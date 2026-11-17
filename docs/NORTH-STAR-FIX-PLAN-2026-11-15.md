@@ -1858,63 +1858,158 @@ buffers are bounded; a dead terminal is shown dead.
 
 ## Third fix plan (groups 17 to 23)
 
-Written 2026-11-16 at v1.517.0. The 90 findings above are fixed the way the
-first two plans' were ("How the fixes are made", points 2, 4 and 5): one
-release per group, Opus 5.5 at high effort implementing, each implementer
-with its own files and its own new test file, the lead reading every diff
-and proving each new test red by changing the code it pins. A finding marked
-"pass only" or "suspected" is first proven with a failing test; one that
-cannot be made to fail is marked "not a defect" here with the reason, and
-not changed.
+The owner said "Yes, plan fixes" on 2026-11-16. This is the plan only:
+nothing below is built, and building starts on the owner's go-ahead. The 90
+findings above are fixed the way the first two plans' were ("How the fixes
+are made", points 2, 4 and 5): one release per group, Opus 5.5 at high
+effort implementing, one agent per set of files, the lead reading every
+diff and proving each new test red before green. A finding marked "pass
+only" or "suspected" is first proven with a failing test; one that cannot
+be made to fail is marked "not a defect" here with the reason, and not
+changed.
 
-**The shared causes, and the one piece that closes each**
+Since the review was written, the lead closed the one open link in PG1 by
+reading it: `tools/registry.py:824-830` hands a switched-on app's every
+tool to the chat, held-back ones included (they are only ranked last when
+the app has more tools than fit). PG1 is checked end to end; it has still
+not been run.
+
+**The shared causes this time**
 
 | Cause | The one piece | Closes |
 |---|---|---|
-| A second way in that the gate does not judge | a held-back tool is decided before any approval that came from switching its app on; a workflow step asks the tool's own check through the same call as chat; the `;` guard reads `2>&1` as one word | PG1, PG2, PG3, PG6, PG7, PG8, PG9 |
-| The page, not the daemon, writes the reply into its chat | the daemon adds the finished reply to its chat itself, matched by its turn; the page's save matches by turn too, so a reply is there once | CS1, CS2, CS3, CS5, CS10 |
-| A Stop lives in memory only | a Stop is written on the turn's record before it is acted on; a Stop that arrives before its turn is kept for it; the resume pass refuses a stopped or finished reply | RB1, RB5, CS4, SB2, SB5, SB13, MC5 |
-| "Try on several models" at night went around the night's checks | one reading of the attempts card that the night's outcome, usage and limits all use | NA1, NA2, NA3, NA7 |
-| Terminal output handed to a model with no fence | `wrap_untrusted` at both terminal routes; a block typed in is one press of Enter | TM1, TM14 |
-| The screen names one thing and the daemon does another | the page sends what it names, and the daemon does that or refuses in words | TM4, TM5, RB3, SB4, SB6, MC1, MC2, BR1, PG5 |
-| A Python exception's name, or engine words, on screen | `core.failures.plain_failure` | RB12, RB13, MC8, NA6, TM7, TM8, PG4, PG10 |
+| A way in that the gate does not judge | Two moves. A held-back tool's name is left out of the approval that switching an app on makes, in the one function both chat lanes build that approval with, so only its own card can carry it. And a tool's own "ask every time" check moves into the tool gate (`registry.invoke`), so a caller that cannot ask is refused there instead of each lane remembering to call it | PG1, PG2, PG8, MC5 |
+| The page, not the daemon, writes the reply into its chat | When a turn ends, the daemon adds the reply to its chat through `chat_append`, keyed by the turn. The page shows what the daemon wrote and stops saving replies itself; a save that meets a reply already stored by that turn drops its copy; a turn's record is never removed while its reply is not in its chat | CS1, CS2, CS3, CS5, CS6, CS10, SB3, RB9 |
+| A Stop lives in memory only | The press is written on the turn's record at once ("stop asked"), also when it arrives before the turn is known, and every carry-on (the resume pass, the "Resume when ready" wait, a waiting card) reads it. A reply whose end was seen loses its kept copy whatever happens next | RB1, RB5, CS4, SB2, SB13 |
+| The screen names one thing and the daemon is never told | Each press sends what the screen named (the account, the boxes, the setting as it is now), and the daemon refuses in words when it would do something else | TM4, TM5, SB4, SB6, MC1, BR1, BR3 |
+| "Try on several models" went around the night's checks | One reading of an attempts card (how each attempt ended, what each used), shared by the night's ending, the Last night row and the pay-per-use check | NA1, NA2, NA3, NA7 |
+| Terminal output handed to a model as the user's words | Every prompt built from a terminal's output goes through `wrap_untrusted` and the usual scan; a scan test lists the callers of `output_tail()` | TM1, TM14 |
+| A raw exception or engine words on screen | `core.failures.plain_failure`, and the scan test from group 16 widened to the places found here | RB12, RB13, MC8, NA6, TM7, TM8, PG4, PG10 |
 
-**Order.** The one high finding and its neighbours first, then the review's
-own order: a reply's home, Stop, the night, terminals, then the sidebar and
-the coding session's remaining routes.
+**Order.** A way past a gate and outside text first, then loss, then Stop,
+then consent and what the screen promises, then false "done" and costs,
+then what survives a restart, then stalls, what is kept at rest and
+wording.
 
 | Group | Theme | Findings |
 |---|---|---|
-| 17 | Every way in meets the gate | PG1 to PG10 |
-| 18 | A chat reply lives in its chat | CS1, CS2, CS3, CS5, CS6 to CS10, RB12 |
-| 19 | Stop is remembered | RB1, RB5, RB8, CS4, SB2, SB5, SB13, MC5 |
-| 20 | The night's rules cover every attempt | NA1 to NA8 |
-| 21 | Terminals | TM1 to TM20 |
-| 22 | The browser sidebar and the add-on | SB1, SB3, SB4, SB6 to SB12, SB14, BR1 to BR6 |
-| 23 | Coding sessions and the door to Jarvis's tools | MC1 to MC4, MC6 to MC8, RB2, RB3, RB4, RB6, RB7, RB9, RB10, RB11, RB13, RB14 |
+| 17 | Every way in is judged, outside text stays data | PG1, PG2, PG3, PG6, PG7, PG8, PG9, TM1, TM14, TM15, MC5, BR6, SB11, NA5 |
+| 18 | A reply's home is the daemon | CS1, CS2, CS3, CS5, CS6, CS7, CS10, SB3, RB9 |
+| 19 | Stop is written down | RB1, RB2, RB5, RB8, CS4, SB2, SB5, SB13, NA8 |
+| 20 | What the screen says is what happens | TM4, TM5, TM16, RB3, RB4, RB14, SB4, SB6, MC1, MC2, MC6, BR1, BR3, PG4, PG5, PG10 |
+| 21 | Done means done, every cost counted | NA1, NA2, NA3, NA4, NA6, NA7, RB10, BR2, BR4, BR5, TM13, CS8, SB8, SB9 |
+| 22 | Survives a restart and a dropped connection | MC3, MC4, MC7, SB1, SB7, SB10, SB14, TM2, TM3, TM9, TM10, TM11, TM12, TM17, TM19, RB7 |
+| 23 | Never stalls, kept at rest, plain words | RB6, RB11, RB12, RB13, MC8, TM6, TM7, TM8, TM18, TM20, CS9, SB12 |
+
+All 90 findings are in exactly one group (14 + 9 + 9 + 16 + 14 + 16 + 12).
+
+**What each group changes, and where**
+
+- **Group 17.** `daemon/chat_turn.py` and `daemon/routes/chat.py` together
+  (the approval made by arming), `tools/registry.py` (the "ask every time"
+  check in the gate), `workflows/engine.py`, `core/trust.py` (code-running
+  tools on the list a flagged run loses), `sandbox/cmd_guard.py` (a
+  redirect such as `2>&1` is kept whole; the command after `if exist` or
+  `for … do` is judged), `core/grants.py` (only the app's two own names
+  are left out of an exact approval), `tools/pane_tools.py` (a typed line
+  is read by the git guard and the `;` guard), `daemon/routes/terminals.py`
+  (the fence), `terminals/limit_state.py` (a reset more than 8 days away is
+  not believed), `mcpserver/server.py`, `harness/attempts.py` (the carried
+  files pass the night commit's screen). New tests that must go red first:
+  a chat with a switched-on app that holds a held-back tool must show a
+  card; a scheduled workflow whose step adds an outgoing webhook must be
+  refused; `del /q *.tmp >nul 2>&1; python run.py` must be refused.
+- **Group 18.** The largest change, in two steps inside one release. First
+  the daemon writes the reply (`daemon/durable_turns.py`,
+  `daemon/chat_append.py`, the save route in `daemon/routes/chat.py`) and
+  the 7-day clean-up learns to keep a record whose reply is not in its
+  chat. Then the Chat page (`dashboard/app/chat/page.tsx`,
+  `lib/useChatStream.ts`, `lib/turnRejoin.ts`) follows a turn by its id,
+  rejoins once after a silence instead of saying "stopped", and stops
+  writing replies. The sidebar's conversation is saved the same way
+  (`browser/panel.py`). Deleting a chat removes its turn records.
+- **Group 19.** `core/turns.py`, `daemon/durable_turns.py`, the stop route
+  and the start of `/chat/stream` in `daemon/routes/chat.py`,
+  `daemon/routes/build.py` (the resume pass, the reply's end, Delete
+  holding the session), `browser/panel.py` (a risk card ends on Stop) and
+  the add-on's `sidepanel.ts` (Stop, Allow and Deny check that the press
+  arrived). RB2 is first proven: a reply that ended normally must never
+  get a limit card.
+- **Group 20.** `daemon/routes/terminals.py`, `terminals/continue_on.py`,
+  `terminals/recipes.py` and the Launch menu; the session PATCH and branch
+  routes in `daemon/routes/build.py`; `hosted/adopt.py` and
+  `hosted/service.py`; `mcpserver/server.py` and the bell;
+  `browser/service.py`, `daemon/routes/browser.py`; `daemon/routes/undo.py`;
+  `tools/permissions.py` and the Settings permission rows.
+- **Group 21.** `harness/night.py`, `harness/night_morning.py`,
+  `daemon/routes/night.py`, `daemon/routes/build_attempts.py`,
+  `harness/attempts.py`; the finished notice in `daemon/routes/build.py`;
+  `browser/screenshot.py`; `terminals/agent_state.py`; the usage write in
+  `daemon/chat_turn.py`; two wordings in `browser/panel.py`.
+- **Group 22.** `mcpserver/server.py`, `session.py`, `stdio_shim.py`,
+  `codehost.py`; `browser/panel.py` and the add-on;
+  `terminals/manager.py`, `session.py`, `backend.py`;
+  `tools/pane_tools.py`; `daemon/routes/build.py` (a question that could
+  not be saved).
+- **Group 23.** `daemon/routes/build.py`, `daemon/durable_turns.py`,
+  `harness/sessions.py`, `daemon/routes/mcpserver.py`,
+  `terminals/backend.py`, `terminals/continue_on.py`, `maintenance.py`,
+  `daemon/app.py`, `browser/panel.py`.
 
 **Decisions taken as recommended.** Each changes something the owner will
 notice. Say so to change any of them.
 
 | # | Decision | Taken |
 |---|---|---|
-| K1 | A held-back app tool in a chat with its app switched on (PG1) | Asks every time until the tool is trusted on the app's own page, whatever is switched on for the chat |
-| K2 | A workflow step whose tool asks every time (PG2) | The step waits as "Needs you" with the card. "Always for this schedule" (decision D10) is how it is made to run unattended |
-| K3 | Code a run writes after it has read flagged text (PG3) | `run_code` and `code_run` run with the network closed, as the shell does; where that cannot be done they are refused by name for the rest of the run |
-| K4 | Undo of a change made by a tool set to "Ask first" (PG4) | The Undo press is the consent: it is not asked again and not refused |
-| K5 | Web search and web fetch set to "Ask first" (PG5) | Honoured wherever someone can answer. The Settings row says in words what unattended work does. Decided on reading the setting |
-| K6 | A line an agent types into a Build terminal (PG8) | Meets the same `;` guard and git guard as the shell tool (it already asks first) |
-| K7 | A reply nobody watched finish (CS5) | The daemon writes it into its chat. The seven-day clean-up never removes a reply that has not reached its chat |
-| K8 | Sixty seconds of silence in Chat (CS3) | The page says contact was lost and follows the turn again. It never says "stopped" for a turn that is running |
-| K9 | A reply the user stopped (RB1) | The Stop is written down. A stopped reply is never carried on after a restart |
-| K10 | The sidebar's conversation across a restart (SB3) | Kept on this PC and restored; where it cannot be, the panel says the conversation starts fresh. Listing sidebar conversations among chats is a new feature, left for the owner |
-| K11 | A night task tried on several models (NA1) | "Done" only when at least one attempt finished its work; otherwise "Needs you" with what happened to each |
-| K12 | The pay-per-use limit at night (NA3) | Covers every attempt, the default model included; each attempt gets what is left of the limit |
-| K13 | "Try on…" in a session that works in the folder directly (NA5) | The same screen as the night's commit (secrets, very large files) before anything is committed to an attempt's branch |
-| K14 | The Continue strip (TM4) | The page sends the account it names; the daemon uses that account or refuses in words |
-| K15 | "With Iron Jarvis's tools" in the Launch menu (TM5) | The row really sets the tools up and starts the tool; a row that cannot does not say "ready" |
-| K16 | A terminal's kept output (TM6) | Left out of backups, and removed when the terminal is closed |
-| K17 | Changing the permission level while a reply runs (RB3) | A stricter level holds from the running reply's next step; a looser one from the next reply, and the page says which |
-| K18 | A coding tool asking to click or type in the browser (MC2) | The card names the session, the page and what is clicked or typed, and waits as long as chat's card; only answers the card can honour are offered |
-| K19 | A coding tool kept running across a restart (MC3) | Gets Iron Jarvis's tools back by itself |
-| K20 | "Start new chats local only" and the sidebar (SB12) | Covers the sidebar and its dictation |
+| G1 | A held-back app tool in chat (PG1) | Asks every time, even with its app switched on, until it is trusted on the app's card |
+| G2 | A workflow step whose tool asks every time (PG2) | Refused in words in an unattended workflow, naming the step, unless an "Always for this workflow" approval covers that exact step |
+| G3 | Code-running tools after flagged text (PG3) | Refused for the rest of that run, like the web tools |
+| G4 | An Undo the user pressed (PG4) | Never asks; refused only for a tool set to Deny |
+| G5 | "Ask first" for web search and web fetch (PG5) | Settings offers Allow or Deny for these two and says why; "Ask first" is no longer offered. (The other way, a card in attended chat only, is more work for a choice few make.) |
+| G6 | Where a chat reply lives (CS1 to CS5) | The daemon writes every reply into its chat; a reply that finished while you were elsewhere is in the chat and in search at once |
+| G7 | The sidebar's conversation (SB3) | Saved as a chat marked "from the browser sidebar" and listed with the others; Reset starts a new one |
+| G8 | Silence for 60 seconds (CS3) | The page rejoins once and says it is still working; "stopped" is said only for a real stop |
+| G9 | A stopped coding reply after a restart (RB1) | Never carried on by itself. It is shown as stopped, with "Continue from where it stopped" as your own press |
+| G10 | A night task tried on several models (NA1) | Ends "Needs you: choose one" when at least one attempt finished, "Failed" when none did; never "Done" |
+| G11 | The pay-per-use limit at night (NA3) | Applies to every pick, the default model included, and each attempt gets what is left of the limit |
+| G12 | "Runs at once" (NA7) | A task tried on three models counts as three |
+| G13 | Files carried into "Try on…" (NA5) | Pass the same screen as the night's commit; a file left out is named on the card |
+| G14 | A stricter permission level set while a reply runs (RB3) | Applies to that reply from its next step; a looser one applies from your next message; the chip says which |
+| G15 | "Continue on X" (TM4) | Goes to X, or refuses and names the account it would use instead |
+| G16 | "With Iron Jarvis's tools" in the Launch menu (TM5) | Pressing it shows the boxes first (ticking one is the consent), then opens the terminal set up and starts the tool. A row never says "ready" for something it cannot do |
+| G17 | A coding tool asking to act in your browser (MC2) | Its own card, naming the session or terminal and what is clicked or typed; "Allow once" and "Deny" only |
+| G18 | A risk card in the sidebar (SB6) | "Allow once" and "Deny" only |
+| G19 | Terminal history in backups (TM6) | Left out. The list of terminals is kept, so they reopen after a restore, with empty history |
+| G20 | "Start new chats local only" (SB12) | Also covers the browser sidebar and its dictation |
+| G21 | "Type it in" in a terminal (TM14) | Offered only for a one-line command |
+| G22 | "Branch from here" (RB4, RB14) | The branch keeps the session's Local only hold and its reply limit |
+
+**What must be tried on the installed app, not only in tests**
+
+- Group 22: starting, stopping and reopening terminals, the code host's
+  stop, and a real coding tool keeping Jarvis's tools across a restart.
+  Like group 12, tests can only use stand-ins for these.
+- Groups 19, 20 and 22 change the add-on's sidebar. They hold only once
+  the add-on in the browser is the new one.
+- Group 18: a long reply left running while the Chat page is closed, then
+  opened in two windows.
+
+**Worth settling before group 22.** TM9 (a terminal an agent opens records
+nothing on Linux and Mac) is in the Linux work's path; that session should
+know before it tests agent-opened terminals.
+
+**Left for the owner as before.** A4 (the bundled account manager) is
+unchanged by this plan, and so are the eight decisions at the end of the
+second plan.
+
+**Building (from 2026-11-16).** The owner started the fixing session the
+same day. That session had drafted its own grouping (by area) before it saw
+this plan; the two were compared and THIS plan is the one kept: these
+groups, these decisions. What differs in the building, and why:
+
+- **PG4, PG5 and PG10 are built with group 17, not group 20.** Their
+  implementers were already at work under the first grouping when the
+  plans were compared, and they share `tools/permissions.py` with PG1.
+  Decisions G4 and G5 apply to them as written.
+- Anything else that ends up built differently from a decision above is
+  said in that group's "as built" note.
