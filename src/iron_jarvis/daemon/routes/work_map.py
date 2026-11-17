@@ -95,7 +95,29 @@ def _with_clients(platform, folders: list[dict[str, Any]]) -> None:
             row["may_make_client"] = False
 
 
+OTHER_TOOLS_UNREADABLE = "Your chats in other tools could not be read right now. Try again in a moment."
+
+
 def register(app: FastAPI, d) -> None:
+    @app.get("/work-record/other-tools")
+    def other_tools() -> dict[str, Any]:
+        """v1.518.0: the owner's chats in Claude Code and Codex, by tool and
+        by folder (the sidebar's "Other tools" row). The owner's own screen:
+        it does not depend on the memory switch, and it lists no chat that is
+        already an Iron Jarvis coding session. Names only, never a transcript."""
+        from ...core.db import session_scope
+        from ...workmap import outside
+
+        try:
+            engine = getattr(d.platform, "engine", None)
+            used: set[str] = set()
+            if engine is not None:
+                with session_scope(engine) as db:
+                    used = outside.used_ids(db)
+            return outside.listing_view(used)
+        except Exception as exc:  # noqa: BLE001 — said, never an empty list
+            raise HTTPException(status_code=503, detail=OTHER_TOOLS_UNREADABLE) from exc
+
     @app.get("/work-record/folders")
     def work_folders() -> dict[str, Any]:
         wm = _map(d)

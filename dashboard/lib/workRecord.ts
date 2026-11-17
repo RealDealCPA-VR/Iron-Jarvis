@@ -184,6 +184,8 @@ export function decodeEntries(raw: unknown): { entries: WorkItem[]; total: numbe
 export function kindWords(kind: string, tool: string): string {
   if (kind === "chat") return "Chat";
   if (kind === "run") return "Agent run";
+  // v1.518.0: a chat the owner had in another coding tool.
+  if (kind === "outside") return tool ? `Chat in ${tool}` : "Chat in another tool";
   if (kind === "code" || kind === "tool_code") return tool ? `Coding session (${tool})` : "Coding session";
   return "Work";
 }

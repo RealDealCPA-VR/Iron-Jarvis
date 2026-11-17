@@ -217,6 +217,23 @@ def _no_real_coding_tool():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _other_tools_never_read_the_real_homes():
+    """v1.518.0: the work record lists the owner's chats in Claude Code and
+    Codex from those tools' own folders (``workmap/outside.py``). A bare test
+    daemon would read the developer's real ``~/.claude`` into its work record
+    and its prompts, so that source is off for the whole session; a test of
+    it turns ``READS_DISK`` on and points both tools at its own folders."""
+    from iron_jarvis.workmap import outside
+
+    prev = outside.READS_DISK
+    outside.READS_DISK = False
+    try:
+        yield
+    finally:
+        outside.READS_DISK = prev
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_codex_home():
     """v1.420.0: ``chat_turn.codex_context_window`` reads
     ``<CODEX_HOME>/models_cache.json`` on a background thread for any

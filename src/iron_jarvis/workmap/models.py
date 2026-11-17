@@ -25,7 +25,11 @@ KIND_CHAT = "chat"
 KIND_CODE = "code"            # Chat › Code (a Build thread)
 KIND_TOOL_CODE = "tool_code"  # Build › Code (a real coding tool)
 KIND_RUN = "run"              # an agent run
-KINDS = (KIND_CHAT, KIND_CODE, KIND_TOOL_CODE, KIND_RUN)
+#: v1.518.0: a chat the owner had in another coding tool (Claude Code,
+#: Codex), read from that tool's own files (``workmap/outside.py``). Its
+#: ``ref`` is ``<tool>:<the tool's chat id>``.
+KIND_OUTSIDE = "outside"
+KINDS = (KIND_CHAT, KIND_CODE, KIND_TOOL_CODE, KIND_RUN, KIND_OUTSIDE)
 
 
 class WorkEntry(SQLModel, table=True):

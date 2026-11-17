@@ -1,11 +1,14 @@
 """Reads Iron Jarvis's own records into work rows (v1.491.0).
 
-FOUR SOURCES, each a kind of work that has a folder:
+FIVE SOURCES, each a kind of work that has a folder:
 
 * a CHAT bound to a folder (its ``workspace_dir``, else its project's folder);
 * a CODING SESSION in Chat › Code (a Build thread): the folder the user
   picked (``harness/sessions.checkout_of``), or the session's own folder;
 * a CODING SESSION in a real tool (Build › Code, ``hosted``): its folder;
+* (v1.518.0) a CHAT IN ANOTHER CODING TOOL (Claude Code, Codex), read from
+  that tool's own files by ``outside.py``: the one source that is not Iron
+  Jarvis's own record, behind its own switch;
 * an AGENT RUN the user or a schedule started in a folder (never a helper,
   a mission teammate or a delegated child: those are part of the work that
   started them, and that work has its own row).
@@ -44,7 +47,8 @@ from ..core.db import storable_text
 from ..core.models import BUILD_SURFACE, AgentRun, ChatThreadRecord, Project, UndoJournal
 from ..core.models import Session as RunRow
 from . import keys
-from .models import KIND_CHAT, KIND_CODE, KIND_RUN, KIND_TOOL_CODE
+from . import outside
+from .models import KIND_CHAT, KIND_CODE, KIND_OUTSIDE, KIND_RUN, KIND_TOOL_CODE
 
 log = logging.getLogger(__name__)
 
@@ -491,6 +495,15 @@ def candidates(db: Any, *, home: Any = None) -> tuple[list[Candidate], set[str]]
             complete.add(KIND_RUN)
     except Exception:  # noqa: BLE001
         log.debug("work record: the agent runs could not be read", exc_info=True)
+    try:
+        # v1.518.0: the owner's chats in other coding tools (stat only here;
+        # a file is opened when its row is built).
+        got, whole = outside.candidates(db, Candidate)
+        out += got
+        if whole:
+            complete.add(KIND_OUTSIDE)
+    except Exception:  # noqa: BLE001
+        log.debug("work record: the other tools' chats could not be read", exc_info=True)
     return out, complete
 
 
@@ -547,6 +560,12 @@ def live_state(db: Any, rows: "list[tuple[str, str]]") -> dict[tuple[str, str], 
             stmt = select(H.id, H.archived_at).where(H.id.in_(refs[i : i + _IN_CHUNK]))  # type: ignore[attr-defined]
             for sid, archived in db.exec(stmt):
                 out[(KIND_TOOL_CODE, str(sid))] = {"local_only": False, "archived": archived is not None}
+    refs = by_kind.get(KIND_OUTSIDE) or []
+    if refs:
+        # v1.518.0: still on disk, its tool still switched on, and not an
+        # Iron Jarvis session since (a tool's folder that cannot be read RAISES).
+        for ref, state in outside.live_state(db, refs).items():
+            out[(KIND_OUTSIDE, ref)] = state
     return out
 
 

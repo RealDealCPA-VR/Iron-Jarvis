@@ -53,7 +53,7 @@ from typing import Any
 from ..core.db import session_scope
 from . import collect, keys
 from .index import work_map
-from .models import KIND_CHAT, KIND_CODE, KIND_RUN, KIND_TOOL_CODE
+from .models import KIND_CHAT, KIND_CODE, KIND_OUTSIDE, KIND_RUN, KIND_TOOL_CODE
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +103,7 @@ KIND_WORDS = {
     KIND_CODE: "coding session",
     KIND_TOOL_CODE: "coding session",
     KIND_RUN: "agent run",
+    KIND_OUTSIDE: "chat in another tool",
 }
 #: How a piece of work ended, when that is worth saying.
 OUTCOME_WORDS = {

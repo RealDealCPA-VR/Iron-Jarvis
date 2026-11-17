@@ -917,6 +917,20 @@ SETTINGS: tuple[SettingDef, ...] = (
       "notice them, and nothing is sent anywhere. Off: nothing new is noticed or asked. Clients you "
       "already said yes to keep working, and their folders stay apart from other clients' chats.",
       tier="allow", aliases=("noticing clients", "client suggestions")),
+    # v1.518.0: chats the owner had in Claude Code / Codex, in the work record.
+    S("other_tools_in_memory", "Remember chats from other coding tools", "memory", "enum",
+      "Claude Code and Codex keep each chat you have in them as a file on this PC. Iron Jarvis can "
+      "add those chats to your work record: the chat's first words, its folder and its date. A later "
+      "chat in the same folder is then told that work was done there, whichever tool did it. It "
+      "reads the start and end of each file, calls no model, and changes nothing in those tools. "
+      "The first words of a chat from one tool can reach the model of another, the same way the "
+      "title of an Iron Jarvis chat can. Chats a program started, and chats in temporary folders, "
+      "are left out. Neither: nothing from those tools is kept or told; the list in the sidebar "
+      "still shows them to you.",
+      tier="allow", aliases=("chats from other tools", "Claude Code and Codex chats in memory"),
+      options=(("all", "Claude Code and Codex (default)"), ("claude-code", "Claude Code only"),
+               ("codex", "Codex only"), ("none", "Neither")),
+      ),
     # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.
     # Its own control in Settings › Memory & you (CONTROLLED_IN_SECTION); a
     # project may choose its own (Project.brain_profile). Choosing where

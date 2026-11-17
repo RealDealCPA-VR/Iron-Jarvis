@@ -36,7 +36,7 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from . import collect, keys
-from .models import KIND_CHAT, KIND_RUN, KIND_TOOL_CODE, WorkEntry, WorkForgotten, WorkRecap
+from .models import KIND_CHAT, KIND_OUTSIDE, KIND_RUN, KIND_TOOL_CODE, WorkEntry, WorkForgotten, WorkRecap
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +65,8 @@ def link_for(kind: str, ref: str) -> str:
         return CHAT_HREF + quote(str(ref), safe="")
     if kind == KIND_RUN:
         return RUN_HREF + quote(str(ref), safe="")
+    if kind == KIND_OUTSIDE:
+        return ""  # opened from the sidebar's own list (it becomes a session there)
     from ..projects.coding_sessions import BUILD_CODE_HREF, CHAT_CODE_HREF
 
     base = BUILD_CODE_HREF if kind == KIND_TOOL_CODE else CHAT_CODE_HREF

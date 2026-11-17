@@ -688,6 +688,12 @@ class Config(BaseModel):
     #: asked; clients the owner already confirmed keep working, and their
     #: folders stay walled.
     notice_clients: bool = True
+    #: v1.518.0: which other coding tools' chats on this PC enter the work
+    #: record, and so may be told to a chat in the same folder (titles and
+    #: folder names only; ``workmap/outside.py``): "all" | "claude-code" |
+    #: "codex" | "none". The sidebar's own list of those chats does not
+    #: depend on it. An unknown value means none.
+    other_tools_in_memory: str = "all"
     #: v1.405.0: the code editor a coding session's "Open in …" presses open
     #: (harness/code_editor): "auto" = VS Code when installed, else Cursor;
     #: "vscode" / "cursor" = that one. Read live by GET /editor/options.

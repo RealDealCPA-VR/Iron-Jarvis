@@ -30,12 +30,16 @@
 // v1.500.0 (ONE sidebar): the list's foot carries "Archived chats", the way
 // to the chat page's Archived view (`/chat?archived=1`), so the archive is
 // one press away from every page, not only from Chat.
+//
+// v1.518.0: under it, "Other tools" (OtherToolChats): the chats the owner had
+// in Claude Code and Codex, closed until pressed, absent when there are none.
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, Search } from "lucide-react";
 
 import { LoadFailedLine } from "@/components/LoadFailedLine";
+import OtherToolChats from "@/components/chat/OtherToolChats";
 import ThreadGroups, { GROUP_LIMIT, ShowOlderChats, ThreadSnippet } from "@/components/chat/ThreadGroups";
 import {
   CHAT_SEARCH_FALLBACK_WORDS,
@@ -115,6 +119,7 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
           Your chats appear here.
         </p>
         <ArchivedChatsLink onNavigate={onNavigate} />
+        <OtherToolChats onNavigate={onNavigate} go={(href) => router.push(href)} />
       </div>
     );
   }
@@ -188,6 +193,7 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
         />
       ) : null}
       <ArchivedChatsLink onNavigate={onNavigate} />
+      <OtherToolChats onNavigate={onNavigate} go={(href) => router.push(href)} />
     </div>
   );
 }

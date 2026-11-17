@@ -2416,6 +2416,15 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'look for recurring client names',
         'do not guess my clients',
     ),
+    'other_tools_in_memory': (
+        'remember my chats from Claude Code',
+        'stop reading my Codex chats into memory',
+        'keep my other coding tools out of the work record',
+        'use what I did in Claude Code as memory',
+        'only remember Codex chats, not Claude Code',
+        'do not tell chats about work from other tools',
+        'add my Claude Code and Codex chats to memory',
+    ),
     'notify': (
         'send a message to my Slack',
         'let my team know on Discord',

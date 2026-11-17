@@ -704,6 +704,11 @@ def build_platform(
     # open_db self-heals a corrupt DB (quarantine + fresh) so the daemon always
     # boots instead of wedging on a malformed file.
     engine = open_db(config.db_path)
+    # v1.518.0: the work record reads the owner's chats in other coding tools
+    # only for the tools this setting names, read again at every use.
+    from .workmap import outside as _outside
+
+    _outside.allow(engine, lambda: getattr(config, "other_tools_in_memory", _outside.SWITCH_DEFAULT))
 
     # Observability (§30): persist every event + log it.
     log = get_logger("events")

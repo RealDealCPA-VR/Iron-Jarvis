@@ -2042,6 +2042,64 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Your Claude Code and Codex chats, in the chat list and in memory (v1.518.0)
+
+Chats you had in Claude Code (the desktop app's Code tab, or a terminal) and in
+Codex now show up in Iron Jarvis, and the work done in them counts as work
+done in that folder.
+
+**In the chat list.** At the foot of the list, under **Archived chats**, there
+is a small **Other tools** part with one line for each tool that has chats on
+this PC. It stays closed until you press it. When chats were written since you
+last looked it says how many, for example "3 new". With no such chats on this
+PC, the part is not there at all.
+
+- Press a tool to see its chats by folder, five per folder and then **Show
+  more**.
+- Press a chat to open it as a coding session on that same tool, with what was
+  said before. Your next message carries on in Claude Code or Codex, on your
+  own account for it. From then on it lives with your coding sessions and
+  leaves this list.
+- If the chat cannot be opened, the reason is said under it.
+
+**In memory.** Each of these chats is also a line in **Memory › Your work, by
+folder**, marked "Chat in Claude Code" or "Chat in Codex". A later chat or
+coding session in the same folder is told that this work was done there,
+whichever tool did it: the chat's first words, the tool and how long ago.
+
+**What is left out**, in both places:
+
+- chats a program started rather than you (this includes the Claude and Codex
+  runs Iron Jarvis makes for its own replies);
+- chats in a temporary folder, or inside the tool's own folder;
+- chats with no folder, or where nothing was typed;
+- a chat that is already one of your coding sessions here (it is listed there).
+
+**What it reads.** The files Claude Code and Codex keep on this PC, and only
+the start and end of each one. It calls no model, sends nothing anywhere, and
+never changes, moves or deletes anything in those tools' folders.
+
+**One thing to know.** The first words of a chat from one tool can reach the
+model of another: a Claude Code chat's first line may be told to a chat that
+runs on a different company's model, the same way an Iron Jarvis chat's title
+can. **Settings › Memory & you › Remember chats from other coding tools**
+chooses which tools count: Claude Code and Codex (the default), one of them,
+or neither. You can also say it in chat ("stop reading my Codex chats into
+memory"). Neither means nothing from those tools is kept or told; the list in
+the sidebar still shows them to you. Forgetting a folder on the Memory page
+keeps these chats out of it too.
+
+**Not in this release:**
+
+- Ordinary chats on claude.ai (the desktop app's Chat tab) are kept by
+  Anthropic, not on this PC, so they cannot be listed.
+- Only the tool's sign-in on this PC is read, not the chats of extra accounts.
+- At most the newest 500 chats of each tool are read.
+- A row on the Memory page for one of these chats has no link yet. Open it from
+  the sidebar.
+- Picking a chat to turn into a memory or a suggestion comes in a later
+  release.
+
 ## The Linux app updates itself, and comes as two files (v1.517.0)
 
 Nothing changes on Windows in this release. The Windows installer, its update
