@@ -330,6 +330,12 @@ def test_the_page_check_is_unscored_when_no_browser_can_start(tmp_path, monkeypa
     monkeypatch.setenv("PATH", os.pathsep.join(p for p in os.environ["PATH"].split(os.pathsep)
                                                if "edge" not in p.lower()
                                                and not shutil.which("msedge", path=p)))
+    if os.name != "nt" and edge_installed():
+        # Off Windows the check also looks at two FIXED places
+        # (/usr/bin/microsoft-edge, /opt/microsoft/msedge/msedge): on a machine
+        # with Edge installed there (GitHub's Linux machines) no variable can
+        # hide it, so "a machine with no Edge" cannot be staged.
+        pytest.skip("Edge is installed at a fixed place on this machine; it cannot be hidden from the check")
     assert not edge_installed()  # the skip's own test sees what the check sees
     g = grade(task, work, tmp_path / "g")
     assert g.passed is None and "exit code 3" in g.reason, (g.reason, g.output[-500:])
