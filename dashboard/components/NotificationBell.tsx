@@ -1137,7 +1137,16 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       id: e.id,
       ts: e.ts,
       href: app ? buildCodeHref(thread) : buildSessionHref(thread),
-      icon: p.outcome === "failed" ? AlertTriangle : CheckCircle2,
+      // Owner decision 5 (third plan RB10): the check mark is for a reply that
+      // FINISHED, nothing less. Stopped at its limit (waits for Keep going) is
+      // the pause sign; could not finish (a Build › Code reply cut at the
+      // model's length limit is one) and "something needs you" are the warning.
+      icon:
+        p.outcome === "limit"
+          ? PauseCircle
+          : p.outcome === "failed" || p.outcome === "needs_you"
+            ? AlertTriangle
+            : CheckCircle2,
       title: buildFinishedHeadline(p.outcome),
       body: buildFinishedBody(p.title, p.seconds),
       attention: true,

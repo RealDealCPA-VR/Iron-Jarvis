@@ -97,6 +97,9 @@ ASK_RULES: dict[str, str] = {
     # the reply by looking it up — the user's words did not name it.
     "looked_up": "Jarvis found this tool by looking it up, so it asks every time before using it",
     "quarantined": "it is new in its app",
+    # Owner decision 8 (v1.529.0): every tool of a LOCKED app (Microsoft 365),
+    # read from the lock itself, reading included.
+    "locked": "its app asks before each use",
     "low_trust": "the chat read something it does not trust",
     "folder_command": "it runs a command the folder wrote",
     "acts_for_you": "it acts in your browser, on your desktop, in a terminal or in a running program",
@@ -1262,6 +1265,11 @@ def _classify(name, args, *, mode, tool, workspace, forced, low_trust, quarantin
         return Verdict(ASK, "low_trust")
     if quarantined or getattr(tool, "quarantined", False):
         return Verdict(ASK, "quarantined")
+    if getattr(tool, "locked", False):
+        # Owner decision 8 (v1.529.0): no approval level passes a LOCKED
+        # app's tool, whatever else is true of the app; the gate holds the
+        # same line (``tools/permissions.asks_each_use``).
+        return Verdict(ASK, "locked")
     if needs_a_person:
         return Verdict(ASK, "folder_command")
     # v1.417.0 (C1.4): a command that only reads runs under Ask first, Accept

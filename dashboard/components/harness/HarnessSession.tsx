@@ -30,6 +30,7 @@ import {
   FolderX,
   GitBranch,
   GitFork,
+  House,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -268,6 +269,7 @@ import {
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { HarnessStartFolder } from "@/components/harness/HarnessStartFolder";
 import { noteSessionUsed } from "@/lib/emptySessions";
+import { LOCAL_ONLY_LINE } from "@/lib/sessionRail";
 import {
   answerQuestion,
   archiveSession,
@@ -294,6 +296,8 @@ import {
   type LevelApplies,
   planFromCards,
   pruneUnsavedReplies,
+  SESSION_LOCAL_ONLY_OFF_TITLE,
+  sessionLocalOnlyHeldWords,
   shownMessages,
   readSentSteers,
   unreadSteersFor,
@@ -3380,6 +3384,43 @@ export function HarnessSession({
                 >
                   {decodeSessionCap(view.setup.cap) ? "Change the reply limit" : "Limit each reply"}
                 </button>
+                {/* Owner decision 2 (after the third fix plan): the open
+                    session's own Local only switch, through the PATCH the
+                    daemon takes. While a reply runs, the toolbar says when
+                    it applies (the daemon's `applies_local_only`). A session
+                    an app holds Local only stays on and says why; the menu
+                    stays open so the answer is seen. */}
+                <button
+                  type="button"
+                  data-testid="harness-local-only"
+                  aria-pressed={view.setup.localOnly}
+                  aria-disabled={view.setup.localOnlyHolds.length > 0 || undefined}
+                  title={
+                    view.setup.localOnlyHolds.length > 0
+                      ? sessionLocalOnlyHeldWords(view.setup.localOnlyHolds)
+                      : view.setup.localOnly
+                        ? LOCAL_ONLY_LINE
+                        : SESSION_LOCAL_ONLY_OFF_TITLE
+                  }
+                  onClick={() => {
+                    if (view.setup.localOnlyHolds.length > 0) return;
+                    void patchSetup({ local_only: !view.setup.localOnly });
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06] aria-disabled:cursor-default aria-disabled:hover:bg-transparent"
+                >
+                  <House
+                    size={14}
+                    aria-hidden
+                    className={`shrink-0 ${view.setup.localOnly ? "text-tone-success" : "text-zinc-400"}`}
+                  />
+                  <span className="min-w-0 flex-1">Local only</span>
+                  {view.setup.localOnly ? <Check size={13} aria-hidden className="shrink-0 text-tone-success" /> : null}
+                </button>
+                {view.setup.localOnlyHolds.length > 0 ? (
+                  <p data-testid="harness-local-only-held" className="px-2.5 pb-1.5 text-[11px] text-zinc-500">
+                    {sessionLocalOnlyHeldWords(view.setup.localOnlyHolds)}
+                  </p>
+                ) : null}
                 <button
                   type="button"
                   data-testid="harness-archive"

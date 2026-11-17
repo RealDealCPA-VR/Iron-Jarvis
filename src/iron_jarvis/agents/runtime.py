@@ -51,7 +51,7 @@ from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
 from ..tools.base import SpendCheck, ToolContext, spend_checks_for, spend_words_for
 from ..tools.builtins import is_own_source
-from ..tools.permissions import SAFE_HEADLESS_TOOLS
+from ..tools.permissions import SAFE_HEADLESS_TOOLS, asks_each_use
 from ..tools.reversible import call_reversible_flag
 from . import chat_delivery as _chat_delivery
 from . import decompose as _decompose
@@ -2009,8 +2009,10 @@ class AgentRuntime:
         made: list = []
         for c in calls:
             tool = self.p.registry.get(c.name)
-            if getattr(tool, "quarantined", False):
-                continue  # review fix: a quarantined pack tool is never remembered
+            if asks_each_use(tool):
+                # review fix: a held-back app tool is never remembered; owner
+                # decision 8 (v1.529.0): nor a LOCKED app's tool.
+                continue
             safe = tool.redact_args(c.arguments) if tool is not None else c.arguments
             try:
                 made.append(
@@ -2428,8 +2430,13 @@ class AgentRuntime:
             # SKIP MEMORY (v1.501.0, north-star 1.4): set for the run body so
             # every child run awaited inside it skips memory too.
             _skip_token = SKIP_MEMORY.set(run_skips_memory(session))
+            # v1.529.0 (owner decision 3): the run counts its own model calls
+            # (its row is saved after each step), so a tool that started it
+            # (``delegate``) does not count them again (``eval.call_ledger``).
+            from ..eval import call_ledger as _call_ledger
+
             try:
-                with _client_wall.turn_scope(_turn_wall):
+                with _client_wall.turn_scope(_turn_wall), _call_ledger.counted_scope():
                     if not _lo:
                         return await self._run_body(session, agent_def, parent_id)
                     with _egress.local_only_scope(True):
@@ -3633,7 +3640,7 @@ class AgentRuntime:
         # tool resolves to deny here, so it never cards — ``invoke`` refuses
         # it with the low-trust sentence instead.
         mode = self.p.permissions.mode_for(perm, self._trust_overrides(session, agent_def))
-        if mode is not PermissionMode.DENY and getattr(tool, "quarantined", False):
+        if mode is not PermissionMode.DENY and asks_each_use(tool):
             # A HELD-BACK APP TOOL (third fix plan, PG1/K1) pauses in every
             # posture, whatever the run was handed at its start (the names
             # chat armed), whatever an agent's definition allows, and past
@@ -3643,7 +3650,23 @@ class AgentRuntime:
             # the user's own answer to a card that showed THIS tool, in this
             # run, skips the pause. A priced call of it pauses every time.
             # The registry's gate holds the same line (``card_allow``).
+            # Owner decision 8 (v1.529.0): a LOCKED app's tool is held the
+            # same way, read from the lock (never from "kept on your own
+            # models"), and it asks before EACH use: no "for this run"
+            # answer skips its pause.
+            if getattr(tool, "locked", False):
+                # A call that could not run here at all (an app kept on the
+                # user's own models, in a run) is never asked about: the
+                # registry refuses it in the tool's own words.
+                _here = getattr(tool, "refusal_here", None)
+                try:
+                    if callable(_here) and _here(SimpleNamespace(session_id=str(session.id))):
+                        return ""
+                except Exception:  # noqa: BLE001 — cannot tell: ask
+                    pass
             if spend is not None and spend.ask:
+                return perm
+            if getattr(tool, "locked", False):
                 return perm
             return "" if tc.name in self._held_grants.get(session.id, ()) else perm
         if spend is not None and mode is not PermissionMode.DENY:
@@ -3683,15 +3706,23 @@ class AgentRuntime:
         return perm
 
     def _held_back(self, name: str) -> bool:
-        """Is ``name`` a held-back app tool (``quarantined``, v1.299.0)?"""
-        return bool(getattr(self.p.registry.get(name), "quarantined", False))
+        """Does ``name`` ask before each use whatever the run was handed: a
+        held-back app tool (``quarantined``, v1.299.0) or a LOCKED app's tool
+        (owner decision 8, v1.529.0; ``tools.permissions.asks_each_use``)?"""
+        return asks_each_use(self.p.registry.get(name))
+
+    def _locked(self, name: str) -> bool:
+        """Is ``name`` a LOCKED app's tool? It asks before EACH use: "Allow
+        for this run" counts once (owner decision 8, v1.529.0)."""
+        return bool(getattr(self.p.registry.get(name), "locked", False))
 
     def _held_card_allow(self, session: Session, tc) -> frozenset[str]:
         """The gate's ``card_allow`` for a held-back tool's call (PG1): the
         names the user allowed for this run on a card that showed them, plus
         this call's own name when the user allowed THIS call once (taken
         here: one answer runs one call)."""
-        names = set(self._held_grants.get(session.id, ()))
+        # A LOCKED app's tool: only this call's own "once" (owner decision 8).
+        names = set() if self._locked(tc.name) else set(self._held_grants.get(session.id, ()))
         once = self._held_once.get(session.id)
         if once is not None and id(tc) in once:
             once.discard(id(tc))
@@ -3952,6 +3983,12 @@ class AgentRuntime:
             _cost_kw["once_only"] = True
             if getattr(spend, "reason", ""):
                 _cost_kw["once_reason"] = spend.reason
+        # Owner decision 8 (v1.529.0): a LOCKED app's tool asks before each
+        # use — "Allow once" and Deny only, on the registry entry too (a
+        # sibling's wider answer never wakes it).
+        _lock_ask = any(self._locked(c.name) for c in calls)
+        if _lock_ask:
+            _cost_kw["once_only"] = True
         # Readiness 0j.5 item 13: WHO asks and WHY, as the chat stream lane's
         # approval frame says it since v1.417.0 (MIRROR NOTE: routes/chat.py's
         # `_frame["why"]` / `_frame["asker"]`). An agent run's call is always
@@ -3973,6 +4010,8 @@ class AgentRuntime:
             ),
             strict=str(getattr(session, "approval_mode", "") or "") == "always_ask",
             default=_auto_why.RUN_NOT_GRANTED_WHY,
+            # Owner decision 8: "its app asks before each use".
+            forced="locked" if _lock_ask else "",
         )
         _cost_kw["why"] = _why
         _cost_kw["asker"] = _auto_why.ASKER_MODEL
@@ -4010,7 +4049,8 @@ class AgentRuntime:
             "can_always": bool(
                 getattr(self.p, "grants", None) is not None
                 and _pick_scope(_grant_scopes) is not None
-                and not getattr(tool, "quarantined", False)
+                # Owner decision 8: nor a LOCKED app's tool (each use asks).
+                and not asks_each_use(tool)
                 # v1.346.0: never on a priced ask — the next quote is a
                 # different spend.
                 and spend is None
@@ -4052,6 +4092,11 @@ class AgentRuntime:
             # v1.350.0: a plan is approved or declined, nothing wider — the
             # card's "Allow once" + "Deny" (the chat lane's local-only flag).
             requested["once_only"] = True
+        if _lock_ask:
+            # Owner decision 8 (v1.529.0): a LOCKED app's card is "Allow
+            # once" and Deny only; a wider answer is read as once below.
+            requested["once_only"] = True
+            requested["can_always"] = False
         if _once_spend(spend):
             # v1.375.0: a commit / push on a Build session's branch asks every
             # time (harness/git_guard) — "Allow once" and Deny only; a wider
@@ -4184,6 +4229,10 @@ class AgentRuntime:
             await asyncio.shield(restore)
         if _once_spend(spend) and decision in ("conversation", "always", "tab"):
             # v1.375.0: approving one commit / push never approves the next.
+            decision = "once"
+        if _lock_ask and decision in ("conversation", "always", "tab"):
+            # Owner decision 8 (v1.529.0): one use of a LOCKED app never
+            # approves the next ("Allow for this run" counts once).
             decision = "once"
         _inote.answered(decision, _m_actor)
         await self.p.event_bus.publish(

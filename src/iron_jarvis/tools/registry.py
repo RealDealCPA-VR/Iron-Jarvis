@@ -38,7 +38,7 @@ from .base import (
     replay_safe,
     safe_path,
 )
-from .permissions import PermissionDecision, PermissionEngine
+from .permissions import PermissionDecision, PermissionEngine, asks_each_use
 from .undo import make_file_descriptor, sha256_target
 from .undo import drop_preimages, finalize_post_hash, settle_unfinished
 
@@ -1129,6 +1129,21 @@ class ToolRegistry:
         # relays to the user as "I don't have permission" — and both chat lanes
         # string-match that exact phrase to list a turn's user-refused tools.
         # Default unchanged, so every existing caller reads byte-identically.
+        #
+        # A TOOL THAT ASKS BEFORE EACH USE AND COULD NOT RUN HERE (owner
+        # decision 8, v1.529.0): an app kept on the user's own models outside
+        # a plain chat or a Local only turn refuses itself before reaching its
+        # app (``MCPRemoteTool.refusal_here``). The lanes card nothing for
+        # such a call (an Allow would be a lie), so it is refused here in the
+        # tool's OWN words, never as a permission nobody was asked for.
+        if not deny_reason and asks_each_use(tool):
+            _here = getattr(tool, "refusal_here", None)
+            try:
+                _no_here = str(_here(ctx) or "") if callable(_here) else ""
+            except Exception:  # noqa: BLE001 — cannot tell: the gate decides
+                _no_here = ""
+            if _no_here:
+                deny_reason, deny_label = _no_here, "not run here"
         if deny_reason:
             decision = PermissionDecision(False, PermissionMode.ASK, deny_reason)
         else:
@@ -1140,11 +1155,18 @@ class ToolRegistry:
             _extra: dict[str, Any] = {}
             if grants is not None and scopes:
                 _extra.update(grants=grants, scopes=scopes, call_name=name)
-            _held = bool(getattr(tool, "quarantined", False))
+            # A LOCKED app's tool is held exactly like a held-back one (owner
+            # decision 8, v1.529.0): its card promises it asks before each
+            # use, and that is read from the lock ITSELF here — never from
+            # the catalog keeping every locked app on the user's own models
+            # (``local_only``), which is what used to make it ask.
+            _held = asks_each_use(tool)
             if _held:
                 # QUARANTINE (v1.299.0): a pack tool the user never knowingly
                 # installed is lifted by no blanket grant, name or standing —
                 # only by a card answered about THIS tool (``call_name``).
+                # The engine's ``quarantined`` is that one held path, for a
+                # locked app's tool too (no second path to drift apart).
                 _extra.update(quarantined=True, call_name=name)
                 # PG1 (third fix plan): a lane that keeps its CARD answers
                 # apart from the names it armed hands them here, and only
@@ -1400,8 +1422,14 @@ class ToolRegistry:
                 from ..deliverables.scope import _SCOPE as _TASK_SCOPE
 
                 _tscope = _TASK_SCOPE.set(getattr(ctx, "task_scope", None))
+                from ..eval import call_ledger as _call_ledger
+
                 try:
-                    result = await tool.execute(run_args, ctx)
+                    # v1.529.0 (owner decision 3): a model call the tool makes
+                    # (a picture's question, reading a scan) is on a usage row
+                    # of its own (``eval.call_ledger``; the router's one seam).
+                    with _call_ledger.tool_scope(name, ctx):
+                        result = await tool.execute(run_args, ctx)
                 finally:
                     if _awake_deadline is not None:
                         _awake_deadline.cancel()

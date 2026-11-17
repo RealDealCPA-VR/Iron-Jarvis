@@ -2532,3 +2532,64 @@ For the owner to decide (a recommendation with each):
     update, then asked to use Iron Jarvis's tools; terminals closed and
     reopened across a restart; a long chat reply left running with the
     Chat page closed, then opened in two windows.
+
+### Owner decisions 2 to 9, as built (v1.529.0)
+
+The owner said "yes proceed" on 2026-11-17 to items 2 to 9 above, as
+recommended. Item 1 is left as recommended (the check stays with its
+callers); item 10 is the owner's to try. Eight implementers (Opus 5.5), one
+set of files each; the lead read every diff. Each item has a test that went
+red first and a mutation that made it red again.
+
+- [x] **2. An open coding session has its own Local only switch**, in the
+  session's ⋯ menu beside the reply limit, through the existing PATCH. A
+  held session shows it on, sends nothing and says why; the chat tool's
+  refusal names the menu.
+- [x] **3 and 4. Every model call is counted once.** One seam in the router
+  gives a model call made inside a tool its own usage row
+  (`eval/call_ledger.py`). Both chat lanes write each counted call as an
+  open record that the reply's end row deletes in the same transaction; a
+  start-up step folds what an earlier daemon left into one row per reply.
+  Where it differs from the plan: the open records are written where the
+  lane counts a call, not in the router (the router also sees calls that
+  bill their own rows, which a crash would then count twice), and agent
+  runs need none (their row is saved after every step). The lead wired the
+  start-up step into `daemon/app.py` and added the test that the real app
+  start settles a cut-off reply.
+- [x] **5. A Build › Code reply cut at the model's length limit ends
+  "failed", said once in plain words**, for OpenCode, Grok, Antigravity
+  (ACP `max_tokens`), Claude Code (`stop_reason: "max_tokens"`) and Pi
+  (`length`); the bell's check mark is for a finished reply only. Codex
+  reports no such ending.
+- [x] **6. No programming words** in the app-wide 400 or a one-shot's 502.
+  No existing test read the old words in an answer's main text.
+- [x] **7. Why a wait ended, and the day of a passing refusal, are stored
+  with the session.**
+- [x] **8. The gate reads the lock.** `tools.permissions.asks_each_use` (a
+  held-back tool or any locked app's tool) is the one test in the gate and
+  in the three lanes. A locked app's card is once-only. The first pass made
+  only the gate change; a probe through the real lanes showed a locked app
+  not kept on the user's own models still ran with no card, so the lanes
+  were changed too. Along the way: a call a locked app could not run here is
+  refused in its own words and never carded.
+- [x] **9. One run per hand-off**, on all three doors that start one
+  (`POST /sessions`, `/continue`, `/agents/{name}/spawn`), held per turn
+  name and read from the stored rows.
+
+Left open:
+
+- No screen draws a 502's `technical` text (item 6); the plain sentence and
+  the log carry it.
+- Some model calls are still on no row: OCR of a chat attachment, the
+  `/documents` OCR, and background engines outside a lane (item 3). An agent
+  run's tool rows are not linked to the run, so its monthly allowance does
+  not see them.
+- A crash between making a hand-off run and stamping it leaves one
+  unstamped run that never started (item 9).
+- The bell does not ring when a wait ends (item 7).
+- Claude Code's `stop_reason: "max_tokens"` was taken from its result
+  format; no recorded session shows one (item 5).
+- Tried on the installed app: none of it. What would show a problem: a
+  Usage total that jumps after a restart; a long Build › Code reply that
+  still shows the check mark; two runs in Sessions for one hand-off from a
+  chat open in two windows.

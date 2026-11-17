@@ -4464,7 +4464,7 @@ def _can_always(platform: Any, scopes: list[tuple[str, str]], state: dict[str, A
         return False
     if (state.get("low") or state.get("tainted")) and name in deny_names(bool(state.get("tainted"))):
         return False
-    if _quarantined(platform, name):
+    if _held(platform, name):
         return False  # a standing grant could not lift it anyway (review fix)
     from ..settings.tools import ALWAYS_CARD_TOOLS
 
@@ -4484,6 +4484,45 @@ def _quarantined(platform: Any, name: str) -> bool:
     return bool(getattr(tool, "quarantined", False))
 
 
+def _held(platform: Any, name: str) -> bool:
+    """Does ``name`` ask before each use whatever the turn armed or granted
+    (``tools.permissions.asks_each_use``: a held-back app tool, or any tool of
+    a LOCKED app — owner decision 8, v1.529.0)? What decides a card, a
+    refusal, ``card_allow`` and "Always"; :func:`_quarantined` only words the
+    card ("new in its app")."""
+    from ..tools.permissions import asks_each_use
+
+    try:
+        tool = platform.registry.get(name)
+    except Exception:  # noqa: BLE001
+        return False
+    return asks_each_use(tool)
+
+
+def _refused_here(platform: Any, name: str, ctx: Any) -> str:
+    """The tool's own refusal in ``ctx`` when it could not run here at all
+    (``MCPRemoteTool.refusal_here``: an app kept on the user's own models,
+    outside a plain chat or a Local only turn), else "". Such a call is
+    never carded — an Allow would be a lie — and the registry refuses it in
+    those words (owner decision 8, v1.529.0). Never raises."""
+    try:
+        here = getattr(platform.registry.get(name), "refusal_here", None)
+        return str(here(ctx) or "") if callable(here) else ""
+    except Exception:  # noqa: BLE001 — cannot tell: the card decides
+        return ""
+
+
+def _locked(platform: Any, name: str) -> bool:
+    """Is ``name`` a tool of a LOCKED app (``Tool.locked``)? It asks before
+    EACH use: a "for this conversation" answer counts once, and only this
+    call's own "once" reaches the gate (owner decision 8, v1.529.0)."""
+    try:
+        tool = platform.registry.get(name)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(getattr(tool, "locked", False))
+
+
 def _mint_always(
     platform: Any, scopes: list[tuple[str, str]], name: str, args: Any, safe_args: Any
 ) -> Any:
@@ -4492,8 +4531,8 @@ def _mint_always(
     with the REDACTED arguments, 30 days. ``None`` without a store/scope."""
     store = _grant_store(platform)
     scope = _pick_scope(scopes)
-    if store is None or scope is None or _quarantined(platform, name):
-        return None  # a quarantined pack tool is never remembered (review fix)
+    if store is None or scope is None or _held(platform, name):
+        return None  # a held-back or locked app's tool is never remembered (review fix)
     return store.create(
         scope[0], scope[1], name, _grant_hash(name, args), _grant_label(name, safe_args)
     )
@@ -11427,6 +11466,7 @@ def _persist_chat_usage(
     started_at=None, cost_usd: float = 0.0, thread_id: str = "",
     tool_session: str = "", label: str = "",
     turn_id: str = "", pending: "list[asyncio.Future[Any]] | None" = None,
+    ledger: Any = None,
 ) -> "asyncio.Future[Any] | None":
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
@@ -11461,7 +11501,12 @@ def _persist_chat_usage(
     to ``pending``, and the lane waits for it (:func:`settle_usage_writes`)
     before its turn ends. Without ``pending`` (a follow-up, a pack's sampling
     call, a reflection), or with no running loop on this thread, it is
-    written right here as before, and this returns None."""
+    written right here as before, and this returns None.
+
+    ``ledger`` (v1.529.0, owner decision 4; both lanes): the turn's
+    ``eval.call_ledger.TurnLedger`` (its tally's). The row deletes the
+    turn's open calls IN THE SAME transaction that inserts it, so a crash
+    between the two never counts the turn twice."""
     # Third plan CS6 (ONE place, both lanes): a NEW chat's first turn starts
     # with no chat id — the page names the chat a moment later
     # (``POST /chat/turns/{id}/thread``). The row takes the chat the turn
@@ -11490,6 +11535,7 @@ def _persist_chat_usage(
         _write_chat_usage, d, fields,
         thread=str(thread_id or "").strip()[:80], turn=_turn,
         turn_id=str(turn_id or "").strip() or _turn, tool_session=tool_session,
+        ledger=ledger,
     )
     loop: "asyncio.AbstractEventLoop | None"
     try:
@@ -11508,21 +11554,31 @@ def _persist_chat_usage(
 
 
 def _write_chat_usage(d, fields: "dict[str, Any]", *, thread: str, turn: str, turn_id: str,
-                      tool_session: str) -> None:
+                      tool_session: str, ledger: Any = None) -> None:
     """Write one chat usage row (:func:`_persist_chat_usage`). BLOCKING;
     never raises: accounting must never break (or alter) a reply. A failed
-    write is logged ONCE at WARNING, naming the turn (third plan CS8)."""
+    write is logged ONCE at WARNING, naming the turn (third plan CS8).
+
+    v1.529.0 (owner decision 4): with the turn's ``ledger`` the row deletes
+    the turn's open calls in its own transaction, holding the ledger so a
+    late open write can never land after it (``call_ledger.TurnLedger``)."""
     from . import durable_turns as _durable
 
+    hold = ledger.closing() if ledger is not None else contextlib.nullcontext()
     try:
         from ..core.models import AgentRun
 
-        with session_scope(d.platform.engine) as db:
-            run = AgentRun(session_id="chat", agent_type=AgentType.BUILDER,
-                           thread_id=(thread or None), **fields)
-            run_id = run.id
-            db.add(run)
-            db.commit()
+        with hold:
+            with session_scope(d.platform.engine) as db:
+                run = AgentRun(session_id="chat", agent_type=AgentType.BUILDER,
+                               thread_id=(thread or None), **fields)
+                run_id = run.id
+                db.add(run)
+                if ledger is not None:
+                    ledger.close_in(db)
+                db.commit()
+            if ledger is not None:
+                ledger.mark_closed()
     except Exception:  # noqa: BLE001 — accounting must never break a reply
         log.warning("could not write the usage of chat turn %s (chat %s): its use is missing "
                     "from the usage totals", turn_id or "(no id)", thread or "(none)", exc_info=True)
@@ -13972,7 +14028,16 @@ async def run_chat_turn(
     usage_in = usage_out = completions = 0
     # v1.300.0: the whole usage per completion (cache counts, the provider's
     # own cost) — priced per step. Lock-step: the stream lane keeps one too.
-    _tally = UsageTally()
+    # v1.529.0 (owner decision 4): each call it counts is also kept as an
+    # open record until the end row deletes it (`eval.call_ledger`), so a
+    # hard kill mid-reply is counted at the next start. Lock-step.
+    from ..eval import call_ledger as _call_ledger
+
+    _tally = _call_ledger.JournaledTally(
+        getattr(getattr(d, "platform", None), "engine", None),
+        thread_id=getattr(body, "thread_id", "") or "",
+        turn_id=str(getattr(body, "turn_id", "") or ""), started_at=turn_started,
+    )
     if _route is not None:
         # v1.489.0: the routing call is a billed call of this turn (billed
         # once, where its answer is used).
@@ -14062,6 +14127,7 @@ async def run_chat_turn(
             thread_id=getattr(body, "thread_id", ""),
             tool_session=_tool_session,  # v1.367.0 (lock-step)
             turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
+            ledger=_tally.ledger,  # v1.529.0 (lock-step)
         )
 
     async def _billed_await(aw):
@@ -14629,15 +14695,25 @@ async def run_chat_turn(
             # MIRROR NOTE (lock-step): routes/chat.py `_held_back`/`_held_card`.
             _held_refuse: dict[int, dict[str, str]] = {}
             for _hi, _htc in enumerate(calls):
+                # Owner decision 8 (v1.529.0): a LOCKED app's tool too (read
+                # from the lock, not from Local only), and for it no earlier
+                # "for this conversation" counts: it asks before each use.
+                _h_locked = _locked(d.platform, _htc.name)
                 if (_refused[_hi] or _htc.name not in _gate_now
-                        or not _quarantined(d.platform, _htc.name) or _htc.name in _card_grants):
+                        or not _held(d.platform, _htc.name)
+                        or (_htc.name in _card_grants and not _h_locked)
+                        # It could not run here at all: the registry refuses
+                        # it in its own words (not "needs your OK").
+                        or _refused_here(d.platform, _htc.name, ctx)):
                     continue
                 _ht = d.platform.registry.get(_htc.name)
                 _hpk = _ht.perm_key() if _ht is not None else _htc.name
                 if d.platform.permissions.mode_for(_hpk, overrides) is PermissionMode.DENY:
                     continue  # the registry refuses it in its own words
                 _held_refuse[_hi] = {
-                    "deny_reason": _auto.post_lane_refusal(_auto.Verdict(_auto.ASK, "quarantined")),
+                    "deny_reason": _auto.post_lane_refusal(
+                        _auto.Verdict(_auto.ASK, "quarantined" if _quarantined(d.platform, _htc.name) else "locked")
+                    ),
                     "deny_label": "needs your OK",
                 }
             _batched = [
@@ -14749,9 +14825,14 @@ async def run_chat_turn(
                     # arming put in `armed_grant`. Only for such a tool, so
                     # every other call is byte-identical. MIRROR NOTE:
                     # routes/chat.py `_registry_invoke`.
+                    # Owner decision 8: a LOCKED app's tool too, and for it no
+                    # answer at all (this lane shows no card, and a
+                    # conversation answer never covers its next use).
                     **(
-                        {"card_allow": frozenset(_card_grants)}
-                        if _quarantined(d.platform, tc.name)
+                        {"card_allow": (
+                            frozenset() if _locked(d.platform, tc.name) else frozenset(_card_grants)
+                        )}
+                        if _held(d.platform, tc.name)
                         else {}
                     ),
                     # v1.246.0: the agent run's tool deadline, so a hung
@@ -15289,6 +15370,7 @@ async def run_chat_turn(
         thread_id=getattr(body, "thread_id", ""),
         tool_session=_tool_session,  # v1.367.0 (lock-step)
         turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
+        ledger=_tally.ledger,  # v1.529.0 (lock-step)
     )
     # Third plan CS8: written off the loop; the reply goes back once it is.
     await settle_usage_writes(_usage_pending, turn_id=_usage_turn)

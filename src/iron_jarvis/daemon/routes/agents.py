@@ -56,6 +56,7 @@ from ...agents.allowance import allowance_state, month_spend, refusal_for
 # agent's folder, portrait and face key cannot disagree.
 from ...agents.files import agent_slug
 from ...agents import model_team as _team
+from ...agents import hand_off_guard  # v1.529.0: one run per hand-off
 from ...core.events import EventType
 from ...core.models import AgentType
 from ...core.logging import get_logger
@@ -4862,11 +4863,26 @@ def register(app: FastAPI, d) -> None:
             )
         return out
 
+    async def _first_spawn(turn: str) -> dict[str, Any] | None:
+        """The run *turn* already handed off to, as the spawn door answers
+        it, or None (v1.529.0, ``agents.hand_off_guard``)."""
+        if not turn:
+            return None
+        first = await asyncio.to_thread(hand_off_guard.find_handed, d.platform.engine, turn)
+        row = await asyncio.to_thread(d.orchestrator.get_session, first) if first else None
+        return None if row is None else _session_view(row, d)
+
     @app.post("/agents/{name}/spawn")
     async def spawn_agent_ep(name: str, body: SpawnBody) -> dict[str, Any]:
         from ...agents.types import get_agent_definition
         from ...core.models import AgentType
 
+        # v1.529.0: a hand-off that already started its run is answered with
+        # that run before anything else is checked (an allowance the first
+        # run spent must not turn the second window's answer into a refusal).
+        first = await _first_spawn(body.handed_from_turn)
+        if first is not None:
+            return first
         definition = d.platform.agents_registry.definition(name)
         rec = d.platform.agents_registry.get(name)
         # WHO RAN (v1.193.0). THIS IS THE MOST COMMON WAY A USER RUNS THEIR OWN
@@ -4939,32 +4955,47 @@ def register(app: FastAPI, d) -> None:
                         "save files in"
                     ),
                 )
-        session = await d.orchestrator.create_session(
-            body.task,
-            definition.type,
-            provider=provider,
-            model=model,
-            project_id=body.project_id or None,
-            allow_tools=body.allow_tools or None,
-            workspace_root=workspace_root,
-            origin=body.origin,
-            agent_name=agent_name,
-            # The chat posture rides a custom-agent escalation too (v1.232.0);
-            # when the spawn states none, the job card's posture applies
-            # (v1.295.0), and so does its per-run step budget.
-            approval_mode=body.approval_mode
-            or (str(getattr(rec, "approval_mode", "") or "") if rec is not None else ""),
-            max_steps=getattr(rec, "max_steps", None) if rec is not None else None,
-            # LOCAL ONLY RIDES THE ESCALATION (v1.332.0): stored on the row; a
-            # provider off this network is refused inside create_session (409).
-            options={"local_only": True} if getattr(body, "local_only", False) else None,
-            # v1.344.0: what the chat already ran this turn rides the
-            # custom-agent escalation too (SpawnBody.prior_tool_results).
-            prior_tool_results=getattr(body, "prior_tool_results", None),
-            # v1.345.0: the chat the custom-agent escalation was asked in —
-            # the daemon appends the run's final line to it.
-            chat_thread_id=getattr(body, "chat_thread_id", ""),
-        )
+        # ONE RUN PER HAND-OFF (v1.529.0): a chat turn that hands off to one
+        # of YOUR agents, posted by two windows on one chat, starts one run;
+        # the second window gets that run back (same id, its status). The
+        # same order as POST /sessions: held -> lookup -> create -> stamp ->
+        # let go -> start. No name: exactly as before.
+        turn = body.handed_from_turn
+        async with hand_off_guard.held(d.platform.engine, turn):
+            first = await _first_spawn(turn)
+            if first is not None:
+                return first
+            session = await d.orchestrator.create_session(
+                body.task,
+                definition.type,
+                provider=provider,
+                model=model,
+                project_id=body.project_id or None,
+                allow_tools=body.allow_tools or None,
+                workspace_root=workspace_root,
+                origin=body.origin,
+                agent_name=agent_name,
+                # The chat posture rides a custom-agent escalation too (v1.232.0);
+                # when the spawn states none, the job card's posture applies
+                # (v1.295.0), and so does its per-run step budget.
+                approval_mode=body.approval_mode
+                or (str(getattr(rec, "approval_mode", "") or "") if rec is not None else ""),
+                max_steps=getattr(rec, "max_steps", None) if rec is not None else None,
+                # LOCAL ONLY RIDES THE ESCALATION (v1.332.0): stored on the row; a
+                # provider off this network is refused inside create_session (409).
+                options={"local_only": True} if getattr(body, "local_only", False) else None,
+                # v1.344.0: what the chat already ran this turn rides the
+                # custom-agent escalation too (SpawnBody.prior_tool_results).
+                prior_tool_results=getattr(body, "prior_tool_results", None),
+                # v1.345.0: the chat the custom-agent escalation was asked in —
+                # the daemon appends the run's final line to it.
+                chat_thread_id=getattr(body, "chat_thread_id", ""),
+            )
+            if turn:
+                await asyncio.to_thread(
+                    hand_off_guard.stamp, d.platform.engine, session.id, turn
+                )
+                session.handed_from_turn = turn
         # Run through the orchestrator (with the dynamic definition override) so
         # a crashed run is finalized FAILED instead of stranded ACTIVE, and
         # post-run learning + git review fire for spawned agents too — the old

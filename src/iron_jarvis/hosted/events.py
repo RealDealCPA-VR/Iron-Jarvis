@@ -34,7 +34,10 @@ turn id). The types (``docs/BUILD-APP-VIEW-PLAN.md`` "Normalized events"):
 * ``usage`` {input, output, cache_read, cost_usd?, list_price}
 * ``notice`` {text}
 * ``error`` {title, fix, technical, fix_kind?, account?}
-* ``done`` {stop: completed|interrupted|failed|max_turns, result?}
+* ``done`` {stop: completed|interrupted|failed|max_turns, result?, cut?}
+  (owner decision 5: ``cut`` = :data:`CUT_LENGTH` on a reply the tool ended
+  at the model's length limit; its stop is "failed", as a Chat › Code
+  reply's ``truncated`` is — it did not finish)
 * v1.426.0 (E4): ``setup`` {mcp_servers: [{name, state, error?, source?}]} — the
   tool's OWN MCP servers as it reported them (``hosted/tool_setup``), emitted
   only when the list changes; drawn in the Session tab, never in the
@@ -80,6 +83,9 @@ TOOL_KINDS: tuple[str, ...] = (
 )
 APPROVAL_KINDS: tuple[str, ...] = ("command", "edit", "tool", "network", "other")
 STOPS: tuple[str, ...] = ("completed", "interrupted", "failed", "max_turns")
+#: Owner decision 5 (third plan RB10): the ``cut`` of a ``done`` whose reply
+#: the tool ended at the model's length limit (its stop is "failed").
+CUT_LENGTH = "length"
 
 #: Cuts (characters), each applied AFTER masking.
 INPUT_CHARS = 300
@@ -182,6 +188,15 @@ def make(event_type: str, /, **fields: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"type": event_type, "at": now_iso()}
     out.update(fields)
     return out
+
+
+def make_done(stop: str, cut: str = "") -> dict[str, Any]:
+    """A turn's ``done``. ``cut`` (owner decision 5: :data:`CUT_LENGTH`) is
+    kept only on a "failed" end — a Stop pressed meanwhile is a Stop."""
+    done = make("done", stop=stop)
+    if cut and stop == "failed":
+        done["cut"] = cut
+    return done
 
 
 def unified_from_hunks(path: str, hunks: list[dict[str, Any]]) -> str:

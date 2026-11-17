@@ -249,6 +249,15 @@ class Session(SQLModel, table=True):
     #: row, so it never inherits one. Additive column (auto-reconciled; NULL
     #: on older rows).
     failure_detail: str = ""
+    #: THE CHAT TURN THAT HANDED THIS RUN OFF (v1.529.0): the reply's name
+    #: (``turnId``) a chat hand-off names, or "" for every other door. Two
+    #: windows on one chat each end the reply that hands off, and each posts
+    #: the hand-off: ``agents.hand_off_guard`` starts at most one run per name
+    #: and gives the second window this row back. Stored so it holds across a
+    #: restart; never inherited by a continue or rerun (a new row). Additive
+    #: column (auto-reconciled; NULL on older rows); indexed through
+    #: ``core.db._HOT_INDEXES`` for an existing install.
+    handed_from_turn: str = Field(default="", index=True)
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 
@@ -279,6 +288,40 @@ class AgentRun(SQLModel, table=True):
     #: every chat's spend in one bucket. Additive (auto-reconciled); indexed
     #: through ``core.db._HOT_INDEXES``.
     thread_id: str | None = None
+
+
+class OpenModelCall(SQLModel, table=True):
+    """One model call of a chat reply that has not ended yet (v1.529.0,
+    owner decision 4).
+
+    A reply's usage row (:class:`AgentRun`, ``session_id="chat"``) is written
+    once, when the reply ends; a hard kill in the middle used to lose the
+    calls already made. Each call the reply counts is written here as it is
+    counted (``eval.call_ledger.JournaledTally``); the reply's own row deletes
+    its calls IN THE SAME transaction that inserts it, and the next start
+    folds what is left into one row per reply (``call_ledger.settle_open_calls``).
+    Emptied at every reply's end and every start, so it stays small. A new
+    table (``create_all`` makes it; no column to reconcile)."""
+
+    id: str = Field(default_factory=lambda: new_id("call"), primary_key=True)
+    #: The reply these calls belong to (a fresh key per reply).
+    owner: str = Field(index=True)
+    #: The daemon that wrote it: the start-up step settles only another
+    #: (earlier) daemon's calls, never a reply running now.
+    process: str = ""
+    session_id: str = "chat"
+    thread_id: str = ""
+    turn_id: str = ""
+    provider: str = ""
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cost_usd: float = 0.0
+    #: When the reply began (its row's ``created_at``).
+    started_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class ToolInvocation(SQLModel, table=True):

@@ -149,6 +149,22 @@ def headless_ask_resolver(
     return _resolve
 
 
+def asks_each_use(tool: object) -> bool:
+    """Is *tool* one the gate holds for a card about THIS call, whatever the
+    turn armed or granted? Two kinds (owner decision 8, v1.529.0):
+
+    * a HELD-BACK app tool (``quarantined``, v1.299.0): it arrived in a later
+      update of its app and can change things; and
+    * every tool of a LOCKED app (``locked``, Microsoft 365): its card and the
+      Handbook promise "Jarvis asks you before each use of it". Read from the
+      lock ITSELF, never from "a locked app is also kept on your own models"
+      (``local_only``), which the catalog ties to it today.
+
+    The one predicate the gate (``registry.invoke``) and every lane that cards
+    or refuses such a tool read. Never raises: ``None`` is no tool."""
+    return bool(getattr(tool, "quarantined", False) or getattr(tool, "locked", False))
+
+
 @dataclass
 class PermissionDecision:
     allowed: bool
@@ -242,7 +258,9 @@ class PermissionEngine:
         stays an ASK (a card where the origin can ask, the resolver's refusal
         headless) until ``POST /mcp/servers/{s}/tools/{t}/trust`` — and the
         ONE lift it keeps is the user's answer to a card about THIS tool
-        (``call_name`` in ``session_allow``; review fix, see below).
+        (``call_name`` in ``session_allow``; review fix, see below). The
+        registry passes it for every tool :func:`asks_each_use` names: a
+        LOCKED app's tool takes this same path (owner decision 8, v1.529.0).
 
         ``card_allow`` (third fix plan, PG1/K1): the names the USER allowed
         on a card about that tool (once, or for this conversation), handed

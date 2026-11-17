@@ -909,6 +909,28 @@ async def _split_think_frames(frames: Any) -> AsyncIterator[dict[str, Any]]:
             await close()
 
 
+def _note_call(adapter: Any, response: Any) -> None:
+    """v1.529.0 (owner decision 3): hand one answered call's usage to
+    ``eval.call_ledger.note_model_call`` — the ONE seam that puts a model call
+    made inside a tool on a usage row (a no-op anywhere else). Never raises."""
+    try:
+        from ..eval.call_ledger import note_model_call
+
+        note_model_call(
+            str(getattr(adapter, "provider", "") or ""),
+            str(getattr(adapter, "model", "") or ""),
+            getattr(response, "usage", None),
+        )
+    except Exception:  # noqa: BLE001 — accounting must never break a request
+        pass
+
+
+def _note_final(adapter: Any, frame: Any) -> None:
+    """:func:`_note_call` for a stream's terminal ``final`` frame."""
+    if isinstance(frame, dict) and frame.get("type") == "final":
+        _note_call(adapter, frame.get("response"))
+
+
 class RouteResult:
     """What answered — and, since v1.165.0, WHY.
 
@@ -2278,6 +2300,10 @@ class ModelRouter:
             _routing.LATENCY.record(adapter.provider, adapter.model, self._clock() - t0)
         except Exception:  # noqa: BLE001 — telemetry must never break a request
             pass
+        # v1.529.0 (owner decision 3): THE ONE SEAM where a call made inside
+        # a tool reaches a usage row (``eval.call_ledger``; a no-op outside a
+        # tool). The stream twin is in `_stream_one`.
+        _note_call(adapter, resp)
         # v1.323.0: a leading `<think>` block is reasoning, not answer — the
         # stream twin is `_split_think_frames` in `_stream_one`.
         return _with_split_thinking(resp)
@@ -2797,6 +2823,7 @@ class ModelRouter:
             async for frame in _split_think_frames(adapter.stream(
                 system=system, messages=messages, tools=tools, **_kw
             )):
+                _note_final(adapter, frame)  # v1.529.0: the `_timed_complete` twin
                 yield frame
             return
         delay = 1.5
@@ -2809,6 +2836,7 @@ class ModelRouter:
                 )):
                     if _is_answer_frame(frame):
                         yielded = True
+                    _note_final(adapter, frame)  # v1.529.0: the `_timed_complete` twin
                     yield frame
                 return
             except Exception as exc:  # noqa: BLE001 — classified below

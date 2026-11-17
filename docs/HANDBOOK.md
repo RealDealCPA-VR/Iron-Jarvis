@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.528.0 (2026-11-15).*
+holds itself to. Current as of v1.529.0 (2026-11-17).*
 
 ---
 
@@ -2041,6 +2041,43 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Every model call counted, and the open decisions settled (v1.529.0)
+
+Eight of the ten points the third fix plan left for you to decide, built as
+recommended.
+
+- **Every model call is on the Usage page.** A picture looked at for a step,
+  or a screenshot's question, now has a usage row of its own (its line says
+  "A picture was looked at for a step"). And if Iron Jarvis is closed or
+  crashes in the middle of a chat reply, the model calls that reply had
+  already made are counted at the next start, on one line that says the
+  reply was cut off. Nothing is counted twice.
+- **A coding session in Chat › Code has its own Local only switch**, in the
+  ⋯ menu at the top of the session, beside the reply limit. While a reply is
+  running, it says the change applies from your next message. A session that
+  used Microsoft 365 stays Local only and says why.
+- **A Build › Code reply cut off at the model's output limit no longer
+  reads as finished.** The session says it was cut off and did not finish,
+  and the bell shows a warning instead of the check mark. Send a message to
+  carry on. (Codex does not report this kind of ending.)
+- **Answers no longer show programming words.** A request Iron Jarvis cannot
+  use says so in a sentence (for text it could not read, where the problem
+  is), and a model that could not answer is named in plain words.
+- **Why a "Resume when ready" wait ended survives a restart**, and so does
+  the day a wait keeps trying after a passing refusal.
+- **A locked app asks before each use, wherever it runs.** This was already
+  true for Microsoft 365; it now comes from the lock itself, in every place a
+  tool can run, so any locked app added later asks too. Its card offers
+  "Allow once" and "Deny" only.
+- **One chat open in two windows starts one agent run** when a reply hands
+  the work to an agent. Both windows follow that same run.
+
+Left as they were, on purpose: a tool's own "ask every time" check stays with
+each of its callers (a test lists them), and a kept "Allow for this session"
+answer is still forgotten when Iron Jarvis restarts (its sentence says so).
+Still for you to try on the installed app: the four checks listed at the end
+of the third fix plan.
 
 ## Claude desktop's Chat tab and Codex can record their chats here (v1.528.0)
 

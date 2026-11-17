@@ -235,11 +235,25 @@ class SessionCreate(BaseModel):
     #: keeps it) and armed for the WHOLE run by the runtime — every lease on
     #: that account or a plain refusal, never another login.
     account: str = ""
+    #: v1.529.0: THE CHAT TURN THAT HANDS THIS WORK OFF (the reply's name,
+    #: the page's ``turnId``; "" = none, exactly today's body). Two windows on
+    #: one chat each post the hand-off; the daemon starts at most ONE run per
+    #: name and answers the second with the first run
+    #: (``agents.hand_off_guard``). Stored on the row, so it holds across a
+    #: restart.
+    handed_from_turn: str = ""
 
     @field_validator("account", mode="before")
     @classmethod
     def _account_text(cls, v: Any) -> Any:
         return "" if v is None else " ".join(str(v).split())[:120]
+
+    @field_validator("handed_from_turn", mode="before")
+    @classmethod
+    def _handed_from_turn_text(cls, v: Any) -> str:
+        from ..agents.hand_off_guard import clean_turn
+
+        return clean_turn(v)
 
     @field_validator("origin")
     @classmethod
@@ -868,11 +882,22 @@ class ContinueBody(BaseModel):
     # Same contract as SessionCreate.chat_thread_id (v1.345.0): a follow-up
     # carries ITS OWN chat, never the parent's.
     chat_thread_id: str = ""
+    # Same contract as SessionCreate.handed_from_turn (v1.529.0): a chat
+    # hand-off that continues the chat's earlier run names its turn too, so
+    # two windows start one follow-up, not two.
+    handed_from_turn: str = ""
 
     @field_validator("prior_tool_results")
     @classmethod
     def _validate_prior_tool_results(cls, v: Any) -> list[PriorToolResult] | None:
         return _clean_prior_tool_results(v)
+
+    @field_validator("handed_from_turn", mode="before")
+    @classmethod
+    def _handed_from_turn_text(cls, v: Any) -> str:
+        from ..agents.hand_off_guard import clean_turn
+
+        return clean_turn(v)
 
 
 class UploadBody(BaseModel):
@@ -2128,6 +2153,9 @@ class SpawnBody(BaseModel):
     prior_tool_results: list[PriorToolResult] | None = None
     # Same contract as SessionCreate.chat_thread_id (v1.345.0).
     chat_thread_id: str = ""
+    # Same contract as SessionCreate.handed_from_turn (v1.529.0): a turn that
+    # hands off to one of YOUR agents, posted by two windows, starts one run.
+    handed_from_turn: str = ""
 
     @field_validator("origin")
     @classmethod
@@ -2138,6 +2166,13 @@ class SpawnBody(BaseModel):
     @classmethod
     def _validate_prior_tool_results(cls, v: Any) -> list[PriorToolResult] | None:
         return _clean_prior_tool_results(v)
+
+    @field_validator("handed_from_turn", mode="before")
+    @classmethod
+    def _handed_from_turn_text(cls, v: Any) -> str:
+        from ..agents.hand_off_guard import clean_turn
+
+        return clean_turn(v)
 
 
 class UpdateBody(BaseModel):

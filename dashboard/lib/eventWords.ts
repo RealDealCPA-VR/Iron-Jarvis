@@ -270,6 +270,16 @@ function statusDetail(v: unknown): string {
   return safeDetailValue(outcomeWords(v)?.word ?? statusWords(v).word);
 }
 
+/** How a long reply ended (`build.turn_finished` / `chat.turn_finished`
+ *  `outcome`). Owner decision 5 (third plan RB10): "limit" — stopped at its
+ *  step or reply limit, waiting for Keep going — was shown as the bare word
+ *  "Limit"; it says what the bell says (lib/buildLinks.buildFinishedHeadline).
+ *  Every other outcome is the one status vocabulary. */
+function finishedDetail(v: unknown): string {
+  if (typeof v === "string" && v.trim().toLowerCase() === "limit") return "Stopped at its limit";
+  return statusDetail(v);
+}
+
 /** A webhook refusal's reason, said plainly (daemon/routes/comm.py's
  *  `rejected` values). An unknown reason is shown as the words it already
  *  is ("bad_signature" → "bad signature"). */
@@ -426,7 +436,7 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
     case "chat.turn_finished":
       add(pick(p, "title"));
       if (type === "build.account_limit") add(pick(p, "account_name"));
-      if (type === "build.turn_finished" || type === "chat.turn_finished") add(statusDetail(p.outcome));
+      if (type === "build.turn_finished" || type === "chat.turn_finished") add(finishedDetail(p.outcome));
       break;
     case "build.rewound":
       add(count(p.turns, "message", "messages"));

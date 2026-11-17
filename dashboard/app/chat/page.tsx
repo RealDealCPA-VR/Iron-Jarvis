@@ -10512,6 +10512,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     const carried = opts.priorToolResults?.length
       ? { prior_tool_results: opts.priorToolResults }
       : {};
+    // ONE RUN PER HAND-OFF (v1.529.0): the hand-off names the chat turn that
+    // handed off, so two windows on this chat start ONE run — the daemon
+    // answers the second window with the first run. Only a hand-off has one.
+    const handedFrom = esc?.turnId ? { handed_from_turn: esc.turnId } : {};
     if (!esc && !opts.keepGoing) setAttachments([]); // chips are consumed by this message
     // A recap of the chat so far — prepended ONLY when opening a fresh session
     // below (switching to Agent mode drops all context otherwise). Captured
@@ -10655,6 +10659,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           // at-send save above (a new chat is named before the daemon is
           // asked); a messaging thread's box has none and sends nothing.
           ...(box.id ? { chat_thread_id: box.id } : {}),
+          ...handedFrom, // v1.529.0: one follow-up per hand-off
         });
       } else {
         // First message opens a session — carry the chat recap into the task so
@@ -10688,6 +10693,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                 ...carried,
                 // v1.345.0 — see the continue branch above.
                 ...(box.id ? { chat_thread_id: box.id } : {}),
+                ...handedFrom, // v1.529.0: one run per hand-off
               },
             )
           : await post<SessionView>("/sessions", {
@@ -10745,6 +10751,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               ...carried,
               // v1.345.0 — see the continue branch above.
               ...(box.id ? { chat_thread_id: box.id } : {}),
+              ...handedFrom, // v1.529.0: one run per hand-off
             });
       }
       // ALWAYS chain forward to the returned session id: `continue` spawns a NEW

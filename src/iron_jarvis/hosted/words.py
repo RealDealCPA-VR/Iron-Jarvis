@@ -100,7 +100,15 @@ POOL_FULL = (
     "then send this again."
 )
 NO_SESSION_YET = "This session has no conversation yet — send a message first."
-RUNNING = "This session is working on a message — stop it or let it finish first."
+#: Owner decision 5 (third plan RB10): the coding tool ended the reply at the
+#: model's length limit (ACP ``max_tokens``, Claude Code's ``stop_reason``,
+#: Pi's ``length``). The reply did not finish; the chat's own words for it
+#: are "Cut off at the output limit" (dashboard/lib/turnRecovery.ts).
+OUTPUT_LIMIT_CUT = (
+    "This reply was cut off at the model's output limit, so it did not finish. "
+    "What it did before that is shown above. Send a message to carry on."
+)
+RUNNING ="This session is working on a message — stop it or let it finish first."
 #: v1.453.0: Archive is refused while the tool still works in the background
 #: (archiving stops the tool, and what it runs in the background with it).
 ARCHIVE_BACKGROUND = (

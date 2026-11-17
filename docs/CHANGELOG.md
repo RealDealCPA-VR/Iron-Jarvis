@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.529.0
+
+**Every model call counted, and the open decisions settled.** Eight of the ten points the third fix plan left for you to decide, built as recommended.
+
 ## v1.528.0
 
 **Claude desktop's Chat tab and Codex can record their chats here.** Claude desktop keeps the chats in its **Chat** tab on claude.ai, not on this PC, so Iron Jarvis cannot read them.
@@ -77,7 +81,3 @@
 ## v1.511.0
 
 **Every OK is for what will really happen.** The third of eight releases from the second review.
-
-## v1.510.0
-
-**Nothing is lost, part two.** The second of eight releases from the second review.

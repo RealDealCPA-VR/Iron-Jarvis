@@ -49,7 +49,7 @@ from ...core import risk_door as _risk_door
 from ...core import auto_approve as _auto
 from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
 from ...tools.reversible import call_reversible_flag as _call_reversible_flag
-from ...eval.pricing import UsageTally
+from ...eval import call_ledger as _call_ledger
 from ...providers import egress as _egress
 from ...providers.adapters.base import refusal_of as _refusal_of
 from ...providers.reasoning import normalize_level
@@ -128,6 +128,9 @@ from ..chat_turn import (
     _grant_covers,
     _can_always,
     _quarantined,
+    _held,
+    _locked,
+    _refused_here,
     _mint_always,
     _taint_chat_turn,  # noqa: F401 — re-exported; the lane taints via _fence_tool_output (v1.311.0)
     _batchable_call,
@@ -1268,12 +1271,24 @@ def _clean_branched_from(raw: Any) -> "dict[str, Any] | None":
 
 #: The keys of a Build session's limit record / resume wait (v1.368.0).
 _ACCOUNT_LIMIT_KEYS = ("account", "account_name", "provider", "vendor", "kind",
-                       "resets_at", "at", "turn_id")
+                       "resets_at", "at", "turn_id",
+                       # v1.529.0 (owner decision 7): why the card's "Resume
+                       # when ready" wait ENDED without carrying the reply on
+                       # (``routes/build._wait_refused``) — kept, so a restart
+                       # still says it.
+                       "wait_ended")
 _ACCOUNT_WAIT_KEYS = ("account", "account_name", "resets_at", "armed_at", "next_check_at",
                       # v1.393.0 (the long-jobs plan's Phase 4): the group the
                       # account was in when the wait was armed (for words —
                       # the move itself reads the live groups).
-                      "group")
+                      "group",
+                      # v1.529.0 (owner decision 7): when this wait's carry-on
+                      # was FIRST refused for a passing reason — its day is
+                      # counted from here, across a restart.
+                      "refused_at")
+#: v1.529.0: a kept key longer than the others' 200 characters (the card's
+#: sentence; the dashboard reads at most 600 of it).
+_ACCOUNT_KEY_CAPS = {"wait_ended": 600}
 #: v1.393.0: the wait's flags — ``auto`` (armed by itself, no press) and
 #: ``told`` (the wait loop said the limit on the bell itself).
 _ACCOUNT_WAIT_FLAGS = ("auto", "told")
@@ -1298,7 +1313,8 @@ def _clean_account_setup(raw: dict[str, Any]) -> dict[str, Any]:
         for k in keys:
             v = value.get(k)
             if isinstance(v, str) and v.strip():
-                kept[k] = v.strip()[:200]
+                cap = _ACCOUNT_KEY_CAPS.get(k)
+                kept[k] = " ".join(v.split())[:cap] if cap else v.strip()[:200]
         if key == "account_limit" and isinstance(value.get("resumable"), bool):
             kept["resumable"] = value["resumable"]
         if key == "account_wait":
@@ -5754,7 +5770,14 @@ async def chat_stream(
         usage_in = usage_out = completions = 0
         # v1.300.0: the whole usage per completion, priced per step.
         # MIRROR NOTE (lock-step): chat_turn.run_chat_turn keeps one too.
-        _tally = UsageTally()
+        # v1.529.0 (owner decision 4): each call it counts is also kept as an
+        # open record until the end row below deletes it (`eval.call_ledger`),
+        # so a hard kill mid-reply is counted at the next start.
+        _tally = _call_ledger.JournaledTally(
+            getattr(getattr(d, "platform", None), "engine", None),
+            thread_id=getattr(body, "thread_id", "") or "", turn_id=_usage_turn,
+            started_at=turn_started,
+        )
         if _route is not None:
             # v1.489.0: the routing call is a billed call of this turn (billed
             # once, where its answer is used).
@@ -5890,6 +5913,7 @@ async def chat_stream(
                 thread_id=getattr(body, "thread_id", ""),
                 tool_session=_tool_session,  # v1.367.0 (lock-step)
                 turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
+                ledger=_tally.ledger,  # v1.529.0 (lock-step)
             )
 
         # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office
@@ -6677,7 +6701,16 @@ async def chat_stream(
                     # it). The registry's gate reads the same answers
                     # (`card_allow` below), so a skipped card runs nothing.
                     # MIRROR NOTE (lock-step): chat_turn refuses it.
-                    return _quarantined(d.platform, _c.name) and _c.name not in card_grants
+                    # Owner decision 8 (v1.529.0): every tool of a LOCKED
+                    # app too, read from the lock (not from Local only); it
+                    # asks before EACH use, so no earlier "for this
+                    # conversation" covers it.
+                    # A call that could not run here at all (an app kept on
+                    # your own models, Local only off) is never carded: the
+                    # registry refuses it in the tool's own words.
+                    return _held(d.platform, _c.name) and (
+                        _c.name not in card_grants or _locked(d.platform, _c.name)
+                    ) and not _refused_here(d.platform, _c.name, ctx)
 
                 # THE SPEND CHECK (v1.346.0, media in chat): ONCE per call of
                 # the round, BEFORE any card is decided, each armed tool
@@ -7150,6 +7183,9 @@ async def chat_stream(
                         not _unarmed and _held_back(tc)
                         and _mode is not PermissionMode.DENY
                     )
+                    # Owner decision 8 (v1.529.0): a LOCKED app's card is
+                    # "Allow once" / "Deny" only — it asks before each use.
+                    _lock_card = _held_card and _locked(d.platform, tc.name)
                     _card_key = (
                         _ask_first_key(tc, _perm_name)
                         if (_local_ask or _once_only or _held_card) else _perm_name
@@ -7313,7 +7349,7 @@ async def chat_stream(
                                 _frame["cost_note"] = spend_words_for(
                                     _spend.get(id(_c)) for _c in _group
                                 )
-                            if _local_ask or _once_only:
+                            if _local_ask or _once_only or _lock_card:
                                 # v1.332.0 (L3): this card offers "Allow
                                 # once" and "Deny" only; any wider answer is
                                 # read as once below. v1.367.0: the plan
@@ -7371,8 +7407,10 @@ async def chat_stream(
                                     "local_only" if _local_ask
                                     else "looked_up" if (_night_card and tc.name in _looked_up)
                                     else "night" if _night_card
-                                    # PG1: "it is new in its app".
-                                    else "quarantined" if _held_card else ""
+                                    # PG1: "it is new in its app"; owner
+                                    # decision 8: "its app asks before each use".
+                                    else ("quarantined" if _quarantined(d.platform, tc.name) else "locked")
+                                    if _held_card else ""
                                 ),
                                 rule=_auto_kept.get(id(tc), ""),
                                 strict=approval_mode == "always_ask",
@@ -7409,7 +7447,7 @@ async def chat_stream(
                                 ),
                                 turn_id=_step_turn,
                                 once_only=bool(
-                                    _local_ask or _once_only or _spend_card
+                                    _local_ask or _once_only or _spend_card or _lock_card
                                     or (_night_card and tc.name in _looked_up)
                                 ),
                                 reason=str(
@@ -7467,7 +7505,7 @@ async def chat_stream(
                                     ),
                                 )
                                 if _coding_session and _stall.phone_may_ask(
-                                    once_only=bool(_once_only), local_ask=bool(_local_ask),
+                                    once_only=bool(_once_only or _lock_card), local_ask=bool(_local_ask),
                                     priced=bool(_spend_card),
                                     # v1.392.0: a Local only turn keeps every
                                     # card in the app (a phone is a cloud).
@@ -7555,10 +7593,11 @@ async def chat_stream(
                                 # no frame is emitted (as every stop path).
                                 _persist_once(AgentState.CANCELLED)
                                 return
-                            if (_local_ask or _once_only) and _decision in ("tab", "conversation", "always"):
+                            if (_local_ask or _once_only or _lock_card) and _decision in ("tab", "conversation", "always"):
                                 # v1.332.0 (L3): a local-only card is "Allow
                                 # once": no tab grant, no conversation grant,
                                 # no standing grant is recorded from it.
+                                # Owner decision 8: a locked app's card too.
                                 _decision = "once"
                             if (_night_card and tc.name in _looked_up
                                     and _decision in ("tab", "conversation", "always")):
@@ -7869,9 +7908,15 @@ async def chat_stream(
                         # names arming put in `armed_grant`. Passed only for
                         # such a tool, so every other call (and every invoke
                         # double) is byte-identical. MIRROR NOTE: chat_turn.
+                        # Owner decision 8 (v1.529.0): a LOCKED app's tool too,
+                        # and for it only this call's "once" (it asks before
+                        # each use; no conversation answer covers it).
                         **(
-                            {"card_allow": frozenset(card_grants | _p["card_once"])}
-                            if _quarantined(d.platform, tc.name)
+                            {"card_allow": (
+                                frozenset(_p["card_once"]) if _locked(d.platform, tc.name)
+                                else frozenset(card_grants | _p["card_once"])
+                            )}
+                            if _held(d.platform, tc.name)
                             else {}
                         ),
                         # v1.246.0 — lock-step with chat_turn.

@@ -97,6 +97,7 @@ from typing import Any
 from . import words as W
 from .driver import Ask, AskRefused, ControlRefused, ControlWaiter, Driver, new_ask_id
 from .events import (
+    CUT_LENGTH,
     DETAIL_CHARS,
     DIFF_CHARS,
     FULL_KEY,
@@ -105,6 +106,7 @@ from .events import (
     clip,
     clip_tail,
     make,
+    make_done,
     now_iso,
     one_line,
     unified_from_hunks,
@@ -2048,6 +2050,7 @@ class ClaudeDriver(Driver):
         self.emit(_seen.attach(ev, self))
         sub = str(obj.get("subtype") or "")
         reason = str(obj.get("terminal_reason") or "")
+        cut = ""
         if self._interrupting or reason.startswith("aborted"):
             stop = "interrupted"
         elif sub == "error_max_turns":
@@ -2056,9 +2059,15 @@ class ClaudeDriver(Driver):
             stop = "failed"
             if not self._errored and obj.get("result"):
                 self._failure(str(obj.get("result")))
+        elif str(obj.get("stop_reason") or "") == "max_tokens":
+            # Owner decision 5 (third plan RB10): Claude Code ended the reply
+            # at the model's length limit (its own recovery gave up) — the
+            # failed ending with its cut, said in plain words, never "finished".
+            stop, cut = "failed", CUT_LENGTH
+            self.emit(make("notice", text=W.OUTPUT_LIMIT_CUT))
         else:
             stop = "completed"
-        done = make("done", stop=stop)
+        done = make_done(stop, cut)
         if stop == "completed" and obj.get("result"):
             done["result"] = clip(obj["result"], 4000)
         if stop != "interrupted" and any(s == "sent" for s in self.steers.values()):

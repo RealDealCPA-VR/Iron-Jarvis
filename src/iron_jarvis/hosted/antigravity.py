@@ -986,6 +986,7 @@ class AntigravityDriver(AcpDriver):
         self._errored = False
         self._interrupting = False
         self._stop = ""
+        self._cut = ""
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._pending.clear()
         self.turn_started()
@@ -1164,9 +1165,9 @@ class AntigravityDriver(AcpDriver):
         else:
             data = result if isinstance(result, dict) else {}
             stop = self.take_answer(data)
+            # Owner decision 5: ``max_tokens`` is the failed ending with its
+            # cut, said once (``AcpDriver.stop_of``).
             self._stop = self.stop_of(stop, data)
-            if stop == "max_tokens":
-                self.emit(make("notice", text="The answer reached the model's output limit."))
             if self._interrupting and self._stop == "completed":
                 self._stop = "interrupted"
         if self._failed_said and self._stop != "interrupted":

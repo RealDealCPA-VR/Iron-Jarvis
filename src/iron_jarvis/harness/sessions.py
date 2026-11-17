@@ -1554,7 +1554,7 @@ def take_wait(engine: Any, thread_id: str, armed_at: str, account: str, *,
 
 
 def amend_wait(engine: Any, thread_id: str, armed_at: str, account: str,
-               changes: "dict[str, Any] | None") -> bool:
+               changes: "dict[str, Any] | None", *, ended: str = "", at: str = "") -> bool:
     """CHANGE (``changes``: keys merged into the wait) or, with ``None``, END
     the "Resume when ready" wait armed at ``armed_at`` for ``account`` — only
     while it is still the session's own (v1.393.0, the long-jobs plan's
@@ -1565,7 +1565,13 @@ def amend_wait(engine: Any, thread_id: str, armed_at: str, account: str,
     whether it wrote. Never on an ARCHIVED session (v1.393.0 review — the
     rule :func:`take_wait` keeps: a pass racing an archive must not mark,
     and so announce, the limit of a session the user just put away).
-    BLOCKING."""
+    BLOCKING.
+
+    v1.529.0 (owner decision 7): ``ended`` — with ``changes`` None, WHY the
+    wait ended without carrying the reply on, kept on the session's limit
+    card of ``account`` (``account_limit.wait_ended``) in the SAME write, so
+    a restart still says it; a session with no card of that account gets
+    one (``at``: its time) that names the account."""
     from ..daemon.routes.chat import _clean_setup
 
     if not armed_at or not account:
@@ -1585,8 +1591,37 @@ def amend_wait(engine: Any, thread_id: str, armed_at: str, account: str,
             return False
         if changes is None:
             setup.pop("account_wait", None)
+            if ended:
+                card = setup.get("account_limit")
+                if not isinstance(card, dict) or card.get("account") != account:
+                    card = {"account": account, "account_name": str(setup.get("account_name") or ""),
+                            "at": at or utcnow().isoformat()}
+                setup["account_limit"] = {**card, "wait_ended": ended}
         else:
             setup["account_wait"] = {**wait, **changes}
+        row.setup_json = _clean_setup(setup)
+        db.add(row)
+        db.commit()
+        return True
+
+
+def forget_wait_ended(engine: Any, thread_id: str) -> bool:
+    """v1.529.0 (owner decision 7): take why an earlier "Resume when ready"
+    wait ended (``account_limit.wait_ended``, :func:`amend_wait`) off the
+    session's limit card — the user waits again or a reply starts, so it is
+    moot; the card itself stays. Writes only when the words are there.
+    Answers whether it wrote. BLOCKING."""
+    from ..daemon.routes.chat import _clean_setup
+
+    with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, str(thread_id or ""))
+        if row is None or not is_build_thread(row):
+            return False
+        setup = _setup(row)
+        card = setup.get("account_limit")
+        if not isinstance(card, dict) or "wait_ended" not in card:
+            return False
+        setup["account_limit"] = {k: v for k, v in card.items() if k != "wait_ended"}
         row.setup_json = _clean_setup(setup)
         db.add(row)
         db.commit()

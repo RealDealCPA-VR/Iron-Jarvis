@@ -140,7 +140,11 @@ def outcome_of(stop: str) -> str:
     stopped at its turn limit (``max_turns``) did not finish and waits for
     the user — "limit" ("Your coding session stopped at its limit and needs
     you"), never "finished"; one that failed is "failed"; one the user
-    stopped or a shutdown cut off (``interrupted``) sends no notice."""
+    stopped or a shutdown cut off (``interrupted``) sends no notice.
+
+    Owner decision 5: a reply the tool ended at the model's LENGTH limit
+    reaches here as "failed" (each driver ends it so, with ``cut: "length"``
+    on its ``done``), exactly as Chat › Code's ``truncated`` is "failed"."""
     stop = str(stop or "")
     if stop == "max_turns":
         return "limit"

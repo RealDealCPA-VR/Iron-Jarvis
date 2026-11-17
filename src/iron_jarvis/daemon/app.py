@@ -206,21 +206,90 @@ def _refusal_http(exc: Exception, provider: str = "", manager: Any = None) -> HT
         return None
 
 
-def _provider_error_http(exc: Exception, manager: Any = None) -> HTTPException:
+class ProviderFailedHTTP(HTTPException):
+    """A one-shot's 502 when the model it asked could not answer (owner
+    decision 6, v1.529.0): an ``HTTPException`` exactly as before (status
+    502, a string ``detail``), carrying the provider's own text as
+    ``technical`` so the app's handler answers ``{detail, technical}`` — the
+    shape of the chat lane's 502 (``chat_turn.ChatTurnFailed``) and of
+    ``failure_words.friendly_error``. A caller that catches
+    ``HTTPException`` and reads ``.detail`` sees the plain sentence."""
+
+    def __init__(self, detail: str, technical: str = "") -> None:
+        super().__init__(status_code=502, detail=detail)
+        self.technical = str(technical or "")
+
+    def body(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"detail": str(self.detail)}
+        if self.technical:
+            out["technical"] = self.technical
+        return out
+
+
+def _provider_failed_words(exc: Exception, manager: Any = None, provider: str = "") -> tuple[str, str]:
+    """``(detail, technical)`` for a one-shot's provider failure that is not
+    a rate limit: the run's plain words (``failure_words.run_failure_words``:
+    a recognised failure's headline and fix, else "<Model> couldn't finish
+    this task. Run it again. …"), naming the model by its plain name — the
+    failure's own name for it, else *provider*, the one the one-shot asked
+    (a call that failed came from a model, so it is never "Iron Jarvis's own
+    fault"). The raw text is ``technical`` (masked, bounded). Ends with the
+    D1 sentence when pay-per-use models were left out. Never raises."""
+    from ..providers import failure_words as fw
+
+    hint = " ".join(str(provider or "").split())
+    if hint.lower() in ("auto", "mock"):
+        hint = ""
+    try:
+        if hint and not fw.failure_facts(exc).provider:
+            # The ``_refusal_http`` stamp: whose failure this is.
+            exc.failed_provider = hint  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — a frozen exception keeps its own words
+        pass
+    try:
+        reason, technical = fw.run_failure_words(exc, manager=manager, provider=hint)
+    except Exception:  # noqa: BLE001 — wording only
+        reason, technical = "", ""
+    own_fault = f"{fw.GENERIC_TITLE_RUN}. {fw.GENERIC_FIX_RUN_OWN}"
+    if not reason or reason.startswith(own_fault):
+        # No name to give: still a MODEL's failure, and a one-shot has no run
+        # page to open — "choose another model", never "open the run".
+        rest = reason[len(own_fault):] if reason else fw._with_not_moved("", exc, manager)
+        reason = f"{fw.GENERIC_TITLE_RUN}. {fw.GENERIC_FIX_RUN}" + (
+            rest if rest.startswith(" ") or not rest else f" {rest}"
+        )
+    if not technical:
+        try:
+            technical = fw.technical_text(exc)
+        except Exception:  # noqa: BLE001
+            technical = ""
+    if technical and technical.strip() == reason.strip():
+        technical = ""
+    return reason, technical
+
+
+def _provider_error_http(exc: Exception, manager: Any = None, provider: str = "") -> HTTPException:
     """Map a provider failure to an honest, human-readable HTTP error.
 
     v1.424.0 (the owner's decision D1): a one-shot whose failover LEFT OUT
     pay-per-use models (its own pick was not one) ends with the one sentence
     that says so (``providers/billing.not_moved_for``) — byte-identical
-    otherwise. ``manager`` names a fleet node by its label."""
-    refused = _refusal_http(exc)
+    otherwise. ``manager`` names a fleet node by its label.
+
+    Owner decision 6 (v1.529.0): a failure that is not a rate limit answers
+    502 with plain words that NAME the model that could not answer
+    (:func:`_provider_failed_words`; *provider* is the one the one-shot
+    asked, used when the failure names none itself), never the provider's
+    own text — that rides beside it as ``technical``
+    (:class:`ProviderFailedHTTP`)."""
+    refused = _refusal_http(exc, provider, manager)
     if refused is not None:
         return refused
-    from ..providers.billing import not_moved_for
-
-    note = not_moved_for(exc, manager)
-    tail = f" {note}" if note else ""
     if _is_transient_provider_error(exc):
+        from ..providers.billing import not_moved_for
+
+        note = not_moved_for(exc, manager)
+        tail = f" {note}" if note else ""
         return HTTPException(
             status_code=429,
             detail=(
@@ -228,7 +297,65 @@ def _provider_error_http(exc: Exception, manager: Any = None) -> HTTPException:
                 "again, or pick a different model for this terminal" + tail
             ),
         )
-    return HTTPException(status_code=502, detail=str(exc) + tail)
+    detail, technical = _provider_failed_words(exc, manager, provider)
+    return ProviderFailedHTTP(detail, technical)
+
+
+#: The app-wide 400's plain lines (owner decision 6, v1.529.0), one per kind
+#: of malformed input; :func:`_input_error_words` picks one.
+INPUT_NOT_USABLE = "Iron Jarvis couldn't use what was sent. Check it and try again."
+INPUT_NOT_FOUND = "Iron Jarvis couldn't find that. Check the name and try again."
+_INPUT_NOT_READ = "Iron Jarvis couldn't read that {kind} text{where}. Check it and try again."
+
+
+def _parser_where(exc: BaseException) -> str:
+    """``" (line 2, column 18)"`` from a JSON or TOML parser's error, or ""."""
+    import re as _re
+
+    try:
+        line, col = getattr(exc, "lineno", None), getattr(exc, "colno", None)
+        if not (isinstance(line, int) and isinstance(col, int)):
+            m = _re.search(r"line (\d+),? column (\d+)", str(getattr(exc, "msg", "") or exc))
+            if m is None:
+                return ""
+            line, col = int(m.group(1)), int(m.group(2))
+        return f" (line {line}, column {col})"
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+
+
+def _input_error_words(exc: BaseException) -> str:
+    """The one plain sentence the app-wide 400 answers for an input error
+    that reached the app (owner decision 6, v1.529.0) — never the class
+    name, never a parser's raw text:
+
+    * a JSON or TOML decode error says which kind of text could not be read
+      and where, when the parser says ("… that JSON text (line 2, column
+      18) …");
+    * a ``KeyError`` (its text is a quoted key) is :data:`INPUT_NOT_FOUND`;
+    * a ``ValueError`` keeps a sentence the app's own code wrote for the
+      user, else :data:`INPUT_NOT_USABLE`.
+
+    One rule for all: ``core.failures.plain_failure``, which keeps only our
+    own sentence (never a parser's or a key's) and logs the raw text,
+    masked. Never raises."""
+    import json as _json
+    import tomllib as _tomllib
+
+    from ..core.failures import plain_failure
+
+    try:
+        if isinstance(exc, _json.JSONDecodeError):
+            what = _INPUT_NOT_READ.format(kind="JSON", where=_parser_where(exc))
+        elif isinstance(exc, _tomllib.TOMLDecodeError):
+            what = _INPUT_NOT_READ.format(kind="TOML", where=_parser_where(exc))
+        elif isinstance(exc, KeyError):
+            what = INPUT_NOT_FOUND
+        else:
+            what = INPUT_NOT_USABLE
+        return plain_failure(what, exc)
+    except Exception:  # noqa: BLE001 — the answer must never become the failure
+        return INPUT_NOT_USABLE
 
 
 def _graceful_stop() -> None:  # pragma: no cover — exercised via monkeypatch
@@ -1149,6 +1276,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # put back (both above), replies brought home, old records dropped.
         _turns_reconciled = await _rehydrate_step(
             "reconcile_chat_turns", _reconcile_chat_turns, off_loop_s=_TURN_PASS_TIMEOUT_S
+        )
+        # v1.529.0 (owner decision 4): the model calls of a chat reply an
+        # earlier daemon was cut off in are counted, one usage row per reply
+        # (``eval.call_ledger``). Only records ANOTHER process wrote; before
+        # the tidy below, so a cut-off reply's chat can still be read.
+        from ..eval.call_ledger import settle_open_calls as _settle_open_calls
+
+        await _rehydrate_step(
+            "settle_open_model_calls",
+            lambda: _settle_open_calls(platform.engine),
+            off_loop_s=_TURN_PASS_TIMEOUT_S,
         )
         # Third plan G6 / RB9: AFTER the coding sessions' replies were put
         # back (above), a chat reply that never reached its chat is written
@@ -2646,10 +2784,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from fastapi.responses import JSONResponse
 
     async def _input_error(request: Request, exc: Exception):  # noqa: ANN202
-        return JSONResponse(status_code=400, content={"detail": f"{type(exc).__name__}: {exc}"})
+        # Owner decision 6 (v1.529.0): one plain sentence, never
+        # "<ClassName>: <text>" (``_input_error_words``); still 400.
+        return JSONResponse(status_code=400, content={"detail": _input_error_words(exc)})
 
     for _exc_type in (ValueError, KeyError, _tomllib.TOMLDecodeError, _json.JSONDecodeError):
         app.add_exception_handler(_exc_type, _input_error)
+
+    async def _provider_failed(request: Request, exc: Exception):  # noqa: ANN202
+        # Owner decision 6 (v1.529.0): a one-shot's 502 answers its plain
+        # words as ``detail`` and the provider's own text as ``technical``
+        # (``ProviderFailedHTTP``), the chat lane's 502 shape.
+        return JSONResponse(
+            status_code=exc.status_code,  # type: ignore[attr-defined]
+            content=exc.body(),  # type: ignore[attr-defined]
+            headers=getattr(exc, "headers", None),
+        )
+
+    app.add_exception_handler(ProviderFailedHTTP, _provider_failed)
 
     async def _local_only_refused(request: Request, exc: Exception):  # noqa: ANN202
         # LOCAL ONLY (v1.332.0): nothing was sent because the chat is local
@@ -3316,7 +3468,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     ),
                 ) from exc
             if not _is_transient_provider_error(exc):
-                raise _provider_error_http(exc)
+                raise _provider_error_http(exc, platform.providers, primary)
             # A BUILD SESSION'S ACCOUNT (v1.368.0 review): a one-shot made
             # inside a Build turn (its automatic compaction) is HELD like the
             # turn itself — the router holds the turn (``held``), and these
@@ -3325,13 +3477,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # another provider (an API key, another vendor, another machine)
             # the session did not choose.
             if _pin_armed():
-                raise _provider_error_http(exc)
+                raise _provider_error_http(exc, platform.providers, primary)
             # STRICT MODEL PIN (v1.502.0, north-star 2.14): a provider the
             # caller named answers or the call fails — by name, never moved.
             if bool(getattr(platform.config, "strict_model_pin", False)) and _one_shot_named(
                 provider, named
             ):
-                base = _provider_error_http(exc, platform.providers)
+                base = _provider_error_http(exc, platform.providers, primary)
                 who = _egress.friendly_name(primary, platform.providers)
                 raise HTTPException(
                     status_code=base.status_code,
@@ -3389,7 +3541,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # — plus, when pay-per-use models were left out (v1.424.0), the
             # one sentence that says so.
             _billing.mark_left_out(exc, _left_out)
-            raise _provider_error_http(exc, platform.providers)
+            raise _provider_error_http(exc, platform.providers, primary)
 
     # --- Skill learning (v1.135.0): distill glue + proposal event ---------
 

@@ -22,6 +22,7 @@ import { decodeSessionGit, type SessionGit } from "@/lib/buildGit";
 import { decodeBranchedFrom, type BranchedFrom } from "@/lib/buildNext";
 import type { FinishRecord, FinishReview } from "@/lib/stepWords";
 import { decodeSessionTeam, decodeTeamNames, type SessionTeam, type TeamNames } from "@/lib/sessionTeam";
+import { localOnlyHeldTitle } from "@/lib/localOnly";
 
 // Where a Build session opens lives in the import-free lib/buildLinks (the
 // bell and the Activity rows read it); re-exported here for the screen.
@@ -679,6 +680,20 @@ export function localOnlyAppliesLine(raw: unknown, on: boolean): string {
   const v = raw && typeof raw === "object" ? (raw as { applies_local_only?: unknown }).applies_local_only : undefined;
   if (v !== "next_reply") return "";
   return on ? LOCAL_ONLY_APPLIES_ON : LOCAL_ONLY_APPLIES_OFF;
+}
+
+/** Owner decision 2: the open session's Local only switch (its ⋯ menu),
+ *  off. On, it reads the Session tab's own line (sessionRail LOCAL_ONLY_LINE). */
+export const SESSION_LOCAL_ONLY_OFF_TITLE =
+  "Keep this session on this PC or your own network: nothing goes to a cloud model without your OK.";
+
+/** Owner decision 2 (after the third fix plan): why an open session's Local
+ *  only switch stays on — an app it used holds it (`local_only_holds`,
+ *  egress.HOLDS_KEY; the daemon keeps such a session on whatever a PATCH
+ *  sends). The chat page's own sentence (`localOnlyHeldTitle`), said of a
+ *  session. */
+export function sessionLocalOnlyHeldWords(holds: readonly string[]): string {
+  return localOnlyHeldTitle([...holds]).replace("this chat used", "this session used");
 }
 
 /** `patchSession` for the level picker and Local only: the view, and when

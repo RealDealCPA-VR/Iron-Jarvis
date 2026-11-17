@@ -4114,8 +4114,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # RB7: only once its question is saved (a message that could not
             # be saved leaves "Continue from where it stopped" as it was).
             await asyncio.to_thread(RR.drop_failed, platform.engine, S.session_id_for(thread_id))
-            # Third plan RB6: a reply starts — why an earlier wait ended is moot.
-            _WAIT_ENDED.pop(thread_id, None)
+            # Third plan RB6: a reply starts — why an earlier wait ended is moot
+            # (v1.529.0: taken off the stored card; a write only when it is there).
+            try:
+                await asyncio.to_thread(S.forget_wait_ended, platform.engine, thread_id)
+            except Exception:  # noqa: BLE001 — the reply still starts; its end replaces the card
+                log.warning("clearing why the wait of build session %s ended failed", thread_id,
+                            exc_info=True)
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
                 no_limit=no_limit, record=record, account_move=move_line,
@@ -4304,16 +4309,13 @@ async def _move_within_group(d: Any, thread_id: str, setup: dict[str, Any],
 #: again at each pass — but never longer than this after its first refusal;
 #: then the wait ends and says so, like a lasting refusal.
 WAIT_GIVE_UP_S = 24 * 3600.0
-#: Third plan RB6: (thread id, the wait's ``armed_at``) -> when this Iron
-#: Jarvis first saw its carry-on refused (a passing refusal). In memory: a
-#: restart gives a wait a new day. On the loop thread only.
-_WAIT_REFUSED: dict[tuple[str, str], Any] = {}
-#: Third plan RB6: thread id -> {account, words}: why a session's "Resume when
-#: ready" wait ENDED without carrying the reply on — shown on its limit card
-#: (the view's ``account_limit.wait_ended``) until the user presses Resume
-#: when ready again or a reply starts. In memory (the stored card keeps only
-#: its whitelisted keys, ``routes/chat._ACCOUNT_LIMIT_KEYS``).
-_WAIT_ENDED: dict[str, dict[str, str]] = {}
+#: Third plan RB6, kept since v1.529.0 (owner decision 7): when a wait's
+#: carry-on was FIRST refused for a passing reason is the wait's own
+#: ``refused_at`` (a restart never gives it a new day), and why a wait ENDED
+#: without carrying the reply on is its limit card's ``wait_ended`` (shown
+#: until the user presses Resume when ready again or a reply starts) — both
+#: stored with the session (``routes/chat._ACCOUNT_WAIT_KEYS`` /
+#: ``_ACCOUNT_LIMIT_KEYS``), never in this process's memory alone.
 #: Third plan RB6: the card's words when the wait ended on a LASTING refusal
 #: (``{why}``: the start's own sentence).
 WAIT_ENDED_WORDS = (
@@ -4357,49 +4359,53 @@ async def _wait_refused(platform: Any, thread_id: str, setup: dict[str, Any], wa
     :data:`WAIT_GIVE_UP_S` after its first refusal; a lasting one, or one
     that lasted that long, ENDS the wait (only while it is still the one
     refused: ``S.amend_wait``) and says why on the session's limit card
-    (:data:`_WAIT_ENDED`, the view's ``account_limit.wait_ended``) — never
-    tried every minute for ever without a word. Never raises."""
+    (``account_limit.wait_ended``, written in the same write) — never
+    tried every minute for ever without a word. v1.529.0 (owner decision 7):
+    both are STORED — the first passing refusal on the wait
+    (``refused_at``), the words on the card — so a restart neither forgets
+    why nor gives the wait a new day. Never raises."""
     engine = platform.engine
     account = str(setup.get("account") or "")
     armed_at = str(wait.get("armed_at") or "")
-    key = (thread_id, armed_at)
     why = _sentence(getattr(exc, "detail", "") or "")
     if wait_refusal_passes(exc):
-        first = _WAIT_REFUSED.setdefault(key, when)
+        first = _parse_iso(wait.get("refused_at")) if wait.get("refused_at") else None
+        if first is None:
+            first = when
+            try:
+                await asyncio.to_thread(
+                    S.amend_wait, engine, thread_id, armed_at, account, {"refused_at": when.isoformat()},
+                )
+            except Exception:  # noqa: BLE001 — the next pass writes it
+                log.warning("noting the refused carry-on of build session %s failed", thread_id,
+                            exc_info=True)
         if (when - first).total_seconds() < WAIT_GIVE_UP_S:
             return
         words = WAIT_GAVE_UP_WORDS.format(why=why)
     else:
         words = WAIT_ENDED_WORDS.format(why=why)
-    _WAIT_REFUSED.pop(key, None)
     try:
-        if not await asyncio.to_thread(S.amend_wait, engine, thread_id, armed_at, account, None):
+        # The wait ends and the words go on the card of its account (one is
+        # made when the session has none) in ONE conditional write.
+        if not await asyncio.to_thread(S.amend_wait, engine, thread_id, armed_at, account, None,
+                                       ended=words, at=when.isoformat()):
             return  # cancelled, chosen or carried on meanwhile: nothing to say
-        card = setup.get("account_limit")
-        if not isinstance(card, dict) or card.get("account") != account:
-            # The wait had no card of its own account: one names the account,
-            # so the words have a place on the session.
-            await asyncio.to_thread(S.update, engine, thread_id, setup={"account_limit": {
-                "account": account, "account_name": str(setup.get("account_name") or ""),
-                "at": when.isoformat(),
-            }})
     except Exception:  # noqa: BLE001 — the next pass looks again
         log.warning("ending the wait of build session %s failed", thread_id, exc_info=True)
         return
-    _WAIT_ENDED[thread_id] = {"account": account, "words": words}
     log.warning("the Resume when ready wait of build session %s ended: %s", thread_id, why)
 
 
-def wait_ended_words(thread_id: str, setup: dict[str, Any]) -> str:
+def wait_ended_words(setup: dict[str, Any]) -> str:
     """Third plan RB6: why the session's "Resume when ready" wait ended
-    without carrying the reply on (:func:`_wait_refused`), while its card of
-    that account is still shown and no wait is armed; else ""."""
-    ended = _WAIT_ENDED.get(thread_id)
+    without carrying the reply on (:func:`_wait_refused`; the stored card's
+    ``wait_ended`` since v1.529.0), while that card is of the session's
+    account and no wait is armed; else ""."""
     card = setup.get("account_limit")
-    if not ended or setup.get("account_wait") or not isinstance(card, dict) \
-            or card.get("account") != ended.get("account"):
+    if setup.get("account_wait") or not isinstance(card, dict) \
+            or card.get("account") != setup.get("account"):
         return ""
-    return ended.get("words") or ""
+    return str(card.get("wait_ended") or "")
 
 
 async def resume_due(d: Any, *, now: Any = None) -> list[str]:
@@ -4483,7 +4489,6 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
                     # said; a passing one is tried again, for a day at most.
                     await _wait_refused(platform, thread_id, setup, wait, exc, when)
                     continue
-                _WAIT_REFUSED.pop((thread_id, armed_at), None)
                 row = await asyncio.to_thread(S.get_row, engine, thread_id)
                 bus = getattr(platform, "event_bus", None)
                 if bus is not None:
@@ -5129,10 +5134,12 @@ def register(app: FastAPI, d: Any) -> None:
         # an account taken out of its group no longer does. The stored record
         # (who says the limit on the bell) is unchanged.
         # Third plan RB6: why the "Resume when ready" wait ended without
-        # carrying the reply on — said on its card (``wait_ended``).
-        ended = wait_ended_words(row.id, setup)
-        if ended and isinstance(view.get("account_limit"), dict):
-            view["account_limit"] = {**view["account_limit"], "wait_ended": ended}
+        # carrying the reply on — said on its card (``wait_ended``, stored
+        # with it since v1.529.0), only while no wait is armed.
+        ended = wait_ended_words(setup)
+        if isinstance(view.get("account_limit"), dict):
+            card = {k: v for k, v in view["account_limit"].items() if k != "wait_ended"}
+            view["account_limit"] = {**card, "wait_ended": ended} if ended else card
         wait = view.get("account_wait")
         if isinstance(wait, dict):
             wait = {k: v for k, v in wait.items() if k != "group"}
@@ -6236,8 +6243,15 @@ def register(app: FastAPI, d: Any) -> None:
         row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup={"account_wait": wait})
         if row is None:
             raise HTTPException(status_code=404, detail="no such coding session")
-        # Third plan RB6: waiting again — why the last wait ended is moot.
-        _WAIT_ENDED.pop(thread_id, None)
+        # Third plan RB6: waiting again — why the last wait ended is moot
+        # (v1.529.0: taken off the stored card, so a Cancel never brings it back).
+        try:
+            if await asyncio.to_thread(S.forget_wait_ended, platform.engine, thread_id):
+                row = await asyncio.to_thread(_session_or_404, thread_id)
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001 — the wait is armed; its card hides the words meanwhile
+            log.warning("clearing why the wait of build session %s ended failed", thread_id, exc_info=True)
         wake_wait_loop()
         return await asyncio.to_thread(_full_view, row)
 

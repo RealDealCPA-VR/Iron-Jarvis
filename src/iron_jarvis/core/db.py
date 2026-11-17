@@ -135,6 +135,10 @@ _HOT_INDEXES = (
     # v1.335.0: a chat's own usage (GET /chat/threads/{id}/usage) sums the
     # session_id="chat" run rows stamped with that thread.
     ("ix_agentrun_thread_id", "agentrun", "thread_id"),
+    # v1.529.0: a chat hand-off asks "did this turn already start a run" on
+    # every create that names one (``agents.hand_off_guard``). Same name as
+    # SQLModel's, so a fresh DB is a no-op.
+    ("ix_session_handed_from_turn", "session", "handed_from_turn"),
 )
 
 

@@ -86,6 +86,7 @@ from typing import Any
 from . import words as W
 from .driver import Ask, AskRefused, ControlRefused, ControlWaiter, Driver, new_ask_id
 from .events import (
+    CUT_LENGTH,
     DETAIL_CHARS,
     DIFF_CHARS,
     INPUT_CHARS,
@@ -93,6 +94,7 @@ from .events import (
     TEXT_CHARS,
     clip,
     make,
+    make_done,
     one_line,
     unified_new_file,
     unified_replace,
@@ -764,6 +766,9 @@ class PiDriver(Driver):
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._cost = 0.0
         self._last_error = ""
+        #: Owner decision 5: the run's LAST answer stopped at the model's
+        #: length limit (``stopReason: "length"``); a later answer clears it.
+        self._cut = ""
         self._retry_said = False
         self._waiting_run = False
         self._handled: asyncio.TimerHandle | None = None
@@ -1102,6 +1107,7 @@ class PiDriver(Driver):
         self._interrupting = False
         self._retry_said = False
         self._last_error = ""
+        self._cut = ""
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._cost = 0.0
         self._waiting_run = True
@@ -1464,12 +1470,15 @@ class PiDriver(Driver):
         if isinstance(cost, (int, float)) and not isinstance(cost, bool):
             self._cost += float(cost)
         stop = msg.get("stopReason")
+        self._cut = ""
         if stop == "error":
             self._last_error = str(msg.get("errorMessage") or "Pi's model answered with an error")
         elif stop in ("stop", "toolUse"):
             self._last_error = ""
         elif stop == "length":
-            self.emit(make("notice", text="The answer reached the model's output limit."))
+            # Owner decision 5: said when the run ENDS on it (``_settled``),
+            # once — an answer Pi carries on after is not the reply's end.
+            self._cut = CUT_LENGTH
 
     # -- tools --
     def _tool_started(self, obj: dict[str, Any]) -> None:
@@ -1638,6 +1647,12 @@ class PiDriver(Driver):
         elif self._last_error:
             self._fail(self._last_error)
             self._end("failed")
+        elif self._cut:
+            # Owner decision 5 (third plan RB10): the run ended on an answer
+            # cut at the model's length limit — the failed ending with its
+            # cut, never "finished".
+            self.emit(make("notice", text=W.OUTPUT_LIMIT_CUT))
+            self._end("failed")
         else:
             self._end("completed")
 
@@ -1669,7 +1684,8 @@ class PiDriver(Driver):
                 usage["cost_usd"] = round(self._cost, 6)
                 usage["cost_reported_by"] = "Pi"
             self.emit(usage)
-        self.emit(make("done", stop=stop))
+        cut, self._cut = self._cut, ""
+        self.emit(make_done(stop, cut))
 
 
 def _answer_value(ask: Ask, answers: Any) -> str | None:

@@ -33,6 +33,7 @@ from ..schemas import (
 #: an ATTENDED origin (runtime.ATTENDED_ORIGINS): its asks wait for the user.
 from ...agents.team import MISSION_ORIGIN  # noqa: E402  (one definition)
 from ...agents.orchestrator import off_loop_settled  # noqa: E402  (v1.512.0)
+from ...agents import hand_off_guard  # noqa: E402  (v1.529.0)
 from ...core.events import EventType  # noqa: E402  (v1.433.0: review events)
 from ...providers.egress import LocalOnlyRefused  # noqa: E402  (v1.332.0)
 
@@ -432,10 +433,52 @@ def interrupted_rows(db) -> list:
         )
     )
 
+
+async def _first_hand_off(d, turn: str) -> dict[str, Any] | None:
+    """The run *turn* already handed off to, as the door answers it, or None
+    (v1.529.0, ``agents.hand_off_guard``). Called under ``held``."""
+    if not turn:
+        return None
+    first = await asyncio.to_thread(hand_off_guard.find_handed, d.platform.engine, turn)
+    if not first:
+        return None
+    row = await asyncio.to_thread(d.orchestrator.get_session, first)
+    return None if row is None else _session_row(d, row)
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.post("/sessions")
     async def create_session(body: SessionCreate) -> dict[str, Any]:
+        # ONE RUN PER HAND-OFF (v1.529.0). Two windows on one chat each end
+        # the reply that hands off, and each posts it: the turn's name
+        # (``handed_from_turn``) admits one run, and the second window gets
+        # that run back (same id, its status) instead of a second one. Held
+        # per name, so two requests at once cannot both miss the lookup;
+        # read from the rows, so it holds across a restart. No name: today.
+        turn = body.handed_from_turn
+        async with hand_off_guard.held(d.platform.engine, turn):
+            first = await _first_hand_off(d, turn)
+            if first is not None:
+                return first
+            session = await _open_session(body)
+            if turn:
+                await asyncio.to_thread(
+                    hand_off_guard.stamp, d.platform.engine, session.id, turn
+                )
+                session.handed_from_turn = turn
+        if body.wait:
+            session = await d.orchestrator.run_session(session.id)
+        else:
+            # A parked spawn returns None (v1.167.0): the governor marked the
+            # row QUEUED, so re-read it — serializing the stale in-memory
+            # object here claimed "active" for work that never started.
+            if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
+                session = d.orchestrator.get_session(session.id) or session
+        return _session_row(d, session)
+
+    async def _open_session(body: SessionCreate):
+        """Make (never start) the run ``POST /sessions`` asks for."""
         # THE FOLDER RIDES THE ESCALATION (v1.189.0). Validated with the SAME
         # tests the chat lane applies to its workspace — and unlike chat's
         # silent fallback, an EXPLICIT folder that fails them is an honest 400:
@@ -512,15 +555,7 @@ def register(app: FastAPI, d) -> None:
             raise  # v1.332.0: the app's 409 local-only shape, not a 400
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
             raise HTTPException(status_code=400, detail=plain_failure("That task could not start.", exc))
-        if body.wait:
-            session = await d.orchestrator.run_session(session.id)
-        else:
-            # A parked spawn returns None (v1.167.0): the governor marked the
-            # row QUEUED, so re-read it — serializing the stale in-memory
-            # object here claimed "active" for work that never started.
-            if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
-                session = d.orchestrator.get_session(session.id) or session
-        return _session_row(d, session)
+        return session
 
     @app.post("/missions", status_code=201)
     async def create_mission(body: MissionCreate) -> dict[str, Any]:
@@ -788,6 +823,28 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/sessions/{session_id}/continue")
     async def continue_session(session_id: str, body: ContinueBody) -> dict[str, Any]:
+        # ONE RUN PER HAND-OFF (v1.529.0): a chat hand-off that continues the
+        # chat's earlier run, posted by two windows, starts one follow-up;
+        # the second window gets it back (see ``create_session``).
+        turn = body.handed_from_turn
+        async with hand_off_guard.held(d.platform.engine, turn):
+            first = await _first_hand_off(d, turn)
+            if first is not None:
+                return first
+            session = await _continue_row(session_id, body, turn)
+        if body.wait:
+            session = await d.orchestrator.run_session(session.id)
+        else:
+            # A parked spawn returns None (v1.167.0): the governor marked the
+            # row QUEUED, so re-read it — serializing the stale in-memory
+            # object here claimed "active" for work that never started.
+            if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
+                session = d.orchestrator.get_session(session.id) or session
+        return _session_row(d, session)
+
+    async def _continue_row(session_id: str, body: ContinueBody, turn: str):
+        """Make (never start) the follow-up ``/continue`` asks for, stamped
+        with the hand-off's turn when it names one."""
         try:
             session = await d.orchestrator.continue_session(
                 session_id,
@@ -826,18 +883,15 @@ def register(app: FastAPI, d) -> None:
             # longer a prompt. The tag is cleared on the ORIGINAL row — the
             # continuation is a new session, and the old one keeps its verdict.
             await asyncio.to_thread(_clear_interrupted, d, session_id)
+            if turn:  # v1.529.0: on the row before the guard lets go
+                await asyncio.to_thread(
+                    hand_off_guard.stamp, d.platform.engine, session.id, turn
+                )
+                session.handed_from_turn = turn
         except asyncio.CancelledError:
             await _settle_unstarted(d, session)
             raise
-        if body.wait:
-            session = await d.orchestrator.run_session(session.id)
-        else:
-            # A parked spawn returns None (v1.167.0): the governor marked the
-            # row QUEUED, so re-read it — serializing the stale in-memory
-            # object here claimed "active" for work that never started.
-            if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
-                session = d.orchestrator.get_session(session.id) or session
-        return _session_row(d, session)
+        return session
 
     @app.post("/sessions/{session_id}/worklist/reset-failed")
     async def reset_failed_worklist_items(session_id: str) -> dict[str, Any]:

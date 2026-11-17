@@ -575,6 +575,14 @@ LOCAL_ONLY_OFF_CARD = (
     "model off this PC and your own network."
 )
 _HELD_APP_WORDS = {"microsoft_365": "Microsoft 365"}
+#: Owner decision 2 (after the third fix plan): a coding session's Local only
+#: is its own switch, in the session's ⋯ menu (dashboard
+#: ``components/harness/HarnessSession.tsx``, row ``harness-local-only``; the
+#: PATCH ``/build/sessions/{id}`` writes it). Named where it really is.
+LOCAL_ONLY_IN_CODE = (
+    "This is a coding session: turn Local only on or off from the ⋯ menu at the top of the "
+    "session in Chat › Code. Nothing changed."
+)
 
 
 def _chat_state(platform: Any, thread_id: str, turn_id: str) -> dict[str, Any]:
@@ -776,9 +784,7 @@ class ChatLocalOnlyTool(R._RecordTool):
             return ToolResult(ok=False, error="Local only can be changed from the chat page only.")
         st, on_now = await self._state(ctx)
         if st["build"]:
-            return ToolResult(
-                ok=False, error="This is a coding session: use its own Local only switch in Code."
-            )
+            return ToolResult(ok=False, error=LOCAL_ONLY_IN_CODE)
         if not on and st["holds"]:
             return ToolResult(ok=False, error=LOCAL_ONLY_HELD.format(apps=_held_words(st["holds"])))
         if on and on_now:

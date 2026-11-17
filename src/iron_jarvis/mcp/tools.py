@@ -422,11 +422,21 @@ class MCPRemoteTool(Tool):
             spec["flagged"] = True
         return spec
 
+    def refusal_here(self, ctx: Any) -> str:
+        """The plain refusal this tool gives in ``ctx`` WITHOUT reaching its
+        app (an app kept on the user's own models, outside a plain chat or a
+        Local only turn), else "". Read by :meth:`execute` and, for a tool
+        that asks before each use, by the gate and the lanes BEFORE a card:
+        a call that could not run is never asked about (an Allow would be a
+        lie), it is refused in these words (owner decision 8, v1.529.0)."""
+        if not self.local_only:
+            return ""
+        return chat_only_refusal(self.app_name, ctx) or local_only_refusal(self.app_name)
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        if self.local_only:
-            refusal = chat_only_refusal(self.app_name, ctx) or local_only_refusal(self.app_name)
-            if refusal:
-                return ToolResult(ok=False, error=refusal)
+        refusal = self.refusal_here(ctx)
+        if refusal:
+            return ToolResult(ok=False, error=refusal)
         try:
             result = await self.client.call_tool(self.remote_name, args)
         except Exception as exc:  # a remote failure must never crash the runtime

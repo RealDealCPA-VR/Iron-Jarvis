@@ -41,6 +41,7 @@ from typing import Any
 from . import words as W
 from .driver import Ask, AskRefused, ControlRefused, ControlWaiter, Driver, new_ask_id
 from .events import (
+    CUT_LENGTH,
     DETAIL_CHARS,
     DIFF_CHARS,
     INPUT_CHARS,
@@ -48,6 +49,7 @@ from .events import (
     TEXT_CHARS,
     clip,
     make,
+    make_done,
     one_line,
     unified_new_file,
     unified_replace,
@@ -254,6 +256,9 @@ class AcpDriver(Driver):
         self._message_prompt: int | None = None
         self._pending: dict[int, str] = {}
         self._stop: str = ""
+        #: Owner decision 5: why the open turn was cut ("" = it was not):
+        #: :data:`~.events.CUT_LENGTH` once the tool answered ``max_tokens``.
+        self._cut: str = ""
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._cost: float | None = None
         self._cost_start: float | None = None
@@ -418,6 +423,7 @@ class AcpDriver(Driver):
         self._errored = False
         self._interrupting = False
         self._stop = ""
+        self._cut = ""
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._cost_start = self._cost
         self._pending.clear()
@@ -452,8 +458,6 @@ class AcpDriver(Driver):
             else:
                 stop = self.take_answer(result if isinstance(result, dict) else {})
                 self._stop = self.stop_of(stop, result if isinstance(result, dict) else {})
-                if stop == "max_tokens":
-                    self.emit(make("notice", text="The answer reached the model's output limit."))
                 if stop == "refusal":
                     self._fail("The model refused to go on with this request.")
                 if self._interrupting and self._stop == "completed":
@@ -467,8 +471,23 @@ class AcpDriver(Driver):
 
         v1.514.0 (A13): an ending Iron Jarvis does not know never reads as
         success: it is the failed ending, said in plain words with the
-        tool's own reason (bounded). After the user's Stop it is that stop."""
-        known = {"end_turn": "completed", "cancelled": "interrupted", "max_tokens": "completed",
+        tool's own reason (bounded). After the user's Stop it is that stop.
+
+        Owner decision 5 (third plan RB10): ``max_tokens`` — the model's
+        length limit ended the reply — was "completed", so the bell, the tray
+        and the queue read a cut reply as finished work. It is the failed
+        ending now, as a Chat › Code reply's ``truncated`` is
+        (``routes/build.finished_notice_outcome``), with ``cut: "length"`` on
+        the ``done`` and :data:`~.words.OUTPUT_LIMIT_CUT` said once; after
+        the user's Stop it is that stop."""
+        if stop == "max_tokens":
+            if self._interrupting:
+                return "interrupted"
+            if self._cut != CUT_LENGTH:
+                self._cut = CUT_LENGTH
+                self.emit(make("notice", text=W.OUTPUT_LIMIT_CUT))
+            return "failed"
+        known = {"end_turn": "completed", "cancelled": "interrupted",
                  "max_turn_requests": "max_turns", "refusal": "failed"}
         if stop in known:
             return known[stop]
@@ -729,4 +748,5 @@ class AcpDriver(Driver):
             from . import seen as _seen
 
             self.emit(_seen.attach(usage, self))
-        self.emit(make("done", stop=stop))
+        cut, self._cut = self._cut, ""
+        self.emit(make_done(stop, cut))
