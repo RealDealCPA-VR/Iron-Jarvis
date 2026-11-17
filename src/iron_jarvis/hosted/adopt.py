@@ -436,7 +436,13 @@ async def _adopt_one(svc: Any, link: HL.HostLink, t: dict[str, Any]) -> bool:
     live.kept = dict(kept_service)
     live.open_steps = dict(facts.get("open_steps") or {})  # v1.427.2
     live.title = str(service.get("title") or row.title or "")
-    live.caps = dict(service.get("caps") or {})
+    # MC1 (third fix plan): the boxes come from the SESSION'S RECORD — what
+    # the chip shows — never from the kept state, which can be older than a
+    # box the user turned off (Iron Jarvis killed before it was kept again).
+    # The door reads ``live.caps`` (``HostedTokens.lookup``).
+    from . import jarvis_tools as JT
+
+    live.caps = JT.load(getattr(row, "capabilities_json", "") or "")
     live.folder = str(service.get("folder") or row.folder or "")
     live.restart = bool(service.get("restart"))
     token = str(service.get("token") or "")

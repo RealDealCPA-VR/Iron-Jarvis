@@ -30,6 +30,41 @@ from ..schemas import (
     TerminalUpdate,
     TerminalWorkflowBody,
 )
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+
+class ContinueOnNext(BaseModel):
+    """``POST /terminals/{id}/continue-on-next`` (third plan TM4): the account
+    the Continue strip NAMED, by its profile id. Absent = the daemon picks
+    (an older page)."""
+
+    account: str | None = None
+
+
+class TerminalLaunchWithTools(BaseModel):
+    """``POST /terminals/launch-with-tools`` (third plan TM5, decision G16): a
+    NEW terminal for a coding tool, made WITH the boxes the user ticked
+    (``capabilities``: ``memory`` / ``browser``), its launch recipe set up and
+    the tool started. ``near`` lends its folder; ``cwd`` names one."""
+
+    cli: str
+    capabilities: dict[str, Any] | None = None
+    near: str | None = None
+    cwd: str | None = None
+    cols: int = 100
+    rows: int = 30
+
+
+#: The boxes a "with Iron Jarvis's tools" launch can tick: the two a coding
+#: tool is really given through Jarvis (the others are recorded, not enforced).
+_TOOL_BOXES = ("memory", "browser")
+
+#: Third plan TM5: said when no box is ticked — the row's promise cannot be kept.
+NO_BOX_TICKED = (
+    "Tick Memory or Browser first: with neither, {label} would start without Iron "
+    "Jarvis's tools, so no terminal was opened."
+)
 
 #: Screen-snippet uploads (Win+Shift+S -> a Build pane). Both Claude Code and
 #: Codex cap an attached image around 5MB, so accepting more would only hand
@@ -274,6 +309,32 @@ def _unique_pane_name(terminals, wanted: str) -> str:
     return f"{wanted} ({n})"
 
 
+#: A start-line option typed as it is in every shell (no quoting needed).
+_PLAIN_ARG = _re.compile(r"^[A-Za-z0-9_./:=@+-]+$")
+
+
+def _shell_args(shell: str, args: list[str]) -> str:
+    """``args`` (a launch recipe's options) as words typed after a command in a
+    terminal running ``shell``, each quoted only when it needs it: a comma is
+    an array in PowerShell and a separator for a cmd batch file, so
+    ``WebFetch,WebSearch`` must arrive as ONE argument."""
+    name = (shell or "").lower()
+    out: list[str] = []
+    for raw in args:
+        a = str(raw)
+        if a and _PLAIN_ARG.match(a):
+            out.append(a)
+        elif name in ("pwsh", "powershell") or name.endswith(("pwsh.exe", "powershell.exe")):
+            out.append("'" + a.replace("'", "''") + "'")
+        elif name == "cmd" or name.endswith("cmd.exe"):
+            out.append('"' + a.replace('"', '""') + '"')
+        else:
+            import shlex
+
+            out.append(shlex.quote(a))
+    return " ".join(out)
+
+
 def launch_pane(
     platform,
     body: TerminalLaunch,
@@ -282,6 +343,7 @@ def launch_pane(
     command: str | None = None,
     name_base: str | None = None,
     claude_session_id: str | None = None,
+    tools: dict[str, Any] | None = None,
 ):
     """A NEW pane on an account with a catalog CLI started in it (v1.302.0).
 
@@ -302,8 +364,15 @@ def launch_pane(
     --session-id <uuid4>`` and that id is RECORDED on the pane (and its
     snapshot), so "continue on the next account" carries exactly that
     conversation and Resume reopens it by id. ``claude_session_id`` records
-    the id a ``command`` already names (``claude --resume <id>``)."""
+    the id a ``command`` already names (``claude --resume <id>``).
+
+    Third plan TM5 (decision G16): ``tools`` = the boxes the user ticked
+    (``{"memory": True, ...}``) for a launch WITH Iron Jarvis's tools. The
+    terminal is made with them and the CLI's launch recipe, the recipe must
+    really set the tool up (else a 409 sentence and no terminal, no token),
+    and the recipe's own options are typed after the start command."""
     from ...terminals.ai_clis import launch_entry, launch_env, launch_line
+    from ...terminals.manager import RecipeNotSetUp
     from ...terminals.pane_accounts import CLI_PROVIDER, PaneAccountRefused
 
     cli_id = (body.cli or "").strip().lower()
@@ -393,7 +462,19 @@ def launch_pane(
                 # call is exactly what it was (the backends then copy the
                 # daemon's environment themselves).
                 **({"env": {**_job_base(locked_argv is not None), **job_env}} if job_env else {}),
+                # Third plan TM5: made WITH the ticked boxes and the recipe,
+                # which must set the tool up (only for a "with tools" launch).
+                **(
+                    {"capabilities": dict(tools), "recipe": cli_id, "recipe_required": True}
+                    if tools is not None else {}
+                ),
             )
+        except RecipeNotSetUp as refused:  # nothing spawned, no live token
+            raise HTTPException(
+                status_code=409,
+                detail=f"{cat['label']} could not be set up with Iron Jarvis's tools, so no "
+                f"terminal was opened. {refused.sentence}",
+            ) from None
         except ShellStartStuck as exc:  # v1.418.1: another shell is stuck starting
             raise HTTPException(status_code=503, detail=str(exc)) from None
         except RuntimeError as exc:  # the session cap
@@ -410,6 +491,15 @@ def launch_pane(
         from ...terminals.signin_watch import watch_default_login
 
         watch_default_login(session, cli_id)
+    if tools is not None:
+        # The tool is started WITH what its recipe set up: the recipe's own
+        # options (Claude Code's `--mcp-config .mcp.json …`) after the
+        # start command, Enter pressed — the press on the boxes is the consent.
+        extra = list((getattr(session, "recipe_outcome", None) or {}).get("argv_extra") or [])
+        base = command if command is not None else launch_line(cat, session.shell).rstrip()
+        line = base + (" " + _shell_args(session.shell or "", extra) if extra else "")
+        session.write(line + "\r")
+        return session
     if command is not None:
         session.write(command + "\r")
         return session
@@ -703,8 +793,10 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=429, detail=plain_failure("Too many terminals are open. Close one and try again.", exc))
         return pane_row(d.platform, session.info())
 
-    @app.post("/terminals/{term_id}/continue-on-next")
-    def continue_on_next(term_id: str) -> dict[str, Any]:
+    @app.post("/terminals/{term_id}/continue-on-next", response_model=None)
+    def continue_on_next(
+        term_id: str, body: ContinueOnNext | None = None
+    ) -> dict[str, Any] | JSONResponse:
         """Continue this pane's Claude Code conversation on the NEXT Iron-Proxy
         account (v1.303.0): tell Iron-Proxy the limit line (ONLY that line),
         pick the next account, carry the conversation file over (never
@@ -712,7 +804,12 @@ def register(app: FastAPI, d) -> None:
         pane on it running ``claude --resume <id>`` (or ``claude`` when there
         is nothing to carry). The old pane is left as it is. Sync ``def``:
         everything here blocks. Answers ``{pane, resumed, session_id?,
-        parked, from, to, note}``; a refusal is a 409 sentence and no pane."""
+        parked, from, to, note}``; a refusal is a 409 sentence and no pane.
+
+        Third plan TM4 (G15): ``{"account": "<profile id>"}`` is the account
+        the strip NAMED; it is used exactly, or refused with a sentence that
+        names the one that would be used instead (``instead: {id, title}``
+        beside ``detail``). No body (an older page) keeps the daemon's pick."""
         from ...terminals import continue_on
         from ...terminals.pane_accounts import PaneAccounts, from_recorded
 
@@ -728,8 +825,14 @@ def register(app: FastAPI, d) -> None:
                 room_for_pane=live < terminals.max_sessions,
                 # An older copy of the same conversation is MOVED here, never deleted.
                 trash_root=Path(d.platform.config.home) / "trash",
+                account=(body.account if body is not None else None),
             )
         except continue_on.ContinueRefused as refused:
+            if refused.instead:
+                return JSONResponse(
+                    status_code=refused.status,
+                    content={"detail": refused.sentence, "instead": dict(refused.instead)},
+                )
             raise HTTPException(status_code=refused.status, detail=refused.sentence) from None
         # The other CLIs keep the accounts the old pane had (their recorded
         # homes; no call); Claude moves to the next account.
@@ -880,6 +983,49 @@ def register(app: FastAPI, d) -> None:
         (``near`` lends its folder). An account that cannot be used is a 409
         sentence and no pane. Sync ``def``: the resolution blocks."""
         return pane_row(d.platform, launch_pane(d.platform, body).info())
+
+    @app.post("/terminals/launch-with-tools")
+    def launch_terminal_with_tools(body: TerminalLaunchWithTools) -> dict[str, Any]:
+        """Third plan TM5 (decision G16): the Launch menu's "With Iron Jarvis's
+        tools" row, after the user ticked its boxes. A NEW terminal made WITH
+        those boxes, the CLI's launch recipe set up in it and the CLI started
+        (typed + Enter). With no box ticked, or a CLI whose recipe cannot be
+        set up on this PC, a 409 sentence and nothing opened or minted.
+        Answers ``{pane, tools: {set_up, limitations}}``. Sync ``def``: the
+        recipe's probe, its writes and the spawn block."""
+        from ...browser.panetokens import normalise_capabilities
+        from ...terminals.ai_clis import launch_entry
+        from ...terminals.recipes import recipe_for
+
+        cli_id = (body.cli or "").strip().lower()
+        cat = launch_entry(cli_id)
+        if cat is None or recipe_for(cli_id) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f'"{body.cli}" cannot be given Iron Jarvis\'s tools from the Launch menu.',
+            )
+        ticked = {
+            k: True
+            for k in normalise_capabilities(body.capabilities or {})
+            if k in _TOOL_BOXES
+        }
+        if not ticked:
+            raise HTTPException(status_code=409, detail=NO_BOX_TICKED.format(label=cat["label"]))
+        session = launch_pane(
+            d.platform,
+            TerminalLaunch(
+                cli=cli_id, cwd=body.cwd, near=body.near, cols=body.cols, rows=body.rows
+            ),
+            tools=ticked,
+        )
+        outcome = getattr(session, "recipe_outcome", None) or {}
+        return {
+            "pane": pane_row(d.platform, session.info()),
+            "tools": {
+                "set_up": bool(outcome.get("set_up")),
+                "limitations": list(outcome.get("limitations") or []),
+            },
+        }
 
     @app.patch("/terminals/{term_id}")
     def update_terminal(term_id: str, body: TerminalUpdate) -> dict[str, Any]:

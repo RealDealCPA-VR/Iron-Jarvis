@@ -83,7 +83,13 @@ SAME_LOGIN_FIX = _ci_words.SAME_LOGIN_FIX
 
 
 class ContinueRefused(Exception):
-    def __init__(self, sentence: str, status: int = 409, choices: list[dict[str, str]] | None = None) -> None:
+    def __init__(
+        self,
+        sentence: str,
+        status: int = 409,
+        choices: list[dict[str, str]] | None = None,
+        instead: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(sentence)
         self.sentence = sentence
         self.status = status
@@ -92,6 +98,10 @@ class ContinueRefused(Exception):
         #: ``[{id, title, why}]``, none of them known to share this account's
         #: sign-in. Empty for every other refusal.
         self.choices = list(choices or [])
+        #: Third plan TM4 (G15): the page named an account that cannot take
+        #: over — ``{id, title}`` of the one Iron Jarvis would use instead, so
+        #: the strip can offer THAT one for the next press. None otherwise.
+        self.instead = dict(instead) if instead else None
 
 
 def encode_cwd(cwd: str) -> str:
@@ -584,13 +594,78 @@ def _none_free(
 FULL = "Build already has as many panes open as it can — close one, then try again."
 
 
+def _named_choice(
+    profiles: list[dict[str, Any]], states: Mapping[str, Any], current: str, mine: str,
+    named: str, fallback: _acc.Lease,
+) -> _acc.Lease:
+    """Third plan TM4 (decision G15): the account the strip NAMED, exactly — or
+    a refusal that names it, says why, and names the account Iron Jarvis would
+    use instead (``fallback``, the first usable other account). Never another
+    account silently. Runs BEFORE any signal or copy. BLOCKING (same-login
+    check reads two small files)."""
+    instead = {"id": fallback.profile_id, "title": fallback.title}
+
+    def refuse(title: str, why: str) -> ContinueRefused:
+        return ContinueRefused(
+            f'"{title}" cannot take over right now ({why}), so nothing was copied. '
+            f'"{fallback.title}" can: press Continue on "{fallback.title}" to use it instead.',
+            instead=instead,
+        )
+
+    if named == current:
+        title = next(
+            (str(p.get("title") or current) for p in profiles if isinstance(p, Mapping) and p.get("id") == current),
+            current,
+        )
+        raise refuse(title, "it is the account this terminal is already on")
+    prof = next((p for p in _others(profiles, current) if p.get("id") == named), None)
+    if prof is None:
+        raise ContinueRefused(
+            "The account shown is no longer one of your Claude accounts, so nothing was copied. "
+            f'"{fallback.title}" can take over: press Continue on "{fallback.title}" to use it.',
+            instead=instead,
+        )
+    title = str(prof.get("title") or named)
+    st = states.get(named) if isinstance(states.get(named), Mapping) else {}
+    home = _profile_home(prof)
+    kind = _acc._account_kind(dict(st))
+    if st.get("status") == "disabled":
+        raise refuse(title, "it is turned off on the Several accounts card")
+    if kind == "signin" or st.get("status") == "unauthenticated":
+        raise refuse(title, f"it needs to sign in again on {_pa._CONNECTIONS}")
+    if not home:
+        raise refuse(title, "it has no Claude folder on this PC")
+    if _pa._parked_now(st):
+        until = str(st.get("parkedUntil") or "")
+        words, _secs = _acc._local_time(until) if until else ("", None)
+        when = f" until {words}" if words else ""
+        raise refuse(title, f"it is {_acc._WHAT.get(kind, 'parked')}{when}")
+    if same_login_as(prof, mine):
+        current_title = next(
+            (str(p.get("title") or current) for p in profiles if isinstance(p, Mapping) and p.get("id") == current),
+            current,
+        )
+        raise refuse(title, f"it is signed in to the same Claude account as \"{current_title}\"")
+    return _acc.make_lease(
+        _pa.SPECS[PROVIDER], named, title, home, sorted(_pa.PANE_OWN_KEYS[PROVIDER])
+    )
+
+
 def prepare(
-    svc: Any, session: Any, *, room_for_pane: bool = True, trash_root: Path | None = None
+    svc: Any, session: Any, *, room_for_pane: bool = True, trash_root: Path | None = None,
+    account: str | None = None,
 ) -> Plan:
     """Tell, find, pick, copy — in the order that refuses BEFORE anything is
     told or copied: this PC's login, Iron-Proxy off/unavailable, no room for a
-    pane, no other usable account. BLOCKING. Raises :class:`ContinueRefused`
-    with one sentence; nothing is opened by it."""
+    pane, no other usable account, the named account unusable. BLOCKING.
+    Raises :class:`ContinueRefused` with one sentence; nothing is opened by it.
+
+    ``account`` (third plan TM4): the account the page's strip NAMED. Used
+    exactly, or refused naming the one that would be used instead. None (an
+    older page) keeps the daemon's own pick.
+
+    Third plan TM16: nothing refuses AFTER the account manager is told — a
+    pick that fails after the signal takes the account read before it."""
     rec = (getattr(session, "accounts", None) or {}).get(PROVIDER) or {}
     current = str(rec.get("id") or "")
     if rec.get("source") != "iron-proxy" or not current:
@@ -623,6 +698,8 @@ def prepare(
     fallback = _own_choice(profiles, states, current, mine)
     if fallback is None:
         raise _none_free(profiles, states, current, mine)
+    named = str(account or "").strip()
+    chosen = _named_choice(profiles, states, current, mine, named, fallback) if named else None
 
     # Tell Iron-Proxy — ONLY the matched limit message (normalised so its own
     # classifier reads the kind and the reset; built from nothing else).
@@ -643,15 +720,21 @@ def prepare(
     else:
         told = f'No limit message was on screen, so the account manager was not told about "{title}".'
 
-    # The next account: Iron-Proxy's pick, unless it hands back this one (it
+    # The next account: the one the page named (checked above, before the
+    # signal); else Iron-Proxy's pick, unless it hands back this one (it
     # declined to park it) or nothing — then the next usable one in its order.
-    lease: _acc.Lease | None = None
-    try:
-        lease = _acc._lease_of(_pa.SPECS[PROVIDER], client.pick(PROVIDER, lane="cli"))
-    except Exception as exc:  # noqa: BLE001 — sorted below
-        code = str(getattr(exc, "code", "") or "")
-        if code not in ("ALL_PROFILES_EXHAUSTED", "QUOTA_EXCEEDED", "AUTH_REQUIRED", "NO_PROFILE"):
-            raise ContinueRefused(_pa._unavailable_sentence(exc)) from None
+    # Third plan TM16: a pick that FAILS here no longer refuses — the account
+    # manager has already been told, and the account read moments ago
+    # (``fallback``) can take over.
+    lease: _acc.Lease | None = chosen
+    if lease is None:
+        try:
+            lease = _acc._lease_of(_pa.SPECS[PROVIDER], client.pick(PROVIDER, lane="cli"))
+        except Exception as exc:  # noqa: BLE001 — the fallback below
+            code = str(getattr(exc, "code", "") or "")
+            if code not in ("ALL_PROFILES_EXHAUSTED", "QUOTA_EXCEEDED", "AUTH_REQUIRED", "NO_PROFILE"):
+                _acc._note("continue pick", exc)
+            lease = None
     if lease is None or lease.profile_id == current or _same_home_login(lease.home, mine):
         # v1.427.3: Iron-Proxy's pick knows nothing of WHO an account is signed
         # in as — one sharing this account's login shares its limit.

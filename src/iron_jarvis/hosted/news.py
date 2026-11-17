@@ -21,7 +21,8 @@ facts come from — in memory, never a database read on the poll paths:
   parked on an unanswered card is BUSY (the update still cuts it off, so the
   warning names it) but NOT working (the PC may sleep; the card waits).
 * :func:`announce_finished` — ``build.turn_finished`` for a reply that ran
-  longer than :data:`FINISH_NOTICE_AFTER_S` and ENDED (finished or failed),
+  longer than :data:`FINISH_NOTICE_AFTER_S` and ENDED (finished, stopped
+  at its limit, or failed — :func:`outcome_of`),
   mirroring Chat › Code's (``routes/build._announce_turn_finished``): never
   for a Stop, a shutdown cut-off or an account's limit card. The SAME event
   type with ``surface: "build_app"`` — the bell, the tray and
@@ -132,9 +133,18 @@ def counts(platform: Any) -> dict[str, Any]:
 
 
 def outcome_of(stop: str) -> str:
-    """"done" | "failed" | "" (no notice: stopped, cut off)."""
+    """"done" | "limit" | "failed" | "" (no notice: stopped, cut off).
+
+    Third plan RB10 (the rule Chat › Code's ``routes/build.
+    finished_notice_outcome`` follows): a reply that ended is "done"; one
+    stopped at its turn limit (``max_turns``) did not finish and waits for
+    the user — "limit" ("Your coding session stopped at its limit and needs
+    you"), never "finished"; one that failed is "failed"; one the user
+    stopped or a shutdown cut off (``interrupted``) sends no notice."""
     stop = str(stop or "")
-    if stop in ("completed", "done", "max_turns"):
+    if stop == "max_turns":
+        return "limit"
+    if stop in ("completed", "done"):
         return "done"
     if stop in ("failed", "error"):
         return "failed"

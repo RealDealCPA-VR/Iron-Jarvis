@@ -291,15 +291,20 @@ MCP_NOT_CONNECTED_LINE = (
 
 #: How long an ``ask``-tier MCP call waits for the user's answer.
 #:
-#: DELIBERATELY SHORTER than the chat lane's ``APPROVAL_TIMEOUT_S`` (180s) and
-#: the agent runtime's, and the reason is the transport, not taste: an MCP call
-#: is ONE HTTP round trip that the harness is blocked on, and
-#: ``mcpserver/stdio_shim.py:DEFAULT_TIMEOUT_S`` bounds that trip at 60 seconds.
+#: DELIBERATELY SHORTER than the chat lane's card (which waits until answered,
+#: ``CHAT_ASK_TIMEOUT_S`` None) and the agent runtime's, and the reason is the
+#: transport, not taste: an MCP call is ONE HTTP round trip that the coding tool
+#: is blocked on, and ``mcpserver/stdio_shim.py:DEFAULT_TIMEOUT_S`` bounds that
+#: trip at 60 seconds (Codex's own MCP client gives up at 60 s by default too).
 #: A pause that outlives the client's own ceiling does not read to the user as
 #: "still waiting" — the shim reports "cannot reach Iron Jarvis" while their
-#: approval card is still on screen, and answering it then resolves nothing. So
-#: this must stay strictly under that ceiling with room for the call itself; the
-#: relationship is pinned by a test rather than left as a comment.
+#: approval card is still on screen, and answering it then resolves nothing.
+#:
+#: MC2 (third fix plan): 45 s is the LONGEST wait that still returns an answer
+#: to the tool: the shim's 60 s less the 15 s an approved click, type or key
+#: press may then take in the browser (``browser/protocol.py``
+#: ``DEFAULT_COMMAND_TIMEOUT_S``). Pinned as that sum by
+#: ``tests/test_third_plan_g20_door_card.py``.
 MCP_APPROVAL_TIMEOUT_S = 45.0
 
 #: The refusal when an ``ask``-tier tool is called and this install has no
@@ -318,13 +323,24 @@ MCP_NO_ASK_SURFACE_MESSAGE = (
 MCP_ASK_DENIED_MESSAGE = "the user declined this call when Iron Jarvis asked them"
 
 #: The refusal when nobody answered in :data:`MCP_APPROVAL_TIMEOUT_S`. An honest
-#: timeout, never a run: the harness is told the question went out and names the
-#: standing grant that avoids the next one.
+#: timeout, never a run. MC2 (third fix plan): it no longer sends the user to
+#: set the tool to allow in Settings — Settings refuses that for these tools —
+#: and says what is true: the card is gone, and the next try asks again.
 MCP_ASK_TIMEOUT_MESSAGE = (
-    "Iron Jarvis asked the user to approve this call and nobody answered in "
-    f"{int(MCP_APPROVAL_TIMEOUT_S)}s, so nothing was done — ask them to approve "
-    "it in Iron Jarvis (the bell), or to set this tool to allow in Settings"
+    "Iron Jarvis asked the user to allow this call and they did not answer within "
+    f"{int(MCP_APPROVAL_TIMEOUT_S)} seconds, so nothing was done. Ask the user to "
+    "watch for the card in Iron Jarvis (the bell) and answer it, then make the call "
+    "again: each try asks again."
 )
+
+#: MC2 (third fix plan, decision G17): the answers the door's card can honour.
+#: The card offers "Allow once" and "Deny" only (``once_only``); a wider answer
+#: that still arrives (an older page, the phone) means "allow" and is honoured
+#: as once — never read as "nobody answered".
+_ALLOW_ANSWERS = frozenset({"once", "conversation", "tab", "always"})
+
+#: How much of a name, a title or a label the card repeats.
+_CARD_PART_CHARS = 60
 
 #: MC5 (third fix plan): the refusal when the user pressed Allow but, while the
 #: card waited, the call stopped being allowed - the box was turned off, the
@@ -646,6 +662,138 @@ def harness_session_id(pane_id: str) -> str:
     return f"mcp:{pane_id}"
 
 
+# --------------------------------------------------------------------------- #
+# The card's words (MC2, third fix plan; decision G17): WHO asks, WHERE, WHAT.
+# --------------------------------------------------------------------------- #
+def _clip(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= _CARD_PART_CHARS else text[: _CARD_PART_CHARS - 1].rstrip() + "…"
+
+
+def door_asker_words(d, pane_id: str) -> str:
+    """WHO asks, as the card says it: the Build terminal by its name, or the
+    Build › Code session by its title and tool. In-memory reads only (the
+    terminal manager, the Code view's live sessions). Never raises."""
+    from ..hosted.jarvis_tools import session_of
+
+    platform = getattr(d, "platform", None)
+    try:
+        code = session_of(pane_id)
+        if code:
+            hosted = getattr(platform, "hosted", None)
+            live = hosted.live.get(code) if hosted is not None else None
+            title = _clip(getattr(live, "title", "")) if live is not None else ""
+            harness = str(getattr(live, "harness", "") or "") if live is not None else ""
+            tool = ""
+            if harness:
+                from ..hosted import words as W
+
+                tool = f" ({W.label(harness)})"
+            return f"The coding session “{title}”{tool}" if title else f"A coding session{tool}"
+        terminals = getattr(platform, "terminals", None)
+        pane = terminals.get(pane_id) if terminals is not None else None
+        name = _clip(getattr(pane, "pane_name", "")) if pane is not None else ""
+        return f"The Build terminal “{name}”" if name else "A Build terminal"
+    except Exception:  # noqa: BLE001 - the card's words never decide the call
+        logger.debug("could not name the asker for %s", pane_id, exc_info=True)
+        return "A coding tool in Build"
+
+
+def _door_page(d, args: dict[str, Any]) -> "tuple[str, str, Any]":
+    """WHERE a browser call acts: ``(host, title, snapshot)`` of the tab it
+    targets — its ``tab_id``, else the tab in front (the tool's own rule,
+    ``BrowserRuntime.effective_tab``). The HOST only, never the address with
+    its path or query. From what the daemon already holds (the newest page
+    read of that tab, the active tab the add-on reported); ``("", "", None)``
+    when it holds nothing. Never a round trip to the browser; never raises."""
+    try:
+        from ..browser import protocol as P
+        from ..browser.grants import tab_key
+
+        runtime = getattr(getattr(d, "platform", None), "browser", None)
+        if runtime is None:
+            return "", "", None
+        active = getattr(getattr(runtime, "backend", None), "active_tab", None) or {}
+        active_key = tab_key(active.get("tab_id", active.get("id"))) if isinstance(active, dict) else ""
+        given = tab_key(args.get("tab_id"))
+        key = given or active_key
+        snaps = getattr(runtime, "snapshots", None)
+        snap = snaps.get(key) if snaps is not None and key else None
+        if snap is not None:
+            url, title = str(snap.url or ""), str(snap.title or "")
+        elif key and key == active_key:
+            url, title = str(active.get("url") or ""), str(active.get("title") or "")
+        else:
+            url, title = "", ""
+        host = P.page_site_words(url) if url else ""
+        return host, _clip(title), snap
+    except Exception:  # noqa: BLE001
+        logger.debug("could not name the page for a door card", exc_info=True)
+        return "", "", None
+
+
+def _card_args(name: str, safe: dict[str, Any], snap: Any) -> dict[str, Any]:
+    """The REDACTED arguments as the card reads them: a target named by its
+    visible label when the newest page read of the tab knows it, and an
+    address reduced to its host. Never the typed text (``safe`` is the tool's
+    own ``redact_args``)."""
+    from ..browser import protocol as P
+
+    out = dict(safe)
+    target = out.get("target")
+    if isinstance(target, str) and target.strip():
+        target = {"element_id": target.strip()}
+    if isinstance(target, dict):
+        target = dict(target)
+        element_id = str(target.get("element_id") or "")
+        if element_id and not target.get("name") and snap is not None:
+            try:
+                label = snap.element_label(element_id)
+            except Exception:  # noqa: BLE001
+                label = ""
+            if label:
+                target["name"] = _clip(label)
+        out["target"] = target
+    if isinstance(out.get("url"), str) and out["url"].strip():
+        out["url"] = P.page_site_words(out["url"]) or "a page"
+    return out
+
+
+def door_card_words(d, tool, name: str, safe: dict[str, Any], pane_id: str) -> str:
+    """The card's one sentence: WHO asks to do WHAT, and WHERE — "The Build
+    terminal “api” wants to click 'Save' in your browser, in the tab showing
+    example.com (“Settings”)." Typed text is never in it (the redacted args
+    say "type some text", the sidebar card's words, ``browser/panel``).
+    Masked and cut like every card's reason line (``core/approvals``).
+    Non-blocking; never raises."""
+    from ..core.approvals import _why_sentence
+
+    who = door_asker_words(d, pane_id)
+    try:
+        if name.startswith("browser_"):
+            from ..browser.panel import describe_browser_call
+
+            host, title, snap = _door_page(d, safe)
+            what = describe_browser_call(name, _card_args(name, safe, snap)) or "act in your browser"
+            if ": " in what:  # "fill in a form: 3 steps" -> "fill in a form (3 steps)"
+                head, _, rest = what.partition(": ")
+                what = f"{head} ({rest})"
+            where = ""
+            if host and name != "browser_create_tab":
+                where = f", in the tab showing {host}" + (f" (“{title}”)" if title else "")
+            sentence = f"{who} wants to {what} in your browser{where}."
+        else:
+            from ..hosted import words as W
+
+            titles = W.JARVIS_TOOL_TITLES.get(name)
+            what = (titles[1][:1].lower() + titles[1][1:]) if titles else f"use {name}"
+            sentence = f"{who} wants to {what}."
+    except Exception:  # noqa: BLE001 - the card's words never decide the call
+        logger.debug("could not word the door card for %s", name, exc_info=True)
+        sentence = f"{who} wants to use {name}."
+    return _why_sentence(sentence)
+
+
 async def _ask_the_user(d, tool, name: str, perm: str, arguments: dict[str, Any],
                         pane_id: str) -> "tuple[str, set[str]]":
     """Put ONE ask-tier MCP call in front of the human, and wait for the answer.
@@ -691,12 +839,18 @@ async def _ask_the_user(d, tool, name: str, perm: str, arguments: dict[str, Any]
     an interactive per-call grant is the engine's own sanctioned lift, which is
     precisely what the approval card is in every other lane.
 
-    'conversation' IS TREATED AS 'once', deliberately. MCP has no per-conversation
-    scope this server can honour: sessions are per-handshake, the grant would have
-    to live somewhere ``McpSession`` does not carry it, and the failure mode of
-    guessing wrong is a standing grant the user thought was one click. Answering
-    "for this conversation" therefore grants this call and the next one asks
-    again - over-asking, never over-granting.
+    ITS OWN CARD (MC2, third fix plan; decision G17). The card names WHO asks
+    (the Build terminal or the Build › Code session), WHAT (click / type /
+    press and the target's visible label; typed text never) and WHERE (the
+    host and title of the tab it acts on) in one sentence, carried as the
+    card's reason line (``why``) - the field the registry, the pending
+    listing and the bell already carry for a card's reason - and offers
+    "Allow once" and "Deny" only (``once_only``). Any wider answer that still
+    arrives (an older page, the phone: "conversation", "tab", "always") is
+    honoured as once - over-asking, never over-granting, and never read as
+    "nobody answered". MCP has no per-conversation or per-tab scope this
+    server can keep: sessions are per-handshake and a grant would have to
+    live somewhere ``McpSession`` does not carry it.
     """
     platform = getattr(d, "platform", None)
     approvals = getattr(platform, "approvals", None)
@@ -710,7 +864,9 @@ async def _ask_the_user(d, tool, name: str, perm: str, arguments: dict[str, Any]
     except Exception:  # noqa: BLE001 - a redactor must never decide the call
         safe = {}
     session_id = harness_session_id(pane_id)
-    approval_id, fut = approvals.request(name, safe, session_id=session_id)
+    why = door_card_words(d, tool, name, safe, pane_id)
+    approval_id, fut = approvals.request(name, safe, session_id=session_id,
+                                         once_only=True, why=why)
     decision = "timeout"
     try:
         await _publish(
@@ -723,6 +879,9 @@ async def _ask_the_user(d, tool, name: str, perm: str, arguments: dict[str, Any]
                 "timeout_s": int(MCP_APPROVAL_TIMEOUT_S),
                 "origin": "mcp",
                 "pane_id": pane_id,
+                # MC2: "Allow once" and "Deny" only, and the card's sentence.
+                "once_only": True,
+                "why": why,
             },
             session_id,
         )
@@ -740,9 +899,10 @@ async def _ask_the_user(d, tool, name: str, perm: str, arguments: dict[str, Any]
         {"approval_id": approval_id, "tool": name, "decision": decision},
         session_id,
     )
-    if decision in ("once", "conversation"):
+    if decision in _ALLOW_ANSWERS:
         # BOTH names, because the engine authorises on ``perm_key()`` while the
-        # roster gate matches on the tool NAME (the v1.187.0 lesson).
+        # roster gate matches on the tool NAME (the v1.187.0 lesson). This one
+        # call only, whatever wider answer arrived (MC2).
         return "", {name, perm}
     if decision == "deny":
         return MCP_ASK_DENIED_MESSAGE, set()
@@ -1112,6 +1272,8 @@ __all__ = [
     "McpReply",
     "capability_refused_message",
     "dispatch",
+    "door_asker_words",
+    "door_card_words",
     "granted_capabilities",
     "harness_session_id",
     "instructions_heading",

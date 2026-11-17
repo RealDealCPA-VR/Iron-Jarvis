@@ -1230,7 +1230,11 @@ class BrowserRuntime:
             allow_replace=True,
         )
         try:
-            await self.backend.deliver_pairing(request_id, token)
+            # Third plan, BR3: while Browser access is off the pairing completes
+            # but the browser WAITS, like any paired browser connecting then.
+            await self.backend.deliver_pairing(
+                request_id, token, activate=self.access() != ACCESS_OFF
+            )
         except BaseException:
             # The compensating half of the mint: a credential that reached no
             # browser must not stay live, or this install is paired with nobody.
@@ -1252,6 +1256,18 @@ class BrowserRuntime:
         if self.pairing is None or not token:
             return None
         return await asyncio.to_thread(self.pairing.verify, token)
+
+    async def promote_waiting(self, conn: Any) -> bool:
+        """Make a browser held WAITING live, only if its pairing still verifies.
+
+        THE ONE WAY a waiting socket becomes live (third plan, BR1). The socket
+        route calls it when Browser access is switched back on. The credential is
+        checked against the pairings as they are now, through :meth:`verify_token`
+        (the socket route's own verifier, constant-time in the store), so a
+        browser forgotten or replaced while it waited is closed, never admitted.
+        Returns whether it is now the live browser.
+        """
+        return bool(await self.backend.promote_waiting(conn, self.verify_token))
 
     async def disconnect(self, *, suspend: bool = False) -> bool:
         """End the live socket and KEEP the credential (plan §7).
@@ -1343,20 +1359,50 @@ class BrowserRuntime:
         return self.tab_grants.grant_all(on)
 
     async def forget(self) -> int:
-        """Revoke every pairing and drop the live socket; returns credentials killed.
+        """Revoke every pairing and close every socket of it; returns credentials killed.
 
         Order matters: revoke first, then close. Closing first would leave a window
         in which the add-on reconnects with a credential that is still valid, and
         the user who just pressed Forget would watch it come back.
+
+        EVERY socket, live or waiting (third plan, BR1). While Browser access is
+        off a paired browser is held waiting and is not ``backend.connection``;
+        closing only the live one left the forgotten browser's socket open, and
+        switching access on brought it back with no pairing.
+
+        Raises:
+            BrowserError: ``EXTENSION_ERROR`` with a plain sentence when a
+                connection could not be closed, so the screen never says
+                "Forgotten" over a browser that is still connected.
         """
         # Every consent that rode on the pairing ends with it (v1.266.0).
         self.tab_grants.clear()
         killed = 0
         if self.pairing is not None:
             killed = await asyncio.to_thread(self.pairing.revoke_all)
-        conn = self.backend.connection
-        if conn is not None:
-            await self.backend.release(conn, reason="revoked", detail="pairing forgotten")
+        waiting = getattr(self.backend, "waiting_connections", None)
+        targets = list(waiting()) if callable(waiting) else []
+        live = self.backend.connection
+        if live is not None and live not in targets:
+            targets.append(live)
+        still_open = 0
+        for conn in targets:
+            try:
+                await self.backend.release(conn, reason="revoked", detail="pairing forgotten")
+            except Exception:  # noqa: BLE001 - counted below and said plainly
+                logger.warning("a forgotten browser's connection did not close", exc_info=True)
+            if not getattr(conn, "closed", False):
+                still_open += 1
+        if still_open:
+            raise BrowserError(
+                BrowserErrorCode.EXTENSION_ERROR,
+                message=(
+                    "The pairing was removed, but Iron Jarvis could not close the "
+                    "browser's connection, so that browser may still be connected. "
+                    "Close the browser, or turn the Iron Jarvis add-on off in it, to "
+                    "end the connection."
+                ),
+            )
         return killed
 
     async def request_host_permission(self) -> dict[str, Any]:

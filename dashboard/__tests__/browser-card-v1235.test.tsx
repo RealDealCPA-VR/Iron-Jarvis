@@ -80,6 +80,7 @@ const api = vi.hoisted(() => {
     gets: [] as string[],
     posts: [] as { path: string; body: unknown }[],
     puts: [] as { path: string; body: unknown }[],
+    forget: undefined as { forgotten?: boolean } | undefined,
     /** null => the route does not exist on this daemon (404). */
     status: null as Record<string, unknown> | null,
     test: {
@@ -119,6 +120,7 @@ vi.mock("@/lib/api", () => ({
     if (path === "/browser/test") return api.test;
     if (path === "/browser/pair") return { paired: true };
     if (path === "/browser/request-host-permission") return { requested: true };
+    if (path === "/browser/forget") return api.forget ?? {};
     return {};
   },
   put: async (path: string, body?: unknown) => {
@@ -323,6 +325,20 @@ describe("Pair posts once, with the pending request id (v1.235.0)", () => {
     fireEvent.click(await screen.findByRole("button", { name: /confirm/i }));
     await screen.findByText(/asks to pair again/);
     expect(postPaths()).toEqual(["/browser/forget"]);
+  });
+
+  it("Forget says so when there was no pairing to remove (third plan BR1)", async () => {
+    api.status = byState("connected");
+    api.forget = { forgotten: false };
+    try {
+      render(<YourBrowserCard />);
+      fireEvent.click(await screen.findByRole("button", { name: /forget/i }));
+      fireEvent.click(await screen.findByRole("button", { name: /confirm/i }));
+      await screen.findByText("No browser was paired, so there was nothing to forget.");
+      expect(screen.queryByText(/asks to pair again/)).toBeNull();
+    } finally {
+      api.forget = undefined;
+    }
   });
 });
 

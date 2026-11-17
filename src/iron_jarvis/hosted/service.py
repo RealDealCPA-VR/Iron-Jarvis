@@ -2420,6 +2420,12 @@ class HostedService:
                     live.caps = merged
                     if live.running and needs:
                         live.restart = True
+                    # MC1 (third fix plan): the state kept beside a running
+                    # tool for a restart carries the boxes — keep it now, so
+                    # a box turned off is off in it too.
+                    keep_now = getattr(live.proc, "snapshot_now", None)
+                    if callable(keep_now):
+                        keep_now()
                 applied["capabilities"] = "next" if live is not None and live.running and needs else "now"
         if folder_got is not None:
             # v1.431.0: the ONE way a Pi session loads its folder's own

@@ -559,6 +559,16 @@ class ExtensionBackend:
         #: A restricted socket is NOT authoritative: it cannot run a command, and
         #: putting it in ``_conn`` would make an unpaired browser look connected.
         self._restricted: dict[str, ExtensionConnection] = {}
+        #: Third plan, group 20 (BR1, BR3): every PAIRED socket the daemon is
+        #: holding WAITING because Browser access is off, with the credential it
+        #: paired with. Kept HERE, not in a local of the socket route, so Forget
+        #: can find and close every one of them (a waiting socket is not
+        #: ``_conn``, so closing only ``_conn`` left it open), and so promotion
+        #: can check the credential again against the pairings as they are at
+        #: that moment. The credential lives only in memory and only while the
+        #: socket waits: never logged, never in :meth:`status`, dropped on
+        #: promotion and on release.
+        self._waiting: dict[ExtensionConnection, str] = {}
         #: The last thing that went wrong, for ``GET /browser/status.last_error``.
         #: One key, per the v1.229.0 rule that a failing loop is NAMED where the
         #: user is standing rather than logged at DEBUG and reported ``ok``.
@@ -760,6 +770,58 @@ class ExtensionBackend:
             return None
         return conn
 
+    # --- waiting connections (Browser access off) -------------------------
+
+    def hold_waiting(self, conn: ExtensionConnection, credential: str) -> None:
+        """Hold a PAIRED socket waiting: never authoritative while access is off.
+
+        ``credential`` is the pairing token it authenticated with, kept so
+        :meth:`promote_waiting` can verify it again before the socket ever goes
+        live. A socket with no credential cannot be promoted, by construction.
+        """
+        if conn.closed:
+            return
+        self._waiting[conn] = str(credential or "")
+
+    def is_waiting(self, conn: ExtensionConnection) -> bool:
+        """Whether ``conn`` is held waiting (paired, access off, not live)."""
+        return conn in self._waiting
+
+    def waiting_connections(self) -> list[ExtensionConnection]:
+        """Every socket held waiting, open ones only. Forget closes each of them."""
+        for conn in [c for c in self._waiting if c.closed]:
+            self._waiting.pop(conn, None)
+        return list(self._waiting)
+
+    async def promote_waiting(self, conn: ExtensionConnection, verify: Any) -> bool:
+        """Make a waiting socket live ONLY if its credential still verifies.
+
+        ``verify`` is ``async (token) -> pairing | None``, the socket route's own
+        verifier (``BrowserRuntime.verify_token``): the transport holds the
+        credential, the service holds the policy. It is checked against the
+        pairings as they are NOW, so a browser whose pairing was forgotten,
+        revoked by id or superseded by a newer Pair press while it waited is
+        refused and closed here, whatever route removed the pairing. Returns
+        whether the socket is now authoritative.
+        """
+        credential = self._waiting.get(conn)
+        if credential is None or conn.closed:
+            return False
+        try:
+            verified = bool(credential) and await verify(credential) is not None
+        except Exception:  # noqa: BLE001 - an unanswerable check refuses, never admits
+            logger.debug("waiting browser credential check failed", exc_info=True)
+            verified = False
+        # Re-read after the await: a Forget that ran meanwhile has already closed
+        # and dropped this socket, and adopting it now would revive it.
+        if conn.closed or conn not in self._waiting:
+            return False
+        if not verified:
+            await self.release(conn, reason="revoked", detail="the browser's pairing was removed")
+            return False
+        await self.adopt(conn)
+        return True
+
     async def adopt(self, conn: ExtensionConnection) -> ExtensionConnection | None:
         """Make ``conn`` authoritative and retire any predecessor (D08).
 
@@ -780,6 +842,8 @@ class ExtensionBackend:
             previous = self._conn
             self._conn = conn
             self._restricted.pop(conn.pairing_request_id, None)
+            # A live socket is no longer waiting, and its credential is not kept.
+            self._waiting.pop(conn, None)
         if previous is not None and previous is not conn:
             # Recorded BEFORE anything else can publish: the outgoing socket's own
             # ``_pump`` reaches its ``finally`` and calls ``release`` moments from
@@ -815,13 +879,23 @@ class ExtensionBackend:
         )
         return previous if previous is not conn else None
 
-    async def deliver_pairing(self, request_id: str, token: str) -> ExtensionConnection:
+    async def deliver_pairing(
+        self, request_id: str, token: str, *, activate: bool = True
+    ) -> ExtensionConnection:
         """Hand the plaintext token to the restricted socket, then adopt it (D06A).
 
-        The token's ONE appearance on the wire. It is not stored, not logged and
-        not returned: ``POST /browser/pair`` answers ``{"paired": true}``, and the
+        The token's ONE appearance on the wire. It is not logged and not
+        returned: ``POST /browser/pair`` answers ``{"paired": true}``, and the
         caller minted this value from
         :meth:`~iron_jarvis.browser.pairing.PairingStore.mint` moments ago.
+
+        ``activate`` is the caller's policy (third plan, BR3): False while Browser
+        access is off. The pairing still completes (the browser is remembered),
+        but the socket is held WAITING, exactly like a paired browser that
+        reconnects while access is off, and told ``browser.ready {active:
+        false}``; switching access on promotes it through
+        :meth:`promote_waiting`, which verifies the credential again. Only then
+        is the token kept, in memory, for that check.
 
         Raises:
             BrowserError: ``BROWSER_NOT_CONNECTED`` when the socket that asked has
@@ -842,6 +916,10 @@ class ExtensionBackend:
             raise BrowserError(BrowserErrorCode.BROWSER_NOT_CONNECTED)
         conn.paired = True
         self._restricted.pop(request_id, None)
+        if not activate:
+            self.hold_waiting(conn, token)
+            await conn.send(self.ready_frame(active=False))
+            return conn
         await self.adopt(conn)
         return conn
 
@@ -884,6 +962,7 @@ class ExtensionBackend:
         if conn.superseded:
             word = "replaced"
         conn.fail_pending(BrowserErrorCode.BROWSER_NOT_CONNECTED)
+        self._waiting.pop(conn, None)
         await conn.close(1011 if word == "error" else 1000)
         if conn.pairing_request_id:
             self._restricted.pop(conn.pairing_request_id, None)

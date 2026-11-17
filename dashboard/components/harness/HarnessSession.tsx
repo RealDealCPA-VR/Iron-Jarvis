@@ -289,6 +289,9 @@ import {
   noFolderEmptyWords,
   notSavedOf,
   patchSession,
+  patchSessionLevel,
+  LEVEL_APPLIES_WORDS,
+  type LevelApplies,
   planFromCards,
   pruneUnsavedReplies,
   shownMessages,
@@ -944,6 +947,18 @@ export function HarnessSession({
   // v1.455.0 (Wave F, item 13): the card's redirect reads these at press time.
   const busyNowRef = useRef(busy);
   busyNowRef.current = busy;
+  // Third plan G20 (RB3, decision G14): a level or Plan changed while a reply
+  // runs says beside the picker when it applies (the daemon's answer); the
+  // line goes when the reply ends.
+  const [levelApplies, setLevelApplies] = useState<LevelApplies | null>(null);
+  // ...and so does Local only changed while a reply runs (the next message).
+  const [localOnlyApplies, setLocalOnlyApplies] = useState("");
+  useEffect(() => {
+    if (!busy) {
+      setLevelApplies(null);
+      setLocalOnlyApplies("");
+    }
+  }, [busy]);
   // v1.412.0 review: once the user puts anything into this session — words,
   // a file, an "@" file, a skill, a message — it is never cleaned up as an
   // abandoned New session (lib/emptySessions; IjHarnessView).
@@ -2305,8 +2320,18 @@ export function HarnessSession({
   // ------------------------------------------------------------ the setup
   async function patchSetup(body: Record<string, unknown>) {
     try {
-      const v = await patchSession(threadId, body);
-      if (v) setView(v);
+      // Third plan G20 (RB3, decision G14): a change of the level or Plan
+      // reads when it applies (the daemon says so only while a reply runs).
+      if ("approval_mode" in body || "mode" in body || "local_only" in body) {
+        const { view: v, applies, localOnlyLine } = await patchSessionLevel(threadId, body);
+        if (v) setView(v);
+        if ("approval_mode" in body || "mode" in body) setLevelApplies(busyNowRef.current ? applies : null);
+        // The follow-up to RB3: Local only reaches the next message only.
+        if ("local_only" in body) setLocalOnlyApplies(busyNowRef.current ? localOnlyLine : "");
+      } else {
+        const v = await patchSession(threadId, body);
+        if (v) setView(v);
+      }
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -3883,6 +3908,18 @@ export function HarnessSession({
                 planMode={view.mode === "plan"}
                 onPlanChange={(on) => void patchSetup({ mode: on ? "plan" : "act" })}
               />
+              {/* Third plan G20 (RB3, decision G14): while a reply runs, a
+                  level changed now says when it applies. */}
+              {busy && levelApplies ? (
+                <span data-testid="harness-level-applies" className="shrink-0 text-[11px] text-zinc-400">
+                  {LEVEL_APPLIES_WORDS[levelApplies]}
+                </span>
+              ) : null}
+              {busy && localOnlyApplies ? (
+                <span data-testid="harness-local-only-applies" className="shrink-0 text-[11px] text-zinc-400">
+                  {localOnlyApplies}
+                </span>
+              ) : null}
               {/* v1.397.0: try the next message on up to three models, each on
                   its own branch (the words "try this with …" ask the same). */}
               <TryOnControl

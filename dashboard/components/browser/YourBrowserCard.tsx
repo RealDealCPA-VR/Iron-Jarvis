@@ -639,9 +639,16 @@ export function YourBrowserCard() {
 
   async function forget() {
     await run("forget", async () => {
-      await post("/browser/forget");
+      // Third plan BR1: the daemon answers whether a pairing really was
+      // removed (`forgotten`), not whether the button was pressed. With
+      // none to remove, "Forgotten" would be untrue.
+      const res = await post<{ forgotten?: boolean }>("/browser/forget");
       setTest(null);
-      setNote("Forgotten. The next time your browser connects it asks to pair again.");
+      setNote(
+        res?.forgotten === false
+          ? "No browser was paired, so there was nothing to forget."
+          : "Forgotten. The next time your browser connects it asks to pair again.",
+      );
       reload();
     });
   }

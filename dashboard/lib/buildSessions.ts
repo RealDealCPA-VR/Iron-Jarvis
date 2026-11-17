@@ -649,6 +649,52 @@ export async function patchSession(id: string, body: Record<string, unknown>): P
   return decodeSessionView(await patch<unknown>(`/build/sessions/${encodeURIComponent(id)}`, body));
 }
 
+/** Third plan G20 (RB3, decision G14): when a level or Plan changed WHILE a
+ *  reply runs reaches it — the daemon's `applies` on the PATCH's answer. A
+ *  stricter one holds from the reply's next step, a looser one from the next
+ *  message. None while no reply runs (the daemon then says nothing). */
+export type LevelApplies = "now" | "next_reply";
+
+/** The line beside the level picker while a reply runs. */
+export const LEVEL_APPLIES_WORDS: Record<LevelApplies, string> = {
+  now: "Applies from this reply's next step.",
+  next_reply: "Applies from your next message.",
+};
+
+export function levelAppliesOf(raw: unknown): LevelApplies | null {
+  const v = raw && typeof raw === "object" ? (raw as { applies?: unknown }).applies : undefined;
+  return v === "now" || v === "next_reply" ? v : null;
+}
+
+/** Third plan G20 (the follow-up to RB3): Local only is read once when a reply
+ *  starts, so a change while one runs reaches the next message only. The
+ *  line beside it while the reply runs. */
+export const LOCAL_ONLY_APPLIES_ON = "Local only starts with your next message. This reply keeps the model it started with.";
+export const LOCAL_ONLY_APPLIES_OFF = LEVEL_APPLIES_WORDS.next_reply;
+
+/** The line for a Local only change, from the daemon's answer
+ *  (`applies_local_only`, sent only while a reply runs); "" for none. `on` is
+ *  what the change asked for. */
+export function localOnlyAppliesLine(raw: unknown, on: boolean): string {
+  const v = raw && typeof raw === "object" ? (raw as { applies_local_only?: unknown }).applies_local_only : undefined;
+  if (v !== "next_reply") return "";
+  return on ? LOCAL_ONLY_APPLIES_ON : LOCAL_ONLY_APPLIES_OFF;
+}
+
+/** `patchSession` for the level picker and Local only: the view, and when
+ *  each change applies. */
+export async function patchSessionLevel(
+  id: string,
+  body: Record<string, unknown>,
+): Promise<{ view: BuildSessionView | null; applies: LevelApplies | null; localOnlyLine: string }> {
+  const raw = await patch<unknown>(`/build/sessions/${encodeURIComponent(id)}`, body);
+  return {
+    view: decodeSessionView(raw),
+    applies: levelAppliesOf(raw),
+    localOnlyLine: "local_only" in body ? localOnlyAppliesLine(raw, body.local_only === true) : "",
+  };
+}
+
 export function renameFolder(path: string, name: string): Promise<unknown> {
   return post("/build/folders/rename", { path, name });
 }

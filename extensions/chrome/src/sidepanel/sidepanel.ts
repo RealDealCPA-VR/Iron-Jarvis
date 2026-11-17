@@ -257,6 +257,23 @@ function setTurn(running: boolean): void {
   document.body.dataset["turn"] = running ? "running" : "idle";
 }
 
+/**
+ * Does this `error` frame END the turn on screen? (Third review SB8.) The
+ * daemon marks every error that is not the reply's end `ends: false` — a
+ * line, while the reply keeps running until its own `done` or error. An
+ * unmarked frame is the reply's end, a Send refused before it started, or a
+ * frame from an older daemon, which marks nothing: those read as before —
+ * every error ends the turn except a dictation's, a withdrawn answer's and a
+ * refused "Allow all page actions" (the three it already kept running).
+ */
+const ERRORS_THAT_KEEP_THE_TURN: readonly string[] = ["withdrawn", "risk_card_all"];
+
+export function errorEndsTurn(payload: Record<string, unknown>): boolean {
+  if (typeof payload["ends"] === "boolean") return payload["ends"];
+  const reason = typeof payload["reason"] === "string" ? payload["reason"] : "";
+  return !reason.startsWith("voice") && !ERRORS_THAT_KEEP_THE_TURN.includes(reason);
+}
+
 function say(who: string, text: string): HTMLElement {
   const node = document.createElement("p");
   node.className = "turn";
@@ -817,10 +834,15 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
         say("error", text);
         return;
       }
-      setTurn(false);
       streaming = null;
-      clearApproval();
-      finishWork();
+      // Third review SB8: only an error that ENDS the reply ends the turn here;
+      // any other (an answer that came too late, a refused second Send) is a
+      // line, and the reply stays running until its own end frame.
+      if (errorEndsTurn(payload)) {
+        setTurn(false);
+        clearApproval();
+        finishWork();
+      }
       say("error", text || "Iron Jarvis could not finish that.");
       // v1.433.0: the line says it in plain words; the exact message, when the
       // daemon sent one, is folded beneath it.

@@ -60,6 +60,7 @@ import logging
 import re
 import secrets
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -486,6 +487,126 @@ def _running_turn(d: Any, thread_id: str) -> str:
             return lg.turn_id
     state = TURNS.thread_states().get(thread_id) or {}
     return "running" if state.get("running") else ""
+
+
+# --------------------------------------------------------------------------- #
+# Third plan G20 (RB3, decision G14): a level changed while a reply runs
+# --------------------------------------------------------------------------- #
+#: The permission levels from the loosest to the strictest (``VOCABULARY.md``:
+#: Don't ask, Auto, Accept edits, Ask before commands — the default, "" —,
+#: Ask before every action). Plan is stricter than all of them for changes.
+LEVEL_ORDER: tuple[str, ...] = ("yolo", "auto", "accept_edits", "approve_for_me", "always_ask")
+#: ``PATCH``'s ``applies`` while a reply runs: the change reaches that reply
+#: from its next step, or only the user's next message.
+APPLIES_NOW = "now"
+APPLIES_NEXT_REPLY = "next_reply"
+#: What a running reply's call is answered when Plan was switched on after it
+#: started (the registry's refusal reason: the model reads it, the ledger keeps
+#: it). Reading goes on; nothing changes until the user approves a plan.
+PLAN_NOW_REFUSAL = (
+    "The user switched this session to Plan while you were working, so nothing may change now and this "
+    "call was not run. You can still read; finish by setting out your plan in words, and the changes "
+    "wait until the user approves it."
+)
+
+
+def plan_now_allows(name: Any) -> bool:
+    """May a reply that had Plan switched on while it ran still make this
+    (real) tool call? Only what a reply started in Plan is given
+    (``harness/mode.PLAN_MODE_TOOLS``: tools that change nothing on this PC)
+    and the question tool. Pure."""
+    from ...harness.mode import ASK_USER_TOOL, PLAN_MODE_TOOLS
+
+    return str(name or "") in PLAN_MODE_TOOLS or name == ASK_USER_TOOL
+
+
+def level_rank(mode: Any) -> int:
+    """How strict a stored level is (:data:`LEVEL_ORDER`); an unknown or blank
+    level is the default, Ask before commands. Pure."""
+    from ..chat_turn import normalize_approval_mode
+
+    return LEVEL_ORDER.index(normalize_approval_mode(mode))
+
+
+def level_applies(before: "dict[str, Any]", after: "dict[str, Any]") -> str:
+    """Third plan G20 (RB3, decision G14): when a change of a session's level
+    or Plan reaches a reply that is RUNNING — :data:`APPLIES_NOW` (stricter:
+    from its next step), :data:`APPLIES_NEXT_REPLY` (looser: from the user's
+    next message), or "" (neither changed). Plan switched on is the strictest
+    change there is; leaving Plan lets a reply change things, so it is looser
+    whatever level it goes to. Pure (two setups)."""
+    plan_before = before.get("mode") == S.MODE_PLAN
+    plan_after = after.get("mode") == S.MODE_PLAN
+    if plan_after and not plan_before:
+        return APPLIES_NOW
+    if plan_before and not plan_after:
+        return APPLIES_NEXT_REPLY
+    old, new = level_rank(before.get("approval_mode")), level_rank(after.get("approval_mode"))
+    if new > old:
+        return APPLIES_NOW
+    if new < old:
+        return APPLIES_NEXT_REPLY
+    return ""
+
+
+@dataclass
+class LevelWatch:
+    """Third plan G20 (RB3): what a coding session's reply needs to see a
+    level or Plan the user set WHILE it runs — the session, and its stored
+    level and Plan as they were when the reply started (a level the reply
+    runs with for its own reasons, the night's or an unattended start's, is
+    never "changed" by the user). Armed for the reply's driver task like the
+    pin (:func:`start_build_turn`); read by the stream lane before each round
+    of tool calls."""
+
+    engine: Any
+    thread_id: str
+    level: str
+    plan: bool
+
+    def read(self) -> "tuple[str, bool] | None":
+        """The session's stored ``(level, plan)`` now; None when unreadable.
+        BLOCKING (one row read): call it off the loop. Never raises."""
+        try:
+            row = S.get_row(self.engine, self.thread_id)
+        except Exception:  # noqa: BLE001 — unread: the reply keeps its level
+            log.warning("reading the level of session %s failed", self.thread_id, exc_info=True)
+            return None
+        if row is None:
+            return None
+        setup = _setup_of(row)
+        return str(setup.get("approval_mode") or ""), setup.get("mode") == S.MODE_PLAN
+
+    def tighten(self, running: str, plan: bool, now: "tuple[str, bool] | None") -> "tuple[str, bool]":
+        """The level and Plan the running reply takes for its next step: a
+        level the user set since it started that is STRICTER than the one it
+        runs with, and Plan once switched on — never anything looser (decision
+        G14: that waits for the next message). Pure."""
+        if now is None:
+            return running, plan
+        level, plan_now = now
+        from ..chat_turn import normalize_approval_mode
+
+        if normalize_approval_mode(level) != normalize_approval_mode(self.level) \
+                and level_rank(level) > level_rank(running):
+            running = normalize_approval_mode(level)
+        if plan_now and not self.plan:
+            plan = True
+        return running, plan
+
+
+_LEVEL_WATCH: "contextvars.ContextVar[LevelWatch | None]" = contextvars.ContextVar(
+    "ij_build_level_watch", default=None,
+)
+
+
+def current_level_watch(thread_id: Any) -> "LevelWatch | None":
+    """The armed :class:`LevelWatch` of the coding-session reply for
+    ``thread_id`` running in this context, else None (every other turn)."""
+    watch = _LEVEL_WATCH.get()
+    if watch is None or not thread_id or watch.thread_id != str(thread_id):
+        return None
+    return watch
 
 
 def _turn_record(engine: Any, turn_id: str, *, with_ids: bool = False) -> "tuple[str, str] | None":
@@ -1995,8 +2116,45 @@ async def _announce_account_limit(platform: Any, thread_id: str, limit: "dict[st
         log.warning("announcing build session %s's account limit failed", thread_id, exc_info=True)
 
 
+def finished_notice_outcome(status: str, done: Any = None, fin: Any = None) -> str:
+    """How the bell, the tray and the phone say a long reply ENDED: "done" |
+    "limit" | "needs_you" | "failed" (the ``outcome`` of ``build.turn_finished``, the
+    one field ``comm/notifier.build_finished_title``, the desktop app and the
+    dashboard's bell read). Pure; junk reads as no.
+
+    Third plan RB10: a reply cut short was announced "Your coding session
+    finished". Now:
+
+    * cut off — at the model's length limit (``truncated``), or a model call
+      cut off mid-answer and not recovered (``route.cut_off``) — is
+      "failed": "Your coding session could not finish";
+    * stopped at its step limit or at the session's reply limit (minutes or
+      dollars, ``cap``) — the work is not done and waits for the user's Keep
+      going — is "limit": "Your coding session stopped at its limit and
+      needs you";
+    * a reply whose own finish check found failing tests or open points
+      (``harness/night.finish_needs_you``) did finish: "needs_you";
+    * every other reply that ended on its ``done`` frame is "done".
+
+    The same marks the reply line keeps (``truncated``, ``stepLimit``,
+    ``capMet``) and that :func:`plan_run_due` reads as "not clean"."""
+    if status != "done":
+        return "failed"
+    d = done if isinstance(done, dict) else {}
+    route = d.get("route")
+    cut = route.get("cut_off") if isinstance(route, dict) else None
+    if d.get("truncated") or (isinstance(cut, dict) and not cut.get("recovered")):
+        return "failed"
+    if isinstance(d.get("step_limit"), dict) or isinstance(d.get("cap"), dict):
+        return "limit"
+    from ...harness.night import finish_needs_you
+
+    return "needs_you" if finish_needs_you(fin) else "done"
+
+
 async def _announce_turn_finished(platform: Any, thread_id: str, turn_id: str, status: str,
-                                  seconds: float, *, fin: "dict[str, Any] | None" = None) -> None:
+                                  seconds: float, *, fin: "dict[str, Any] | None" = None,
+                                  done: "dict[str, Any] | None" = None) -> None:
     """``build.turn_finished`` (v1.374.0) for a long turn that ended: the
     session's title, how long it took and how it ended ("done" | "failed" |
     "needs_you"). The bell says it (unless the user is looking at that
@@ -2006,18 +2164,19 @@ async def _announce_turn_finished(platform: Any, thread_id: str, turn_id: str, s
     ``fin`` (v1.503.0, north-star 3.6): the reply's saved finish record. A
     reply that ended but whose own check found failing tests or points of
     the request still open is ``needs_you`` — the night shift's reading
-    (``harness/night.finish_needs_you``), never "finished" over it."""
+    (``harness/night.finish_needs_you``), never "finished" over it.
+
+    ``done`` (third plan RB10): the reply's ``done`` frame — a reply cut at
+    its length, its step limit or its reply limit is never "finished"
+    (:func:`finished_notice_outcome`)."""
     try:
         bus = getattr(platform, "event_bus", None)
         if bus is None:
             return
         from ...core.events import EventType
-        from ...harness.night import finish_needs_you
 
-        outcome = "done" if status == "done" else "failed"
-        if outcome == "done" and finish_needs_you(fin):
-            outcome = "needs_you"
-        row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
+        outcome = finished_notice_outcome(status, done, fin)
+        row =await asyncio.to_thread(S.get_row, platform.engine, thread_id)
         await bus.publish(EventType.BUILD_TURN_FINISHED, {
             "thread_id": thread_id,
             "turn_id": turn_id,
@@ -2547,7 +2706,8 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
             _fin = _saved_finish(watch.done.get("finish")) if isinstance(watch.done, dict) else None
             with contextlib.suppress(BaseException):
                 await asyncio.shield(
-                    _announce_turn_finished(platform, thread_id, turn_id, status, elapsed, fin=_fin)
+                    _announce_turn_finished(platform, thread_id, turn_id, status, elapsed, fin=_fin,
+                                            done=watch.done)
                 )
         # v1.370.0 (Phase 7): the EXPERIENCE LIBRARY notes a turn that
         # FINISHED; the session is reflected on ONCE it has been idle (one
@@ -3675,6 +3835,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         team_token = _team.set_team(_team.from_setup(setup))
         # v1.381.0: the command rule (read above), armed last and reset first.
         command_token = _cmd_shell.set_turn_rule(command_rule)
+        # Third plan G20 (RB3, decision G14): the session's level and Plan as
+        # STORED when the reply starts (never the night's or an unattended
+        # start's own), so the lane sees one the user sets while it runs.
+        _stored = _setup_of(row)
+        level_token = _LEVEL_WATCH.set(LevelWatch(
+            engine=platform.engine, thread_id=thread_id,
+            level=str(_stored.get("approval_mode") or ""), plan=_stored.get("mode") == S.MODE_PLAN,
+        ))
         # v1.398.0 (night shift N1, decision 1): a night task's turn — its
         # questions wait the night's card wait, then that step is declined.
         # Armed only for one (every other turn: nothing set at all).
@@ -3830,6 +3998,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         finally:
             if night_token is not None:
                 _night.reset_turn(night_token)
+            _LEVEL_WATCH.reset(level_token)
             _cmd_shell.reset_turn_rule(command_token)
             _team.reset_team(team_token)
             _failure_words.reset_surface(surface_token)
@@ -4950,10 +5119,42 @@ def register(app: FastAPI, d: Any) -> None:
         return {"program": row}
 
     @app.patch("/build/sessions/{thread_id}")
-    def patch_build_session(thread_id: str, body: BuildSessionPatch) -> dict[str, Any]:
+    async def patch_build_session(thread_id: str, body: BuildSessionPatch) -> dict[str, Any]:
         """PARTIAL: title, model / provider / reasoning, approval mode, mode
-        ("act" | "plan"), local only. The folder never changes. A mode change
-        takes effect from the NEXT turn (a running turn keeps its tools)."""
+        ("act" | "plan"), local only. The folder never changes.
+
+        Third plan G20 (RB3, decision G14): while a reply RUNS, a change of the
+        level or Plan answers ``applies`` — ``"now"`` when it is stricter (Plan
+        switched on, or a stricter level: the running reply takes it from its
+        next step, ``LevelWatch``), ``"next_reply"`` when it is looser (Plan
+        switched off, or a looser level: from the user's next message; the
+        running reply keeps its own). No ``applies`` while no reply runs.
+        Local only switched on or off while a reply runs answers
+        ``applies_local_only: "next_reply"`` (its own key: one PATCH may change
+        both): the running reply keeps the model it started with. Everything
+        else here (model, account, effort, the reply limit, the team) applies
+        from the next reply, as before."""
+        running = thread_id in _STARTING or bool(_running_turn(d, thread_id))
+        before, view = await asyncio.to_thread(_patch_session_now, thread_id, body)
+        if running and ({"approval_mode", "mode"} & body.model_fields_set):
+            applies = level_applies(before, view.get("setup", {}) | {"mode": view.get("mode")})
+            if applies:
+                view["applies"] = applies
+        if running and "local_only" in body.model_fields_set:
+            # Third plan G20 (the lead's follow-up to RB3): Local only is read
+            # ONCE when a reply starts (the lane's scope and route), so a
+            # change now — on or off — reaches the user's next message only;
+            # the running reply keeps the model it started with. Its own key,
+            # so a PATCH that changes the level too keeps both answers.
+            was_on = before.get("local_only") is True
+            now_on = view.get("setup", {}).get("local_only") is True
+            if was_on != now_on:
+                view["applies_local_only"] = APPLIES_NEXT_REPLY
+        return view
+
+    def _patch_session_now(thread_id: str, body: BuildSessionPatch) -> "tuple[dict[str, Any], dict[str, Any]]":
+        """The PATCH's own work: ``(setup before, the session's view after)``.
+        BLOCKING (row reads and the write)."""
         current = _setup_of(_session_or_404(thread_id))
         setup: dict[str, Any] = {}
         fields = body.model_fields_set
@@ -5013,7 +5214,7 @@ def register(app: FastAPI, d: Any) -> None:
         row = S.update(engine_of(), thread_id, title=title, setup=setup)
         if row is None:
             raise HTTPException(status_code=404, detail="no such coding session")
-        return _full_view(row)
+        return current, _full_view(row)
 
     @app.post("/build/sessions/{thread_id}/archive")
     async def archive_build_session(thread_id: str, body: ChatArchiveBody | None = None) -> Any:
@@ -5341,7 +5542,11 @@ def register(app: FastAPI, d: Any) -> None:
         is not carried and ``branched_from.code`` says so); the new
         session starts in act mode with no approved plan and no conversation
         grants (it asks again), and the account, model, reasoning, approval
-        setting, Local only and the Browser pane's address go with it. A
+        setting, Local only, the reply limit (third plan G20, RB14) and the
+        Browser pane's address go with it. (RB4: no coding session holds an
+        app's Local only hold — the one writer, ``mcp/tools._hold_chat_local``,
+        runs only after such an app's call, which refuses outside Chat; Local
+        only itself is copied.) A
         question branch answers ``draft`` (the question's words and files)
         for the new session's box."""
         from ...harness import branches as B
@@ -5379,7 +5584,10 @@ def register(app: FastAPI, d: Any) -> None:
                 "command_shell",
                 # v1.403.0: the session's team goes with it.
                 "team",
-            ) if setup.get(k) not in (None, "", [])
+                # Third plan G20 (RB14, decision G22): and its reply limit
+                # (``harness/reply_cap.SETUP_KEY``), as the parent has it.
+                "cap",
+            ) if setup.get(k) not in (None, "", [], {})
         }
         branched = {"thread_id": thread_id, "title": row.title or "", "turn_id": turn_id, "at": at}
         facts = B.facts_of(setup)

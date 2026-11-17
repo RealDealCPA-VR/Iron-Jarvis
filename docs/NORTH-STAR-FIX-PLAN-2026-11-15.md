@@ -1392,7 +1392,7 @@ Both files were read whole.
   Auto-allow on for every tab. The daemon marks the card (`floor`,
   `panel.py:837`); the panel never reads the mark.
 - [ ] **SB7 to SB14 (low, pass only).** Stopping a dictation makes the
-  *Done so far: SB11 (v1.520.0); SB13 (v1.522.0).*
+  *Done so far: SB11 (v1.520.0); SB13 (v1.522.0); SB8, SB9 (v1.524.0).*
   add-on's whole connection wait for the transcription, so a page action
   another chat is running can time out (`panel.py:1127-1175`); any error
   that is not about voice ends the turn on screen while it still runs
@@ -1419,7 +1419,7 @@ to the daemon.
 
 All four were read whole.
 
-- [ ] **BR1 (1, medium, checked). With Browser access off, Forget says
+- [x] **BR1 (1, medium, checked). With Browser access off, Forget says
   "Forgotten" but keeps that browser's waiting connection.** When Browser
   access is switched back on, the forgotten browser is connected and usable
   again with no pairing. `browser/service.py:1345-1360` closes only the
@@ -1432,8 +1432,8 @@ All four were read whole.
   `browser/screenshot.py:508-610` lacks the check `tools/images.py:253-271`
   has. Not verified: that such a run is given the screenshot tool, and what
   each adapter does with a picture it cannot take.
-- [ ] **BR3 to BR6 (low; BR3 and BR4 pass only, BR5 and BR6 suspected).** A
-  *Done so far: BR6 (v1.520.0); BR4, BR5 (v1.523.0).*
+- [x] **BR3 to BR6 (low; BR3 and BR4 pass only, BR5 and BR6 suspected).** A
+  *Done so far: BR6 (v1.520.0); BR4, BR5 (v1.523.0); BR3 (v1.524.0).*
   Pair press that lands while Browser access is off makes that browser the
   live one anyway (`browser/extension_backend.py:818-846`; the card does not
   offer Pair then); the screenshot tool promises "the result names the
@@ -1455,14 +1455,14 @@ daemon; a terminal's token lives in memory only and dies with its terminal.
 
 All of both were read whole.
 
-- [ ] **MC1 (2, medium, checked on the restore side). A Memory, Browser or
+- [x] **MC1 (2, medium, checked on the restore side). A Memory, Browser or
   Hand off box turned OFF on a Build › Code session can be ON again after
   Iron Jarvis is killed and restarted.** The restore takes the boxes from
   the state kept beside the running tool, not from the session's record
   (`hosted/adopt.py:439-444`), and turning a box off does not refresh that
   kept state (`hosted/service.py:2402-2423`, pass only). The chip shows off
   while the tool is still served.
-- [ ] **MC2 (4, medium, checked on the daemon side). When a coding tool
+- [x] **MC2 (4, medium, checked on the daemon side). When a coding tool
   asks to click or type in the user's browser through this door, the only
   card is a bell row "An agent run wants to …".** It does not say which
   session asks, on which page, or what is clicked or typed, and it lapses
@@ -1479,7 +1479,7 @@ All of both were read whole.
   (`stdio_shim.py:226-244`). Not verified: what each tool's own client does
   with that answer.
 - [ ] **MC4 to MC8 (low; MC4 and MC7 suspected, the rest pass only).**
-  *Done so far: MC5 (v1.520.0).*
+  *Done so far: MC5 (v1.520.0); MC6 (v1.524.0).*
   Stopping a tool that left a program holding its output open can hang the
   stop for 60 seconds (`codehost.py:547-559`; the daemon's own copy has the
   guard); a call through the door has no time limit and is not re-checked
@@ -1518,13 +1518,14 @@ The whole file was read, in two halves.
   included (`build.py:2380-2388`), and the limit branch comes before the
   "it finished" branch (`1884-1901`). Not verified: that a refused side
   call lets the main reply end normally.
-- [ ] **RB3 (4, medium, checked on the route; the lane pass only). Changing
+- [x] **RB3 (4, medium, checked on the route; the lane pass only). Changing
   the permission level, or switching Plan on, while a reply runs is shown
   as applied at once, but the running reply keeps its old level.** A user
   going from "Don't ask" to "Ask before every action" to rein a reply in
   still gets commands run unasked until it ends, and nothing says so
   (`build.py:4816-4880`; the level is read once, `routes/chat.py:5063`).
-- [ ] **RB4 (2, medium, suspected). "Branch from here" does not copy the
+- [-] **RB4 (2, medium, suspected). "Branch from here" does not copy the
+  *Not a defect: no coding session ever gets such a hold. Its one writer runs only after an app kept on the user's own models was used, and that app refuses outside chat. Pinned by two tests; no code changed.*
   hold that keeps a session Local only after it read an app kept on the
   user's own models.** In the branch Local only can be switched off, and
   the copied conversation then goes to a cloud model
@@ -1536,7 +1537,7 @@ The whole file was read, in two halves.
   (`build.py:2432-2441, 2468-2471`); the resume pass never checks that the
   session already holds the finished reply.
 - [ ] **RB6 to RB14 (low, pass only; RB12 by two passes).** A "Resume when
-  *Done so far: RB9 (v1.521.0); RB8 (v1.522.0).*
+  *Done so far: RB9 (v1.521.0); RB8 (v1.522.0); RB10, RB14 (v1.524.0).*
   ready" wait whose carry-on is refused for a lasting reason (folder gone,
   model no longer usable) is tried every 60 seconds for ever and never said
   (`build.py:3996-4002`); a failed write of the question at a reply's start
@@ -1728,7 +1729,7 @@ only along the save path.
   age with no check that the reply reached its chat. `docs/rules/chat.md`
   says a line the daemon can write must be written by the daemon.
 - [ ] **CS6 to CS10 (low; CS6 and CS10 partly suspected, the rest pass
-  *Done so far: CS6, CS7, CS10 (v1.521.0).*
+  *Done so far: CS6, CS7, CS10 (v1.521.0); CS8 (v1.524.0).*
   only).** The first reply of every new chat runs with no chat id, so its
   cost is missing from that chat's usage line (`page.tsx:8666, 9240-9252`;
   `routes/chat.py:5710`); deleting a chat leaves its turn records (each
@@ -1773,14 +1774,14 @@ All eighteen files in `terminals/` were read whole.
   on the Build page, a debug log line only (`terminals/manager.py:1410-1411,
   1463-1464`), and its kept history is deleted at the next save
   (`985-996`, pass only).
-- [ ] **TM4 (2, medium, checked). The Continue strip says Continue on "X"
+- [x] **TM4 (2, medium, checked). The Continue strip says Continue on "X"
   and "Your conversation is copied to X", but the daemon is never told X
   and picks the account itself.** With three or more Claude accounts the
   two can differ, and the conversation is then copied into and resumed
   under another account than the one agreed to
   (`dashboard/components/terminal/ContinueStrip.tsx:151, 160, 226`;
   `routes/terminals.py:663-732`; `terminals/continue_on.py:587-680`).
-- [ ] **TM5 (1, medium, checked on the daemon side). The Launch menu's
+- [x] **TM5 (1, medium, checked on the daemon side). The Launch menu's
   "With Iron Jarvis's tools (opens a new terminal)" rows say "Jarvis tools
   ready", and pressing one opens a bare terminal:** nothing is set up and
   no tool is started, because no boxes are ticked when the terminal is
@@ -1788,7 +1789,7 @@ All eighteen files in `terminals/` were read whole.
   to the log (`platform.py:403-426`; `terminals/recipes.py:545-557,
   716-718`; `dashboard/app/terminals/page.tsx:1118`).
 - [ ] **TM6 to TM20 (low; TM10, TM14, TM15 and TM20 suspected, the rest
-  *Done so far: TM14, TM15 (v1.520.0); TM13 (v1.523.0).*
+  *Done so far: TM14, TM15 (v1.520.0); TM13 (v1.523.0); TM16 (v1.524.0).*
   pass only), in the order written:**
   - Kept on this PC and in backups: each terminal's last 64 KB of output
     is written in the clear and carried by every backup, where it stays
@@ -2294,3 +2295,74 @@ Tested with stand-ins only: the models; "billed per use" (set in the test);
 the money cut-off between attempts (a unit test of the shared limit, not a
 model reporting dollars); the capture check in the add-on (source pins and
 a type check, never a browser).
+
+### Group 20 as built (v1.524.0)
+
+Fixed: TM4, TM5, TM16, RB3, RB14, MC1, MC2, MC6, BR1, BR3, and four that the
+plan put in group 21 but that live in files this group changes: RB10, CS8,
+SB8, SB9. SB4 and SB6 went out with group 19, and PG4, PG5 and PG10 with
+group 17.
+
+Not a defect: RB4. A coding session never gets the hold that keeps a
+session Local only after it read an app kept on the user's own models: the
+only code that writes it runs after such an app was used, and that app
+refuses outside chat. Two tests pin it. (Decision G22's other half, the
+reply limit, is built.)
+
+Where it differs from the plan:
+
+- **MC1.** The session's record alone decides the boxes at a restart. The
+  brief said the state kept beside the tool could still narrow them; that
+  would have left a box showing ON while the door refused it.
+- **MC2 (decision G17).** The card waits 45 seconds, not as long as chat's
+  card: the bridge between the coding tool and Iron Jarvis gives up at one
+  minute, and a longer wait would promise an answer the tool can no longer
+  receive. Who, what and where are one sentence on the card.
+- **RB3 (decision G14).** Plan switched on mid-reply was built for real: the
+  running reply makes no change from its next step.
+- **Decision G16.** The boxes shown are Memory and Browser (the two a Build
+  terminal has).
+- **Added along the way.** The browser card says "No browser was paired, so
+  there was nothing to forget." when that is so. A change to Local only
+  while a coding reply runs answers that it starts with the next message.
+
+Left open:
+
+- **Local only switched on while a coding reply runs does not reach that
+  reply**, which keeps the model it started with until it ends. The daemon
+  now says so, but an open coding session has no Local only switch at all
+  (it exists only before a session starts), and the chat tool that refuses
+  to change it for a coding session points to "its own Local only switch in
+  Code". For the owner: add that switch, or correct the sentence.
+- TM5: the start line typed into the new terminal was not tried with a real
+  coding tool on the installed app; a terminal opened with tools is not
+  given them again after Iron Jarvis restarts (as before).
+- MC2: how the phone shows this card was not looked at; the 45 seconds for
+  Codex's own client is from memory, not measured.
+- RB3: a helper already running keeps the level it started with; the
+  sentence in the reply's own instructions that says actions are
+  pre-approved is not rewritten mid-reply (the cards and refusals hold).
+- BR1: "could not close the browser's connection" can only be reached with
+  a stand-in; in practice a close always closes.
+- RB10: a Build › Code reply cut at the model's LENGTH limit still arrives
+  as finished (`hosted/acp.py` turns that ending into "completed" before
+  the notice sees it). The bell draws a reply stopped at its limit with the
+  same check mark as a finished one, and the activity list shows the word
+  "Limit" for it.
+- CS8: the follow-up questions, an app's own model call and the reflection
+  still write their usage on the event loop (a failed write is now logged
+  there too). A hard kill in the middle of a reply still loses the usage of
+  the model calls already made in it: that needs a row written after each
+  call, and a start-up step that settles the ones left open.
+- SB9: other failed steps in the sidebar still show a code before their
+  words ("ELEMENT_NOT_FOUND: …").
+
+Tested with stand-ins only: the models; the account manager (a recording
+stand-in); the terminals' shell; the coding tool behind the door and the
+browser tab it would act on; no card was looked at in the running app.
+
+Found in this group's own local run: once a reply's usage is written off the
+main loop, the sidebar's reply is still tidying up for an instant after the
+panel was told it ended, and a message sent in that instant was refused as
+"still working on the last message". A Send that arrives after the shown
+end now waits for the tidy-up (at most five seconds).

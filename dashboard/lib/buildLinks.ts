@@ -248,6 +248,9 @@ export function buildFinishedHeadline(outcome: unknown): string {
   // v1.503.0 (north-star 3.6): the reply ended, but its own finish check found
   // failing tests or points still open (comm/notifier.build_finished_title).
   if (outcome === "needs_you") return "Your coding session finished, but something needs you";
+  // Third plan RB10: stopped at its step or reply limit, waiting for Keep going —
+  // it did not finish (the same words as the notifier and the tray).
+  if (outcome === "limit") return "Your coding session stopped at its limit and needs you";
   return outcome === "failed" ? "Your coding session could not finish" : "Your coding session finished";
 }
 

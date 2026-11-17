@@ -476,13 +476,24 @@ def build_finished_title(payload: dict) -> str:
 
     v1.503.0 (north-star 3.6): ``needs_you`` — the reply ended, but its own
     finish check found failing tests or points still open (the objective's
-    own words for the same verdict)."""
+    own words for the same verdict).
+
+    Third plan RB10: ``limit`` — the reply stopped at its step limit or at
+    the session's reply limit (minutes or dollars) and waits for the user's
+    Keep going: it did not finish, so it never says "finished". The twins:
+    desktop/main.js (the tray) and dashboard/lib/buildLinks.ts (the bell)."""
     outcome = _text(payload.get("outcome"))
     if outcome == "failed":
         return "Your coding session could not finish"
+    if outcome == "limit":
+        return BUILD_LIMIT_TITLE
     if outcome == "needs_you":
         return "Your coding session finished, but something needs you"
     return "Your coding session finished"
+
+
+#: Third plan RB10: the headline of a coding reply that stopped at its limit.
+BUILD_LIMIT_TITLE = "Your coding session stopped at its limit and needs you"
 
 
 def _build_finished_line(payload: dict) -> str:

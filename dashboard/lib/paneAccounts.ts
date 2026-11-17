@@ -454,6 +454,36 @@ export function isContinueAnswer(v: unknown): v is ContinueAnswer {
   return !!pane && typeof pane === "object" && typeof pane.id === "string" && !!pane.id;
 }
 
+/** An account as the Continue strip names it, and as the daemon names the one
+ *  it would use instead (third plan TM4). */
+export interface ContinueTarget {
+  id: string;
+  title: string;
+}
+
+/** Third plan TM4 (G15): the daemon refused the account the strip named and
+ *  named the one it would use instead (`instead` beside the 409's `detail`).
+ *  Null for every other refusal. */
+export function continueInstead(err: unknown): ContinueTarget | null {
+  const body = err && typeof err === "object" ? (err as { body?: unknown }).body : undefined;
+  const inst = body && typeof body === "object" ? (body as { instead?: unknown }).instead : undefined;
+  if (!inst || typeof inst !== "object") return null;
+  const { id, title } = inst as { id?: unknown; title?: unknown };
+  if (typeof id !== "string" || !id) return null;
+  return { id, title: typeof title === "string" && title ? title : id };
+}
+
+/** The new terminal's line, from what the daemon ANSWERED: its note, and —
+ *  if it went to another account than the strip named (an older daemon that
+ *  does not read the name) — that it did, in words. */
+export function continuedNote(a: ContinueAnswer, asked: ContinueTarget | null): string {
+  const note = continueNote(a);
+  if (asked && a.to?.id && a.to.id !== asked.id) {
+    return `It opened on “${a.to.title || a.to.id}”, not “${asked.title}”. ${note}`;
+  }
+  return note;
+}
+
 /** What the new pane says about how it started: the daemon's note when it
  *  sent one, else a sentence built from `resumed` / `parked`. */
 export function continueNote(a: ContinueAnswer): string {

@@ -681,7 +681,10 @@ export function jarvisToolHint(key: keyof JarvisTools, toolName: string, tool: s
   if (key === "handoff") {
     return `${toolName} may start another coding tool you have here (Codex, Claude Code, Pi…) on part of the work, in this folder. The work it hands over goes to that tool's own service. Each helper is its own session you can open; it asks you before anything its own rules ask about, and never gets Full access.`;
   }
-  return `${toolName} may use your browser through Iron Jarvis. Every click, typing or page change asks you first.`;
+  // Third plan G20 (MC6): reading needs no card (mcpserver CAPABILITY_TOOLS
+  // "browser_": the status, the tab list, a page's text and elements, a
+  // screenshot are allow-tier, core/config), so say where what it reads goes.
+  return `${toolName} may use your browser through Iron Jarvis. It reads your open tabs without asking, and what it reads goes to ${toolVendor(tool)} with the conversation. Every click, typing or page change asks you first.`;
 }
 
 /** v1.441.0 review: a Pi session runs a message that starts with `!` as a

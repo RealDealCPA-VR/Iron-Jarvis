@@ -2042,6 +2042,66 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## What the screen says is what happens (v1.524.0)
+
+Where a button or a line named one thing and Iron Jarvis did another, the
+two now agree: "Continue on X" goes to X, a setting changed while a reply
+runs says when it takes effect, and a box you turned off stays off. This is
+the fourth of seven releases from the third review.
+
+- **"Continue on X" goes to X.** The strip in a Build terminal named the
+  account it would continue on, but Iron Jarvis picked the account itself,
+  and with three or more accounts the two could differ. The page now sends
+  the account it names. Iron Jarvis uses that one, or refuses and names the
+  account that can take over, which the button then offers.
+- **"With Iron Jarvis's tools" really sets the tools up.** Those rows in the
+  Launch menu said "Jarvis tools ready" and opened a bare terminal. Pressing
+  one now shows the Memory and Browser boxes first (ticking one is your
+  consent), then opens the terminal set up and starts the tool in it. A row
+  says "ready" only for a tool that can be set up on this PC; one that
+  cannot says why. A plain Launch row says "Starts without Iron Jarvis's
+  tools in this terminal".
+- **A stricter permission level reaches the reply that is running.** Going
+  from "Don't ask" to "Ask before every action" while a coding reply ran
+  showed the new level at once, and the reply kept running commands
+  unasked until it ended. A stricter level now holds from the reply's next
+  step, and Plan switched on mid-reply stops it changing anything from its
+  next step. A looser level applies from your next message. The line beside
+  the level says which: "Applies from this reply's next step." or "Applies
+  from your next message."
+- **A box turned off stays off.** A Memory, Browser or Hand off box turned
+  off on a Build › Code session could be on again after Iron Jarvis was
+  killed and restarted, while its chip still showed off.
+- **A coding tool asking to act in your browser says who and what.** The
+  card used to read "An agent run wants to …". It now names the terminal or
+  coding session, what would be clicked or typed (typed text is never
+  shown), and the site, and offers "Allow once" and "Deny" only. Its link
+  opens that terminal or session. If you do not answer in 45 seconds
+  nothing is done, and the tool is told to ask you to look at the card.
+- **The Browser box says what it lets a coding tool read.** Reading your
+  open tabs does not ask, and what is read goes to the tool's own provider;
+  clicks and typing ask first. The box's hint now says both.
+- **Forget really forgets a browser.** With Browser access off, Forget said
+  "Forgotten" but kept that browser's waiting connection, and switching
+  access back on connected it again with no pairing. A waiting browser is
+  now connected only after its pairing is checked again, and Forget says so
+  when there was nothing to forget.
+- **"Branch from here" keeps the session's reply limit.**
+- **A coding reply stopped at its limit is not announced as "finished".**
+  The bell, the tray and the phone said "Your coding session finished" for
+  a reply cut at its step limit, its time or money limit, or the model's
+  length limit. They now say "Your coding session stopped at its limit and
+  needs you", or "could not finish" for a reply that was cut off. The same
+  for a Build › Code reply cut at its turn limit.
+- **In the browser sidebar, an error that is not the end of the reply no
+  longer ends it on screen.** The panel went back to idle while Iron Jarvis
+  was still working. A reply that ended on an error is no longer also
+  marked "Stopped.", and a click whose answer was lost says so in plain
+  words: "Iron Jarvis did not hear back from the page … Look at the page
+  before trying again."
+- **A chat's usage is written without holding the app**, and a failed write
+  is no longer silent: it is noted in the log with the reply it belongs to.
+
 ## Done means done at night, and a picture is described only by a model that saw it (v1.523.0)
 
 A night task tried on several models no longer reads "Done" whatever its
@@ -8851,8 +8911,10 @@ OpenCode) is now seen, and can know you, everywhere else in Iron Jarvis.
   memory profile (read-only; it can never write). What it reads goes to the
   tool's model provider (Anthropic for Claude Code, OpenAI for Codex, the
   provider you chose in Pi or OpenCode) with the conversation.
-- **Browser**: the coding tool may use your browser through Iron Jarvis;
-  every click, typing or page change asks you first.
+- **Browser**: the coding tool may use your browser through Iron Jarvis.
+  It reads your open tabs without asking, and what it reads goes to the
+  tool's model provider with the conversation. Every click, typing or page
+  change asks you first.
 
 These are the same two boxes a Build terminal has. Ticking the first box (or
 unticking the last) applies from your next message: the tool starts again on

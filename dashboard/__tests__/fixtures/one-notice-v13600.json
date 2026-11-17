@@ -441,6 +441,28 @@
       "href": "/chat?view=code&session=bs_red"
     },
     {
+      "case": "build-turn-limit",
+      "event": {
+        "id": "evt_build_limit",
+        "type": "build.turn_finished",
+        "session_id": "build:bs_cap",
+        "ts": "2026-10-19T03:16:00",
+        "payload": {
+          "thread_id": "bs_cap",
+          "turn_id": "bt_cap1",
+          "title": "Tidy the notes",
+          "seconds": 1200,
+          "outcome": "limit"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "title": "Your coding session stopped at its limit and needs you",
+      "body": "Tidy the notes · took 20 min",
+      "href": "/chat?view=code&session=bs_cap"
+    },
+    {
       "case": "build-app-turn-finished",
       "event": {
         "id": "evt_build_app_done",

@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import functools
 import json as _json
 import logging
 import os
@@ -11411,12 +11412,22 @@ def _usage_frame(tally: UsageTally, usage_in: int, usage_out: int) -> dict[str, 
     return out
 
 
+#: Third plan CS8: how long a chat turn waits for its usage row to be written
+#: on its worker thread before it goes on without waiting (the write itself
+#: carries on, and a failure is still logged).
+USAGE_WRITE_TIMEOUT_S = 15.0
+#: CS8: the usage writes still running on a worker thread (held so nothing is
+#: collected mid-write; each leaves the set when it ends).
+_USAGE_WRITES: "set[asyncio.Future[Any]]" = set()
+
+
 def _persist_chat_usage(
     d, *, provider: str, model: str, state: AgentState,
     completions: int, usage_in: int, usage_out: int,
     started_at=None, cost_usd: float = 0.0, thread_id: str = "",
     tool_session: str = "", label: str = "",
-) -> None:
+    turn_id: str = "", pending: "list[asyncio.Future[Any]] | None" = None,
+) -> "asyncio.Future[Any] | None":
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
     "chat") with the adapters' reported token usage — including turns that
@@ -11436,7 +11447,21 @@ def _persist_chat_usage(
     chat can total its own use (``GET /chat/threads/{id}/usage``).
 
     ``label`` (v1.516.0): what a row that is not a turn's own was for, in the
-    user's words (the row's ``result``) — a conversation summary's row."""
+    user's words (the row's ``result``) — a conversation summary's row.
+
+    Third plan CS8: the row — and after it the detections scan of the turn
+    the row names (``detections.bell.schedule_chat_turn_scan``, v1.290.0) —
+    is written by :func:`_write_chat_usage`, which never raises and logs a
+    failed write ONCE at WARNING with the turn's id
+    (``turn_id``; else the daemon-owned turn's own id) — it was dropped with
+    no line. ``pending`` (both chat lanes): the write runs on a worker
+    thread, never on the event loop. This returns at once (sync on purpose:
+    a cancel arm is never delayed here, and the write has started before any
+    await, so a second cancel cannot lose it), the started write is appended
+    to ``pending``, and the lane waits for it (:func:`settle_usage_writes`)
+    before its turn ends. Without ``pending`` (a follow-up, a pack's sampling
+    call, a reflection), or with no running loop on this thread, it is
+    written right here as before, and this returns None."""
     # Third plan CS6 (ONE place, both lanes): a NEW chat's first turn starts
     # with no chat id — the page names the chat a moment later
     # (``POST /chat/turns/{id}/thread``). The row takes the chat the turn
@@ -11444,37 +11469,72 @@ def _persist_chat_usage(
     # (``durable_turns.note_usage_row``). Outside a daemon-owned turn (the
     # POST lane, a follow-up, a reflection) this changes nothing.
     from . import durable_turns as _durable
+    from ..core.ids import utcnow as _now
 
     _turn, _turn_thread = _durable.current_turn()
     if not str(thread_id or "").strip():
         thread_id = _turn_thread
+    fields: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "state": state,
+        "steps": max(1, completions),
+        "input_tokens": usage_in,
+        "output_tokens": usage_out,
+        "cost_usd": max(0.0, float(cost_usd or 0.0)),
+        "finished_at": _now(),
+        **({"result": str(label)} if label else {}),
+        **({"created_at": started_at} if started_at is not None else {}),
+    }
+    job = functools.partial(
+        _write_chat_usage, d, fields,
+        thread=str(thread_id or "").strip()[:80], turn=_turn,
+        turn_id=str(turn_id or "").strip() or _turn, tool_session=tool_session,
+    )
+    loop: "asyncio.AbstractEventLoop | None"
     try:
-        from ..core.ids import utcnow as _now
+        loop = asyncio.get_running_loop() if pending is not None else None
+    except RuntimeError:  # no loop on this thread: already off it
+        loop = None
+    if loop is None or pending is None:
+        job()
+        return None
+    # The turn's context rides along (the CS6 read of the live chat id).
+    fut = loop.run_in_executor(None, contextvars.copy_context().run, job)
+    _USAGE_WRITES.add(fut)
+    fut.add_done_callback(_USAGE_WRITES.discard)
+    pending.append(fut)
+    return fut
+
+
+def _write_chat_usage(d, fields: "dict[str, Any]", *, thread: str, turn: str, turn_id: str,
+                      tool_session: str) -> None:
+    """Write one chat usage row (:func:`_persist_chat_usage`). BLOCKING;
+    never raises: accounting must never break (or alter) a reply. A failed
+    write is logged ONCE at WARNING, naming the turn (third plan CS8)."""
+    from . import durable_turns as _durable
+
+    try:
         from ..core.models import AgentRun
 
         with session_scope(d.platform.engine) as db:
-            run = AgentRun(
-                session_id="chat",
-                agent_type=AgentType.BUILDER,
-                provider=provider,
-                model=model,
-                state=state,
-                steps=max(1, completions),
-                input_tokens=usage_in,
-                output_tokens=usage_out,
-                cost_usd=max(0.0, float(cost_usd or 0.0)),
-                finished_at=_now(),
-                thread_id=(str(thread_id or "").strip()[:80] or None),
-                **({"result": str(label)} if label else {}),
-                **({"created_at": started_at} if started_at is not None else {}),
-            )
+            run = AgentRun(session_id="chat", agent_type=AgentType.BUILDER,
+                           thread_id=(thread or None), **fields)
             run_id = run.id
             db.add(run)
             db.commit()
-        if _turn and not str(thread_id or "").strip():
-            _durable.note_usage_row(_turn, run_id)  # CS6: the link names it
     except Exception:  # noqa: BLE001 — accounting must never break a reply
+        log.warning("could not write the usage of chat turn %s (chat %s): its use is missing "
+                    "from the usage totals", turn_id or "(no id)", thread or "(none)", exc_info=True)
         return
+    if turn and not thread:
+        _durable.note_usage_row(turn, run_id)  # CS6: the link names it
+        # CS8: written off the loop, the link may have landed between the
+        # read of the chat id and the note above: read it again, and name
+        # the row (only a row that still names no chat is changed).
+        _, live = _durable.current_turn()
+        if live:
+            _durable.stamp_usage_rows(d.platform.engine, [run_id], live)
     # DETECTIONS (v1.290.0): this is the ONE end-of-turn point both chat lanes
     # pass, and the run row just written is what names the turn — scan its
     # tool calls on a daemon thread (never waited on, never raises).
@@ -11489,6 +11549,41 @@ def _persist_chat_usage(
             schedule_chat_turn_scan(d.platform, run_id)
     except Exception:  # noqa: BLE001 — a detection must never touch a reply
         pass
+
+
+async def settle_usage_writes(pending: "list[asyncio.Future[Any]]", *, turn_id: str = "") -> None:
+    """Wait for the usage writes a chat turn started (third plan CS8),
+    bounded by :data:`USAGE_WRITE_TIMEOUT_S` and shielded: a cancel or the
+    bound ends the WAIT, never the write (it carries on on its worker
+    thread, and the daemon's shutdown waits for those threads). Never raises
+    but a cancel of the caller itself. MIRROR NOTE (lock-step): both chat
+    lanes call it before their turn ends.
+
+    The wait runs in an anyio SHIELDED scope with its own deadline: a client
+    that goes away mid-reply cancels the stream lane through Starlette's
+    anyio scope, which re-delivers the cancel at every later await (the
+    v1.228.0 lesson), so a plain await here would end at once and the turn
+    would end before its CANCELLED row is written. The deadline is the
+    bound; the inner ``asyncio.shield`` keeps the deadline from cancelling
+    a write that is still queued for its thread."""
+    waiting = [f for f in pending if not f.done()]
+    pending.clear()
+    if not waiting:
+        return
+    import anyio
+
+    try:
+        with anyio.CancelScope(shield=True) as scope:
+            scope.deadline = anyio.current_time() + USAGE_WRITE_TIMEOUT_S
+            await asyncio.shield(asyncio.gather(*waiting, return_exceptions=True))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — accounting never breaks a reply
+        log.warning("waiting for the usage of chat turn %s failed", turn_id or "(no id)", exc_info=True)
+        return
+    if scope.cancelled_caught:
+        log.warning("the usage of chat turn %s is still being written after %.0f s; the reply "
+                    "goes on without waiting", turn_id or "(no id)", USAGE_WRITE_TIMEOUT_S)
 
 
 def _load_project(platform, pid: "str | None"):
@@ -13946,6 +14041,12 @@ async def run_chat_turn(
     # delayed by an await here. MIRROR NOTE (lock-step): routes/chat.py.
     route = None  # bound by the first round (the routing call may bill first)
     _usage_written = False
+    # Third plan CS8: the row is written on a worker thread (started here,
+    # sync, so a cancel never loses it) and the turn waits for it
+    # (`settle_usage_writes`, bounded) before it ends. MIRROR NOTE
+    # (lock-step): routes/chat.py.
+    _usage_pending: list = []
+    _usage_turn = str(getattr(body, "turn_id", "") or "")
 
     def _persist_once(state: AgentState) -> None:
         nonlocal _usage_written
@@ -13960,6 +14061,7 @@ async def run_chat_turn(
             started_at=turn_started, cost_usd=_tally.cost_usd,
             thread_id=getattr(body, "thread_id", ""),
             tool_session=_tool_session,  # v1.367.0 (lock-step)
+            turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
         )
 
     async def _billed_await(aw):
@@ -13974,6 +14076,7 @@ async def run_chat_turn(
             raise
         except BaseException:
             _persist_once(AgentState.CANCELLED)
+            await settle_usage_writes(_usage_pending, turn_id=_usage_turn)  # CS8
             raise
 
     try:
@@ -15076,6 +15179,10 @@ async def run_chat_turn(
                 await _turn_scope.close(_fin_scope)
             finally:
                 _turn_scope.reset(_fin_scope_token)
+        # Third plan CS8: a FAILED or CANCELLED row started above is written
+        # (off the loop) before the turn ends — LAST, so a cancel of this wait
+        # skips no clean-up (lock-step: the stream lane).
+        await settle_usage_writes(_usage_pending, turn_id=_usage_turn)
     # LANGUAGE GUARD (v1.144.0) — runs BEFORE the ledger below so a corrective
     # completion is billed like any other. Operates on the MODEL's text, not on
     # the assembled reply: our own honesty notes are written in English by
@@ -15181,7 +15288,10 @@ async def run_chat_turn(
         started_at=turn_started, cost_usd=_tally.cost_usd,
         thread_id=getattr(body, "thread_id", ""),
         tool_session=_tool_session,  # v1.367.0 (lock-step)
+        turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
     )
+    # Third plan CS8: written off the loop; the reply goes back once it is.
+    await settle_usage_writes(_usage_pending, turn_id=_usage_turn)
     # Reply honesty: if the model returned no final text but tools DID run
     # with output, synthesize a short summary from the last result rather
     # than the bare "(no reply)" placeholder (which reads like the turn did

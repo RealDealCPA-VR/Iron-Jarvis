@@ -275,6 +275,10 @@ BROWSER_TOOL_PREFIX = "browser_"
 #: monotonic clock, never on wall-clock time, so a system clock change cannot
 #: widen it and nothing here asserts a duration.
 PANEL_TURN_WINDOW_S = 60.0
+#: How long a Send waits for the reply before it to finish tidying up once
+#: its `done` has been shown; past it the Send is refused as before.
+END_TIDY_WAIT_S = 5.0
+
 PANEL_TURNS_PER_WINDOW = 12
 
 
@@ -354,6 +358,29 @@ def _short(value: object) -> str:
 
 #: How much of a failed step's reason the folded line carries (v1.270.1).
 STEP_REASON_CHARS = 160
+
+
+#: Third plan SB9: the step's line when a page action went out and the
+#: browser's answer was lost (``browser.errors.UNKNOWN_OUTCOME_MESSAGE`` is
+#: the MODEL's sentence for the same case and stays the model's). ``{what}``
+#: is the action in words ("click 'Search'").
+ANSWER_LOST_STEP = (
+    "Iron Jarvis did not hear back from the page after it tried to {what}, so it does "
+    "not know whether that happened. Look at the page before trying again."
+)
+
+
+def _step_failed_line(what: str, output: object) -> str:
+    """The sidebar's line for a page action that did not succeed: "Could not
+    {what}." plus the tool's reason (v1.270.1) — or, when the action went
+    out and its answer was lost (third plan SB9), :data:`ANSWER_LOST_STEP`,
+    never the model's sentence nor its code."""
+    from .errors import UNKNOWN_OUTCOME_MESSAGE
+
+    if UNKNOWN_OUTCOME_MESSAGE in str(output or ""):
+        return ANSWER_LOST_STEP.format(what=what)
+    reason = _short_reason(output)
+    return f"Could not {what}." + (f" {reason}" if reason else "")
 
 
 def _short_reason(output: object) -> str:
@@ -703,6 +730,8 @@ class PanelTurns:
         #: parallel suite caught the opposite order: ``open`` racing the turn's
         #: own ``finally`` and replaying a question with no answer.
         self._turn_text: str = ""
+        #: The running reply's `done` frame has left (see ``_send``).
+        self._end_sent: bool = False
         self._remembered: bool = True
         #: SB3 (third review): the conversation is ALSO a chat the daemon
         #: writes (``panel_chat``), so a restart restores it and the chat list
@@ -754,10 +783,26 @@ class PanelTurns:
         task = self._task
         return task is not None and not task.done()
 
-    async def emit(self, conn: Any, event: str, payload: dict[str, Any]) -> None:
+    async def emit(self, conn: Any, event: str, payload: dict[str, Any], *,
+                   ends_turn: bool = False) -> None:
         """Send one ``browser.panel_event``. Never raises — a dead socket is an
         expected outcome mid-turn (the user closed the browser), and an
-        exception here would take down the read loop that owns this call."""
+        exception here would take down the read loop that owns this call.
+
+        Third plan SB8: an ``error`` that does NOT end the turn on the panel
+        goes out marked ``ends: false`` — the panel shows the line and keeps
+        the reply "running" until the reply's own end frame. ``ends_turn``:
+        the error IS that end (the reply's own failure, or a Send refused
+        before its reply started); it goes out unmarked, exactly as every
+        error did before, so an older add-on and a newer one both end the turn
+        on it. A dictation's errors are never marked (the panel's voice
+        branch never ends a turn)."""
+        if (
+            event == P.PANEL_EVENT_ERROR
+            and not ends_turn
+            and not str((payload or {}).get("reason") or "").startswith("voice")
+        ):
+            payload = {**(payload or {}), "ends": False}
         # v1.433.0: what the panel's current answer bubble holds, by the
         # panel's own rules (sidepanel.ts): a delta appends to it; a step, a
         # reset, the end of a turn, an error (not a dictation's: that one
@@ -1436,6 +1481,7 @@ class PanelTurns:
                     " more. Pick another model in the sidebar.",
                     "reason": "model_unknown",
                 },
+                ends_turn=True,  # SB8: the Send it refuses never started
             )
             return True
         if match.get("available") is False:
@@ -1447,6 +1493,7 @@ class PanelTurns:
                     " another model, or connect it in Jarvis → Connections.",
                     "reason": "model_unavailable",
                 },
+                ends_turn=True,  # SB8: the Send it refuses never started
             )
             return True
         return False
@@ -1469,9 +1516,19 @@ class PanelTurns:
             text = SKILL_ALONE.format(name=skill)
         if not text:
             await self.emit(
-                conn, P.PANEL_EVENT_ERROR, {"text": "There was nothing to send."}
+                conn, P.PANEL_EVENT_ERROR, {"text": "There was nothing to send."},
+                ends_turn=not self.running,  # SB8: the Send it refuses never started
             )
             return
+        if self.running and self._end_sent:
+            # The reply's END HAS BEEN SHOWN (its `done` left); only its
+            # tidy-up is still running (since the third fix plan the lane
+            # waits for its usage row's write after `done`). A Send in that
+            # instant waits for it, bounded, instead of being refused as
+            # "still working on the last message".
+            task = self._task
+            if task is not None:
+                await asyncio.wait({task}, timeout=END_TIDY_WAIT_S)
         if self.running:
             # REFUSED, not queued. A second turn would race the first for the
             # same panel and the user would watch two answers interleave with
@@ -1488,7 +1545,8 @@ class PanelTurns:
         refusal = self._over_budget()
         if refusal:
             await self.emit(conn, P.PANEL_EVENT_ERROR, {"text": refusal,
-                                                        "reason": "rate_limited"})
+                                                        "reason": "rate_limited"},
+                            ends_turn=True)  # SB8: the Send it refuses never started
             return
         # v1.267.0: the pick is checked before anything is spent on the turn.
         if await self._refuse_pick(conn, provider, model):
@@ -1498,7 +1556,8 @@ class PanelTurns:
         skill_refusal = self._skill_refusal(skill)
         if skill_refusal:
             await self.emit(
-                conn, P.PANEL_EVENT_ERROR, {"text": skill_refusal, "reason": "skill_unknown"}
+                conn, P.PANEL_EVENT_ERROR, {"text": skill_refusal, "reason": "skill_unknown"},
+                ends_turn=True,  # SB8: the Send it refuses never started
             )
             return
         # SB3: the conversation this question continues is its chat. Read back
@@ -1526,6 +1585,7 @@ class PanelTurns:
         self._turn_text = text
         self._remembered = False
         await self.emit(conn, P.PANEL_EVENT_STATE, self._state(running=True))
+        self._end_sent = False
         self._task = asyncio.ensure_future(
             self._run(
                 conn, text, self._turn_id, provider=provider, model=model, pointed=pointed,
@@ -2101,6 +2161,9 @@ class PanelTurns:
         if not wants_new_tab(text):
             ceiling = frozenset(ceiling - {"browser_create_tab"})
         emitted_done = False
+        # Third plan (G20 follow-up): the reply ENDED on its own error frame —
+        # its end, never a Stop (the trailing `done` below says "failed").
+        ended_on_error = False
         # v1.433.0 review: THE SIDEBAR'S OWN WORDS. Since the sidebar shows the
         # lane's end-of-turn words and its failure line, they are worded for
         # the sidebar (``failure_words.SURFACE_SIDEBAR``): it has no Retry
@@ -2131,6 +2194,9 @@ class PanelTurns:
                 for event, data in parse_sse(chunk):
                     if event == "done":
                         emitted_done = True
+                        self._end_sent = True
+                    elif event == "error":
+                        ended_on_error = True
                     await self._translate(conn, event, data)
         except asyncio.CancelledError:
             raise
@@ -2149,6 +2215,7 @@ class PanelTurns:
                 conn,
                 P.PANEL_EVENT_ERROR,
                 {"text": plain if words == plain else f"Iron Jarvis could not finish that: {words}"},
+                ends_turn=True,  # SB8: the reply's own end
             )
             emitted_done = True
         finally:
@@ -2161,15 +2228,21 @@ class PanelTurns:
             # SB13: a reply the last sidebar window's closing stopped is
             # written as stopped, so nothing reads it as finished.
             await self._remember_exchange(
-                stopped_on_close=self._closed_stop and not emitted_done
+                stopped_on_close=self._closed_stop and not emitted_done and not ended_on_error
             )
             if not emitted_done:
                 # A STOPPED turn returns with no terminal `done` frame — it
                 # writes the CANCELLED usage row and returns. Without this the
                 # panel would spin "working…" forever on the one press whose
                 # entire purpose was to end that state.
+                # Third plan (G20 follow-up): a reply that ended on its OWN
+                # error frame was not stopped — the panel printed "Stopped."
+                # under the error. Its `done` still goes (it ends the turn on
+                # an older add-on and says a pending steer was not taken), but
+                # never as stopped.
                 await self.emit(
-                    conn, P.PANEL_EVENT_DONE, {"reason": "stopped", "text": ""}
+                    conn, P.PANEL_EVENT_DONE,
+                    {"reason": "failed" if ended_on_error else "stopped", "text": ""},
                 )
             # Anything still queued was never read by anybody. The `done`
             # above is what the panel turns into "not taken".
@@ -2259,8 +2332,9 @@ class PanelTurns:
                 # the risk door or a permission refused — the live report was
                 # a permission refusal the user only met through the model's
                 # paraphrase. Capped: a reason is a sentence, not a dump.
-                reason = _short_reason(data.get("output"))
-                text = f"Could not {what}." + (f" {reason}" if reason else "")
+                # Third plan SB9: an action whose answer was lost has its own
+                # sentence for the user (``_step_failed_line``).
+                text = _step_failed_line(what, data.get("output"))
             else:
                 text = f"{_cap(what)}…"
             # v1.270.0: `status`/`ok` ride along so the panel folds a step's
@@ -2375,7 +2449,8 @@ class PanelTurns:
                 payload["technical"] = technical[:TECHNICAL_CHARS]
             # What was read is remembered BEFORE the terminal frame leaves.
             await self._remember_exchange()
-            await self.emit(conn, P.PANEL_EVENT_ERROR, payload)
+            # SB8: the reply's own failure is its end on the panel.
+            await self.emit(conn, P.PANEL_EVENT_ERROR, payload, ends_turn=True)
             return
 
 

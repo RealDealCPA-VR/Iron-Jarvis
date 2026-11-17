@@ -386,9 +386,11 @@ def build_recipe_preparer(url: str):
     The manager owns the token (it is the thing that revokes it) and knows the
     pane; the recipe knows what the installed CLI can be told and writes the
     config into the pane's own folder. This function is the only place those two
-    meet, and it deliberately returns ENVIRONMENT ONLY: whatever it returns is
-    merged into the child environment, so a `config_writes` or `argv_extra` key
-    leaking through would arrive as a bogus variable in the harness's process.
+    meet. It returns the recipe's whole result (third fix plan, TM5); the
+    manager merges ONLY its `.env` into the child environment, so a
+    `config_writes` or `argv_extra` key can never arrive as a bogus variable in
+    the harness's process, and keeps `argv_extra`, `set_up` and `limitations`
+    for the launch that types the tool's start command.
 
     It runs on Starlette's threadpool (POST /terminals is a sync `def`) and both
     probing and writing are blocking, which is why the seam is synchronous and
@@ -408,7 +410,12 @@ def build_recipe_preparer(url: str):
         capabilities: dict[str, bool] | None = None,
         cwd: str = "",
         **_unused: Any,
-    ) -> dict[str, str]:
+    ) -> Any:
+        # Third plan TM5: the RecipeResult itself, not its env alone — the
+        # manager takes ONLY ``.env`` into the child environment and keeps
+        # ``argv_extra`` (typed after the tool's start command) and whether
+        # anything was really set up (said where the user pressed, not only
+        # in this log line).
         from .terminals import recipes
 
         entry = recipes.recipe_for(recipe)
@@ -423,8 +430,17 @@ def build_recipe_preparer(url: str):
             result.method,
             result.config_writes,
         )
-        return {str(k): str(v) for k, v in dict(result.env).items()}
+        return result
 
+    def inspect(*, recipe: str, **_unused: Any) -> Any:
+        """The recipe's dry run (writes nothing, mints nothing), asked BEFORE a
+        token is minted (third plan TM5). None = no recipe for this CLI."""
+        from .terminals import recipes
+
+        entry = recipes.recipe_for(recipe)
+        return None if entry is None else entry.inspect()
+
+    prepare.inspect = inspect  # type: ignore[attr-defined]
     return prepare
 
 

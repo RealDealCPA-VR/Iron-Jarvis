@@ -168,6 +168,11 @@ class RecipeResult:
     argv_extra: list[str] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
     detail: str = ""
+    #: Third plan TM5 (decision G16): can the tool reach Jarvis's tools from
+    #: the moment it starts? ``None`` = decided by ``ok`` and ``method``; a
+    #: recipe that is set up but still needs a step by hand (Pi's adapter)
+    #: says False, so the Launch menu never says "ready" for it.
+    ready: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.ok and not self.limitations:
@@ -175,14 +180,35 @@ class RecipeResult:
                 "a failed RecipeResult must carry at least one limitation sentence"
             )
 
+    @property
+    def set_up(self) -> bool:
+        """The recipe really configured something for the tool."""
+        return self.ok and self.method != METHOD_NONE
+
     def row(self) -> dict[str, Any]:
         """The shape the Launch menu reads (plan section 13.1)."""
         return {
             "method": self.method,
             "ok": self.ok,
+            "ready": self.set_up if self.ready is None else (self.ready and self.set_up),
             "limitations": list(self.limitations),
             "detail": self.detail,
         }
+
+
+#: The tail every "could not" limitation carries, about the older plain launch.
+_AS_TODAY = "The pane launches as it does today, without Jarvis capabilities."
+
+
+def why_not(result: Any) -> str:
+    """Third plan TM5: the plain reason a recipe could not be set up, for a
+    refusal said where the user pressed — the recipe's first limitation
+    without its sentence about the plain launch. Never empty."""
+    for line in list(getattr(result, "limitations", None) or []):
+        text = str(line or "").replace(_AS_TODAY, "").strip()
+        if text:
+            return text
+    return "Iron Jarvis could not prepare this tool to reach its tools on this PC."
 
 
 @runtime_checkable
@@ -1009,12 +1035,25 @@ class PiRecipe:
     def inspect(self, version: str | None = None) -> RecipeResult:
         ver = self.detect() if version is None else version
         method, limitations, detail = self._plan(ver)
+        ready: bool | None = None
+        if method == METHOD_STDIO:
+            # Third plan TM5: the adapter is placed, but Pi does not start it —
+            # said BEFORE the press, and never "ready".
+            from .pi_adapter import ADAPTER_FILENAME
+
+            ready = False
+            limitations = list(limitations) + [
+                "Pi does not load the Iron Jarvis adapter on its own: after it opens, run "
+                f"`{self.runtime()} {ADAPTER_FILENAME}` in that terminal to give Pi the "
+                "Jarvis tools."
+            ]
         return RecipeResult(
             ok=method != METHOD_NONE,
             method=method,
             version=ver,
             limitations=list(limitations),
             detail=detail,
+            ready=ready,
         )
 
     def prepare(
@@ -1050,11 +1089,8 @@ class PiRecipe:
         limitations = list(base.limitations)
         path = _confined(cwd, ADAPTER_FILENAME)
         writes.append(_write_config(path, adapter_source()))
-        limitations.append(
-            "Pi does not load the Iron Jarvis adapter on its own: run "
-            f"`{self.runtime()} {ADAPTER_FILENAME}` in this pane to give Pi "
-            "the Jarvis tools."
-        )
+        # The "Pi does not load the adapter on its own" sentence rides
+        # ``base.limitations`` (inspect says it before the press, TM5).
         return RecipeResult(
             ok=True,
             method=base.method,
@@ -1063,6 +1099,7 @@ class PiRecipe:
             config_writes=writes,
             limitations=limitations,
             detail=base.detail,
+            ready=False,
         )
 
 

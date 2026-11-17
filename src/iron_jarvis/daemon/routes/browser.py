@@ -1022,17 +1022,36 @@ def register(app: FastAPI, d) -> None:
             )
             return recv.done()
 
+        def _waiting() -> bool:
+            # Third plan, BR1/BR3: whether this socket is held waiting is the
+            # BACKEND's record, not a local of this pump, so a socket that paired
+            # in place while access was off waits too, and Forget can close it.
+            is_waiting = getattr(backend, "is_waiting", None)
+            return bool(is_waiting(conn)) if callable(is_waiting) else inert
+
         try:
             while True:
-                if inert:
+                if conn.closed:
+                    # Closed from elsewhere (Forget, Disconnect, a refused
+                    # promotion): never read or act on this socket again.
+                    break
+                if _waiting():
                     if not await _idle_wait():
                         if _access_off(runtime):
                             next_ping = await _keepalive(conn, loop, next_ping)
                             continue
-                        # The user turned Browser access back on: this socket may
-                        # become the authoritative one now, and adopt() sends the
-                        # browser.ready that says so.
-                        await backend.adopt(conn)
+                        # The user turned Browser access back on. The ONE way a
+                        # waiting socket goes live: its pairing is verified again,
+                        # as the pairings are now, and a browser forgotten or
+                        # replaced while it waited is closed instead (BR1).
+                        promote = getattr(runtime, "promote_waiting", None)
+                        if not callable(promote) or not await promote(conn):
+                            if not conn.closed:
+                                await backend.release(
+                                    conn, reason="revoked", detail="the browser's pairing was removed"
+                                )
+                            reason, detail = "revoked", "the browser's pairing was removed"
+                            break
                         # adopt() sent a ready frame carrying this word; the
                         # paired branch below must not repeat it.
                         announced_access = backend.access_word()
@@ -1178,6 +1197,12 @@ def register(app: FastAPI, d) -> None:
                 # — instead of being left to guess from a close code, and its frames
                 # are discarded while it waits. Nothing here trusts the client.
                 inert = True
+                # Held on the BACKEND with its credential (third plan, BR1): Forget
+                # finds and closes it there, and switching access on promotes it
+                # only after that credential verifies again.
+                hold = getattr(runtime.backend, "hold_waiting", None)
+                if callable(hold):
+                    hold(conn, token)
                 await conn.send(runtime.backend.ready_frame(active=False))
             else:
                 # adopt() sends browser.ready and performs the D08 replacement,
@@ -1364,12 +1389,18 @@ def register(app: FastAPI, d) -> None:
         ``forgotten`` is whether a credential actually died, not whether the button
         was pressed: reporting true with nothing revoked would tell the user their
         browser was forgotten while the add-on kept reconnecting silently.
+
+        Third plan, BR1: every connection of the forgotten browser, live or
+        waiting, is closed before this answers. One that could not be closed is
+        a refusal in plain words (500), never a quiet "Forgotten".
         """
         runtime = _runtime(d)
         if runtime is None:
             return {"forgotten": False}
         try:
             return {"forgotten": bool(await runtime.forget())}
+        except BrowserError as exc:
+            raise _refuse(exc.code, 500, exc.message) from exc
         except Exception:
             logger.debug("POST /browser/forget found no pairing to revoke", exc_info=True)
             return {"forgotten": False}

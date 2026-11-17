@@ -33,6 +33,7 @@ import { couldnt, failureOf, serverSentence, type FailureLike } from "@/lib/load
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { paneTurn } from "@/components/terminal/paneChatCore";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
+import type { LaunchTools } from "@/components/terminal/TerminalPane";
 import { STORE_SHELL_TITLE, defaultShellName, shellLabel, type ShellOption } from "@/lib/shells";
 import { Card, OfflineHint, Spinner, ConfirmButton, Empty } from "@/components/ui";
 import { usePolledApi } from "@/lib/useApi";
@@ -1077,6 +1078,32 @@ export default function TerminalsPage() {
     [bringToFront],
   );
 
+  /** Third plan TM5 (G16): a Launch menu "With Iron Jarvis's tools" row,
+   *  after its boxes were ticked: the daemon makes the NEW terminal with
+   *  them, sets the tool up and starts it (`POST /terminals/launch-with-tools`).
+   *  Resolves to null once it is open (added and focused), else the plain
+   *  sentence the pane shows beside the boxes. */
+  const launchWithTools = useCallback(
+    async (near: TerminalInfo, cli: string, tools: LaunchTools): Promise<string | null> => {
+      try {
+        const res = await post<{ pane?: TerminalInfo }>("/terminals/launch-with-tools", {
+          cli,
+          near: near.id,
+          capabilities: { memory: tools.memory, browser: tools.browser },
+        });
+        if (!res?.pane?.id) return "Iron Jarvis did not open a new terminal.";
+        setOffline(false);
+        adoptPane(res.pane);
+        return null;
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 0) setOffline(true);
+        const f = failureOf(e);
+        return serverSentence(f) ? f.message ?? "" : couldnt("open a terminal", f);
+      }
+    },
+    [adoptPane],
+  );
+
   const closeTerminal = useCallback((id: string) => {
     // v1.339.0: closing a terminal ends its chat's running turn too — the
     // daemon keeps a NAMED turn running when its pane merely goes away.
@@ -1115,7 +1142,7 @@ export default function TerminalsPage() {
         paneStateLine={act?.state_line}
         onRenamed={(name) => notePaneOverride(t.id, { name: name || undefined })}
         onLaunched={(cli) => notePaneOverride(t.id, { cli })}
-        onLaunchWithCapabilities={(cli) => void addTerminal(t.cwd, cli)}
+        onLaunchWithCapabilities={(cli, tools) => launchWithTools(t, cli, tools)}
         onOpenedPane={adoptPane}
         liveAccounts={livePaneAccounts(t, act)}
         paneLimit={paneLimitOf(act)}

@@ -5723,10 +5723,22 @@ async def chat_stream(
     if _risk_turn:
         _risk_door.register_turn(_risk_turn, _risk_ask)
 
+    # Third plan CS8: the usage row is written on a worker thread (started
+    # sync by `_persist_once`, so a cancel never loses it) and the turn waits
+    # for it in the `finally` below (`settle_usage_writes`, bounded).
+    # MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+    _usage_pending: list = []
+    _usage_turn = str(getattr(body, "turn_id", "") or "")
+
     # ------------------------------------------------------------------ #
     # STREAM — the round + tool loop, emitting SSE frames as it goes.
     # ------------------------------------------------------------------ #
     async def gen():
+        # Third plan G20 (RB3, decision G14): a coding session's reply takes a
+        # STRICTER level (or Plan) the user sets while it runs, from its next
+        # round of tool calls (`_level_watch` below) — so the posture is this
+        # generator's to tighten, never to loosen.
+        nonlocal approval_mode
         usage_in = usage_out = completions = 0
         # v1.300.0: the whole usage per completion, priced per step.
         # MIRROR NOTE (lock-step): chat_turn.run_chat_turn keeps one too.
@@ -5754,6 +5766,19 @@ async def chat_stream(
         # the check's bookkeeping (its test step, the separator, the "N.
         # met:" answer) out of the live reply. Off for every other frame.
         _fin_live = {"on": False}
+        # Third plan G20 (RB3): the coding session's level as the user sets
+        # it while this reply runs (`routes/build.LevelWatch`, armed by the
+        # session's own turn route; None for every other turn). `_plan_now`:
+        # Plan was switched on after the reply started — from then on its
+        # calls that change something are refused (`PLAN_NOW_REFUSAL`).
+        # MIRROR NOTE: the POST lane runs no coding session, so it has none.
+        from .build import PLAN_NOW_REFUSAL as _PLAN_NOW_REFUSAL
+        from .build import current_level_watch, plan_now_allows as _plan_now_allows
+
+        _level_watch = (
+            current_level_watch(getattr(body, "thread_id", "")) if _harness is not None else None
+        )
+        _plan_now = False
 
         def _ev(event: str, payload: dict) -> str:
             if _fin_live["on"]:
@@ -5852,6 +5877,7 @@ async def chat_stream(
                 started_at=turn_started, cost_usd=_tally.cost_usd,
                 thread_id=getattr(body, "thread_id", ""),
                 tool_session=_tool_session,  # v1.367.0 (lock-step)
+                turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
             )
 
         # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office
@@ -6549,6 +6575,19 @@ async def chat_stream(
                         reply_record.note_calls(_model_calls, calls)
                         reply_record.note_trust(_trust_state)
                         await reply_record.save(msgs, _head)
+                # Third plan G20 (RB3, decision G14): BEFORE any of this
+                # round's calls is decided, a coding session's reply reads the
+                # session's level again (one row, off the loop, once a round):
+                # a STRICTER level the user set while it runs, or Plan, holds
+                # from here — every card predicate below reads
+                # `approval_mode`, so the calls not yet started follow it. A
+                # looser one waits for the next message (`tighten`).
+                if _level_watch is not None and calls:
+                    # (A reply that started in Plan already runs with Plan's
+                    # tools: `tighten` never flips it, its watch says Plan.)
+                    approval_mode, _plan_now = _level_watch.tighten(
+                        approval_mode, _plan_now, await asyncio.to_thread(_level_watch.read),
+                    )
                 # ONE CARD FOR THE BATCH (v1.247.0) — the stream half of the
                 # runtime's grouping. Read this round's calls AHEAD with the
                 # same predicate the per-call card uses below, grouped by
@@ -6704,6 +6743,9 @@ async def chat_stream(
                     # (redesign S3, ALWAYS_CARD_TOOLS). MIRROR NOTE: the
                     # per-call branch below repeats this rule.
                     if _c.name not in _turn_tools:
+                        return ""
+                    if _plan_now and not _plan_now_allows(_c.name):
+                        # Third plan G20 (RB3): refused below, never carded.
                         return ""
                     if _c.name in _ONCE_ONLY or _spend_once(_c):
                         # v1.367.0: the plan door cards in EVERY posture, by
@@ -7002,6 +7044,13 @@ async def chat_stream(
                     # chat_turn.py's loop does the same at its invoke.
                     _call_key = _repeat_key(tc.name, tc.arguments)
                     _plan["key"] = _call_key
+                    if _plan_now and not _plan_now_allows(tc.name):
+                        # Third plan G20 (RB3, decision G14): Plan was switched
+                        # on while this reply ran — a call that changes
+                        # something is refused through the registry's deny path
+                        # (recorded on the ledger; no card: it cannot run).
+                        _plan["card_deny"] = _PLAN_NOW_REFUSAL
+                        continue
                     if id(tc) in _detail_refused:
                         # v1.489.0: the user declined the question card for a
                         # detail this call needs: answered, not run, no card.
@@ -9017,3 +9066,7 @@ async def chat_stream(
                 await _turn_scope.close(_fin_scope)
             finally:
                 _turn_scope.reset(_fin_scope_token)
+        # Third plan CS8: the usage row the turn started (done, failed or
+        # stopped) is written, off the loop, before the turn ends — LAST, so a
+        # cancel of this wait skips no clean-up (the write goes on regardless).
+        await _chat_turn.settle_usage_writes(_usage_pending, turn_id=_usage_turn)

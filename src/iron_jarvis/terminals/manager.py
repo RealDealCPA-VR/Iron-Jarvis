@@ -21,6 +21,17 @@ from .shells import resolve_shell, restored_argv
 
 log = logging.getLogger(__name__)
 
+
+class RecipeNotSetUp(Exception):
+    """Third plan TM5: a terminal asked for WITH Iron Jarvis's tools whose
+    launch recipe could not be set up. Raised before the spawn: no terminal,
+    no live token. ``sentence`` is the plain reason (the caller says what was
+    not done around it)."""
+
+    def __init__(self, sentence: str) -> None:
+        super().__init__(sentence)
+        self.sentence = sentence
+
 #: Cap on how much per-session scrollback is persisted (bytes). Enough to show
 #: meaningful history after a restart without bloating the snapshot file.
 _SNAPSHOT_SCROLLBACK = 64 * 1024
@@ -384,7 +395,9 @@ class TerminalManager:
         #: the launch-recipe seam (plan 13.3). Whatever it returns is merged
         #: into `pane_env` BEFORE the spawn, which is the only moment a child
         #: environment can still be changed. `None` = no recipe machinery, and
-        #: every pane then behaves exactly as it does today.
+        #: every pane then behaves exactly as it does today. Third plan TM5: it
+        #: may answer a `RecipeResult` (only its `.env` is merged) and offer
+        #: `.inspect(*, recipe, ...)`, the dry run asked before any mint.
         self.recipe_preparer = recipe_preparer
         #: Where a harness should POST its MCP calls, exported as
         #: IRONJARVIS_MCP_URL beside the token. Empty until a caller sets it —
@@ -438,8 +451,15 @@ class TerminalManager:
         accounts: Any | None = None,
         claude_session_id: str | None = None,
         below_normal: bool = False,
+        recipe_required: bool = False,
     ) -> TerminalSession:
         """Create, start, and register a new session.
+
+        ``recipe_required`` (third plan TM5): the terminal is asked for WITH
+        Iron Jarvis's tools, so a recipe that cannot be set up raises
+        :class:`RecipeNotSetUp` before anything is spawned instead of opening
+        a plain terminal. The session then carries ``recipe_outcome``
+        (``{set_up, argv_extra, limitations}``).
 
         ``cwd`` defaults to the user's home; ``shell`` defaults via
         :func:`resolve_shell`. Raises :class:`RuntimeError` at the cap.
@@ -486,6 +506,7 @@ class TerminalManager:
             return self._create_reserved(
                 cwd, shell_name, argv, cols, rows, backend, env, name, agent_cli,
                 capabilities, recipe, accounts, claude_session_id, below_normal,
+                recipe_required,
             )
         finally:
             with self._lock:
@@ -494,6 +515,7 @@ class TerminalManager:
     def _create_reserved(
         self, cwd, shell_name, argv, cols, rows, backend, env, name, agent_cli,
         capabilities, recipe, accounts, claude_session_id, below_normal=False,
+        recipe_required=False,
     ) -> TerminalSession:
         """The body of :meth:`create` once its cap slot is reserved."""
         if accounts is not None and isinstance(accounts, Mapping):
@@ -527,11 +549,18 @@ class TerminalManager:
         if agent_cli:
             pane_env["IRONJARVIS_PANE_CLI"] = agent_cli
         caps = _capabilities_or_none(capabilities)
+        recipe_outcome: dict[str, Any] | None = None
         with self._lock:
             self._pending_panes.add(pane_id)
         try:
             if recipe:
-                pane_env.update(self._prepare_recipe(recipe, pane_id, caps, cwd))
+                recipe_outcome = {}
+                pane_env.update(
+                    self._prepare_recipe(
+                        recipe, pane_id, caps, cwd,
+                        required=recipe_required, outcome=recipe_outcome,
+                    )
+                )
             session = self._spawn(
                 cwd,
                 shell_name,
@@ -551,6 +580,9 @@ class TerminalManager:
             session.pane_env_extra = pane_env
             session.accounts = _account_records(accounts)
             session.claude_session_id = claude_session_id or None
+            # Third plan TM5: what the recipe really did (read by the caller
+            # that types the tool's start line). Absent for a plain terminal.
+            session.recipe_outcome = recipe_outcome
             with self._lock:
                 self._sessions[session.id] = session
                 # Dropped INSIDE the same lock hold that registers the session,
@@ -572,6 +604,9 @@ class TerminalManager:
         pane_id: str,
         capabilities: Mapping[str, bool] | None,
         cwd: str = "",
+        *,
+        required: bool = False,
+        outcome: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         """Environment for a harness pane, minted and built BEFORE the spawn.
 
@@ -581,18 +616,55 @@ class TerminalManager:
         preparer only adds configuration on top, and a preparer that fails must
         not cost the pane its shell — the launch degrades to a pane with a token
         and no harness configuration, which is what the diagnostics panel is for.
+
+        Third plan TM5: the recipe ANSWERS FIRST. A preparer that offers a dry
+        run (``recipe_preparer.inspect``, the platform's) is asked before any
+        token exists; a recipe that cannot be set up on this PC gets none.
+        ``required`` (a "with Iron Jarvis's tools" launch) turns every way the
+        set-up can fall short into :class:`RecipeNotSetUp` — raised BEFORE the
+        spawn, with any minted token revoked — so no terminal that looks set
+        up is left behind. ``outcome`` is filled with ``{set_up, argv_extra,
+        limitations}`` for the caller (the tool's start line).
         """
         from ..browser.panetokens import MCP_TOKEN_ENV, MCP_URL_ENV  # deferred
+        from ..browser.panetokens import normalise_capabilities
+        from ..core.failures import plain_failure
+        from .recipes import why_not
 
+        out = outcome if outcome is not None else {}
+        out.update(set_up=False, argv_extra=[], limitations=[])
+        if required and not normalise_capabilities(capabilities):
+            raise RecipeNotSetUp("No box is ticked, so there is nothing to give it.")
+        inspector = getattr(self.recipe_preparer, "inspect", None)
+        if callable(inspector):
+            try:
+                dry = inspector(recipe=recipe, capabilities=dict(capabilities or {}), cwd=cwd)
+            except Exception as exc:  # noqa: BLE001 - said, never a token for it
+                log.warning("launch recipe %s could not be checked", recipe, exc_info=True)
+                if required:
+                    raise RecipeNotSetUp(
+                        plain_failure("Iron Jarvis could not check this tool.", exc)
+                    ) from None
+                return {}
+            if dry is not None and not getattr(dry, "ok", True):
+                out["limitations"] = list(getattr(dry, "limitations", None) or [])
+                if required:
+                    raise RecipeNotSetUp(why_not(dry))
+                return {}  # the recipe answered "no": no token for it
         extra: dict[str, str] = {}
         try:
             extra[MCP_TOKEN_ENV] = self.pane_tokens.mint(pane_id, capabilities or {})
-        except Exception:  # noqa: BLE001 - a failed mint must not lose the pane
+        except Exception as exc:  # noqa: BLE001 - a failed mint must not lose the pane
             log.warning("could not mint a pane capability token", exc_info=True)
+            if required:
+                raise RecipeNotSetUp(
+                    plain_failure("Iron Jarvis could not make this terminal's key to its tools.", exc)
+                ) from None
             return {}
         if self.mcp_url:
             extra[MCP_URL_ENV] = self.mcp_url
         if self.recipe_preparer is None:
+            out["set_up"] = True
             return extra
         try:
             prepared = self.recipe_preparer(
@@ -607,11 +679,34 @@ class TerminalManager:
                 # happen.
                 cwd=cwd,
             )
-        except Exception:  # noqa: BLE001 - see the docstring
+        except Exception as exc:  # noqa: BLE001 - see the docstring
             log.warning("launch recipe %s could not be prepared", recipe, exc_info=True)
+            if required:
+                self._revoke_pane_tokens([pane_id])
+                raise RecipeNotSetUp(
+                    plain_failure("Iron Jarvis could not set this tool up.", exc)
+                ) from None
             return extra
         if isinstance(prepared, Mapping):
+            # A preparer that answers its environment only (an older seam):
+            # what it says is all there is to know.
             extra.update({str(k): str(v) for k, v in prepared.items()})
+            out["set_up"] = True
+            return extra
+        env = getattr(prepared, "env", None)
+        if isinstance(env, Mapping):
+            # ONLY the environment reaches the child: ``argv_extra`` and the
+            # rest are kept apart (never a bogus variable in the harness).
+            extra.update({str(k): str(v) for k, v in env.items()})
+        set_up = bool(getattr(prepared, "set_up", False))
+        out.update(
+            set_up=set_up,
+            argv_extra=[str(a) for a in (getattr(prepared, "argv_extra", None) or [])],
+            limitations=list(getattr(prepared, "limitations", None) or []),
+        )
+        if required and not set_up:
+            self._revoke_pane_tokens([pane_id])
+            raise RecipeNotSetUp(why_not(prepared))
         return extra
 
     @staticmethod

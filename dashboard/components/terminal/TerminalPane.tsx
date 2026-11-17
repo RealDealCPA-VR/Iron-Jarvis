@@ -4,7 +4,7 @@
 // to one daemon shell session. xterm itself is imported dynamically inside the
 // effect so it never runs during SSR / `next build`.
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -46,7 +46,8 @@ import {
 import { resizeAllowed } from "@/components/terminal/resizeGate";
 import { PANE_TOGGLE_SLOT } from "@/components/terminal/paneViewToggle";
 import { useDaemon } from "@/lib/daemon";
-import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
+import type { AiCli, BrowserStatus, ModelOption, Skill, TerminalInfo } from "@/lib/types";
+import { PANE_CAPABILITIES, capabilityStatus } from "@/components/terminal/PaneRail";
 import { PaneStateChip, type PaneState } from "@/components/terminal/PaneState";
 import { usePolledApi } from "@/lib/useApi";
 import { terminalsHref } from "@/lib/ironProxy";
@@ -122,8 +123,18 @@ export interface CliRecipe {
   /** "mcp_http" | "mcp_stdio" | "none" — whatever the recipe verified. */
   method?: string;
   ok?: boolean;
+  /** Third plan TM5 (G16): the daemon's word on whether the tool reaches
+   *  Jarvis's tools from the moment it starts. `false` for a recipe that is
+   *  set up but needs a step by hand (Pi's adapter). Absent: an older daemon. */
+  ready?: boolean;
   /** User-facing sentences. Never empty when `ok` is false. */
   limitations?: string[];
+}
+
+/** Third plan TM5: the boxes a "With Iron Jarvis's tools" launch ticks. */
+export interface LaunchTools {
+  memory: boolean;
+  browser: boolean;
 }
 
 /** An AI CLI as the Launch menu sees it once recipes exist. */
@@ -143,8 +154,27 @@ export function recipeMethodWord(method: string): string {
  *  rides the row's title (`recipeNote(...).title`). */
 export const RECIPE_READY_HEADLINE = "Jarvis tools ready";
 
-/** The one sentence the CLI I am about to launch has coming to it. */
-export function recipeNote(cli: LaunchCli): {
+/** Third plan TM5: a plain Launch row types the command into THIS terminal,
+ *  which can never be given the tools — so it never says "ready". */
+export const RECIPE_HERE_HEADLINE = "Starts without Iron Jarvis's tools in this terminal";
+
+/** Third plan TM5: set up, but the tool does not reach the tools on its own. */
+export const RECIPE_ONE_MORE_STEP_HEADLINE = "Iron Jarvis's tools need one more step";
+
+/** Can a "With Iron Jarvis's tools" row be pressed at all (the recipe can be
+ *  set up on this PC)? Not the same as "ready": Pi's adapter is set up but
+ *  needs a step by hand. */
+export function recipeCanSetUp(cli: LaunchCli): boolean {
+  const r = cli.recipe;
+  if (!r || r.ok === false) return false;
+  const method = String(r.method ?? "").trim();
+  return Boolean(method) && method !== "none";
+}
+
+/** The one sentence the CLI I am about to launch has coming to it.
+ *  `place` (third plan TM5): "new" = the "With Iron Jarvis's tools" row (a
+ *  new terminal, set up); "here" = a plain row that types into this one. */
+export function recipeNote(cli: LaunchCli, place: "new" | "here" = "new"): {
   headline: string;
   ready: boolean;
   limitations: string[];
@@ -174,6 +204,19 @@ export function recipeNote(cli: LaunchCli): {
   if (!method || method === "none") {
     return { headline: "Starts without Iron Jarvis's memory and browser", ready: false, limitations };
   }
+  if (place === "here") {
+    // The caveats of the set-up belong to the row that sets it up.
+    return { headline: RECIPE_HERE_HEADLINE, ready: false, limitations: [] };
+  }
+  if (recipe.ready === false) {
+    return {
+      headline: RECIPE_ONE_MORE_STEP_HEADLINE,
+      ready: false,
+      limitations: limitations.length
+        ? limitations
+        : ["This tool needs a step by hand before it can use Iron Jarvis's tools."],
+    };
+  }
   return {
     headline: RECIPE_READY_HEADLINE,
     ready: true,
@@ -182,6 +225,11 @@ export function recipeNote(cli: LaunchCli): {
   };
 }
 
+/** Third plan TM5: which kind of Launch row a `LaunchRecipeNote` sits in —
+ *  "here" around the plain rows (typed into this terminal), "new" (the
+ *  default) for the "With Iron Jarvis's tools" rows. */
+export const RecipePlace = createContext<"new" | "here">("new");
+
 /**
  * The recipe state, rendered INSIDE the Launch row, before the click.
  *
@@ -189,8 +237,9 @@ export function recipeNote(cli: LaunchCli): {
  * render an xterm pane, so the house idiom is to unit-test the seam and
  * source-pin the call site (v1.163.0, v1.190.0, v1.194.0).
  */
-export function LaunchRecipeNote({ cli }: { cli: LaunchCli }) {
-  const note = recipeNote(cli);
+export function LaunchRecipeNote({ cli, place }: { cli: LaunchCli; place?: "new" | "here" }) {
+  const fromMenu = useContext(RecipePlace);
+  const note = recipeNote(cli, place ?? fromMenu);
   const tone = note.ready
     ? "text-tone-success/80"
     : note.limitations.length
@@ -207,6 +256,133 @@ export function LaunchRecipeNote({ cli }: { cli: LaunchCli }) {
         </span>
       ))}
     </span>
+  );
+}
+
+/** Third plan TM5: said under the boxes while none is ticked. */
+export function toolsNoneTickedWords(label: string): string {
+  return `Tick at least one: with none, ${label} would start without Iron Jarvis's tools.`;
+}
+
+/**
+ * THE BOXES FIRST (third plan TM5, decision G16). Pressing a "With Iron
+ * Jarvis's tools" row shows this, inside the terminal it was pressed in:
+ * Memory and Browser (the two a coding tool is really given through Jarvis),
+ * all off. Ticking one is the consent; with none ticked Open is off and says
+ * why. Open asks the page to make the NEW terminal with those boxes; the
+ * daemon sets the tool up and starts it, or answers a sentence, which is
+ * shown here (no terminal is left that looks set up).
+ */
+export function LaunchToolsDialog({
+  cli,
+  onOpen,
+  onCancel,
+}: {
+  cli: LaunchCli;
+  /** Resolves to null when the new terminal opened, else the plain sentence. */
+  onOpen: (tools: LaunchTools) => Promise<string | null>;
+  onCancel: () => void;
+}) {
+  const [tools, setTools] = useState<LaunchTools>({ memory: false, browser: false });
+  const [access, setAccess] = useState("");
+  const [accessFailed, setAccessFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The install's browser setting, read when the boxes are shown (the
+  // Capabilities popover's rule): an unknown setting is not a live box.
+  useEffect(() => {
+    let live = true;
+    get<BrowserStatus>("/browser/status")
+      .then((s) => {
+        if (live) setAccess(String(s?.access || "off"));
+      })
+      .catch(() => {
+        if (live) setAccessFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const boxes = PANE_CAPABILITIES.filter((c) => c.key === "memory" || c.key === "browser");
+  const anyTicked = tools.memory || tools.browser;
+
+  async function open() {
+    if (!anyTicked || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const why = await onOpen(tools);
+      if (why) setError(why);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-label={`Open ${cli.label} with Iron Jarvis's tools`}
+      data-testid={`launch-tools-${cli.id}`}
+      className="absolute right-2 top-11 z-40 w-72 rounded-xl border border-white/10 bg-ink-900/95 p-3 shadow-card backdrop-blur"
+    >
+      <p className="mb-2 text-[12px] text-zinc-300">
+        Open {cli.label} in a new terminal with Iron Jarvis&apos;s tools. Tick what it may use:
+      </p>
+      <ul className="space-y-1.5">
+        {boxes.map((cap) => {
+          const on = tools[cap.key as keyof LaunchTools];
+          const status = capabilityStatus(cap.key, access, accessFailed, on);
+          return (
+            <li key={cap.key}>
+              <label className="flex cursor-pointer items-start gap-2 text-[12px] text-zinc-200">
+                <input
+                  type="checkbox"
+                  data-testid={`launch-tools-${cli.id}-${cap.key}`}
+                  checked={on}
+                  disabled={busy || (!status.available && !on)}
+                  onChange={() => setTools((t) => ({ ...t, [cap.key]: !t[cap.key as keyof LaunchTools] }))}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block">{cap.label}</span>
+                  <span className="block text-[11px] text-zinc-500">
+                    {status.available ? cap.hint : status.word}
+                  </span>
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {!anyTicked ? (
+        <p data-testid={`launch-tools-none-${cli.id}`} className="mt-2 text-[11px] text-zinc-500">
+          {toolsNoneTickedWords(cli.label)}
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" data-testid={`launch-tools-error-${cli.id}`} className="mt-2 text-[11px] text-tone-danger">
+          {error}
+        </p>
+      ) : null}
+      <div className="mt-3 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md px-2 py-1 text-[12px] text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-testid={`launch-tools-open-${cli.id}`}
+          disabled={!anyTicked || busy}
+          onClick={() => void open()}
+          className="rounded-md border border-accent/40 px-2 py-1 text-[12px] font-medium text-accent-soft hover:bg-accent/10 disabled:opacity-50"
+        >
+          {busy ? "Opening…" : "Open"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -508,8 +684,11 @@ export function TerminalPane({
    *  spawned — so it can only be asked for at pane creation. Launching in
    *  THIS pane types a command into a shell that is already running and
    *  can never receive them, and the token must never be typed, because a
-   *  shell keeps history and scrollback. */
-  onLaunchWithCapabilities?: (cli: string) => void;
+   *  shell keeps history and scrollback.
+   *  Third plan TM5 (G16): called with the boxes the user ticked; resolves
+   *  to null once the new terminal is open, else the plain sentence shown
+   *  beside the boxes. */
+  onLaunchWithCapabilities?: (cli: string, tools: LaunchTools) => Promise<string | null>;
   /** v1.302.0: Launch → "as <another account>" started a NEW pane on that
    *  account (a running CLI cannot change accounts) — add it and focus it.
    *  Without it the page is reloaded on `/terminals?focus=<id>`. */
@@ -756,6 +935,9 @@ export function TerminalPane({
     });
   }, [draftName, paneName, info.id, onRenamed]);
   const installedClis: LaunchCli[] = aiClis.filter((c) => c.installed);
+  // Third plan TM5: the CLI whose "With Iron Jarvis's tools" row was pressed —
+  // its boxes are shown first (LaunchToolsDialog).
+  const [toolsFor, setToolsFor] = useState<LaunchCli | null>(null);
 
   // --- Accounts (v1.302.0) — see components/terminal/PaneAccountChip ---------
   // Iron-Proxy's accounts are read ONLY while the Launch menu is open (no
@@ -1711,6 +1893,9 @@ export function TerminalPane({
                 Installed — click to type, then Enter
               </div>
             )}
+            {/* Third plan TM5: these rows type into THIS terminal, which can
+                never be given the tools — their notes never say "ready". */}
+            <RecipePlace.Provider value="here">
             {installedClis.map((c) => {
               const offer = launchOffer(c.id, ironProxySnap);
               return (
@@ -1756,6 +1941,7 @@ export function TerminalPane({
                 </Fragment>
               );
             })}
+            </RecipePlace.Provider>
             {/* THE SECOND DOOR (v1.238.0). A recipe hands the harness the MCP
                 address and a pane-scoped token through the child ENVIRONMENT,
                 which the daemon merges before the shell is spawned. Launching
@@ -1764,23 +1950,27 @@ export function TerminalPane({
                 because a shell keeps history and scrollback. So the capable
                 launch is a NEW pane, and the menu says so rather than quietly
                 doing something different from what the row above it does. */}
-            {onLaunchWithCapabilities &&
-              installedClis.filter((c) => c.recipe && c.recipe.method !== "none").length > 0 && (
+            {/* Third plan TM5 (G16): every installed CLI that HAS a recipe is
+                listed; one whose recipe cannot be set up on this PC is shown
+                off, with the daemon's reason instead of "ready". Pressing a
+                row shows its boxes first (LaunchToolsDialog). */}
+            {onLaunchWithCapabilities && installedClis.filter((c) => c.recipe).length > 0 && (
                 <>
                   <div className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
                     With Iron Jarvis's tools (opens a new terminal)
                   </div>
                   {installedClis
-                    .filter((c) => c.recipe && c.recipe.method !== "none")
+                    .filter((c) => c.recipe)
                     .map((c) => (
                       <button
                         key={`cap-${c.id}`}
                         data-testid={`launch-capable-${c.id}`}
+                        disabled={!recipeCanSetUp(c)}
                         onClick={() => {
-                          onLaunchWithCapabilities(c.id);
+                          setToolsFor(c);
                           setLaunchOpen(false);
                         }}
-                        className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-200 transition-colors hover:bg-accent/10 hover:text-accent-soft"
+                        className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-200 transition-colors hover:bg-accent/10 hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:bg-transparent disabled:hover:text-zinc-200"
                       >
                         <span className="flex w-full items-center justify-between gap-2">
                           <span className="flex items-center gap-2">
@@ -1814,6 +2004,17 @@ export function TerminalPane({
             ))}
           </div>
         </>
+      )}
+      {toolsFor && onLaunchWithCapabilities && (
+        <LaunchToolsDialog
+          cli={toolsFor}
+          onCancel={() => setToolsFor(null)}
+          onOpen={async (tools) => {
+            const why = await onLaunchWithCapabilities(toolsFor.id, tools);
+            if (!why) setToolsFor(null);
+            return why;
+          }}
+        />
       )}
       {showResume && (
         <ResumeStrip

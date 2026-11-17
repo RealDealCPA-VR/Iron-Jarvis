@@ -444,6 +444,63 @@ if (absent.length) {
       (el("reset") as HTMLButtonElement).click();
       expect(el("transcript").querySelector('details[data-kind="technical"]')).toBeNull();
     });
+
+    it("third plan SB8: an error that is not the reply's end is a line; the reply stays running", async () => {
+      const h = await panelReady({ state: "connected", access: "read_only", paired: true });
+      startTurn(h, "Looking at the page");
+      // An answer that came too late, and a second Send refused while this
+      // reply runs: the daemon marks both `ends: false`.
+      h.emit("error", { text: "That request was already answered or has expired.", ends: false });
+      h.emit("error", { text: "Iron Jarvis is still working on the last message. Stop it first.", ends: false });
+      expect(document.body.dataset.turn).toBe("running");
+      expect(getComputedStyle(el("stop")).display).not.toBe("none");
+      const lines = turns().filter((t) => t.dataset["who"] === "error").map((t) => t.textContent);
+      expect(lines).toEqual([
+        "That request was already answered or has expired.",
+        "Iron Jarvis is still working on the last message. Stop it first.",
+      ]);
+      // The reply's next words start a new answer under the line, not glued above it.
+      h.emit("delta", { text: "Found it." });
+      const said = turns().map((t) => `${t.dataset["who"]}:${t.textContent}`);
+      expect(said.at(-1)).toBe("jarvis:Found it.");
+      expect(said.filter((s) => s.startsWith("jarvis:"))).toEqual([
+        "jarvis:Looking at the page",
+        "jarvis:Found it.",
+      ]);
+      // Only the reply's own end ends it.
+      h.emit("done", {});
+      expect(document.body.dataset.turn).toBe("idle");
+    });
+
+    it("third plan: a reply that ended on its error and then `done{failed}` is never called stopped", async () => {
+      const h = await panelReady({ state: "connected", access: "read_only", paired: true });
+      startTurn(h);
+      h.emit("error", { text: "Iron Jarvis could not reach that page." });
+      // The daemon's trailing end frame for a reply that ended on its error.
+      h.emit("done", { reason: "failed", text: "" });
+      expect(document.body.dataset.turn).toBe("idle");
+      expect(transcript()).toContain("could not reach that page");
+      expect(transcript()).not.toContain("Stopped.");
+      // A reply that WAS stopped still says so.
+      startTurn(h);
+      h.emit("done", { reason: "stopped", text: "" });
+      expect(transcript()).toContain("Stopped.");
+    });
+
+    it("third plan SB8: the reply's own error (unmarked) still ends the turn, and so does an older daemon's", async () => {
+      const h = await panelReady({ state: "connected", access: "read_only", paired: true });
+      startTurn(h);
+      h.emit("error", { text: "Iron Jarvis could not reach that page." });
+      expect(document.body.dataset.turn).toBe("idle");
+      // A refused Send (the daemon sends it unmarked: that Send never started).
+      startTurn(h);
+      h.emit("error", { text: "Too many messages in a minute.", reason: "rate_limited" });
+      expect(document.body.dataset.turn).toBe("idle");
+      // An older daemon's withdrawn answer marks nothing and keeps the turn, as before.
+      startTurn(h);
+      h.emit("error", { text: "That card was withdrawn.", reason: "withdrawn" });
+      expect(document.body.dataset.turn).toBe("running");
+    });
   });
 
   /* ------------------------------------------------------------------------ */

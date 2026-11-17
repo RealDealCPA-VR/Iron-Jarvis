@@ -861,7 +861,10 @@ def test_detect_ai_clis_probes_only_installed_clis_that_have_a_recipe(monkeypatc
 def test_recipe_state_is_the_shape_the_launch_menu_reads(probe):
     probe("claude", version="1.0.0", help=FULL_CLAUDE_HELP)
     state = recipes.recipe_state("claude")
-    assert set(state) == {"method", "ok", "limitations", "detail"}
+    # Third fix plan (TM5, decision G16): the row also says whether the
+    # tool can really be set up on this PC ("ready"), so the Launch menu
+    # never says "ready" for one that cannot.
+    assert set(state) == {"method", "ok", "ready", "limitations", "detail"}
     assert isinstance(state["limitations"], list)
 
 

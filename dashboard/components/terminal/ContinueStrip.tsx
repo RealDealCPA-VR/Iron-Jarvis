@@ -13,7 +13,10 @@
  *
  *  - Shown only for a pane on an IRON-PROXY Claude account with a `limit`.
  *  - Names the account it would move to from the LIGHT Iron-Proxy read
- *    (`?discover=0`), read only while the strip is on screen.
+ *    (`?discover=0`), read only while the strip is on screen. Third plan TM4
+ *    (G15): the press SENDS that account (`{account}`); the daemon uses it or
+ *    refuses naming the one it would use instead, which the button then
+ *    offers. The new terminal's line says what the daemon answered.
  *  - No other free account: says when the first frees, and has no button.
  *  - Dismiss hides it for this limit EPISODE (`limitKey`: its `since`), not
  *    its line — a countdown repaints the line (review F5).
@@ -35,7 +38,9 @@ import {
   IRON_PROXY_LIGHT,
   LAUNCH_ACCOUNTS_POLL_MS,
   continuableAccount,
-  continueNote,
+  continueInstead,
+  continuedNote,
+  type ContinueTarget,
   handoffNote,
   openedPaneId,
   resumeFailedKey,
@@ -151,22 +156,37 @@ function ContinueStrip({
   const next = nextAccount(snap, account.id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Third plan TM4 (G15): the account the daemon said it would use instead,
+  // after it refused the one this strip named — offered for the next press.
+  const [offer, setOffer] = useState<ContinueTarget | null>(null);
   const resets = limitResetWords(account, limit);
+  // The account the button and the privacy line NAME is the account the
+  // press asks for: the daemon uses exactly it or refuses (never another).
+  const target: ContinueTarget | null =
+    offer ?? (next.kind === "next" ? { id: next.account.id, title: next.account.title } : null);
+  const canPress = target !== null || next.kind === "unknown";
 
   async function go() {
     setBusy(true);
     setError(null);
+    const asked = target;
     try {
-      const res = await post<unknown>(`/terminals/${encodeURIComponent(paneId)}/continue-on-next`);
+      const res = await post<unknown>(
+        `/terminals/${encodeURIComponent(paneId)}/continue-on-next`,
+        asked ? { account: asked.id } : undefined,
+      );
       if (!isContinueAnswer(res)) throw new Error("Iron Jarvis did not open a new terminal.");
-      rememberContinued(res.pane.id, res.from?.title || account.title, continueNote(res));
+      rememberContinued(res.pane.id, res.from?.title || account.title, continuedNote(res, asked));
       // This pane is still at its limit: it has been answered, so it stops asking.
       dismissedLine.set(paneId, limitKey(limit));
+      setOffer(null);
       changed();
       onOpened(res.pane);
     } catch (err) {
       // The daemon's one plain sentence (409: no free account, this PC's login…).
       setError(err instanceof ApiError || err instanceof Error ? err.message : String(err));
+      // A refused name comes back with the account it would use instead.
+      setOffer(continueInstead(err));
     } finally {
       setBusy(false);
     }
@@ -182,14 +202,16 @@ function ContinueStrip({
       <span className="min-w-0 flex-1">
         Claude&apos;s account “{account.title}” {limitWords(limit)}
         {resets ? ` (${resets})` : ""}.
-        {next.kind === "wait" &&
+        {!offer &&
+          next.kind === "wait" &&
           (next.until
             ? ` No other Claude account is free — “${next.account.title}” frees at ${localTime(next.until)}.`
             : ` No other Claude account is free right now.`)}
-        {next.kind === "none" &&
+        {!offer &&
+          next.kind === "none" &&
           " No other Claude account can take over — add or sign one in on the Connections page."}
       </span>
-      {(next.kind === "next" || next.kind === "unknown") && (
+      {canPress && (
         <button
           type="button"
           data-testid={`pane-continue-go-${paneId}`}
@@ -202,8 +224,8 @@ function ContinueStrip({
             <span className="flex items-center gap-1">
               <Loader2 size={11} className="animate-spin" /> Opening…
             </span>
-          ) : next.kind === "next" ? (
-            `Continue on “${next.account.title}”`
+          ) : target ? (
+            `Continue on “${target.title}”`
           ) : (
             "Continue on the next account"
           )}
@@ -217,14 +239,14 @@ function ContinueStrip({
         icon={<X size={13} aria-hidden />}
         onClick={onDismiss}
       />
-      {(next.kind === "next" || next.kind === "unknown") && (
+      {canPress && (
         <span
           data-testid={`pane-continue-privacy-${paneId}`}
           title="Claude Code sends the conversation to Anthropic under the account it runs on. The copy stays in that account's own history; nothing is deleted from either."
           className="basis-full text-[10px] text-tone-warn/80"
         >
           Your conversation is copied to{" "}
-          {next.kind === "next" ? `“${next.account.title}”` : "the next account"} and continues
+          {target ? `“${target.title}”` : "the next account"} and continues
           there (sent to Anthropic under that account); “{account.title}” keeps its copy.
         </span>
       )}

@@ -1550,6 +1550,67 @@ interface PendingAgentApproval {
    *  — the row opens Build on it, where the helper's row and card are.
    *  Absent for every other run and on an older daemon. */
   buildSession?: string;
+  /** MC2 (third fix plan): the ask is a CODING TOOL's, through Iron Jarvis's
+   *  tools door — not an agent run's. Absent for every other ask. */
+  door?: DoorAsk;
+}
+
+/** MC2 (third fix plan, decision G17): a coding tool in a Build terminal or
+ *  a Build › Code session asking, through Iron Jarvis's tools door, to act
+ *  (click, type, press a key in your browser). The daemon files it under
+ *  `mcp:<terminal id>` (`mcp:code:<session id>` for Build › Code) and says
+ *  WHO asks, WHAT and WHERE in one sentence (the row's `why`); the card
+ *  offers "Allow once" and "Deny" only. */
+export interface DoorAsk {
+  /** The daemon's sentence: "The Build terminal “api” wants to click
+   *  'Save' in your browser, in the tab showing example.com (“Settings”)."
+   *  "" on a daemon that did not send one. */
+  sentence: string;
+  /** The Build terminal's id ("" for a Build › Code session). */
+  terminal: string;
+  /** The Build › Code session's id ("" for a terminal). */
+  codeSession: string;
+}
+
+const DOOR_PREFIX = "mcp:";
+const DOOR_CODE_PREFIX = "code:";
+
+/** The door ask a pending row's session id names, or null for any other ask. */
+export function doorAskOf(sessionId: string, why: unknown): DoorAsk | null {
+  if (!sessionId.startsWith(DOOR_PREFIX)) return null;
+  const grant = sessionId.slice(DOOR_PREFIX.length);
+  const sentence = typeof why === "string" ? why.trim() : "";
+  return grant.startsWith(DOOR_CODE_PREFIX)
+    ? { sentence, terminal: "", codeSession: grant.slice(DOOR_CODE_PREFIX.length) }
+    : { sentence, terminal: grant, codeSession: "" };
+}
+
+/** The door card's title. */
+export const DOOR_TITLE = "A coding tool is asking permission";
+
+/** What the door card says the tool wants, with no sentence from the daemon
+ *  (an older one): the tool in plain words, never "An agent run". */
+export function doorAskWords(ask: { tool: string; door?: DoorAsk }): string {
+  const said = ask.door?.sentence ?? "";
+  return said || `A coding tool wants to ${askPhrase(ask.tool)}.`;
+}
+
+/** How long the coding tool waits for the answer: the daemon's own number
+ *  (it cannot wait longer than the tool waits for its reply). */
+export function doorWaitLine(timeoutS?: number): string {
+  return timeoutS && timeoutS > 0
+    ? `The coding tool waits ${Math.round(timeoutS)} seconds for your answer, then nothing is done.`
+    : "The coding tool is waiting for you.";
+}
+
+/** Where a door ask opens: the Build › Code session, else the terminal. */
+export function doorAskHref(door: DoorAsk): string {
+  return door.codeSession ? buildCodeHref(door.codeSession) : paneWaitingHref({ id: door.terminal });
+}
+
+/** The words of that link. */
+export function doorOpenWords(door: DoorAsk): string {
+  return door.codeSession ? "Open the coding session" : "Open the terminal";
 }
 
 /** v1.351.0 (G03, with G05): a CHAT turn parked on its own approval card
@@ -1669,10 +1730,14 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
   if (r.surface === "build_app") return null;
   const id = typeof r.id === "string" ? r.id : "";
   if (!id) return null;
+  const sessionId = typeof r.session_id === "string" ? r.session_id : "";
+  const door = doorAskOf(sessionId, r.why);
   return {
     id,
     tool: typeof r.tool === "string" && r.tool ? r.tool : "unknown",
-    sessionId: typeof r.session_id === "string" ? r.session_id : "",
+    sessionId,
+    // MC2: a coding tool's ask through the tools door (its own card).
+    ...(door ? { door } : {}),
     requestedAt: typeof r.requested_at === "string" ? r.requested_at : "",
     count: typeof r.count === "number" && r.count > 1 ? r.count : 1,
     ...(typeof r.timeout_s === "number" ? { timeoutS: r.timeout_s } : {}),
@@ -1738,7 +1803,10 @@ export function agentAskWords(ask: {
   origin?: string;
   task?: string;
   count?: number;
+  door?: DoorAsk;
 }): string {
+  // MC2: a coding tool's ask says who, what and where (the daemon's words).
+  if (ask.door) return doorAskWords({ tool: ask.tool, door: ask.door });
   const head =
     ask.tool === PLAN_TOOL
       ? `${runSubject(ask.origin)} wants you to approve its plan`
@@ -1812,6 +1880,9 @@ export function newAskWords(
 /** Where a run's ask opens: its mission screen, a Build session's helper its
  *  Build session (v1.372.0), else its session page. */
 function agentAskHref(ask: PendingAgentApproval): string | null {
+  // MC2: a coding tool's ask opens its terminal or coding session, never a
+  // run page (it is no run: /sessions/mcp:… is a page that does not exist).
+  if (ask.door) return doorAskHref(ask.door);
   if (ask.missionId) return missionPath(ask.missionId, ask.projectId ?? "");
   if (ask.buildSession) return buildSessionHref(ask.buildSession);
   return ask.sessionId ? `/sessions/${encodeURIComponent(ask.sessionId)}` : null;
@@ -1854,18 +1925,34 @@ function AgentApprovalRow({
 
   const planAsk = ask.tool === PLAN_TOOL;
   const undo = planAsk ? null : undoLine(ask.reversible);
+  // MC2 (third fix plan, decision G17): a coding tool's ask through the tools
+  // door is its own card — who asks, what and where, "Allow once" and "Deny"
+  // only (the daemon honours nothing wider for it).
+  const door = ask.door;
+  const onlyOnce = ask.onceOnly || !!door;
   return (
-    <li data-testid="bell-agent-approval" className="px-4 py-3">
+    <li
+      data-testid="bell-agent-approval"
+      data-kind={door ? "door" : undefined}
+      className="px-4 py-3"
+    >
       <div className="flex items-start gap-3">
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-tone-warn/25 bg-tone-warn/[0.08] text-tone-warn">
           <ShieldAlert size={15} />
         </span>
         <div className="min-w-0 flex-1">
           <span className="block text-sm font-medium text-zinc-100">
-            An agent is asking permission
+            {door ? DOOR_TITLE : "An agent is asking permission"}
           </span>
           <p data-testid="bell-approval-line" className="mt-0.5 text-[12px] leading-snug text-tone-warn">
-            {planAsk ? (
+            {door ? (
+              <>
+                <span data-testid="bell-door-line" title={`The exact tool: ${ask.tool}`}>
+                  {doorAskWords(ask)}
+                </span>{" "}
+                {doorWaitLine(ask.timeoutS)}
+              </>
+            ) : planAsk ? (
               // v1.350.0: the plan approval is not a tool to run.
               <>{runSubject(ask.origin)} wants you to approve its plan</>
             ) : (
@@ -1873,13 +1960,17 @@ function AgentApprovalRow({
               // stays in the title (the record a grant is keyed on).
               <span title={`The exact tool: ${ask.tool}`}>{askSentence(ask.origin, ask.tool)}</span>
             )}
-            {ask.count > 1 ? (
-              <span data-testid="bell-approval-count"> × {ask.count} (one answer covers all)</span>
-            ) : null}
-            .{" "}
-            {ask.timeoutS && ask.timeoutS > 0
-              ? `The run waits up to ${Math.max(1, Math.round(ask.timeoutS / 60))} min for you.`
-              : "The run is waiting for you."}
+            {door ? null : (
+              <>
+                {ask.count > 1 ? (
+                  <span data-testid="bell-approval-count"> × {ask.count} (one answer covers all)</span>
+                ) : null}
+                .{" "}
+                {ask.timeoutS && ask.timeoutS > 0
+                  ? `The run waits up to ${Math.max(1, Math.round(ask.timeoutS / 60))} min for you.`
+                  : "The run is waiting for you."}
+              </>
+            )}
           </p>
           {ask.task ? (
             <p
@@ -1923,7 +2014,7 @@ function AgentApprovalRow({
             >
               {busy === "once" ? "Approving…" : ALLOW_ONCE}
             </button>
-            {!ask.onceOnly && !planAsk && (
+            {!onlyOnce && !planAsk && (
               <button
                 type="button"
                 onClick={() => void answer("conversation")}
@@ -1943,7 +2034,7 @@ function AgentApprovalRow({
                 {busy === "conversation" ? "Allowing…" : scopeLabel(ask.buildSession ? "session" : "run")}
               </button>
             )}
-            {ask.canAlways && (
+            {ask.canAlways && !door && (
               // v1.299.0: a standing grant on the EXACT arguments — offered
               // only when the daemon said it can key one (never for a batch).
               <button
@@ -1993,9 +2084,18 @@ function AgentApprovalRow({
             >
               Open the coding session →
             </Link>
+          ) : door ? (
+            // MC2: the terminal or coding session that asks.
+            <Link
+              data-testid="bell-door-open"
+              href={doorAskHref(door)}
+              className="mt-1 inline-block text-[12px] text-accent-soft transition-colors hover:text-accent"
+            >
+              {doorOpenWords(door)} →
+            </Link>
           ) : null}
           <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600 empty:hidden">
-            {ask.sessionId && !ask.task ? (
+            {door ? null : ask.sessionId && !ask.task ? (
               // No task to name it by: the link says what it opens, in the
               // words the answered row uses; the id stays in the title.
               <Link
@@ -2011,7 +2111,7 @@ function AgentApprovalRow({
             )}
             {ask.requestedAt ? (
               <>
-                {ask.sessionId && ask.task ? null : "· "}
+                {door || (ask.sessionId && ask.task) ? null : "· "}
                 {clockTime(ask.requestedAt)}
               </>
             ) : null}
@@ -2047,7 +2147,8 @@ function AgentAnsweredRow({
           data-testid="bell-agent-answered-line"
           className="min-w-0 flex-1 pt-1.5 text-[12px] leading-snug text-zinc-300"
         >
-          {answeredLine(outcome)}
+          {/* MC2: a coding tool's ask is no run: its own words and link. */}
+          {ask.door && outcome === "approved" ? "Allowed once. The coding tool carries on" : answeredLine(outcome)}
           {outcome === "approved" && !href ? "." : null}
           {outcome === "approved" && href ? (
             <>
@@ -2057,7 +2158,7 @@ function AgentAnsweredRow({
                 href={href}
                 className="text-accent-soft transition-colors hover:text-accent"
               >
-                Open run
+                {ask.door ? doorOpenWords(ask.door) : "Open run"}
               </Link>
             </>
           ) : null}
