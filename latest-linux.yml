@@ -1,12 +1,12 @@
-version: 1.522.0
+version: 1.525.0
 files:
-  - url: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.522.0/Iron-Jarvis-x86_64.AppImage
-    sha512: S2jyJoc3myu26hQDp/vFZ4PZGHija6ShFSapCy5W1fqanbZ76QzibdO2NuDEZ1KbhXzHJ3TMnygUJ2tvl80fYQ==
-    size: 385060712
-    blockMapSize: 402796
-  - url: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.522.0/Iron-Jarvis-amd64.deb
-    sha512: ejlfmTngEVYQggTlIp+VR9672M9vDqMdr75wwZeP38dLsf5D6u1f8uqws0Y37p67tIqDKmNoF8PdbGTpjSm1bA==
-    size: 329597652
-path: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.522.0/Iron-Jarvis-x86_64.AppImage
-sha512: S2jyJoc3myu26hQDp/vFZ4PZGHija6ShFSapCy5W1fqanbZ76QzibdO2NuDEZ1KbhXzHJ3TMnygUJ2tvl80fYQ==
-releaseDate: '2026-11-17T08:08:36.414Z'
+  - url: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.525.0/Iron-Jarvis-x86_64.AppImage
+    sha512: rxRfS5KBoO7rwgndToeCA39b4aRXYwlILJ529WocxL+lglet9JKWtzJeoR3I5vwVQBtEpZxZRHuXoHjyG+Sc/w==
+    size: 385110040
+    blockMapSize: 402972
+  - url: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.525.0/Iron-Jarvis-amd64.deb
+    sha512: rQg3V1UKE+3Vzp/yQHVkmHpS1HvABt7ch58D3Mf0aoAkAtxGdZQwetkSJUxGnHTdhJgsn7X5hizXEqD4han9KA==
+    size: 329668640
+path: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.525.0/Iron-Jarvis-x86_64.AppImage
+sha512: rxRfS5KBoO7rwgndToeCA39b4aRXYwlILJ529WocxL+lglet9JKWtzJeoR3I5vwVQBtEpZxZRHuXoHjyG+Sc/w==
+releaseDate: '2026-11-17T13:31:48.198Z'
