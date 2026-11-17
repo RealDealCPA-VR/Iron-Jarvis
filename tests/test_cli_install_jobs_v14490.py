@@ -18,6 +18,7 @@ twin (``lib/cliInstall.ts``) naming the same ids and sending no command.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 from pathlib import Path
 
@@ -82,6 +83,7 @@ def test_the_install_jobs_stay_off_the_launch_menu_and_the_cli_list():
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("shell", ["pwsh", "powershell", "PowerShell", None, "", "bash"])
 def test_every_shell_but_cmd_gets_the_powershell_line(monkeypatch, shell):
+    monkeypatch.setattr(ai_clis, "_ON_WINDOWS", True)  # Windows' lines, on any machine
     monkeypatch.setattr(ai_clis.shutil, "which", lambda exe: None)
     assert ai_clis.launch_line(ai_clis.launch_entry("claude-code-install"), shell) == CLAUDE_PS
     assert ai_clis.launch_line(ai_clis.launch_entry("codex-install"), shell) == CODEX_PS
@@ -91,9 +93,29 @@ def test_every_shell_but_cmd_gets_the_powershell_line(monkeypatch, shell):
 def test_a_command_prompt_pane_gets_the_cmd_form(monkeypatch, shell):
     """``irm`` does not exist in cmd.exe; the vendors publish a CMD line.
     MUTATION: drop the command_cmd branch of launch_line -> red."""
+    monkeypatch.setattr(ai_clis, "_ON_WINDOWS", True)  # Windows' lines, on any machine
     monkeypatch.setattr(ai_clis.shutil, "which", lambda exe: f"/usr/bin/{exe}")
     assert ai_clis.launch_line(ai_clis.launch_entry("claude-code-install"), shell) == CLAUDE_CMD
     assert ai_clis.launch_line(ai_clis.launch_entry("codex-install"), shell) == CODEX_CMD
+
+
+@pytest.mark.parametrize("shell", ["bash", "zsh", "sh", None, "", "cmd", "pwsh"])
+def test_off_windows_every_pane_gets_the_vendors_shell_installer(monkeypatch, shell):
+    """Linux and macOS: a pane's shell is bash, zsh or sh, and the PowerShell
+    line was typed into it ("irm: command not found").
+    MUTATION: drop the command_sh branch of launch_line -> red."""
+    monkeypatch.setattr(ai_clis, "_ON_WINDOWS", False)
+    monkeypatch.setattr(ai_clis.shutil, "which", lambda exe: None)
+    assert ai_clis.launch_line(ai_clis.launch_entry("claude-code-install"), shell) == (
+        "curl -fsSL https://claude.ai/install.sh | bash")
+    assert ai_clis.launch_line(ai_clis.launch_entry("codex-install"), shell) == (
+        "curl -fsSL https://chatgpt.com/codex/install.sh | sh")
+    # A launch-menu entry has no installer form: typed as it is, on any system.
+    assert ai_clis.launch_line(ai_clis.launch_entry("ollama-starter"), shell) == "ollama pull llama3.2"
+
+
+def test_the_system_name_is_this_systems():
+    assert ai_clis._ON_WINDOWS is (os.name == "nt")
 
 
 def test_the_starter_and_every_launch_menu_line_are_unchanged(monkeypatch):
@@ -159,6 +181,7 @@ def client(tmp_path, monkeypatch):
     [("claude-code-install", "Install Claude Code", CLAUDE_PS), ("codex-install", "Install Codex", CODEX_PS)],
 )
 def test_install_for_me_opens_a_pane_running_the_vendors_installer(client, monkeypatch, cli, name, line):
+    monkeypatch.setattr(ai_clis, "_ON_WINDOWS", True)  # Windows' lines, on any machine
     """The acceptance line, through the real route: one press, a NEW pane
     named for the install, the installer typed AND started (Enter), and the
     pane a plain shell — never silently, the terminal shows it."""
