@@ -1,0 +1,138 @@
+name: Linux update trial
+
+# A TRIAL on the throwaway branch trial/linux-updates only; publishes nothing.
+# Builds the Linux app from this branch exactly as linux-release.yml would,
+# then builds the single file once more under a HIGHER version number and has
+# the first one update itself to it (the rehearsal, with no published version
+# to start from yet).
+
+on:
+  push:
+    branches: ["trial/linux-updates"]
+
+permissions:
+  contents: read
+
+env:
+  APPIMAGE: Iron-Jarvis-x86_64.AppImage
+  DEB: Iron-Jarvis-amd64.deb
+
+jobs:
+  build-and-rehearse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Freeze the service
+        run: |
+          uv sync --extra dev --extra voice
+          uv run python -m PyInstaller packaging/ironjarvis.spec --noconfirm --distpath packaging/dist --workpath packaging/build > freeze.log 2>&1 || { tail -60 freeze.log; exit 1; }
+          test -x packaging/dist/ironjarvis/ironjarvis
+      - name: The frozen service starts, answers, and its search program finds a line
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -Po '^version\s*=\s*"\K[^"]+' pyproject.toml | head -1)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          ./packaging/dist/ironjarvis/ironjarvis serve --root "$RUNNER_TEMP/ij-frozen" --port 8796 > frozen.log 2>&1 &
+          pid=$!
+          ok=""
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8796/health > health.json; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          test -n "$ok" || { tail -40 frozen.log; exit 1; }
+          head -c 300 health.json; echo
+          grep -q "\"version\": *\"$VERSION\"" health.json || { echo "the frozen service is not v$VERSION"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/hay/sub"
+          { echo alpha; echo "needle here"; echo omega; } > "$RUNNER_TEMP/hay/sub/a.txt"
+          python3 scripts/linux_search_request.py "$RUNNER_TEMP/hay" > req.json
+          ./packaging/dist/ironjarvis/ironjarvis search-worker < req.json > search.out
+          grep -q '"found"' search.out && grep -q '"end"' search.out
+      - name: Build the dashboard
+        working-directory: dashboard
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          mkdir -p .next/standalone/.next
+          cp -r .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
+      - name: Build the browser add-on
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Voice model
+        working-directory: desktop
+        run: |
+          mkdir -p resources && cd resources
+          curl -fsSL --retry 3 -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q vosk.zip && mv vosk-model-small-en-us-0.15 vosk-model && rm vosk.zip
+          test -d vosk-model/am
+      - name: Package the single-file app, then the package
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          common=(--publish never -c.linux.category=Office -c.linux.icon=assets/icon.png
+                  "-c.linux.maintainer=RealDealCPA.Ai LLC" -c.extraMetadata.homepage=https://realdealcpa.ai/IJ/
+                  '-c.linux.artifactName=Iron-Jarvis-${arch}.${ext}')
+          mkdir -p out
+          pnpm exec electron-builder --linux AppImage "${common[@]}" -c.toolsets.appimage=1.0.3
+          ls -la release
+          test ! -e release/linux-unpacked/resources/package-type
+          cat release/linux-unpacked/resources/app-update.yml
+          mv "release/$APPIMAGE" out/ && mv release/latest-linux.yml out/appimage.yml
+          pnpm exec electron-builder --linux deb "${common[@]}"
+          ls -la release
+          test "$(cat release/linux-unpacked/resources/package-type)" = "deb"
+          mv "release/$DEB" out/ && mv release/latest-linux.yml out/deb.yml
+          cd .. && uv run --no-project python scripts/linux_update_manifest.py desktop/out/latest-linux.yml \
+            desktop/out/appimage.yml desktop/out/deb.yml --version "$VERSION" --dir desktop/out
+          cat desktop/out/latest-linux.yml; ls -la desktop/out
+      - name: The single-file app starts as downloaded
+        run: bash scripts/linux_app_check.sh appimage "desktop/out/$APPIMAGE"
+      - name: The package installs and starts, with the safety box on
+        if: always()
+        run: |
+          bash scripts/linux_app_check.sh deb "desktop/out/$DEB"
+          code=$?
+          sudo apt-get remove -y -qq iron-jarvis-desktop > /dev/null 2>&1 || true
+          exit $code
+      - name: The same single file once more, as a higher version (the rehearsal's "new" one)
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          rm -rf release/linux-unpacked release/*.yml
+          pnpm exec electron-builder --linux AppImage --publish never -c.linux.category=Office -c.linux.icon=assets/icon.png \
+            "-c.linux.maintainer=RealDealCPA.Ai LLC" -c.extraMetadata.homepage=https://realdealcpa.ai/IJ/ \
+            '-c.linux.artifactName=Iron-Jarvis-${arch}.${ext}' -c.toolsets.appimage=1.0.3 -c.extraMetadata.version=1.999.0
+          mkdir -p new && mv "release/$APPIMAGE" new/ && mv release/latest-linux.yml new/
+          cat new/latest-linux.yml
+      - name: Rehearsal - it installs the update when the app is closed
+        if: always()
+        run: bash scripts/linux_update_rehearsal.sh "desktop/out/$APPIMAGE" desktop/new quit
+      - name: Rehearsal - it installs the update by Restart to update
+        if: always()
+        run: bash scripts/linux_update_rehearsal.sh "desktop/out/$APPIMAGE" desktop/new restart
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-update-trial-logs
+          path: |
+            freeze.log
+            frozen.log
+            start-*.log
+            deb-install.log
+            rehearsal-*.log
+          retention-days: 7

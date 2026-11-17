@@ -1,0 +1,254 @@
+name: Linux parity trial
+
+# A MEASUREMENT, never part of a release. It lives only on the throwaway branch
+# trial/linux-parity, runs only on a push to that branch, publishes nothing,
+# and every job may fail. It answers one question: what would the release gate
+# say if it ran on Linux today?
+#
+#   suite  x12  the Python suite, split exactly as the Windows gate splits it
+#   vitest x3   the dashboard suite, as the Windows gate runs it
+#   frozen      the frozen daemon: starts, answers, and what `doctor` reports
+#   app         the whole app as an AppImage, started on a virtual screen
+
+on:
+  push:
+    branches: ["trial/linux-parity"]
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    if: ${{ !contains(github.event.head_commit.message, '[app-only]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - name: Sync Python deps
+        run: uv sync --extra dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+      - name: Build the browser add-on
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Every test file pytest collects is in a shard
+        if: matrix.shard == 1
+        run: |
+          uv run pytest --collect-only -q -p no:cacheprovider > collected.txt || true
+          tail -3 collected.txt
+          uv run python scripts/ci_shards.py --shards 12 --check-collected collected.txt
+      - name: Run this shard
+        if: always()
+        env:
+          # GitHub's Linux machines have Docker running, which makes the shell
+          # tool run commands in a container. The Windows gate has no Docker;
+          # point at a dead port so both judge the same code path.
+          DOCKER_HOST: tcp://127.0.0.1:9
+        run: |
+          files="$(uv run python scripts/ci_shards.py --shards 12 --index ${{ matrix.shard }})"
+          echo "shard ${{ matrix.shard }}: $(wc -w <<< "$files") test files"
+          set +e
+          uv run pytest -q --no-header -n auto -p no:cacheprovider --reruns 1 --rerun-except "pytest-timeout" -rfERs $files > pytest-out.txt 2>&1
+          code=$?
+          set -e
+          tail -1 pytest-out.txt
+          echo "linux shard ${{ matrix.shard }}: $(tail -1 pytest-out.txt)" >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^(FAILED|ERROR|RERUN) " pytest-out.txt | cut -c1-300 >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-linux-${{ matrix.shard }}
+          path: pytest-out.txt
+          retention-days: 7
+
+  vitest:
+    if: ${{ !contains(github.event.head_commit.message, '[app-only]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+      - name: Build the browser add-on
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Dashboard unit tests (vitest)
+        working-directory: dashboard
+        run: |
+          set +e
+          pnpm test --retry=1 --reporter=default --shard=${{ matrix.part }}/3 > ../vitest-out.txt 2>&1
+          code=$?
+          set -e
+          tail -15 ../vitest-out.txt
+          echo "linux vitest ${{ matrix.part }}: $(grep -E '^ +Tests ' ../vitest-out.txt | tail -1)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+      - name: Typecheck the dashboard
+        if: always() && matrix.part == 1
+        working-directory: dashboard
+        run: npx tsc --noEmit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vitest-linux-${{ matrix.part }}
+          path: vitest-out.txt
+          retention-days: 7
+
+  frozen:
+    if: ${{ !contains(github.event.head_commit.message, '[app-only]') }}
+    # The frozen daemon WITH the voice extra, as the Windows installer has it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - name: Sync (dev + voice)
+        run: uv sync --extra dev --extra voice
+      - name: Freeze the daemon
+        run: |
+          uv run python -m PyInstaller packaging/ironjarvis.spec --noconfirm --distpath packaging/dist --workpath packaging/build > freeze.log 2>&1 || { tail -80 freeze.log; exit 1; }
+          grep -iE "warn|not found|missing" freeze.log | head -60 || true
+          du -sh packaging/dist/ironjarvis
+      - name: The frozen daemon starts and answers /health
+        run: |
+          ./packaging/dist/ironjarvis/ironjarvis serve --root "$RUNNER_TEMP/ij-frozen" --port 8796 > frozen.log 2>&1 &
+          ok=""
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8796/health > health.json; then ok=1; break; fi
+            sleep 1
+          done
+          tail -40 frozen.log
+          test -n "$ok"
+          head -c 800 health.json; echo
+      - name: What doctor reports, frozen
+        if: always()
+        run: |
+          ./packaging/dist/ironjarvis/ironjarvis doctor --root "$RUNNER_TEMP/ij-doctor" > doctor.txt 2>&1 || echo "doctor exit: $?"
+          cat doctor.txt
+      - name: The frozen search program finds a line
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/hay/sub"
+          { echo alpha; echo "needle here"; echo omega; } > "$RUNNER_TEMP/hay/sub/a.txt"
+          python3 .github/trial-search-request.py > req.json
+          ./packaging/dist/ironjarvis/ironjarvis search-worker < req.json > search.out 2> search.err; echo "exit: $?"
+          cat search.out; tail -5 search.err
+          grep -q '"found"' search.out && grep -q '"end"' search.out
+      - name: The child programs the frozen daemon starts for itself
+        if: always()
+        run: |
+          set +e
+          grep -n "_fast_path" -A 40 packaging/ironjarvis_entry.py | head -80
+          ./packaging/dist/ironjarvis/ironjarvis --help > help.txt 2>&1; echo "help exit: $?"; head -60 help.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frozen-linux
+          path: |
+            freeze.log
+            frozen.log
+            doctor.txt
+            help.txt
+          retention-days: 7
+
+  app:
+    # The whole Linux app, assembled the way linux-preview.yml does it today,
+    # plus what a real release needs to know: does electron-builder write the
+    # update file (latest-linux.yml), and what does the started app log?
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Freeze the daemon
+        run: |
+          uv sync --extra dev --extra voice
+          uv run python -m PyInstaller packaging/ironjarvis.spec --noconfirm --distpath packaging/dist --workpath packaging/build > freeze.log 2>&1 || { tail -60 freeze.log; exit 1; }
+          test -x packaging/dist/ironjarvis/ironjarvis
+      - name: Build the dashboard
+        working-directory: dashboard
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          mkdir -p .next/standalone/.next
+          cp -r .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
+      - name: Build the browser add-on
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Voice model
+        working-directory: desktop
+        run: |
+          mkdir -p resources && cd resources
+          curl -fsSL --retry 3 -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q vosk.zip && mv vosk-model-small-en-us-0.15 vosk-model && rm vosk.zip
+          test -d vosk-model/am
+      - name: Package the AppImage and a .deb
+        working-directory: desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec electron-builder --linux AppImage --publish never -c.linux.category=Office -c.linux.icon=assets/icon.png -c.toolsets.appimage=1.0.3
+          echo "== update file (AppImage) =="; cat release/latest-linux.yml || echo "NO latest-linux.yml was written"
+          set +e
+          pnpm exec electron-builder --linux deb --publish never -c.linux.category=Office -c.linux.icon=assets/icon.png -c.linux.maintainer="RealDealCPA.Ai LLC" -c.extraMetadata.homepage=https://realdealcpa.ai/IJ/ > deb.log 2>&1
+          echo "deb build exit: $?"; tail -25 deb.log
+          set -e
+          ls -la release
+          echo "== update file (after the .deb) =="; cat release/latest-linux.yml || true
+      - name: How the app starts on this Ubuntu, each way a person might start it
+        run: bash .github/trial-linux-starts.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-linux-logs
+          path: |
+            start-*.log
+            freeze.log
+            desktop/deb.log
+            deb-install.log
+            desktop/release/latest-linux.yml
+          retention-days: 7
