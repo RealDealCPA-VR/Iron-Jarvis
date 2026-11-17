@@ -62,11 +62,22 @@ def test_the_door_says_it_opens_a_new_pane():
 
 def test_only_a_cli_whose_recipe_verified_a_method_is_offered():
     """A CLI with no verified method gets no capable door — offering one would
-    promise an isolation the recipe could not confirm (D18, Q04)."""
+    promise an isolation the recipe could not confirm (D18, Q04).
+
+    Third fix plan (TM5): such a CLI is now LISTED, switched off, with the
+    daemon's reason beside it (it used to be left out without a word). The
+    rule that it cannot be pressed is one function, and the button reads
+    it."""
     src = _read(PANE)
-    assert 'c.recipe && c.recipe.method !== "none"' in src, (
-        "the capable-launch list is not filtered by a verified recipe method, so a "
+    assert "disabled={!recipeCanSetUp(c)}" in src, (
+        "the capable-launch button is not switched off by the recipe rule, so a "
         "CLI whose recipe verified nothing is offered a capability it will not get"
+    )
+    start = src.index("export function recipeCanSetUp")
+    rule = src[start : src.index("\n}", start)]
+    assert "r.ok === false" in rule and 'method !== "none"' in rule, (
+        "the rule no longer refuses a recipe the daemon could not set up, or one "
+        "that verified no method"
     )
 
 
@@ -78,7 +89,16 @@ def test_the_page_actually_passes_the_handler():
         "nowhere. This is the exact shape of the defect Ship 4's review found: the "
         "mechanism present, the feature unreachable, and everything compiling"
     )
-    assert "addTerminal(t.cwd, cli)" in src, (
+    # Third fix plan (TM5, TM16): the handler asks the DAEMON to open the
+    # prepared terminal (it sets up, then starts the tool), with the boxes the
+    # user ticked; it used to create the pane itself and leave the start to
+    # the user.
+    assert "onLaunchWithCapabilities={(cli, tools) => launchWithTools(t, cli, tools)}" in src, (
+        "the handler does not open a prepared terminal with the ticked boxes"
+    )
+    start = src.index("const launchWithTools")
+    body = src[start : src.index("\n  );", start)]
+    assert '"/terminals/launch-with-tools"' in body and "adoptPane(res.pane)" in body, (
         "the handler does not create a pane with the recipe. Anything else — a patch, "
         "a typed command — cannot deliver the environment the harness needs"
     )

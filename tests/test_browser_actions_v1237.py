@@ -1180,6 +1180,10 @@ RUNTIME_PUBLIC_COROUTINES: frozenset[str] = frozenset(
         "disconnect",
         "request_host_permission",
         "command",
+        # Third fix plan (BR1): a browser held waiting becomes the live one
+        # only through this, which checks its pairing again first. It sends
+        # no frame to a page: it decides which socket is the browser.
+        "promote_waiting",
     }
 )
 
