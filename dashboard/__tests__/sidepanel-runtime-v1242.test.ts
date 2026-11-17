@@ -1434,4 +1434,194 @@ if (absent.length) {
       expect(document.body.dataset["recording"]).toBe("off");
     });
   });
+
+  /* ------------------------------------------------------------------------ */
+  /*  Third plan, group 22: the sidebar's link (SB1, SB10, SB14, SB12)         */
+  /* ------------------------------------------------------------------------ */
+
+  describe("third plan group 22: a dropped link, a refused Send, the microphone (SB1, SB10, SB14, SB12)", () => {
+    const READY = { state: "connected", access: "interactive", paired: true, hostPermission: true };
+
+    function sendParams(h: Harness): Record<string, unknown> {
+      const send = [...h.sent].reverse().find((m) => m["action"] === "send");
+      return (send?.["params"] ?? {}) as Record<string, unknown>;
+    }
+
+    function said(): string[] {
+      return turns().map((t) => `${t.dataset["who"]}:${t.textContent}`);
+    }
+
+    it("SB10: a Send Iron Jarvis refuses gives the words back and leaves no sent bubble", async () => {
+      const h = await panelReady(READY);
+      const ask = el("ask") as HTMLTextAreaElement;
+      ask.value = "summarise this page";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(h.sent.some((m) => m["action"] === "send")).toBe(true));
+      expect(ask.value).toBe("");
+      const window = sendParams(h)["window"];
+      expect(typeof window).toBe("string");
+      h.emit("error", {
+        text: "Too many messages in a minute.",
+        reason: "rate_limited",
+        send_refused: true,
+        window,
+      });
+      await waitFor(() => expect(ask.value).toBe("summarise this page"));
+      expect(said().filter((s) => s.startsWith("you:"))).toEqual([]);
+      expect(said()).toContain("error:Too many messages in a minute.");
+      expect(document.body.dataset.turn).toBe("idle");
+    });
+
+    it("SB10: refused while another reply runs: words back, that reply keeps running", async () => {
+      const h = await panelReady(READY);
+      startTurn(h, "Reading the page");
+      const ask = el("ask") as HTMLTextAreaElement;
+      ask.value = "and the next one";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(h.sent.some((m) => m["action"] === "send")).toBe(true));
+      // Typed meanwhile: kept, after the words that come back.
+      ask.value = "typed meanwhile";
+      h.emit("error", {
+        text: "Iron Jarvis is still working on the last message. Stop it first.",
+        ends: false,
+        send_refused: true,
+        window: sendParams(h)["window"],
+      });
+      await waitFor(() => expect(ask.value).toBe("and the next one\ntyped meanwhile"));
+      expect(said().filter((s) => s.startsWith("you:"))).toEqual([]);
+      expect(document.body.dataset.turn).toBe("running");
+    });
+
+    it("SB10: another window's refused Send leaves this panel's bubble alone", async () => {
+      const h = await panelReady(READY);
+      const ask = el("ask") as HTMLTextAreaElement;
+      ask.value = "mine";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(h.sent.some((m) => m["action"] === "send")).toBe(true));
+      h.emit("error", { text: "Too many messages in a minute.", send_refused: true, window: "w_other" });
+      await waitFor(() => expect(transcript()).toContain("Too many messages"));
+      expect(said()).toContain("you:mine");
+      expect(ask.value).toBe("");
+    });
+
+    it("SB10: a Send that never left the browser keeps its words too", async () => {
+      const h = await panelReady(READY);
+      h.delivered = false;
+      const ask = el("ask") as HTMLTextAreaElement;
+      ask.value = "this one";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("did not reach Iron Jarvis"));
+      expect(ask.value).toBe("this one");
+      expect(said().filter((s) => s.startsWith("you:"))).toEqual([]);
+    });
+
+    it("SB14: a dictation Iron Jarvis ended releases the microphone and keeps what was typed", async () => {
+      const h = await panelReady(READY);
+      h.emit("models", {
+        models: [],
+        default: { provider: "", model: "" },
+        voice: { available: true, backend: "local", hint: "" },
+      });
+      let stopped = 0;
+      const track = { stop: () => { stopped += 1; } };
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: { getUserMedia: () => Promise.resolve({ getTracks: () => [track] }) },
+      });
+      const g = globalThis as unknown as { AudioContext?: unknown };
+      const had = g.AudioContext;
+      g.AudioContext = class {
+        sampleRate = 16000;
+        destination = {};
+        createMediaStreamSource() {
+          return { connect: () => {} };
+        }
+        createScriptProcessor() {
+          return { connect: () => {}, disconnect: () => {}, onaudioprocess: null };
+        }
+        close() {
+          return Promise.resolve();
+        }
+      };
+      try {
+        const ask = el("ask") as HTMLTextAreaElement;
+        ask.value = "";
+        ask.dispatchEvent(new Event("input"));
+        (el("send") as HTMLButtonElement).click();
+        await waitFor(() => expect(document.body.dataset.voice).toBe("listening"));
+        await waitFor(() =>
+          expect(h.sent.some((m) => m["action"] === "voice" && (m["params"] as Record<string, unknown>)["op"] === "start")).toBe(true),
+        );
+        h.emit("transcript", { text: "", partial: "", final: false, listening: true });
+        h.emit("transcript", { text: "", partial: "hello", final: false });
+        await waitFor(() => expect(ask.value).toBe("hello"));
+        // Typed while the microphone is still open.
+        ask.value = "hello, and typed by hand";
+        // Iron Jarvis ends it at its size limit.
+        h.emit("transcript", { text: "hello world", partial: "", final: true, limit: true });
+        await waitFor(() => expect(document.body.dataset.voice).toBe("idle"));
+        expect(stopped).toBe(1);
+        expect(ask.value).toBe("hello world, and typed by hand");
+        expect(transcript()).toContain("longest a dictation can be");
+      } finally {
+        g.AudioContext = had;
+      }
+    });
+
+    it("SB14: a final transcript never wipes text typed while it ran", async () => {
+      const h = await panelReady(READY);
+      const ask = el("ask") as HTMLTextAreaElement;
+      h.emit("transcript", { text: "", partial: "first words", final: false });
+      await waitFor(() => expect(ask.value).toBe("first words"));
+      // Edited in place (not only typed after): kept as the person left it.
+      ask.value = "Note: first words";
+      h.emit("transcript", { text: "first words then more", partial: "", final: true });
+      await waitFor(() => expect(ask.value).toBe("Note: first words then more"));
+    });
+
+    it("SB1: a panel opened while a reply waits on a card shows the reply, its words and the card", async () => {
+      const h = await panelReady(READY);
+      h.emit("state", { running: true, auto_allow: false });
+      h.emit("history", {
+        turns: [{ role: "user", text: "earlier" }, { role: "assistant", text: "Earlier answer." }],
+        live: { question: "go to the next page", answer: "Part one." },
+      });
+      h.emit("approval", { id: "ask_live", text: "Iron Jarvis wants to click Next. Allow it?" });
+      expect(document.body.dataset.turn).toBe("running");
+      expect(said()).toEqual([
+        "you:earlier",
+        "jarvis:Earlier answer.",
+        "you:go to the next page",
+        "jarvis:Part one.",
+      ]);
+      expect((el("approval") as HTMLElement).hidden).toBe(false);
+      // The rest of the answer extends the live one.
+      h.emit("delta", { text: " Part two." });
+      expect(said().at(-1)).toBe("jarvis:Part one. Part two.");
+    });
+
+    it("SB1: when the add-on's connection comes back, the panel opens again to hear the truth", async () => {
+      const h = await panelReady({ ...READY, state: "offline" });
+      const opens = () => h.sent.filter((m) => m["action"] === "open").length;
+      await waitFor(() => expect(el("state-word").textContent).toBe("Not connected"));
+      await waitFor(() => expect(opens()).toBe(1));
+      // The connection comes back (the worker's status change).
+      h.status = bridgeStatus(READY);
+      await h.restatus();
+      await waitFor(() => expect(el("state-word").textContent).toBe("Connected"));
+      await waitFor(() => expect(opens()).toBe(2));
+    });
+
+    it("SB12: the header says Local only when Iron Jarvis keeps new chats local", async () => {
+      const h = await panelReady(READY);
+      h.emit("state", { running: false, local_only: true });
+      const pill = document.getElementById("local-only") as HTMLElement | null;
+      expect(pill).not.toBeNull();
+      expect(pill?.hidden).toBe(false);
+      expect(pill?.textContent).toBe("Local only");
+      expect(pill?.title).toContain("this PC or your own network");
+      h.emit("state", { running: false });
+      expect(pill?.hidden).toBe(true);
+    });
+  });
 }

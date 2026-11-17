@@ -160,6 +160,9 @@ class WinPtyBackend:
 
     def __init__(self) -> None:
         self._proc = None  # winpty.PtyProcess
+        #: Third plan TM10: the Windows Job owning the shell + every process it
+        #: starts (as the pipe shell's); None = none could be made.
+        self._job: int | None = None
 
     @property
     def pid(self) -> int | None:
@@ -176,6 +179,7 @@ class WinPtyBackend:
         cols: int,
         rows: int,
     ) -> None:
+        check_start_folder(cwd)  # third plan TM7: before any process exists
         import winpty  # lazy: only importable / needed on Windows
 
         # pywinpty dimensions are (rows, cols).
@@ -192,6 +196,14 @@ class WinPtyBackend:
             self._proc.fileobj.setblocking(False)
         except Exception:  # pragma: no cover - defensive
             pass
+        if _WINDOWS:
+            # Third plan TM10: pywinpty cannot start the shell inside a job, so
+            # it joins one right after the spawn (the pipe shell's way: a shell
+            # takes far longer to reach its prompt than this takes). Closing
+            # the terminal then ends everything it started (`kill`).
+            pid = self.pid
+            if pid:
+                self._job = _win_job_for_pid(pid)
         if self.below_normal and sys.platform == "win32":
             try:
                 import psutil
@@ -245,6 +257,16 @@ class WinPtyBackend:
     def kill(self) -> None:
         if self._proc is None:
             return
+        # Third plan TM10: the TREE first, exactly as the pipe shell does
+        # (`_tree_kill`: the job, else `taskkill /T` while the shell still
+        # runs). `terminate` alone ends one process — the shell — and left
+        # every program it started running with no terminal to stop it from.
+        alive = self.is_alive()
+        try:
+            _tree_kill(self._proc, self._job, alive)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        self._job = None  # handle closed by _win_terminate_job
         try:
             self._proc.terminate(force=True)
         except Exception:  # pragma: no cover - defensive
@@ -280,6 +302,9 @@ class PosixPtyBackend:
         cols: int,
         rows: int,
     ) -> None:
+        # Third plan TM7: before the fork — the child's own `chdir` failure
+        # was an exit 127 with no word on screen.
+        check_start_folder(cwd)
         import pty as _pty  # lazy: POSIX-only
 
         argv = list(argv)
@@ -461,7 +486,7 @@ _REAP_WAIT_S = 3.0
 
 
 # --------------------------------------------------------------------------- #
-# Windows process-TREE teardown (used by the pipe fallback)                   #
+# Windows process-TREE teardown (the pipe and pywinpty fallbacks)             #
 # --------------------------------------------------------------------------- #
 # ``Popen.kill`` is ``TerminateProcess`` on Windows: it kills exactly ONE
 # process. A pipe shell's children — an AI CLI launched by Creative Studio,
@@ -553,6 +578,29 @@ def _win_job_for(process_handle: int) -> int | None:
         return None
 
 
+def _win_job_for_pid(pid: int) -> int | None:
+    """:func:`_win_job_for` for a process this daemon has only the pid of
+    (pywinpty starts the shell itself; third plan TM10). Opens the process
+    with just the rights a job assignment needs and closes that handle again
+    (the job keeps the process). None when it cannot."""
+    try:  # pragma: no cover - exercised only on a real Windows spawn
+        import ctypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        # PROCESS_SET_QUOTA | PROCESS_TERMINATE: what AssignProcessToJobObject asks.
+        handle = k32.OpenProcess(0x0100 | 0x0001, 0, int(pid))
+        if not handle:
+            return None
+        try:
+            return _win_job_for(int(handle))
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(handle))
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
 def _win_terminate_job(job: int) -> bool:
     """``TerminateJobObject`` + close the handle. True when the job was killed."""
     try:  # pragma: no cover - exercised only on a real Windows spawn
@@ -581,8 +629,9 @@ def _win_taskkill_tree(pid: int) -> bool:
         return False
 
 
-def _tree_kill(proc: subprocess.Popen, job: int | None, alive: bool = True) -> bool:
-    """Kill ``proc`` AND everything it launched. No-op off Windows.
+def _tree_kill(proc, job: int | None, alive: bool = True) -> bool:
+    """Kill ``proc`` (anything with a ``pid``: a ``Popen``, pywinpty's
+    ``PtyProcess``) AND everything it launched. No-op off Windows.
 
     POSIX callers tear the tree down with ``killpg`` instead (see
     :meth:`PosixPtyBackend.kill`).
@@ -638,6 +687,7 @@ class PipeBackend:
         cols: int,
         rows: int,
     ) -> None:
+        check_start_folder(cwd)  # third plan TM7: before any process exists
         extra = {}
         if self.below_normal and _WINDOWS:  # v1.333.0: a pane an agent opened
             from ..core.procs import priority_flags
@@ -802,6 +852,100 @@ class ShellStartStuck(RuntimeError):
     has not finished — Windows can leave that call hanging for hours. Not a
     broken ConPTY (it must not disable ConPTY for later panes) and not a cap:
     its message is the plain sentence the user sees."""
+
+
+class StartFolderGone(ShellStartStuck):
+    """Third plan TM7: the folder a terminal was asked to open in is gone,
+    is not a folder, or does not answer — found BEFORE any process started,
+    so nothing was opened. Its message is the plain sentence the user sees
+    (it names the folder; never the system's error text).
+
+    A :class:`ShellStartStuck` only so that the routes that already answer
+    that class with its own words (``routes/terminals.py``: 503 + ``str``)
+    pass this one on unchanged, and the boot restore keeps the pane to try
+    again (a drive that is not connected yet) rather than dropping it. Like
+    its parent it is never a broken ConPTY."""
+
+
+#: Third plan TM7: the longest opening a terminal waits for its folder to
+#: answer. A folder on a drive or another computer that is not connected
+#: can leave a ``stat`` waiting for a long time; past this the terminal is
+#: refused in words and the stat is left to finish on its own thread.
+FOLDER_CHECK_WAIT_S = 10.0
+
+
+def check_start_folder(cwd, *, wait_s: float | None = None, _stat=None) -> None:
+    """Refuse (:class:`StartFolderGone`) a terminal whose folder is gone, is
+    a file, cannot be opened, or does not answer within ``wait_s`` (default
+    :data:`FOLDER_CHECK_WAIT_S`). No folder (``""``/None) is the backend's
+    default and passes. Called at the top of every real backend's ``start``,
+    before any pipe, console or process exists. BLOCKING for at most the
+    bound: the stat runs on its own daemon thread."""
+    if not cwd:
+        return
+    folder = os.fspath(cwd)
+    stat_fn = _stat or os.stat
+    box: dict = {}
+    done = threading.Event()
+
+    def _probe() -> None:
+        try:
+            box["st"] = stat_fn(folder)
+        except BaseException as exc:  # noqa: BLE001 — judged below
+            box["exc"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=_probe, name="terminal-folder-check", daemon=True).start()
+    named = f"'{folder[:200]}'"
+    if not done.wait(FOLDER_CHECK_WAIT_S if wait_s is None else wait_s):
+        raise StartFolderGone(
+            f"The folder {named} is not answering (the drive or computer it is on "
+            "may not be connected), so no terminal was opened. Try again once it "
+            "is back, or choose another folder."
+        )
+    exc = box.get("exc")
+    if exc is None:
+        import stat as _stat_mod
+
+        if _stat_mod.S_ISDIR(getattr(box.get("st"), "st_mode", 0)):
+            return
+        raise StartFolderGone(
+            f"{named} is a file, not a folder, so no terminal was opened. "
+            "Choose a folder and try again."
+        )
+    if isinstance(exc, (FileNotFoundError, NotADirectoryError)):
+        raise StartFolderGone(
+            f"The folder {named} no longer exists, so no terminal was opened. "
+            "Choose a folder that exists and try again."
+        ) from None
+    if isinstance(exc, PermissionError):
+        raise StartFolderGone(
+            f"This PC does not let Iron Jarvis open the folder {named}, so no "
+            "terminal was opened. Choose another folder."
+        ) from None
+    raise StartFolderGone(
+        f"The folder {named} cannot be reached, so no terminal was opened. "
+        "Choose another folder and try again."
+    ) from None
+
+
+def exit_says_pty_failed(code) -> bool:
+    """Third plan TM11: could this exit code mean the TERMINAL failed (as
+    opposed to the program in it ending by itself)? True for no code at all
+    (nothing is known) and for a Windows start failure (an NTSTATUS error,
+    0xC0000000 and up — e.g. 0xC0000142, "the program could not start in its
+    console", what a shell with no console host ends with). False for an
+    ordinary exit code (0, 1, 127 …) and for a POSIX signal (negative)."""
+    if code is None:
+        return True
+    try:
+        value = int(code)
+    except (TypeError, ValueError):
+        return True
+    if value < 0:
+        return False
+    return (value & 0xFFFFFFFF) >= 0xC0000000
 
 
 def _shell_words(argv0: str) -> str:
@@ -1091,6 +1235,9 @@ class ConPtyBackend:
         cols: int,
         rows: int,
     ) -> None:
+        # Third plan TM7: a folder that is gone is refused in words BEFORE a
+        # pipe or a pseudoconsole exists (CreateProcessW answered WinError 267).
+        check_start_folder(cwd)
         if sys.platform != "win32":
             raise ConPtyUnavailable("ConPTY is Windows-only")
         try:

@@ -30,6 +30,103 @@ from .shells import resolve_shell
 
 log = logging.getLogger("iron_jarvis.terminals.session")
 
+#: Third plan TM2: the longest a reopened terminal's SECOND start (at the
+#: page's size, :meth:`TerminalSession.restart_at_size`) waits for Windows —
+#: the bound a first start has for a Store shell (``PACKAGED_SPAWN_WAIT_S``).
+#: Windows has left such a start hanging for hours.
+from .backend import PACKAGED_SPAWN_WAIT_S as RESTART_START_WAIT_S  # noqa: E402
+
+#: Third plan TM2: said on the pane's screen when that second start failed.
+RESTART_FAILED_NOTE = (
+    "This terminal could not be started again at the window's size, so it keeps "
+    "the shell and size it had. Resize the window to try again, or just type: it "
+    "works as it is."
+)
+
+
+class _HeldOutput:
+    """A new shell's first output, held until the session takes it over (third
+    plan TM2): a pushing backend needs its handler BEFORE it starts, and the
+    session must not show a byte of it until the old shell is detached."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._held: list[bytes] = []
+        self._ended = False
+        self._to = None
+        self._on_eof = None
+
+    def chunk(self, data: bytes) -> None:
+        with self._lock:
+            to = self._to
+            if to is None:
+                self._held.append(bytes(data))
+                return
+        to(data)
+
+    def eof(self) -> None:
+        with self._lock:
+            on_eof = self._on_eof
+            if self._to is None:
+                self._ended = True
+                return
+        if on_eof is not None:
+            on_eof()
+
+    def forward_to(self, on_output, on_eof) -> None:
+        """Deliver what was held, in order, then pass everything straight on.
+        The one reader thread delivers chunks in order, and it waits on the
+        lock while the held ones are handed over."""
+        with self._lock:
+            for data in self._held:
+                on_output(data)
+            self._held.clear()
+            self._to, self._on_eof = on_output, on_eof
+            ended = self._ended
+        if ended and on_eof is not None:
+            on_eof()
+
+
+def _start_within(backend, argv, cwd, env, cols, rows, wait_s: float) -> bool:
+    """``backend.start(...)`` on its own daemon thread, waited for at most
+    ``wait_s`` (third plan TM2). True when it started. False when it raised
+    (logged) or did not answer in time: a start that answers LATER is closed
+    at once, so no shell is left running with no pane. BLOCKING for at most
+    the bound."""
+    gate = threading.Lock()
+    state = {"done": False, "abandoned": False, "ok": False}
+    done = threading.Event()
+
+    def _run() -> None:
+        ok = False
+        try:
+            backend.start(argv, cwd, env, cols, rows)
+            ok = True
+        except Exception:  # noqa: BLE001 — the old shell is still there
+            log.warning("could not start a reopened terminal again at its size", exc_info=True)
+        with gate:
+            state["done"], state["ok"] = True, ok
+            late = state["abandoned"]
+        done.set()
+        if late and ok:
+            try:
+                backend.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+    threading.Thread(target=_run, name="terminal-restart", daemon=True).start()
+    done.wait(wait_s)
+    with gate:
+        if not state["done"]:
+            state["abandoned"] = True
+            log.warning(
+                "a reopened terminal's second start did not answer within %g s; "
+                "it keeps the shell it had",
+                wait_s,
+            )
+            return False
+        return bool(state["ok"])
+
 #: How long "does the shell have a program running in it?" is trusted before
 #: the process table is read again (v1.333.0). Only a mouse report asks.
 CHILD_CHECK_TTL_S = 1.0
@@ -322,6 +419,9 @@ class TerminalSession:
         self._consumer_lock = threading.Lock()
         self._drain_thread: threading.Thread | None = None
         self._drain_stop = threading.Event()
+        # Third plan TM9: ONE reader per session, whoever asks for it (the
+        # agent's pane_spawn, the last page to detach, the boot restore).
+        self._drain_lock = threading.Lock()
         # monotonic timestamp of the last NON-EMPTY read — "is the CLI actively
         # printing?" signal for the studio's phase detection (a running TUI
         # repaints its status bar about once a second).
@@ -350,6 +450,10 @@ class TerminalSession:
         # shell with); cleared by the first input. See `restart_at_size`.
         self._respawn_env: dict | None = None
         self._untouched = False
+        # Third plan TM2: a second start is under way / the last one failed
+        # (the next resize may try again while nothing has been typed).
+        self._restarting = False
+        self._restart_failed = False
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent).
@@ -394,50 +498,96 @@ class TerminalSession:
         loses nothing — and once per pane. The old shell's output is detached
         first, a fresh page is drawn, and only then does the new shell start,
         so the pane sees: old screen, fresh page, the new prompt. BLOCKING (a
-        process spawn): call it off the event loop."""
+        process spawn): call it off the event loop.
+
+        Third plan TM2: the new shell is started FIRST, on its own thread, and
+        waited for at most :data:`RESTART_START_WAIT_S` (a first start's bound
+        for a Store shell). Until it has started nothing changes: the old shell
+        stays attached, keeps its output and takes keys (no lock is held while
+        Windows is asked). A start that fails or does not answer in time keeps
+        the old shell, says so in one line on screen, and leaves the pane
+        untouched so the next resize may try again (:meth:`restart_wanted`); a
+        start that answers late is closed again. A key typed while the start
+        waits keeps the old shell too."""
         from .modes import fresh_page
 
         if (cols, rows) == (self.cols, self.rows) or cols < 2 or rows < 2:
             return False
         if not self._untouched or self._killed or self._respawn_env is None:
             return False
-        try:
-            new = type(self.backend)()
-        except Exception:  # noqa: BLE001 — keep the shell we have
-            return False
-        old = self.backend
-        pushing = self.pushes_output
         with self._write_lock:
-            if not self._untouched:
+            if not self._untouched or self._restarting:
                 return False
-            self._untouched = False  # once per pane, whatever happens next
+            self._restarting = True
+        try:
+            try:
+                new = type(self.backend)()
+            except Exception:  # noqa: BLE001 — keep the shell we have
+                return False
+            old = self.backend
+            pushing = self.pushes_output
+            held = _HeldOutput()
             if pushing:
-                old.set_output_handler(None, None)  # its last bytes go nowhere
-                new.set_output_handler(self._ingest, self._on_output_eof)
+                new.set_output_handler(held.chunk, held.eof)
             if self.below_normal:
                 try:
                     new.below_normal = True
                 except Exception:  # noqa: BLE001
                     pass
-            with self._read_lock:
-                self._record_locked(fresh_page(rows))
-                self._modes = ModeTracker()
-            try:
-                new.start(self.argv, self.cwd, self._respawn_env, cols, rows)
-            except Exception:  # noqa: BLE001 — the old shell is still there
-                log.warning("could not restart a restored pane at its size", exc_info=True)
-                if pushing:
-                    old.set_output_handler(self._ingest, self._on_output_eof)
+            if not _start_within(
+                new, self.argv, self.cwd, self._respawn_env, cols, rows, RESTART_START_WAIT_S
+            ):
+                self._restart_failed = True
+                self.note_on_screen(RESTART_FAILED_NOTE)
                 return False
-            self.backend = new
-            self.cols, self.rows = cols, rows
-            self._child_check = None
-            self._own_console = 0
-        try:
-            old.kill()
-        except Exception:  # noqa: BLE001 — it is detached either way
-            pass
-        return True
+            with self._write_lock:
+                if not self._untouched or self._killed:
+                    # Typed into (or closed) while the new shell started: the
+                    # old one is the pane's. The new one is closed below.
+                    swapped = False
+                else:
+                    swapped = True
+                    self._untouched = False  # once per pane, from here on
+                    self._restart_failed = False
+                    if pushing:
+                        old.set_output_handler(None, None)  # its last bytes go nowhere
+                    with self._read_lock:
+                        self._record_locked(fresh_page(rows))
+                        self._modes = ModeTracker()
+                    self.backend = new
+                    self.cols, self.rows = cols, rows
+                    self._child_check = None
+                    self._own_console = 0
+            if not swapped:
+                try:
+                    new.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+                return False
+            if pushing:
+                held.forward_to(self._ingest, self._on_output_eof)
+            try:
+                old.kill()
+            except Exception:  # noqa: BLE001 — it is detached either way
+                pass
+            return True
+        finally:
+            self._restarting = False
+
+    def restart_wanted(self) -> bool:
+        """Third plan TM2: the last :meth:`restart_at_size` could not start the
+        shell again and nothing has been typed since — the next resize may try
+        again."""
+        return bool(
+            self._restart_failed and self._untouched and not self._restarting and not self._killed
+        )
+
+    def note_on_screen(self, text: str) -> None:
+        """One line of Iron Jarvis's own on the pane's screen (and in its
+        tail), never typed into the shell."""
+        data = f"\r\n\x1b[33m[{text}]\x1b[0m\r\n".encode("utf-8")
+        with self._read_lock:
+            self._record_locked(data)
 
     def write_input(self, data: str | bytes) -> None:
         """What a PANE types (the WebSocket input path), v1.333.0.
@@ -463,6 +613,33 @@ class TerminalSession:
         """The shell's process id, when the backend knows it."""
         pid = getattr(self.backend, "pid", None)
         return pid if isinstance(pid, int) and pid > 0 else None
+
+    #: Third plan TM12: console hosts are not programs a person ran.
+    _NOT_PROGRAMS = frozenset({"conhost", "openconsole"})
+
+    def running_program(self) -> str | None:
+        """Third plan TM12: the name of the program running in this shell now
+        (its first child on the pane's console, ``.exe`` dropped), or None —
+        nothing running, the shell is not known, or the process table cannot
+        be read. BLOCKING (a process-table read): the shutdown snapshot asks
+        it, off the event loop. Never raises."""
+        if not self.alive:
+            return None
+        pid = self.shell_pid
+        if pid is None:
+            return None
+        try:
+            import psutil
+
+            for kid in self._console_children(psutil.Process(pid)):
+                name = os.path.basename(str(kid.name() or "")).strip()
+                if name.lower().endswith(".exe"):
+                    name = name[:-4]
+                if name and name.lower() not in self._NOT_PROGRAMS:
+                    return name[:60]
+        except Exception:  # noqa: BLE001 — unknown is said as nothing
+            return None
+        return None
 
     def _shell_is_idle(self) -> bool:
         """True when this pane runs a Windows shell (:data:`modes.NATIVE_SHELLS`)
@@ -737,15 +914,27 @@ class TerminalSession:
 
         A PUSHING backend needs none (v1.248.0): its own reader thread never
         stops reading, so a PTY nobody watches cannot fill up and the tail is
-        always current — a drain here would only poll an empty queue."""
-        if self._drain_thread is not None or self.pushes_output:
+        always current — a drain here would only poll an empty queue.
+
+        Third plan TM9: a terminal an AGENT opens (``pane_spawn``) calls this
+        too — on a polled backend (Linux, Mac, the Windows fallbacks) nothing
+        else read it, and ``pane_read`` said it printed nothing. Started under
+        a lock, so two callers at once still make ONE reader."""
+        if self.pushes_output:
             return
-        self._drain_stop.clear()
-        thread = threading.Thread(
-            target=self._drain_loop, name=f"drain-{self.id}", daemon=True
-        )
-        self._drain_thread = thread
+        with self._drain_lock:
+            if self._drain_thread is not None:
+                return
+            self._drain_stop.clear()
+            thread = threading.Thread(
+                target=self._drain_loop, name=f"drain-{self.id}", daemon=True
+            )
+            self._drain_thread = thread
         thread.start()
+
+    #: Third plan TM9: at most this many reads take what a shell that has just
+    #: ended left unread (each up to 64 KB), so the reader always stops.
+    _LAST_READS = 64
 
     def _drain_loop(self) -> None:
         """Keep the PTY flowing into the tail. Yields to a live pane (which
@@ -754,6 +943,16 @@ class TerminalSession:
         tail endpoint serves and what auto-mode detection reads."""
         while not self._drain_stop.is_set():
             if not self.alive:
+                # Third plan TM9: the shell ENDED (nobody closed it): what it
+                # printed last is still waiting — a command's final lines, an
+                # error before the exit. Record it before stopping.
+                if not self._killed:
+                    for _ in range(self._LAST_READS):
+                        try:
+                            if not self.read():
+                                break
+                        except Exception:  # noqa: BLE001 - a dying backend
+                            break
                 break
             if self.has_consumer:  # a WS pane is reading — one reader is enough
                 # (a read here would no longer steal from it — read() delivers
@@ -808,6 +1007,50 @@ class TerminalSession:
     @property
     def exit_code(self) -> int | None:
         return self.backend.exit_code
+
+    def ended_by_itself(self) -> bool:
+        """Third plan TM11: did this shell END ON ITS OWN in a terminal that
+        worked — as opposed to a terminal that never worked (the v1.190.0
+        build with no console host: its shell died silently)?
+
+        True only when it was started, nobody closed it, it is no longer
+        running, and the terminal is shown to have worked: it printed
+        something (a polled backend's leftover output is read and recorded
+        first, so it is also kept for the user), or it returned an ordinary
+        exit code (0 from a profile that exits, 1, 127 for a wrong shell
+        path — see :func:`~.backend.exit_says_pty_failed`). No output and no
+        exit code, or a Windows start failure code, answers False: that is
+        the one case the pipe-shell fallback exists for. BLOCKING (a few
+        non-blocking reads at most)."""
+        if not self._started or self._killed:
+            return False
+        try:
+            if self.backend.is_alive():
+                return False
+        except Exception:  # noqa: BLE001 — a backend that cannot say
+            return False
+        if not self.pushes_output:
+            for _ in range(self._LAST_READS):
+                try:
+                    if not self.read():
+                        break
+                except Exception:  # noqa: BLE001
+                    break
+        if self.output_seq > 0:
+            return True
+        from .backend import exit_says_pty_failed
+
+        code = self.exit_code
+        try:
+            killed = code is not None and int(code) < 0
+        except (TypeError, ValueError):
+            killed = False
+        if killed:
+            # Group 22 (TM11 applied): a shell KILLED (a signal) before it
+            # printed a byte has not shown the terminal working — it did not
+            # end by itself. The pipe-shell fallback stays its safe answer.
+            return False
+        return not exit_says_pty_failed(code)
 
     # ---- what the agent in this pane is doing (v1.217.0) ------------------
     #: What the Launch catalog started here, when it knows ("claude" /

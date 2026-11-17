@@ -2042,6 +2042,65 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## It keeps working across a restart and a dropped connection (v1.526.0)
+
+A coding tool that was running when Iron Jarvis restarted gets Iron
+Jarvis's tools back by itself, a reply in the browser sidebar follows the
+sidebar when its connection drops and returns, and a terminal that cannot
+be reopened is kept and shown instead of vanishing. This is the sixth of
+seven releases from the third review.
+
+- **A coding tool keeps Iron Jarvis's tools across a restart.** After any
+  restart of Iron Jarvis (every update), or an hour without a call, a tool
+  such as Claude Code that was still running answered every use of Iron
+  Jarvis's tools with "no MCP session" until you started it again. The
+  bridge between the two now starts a new session by itself and repeats the
+  call once. While Iron Jarvis is restarting it tries again for a few
+  seconds, then tells the tool plainly that Iron Jarvis is not answering.
+- **That bridge talks to this PC only.** On a PC with a system proxy set it
+  could send its call, with the terminal's own key, to the proxy. It now
+  ignores every proxy setting and refuses an address that is not this PC.
+- **Stopping a coding tool no longer hangs.** A tool that left a program
+  holding its output open could hold the stop for a minute.
+- **A sidebar reply follows the sidebar.** When the browser's connection
+  dropped and came back mid-reply, the rest of the answer, any approval
+  card and the end went nowhere: the panel showed "running" for ever and
+  every later message was refused. The reply now goes to wherever the
+  sidebar is connected, and a card that was waiting is shown again.
+- **A message the sidebar could not send comes back.** A Send that Iron
+  Jarvis refused (still working, too many in a minute) had already emptied
+  the box and drawn a sent bubble. The words now return to the box.
+- **Dictation in the sidebar.** Writing a dictation down no longer holds up
+  everything else the browser is doing for Iron Jarvis; the microphone is
+  released when a dictation ends, also when it reached its longest length;
+  and what you typed meanwhile is kept, with the dictated words added.
+- **"Start new chats local only" covers the sidebar.** With that setting on,
+  a sidebar reply and its dictation stay on this PC or your own network,
+  and the panel shows a "Local only" label.
+- **A terminal that cannot be reopened is kept.** After a restart, a
+  terminal whose program had been uninstalled or moved simply disappeared,
+  and its history was deleted soon after. It is now listed with the reason,
+  a "Try again" and a "Close", and its history is kept until you close it.
+- **A reopened terminal cannot hang on resize.** The first time the page
+  showed a reopened terminal at another size, its shell was started a
+  second time with no time limit; if Windows hung that start, the pane was
+  blank and took no keys. The old shell now stays in use until the new one
+  has started, and if it does not start the pane says so and keeps working.
+- **Terminals, smaller things.** A restored terminal says when the program
+  that was running in it has ended. Opening a terminal in a folder that is
+  gone says so in plain words. One shell that exits at once no longer marks
+  terminals as broken until Iron Jarvis is restarted. A terminal an agent
+  opens is read on Linux and Mac too. On the older Windows fallback,
+  closing a terminal now also ends what its shell started. "Continue" and
+  "start fresh" are recorded in history. When a conversation was copied to
+  another account but some of its side files could not be, the line says
+  exactly that.
+- **A terminal's kept output is left out of backups.** Each terminal's last
+  output was written to disk in the clear and copied into every backup,
+  where it stayed after the terminal was closed. Backups now keep the list
+  of terminals (they reopen after a restore, with empty history) and not
+  their output. Backups made before this release still hold it.
+
 ## Your other tools' chats, tidied after a look in the real window (v1.525.0)
 
 The "Other tools" part of the chat list (v1.518.0) was looked at with the

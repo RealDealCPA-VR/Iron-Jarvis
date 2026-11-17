@@ -313,8 +313,16 @@ class PaneSpawnTool(_PaneTool):
                 mgr.create, str(cwd), None, 100, 30, name=name,
                 below_normal=True,
             )
-        except RuntimeError as exc:  # the session cap
+        except RuntimeError as exc:  # the session cap; a folder that is gone (TM7)
             return ToolResult(ok=False, error=str(exc))
+        # Third plan TM9: no page is attached to a terminal an agent opens, so
+        # on a POLLED backend (Linux, Mac, the Windows fallbacks) nothing read
+        # its output and `pane_read` said it printed nothing. Start its one
+        # reader now (it steps aside while a page reads; a pushing backend
+        # needs none). The launch route does the same for its terminals.
+        start_reader = getattr(session, "start_autodrain", None)
+        if callable(start_reader):
+            start_reader()
         return ToolResult(
             ok=True,
             output=f"Opened pane {session.pane_name or session.id} in {session.cwd}.",

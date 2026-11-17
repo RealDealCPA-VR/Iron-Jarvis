@@ -1358,7 +1358,7 @@ makes Jarvis type or change account by itself.
 
 Both files were read whole.
 
-- [ ] **SB1 (4, medium, checked). A sidebar reply keeps talking to the
+- [x] **SB1 (4, medium, checked). A sidebar reply keeps talking to the
   connection it started on.** If the add-on's connection drops and comes
   back mid-reply, the rest of the answer, any approval card and the end of
   the turn go nowhere. The panel shows "running"; a turn that reaches an
@@ -1391,8 +1391,8 @@ Both files were read whole.
   "Allow all page actions": one press allows that risky action and turns
   Auto-allow on for every tab. The daemon marks the card (`floor`,
   `panel.py:837`); the panel never reads the mark.
-- [ ] **SB7 to SB14 (low, pass only).** Stopping a dictation makes the
-  *Done so far: SB11 (v1.520.0); SB13 (v1.522.0); SB8, SB9 (v1.524.0).*
+- [x] **SB7 to SB14 (low, pass only).** Stopping a dictation makes the
+  *Done so far: SB11 (v1.520.0); SB13 (v1.522.0); SB8, SB9 (v1.524.0); SB7, SB10, SB12, SB14 (v1.526.0).*
   add-on's whole connection wait for the transcription, so a page action
   another chat is running can time out (`panel.py:1127-1175`); any error
   that is not about voice ends the turn on screen while it still runs
@@ -1470,7 +1470,7 @@ All of both were read whole.
   only, `dashboard/components/NotificationBell.tsx:1857-1945`). On the same
   card: "Allow for this run" is offered but counts once (`678-683`), and
   two of the card's answers are read as "nobody answered" (`727-733`).
-- [ ] **MC3 (4, medium, checked for the bridge; suspected for tools that
+- [x] **MC3 (4, medium, checked for the bridge; suspected for tools that
   connect by themselves). After any restart of Iron Jarvis, or an hour
   without a call, a running coding tool loses Jarvis's tools until it is
   started again.** The door forgets the tool's session and answers every
@@ -1478,8 +1478,8 @@ All of both were read whole.
   `session.py:59, 259-266`); the bridge never starts a new one
   (`stdio_shim.py:226-244`). Not verified: what each tool's own client does
   with that answer.
-- [ ] **MC4 to MC8 (low; MC4 and MC7 suspected, the rest pass only).**
-  *Done so far: MC5 (v1.520.0); MC6 (v1.524.0).*
+- [x] **MC4 to MC8 (low; MC4 and MC7 suspected, the rest pass only).**
+  *Done so far: MC5 (v1.520.0); MC6 (v1.524.0); MC4, MC7, MC8 (v1.526.0).*
   Stopping a tool that left a program holding its output open can hang the
   stop for 60 seconds (`codehost.py:547-559`; the daemon's own copy has the
   guard); a call through the door has no time limit and is not re-checked
@@ -1761,14 +1761,14 @@ All eighteen files in `terminals/` were read whole.
   (`daemon/routes/terminals.py:1206, 1277-1295` and `1427-1444`, where the
   output can also close the marks put around it). The second review's fix
   covered the three pane tools only.
-- [ ] **TM2 (7, medium, checked for the missing limit; the rest pass
+- [x] **TM2 (7, medium, checked for the missing limit; the rest pass
   only). The first time a page shows a reopened terminal at a different
   size, its shell is started a second time with no time limit.** If Windows
   hangs that start (the known Store PowerShell hang), the pane is blank and
   takes no keys until it is closed, and its still-working old shell is cut
   off from the screen (`routes/terminals.py:1051-1057`;
   `terminals/session.py:379-440`).
-- [ ] **TM3 (3, medium, checked). A terminal whose shell cannot be started
+- [x] **TM3 (3, medium, checked). A terminal whose shell cannot be started
   at a restart for any reason other than "stuck" is dropped with no word.**
   A program that was uninstalled or moved is enough: no terminal, nothing
   on the Build page, a debug log line only (`terminals/manager.py:1410-1411,
@@ -1789,7 +1789,7 @@ All eighteen files in `terminals/` were read whole.
   to the log (`platform.py:403-426`; `terminals/recipes.py:545-557,
   716-718`; `dashboard/app/terminals/page.tsx:1118`).
 - [ ] **TM6 to TM20 (low; TM10, TM14, TM15 and TM20 suspected, the rest
-  *Done so far: TM14, TM15 (v1.520.0); TM13 (v1.523.0); TM16 (v1.524.0).*
+  *Done so far: TM14, TM15 (v1.520.0); TM13 (v1.523.0); TM16 (v1.524.0); TM6, TM7, TM8, TM9, TM10, TM11, TM12, TM17, TM18, TM19 (v1.526.0).*
   pass only), in the order written:**
   - Kept on this PC and in backups: each terminal's last 64 KB of output
     is written in the clear and carried by every backup, where it stays
@@ -2366,3 +2366,57 @@ main loop, the sidebar's reply is still tidying up for an instant after the
 panel was told it ended, and a message sent in that instant was refused as
 "still working on the last message". A Send that arrives after the shown
 end now waits for the tidy-up (at most five seconds).
+
+### Group 22 as built (v1.526.0)
+
+Fixed: MC3, MC4, MC7, SB1, SB7, SB10, SB14, TM2, TM3, TM9, TM10, TM11, TM12,
+TM17, TM19, and five that the plan put in group 23 but that live in files
+this group changes: MC8, SB12, TM6, TM7, TM8, TM18. RB7 moved the other
+way, to group 23 (it is in the coding-session routes). MC4, MC7, TM10 were
+suspected and each was first proven with a failing test.
+
+Where it differs from the plan:
+
+- **MC3 was fixed in the bridge, and the door now answers 404.** The bridge
+  starts a new session by itself and repeats the call once. For a coding
+  tool that connects without the bridge, the door now answers a session id
+  it does not know with 404, the answer that tells a client following the
+  MCP rules to start again. What each tool's own client does with it was
+  not verified.
+- **TM2.** The second start is not only bounded: the old shell stays in use
+  until the new one has started, so a hung start costs nothing.
+- **TM3 and TM19.** A terminal that could not be reopened is a row with its
+  reason, "Try again" and "Close", not one sentence for all of them.
+- **TM11** needed a correction after the first attempt: a shell killed
+  before it printed anything still counts as a failed terminal engine (an
+  older test caught the first version treating it as "ended by itself").
+
+Left open:
+
+- The sidebar: words streamed while no connection is open are not shown
+  until the reply's end repairs the text; a card whose connection never
+  returns waits for the reply's own card limit; a failed dictation still
+  shows the speech service's own error text; dictation frames reach every
+  sidebar window, so a second window's box can receive the first one's
+  words.
+- Terminals: after a crash (no clean shutdown) a restored terminal cannot
+  name the program that was running, so it says nothing; entries past the
+  terminal limit are still dropped at a restart and their history deleted
+  at the next save; a folder deleted in the instant between the check and
+  the start still gives the system's own error; the Build page's older line
+  "restart Iron Jarvis to try again" still stands beside the new "Try
+  again".
+- Backups made before this release still hold terminals' output.
+- The two new history records are named by plain strings, not in the list
+  of event names (`core/events.py`).
+
+Tested with stand-ins only: the coding tool and its bridge's far end (a
+scripted daemon and the real route, never a real tool across a real
+restart); a hung Windows start (a stand-in that never answers); the Linux
+and Mac reader (a stand-in polled backend, never a real terminal there);
+the pywinpty fallback's tree kill (never against a real pywinpty shell);
+the sidebar's connection drop (fake connections; its panel side runs in the
+built add-on under jsdom, never in Chrome or Edge). What must be tried on
+the installed app: a coding tool left running across an update, then
+asked to use Iron Jarvis's tools; closing and reopening terminals across a
+restart; the sidebar after the browser was left idle for a while.

@@ -84,6 +84,36 @@ NO_STREAM_MESSAGE = (
 )
 
 
+#: What a coding tool reads when Iron Jarvis fails while running one of its
+#: tools (MC8). The tool may have run before the failure, so it says so.
+TOOL_CALL_CRASH_MESSAGE = (
+    "Iron Jarvis hit a problem while running that tool, so it is not known "
+    "whether it was done. Check before trying it again."
+)
+
+#: The same for any other request (listing tools, starting a session):
+#: nothing was changed.
+REQUEST_CRASH_MESSAGE = (
+    "Iron Jarvis hit a problem answering that request; nothing was changed. "
+    "Try again."
+)
+
+
+def _crash_sentence(method: str, exc: BaseException) -> str:
+    """The plain sentence for a crash while serving ``method`` (MC8).
+
+    ``core.failures.plain_failure``: a sentence our own code raised is kept
+    (and, for a tool call, followed by the not-known clause); anything else is
+    the plain line, its raw text logged, never shown."""
+    from ...core.failures import plain_failure
+
+    what = TOOL_CALL_CRASH_MESSAGE if method == "tools/call" else REQUEST_CRASH_MESSAGE
+    said = plain_failure(what, exc)
+    if said != what and method == "tools/call":
+        said = f"{said.rstrip('.')}. It is not known whether the tool ran; check before trying it again."
+    return said
+
+
 def _bearer(request: Request) -> str:
     """The candidate credential: ``Authorization: Bearer <t>`` or ``?token=``.
 
@@ -248,14 +278,13 @@ def register(app: FastAPI, d) -> None:
         except JsonRpcError as exc:
             return _envelope_response(exc.envelope(parsed.id), 500, accept)
         except Exception as exc:  # noqa: BLE001 — a tool crash is not a 500 page
-            # NAMED, not a traceback: the harness relays this to its own model,
-            # and `iron_jarvis.daemon.auth.unhandled_error_response` would give it
-            # an opaque `err_` id instead of something it can act on.
+            # A plain sentence, not a traceback and not the exception's name
+            # (MC8, third fix plan): the coding tool relays this to its own model
+            # and on to the user. What failed, and whether anything was done; the
+            # detail goes to the log.
             logger.exception("/mcp failed handling %s", parsed.method)
             return _envelope_response(
-                error_response(
-                    parsed.id, INTERNAL_ERROR, f"{type(exc).__name__}: {exc}"
-                ),
+                error_response(parsed.id, INTERNAL_ERROR, _crash_sentence(parsed.method, exc)),
                 500,
                 accept,
             )

@@ -944,7 +944,15 @@ def _door_refusal(d, grant, sessions: "McpSessionRegistry | None", session_id: s
     """
     pane_id = getattr(grant, "pane_id", "") or ""
     if sessions is not None and sessions.get(session_id, pane_id=pane_id) is None:
-        return 400, INVALID_REQUEST, NO_SESSION_MESSAGE
+        # MC3 (third fix plan): an id that WAS sent and is not known (the
+        # daemon restarted, the session sat idle past its limit, or it is
+        # another pane's) answers 404, which is what tells a client that
+        # follows the MCP rules to start a new session with a fresh
+        # `initialize`; a request with no session id at all stays 400. The
+        # same answer for "unknown" and "another pane's" says nothing about
+        # which ids exist. The bridge (`stdio_shim`) reads either as "session
+        # lost".
+        return (404 if session_id else 400), INVALID_REQUEST, NO_SESSION_MESSAGE
     if not granted_capabilities(grant):
         return 403, INVALID_REQUEST, no_capability_message(pane_id)
     if name and name not in permitted_tool_names(d, grant):

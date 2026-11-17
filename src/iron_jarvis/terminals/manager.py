@@ -32,6 +32,22 @@ class RecipeNotSetUp(Exception):
         super().__init__(sentence)
         self.sentence = sentence
 
+
+class SessionCapReached(RuntimeError):
+    """Third plan (group 22): the cap on open terminals. A ``RuntimeError``
+    as before (every caller that caught the cap that way still does); the
+    routes answer ONLY this one "Too many terminals are open"."""
+
+
+class ReopenFailed(Exception):
+    """Third plan TM3: "Try again" on a terminal that could not be reopened
+    after a restart did not reopen it. ``sentence`` is the plain reason; the
+    terminal stays listed as one that could not be reopened."""
+
+    def __init__(self, sentence: str) -> None:
+        super().__init__(sentence)
+        self.sentence = sentence
+
 #: Cap on how much per-session scrollback is persisted (bytes). Enough to show
 #: meaningful history after a restart without bloating the snapshot file.
 _SNAPSHOT_SCROLLBACK = 64 * 1024
@@ -76,11 +92,26 @@ RESTORE_GIVE_UP_S = 60.0
 RESTORE_FAILED_REASON_ONE = "its shell didn't start"
 RESTORE_FAILED_REASON_MANY = "their shell didn't start"
 
+#: Third plan TM3: one terminal's own reason, for one given up because its
+#: shell never started (``restore_failed_panes``).
+RESTORE_GAVE_UP_WHY = "Its shell did not start within a minute."
+
+#: Third plan TM12: said at the top of a restored terminal's new shell when a
+#: program (named) was running in it when Iron Jarvis stopped.
+PROGRAM_ENDED_NOTE = (
+    "Iron Jarvis restarted, so {program}, which was running in this terminal, "
+    "has ended. Nothing was run again."
+)
+
 #: A PTY shell that's going to die (e.g. a frozen build whose ConPTY has no
 #: OpenConsole.exe host) dies within a fraction of a second; give it this long
 #: to reveal itself before trusting it. Only paid ONCE per daemon run (the
 #: result is cached in ``_pty_ok``), so steady-state creates have no extra cost.
 _PTY_VERIFY_SECONDS = 0.7
+
+#: Third plan TM11: a terminal engine found broken is tried again after this
+#: long (not for the rest of the daemon's life): one bad start is not a verdict.
+_PTY_RETRY_S = 600.0
 
 
 #: Credentials the daemon holds that a pane's child must NOT inherit (v1.238.0).
@@ -280,6 +311,37 @@ def _persisted_accounts(records: Mapping[str, Any]) -> dict[str, dict[str, Any]]
     return out
 
 
+def _why_not_reopened(exc: BaseException, entry: Mapping[str, Any]) -> str:
+    """Third plan TM3: why a terminal could not be reopened, in plain words —
+    what could not be started (its program, by name), never the system's
+    error text. A :class:`~.backend.ShellStartStuck` is already a sentence."""
+    import errno
+
+    from ..core.failures import plain_failure
+    from .backend import ShellStartStuck
+
+    if isinstance(exc, ShellStartStuck):
+        return str(exc)
+    argv = entry.get("argv") if isinstance(entry.get("argv"), list) else None
+    first = str((argv or [entry.get("shell") or ""])[0] or "")
+    program = os.path.basename(first.replace("\\", "/"))
+    if program.lower().endswith(".exe"):
+        program = program[:-4]
+    program = re.sub(r"[\x00-\x1f\x7f]", "", program)[:60] or "its shell"
+    missing = isinstance(exc, FileNotFoundError) or (
+        isinstance(exc, OSError)
+        and (getattr(exc, "winerror", None) in (2, 3) or getattr(exc, "errno", None) == errno.ENOENT)
+    )
+    if missing:
+        return (
+            f"Its program, {program}, is no longer on this PC "
+            "(it may have been uninstalled or moved)."
+        )
+    if isinstance(exc, PermissionError):
+        return f"This PC did not let Iron Jarvis start its program, {program}."
+    return plain_failure(f"Its program, {program}, could not be started.", exc)
+
+
 class TerminalManager:
     """Create, look up, list, and kill multiple live terminal sessions.
 
@@ -310,6 +372,9 @@ class TerminalManager:
         # missing the ConPTY host) so go straight to a pipe-based shell. Set once
         # by the first verified create; skips the verify wait thereafter.
         self._pty_ok: bool | None = None
+        #: Third plan TM11: when ``_pty_ok`` was last set False (``_now``'s
+        #: clock); a broken verdict is tried again after ``_PTY_RETRY_S``.
+        self._pty_broken_at = 0.0
         # The /terminals endpoints are sync `def`, so Starlette runs them on
         # concurrent threadpool threads. Guard the dict so a list() iteration can't
         # race a create/kill ("dictionary changed size during iteration" -> 500) and
@@ -330,6 +395,17 @@ class TerminalManager:
         #: create() calls that passed the cap check and have not yet registered
         #: (or put their id in `_pending_panes`) -- counted by the cap (v1.303.3).
         self._reserved = 0
+        #: Third plan TM19: creates whose session is ALREADY registered (so it
+        #: counts as live) while their reservation is not yet released. The
+        #: cap subtracts them: a pane mid-create counted once, not twice.
+        self._registered_in_flight = 0
+        #: Third plan TM3: each terminal in ``_restore_failed``'s own plain
+        #: reason (absent = given up because its shell never started).
+        self._restore_failed_why: dict[str, str] = {}
+        #: Third plan TM19: restores given up while their thread still runs
+        #: (their slot released at the give-up). A late finisher whose pane
+        #: was closed or tried again meanwhile is closed, not registered.
+        self._given_up_running: set[str] = set()
         #: v1.406.0 (part 6): snapshot entries whose restore the boot stopped
         #: waiting for (``RESTORE_WAIT_S``), by pane id, in snapshot order.
         #: Each still holds its ``_reserved`` slot; the snapshot keeps the
@@ -496,26 +572,39 @@ class TerminalManager:
             # 16 panes against a cap of 5 under load (test_concurrency_fixes,
             # v1.303.3). The reservation is released on every exit path.
             self.purge_dead()
-            live = sum(1 for s in self._sessions.values() if s.alive)
-            if live + len(self._pending_panes) + self._reserved >= self.max_sessions:
-                raise RuntimeError(
+            if self._in_use_locked() >= self.max_sessions:
+                raise SessionCapReached(
                     f"terminal session cap reached ({self.max_sessions})"
                 )
             self._reserved += 1
+        slot = {"registered": False}
         try:
             return self._create_reserved(
                 cwd, shell_name, argv, cols, rows, backend, env, name, agent_cli,
                 capabilities, recipe, accounts, claude_session_id, below_normal,
-                recipe_required,
+                recipe_required, slot,
             )
         finally:
             with self._lock:
                 self._reserved -= 1
+                if slot["registered"]:
+                    self._registered_in_flight -= 1
+
+    def _in_use_locked(self) -> int:
+        """Slots in use, for the cap (caller holds ``_lock``): live terminals
+        plus every reservation (a create or a boot restore in flight). Third
+        plan TM19: a create in flight is ONE slot whatever step it is at — its
+        id in ``_pending_panes`` is inside its reservation (it was counted
+        twice, so a cap of two refused a second terminal while one started),
+        and once registered it is live, so its reservation is not counted
+        again (``_registered_in_flight``)."""
+        live = sum(1 for s in self._sessions.values() if s.alive)
+        return live + self._reserved - self._registered_in_flight
 
     def _create_reserved(
         self, cwd, shell_name, argv, cols, rows, backend, env, name, agent_cli,
         capabilities, recipe, accounts, claude_session_id, below_normal=False,
-        recipe_required=False,
+        recipe_required=False, slot=None,
     ) -> TerminalSession:
         """The body of :meth:`create` once its cap slot is reserved."""
         if accounts is not None and isinstance(accounts, Mapping):
@@ -589,6 +678,9 @@ class TerminalManager:
                 # so there is no instant in which the pane is in neither the
                 # pending set nor `_sessions` — that instant is the bug.
                 self._pending_panes.discard(pane_id)
+                if slot is not None:  # TM19: live now; its slot counts once
+                    slot["registered"] = True
+                    self._registered_in_flight += 1
         except BaseException:
             with self._lock:
                 self._pending_panes.discard(pane_id)
@@ -753,8 +845,12 @@ class TerminalManager:
             return session
 
         # Known-bad PTY in this environment → pipe shell straight away (no wait).
+        # Third plan TM11: for `_PTY_RETRY_S`, then the real terminal is
+        # verified again (one bad start is not a verdict for the daemon's life).
         if self._pty_ok is False:
-            return self._pipe_session(cwd, name, argv, cols, rows, env, **low)
+            if self._now() - self._pty_broken_at < _PTY_RETRY_S:
+                return self._pipe_session(cwd, name, argv, cols, rows, env, **low)
+            self._pty_ok = None
 
         from .backend import ConPtyUnavailable, mark_conpty_broken
 
@@ -798,8 +894,15 @@ class TerminalManager:
             self._pty_ok = True
             return session
 
+        # Third plan TM11: a shell that ENDED BY ITSELF in a terminal shown to
+        # work (it printed, or returned an ordinary exit code: a profile that
+        # exits, a wrong shell path) is the program's own exit, not a broken
+        # terminal engine. Returned as it is: the pane says the shell ended.
+        if session.ended_by_itself():
+            return session
         # The real PTY produced a dead shell — this environment can't host one.
         self._pty_ok = False
+        self._pty_broken_at = self._now()
         try:
             session.kill()
         except Exception:  # pragma: no cover - defensive
@@ -1018,6 +1121,18 @@ class TerminalManager:
                 background = []
             if background:
                 entry["background"] = background
+        if inline:
+            # Third plan TM12: the shutdown snapshot names the program running
+            # in this terminal (it ends with the daemon), so the restored
+            # terminal can say so. Only here: a process-table read per pane,
+            # once per clean shutdown, never on the 30 s loop.
+            running = getattr(s, "running_program", None)
+            try:
+                program = running() if callable(running) else None
+            except Exception:  # noqa: BLE001 — unknown is said as nothing
+                program = None
+            if program:
+                entry["running"] = str(program)
         if inline or not _FILE_SAFE_ID.match(str(s.id)):
             sb = s.scrollback_bytes()[-_SNAPSHOT_SCROLLBACK:]
             entry["scrollback_b64"] = base64.b64encode(sb).decode("ascii")
@@ -1154,6 +1269,86 @@ class TerminalManager:
             "reason": RESTORE_FAILED_REASON_ONE if len(ids) == 1 else RESTORE_FAILED_REASON_MANY,
         }
 
+    def restore_failed_panes(self) -> list[dict[str, Any]]:
+        """Third plan TM3: each terminal that could not be reopened after the
+        restart, in the user's order, as ``{id, name, cwd, reason}`` — the
+        reason in plain words (what could not be started, or that its shell
+        did not start in time). [] when there are none."""
+        self._settle_restores()
+        with self._lock:
+            rows = [(rid, dict(e)) for rid, e in self._restore_failed.items()]
+            whys = dict(self._restore_failed_why)
+            rank = getattr(self, "_restore_rank", {})
+        rows.sort(key=lambda pair: rank.get(pair[0], len(rank)))
+        return [
+            {
+                "id": rid,
+                "name": (e.get("name") or None) if isinstance(e.get("name"), str) else None,
+                "cwd": e.get("cwd") if isinstance(e.get("cwd"), str) else None,
+                "reason": whys.get(rid) or RESTORE_GAVE_UP_WHY,
+            }
+            for rid, e in rows
+        ]
+
+    def retry_restore(self, rid: str) -> TerminalSession:
+        """Third plan TM3: "Try again" on a terminal that could not be
+        reopened. Opens it under its id with its kept history, registered and
+        saved; or raises :class:`ReopenFailed` (its new plain reason; it stays
+        listed), :class:`SessionCapReached`, or ``KeyError`` (no such
+        terminal). BLOCKING (a spawn, bounded as every start is)."""
+        with self._lock:
+            entry = self._restore_failed.pop(rid, None)
+            if entry is None:
+                raise KeyError(rid)
+            self._restore_failed_why.pop(rid, None)
+            self.purge_dead()
+            if self._in_use_locked() >= self.max_sessions:
+                self._restore_failed[rid] = entry
+                raise SessionCapReached(f"terminal session cap reached ({self.max_sessions})")
+            self._reserved += 1
+        session: TerminalSession | None = None
+        try:
+            session = self.restore(entry, register=False)
+            if session is None:  # pragma: no cover - the slot was reserved above
+                raise SessionCapReached(f"terminal session cap reached ({self.max_sessions})")
+        except Exception as exc:  # noqa: BLE001 - said in words, kept listed
+            sentence = (
+                "Too many terminals are open." if isinstance(exc, SessionCapReached)
+                else _why_not_reopened(exc, entry)
+            )
+            with self._lock:
+                self._reserved -= 1
+                self._restore_failed[rid] = entry
+                self._restore_failed_why[rid] = sentence
+            if isinstance(exc, SessionCapReached):
+                raise
+            log.warning("a terminal still could not be reopened", exc_info=True)
+            raise ReopenFailed(sentence) from None
+        session.start_autodrain()
+        with self._lock:
+            self._reserved -= 1
+            self._sessions[session.id] = session
+        self._persist()
+        return session
+
+    def forget_restore(self, rid: str) -> bool:
+        """Third plan TM19: "Close" on a terminal that could not be reopened:
+        it leaves the saved list (the next start does not try it again) and
+        its kept history is deleted. False when there is no such terminal.
+        BLOCKING (file writes)."""
+        with self._lock:
+            gone = self._restore_failed.pop(rid, None) is not None
+            self._restore_failed_why.pop(rid, None)
+        if not gone:
+            return False
+        self._persist()
+        if self.state_path and _FILE_SAFE_ID.match(str(rid)):
+            try:  # deleted now: `_write_index` skips its tidy while a slot is held
+                (_scrollback_dir(self.state_path) / f"{rid}.bin").unlink(missing_ok=True)
+            except OSError:
+                log.warning("could not delete a closed terminal's kept history", exc_info=True)
+        return True
+
     def _settle_restores(self) -> None:
         """Give up every boot restore still starting once ``RESTORE_GIVE_UP_S``
         has passed (v1.418.1). Decided when the state is READ (the listing,
@@ -1169,6 +1364,7 @@ class TerminalManager:
             self._restore_give_up_at = None
             for rid, entry in moved:
                 self._restore_failed[rid] = entry
+                self._given_up_running.add(rid)
             # The stuck threads keep running; their slots are released NOW so
             # a new terminal is never refused for a pane that may never start.
             # `_finish_late_restore` does not release them a second time.
@@ -1250,7 +1446,16 @@ class TerminalManager:
         dict: ``rehydrate`` restores panes concurrently and registers them
         afterwards IN SNAPSHOT ORDER, so the rail keeps the user's order."""
         cwd = entry.get("cwd") or str(Path.home())
-        if not Path(cwd).is_dir():  # the folder may have moved/been deleted
+        # The folder may have moved or been deleted, or sit on a drive that is
+        # not connected: the shell opens in the home folder instead. Third
+        # plan (group 22): asked through the BOUNDED check every start uses
+        # (`check_start_folder`); `Path.is_dir()` waited on a drive that did
+        # not answer for as long as Windows did.
+        from .backend import StartFolderGone, check_start_folder
+
+        try:
+            check_start_folder(cwd)
+        except StartFolderGone:
             cwd = str(Path.home())
         name = entry.get("shell")
         argv = entry.get("argv")
@@ -1324,7 +1529,13 @@ class TerminalManager:
         # pane. `/mcp` answers 401 until the user relaunches the harness.
         session.pane_env_extra = pane_env
         old = self._saved_scrollback(entry, rid)
-        if old:
+        # Third plan TM12: a program that was running here (named by the
+        # shutdown snapshot) ENDED with the old shell, and nothing re-runs it.
+        # Said once, under the old output, above the new prompt — unless a
+        # coding tool is offered for resume (its own offer says what ended).
+        ended = self._program_ended_line(entry, agent_cli)
+        if old or ended:
+            old = old or b""
             # v1.333.0: the old program's bytes are followed by
             # `restore_reset`. That program is DEAD, and a replay that left
             # xterm in its mouse mode sent a mouse report for every cell the
@@ -1333,8 +1544,12 @@ class TerminalManager:
             # (terminals/modes.py).
             # Once: a tail that already ends with it (a pane restored and
             # closed again before its new shell printed) gets no second copy.
-            reset = restore_reset(old, rows)
-            prior = old if old.endswith(reset) else old + reset
+            if old:
+                reset = restore_reset(old, rows)
+                prior = old if old.endswith(reset) else old + reset
+            else:
+                prior = b""
+            prior += ended
             # v1.337.2: PREPEND, under the lock the output path records with.
             # The new shell was spawned above and a pushing backend has been
             # recording its first bytes (ConPTY's start-up and the prompt)
@@ -1354,6 +1569,21 @@ class TerminalManager:
             with self._lock:
                 self._sessions[rid] = session
         return session
+
+    @staticmethod
+    def _program_ended_line(entry: Mapping[str, Any], resume_cli: str | None) -> bytes:
+        """Third plan TM12: the one line a restored terminal shows when the
+        shutdown snapshot named a program running in it (``running``), as
+        terminal bytes; ``b""`` when nothing was named or a coding tool is
+        offered for resume instead."""
+        program = entry.get("running")
+        if resume_cli or not isinstance(program, str):
+            return b""
+        program = re.sub(r"[\x00-\x1f\x7f]", "", program).strip()[:60]
+        if not program:
+            return b""
+        text = PROGRAM_ENDED_NOTE.format(program=program)
+        return f"\r\n\x1b[33m[{text}]\x1b[0m\r\n".encode("utf-8")
 
     def _restore_accounts(self, recorded: Any) -> Any | None:
         """The accounts a RESTORED pane comes back on (v1.302.0), never another
@@ -1467,8 +1697,7 @@ class TerminalManager:
         # cannot overshoot either.
         with self._lock:
             self.purge_dead()
-            live = sum(1 for s in self._sessions.values() if s.alive)
-            free = self.max_sessions - live - len(self._pending_panes) - self._reserved
+            free = self.max_sessions - self._in_use_locked()  # TM19: once each
             batch = entries[: max(0, free)]
             self._reserved += len(batch)
             self._restore_rank = {str(e.get("id")): i for i, e in enumerate(batch) if e.get("id")}
@@ -1476,6 +1705,10 @@ class TerminalManager:
         # v1.418.1: a restore whose shell could not even be ASKED to start
         # (another Store shell is stuck starting) is given up, not dropped.
         stuck = [False] * len(batch)
+        # Third plan TM3: ANY restore that raised is kept as one that could not
+        # be reopened, with its plain reason (it was dropped with a debug line,
+        # and its kept history deleted at the next save).
+        why: list[str | None] = [None] * len(batch)
         if backend is None and batch:
             # v1.418.1: load the ConPTY DLLs ONCE, here on the boot thread,
             # before any restore thread starts. A frozen daemon (2026-10-31)
@@ -1499,11 +1732,14 @@ class TerminalManager:
                     # start; it yields whenever a Build pane attaches.
                     session.start_autodrain()
                     slots[i] = session
-            except ShellStartStuck:
+            except ShellStartStuck as exc:
                 stuck[i] = True
+                why[i] = _why_not_reopened(exc, batch[i])
                 log.warning("a terminal pane could not be reopened", exc_info=True)
-            except Exception:  # pragma: no cover - one bad entry mustn't skip the rest
-                log.debug("failed to restore a terminal", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - one bad entry mustn't skip the rest
+                stuck[i] = True  # kept and listed, never dropped (TM3)
+                why[i] = _why_not_reopened(exc, batch[i])
+                log.warning("a terminal pane could not be reopened", exc_info=True)
 
         restored = 0
         on_accounts = False
@@ -1525,7 +1761,7 @@ class TerminalManager:
                     if waiting["on"]:
                         finished[i] = True
                         return
-                self._finish_late_restore(slots[i], batch[i], stuck=stuck[i])
+                self._finish_late_restore(slots[i], batch[i], stuck=stuck[i], why=why[i])
 
         self._restore_deadline = time.monotonic() + RESTORE_ACCOUNTS_BUDGET_S
         started_at = self._now()
@@ -1554,6 +1790,8 @@ class TerminalManager:
                         rid = batch[i].get("id")
                         if rid:
                             self._restore_failed[str(rid)] = batch[i]
+                            if why[i]:
+                                self._restore_failed_why[str(rid)] = why[i]
                         continue
                     if session is None:
                         continue
@@ -1598,6 +1836,7 @@ class TerminalManager:
         entry: Mapping[str, Any],
         *,
         stuck: bool = False,
+        why: str | None = None,
     ) -> None:
         """A boot restore that finished after the boot stopped waiting
         (v1.406.0, part 6): register it (or close it, when shutdown began),
@@ -1607,10 +1846,15 @@ class TerminalManager:
         v1.418.1: one already GIVEN UP (``_settle_restores``) released its
         slot then, and is registered here all the same — it is the user's
         pane, and the note about it goes away. One whose shell could not be
-        asked to start (``stuck``) is given up now, its entry kept."""
+        asked to start (``stuck``) is given up now, its entry kept.
+
+        Third plan TM3/TM19: one that RAISED for any reason is kept the same
+        way, with its plain reason (``why``); and one given up whose terminal
+        the user closed or tried again meanwhile is closed, not registered."""
         rid = str(entry.get("id") or "")
         close_it = False
         keep_failed = False
+        unwanted = False
         with self._lock:
             if self._closing:
                 # v1.418.1 (review): shutdown began. `kill_all` sets the flag
@@ -1622,15 +1866,32 @@ class TerminalManager:
                 # shell that did start (below, outside the lock).
                 close_it = True
             else:
-                given_up = self._restore_failed.pop(rid, None) is not None
+                # Given up = its slot was released then (`_settle_restores`).
+                given_up = rid in self._given_up_running
+                self._given_up_running.discard(rid)
+                still_listed = self._restore_failed.pop(rid, None) is not None
+                self._restore_failed_why.pop(rid, None)
                 self._restoring.pop(rid, None)
                 if not given_up:
                     self._reserved -= 1
-                if stuck and session is None and rid:
+                if given_up and not still_listed:
+                    # Closed (`forget_restore`) or tried again (`retry_restore`)
+                    # while this start hung: not the user's terminal any more.
+                    unwanted = True
+                elif stuck and session is None and rid:
                     self._restore_failed[rid] = dict(entry)
+                    if why:
+                        self._restore_failed_why[rid] = why
                     keep_failed = True
-                if session is not None:
+                elif session is not None:
                     self._sessions[session.id] = session
+        if unwanted:
+            if session is not None:
+                try:
+                    session.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            return
         if close_it:
             if session is not None:
                 try:

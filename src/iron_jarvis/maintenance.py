@@ -66,6 +66,38 @@ WORKSPACE_BACKUP_MAX_BYTES = 100 * 1024 * 1024
 WORKSPACE_BACKUP_MAX_FILE = 25 * 1024 * 1024
 
 
+def _add_terminal_list(tar: "tarfile.TarFile", path: Path, arcname: str) -> bool:
+    """Third plan TM6: ``terminals.json`` into a backup WITHOUT any terminal's
+    output (each entry's ``scrollback_b64`` dropped), so a restore reopens the
+    terminals with empty history. A file that is not the expected JSON is
+    left out rather than archived as it is (it could carry the output).
+    True when it was added."""
+    import io
+    import json
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    entries = data.get("terminals") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return False
+    kept = [
+        {k: v for k, v in e.items() if k != "scrollback_b64"}
+        for e in entries
+        if isinstance(e, dict)
+    ]
+    raw = json.dumps({"terminals": kept}).encode("utf-8")
+    info = tarfile.TarInfo(arcname)
+    info.size = len(raw)
+    try:
+        info.mtime = int(path.stat().st_mtime)
+    except OSError:
+        pass
+    tar.addfile(info, io.BytesIO(raw))
+    return True
+
+
 def create_backup(
     home: Path,
     out_path: Path,
@@ -132,6 +164,15 @@ def create_backup(
     from .core.home_lock import LOCK_NAME, OWNER_NAME
 
     lock_files = ((home / LOCK_NAME).resolve(), (home / OWNER_NAME).resolve())
+    # Third plan TM6 (decision G19): a terminal's kept output (its last 64 KB,
+    # raw, in ``terminals-scrollback/``) stays OUT of every backup — it can
+    # hold whatever a program printed, and a backup kept it long after the
+    # terminal was closed. The LIST of terminals is kept (they reopen after a
+    # restore, with empty history), without the copies of their output the
+    # shutdown snapshot writes into it (``scrollback_b64``).
+    terminal_output_dir = (home / "terminals-scrollback").resolve()
+    terminal_list = (home / "terminals.json").resolve()
+    terminal_list_tmp = (home / "terminals.tmp").resolve()
     db_path = (home / _DB_NAME).resolve()
     snapshot = _consistent_db_snapshot(engine, home) if (engine is not None and db_path.exists()) else None
 
@@ -177,6 +218,12 @@ def create_backup(
                     continue  # skip live DB + sidecars; the snapshot stands in
                 if rp in lock_files:
                     continue  # a live process's lock; unreadable by design
+                if terminal_output_dir in rp.parents or rp == terminal_list_tmp:
+                    continue  # TM6: terminal output never goes into a backup
+                if rp == terminal_list:
+                    if _add_terminal_list(tar, p, str(p.relative_to(home.parent))):
+                        n += 1
+                    continue
                 if not include_keys and (
                     p.name.startswith(".secrets.key") or p.name.startswith(".vault.key")
                 ):

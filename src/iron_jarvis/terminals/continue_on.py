@@ -444,9 +444,6 @@ def carry_over(
         else:
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, dest)
-        sibling = source.with_suffix("")
-        if sibling.is_dir() and not sibling.is_symlink():
-            _copy_missing_tree(sibling, dest_dir / sid, root, trash, Path(sid))
     except CarryBusy:
         return Carried(
             False, None,
@@ -454,11 +451,34 @@ def carry_over(
             f"and press Continue again. {fresh_tail}",
         )
     except OSError as exc:
-        return Carried(False, None, f"The conversation could not be carried over ({type(exc).__name__}) — {fresh_tail}")
+        from ..core.failures import plain_failure
+
+        return Carried(
+            False, None,
+            plain_failure("The conversation could not be copied to the next account.", exc)
+            + f" {fresh_tail}",
+        )
+    # Third plan TM8: the conversation IS copied from here on. Its side folder
+    # (what Claude Code keeps beside it: attachments, long tool results) is a
+    # second, optional step: one that cannot be copied no longer turns a
+    # carried conversation into "could not be carried over" and a fresh start.
+    side_note = ""
+    sibling = source.with_suffix("")
+    try:
+        if sibling.is_dir() and not sibling.is_symlink():
+            _copy_missing_tree(sibling, dest_dir / sid, root, trash, Path(sid))
+    except OSError as exc:
+        from ..core.failures import plain_failure
+
+        plain_failure("A conversation's side files could not be copied.", exc)  # logs the cause
+        side_note = (
+            " Some of the files Claude keeps beside it (attachments and long tool results) "
+            "could not be copied, so a few earlier attachments may be missing there."
+        )
     return Carried(
         True, sid,
-        f'Carried your conversation over to "{to_title}". If Claude cannot continue it there, '
-        "the new pane offers to start fresh with a handoff of where it stopped.",
+        f'Carried your conversation over to "{to_title}".{side_note} If Claude cannot continue it '
+        "there, the new pane offers to start fresh with a handoff of where it stopped.",
         dest,
     )
 

@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 from ...core.failures import plain_failure
 from ...projects.locate import project_context_block, project_for_path
-from ...terminals.backend import ShellStartStuck
+from ...terminals.backend import ShellStartStuck, StartFolderGone
 from ..chat_turn import _profile_section
 
 from ..app import _first_code_block, _ws_token_ok
@@ -335,6 +335,56 @@ def _shell_args(shell: str, args: list[str]) -> str:
     return " ".join(out)
 
 
+#: Third plan TM18: the longest the pane's "ask AI" waits for one read of the
+#: profile, the project, the lessons or the skill library (each off the loop).
+ASSIST_READ_MAX_S = 10.0
+
+
+#: Third plan (group 22): what the session cap is said as — and ONLY the cap
+#: (any other failure to open a terminal got these words too).
+TOO_MANY_TERMINALS = "Too many terminals are open. Close one and try again."
+
+
+def _open_refused(exc: BaseException) -> HTTPException:
+    """A terminal that was not opened: the cap is a 429 in its own words;
+    anything else a 500 that says the terminal did not open (the raw text is
+    logged by ``plain_failure``, never shown)."""
+    from ...terminals.manager import SessionCapReached
+
+    if isinstance(exc, SessionCapReached):
+        return HTTPException(status_code=429, detail=TOO_MANY_TERMINALS)
+    return HTTPException(
+        status_code=500,
+        detail=plain_failure("The terminal could not be opened. Try again.", exc),
+    )
+
+
+#: Third plan TM17: the records Continue and "start fresh" leave in history
+#: (the event log the Activity page reads). Who: the terminal (and the new one
+#: Continue opened); what: the accounts by name; how it ended. Never the
+#: conversation's text.
+TERMINAL_CONTINUED = "terminal.continued"
+TERMINAL_STARTED_FRESH = "terminal.started_fresh"
+
+
+def _record(platform, kind: str, payload: dict[str, Any]) -> None:
+    """Publish one record from a sync route (the threadpool). Never raises:
+    a record that cannot be written never undoes what was done."""
+    bus = getattr(platform, "event_bus", None)
+    if bus is None:
+        return
+    try:
+        import anyio.from_thread
+
+        anyio.from_thread.run(bus.publish, kind, payload)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("iron_jarvis.terminals").warning(
+            "could not record a terminal action in history", exc_info=True
+        )
+
+
 def launch_pane(
     platform,
     body: TerminalLaunch,
@@ -475,10 +525,12 @@ def launch_pane(
                 detail=f"{cat['label']} could not be set up with Iron Jarvis's tools, so no "
                 f"terminal was opened. {refused.sentence}",
             ) from None
+        except StartFolderGone as exc:  # third plan TM7: the user's folder, said
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         except ShellStartStuck as exc:  # v1.418.1: another shell is stuck starting
             raise HTTPException(status_code=503, detail=str(exc)) from None
-        except RuntimeError as exc:  # the session cap
-            raise HTTPException(status_code=429, detail=plain_failure("Too many terminals are open. Close one and try again.", exc)) from None
+        except RuntimeError as exc:  # the session cap, or another failure (own words)
+            raise _open_refused(exc) from None
     # Nobody is attached until the page focuses it: keep the CLI's first
     # screen in the pane's tail so the attach replays it (the sign-in pane's
     # pattern), and answer ConPTY's start-up query meanwhile.
@@ -677,7 +729,48 @@ def register(app: FastAPI, d) -> None:
         note = failed() if callable(failed) else None
         if note:
             out["restore_failed"] = note
+            # Third plan TM3: each one with its own plain reason, so the Build
+            # page can offer "Try again" and "Close" per terminal.
+            panes = getattr(terminals, "restore_failed_panes", None)
+            rows = panes() if callable(panes) else []
+            if rows:
+                out["restore_failed_panes"] = rows
         return out
+
+    @app.post("/terminals/not-reopened/{term_id}/retry")
+    def retry_not_reopened(term_id: str) -> dict[str, Any]:
+        """Third plan TM3: "Try again" on a terminal that could not be
+        reopened after a restart. Its row, reopened under its id with its
+        history; or a 409 sentence (it stays listed), 429 at the cap, 404 when
+        there is no such terminal. Sync ``def``: the spawn blocks."""
+        from ...terminals.manager import ReopenFailed, SessionCapReached
+
+        try:
+            session = d.platform.terminals.retry_restore(term_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail="That terminal is no longer waiting to be reopened."
+            ) from None
+        except SessionCapReached:
+            raise HTTPException(status_code=429, detail=TOO_MANY_TERMINALS) from None
+        except ReopenFailed as failed:
+            raise HTTPException(
+                status_code=409,
+                detail=f"The terminal could not be reopened. {failed.sentence}",
+            ) from None
+        return pane_row(d.platform, session.info())
+
+    @app.delete("/terminals/not-reopened/{term_id}")
+    def forget_not_reopened(term_id: str) -> dict[str, Any]:
+        """Third plan TM19: "Close" (after the page asked) on a terminal that
+        could not be reopened: it leaves the saved list, so the next start
+        does not try it again, and its kept history is deleted. 404 when there
+        is no such terminal. Sync ``def``: file writes."""
+        if not d.platform.terminals.forget_restore(term_id):
+            raise HTTPException(
+                status_code=404, detail="That terminal is no longer waiting to be reopened."
+            )
+        return {"closed": True}
 
     @app.get("/terminals/shells")
     def terminal_shells() -> dict[str, Any]:
@@ -787,10 +880,12 @@ def register(app: FastAPI, d) -> None:
             )
         except PaneAccountRefused as refused:  # no pane was created
             raise HTTPException(status_code=refused.status, detail=refused.sentence)
+        except StartFolderGone as exc:  # third plan TM7: the user's folder, said
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         except ShellStartStuck as exc:  # v1.418.1: another shell is stuck starting
             raise HTTPException(status_code=503, detail=str(exc))
-        except RuntimeError as exc:  # session cap reached
-            raise HTTPException(status_code=429, detail=plain_failure("Too many terminals are open. Close one and try again.", exc))
+        except RuntimeError as exc:  # the session cap, or another failure (own words)
+            raise _open_refused(exc) from None
         return pane_row(d.platform, session.info())
 
     @app.post("/terminals/{term_id}/continue-on-next", response_model=None)
@@ -828,6 +923,9 @@ def register(app: FastAPI, d) -> None:
                 account=(body.account if body is not None else None),
             )
         except continue_on.ContinueRefused as refused:
+            _record(d.platform, TERMINAL_CONTINUED, {
+                "terminal": term_id, "outcome": "refused", "detail": refused.sentence,
+            })
             if refused.instead:
                 return JSONResponse(
                     status_code=refused.status,
@@ -847,14 +945,21 @@ def register(app: FastAPI, d) -> None:
         opened_at = datetime.now(timezone.utc).isoformat()
         # Resumed: the same conversation id, kept by `--resume`. Fresh: a new
         # id this app mints (launch_pane types `claude --session-id <uuid>`).
-        new = launch_pane(
-            d.platform,
-            TerminalLaunch(cli="claude", near=term_id),
-            accounts=accounts,
-            command=f"claude --resume {carried.session_id}" if carried.resumed else None,
-            name_base=f"Claude Code · {plan.lease.title} (continued)",
-            claude_session_id=carried.session_id if carried.resumed else None,
-        )
+        try:
+            new = launch_pane(
+                d.platform,
+                TerminalLaunch(cli="claude", near=term_id),
+                accounts=accounts,
+                command=f"claude --resume {carried.session_id}" if carried.resumed else None,
+                name_base=f"Claude Code · {plan.lease.title} (continued)",
+                claude_session_id=carried.session_id if carried.resumed else None,
+            )
+        except HTTPException as exc:  # TM17: the copy was made; the terminal was not
+            _record(d.platform, TERMINAL_CONTINUED, {
+                "terminal": term_id, "to": plan.lease.title, "outcome": "failed",
+                "detail": str(exc.detail),
+            })
+            raise
         new.continued_from = {
             "from_id": plan.from_rec.get("id"),
             "from_title": plan.from_rec.get("title"),
@@ -875,10 +980,40 @@ def register(app: FastAPI, d) -> None:
             out["session_id"] = carried.session_id
         if plan.reset_at is not None:
             out["reset_at"] = plan.reset_at.isoformat()
+        # Third plan TM17: who (this terminal, and the one opened), what (the
+        # accounts by name), how it ended. Never the conversation itself.
+        _record(d.platform, TERMINAL_CONTINUED, {
+            "terminal": term_id,
+            "new_terminal": new.id,
+            "from": plan.from_rec.get("title") or plan.from_rec.get("id"),
+            "to": plan.lease.title,
+            "resumed": bool(carried.resumed),
+            "parked": bool(plan.parked),
+            "outcome": "continued",
+        })
         return out
 
     @app.post("/terminals/{term_id}/start-fresh-with-handoff")
     def start_fresh_with_handoff(term_id: str) -> dict[str, Any]:
+        """See :func:`_start_fresh` (below). Third plan TM17: every press is
+        recorded in history — started fresh, or refused with its sentence —
+        naming the terminal and the accounts, never the conversation."""
+        try:
+            out = _start_fresh(term_id)
+        except HTTPException as exc:
+            _record(d.platform, TERMINAL_STARTED_FRESH, {
+                "terminal": term_id, "outcome": "refused", "detail": str(exc.detail),
+            })
+            raise
+        _record(d.platform, TERMINAL_STARTED_FRESH, {
+            "terminal": term_id,
+            "from": out.pop("_from", None),
+            "to": out.pop("_to", None),
+            "outcome": "started fresh",
+        })
+        return out
+
+    def _start_fresh(term_id: str) -> dict[str, Any]:
         """When the next account cannot continue the conversation it was
         handed (v1.303.2): write a HANDOFF of where it stopped (deterministic,
         no model call) under Iron Jarvis's own home, quit Claude in THIS pane,
@@ -972,6 +1107,9 @@ def register(app: FastAPI, d) -> None:
             "handoff_path": str(path),
             "note": f'Started a fresh conversation on "{to_title}" that reads a handoff of '
             f'where it stopped on "{from_title}". The old conversation is kept on both accounts.',
+            # For the record only (popped by the route before it answers).
+            "_from": from_title,
+            "_to": to_title,
         }
 
     @app.post("/terminals/launch")
@@ -1237,12 +1375,15 @@ def register(app: FastAPI, d) -> None:
                             obj = None
                         if isinstance(obj, dict) and obj.get("type") == "resize":
                             cols, rows = int(obj["cols"]), int(obj["rows"])
-                            if repaint_pending:
+                            wanted = getattr(session, "restart_wanted", None)
+                            if repaint_pending or (callable(wanted) and wanted()):
                                 # v1.338.0: a restored shell spawned at a stale
                                 # saved size starts again at this pane's size
                                 # while nothing has been typed into it — else
                                 # its wrapped prompt and the pane disagree on
                                 # the cursor and keys land over the prompt.
+                                # Third plan TM2: bounded; one that failed is
+                                # tried again at the next resize.
                                 await asyncio.to_thread(session.restart_at_size, cols, rows)
                             # Scrollback replay can't reconstruct a FULL-SCREEN
                             # app's frame: a TUI (grok/claude/codex) paints only
@@ -1252,8 +1393,10 @@ def register(app: FastAPI, d) -> None:
                             # A resize wiggle (one row down, then back) makes
                             # the app itself repaint every cell at the right
                             # size; a line-mode shell just ignores it.
+                            # Third plan TM18: a resize is a call into the
+                            # console host (it can wait on it): off the loop.
                             if repaint_pending and rows > 1:
-                                session.resize(cols, rows - 1)
+                                await asyncio.to_thread(session.resize, cols, rows - 1)
                             elif not repaint_pending and (cols, rows) == (
                                 session.cols,
                                 session.rows,
@@ -1265,7 +1408,7 @@ def register(app: FastAPI, d) -> None:
                                 # attach's FIRST resize still always wiggles.
                                 continue
                             repaint_pending = False
-                            session.resize(cols, rows)
+                            await asyncio.to_thread(session.resize, cols, rows)
                         elif isinstance(obj, dict) and obj.get("type") == "flow":
                             # v1.248.0 flow control (see pump_output). Only a
                             # real bool counts; anything else is ignored —
@@ -1305,6 +1448,21 @@ def register(app: FastAPI, d) -> None:
                 await ws.close()
             except Exception:
                 pass
+
+    async def _off_loop(fn, *args, fallback):
+        """Third plan TM18: ``fn(*args)`` on a worker thread, waited for at
+        most ``ASSIST_READ_MAX_S``; ``fallback`` when it does not answer in
+        time (logged). Raises what ``fn`` raises."""
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=ASSIST_READ_MAX_S)
+        except asyncio.TimeoutError:
+            import logging
+
+            logging.getLogger("iron_jarvis.terminals").warning(
+                "a terminal assist read did not answer within %g s; going on without it",
+                ASSIST_READ_MAX_S,
+            )
+            return fallback
 
     def _pane_identity_block(session) -> str:
         """One line naming the pane: its name, folder and the CLI running in it."""
@@ -1415,16 +1573,23 @@ def register(app: FastAPI, d) -> None:
         # three seams every chat turn gets, in the same order, each "" when
         # there is nothing to say.
         system += _pane_identity_block(session)
-        system += _profile_section(d.platform)
-        _proj_block = project_context_block(
-            project_for_path(d.platform.engine, getattr(session, "cwd", "") or "")
-        )
-        if _proj_block:
-            system += "\n\n" + _proj_block
-        try:
-            system = d.platform.learning.apply_to_prompt(system)
-        except Exception:  # noqa: BLE001 — lessons must never break assist
-            pass
+        # Third plan TM18: the profile, the project (a database read) and the
+        # lessons are read from disk and the database — OFF the event loop,
+        # bounded; past the bound the answer goes on without them (logged).
+        _cwd = getattr(session, "cwd", "") or ""
+
+        def _profile_project_lessons(base: str) -> str:
+            text = base + _profile_section(d.platform)
+            _proj_block = project_context_block(project_for_path(d.platform.engine, _cwd))
+            if _proj_block:
+                text += "\n\n" + _proj_block
+            try:
+                text = d.platform.learning.apply_to_prompt(text)
+            except Exception:  # noqa: BLE001 — lessons must never break assist
+                pass
+            return text
+
+        system = await _off_loop(_profile_project_lessons, system, fallback=system)
         # THE CLIENT BLOCK (v1.499.0, vision plan leap 3, Phase 3): a pane in
         # a confirmed client's folder is told what the owner keeps for that
         # client, right after the owner's own lessons — the same block a chat
@@ -1447,15 +1612,20 @@ def register(app: FastAPI, d) -> None:
         if want.lower() == "none":
             chosen = []
         elif want:
-            sk = d.platform.skills.get(want)
+            # TM18: the skill library is read from disk — off the loop.
+            sk = await _off_loop(d.platform.skills.get, want, fallback=None)
             if sk is None:
                 raise HTTPException(status_code=404, detail=f"no such skill: {want}")
             chosen = [sk]
         else:  # AUTO: best matches for the request (quietly none if no hit)
-            try:
-                chosen = d.platform.skills.search(body.prompt, k=2)
-            except Exception:  # noqa: BLE001 — skills must never break assist
-                chosen = []
+
+            def _search() -> list:
+                try:
+                    return list(d.platform.skills.search(body.prompt, k=2))
+                except Exception:  # noqa: BLE001 — skills must never break assist
+                    return []
+
+            chosen = await _off_loop(_search, fallback=[])
         skill_block = ""
         for sk in chosen[:2]:
             skills_used.append(sk.name)

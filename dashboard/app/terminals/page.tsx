@@ -34,6 +34,11 @@ import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { paneTurn } from "@/components/terminal/paneChatCore";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 import type { LaunchTools } from "@/components/terminal/TerminalPane";
+import {
+  NotReopenedList,
+  decodeNotReopened,
+  type NotReopenedPane,
+} from "@/components/terminal/NotReopenedList";
 import { STORE_SHELL_TITLE, defaultShellName, shellLabel, type ShellOption } from "@/lib/shells";
 import { Card, OfflineHint, Spinner, ConfirmButton, Empty } from "@/components/ui";
 import { usePolledApi } from "@/lib/useApi";
@@ -191,6 +196,9 @@ export default function TerminalsPage() {
   // daemon GAVE UP reopening (`GET /terminals` → `restore_failed`). Said in
   // one quiet line beside the normal New terminal door, never "Reopening…".
   const [restoreFailed, setRestoreFailed] = useState<RestoreFailed | null>(null);
+  // Third plan TM3 + TM19: the same terminals ONE ROW EACH, with the
+  // daemon's plain reason, "Try again" and "Close" (`restore_failed_panes`).
+  const [notReopened, setNotReopened] = useState<NotReopenedPane[]>([]);
 
   // v1.406.0 (part 1): Build is the terminals only. An OLD link to a
   // coding session or to Last night (`/terminals?session=<id>`,
@@ -894,6 +902,7 @@ export default function TerminalsPage() {
           terminals: TerminalInfo[];
           restoring?: string[];
           restore_failed?: unknown;
+          restore_failed_panes?: unknown;
         }>("/terminals");
         if (cancelled) return;
         const alive = terms.terminals.filter((t) => t.alive);
@@ -921,6 +930,7 @@ export default function TerminalsPage() {
         setTerminals(alive);
         setRestoringIds(restoring);
         setRestoreFailed(failed);
+        setNotReopened(decodeNotReopened(terms.restore_failed_panes));
         // Deep-link from "Open in Build →" (Creative Studio): ?focus=<id>
         // brings that terminal to the front + centers it so the user lands
         // right on the pane they came to watch. Read window.location to avoid a
@@ -957,12 +967,18 @@ export default function TerminalsPage() {
           );
           if (cancelled) return;
           if (typeof document !== "undefined" && document.visibilityState === "hidden") continue;
-          let again: { terminals: TerminalInfo[]; restoring?: string[]; restore_failed?: unknown };
+          let again: {
+            terminals: TerminalInfo[];
+            restoring?: string[];
+            restore_failed?: unknown;
+            restore_failed_panes?: unknown;
+          };
           try {
             again = await get<{
               terminals: TerminalInfo[];
               restoring?: string[];
               restore_failed?: unknown;
+              restore_failed_panes?: unknown;
             }>("/terminals");
           } catch {
             continue;
@@ -981,6 +997,7 @@ export default function TerminalsPage() {
           const nowFailed = decodeRestoreFailed(again.restore_failed);
           setRestoringIds(stillRestoring);
           setRestoreFailed(nowFailed);
+          setNotReopened(decodeNotReopened(again.restore_failed_panes));
           waitingFor = [...stillRestoring, ...(nowFailed?.ids ?? [])];
         }
       } catch (e) {
@@ -1077,6 +1094,71 @@ export default function TerminalsPage() {
     },
     [bringToFront],
   );
+
+  /** Third plan TM3 + TM19: a terminal from before the restart leaves the
+   *  "couldn't be reopened" list (it reopened, or was closed). */
+  const dropNotReopened = useCallback((id: string) => {
+    setNotReopened((prev) => prev.filter((p) => p.id !== id));
+    setRestoreFailed((prev) => {
+      if (!prev || !prev.ids.includes(id)) return prev;
+      const ids = prev.ids.filter((x) => x !== id);
+      const count = prev.count - 1;
+      if (count <= 0) return null;
+      return { count, ids, reason: count === 1 ? "its shell didn't start" : prev.reason };
+    });
+  }, []);
+
+  /** "Try again": the daemon reopens it under its id, with its history
+   *  (`POST /terminals/not-reopened/{id}/retry`). Null once it is open, else
+   *  the plain sentence the row shows. */
+  const retryNotReopened = useCallback(
+    async (id: string): Promise<string | null> => {
+      try {
+        const row = await post<TerminalInfo>(`/terminals/not-reopened/${encodeURIComponent(id)}/retry`);
+        setOffline(false);
+        dropNotReopened(id);
+        if (row?.id) adoptPane(row);
+        return null;
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 0) setOffline(true);
+        if (e instanceof ApiError && e.status === 404) {
+          dropNotReopened(id);
+          return null;
+        }
+        const f = failureOf(e);
+        return serverSentence(f) ? f.message ?? "" : couldnt("reopen this terminal", f);
+      }
+    },
+    [adoptPane, dropNotReopened],
+  );
+
+  /** "Close" (the row asked first): the daemon forgets it and the history
+   *  kept for it, so the next start does not try it again
+   *  (`DELETE /terminals/not-reopened/{id}`). */
+  const forgetNotReopened = useCallback(
+    async (id: string): Promise<string | null> => {
+      try {
+        await del(`/terminals/not-reopened/${encodeURIComponent(id)}`);
+        setOffline(false);
+        dropNotReopened(id);
+        return null;
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 0) setOffline(true);
+        if (e instanceof ApiError && e.status === 404) {
+          dropNotReopened(id);
+          return null;
+        }
+        const f = failureOf(e);
+        return serverSentence(f) ? f.message ?? "" : couldnt("close this terminal", f);
+      }
+    },
+    [dropNotReopened],
+  );
+
+  const notReopenedList =
+    notReopened.length > 0 ? (
+      <NotReopenedList panes={notReopened} onRetry={retryNotReopened} onClose={forgetNotReopened} />
+    ) : undefined;
 
   /** Third plan TM5 (G16): a Launch menu "With Iron Jarvis's tools" row,
    *  after its boxes were ticked: the daemon makes the NEW terminal with
@@ -1365,6 +1447,7 @@ export default function TerminalsPage() {
                 busy={busy}
                 reopening={restoringIds.length}
                 restoreFailed={restoreFailed ? restoreFailedWords(restoreFailed) : undefined}
+                notReopened={notReopenedList}
               />
             );
             return listSlot ? (
@@ -1430,6 +1513,8 @@ export default function TerminalsPage() {
                     {restoreFailed && (
                       // v1.418.1: the daemon gave up reopening the panes from
                       // before the restart — one quiet line, then the door.
+                      // (Third plan TM3: each one's Try again / Close is in
+                      // the list of terminals beside it.)
                       <p
                         role="status"
                         data-testid="build-restore-failed"

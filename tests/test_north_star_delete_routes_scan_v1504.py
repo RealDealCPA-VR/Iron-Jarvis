@@ -28,6 +28,12 @@ ALLOWED: dict[str, str] = {
     # -- not a stored record
     "DELETE /mcp": "closes a live connection from an outside tool; nothing is stored",
     "DELETE /terminals/{term_id}": "ends a running terminal; nothing is stored",
+    # Third fix plan (TM19): "Close" on a terminal that could not be reopened
+    # after a restart. Its kept output goes, as it does when any terminal is
+    # closed; the user pressed Close on that one terminal.
+    "DELETE /terminals/not-reopened/{term_id}": (
+        "closes a terminal that could not be reopened; its kept output goes with it, as for any closed terminal"
+    ),
     "DELETE /build/sessions/{thread_id}/resume-when-ready": "clears a wait flag; nothing is removed",
     # -- already recoverable another way
     "DELETE /sessions/{session_id}": "moves the run's files and record to the app's trash (v1.504.0, plan 4.2)",

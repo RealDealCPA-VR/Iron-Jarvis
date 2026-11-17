@@ -239,6 +239,7 @@ export function PaneRail({
   now,
   reopening = 0,
   restoreFailed,
+  notReopened,
 }: {
   panes: RailPane[];
   focusedId: string | null;
@@ -258,6 +259,10 @@ export function PaneRail({
   /** v1.418.1: the sentence for panes the daemon GAVE UP reopening after a
    *  restart (lib/restoreFailed), shown as one quiet line; absent = none. */
   restoreFailed?: string;
+  /** Third plan TM3 + TM19: those terminals one row each, with Try again and
+   *  Close (components/terminal/NotReopenedList). Shown in place of the
+   *  one-line sentence when the daemon names them. */
+  notReopened?: React.ReactNode;
 }) {
   const clock = now ?? Date.now();
   const blocked = panes.filter((p) => p.state === "blocked");
@@ -737,7 +742,9 @@ export function PaneRail({
             );
           })
         )}
-        {restoreFailed ? (
+        {notReopened ? (
+          notReopened
+        ) : restoreFailed ? (
           <p data-testid="rail-restore-failed" className="px-2.5 py-3 text-meta text-zinc-500">
             {restoreFailed}
           </p>

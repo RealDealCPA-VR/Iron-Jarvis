@@ -465,7 +465,52 @@ function paintAuto(on: boolean): void {
   document.body.dataset["auto"] = on ? "on" : "off";
 }
 
+/**
+ * Third review SB12 (decision G20): the header's "Local only" pill. With "Start
+ * new chats local only" on, this sidebar's replies and its dictation stay on
+ * this PC or your own network; the pill says so (the setting is changed in
+ * Iron Jarvis, so this is a fact, not a switch). Made here, beside the "Tab
+ * allowed" pill, so the page needs nothing new.
+ */
+export const LOCAL_ONLY_PILL_ID = "local-only";
+export const LOCAL_ONLY_PILL_TITLE =
+  "Start new chats local only is on in Iron Jarvis, so replies and dictation here stay on this PC or your own network.";
+
+function localOnlyPill(): HTMLElement | null {
+  const found = document.getElementById(LOCAL_ONLY_PILL_ID);
+  if (found) return found;
+  const anchor = el.tabAllowed;
+  if (!anchor?.parentElement) return null;
+  const pill = document.createElement("span");
+  pill.className = "pill";
+  pill.id = LOCAL_ONLY_PILL_ID;
+  pill.hidden = true;
+  pill.textContent = "Local only";
+  pill.title = LOCAL_ONLY_PILL_TITLE;
+  anchor.insertAdjacentElement("afterend", pill);
+  return pill;
+}
+
+function paintLocalOnly(on: boolean): void {
+  const pill = localOnlyPill();
+  if (pill) pill.hidden = !on;
+}
+
+/**
+ * Third review SB1: the add-on's connection to Iron Jarvis as last painted
+ * (`null` before the first). When it comes back after a drop, the panel opens
+ * again, so Iron Jarvis tells it the truth: a reply still running, what was
+ * said so far, and a card still waiting to be answered.
+ */
+let lastBridgeState: string | null = null;
+
 function paintStatus(status: BridgeStatus): void {
+  const before = lastBridgeState;
+  lastBridgeState = status.state;
+  if (status.state === "connected" && before !== null && before !== "connected") {
+    // The same one sender as the mount's and a tab switch's open (SB4).
+    sendOpen().catch(() => false);
+  }
   const view = describe(status);
   if (el.state) {
     el.state.dataset["tone"] = view.tone;
@@ -697,6 +742,9 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       }
       // v1.270.0: the one switch. Absent (an older daemon) reads as off.
       paintAuto(payload["auto_allow"] === true);
+      // Third review SB12 (decision G20): "Start new chats local only" covers
+      // this sidebar. Absent (an older daemon) reads as not said.
+      paintLocalOnly(payload["local_only"] === true);
       // Third review SB6: the card's "Allow all page actions" is remembered
       // only once the daemon says the switch did turn on.
       if (allowAllPending && payload["auto_allow"] === true) {
@@ -834,6 +882,15 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
         say("error", text);
         return;
       }
+      // Third review SB10: Iron Jarvis refused THIS window's Send. Its bubble
+      // goes and its words go back into the box; the line below says why.
+      if (
+        payload["send_refused"] === true &&
+        payload["window"] === PANEL_WINDOW &&
+        lastSend !== null
+      ) {
+        takeBack(lastSend);
+      }
       streaming = null;
       // Third review SB8: only an error that ENDS the reply ends the turn here;
       // any other (an answer that came too late, a refused second Send) is a
@@ -964,8 +1021,47 @@ el.ask?.addEventListener("keydown", (event: KeyboardEvent) => {
   (press === "send" ? el.send : press === "steer" ? el.steer : el.stop)?.click();
 });
 
+/**
+ * Third review SB10: the last Send this panel made, until another replaces it,
+ * so a Send that did not go out, or that Iron Jarvis refused (still working, too
+ * many messages, a model or skill it cannot use), takes back the bubble it drew
+ * and puts the words back in the box. Nothing reads as sent that was not.
+ */
+interface LastSend {
+  box: string;
+  bubble: HTMLElement;
+  point: Pointed | null;
+  skill: string;
+  startedAt: number;
+}
+let lastSend: LastSend | null = null;
+
+/** SB10: undo a Send on screen: no bubble that reads as sent, the words back in the box. */
+function takeBack(send: LastSend): void {
+  if (lastSend === send) lastSend = null;
+  if (turnStartedAt === send.startedAt) turnStartedAt = 0;
+  send.bubble.remove();
+  if (el.ask) {
+    const now = el.ask.value;
+    // Whatever was typed since stays, after the words that came back.
+    el.ask.value = now.trim() ? `${send.box}\n${now}` : send.box;
+  }
+  // The message never left, so the element it pointed at is still meant.
+  if (send.point && pointed === null) {
+    pointed = send.point;
+    paintPointed();
+  }
+  // And so is the skill.
+  if (send.skill && !skillPick) {
+    skillPick = send.skill;
+    paintSkill();
+  }
+  refreshComposer();
+}
+
 function sendNow(): void {
-  let text = (el.ask?.value ?? "").trim();
+  const box = el.ask?.value ?? "";
+  let text = box.trim();
   // v1.454.0: the skill rides THIS Send — the one picked from the list, else a
   // message that starts with "/<a skill's exact name>" (the chat page's rule).
   let skill = skillPick;
@@ -1019,23 +1115,16 @@ function sendNow(): void {
   if (skill) {
     send["skill"] = skill;
   }
+  const mine: LastSend = { box, bubble: you, point, skill, startedAt };
+  lastSend = mine;
   void post(PANEL_ACTION_SEND, send).then((sent) => {
     if (!sent) {
       // v1.353.0 (G53 review): no turn started, so no start time is kept —
       // another window's turn this panel later sees must not borrow it.
-      if (turnStartedAt === startedAt) turnStartedAt = 0;
+      // Third review SB10: the bubble goes and the words come back (`takeBack`).
       setTurn(false);
+      takeBack(mine);
       say("error", "That did not reach Iron Jarvis — this browser is not connected.");
-      // The message never left, so the element it pointed at is still meant.
-      if (point && pointed === null) {
-        pointed = point;
-        paintPointed();
-      }
-      // And so is the skill.
-      if (skill && !skillPick) {
-        skillPick = skill;
-        paintSkill();
-      }
     }
   });
   refreshComposer();
@@ -1285,7 +1374,7 @@ function setVoiceState(state: VoiceState): void {
 
 function resetVoice(): void {
   teardownAudio();
-  dictationBase = "";
+  resetDictationText();
   setVoiceState("idle");
 }
 
@@ -1382,7 +1471,7 @@ async function startDictation(): Promise<void> {
   }
   voiceStream = stream;
   voiceCtx = ctx;
-  dictationBase = el.ask?.value ?? "";
+  beginDictationText();
   setVoiceState("listening");
   const started = await post(PANEL_ACTION_VOICE, { op: "start" });
   if (!started) {
@@ -1416,6 +1505,58 @@ function stopDictation(): void {
   });
 }
 
+/**
+ * Third review SB14: what this dictation last wrote into the box, the words it
+ * had heard then, words typed AFTER the dictated part while it ran, and the
+ * heard words already counted into `dictationBase` (after an edit elsewhere in
+ * the box). The box always reads base + heard + typed: a frame never replaces
+ * what the person typed while the dictation ran.
+ */
+let dictationWritten = "";
+let dictationHeard = "";
+let dictationTyped = "";
+let dictationConsumed = "";
+
+/** SB14: no dictation writing the box. */
+function resetDictationText(): void {
+  dictationBase = "";
+  dictationWritten = "";
+  dictationHeard = "";
+  dictationTyped = "";
+  dictationConsumed = "";
+}
+
+/** SB14: a new dictation writes after what the box holds now. */
+function beginDictationText(): void {
+  dictationBase = el.ask?.value ?? "";
+  dictationWritten = dictationBase;
+  dictationHeard = "";
+  dictationTyped = "";
+  dictationConsumed = "";
+}
+
+/** SB14: `heard` without the words already counted into the box's own text. */
+export function heardAfter(heard: string, consumed: string): string {
+  if (!consumed) return heard;
+  const said = heard.split(/\s+/).filter(Boolean);
+  const kept = consumed.split(/\s+/).filter(Boolean);
+  let n = 0;
+  while (n < said.length && n < kept.length && said[n] === kept[n]) n++;
+  return said.slice(n).join(" ");
+}
+
+/** The box's text: what came before, the dictated words, then what was typed after. */
+export function dictatedBox(base: string, heard: string, typed: string): string {
+  const head = base.replace(/\s+$/, "");
+  const words = head && heard ? `${head} ${heard}` : head || heard;
+  return words + typed;
+}
+
+/** SB14: the line for a dictation Iron Jarvis ended while the microphone was open. */
+export const DICTATION_LIMIT_WORDS =
+  "Dictation stopped: it reached the longest a dictation can be. What was heard is in the box.";
+export const DICTATION_ENDED_WORDS = "Iron Jarvis ended the dictation. What was heard is in the box.";
+
 /** Paint the dictation so far into the box; the final frame hands the box back. */
 function applyTranscript(payload: Record<string, unknown>): void {
   if (payload["listening"] === true && voiceState === "idle") {
@@ -1426,12 +1567,33 @@ function applyTranscript(payload: Record<string, unknown>): void {
   const partial = typeof payload["partial"] === "string" ? (payload["partial"] as string) : "";
   const heard = [text, partial].filter((s) => s.trim()).join(" ").trim();
   if (el.ask && (heard || payload["final"] === true)) {
-    const base = dictationBase.replace(/\s+$/, "");
-    el.ask.value = base && heard ? `${base} ${heard}` : base || heard;
+    // Third review SB14: never wipe what was typed while the dictation ran.
+    const now = el.ask.value;
+    if (now !== dictationWritten) {
+      if (dictationWritten && now.startsWith(dictationWritten)) {
+        // Typed after the dictated words: kept after them.
+        dictationTyped += now.slice(dictationWritten.length);
+      } else {
+        // Edited elsewhere: the box as it is now is the base, and the words
+        // already in it are not written a second time.
+        dictationBase = now;
+        dictationTyped = "";
+        dictationConsumed = dictationHeard;
+      }
+    }
+    el.ask.value = dictatedBox(dictationBase, heardAfter(heard, dictationConsumed), dictationTyped);
+    dictationWritten = el.ask.value;
+    dictationHeard = heard;
   }
   if (payload["final"] === true) {
-    dictationBase = "";
+    // Third review SB14: Iron Jarvis ended it (its size limit) while this
+    // panel was still listening: the microphone is released and the line
+    // says why. A dictation the person stopped already released it.
+    const endedHere = voiceState === "listening";
+    teardownAudio();
+    resetDictationText();
     setVoiceState("idle");
+    if (endedHere) say("tool", payload["limit"] === true ? DICTATION_LIMIT_WORDS : DICTATION_ENDED_WORDS);
     el.ask?.focus();
   } else {
     refreshComposer();

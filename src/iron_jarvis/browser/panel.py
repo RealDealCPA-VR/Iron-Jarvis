@@ -278,7 +278,6 @@ PANEL_TURN_WINDOW_S = 60.0
 #: How long a Send waits for the reply before it to finish tidying up once
 #: its `done` has been shown; past it the Send is refused as before.
 END_TIDY_WAIT_S = 5.0
-
 PANEL_TURNS_PER_WINDOW = 12
 
 
@@ -655,6 +654,36 @@ def failure_sentence(title: object, fix: object) -> str:
     return f"{head} {f}" if f else head
 
 
+class _ReplyRoute:
+    """Third review SB1: "the running reply", as an address for
+    :meth:`PanelTurns.emit`. ``origin`` is the connection the frame's caller
+    holds (the one the reply started on); the frame goes to whichever
+    connections the sidebar is on when it is sent (:meth:`PanelTurns._reply_conns`)."""
+
+    __slots__ = ("origin",)
+
+    def __init__(self, origin: Any) -> None:
+        self.origin = origin.origin if isinstance(origin, _ReplyRoute) else origin
+
+
+#: Third review SB7: the longest a dictation's words may take to come back
+#: from a speech service before the sidebar is told it took too long. A bound,
+#: so a hung service never holds a dictation open for ever; the add-on's
+#: connection is never held by it at all (the transcription is its own task).
+VOICE_TRANSCRIBE_TIMEOUT_S = 180.0
+
+#: SB7: a dictation started while the last one is still being written down.
+VOICE_BUSY = (
+    "Iron Jarvis is still writing down the last dictation. Wait for it to"
+    " appear in the box, then try again."
+)
+#: SB7: the speech service did not answer inside :data:`VOICE_TRANSCRIBE_TIMEOUT_S`.
+VOICE_TOO_SLOW = (
+    "The speech service took too long to write down the dictation, so it was"
+    " stopped. Try again, or type the message."
+)
+
+
 class PanelTurns:
     """One panel conversation: start it, narrate it, stop it, answer its asks.
 
@@ -775,6 +804,14 @@ class PanelTurns:
         #: only: an older add-on's "Allow all page actions" is exactly that
         #: Allow followed by the switch, which must not turn on.
         self._risk_allowed_unnamed = False
+        #: Third review SB1: the cards of the running reply that are up, by id,
+        #: with the frame each was shown with — so a panel that opens (or
+        #: re-opens on a new connection) while one waits is shown it again and
+        #: can answer it. An id leaves when it is answered or its reply ends.
+        self._cards: dict[str, dict[str, Any]] = {}
+        #: Third review SB7: the dictation being written down by a speech
+        #: service, as its own task (never on the socket's read loop).
+        self._voice_task: asyncio.Task | None = None
 
     # --- narration --------------------------------------------------------
 
@@ -827,10 +864,49 @@ class PanelTurns:
             self._segment = [str(body["live"].get("answer") or "")]
         if conn is None:
             return
+        # Third review SB1: a running reply's frames go to the connection(s)
+        # the sidebar is on NOW, looked up at send time — never only the one the
+        # reply started on, which a restarted worker or a replaced socket left
+        # behind. The bookkeeping above runs once whatever the count.
+        targets = self._reply_conns(conn.origin) if isinstance(conn, _ReplyRoute) else [conn]
+        for target in targets:
+            try:
+                await target.send(P.panel_event_frame(event, payload))
+            except Exception:  # noqa: BLE001 — narration must never break the socket
+                logger.debug("panel event send failed (%s)", event, exc_info=True)
+
+    def _reply_conns(self, origin: Any) -> list[Any]:
+        """Third review SB1: where a running reply's frame goes at this moment.
+
+        The connection the reply started on (or a panel re-opened on since,
+        :attr:`_conn`), every open sidebar window's connection, and the
+        add-on's live connection as the browser backend holds it now; each
+        once, and none that is closed. Every window of one browser shares the
+        add-on's one socket (its worker hands a frame to every window), so the
+        usual answer is exactly one connection: the live one."""
+        out: list[Any] = []
+        for target in (origin, self._conn, *self._windows.values(), self._live_conn()):
+            if target is None or getattr(target, "closed", False) is True:
+                continue
+            if any(target is seen for seen in out):
+                continue
+            out.append(target)
+        return out
+
+    def _live_conn(self) -> Any:
+        """SB1: the add-on's authoritative, paired, open connection, or None."""
+        backend = getattr(getattr(self.platform, "browser", None), "backend", None)
+        if backend is None:
+            return None
+        from .extension_backend import ExtensionConnection
+
         try:
-            await conn.send(P.panel_event_frame(event, payload))
-        except Exception:  # noqa: BLE001 — narration must never break the socket
-            logger.debug("panel event send failed (%s)", event, exc_info=True)
+            conn = backend.connection
+        except Exception:  # noqa: BLE001 — a stand-in backend: no live socket
+            return None
+        if isinstance(conn, ExtensionConnection) and conn.paired and not conn.closed:
+            return conn
+        return None
 
     # --- the action vocabulary -------------------------------------------
 
@@ -851,6 +927,11 @@ class PanelTurns:
             # SB13: a window that opens or sends is a window that is open.
             self._window_open(params.get("window"), conn)
         if act == P.PANEL_ACTION_OPEN:
+            # Third review SB1: a panel opening while a reply runs is where that
+            # reply talks from now on (the connection it started on may be gone:
+            # a restarted worker, a replaced socket).
+            if self.running:
+                self._conn = conn
             # v1.270.0: the panel's remembered switch setting rides the open
             # (a bool, or absent). Applied BEFORE the state frame so the header
             # paints the setting the user chose, not a flag the browser restart
@@ -883,6 +964,9 @@ class PanelTurns:
             if notice:
                 view["notice"] = notice
             await self.emit(conn, P.PANEL_EVENT_HISTORY, view)
+            # SB1: a card the running reply waits on is shown again, so it can
+            # be answered from this panel (the daemon still holds it).
+            await self._show_waiting_cards(conn)
             # v1.454.0: the skills the "/" list offers. A dictionary read of
             # the registry (no file, no probe), so it rides the open inline.
             await self.emit(conn, P.PANEL_EVENT_SKILLS, self.skills_view())
@@ -925,6 +1009,7 @@ class PanelTurns:
                 model=str(params.get("model") or "").strip(),
                 pointed=pointed_from(params.get("pointed")),
                 skill=str(params.get("skill") or "").strip()[:PANEL_SKILL_NAME_CHARS],
+                window=self._window_name(params.get("window")),
             )
             return
         if act == P.PANEL_ACTION_STOP:
@@ -954,6 +1039,9 @@ class PanelTurns:
             # A close that names no window (an older add-on) stops as before.
             if self._window_closed(params.get("window")):
                 return
+            # SB7: a dictation nobody can see any more is dropped, its
+            # transcription with it.
+            self._cancel_voice()
             if self._turn_id and TURNS.stop(self._turn_id):
                 self._stop_asked = True
                 self._closed_stop = True
@@ -1019,6 +1107,28 @@ class PanelTurns:
         self._set_auto_allow(on)
         return self._auto_allowed() != before
 
+    async def _show_waiting_cards(self, conn: Any) -> None:
+        """SB1 (third review): show ``conn`` every card the running reply is
+        still waiting on, exactly as it was first shown. A card already
+        answered, or of a reply asked to stop, is not shown again."""
+        if not self._cards:
+            return
+        if not self.running or self._stop_requested():
+            self._cards.clear()
+            return
+        from ..daemon.routes.chat import _approvals
+
+        try:
+            waiting = set(_approvals(SimpleNamespace(platform=self.platform)).pending_ids())
+        except Exception:  # noqa: BLE001 — an unreadable registry shows nothing again
+            logger.debug("panel: waiting cards could not be read", exc_info=True)
+            return
+        for approval_id, payload in list(self._cards.items()):
+            if approval_id not in waiting:
+                self._cards.pop(approval_id, None)
+                continue
+            await self.emit(conn, P.PANEL_EVENT_APPROVAL, dict(payload))
+
     def _stop_requested(self) -> bool:
         """SB2: was the running (or last) reply asked to stop — from this
         sidebar, or through the turn's own stop from anywhere else?"""
@@ -1077,20 +1187,21 @@ class PanelTurns:
         )
         what = describe_browser_call(name, safe_args)
         reason = " ".join(str(getattr(req, "reason", "") or "").split())
-        await self.emit(
-            self._conn,
-            P.PANEL_EVENT_APPROVAL,
-            {
-                "id": ap_id,
-                "tool": name,
-                "text": (
-                    f"Iron Jarvis wants to {what}, and stops to ask because {reason}. Allow it?"
-                    if reason
-                    else f"Iron Jarvis wants to {what}. Allow it?"
-                ),
-                "floor": True,
-            },
-        )
+        card = {
+            "id": ap_id,
+            "tool": name,
+            "text": (
+                f"Iron Jarvis wants to {what}, and stops to ask because {reason}. Allow it?"
+                if reason
+                else f"Iron Jarvis wants to {what}. Allow it?"
+            ),
+            "floor": True,
+        }
+        # SB1 (third review): kept so a panel that opens while it waits is
+        # shown it again; sent to the connection the sidebar is on NOW. It
+        # leaves ``_cards`` once the registry no longer holds it.
+        self._cards[ap_id] = dict(card)
+        await self.emit(_ReplyRoute(self._conn), P.PANEL_EVENT_APPROVAL, card)
         note.asked()
         # SB2 (third review): the wait ends on the card's answer OR the
         # reply's Stop, whichever comes first — one wait on both, woken by the
@@ -1323,7 +1434,7 @@ class PanelTurns:
         elif op == "stop":
             await self._voice_stop(conn)
         elif op == "cancel":
-            self._voice_session = None
+            self._cancel_voice()
         else:
             await self.emit(
                 conn,
@@ -1331,8 +1442,52 @@ class PanelTurns:
                 {"text": f"Iron Jarvis does not know the voice step {op!r}.", "reason": "voice_failed"},
             )
 
+    def _cancel_voice(self) -> None:
+        """Drop the dictation in progress and (SB7) a transcription still
+        running for the last one: nothing of either reaches the box."""
+        self._voice_session = None
+        task, self._voice_task = self._voice_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _local_only(self) -> bool:
+        """Third review SB12 (decision G20): "Start new chats local only"
+        (``chat_new_local_only``) covers the sidebar: its replies run Local
+        only and its dictation never goes to a speech service off this
+        network. Read live, so a change in Settings applies to the next reply."""
+        cfg = getattr(self.platform, "config", None)
+        return getattr(cfg, "chat_new_local_only", False) is True
+
+    def _voice_kept_here(self) -> str:
+        """SB12: under Local only, the sentence refusing a speech service off
+        this network ("" when dictation may go where it is set to). The
+        bundled offline model never leaves this PC; anything else is judged
+        by the voice route's own rule (``routes.voice._refuse_off_network``),
+        in its own words."""
+        if not self._local_only():
+            return ""
+        backend_of = getattr(self.deps, "_voice_backend", None)
+        backend = backend_of() if callable(backend_of) else None
+        if not backend:
+            return ""
+        from ..daemon.routes.voice import SpeechKeptHere, _refuse_off_network
+
+        try:
+            _refuse_off_network(str(backend[0] or ""), str(backend[1] or ""))
+        except SpeechKeptHere as exc:
+            return str(exc)
+        return ""
+
     async def _voice_start(self, conn: Any) -> None:
         self._voice_session = None
+        task = self._voice_task
+        if task is not None and not task.done():
+            # SB7: one dictation writes the box at a time. The last one's words
+            # are still on their way; a second must not race them.
+            await self.emit(
+                conn, P.PANEL_EVENT_ERROR, {"text": VOICE_BUSY, "reason": "voice_busy"}
+            )
+            return
         cap = self.voice_view()
         if not cap.get("available"):
             await self.emit(
@@ -1344,7 +1499,22 @@ class PanelTurns:
                 },
             )
             return
-        if cap.get("backend") == "local":
+        use_local = cap.get("backend") == "local"
+        if not use_local:
+            # SB12: under "Start new chats local only", never a speech service
+            # off this network: the built-in offline model when it is here,
+            # else refused before a word is recorded.
+            kept = self._voice_kept_here()
+            if kept:
+                path_of = getattr(self.deps, "_vosk_model_path", None)
+                if callable(path_of) and path_of() is not None:
+                    use_local = True
+                else:
+                    await self.emit(
+                        conn, P.PANEL_EVENT_ERROR, {"text": kept, "reason": "voice_unavailable"}
+                    )
+                    return
+        if use_local:
             loader = getattr(self.deps, "_vosk_model", None)
             model = await asyncio.to_thread(loader) if callable(loader) else None
             if model is None:
@@ -1404,59 +1574,102 @@ class PanelTurns:
         else:
             session.chunks.append(raw)
         if session.total >= self.VOICE_MAX_SESSION_BYTES:
-            await self._voice_stop(conn)
+            # Third review SB14: the daemon ends it at its size limit, and the
+            # final frame says so (`limit`), so the panel releases the
+            # microphone and tells the person why.
+            await self._voice_stop(conn, limit=True)
 
-    async def _voice_stop(self, conn: Any) -> None:
+    async def _voice_stop(self, conn: Any, *, limit: bool = False) -> None:
         session = self._voice_session
         self._voice_session = None
         if session is None:
             return
+        extra: dict[str, Any] = {"limit": True} if limit else {}
         if session.mode == "stream":
             final = str(json.loads(await asyncio.to_thread(session.rec.FinalResult)).get("text") or "").strip()
             text = f"{session.text} {final}".strip()
             await self.emit(
                 conn,
                 P.PANEL_EVENT_TRANSCRIPT,
-                {"text": text, "partial": "", "final": True, "backend": session.backend},
+                {"text": text, "partial": "", "final": True, "backend": session.backend, **extra},
             )
             return
         pcm = b"".join(session.chunks)
         if not pcm:
             await self.emit(
-                conn, P.PANEL_EVENT_TRANSCRIPT, {"text": "", "partial": "", "final": True, "backend": session.backend}
+                conn,
+                P.PANEL_EVENT_TRANSCRIPT,
+                {"text": "", "partial": "", "final": True, "backend": session.backend, **extra},
             )
             return
+        # Third review SB7: the speech service is asked from ITS OWN TASK. This
+        # handler is awaited by the add-on socket's read loop, so waiting here
+        # held every other frame on that connection (a page action another
+        # chat was running could time out) for as long as the service took.
+        # The words are sent when they come back, to the connection the
+        # sidebar is on then; a new start waits for them (`_voice_start`).
+        self._voice_task = asyncio.ensure_future(
+            self._transcribe(_ReplyRoute(conn), pcm, session.backend, extra)
+        )
+
+    async def _transcribe(
+        self, route: "_ReplyRoute", pcm: bytes, backend: str, extra: dict[str, Any]
+    ) -> None:
+        """SB7: one dictation clip through the shared transcriber, bounded by
+        :data:`VOICE_TRANSCRIBE_TIMEOUT_S`; its words (or why there are none)
+        are the dictation's final frame. Never raises."""
         import base64
 
         from fastapi import HTTPException
 
-        from ..daemon.routes.voice import transcribe_clip
+        from ..daemon.routes import voice as _voice_routes
+        from ..providers.egress import LocalOnlyRefused
 
+        kwargs: dict[str, Any] = {}
+        if self._local_only():
+            # SB12: "Start new chats local only" covers the sidebar's dictation.
+            kwargs["local_only"] = True
         try:
-            result = await transcribe_clip(
-                self.deps, audio_b64=base64.b64encode(_wav_bytes(pcm)).decode("ascii"), mime="audio/wav"
+            result = await asyncio.wait_for(
+                _voice_routes.transcribe_clip(
+                    self.deps, audio_b64=base64.b64encode(_wav_bytes(pcm)).decode("ascii"),
+                    mime="audio/wav", **kwargs,
+                ),
+                VOICE_TRANSCRIBE_TIMEOUT_S,
             )
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            await self.emit(route, P.PANEL_EVENT_ERROR, {"text": VOICE_TOO_SLOW, "reason": "voice_failed"})
+            return
         except HTTPException as exc:
-            await self.emit(conn, P.PANEL_EVENT_ERROR, {"text": str(exc.detail), "reason": "voice_failed"})
+            await self.emit(route, P.PANEL_EVENT_ERROR, {"text": str(exc.detail), "reason": "voice_failed"})
+            return
+        except LocalOnlyRefused as exc:
+            # SB12: the voice route's own sentence (nothing was sent).
+            await self.emit(route, P.PANEL_EVENT_ERROR, {"text": str(exc), "reason": "voice_failed"})
             return
         except Exception as exc:  # noqa: BLE001 — an honest failure, never silence
             logger.debug("panel dictation failed", exc_info=True)
             await self.emit(
-                conn, P.PANEL_EVENT_ERROR, {"text": f"Transcription failed: {exc}"[:300], "reason": "voice_failed"}
+                route, P.PANEL_EVENT_ERROR, {"text": f"Transcription failed: {exc}"[:300], "reason": "voice_failed"}
             )
             return
         await self.emit(
-            conn,
+            route,
             P.PANEL_EVENT_TRANSCRIPT,
             {
                 "text": str(result.get("text") or "").strip(),
                 "partial": "",
                 "final": True,
-                "backend": str(result.get("backend") or session.backend),
+                "backend": str(result.get("backend") or backend),
+                **extra,
             },
         )
 
-    async def _refuse_pick(self, conn: Any, provider: str, model: str) -> bool:
+    async def _refuse_pick(
+        self, conn: Any, provider: str, model: str, *, mark: dict[str, Any] | None = None
+    ) -> bool:
         """Whether a (provider, model) pick must be refused — and say why if so.
 
         Checked against the daemon's own list BEFORE a turn starts. The router
@@ -1480,6 +1693,7 @@ class PanelTurns:
                     "text": f"{model or provider} is not on Iron Jarvis's model list any"
                     " more. Pick another model in the sidebar.",
                     "reason": "model_unknown",
+                    **(mark or {}),
                 },
                 ends_turn=True,  # SB8: the Send it refuses never started
             )
@@ -1492,6 +1706,7 @@ class PanelTurns:
                     "text": f"{model} ({provider}) is not connected right now. Pick"
                     " another model, or connect it in Jarvis → Connections.",
                     "reason": "model_unavailable",
+                    **(mark or {}),
                 },
                 ends_turn=True,  # SB8: the Send it refuses never started
             )
@@ -1507,7 +1722,14 @@ class PanelTurns:
         model: str = "",
         pointed: dict[str, Any] | None = None,
         skill: str = "",
+        window: str = "",
     ) -> None:
+        # Third review SB10: every refusal of this Send says it was this Send,
+        # from which window, so that window puts the words back in its box and
+        # takes back the bubble it drew (every window gets the frame).
+        mark: dict[str, Any] = {"send_refused": True}
+        if window:
+            mark["window"] = window
         if skill and not text:
             # A skill picked alone, the chat page's own words for it (the lane
             # reads them as "no arguments", ``chat_turn.skill_invocation_args``).
@@ -1516,7 +1738,7 @@ class PanelTurns:
             text = SKILL_ALONE.format(name=skill)
         if not text:
             await self.emit(
-                conn, P.PANEL_EVENT_ERROR, {"text": "There was nothing to send."},
+                conn, P.PANEL_EVENT_ERROR, {"text": "There was nothing to send.", **mark},
                 ends_turn=not self.running,  # SB8: the Send it refuses never started
             )
             return
@@ -1538,25 +1760,27 @@ class PanelTurns:
                 P.PANEL_EVENT_ERROR,
                 {
                     "text": "Iron Jarvis is still working on the last message."
-                    " Stop it first."
+                    " Stop it first.",
+                    **mark,
                 },
             )
             return
         refusal = self._over_budget()
         if refusal:
             await self.emit(conn, P.PANEL_EVENT_ERROR, {"text": refusal,
-                                                        "reason": "rate_limited"},
+                                                        "reason": "rate_limited", **mark},
                             ends_turn=True)  # SB8: the Send it refuses never started
             return
         # v1.267.0: the pick is checked before anything is spent on the turn.
-        if await self._refuse_pick(conn, provider, model):
+        if await self._refuse_pick(conn, provider, model, mark=mark):
             return
         # v1.454.0: so is the skill — the lane's own refusal of an unknown
         # skill is an HTTP 404, which here would read as a crash.
         skill_refusal = self._skill_refusal(skill)
         if skill_refusal:
             await self.emit(
-                conn, P.PANEL_EVENT_ERROR, {"text": skill_refusal, "reason": "skill_unknown"},
+                conn, P.PANEL_EVENT_ERROR,
+                {"text": skill_refusal, "reason": "skill_unknown", **mark},
                 ends_turn=True,  # SB8: the Send it refuses never started
             )
             return
@@ -1576,6 +1800,7 @@ class PanelTurns:
         # would only widen what this panel may resolve.
         self._offered.clear()
         self._floor_offered.clear()
+        self._cards.clear()
         # SB2/SB13: a new reply has been asked to stop by nobody yet.
         self._stop_asked = False
         self._closed_stop = False
@@ -1606,6 +1831,9 @@ class PanelTurns:
             "tab_allowed": self._tab_allowed(),
             # v1.270.0: the one switch, as the daemon holds it.
             "auto_allow": self._auto_allowed(),
+            # Third review SB12 (G20): "Start new chats local only" covers the
+            # sidebar; the panel shows it is on (it is changed in Settings).
+            "local_only": self._local_only(),
         }
 
     def _tab_allowed(self) -> bool:
@@ -1871,6 +2099,7 @@ class PanelTurns:
                     # v1.402.0: settled by the switch the person just turned
                     # on — a grant, not a second answer (the autonomy metrics).
                     _resolve_as(registry, approval_id, "once", actor="grant")
+                    self._cards.pop(approval_id, None)  # SB1: answered
                 except Exception:  # noqa: BLE001 — an already-answered card
                     logger.debug("auto-allow: card %s not resolvable", approval_id, exc_info=True)
         # SB4: every open window paints the new value, not only the one pressed.
@@ -2062,6 +2291,7 @@ class PanelTurns:
                 {"text": "That request was already answered or has expired."},
             )
             return
+        self._cards.pop(approval_id, None)  # SB1: answered, never shown again
         if floor and decision == "once" and not named:
             # SB6: an older add-on's "Allow all page actions" is this Allow
             # and then the switch; the next action reads this mark.
@@ -2088,7 +2318,7 @@ class PanelTurns:
         self._steers.clear()
         for note in taken:
             await self.emit(
-                self._conn,
+                _ReplyRoute(self._conn),  # SB1: wherever the sidebar is now
                 P.PANEL_EVENT_STEERED,
                 {"id": note["id"], "text": note["text"]},
             )
@@ -2145,6 +2375,11 @@ class PanelTurns:
             # (``chat_turn.skill_playbook``: the skill's body with the turn's
             # words as its arguments, scanned when it is not the user's own).
             skill=skill,
+            # Third review SB12 (decision G20): "Start new chats local only"
+            # covers the sidebar — the same field a new Chat page chat sends,
+            # so the lane's Local only routing and its refusals (in its own
+            # words, through the error frame) are the chat page's, unchanged.
+            local_only=self._local_only(),
         )
         # THE CEILING. Computed here, per turn, from the live registry, and
         # passed to the chat lane — which drops anything outside it BEFORE the
@@ -2212,7 +2447,7 @@ class PanelTurns:
             plain = "Iron Jarvis could not finish that."
             words = plain_failure(plain, exc)
             await self.emit(
-                conn,
+                _ReplyRoute(conn),  # SB1: wherever the sidebar is now
                 P.PANEL_EVENT_ERROR,
                 {"text": plain if words == plain else f"Iron Jarvis could not finish that: {words}"},
                 ends_turn=True,  # SB8: the reply's own end
@@ -2222,6 +2457,8 @@ class PanelTurns:
             reset_surface(surface_token)
             self._task = None
             self._turn_id = ""
+            # SB1: the reply's cards go with it.
+            self._cards.clear()
             # v1.270.0: a STOPPED turn reaches here with no `done` frame sent
             # and its exchange unwritten — the half-answer the user read is
             # written now, before the stop's own terminal frame below.
@@ -2241,7 +2478,7 @@ class PanelTurns:
                 # an older add-on and says a pending steer was not taken), but
                 # never as stopped.
                 await self.emit(
-                    conn, P.PANEL_EVENT_DONE,
+                    _ReplyRoute(conn), P.PANEL_EVENT_DONE,  # SB1: wherever the sidebar is now
                     {"reason": "failed" if ended_on_error else "stopped", "text": ""},
                 )
             # Anything still queued was never read by anybody. The `done`
@@ -2292,7 +2529,12 @@ class PanelTurns:
         words it streamed — a reply rewritten into the user's language, a tool
         call the model wrote as text after a cut-off. Ignored, the sidebar
         showed both versions, or the raw markup, and remembered them.
+
+        Third review SB1: every frame here belongs to the running reply, so it
+        goes to the connection(s) the sidebar is on when it is sent
+        (:class:`_ReplyRoute`), not only the one the reply started on.
         """
+        conn = _ReplyRoute(conn)
         if event == "reset":
             # The lane's `drop` (a retried round of a coding session takes back
             # only its own words, counted in code points) keeps the rest; with
@@ -2361,17 +2603,18 @@ class PanelTurns:
             # A card that lists steps (a form, v1.400.9) ends its list on its
             # own line; the question goes under it, not after the last step.
             ask = "\nAllow it?" if "\n" in what else ". Allow it?"
-            await self.emit(
-                conn,
-                P.PANEL_EVENT_APPROVAL,
-                {
-                    "id": approval_id,
-                    "tool": tool,
-                    "text": f"Iron Jarvis wants to {what}{ask}",
-                },
-            )
+            card = {
+                "id": approval_id,
+                "tool": tool,
+                "text": f"Iron Jarvis wants to {what}{ask}",
+            }
+            if approval_id:
+                # SB1: shown again to a panel that opens while it waits.
+                self._cards[approval_id] = dict(card)
+            await self.emit(conn, P.PANEL_EVENT_APPROVAL, card)
             return
         if event == "approval_resolved":
+            self._cards.pop(str(data.get("id") or ""), None)
             # v1.266.0: an "Allow for this tab" answer changes what the header
             # says about this tab. The lane records the grant BEFORE it emits
             # this frame, so the state painted here is a fact.

@@ -601,7 +601,10 @@ def test_a_session_id_is_not_transferable_between_panes(harness):
         token=other_token,
         session_id=session_id,
     )
-    assert response.status_code == 400, response.text
+    # Third fix plan (MC3): an id that was sent and is not this pane's (or is
+    # no longer known) is 404, the status that tells a client to start a new
+    # session; the words are the same, so nothing says which ids exist.
+    assert response.status_code == 404, response.text
     assert response.json()["detail"] == NO_SESSION_MESSAGE
 
 
@@ -1365,7 +1368,10 @@ def test_a_tool_that_explodes_is_a_json_rpc_error_not_a_500_page(harness):
     assert response.status_code == 500, response.text
     body = response.json()
     assert body["id"] == 78
-    assert "RuntimeError: the registry fell over" in body["error"]["message"]
+    # Third fix plan (MC8): a plain sentence, never the exception's name; the
+    # detail is in the log.
+    assert body["error"]["message"] == mcp_routes.TOOL_CALL_CRASH_MESSAGE
+    assert "RuntimeError" not in response.text
     assert "Traceback" not in response.text
 
 

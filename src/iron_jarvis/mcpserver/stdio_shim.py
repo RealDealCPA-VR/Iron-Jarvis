@@ -31,15 +31,35 @@ both are pinned by ``tests/test_mcp_server_v1238.py``, which asserts the names
 against the real constants and the parser against the real client's behaviour on
 the same body — a fallback ``try: import … except ImportError:`` was the first
 cut and it is worse, because a pin cannot fail against a fallback.
+
+**IT OUTLIVES A RESTART OF IRON JARVIS (MC3, third fix plan).** The door keeps
+sessions in memory and forgets them on every restart (every update) and after an
+idle hour, then answers each later call "no MCP session" (HTTP 400, JSON-RPC
+``-32600``; a daemon that follows the MCP spec more closely answers 404). The
+coding tool's own client never starts a new session over stdio, so the bridge
+does it: it keeps the tool's own ``initialize`` (and ``notifications/
+initialized``), replays them with NO session id, through the same token check,
+and repeats the refused call ONCE with the new id. The new session is rebuilt
+by the daemon from that handshake and the pane's grant as it is now. A daemon
+that does not answer at all (refused connection: it is restarting) is retried
+for a few seconds with a backoff (:data:`RETRY_DELAYS_S`), then the tool reads a
+plain sentence; a call that may have reached the daemon is never sent twice.
+
+**ONLY TO THIS PC, NEVER THROUGH A PROXY (MC7).** The bridge carries the pane's
+token, so the real transport ignores every proxy setting (environment and
+Windows) and refuses an address that is not this computer.
 """
 
 from __future__ import annotations
 
 import io
+import ipaddress
 import json
 import os
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, TextIO
@@ -63,14 +83,73 @@ PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 INTERNAL_ERROR = -32603
 
-#: What the shim says when it cannot reach the daemon at all.
-UNREACHABLE_MESSAGE = "cannot reach Iron Jarvis at {url}: {error}"
+#: What the shim says when the daemon did not answer and the call may have
+#: reached it (a read timed out, the connection dropped mid-answer). Never
+#: repeated: a tool could run twice.
+UNREACHABLE_MESSAGE = (
+    "cannot reach Iron Jarvis at {url}: no answer came back, so it is not known "
+    "whether the call was made. Check in Iron Jarvis before trying it again"
+)
+
+#: What it says when Iron Jarvis is not answering at all (nothing listening:
+#: it is restarting or closed), after :data:`RETRY_DELAYS_S`.
+NOT_ANSWERING_MESSAGE = (
+    "cannot reach Iron Jarvis at {url}: it is not answering right now (it may be "
+    "restarting), so the call was not made. Try again in a minute; if it keeps "
+    "happening, open Iron Jarvis"
+)
+
+#: What it says for an address that is not this computer (MC7). The pane's
+#: token is never sent there.
+NOT_THIS_PC_MESSAGE = (
+    "the address for Iron Jarvis's tools is not on this computer, so nothing was "
+    "sent: start this coding tool again from a Build terminal in Iron Jarvis"
+)
+
+#: What it says when a new session was started but speaks another protocol
+#: version than the one this coding tool agreed at its start (an update).
+PROTOCOL_CHANGED_MESSAGE = (
+    "Iron Jarvis was updated and its tools now need a fresh start of this coding "
+    "tool: the call was not made. Start the coding tool again"
+)
 
 #: What it says when it was started with no token in the environment.
 NO_TOKEN_MESSAGE = (
     f"{MCP_TOKEN_ENV} is not set: start this coding tool from a Build terminal in Iron "
     "Jarvis so the terminal token reaches it"
 )
+
+#: Waits between tries while Iron Jarvis is not answering (MC3): about 15 s in
+#: all, the time a restart takes, then the plain sentence. Short: the coding
+#: tool's model is waiting on this call.
+RETRY_DELAYS_S: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0, 8.0)
+
+#: The id the bridge gives its own replayed ``initialize``; its answer is read
+#: here and never written to the coding tool.
+REINIT_ID_PREFIX = "ironjarvis-bridge-reinit-"
+
+
+def is_loopback_url(url: str) -> bool:
+    """Is ``url`` an http(s) address on THIS computer (127.x, ::1, localhost)?
+
+    No name lookup: ``localhost`` is taken literally and any other name is
+    refused, so a name that resolves elsewhere cannot carry the token away.
+    """
+    try:
+        parts = urllib.parse.urlsplit(str(url or ""))
+        if parts.scheme not in ("http", "https"):
+            return False
+        host = (parts.hostname or "").strip().lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 @dataclass
@@ -82,6 +161,20 @@ class HttpReply:
     #: Header names LOWERCASED, because that is how the repository's own client
     #: reads ``mcp-session-id`` and a plain dict is not case-insensitive.
     headers: dict[str, str] = field(default_factory=dict)
+    #: For ``status == 0`` only. ``False``: the request certainly never left this
+    #: PC (the connection was refused, or the address was refused here). ``None``:
+    #: not known (it may have reached Iron Jarvis), so it is never repeated.
+    sent: bool | None = None
+    #: ``True`` when trying again in a moment may succeed (nothing listening).
+    retryable: bool = False
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is answered as it stands, never followed: following one would
+    carry the token's headers to wherever the answer points."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
 
 
 class UrllibPoster:
@@ -89,12 +182,23 @@ class UrllibPoster:
 
     A network failure is returned as an :class:`HttpReply` with status 0 rather
     than raised, so the caller has exactly one shape to relay.
+
+    NO PROXY, EVER (MC7): urllib's default opener honours ``HTTP_PROXY`` /
+    ``ALL_PROXY`` and the Windows proxy settings even for ``127.0.0.1``, and
+    builds that choice once per process. This opener has an empty
+    ``ProxyHandler`` and follows no redirect, and a target that is not this
+    computer is refused before anything is sent.
     """
 
+    def __init__(self) -> None:
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+
     def post(self, url: str, body: bytes, headers: dict[str, str], timeout: float) -> HttpReply:
+        if not is_loopback_url(url):
+            return HttpReply(status=0, text=NOT_THIS_PC_MESSAGE, headers={}, sent=False)
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            with self._opener.open(request, timeout=timeout) as response:
                 raw = response.read() or b""
                 return HttpReply(
                     status=int(getattr(response, "status", 200) or 200),
@@ -108,8 +212,14 @@ class UrllibPoster:
                 text=raw.decode("utf-8", "replace"),
                 headers={str(k).lower(): str(v) for k, v in (exc.headers or {}).items()},
             )
-        except Exception as exc:  # noqa: BLE001 — URLError, socket timeout, DNS…
-            return HttpReply(status=0, text=f"{type(exc).__name__}: {exc}", headers={})
+        except urllib.error.URLError as exc:
+            # Raised while CONNECTING or sending; a refused connection means
+            # nothing is listening, so the request never left this PC.
+            refused = isinstance(getattr(exc, "reason", None), ConnectionRefusedError)
+            return HttpReply(status=0, text=str(getattr(exc, "reason", exc)), headers={},
+                             sent=False if refused else None, retryable=refused)
+        except Exception as exc:  # noqa: BLE001 — a read timeout, a dropped answer
+            return HttpReply(status=0, text=str(exc), headers={})
 
 
 def payload_from_body(content_type: str, text: str) -> dict[str, Any] | None:
@@ -140,6 +250,15 @@ def payload_from_body(content_type: str, text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return decoded if isinstance(decoded, dict) else None
+
+
+def _protocol_of(reply: HttpReply) -> str:
+    """The ``protocolVersion`` an ``initialize`` answer agreed, or ``""``."""
+    decoded = payload_from_body((reply.headers or {}).get("content-type", ""), reply.text)
+    result = decoded.get("result") if isinstance(decoded, dict) else None
+    if isinstance(result, dict):
+        return str(result.get("protocolVersion") or "")
+    return ""
 
 
 def error_line(request_id: Any, code: int, message: str) -> str:
@@ -173,15 +292,26 @@ class StdioShim:
         *,
         poster: Any | None = None,
         timeout: float = DEFAULT_TIMEOUT_S,
+        sleep: Callable[[float], None] | None = None,
+        retry_delays: Iterable[float] | None = None,
     ) -> None:
         self.url = str(url or "")
         self.token = str(token or "")
         self.poster = poster if poster is not None else UrllibPoster()
         self.timeout = float(timeout)
+        #: Injected so a test drives the backoff with no real wait.
+        self.sleep = sleep if sleep is not None else time.sleep
+        self.retry_delays = tuple(RETRY_DELAYS_S if retry_delays is None else retry_delays)
         #: Captured from the ``initialize`` response and sent on every later
         #: request. Without it the daemon answers "send initialize first" to a
         #: harness that DID, and the failure reads as a broken server.
         self.session_id = ""
+        #: The coding tool's own handshake, kept to start a new session after
+        #: Iron Jarvis forgot this one (MC3), and the protocol version it agreed.
+        self._initialize: dict[str, Any] | None = None
+        self._initialized: dict[str, Any] | None = None
+        self._protocol_version = ""
+        self._reinits = 0
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -221,22 +351,108 @@ class StdioShim:
             return None if is_notification else error_line(
                 request_id, INVALID_REQUEST, NO_TOKEN_MESSAGE
             )
-        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        reply = self.poster.post(self.url, body, self._headers(), self.timeout)
-        session = (reply.headers or {}).get(SESSION_HEADER.lower(), "")
-        if session:
-            self.session_id = str(session).strip()
+        method = payload.get("method")
+        if method == "initialize" and not is_notification:
+            self._initialize = dict(payload)
+            # The tool's own start of a session: it carries no old id.
+            self.session_id = ""
+        elif method == "notifications/initialized" and is_notification:
+            self._initialized = dict(payload)
+        sent_session = self.session_id
+        reply = self._post(payload, retry=not is_notification)
         if is_notification:
             # The daemon answers a notification with an empty 202 and no body.
             # Even if it answered with one, a notification takes no reply.
             return None
-        if reply.status == 0:
-            return error_line(
-                request_id,
-                INTERNAL_ERROR,
-                UNREACHABLE_MESSAGE.format(url=self.url, error=reply.text),
-            )
+        if method == "initialize":
+            self._protocol_version = _protocol_of(reply)
+        elif sent_session and self._initialize is not None and self._session_lost(reply):
+            # MC3: Iron Jarvis restarted (or this session sat idle an hour) and
+            # forgot it. Start a new one from the tool's own handshake, then
+            # repeat THIS call once; never a loop.
+            refusal = self._reinitialise()
+            if refusal is not None:
+                return self._relay(request_id, refusal)
+            reply = self._post(payload, retry=True)
+        return self._relay(request_id, reply)
+
+    def _post(self, payload: dict[str, Any], *, retry: bool) -> HttpReply:
+        """One POST, capturing a session id from the answer. ``retry``: while
+        nothing is listening (the request certainly never left), try again
+        after each of :attr:`retry_delays`; any other answer is final."""
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        delays = list(self.retry_delays) if retry else []
+        while True:
+            reply = self.poster.post(self.url, body, self._headers(), self.timeout)
+            if not (reply.status == 0 and getattr(reply, "retryable", False) and delays):
+                break
+            self.sleep(delays.pop(0))
+        session = (reply.headers or {}).get(SESSION_HEADER.lower(), "")
+        if session:
+            self.session_id = str(session).strip()
+        return reply
+
+    @staticmethod
+    def _session_lost(reply: HttpReply) -> bool:
+        """Did the daemon answer that it does not know the session we sent?
+
+        Matched on the status and the JSON-RPC code, never the wording: 404 is
+        the MCP spec's answer for an expired session id; this daemon's door
+        answers 400 with ``-32600`` (``server.py``'s ``_door_refusal``)."""
+        if reply.status == 404:
+            return True
+        if reply.status != 400:
+            return False
         decoded = payload_from_body((reply.headers or {}).get("content-type", ""), reply.text)
+        error = decoded.get("error") if isinstance(decoded, dict) else None
+        return isinstance(error, dict) and error.get("code") == INVALID_REQUEST
+
+    def _reinitialise(self) -> HttpReply | None:
+        """Start a new session from the coding tool's own handshake (MC3).
+
+        Returns ``None`` when a new session is open (``session_id`` set), or the
+        answer to relay instead of repeating the call: a refusal at the token
+        check (a closed terminal's token), Iron Jarvis not answering, or a new
+        protocol version. Called only with a kept ``initialize``."""
+        self._reinits += 1
+        replay = dict(self._initialize or {})
+        replay["id"] = f"{REINIT_ID_PREFIX}{self._reinits}"
+        self.session_id = ""
+        reply = self._post(replay, retry=True)
+        decoded = payload_from_body((reply.headers or {}).get("content-type", ""), reply.text)
+        if not (reply.status == 200 and self.session_id and isinstance(decoded, dict)
+                and isinstance(decoded.get("result"), dict)):
+            self.session_id = ""
+            return reply
+        version = _protocol_of(reply)
+        if self._protocol_version and version and version != self._protocol_version:
+            self.session_id = ""
+            return HttpReply(status=0, text=PROTOCOL_CHANGED_MESSAGE, headers={}, sent=False)
+        self._post(self._initialized or {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                   retry=False)
+        return None
+
+    def _relay(self, request_id: Any, reply: HttpReply) -> str:
+        """The stdout line for one answer (an envelope, or an error naming why)."""
+        if reply.status == 0:
+            if getattr(reply, "sent", None) is False:
+                if getattr(reply, "retryable", False):
+                    message = NOT_ANSWERING_MESSAGE.format(url=self.url)
+                else:
+                    message = reply.text or NOT_ANSWERING_MESSAGE.format(url=self.url)
+            else:
+                message = UNREACHABLE_MESSAGE.format(url=self.url)
+            return error_line(request_id, INTERNAL_ERROR, message)
+        decoded = payload_from_body((reply.headers or {}).get("content-type", ""), reply.text)
+        if isinstance(decoded, dict) and decoded.get("jsonrpc") == "2.0" and \
+                str(decoded.get("id", "")).startswith(REINIT_ID_PREFIX):
+            # The answer to the bridge's own replay: worded for the tool, under
+            # the tool's own request id.
+            error = decoded.get("error") if isinstance(decoded.get("error"), dict) else {}
+            code = error.get("code")
+            return error_line(request_id, code if isinstance(code, int) else INTERNAL_ERROR,
+                              str(error.get("message") or decoded.get("detail") or
+                                  f"HTTP {reply.status}"))
         if isinstance(decoded, dict) and decoded.get("jsonrpc") == "2.0":
             # A real envelope — relayed BYTE-FAITHFULLY in content: re-serialised,
             # never rebuilt field by field, so a result this shim does not
@@ -295,6 +511,10 @@ def main(
     if not url:
         err.write(f"{MCP_URL_ENV} is not set and no URL was given\n")
         return 2
+    if not is_loopback_url(url):
+        # MC7: the pane's token is never sent off this computer.
+        err.write(NOT_THIS_PC_MESSAGE + "\n")
+        return 2
     factory = shim_factory if shim_factory is not None else StdioShim
     shim = factory(url, token)
     return shim.run(stdin if stdin is not None else _utf8_stdin(),
@@ -343,13 +563,18 @@ __all__ = [
     "DEFAULT_TIMEOUT_S",
     "MCP_TOKEN_ENV",
     "MCP_URL_ENV",
+    "NOT_ANSWERING_MESSAGE",
+    "NOT_THIS_PC_MESSAGE",
     "NO_TOKEN_MESSAGE",
+    "PROTOCOL_CHANGED_MESSAGE",
+    "RETRY_DELAYS_S",
     "SESSION_HEADER",
     "UNREACHABLE_MESSAGE",
     "HttpReply",
     "StdioShim",
     "UrllibPoster",
     "error_line",
+    "is_loopback_url",
     "main",
     "payload_from_body",
 ]

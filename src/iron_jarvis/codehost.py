@@ -551,7 +551,19 @@ class Tool:
             t.join(timeout=max(0.0, end - _now()))
         with self._wcv:
             self._wcv.notify_all()
-        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+        # MC4 (third fix plan): a reader still blocked means a program the tool
+        # started still holds its output open (no Job on Linux or Mac, or none
+        # could be made); closing a pipe another thread is reading waits for
+        # that program. Only the pipes whose reader has finished are closed:
+        # the guard ``hosted/process.HarnessProcess.stop`` has (mirrored, not
+        # shared: it is inline code there, not a helper).
+        alive = {t.name.rsplit("-", 1)[-1] for t in self._threads if t.is_alive()}
+        pipes = [proc.stdin]
+        if "out" not in alive:
+            pipes.append(proc.stdout)
+        if "err" not in alive:
+            pipes.append(proc.stderr)
+        for pipe in pipes:
             try:
                 if pipe and not pipe.closed:
                     pipe.close()
