@@ -380,6 +380,12 @@ def test_tm12_a_restored_terminal_says_the_program_ended_and_nothing_was_rerun(t
         line = mgr_mod.PROGRAM_ENDED_NOTE.format(program="npm")
         assert line in text
         assert text.index("listening") < text.index(line)  # after the old output
+        # ...and ABOVE the fresh page the new shell draws on: ConPTY places
+        # the cursor by absolute row on a screen it believes is blank, so a
+        # line after the clear drew every typed key over the shell's banner.
+        raw = bytes(s._tail).decode("utf-8", "replace")
+        assert raw.index(line) < raw.rindex("\x1b[2J\x1b[H")
+        assert raw.count(line) == 1
     finally:
         s.kill()
 

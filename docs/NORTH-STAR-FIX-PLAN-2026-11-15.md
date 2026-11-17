@@ -2410,6 +2410,18 @@ Left open:
 - The two new history records are named by plain strings, not in the list
   of event names (`core/events.py`).
 
+Found before release by the update rehearsal
+(`tests/test_update_rehearsal_v1338.py`, run on this PC): the line saying
+which program ended was first written at the top of the new shell's screen.
+Windows' console places the cursor by absolute row on a screen it believes
+is blank, so every key typed was drawn two rows too high, over the shell's
+banner. It now goes under the old output, above the new screen, and a test
+pins that order. GitHub's runs did not catch it: the rehearsal checks the
+screen only where Node is installed, and the Python job has none. The
+"could not start the shell again" line has the same shape; it is drawn
+just before the page's own resize, which makes the console repaint and line
+up again, so it may be drawn over (the log has the reason).
+
 Tested with stand-ins only: the coding tool and its bridge's far end (a
 scripted daemon and the real route, never a real tool across a real
 restart); a hung Windows start (a stand-in that never answers); the Linux

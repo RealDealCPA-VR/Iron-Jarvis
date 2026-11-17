@@ -15,7 +15,7 @@ from typing import Any
 
 from ..core.ids import new_id
 from .backend import PipeBackend, PtyBackend
-from .modes import restore_reset
+from .modes import fresh_page, restore_reset
 from .session import TerminalSession, normalise_pane_capabilities
 from .shells import resolve_shell, restored_argv
 
@@ -1544,12 +1544,18 @@ class TerminalManager:
             # (terminals/modes.py).
             # Once: a tail that already ends with it (a pane restored and
             # closed again before its new shell printed) gets no second copy.
+            # The line goes ABOVE the reset's fresh page, never after it:
+            # the new shell's ConPTY moves the cursor to absolute rows on
+            # a screen it believes starts blank, so a line drawn at the top
+            # of that screen put every typed key two rows too high, over
+            # the shell's banner (found by the update rehearsal).
             if old:
                 reset = restore_reset(old, rows)
-                prior = old if old.endswith(reset) else old + reset
+                if old.endswith(reset):
+                    old = old[: -len(reset)]
+                prior = old + ended + reset
             else:
-                prior = b""
-            prior += ended
+                prior = ended + fresh_page(rows)
             # v1.337.2: PREPEND, under the lock the output path records with.
             # The new shell was spawned above and a pushing backend has been
             # recording its first bytes (ConPTY's start-up and the prompt)

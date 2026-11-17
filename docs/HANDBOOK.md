@@ -2085,7 +2085,7 @@ seven releases from the third review.
   showed a reopened terminal at another size, its shell was started a
   second time with no time limit; if Windows hung that start, the pane was
   blank and took no keys. The old shell now stays in use until the new one
-  has started, and if it does not start the pane says so and keeps working.
+  has started, and if it does not start the pane keeps working with it.
 - **Terminals, smaller things.** A restored terminal says when the program
   that was running in it has ended. Opening a terminal in a folder that is
   gone says so in plain words. One shell that exits at once no longer marks
