@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.518.0
+
+**Linux: start at sign-in, the tray icon, Edge, and true words.** Nothing changes on Windows in this release.
+
 ## v1.517.0
 
 **The Linux app updates itself, and comes as two files.** Nothing changes on Windows in this release.
@@ -77,7 +81,3 @@
 ## v1.500.2
 
 **Resize the panel beside a coding session.** In Chat › Code and Build › Code, the panel on the right (plan, timeline, changes, usage, files and the rest) can now be made wider or narrower: drag its left edge.
-
-## v1.500.1
-
-**Archive or delete a coding session from the list.** In Chat › Code, every session in the sidebar list now has a ⋯ button (it shows when you point at the row).
