@@ -1536,8 +1536,8 @@ The whole file was read, in two halves.
   app stops between the save and the removal of its kept copy
   (`build.py:2432-2441, 2468-2471`); the resume pass never checks that the
   session already holds the finished reply.
-- [ ] **RB6 to RB14 (low, pass only; RB12 by two passes).** A "Resume when
-  *Done so far: RB9 (v1.521.0); RB8 (v1.522.0); RB10, RB14 (v1.524.0).*
+- [x] **RB6 to RB14 (low, pass only; RB12 by two passes).** A "Resume when
+  *Done so far: RB9 (v1.521.0); RB8 (v1.522.0); RB10, RB14 (v1.524.0); RB6, RB7, RB11, RB12, RB13 (v1.527.0).*
   ready" wait whose carry-on is refused for a lasting reason (folder gone,
   model no longer usable) is tried every 60 seconds for ever and never said
   (`build.py:3996-4002`); a failed write of the question at a reply's start
@@ -1728,8 +1728,8 @@ only along the save path.
   `durable_turns.py:894-956` writes the record only; `1282-1283` deletes by
   age with no check that the reply reached its chat. `docs/rules/chat.md`
   says a line the daemon can write must be written by the daemon.
-- [ ] **CS6 to CS10 (low; CS6 and CS10 partly suspected, the rest pass
-  *Done so far: CS6, CS7, CS10 (v1.521.0); CS8 (v1.524.0).*
+- [x] **CS6 to CS10 (low; CS6 and CS10 partly suspected, the rest pass
+  *Done so far: CS6, CS7, CS10 (v1.521.0); CS8 (v1.524.0); CS9 (v1.527.0).*
   only).** The first reply of every new chat runs with no chat id, so its
   cost is missing from that chat's usage line (`page.tsx:8666, 9240-9252`;
   `routes/chat.py:5710`); deleting a chat leaves its turn records (each
@@ -1788,8 +1788,8 @@ All eighteen files in `terminals/` were read whole.
   made and the set-up runs only then. The sentence that would say why goes
   to the log (`platform.py:403-426`; `terminals/recipes.py:545-557,
   716-718`; `dashboard/app/terminals/page.tsx:1118`).
-- [ ] **TM6 to TM20 (low; TM10, TM14, TM15 and TM20 suspected, the rest
-  *Done so far: TM14, TM15 (v1.520.0); TM13 (v1.523.0); TM16 (v1.524.0); TM6, TM7, TM8, TM9, TM10, TM11, TM12, TM17, TM18, TM19 (v1.526.0).*
+- [x] **TM6 to TM20 (low; TM10, TM14, TM15 and TM20 suspected, the rest
+  *Done so far: TM14, TM15 (v1.520.0); TM13 (v1.523.0); TM16 (v1.524.0); TM6, TM7, TM8, TM9, TM10, TM11, TM12, TM17, TM18, TM19 (v1.526.0); TM20 (v1.527.0).*
   pass only), in the order written:**
   - Kept on this PC and in backups: each terminal's last 64 KB of output
     is written in the clear and carried by every backup, where it stays
@@ -2432,3 +2432,103 @@ built add-on under jsdom, never in Chrome or Edge). What must be tried on
 the installed app: a coding tool left running across an update, then
 asked to use Iron Jarvis's tools; closing and reopening terminals across a
 restart; the sidebar after the browser was left idle for a while.
+
+### Group 23 as built (v1.527.0)
+
+Fixed: RB6, RB7, RB11, RB12, RB13, CS9, TM20. The rest of the plan's group
+23 went out earlier, in the files they share: MC8, SB12, TM6, TM7, TM8 and
+TM18 with group 22. TM20 was suspected and was first proven with a failing
+test.
+
+Where it differs from the plan:
+
+- **RB6.** A refusal that passes by itself (Compact running, a delete,
+  Emergency stop, the accounts not listed yet, a busy database) is not
+  given up at once: the wait is tried again for up to a day, then ends and
+  says so. A lasting refusal ends it at once.
+- **RB7.** Taking the wait and saving the question became one write, so
+  there is no moment in which one has happened without the other. The
+  lead added: "Continue from where it stopped" is not made moot by a
+  message that was never saved, and the kept rounds a refused Continue had
+  already taken are put back (two tests).
+- **RB12's sweep** reached five more places that showed an exception's
+  name or text: the coding folder check, a living document, and the model
+  refusal of a shared summary, of a workflow drafted from a chat and of the
+  workflow builder.
+- **CS9.** If the start's cut-off pass is still running at its one-minute
+  bound, the start goes on and nothing is brought home or removed that
+  time; the next start does it.
+
+Left open:
+
+- RB6: why a wait ended, and the day a passing refusal is given, live in
+  memory; after a restart the card no longer says why and the day starts
+  again. Making them last needs two keys added to what the stored card and
+  wait keep (`routes/chat._ACCOUNT_LIMIT_KEYS`, `_ACCOUNT_WAIT_KEYS`). The
+  bell does not ring when a wait ends (a new kind of notice is needed).
+- RB11: a kept "Allow for this session" answer lives in memory, as its
+  sentence says; after a restart the user is asked again.
+- The app-wide answer to a malformed request (`daemon/app._input_error`)
+  still shows an exception's name ("ValueError: …") on some routes, and
+  `_provider_error_http` the provider's own text. Changing the first moves
+  answers that about 180 test files read; it needs a pass of its own.
+
+Tested with stand-ins only: the account service and its check; the
+database refusing a write (a stand-in raising "database is locked" inside
+the real store); the start's passes (a seeded store of 300 records, read
+through a listener on the real engine).
+
+## Third fix plan: closing state
+
+Every finding of the third review is ticked, except RB4, which was checked
+and is not a defect (group 20). Seven releases: v1.520.0 (group 17),
+v1.521.0 (18), v1.522.0 (19), v1.523.0 (21), v1.524.0 (20), v1.526.0 (22),
+v1.527.0 (23); v1.519.0 and v1.525.0 were other sessions' releases made
+meanwhile. Groups 22 and 23 were re-cut by file, not by cause, so that two
+groups never changed one file at once; each "as built" note says which
+findings moved.
+
+The decisions G1 to G22 were built as written, except where an "as built"
+note says otherwise: G2 (the workflow step reads the tool's own check, but
+the check was not moved into the gate), G6 (the page still saves its own,
+fuller copy of a reply; the daemon's copy is the floor), G12 (a task's
+models run at most "Night tasks at once" at a time, instead of failing a
+task bigger than that) and G17 (the card waits 45 seconds, because the
+bridge gives up at one minute).
+
+For the owner to decide (a recommendation with each):
+
+1. **Move a tool's own "ask every time" check into the tool gate (PG2).**
+   Today each of the eleven callers honours it and a scan test lists them.
+   Recommended: keep the scan test; moving it risks refusing work that is
+   allowed today, for no case known to be open.
+2. **Local only in an open coding session.** Switching Local only on while
+   a coding reply runs reaches the next message only, and an open session
+   has no Local only switch of its own, although the chat tool's refusal
+   points to one. Recommended: add the switch to the session's settings.
+3. **Model calls made inside a tool are on no usage row** (a screenshot's
+   question, reading text in a picture). Recommended: count them at one
+   seam in the router, so every lane gets it.
+4. **A hard kill mid-reply loses the usage of the model calls already
+   made.** Recommended: a row after each call, settled at the next start.
+5. **A Build › Code reply cut at the model's length limit arrives as
+   finished** (`hosted/acp.py`). Recommended: carry the reason through, as
+   was done for the coding session's own limit.
+6. **Two answers still show programming words**: the app-wide answer to a
+   malformed request, and a provider's raw error text. Recommended: a pass
+   of its own, run on GitHub, since about 180 test files read those words.
+7. **What lives in memory only**: why a "Resume when ready" wait ended, and
+   a kept "Allow for this session" answer. Recommended: store the first
+   with the card (two keys); leave the second (its sentence is honest).
+8. **"A locked app asks before each use" rests on every locked app also
+   being kept on your own models.** Recommended: have the gate read the
+   lock itself.
+9. **Suspected, not fixed: with two pages open on one chat, a reply that
+   hands work to an agent may start that run twice.** Recommended: a guard
+   on the reply's name, which every hand-off line now carries.
+10. **Try on the installed app** (none of these could be tried with the
+    stand-ins): the browser sidebar with the new add-on, including a
+    connection dropped mid-reply; a coding tool left running across an
+    update, then asked to use Iron Jarvis's tools; terminals closed and
+    reopened across a restart; a long chat reply left running with the
+    Chat page closed, then opened in two windows.

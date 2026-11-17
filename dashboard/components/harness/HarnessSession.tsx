@@ -3587,7 +3587,9 @@ export function HarnessSession({
               waiting={waiting}
               wait={decodeAccountWait(view.accountWait)}
               busy={accountBusy}
-              error={limitError}
+              // Third plan RB6: a wait that ended without carrying the reply
+              // on says why on the card (the daemon's sentence).
+              error={limitError ?? (waiting ? null : limit.waitEnded ?? null)}
               onResume={() => void resumeWhenReady()}
               onCancelWait={() => void cancelWait()}
               onChoose={() => {

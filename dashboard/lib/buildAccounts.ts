@@ -134,6 +134,10 @@ export interface AccountLimit {
    *  not said (offered for the kinds a reset ends). */
   resumable: boolean | null;
   turnId: string;
+  /** Third plan RB6: why the "Resume when ready" wait ENDED without carrying
+   *  the reply on (the daemon's sentence, `wait_ended` on the view's card);
+   *  absent while nothing ended it. */
+  waitEnded?: string;
 }
 
 /** The armed "Resume when ready" wait (the view's `account_wait`). */
@@ -322,6 +326,7 @@ export function decodeAccountLimit(raw: unknown): AccountLimit | null {
   const account = str(r.account, 120);
   const accountName = str(r.account_name, 80);
   if (!account && !accountName) return null;
+  const waitEnded = str(r.wait_ended, 600);
   return {
     account,
     accountName: accountName || account,
@@ -331,6 +336,7 @@ export function decodeAccountLimit(raw: unknown): AccountLimit | null {
     resetsAt: isoOrNull(r.resets_at),
     resumable: typeof r.resumable === "boolean" ? r.resumable : null,
     turnId: str(r.turn_id, 80),
+    ...(waitEnded ? { waitEnded } : {}),
   };
 }
 

@@ -702,7 +702,11 @@ def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
     lock, moving ``updated_at`` the PUT route's monotonic way. A session still
     called :data:`NEW_SESSION_TITLE` takes its first question as its title.
     Never indexed for Chat's history search. Returns ``{ok, updated_at,
-    count}``; ``ok`` False for an unknown session. Never raises."""
+    count}``; ``ok`` False for an unknown session. Never raises.
+
+    Third plan RB7: a write that FAILED (the session is there, the database
+    refused it) also answers ``failed: True`` — the caller says "could not be
+    saved", never "no such coding session"."""
     stamp = utcnow().isoformat()
     cleaned = [c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None]
     try:
@@ -710,12 +714,7 @@ def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
             row = db.get(ChatThreadRecord, str(thread_id or ""))
             if row is None or not is_build_thread(row):
                 return {"ok": False, "updated_at": None, "count": 0}
-            before = _messages(row)
-            msgs = _capped(before + cleaned)
-            row.messages_json = json.dumps(msgs)
-            if title_from_first:
-                row.title = session_title(row.title or NEW_SESSION_TITLE, before, msgs)
-            row.updated_at = _next_stamp(row.updated_at)
+            msgs = _with_lines(row, cleaned, title_from_first=title_from_first)
             db.add(row)
             db.commit()
             db.refresh(row)
@@ -723,7 +722,20 @@ def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
                     "count": len(msgs)}
     except Exception:  # noqa: BLE001 — a turn never fails on its transcript
         log.warning("appending to build session %s failed", thread_id, exc_info=True)
-        return {"ok": False, "updated_at": None, "count": 0}
+        return {"ok": False, "updated_at": None, "count": 0, "failed": True}
+
+
+def _with_lines(row: Any, cleaned: list[dict[str, Any]], *, title_from_first: bool = True) -> list[dict[str, Any]]:
+    """Put already-cleaned ``cleaned`` lines on ``row`` (in the caller's open
+    write): capped, the first question naming a new session, ``updated_at``
+    moved the monotonic way. Returns the lines the row now holds."""
+    before = _messages(row)
+    msgs = _capped(before + cleaned)
+    row.messages_json = json.dumps(msgs)
+    if title_from_first:
+        row.title = session_title(row.title or NEW_SESSION_TITLE, before, msgs)
+    row.updated_at = _next_stamp(row.updated_at)
+    return msgs
 
 
 def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at: Any) -> dict[str, Any]:
@@ -1484,7 +1496,8 @@ def waiting_sessions(engine: Any) -> list[tuple[str, dict[str, Any]]]:
 
 
 def take_wait(engine: Any, thread_id: str, armed_at: str, account: str, *,
-              then: "dict[str, Any] | None" = None) -> bool:
+              then: "dict[str, Any] | None" = None,
+              lines: "list[dict[str, Any]] | None" = None) -> bool:
     """END a "Resume when ready" wait for the continuation that is about to
     start (v1.368.0 review): in ONE locked write, True when the wait armed at
     ``armed_at`` for ``account`` is still the session's (it is removed, and
@@ -1498,11 +1511,18 @@ def take_wait(engine: Any, thread_id: str, armed_at: str, account: str, *,
     a MOVE within the account's group (``routes/build.account_patch``'s own
     patch: the new account, its provider; ``None`` removes a key), applied in
     the SAME locked write: the session moves to the other account only when
-    the wait it answers is still its own. BLOCKING."""
+    the wait it answers is still its own. BLOCKING.
+
+    Third plan RB7: ``lines`` — the continuation's QUESTION, appended in the
+    SAME write (:func:`append_lines`' way): the wait and its card go only
+    together with the question being saved. A write that fails RAISES and
+    changes nothing (the wait and the card stay exactly as they were)."""
     from ..daemon.routes.chat import _clean_setup
 
     if not armed_at or not account:
         return False
+    stamp = utcnow().isoformat()
+    cleaned = [c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None]
     with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
         row = db.get(ChatThreadRecord, str(thread_id or ""))
         if row is None or not is_build_thread(row) or getattr(row, "archived_at", None) is not None:
@@ -1526,6 +1546,8 @@ def take_wait(engine: Any, thread_id: str, armed_at: str, account: str, *,
             else:
                 setup[key] = value
         row.setup_json = _clean_setup(setup)
+        if cleaned:
+            _with_lines(row, cleaned)
         db.add(row)
         db.commit()
         return True
@@ -1588,13 +1610,15 @@ def reconcile_interrupted_turns(engine: Any) -> int:
     written = 0
     try:
         with session_scope(engine) as db:
+            # Third plan CS9: the ids only — a record's stored frames are
+            # read (below) only for a session that holds its question and no
+            # reply, never every interrupted record's whole stream at once.
             rows = list(db.exec(
-                select(ChatTurnRecord.id, ChatTurnRecord.thread_id, ChatTurnRecord.frames_json,
-                       ChatTurnRecord.started_at)
+                select(ChatTurnRecord.id, ChatTurnRecord.thread_id, ChatTurnRecord.started_at)
                 .where(ChatTurnRecord.status == "interrupted")
                 .where(ChatTurnRecord.thread_id != "")
             ))
-        for turn_id, thread_id, frames_json, started in rows:
+        for turn_id, thread_id, started in rows:
             row = get_row(engine, thread_id or "")
             if row is None or has_turn_reply(row, turn_id):
                 continue
@@ -1604,6 +1628,10 @@ def reconcile_interrupted_turns(engine: Any) -> int:
             ), None)
             if question is None:
                 continue
+            with session_scope(engine) as db:
+                frames_json = db.exec(
+                    select(ChatTurnRecord.frames_json).where(ChatTurnRecord.id == turn_id)
+                ).first()
             try:
                 frames = json.loads(frames_json or "[]")
             except (TypeError, ValueError):
@@ -1769,9 +1797,25 @@ def reconcile_unsaved_replies(engine: Any) -> int:
     return written
 
 
+#: Third plan RB13: why a folder cannot be used when CHECKING it failed (the
+#: check itself raised — a folder this PC will not let Iron Jarvis open). A
+#: clause, like every :func:`folder_problem` answer: each caller puts its own
+#: lead-in before it ("This folder cannot be used: …"), so it never carries
+#: one of its own, and never the exception's name.
+FOLDER_CHECK_FAILED = (
+    "Iron Jarvis could not check it — make sure this PC can open that folder, or choose another one"
+)
+
+
 def folder_problem(folder: str) -> str | None:
     """Why ``folder`` cannot be a session's working folder, in words, or None.
-    THE one rule (``fs_policy.root_problem``). BLOCKING (a writability probe)."""
+    THE one rule (``fs_policy.root_problem``). BLOCKING (a writability probe).
+
+    Every answer is a clause the caller leads in to ("This folder cannot be
+    used: …"); a check that raised is :data:`FOLDER_CHECK_FAILED` (third plan
+    RB13: it read "that folder cannot be used: PermissionError" after the
+    caller's own lead-in), the raw error logged, never shown."""
+    from ..core.failures import plain_failure
     from ..core.fs_policy import root_problem
 
     text = str(folder or "").strip()
@@ -1780,7 +1824,7 @@ def folder_problem(folder: str) -> str | None:
     try:
         return root_problem(text)
     except Exception as exc:  # noqa: BLE001 — an unreadable path is a refusal
-        return f"that folder cannot be used: {type(exc).__name__}"
+        return plain_failure(FOLDER_CHECK_FAILED, exc)
 
 
 #: Files picked with "@" one message may carry (the screen's list is bounded too).

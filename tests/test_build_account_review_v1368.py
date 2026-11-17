@@ -116,17 +116,25 @@ async def test_the_wait_and_the_old_card_end_before_the_continuations_question(a
     beh, sid, card, view = await _limit_then_arm(app, fake, work, monkeypatch, park_s=1.0)
     await asyncio.sleep(1.2)
     seen: list[dict] = []
-    real_append = S.append_lines
+    real_take = S.take_wait
 
-    def spy(eng, tid, lines, **kw):
-        if any(isinstance(m, dict) and m.get("continuation") for m in lines):
-            setup = build_routes._setup_of(S.get_row(eng, tid))
-            seen.append({k: setup.get(k) for k in ("account_wait", "account_limit")})
-        return real_append(eng, tid, lines, **kw)
+    # Third fix plan (RB7): the continuation's question is saved in the SAME
+    # write that takes the wait (`take_wait(lines=)`), so right after that
+    # one write the wait and the card are gone and the question is there.
+    def spy(eng, tid, *args, lines=None, **kw):
+        took = real_take(eng, tid, *args, lines=lines, **kw)
+        if took and any(isinstance(m, dict) and m.get("continuation") for m in (lines or [])):
+            row = S.get_row(eng, tid)
+            setup = build_routes._setup_of(row)
+            seen.append({
+                "account_wait": setup.get("account_wait"), "account_limit": setup.get("account_limit"),
+                "question_saved": any(m.get("continuation") for m in S._messages(row)),
+            })
+        return took
 
-    monkeypatch.setattr(S, "append_lines", spy)
+    monkeypatch.setattr(S, "take_wait", spy)
     assert await build_routes.resume_due(app.state.d) == [sid]
-    assert seen == [{"account_wait": None, "account_limit": None}], seen
+    assert seen == [{"account_wait": None, "account_limit": None, "question_saved": True}], seen
     turn_id = _events(app, "build.resumed")[-1]["turn_id"]
     lg = await until(lambda: turn_log(app, turn_id))
     await until(lambda: lg.status != "running")

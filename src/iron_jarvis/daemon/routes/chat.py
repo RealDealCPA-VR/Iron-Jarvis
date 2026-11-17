@@ -1379,6 +1379,18 @@ def _local_one_shot_pick(
     return None
 
 
+def _model_unusable(platform: Any, provider: str, exc: BaseException) -> str:
+    """Third plan G23 (RB12's sweep): the 400 for a one-shot (a shared digest,
+    a workflow drafted from a chat) whose model cannot be used. The provider's
+    own sentence when it wrote one, else a plain one that names it; the raw
+    text goes to the log, never to the page (it read "provider unavailable:
+    <exception text>"). The words ``daemon/app._build_workflow`` uses."""
+    from ...core.failures import plain_failure
+
+    name = _egress.friendly_name(provider, getattr(platform, "providers", None)) or "That model"
+    return plain_failure(f"{name} can't be used right now. Pick another model and try again.", exc)
+
+
 def _local_pick_or_refuse(platform, provider: str, model: str, setup_json: str) -> tuple[str, str]:
     """:func:`_local_one_shot_pick`, or the 409 local-only refusal naming the
     model the request would have used. The offline demo (``mock``) is kept as
@@ -2730,7 +2742,7 @@ def register(app: FastAPI, d) -> None:
             try:
                 adapter = d.platform.providers.get(provider, model)
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+                raise HTTPException(status_code=400, detail=_model_unusable(d.platform, provider, exc))
             # A mock adapter would FABRICATE a digest of a real conversation —
             # never acceptable here (unlike the workflow builder's offline
             # demo). Route to the strongest REAL provider instead; with none
@@ -2954,7 +2966,7 @@ def register(app: FastAPI, d) -> None:
         try:
             adapter = d.platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            raise HTTPException(status_code=400, detail=_model_unusable(d.platform, provider, exc))
         if isinstance(adapter, MockLLMAdapter):
             adapter, provider = d._failover_adapter("mock")
             if adapter is None:

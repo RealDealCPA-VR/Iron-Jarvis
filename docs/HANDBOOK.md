@@ -2042,6 +2042,43 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Plain words, and nothing dropped without a word (v1.527.0)
+
+The last of seven releases from the third review: coding sessions say why
+they stopped waiting or could not save, failures read as sentences, and the
+start-up no longer slows down as the history grows.
+
+- **A "Resume when ready" wait that cannot carry on says why.** When the
+  reply could not start at all (its folder was deleted, the session was
+  archived, the night's time ran out), Iron Jarvis tried again every minute,
+  for ever, without a word. Now the wait ends and the limit card says why,
+  with "Resume when ready" to wait again once it is fixed. A reason that
+  passes by itself (Compact running, Emergency stop on) is tried again for
+  up to a day, then said the same way.
+- **A message that could not be saved says so.** When the session could not
+  be written (the database was busy), a message answered "no such coding
+  session", and a waiting carry-on had already lost its wait and its card.
+  Now it says "Your message could not be saved to the session, so nothing
+  was started. Try sending it again.", the words go back in the box, and
+  nothing is removed: the wait, its card and "Continue from where it
+  stopped" stay as they were.
+- **An "Allow for this session" answer that could not be saved is kept.**
+  The reply says so at its end, the answer is kept and saved with your next
+  message, and the log no longer fills with one error per word of the reply.
+- **Failures in plain words.** A reply that broke inside Iron Jarvis ends
+  with "Iron Jarvis hit a problem while answering" instead of a programming
+  error's name; a folder Iron Jarvis cannot check, a living document that
+  could not be written, and a model that cannot be used for a shared
+  summary, a workflow drafted from a chat or the workflow builder each say
+  so in one sentence.
+- **A faster start with a long history.** At start-up the stored replies
+  are read off the main thread and only the parts needed, so a large
+  history no longer holds up everything else; old records are removed only
+  after the replies they hold are back in their chats.
+- **Running from source without a token**, a terminal's connection from
+  another computer is refused, as every other request already was. The
+  installed app always has a token and is unchanged.
+
 ## It keeps working across a restart and a dropped connection (v1.526.0)
 
 A coding tool that was running when Iron Jarvis restarted gets Iron

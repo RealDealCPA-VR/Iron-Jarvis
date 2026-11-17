@@ -272,6 +272,33 @@ INTERRUPTED_DETAIL = (
     "Iron Jarvis stopped while answering (a restart or a crash). What it had"
     " written so far is kept; press Retry to ask again."
 )
+#: Third plan G23 (RB12): the error a turn ends with when its lane broke
+#: OUTSIDE its own error handling (a fault in Iron Jarvis, not the model's).
+#: The frame has the shape the page draws for a failed turn (``title`` +
+#: ``fix``, ``dashboard/lib/failureLine.ts``); the exception goes to the log
+#: only — the live stream and the stored record used to carry
+#: "TypeError: ...".
+LANE_BROKE_TITLE = "Iron Jarvis hit a problem while answering"
+LANE_BROKE_FIX = "What it had written so far is kept; press Retry to ask again."
+LANE_BROKE_DETAIL = f"{LANE_BROKE_TITLE}. {LANE_BROKE_FIX}"
+
+
+def lane_broke_frame(exc: BaseException) -> dict[str, str]:
+    """The ``error`` frame for a lane that raised outside its own handling:
+    a sentence the app wrote itself is kept as the headline
+    (``core.failures.plain_failure``), anything else is
+    :data:`LANE_BROKE_TITLE`; the raw text is logged, never sent. Never
+    raises."""
+    try:
+        from ..core.failures import plain_failure
+
+        words = plain_failure(LANE_BROKE_DETAIL, exc)
+    except Exception:  # noqa: BLE001 — the words never become the failure
+        words = LANE_BROKE_DETAIL
+    if words == LANE_BROKE_DETAIL:
+        return {"detail": LANE_BROKE_DETAIL, "title": LANE_BROKE_TITLE, "fix": LANE_BROKE_FIX}
+    return {"detail": words, "title": words, "fix": LANE_BROKE_FIX}
+
 
 _MERGEABLE = ("token", "thinking")
 _END = object()
@@ -1386,7 +1413,9 @@ class TurnLogs:
             raise
         except Exception as exc:  # noqa: BLE001 — the lane yields its own errors
             log.warning("chat turn %s failed outside its stream", lg.turn_id, exc_info=True)
-            lg.add(sse("error", {"detail": f"{type(exc).__name__}: {exc}"}))
+            # Third plan G23 (RB12): plain words live and on the record; the
+            # exception is in the log line above (``exc_info``).
+            lg.add(sse("error", lane_broke_frame(exc)))
             status = "error"
         finally:
             CHAT_INFLIGHT.exit()
@@ -2102,11 +2131,14 @@ def drop_old_records(engine: Any) -> int:
     try:
         cutoff = (utcnow() - timedelta(days=KEEP_RECORDS_DAYS)).replace(tzinfo=None)
         with session_scope(engine) as db:
+            # Third plan G23 (CS9): only the OLD finished rows come back (the
+            # database filters them; the check below stays as the rule).
             rows = [
                 tuple(r) for r in db.exec(select(  # type: ignore[call-overload]
                     ChatTurnRecord.id, ChatTurnRecord.thread_id, ChatTurnRecord.status,
                     ChatTurnRecord.home, ChatTurnRecord.updated_at, ChatTurnRecord.started_at,
-                ))
+                ).where(ChatTurnRecord.status != "running")
+                 .where(ChatTurnRecord.updated_at < cutoff))  # type: ignore[operator]
                 if r[2] != "running" and r[4] is not None and r[4].replace(tzinfo=None) < cutoff
             ]
         if not rows:

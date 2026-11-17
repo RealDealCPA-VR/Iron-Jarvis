@@ -33,6 +33,7 @@ from ..core.models import AgentType
 from ..personas.builtins import BUILTIN_PERSONAS
 from ..platform import build_platform, finish_deferred_mcp, start_deferred_mcp
 from ..tools.permissions import headless_ask_resolver
+from .auth import _from_another_computer
 from .auth import token_matches as _token_matches
 
 log = get_logger("daemon")
@@ -66,6 +67,13 @@ _MAX_UPLOAD_BYTES = _max_upload_bytes()
 # content.
 _BOOT_SLOWEST = 6  # how many phases the summary names; a 40-step list hides the cause
 _BOOT_SLOW_MS = 50.0  # under this a phase is noise, not an explanation
+#: Third plan G23 (CS9): the bound on each start pass over the stored chat
+#: turn records (run on a worker thread; the start goes on past it).
+_TURN_PASS_TIMEOUT_S = 60.0
+#: Third plan G23: a living document's regeneration that failed outside the
+#: model call (which answers in its own words) says this, on its row and in
+#: the 502; the raw text goes to the log.
+_LIVEDOC_FAILED = "That living document could not be written. Try again."
 
 #: How long work that fires right after boot (the assignment dispatcher) waits
 #: for the background MCP load before it runs anyway (v1.311.0). Above the
@@ -107,7 +115,12 @@ def _ws_token_ok(ws: WebSocket) -> bool:
     """
     token = os.environ.get("IRONJARVIS_TOKEN", "").strip()
     if not token:
-        return True
+        # Third plan G23 (TM20): no token = THIS PC only, the rule the HTTP
+        # side has kept since v1.502.0 (``auth.TokenAuthMiddleware``, the
+        # same address check). A socket here can be a shell (a terminal):
+        # one from another computer's address is refused, however the app
+        # was served. The packaged app always has a token: unchanged there.
+        return not _from_another_computer(ws)
     return _token_matches(ws.query_params.get("token") or "", token)
 
 
@@ -1027,10 +1040,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # left every inbound webhook un-armed until the next restart, with no
         # signal. Record each in loop_health so a silent skip is visible in
         # /diagnostics.
-        def _rehydrate_step(name, fn):
+        def _rehydrate_step(name, fn, off_loop_s: float | None = None):
             # v1.250.0 (S-01): timed in a `finally` so a step that FAILS still
             # gets a number — the breakdown must not go quiet exactly when
             # something is wrong. Order and failure behaviour are unchanged.
+            # Third plan G23 (CS9): with *off_loop_s* the step runs on a
+            # worker thread and this returns the awaitable
+            # (:func:`_rehydrate_step_off_loop`), so the caller awaits it.
+            if off_loop_s is not None:
+                return _rehydrate_step_off_loop(name, fn, off_loop_s)
             _t = time.perf_counter()
             _boot_watch.step(name)
             try:
@@ -1045,6 +1063,34 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 _tick(name, False, exc)
                 loop_health[name]["error"] = loop_health[name].get("last_error", "failed")
                 log.exception("boot rehydration step %s failed", name)
+            finally:
+                _boot_step(name, _t)
+
+        async def _rehydrate_step_off_loop(name, fn, timeout_s: float) -> bool:
+            """Third plan G23 (CS9): ``_rehydrate_step(..., off_loop_s=)`` for a step that
+            reads the database at size — run on a worker thread, bounded by
+            *timeout_s*, with the same health line and timing. True when it
+            finished (failed or not); False when it was still running at the
+            bound (it goes on in its thread). Never raises but a cancel."""
+            _t = time.perf_counter()
+            _boot_watch.step(name)
+            try:
+                await asyncio.wait_for(asyncio.to_thread(fn), timeout=timeout_s)
+                _tick(name, True)
+                return True
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError as exc:
+                _tick(name, False, exc)
+                loop_health[name]["error"] = loop_health[name].get("last_error", "failed")
+                log.warning("boot step %s still running after %.0f s; the start goes on",
+                            name, timeout_s)
+                return False
+            except Exception as exc:  # noqa: BLE001 - never block boot
+                _tick(name, False, exc)
+                loop_health[name]["error"] = loop_health[name].get("last_error", "failed")
+                log.exception("boot rehydration step %s failed", name)
+                return True
             finally:
                 _boot_step(name, _t)
 
@@ -1096,17 +1142,28 @@ def create_app(project_root: str | None = None) -> FastAPI:
             if m:
                 log.info("kept %d Build session answer(s) a restart or crash cut off", m)
 
-        _rehydrate_step("reconcile_chat_turns", _reconcile_chat_turns)
+        # Third plan G23 (CS9): the passes over the stored turn records read
+        # and rewrite them on a worker thread, bounded — they ran on the
+        # event loop, so a large record store held every other start task.
+        # Awaited, so the order stands: cut-off turns marked, coding replies
+        # put back (both above), replies brought home, old records dropped.
+        _turns_reconciled = await _rehydrate_step(
+            "reconcile_chat_turns", _reconcile_chat_turns, off_loop_s=_TURN_PASS_TIMEOUT_S
+        )
         # Third plan G6 / RB9: AFTER the coding sessions' replies were put
         # back (above), a chat reply that never reached its chat is written
         # into it, and only THEN are old turn records removed — never one
         # whose reply has not reached its chat or session. Off the loop,
-        # bounded; never blocks the start.
+        # bounded; never blocks the start. G23: skipped when the pass above
+        # did not finish in time (it may still be running): nothing is
+        # removed before the replies are back; the next start does it.
         try:
+            if not _turns_reconciled:
+                raise TimeoutError("the cut-off pass did not finish; the next start tidies")
             from .durable_turns import home_and_tidy as _home_and_tidy
 
             _homed, _tidied = await asyncio.wait_for(
-                asyncio.to_thread(_home_and_tidy, platform.engine), timeout=60.0
+                asyncio.to_thread(_home_and_tidy, platform.engine), timeout=_TURN_PASS_TIMEOUT_S
             )
             if _homed or _tidied:
                 log.info("chat replies written home: %d; old turn records removed: %d",
@@ -2958,7 +3015,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001 — record the failure honestly
-            err_text = f"{type(exc).__name__}: {exc}"[:300]
+            # Third plan G23 (RB12's sweep): the page and the 502 read a plain
+            # sentence; the raw text goes to the log (``plain_failure``).
+            from ..core.failures import plain_failure
+
+            err_text = plain_failure(_LIVEDOC_FAILED, exc)[:300]
 
             def _mark_failed() -> None:  # v1.226.0: SQLite write off the loop
                 with session_scope(platform.engine) as db:
@@ -2969,7 +3030,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         db.commit()
 
             await asyncio.to_thread(_mark_failed)
-            raise HTTPException(status_code=502, detail=str(exc))
+            raise HTTPException(status_code=502, detail=err_text)
 
     app.state.regenerate_livedoc = _regenerate_livedoc  # for the schedule handler
 
@@ -3556,7 +3617,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
         try:
             adapter = platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            # Third plan G23 (RB12's sweep): the provider's own sentence when
+            # it wrote one, else a plain one that names it (never the raw
+            # exception text; that goes to the log).
+            from ..core.failures import plain_failure
+
+            raise HTTPException(status_code=400, detail=plain_failure(
+                f"{_egress.friendly_name(provider, platform.providers) or 'That model'}"
+                " can't be used right now."
+                " Pick another model and try again.",
+                exc,
+            ))
         # Honest offline hint: when the RESOLVED adapter is the built-in offline
         # mock (a fresh/SIMULATED install) and no real provider exists to fail
         # over to, say "connect a model" instead of building a fabricated

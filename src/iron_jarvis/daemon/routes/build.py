@@ -1108,6 +1108,17 @@ class _ReplyWatch:
         #: (``_record_turn_end``): its kept conversation stays, the last frame
         #: says so, and the next start writes the line.
         self.reply_unsaved = False
+        #: Third plan RB11: the session's record could not be written while
+        #: the reply ran (an approved plan or a conversation grant pending):
+        #: how many writes failed, when the next may be tried (``_session_clock``
+        #: time — never once per frame), and when the last line was logged.
+        self.session_write_fails = 0
+        self.session_write_next = 0.0
+        self.session_write_logged = 0.0
+        #: Third plan RB11: an "Allow for this session" answer that could not be
+        #: saved by the reply's end — kept in memory for the session's next
+        #: reply (:data:`_UNSAVED_GRANTS`) and said on the last frame.
+        self.grant_unsaved = False
 
     def stopped_trust(self) -> str:
         """Why a reply that ended WITHOUT its done / error frame ran at LOW
@@ -1804,6 +1815,54 @@ def _with_helper_plans(engine: Any, lines: list[dict[str, Any]]) -> list[dict[st
     return lines
 
 
+#: Third plan RB11: while a session's record cannot be written, a reply tries
+#: again at most this often (never once per frame: each try can wait on a
+#: locked database) — and always once more at its end.
+SESSION_WRITE_RETRY_S = 10.0
+#: ...and says it in the log at most this often after the first (full) report.
+SESSION_WRITE_LOG_S = 60.0
+#: The clock of both — a test injects its own.
+_session_clock = time.monotonic
+#: Third plan RB11: "Allow for this session" answers a reply could not save
+#: on its session (build thread id -> tool names), kept for this Iron Jarvis's
+#: life: the session's next reply runs with them and writes them
+#: (:func:`_restore_unsaved_grants`). On the loop thread only.
+_UNSAVED_GRANTS: dict[str, set[str]] = {}
+#: Third plan RB11: the words on a reply's last frame when its "Allow for
+#: this session" answer could not be saved (beside ``REPLY_NOT_SAVED`` /
+#: ``PLAN_NOT_SAVED``). Only what the code then does.
+GRANT_NOT_SAVED = (
+    "Your “Allow for this session” answer could not be saved to the session. Iron Jarvis keeps it"
+    " and saves it with your next message; if Iron Jarvis restarts first, you will be asked again."
+)
+
+
+def _session_write_failed(watch: "_ReplyWatch", thread_id: str, what: str) -> None:
+    """Third plan RB11: one failed write of the session's record during a
+    reply — the FIRST is logged with its error (the caller's ``exc_info``),
+    later ones at most one line per :data:`SESSION_WRITE_LOG_S` with the
+    count; the next try waits :data:`SESSION_WRITE_RETRY_S`. Must be called
+    from inside the ``except`` (the first report reads the error)."""
+    now = _session_clock()
+    watch.session_write_fails += 1
+    watch.session_write_next = now + SESSION_WRITE_RETRY_S
+    if watch.session_write_fails == 1:
+        log.warning("%s on build session %s failed; trying again every %.0f s", what, thread_id,
+                    SESSION_WRITE_RETRY_S, exc_info=True)
+        watch.session_write_logged = now
+    elif now - watch.session_write_logged >= SESSION_WRITE_LOG_S:
+        log.warning("%s on build session %s still fails (%d tries)", what, thread_id,
+                    watch.session_write_fails)
+        watch.session_write_logged = now
+
+
+def _session_write_due(watch: "_ReplyWatch") -> bool:
+    """Third plan RB11: may the reply try its session write now — never
+    sooner than :data:`SESSION_WRITE_RETRY_S` after one failed (the reply's
+    frames go on meanwhile; its end tries anyway)."""
+    return not watch.session_write_fails or _session_clock() >= watch.session_write_next
+
+
 async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch) -> None:
     """An approved plan switches the session to act mode and keeps the plan
     (v1.402.0: the act turn then starts BY ITSELF when this turn ends cleanly,
@@ -1813,7 +1872,13 @@ async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch
     v1.510.0 (second review S2): an approved plan is cleared from the watch
     only once the session write SUCCEEDED (the grant's rule below): a failed
     write keeps it for the next frame's try, and while it is pending the act
-    turn never starts (:func:`plan_run_due`) and the last frame says why."""
+    turn never starts (:func:`plan_run_due`) and the last frame says why.
+
+    Third plan RB11: the reply calls it again only when
+    :func:`_session_write_due` (and at its end), and the log says a failure
+    once in full, then a line a minute (:func:`_session_write_failed`) —
+    never a traceback per frame."""
+    failed = False
     setup: dict[str, Any] = {}
     plans_taken = 0
     if watch.approved_plans:
@@ -1834,21 +1899,60 @@ async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch
             await asyncio.to_thread(S.add_granted_tools, engine, thread_id, list(watch.granted))
         except Exception:  # noqa: BLE001 — "never raises" (Phase 4 review): a
             # busy database here used to escape into recorded_turn and end
-            # the live turn mid-stream. The grant stays pending (the next
+            # the live turn mid-stream. The grant stays pending (a later
             # frame tries again); an approved plan above is still written.
-            log.warning("saving a grant on build session %s failed", thread_id, exc_info=True)
+            _session_write_failed(watch, thread_id, "saving a grant")
+            failed = True
         else:
             watch.granted = []
-    if not setup:
+    if setup:
+        try:
+            await asyncio.to_thread(S.update, engine, thread_id, setup=setup)
+        except Exception:  # noqa: BLE001 — the turn never fails on its session record
+            # The approved plan stays pending (a later frame tries again).
+            if not failed:
+                _session_write_failed(watch, thread_id, "updating the session")
+            failed = True
+        else:
+            # Written (or the session is gone: nothing left to write it to).
+            del watch.approved_plans[:plans_taken]
+    if not failed and watch.session_write_fails:
+        log.info("build session %s written again after %d failed tries", thread_id, watch.session_write_fails)
+        watch.session_write_fails = 0
+
+
+def _keep_unsaved_grants(thread_id: str, watch: "_ReplyWatch") -> None:
+    """Third plan RB11: at a reply's END, an "Allow for this session" answer
+    still not saved is KEPT in memory for the session's next reply
+    (:data:`_UNSAVED_GRANTS`) and said once on the last frame
+    (:data:`GRANT_NOT_SAVED`) — never dropped without a word."""
+    if not watch.granted:
         return
+    _UNSAVED_GRANTS.setdefault(thread_id, set()).update(str(n) for n in watch.granted)
+    watch.granted = []
+    watch.grant_unsaved = True
+    log.warning("a grant of build session %s could not be saved; it is kept for the next reply", thread_id)
+
+
+async def _restore_unsaved_grants(engine: Any, thread_id: str) -> set[str]:
+    """Third plan RB11: the grants a reply of this session could not save
+    (:func:`_keep_unsaved_grants`) — written now, at the next reply's start
+    (forgotten once written), and returned so that reply runs with them
+    either way. Off the loop; never raises."""
+    pending = set(_UNSAVED_GRANTS.get(thread_id) or ())
+    if not pending:
+        return set()
     try:
-        await asyncio.to_thread(S.update, engine, thread_id, setup=setup)
-    except Exception:  # noqa: BLE001 — the turn never fails on its session record
-        # The approved plan stays pending (the next frame tries again).
-        log.warning("updating build session %s failed", thread_id, exc_info=True)
-        return
-    # Written (or the session is gone: nothing left to write it to).
-    del watch.approved_plans[:plans_taken]
+        await asyncio.to_thread(S.add_granted_tools, engine, thread_id, sorted(pending))
+    except Exception:  # noqa: BLE001 — kept for the next try; this reply still has them
+        log.warning("saving the kept grants of build session %s failed again", thread_id)
+    else:
+        left = _UNSAVED_GRANTS.get(thread_id, set()) - pending
+        if left:
+            _UNSAVED_GRANTS[thread_id] = left
+        else:
+            _UNSAVED_GRANTS.pop(thread_id, None)
+    return pending
 
 
 #: Frames that END a turn: the account-limit card goes out right BEFORE one.
@@ -2290,7 +2394,8 @@ def _with_save_notes(chunk: str, watch: "_ReplyWatch") -> str:
     sentence(s) of what could not be kept on the session (v1.510.0, S2): the
     reply line (:data:`REPLY_NOT_SAVED`) and/or an approved plan
     (:data:`PLAN_NOT_SAVED`). Any other chunk, or nothing to say, passes."""
-    said = [s for s, on in ((REPLY_NOT_SAVED, watch.reply_unsaved), (PLAN_NOT_SAVED, bool(watch.approved_plans)))
+    said = [s for s, on in ((REPLY_NOT_SAVED, watch.reply_unsaved), (PLAN_NOT_SAVED, bool(watch.approved_plans)),
+                            (GRANT_NOT_SAVED, watch.grant_unsaved))
             if on]
     if not said:
         return chunk
@@ -2321,7 +2426,14 @@ async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_R
     short pause; still failing, ``watch.reply_unsaved`` is set — the turn's
     last frame says so (:func:`_with_save_notes`) and its kept conversation is
     not deleted. A helper plan that cannot be read never skips the write: the
-    lines go without it."""
+    lines go without it.
+
+    Third plan RB11: a conversation grant still not saved is tried once more
+    (unless a try just failed) and then KEPT for the session's next reply and
+    said on the last frame (:func:`_keep_unsaved_grants`)."""
+    if (watch.granted or watch.approved_plans) and _session_write_due(watch):
+        await _apply_session_changes(engine, thread_id, watch)
+    _keep_unsaved_grants(thread_id, watch)
     lines = watch.lines(turn_id, status)
     if lines:
         if watch.helpers:
@@ -2600,7 +2712,8 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                     parked_now = _asks_after(open_asks, parsed)
                     if record is not None:
                         await record.set_waiting(parked_now)
-                if watch.approved_plans or watch.granted:
+                if (watch.approved_plans or watch.granted) and (terminal or _session_write_due(watch)):
+                    # Third plan RB11: spaced after a failure; the end tries anyway.
                     await _apply_session_changes(engine, thread_id, watch)
                 if terminal and watch.done is not None and plan_run_due(watch):
                     # v1.402.0: AN APPROVED PLAN RUNS — marked due BEFORE the
@@ -3011,6 +3124,33 @@ class ResumeGone(Exception):
     conversation is gone (another resume took it, it was never kept, it went
     over its cap) or its question is no longer in the transcript. Nothing was
     started; the reply keeps its Retry."""
+
+
+#: Third plan RB7: a reply's question that could not be WRITTEN to the
+#: session (the session is there; the database refused the write). Nothing
+#: started and nothing was removed: a "Resume when ready" wait and its card
+#: stay, and the page puts the words back in the box.
+QUESTION_NOT_SAVED = (
+    "Your message could not be saved to the session, so nothing was started. Try sending it again."
+)
+
+
+async def _not_started(gen: Any, engine: Any, resume: Any, resume_turn: str, turn_id: str,
+                       resume_failed: bool) -> None:
+    """Third plan RB7: a reply whose question was not saved does not start —
+    its lane is closed, and a cut-off or failed reply's kept rounds this
+    start had already TAKEN (``reply_record.claim`` moved them to this turn's
+    key) go back where they were, so the next start or the user's "Continue
+    from where it stopped" still finds them. Never raises."""
+    with contextlib.suppress(Exception):
+        await gen.aclose()
+    if resume is None or not resume_turn:
+        return
+    from ...harness import reply_record as RR
+
+    back = RR.failed_run_id_for(resume_turn) if resume_failed else RR.run_id_for(resume_turn)
+    with contextlib.suppress(Exception):
+        await asyncio.to_thread(RR._move_failed, engine, RR.run_id_for(turn_id), back)  # noqa: SLF001
 
 
 def _listed(value: Any) -> list[Any]:
@@ -3679,6 +3819,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # v1.398.0: words for the MODEL only (a night task's "use your
             # team"); the question line keeps what was asked.
             model_text = (model_text + "\n\n" + model_note.strip()).strip()
+        # Third plan RB11: an "Allow for this session" answer an earlier reply
+        # could not save is written now, and this reply runs with it.
+        kept_grants = await _restore_unsaved_grants(platform.engine, thread_id)
         chat_body = ChatBody(
             messages=[*history, ChatMessageBody(role="user", content=model_text)],
             provider=account_provider or str(setup.get("provider") or ""),
@@ -3700,7 +3843,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # v1.404.1: what any card of the session granted — its helpers'
             # too — and running a command as one approval (session_grants).
             granted_tools=sorted(_session_grants.widen(
-                {*(setup.get("granted_tools") or []), *_session_grants.granted(thread_id)}
+                {*(setup.get("granted_tools") or []), *_session_grants.granted(thread_id), *kept_grants}
             )),
             workspace_dir=folder,
             project_id=project.id if project is not None else "",
@@ -3903,16 +4046,6 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=plain_failure("That message could not be sent to the coding session.", exc)) from None
-            if resume_of is not None:
-                took = await asyncio.to_thread(
-                    S.take_wait, platform.engine, thread_id,
-                    str(resume_of.get("armed_at") or ""), str(resume_of.get("account") or ""),
-                    then=move_patch,
-                )
-                if not took:
-                    with contextlib.suppress(Exception):
-                        await gen.aclose()
-                    raise WaitEnded(thread_id)
             if resume is not None:
                 # v1.391.0: TAKE the cut-off turn's kept conversation — one
                 # statement, so a second resume of it starts nothing. Review:
@@ -3925,10 +4058,6 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     with contextlib.suppress(Exception):
                         await gen.aclose()
                     raise ResumeGone(thread_id)
-            # v1.422.0 (B1): a turn starts — every OTHER failed reply's kept
-            # rounds of this session are moot now (the one this turn carries
-            # on, if any, has just moved to this turn's own key).
-            await asyncio.to_thread(RR.drop_failed, platform.engine, S.session_id_for(thread_id))
             question: dict[str, Any] = {"role": "user", "content": content, "turnId": turn_id, **line_extra}
             if attachments:
                 question["attachmentPaths"] = list(attachments)
@@ -3947,11 +4076,46 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 question["continuation"] = True
             if move_line:
                 question["accountMove"] = move_line
-            saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
-            if not saved.get("ok"):
-                with contextlib.suppress(Exception):
-                    await gen.aclose()
-                raise HTTPException(status_code=404, detail="no such coding session")
+            # Third plan RB7: NOTHING IS REMOVED BEFORE THE QUESTION IS SAVED.
+            # A "Resume when ready" wait is TAKEN in the same write that saves
+            # the question (one locked write, right before it starts: a Cancel
+            # or Choose account that landed meanwhile still starts nothing),
+            # so a write that fails leaves the wait and its card exactly as
+            # they were. A write that fails is said in plain words (the page
+            # puts the words back in the box), never "no such coding session"
+            # — that stays for a session that is really gone.
+            if resume_of is not None:
+                try:
+                    took = await asyncio.to_thread(
+                        S.take_wait, platform.engine, thread_id,
+                        str(resume_of.get("armed_at") or ""), str(resume_of.get("account") or ""),
+                        then=move_patch, lines=[question],
+                    )
+                except Exception as exc:  # noqa: BLE001 — said below; nothing changed
+                    log.warning("saving the carry-on question of build session %s failed", thread_id,
+                                exc_info=True)
+                    await _not_started(gen, platform.engine, resume, resume_turn, turn_id, resume_failed)
+                    raise HTTPException(
+                        status_code=503, detail=plain_failure(QUESTION_NOT_SAVED, exc),
+                    ) from None
+                if not took:
+                    await _not_started(gen, platform.engine, resume, resume_turn, turn_id, resume_failed)
+                    raise WaitEnded(thread_id)
+            else:
+                saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
+                if not saved.get("ok"):
+                    await _not_started(gen, platform.engine, resume, resume_turn, turn_id, resume_failed)
+                    if saved.get("failed"):
+                        raise HTTPException(status_code=503, detail=QUESTION_NOT_SAVED)
+                    raise HTTPException(status_code=404, detail="no such coding session")
+            # v1.422.0 (B1): a turn starts — every OTHER failed reply's kept
+            # rounds of this session are moot now (the one this turn carries
+            # on, if any, has just moved to this turn's own key). Third plan
+            # RB7: only once its question is saved (a message that could not
+            # be saved leaves "Continue from where it stopped" as it was).
+            await asyncio.to_thread(RR.drop_failed, platform.engine, S.session_id_for(thread_id))
+            # Third plan RB6: a reply starts — why an earlier wait ended is moot.
+            _WAIT_ENDED.pop(thread_id, None)
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
                 no_limit=no_limit, record=record, account_move=move_line,
@@ -4136,6 +4300,108 @@ async def _move_within_group(d: Any, thread_id: str, setup: dict[str, Any],
     return "moved"
 
 
+#: Third plan RB6: a carry-on refused for a PASSING reason (below) is tried
+#: again at each pass — but never longer than this after its first refusal;
+#: then the wait ends and says so, like a lasting refusal.
+WAIT_GIVE_UP_S = 24 * 3600.0
+#: Third plan RB6: (thread id, the wait's ``armed_at``) -> when this Iron
+#: Jarvis first saw its carry-on refused (a passing refusal). In memory: a
+#: restart gives a wait a new day. On the loop thread only.
+_WAIT_REFUSED: dict[tuple[str, str], Any] = {}
+#: Third plan RB6: thread id -> {account, words}: why a session's "Resume when
+#: ready" wait ENDED without carrying the reply on — shown on its limit card
+#: (the view's ``account_limit.wait_ended``) until the user presses Resume
+#: when ready again or a reply starts. In memory (the stored card keeps only
+#: its whitelisted keys, ``routes/chat._ACCOUNT_LIMIT_KEYS``).
+_WAIT_ENDED: dict[str, dict[str, str]] = {}
+#: Third plan RB6: the card's words when the wait ended on a LASTING refusal
+#: (``{why}``: the start's own sentence).
+WAIT_ENDED_WORDS = (
+    "Iron Jarvis stopped waiting to carry this reply on, because it cannot start: {why}"
+    " Once that is fixed, press Resume when ready, or send a message."
+)
+#: ...and when a PASSING refusal went on for :data:`WAIT_GIVE_UP_S`.
+WAIT_GAVE_UP_WORDS = (
+    "Iron Jarvis stopped waiting to carry this reply on: for a whole day it could not start. The last"
+    " reason: {why} Press Resume when ready to wait again, or send a message."
+)
+
+
+def wait_refusal_passes(exc: HTTPException) -> bool:
+    """Third plan RB6: is a carry-on's refusal one that goes away by itself —
+    the session busy with Compact or a delete, Emergency stop on, the accounts
+    not listed yet, a write that failed (5xx), a rate limit? Everything else
+    (the folder gone or unusable, the session archived or gone, no account
+    to run on, a night task's window or time used up, a model the start
+    refused) waits on the user: the wait ends and says so. Pure."""
+    from ...harness import build_accounts as BA
+
+    status = int(getattr(exc, "status_code", 0) or 0)
+    if status >= 500 or status == 429:
+        return True
+    return str(getattr(exc, "detail", "") or "") in (
+        COMPACTING_SENTENCE, DELETING_SENTENCE, UNATTENDED_REFUSAL, BA.NOT_READ_NOTE,
+    )
+
+
+def _sentence(text: Any) -> str:
+    """``text`` as one sentence (a closing full stop added when missing)."""
+    words = " ".join(str(text or "").split())
+    return words if not words or words[-1] in ".!?" else words + "."
+
+
+async def _wait_refused(platform: Any, thread_id: str, setup: dict[str, Any], wait: dict[str, Any],
+                        exc: HTTPException, when: Any) -> None:
+    """Third plan RB6: a "Resume when ready" carry-on was REFUSED. A passing
+    refusal (:func:`wait_refusal_passes`) keeps the wait — until
+    :data:`WAIT_GIVE_UP_S` after its first refusal; a lasting one, or one
+    that lasted that long, ENDS the wait (only while it is still the one
+    refused: ``S.amend_wait``) and says why on the session's limit card
+    (:data:`_WAIT_ENDED`, the view's ``account_limit.wait_ended``) — never
+    tried every minute for ever without a word. Never raises."""
+    engine = platform.engine
+    account = str(setup.get("account") or "")
+    armed_at = str(wait.get("armed_at") or "")
+    key = (thread_id, armed_at)
+    why = _sentence(getattr(exc, "detail", "") or "")
+    if wait_refusal_passes(exc):
+        first = _WAIT_REFUSED.setdefault(key, when)
+        if (when - first).total_seconds() < WAIT_GIVE_UP_S:
+            return
+        words = WAIT_GAVE_UP_WORDS.format(why=why)
+    else:
+        words = WAIT_ENDED_WORDS.format(why=why)
+    _WAIT_REFUSED.pop(key, None)
+    try:
+        if not await asyncio.to_thread(S.amend_wait, engine, thread_id, armed_at, account, None):
+            return  # cancelled, chosen or carried on meanwhile: nothing to say
+        card = setup.get("account_limit")
+        if not isinstance(card, dict) or card.get("account") != account:
+            # The wait had no card of its own account: one names the account,
+            # so the words have a place on the session.
+            await asyncio.to_thread(S.update, engine, thread_id, setup={"account_limit": {
+                "account": account, "account_name": str(setup.get("account_name") or ""),
+                "at": when.isoformat(),
+            }})
+    except Exception:  # noqa: BLE001 — the next pass looks again
+        log.warning("ending the wait of build session %s failed", thread_id, exc_info=True)
+        return
+    _WAIT_ENDED[thread_id] = {"account": account, "words": words}
+    log.warning("the Resume when ready wait of build session %s ended: %s", thread_id, why)
+
+
+def wait_ended_words(thread_id: str, setup: dict[str, Any]) -> str:
+    """Third plan RB6: why the session's "Resume when ready" wait ended
+    without carrying the reply on (:func:`_wait_refused`), while its card of
+    that account is still shown and no wait is armed; else ""."""
+    ended = _WAIT_ENDED.get(thread_id)
+    card = setup.get("account_limit")
+    if not ended or setup.get("account_wait") or not isinstance(card, dict) \
+            or card.get("account") != ended.get("account"):
+        return ""
+    return ended.get("words") or ""
+
+
 async def resume_due(d: Any, *, now: Any = None) -> list[str]:
     """ONE pass of the wait loop: every session whose "Resume when ready" wait
     is due (its reset passed, or the next re-check) has its account checked
@@ -4213,7 +4479,11 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
                     continue
                 except HTTPException as exc:
                     log.info("resuming build session %s did not start: %s", thread_id, exc.detail)
+                    # Third plan RB6: a lasting refusal ends the wait and is
+                    # said; a passing one is tried again, for a day at most.
+                    await _wait_refused(platform, thread_id, setup, wait, exc, when)
                     continue
+                _WAIT_REFUSED.pop((thread_id, armed_at), None)
                 row = await asyncio.to_thread(S.get_row, engine, thread_id)
                 bus = getattr(platform, "event_bus", None)
                 if bus is not None:
@@ -4858,6 +5128,11 @@ def register(app: FastAPI, d: Any) -> None:
         # press armed, or one armed before the group was made, moves too, and
         # an account taken out of its group no longer does. The stored record
         # (who says the limit on the bell) is unchanged.
+        # Third plan RB6: why the "Resume when ready" wait ended without
+        # carrying the reply on — said on its card (``wait_ended``).
+        ended = wait_ended_words(row.id, setup)
+        if ended and isinstance(view.get("account_limit"), dict):
+            view["account_limit"] = {**view["account_limit"], "wait_ended": ended}
         wait = view.get("account_wait")
         if isinstance(wait, dict):
             wait = {k: v for k, v in wait.items() if k != "group"}
@@ -5961,6 +6236,8 @@ def register(app: FastAPI, d: Any) -> None:
         row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup={"account_wait": wait})
         if row is None:
             raise HTTPException(status_code=404, detail="no such coding session")
+        # Third plan RB6: waiting again — why the last wait ended is moot.
+        _WAIT_ENDED.pop(thread_id, None)
         wake_wait_loop()
         return await asyncio.to_thread(_full_view, row)
 
