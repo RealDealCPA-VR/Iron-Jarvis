@@ -20,6 +20,12 @@ WHAT IS LEFT OUT (``hidden_reason``), each for a reason the owner would give:
 * ``empty``: no folder, or nothing the owner typed.
 * ``open``: it is already an Iron Jarvis coding session (Build › Code holds
   the tool's session id), so it is on the list and in the record as that.
+* ``gone`` (the LIST only, v1.525.0): the folder it ran in no longer exists,
+  so it cannot be continued. It stays in the work record.
+
+A chat in Claude Code's own copy of a project
+(``<project>/.claude/worktrees/<name>``) is the project's work: grouped and
+filed under the project, opened in the copy (v1.525.0).
 
 RULES THIS MODULE KEEPS
 
@@ -84,13 +90,30 @@ LISTED = 500
 TITLE_CHARS = 120
 
 #: Text that marks a temporary folder wherever the PC keeps its own (a chat
-#: copied from another Windows login still reads as scratch).
-SCRATCH_MARKERS: tuple[str, ...] = ("/appdata/local/temp/",)
+#: copied from another Windows login still reads as scratch), and (v1.525.0)
+#: the Claude desktop app's own folder on each system: its scratch
+#: workspaces and agent sessions run there, never in a folder of the owner's.
+SCRATCH_MARKERS: tuple[str, ...] = (
+    "/appdata/local/temp/",
+    "/appdata/roaming/claude/",
+    "/library/application support/claude/",
+    "/.config/claude/",
+)
+
+#: v1.525.0: Claude Code (the desktop app) runs a session in its own copy of
+#: a project, ``<project>/.claude/worktrees/<name>``. The work is the
+#: project's: it is filed and grouped under the project, and opened in the
+#: copy (the tool keeps the conversation under the copy's folder).
+_COPY = re.compile(r"^(.+?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]+(?:[\\/].*)?$", re.I)
 
 HIDDEN_PROGRAM = "program"
 HIDDEN_SCRATCH = "scratch"
 HIDDEN_EMPTY = "empty"
 HIDDEN_OPEN = "open"
+#: v1.525.0: the folder the chat ran in is gone (a deleted copy of a
+#: project), so it cannot be continued. Left off the LIST only: it stays in
+#: the work record, under its project.
+HIDDEN_GONE = "gone"
 
 _ATTR = "_ironjarvis_other_tools_allowed"
 _SID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -214,6 +237,13 @@ def is_scratch(folder_key: str, roots: "list[str] | None" = None) -> bool:
     return any(keys.inside(folder_key, r) for r in (roots if roots is not None else _scratch_roots()))
 
 
+def project_of(folder: str) -> str:
+    """The folder a chat's work belongs to: the project for a Claude Code
+    copy of it, else the folder itself (text only)."""
+    m = _COPY.match(str(folder or "").strip())
+    return m.group(1) if m else str(folder or "")
+
+
 def _iso_of_ns(ns: int) -> str:
     return datetime.fromtimestamp(ns / 1e9, tz=timezone.utc).isoformat()
 
@@ -245,6 +275,7 @@ def light(tool: str, path: Path, mtime_ns: int, size: int) -> dict[str, Any] | N
         "tool": tool,
         "id": str(mod.id_from_path(path) or ""),
         "folder": folder,
+        "home": project_of(folder) if folder else "",
         "title": _SPACES.sub(" ", str(fields.get("title") or "")).strip()[:TITLE_CHARS],
         "started": fields.get("started") or fields.get("ended") or stamp,
         "ended": fields.get("ended") or stamp,
@@ -294,8 +325,11 @@ def used_ids(db: Any) -> set[str]:
 def listing_view(used: "set[str] | None" = None) -> dict[str, Any]:
     """BLOCKING: the owner's chats in the other tools, by tool then by
     folder, newest first: ``{tools: [{tool, label, total, folders: [{folder,
-    name, chats: [{id, title, started, ended}]}]}], hidden, whole}``. A tool
-    with nothing to show is left out."""
+    name, chats: [{id, title, folder, started, ended}]}]}], hidden, whole}``.
+    A group's folder is the project; a chat's own ``folder`` is where it ran
+    and is opened (a Claude Code copy of the project). A chat whose folder is
+    gone is left out (``HIDDEN_GONE``). A tool with nothing to show is left
+    out."""
     used = used or set()
     tools: list[dict[str, Any]] = []
     hidden = 0
@@ -303,6 +337,7 @@ def listing_view(used: "set[str] | None" = None) -> dict[str, Any]:
     if not READS_DISK:
         return {"tools": [], "hidden": 0, "whole": True}
     roots = _scratch_roots()
+    there: dict[str, bool] = {}
     for tool in TOOLS:
         try:
             files, all_of_them = _files(tool)
@@ -320,12 +355,19 @@ def listing_view(used: "set[str] | None" = None) -> dict[str, Any]:
             if hidden_reason(chat, used, roots):
                 hidden += 1
                 continue
-            fkey = keys.folder_key(chat["folder"])
-            group = groups.setdefault(fkey, {
-                "folder": chat["folder"], "name": keys.file_name(chat["folder"]) or chat["folder"], "chats": [],
+            if chat["folder"] not in there:  # one look per folder per listing
+                there[chat["folder"]] = os.path.isdir(chat["folder"])
+            if not there[chat["folder"]]:
+                hidden += 1  # HIDDEN_GONE: it cannot be continued
+                continue
+            home = chat.get("home") or chat["folder"]
+            group = groups.setdefault(keys.folder_key(home), {
+                "folder": home, "name": keys.file_name(home) or home, "chats": [],
             })
+            # ``folder`` is where the chat ran, which is where it is opened.
             group["chats"].append({
-                "id": chat["id"], "title": chat["title"], "started": chat["started"], "ended": chat["ended"],
+                "id": chat["id"], "title": chat["title"], "folder": chat["folder"],
+                "started": chat["started"], "ended": chat["ended"],
             })
             total += 1
         if total:
@@ -382,10 +424,11 @@ def candidates(db: Any, candidate: Callable[..., Any]) -> tuple[list[Any], bool]
                 chat = light(tool, path, mtime_ns, size)
                 if chat is None or hidden_reason(chat, frozenset(), roots):
                     return None
+                home = chat.get("home") or chat["folder"]
                 return {
                     "title": storable_text(chat["title"]),
-                    "folder": storable_text(chat["folder"]),
-                    "folder_key": storable_text(keys.folder_key(chat["folder"])),
+                    "folder": storable_text(home),
+                    "folder_key": storable_text(keys.folder_key(home)),
                     "tool": LABELS[tool],
                     "started_at": _naive(chat["started"]),
                     "updated_at": _naive(chat["ended"]) or _naive(_iso_of_ns(mtime_ns)),
@@ -445,5 +488,5 @@ def forget_cache() -> None:
 __all__ = [
     "CLAUDE", "CODEX", "LABELS", "LISTED", "READS_DISK", "SWITCH", "SWITCH_DEFAULT", "TOOLS",
     "allow", "allowed", "by_a_program", "candidates", "find", "forget_cache", "hidden_reason",
-    "is_scratch", "light", "listing_view", "live_state", "ref_of", "split_ref", "used_ids",
+    "is_scratch", "light", "listing_view", "live_state", "project_of", "ref_of", "split_ref", "used_ids",
 ]

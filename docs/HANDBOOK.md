@@ -2042,6 +2042,30 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Your other tools' chats, tidied after a look in the real window (v1.525.0)
+
+The "Other tools" part of the chat list (v1.518.0) was looked at with the
+chats on a real PC, and three things were wrong. All three are fixed.
+
+- **A copy of a project is the project.** The Claude desktop app sometimes
+  works in its own copy of a project, a folder like
+  `.claude\worktrees\sleepy-panini-7ddb8c` inside it. Those chats were listed
+  under that odd name. They are now listed under the project itself, and the
+  Memory page files them there too. Pressing one still opens it in the copy,
+  where Claude Code keeps it.
+- **A chat whose folder is gone is not offered.** When that copy has since
+  been deleted, the chat cannot be carried on, so it is left off the list. It
+  stays in memory as work done in the project.
+- **The Claude desktop app's own folders are left out**, like other temporary
+  folders: its scratch workspaces were listed as if they were your folders.
+- **A chat that began with pasted text is named by its words**, not by the
+  `<pasted_content …>` markup the app wraps around a paste. When you typed
+  something around the paste, those words name it. The same fix applies to
+  the chat titles on the Activity page's Other agents.
+
+On the PC this was checked on, the list went from 18 folders to 8 (plus one
+for Codex), and no title shows markup.
+
 ## What the screen says is what happens (v1.524.0)
 
 Where a button or a line named one thing and Iron Jarvis did another, the

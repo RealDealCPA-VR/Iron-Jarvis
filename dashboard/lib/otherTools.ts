@@ -22,6 +22,10 @@
 export interface OtherChat {
   id: string;
   title: string;
+  /** v1.525.0: where the chat ran, which is where it is opened. Its group's
+   *  folder is the project; a chat in Claude Code's own copy of the project
+   *  (`<project>\.claude\worktrees\<name>`) ran in that copy. */
+  folder: string;
   started: string;
   ended: string;
 }
@@ -80,7 +84,13 @@ export function decodeOtherTools(raw: unknown): OtherTool[] {
         const id = text(co?.id, 200).trim();
         const title = text(co?.title, 300).trim();
         if (!co || !id || !title) continue;
-        chats.push({ id, title, started: text(co.started, 60), ended: text(co.ended, 60) });
+        chats.push({
+          id,
+          title,
+          folder: text(co.folder, 1000).trim() || folder,
+          started: text(co.started, 60),
+          ended: text(co.ended, 60),
+        });
       }
       if (chats.length) folders.push({ folder, name: text(fo.name, 200).trim() || folder, chats });
     }

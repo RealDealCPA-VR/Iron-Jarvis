@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.525.0
+
+**Your other tools' chats, tidied after a look in the real window.** The "Other tools" part of the chat list (v1.518.0) was looked at with the chats on a real PC, and three things were wrong.
+
 ## v1.524.0
 
 **What the screen says is what happens.** Where a button or a line named one thing and Iron Jarvis did another, the two now agree: "Continue on X" goes to X, a setting changed while a reply runs says when it takes effect, and a box you turned off stays off.
@@ -77,7 +81,3 @@
 ## v1.507.1
 
 **It learns from what went wrong.** The last part of the review fixes: Iron Jarvis now notices when something went wrong and asks whether to remember it.
-
-## v1.506.0
-
-**Ask for anything in chat.** The sixth part of the review fixes: things the app could do that chat could not reach, could not find, or could not point you to.

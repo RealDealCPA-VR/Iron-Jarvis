@@ -111,7 +111,9 @@ describe("the list's data", () => {
         tool: "claude-code",
         label: "claude-code",
         total: 1,
-        folders: [{ folder: "C:\\B", name: "C:\\B", chats: [{ id: "1", title: "Kept", started: "", ended: "" }] }],
+        folders: [
+          { folder: "C:\\B", name: "C:\\B", chats: [{ id: "1", title: "Kept", folder: "C:\\B", started: "", ended: "" }] },
+        ],
       },
     ]);
   });
@@ -215,6 +217,31 @@ describe("the row in the sidebar", () => {
     // It is a coding session now: it left this list, and Codex with it.
     expect(screen.queryByTestId("other-tool-codex")).toBeNull();
     expect(screen.getByTestId("other-tool-claude-code")).toBeInTheDocument();
+  });
+
+  it("a chat that ran in a copy of the project is grouped under the project and opened in its copy", async () => {
+    const copy = "C:\\Work\\Parser\\.claude\\worktrees\\calm-otter-1a2b3c";
+    answer = {
+      tools: [
+        {
+          tool: "claude-code",
+          label: "Claude Code",
+          folders: [
+            {
+              folder: "C:\\Work\\Parser",
+              name: "Parser",
+              chats: [{ ...chat("w1", "Try the parser in a copy", 9), folder: copy }, chat("w2", "Fix it for real", 8)],
+            },
+          ],
+        },
+      ],
+    };
+    await shown();
+    fireEvent.click(screen.getByTestId("other-tool-claude-code"));
+    expect(screen.getByTestId("other-tool-list-claude-code")).toHaveTextContent("Parser");
+    fireEvent.click(screen.getByTestId("other-chat-w1"));
+    await waitFor(() => expect(push).toHaveBeenCalled());
+    expect(calls.post[0]?.body).toEqual({ harness: "claude-code", folder: copy, harness_session_id: "w1" });
   });
 
   it("a refusal is said under the row, in the daemon's words, and nothing navigates", async () => {

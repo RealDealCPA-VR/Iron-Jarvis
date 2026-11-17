@@ -66,8 +66,14 @@ def scene(tmp_path, monkeypatch):
     outside.forget_cache()
 
 
-def _claude(scene, sid, words, *, folder=None, entry="claude-desktop", day=10):
+def _made(folder: str, exists: bool) -> None:
+    if exists and folder and os.path.isabs(folder):
+        os.makedirs(folder, exist_ok=True)
+
+
+def _claude(scene, sid, words, *, folder=None, entry="claude-desktop", day=10, exists=True):
     folder = str(scene.folder if folder is None else folder)
+    _made(folder, exists)
     home = scene.claude / "projects" / "some-slug"
     home.mkdir(parents=True, exist_ok=True)
     stamp = f"2026-11-{day:02d}T10:00:00.000Z"
@@ -84,8 +90,9 @@ def _claude(scene, sid, words, *, folder=None, entry="claude-desktop", day=10):
     return path
 
 
-def _codex(scene, sid, words, *, folder=None, originator="codex_cli_rs", source="cli", day=11):
+def _codex(scene, sid, words, *, folder=None, originator="codex_cli_rs", source="cli", day=11, exists=True):
     folder = str(scene.folder if folder is None else folder)
+    _made(folder, exists)
     home = scene.codex / "sessions" / "2026" / "11" / f"{day:02d}"
     home.mkdir(parents=True, exist_ok=True)
     stamp = f"2026-11-{day:02d}T09:00:00.000Z"
@@ -144,10 +151,29 @@ def test_a_windows_temporary_folder_is_scratch_whoevers_login_it_was():
 
     chat = {"tool": "claude-code", "id": C1, "title": "Scratch work", "origin": "cli", "source": "",
             "folder": "C:/Users/someone/AppData/Local/Temp/claude/scratchpad"}
-    assert outside.SCRATCH_MARKERS == ("/appdata/local/temp/",)
+    assert "/appdata/local/temp/" in outside.SCRATCH_MARKERS
     assert outside.hidden_reason(chat, frozenset(), []) == outside.HIDDEN_SCRATCH
     assert outside.is_scratch(keys.folder_key("C:/Users/someone/Documents/Temp notes"), []) is False
     assert outside.hidden_reason({**chat, "folder": "C:/Work/Hartleys"}, frozenset(), []) == ""
+
+
+@pytest.mark.parametrize("folder", [
+    "C:/Users/someone/AppData/Roaming/Claude/scratch-workspaces/a1/b2/scratch-2026-11-01-a18d9b",
+    "C:/Users/someone/AppData/Roaming/Claude/local-agent-mode-sessions/x",
+    "/Users/someone/Library/Application Support/Claude/scratch-workspaces/a1",
+    "/home/someone/.config/Claude/scratch-workspaces/a1",
+])
+def test_the_claude_desktop_apps_own_folders_are_scratch(folder):
+    chat = {"tool": "claude-code", "id": C1, "title": "Scratch work", "origin": "claude-desktop", "source": "",
+            "folder": folder}
+    assert outside.hidden_reason(chat, frozenset(), []) == outside.HIDDEN_SCRATCH
+
+
+def test_a_folder_merely_named_like_claude_is_not_scratch():
+    from iron_jarvis.workmap import keys
+
+    for folder in ("C:/Users/someone/Projects/Claude", "C:/Work/Roaming/Claude notes", "/home/someone/claude"):
+        assert outside.is_scratch(keys.folder_key(folder), []) is False, folder
 
 
 @pytest.mark.parametrize("why", ["program_claude", "program_codex", "program_codex_exec", "temp",
@@ -199,6 +225,46 @@ def test_one_chat_kept_in_two_of_the_tools_folders_is_listed_once_newest_file(sc
     assert _titles(view) == {"claude-code": ["Where it was carried on"]}
     scene.wm.refresh(force=True)
     assert [r.title for r in _rows(scene).values()] == ["Where it was carried on"]
+
+
+def test_a_chat_in_a_copy_of_the_project_is_the_projects_work_opened_in_its_copy(scene):
+    copy = scene.folder / ".claude" / "worktrees" / "calm-otter-1a2b3c"
+    _claude(scene, C1, "Try it in a copy", folder=copy, day=12)
+    _claude(scene, C2, "Fix it for real", day=10)
+    view = outside.listing_view()
+    folders = view["tools"][0]["folders"]
+    assert [(f["folder"], f["name"]) for f in folders] == [(str(scene.folder), "Hartleys 2026")]
+    by_id = {c["id"]: c for c in folders[0]["chats"]}
+    assert by_id[C1]["folder"] == str(copy)  # opened where it ran
+    assert by_id[C2]["folder"] == str(scene.folder)
+    scene.wm.refresh(force=True)
+    assert {r.folder for r in _rows(scene).values()} == {str(scene.folder)}
+    text = _block(scene, folder=str(scene.folder))
+    assert "Try it in a copy" in text and "Fix it for real" in text
+
+
+def test_a_chat_whose_folder_is_gone_is_off_the_list_but_stays_in_memory(scene):
+    gone = scene.folder / ".claude" / "worktrees" / "deleted-copy-9f8e7d"
+    _claude(scene, C1, "Work in a copy since deleted", folder=gone, exists=False, day=12)
+    _claude(scene, C2, "Work that stays", day=10)
+    view = outside.listing_view()
+    assert _titles(view) == {"claude-code": ["Work that stays"]}
+    assert view["hidden"] == 1
+    scene.wm.refresh(force=True)
+    assert {r.title for r in _rows(scene).values()} == {"Work in a copy since deleted", "Work that stays"}
+    assert "Work in a copy since deleted" in _block(scene, folder=str(scene.folder))
+
+
+@pytest.mark.parametrize("prompt,title", [
+    ('<pasted_content id="b6d3">Quarterly close checklist for March</pasted_content id="b6d3">',
+     "Quarterly close checklist for March"),
+    ('Summarise this <pasted_content id="a1">a very long pasted document</pasted_content id="a1"> in five lines',
+     "Summarise this in five lines"),
+    ("No paste at all", "No paste at all"),
+])
+def test_a_pasted_first_message_is_titled_by_its_words_not_its_markup(scene, prompt, title):
+    _claude(scene, C1, prompt)
+    assert _titles(outside.listing_view()) == {"claude-code": [title]}
 
 
 def test_a_file_is_read_once_until_it_changes(scene, monkeypatch):

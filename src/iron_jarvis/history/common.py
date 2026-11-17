@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,6 +18,21 @@ def clip(text: Any, cap: int = TEXT_CAP) -> str:
     if not isinstance(text, str):
         return ""
     return text if len(text) <= cap else text[:cap]
+
+
+#: v1.525.0: Claude desktop wraps pasted text as
+#: ``<pasted_content id="…">…</pasted_content id="…">``.
+_PASTE = re.compile(r"<pasted_content\b[^>]*>.*?</pasted_content\b[^>]*>", re.S)
+_PASTE_TAG = re.compile(r"</?pasted_content\b[^>]*>")
+
+
+def typed_words(text: str) -> str:
+    """A prompt as a title reads it: the words typed around any pasted text,
+    or, when the prompt is only a paste, the pasted text without its tags."""
+    if not isinstance(text, str) or "pasted_content" not in text:
+        return text if isinstance(text, str) else ""
+    around = _PASTE_TAG.sub(" ", _PASTE.sub(" ", text)).strip()
+    return around or _PASTE_TAG.sub(" ", text).strip()
 
 
 def title_of(text: str) -> str:

@@ -204,7 +204,7 @@ export default function OtherToolChats({
                             data-testid={`other-chat-${c.id}`}
                             disabled={busy !== null}
                             title={`${c.title}\nOpens as a coding session on ${t.label}.`}
-                            onClick={() => void open(t.tool, f.folder, c.id)}
+                            onClick={() => void open(t.tool, c.folder, c.id)}
                             className={`${ROW} text-zinc-400 disabled:cursor-wait disabled:opacity-60`}
                           >
                             <span className="min-w-0 flex-1 truncate">{c.title}</span>

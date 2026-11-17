@@ -8,27 +8,27 @@ How to use this file: read the contents list, then read only the entries your ch
 ## Contents (22 entries; the number is the line where the full text starts)
 
 - L43: **The owner's chats in OTHER coding tools are a fifth source of the work record, read from those tools' own files behind one switch that fails closed** (v1.518.0)
-- L54: **The identity spine reaches EVERY prompt seam** (v1.144.0)
-- L64: **A rule that lives in one page's JSX is not a rule, and a delete must untag what SPAWNS** (v1.220.0)
-- L84: **Task reflections are not knowledge about the user; chat can remember a stated preference; the Memory page says what it knows** (v1.279.0)
-- L109: **A preference has a STATUS, and only a confirmed one reaches a prompt; the second same correction becomes ONE question** (v1.305.0)
-- L174: **The profile reaches a Build pane ONLY through a switched-on, generated block in the CLI's own instructions file — outside text byte-identical, a hand edit never overwritten** (v1.306.0)
-- L252: **An MCP memory base WRITES only through tools the user CONFIRMED; a refusal is never "unavailable"; a save that landed is never sent twice** (v1.408.0)
-- L306: **A BRAIN PROFILE names the durable memory base; ONE resolve rule; the guide is trusted, every retrieved note is DATA; a save is "saved" only when read back; a structural change asks every time** (v1.406.0)
-- L381: **A project KNOWS its coding sessions: resolved by FOLDER at read time, merged into "Recent activity", and a repeated correction in Chat › Code is the chat's own Keep line** (v1.414.0)
-- L466: **A skill works in a coding session the way the harness it came from runs it: the same discovery, listed up front, Claude Code's base-directory line and argument filling, the harnesses' own switches; `allowed-tools` grants nothing** (v1.418.0)
-- L574: **THE WORK RECORD: what Iron Jarvis did, in which folder, built only from its own records; a chat is told of a piece of work only after its SOURCE was asked again** (v1.491.0)
-- L648: **A RECAP of finished work is written by the conversation's own model and kept only where the conversation's record supports it; it is told only in ITS OWN folder; a folder can be FORGOTTEN** (v1.494.0)
-- L808: **THE IMPROVEMENTS INBOX: one read over every waiting suggestion; it decides NOTHING itself** (v1.496.0)
-- L897: **CLIENTS: a client's facts are told only in that client's own folders, and ONE wall (`workmap/clients/wall.may_tell`) decides what every turn may be told** (v1.499.0)
-- L911: `guide/` — THE IRON JARVIS GUIDE (v1.224.0; v1.223.0 shipped it as a chat persona, which the user rejected — i…
-- L939: `profile/` — the user profile (ONE row): `models` (record), `store` (read-never-writes, partial save), `preset…
-- L945: `skills/` — recursive discovery incl. `~/.claude/skills`, `~/.claude/plugins`, `~/.codex/skills` (`framework.p…
-- L953: **A secret never reaches memory, preferences or a brain note** (v1.499.3)
-- L955: **Every store a model reads back passes the client wall, and only the owner's own word is kept unasked** (v1.501.0)
-- L993: **What went wrong in a chat leaves ONE proposed suggestion in the owner's words, walled by its chat** (v1.507.0)
-- L1008: **Two rows with the same time are ordered by which was written later** (v1.510.0)
-- L1015: **A client question that is skipped says why in the log, and a test that takes it through a lane does not race the lane's wait** (v1.515.0)
+- L55: **The identity spine reaches EVERY prompt seam** (v1.144.0)
+- L65: **A rule that lives in one page's JSX is not a rule, and a delete must untag what SPAWNS** (v1.220.0)
+- L85: **Task reflections are not knowledge about the user; chat can remember a stated preference; the Memory page says what it knows** (v1.279.0)
+- L110: **A preference has a STATUS, and only a confirmed one reaches a prompt; the second same correction becomes ONE question** (v1.305.0)
+- L175: **The profile reaches a Build pane ONLY through a switched-on, generated block in the CLI's own instructions file — outside text byte-identical, a hand edit never overwritten** (v1.306.0)
+- L253: **An MCP memory base WRITES only through tools the user CONFIRMED; a refusal is never "unavailable"; a save that landed is never sent twice** (v1.408.0)
+- L307: **A BRAIN PROFILE names the durable memory base; ONE resolve rule; the guide is trusted, every retrieved note is DATA; a save is "saved" only when read back; a structural change asks every time** (v1.406.0)
+- L382: **A project KNOWS its coding sessions: resolved by FOLDER at read time, merged into "Recent activity", and a repeated correction in Chat › Code is the chat's own Keep line** (v1.414.0)
+- L467: **A skill works in a coding session the way the harness it came from runs it: the same discovery, listed up front, Claude Code's base-directory line and argument filling, the harnesses' own switches; `allowed-tools` grants nothing** (v1.418.0)
+- L575: **THE WORK RECORD: what Iron Jarvis did, in which folder, built only from its own records; a chat is told of a piece of work only after its SOURCE was asked again** (v1.491.0)
+- L649: **A RECAP of finished work is written by the conversation's own model and kept only where the conversation's record supports it; it is told only in ITS OWN folder; a folder can be FORGOTTEN** (v1.494.0)
+- L809: **THE IMPROVEMENTS INBOX: one read over every waiting suggestion; it decides NOTHING itself** (v1.496.0)
+- L898: **CLIENTS: a client's facts are told only in that client's own folders, and ONE wall (`workmap/clients/wall.may_tell`) decides what every turn may be told** (v1.499.0)
+- L912: `guide/` — THE IRON JARVIS GUIDE (v1.224.0; v1.223.0 shipped it as a chat persona, which the user rejected — i…
+- L940: `profile/` — the user profile (ONE row): `models` (record), `store` (read-never-writes, partial save), `preset…
+- L946: `skills/` — recursive discovery incl. `~/.claude/skills`, `~/.claude/plugins`, `~/.codex/skills` (`framework.p…
+- L954: **A secret never reaches memory, preferences or a brain note** (v1.499.3)
+- L956: **Every store a model reads back passes the client wall, and only the owner's own word is kept unasked** (v1.501.0)
+- L994: **What went wrong in a chat leaves ONE proposed suggestion in the owner's words, walled by its chat** (v1.507.0)
+- L1009: **Two rows with the same time are ordered by which was written later** (v1.510.0)
+- L1016: **A client question that is skipped says why in the log, and a test that takes it through a lane does not race the lane's wait** (v1.515.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -49,7 +49,8 @@ How to use this file: read the contents list, then read only the entries your ch
   - **`READS_DISK` is off for the whole test session** (`tests/conftest.py`, `_other_tools_never_read_the_real_homes`): a bare test daemon must never read the developer's `~/.claude` into its record and its prompts. A test of this source turns it on, points both homes at its own folders, gives the scene its own temporary folder and empties `SCRATCH_MARKERS` (pytest's folders are under the PC's temporary folder).
   - **Dashboard**: `components/chat/OtherToolChats.tsx` + `lib/otherTools.ts`, mounted under "Archived chats" in `SidebarChats` and in the chat page's own list. Absent when there are no chats or the read failed; first read `FIRST_READ_MS` (3 s) after mount, again only when a tool is opened and the list is a minute old; "N new" counts chats written since the tool was last opened in this browser (localStorage `ij_other_tools_seen`), never on first sight. A press makes Build › Code's own request (`POST /build/app/sessions` with `harness_session_id`) and goes to `/terminals?view=code&code=<id>`. The component takes `go` and never calls `useRouter`: the chat page is drawn where no app router is mounted.
   - **OPEN:** claude.ai chats (the desktop app's Chat tab) are not on this PC; Iron-Proxy accounts' homes are not read; a Memory page row of this kind has no link (`index.link_for` answers ""); no files are taken from these chats; recaps and "Remember this" are the next release; client noticing counts these rows' folders like any other; not run in the packaged app at release.
-  - **Pins:** `tests/test_other_tool_chats_v1518.py` (34; nine mutations, all red), `dashboard/__tests__/other-tool-chats-v1518.test.tsx` (13).
+  - **What the real window showed (v1.525.0; the first look with the owner's real chats, after release).** (1) The Claude desktop app runs sessions in its own COPY of a project, `<project>/.claude/worktrees/<name>`: `outside.project_of` files and groups such a chat under the project (`home`), while the chat's own `folder` (where it ran) is what a press opens, because Claude Code keeps the conversation under the copy's folder and Build › Code's opener matches it by that folder. A group's `folder` is the project; each chat row carries `folder`. (2) A chat whose folder is GONE (`HIDDEN_GONE`, one `isdir` per distinct folder per listing) is left off the LIST only; it stays in the record under its project. (3) `SCRATCH_MARKERS` also names the Claude desktop app's own folder on each system (`AppData/Roaming/Claude`, `Library/Application Support/Claude`, `.config/Claude`): its scratch workspaces and agent sessions run there. (4) Claude desktop wraps a paste as `<pasted_content id="…">…</pasted_content id="…">` (the closing tag carries the id too); `history.common.typed_words` titles a prompt by the words typed around a paste, else by the paste without its tags, in `history/claude_code.summarize` (so the Activity page's Other agents gets it too). On the owner's PC: 18 folders became 9, 6 titles lost their markup. A fixture's chat folder must EXIST now (the test helpers make it; `exists=False` does not).
+  - **Pins:** `tests/test_other_tool_chats_v1518.py` (44; nine mutations in v1.518.0 and seven in v1.525.0, all red), `dashboard/__tests__/other-tool-chats-v1518.test.tsx` (14).
 
 - **The identity spine reaches EVERY prompt seam** (v1.144.0). `profile/`
   renders the user's profile and `personas/voice.py` the assistant's voice;

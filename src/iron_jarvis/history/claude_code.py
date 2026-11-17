@@ -22,7 +22,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
-from .common import clip, event, first_str, iso, result_text, s, title_of
+from .common import clip, event, first_str, iso, result_text, s, title_of, typed_words
 
 HARNESS = "claude-code"
 
@@ -189,7 +189,7 @@ def summarize(
         if not out["title"]:
             prompt = _prompt_text(rec)
             if prompt:
-                out["title"] = title_of(prompt)
+                out["title"] = title_of(typed_words(prompt))
         named = _name_of(rec) or named
         out["ended"] = iso(rec.get("timestamp")) or out["ended"]
     for _, rec in tail:
