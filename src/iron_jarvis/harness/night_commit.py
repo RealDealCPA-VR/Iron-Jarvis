@@ -146,7 +146,7 @@ def _staged(wt: Path) -> "list[tuple[str, str, str]]":
     got = _g(["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev"], wt, reads=True)
     if not got.ok:
         raise GitRefused("Git could not list what it was about to commit.", 409)
-    return _parse_raw(got.out)
+    return parse_diff_raw(got.out)
 
 
 def _committed(wt: Path) -> "list[tuple[str, str, str]]":
@@ -156,10 +156,17 @@ def _committed(wt: Path) -> "list[tuple[str, str, str]]":
     got = _g(["diff", "--raw", "-z", "--no-renames", "--no-abbrev", "HEAD~1", "HEAD"], wt, reads=True)
     if not got.ok:
         raise GitRefused("Git could not list what it committed.", 409)
-    return _parse_raw(got.out)
+    return parse_diff_raw(got.out)
 
 
-def _parse_raw(out_text: str) -> "list[tuple[str, str, str]]":
+def parse_diff_raw(out_text: str) -> "list[tuple[str, str, str]]":
+    """``(status, new mode, path)`` of each change in the text of ``git diff
+    --raw -z --no-renames`` (the status letter only: ``A``, ``M``, ``D``...).
+    A malformed entry is skipped. Pure.
+
+    THE ONE READER of that listing for the night commit's screen
+    (:func:`screen`, :func:`check_commit`) and for "Try on…" (``harness/
+    attempts``), which screens what it would commit by the same rules."""
     tokens = _split_z(out_text)
     out: list[tuple[str, str, str]] = []
     i = 0
@@ -220,7 +227,7 @@ def screen(wt: Path) -> list[dict[str, str]]:
     unstaged entirely) when that cannot be made sure of. BLOCKING."""
     from .branches import GitRefused, _g
 
-    left = _judge(wt, _staged(wt), "HEAD")
+    left = judge_changes(wt, _staged(wt), "HEAD")
     if not left:
         return []
     paths = sorted(left)
@@ -241,14 +248,22 @@ def check_commit(wt: Path) -> list[dict[str, str]]:
     repository's own hooks ran between the screen and the commit, and a hook
     that stages everything again (``git add -A`` after a formatter) put back
     what the screen left out. ``[]`` when the commit is clean. BLOCKING."""
-    left = _judge(wt, _committed(wt), "HEAD~1")
+    left = judge_changes(wt, _committed(wt), "HEAD~1")
     return [{"path": rel, "why": left[rel]} for rel in sorted(left)]
 
 
-def _judge(wt: Path, entries: "list[tuple[str, str, str]]", old_rev: str) -> dict[str, str]:
-    """``{path: why}`` of the changes (``entries``) a night commit must not
-    take; a changed file's secrets count only when ``old_rev``'s copy did not
-    hold them. BLOCKING."""
+def judge_changes(wt: Path, entries: "list[tuple[str, str, str]]", old_rev: str) -> dict[str, str]:
+    """``{path: why}`` of the changes (``entries``, as :func:`parse_diff_raw`
+    gives them) that must not be committed: a secret-named file, a new file
+    in a dependency or cache folder, a file over :data:`MAX_COMMIT_FILE_BYTES`,
+    or text holding a secret — a changed file's secrets count only when
+    ``old_rev``'s copy did not hold them. ``why`` is :data:`SECRET`,
+    :data:`DEPENDENCY` or :data:`LARGE` (:func:`why_words` says it). BLOCKING
+    (reads the folder and runs git).
+
+    THE ONE SCREEN, called by the night commit (:func:`screen`,
+    :func:`check_commit`) and by "Try on…" (``harness/attempts``), so both
+    leave out the same files for the same reasons."""
     left: dict[str, str] = {}
     to_read: list[tuple[str, str]] = []
     for status, mode, rel in entries:
@@ -286,6 +301,16 @@ def _judge(wt: Path, entries: "list[tuple[str, str, str]]", old_rev: str) -> dic
         if found:
             left[rel] = SECRET
     return left
+
+
+def _parse_raw(out_text: str) -> "list[tuple[str, str, str]]":
+    """Kept for older callers: :func:`parse_diff_raw`."""
+    return parse_diff_raw(out_text)
+
+
+def _judge(wt: Path, entries: "list[tuple[str, str, str]]", old_rev: str) -> dict[str, str]:
+    """Kept for older callers: :func:`judge_changes`."""
+    return judge_changes(wt, entries, old_rev)
 
 
 def why_words(why: str) -> str:
@@ -332,5 +357,5 @@ def left_out_words(left: list[dict[str, Any]], total: "int | None" = None, *,
 
 __all__ = [
     "DEPENDENCY", "LARGE", "MAX_COMMIT_FILE_BYTES", "MAX_LEFT_OUT_KEPT", "SECRET", "left_out_words",
-    "check_commit", "screen", "secret_name", "secrets_in", "why_words",
+    "check_commit", "judge_changes", "parse_diff_raw", "screen", "secret_name", "secrets_in", "why_words",
 ]

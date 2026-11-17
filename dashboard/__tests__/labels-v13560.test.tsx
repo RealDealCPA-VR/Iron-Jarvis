@@ -202,6 +202,13 @@ describe("hovering 'low trust' says what the run cannot do", () => {
     );
     for (const f of LOW_TRUST_FAMILIES) expect(f.tools.length).toBeGreaterThan(0);
   });
+
+  it("third fix plan (PG3): running code the model wrote is named as kept away", () => {
+    const fam = LOW_TRUST_FAMILIES.find((f) => f.tools.includes("run_code"));
+    expect(fam?.words).toBe("code it writes");
+    expect([...(fam?.tools ?? [])].sort()).toEqual(["code_run", "repl", "run_code"]);
+    expect(LOW_TRUST_CANNOT).toContain("can't run code it writes");
+  });
 });
 
 /* ===================================================== after a restart */

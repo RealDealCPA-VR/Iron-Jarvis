@@ -36,6 +36,71 @@ from ...tools.undo import RevertConflict
 logger = logging.getLogger("iron_jarvis.undo")
 
 
+# THE UNDO PRESS IS THE CONSENT (third fix plan, PG4, decision K4). A revert
+# meets the permission gate of the tool that made the change, and the gate
+# was asked with nobody there to answer — so a tool set to ask (every rename,
+# move or copy of a download on a default install; every file edit for a
+# person who set edits to ask) could never be undone. When a PERSON pressed
+# Undo (this route, a task card's Revert, a coding session's Rewind) the gate
+# is handed the consent for THAT tool's permission key for THAT one revert
+# (``session_allow``): a tool set to never stays refused, and the folder
+# policy and every other check the revert passes through are unchanged. An
+# undo a MODEL asks for (``change_undo``, ``config_undo``) passes a plain id
+# and gets no consent: its gate is what it was.
+
+
+class PressedUndo(str):
+    """An action id a PERSON pressed Undo, Revert or Rewind on — the only way
+    besides ``pressed=True`` that :func:`perform_undo` hands the gate the
+    consent. A plain ``str`` never carries it, so a caller that does not say
+    a person pressed is refused as before (fail closed). ``harness/rewind.plan``
+    mints these for the actions of the Rewind the person asked for."""
+
+    __slots__ = ()
+
+
+def _pressed(action_id: Any, pressed: bool) -> bool:
+    return bool(pressed) or isinstance(action_id, PressedUndo)
+
+
+#: The 422 for a change whose tool is gone (was "tool '<name>' is no longer
+#: registered — cannot undo").
+TOOL_GONE = "This change cannot be undone: the tool that made it is no longer part of Iron Jarvis."
+
+
+def _doing_words(tool_name: str) -> str:
+    """What the tool does, in the approval card's own words ("save a file")."""
+    try:
+        from ...agents.mission import card_words
+
+        return card_words(tool_name)
+    except Exception:  # noqa: BLE001 — words only
+        return "use the tool that made it"
+
+
+def revert_refusal(permissions: Any, tool: Any, *, pressed: bool) -> str:
+    """Why the gate refuses to put back a change *tool* made — ``""`` when it
+    lets the revert run. ``pressed``: a person pressed Undo, so an ASK is
+    answered by that press (only for this tool's own permission key; a
+    never is never lifted). The reason is a plain clause that follows
+    "This change was not undone: " / a rewind's file name. Never raises."""
+    key = tool.perm_key()
+    try:
+        decision = permissions.authorize(key, {}, session_allow=frozenset({key}) if pressed else None)
+    except Exception:  # noqa: BLE001 — a gate fault refuses, in words
+        logger.warning("undo: the permission check for %s failed", key, exc_info=True)
+        return "Iron Jarvis could not check whether it may put it back"
+    if decision.allowed:
+        return ""
+    words = _doing_words(getattr(tool, "name", "") or key)
+    if decision.mode is PermissionMode.DENY:
+        return f"putting it back means letting Iron Jarvis {words}, and your settings never allow that"
+    return (
+        f"putting it back means letting Iron Jarvis {words}, which asks you first, "
+        "so only you can undo it, with its Undo in the app"
+    )
+
+
 # NOTHING HERE TOUCHES THE DATABASE ON THE EVENT LOOP (v1.311.0, finding
 # undo-revert-db-writes-on-loop). Both routes are `async def` — `tool.revert`
 # is a coroutine that offloads its own file I/O — and every SQLite
@@ -171,11 +236,17 @@ def _revert_candidates(d, session_id: str) -> list[str]:
         ]
 
 
-async def perform_undo(d, action_id: str) -> dict[str, Any]:
+async def perform_undo(d, action_id: str, *, pressed: bool = False) -> dict[str, Any]:
     """Reverse one recorded action — THE body of ``POST /undo/{action_id}``
     (calm UI redesign: chat's ``config_undo`` runs this same code, so "undo
     that" in chat and the Undo button cannot drift apart). Raises
-    ``HTTPException`` with the route's exact status and words."""
+    ``HTTPException`` with the route's exact status and words.
+
+    ``pressed`` (or a :class:`PressedUndo` id): a PERSON pressed Undo, and
+    that press is the consent a tool set to ask needs (PG4, K4). Default
+    False: a model's undo is gated as before."""
+    consent = _pressed(action_id, pressed)
+    action_id = str(action_id)
     platform = d.platform
     engine = platform.engine
 
@@ -265,17 +336,14 @@ async def perform_undo(d, action_id: str) -> dict[str, Any]:
         result_output = _words
     else:
         # 4) Tool-backed revert: same tool, same PermissionEngine + fs policy.
+        # A person's press answers the tool's ask (PG4, K4); a never stays.
         tool = platform.registry.get(tool_name)
         if tool is None:
+            raise HTTPException(status_code=422, detail=TOOL_GONE)
+        why = revert_refusal(platform.permissions, tool, pressed=consent)
+        if why:
             raise HTTPException(
-                status_code=422,
-                detail=f"tool '{tool_name}' is no longer registered — cannot undo",
-            )
-        decision = platform.permissions.authorize(tool.perm_key(), {})
-        if not decision.allowed:
-            raise HTTPException(
-                status_code=403,
-                detail=f"permission denied: {decision.reason}",
+                status_code=403, detail=f"This change was not undone: {why}."
             )
         # The workspace the envelope's relative path was captured against
         # (v1.166.3) beats any reconstruction: chat runs as session id
@@ -474,7 +542,8 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/undo/{action_id}")
     async def undo_action(action_id: str) -> dict[str, Any]:
-        return await perform_undo(d, action_id)
+        # The dashboard's Undo: a person pressed it (PG4, K4).
+        return await perform_undo(d, action_id, pressed=True)
 
     @app.post("/sessions/{session_id}/revert")
     async def revert_session(session_id: str) -> dict[str, Any]:

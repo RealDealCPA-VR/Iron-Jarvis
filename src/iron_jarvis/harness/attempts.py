@@ -887,6 +887,10 @@ class StartPoint:
     folder: str
     head: str = ""
     carried: bool = False
+    #: Third plan G13 (NA5): the files NOT carried — the night commit's own
+    #: screen left them out (``[{path, why}]``, ``why`` in plain words). They
+    #: stay in the session's folder as they were; no attempt has them.
+    left_out: list[dict[str, str]] = field(default_factory=list)
 
 
 #: The subject of the commit that carries a session's work not committed yet
@@ -925,11 +929,55 @@ def _copy_own_index(cwd: Path, to: Path) -> bool:
         return False
 
 
-def folder_tree(cwd: Path, head: str) -> str:
+#: Third plan G13 (NA5): the screen could not be run on what would be carried.
+CARRY_UNSCREENED = (
+    "Iron Jarvis could not check the session's files for secrets and very large files before carrying "
+    "them into the attempts, so nothing started."
+)
+
+
+class _Unscreened(Exception):
+    """The night screen could not judge (or leave out) what would be carried."""
+
+
+def _screen_carried(cwd: Path, head: str, index: Path) -> list[dict[str, str]]:
+    """THE NIGHT COMMIT'S OWN SCREEN (``night_commit.judge_changes``: secret-named
+    files, secret-shaped text, files over its size limit, new files in a
+    dependency folder) on what the THROWAWAY ``index`` would carry over
+    ``head``; what fails it is put back to ``head``'s copy in that index (a
+    new file: not there at all). ``[{path, why}]`` (``why`` in plain words);
+    :class:`_Unscreened` when it cannot be made sure of — unscreened is never
+    carried. The folder's own index and files are not touched. BLOCKING."""
+    from . import night_commit as N
+
+    diff = ["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev", head]
+    got = _gi(diff, cwd, index)
+    if not got.ok:
+        raise _Unscreened("git could not list what would be carried")
+    try:
+        left = N.judge_changes(cwd, N.parse_diff_raw(got.out), head)  # the night's one screen
+    except Exception as exc:  # noqa: BLE001
+        raise _Unscreened(str(exc)) from None
+    if not left:
+        return []
+    paths = sorted(left)
+    back = _gi(["--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul", head],
+               cwd, index, input="\0".join(paths).encode("utf-8"))
+    after = _gi(diff, cwd, index) if back.ok else None
+    still = {rel for _s, _m, rel in N.parse_diff_raw(after.out)} if after is not None and after.ok else None
+    if still is None or still & set(paths):
+        raise _Unscreened("the files to leave out could not be left out")
+    return [{"path": rel, "why": N.why_words(left[rel])} for rel in paths]
+
+
+def screened_tree(cwd: Path, head: str) -> "tuple[str, list[dict[str, str]]]":
     """The tree of the folder's CURRENT files — committed or not, new files
     included, ignored ones left out (``git add -A`` into a THROWAWAY copy of
-    its index, else one read from ``head``). The folder's own index, files
-    and refs are not touched. "" when it cannot be read. BLOCKING."""
+    its index, else one read from ``head``) — after the night commit's own
+    screen (:func:`_screen_carried`), and what that screen left out. The
+    folder's own index, files and refs are not touched. ``("", [])`` when the
+    files cannot be read; :class:`_Unscreened` when they cannot be screened.
+    BLOCKING."""
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="ij-attempt-index-") as tmp:
@@ -942,13 +990,20 @@ def folder_tree(cwd: Path, head: str) -> str:
                 with contextlib.suppress(OSError):
                     index.unlink()
                 if not _gi(["read-tree", head], cwd, index).ok:
-                    return ""
+                    return "", []
             if not _gi(["add", "-A", "--", "."], cwd, index).ok:
                 continue
+            left = _screen_carried(cwd, head, index)
             got = _gi(["write-tree"], cwd, index)
             if got.ok and got.out.strip():
-                return got.out.strip()
-        return ""
+                return got.out.strip(), left
+        return "", []
+
+
+def folder_tree(cwd: Path, head: str) -> str:
+    """:func:`screened_tree`'s tree alone ("" when it cannot be read).
+    BLOCKING; :class:`_Unscreened` when the files cannot be screened."""
+    return screened_tree(cwd, head)[0]
 
 
 def _tree_of(cwd: Path, commit: str) -> str:
@@ -956,20 +1011,26 @@ def _tree_of(cwd: Path, commit: str) -> str:
     return got.out.strip() if got.ok else ""
 
 
-def snapshot_commit(cwd: Path, head: str) -> str:
+def snapshot_commit(cwd: Path, head: str) -> "tuple[str, list[dict[str, str]]]":
     """A commit OBJECT of the folder's current files on top of ``head`` (no
     branch, no ref moves: nothing of the user's changes) — "" when the folder
-    has nothing that is not committed. Raises :class:`AttemptsRefused` when
-    the files cannot be read. BLOCKING."""
+    has nothing that is not committed — and the files the night commit's own
+    screen LEFT OUT of it (third plan G13: never carried onto an attempt's
+    branch, still in the folder as they were). Raises
+    :class:`AttemptsRefused` when the files cannot be read or screened.
+    BLOCKING."""
     from ..git.integration import default_identity, git_env, has_identity
 
-    tree = folder_tree(cwd, head)
+    try:
+        tree, left_out = screened_tree(cwd, head)
+    except _Unscreened:
+        raise AttemptsRefused(CARRY_UNSCREENED, 409) from None
     if not tree:
         raise AttemptsRefused(
             "The session's files could not be read to start the attempts from them; nothing started.", 409,
         )
     if tree == _tree_of(cwd, head):
-        return ""
+        return "", left_out
     ident = [] if has_identity(cwd, git_env()) else default_identity()
     made = _gi([*ident, "commit-tree", tree, "-p", head, "-F", "-"], cwd,
                input=(CARRIED_SUBJECT + "\n").encode("utf-8"))
@@ -978,7 +1039,7 @@ def snapshot_commit(cwd: Path, head: str) -> str:
         raise AttemptsRefused(
             "The session's work not committed yet could not be carried into the attempts; nothing started.", 409,
         )
-    return sha
+    return sha, left_out
 
 
 def start_point(row: Any) -> StartPoint:
@@ -1004,10 +1065,10 @@ def start_point(row: Any) -> StartPoint:
         head = B._ref_sha(wt, "HEAD")  # noqa: SLF001
         if not head:
             raise AttemptsRefused(NEEDS_GIT, 409)
-        carried = snapshot_commit(wt, head)
+        carried, left_out = snapshot_commit(wt, head)
         return StartPoint(checkout=facts.get("checkout") or facts.get("repo", ""), sha=carried or head,
                           base=facts.get("branch", ""), adopt=False, folder=folder, head=head,
-                          carried=bool(carried))
+                          carried=bool(carried), left_out=left_out)
     if not folder:
         raise AttemptsRefused(NEEDS_GIT, 409)
     info = B.inspect_folder(folder)
@@ -1019,9 +1080,9 @@ def start_point(row: Any) -> StartPoint:
     head = B._ref_sha(root, "HEAD")  # noqa: SLF001
     if not head:
         raise AttemptsRefused(NEEDS_GIT, 409)
-    carried = snapshot_commit(root, head)
+    carried, left_out = snapshot_commit(root, head)
     return StartPoint(checkout=folder, sha=carried or head, base=str(info.get("branch") or ""), adopt=True,
-                      folder=folder, head=head, carried=bool(carried))
+                      folder=folder, head=head, carried=bool(carried), left_out=left_out)
 
 
 KEEP_CHANGED_SINCE = (
@@ -1051,7 +1112,16 @@ def land(session_wt: Path, from_tree: str, to_tree: str) -> None:
     import tempfile
 
     head = _gi(["rev-parse", "--verify", "-q", "HEAD"], session_wt)
-    if not head.ok or folder_tree(session_wt, head.out.strip()) != from_tree:
+    if not head.ok:
+        raise AttemptsRefused(KEEP_CHANGED_SINCE, 409)
+    # Third plan G13: the SAME screen as at the start, so a file it left out
+    # then (still in the folder, in neither tree) is left out now too — the
+    # two-tree read below never touches it.
+    try:
+        now = folder_tree(session_wt, head.out.strip())
+    except _Unscreened:
+        raise AttemptsRefused(KEEP_LAND_FAILED.format(why="its files could not be checked"), 409) from None
+    if now != from_tree:
         raise AttemptsRefused(KEEP_CHANGED_SINCE, 409)
     with tempfile.TemporaryDirectory(prefix="ij-attempt-keep-") as tmp:
         index = Path(tmp) / "index"
@@ -1725,6 +1795,9 @@ def summary_words(card: dict[str, Any]) -> str:
         if files:
             bits.append(f"{len(files)} file{'s' if len(files) != 1 else ''} changed")
         lines.append(f"- {it.get('label')}: " + "; ".join(bits) + ".")
+    left = left_out_line(card)
+    if left:
+        lines.append(left)
     if any(str(it.get("why")) == "finished" for it in items):
         lines.append(
             "Press Keep on the one you want: only its work joins this session's branch, and the other "
@@ -1750,7 +1823,44 @@ def card_head(plan: Plan) -> dict[str, Any]:
     if plan.start.carried:
         # Review: they started from the session's work not committed yet.
         out["carried"] = True
+    left = _saved_left_out(plan.start.left_out)
+    if left:
+        # Third plan G13: what the night commit's screen kept out of them.
+        out["left_out"] = left
     return out
+
+
+#: The card names at most this many files not carried (the count is kept).
+LEFT_OUT_KEPT = 20
+
+
+def _saved_left_out(raw: Any) -> list[dict[str, str]]:
+    """The card's ``left_out``: ``[{path, why}]`` (both plain strings)."""
+    out: list[dict[str, str]] = []
+    for x in raw if isinstance(raw, list) else []:
+        if not isinstance(x, dict):
+            continue
+        path, why = x.get("path"), x.get("why")
+        if isinstance(path, str) and path and isinstance(why, str) and why:
+            out.append({"path": path[:500], "why": why[:80]})
+        if len(out) >= LEFT_OUT_KEPT:
+            break
+    return out
+
+
+def left_out_line(card: dict[str, Any]) -> str:
+    """The one line about the files not carried into the attempts ("" when
+    none): "Not carried into the attempts: .env (looks like a secret). …"."""
+    left = _saved_left_out(card.get("left_out"))
+    if not left:
+        return ""
+    names = ", ".join(f"{x['path']} ({x['why']})" for x in left)
+    one = len(left) == 1
+    return (
+        f"Not carried into the attempts: {names}. "
+        + ("It stays where it was, unchanged; no attempt has it." if one
+           else "They stay where they were, unchanged; no attempt has them.")
+    )
 
 
 def card_of(plan: Plan) -> dict[str, Any]:
@@ -1965,6 +2075,9 @@ def saved_card(raw: Any, *, cut_off: bool = False) -> "dict[str, Any] | None":
     for key in ("carried", "landed"):
         if raw.get(key) is True:
             out[key] = True
+    left = _saved_left_out(raw.get("left_out"))
+    if left:
+        out["left_out"] = left
     for key, cap in (("from_session", 80), ("discarded_at", 40)):
         v = raw.get(key)
         if isinstance(v, str) and v:
@@ -2148,12 +2261,23 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
         card["merge_commit"] = str(out.get("merge_commit") or "")
     if out.get("landed"):
         card["landed"] = True
+    left_out = _saved_left_out(card.get("left_out"))
     if adopt and carried:
         # The folder's own changes not committed stay in the folder (it is
         # never touched); the session's branch has them too now.
         notes.append(
             f"The changes not committed in {S.folder_of(row) or 'your folder'} are still there as well; "
-            "this session's branch has them too."
+            + ("this session's branch has them too, except the files not carried into the attempts."
+               if left_out else "this session's branch has them too.")
+        )
+    if adopt and left_out:
+        # Third plan G13: the session works in the kept attempt's folder now,
+        # and the files the screen kept out are not there (only in the
+        # folder it left, untouched).
+        names = ", ".join(x["path"] for x in left_out)
+        notes.append(
+            f"Not in this session's new folder: {names}. "
+            f"{'It is' if len(left_out) == 1 else 'They are'} still in {S.folder_of(row) or 'your folder'}."
         )
     if notes:
         card["keep_note"] = " ".join(notes)[:600]

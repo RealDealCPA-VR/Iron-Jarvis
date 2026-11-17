@@ -99,16 +99,25 @@ HASH_LEN = 64
 SCOPE_PRECEDENCE: tuple[str, ...] = ("schedule", "workflow", "agent", "project", "goal", "chat")
 
 
+#: The app's OWN control keys — never part of a call's identity (third fix
+#: plan, PG7). ``_store_as`` (v1.159.0, ``tools/registry.invoke`` strips it
+#: before it authorises) and ``_isolate`` (v1.298.0, a lane or the runtime
+#: adds it under low trust): hashing them would make the card's check and the
+#: registry's check disagree about the same call. NAMED, not "every key that
+#: starts with ``_``": a tool's own argument such as an app tool's ``_id`` is
+#: the call's data, and dropping it let "Always allow exactly this" for one
+#: record cover every other. A grant minted before this hashed such a call
+#: without its ``_id``; it now matches no call that has one (the user is asked
+#: again) and still matches what it did for a call that has none — never more.
+CONTROL_ARGS: frozenset[str] = frozenset({"_store_as", "_isolate"})
+
+
 def _canon_args(args: Any) -> dict:
     """The arguments that are the CALL's identity: a dict, minus the app's
-    own control keys. ``_store_as`` (v1.159.0) and ``_isolate`` (v1.298.0)
-    are set by the lane, not the model — the registry strips the first
-    before it authorises and the runtime adds the second under low trust,
-    so hashing them would make the card's check and the registry's check
-    disagree about the same call."""
+    own control keys (:data:`CONTROL_ARGS`)."""
     if not isinstance(args, dict):
         return {}
-    out = {str(k): v for k, v in args.items() if not str(k).startswith("_")}
+    out = {str(k): v for k, v in args.items() if str(k) not in CONTROL_ARGS}
     # A SCRIPT'S KEPT VALUE (v1.499.3 review). ``_from_script`` is the one
     # underscore key the MODEL writes, and it carries the call's DATA: an
     # "always allow exactly this" grant must not cover a different kept

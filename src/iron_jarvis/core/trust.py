@@ -12,7 +12,9 @@ NEXT run reads — memory, preferences, agents, skills, schedules, workflows,
 queued work, a live PTY — are kept away. The run may still read, search,
 write files in its folder and answer; it is told to SAY what it would have
 changed instead. ``shell`` under low trust must run in the isolating
-sandbox (Docker); the native fallback is refused, not advised.
+sandbox (Docker); the native fallback is refused, not advised. The tools
+that run model-written code outside that sandbox (``CODE_DENY``) are
+refused by name instead.
 
 Everything here is pure: no I/O, no platform. The posture is applied by the
 runtime (``AgentRuntime``) and the two chat lanes; the row columns live on
@@ -220,6 +222,21 @@ TAINTED_DENY: frozenset[str] = frozenset(
 )
 
 
+#: Third fix plan PG3 (decision K3): the tools that run MODEL-WRITTEN CODE
+#: on this computer with the network open — ``run_code`` and ``code_run``
+#: start a native interpreter through ``core.procs``, and ``repl`` runs in
+#: the session's non-isolated worker. None of them can be put in the shell's
+#: isolated sandbox (``_isolate`` is the shell tool's own), so, like
+#: ``process_start``, they are kept away from EVERY low run (door or taint)
+#: and refused by name; the shell still runs, isolated. Kept apart from
+#: ``LOW_TRUST_DENY`` on purpose, so an ordinary run is untouched: Auto's
+#: always-ask list (``core/auto_approve._standing_tools``) reads
+#: ``LOW_TRUST_DENY``. The dashboard's low-trust words name both lists
+#: (``tests/test_trust_words_v13560``). Read through :func:`deny_names` and
+#: the default of :func:`low_trust_overrides`.
+CODE_DENY: frozenset[str] = frozenset({"run_code", "code_run", "repl"})
+
+
 #: v1.509.0 (second review F1, decision E1): the tools that READ ACROSS THIS
 #: COMPUTER — its memory, lessons, notes, memory base, past chats and runs,
 #: clients, and files outside the run's own folder — kept away from a run
@@ -248,10 +265,13 @@ REMOTE_RUN_DENY: frozenset[str] = frozenset(
 
 
 def deny_names(tainted: bool, remote: bool = False) -> frozenset[str]:
-    """The names kept away from a low run NOW: ``LOW_TRUST_DENY``, plus
-    ``TAINTED_DENY`` once the run has read flagged content, plus
-    ``REMOTE_RUN_DENY`` for a run another computer's task started."""
-    names = (LOW_TRUST_DENY | TAINTED_DENY) if tainted else LOW_TRUST_DENY
+    """The names kept away from a low run NOW: ``LOW_TRUST_DENY`` and
+    ``CODE_DENY``, plus ``TAINTED_DENY`` once the run has read flagged
+    content, plus ``REMOTE_RUN_DENY`` for a run another computer's task
+    started."""
+    names = LOW_TRUST_DENY | CODE_DENY
+    if tainted:
+        names = names | TAINTED_DENY
     return (names | REMOTE_RUN_DENY) if remote else names
 
 
@@ -330,7 +350,7 @@ def normalize_trust(value: object) -> str:
 
 def low_trust_overrides(
     base: Mapping[str, str] | None,
-    names: Iterable[str] = LOW_TRUST_DENY,
+    names: Iterable[str] = LOW_TRUST_DENY | CODE_DENY,
 ) -> dict[str, str]:
     """``base`` merged with ``{name: "deny"}`` for every kept-away name.
 
@@ -365,13 +385,22 @@ def effective_trust(session_trust: object, tainted: bool) -> str:
 def low_trust_refusal(tool: str, tainted: bool) -> str:
     """The sentence a kept-away call is refused with. ``tainted`` names the
     cause the model can act on (it READ something), the other wording is for
-    a run that was low from its door."""
+    a run that was low from its door. A code tool (``CODE_DENY``) also says
+    why, and what still works: the shell, which a low run keeps (isolated)."""
     if tainted:
-        return (
+        sentence = (
             f"this run is in low trust after reading flagged content — "
             f"{tool} is kept away"
         )
-    return f"this run is in low trust — {tool} is kept away"
+    else:
+        sentence = f"this run is in low trust — {tool} is kept away"
+    if tool in CODE_DENY:
+        sentence += (
+            ", because it runs code on this computer with the network open. "
+            "The shell tool is not kept away: it runs commands in the isolated "
+            "sandbox."
+        )
+    return sentence
 
 
 def kept_away(armed: Iterable[str]) -> list[str]:

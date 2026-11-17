@@ -94,7 +94,10 @@ async def test_a_revert_the_permissions_refuse_is_named_before_anything_moves(ap
     before = messages_of(app, sid)
     status, out = await asgi(app, "POST", f"/build/sessions/{sid}/rewind", {"to": "t1"})
     assert status == 409, out
-    assert out["detail"].startswith("Nothing was rewound") and "edit_file" in out["detail"], out
+    # Third plan PG4: the reason is in plain words (what the tool does and
+    # that the settings never allow it), not the tool's name.
+    assert out["detail"].startswith("Nothing was rewound"), out
+    assert "never allow" in out["detail"] and "edit_file" not in out["detail"], out
     assert out.get("partial") is not True
     # NOTHING moved: not the files the other tools could put back, not the talk.
     assert (work / "app.py").read_bytes() == b"x = 3\n"

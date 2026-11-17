@@ -147,7 +147,13 @@ class ConfigWriter:
             return getattr(ProfileStore(self.platform.engine).get(), d.field_name, None)
         if d.pattern and key.startswith("permissions."):
             tool = schema.pattern_arg(d, key)
-            return (getattr(cfg, "permissions", {}) or {}).get(tool)
+            mode = (getattr(cfg, "permissions", {}) or {}).get(tool)
+            if tool in schema.WEB_READER_TOOLS and mode == "ask":
+                # PG5 (third fix plan): an "ask" an older version stored for
+                # web search / web fetch runs them unasked (the gate's rule),
+                # so it is shown as what it does — never as "Ask first".
+                return "allow"
+            return mode
         if "." in d.field_name:
             outer, inner = d.field_name.split(".", 1)
             return (getattr(cfg, outer, {}) or {}).get(inner)
@@ -202,6 +208,19 @@ class ConfigWriter:
                 # (v1.438.0, ``unset_ok``). Restoring it removes the entry.
                 clean[key] = None
                 continue
+            if (
+                d.pattern and key.startswith("permissions.")
+                and schema.pattern_arg(d, key) in schema.WEB_READER_TOOLS
+                and str(value).strip().lower() in ("ask", "ask first")
+            ):
+                # PG5 (third fix plan): web search / web fetch are Allow or
+                # Never run. "Ask first" (or its words) is refused in words —
+                # the same sentence chat relays. An Undo that puts back an
+                # "ask" an older version stored restores what it did: allow.
+                if restoring and value == "ask":
+                    value = "allow"
+                else:
+                    raise SettingError(schema.WEB_READERS_ASK_REFUSAL)
             if d.type == "bool":
                 if not isinstance(value, bool):
                     raise SettingError(f"{d.label} must be on or off.")

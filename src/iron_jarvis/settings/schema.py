@@ -32,7 +32,7 @@ safety off is not the same act as turning it on).
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from . import theme_colors as _theme_colors
@@ -993,7 +993,7 @@ SETTINGS: tuple[SettingDef, ...] = (
                "folders jarvis can read", "which folders"),
       placeholder="One folder per line, for example C:\\Users\\you\\Documents\\Clients"),
     S("permissions.{tool}", "Approval for one tool", "permissions", "enum",
-      "Whether a tool may run without asking (allow), asks first (ask), or never runs (deny). Tools that touch your PC can never be set to allow.",
+      "Whether a tool may run without asking (allow), asks first (ask), or never runs (deny). Tools that touch your PC can never be set to allow. Web search and reading a web page are either allowed or never run.",
       options=(("allow", "Run without asking"), ("ask", "Ask first"), ("deny", "Never run")),
       tier="ask-floor", pattern=True, aliases=("tool permission", "always allow", "never allow")),
     # v1.433.0 (Wave 1, A14): lowering it deletes the ledger, the run records
@@ -1221,12 +1221,42 @@ BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTINGS}
 _PATTERNS: tuple[SettingDef, ...] = tuple(d for d in SETTINGS if d.pattern)
 _NAME = re.compile(r"^[A-Za-z0-9_:.\-]{1,80}$")
 
+#: WEB SEARCH AND WEB FETCH (third fix plan, PG5 / decision K5 as settled):
+#: these two only READ the web and always run without asking, so work that
+#: runs while the user is away can still search (``tools/permissions.
+#: READ_ONLY_WEB_TOOLS``: the gate turns an "ask" for them into "allow").
+#: Settings used to offer "Ask first" for them, saved it, showed it, and then
+#: ran them unasked. Now their choices are Allow or Never run, "Ask first" is
+#: refused in these words (the writer, and so chat), and a stored "ask" from
+#: an older version is SHOWN as Allow (what it does). Spelled here so this
+#: module imports nothing from the tool layer (pinned equal by
+#: ``tests/test_third_plan_g17_gate.py``).
+WEB_READER_TOOLS: tuple[str, ...] = ("web_search", "web_fetch")
+WEB_READERS_ASK_REFUSAL = (
+    "Web search and reading a web page always run without asking, so work that "
+    "runs while you are away can still search. They cannot be set to ask first: "
+    "choose Never run to switch one off."
+)
+_WEB_READER_PERMISSION = replace(
+    BY_KEY["permissions.{tool}"],
+    help=(
+        "Web search and reading a web page only read the web, and always run "
+        "without asking, so work that runs while you are away can still search. "
+        "Choose Never run to switch one off."
+    ),
+    options=(("allow", "Run without asking"), ("deny", "Never run")),
+)
+
 
 def get(key: str) -> SettingDef:
     """The definition for ``key`` — a plain key, or one of a family
-    (``permissions.shell`` → the ``permissions.{tool}`` definition)."""
+    (``permissions.shell`` → the ``permissions.{tool}`` definition).
+    ``permissions.web_search`` / ``permissions.web_fetch`` get the family's
+    definition with their own two choices (:data:`WEB_READER_TOOLS`)."""
     if key in BY_KEY and not BY_KEY[key].pattern:
         return BY_KEY[key]
+    if key in {f"permissions.{t}" for t in WEB_READER_TOOLS}:
+        return _WEB_READER_PERMISSION
     for d in _PATTERNS:
         prefix = d.key.split("{", 1)[0]
         if key.startswith(prefix) and _NAME.match(key[len(prefix):]):

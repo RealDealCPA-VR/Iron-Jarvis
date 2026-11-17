@@ -68,9 +68,9 @@ from ..doors import (
 # here because POST /chat/stream deliberately keeps its own inline copy of
 # the loop (SSE stays out of this arc) and the thread routes share the caps.
 from ...core.trust import (
-    LOW_TRUST_DENY,
     LOW_TRUST_PROMPT,
     TRUST_LOW,
+    deny_names,
     kept_away,
     low_trust_overrides,
     normalize_trust,
@@ -5032,11 +5032,15 @@ async def chat_stream(
         # tool it must not be talked into. Recorded once for the receipt.
         # MIRROR NOTE (lock-step): chat_turn.run_chat_turn — edit both or
         # neither.
+        # Third fix plan (PG3 leftover): `deny_names` — the door's list AND
+        # the code tools (`CODE_DENY`), refused at the call — so the model is
+        # not shown them and the receipt counts them (lock-step: chat_turn).
         if _trust_state["low"]:
-            _trust_state["kept"] = kept_away([*armed, *ask_armed])
-            armed = [t for t in armed if t not in LOW_TRUST_DENY]
-            auto_armed = [t for t in auto_armed if t not in LOW_TRUST_DENY]
-            ask_armed = [t for t in ask_armed if t not in LOW_TRUST_DENY]
+            _kept_now = deny_names(False)
+            _trust_state["kept"] = [t for t in [*armed, *ask_armed] if t in _kept_now]
+            armed = [t for t in armed if t not in _kept_now]
+            auto_armed = [t for t in auto_armed if t not in _kept_now]
+            ask_armed = [t for t in ask_armed if t not in _kept_now]
         # LOCAL ONLY (v1.332.0): a tool whose job is to reach the internet
         # (`egress.INTERNET_TOOLS`) leaves EVERY list that reaches the model,
         # whatever armed it — the "+" menu, a skill, the sentence, a saved
@@ -6467,6 +6471,24 @@ async def chat_stream(
                     # for every id, and two calls must never share a card.
                     return f"{_cp}\x1f{id(_c)}"
 
+                def _held_back(_c) -> bool:
+                    # A HELD-BACK APP TOOL (third fix plan, PG1/K1): a tool
+                    # that arrived in a later update of a connected app and
+                    # can change things asks EVERY time until it is trusted
+                    # on the app's own page, whatever is switched on for the
+                    # chat (the app, a lookup, a typed name) and in every
+                    # posture — "Don't ask" included: it is a blanket answer,
+                    # and the quarantine is lifted by no blanket answer
+                    # (v1.299.0). The one lift is the user's answer to a card
+                    # about THIS tool: "for this conversation" (`card_grants`,
+                    # which also holds the page's `granted_tools`) or "once"
+                    # for this call. Its own card, never batched (the shared
+                    # `mcp_call` key must not let a sibling's answer cover
+                    # it). The registry's gate reads the same answers
+                    # (`card_allow` below), so a skipped card runs nothing.
+                    # MIRROR NOTE (lock-step): chat_turn refuses it.
+                    return _quarantined(d.platform, _c.name) and _c.name not in card_grants
+
                 # THE SPEND CHECK (v1.346.0, media in chat): ONCE per call of
                 # the round, BEFORE any card is decided, each armed tool
                 # that has an opinion about money is asked
@@ -6567,6 +6589,10 @@ async def chat_stream(
                     _ct = d.platform.registry.get(_c.name)
                     _cp = _ct.perm_key() if _ct is not None else _c.name
                     _cm = d.platform.permissions.mode_for(_cp, overrides)
+                    if _held_back(_c):
+                        # PG1: its own card, in every posture (MIRROR NOTE:
+                        # the per-call branch's `_held_card`).
+                        return "" if _cm is PermissionMode.DENY else _ask_first_key(_c, _cp)
                     if _night_asks(_c.name) and _cm is not PermissionMode.DENY:
                         # v1.398.0 review: THE NIGHT ALLOW-LIST — the per-call
                         # branch below decides (MIRROR NOTE).
@@ -6798,6 +6824,9 @@ async def chat_stream(
                     _plan: dict[str, Any] = {
                         "t": _t, "safe_args": safe_args, "refused": "",
                         "carded": False, "card_deny": "", "grant_extra": set(),
+                        # PG1 (third fix plan): this call's own card said
+                        # "once" — the registry's `card_allow` for it.
+                        "card_once": set(),
                         # v1.503.0 (north-star 3.12): the label a card's
                         # refusal is recorded under ("" = the registry's
                         # default, "permission denied" — the user's No).
@@ -6911,10 +6940,21 @@ async def chat_stream(
                         not _unarmed and (tc.name in _ONCE_ONLY or _spend_once(tc))
                         and _mode is not PermissionMode.DENY
                     )
-                    _card_key = (
-                        _ask_first_key(tc, _perm_name) if (_local_ask or _once_only) else _perm_name
+                    # PG1 (third fix plan): a HELD-BACK app tool (`_held_back`
+                    # above — MIRROR NOTE: `_would_card` reads it the same
+                    # way) cards in every posture, alone, and no grant below
+                    # (tab, standing, a free spend verdict, Accept edits /
+                    # Auto) skips it. Whatever arming put in `armed_grant`,
+                    # the registry lifts it only on `card_allow`.
+                    _held_card = (
+                        not _unarmed and _held_back(tc)
+                        and _mode is not PermissionMode.DENY
                     )
-                    if _local_ask or _once_only:
+                    _card_key = (
+                        _ask_first_key(tc, _perm_name)
+                        if (_local_ask or _once_only or _held_card) else _perm_name
+                    )
+                    if _local_ask or _once_only or _held_card:
                         _needs_card = True
                     # v1.398.0 review: THE NIGHT ALLOW-LIST (`_night_asks`):
                     # carded whatever the posture said, and no grant below —
@@ -6926,7 +6966,8 @@ async def chat_stream(
                     if _night_card:
                         _needs_card = True
                         _grant_extra = set()
-                    if _needs_card and not _local_ask and not _once_only and not _night_card and _tab_covered(tc):
+                    if (_needs_card and not _local_ask and not _once_only and not _night_card
+                            and not _held_card and _tab_covered(tc)):
                         # A COVERED CALL CARRIES ITS GRANT (v1.270.1). The
                         # card is skipped, but the registry's own permission
                         # gate still runs inside `invoke` and refuses an
@@ -6940,7 +6981,7 @@ async def chat_stream(
                         _needs_card = False
                         if _engine_asks:
                             _grant_extra = {tc.name, _perm_name}
-                    if _needs_card and not _local_ask and not _once_only and not _night_card and _grant_covers(
+                    if _needs_card and not _local_ask and not _once_only and not _night_card and not _held_card and _grant_covers(
                         d.platform, _grant_scopes, tc.name, tc.arguments
                     ):
                         # A STANDING GRANT COVERS IT (v1.299.0): no card. The
@@ -6962,7 +7003,7 @@ async def chat_stream(
                         if _sc.ask:
                             _needs_card = True
                             _spend_card = True
-                        elif not _local_ask and not _night_card:
+                        elif not _local_ask and not _night_card and not _held_card:
                             _needs_card = False
                             if _engine_asks:
                                 _grant_extra = {tc.name, _perm_name}
@@ -6977,7 +7018,8 @@ async def chat_stream(
                     # `_would_card` reads `_auto_ok` the same way.
                     _auto_rule = _auto_ok.get(id(tc), "")
                     if (_needs_card and _auto_rule and not _unarmed and not _local_ask
-                            and not _once_only and not _night_card and not _spend_card):
+                            and not _once_only and not _night_card and not _spend_card
+                            and not _held_card):
                         _needs_card = False
                         _grant_extra = {tc.name, _perm_name}
                         _auto_state["record"].add(tc.name, _auto_rule)
@@ -7128,7 +7170,9 @@ async def chat_stream(
                                 forced=(
                                     "local_only" if _local_ask
                                     else "looked_up" if (_night_card and tc.name in _looked_up)
-                                    else "night" if _night_card else ""
+                                    else "night" if _night_card
+                                    # PG1: "it is new in its app".
+                                    else "quarantined" if _held_card else ""
                                 ),
                                 rule=_auto_kept.get(id(tc), ""),
                                 strict=approval_mode == "always_ask",
@@ -7182,7 +7226,7 @@ async def chat_stream(
                             # once-only, priced, Local only or night one) is
                             # watched, so a grant a helper of this session
                             # makes meanwhile answers it.
-                            if not (_local_ask or _once_only or _spend_card or _night_card):
+                            if not (_local_ask or _once_only or _spend_card or _night_card or _held_card):
                                 _watch_session_ask(_sg_turn, _ap_id, {_c.name for _c in _group})
                             # v1.327.0: the chat reads "waiting on you" from
                             # BEFORE the card goes out until it is answered
@@ -7359,6 +7403,10 @@ async def chat_stream(
                             _decision = "once"
                         if _decision == "once":
                             _grant_extra = {tc.name, _perm_name}
+                            # PG1: the user's answer about THIS call, kept
+                            # apart from the names arming added — the one
+                            # "once" that lifts a held-back tool (`card_allow`).
+                            _plan["card_once"] = {tc.name}
                         elif _decision == "conversation":
                             # Rest of THIS turn's rounds. For later turns
                             # the client does TWO things (v1.312.0): it
@@ -7597,6 +7645,17 @@ async def chat_stream(
                         overrides,
                         session_allow=(armed_grant | _p["grant_extra"]),
                         allowed_names=_turn_tools,
+                        # PG1 (third fix plan): a HELD-BACK app tool is lifted
+                        # only by the user's card answers — this conversation's
+                        # (`card_grants`) or this call's "once" — never by the
+                        # names arming put in `armed_grant`. Passed only for
+                        # such a tool, so every other call (and every invoke
+                        # double) is byte-identical. MIRROR NOTE: chat_turn.
+                        **(
+                            {"card_allow": frozenset(card_grants | _p["card_once"])}
+                            if _quarantined(d.platform, tc.name)
+                            else {}
+                        ),
                         # v1.246.0 — lock-step with chat_turn.
                         deadline_s=chat_tool_deadline(d.platform),
                         # v1.473.0 review: a CARDED call that names a kept

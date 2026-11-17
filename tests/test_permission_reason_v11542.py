@@ -45,10 +45,15 @@ def test_the_refusal_says_what_actually_happened():
 
 
 def test_the_refusal_says_how_to_allow_it():
-    """A dead end is not an error message. Both real routes are named."""
+    """A dead end is not an error message. The real routes are named, in plain
+    words (third fix plan, PG10: no ``allow_tools``, no ``permissions.<tool>``;
+    a floor tool such as ``shell`` is never sent to a Settings change that
+    Settings refuses — ``tests/test_third_plan_g17_gate.py``)."""
     reason = _engine().authorize("shell", {}).reason
-    assert "allow_tools" in reason, "the per-task grant is not mentioned"
-    assert "Settings" in reason, "the permanent setting is not mentioned"
+    assert "Iron Jarvis window" in reason, "the place to approve it is not named"
+    assert "allow_tools" not in reason and "Settings" not in reason
+    other = _engine(write_file="ask").authorize("write_file", {}).reason
+    assert "Iron Jarvis window" in other and "Settings" in other, "the permanent setting is not mentioned"
 
 
 # --------------------------------------------------------------------------- #

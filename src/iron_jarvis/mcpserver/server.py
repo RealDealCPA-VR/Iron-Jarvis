@@ -77,6 +77,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from ..core.logging import get_logger
@@ -323,6 +324,21 @@ MCP_ASK_TIMEOUT_MESSAGE = (
     "Iron Jarvis asked the user to approve this call and nobody answered in "
     f"{int(MCP_APPROVAL_TIMEOUT_S)}s, so nothing was done — ask them to approve "
     "it in Iron Jarvis (the bell), or to set this tool to allow in Settings"
+)
+
+#: MC5 (third fix plan): the refusal when the user pressed Allow but, while the
+#: card waited, the call stopped being allowed - the box was turned off, the
+#: terminal or Code session was stopped, or the coding tool's connection was
+#: closed. The reason that no longer holds follows it.
+MCP_ASK_NO_LONGER_ALLOWED_MESSAGE = (
+    "the user approved this call, but while Iron Jarvis waited for their answer "
+    "it stopped being allowed, so nothing was done"
+)
+
+#: MC5: the reason when the call's terminal or Code session is gone (its token
+#: was revoked, or the pane's shell or the session's process stopped).
+MCP_GRANT_GONE_REASON = (
+    "the Build terminal or Build › Code session it came from was closed or stopped"
 )
 
 
@@ -754,7 +770,78 @@ async def _publish(platform, event_name: str, payload: dict[str, Any],
         logger.debug("could not publish %s for an MCP ask", event_name, exc_info=True)
 
 
-async def _call_tool(d, grant, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _door_refusal(d, grant, sessions: "McpSessionRegistry | None", session_id: str,
+                  name: str = "") -> "tuple[int, int, str] | None":
+    """Whether this grant may make this call NOW: ``None``, or the refusal as
+    ``(http status, JSON-RPC code, sentence)``.
+
+    THE ONE CHECK, two call sites (MC5, third fix plan): :func:`dispatch` runs
+    it when the request arrives, and :func:`_call_tool` runs it AGAIN after an
+    approval card - against the grant as it is then - because the card can wait
+    45 s, and in that time the user may turn the box off, or the door's session
+    may be closed. ``name`` empty (``tools/list``) skips the per-tool part.
+    Non-blocking: a session lookup, a registry name list and a config read.
+    """
+    pane_id = getattr(grant, "pane_id", "") or ""
+    if sessions is not None and sessions.get(session_id, pane_id=pane_id) is None:
+        return 400, INVALID_REQUEST, NO_SESSION_MESSAGE
+    if not granted_capabilities(grant):
+        return 403, INVALID_REQUEST, no_capability_message(pane_id)
+    if name and name not in permitted_tool_names(d, grant):
+        return 403, INVALID_PARAMS, capability_refused_message(name, pane_id)
+    return None
+
+
+def _grant_now(d, grant) -> Any:
+    """The same pane's grant AS IT IS NOW, or ``None`` when it no longer stands.
+
+    The route resolved ``grant`` from the token when the request ARRIVED
+    (``PaneTokenStore.resolve``: the token still held, the pane or Code session
+    still alive, its boxes read live). A call that then waits on a card is
+    re-read here by its pane id from the same store, the same three facts:
+    the store still holds a token for the pane (closing a terminal or stopping a
+    Code session revokes it), the pane is still there and alive, and its boxes
+    as they are now. A store with no live pane to read keeps the grant it gave
+    (``resolve`` hands out the same mint-time snapshot).
+
+    BLOCKING by contract (the lookup may take a lock another thread holds), so
+    :func:`_call_tool` runs it through ``asyncio.to_thread``. Never raises.
+    """
+    from ..browser.panetokens import PaneGrant, normalise_capabilities
+    from ..hosted.jarvis_tools import session_of
+
+    pane_id = getattr(grant, "pane_id", "") or ""
+    platform = getattr(d, "platform", None)
+    try:
+        if session_of(pane_id):
+            tokens = getattr(getattr(platform, "hosted", None), "tokens", None)
+            store = getattr(tokens, "store", None)
+        else:
+            store = getattr(platform, "pane_tokens", None) or getattr(d, "pane_tokens", None)
+        if store is None or not store.has_pane(pane_id):
+            return None
+        lookup = getattr(store, "pane_lookup", None)
+        if lookup is None:
+            return grant
+        pane = lookup(pane_id)
+        if pane is None or getattr(pane, "alive", True) is False:
+            return None
+        return PaneGrant(
+            pane_id=pane_id,
+            capabilities=MappingProxyType(
+                normalise_capabilities(getattr(pane, "capabilities", None))
+            ),
+            minted_at=grant.minted_at,
+            live=True,
+        )
+    except Exception:  # noqa: BLE001 - a grant that cannot be read is no grant
+        logger.debug("could not re-read the grant for %s", pane_id, exc_info=True)
+        return None
+
+
+async def _call_tool(d, grant, name: str, arguments: dict[str, Any], *,
+                     sessions: "McpSessionRegistry | None" = None,
+                     session_id: str = "") -> dict[str, Any]:
     """Run one tool through ``registry.invoke`` and return an MCP result object.
 
     THE ASK TIER IS ASKED, NOT ASSUMED (v1.238.0 review). A tool whose effective
@@ -796,6 +883,28 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any]) -> dict[str
         )
     workspace = await asyncio.to_thread(_pane_workspace, d, grant.pane_id)
     project_id = await asyncio.to_thread(_code_project, d, grant.pane_id, workspace)
+    if session_grant:
+        # CHECKED AGAIN AFTER THE CARD (MC5), as late as possible before the
+        # call: the user pressed Allow, but the card may have waited 45 s, and
+        # in that time the box may have been turned off, the terminal or Code
+        # session stopped, or this connection closed. The same check the
+        # request met on arrival, against the grant as it is NOW; a refusal
+        # still goes through ``invoke`` (``deny_reason``) so it is recorded.
+        now = await asyncio.to_thread(_grant_now, d, grant)
+        if now is None:
+            reason = MCP_GRANT_GONE_REASON
+        else:
+            refusal = _door_refusal(d, now, sessions, session_id, name)
+            reason = refusal[2] if refusal is not None else ""
+        if reason:
+            logger.warning("/mcp refused %s for pane %s after its card: %s",
+                           name, grant.pane_id, reason)
+            deny_reason = f"{MCP_ASK_NO_LONGER_ALLOWED_MESSAGE}: {reason}"
+            session_grant = set()
+        else:
+            allowed = set(permitted_tool_names(d, now))
+    from ..agents.runtime import _tool_deadline
+
     ctx = ToolContext(
         workspace=workspace,
         session_id=harness_session_id(grant.pane_id),
@@ -819,6 +928,11 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any]) -> dict[str
         allowed_names=allowed,
         # Only ever the answer a human gave, and only for this call.
         session_allow=(session_grant or None),
+        # MC5: the SAME per-call deadline every other lane passes
+        # (``config.tool_call_timeout_s``, read live), so a tool that never
+        # answers is a failed call in the registry's own words, not a coding
+        # tool's request held for ever.
+        deadline_s=_tool_deadline(platform.config),
         # Rides ONLY when a human really refused (or was never reachable), so
         # every other call is byte-identical to the previous behaviour.
         **({"deny_reason": deny_reason} if deny_reason else {}),
@@ -915,17 +1029,15 @@ async def dispatch(
         return McpReply(payload=result_response(request.id, {}))
 
     if method in ("tools/list", "tools/call"):
-        if sessions.get(session_id, pane_id=grant.pane_id) is None:
+        # The session and the capability part of the ONE check
+        # (:func:`_door_refusal`); ``_call_tool`` runs it again after a card.
+        refusal = _door_refusal(d, grant, sessions, session_id)
+        if refusal is not None:
+            status, code, sentence = refusal
             return McpReply(
-                payload=error_response(request.id, INVALID_REQUEST, NO_SESSION_MESSAGE),
-                status_code=400,
+                payload=error_response(request.id, code, sentence),
+                status_code=status,
             )
-        if not granted_capabilities(grant):
-            return McpReply(
-                payload=error_response(request.id, INVALID_REQUEST, no_capability_message(grant.pane_id)),
-                status_code=403,
-            )
-        names = permitted_tool_names(d, grant)
         if method == "tools/list":
             return McpReply(payload=result_response(request.id, {"tools": tool_specs(d, grant)}))
         name = request.params.get("name")
@@ -936,7 +1048,8 @@ async def dispatch(
                 ),
                 status_code=400,
             )
-        if name not in names:
+        refusal = _door_refusal(d, grant, sessions, session_id, name)
+        if refusal is not None:
             # 403, and BEFORE ``invoke``: the registry would refuse it too (gate
             # 3, ``allowed_names``), but that refusal is a tool RESULT the
             # harness's model reads as a failed tool. A capability the pane does
@@ -945,11 +1058,10 @@ async def dispatch(
             logger.warning(
                 "/mcp refused %s for pane %s: capability not granted", name, grant.pane_id
             )
+            status, code, sentence = refusal
             return McpReply(
-                payload=error_response(
-                    request.id, INVALID_PARAMS, capability_refused_message(name, grant.pane_id)
-                ),
-                status_code=403,
+                payload=error_response(request.id, code, sentence),
+                status_code=status,
                 tool=name,
             )
         arguments = request.params.get("arguments")
@@ -963,7 +1075,8 @@ async def dispatch(
                 status_code=400,
                 tool=name,
             )
-        result = await _call_tool(d, grant, name, arguments)
+        result = await _call_tool(d, grant, name, arguments,
+                                  sessions=sessions, session_id=session_id)
         return McpReply(payload=result_response(request.id, result), tool=name)
 
     return McpReply(
@@ -982,7 +1095,9 @@ __all__ = [
     "CAPABILITY_TOOLS",
     "MCP_APPROVAL_TIMEOUT_S",
     "MCP_ASK_DENIED_MESSAGE",
+    "MCP_ASK_NO_LONGER_ALLOWED_MESSAGE",
     "MCP_ASK_TIMEOUT_MESSAGE",
+    "MCP_GRANT_GONE_REASON",
     "MCP_MEMORY_UNTRUSTED_LINE",
     "MCP_NO_ASK_SURFACE_MESSAGE",
     "MCP_NOT_CONNECTED_LINE",

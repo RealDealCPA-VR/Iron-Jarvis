@@ -86,7 +86,14 @@ def shareable(registry: Any, name: str) -> bool:
         tool = registry.get(str(name or "")) if registry is not None else None
         if tool is None:
             return False
-        return tool.perm_key() == str(name) and not getattr(tool, "quarantined", False)
+        # The held-back check comes FIRST: an app tool's ``perm_key()`` also
+        # records "the coming question is about this tool"
+        # (``mcp/tools._ASKING_ABOUT``), and this is a read, not a question.
+        # Read for a held-back tool it left that note for the next bare
+        # question in the same context.
+        if getattr(tool, "quarantined", False):
+            return False
+        return tool.perm_key() == str(name)
     except Exception:  # noqa: BLE001
         return False
 

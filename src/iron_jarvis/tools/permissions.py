@@ -223,6 +223,7 @@ class PermissionEngine:
         scopes: "list[tuple[str, str]] | None" = None,
         call_name: str = "",
         quarantined: bool = False,
+        card_allow: "Iterable[str] | None" = None,
     ) -> PermissionDecision:
         """Decide one call. ``grants``/``scopes`` (v1.299.0): the standing
         grant store and the scopes THIS call runs under (``[("goal", id),
@@ -241,13 +242,29 @@ class PermissionEngine:
         stays an ASK (a card where the origin can ask, the resolver's refusal
         headless) until ``POST /mcp/servers/{s}/tools/{t}/trust`` — and the
         ONE lift it keeps is the user's answer to a card about THIS tool
-        (``call_name`` in ``session_allow``; review fix, see below)."""
+        (``call_name`` in ``session_allow``; review fix, see below).
+
+        ``card_allow`` (third fix plan, PG1/K1): the names the USER allowed
+        on a card about that tool (once, or for this conversation), handed
+        apart from ``session_allow`` — which a chat lane also fills with
+        every name it ARMED (an app switched on for the chat arms each of its
+        tools by name). When given, a held-back tool is lifted ONLY by its
+        own name in ``card_allow``; when ``None`` (a caller that keeps one
+        set: the agent runtime, whose set holds the card answers and the
+        names the user typed at the door), ``session_allow`` is read as
+        before. For a held-back tool an ``allow`` from an override or the
+        base policy lifts nothing either (a ``deny`` still denies)."""
         mode = self.mode_for(tool_name, agent_overrides)
-        if mode is PermissionMode.ALLOW:
-            return PermissionDecision(True, mode, "allowed by policy")
         if mode is PermissionMode.DENY:
             # A hard deny is NEVER lifted by a session grant — safety floor.
             return PermissionDecision(False, mode, "denied by policy")
+        if mode is PermissionMode.ALLOW:
+            if not quarantined:
+                return PermissionDecision(True, mode, "allowed by policy")
+            # HELD BACK (PG1): an allow that came from arming (the chat's
+            # override for the app's shared key) or from a blanket base
+            # policy is not the user's answer about THIS tool. It asks.
+            mode = PermissionMode.ASK
         # mode is ASK
         # Per-session grant: the user bundle-approved this tool for THIS task
         # before it ran, so we don't re-ask (and headless doesn't fail-close it).
@@ -263,8 +280,12 @@ class PermissionEngine:
             # "mcp_call"}`` for once/conversation, and the tool's NAME is a
             # string only a card about this tool (or the user naming it at the
             # door) can add. Without it a card's Allow ran nothing (review fix).
+            # PG1 (third fix plan): a caller that hands its card answers
+            # apart (`card_allow`, both chat lanes) is read from THAT set
+            # only — its `session_allow` also holds every name it armed.
             own = call_name if call_name and call_name != tool_name else ""
-            if own and session_allow is not None and own in session_allow:
+            lifts = card_allow if card_allow is not None else session_allow
+            if own and lifts is not None and own in lifts:
                 return PermissionDecision(True, mode, "granted for this task")
             session_allow = None
             grants = None
@@ -306,10 +327,26 @@ class PermissionEngine:
         # and left them looking for a prompt that had never appeared.
         if getattr(self._ask_resolver, "interactive", True):
             return PermissionDecision(False, mode, "rejected by user")
-        return PermissionDecision(
-            False,
-            mode,
-            f"{tool_name} needs approval and nothing here could ask — grant it "
-            f"for one task with allow_tools when starting a session, or set "
-            f"permissions.{tool_name} to allow in Settings",
+        return PermissionDecision(False, mode, nobody_to_ask_refusal(tool_name))
+
+
+def nobody_to_ask_refusal(tool_name: str) -> str:
+    """The refusal when an approval was needed and nothing could ask the user
+    (third fix plan, PG10). Read by the model and shown on the Activity page,
+    so plain words: no ``allow_tools``, no ``permissions.<tool>``. A floor tool
+    (:data:`DENY_FLOOR_TOOLS`) is never advised to Settings, which refuses to
+    let one run without asking (``settings/writer._check_permission``).
+
+    The opening words "needs approval and nothing here could ask" are matched
+    by ``agents/fix_request._NOTHING_ASKED`` and ``detections/ledger.
+    _REFUSAL_MARKERS`` — keep them."""
+    lead = f"{tool_name} needs approval and nothing here could ask you, so it was not run."
+    if tool_name in DENY_FLOOR_TOOLS:
+        return (
+            f"{lead} It is one of the tools that always ask first: ask for it in a "
+            "chat in the Iron Jarvis window, where you can approve it."
         )
+    return (
+        f"{lead} Ask for it in a chat in the Iron Jarvis window, where you can "
+        'approve it, or set this tool to "Run without asking" in Settings.'
+    )

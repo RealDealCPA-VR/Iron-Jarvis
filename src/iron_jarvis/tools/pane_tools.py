@@ -27,15 +27,28 @@ already be authenticated to something) and the other starts a process. Both are
 on the DENY FLOOR (`tools/permissions.DENY_FLOOR_TOOLS`) and default to `ask`,
 so an agent definition can lower them but never raise them to `allow`. The
 read-only three are `allow`, the same tier as `read_file`/`grep`.
+
+THE SHELL TOOL'S CHECKS (third north-star plan PG8, decision K6). A line
+`pane_send` types where it will RUN AS A COMMAND (:func:`_runs_as_command`: no
+coding CLI in the pane, or the pane's last line is its shell's own prompt)
+meets the same checks as the `shell` tool, with the same sentences: the git
+guard (`harness/git_guard`: refused in `execute`, the once-only card through
+`spend_check`) and, in a Command Prompt pane (:func:`_is_cmd_pane`), the `;`
+guard (`sandbox/cmd_guard`) on every line. Text typed into a coding CLI's
+input box is a request to that CLI (prose), and is not read as a command.
+`pane_spawn` runs no command of its own (it opens the default shell); its
+folder is the session's folder, a folder inside it, or a full path that
+passes the rule for what Iron Jarvis may read (:func:`_pane_folder`).
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any
 
-from .base import Reversibility, Tool, ToolContext, ToolResult
+from .base import Reversibility, Tool, ToolContext, ToolResult, safe_path
 
 #: How long a wait may run before it gives up and says so. A wait with no
 #: ceiling is a hung agent run.
@@ -90,6 +103,89 @@ def _view(session, mgr=None) -> dict[str, Any]:
         "state_line": info.get("state_line"),
         "alive": info.get("alive"),
     }
+
+
+def _shell_of(session) -> str:
+    """The pane's shell name (``cmd`` / ``pwsh`` / ``powershell`` / a path),
+    else the program its terminal started; "" when neither is known."""
+    name = str(getattr(session, "shell", "") or "")
+    if name and name != "shell":
+        return name
+    argv = getattr(session, "argv", None) or []
+    return str(argv[0]) if argv else ""
+
+
+def _is_cmd_pane(session) -> bool:
+    """Is the pane's shell Windows' Command Prompt (cmd.exe)? Only there does
+    ``;`` NOT separate commands (PowerShell and bash separate at it)."""
+    base = os.path.basename(_shell_of(session).replace("\\", "/")).lower()
+    return base in ("cmd", "cmd.exe")
+
+
+def _runs_as_command(session, act) -> bool:
+    """Will a line typed into this pane run as a shell command? Yes when no
+    coding CLI is known to run in it (a plain shell, or a program the app
+    cannot name: read the stricter way), and yes when one was but the pane's
+    last line is its shell's own prompt again (the CLI exited). No when a
+    coding CLI is running: the line is a request to that CLI. BLOCKING (reads
+    the pane's output): call it off the event loop."""
+    if not getattr(act, "cli", None):
+        return True
+    from ..terminals.handoff import at_shell_prompt
+
+    try:
+        return at_shell_prompt(session.output_tail(), _shell_of(session))
+    except Exception:  # noqa: BLE001 — cannot tell: the CLI's own reading stands
+        return False
+
+
+def _pane_folder(raw: Any, workspace: Any):
+    """The folder a terminal an agent opens starts in (third plan PG8).
+
+    No folder named: the session's folder. A RELATIVE folder stays inside the
+    session's folder (the shell tool's own ``cwd`` rule, ``safe_path``). A
+    FULL path outside it is held to the rule for what Iron Jarvis may READ
+    (``core/fs_policy.fs_read_ok``): never one of the app's protected
+    folders, never outside the user's "Folders Jarvis may read", never
+    outside the folder a run from another computer is confined to, and never
+    on another computer. (The lead's review: confining a terminal to the
+    session's folder alone would refuse "open a terminal in my project's folder",
+    which the user is asked about on the card anyway.) ``ValueError`` in
+    words for anything else. BLOCKING (resolves the path)."""
+    from pathlib import Path
+
+    from ..core.fs_policy import fs_read_ok
+    from .base import _network_spelling
+
+    root = Path(workspace).resolve() if workspace is not None else None
+    text = str(raw or "").strip()
+    if not text or text == ".":
+        if root is None:
+            raise ValueError("there is no session folder to open a terminal in")
+        return root
+    if os.name == "nt" and _network_spelling(text):
+        raise ValueError(
+            f"the folder '{text[:120]}' is on another computer; a terminal opens on this PC only"
+        )
+    if not Path(text).is_absolute():
+        if root is None:
+            raise ValueError("there is no session folder to open a terminal in")
+        try:
+            folder = safe_path(root, text)
+        except PermissionError:
+            raise ValueError(
+                f"the folder '{text}' is outside the session's folder; "
+                "give its full path to open a terminal there"
+            ) from None
+    else:
+        folder = Path(text).resolve()
+        if root is None or not (folder == root or folder.is_relative_to(root)):
+            ok, why = fs_read_ok(folder)
+            if not ok:
+                raise ValueError(f"a terminal cannot be opened in '{text[:120]}': {why}")
+    if not folder.is_dir():
+        raise ValueError(f"'{text}' is not a folder")
+    return folder
 
 
 class PaneListTool(_PaneTool):
@@ -178,7 +274,10 @@ class PaneSpawnTool(_PaneTool):
     input_schema = {
         "type": "object",
         "properties": {
-            "cwd": {"type": "string", "description": "Folder to open it in."},
+            "cwd": {
+                "type": "string",
+                "description": "Folder to open it in: the session's folder (the default), one inside it, or a full path.",
+            },
             "name": {
                 "type": "string",
                 "description": "A short handle for this pane, e.g. 'reviewer'.",
@@ -199,13 +298,19 @@ class PaneSpawnTool(_PaneTool):
                 ok=False,
                 error=f"a Build terminal named {name!r} already exists — names must be unique",
             )
-        cwd = (args.get("cwd") or "").strip() or getattr(ctx, "workspace", None)
+        # Third plan PG8: the folder passes `_pane_folder`'s rule (never a
+        # protected folder, another computer, or outside the read limits).
+        # Resolved off the loop (it reads disk).
+        try:
+            cwd = await asyncio.to_thread(_pane_folder, args.get("cwd"), getattr(ctx, "workspace", None))
+        except ValueError as exc:
+            return ToolResult(ok=False, error=str(exc))
         try:
             # v1.333.0: a pane an AGENT opens runs below normal priority (and
             # so does everything started in it), so a build an agent kicks
             # off never competes with what the user is doing. Never idle.
             session = await asyncio.to_thread(
-                mgr.create, str(cwd) if cwd else None, None, 100, 30, name=name,
+                mgr.create, str(cwd), None, 100, 30, name=name,
                 below_normal=True,
             )
         except RuntimeError as exc:  # the session cap
@@ -245,6 +350,26 @@ class PaneSendTool(_PaneTool):
     #: evidence line, which a program printed (see ``PaneListTool``).
     returns_untrusted_content = True
 
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> Any:
+        """Third plan PG8 (decision K6): a line that will run as a command
+        asks exactly as the shell tool's would (``shell_tool.spend_check``:
+        the git guard's once-only card on a coding session's branch or own
+        folder, a project command's lines); None otherwise (text for a coding
+        CLI, an unknown pane) — the ordinary verdict decides."""
+        mgr = self.mgr
+        if mgr is None or not isinstance(args, dict):
+            return None
+        text = str(args.get("text") or "")
+        session = _resolve(mgr, str(args.get("pane") or ""))
+        if not text or session is None:
+            return None
+        if not await asyncio.to_thread(lambda: _runs_as_command(session, session.activity())):
+            return None
+        from ..harness.command_shell import tool_check
+        from ..harness.git_guard import spend_check_off_loop
+
+        return await spend_check_off_loop(tool_check, text)
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         mgr = self.mgr
         if mgr is None:
@@ -271,6 +396,25 @@ class PaneSendTool(_PaneTool):
             )
 
         text = str(args.get("text") or "")
+        # Third plan PG8 (decision K6): a line that will run as a command
+        # meets the shell tool's own checks, with its sentences — the git
+        # guard, then (in a Command Prompt pane) the `;` guard on every line.
+        if text and await asyncio.to_thread(_runs_as_command, session, before):
+            from ..harness.git_guard import refusal_off_loop
+
+            refused = await refusal_off_loop(text)
+            if refused:
+                return ToolResult(ok=False, error=refused, data={"pane": _view(session)})
+            if _is_cmd_pane(session):
+                from ..sandbox.cmd_guard import semicolon_refusal
+
+                for line in text.splitlines():
+                    refused = semicolon_refusal(line)
+                    if refused:
+                        return ToolResult(
+                            ok=False, error=refused,
+                            data={"pane": _view(session), "shell": "cmd", "refused": "semicolon"},
+                        )
         await asyncio.to_thread(session.write, text + "\r")
         if not args.get("wait"):
             return ToolResult(

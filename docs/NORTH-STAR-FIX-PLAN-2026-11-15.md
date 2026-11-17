@@ -1392,6 +1392,7 @@ Both files were read whole.
   Auto-allow on for every tab. The daemon marks the card (`floor`,
   `panel.py:837`); the panel never reads the mark.
 - [ ] **SB7 to SB14 (low, pass only).** Stopping a dictation makes the
+  *Done so far: SB11 (v1.520.0).*
   add-on's whole connection wait for the transcription, so a page action
   another chat is running can time out (`panel.py:1127-1175`); any error
   that is not about voice ends the turn on screen while it still runs
@@ -1432,6 +1433,7 @@ All four were read whole.
   has. Not verified: that such a run is given the screenshot tool, and what
   each adapter does with a picture it cannot take.
 - [ ] **BR3 to BR6 (low; BR3 and BR4 pass only, BR5 and BR6 suspected).** A
+  *Done so far: BR6 (v1.520.0).*
   Pair press that lands while Browser access is off makes that browser the
   live one anyway (`browser/extension_backend.py:818-846`; the card does not
   offer Pair then); the screenshot tool promises "the result names the
@@ -1477,6 +1479,7 @@ All of both were read whole.
   (`stdio_shim.py:226-244`). Not verified: what each tool's own client does
   with that answer.
 - [ ] **MC4 to MC8 (low; MC4 and MC7 suspected, the rest pass only).**
+  *Done so far: MC5 (v1.520.0).*
   Stopping a tool that left a program holding its output open can hang the
   stop for 60 seconds (`codehost.py:547-559`; the daemon's own copy has the
   guard); a call through the door has no time limit and is not re-checked
@@ -1589,7 +1592,7 @@ Read whole, with the night's call sites.
   chosen when the accounts list could not be read: the refusal an ordinary
   reply gets is swallowed (`daemon/routes/build_attempts.py:192-195`,
   checked). Not verified: which login then answers.
-- [ ] **NA5 (2, medium, suspected for what is pushed). In a session that
+- [x] **NA5 (2, medium, suspected for what is pushed). In a session that
   works in its folder directly, "Try on…" commits every file not yet
   committed and not ignored, new files included, onto each attempt's
   branch with no screen for secrets or size** (`attempts.py:928-981`,
@@ -1615,7 +1618,7 @@ Both files were read whole, and each caller along the path of a call.
 `cmd_guard.py` is only the guard for `;` in Windows cmd; whether a command
 is dangerous is decided in `core/auto_approve.py`, read in part.
 
-- [ ] **PG1 (4, high, checked for the gate; that such a tool is armed with
+- [x] **PG1 (4, high, checked for the gate; that such a tool is armed with
   its app is pass only; the pass said medium, raised by the lead). A
   held-back app tool runs in chat with no card whenever its app is switched
   on for that chat.** A tool that arrives in a later update of a connected
@@ -1627,7 +1630,7 @@ is dangerous is decided in `core/auto_approve.py`, read in part.
   tool is "its own name is in the grant" (`tools/permissions.py:266-268`).
   Both chat lanes. The test for the hold-back calls the gate directly,
   never a chat with the app switched on.
-- [ ] **PG2 (2, medium, checked). A workflow's tool step skips the tool's
+- [x] **PG2 (2, medium, checked). A workflow's tool step skips the tool's
   own "ask every time" check.** A scheduled workflow can add an outgoing
   webhook (Jarvis's events sent to another address from then on) with
   nobody asked: `workflows/engine.py:1497-1542` asks only the tier, and the
@@ -1636,14 +1639,14 @@ is dangerous is decided in `core/auto_approve.py`, read in part.
   (`schedule_create` and `workflow_create` do not ask,
   `core/config.py:242-248`). Not verified: which agents are given those
   tools.
-- [ ] **PG3 (2, medium, checked; `repl` suspected). After a run reads
+- [x] **PG3 (2, medium, checked; `repl` suspected). After a run reads
   flagged text it loses the web tools and its shell is isolated, but
   `run_code` and `code_run` still run model-written code on this PC with
   the network open.** Neither is on the lists in `core/trust.py`, and only
   the tool named `shell` is isolated (`agents/runtime.py:5102-5108`,
   `daemon/chat_turn.py:4358-4369`). It needs `run_code` already allowed
   for the run.
-- [ ] **PG4 (3, medium, checked). Undo is refused for a change made by any
+- [x] **PG4 (3, medium, checked). Undo is refused for a change made by any
   tool set to "Ask first".** On a default install that is every rename,
   move or copy of a download, whose own answer says it can be reversed from
   the receipt. `daemon/routes/undo.py:267-279` asks the gate with nobody to
@@ -1651,24 +1654,24 @@ is dangerous is decided in `core/auto_approve.py`, read in part.
   allow_tools …", `tools/permissions.py:309-315`). A user who sets file
   edits to "Ask first" loses every edit's Undo, and Rewind of a coding
   session then refuses (`harness/rewind.py:571-583`, pass only).
-- [ ] **PG5 (1, medium, checked on the daemon side). Setting web search or
+- [x] **PG5 (1, medium, checked on the daemon side). Setting web search or
   web fetch to "Ask first" in Settings is saved and shown, and both still
   run without asking.** `tools/permissions.py:206-212` turns "ask" into
   "allow" for these two on purpose (so unattended runs can search); the
   setting still offers the choice.
-- [ ] **PG6 (3, medium, checked by reading; not run). The `;` guard misses
+- [x] **PG6 (3, medium, checked by reading; not run). The `;` guard misses
   a command where `2>&1` comes before the `;`.**
   `del /q *.tmp >nul 2>&1; python run.py` is not refused, and Windows cmd
   hands `del` the later words, so `run.py` is deleted.
   `sandbox/cmd_guard.py:153-157` splits the line at the `&` inside `2>&1`.
   A command line has no Undo.
-- [ ] **PG7 (4, medium, checked for the match; the card suspected).
+- [x] **PG7 (4, medium, checked for the match; the card suspected).
   "Always allow exactly this" ignores every argument whose name starts
   with an underscore** (`core/grants.py:102-120`). Meant for two of the
   app's own names, it also drops an app tool's `_id`, so an exact approval
   for one record covers every other. Not verified: that the card offers
   Always for such a tool.
-- [ ] **PG8 to PG10 (low; PG8 suspected, the rest pass only).** A line an
+- [x] **PG8 to PG10 (low; PG8 suspected, the rest pass only).** A line an
   agent types into a Build terminal meets none of the shell tool's checks
   (no git guard, no `;` guard), and a terminal it opens can be in any
   folder (`tools/pane_tools.py:202-210, 273-274`; both ask first);
@@ -1746,7 +1749,7 @@ call again.
 
 All eighteen files in `terminals/` were read whole.
 
-- [ ] **TM1 (2, medium, checked). The pane's "ask AI" and "make a workflow
+- [x] **TM1 (2, medium, checked). The pane's "ask AI" and "make a workflow
   from this terminal" send the terminal's output to a model with no
   fence.** Text a program printed (a downloaded file shown on screen, a
   repository's log) can steer the command the pane then offers on "Type it
@@ -1782,6 +1785,7 @@ All eighteen files in `terminals/` were read whole.
   to the log (`platform.py:403-426`; `terminals/recipes.py:545-557,
   716-718`; `dashboard/app/terminals/page.tsx:1118`).
 - [ ] **TM6 to TM20 (low; TM10, TM14, TM15 and TM20 suspected, the rest
+  *Done so far: TM14, TM15 (v1.520.0).*
   pass only), in the order written:**
   - Kept on this PC and in backups: each terminal's last 64 KB of output
     is written in the clear and carried by every backup, where it stays
@@ -2013,3 +2017,103 @@ groups, these decisions. What differs in the building, and why:
   Decisions G4 and G5 apply to them as written.
 - Anything else that ends up built differently from a decision above is
   said in that group's "as built" note.
+
+### Group 17 as built (v1.520.0)
+
+Fixed: PG1, PG2, PG3, PG6, PG7, PG8, PG9, TM1, TM14, TM15, MC5, BR6, SB11,
+NA5, and, early (see "Building"), PG4, PG5 and PG10.
+
+Checked and not a defect: a LOCKED app (Microsoft 365) switched on for a
+chat. The first implementer suspected it had PG1's gap. It does not: a
+locked app is always kept on the user's own models, so the chat's Local
+only card asks before every use at every approval level, the phone lane
+does not offer its tools, and outside a Local only chat or in a task the
+tool refuses itself. Seven new tests pin that.
+
+Where it differs from the plan:
+
+- **PG1 reached further than the two chat lanes.** A task handed off from
+  chat starts with every name chat had switched on, so a held-back tool ran
+  there too. The lead added the agent-run side; the implementer who tested
+  it found three more ways through and closed them: a tool whose own check
+  said "free" skipped the card, one card for several app tools in a step
+  answered for the held-back one, and a sibling's "Allow for this run" woke
+  the held-back tool's waiting card. A held-back tool now always has a card
+  of its own, and "Allow for this run" does not carry into the next run.
+- **PG2's check was not moved into the tool gate.** The workflow step reads
+  the tool's own check through the helper the lanes share, and a scan test
+  now lists every caller of the gate with how it honours that check (eleven
+  call sites, none other missing it). Moving the check into the gate would
+  need each of those callers to say whether it had asked; a mistake there
+  refuses work that is allowed today. Left for a later decision.
+- **PG8, the folder of a terminal an agent opens.** The implementer confined
+  it to the session's folder. The lead widened that to the rule for what
+  Iron Jarvis may read (never a protected folder, another computer, or
+  outside "Folders Jarvis may read"), because "open a terminal in my
+  project's folder" is asked about on the card anyway.
+- **TM1.** Output in which the scan finds a line written as instructions to
+  a model is held back whole. The lead added that "ask AI" says so ahead of
+  its answer; the workflow route refuses before any model is called.
+- **SB11.** The implementer also required "not a tab" for the side panel.
+  The lead took that out: the page's address already keeps a page script
+  out, and a browser that marked its side panel as a tab would have had
+  every press in the sidebar refused.
+- **Decision G5 as built:** a stored "Ask first" for web search or web fetch
+  from an older version is shown as "Run without asking" (what it did).
+
+Left open:
+
+- "A locked app asks before each use" rests on every locked app also being
+  kept on the user's own models. The catalog ties the two; nothing in the
+  gate reads the lock itself apart from the "Run app tools without asking"
+  switch.
+- NA5: in a session that works in its folder directly, after Keep the
+  session is in the attempt's folder, which lacks the file that was left
+  out (a `.env`, say). The card and the keep note say so; the file is not
+  brought across.
+- PG8: the `;` guard knows a pane's shell only as it was started (a `cmd`
+  started inside a PowerShell pane is not seen). The git guard on a typed
+  line changes nothing today, because the pane tools are not offered inside
+  a coding session's reply, the only place that guard acts.
+- The Build page's "Run in terminal" (from a terminal's own chat) still
+  sends every line of a block; there the press is the consent.
+- `/terminals/{id}/context` returns the output as it is, for the user to
+  copy; Iron Jarvis sends it to no model.
+- MC5: `mcpserver/server._grant_now` repeats the end of
+  `PaneTokenStore.resolve`. The time limit is the user's tool time limit
+  (ten minutes by default); the bridge still gives up first, at one minute.
+- `tools/apply_changes` and `tools/tool_script` read a tool's own check by
+  their own code, not through the shared helper (the scan test pins that
+  they read it).
+- In both chat lanes a reply with no tool switched on ends without a record
+  of a tool call the model made anyway.
+- The reason for a gate with no way to ask at all still reads "no resolver
+  in headless mode"; the app always has one, so it is not reachable.
+- `tests/test_mcp_server_v1238.py` asks with `ref` where the tool wants
+  `target`, so its approved-ask tests never reach the tool;
+  `tests/test_browser_downloads_v14430.py` uses bank wording in its
+  examples.
+
+Tested with stand-ins only: the models, everywhere; the add-on's worker
+(pinned by reading its source, type-checked, and run once in Node with a
+stand-in browser, never in Chrome or Edge); terminals (a stand-in for the
+shell); the tools door's terminals and Code session; the account manager's
+own reading of a limit line. What would show a problem on the installed
+app: a press in the browser sidebar that does nothing (SB11, with the new
+add-on); a new app tool that runs with no card.
+
+What the branch's full runs on GitHub showed (the release is v1.520.0 because
+another session released v1.519.0 while this one was being tested):
+
+- The dependency page (`docs/DEPENDENCIES.md`) was out of step: this
+  group added imports between packages. Regenerated.
+- Two tests passed only on a retry, which counts as red here. One was this
+  group's own doing: a new test read a held-back app tool's permission key
+  outside any task, which leaves the note "the coming question is about
+  this tool" for the next test in the same worker. The read now checks
+  "held back" first (`harness/session_grants.shareable`), and every test
+  starts and ends with no such note (`tests/conftest.py`). The other was an
+  older desktop test that runs a real Windows process listing under the
+  app's own 10-second limit, which a loaded test machine can miss; it now
+  runs the listing with a limit of its own. The second full run was green
+  with no retried test.

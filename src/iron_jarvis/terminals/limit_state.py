@@ -43,10 +43,18 @@ from datetime import datetime, timedelta, timezone
 
 from .agent_state import _WORKING
 
-__all__ = ["PaneLimit", "SCAN_LINES", "detect_limit", "parse_reset"]
+__all__ = ["MAX_RESET_AHEAD", "PaneLimit", "SCAN_LINES", "detect_limit", "parse_reset"]
 
 #: How many of the newest non-empty rendered lines are searched.
 SCAN_LINES = 20
+
+#: A reset further away than this is not believed (third north-star fix plan,
+#: TM15). The longest real limit window is a week; a line on screen such as
+#: "resets in 90000 hours" (a log being read, a joke, a garbled repaint) would
+#: otherwise park the account for years when the user presses Continue. Not
+#: believed means "limit seen, no reset time known": the limit still stands,
+#: and the callers' own default wait applies.
+MAX_RESET_AHEAD = timedelta(days=8)
 
 #: A limit line is never longer than this.
 _LINE_CAP = 300
@@ -108,6 +116,11 @@ class PaneLimit:
             now = now or datetime.now(timezone.utc)
             minutes = max(1, int(round((self.reset_at - now).total_seconds() / 60)))
             text += f" · try again in {minutes}m"
+        elif self.reset_words and _too_far(self.reset_words, now):
+            # TM15: a reset not believed is not passed on either — the
+            # account manager would read "resets in 90000 hours" itself.
+            kept = [p.strip() for p in text.split("·") if self.reset_words not in p]
+            text = " · ".join(p for p in kept if p)
         return text
 
 
@@ -162,9 +175,33 @@ def parse_reset(words: str, now: datetime | None = None) -> datetime | None:
     """The reset instant (aware, UTC) of words like "resets 3:45pm
     (America/New_York)", "resets Sep 30, 2pm (…)", "at 3pm", "in 2 hours".
     The zone in brackets is honoured; without one, this PC's local zone. None
-    when nothing parses. Never raises."""
+    when nothing parses, and None for a reset further away than
+    :data:`MAX_RESET_AHEAD` (TM15: not believed). Never raises."""
+    when, too_far = _reset_and_bound(words, now)
+    return None if too_far else when
+
+
+def _too_far(words: str, now: datetime | None = None) -> bool:
+    """Do ``words`` parse to a reset that :func:`parse_reset` does not believe?"""
+    return _reset_and_bound(words, now)[1]
+
+
+def _reset_and_bound(words: str, now: datetime | None) -> tuple[datetime | None, bool]:
+    """``(the parsed reset or None, is it further than MAX_RESET_AHEAD)``.
+    Never raises (a naive ``now`` beside the aware reset reads as "too far")."""
+    now = now or datetime.now(timezone.utc)
+    when = _parse_reset_any(words, now)
+    if when is None:
+        return None, False
     try:
-        now = now or datetime.now(timezone.utc)
+        return when, when - now > MAX_RESET_AHEAD
+    except (TypeError, ValueError, OverflowError):
+        return when, True
+
+
+def _parse_reset_any(words: str, now: datetime) -> datetime | None:
+    """:func:`parse_reset` with no upper bound. Never raises."""
+    try:
         text = str(words or "")
         m = _IN.search(text)
         if m and (m.group(1) or m.group(2)):

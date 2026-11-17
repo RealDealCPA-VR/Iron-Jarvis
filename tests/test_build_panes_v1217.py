@@ -401,11 +401,14 @@ async def test_pane_spawn_names_a_pane_and_refuses_a_duplicate(tmp_path):
     mgr = _FakeManager([_FakeSession("t1", name="reviewer")])
     dup = await PaneSpawnTool(mgr).execute({"name": "reviewer"}, _ctx(tmp_path))
     assert not dup.ok and "already exists" in dup.error
+    # Third plan PG8: the folder must exist and pass the folder rule.
+    proj = tmp_path / "proj"
+    proj.mkdir()
     ok = await PaneSpawnTool(mgr).execute(
-        {"name": "tester", "cwd": "C:\\proj"}, _ctx(tmp_path)
+        {"name": "tester", "cwd": str(proj)}, _ctx(tmp_path)
     )
     assert ok.ok and ok.data["pane"]["name"] == "tester"
-    assert mgr.created[-1] == {"cwd": "C:\\proj", "name": "tester"}
+    assert mgr.created[-1] == {"cwd": str(proj.resolve()), "name": "tester"}
 
 
 async def test_a_build_without_terminals_says_so_rather_than_crashing(tmp_path):

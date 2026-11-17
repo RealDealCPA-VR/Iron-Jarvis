@@ -119,7 +119,9 @@ async def test_tool_step_refuses_non_readonly_ask_tools(tmp_path):
     rec = await WorkflowEngine(platform).run(wf)
     assert rec.status == "failed"
     summary = json.loads(rec.outputs_json)["Own"]["summary"]
-    assert "interactive approval" in summary
+    # Third plan PG2 (moved on purpose): the app's words, never "interactive
+    # approval ... headless"; the way that works is named.
+    assert "asks you before it runs" in summary and "Agent step" in summary
 
 
 async def test_notify_step_fails_honestly_when_delivery_fails(tmp_path):

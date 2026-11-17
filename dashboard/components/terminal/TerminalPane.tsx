@@ -90,6 +90,20 @@ type AIResult = {
   skills?: string[];
 };
 
+/** What "Type it in" may type for a suggested command (third north-star fix
+ *  plan, TM14, decision G21): the ONE non-empty line, with no line break, or
+ *  null when the suggestion has more than one non-empty line. A line break
+ *  typed into a bash-family shell runs that line at once, so a block of
+ *  several lines would run before the user's own Enter; such a block is
+ *  offered for Copy only. Blank lines around a single command do not count. */
+export function oneLineCommand(command: string | null | undefined): string | null {
+  const lines = (command ?? "").split(/\r\n|\r|\n/).filter((l) => l.trim() !== "");
+  return lines.length === 1 ? lines[0] : null;
+}
+
+/** Said beside Copy when a suggestion is more than one line (TM14). */
+export const MULTI_LINE_WORDS = "This is more than one line: copy it and run it a line at a time.";
+
 // --- Launch recipes (v1.238.0, D18) ---------------------------------------
 // Before this ship a launch was one string typed into a live shell, and the
 // menu had nothing to say about what the CLI would be able to DO once it
@@ -1001,9 +1015,32 @@ export function TerminalPane({
     // Type the command into the shell WITHOUT submitting it — the user presses
     // Enter themselves (a last look before anything executes). A shell that is
     // not connected takes nothing, and the suggestion stays on screen.
-    if (!aiResult?.command || !hostRef.current?.send(aiResult.command)) return;
+    // ONE line only, typed with no line break (TM14): a line break would be
+    // the Enter this promises to leave to the user.
+    const line = oneLineCommand(aiResult?.command);
+    if (line === null || !hostRef.current?.send(line)) return;
     setAiResult(null);
     setAiPrompt("");
+  }
+
+  // A suggestion of several lines is copied, never typed in (TM14).
+  const [cmdCopied, setCmdCopied] = useState(false);
+  async function copySuggested() {
+    const text = aiResult?.command ?? "";
+    if (!text) return;
+    try {
+      const bridge = (
+        window as unknown as {
+          ironjarvis?: { clipboardWriteText?: (t: string) => Promise<unknown> };
+        }
+      ).ironjarvis;
+      if (bridge?.clipboardWriteText) await bridge.clipboardWriteText(text);
+      else await navigator.clipboard?.writeText?.(text);
+      setCmdCopied(true);
+      window.setTimeout(() => setCmdCopied(false), 2500);
+    } catch (err) {
+      setAiError(err instanceof ApiError ? err.message : String(err));
+    }
   }
 
   useEffect(() => {
@@ -2034,7 +2071,7 @@ export function TerminalPane({
                 {aiResult.reply}
               </p>
               <div className="flex items-center gap-2">
-                {aiResult.command && (
+                {aiResult.command && oneLineCommand(aiResult.command) !== null && (
                   <button
                     onClick={runSuggested}
                     disabled={state !== "open"}
@@ -2043,6 +2080,20 @@ export function TerminalPane({
                   >
                     <Play size={11} /> Type it in
                   </button>
+                )}
+                {aiResult.command && oneLineCommand(aiResult.command) === null && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={copySuggested}
+                      className="btn-accent px-2 py-1 text-[11px]"
+                      title="Copies the commands, so you can run them a line at a time"
+                    >
+                      {cmdCopied ? <Check size={11} /> : <ClipboardCopy size={11} />}{" "}
+                      {cmdCopied ? "Copied" : "Copy"}
+                    </button>
+                    <span className="text-[10px] text-zinc-400">{MULTI_LINE_WORDS}</span>
+                  </>
                 )}
                 {/* v1.359.0 re-review: the model in words, raw pair as title. */}
                 <span className="text-[10px] text-zinc-600" title={modelPickTitle(aiResult)}>
