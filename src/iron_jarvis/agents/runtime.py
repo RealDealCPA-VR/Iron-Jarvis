@@ -13,6 +13,7 @@ import contextvars
 import json
 import logging
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1664,6 +1665,19 @@ class AgentRuntime:
         #: user answered from the list the escalation carried, and under
         #: ``always_ask`` only the former skips a pause. Reset per run.
         self._run_grants: dict[str, set[str]] = {}
+        #: THE USER'S OWN ANSWERS ABOUT HELD-BACK APP TOOLS (third fix plan,
+        #: PG1/K1). A tool that arrived in a later update of a connected app
+        #: and can change things asks until it is trusted on the app's page.
+        #: ``session_allow`` cannot carry that: it starts with every name the
+        #: chat ARMED at hand-off (an app switched on arms each of its tools),
+        #: and a free spend verdict, an Auto rule or a sibling helper's grant
+        #: add names nobody answered a card about. Only these two lift one:
+        #: the names the user allowed 'for this run' on a card that showed
+        #: the tool (``_held_grants``), and the calls the user allowed once
+        #: (``_held_once``, by call identity, taken when the call runs). The
+        #: registry's gate reads them as ``card_allow``.
+        self._held_grants: dict[str, set[str]] = {}
+        self._held_once: dict[str, set[int]] = {}
         #: v1.406.0 part 2 follow-ups: session id -> what an Accept edits /
         #: Auto run may have changed (``_note_auto_changes``), so a test run
         #: after a setup file changed is never passed by rule.
@@ -2447,6 +2461,8 @@ class AgentRuntime:
             # every finished session left its entries here for the daemon's
             # life on a runtime the orchestrator keeps forever.
             self._run_grants.pop(session.id, None)
+            self._held_grants.pop(session.id, None)
+            self._held_once.pop(session.id, None)
             self._tainted.pop(session.id, None)
             self._shell_syntax.pop(session.id, None)  # v1.421.0 (A1)
             self._script_armable.pop(session.id, None)  # v1.473.0
@@ -2707,6 +2723,8 @@ class AgentRuntime:
         # continuation is a NEW session id, so this only clears a rerun of
         # the same id after a crash.
         self._run_grants.pop(session.id, None)
+        self._held_grants.pop(session.id, None)
+        self._held_once.pop(session.id, None)
         # …and no taint (v1.298.0): the row's ``trust`` is what this run
         # starts from; a lowering is this run's own doing.
         self._tainted.pop(session.id, None)
@@ -3615,6 +3633,19 @@ class AgentRuntime:
         # tool resolves to deny here, so it never cards — ``invoke`` refuses
         # it with the low-trust sentence instead.
         mode = self.p.permissions.mode_for(perm, self._trust_overrides(session, agent_def))
+        if mode is not PermissionMode.DENY and getattr(tool, "quarantined", False):
+            # A HELD-BACK APP TOOL (third fix plan, PG1/K1) pauses in every
+            # posture, whatever the run was handed at its start (the names
+            # chat armed), whatever an agent's definition allows, and past
+            # every standing grant, Auto rule and FREE spend verdict (read
+            # before the spend check: "free" hands the call its grant with
+            # no card, and the gate below would then refuse it unasked): only
+            # the user's own answer to a card that showed THIS tool, in this
+            # run, skips the pause. A priced call of it pauses every time.
+            # The registry's gate holds the same line (``card_allow``).
+            if spend is not None and spend.ask:
+                return perm
+            return "" if tc.name in self._held_grants.get(session.id, ()) else perm
         if spend is not None and mode is not PermissionMode.DENY:
             # v1.346.0: the spend check decides — a priced call pauses in
             # every posture and past every grant; a free one never does.
@@ -3650,6 +3681,22 @@ class AgentRuntime:
         if eased and posture in ATTENDED_EASED_MODES and self._auto_rule(session, tc, agent_def):
             return ""
         return perm
+
+    def _held_back(self, name: str) -> bool:
+        """Is ``name`` a held-back app tool (``quarantined``, v1.299.0)?"""
+        return bool(getattr(self.p.registry.get(name), "quarantined", False))
+
+    def _held_card_allow(self, session: Session, tc) -> frozenset[str]:
+        """The gate's ``card_allow`` for a held-back tool's call (PG1): the
+        names the user allowed for this run on a card that showed them, plus
+        this call's own name when the user allowed THIS call once (taken
+        here: one answer runs one call)."""
+        names = set(self._held_grants.get(session.id, ()))
+        once = self._held_once.get(session.id)
+        if once is not None and id(tc) in once:
+            once.discard(id(tc))
+            names.add(tc.name)
+        return frozenset(names)
 
     def _note_auto_changes(self, session: Session, calls) -> None:
         """Keep what an Accept edits / Auto run may have changed (edit targets,
@@ -4144,6 +4191,16 @@ class AgentRuntime:
             {"approval_id": approval_id, "tool": tc.name, "decision": decision},
             session_id=session.id,
         )
+        if decision in ("conversation", "always", "once", "tab"):
+            # PG1: the user answered a card that showed these calls. A
+            # held-back app tool among them is lifted by THIS answer only.
+            _held = {c.name for c in calls if self._held_back(c.name)}
+            if _held and decision == "conversation":
+                self._held_grants.setdefault(session.id, set()).update(_held)
+            elif _held:
+                self._held_once.setdefault(session.id, set()).update(
+                    id(c) for c in calls if c.name in _held
+                )
         if decision == "conversation":
             session_allow.update({*names, perm})
             self._run_grants.setdefault(session.id, set()).update({*names, perm})
@@ -4172,7 +4229,7 @@ class AgentRuntime:
             # timed out 300s later as "denied". Every other pending ask of
             # THIS session for the SAME permission gets the same answer now;
             # each wakes, pops itself, publishes its own `approval.resolved`.
-            self._release_siblings(approvals, session.id, perm)
+            self._release_siblings(approvals, session.id, perm, answered=names)
             # ONE APPROVAL PER CODING SESSION (v1.404.1, a USER BUG: four
             # helpers of one coding session each parked on their own card for
             # running a command, one for 11 hours). A helper's grant is the
@@ -4294,20 +4351,30 @@ class AgentRuntime:
             db.commit()
             return merged
 
-    def _release_siblings(self, approvals, session_id: str, perm: str) -> int:
+    def _release_siblings(
+        self, approvals, session_id: str, perm: str, answered: "Iterable[str]" = (),
+    ) -> int:
         """Resolve every other pending ask of ``session_id`` whose tool maps
         to permission ``perm`` with 'conversation' (the grant just made covers
         them). Matching is by PERMISSION KEY, resolved through the registry,
-        so two tool names sharing one key are released together."""
+        so two tool names sharing one key are released together.
+
+        ``answered`` (third fix plan, PG1): the names the card that was just
+        answered showed. A HELD-BACK app tool's ask is released only when its
+        own name is among them — every app tool shares ``mcp_call``, and a
+        sibling's "Allow for this run" is no answer about the held-back one."""
         pending = getattr(approvals, "pending_for", None)
         release = getattr(approvals, "resolve_where", None)
         if pending is None or release is None:
             return 0
+        answered = {str(n) for n in answered or ()}
         names: set[str] = set()
         once: set[str] = set()
         for entry in pending(session_id):
             name = str(entry.get("tool") or "")
             if not name:
+                continue
+            if self._held_back(name) and name not in answered:
                 continue
             tool = self.p.registry.get(name)
             if (tool.perm_key() if tool is not None else name) == perm:
@@ -5064,6 +5131,13 @@ class AgentRuntime:
                         # v1.375.0: asked about alone, every time — never in
                         # a batch (MIRROR NOTE: the stream lane's per-call key).
                         continue
+                    if self._held_back(_c.name):
+                        # PG1 (third fix plan): a HELD-BACK app tool has its
+                        # own card. It shares ``mcp_call`` with every app
+                        # tool, so a batch card (named after its first call)
+                        # let a sibling's answer run it. MIRROR NOTE: the
+                        # stream lane's `_ask_first_key` for `_held_card`.
+                        continue
                     _perm = self._pause_needed(
                         session, _c, agent_def, session_allow,
                         spend=spend_by_call.get(id(_c)),
@@ -5194,6 +5268,15 @@ class AgentRuntime:
                     deny_reason=deny_reason,
                     deny_label=deny_label,
                     allowed_names=armed_names,
+                    # PG1 (third fix plan): a held-back app tool is lifted
+                    # only by the user's own card answers, never by a name
+                    # in ``session_allow``. Passed only for such a tool, so
+                    # every other call is byte-identical.
+                    **(
+                        {"card_allow": self._held_card_allow(session, tc)}
+                        if self._held_back(tc.name)
+                        else {}
+                    ),
                     # THE DEADLINE (v1.228.0, RT6): a wedged tool becomes a
                     # recorded failed result and the run goes on; 0 = none.
                     deadline_s=_tool_deadline(self.p.config),

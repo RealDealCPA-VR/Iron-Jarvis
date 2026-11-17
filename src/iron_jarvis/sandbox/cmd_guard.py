@@ -17,10 +17,13 @@ any other, before anything runs. It reads the text the way cmd.exe runs it:
   so text after it is ignored;
 * the line is split into commands at cmd's own operators -- ``&``, ``&&``,
   ``|``, ``||`` -- outside double quotes, ``^`` escaping the next character
-  (cmd ignores single quotes);
+  (cmd ignores single quotes); an ``&`` right after ``>`` / ``<`` duplicates
+  a handle (``2>&1``) and is part of the command (third plan PG6);
 * a command is judged by its PROGRAM (path, quotes and ``.exe`` removed),
   after a wrapper that hands the rest to another program (``xargs``, ``sudo``,
-  ``env``, ``call``, ``start``...) and inside ``cmd /c "..."``;
+  ``env``, ``call``, ``start``...), inside ``cmd /c "..."``, and after cmd's
+  ``if <test>`` / ``for ... do`` (a ``( ... )`` block up to its ``)``, and an
+  ``if`` block's ``else``; third plan PG9);
 * only a program of :data:`FILE_PROGRAMS` / :data:`CMD_FILE_COMMANDS` /
   :data:`GIT_FILE_SUBCOMMANDS` / :data:`INSTALLERS` (or an in-place ``sed -i``
   / ``perl -i``) counts, and only an UNQUOTED ``;`` that hands it more words:
@@ -34,8 +37,9 @@ any other, before anything runs. It reads the text the way cmd.exe runs it:
 So ``set PATH=%PATH%;C:\\x``, ``findstr "a;b" f``, ``echo a;b``, ``python -c
 "import x; print(1)"`` and ``sleep 2; cat x`` (harmless, if broken) all run.
 
-HONEST LIMITS: this reads the command's text. A script file, an ``if`` /
-``for`` body and a variable that expands to ``;`` are not read. It is a
+HONEST LIMITS: this reads the command's text. A script file, a variable that
+expands to ``;`` and more than :data:`_MAX_NEST` nested ``if`` / ``for`` /
+blocks in one command are not read. It is a
 guardrail against a careless model, not a sandbox. Where Git for Windows'
 bash runs the command instead (the IJ harness's Claude dialect,
 ``sandbox/git_bash``), ``;`` separates commands and this guard does not apply.
@@ -120,6 +124,13 @@ _REDIRECT_RX = re.compile(r"^\d?(?:>>?|<)")
 _BARE_REDIRECTS = frozenset({">", ">>", "<", "1>", "2>", "1>>", "2>>"})
 #: How deep ``cmd /c "cmd /c ..."`` is followed.
 _MAX_DEPTH = 3
+#: Third plan PG9: cmd's ``if`` tests that take one word (``if exist X``).
+_IF_ONE_WORD = frozenset({"exist", "defined", "errorlevel", "cmdextversion"})
+#: ... and its comparison words (``if a equ b``).
+_IF_COMPARE = frozenset({"equ", "neq", "lss", "leq", "gtr", "geq"})
+#: How many ``if`` / ``for`` / ``( ... )`` levels inside one command are read
+#: (a deeper line is not judged: a guardrail, not a parser of every line).
+_MAX_NEST = 16
 
 
 def refusal_sentence(program: str) -> str:
@@ -137,26 +148,41 @@ def _first_line(command: str) -> str:
 
 def _segments(line: str) -> list[str]:
     """``line`` split at cmd.exe's own operators (``& && | ||``) outside double
-    quotes; ``^`` escapes the next character outside quotes."""
+    quotes; ``^`` escapes the next character outside quotes.
+
+    Third plan PG6: an ``&`` RIGHT AFTER an unescaped ``>`` or ``<`` duplicates
+    a handle (``2>&1``, ``1>&2``, ``>&2``, ``<&0``, ``2>>&1``; cmd also takes
+    ``2>& 1``) and is part of the command, never a separator — cut there,
+    ``del /q *.tmp >nul 2>&1; python run.py`` hid its ``;`` from ``del``.
+    ``2> &1`` (a space before the ``&``) is a syntax error in cmd (measured:
+    nothing runs), so that ``&`` still separates."""
     out: list[str] = []
     buf: list[str] = []
     quoted = False
+    redirect = False  # the last character was an unescaped `>` / `<` outside quotes
     i = 0
     while i < len(line):
         ch = line[i]
         if ch == '"':
             quoted = not quoted
             buf.append(ch)
+            redirect = False
         elif not quoted and ch == "^" and i + 1 < len(line):
             buf.append(line[i + 1])
             i += 1
+            redirect = False
+        elif not quoted and ch == "&" and redirect:
+            buf.append(ch)  # `2>&1`: a handle duplicated, part of the command
+            redirect = False
         elif not quoted and ch in "&|":
             out.append("".join(buf))
             buf = []
             if i + 1 < len(line) and line[i + 1] == ch:
                 i += 1
+            redirect = False
         else:
             buf.append(ch)
+            redirect = not quoted and ch in "<>"
         i += 1
     out.append("".join(buf))
     return [s for s in out if s.strip()]
@@ -341,7 +367,106 @@ def _guarded(prog: str, args: list[str]) -> bool:
     return False
 
 
-def _judge(segment: str, depth: int) -> str:
+def _if_command_at(text: str, words: list[tuple[str, int, int, bool]], i: int) -> int:
+    """The index (in ``words``) of the first word of the command cmd's ``if``
+    at ``words[i]`` runs, or -1 when its test cannot be read. cmd's forms:
+    ``if [/i] [not] exist|defined|errorlevel|cmdextversion <word> <command>``,
+    ``if [/i] [not] a==b <command>`` (spaces around ``==`` allowed) and
+    ``if [/i] [not] a equ|neq|lss|leq|gtr|geq b <command>``."""
+    j, n = i + 1, len(words)
+    if j < n and not words[j][3] and words[j][0].lower() == "/i":
+        j += 1
+    if j < n and not words[j][3] and words[j][0].lower() == "not":
+        j += 1
+    if j >= n:
+        return -1
+    word, start, end, quoted = words[j]
+    raw = text[start:end]  # with its quotes: `"%x%"==""` must not read as `a==`
+    if not quoted and word.lower() in _IF_ONE_WORD:
+        return j + 2
+    if "==" in raw:
+        return j + 2 if raw.endswith("==") else j + 1
+    if j + 1 < n:
+        nxt_raw = text[words[j + 1][1]:words[j + 1][2]]
+        if nxt_raw == "==":
+            return j + 3
+        if nxt_raw.startswith("=="):
+            return j + 2
+        if words[j + 1][0].lower() in _IF_COMPARE:
+            return j + 3
+    return -1
+
+
+def _for_command_at(text: str, words: list[tuple[str, int, int, bool]], i: int) -> int:
+    """The index of the first word of the command cmd's ``for ... in (set) do
+    <command>`` at ``words[i]`` runs (the first ``do`` after ``in`` and its
+    set's parentheses), or -1."""
+    seen_in = False
+    parens = 0
+    for k in range(i + 1, len(words)):
+        word, start, end, quoted = words[k]
+        if quoted:
+            continue
+        low = word.lower()
+        if not seen_in:
+            if low == "in" or low.startswith("in("):
+                seen_in = True
+                raw = text[start:end]
+                parens += raw.count("(") - raw.count(")")
+            continue
+        if low == "do" and parens <= 0:
+            return k + 1
+        raw = text[start:end]
+        parens += raw.count("(") - raw.count(")")
+    return -1
+
+
+def _closing_paren(text: str) -> int:
+    """Where the ``(`` block that starts ``text`` closes (outside double
+    quotes, ``^`` escaping), or -1 when it never does."""
+    level = 0
+    quoted = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            quoted = not quoted
+        elif not quoted and ch == "^":
+            i += 1
+        elif not quoted and ch == "(":
+            level += 1
+        elif not quoted and ch == ")":
+            level -= 1
+            if level == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _judge_body(text: str, depth: int, nest: int) -> str:
+    """Third plan PG9: the program the command an ``if`` / ``for`` / ``else``
+    runs (``text``, from its first word) would feed a destructive ``;``, or "".
+    A ``( ... )`` block is judged up to its own ``)``, and the ``else`` after
+    an ``if``'s block is judged as a command of its own. Bounded:
+    :data:`_MAX_NEST` levels of ``if`` / ``for`` / blocks."""
+    if nest >= _MAX_NEST:
+        return ""
+    body = text.lstrip()
+    while body[:1] == "@":
+        body = body[1:].lstrip()
+    if body[:1] != "(":
+        return _judge(body, depth, nest + 1)
+    close = _closing_paren(body)
+    prog = _judge(body[1:close] if close >= 0 else body[1:], depth, nest + 1)
+    if prog or close < 0:
+        return prog
+    tail = body[close + 1:].lstrip()
+    if tail[:4].lower() == "else" and (len(tail) == 4 or tail[4] in " \t(@"):
+        return _judge_body(tail[4:], depth, nest + 1)
+    return ""
+
+
+def _judge(segment: str, depth: int, nest: int = 0) -> str:
     """The program one cmd command would feed a destructive ``;``, or ""."""
     text = _leading(segment)
     words = _words(text)
@@ -352,6 +477,14 @@ def _judge(segment: str, depth: int) -> str:
             i += 2 if word in _BARE_REDIRECTS else 1
             continue
         prog = _program_name(word)
+        if not was_quoted and prog in ("if", "for"):
+            # Third plan PG9: `if exist out.txt del out.txt; python gen.py`
+            # runs `del` with the rest of the line — the command after the
+            # test (or after `do`) is judged as a command of its own.
+            at = _if_command_at(text, words, i) if prog == "if" else _for_command_at(text, words, i)
+            if at < 0 or at >= len(words):
+                return ""
+            return _judge_body(text[words[at][1]:], depth, nest)
         if prog == "cmd":
             # `cmd /c "rm -f a; b"`: the inner command runs in cmd too.
             for k in range(i + 1, len(words)):

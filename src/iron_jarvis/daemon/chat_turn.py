@@ -13416,10 +13416,14 @@ async def run_chat_turn(
         # is one it cannot be talked into. Recorded once for the receipt.
         # MIRROR NOTE (lock-step): routes/chat.py drops the same names from
         # armed, auto_armed AND ask_armed — edit both or neither.
+        # Third fix plan (PG3 leftover): the names are `deny_names` — the
+        # door's list AND the code tools (`CODE_DENY`), which are refused at
+        # the call, so the model is not shown them and the receipt counts them.
         if _trust_state["low"]:
-            _trust_state["kept"] = kept_away(armed)
-            armed = [t for t in armed if t not in LOW_TRUST_DENY]
-            auto_armed = [t for t in auto_armed if t not in LOW_TRUST_DENY]
+            _kept_now = deny_names(False)
+            _trust_state["kept"] = [t for t in armed if t in _kept_now]
+            armed = [t for t in armed if t not in _kept_now]
+            auto_armed = [t for t in auto_armed if t not in _kept_now]
         # LOCAL ONLY (v1.332.0): the internet-reaching tools
         # (`egress.INTERNET_TOOLS`) are never armed in a local-only turn,
         # whatever picked them. MIRROR NOTE (lock-step): routes/chat.py drops
@@ -14430,6 +14434,29 @@ async def run_chat_turn(
                             "deny_reason": f"{_auto.STRICT_WHY} — {ONCE_NOT_ASKED_TAIL}",
                             "deny_label": SPEND_NOT_ASKED_LABEL,
                         }
+            # A HELD-BACK APP TOOL (third fix plan, PG1/K1): a tool that arrived
+            # in a later update of a connected app and can change things asks
+            # every time until it is trusted on the app's own page, whatever is
+            # switched on for the chat and in every posture. The stream lane
+            # cards it; this lane cannot, so it is REFUSED in words through the
+            # registry's ledgered deny path — unless the user allowed THAT tool
+            # for this conversation on a card (`_card_grants`, the page's
+            # `granted_tools`). The registry's gate reads the same answers
+            # (`card_allow` below), so arming alone never runs it.
+            # MIRROR NOTE (lock-step): routes/chat.py `_held_back`/`_held_card`.
+            _held_refuse: dict[int, dict[str, str]] = {}
+            for _hi, _htc in enumerate(calls):
+                if (_refused[_hi] or _htc.name not in _gate_now
+                        or not _quarantined(d.platform, _htc.name) or _htc.name in _card_grants):
+                    continue
+                _ht = d.platform.registry.get(_htc.name)
+                _hpk = _ht.perm_key() if _ht is not None else _htc.name
+                if d.platform.permissions.mode_for(_hpk, overrides) is PermissionMode.DENY:
+                    continue  # the registry refuses it in its own words
+                _held_refuse[_hi] = {
+                    "deny_reason": _auto.post_lane_refusal(_auto.Verdict(_auto.ASK, "quarantined")),
+                    "deny_label": "needs your OK",
+                }
             _batched = [
                 not _refused[i] and _batchable_call(tc.name, tc.arguments)
                 for i, tc in enumerate(calls)
@@ -14472,6 +14499,10 @@ async def run_chat_turn(
                     # only — the stream lane cards the same verdict.
                     _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
                     _deny_kw = _low_kw or spend_not_asked_invoke_kwargs(_spend.get(id(tc)))
+                    if not _deny_kw and i in _held_refuse:
+                        # PG1: a held-back app tool would card, and this
+                        # lane cannot show one.
+                        _deny_kw = _held_refuse[i]
                     if not _deny_kw and i in _auto_refuse:
                         # v1.406.0 part 2: Accept edits / Auto keeps a card
                         # for this call, and this lane cannot show one.
@@ -14530,6 +14561,16 @@ async def run_chat_turn(
                     d.platform.permissions,
                     overrides, session_allow=armed_grant,
                     allowed_names=_gate_now,
+                    # PG1 (third fix plan): a held-back app tool is lifted
+                    # only by the user's card answers, never by the names
+                    # arming put in `armed_grant`. Only for such a tool, so
+                    # every other call is byte-identical. MIRROR NOTE:
+                    # routes/chat.py `_registry_invoke`.
+                    **(
+                        {"card_allow": frozenset(_card_grants)}
+                        if _quarantined(d.platform, tc.name)
+                        else {}
+                    ),
                     # v1.246.0: the agent run's tool deadline, so a hung
                     # tool ends as a failed result instead of a hung turn.
                     deadline_s=chat_tool_deadline(d.platform),

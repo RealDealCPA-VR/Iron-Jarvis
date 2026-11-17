@@ -274,7 +274,7 @@ def plan_tools(
     (a connector the user switched on, so granted) each keeps its OWN tier:
     an allow-tier one is armed, an ask-tier one is ask-armed (the stream
     lane cards it; the POST lane drops it). Every other filter applies."""
-    from ..core.trust import LOW_TRUST_DENY
+    from ..core.trust import deny_names
     from ..providers import egress
 
     have_apps = _has_app_tools(registry)
@@ -301,7 +301,9 @@ def plan_tools(
             away = egress.ask_first_tools(registry, candidates)
             candidates = [n for n in candidates if n not in away]
     if low_trust:
-        candidates = [n for n in candidates if n not in LOW_TRUST_DENY]
+        # Third fix plan (PG3 leftover): with the code tools (`CODE_DENY`),
+        # which a low turn is refused at the call.
+        candidates = [n for n in candidates if n not in deny_names(False)]
     if tool_ceiling is not None:
         ceiling = set(tool_ceiling)
         candidates = [n for n in candidates if n in ceiling]

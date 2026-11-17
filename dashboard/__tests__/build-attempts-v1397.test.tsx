@@ -326,6 +326,25 @@ describe("when they end: one card, side by side, and Keep", () => {
     expect(screen.queryByTestId("attempts-lead")).toBeNull();
   });
 
+  it("names the files not carried into the attempts, and says nothing when there are none (third plan G13)", () => {
+    const { unmount } = renderCard();
+    expect(screen.queryByTestId("attempts-left-out")).toBeNull();
+    unmount();
+    renderCard({
+      ...CARD,
+      carried: true,
+      left_out: [
+        { path: ".env.local", why: "looks like a secret" },
+        { path: "big.bin", why: "larger than 50 MB" },
+        { path: 7 },
+      ],
+    });
+    expect(screen.getByTestId("attempts-left-out")).toHaveTextContent(
+      "Not carried into the attempts: .env.local (looks like a secret), big.bin (larger than 50 MB). " +
+        "They stay where they were, unchanged; no attempt has them.",
+    );
+  });
+
   it("the session draws the card from the saved reply line (a reload, a return, a restart)", async () => {
     api.gets["/build/sessions/s1"] = view({
       messages: [

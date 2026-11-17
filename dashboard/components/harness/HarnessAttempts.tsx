@@ -44,6 +44,25 @@ import {
 
 const FINAL = new Set(["done", "failed", "stopped", "limit"]);
 
+/** Third plan G13: the files the night commit's own screen kept out of the
+ *  attempts (the card's `left_out`: `[{path, why}]`, `why` in plain words) —
+ *  still in the session's folder as they were, on no attempt's branch. */
+export function leftOutLine(raw: unknown): string {
+  const r = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  const list = Array.isArray(r?.left_out) ? (r!.left_out as unknown[]) : [];
+  const names: string[] = [];
+  for (const x of list.slice(0, 20)) {
+    const e = x && typeof x === "object" ? (x as Record<string, unknown>) : null;
+    const path = typeof e?.path === "string" ? e.path.slice(0, 500) : "";
+    const why = typeof e?.why === "string" ? e.why.slice(0, 80) : "";
+    if (path && why) names.push(`${path} (${why})`);
+  }
+  if (!names.length) return "";
+  return names.length === 1
+    ? `Not carried into the attempts: ${names[0]}. It stays where it was, unchanged; no attempt has it.`
+    : `Not carried into the attempts: ${names.join(", ")}. They stay where they were, unchanged; no attempt has them.`;
+}
+
 /** The turn's attempts while it runs (their order kept). */
 export function LiveAttemptRows({ attempts }: { attempts: readonly AttemptView[] }) {
   if (!attempts.length) return null;
@@ -130,6 +149,7 @@ export function AttemptsCardView({
     if (out.ok) onKept();
   }
   const lead = cardLead(card);
+  const leftOut = leftOutLine(raw);
   // (Not while a Keep is on its way: a press then would be swallowed.)
   const canDiscard = canKeep && hasLiveFolders(card) && (busy === null || busy === "discard");
   return (
@@ -171,6 +191,11 @@ export function AttemptsCardView({
             </span>
           ) : null}
         </div>
+      ) : null}
+      {leftOut ? (
+        <p data-testid="attempts-left-out" className="mt-1 break-words text-[12px] leading-5 text-tone-warn">
+          {leftOut}
+        </p>
       ) : null}
       {card.keepNote ? (
         <p data-testid="attempts-keep-note" className="mt-1 text-[12px] leading-5 text-tone-warn">

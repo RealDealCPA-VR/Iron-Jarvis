@@ -77,7 +77,14 @@ import { BridgeSocket, toggleAction, type BridgeStatus } from "../bridge/socket"
 import { awaitDownload, watchDownloads } from "./downloads";
 import { AgentGlow } from "./glow";
 import { ActionPointer } from "./pointer";
-import { hasHostPermission, onHostPermissionChanged, openMicPage, openSetupPage } from "./hostperms";
+import {
+  hasHostPermission,
+  MIC_PAGE,
+  onHostPermissionChanged,
+  openMicPage,
+  openSetupPage,
+  SETUP_PAGE,
+} from "./hostperms";
 import {
   activateTab,
   activeTab,
@@ -605,12 +612,65 @@ onHostPermissionChanged(() => {
 
 // --- messages from the side panel and the setup page ------------------------
 
+/** The side panel page, as manifest.json's `side_panel.default_path` names it. */
+const SIDEPANEL_PAGE = "dist/sidepanel.html";
+
+/**
+ * Third review SB11: the kinds only one of the add-on's OWN pages sends, and which.
+ *
+ * This listener also hears the content script, which runs inside a web page beside
+ * code the add-on cannot trust. Each kind here is answered only when it came from the
+ * page named (`fromOwnPage`); anything else gets `{ refused: true }` and nothing runs.
+ * The content script's own four kinds (`PICKED_KIND`, `PICK_CANCELLED_KIND`,
+ * `RECORDED_STEP_KIND`, `RECORD_IDLE_KIND`) are not here: they come from a tab, and
+ * each case below answers them only for the tab they belong to.
+ */
+const OWN_PAGE_FOR_KIND: ReadonlyMap<string, string> = new Map<string, string>([
+  ["status", SIDEPANEL_PAGE],
+  ["open_jarvis", SIDEPANEL_PAGE],
+  ["toggle_connection", SIDEPANEL_PAGE],
+  ["request_host_permission", SIDEPANEL_PAGE],
+  ["request_microphone", SIDEPANEL_PAGE],
+  ["panel_action", SIDEPANEL_PAGE],
+  ["pick_element", SIDEPANEL_PAGE],
+  ["pick_cancel", SIDEPANEL_PAGE],
+  ["record_start", SIDEPANEL_PAGE],
+  ["record_stop", SIDEPANEL_PAGE],
+  ["record_status", SIDEPANEL_PAGE],
+  ["mic_permission_result", MIC_PAGE],
+  ["host_permission_result", SETUP_PAGE],
+]);
+
+/**
+ * Whether `sender` is the add-on's own `page`. Every field read here is filled in by
+ * the browser, not by the script that sent the message: a content script's message
+ * carries the web page's address and its tab, whatever the page does.
+ */
+function fromOwnPage(sender: chrome.runtime.MessageSender, page: string): boolean {
+  if (sender.id !== chrome.runtime.id) {
+    return false;
+  }
+  // The ADDRESS decides. A content script's message carries the web page's address,
+  // never a chrome-extension:// one, so this alone keeps a page script out. Whether
+  // `sender.tab` is set is not read: the side panel is not a tab in Chrome, and a
+  // browser that set it would otherwise have every press in the sidebar refused.
+  const url = typeof sender.url === "string" ? sender.url : "";
+  const want = chrome.runtime.getURL(page);
+  return url === want || url.startsWith(`${want}?`) || url.startsWith(`${want}#`);
+}
+
 chrome.runtime.onMessage.addListener((message: WorkerMessage, sender, respond) => {
   // Read the discriminant into a plain string first. A message arrives from a page,
   // so it is untrusted input rather than a value TypeScript has already narrowed:
   // switching on the union directly leaves the default branch typed `never` and
   // there would be no way to report an unrecognised kind at all.
   const kind: string = (message as { kind?: string } | null)?.kind ?? "";
+  const page = OWN_PAGE_FOR_KIND.get(kind);
+  if (page !== undefined && !fromOwnPage(sender, page)) {
+    // Answered at once so the sender's promise ends; nothing from it is logged.
+    respond({ refused: true });
+    return false;
+  }
   void (async () => {
     switch (kind) {
       case "status":

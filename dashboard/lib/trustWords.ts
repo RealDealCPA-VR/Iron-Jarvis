@@ -4,7 +4,8 @@
  *
  * The daemon keeps a run that started from an inbound message (or read
  * something flagged as an injection) away from every tool in
- * `core/trust.LOW_TRUST_DENY`. The chip used to say only "low trust" and the
+ * `core/trust.LOW_TRUST_DENY` and `core/trust.CODE_DENY` (the tools that run
+ * code the model wrote). The chip used to say only "low trust" and the
  * daemon's reason; it never said what that blocks. The families below are
  * that set's MEANING, and `tests/test_trust_words_v13560.py` reads both this
  * file and the real set: a tool added to the deny set without a family here
@@ -165,6 +166,13 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     words: "programs",
     tools: ["process_start", "process_write"],
   },
+  // Third fix plan (PG3): code the model writes runs on this computer with
+  // the network open, outside the low-trust sandbox, so running it is kept
+  // away too (`core/trust.CODE_DENY`).
+  {
+    words: "code it writes",
+    tools: ["run_code", "code_run", "repl"],
+  },
   {
     words: "your web services",
     tools: ["rest_call"],
@@ -196,7 +204,7 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
 /** What a low-trust run cannot do, one sentence (the chip's hover). */
 export const LOW_TRUST_CANNOT =
   "This run can't change settings, schedules, rules, connections, memory, projects, agents or skills, " +
-  "can't type into your terminals, can't start programs that keep running, " +
+  "can't type into your terminals, can't start programs that keep running, can't run code it writes, " +
   "can't call your web services, can't take screenshots of pages, can't use pages in its own browser, " +
   "can't rename, move or copy downloaded files " +
   "and can't spend credits. " +

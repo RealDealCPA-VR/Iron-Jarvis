@@ -406,16 +406,34 @@ def demo(root: str = typer.Option(".", help="Project root.")) -> None:
     console.print(f"Evaluation : sessions_evaluated={m['sessions_evaluated']}, avg_completion={m['avg_completion']}")
 
 
+def shown_tool_mode(writer, platform, name: str) -> str:
+    """One tool's approval as Settings shows it (``settings/writer.
+    ConfigWriter.current``), "ask" when none is stored. Third fix plan (PG5):
+    the writer shows a stored "ask" for web search / web fetch as "allow",
+    because that is what they do; the raw stored value read "ask" here. A
+    name the settings cannot spell falls back to the stored value."""
+    try:
+        mode = writer.current(f"permissions.{name}")
+    except KeyError:
+        mode = (getattr(platform.config, "permissions", {}) or {}).get(name)
+    return str(mode or "ask")
+
+
 @app.command()
 def tools(root: str = typer.Option(".", help="Project root.")) -> None:
     """List registered tools and their default permission modes."""
+    from types import SimpleNamespace
+
+    from ..settings.writer import ConfigWriter
+
     platform = build_platform(root)
+    writer = ConfigWriter(SimpleNamespace(platform=platform))
     table = Table(title="Tools")
     table.add_column("name")
     table.add_column("permission")
     table.add_column("description", overflow="fold")
     for spec in platform.registry.specs():
-        mode = platform.config.permissions.get(spec["name"], "ask")
+        mode = shown_tool_mode(writer, platform, spec["name"])
         table.add_row(spec["name"], mode, spec["description"])
     console.print(table)
 

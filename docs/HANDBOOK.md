@@ -2042,6 +2042,87 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Every way in is judged, and what a program prints stays data (v1.519.0)
+
+The first of seven releases from the third review of the code against the
+north star. These are the places where something reached a tool, a file or a
+model by a way the usual check did not cover.
+
+- **A new tool in a connected app asks, even with the app switched on.** When
+  an update of a connected app brings a new tool that can change things, Iron
+  Jarvis holds that tool back until you trust it on the app's own page. With
+  the app switched on for a chat, the held-back tool ran without asking. It
+  now shows its own card every time, at every approval level ("Don't ask"
+  included), and the card says the tool is new in its app. "Allow once" runs
+  that one call; "for this conversation" covers the rest of the chat. The
+  same holds in a task handed off from chat. From the phone, where no card
+  can be shown, the tool is refused in words.
+- **A workflow step cannot do what chat would ask you about.** A "Tool call"
+  step in a workflow ran its tool without the tool's own question. A
+  scheduled workflow could add an outgoing webhook (Iron Jarvis's events sent
+  to another address from then on), save to memory when you had asked to be
+  asked, or write into Git's own files, with nobody asked. Such a step is now
+  refused, and its line says what it wanted to do and that it needs you: do
+  it from chat, or make it an Agent step, which asks.
+- **`del /q *.tmp >nul 2>&1; python run.py` is refused.** In Windows' Command
+  Prompt a `;` does not end a command, so `del` would have taken `run.py`
+  too. The guard for that missed the line when `2>&1` came before the `;`.
+  It also now reads the command behind `if exist …` and `for … do …`.
+- **A line an agent types into a Build terminal meets the same guards** as
+  the command tool (it still asks you first). A terminal an agent opens
+  cannot be in one of Iron Jarvis's own protected folders, on another
+  computer, or outside "Folders Jarvis may read" when you have set them.
+- **After reading suspicious text, a task cannot run code it writes.** A task
+  that has read text flagged as an attempt to give it instructions already
+  lost the web tools. It could still write and run a script on this PC with
+  the network open. Those three tools are now refused for the rest of that
+  task, and the refusal says the command tool still works (it runs shut off
+  from the network). The "low trust" note on a chat lists this too.
+- **"Always allow exactly this" means exactly this.** For an app tool whose
+  record is named by `_id`, an exact approval for one record covered every
+  other record. It now covers that record only. If you gave such an
+  approval before, you are asked once more.
+- **Undo works for a change made by a tool that asks first.** Renaming,
+  moving or copying a download said "can be undone", and Undo then answered
+  "permission denied". Pressing Undo, Revert on a task card, or Rewind in a
+  coding session is now your consent for putting that one change back. A
+  tool you set to "Never run" is still refused, in plain words.
+- **Web search and reading a web page: "Ask first" is no longer offered.**
+  The setting was saved and shown, and both still ran without asking (so
+  that work done while you are away can search). The choices are now "Run
+  without asking" and "Never run", and asking for "Ask first" in chat gets a
+  sentence that says why.
+- **What a terminal prints is data, never instructions.** The pane's "ask
+  AI" and "make a workflow from this terminal" gave the terminal's output to
+  a model as if you had written it, so a file shown on screen could steer
+  the command offered, or the steps of a workflow that is then saved. The
+  output now reaches the model marked as outside text. If a line in it reads
+  like instructions to an AI model, that output is held back: the answer
+  says so, and no workflow is made from it.
+- **"Type it in" types one line.** A suggestion of several lines was typed
+  as it was, and some shells ran the first lines before you pressed Enter.
+  For more than one line the pane now offers Copy instead.
+- **A reset that is years away is not believed.** A line on screen such as
+  "resets in 90000 hours" could park an account for years when you pressed
+  Continue. A reset more than eight days away is now read as "limit reached,
+  time unknown".
+- **A coding tool's request is checked again after its card.** When a coding
+  tool asks through Iron Jarvis to click or type in your browser and you
+  press Allow, the request is checked once more: if you stopped the session,
+  closed the terminal or unticked the box while the card waited, nothing is
+  done. Such a request also has a time limit now.
+- **"Try on…" no longer commits secrets into its attempts.** In a session
+  that works in its folder directly, starting the attempts committed every
+  file not yet committed, new ones included, onto each attempt's branch. The
+  files now pass the same check as the night's commit: a file that looks
+  like a secret, or is larger than 50 MB, is left out, stays where it was,
+  and is named on the card.
+- **Smaller things.** The browser add-on's background part takes sidebar
+  actions only from the add-on's own pages (this needs the new add-on in
+  your browser). The check for hidden instructions no longer slows down on a
+  long run of blank lines (16 seconds for 32,000 of them before). A refusal
+  with nobody there to ask says what to do in plain words, and no longer
+  advises a Settings change that Settings refuses.
 ## Your Claude Code and Codex chats, in the chat list and in memory (v1.518.0)
 
 Chats you had in Claude Code (the desktop app's Code tab, or a terminal) and in

@@ -56,8 +56,14 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "embedded_imperative",
+        # The line start spans whitespace that is NOT a newline (``[^\S\n]*``).
+        # It was ``\s*``, which includes the newline, so at every newline of a
+        # long run of blank lines the engine ran to the end of the run and back:
+        # quadratic, about 16 s for 32,000 blank lines (third review BR6). The
+        # matches are the same: when blank lines come before the word, the last
+        # newline before it is itself a line start.
         re.compile(
-            r"(^|\n)\s*(system|assistant|developer)\s*:\s*\S|"
+            r"(^|\n)[^\S\n]*(system|assistant|developer)\s*:\s*\S|"
             r"\b(new|updated|revised)\s+instructions\s*:|"
             r"\byou\s+(are\s+now|must\s+now|should\s+now)\b|"
             r"\bas\s+an?\s+(ai|assistant|language\s+model)\b[^.\n]{0,30}\byou\s+(must|should|will)\b",

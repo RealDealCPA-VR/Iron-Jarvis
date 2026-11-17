@@ -187,6 +187,50 @@ def workflow_grant_scope_id(name: str) -> str:
     grants by this id."""
     return _workflow_origin(name)[len("workflow:"):]
 
+
+#: Third plan PG2: the ledger label of a tool step refused by its tool's own
+#: check (``ToolInvocation`` row + the ``tool.denied`` event's ``kind``).
+OWN_CHECK_LABEL = "not run"
+
+
+def own_check_refusal_words(step: "Step", check: Any) -> str:
+    """The sentence a tool step ends with when its tool's own check asks
+    about the call (third plan PG2): what it wanted to do (the check's own
+    words), that Iron Jarvis asks every time, and the way that works. A check
+    that only an attended run may ask (``attended_only``) is refused in an
+    Agent step too, so it names chat alone; any other names an Agent step,
+    which asks. Never raises."""
+    words = str(getattr(check, "words", "") or "").strip().rstrip(".").strip()
+    what = words or f"What the step “{step.name}” does"
+    if getattr(check, "attended_only", False):
+        way = "Do it from chat, where you are asked."
+    else:
+        way = "Make it an Agent step, which asks you first, or do it from chat."
+    return (
+        f"Not done: {what}. Iron Jarvis asks you before this every time, and a "
+        f"workflow's Tool call step cannot ask, so the step “{step.name}” did not "
+        f"do it. {way}"
+    )
+
+
+def tier_refusal_words(step: "Step", decision: Any) -> str:
+    """The sentence a tool step ends with when the tool's permission refuses
+    it (third plan PG2, step 3; it said "needs interactive approval and can't
+    run headless ... set the tool to auto-approve in Settings" before, which
+    Settings refuses for a tool that always asks). Never raises."""
+    from ..core.models import PermissionMode
+
+    if getattr(decision, "mode", None) is PermissionMode.DENY:
+        return (
+            f"Not done: “{step.tool}” is set to Deny, so the step “{step.name}” "
+            "cannot use it."
+        )
+    return (
+        f"Not done: “{step.tool}” asks you before it runs, and a workflow's Tool "
+        f"call step cannot ask, so the step “{step.name}” did not run it. Make it "
+        "an Agent step, which asks you first."
+    )
+
 #: What a step IS (v1.121.0). Unknown values coerce to "agent".
 STEP_KINDS: tuple[str, ...] = ("agent", "tool", "ask", "notify")
 #: What a failed step does to the run. Unknown values coerce to "halt".
@@ -1500,13 +1544,12 @@ class WorkflowEngine:
             if getattr(tool_impl, "reversibility", None) is Reversibility.READONLY:
                 grant = [tool_impl.perm_key()]
             else:
+                # Third plan PG2 (step 3): in the app's words. Never "set the
+                # tool to auto-approve": a floor tool cannot be, and a stored
+                # workflow is not the place to lift a tool's ask.
                 return {
                     "status": "failed",
-                    "summary": (
-                        f"tool '{step.tool}' needs interactive approval and can't "
-                        f"run headless in a workflow — use an agent step (which "
-                        f"asks) or set the tool to auto-approve in Settings"
-                    ),
+                    "summary": tier_refusal_words(step, base),
                     "tool": step.tool,
                     "kind": "tool",
                 }
@@ -1520,6 +1563,34 @@ class WorkflowEngine:
             event_bus=self.platform.event_bus,
             engine=self.platform.engine,
         )
+        # THE TOOL'S OWN CHECK (third plan PG2, decision K2). The tier above
+        # is not the whole gate: a tool may ask about THIS call every time
+        # (an outbound webhook, a memory save the profile wants asked, a
+        # write into Git's own files). Read through the one helper both chat
+        # lanes and the agent runtime call; a check that says ask is refused
+        # in words through the registry's deny seam, so the ledger records
+        # the refusal and the tool never runs. If the registry ever asks the
+        # check itself, it sees this ``deny_reason`` first: one refusal.
+        refusal = await self._own_check_refusal(step, rendered, ctx)
+        if refusal:
+            try:
+                await self.platform.registry.invoke(
+                    step.tool,
+                    rendered,
+                    ctx,
+                    self.platform.permissions,
+                    None,
+                    deny_reason=refusal,
+                    deny_label=OWN_CHECK_LABEL,
+                )
+            except Exception:  # noqa: BLE001 — the ledger row is best effort; the step still fails
+                log.warning("workflow tool step %s: could not record the refusal", step.name, exc_info=True)
+            return {
+                "status": "failed",
+                "summary": refusal[:_MAX_STEP_SUMMARY],
+                "tool": step.tool,
+                "kind": "tool",
+            }
         # v1.505.0 (north-star 5.1): the SAME per-call deadline an agent run
         # and both chat lanes pass (``config.tool_call_timeout_s``, read live),
         # so a call that never answers is a failed step in the registry's
@@ -1589,6 +1660,31 @@ class WorkflowEngine:
             # file expectations and the run record's honesty about outputs.
             out["created_paths"] = [str(p) for p in result.created_paths][:50]
         return out
+
+    async def _own_check_refusal(self, step: Step, rendered: dict, ctx) -> str:
+        """The refusal sentence when the tool's OWN check asks about this call
+        (third plan PG2), else "". ``tools/base.spend_checks_for`` is the one
+        reader (the tool's ``spend_check``, plus Ask first's guard for Git's
+        and Iron Jarvis's own files on the file tools); no posture rides
+        along, so a check marked "Don't ask skips it" still applies (a
+        workflow has no "Don't ask"). A verdict that does not ask changes
+        nothing here: the tier above decided, as before.
+
+        No standing approval covers a call its own check asks about: in every
+        lane a check that asks is answered one call at a time (the runtime's
+        ``can_always`` needs no check, the stream card's ``not _spend_card``),
+        so "Always for this workflow" (D10) never lifts it, and a tool step
+        has no way to wait for an answer. Refused, never parked."""
+        from types import SimpleNamespace
+
+        from ..tools.base import spend_checks_for
+
+        call = SimpleNamespace(name=step.tool, arguments=rendered)
+        checks = await spend_checks_for(self.platform.registry, [call], ctx)
+        check = checks.get(id(call))
+        if check is None or not getattr(check, "ask", False):
+            return ""
+        return own_check_refusal_words(step, check)
 
     def _run_notify_step(self, step: Step, outputs: dict) -> dict:
         message = render_template(step.message or step.task, outputs).strip()

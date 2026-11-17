@@ -1015,6 +1015,7 @@ class ToolRegistry:
         grants: "Any | None" = None,
         scopes: "list[tuple[str, str]] | None" = None,
         kept_pins: "dict[str, str] | None" = None,
+        card_allow: "Iterable[str] | None" = None,
     ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
@@ -1145,6 +1146,13 @@ class ToolRegistry:
                 # installed is lifted by no blanket grant, name or standing —
                 # only by a card answered about THIS tool (``call_name``).
                 _extra.update(quarantined=True, call_name=name)
+                # PG1 (third fix plan): a lane that keeps its CARD answers
+                # apart from the names it armed hands them here, and only
+                # they lift a held-back tool (an app switched on for a chat
+                # arms each of its tools by name into `session_allow`).
+                # ``None``: the caller keeps one set, read as before.
+                if card_allow is not None:
+                    _extra["card_allow"] = frozenset(card_allow)
             try:
                 decision = perms.authorize(
                     tool.perm_key(), args, agent_overrides, session_allow=session_allow,

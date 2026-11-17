@@ -536,6 +536,7 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
     part way). BLOCKING."""
     from ..core.db import session_scope
     from ..core.models import ChatThreadRecord, is_build_thread
+    from ..daemon.routes.undo import PressedUndo, revert_refusal
     from ..tools.base import Reversibility
     from .sessions import session_id_for
 
@@ -570,16 +571,14 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
 
     def refused(tool_name: str) -> str:
         """Why ``POST /undo`` would refuse to revert this tool ("" = it would
-        not)."""
+        not), in plain words. The person pressed Rewind, and that press is
+        the consent a tool set to ask needs (PG4, K4): only a tool set to
+        never refuses — the SAME rule ``perform_undo`` applies."""
         if permissions is None or registry is None:
             return ""
         if tool_name not in allowed:
             tool = registry.get(tool_name)
-            try:
-                decision = permissions.authorize(tool.perm_key(), {}) if tool is not None else None
-                allowed[tool_name] = "" if decision is None or decision.allowed else str(decision.reason or "")
-            except Exception:  # noqa: BLE001 — the revert will say so itself
-                allowed[tool_name] = ""
+            allowed[tool_name] = revert_refusal(permissions, tool, pressed=True) if tool is not None else ""
         return allowed[tool_name]
 
     rows = [
@@ -643,11 +642,7 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
         # permission — perform_undo's own rule.)
         why = "" if desc["kind"] in _NO_TOOL_KINDS else refused(led["tool"])
         if why:
-            out.problems.append({
-                "path": _what(led),
-                "reason": ("putting this back needs " + led["tool"]
-                           + ", and your permissions do not allow it (" + why + ")"),
-            })
+            out.problems.append({"path": _what(led), "reason": why})
             continue
         if desc["kind"] in _FILE_KINDS:
             files, problems = _simulate(led, disk, home)
@@ -657,7 +652,9 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
             if files and not problems and all(f["change"] == ALREADY_GONE for f in files):
                 continue  # nothing to put back, and its revert would refuse
             out.action_files[led["id"]] = [f["rel"] for f in files]
-        out.actions.append(led["id"])
+        # The person pressed Rewind: each id carries that press to
+        # ``perform_undo`` as the consent its tool's ask needs (PG4, K4).
+        out.actions.append(PressedUndo(led["id"]))
     out.files = sorted(seen_files.values(), key=lambda f: f["rel"].lower())
     # One problem per file: an older change of a file that already cannot go
     # back is judged against the same newer bytes and would name it again.
