@@ -438,8 +438,14 @@ describe("CS3: 60 s of silence asks the daemon before it says anything", () => {
     H.turnRow = (id) => ({ turn_id: id, status: "running", running: true, started_at: null, thread_id: "t1" });
     render(<ChatPage />);
     await typeAndSend("a long question");
-    expect((await screen.findByTestId("chat-notice")).textContent).toMatch(
-      /still working on this reply, but this page keeps losing contact/,
+    // Wait for the words asserted, not for the notice to exist: after the
+    // FIRST silence the same line reads "Lost contact ... for a minute",
+    // and reading it then is why this test passed only on its retry in one
+    // GitHub run (2026-11-17).
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-notice").textContent).toMatch(
+        /still working on this reply, but this page keeps losing contact/,
+      ),
     );
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
