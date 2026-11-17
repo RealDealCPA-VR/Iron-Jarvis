@@ -249,6 +249,7 @@ def test_start_with_windows_is_offered_once_and_never_again():
 
 _INSTALLER_HARNESS = """
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
+const UPDATE_PLATFORM = "win32"; // Windows' folder, on whatever machine runs this pin
 __LIFTED__
 process.stdout.write(JSON.stringify({ state: cachedInstallerState() }) + "\\n");
 """

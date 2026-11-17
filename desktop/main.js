@@ -47,6 +47,14 @@ const http = require("http");
 const net = require("net");
 const path = require("path");
 
+// LINUX ONLY. An update that is installed on Quit starts the NEW app file once
+// with this variable set and WAITS for it to end (electron-updater's
+// AppImageUpdater.doInstall). Nothing has been created yet: leave at once, or
+// the old app's Quit hangs behind a second app. Windows never sets it.
+if (process.platform === "linux" && process.env.APPIMAGE_EXIT_AFTER_INSTALL === "true") {
+  process.exit(0);
+}
+
 const windowState = require("./windowState");
 // FAIL-OPEN require: v1.126.0 shipped with integrity.js missing from
 // build.files — the packaged main process died at this line before a single
@@ -4971,6 +4979,40 @@ const UPDATE_GITHUB_FEED = { provider: "github", owner: "RealDealCPA-VR", repo: 
 // (.github/workflows/stable.yml + scripts/promote_stable.py write it, nothing
 // else). Owner/repo pinned equal to UPDATE_MANIFEST_URL's by a test.
 const UPDATE_STABLE_MANIFEST_URL = "https://raw.githubusercontent.com/RealDealCPA-VR/Iron-Jarvis/updates-stable";
+//: The system the updater serves. ONE name, so the node pins can run the
+//: Windows and the Linux paths on any machine.
+const UPDATE_PLATFORM = process.platform;
+// LINUX READS ITS OWN BRANCHES: `updates-linux` and `updates-stable-linux`.
+// Only the Linux release workflow writes them; the Windows release never does,
+// and the Linux one never writes `updates` or `updates-stable`. On every other
+// system the address comes back as it was given.
+function updateBaseFor(url, platform = UPDATE_PLATFORM) {
+  return platform === "linux" ? `${url}-linux` : url;
+}
+//: The file a channel's branch holds for this system (electron-updater's name).
+function updateManifestFileFor(platform = UPDATE_PLATFORM) {
+  return platform === "linux" ? "latest-linux.yml" : "latest.yml";
+}
+// LINUX ONLY: the update REHEARSAL. Before any user is offered a version, the
+// Linux release workflow starts the previous version and has it update itself
+// to the new files, served by a web server on the SAME machine. Nothing but
+// plain http on 127.0.0.1 with a port is accepted, and only on Linux.
+function updateRehearsalUrl(env = process.env, platform = UPDATE_PLATFORM) {
+  if (platform !== "linux") return "";
+  const raw = String((env && env.IRONJARVIS_UPDATE_REHEARSAL_URL) || "").trim();
+  return /^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(raw) ? raw : "";
+}
+//: Can THIS Linux copy replace itself? The single-file app can (it knows its
+//: own file through APPIMAGE) and so can an installed package (the builder
+//: leaves a `package-type` note beside the app). An unpacked folder cannot.
+function linuxCanSelfUpdate(env = process.env, resourcesDir = process.resourcesPath, exists = fs.existsSync) {
+  if (env && env.APPIMAGE) return true;
+  try {
+    return !!resourcesDir && !!exists(path.join(resourcesDir, "package-type"));
+  } catch {
+    return false;
+  }
+}
 let _autoUpdater = null;
 let _updateSource = "manifest"; // "manifest" | "stable" | "feed" — which source the NEXT check reads
 let _updateRetryTimer = null;
@@ -5083,7 +5125,10 @@ async function readChannelVersions(fetchImpl, timeoutMs) {
       }
     }, timeoutMs);
     try {
-      const res = await fetchImpl(`${base}/latest.yml`, ctrl ? { signal: ctrl.signal } : {});
+      const res = await fetchImpl(
+        `${updateBaseFor(base)}/${updateManifestFileFor()}`,
+        ctrl ? { signal: ctrl.signal } : {}
+      );
       if (!res || !res.ok) return null;
       return manifestVersionOf(await res.text());
     } catch {
@@ -5250,7 +5295,11 @@ const UPDATE_TIDY_SHUTDOWN_MS = 5000;
 // happen.
 function cachedInstallerState() {
   try {
-    const base = process.env.LOCALAPPDATA;
+    // Windows: %LOCALAPPDATA%. Linux: the user's cache folder (the updater's own choice).
+    const base =
+      UPDATE_PLATFORM === "linux"
+        ? process.env.XDG_CACHE_HOME || path.join(require("os").homedir(), ".cache")
+        : process.env.LOCALAPPDATA;
     if (!base) return "unknown";
     const pending = path.join(base, "iron-jarvis-desktop-updater", "pending");
     let info;
@@ -5716,7 +5765,7 @@ function abortUpdateInstall(err) {
 // Pure and adjacent to friendlyUpdateError so the two are lifted together.
 function updateErrorKind(msg) {
   const m = (msg || "").toString();
-  if (/latest\.yml/i.test(m) && /404|not.*found|cannot find/i.test(m)) return "publishing";
+  if (/latest(?:-linux)?\.yml/i.test(m) && /404|not.*found|cannot find/i.test(m)) return "publishing";
   if (/^\s*(5\d\d|429)\b/.test(m) || /HTTP_ERROR_(5\d\d|429)\b/.test(m)) return "transient";
   if (/\b(5\d\d)\s+(Gateway|Bad Gateway|Service Unavailable|Internal Server)/i.test(m)) return "transient";
   if (/Gateway Time-?out|couldn't respond to your request in time|Unicorn!/i.test(m)) return "transient";
@@ -5808,12 +5857,17 @@ function onUpdaterError(msg) {
 
 function _setUpdateSource(au, which) {
   _updateSource = which === "feed" ? "feed" : which === "stable" ? "stable" : "manifest";
+  const rehearsal = updateRehearsalUrl();
+  if (rehearsal) {
+    au.setFeedURL({ provider: "generic", url: rehearsal });
+    return;
+  }
   au.setFeedURL(
     _updateSource === "feed"
       ? UPDATE_GITHUB_FEED
       : _updateSource === "stable"
-        ? { provider: "generic", url: UPDATE_STABLE_MANIFEST_URL }
-        : { provider: "generic", url: UPDATE_MANIFEST_URL }
+        ? { provider: "generic", url: updateBaseFor(UPDATE_STABLE_MANIFEST_URL) }
+        : { provider: "generic", url: updateBaseFor(UPDATE_MANIFEST_URL) }
   );
 }
 
@@ -5853,6 +5907,7 @@ async function checkForUpdatesWithFallback(au, channel) {
 
 function initUpdater() {
   if (_autoUpdater || !IS_PACKAGED) return _autoUpdater;
+  if (UPDATE_PLATFORM === "linux" && !updateRehearsalUrl() && !linuxCanSelfUpdate()) return null;
   try {
     ({ autoUpdater: _autoUpdater } = require("electron-updater"));
   } catch (err) {
@@ -5908,6 +5963,11 @@ function initUpdater() {
     // running agent session is never interrupted by surprise.
     pendingUpdateInfo = { version: (info && info.version) || "" };
     console.log("[update] downloaded + ready:", pendingUpdateInfo.version);
+    if (updateRehearsalUrl() && process.env.IRONJARVIS_UPDATE_REHEARSAL_INSTALL === "restart") {
+      // The rehearsal has no one to press the button (Linux only, see above).
+      const t = setTimeout(() => applyPendingUpdate(), 2000);
+      if (t && typeof t.unref === "function") t.unref();
+    }
     refreshTrayMenu(); // inserts the "Restart to update (vX)" item
     try {
       if (tray) {
@@ -7297,7 +7357,21 @@ function protocolUrlIn(argv) {
 
 // Single-instance: a second launch focuses/opens the existing window instead of
 // spawning a duplicate daemon/dashboard pair.
-const gotLock = app.requestSingleInstanceLock();
+//: LINUX ONLY: the new app file, started by the updater (it sets
+//: APPIMAGE_SILENT_INSTALL) while the old app is still closing. Wait for the
+//: old one to let go of the lock, up to `waitMs`, checking every quarter second.
+function lockAfterUpdate(waitMs) {
+  const until = Date.now() + waitMs;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < until) {
+    Atomics.wait(pause, 0, 0, 250);
+    if (app.requestSingleInstanceLock()) return true;
+  }
+  return false;
+}
+const gotLock =
+  app.requestSingleInstanceLock() ||
+  (process.platform === "linux" && process.env.APPIMAGE_SILENT_INSTALL === "true" && lockAfterUpdate(20000));
 if (!gotLock) {
   app.quit();
 } else {

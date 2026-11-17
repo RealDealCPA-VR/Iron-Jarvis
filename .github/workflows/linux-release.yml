@@ -1,0 +1,457 @@
+name: Linux release
+
+# Builds, tests and publishes the Linux app for a version that is ALREADY
+# published for Windows: two files (the single-file app and a package) and the
+# update file that lets installed Linux copies update themselves.
+#
+# IT IS ITS OWN WORKFLOW ON PURPOSE. The owner's condition (2026-11-11, repeated
+# 2026-11-16): nothing done for Linux may affect the Windows app or its release
+# in any way.
+#   * release.yml is not changed by a byte. This runs AFTER a Release run has
+#     finished, so nothing here can delay, block or fail the Windows installer.
+#   * It writes only its OWN things: the two Linux files and `latest-linux.yml`
+#     on the release, one line in the release notes, and the branch
+#     `updates-linux`. It never touches the installer, its blockmap,
+#     `latest.yml`, or the branches `updates` and `updates-stable` (everything
+#     the Windows app and scripts/promote_stable.py read).
+#   * It never replaces a file (no --clobber): a release that already has the
+#     Linux app is left alone.
+#   * A failure here leaves the release exactly as the Release run made it:
+#     that version then exists for Windows only, and Linux copies stay on the
+#     last version that passed.
+#   * At most FIVE of its jobs run at once, so a Windows release that starts
+#     meanwhile is not left waiting for machines.
+#
+# NOTHING IS PUBLISHED UNLESS ALL OF THIS PASSED, ON LINUX, FOR THIS VERSION:
+#   plan ──┬── python ×6    the whole Python suite
+#          ├── dashboard    the whole dashboard suite and the type check
+#          └── build        both files; each started the way a person would
+#                 └── rehearsal   the previous Linux version updates ITSELF to
+#                                 this one (both ways: on Quit, and by
+#                                 "Restart to update")
+#                        └── publish   the only job that may write
+#
+# Try it without publishing anything:
+#   gh workflow run linux-release.yml -f version=X.Y.Z -f dry_run=true
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "A published version, like 1.517.0"
+        required: true
+      dry_run:
+        description: "Build, test and rehearse; publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One Linux release at a time. A newer one waits its turn; of several waiting,
+# GitHub keeps the newest, and an older version's Linux files are then skipped.
+concurrency:
+  group: linux-release
+  cancel-in-progress: false
+
+env:
+  APPIMAGE: Iron-Jarvis-x86_64.AppImage
+  DEB: Iron-Jarvis-amd64.deb
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.gate.outputs.build }}
+      version: ${{ steps.gate.outputs.version }}
+      attach: ${{ steps.gate.outputs.attach }}
+      previous: ${{ steps.gate.outputs.previous }}
+    steps:
+      - name: Gate - which published version, if any?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          ASKED: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          say() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+          say build false; say attach false; say version ""; say previous ""
+          if [ "$EVENT" = "workflow_run" ]; then
+            if [ "$RUN_CONCLUSION" != "success" ]; then
+              echo "the Release run did not succeed - nothing to build"; exit 0
+            fi
+            ver="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName' | sed 's/^v//')"
+            attach=true
+          else
+            ver="$(printf '%s' "$ASKED" | sed 's/^v//')"
+            if [ "$DRY_RUN" = "false" ]; then attach=true; else attach=false; fi
+          fi
+          if ! printf '%s' "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "no published version to build for ('$ver')"; exit 0
+          fi
+          rel="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$ver" 2>/dev/null || true)"
+          if [ -z "$rel" ] || [ "$(printf '%s' "$rel" | jq -r '.draft')" != "false" ]; then
+            echo "v$ver is not a published release - nothing to build"; exit 0
+          fi
+          if [ "$EVENT" = "workflow_run" ]; then
+            # Only the version THAT Release run published: its tag must sit on
+            # the commit the run built.
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/v$ver" -q .sha 2>/dev/null || true)"
+            if [ "$sha" != "$RUN_SHA" ]; then
+              echo "the newest release (v$ver) is not from this Release run - nothing to build"; exit 0
+            fi
+          fi
+          if printf '%s' "$rel" | jq -e '.assets[] | select(.name | endswith(".AppImage") or endswith(".deb"))' > /dev/null; then
+            if [ "$attach" = "true" ]; then
+              echo "v$ver already has a Linux file - leaving it"; exit 0
+            fi
+          fi
+          # The newest OLDER published version that carries a Linux update file:
+          # the one the rehearsal starts. None yet = nothing to rehearse from.
+          prev="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=40" \
+            | jq -r --arg v "v$ver" '[.[] | select(.draft == false and .prerelease == false and .tag_name != $v)
+                | select(any(.assets[]; .name == "latest-linux.yml"))
+                | select(any(.assets[]; .name == "Iron-Jarvis-x86_64.AppImage"))
+                | .tag_name] | .[]' \
+            | sed 's/^v//' | while read -r p; do
+                if [ "$(printf '%s\n%s\n' "$p" "$ver" | sort -V | head -1)" = "$p" ] && [ "$p" != "$ver" ]; then echo "$p"; fi
+              done | sort -V | tail -1)"
+          say build true; say version "$ver"; say attach "$attach"; say previous "$prev"
+          echo "the Linux release of v$ver (publish=$attach; rehearse from: ${prev:-nothing yet})"
+
+  # THE GATE: the whole Python suite on Linux, for the published tag. Six parts,
+  # three at a time (see the note on five jobs at once above).
+  python:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.plan.outputs.version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - name: Sync Python deps
+        run: uv sync --extra dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+      - name: Build the browser add-on (three Python tests read the built folder)
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Every test file pytest collects is in a part
+        if: matrix.shard == 1
+        run: |
+          uv run pytest --collect-only -q -p no:cacheprovider > collected.txt
+          uv run python scripts/ci_shards.py --shards 6 --check-collected collected.txt
+      - name: Run this part of the suite on Linux
+        env:
+          # GitHub's Linux machines have Docker running, which makes the shell
+          # tool run commands in a container. A person's PC and the Windows
+          # gate have none; point at a dead port so the same code is judged.
+          DOCKER_HOST: tcp://127.0.0.1:9
+        run: |
+          files="$(uv run python scripts/ci_shards.py --shards 6 --index ${{ matrix.shard }})"
+          echo "part ${{ matrix.shard }}: $(wc -w <<< "$files") test files"
+          set +e
+          uv run pytest -q --no-header -n auto -p no:cacheprovider --reruns 1 --rerun-except "pytest-timeout" -rR $files | tee pytest-out.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "linux part ${{ matrix.shard }}: $(tail -1 pytest-out.txt)" >> "$GITHUB_STEP_SUMMARY"
+          uv run python scripts/ci_flaky_report.py pytest-out.txt "linux part ${{ matrix.shard }}" || true
+          exit "$code"
+
+  dashboard:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.plan.outputs.version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+      - name: Build the browser add-on (the panel test runs it)
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Dashboard tests on Linux
+        working-directory: dashboard
+        run: pnpm test --retry=1 --reporter=default --reporter=github-actions
+      - name: Typecheck the dashboard
+        working-directory: dashboard
+        run: npx tsc --noEmit
+
+  # Builds both files and proves each one: frozen service, search program, the
+  # update file against the files themselves, and a start THE WAY A PERSON
+  # WOULD (no helper flags, nothing extra installed). Publishes nothing.
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.plan.outputs.version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Freeze the service (with the voice part, as the Windows installer has it)
+        run: |
+          uv sync --extra dev --extra voice
+          uv run python -m PyInstaller packaging/ironjarvis.spec --noconfirm --distpath packaging/dist --workpath packaging/build > freeze.log 2>&1 || { tail -60 freeze.log; exit 1; }
+          test -x packaging/dist/ironjarvis/ironjarvis
+      - name: The frozen service starts, answers, and its search program finds a line
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./packaging/dist/ironjarvis/ironjarvis serve --root "$RUNNER_TEMP/ij-frozen" --port 8796 > frozen.log 2>&1 &
+          pid=$!
+          ok=""
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8796/health > health.json; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          test -n "$ok" || { tail -40 frozen.log; exit 1; }
+          grep -q "\"version\": *\"$VERSION\"" health.json || { echo "the frozen service is not v$VERSION"; head -c 400 health.json; exit 1; }
+          mkdir -p "$RUNNER_TEMP/hay/sub"
+          { echo alpha; echo "needle here"; echo omega; } > "$RUNNER_TEMP/hay/sub/a.txt"
+          python3 scripts/linux_search_request.py "$RUNNER_TEMP/hay" > req.json
+          ./packaging/dist/ironjarvis/ironjarvis search-worker < req.json > search.out
+          grep -q '"found"' search.out && grep -q '"end"' search.out
+      - name: Build the dashboard
+        working-directory: dashboard
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          mkdir -p .next/standalone/.next
+          cp -r .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
+      - name: Build the browser add-on
+        working-directory: extensions/chrome
+        run: |
+          pnpm install --frozen-lockfile
+          node scripts/build.mjs
+      - name: Voice model
+        working-directory: desktop
+        run: |
+          mkdir -p resources && cd resources
+          curl -fsSL --retry 3 -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q vosk.zip && mv vosk-model-small-en-us-0.15 vosk-model && rm vosk.zip
+          test -d vosk-model/am
+      # ONE BUILDER RUN PER FILE, the single file first: built together, the
+      # note that says "this copy is a package" would sit in both, and the
+      # single file would then try to update itself as a package. The Linux
+      # settings ride the command line; desktop/package.json is unchanged.
+      # toolsets.appimage: the newer single-file runtime, which starts on a
+      # current Ubuntu as downloaded (the older one needs libfuse2).
+      - name: Package the single-file app, then the package
+        working-directory: desktop
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          common=(--publish never -c.linux.category=Office -c.linux.icon=assets/icon.png
+                  "-c.linux.maintainer=RealDealCPA.Ai LLC" -c.extraMetadata.homepage=https://realdealcpa.ai/IJ/
+                  '-c.linux.artifactName=Iron-Jarvis-${arch}.${ext}')
+          mkdir -p out
+          pnpm exec electron-builder --linux AppImage "${common[@]}" -c.toolsets.appimage=1.0.3
+          test ! -e release/linux-unpacked/resources/package-type
+          mv "release/$APPIMAGE" out/ && mv release/latest-linux.yml out/appimage.yml
+          pnpm exec electron-builder --linux deb "${common[@]}"
+          test "$(cat release/linux-unpacked/resources/package-type)" = "deb"
+          mv "release/$DEB" out/ && mv release/latest-linux.yml out/deb.yml
+          cd .. && uv run --no-project python scripts/linux_update_manifest.py desktop/out/latest-linux.yml \
+            desktop/out/appimage.yml desktop/out/deb.yml --version "$VERSION" --dir desktop/out
+          rm desktop/out/appimage.yml desktop/out/deb.yml
+          cat desktop/out/latest-linux.yml; ls -la desktop/out
+      - name: The single-file app starts as downloaded
+        run: bash scripts/linux_app_check.sh appimage "desktop/out/$APPIMAGE"
+      - name: The package installs and starts, with the safety box on
+        run: bash scripts/linux_app_check.sh deb "desktop/out/$DEB"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: |
+            desktop/out/${{ env.APPIMAGE }}
+            desktop/out/${{ env.DEB }}
+            desktop/out/latest-linux.yml
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-build-logs
+          path: |
+            freeze.log
+            frozen.log
+            start-*.log
+            deb-install.log
+          retention-days: 7
+
+  # THE UPDATE REHEARSAL: the previous published Linux version updates itself
+  # to these files, served on this machine. Nothing is public yet. With no
+  # earlier Linux version there is nothing to start from, and the job says so.
+  rehearsal:
+    needs: [plan, build]
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.plan.outputs.version }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-release
+          path: new
+      - name: Fetch the previous Linux version
+        if: needs.plan.outputs.previous != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+        run: gh release download "v$PREVIOUS" --repo "$GITHUB_REPOSITORY" --pattern "$APPIMAGE" --dir old
+      - name: It installs the update when the app is closed
+        if: needs.plan.outputs.previous != ''
+        run: bash scripts/linux_update_rehearsal.sh "old/$APPIMAGE" new quit "${{ needs.plan.outputs.version }}"
+      - name: It installs the update by Restart to update
+        if: needs.plan.outputs.previous != ''
+        run: bash scripts/linux_update_rehearsal.sh "old/$APPIMAGE" new restart "${{ needs.plan.outputs.version }}"
+      - name: Nothing to rehearse from yet
+        if: needs.plan.outputs.previous == ''
+        run: echo "No earlier release carries a Linux update file - the next release is the first that can be rehearsed." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-rehearsal-logs
+          path: rehearsal-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # THE ONLY JOB THAT MAY WRITE, and only after every job above passed (a job
+  # `if` without a status function carries an implicit success()).
+  publish:
+    needs: [plan, python, dashboard, build, rehearsal]
+    if: needs.plan.outputs.attach == 'true'
+    permissions:
+      contents: write # three new files on an existing release, a line in its notes, the updates-linux branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.plan.outputs.version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-release
+          path: out
+      - name: Attach the Linux files to the release (never replacing anything)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          for f in "$APPIMAGE" "$DEB" latest-linux.yml; do test -s "out/$f"; done
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qE '\.(AppImage|deb)$|^latest-linux\.yml$'; then
+            echo "v$VERSION already has a Linux file - leaving it"; exit 0
+          fi
+          # The update file goes up LAST: a copy that falls back to GitHub's own
+          # list of releases is offered nothing until both files are there.
+          gh release upload "v$VERSION" "out/$APPIMAGE" "out/$DEB" --repo "$GITHUB_REPOSITORY"
+          gh release upload "v$VERSION" out/latest-linux.yml --repo "$GITHUB_REPOSITORY"
+          body="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json body -q .body)"
+          if ! printf '%s' "$body" | grep -q "$APPIMAGE"; then
+            printf '%s\n\n%s\n' "$body" "**Linux (preview):** \`$DEB\` for Ubuntu, Debian and Mint (a normal install), or \`$APPIMAGE\` for any other Linux (mark it as a program and run it). Both passed the whole test suite on Linux and update themselves; the package asks for your password to install an update. Nobody has used the Linux app on a real PC yet. Ignore \`latest-linux.yml\`; the app's updater reads it." > notes.md
+            gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+          fi
+      # LINUX'S OWN BRANCH. The installed Linux app reads
+      # raw.githubusercontent.com/<repo>/updates-linux/latest-linux.yml first.
+      # scripts/publish_update_manifest.py makes the file addresses absolute and
+      # refuses a wrong version or a missing checksum. The Windows branches
+      # (`updates`, `updates-stable`) are never fetched, written or pushed here.
+      - name: Publish the Linux update file to the updates-linux branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern latest-linux.yml --dir "$work/in"
+          python3 scripts/publish_update_manifest.py "$work/in/latest-linux.yml" "$work/out/latest-linux.yml" \
+            --repo "$GITHUB_REPOSITORY" --version "$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch origin updates-linux 2>/dev/null; then
+            git worktree add "$work/wt" FETCH_HEAD
+          else
+            git worktree add --detach "$work/wt"
+            git -C "$work/wt" checkout --orphan updates-linux
+            git -C "$work/wt" rm -rfq --cached . || true
+            find "$work/wt" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+          # Never an older version than the branch already names.
+          if [ -f "$work/wt/latest-linux.yml" ]; then
+            have="$(grep -oE '^version: *[0-9.]+' "$work/wt/latest-linux.yml" | awk '{print $2}')"
+            if [ -n "$have" ] && [ "$(printf '%s\n%s\n' "$have" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+              echo "updates-linux already names $have, newer than $VERSION - leaving it"; exit 0
+            fi
+          fi
+          cp "$work/out/latest-linux.yml" "$work/wt/latest-linux.yml"
+          printf '%s\n' "# updates-linux" "" \
+            "Machine-read by the installed Iron Jarvis app on Linux: \`latest-linux.yml\` names the" \
+            "newest version that passed the Linux gate, and its files on the GitHub release." \
+            "Written by the Linux release workflow. Do not edit by hand." > "$work/wt/README.md"
+          git -C "$work/wt" add latest-linux.yml README.md
+          if git -C "$work/wt" diff --cached --quiet; then
+            echo "the Linux update file is unchanged"
+          else
+            git -C "$work/wt" commit -q -m "linux update file: $VERSION"
+            git -C "$work/wt" push origin HEAD:updates-linux
+          fi

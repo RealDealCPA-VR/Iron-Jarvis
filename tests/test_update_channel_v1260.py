@@ -180,9 +180,13 @@ def _harness() -> str:
             ("", "updateErrorKind"), ("", "_updateErrorStatus"), ("", "friendlyUpdateError"),
             ("", "scheduleUpdateRetry"), ("", "clearUpdateRetry"), ("", "onUpdaterError"),
             ("", "_setUpdateSource"), ("async ", "checkForUpdatesWithFallback"),
+            ("", "updateBaseFor"), ("", "updateRehearsalUrl"),
         )
     )
     assert "UPDATE_RETRY_MS" in funcs and "_updateFallbackArmed" in funcs
+    # The updater's system is ONE name in main.js (UPDATE_PLATFORM): these pins
+    # are Windows', on whatever machine runs them. Linux: test_linux_self_update.
+    decls = 'const UPDATE_PLATFORM = "win32";' + chr(10) + decls
     return _HARNESS.replace("__DECLS__", decls).replace("__FUNCS__", funcs)
 
 

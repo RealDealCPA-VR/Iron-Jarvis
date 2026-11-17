@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.516.1 (2026-11-15).*
+holds itself to. Current as of v1.517.0 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,52 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The Linux app updates itself, and comes as two files (v1.517.0)
+
+Nothing changes on Windows in this release. The Windows installer, its update
+list and its release steps are untouched; Linux has its own.
+
+**Two files on each release page, for Linux:**
+
+- **`Iron-Jarvis-amd64.deb`** for Ubuntu, Debian and Mint. Open it to install,
+  as you would any program. It starts from the app menu and runs with the
+  browser engine's inner safety box on. When an update is ready it asks for
+  your password, because that is how Linux installs a package.
+- **`Iron-Jarvis-x86_64.AppImage`** for any other Linux. Mark it as a program
+  and run it. It now starts as downloaded on a current Ubuntu (the earlier
+  preview needed an extra package first). It updates itself with no question
+  asked. One honest difference: this single-file format runs with the inner
+  safety box off, so prefer the package where you can use it.
+
+Your data is in `~/.config/Iron Jarvis` either way.
+
+**Updates work as on Windows.** The app checks by itself, downloads a new
+version in the background, and installs it when you press **Restart to
+update** or the next time you close the app. Settings › System › Updates no
+longer shows an error on Linux. A copy that cannot replace itself (the app
+unpacked into a folder by hand) says so there.
+
+**What every Linux version must pass before it is offered to anyone:**
+
+- the whole test suite, on Linux;
+- both files started the way a person would start them, with nothing extra
+  installed;
+- an update rehearsal: the previous Linux version is started and has to
+  update itself to the new one, both ways (on closing, and by Restart to
+  update).
+
+A version that fails any of these is still released for Windows. Linux copies
+are simply not offered it and stay on the last version that passed. The Linux
+files appear on the release page some time after the Windows installer,
+because these checks start once the Windows release is out.
+
+**Still called a preview, on purpose.** Not right on Linux yet: the tray
+icon, "start when I sign in", an app-menu entry for the single file, and the
+global hotkeys on newer desktops. Windows checks the publisher's signature on
+every update; the Linux updater checks the file against a checksum from the
+update list, and a signature check is planned. Nobody has used the Linux app
+on a real PC yet.
 
 ## Linux: every test passes there, and two real faults are fixed (v1.516.1)
 
