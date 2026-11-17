@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.520.0
+
+**Every way in is judged, and what a program prints stays data.** A new tool in a connected app now asks before it runs even when its app is switched on for the chat, and sixteen other places where something reached a tool, a file or a model past the usual check are closed.
+
 ## v1.519.0
 
 **Linux: start at sign-in, the tray icon, Edge, and true words.** Nothing changes on Windows in this release.
@@ -77,7 +81,3 @@
 ## v1.502.0
 
 **Nothing leaves your PC as a side effect.** The second part of the review fixes.
-
-## v1.501.0
-
-**One client's notes stay with that client, and Iron Jarvis asks before it keeps what it guessed.** A review of the app against its own promises found places where something learned during one client's work could be told in another client's chat, and places where Iron Jarvis kept what a model guessed as if you had said it.
