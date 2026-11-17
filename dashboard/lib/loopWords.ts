@@ -196,6 +196,12 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Replies the restart cut off weren't tidied up",
     href: STATUS_HREF,
   },
+  // v1.529.0 (owner decision 4): the model calls a cut-off reply had made.
+  settle_open_model_calls: {
+    label: "Cut-off replies' usage",
+    problem: "The usage of replies the restart cut off wasn't counted",
+    href: "/usage",
+  },
   reconcile_sessions: {
     label: "Cut-off tasks",
     problem: "Tasks the restart cut off weren't tidied up",
