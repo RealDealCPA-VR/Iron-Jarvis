@@ -395,8 +395,11 @@ def test_the_card_is_three_answers_and_the_panel_explains_its_mode():
     # access pill's tooltip — the minimal panel prints no instruction paragraphs.
     assert 'id="access"' in html
     ts = _src(_ADDON / "sidepanel.ts")
-    assert re.search(r'approveAlways\?\.addEventListener\("click"[\s\S]{0,300}setAuto\(true\)', ts), (
-        "Always allow does not turn the switch on"
+    # Third fix plan (SB6): "Allow all page actions" is ONE answer the daemon
+    # turns into the switch (and refuses on a risk card); the panel no longer
+    # turns the switch on by itself.
+    assert re.search(r'approveAlways\?\.addEventListener\("click"[\s\S]{0,400}scope: "all"', ts), (
+        "Always allow does not ask the daemon to turn the switch on"
     )
     assert 'case "read_only":' in ts and "choose Interactive" in ts, "read-only mode is not explained"
     assert 'case "interactive":' in ts and "Auto-allow" in ts

@@ -290,7 +290,10 @@ def test_the_panel_has_a_model_select_wired_to_the_daemon_and_to_send():
     assert 'STORAGE_MODEL_KEY = "ij.panel.model"' in ts
     # v1.400.9: the Send's params are built first (the pointed element rides
     # them too), so the pin reads the params object, not the call's literal.
-    assert re.search(r'const send: Record<string, unknown> = \{ text, \.\.\.\(pick \? pick : \{\}\) \}', ts) and (
+    # Third fix plan (SB13): the Send also names the panel's window.
+    assert re.search(
+        r'const send: Record<string, unknown> = \{ text, window: PANEL_WINDOW, \.\.\.\(pick \? pick : \{\}\) \}', ts
+    ) and (
         "post(PANEL_ACTION_SEND, send)" in ts
     ), (
         "the pick does not ride the Send"

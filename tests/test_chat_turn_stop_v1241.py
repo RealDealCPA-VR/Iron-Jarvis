@@ -407,13 +407,17 @@ async def test_stop_during_a_tool_call_prevents_the_next_round_starting(tmp_path
 # (4) AN UNKNOWN OR FINISHED ID IS A 404, NEVER A SILENT SUCCESS.
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_an_unknown_turn_id_is_a_404(tmp_path):
-    """"I stopped it" from a route that stopped nothing is the exact lie this
-    ship exists to remove."""
+async def test_a_stop_for_a_turn_not_yet_known_is_kept_for_it(tmp_path):
+    """Moved on purpose (third fix plan, CS4): a Stop pressed right after Send
+    can arrive before the daemon knows the turn. It used to answer 404 and
+    the turn then ran to its end with "Stopped." on screen. The stop is now
+    KEPT for that id and says so; "I stopped it" is still never said about a
+    reply that had finished (the next test, and
+    ``tests/test_third_plan_g19_stop_written.py``)."""
     app = create_app(str(tmp_path))
     status, payload = await _asgi_post(app, "/chat/turns/never-existed/stop")
-    assert status == 404, (status, payload)
-    assert "never-existed" in str(payload.get("detail", ""))
+    assert status == 200, (status, payload)
+    assert payload == {"ok": True, "stopped": True, "pending": True}
 
 
 @pytest.mark.asyncio
@@ -506,8 +510,10 @@ def test_the_stop_route_is_reachable_and_bearer_guarded_in_a_real_install(
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "stopped": True}
 
+    # Third fix plan, CS4: an id not yet known is a stop KEPT for that turn.
     r = client.post("/chat/turns/no-such-turn/stop", headers=hdr)
-    assert r.status_code == 404, r.text
+    assert r.status_code == 200, r.text
+    assert r.json().get("pending") is True
 
 
 def test_the_stop_route_is_not_on_any_auth_exemption_list():

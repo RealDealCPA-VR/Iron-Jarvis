@@ -154,7 +154,12 @@ payment, a password, a "delete", a flagged page or an unreadable target still
 stop at their own card — the Handbook's promise, kept. The ``state`` frame
 carries ``auto_allow`` so the header paints a fact, and ``open`` may carry the
 panel's remembered setting, because the flag dies with the browser session and
-with Forget while the user's preference does not.
+with Forget while the user's preference does not. Third review SB4: a PRESS is
+the switch's one truth. An ``open`` may restore the setting or turn it off, but
+never turn it back ON over the last press's OFF (a second window still holding
+an old "on" re-sends it on every tab switch), and every open window is told
+when it changes. SB6 (G18): a risk card is answered one action at a time, so
+"Allow all page actions" (``approve`` with ``scope: "all"``) is refused on it.
 
 THE WORK IS FOLDED (v1.270.0). "The specific detail of the process should go
 behind a thinking word in the chat window that is expandable by the user."
@@ -198,6 +203,40 @@ PANEL_SKILL_DESC_CHARS = 200
 #: timeout sentence about the tool; a card left unanswered this long is a
 #: refusal with its own words.
 RISK_ASK_TIMEOUT_S = 300.0
+
+#: Third review SB2: what a card's answer is told when its reply was stopped
+#: before it arrived. The card was withdrawn with the reply; nothing was done.
+CARD_WITHDRAWN = "That request was withdrawn when the reply was stopped, so nothing was done."
+
+#: Third review SB13: what a reply stopped by the LAST sidebar window closing
+#: is written as in the conversation, after what was read (so neither the
+#: reopened panel, the chat list nor the next question reads it as finished).
+STOPPED_ON_CLOSE = "(Stopped when the sidebar was closed.)"
+STOPPED_ON_CLOSE_EMPTY = "(Stopped when the sidebar was closed, before it answered.)"
+
+#: SB13: how many open sidebar windows are remembered, and the longest window
+#: name kept. A bound, not a count anyone reaches: one per browser window.
+PANEL_WINDOWS_MAX = 16
+PANEL_WINDOW_CHARS = 64
+
+#: Third review SB6 (decision G18): the ``scope`` of the card's "Allow all page
+#: actions" answer — allow this one action AND turn the switch on, judged as
+#: ONE answer so a risk card can refuse it whole (:meth:`PanelTurns._decide`).
+SCOPE_ALL = "all"
+
+#: SB6: what the panel is told when "Allow all page actions" answers a RISK
+#: card (a payment or password field, a destructive word, a flagged page). The
+#: answer is read as nothing: the card stays, the switch does not change.
+RISK_CARD_ALL_REFUSED = (
+    "A risky action is allowed one at a time, so nothing was done and Allow all"
+    " page actions was not turned on. Choose Allow once or Deny."
+)
+#: SB6: an older add-on answers "Allow all page actions" with a plain Allow
+#: and then the switch; the Allow is Allow once, the switch is refused.
+RISK_CARD_ALL_OLDER = (
+    "That risky action was allowed once. Allow all page actions was not turned"
+    " on: a risky action is always asked about one at a time."
+)
 
 #: What the panel is told when a queued steer note was never consumed. The
 #: panel renders its own sentence for this from the ``done`` frame; this is the
@@ -682,6 +721,31 @@ class PanelTurns:
         #: One read or write of the chat at a time (a save still in flight
         #: and the next question's check must not cross).
         self._chat_lock = asyncio.Lock()
+        #: SB2 (third review): the running (or last) reply was asked to stop
+        #: from this sidebar — its cards are withdrawn: an Allow, a Deny or the
+        #: switch pressed after Stop answers nothing (:meth:`_stop_requested`).
+        self._stop_asked = False
+        #: SB13: …and the stop was the last sidebar window closing, so the
+        #: conversation says so (:meth:`_remember_exchange`).
+        self._closed_stop = False
+        #: SB13: the sidebar windows that are open, by the name each panel
+        #: gives itself (``window`` on ``open``, ``send`` and ``close``). All
+        #: windows share the add-on's one socket, so only that name tells them
+        #: apart. Oldest first; bounded by :data:`PANEL_WINDOWS_MAX`. The value
+        #: is the connection the window last spoke on (SB4: every open window
+        #: is told when the switch changes, :meth:`_tell_every_window`).
+        self._windows: dict[str, Any] = {}
+        #: SB4 (third review): what the last PRESS of the switch set it to in
+        #: this daemon's life (``None`` before any). A press is the only thing
+        #: that turns the switch ON over a press that turned it OFF: a window
+        #: that still holds an old "on" re-sends it with every ``open`` (each
+        #: tab switch), and that must never undo the person's "off".
+        self._switch_pressed: bool | None = None
+        #: SB6: this panel just allowed a RISK card once with an answer that
+        #: named no window (an older add-on). Read by the very next action
+        #: only: an older add-on's "Allow all page actions" is exactly that
+        #: Allow followed by the switch, which must not turn on.
+        self._risk_allowed_unnamed = False
 
     # --- narration --------------------------------------------------------
 
@@ -735,14 +799,27 @@ class PanelTurns:
         """
         act = str(action or "")
         params = params if isinstance(params, dict) else {}
+        # SB6: only the action right after an older add-on's Allow on a risk
+        # card can be the second half of its "Allow all page actions".
+        risk_allowed_unnamed, self._risk_allowed_unnamed = self._risk_allowed_unnamed, False
+        if act in (P.PANEL_ACTION_OPEN, P.PANEL_ACTION_SEND):
+            # SB13: a window that opens or sends is a window that is open.
+            self._window_open(params.get("window"), conn)
         if act == P.PANEL_ACTION_OPEN:
             # v1.270.0: the panel's remembered switch setting rides the open
             # (a bool, or absent). Applied BEFORE the state frame so the header
             # paints the setting the user chose, not a flag the browser restart
-            # reset a moment ago.
-            if isinstance(params.get("auto_allow"), bool):
-                self._set_auto_allow(bool(params["auto_allow"]))
-            await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
+            # reset a moment ago. SB4: an open may restore it, or turn it off,
+            # but never turn it back ON over the last press's OFF.
+            changed = (
+                self._restore_switch(bool(params["auto_allow"]))
+                if isinstance(params.get("auto_allow"), bool)
+                else False
+            )
+            if changed:
+                await self._tell_every_window(conn, P.PANEL_EVENT_STATE, self._state())
+            else:
+                await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
             # SB3: after a restart the conversation is read back from its chat
             # first, so the replay below and the next question carry it. The
             # panel says how many messages it shows (`shown`): when it shows a
@@ -778,6 +855,21 @@ class PanelTurns:
             await self._reset(conn)
             return
         if act == P.PANEL_ACTION_AUTO_ALLOW:
+            if (
+                risk_allowed_unnamed
+                and params.get("on") is True
+                and not self._window_name(params.get("window"))
+            ):
+                # SB6: an older add-on's "Allow all page actions" on a risk
+                # card — the Allow went through as Allow once; the switch does
+                # not turn on. Said, and the header repainted with the truth.
+                await self.emit(
+                    conn, P.PANEL_EVENT_ERROR,
+                    {"text": RISK_CARD_ALL_OLDER, "reason": "risk_card_all"},
+                )
+                await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
+                return
+            self._window_open(params.get("window"), conn)
             await self._auto_allow(conn, params)
             return
         if act == P.PANEL_ACTION_SEND:
@@ -798,7 +890,8 @@ class PanelTurns:
             return
         if act in (P.PANEL_ACTION_APPROVE, P.PANEL_ACTION_DENY):
             await self._decide(
-                conn, act, str(params.get("id") or ""), str(params.get("scope") or "")
+                conn, act, str(params.get("id") or ""), str(params.get("scope") or ""),
+                named=bool(self._window_name(params.get("window"))),
             )
             return
         if act == P.PANEL_ACTION_VOICE:
@@ -810,14 +903,84 @@ class PanelTurns:
         if act == P.PANEL_ACTION_CLOSE:
             # The panel is gone: a turn narrating to nobody keeps billing.
             # Stop is cooperative, so this is a request, not a kill.
-            if self._turn_id:
-                TURNS.stop(self._turn_id)
+            # SB13 (third review): every sidebar window shows the one
+            # conversation over the add-on's one socket, so a window closing
+            # stops the reply only when no other window is still open on it.
+            # A close that names no window (an older add-on) stops as before.
+            if self._window_closed(params.get("window")):
+                return
+            if self._turn_id and TURNS.stop(self._turn_id):
+                self._stop_asked = True
+                self._closed_stop = True
             return
         await self.emit(
             conn,
             P.PANEL_EVENT_ERROR,
             {"text": f"Iron Jarvis does not know the sidebar action {act!r}."},
         )
+
+    # --- which windows are open, and whether Stop was asked (third review) ----
+
+    @staticmethod
+    def _window_name(raw: object) -> str:
+        return str(raw or "").strip()[:PANEL_WINDOW_CHARS] if isinstance(raw, str) else ""
+
+    def _window_open(self, raw: object, conn: Any = None) -> None:
+        """SB13: remember a sidebar window as open (no-op without a name), and
+        (SB4) the connection it spoke on, so a switch change reaches it."""
+        name = self._window_name(raw)
+        if not name:
+            return
+        self._windows.pop(name, None)
+        self._windows[name] = conn
+        while len(self._windows) > PANEL_WINDOWS_MAX:
+            self._windows.pop(next(iter(self._windows)))
+
+    def _window_closed(self, raw: object) -> bool:
+        """SB13: forget a closing window; True when ANOTHER window of the
+        sidebar is still open (so its reply must keep running). A close that
+        names no window answers False: the reply stops, as it always did."""
+        name = self._window_name(raw)
+        if not name:
+            return False
+        self._windows.pop(name, None)
+        return bool(self._windows)
+
+    async def _tell_every_window(self, conn: Any, event: str, payload: dict[str, Any]) -> None:
+        """SB4: send one frame to ``conn`` and to every other open sidebar
+        window's connection, each connection once. Windows of one browser share
+        the add-on's one socket (its worker hands a frame to every window);
+        a second connection is told separately."""
+        sent: list[Any] = []
+        for target in (conn, *self._windows.values()):
+            if target is None or any(target is s for s in sent):
+                continue
+            sent.append(target)
+            await self.emit(target, event, payload)
+
+    def _restore_switch(self, on: bool) -> bool:
+        """SB4: apply the setting a panel remembered (sent with ``open``).
+
+        Turning the switch OFF always applies: a permission turned off wins
+        over anything stale. Turning it ON applies only when the last press in
+        this daemon's life did not turn it off; that "on" restores the person's
+        choice after a browser restart or Forget cleared the daemon's flag.
+        Over a press's OFF it is a window still holding an old value, and it
+        is read as a report only: the ``state`` frame tells that window the
+        switch's real value. Returns whether the switch changed."""
+        before = self._auto_allowed()
+        if on and self._switch_pressed is False:
+            return False
+        self._set_auto_allow(on)
+        return self._auto_allowed() != before
+
+    def _stop_requested(self) -> bool:
+        """SB2: was the running (or last) reply asked to stop — from this
+        sidebar, or through the turn's own stop from anywhere else?"""
+        if self._stop_asked:
+            return True
+        handle = TURNS.handle(self._turn_id) if self._turn_id else None
+        return bool(handle is not None and handle.stopped)
 
     async def resolve_risk_ask(
         self, req: Any, ctx: Any = None, *, name: str = "", args: Any = None
@@ -843,6 +1006,12 @@ class PanelTurns:
             return False
         if str(getattr(ctx, "turn_id", "") or "") != self._turn_id:
             return False
+        from ..core import risk_door as _risk_door
+
+        # SB2 (third review): a reply already stopped puts up no card at all.
+        handle = TURNS.handle(self._turn_id)
+        if self._stop_requested():
+            return _risk_door.Verdict(False, _risk_door.STOPPED_TAIL)
         from ..daemon.routes.chat import _approvals
 
         from ..core.approvals import InterruptNote, settled_actor
@@ -878,17 +1047,45 @@ class PanelTurns:
             },
         )
         note.asked()
+        # SB2 (third review): the wait ends on the card's answer OR the
+        # reply's Stop, whichever comes first — one wait on both, woken by the
+        # turn's own stop event (``TurnHandle.wait_stopped``, the wake-up a
+        # Stop already sets), not a poll. The chat lane's card wait polls
+        # every second because it must also notice a dropped connection and
+        # beat a keep-alive; this wait has neither, so an event is the faithful
+        # and immediate form. Before this the wait looked at nothing but the
+        # answer: Stop left the reply "running" up to five minutes, and Allow
+        # pressed after Stop still did the action.
+        stop_wait = asyncio.ensure_future(handle.wait_stopped()) if handle is not None else None
         try:
-            decision = await asyncio.wait_for(fut, RISK_ASK_TIMEOUT_S)
-        except asyncio.TimeoutError:
-            note.answered("timeout", "timeout")
-            registry.pop(ap_id)
-            return False
+            await asyncio.wait(
+                {fut} if stop_wait is None else {fut, stop_wait},
+                timeout=RISK_ASK_TIMEOUT_S,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
         except asyncio.CancelledError:
             note.answered("stopped", "app")
             registry.pop(ap_id)
             return False
-        except Exception:  # noqa: BLE001 — an answer that failed to arrive is a refusal
+        finally:
+            if stop_wait is not None:
+                stop_wait.cancel()
+        if self._stop_requested():
+            # Stop wins over an answer that landed in the same instant: after
+            # Stop, nothing is done. The card is withdrawn — its id leaves the
+            # registry (a late Allow resolves nothing and is told so by
+            # ``_decide``); the reply's ``done`` frame takes it off the panel;
+            # the door refuses with its "stopped" words and denies the row.
+            note.answered("stopped", settled_actor(registry, ap_id, "stopped"))
+            registry.pop(ap_id)
+            return _risk_door.Verdict(False, _risk_door.STOPPED_TAIL)
+        if not fut.done():
+            note.answered("timeout", "timeout")
+            registry.pop(ap_id)
+            return False
+        try:
+            decision = fut.result()
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — an answer that failed to arrive is a refusal
             note.answered("stopped", "app")
             registry.pop(ap_id)
             return False
@@ -1320,6 +1517,9 @@ class PanelTurns:
         # would only widen what this panel may resolve.
         self._offered.clear()
         self._floor_offered.clear()
+        # SB2/SB13: a new reply has been asked to stop by nobody yet.
+        self._stop_asked = False
+        self._closed_stop = False
         self._delta_seen = False
         self._answer = []
         self._segment = []
@@ -1383,8 +1583,12 @@ class PanelTurns:
         if self.history_limit > 0:
             del self._history[: -self.history_limit]
 
-    async def _remember_exchange(self) -> None:
+    async def _remember_exchange(self, *, stopped_on_close: bool = False) -> None:
         """Write the running turn's question and what the user READ, once.
+
+        ``stopped_on_close`` (SB13, third review): the reply was stopped by the
+        last sidebar window closing, so the answer is written with
+        :data:`STOPPED_ON_CLOSE` after it (nobody was watching it end).
 
         Called at every exit — the ``done`` branch of :meth:`_translate` (before
         the frame is sent), the failure branch and the ``finally`` of
@@ -1399,7 +1603,11 @@ class PanelTurns:
             return
         self._remembered = True
         question = str(self._turn_text or "").strip()
-        answer = ("".join(self._answer) or "(Iron Jarvis gave no answer.)").strip()
+        read = "".join(self._answer).strip()
+        if stopped_on_close:
+            answer = f"{read}\n\n{STOPPED_ON_CLOSE}" if read else STOPPED_ON_CLOSE_EMPTY
+        else:
+            answer = ("".join(self._answer) or "(Iron Jarvis gave no answer.)").strip()
         self._remember("user", question)
         self._remember("assistant", answer)
         self._answer = []
@@ -1585,8 +1793,12 @@ class PanelTurns:
         the header paints from — a fact, recorded before it is said.
         """
         on = bool(params.get("on"))
+        # SB4: a press is the switch's one truth (see :meth:`_restore_switch`).
+        self._switch_pressed = on
         state = self._set_auto_allow(on)
-        if state:
+        # SB2: the cards of a reply asked to stop are withdrawn; the switch
+        # still turns on (for the next reply) but answers none of them.
+        if state and not self._stop_requested():
             from ..core.approvals import resolve_as as _resolve_as
             from ..daemon.routes.chat import _approvals
 
@@ -1601,7 +1813,8 @@ class PanelTurns:
                     _resolve_as(registry, approval_id, "once", actor="grant")
                 except Exception:  # noqa: BLE001 — an already-answered card
                     logger.debug("auto-allow: card %s not resolvable", approval_id, exc_info=True)
-        await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
+        # SB4: every open window paints the new value, not only the one pressed.
+        await self._tell_every_window(conn, P.PANEL_EVENT_STATE, self._state())
 
     @staticmethod
     def _route_notice(route: Any, reply: str = "") -> str:
@@ -1663,11 +1876,14 @@ class PanelTurns:
         )
 
     async def _stop(self, conn: Any) -> None:
-        if not self._turn_id or not TURNS.stop(self._turn_id):
-            # Nothing addressable is running. Say so plainly rather than
-            # leaving the panel's Stop button looking like it worked on
-            # something: the state frame is what flips it back to idle.
-            await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
+        if self._turn_id and TURNS.stop(self._turn_id):
+            # SB2: from here every card of this reply is withdrawn.
+            self._stop_asked = True
+            return
+        # Nothing addressable is running. Say so plainly rather than
+        # leaving the panel's Stop button looking like it worked on
+        # something: the state frame is what flips it back to idle.
+        await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
 
     async def _steer(self, conn: Any, params: dict[str, Any]) -> None:
         note = str(params.get("text") or "").strip()
@@ -1685,7 +1901,7 @@ class PanelTurns:
         self._steers.append({"id": note_id, "text": note})
 
     async def _decide(
-        self, conn: Any, action: str, approval_id: str, scope: str = ""
+        self, conn: Any, action: str, approval_id: str, scope: str = "", *, named: bool = False
     ) -> None:
         """Answer a mid-turn approval through THE approval registry.
 
@@ -1735,8 +1951,33 @@ class PanelTurns:
                 },
             )
             return
+        if self._stop_requested():
+            # SB2 (third review): the reply was stopped, so its cards were
+            # withdrawn. An answer pressed after Stop resolves NOTHING — the
+            # chat lane's card wait notices Stop only at its next look (up to
+            # a second later), and an Allow passed to it in between would still
+            # do the action. Said, never silent.
+            await self.emit(
+                conn, P.PANEL_EVENT_ERROR, {"text": CARD_WITHDRAWN, "reason": "withdrawn"}
+            )
+            return
+        floor = approval_id in self._floor_offered
+        allow_all = action == P.PANEL_ACTION_APPROVE and scope == SCOPE_ALL
+        if allow_all and floor:
+            # SB6 (third review, decision G18): a RISK card is answered one
+            # action at a time. "Allow all page actions" on it is read as
+            # nothing — not run, the switch unchanged, the card still up —
+            # whatever add-on sent it, and the panel is told why.
+            await self.emit(
+                conn, P.PANEL_EVENT_ERROR,
+                {"text": RISK_CARD_ALL_REFUSED, "reason": "risk_card_all"},
+            )
+            return
         if action != P.PANEL_ACTION_APPROVE:
             decision = "deny"
+        elif allow_all:
+            # SB6: this one action (``once``), then the switch below.
+            decision = "once"
         elif scope == "task":
             decision = "conversation"
         elif scope == "tab":
@@ -1760,6 +2001,14 @@ class PanelTurns:
                 P.PANEL_EVENT_ERROR,
                 {"text": "That request was already answered or has expired."},
             )
+            return
+        if floor and decision == "once" and not named:
+            # SB6: an older add-on's "Allow all page actions" is this Allow
+            # and then the switch; the next action reads this mark.
+            self._risk_allowed_unnamed = True
+        if allow_all:
+            # SB6: the card's "Allow all page actions" is a press of the switch.
+            await self._auto_allow(conn, {"on": True})
 
     # --- the turn ---------------------------------------------------------
 
@@ -1909,7 +2158,11 @@ class PanelTurns:
             # v1.270.0: a STOPPED turn reaches here with no `done` frame sent
             # and its exchange unwritten — the half-answer the user read is
             # written now, before the stop's own terminal frame below.
-            await self._remember_exchange()
+            # SB13: a reply the last sidebar window's closing stopped is
+            # written as stopped, so nothing reads it as finished.
+            await self._remember_exchange(
+                stopped_on_close=self._closed_stop and not emitted_done
+            )
             if not emitted_done:
                 # A STOPPED turn returns with no terminal `done` frame — it
                 # writes the CANCELLED usage row and returns. Without this the

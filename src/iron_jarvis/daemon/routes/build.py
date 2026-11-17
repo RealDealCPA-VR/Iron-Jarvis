@@ -126,6 +126,13 @@ _STARTING: set[str] = set()
 #: rewind or resumed wait starts meanwhile); this set only lets a refusal say
 #: so in its own words. On the loop thread only.
 _COMPACTING: set[str] = set()
+#: Third plan G19 (RB8, NA8): sessions being DELETED right now. They are in
+#: ``_STARTING`` too for the whole delete (no reply, carry-on, night task,
+#: rewind or attempts starts meanwhile); this set only lets a refusal say so
+#: in its own words. On the loop thread only.
+_DELETING: set[str] = set()
+
+DELETING_SENTENCE = "This session is being deleted, so nothing new starts in it."
 
 COMPACTING_SENTENCE = (
     "This session is summarizing its earlier turns. Send your message when that finishes."
@@ -380,6 +387,22 @@ CONTINUE_GONE = (
     "This reply can no longer be continued from where it stopped: its saved progress is gone "
     "(something newer was sent, or it is more than a week old). Press Retry to ask again."
 )
+
+#: Third plan G19 (RB1, decision G9): why the start-up pass does not carry a
+#: reply on — the user pressed Stop on it (``durable_turns.stop_asked``).
+STOPPED_REFUSAL = "you stopped it"
+#: ...the model's note at the end of such a reply's kept conversation when the
+#: user pressed "Continue from where it stopped" (never "an error", never "a
+#: restart": the user stopped it and now asks for it to go on).
+STOPPED_RESUME_NOTE = (
+    "[The user stopped your reply here, and has now asked you to continue it. Your work so far is"
+    " above, exactly as it was. A tool call that was cut off says so in its result: a call that only"
+    " reads is safe to run again; for anything else, check whether it took effect before doing it"
+    " again. Carry on with the reply from where you stopped, and do not repeat work that is already"
+    " done.]"
+)
+#: ...and that continue turn's hidden question line.
+STOPPED_RESUME_QUESTION = "Continue the reply I stopped, from where it stopped."
 
 
 class BuildStopStepBody(BaseModel):
@@ -1896,7 +1919,10 @@ async def _keep_account_limit(engine: Any, thread_id: str, turn_id: str,
                     if served_calls:
                         setup.pop("account_moves", None)
                     wait = auto_wait(platform, setup, limit)
-                    if wait is not None:
+                    # Third plan G19 (contract point 3): a reply the user
+                    # stopped never arms the wait that would carry it on by
+                    # itself — the card waits for the user's own press.
+                    if wait is not None and not await asyncio.to_thread(stop_was_asked, engine, turn_id):
                         changes["account_wait"] = wait
             await asyncio.to_thread(S.update, engine, thread_id, setup=changes)
         elif done:
@@ -2378,13 +2404,20 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                 parsed = _durable.parse_chunk(chunk)
                 terminal = any(ev in _TERMINAL_EVENTS for ev, _ in parsed)
                 if pin is not None and terminal:
-                    if pin.limit and not limit_sent:
+                    # Third plan G19 (RB2): the pin is shared with every side
+                    # call of the reply (a helper, the finish check, a
+                    # summary), and a limit one of them met is left on it. It
+                    # is the REPLY's limit only when the reply did not finish:
+                    # a reply that ended normally never gets a limit card, nor
+                    # the wait that would later carry finished work on.
+                    limit = pin.limit if not any(ev == "done" for ev, _ in parsed) else None
+                    if limit and not limit_sent:
                         limit_sent = True
-                        card = {**pin.limit, "turn_id": turn_id}
+                        card = {**limit, "turn_id": turn_id}
                         watch.account_limit = card
                         yield _durable.sse("account_limit", card)
-                    if pin.limit:
-                        chunk = _with_limit_words(chunk, pin.limit)
+                    if limit:
+                        chunk = _with_limit_words(chunk, limit)
                     chunk = _with_account(chunk, pin)
                     parsed = _durable.parse_chunk(chunk)
                 # v1.390.0 (the Timeline): a frame the reply's clock stamps
@@ -2437,7 +2470,11 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                 yield chunk
         status = "done" if watch.done is not None else "error" if watch.error is not None else "stopped"
     except asyncio.CancelledError:
-        status = "interrupted"
+        # Third plan G19 (RB5): a reply whose END was seen (its done / error
+        # frame, already written to the session) is that end whatever cancels
+        # it after — a shutdown in the moment after the save never leaves a
+        # kept copy the next start would carry on again.
+        status = "done" if watch.done is not None else "error" if watch.error is not None else "interrupted"
         raise
     except Exception as exc:  # noqa: BLE001 — re-raised; TurnLogs._drive logs it
         # The lane broke OUTSIDE its own error handling (it yields its own
@@ -3179,6 +3216,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     if thread_id in _COMPACTING:
         # v1.374.0: Compact holds the session; say so, not "still answering".
         raise HTTPException(status_code=409, detail=COMPACTING_SENTENCE)
+    if thread_id in _DELETING:
+        # Third plan G19 (RB8): Delete holds the session; say so.
+        raise HTTPException(status_code=409, detail=DELETING_SENTENCE)
     if thread_id in _STARTING or _running_turn(d, thread_id):
         raise SessionBusy(thread_id)
     _STARTING.add(thread_id)
@@ -3533,13 +3573,18 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         if resume is not None:
             from ...providers.adapters.base import LLMMessage
 
+            note = RR.FAILED_RESUME_NOTE if resume_failed else RR.RESUME_NOTE
+            if resume_failed and await asyncio.to_thread(stop_was_asked, platform.engine, resume_turn):
+                # Third plan G19 (RB1, decision G9): the user stopped that
+                # reply — the note says so, never "an error".
+                note = STOPPED_RESUME_NOTE
             record = RR.ReplyRecord(
                 platform.engine, thread_id, turn_id,
                 resume_tail=[*resume["tail"], LLMMessage(
                     role="user",
                     # v1.422.0 (B1): a failed reply's continue says what
                     # stopped it (an error), never "Iron Jarvis restarted".
-                    content=RR.FAILED_RESUME_NOTE if resume_failed else RR.RESUME_NOTE,
+                    content=note,
                 )],
                 resumed_from=resume_turn,
             )
@@ -4109,10 +4154,19 @@ def resume_refusal(engine: Any, thread_id: str, turn_id: str, waiting: bool) -> 
     "Resume when ready" wait (that wait carries it on), never once the
     session is archived or gone, never after the user sent a newer message
     (a newer question that is not a continuation), and only for a turn whose
-    record the boot marked cut off ("interrupted")."""
+    record the boot marked cut off ("interrupted").
+
+    Third plan G19: never a reply the user STOPPED (RB1, decision G9:
+    :data:`STOPPED_REFUSAL`, read first — whatever else its record says; the
+    caller then offers "Continue from where it stopped" as the user's own
+    press), and never one whose end the session already holds (RB5: it
+    finished and was saved, and only the removal of its kept copy was cut
+    off)."""
     from ...core.db import session_scope
     from ...core.models import ChatTurnRecord
 
+    if stop_was_asked(engine, turn_id):
+        return STOPPED_REFUSAL
     if waiting:
         return "it was waiting on you when Iron Jarvis stopped"
     with session_scope(engine) as db:
@@ -4134,7 +4188,81 @@ def resume_refusal(engine: Any, thread_id: str, turn_id: str, waiting: bool) -> 
         return "its question is no longer in the session"
     if _newer_message(messages, idx):
         return "a newer message was sent"
+    if reply_ended(messages, turn_id):
+        return "it had already ended"
     return ""
+
+
+def stop_was_asked(engine: Any, turn_id: str) -> bool:
+    """Third plan G19 (contract point 3): did the user press Stop on reply
+    ``turn_id``? The mark written on the reply's record at the press
+    (``durable_turns.stop_asked``). False when unknown or unreadable — and
+    while that reader is not in this build. BLOCKING; never raises."""
+    reader = getattr(_durable, "stop_asked", None)
+    if reader is None or not turn_id:
+        return False
+    try:
+        return bool(reader(engine, str(turn_id)))
+    except Exception:  # noqa: BLE001 — unknown is "not asked", as the reader's own rule
+        log.warning("reading whether reply %s was stopped failed", turn_id, exc_info=True)
+        return False
+
+
+def reply_ended(messages: "list[dict[str, Any]]", turn_id: str) -> bool:
+    """Third plan G19 (RB5): does the session already hold reply
+    ``turn_id``'s line as a reply that ENDED (finished, failed or stopped)?
+    Only a line a restart or a crash wrote for a cut-off reply (its error is
+    ``durable_turns.INTERRUPTED_DETAIL``, or the attempts' cut-off words) is
+    not one. Pure."""
+    from ...harness.attempts import CUT_OFF_LINE
+
+    cut_off = (_durable.INTERRUPTED_DETAIL, CUT_OFF_LINE)
+    for m in messages:
+        if m.get("role") != "assistant" or m.get("turnId") != turn_id:
+            continue
+        if m.get("interrupted") is True and str(m.get("error") or "") in cut_off:
+            continue
+        return True
+    return False
+
+
+def keep_stopped_reply(engine: Any, thread_id: str, turn_id: str) -> bool:
+    """Third plan G19 (RB1, decision G9): a reply the user STOPPED whose wind-
+    down Iron Jarvis closing cut off is never carried on by itself. Its kept
+    rounds MOVE to the key only the user's press reads
+    (``reply_record.failed_run_id_for``: "Continue from where it stopped",
+    :func:`start_build_turn` with ``resume_failed``), when they hold a round
+    past the question; else they go. Its line says it was stopped
+    (``sessions.STOPPED_LINE``), with ``canContinue`` when its rounds were
+    kept — written when the session holds its question but no line yet.
+    Returns whether the rounds were kept. BLOCKING; never raises."""
+    from ...harness import reply_record as RR
+
+    kept = False
+    try:
+        loaded = RR.load(engine, turn_id)
+        if loaded is not None and len(loaded) >= 2:
+            kept = RR._move_failed(engine, RR.run_id_for(turn_id), RR.failed_run_id_for(turn_id))  # noqa: SLF001
+    except Exception:  # noqa: BLE001 — nothing kept: Retry stays
+        log.warning("keeping the stopped reply %s for Continue failed", turn_id, exc_info=True)
+        kept = False
+    if not kept:
+        RR.drop(engine, turn_id)
+    changes: dict[str, Any] = {
+        "interrupted": True, "error": S.STOPPED_LINE, "errorTitle": None, "errorDetail": None,
+        "canContinue": True if kept else None,
+    }
+    try:
+        if not S.amend_reply(engine, thread_id, turn_id, changes):
+            row = S.get_row(engine, thread_id)
+            if row is not None and not S.has_turn_reply(row, turn_id) \
+                    and _question_index(S._messages(row), turn_id) is not None:
+                line = {"role": "assistant", "content": "", "turnId": turn_id,
+                        **{k: v for k, v in changes.items() if v is not None}}
+                S.append_lines(engine, thread_id, [line], title_from_first=False)
+    except Exception:  # noqa: BLE001 — the boot pass never fails on one session
+        log.warning("writing the stopped reply %s's line failed", turn_id, exc_info=True)
+    return kept
 
 
 async def _ready_for_resume(platform: Any) -> None:
@@ -4211,6 +4339,12 @@ async def _resume_after_restart(d: Any) -> list[str]:
         if not thread_id or logs.get(turn_id) is not None:
             continue  # not a session's, or this process runs it
         why = await asyncio.to_thread(resume_refusal, engine, thread_id, turn_id, rec["waiting"])
+        if why == STOPPED_REFUSAL:
+            # Third plan G19 (RB1, decision G9): shown as stopped, and
+            # "Continue from where it stopped" is the user's own press.
+            log.info("not carrying on the reply %s of session %s: %s", turn_id, thread_id, why)
+            await asyncio.to_thread(keep_stopped_reply, engine, thread_id, turn_id)
+            continue
         if why:
             log.info("not carrying on the cut-off reply %s of session %s: %s", turn_id, thread_id, why)
             await asyncio.to_thread(RR.drop, engine, turn_id)
@@ -4235,9 +4369,11 @@ async def _resume_after_restart(d: Any) -> list[str]:
         except HTTPException as exc:
             log.info("carrying on the cut-off reply %s of session %s did not start: %s",
                      turn_id, thread_id, exc.detail)
-            if exc.detail == UNATTENDED_REFUSAL:
+            if exc.detail in (UNATTENDED_REFUSAL, DELETING_SENTENCE):
                 # v1.398.0: Emergency stop turned on during the pass — the
                 # kept conversation stays (as when it was on before the pass).
+                # Third plan G19 (RB8): ...and so it does while the session
+                # is being deleted (a delete that is refused leaves it whole).
                 continue
             if exc.detail in (_night.WINDOW_CLOSED, _night.TIME_USED_UP):
                 # v1.398.0 review: a NIGHT task's reply cut off by a restart
@@ -4918,26 +5054,47 @@ def register(app: FastAPI, d: Any) -> None:
         return out
 
     @app.delete("/build/sessions/{thread_id}")
-    def delete_build_session(thread_id: str, only_if_empty: str = "") -> Any:
+    async def delete_build_session(thread_id: str, only_if_empty: str = "") -> Any:
         """Delete a session (its transcript; its programs are stopped). A
         session still answering is refused: stop it first. v1.412.0 review:
         ``only_if_empty=1`` deletes only a session nobody used yet — no
         message, no waiting message, no reply running or starting — and
         answers 409 ``{detail, code: "not_empty"}`` otherwise (the move of an
         empty session to a folder, and the clean-up of an abandoned New
-        session, never delete a session the user wrote in)."""
-        from .chat import delete_thread
+        session, never delete a session the user wrote in).
 
-        row = _session_or_404(thread_id)
+        Third plan G19 (RB8): the session is HELD for the whole delete
+        (``_STARTING``, the guard every start reads, and ``_DELETING`` for the
+        words), taken and released on the loop: nothing Iron Jarvis starts by
+        itself (a carry-on, a wait, a night task) begins in a session whose
+        folders are being moved, and a delete that is refused or fails leaves
+        the session usable. (NA8) "Answering" includes a reply whose LOG still
+        runs — an attempts turn writes its card, which names the attempts'
+        folders, after its last attempt ended — so those folders always go
+        with the session."""
+        row = await asyncio.to_thread(_session_or_404, thread_id)
         from .build_git import _GIT_ACTING, GIT_BUSY
 
         if thread_id in _GIT_ACTING:
             return JSONResponse(status_code=409, content={"detail": GIT_BUSY})
-        busy = bool(TURNS.thread_states().get(thread_id, {}).get("running")) or thread_id in _STARTING
+        busy = thread_id in _STARTING or bool(_running_turn(d, thread_id))
         if only_if_empty in ("1", "true", "yes") and (busy or _has_content(row)):
             return JSONResponse(status_code=409, content={"detail": NOT_EMPTY_SENTENCE, "code": "not_empty"})
         if busy:
             return JSONResponse(status_code=409, content={"detail": RUNNING_SENTENCE})
+        _STARTING.add(thread_id)
+        _DELETING.add(thread_id)
+        try:
+            return await asyncio.to_thread(_delete_session_now, thread_id, row)
+        finally:
+            _DELETING.discard(thread_id)
+            _STARTING.discard(thread_id)
+
+    def _delete_session_now(thread_id: str, row: Any) -> Any:
+        """The delete's own work, the session HELD by the caller
+        (:func:`delete_build_session`). BLOCKING (git, folder moves)."""
+        from .chat import delete_thread
+
         # v1.375.0 (part 2, Phase 4) DECISION: deleting a session on its own
         # branch never silently destroys work that is not merged — its
         # worktree MOVES to the trash first (the Discard path) and the BRANCH
@@ -5349,6 +5506,10 @@ def register(app: FastAPI, d: Any) -> None:
             from ...harness import reply_record as _RR
 
             text = _RR.FAILED_RESUME_QUESTION
+            # Third plan G19 (RB1, decision G9): a reply the user stopped is
+            # continued in those words, never "stopped on an error".
+            if await asyncio.to_thread(stop_was_asked, platform.engine, continue_turn):
+                text = STOPPED_RESUME_QUESTION
         # v1.373.0 review: a blank entry is no file — `{"files": ["  "]}` used
         # to pass this check and start a turn that sent the model nothing.
         has_files = any(str(p or "").strip() for p in [*(body.attachments or []), *(body.files or [])])

@@ -1366,7 +1366,7 @@ Both files were read whole.
   "still working on the last message". `browser/panel.py:1267, 1603-1700`
   (the turn keeps `conn`), `802-828`; `open` on the new connection does not
   re-bind the turn or show the waiting card again (`709-736`).
-- [ ] **SB2 (4, medium, checked). Stop or Esc does not end a sidebar turn
+- [x] **SB2 (4, medium, checked). Stop or Esc does not end a sidebar turn
   that is waiting at a risk card** (payment, password, delete). It stays
   "running" for up to five minutes, and Allow pressed after Stop still does
   the action. `panel.py:841-854` waits with no look at Stop; the Chat
@@ -1378,21 +1378,21 @@ Both files were read whole.
   one" is answered with no context and nothing says so; once the panel is
   closed the conversation is in no chat list. `panel.py:640-655,
   1329-1354`; `sidepanel.ts:409-416`.
-- [ ] **SB4 (4, medium, checked). With the sidebar open in two browser
+- [x] **SB4 (4, medium, checked). With the sidebar open in two browser
   windows, turning "Auto-allow" off in one is undone at the next tab
   switch.** The other window still holds "on" and sends it again; the
   daemon takes whichever arrives last. `sidepanel.ts:1028-1038, 1621,
   1627-1629` (read once, never re-read); `panel.py:714-715`.
-- [ ] **SB5 (1, medium, checked). Stop prints "Stop requested" and Allow or
+- [x] **SB5 (1, medium, checked). Stop prints "Stop requested" and Allow or
   Deny hide the card without checking that the press reached Iron Jarvis.**
   With the connection down nothing was stopped or answered. Send, Steer and
   Reset do check. `sidepanel.ts:979, 1008, 1019, 1081`.
-- [ ] **SB6 (4, low, checked).** A risk card in the sidebar still offers
+- [x] **SB6 (4, low, checked).** A risk card in the sidebar still offers
   "Allow all page actions": one press allows that risky action and turns
   Auto-allow on for every tab. The daemon marks the card (`floor`,
   `panel.py:837`); the panel never reads the mark.
 - [ ] **SB7 to SB14 (low, pass only).** Stopping a dictation makes the
-  *Done so far: SB11 (v1.520.0).*
+  *Done so far: SB11 (v1.520.0); SB13 (v1.522.0).*
   add-on's whole connection wait for the transcription, so a page action
   another chat is running can time out (`panel.py:1127-1175`); any error
   that is not about voice ends the turn on screen while it still runs
@@ -1504,14 +1504,14 @@ stops tools as a tree.
 
 The whole file was read, in two halves.
 
-- [ ] **RB1 (4, medium, checked; found by both halves). A reply the user
+- [x] **RB1 (4, medium, checked; found by both halves). A reply the user
   stopped can carry on by itself at the next start.** If Iron Jarvis closes
   after Stop but before the reply has wound down (a running command gets up
   to three seconds), the reply is recorded "cut off by a restart", its kept
   work stays, and the resume pass has no check for "the user pressed Stop"
   (`build.py:2439-2441, 2468-2471, 4102-4137`). Stop is never written down
   (`core/turns.py:162`).
-- [ ] **RB2 (4, medium, suspected). A reply that finished normally can get
+- [x] **RB2 (4, medium, suspected). A reply that finished normally can get
   an "account limit" card, arm a wait, and later start a hidden "carry on"
   turn on work that was done.** A limit note left by a side call (a helper,
   the reviewer, the summary) is read at any end of the reply, a good one
@@ -1530,13 +1530,13 @@ The whole file was read, in two halves.
   the copied conversation then goes to a cloud model
   (`build.py:5215-5226`; the hold is `providers/egress.py:789`). Not
   verified: that a coding session's reply gets such a hold written.
-- [ ] **RB5 (4, low, checked for the code; a narrow window).** A reply that
+- [x] **RB5 (4, low, checked for the code; a narrow window).** A reply that
   had finished and was saved is carried on again at the next start if the
   app stops between the save and the removal of its kept copy
   (`build.py:2432-2441, 2468-2471`); the resume pass never checks that the
   session already holds the finished reply.
 - [ ] **RB6 to RB14 (low, pass only; RB12 by two passes).** A "Resume when
-  *Done so far: RB9 (v1.521.0).*
+  *Done so far: RB9 (v1.521.0); RB8 (v1.522.0).*
   ready" wait whose carry-on is refused for a lasting reason (folder gone,
   model no longer usable) is tried every 60 seconds for ever and never said
   (`build.py:3996-4002`); a failed write of the question at a reply's start
@@ -1601,6 +1601,7 @@ Read whole, with the night's call sites.
   Keep, a later Push sends it. Not verified: what the Changes view shows
   before that Push.
 - [ ] **NA6 to NA8 (low; NA6 and NA7 pass only, NA8 suspected).** A night
+  *Done so far: NA8 (v1.522.0).*
   task that fails to start keeps the note "It could not start (KeyError)."
   (`routes/night.py:975-977`); "Runs at once" counts such a task as one
   although it runs three replies at once (`routes/night.py:1036-1047`);
@@ -1712,7 +1713,7 @@ only along the save path.
   so the finished reply never reaches the chat, and Retry starts a second
   turn beside the first (`dashboard/lib/useChatStream.ts:1042-1061,
   1214-1236`; `page.tsx:9483-9548` sends no Stop and does not rejoin).
-- [ ] **CS4 (4, medium, checked). A Stop pressed right after Send can land
+- [x] **CS4 (4, medium, checked). A Stop pressed right after Send can land
   before the daemon knows the turn.** The daemon answers "no such turn",
   the page ignores that, shows and saves "Stopped.", and the turn runs to
   its end with nobody watching, steps included
@@ -2178,3 +2179,54 @@ Left open:
 Tested with stand-ins only: the models; the daemon, in every page test;
 the browser sidebar (never run in Chrome or Edge; it needs the new add-on
 for the "starts fresh" line to show).
+
+### Group 19 as built (v1.522.0)
+
+Fixed: RB1, RB2, RB5, RB8, CS4, SB2, SB5, SB13, NA8, and, from group 20,
+SB4 and SB6 (they are in the same two sidebar files, so they were built and
+released here).
+
+RB2, RB8, NA8 and SB13 were marked suspected or pass only; each was first
+proven with a failing test.
+
+Where it differs from the plan:
+
+- **A Stop for a reply not yet known answers "kept", not "no such reply".**
+  The stop route says "already finished" only for a reply that really had
+  finished; the page then shows that reply instead of writing "Stopped."
+  over it.
+- **The phone's lane registers a named reply too**, so the same Stop
+  reaches it. Before, only a reply in the window could be stopped by name.
+- **Decision G9 as built.** The stopped reply's line and the "Continue from
+  where it stopped" press use what the page already had for a reply that
+  ended on an error; no new control was added.
+- **The sidebar's switch.** A press is its one truth and "off" always
+  wins; an open may still restore "on" after Iron Jarvis restarts, so the
+  setting survives an update.
+
+Left open:
+
+- The stopped line of a coding reply is drawn in the red tone of an error
+  (`HarnessFailure.tsx`); the words are right.
+- In Chat, the check "was the reply stopped" after a RISK card's answer has
+  no test of its own (the ordinary card's has).
+- A Stop kept for a reply that never starts is forgotten after two minutes;
+  it is in memory only.
+- The sidebar: a window that dies without closing (a crash) stays counted
+  as open, so a later close of the last real window does not stop the
+  reply; a Stop you press writes the half answer without a "stopped" note
+  (closing the sidebar does write one); with an older add-on, "Allow all"
+  on a risk card still does that one action (as "Allow once" would) and
+  only the switch is refused.
+- After a restart the record of a stopped coding reply still reads "cut
+  off" in its own status; the session's line, which is what the user sees,
+  says stopped.
+- Not verified end to end: that a real refused side task lets the main
+  reply end normally (RB2 was proven by setting the limit note directly).
+- `routes/build.keep_stopped_reply` uses a private helper of
+  `harness/reply_record`.
+
+Tested with stand-ins only: the models; a whole coding reply was not driven
+through the stop route in the Stop tests (the coding tests write the mark
+with the real writer); the sidebar panel was never run in Chrome or Edge
+(source pins and a type check), and needs the new add-on in the browser.

@@ -166,6 +166,9 @@ SITES: dict[tuple[str, str], Site] = {
     ("daemon/routes/chat.py", "chat_stream.gen._registry_invoke"): Site(
         (READS,), lanes=("chat_stream.gen",),
     ),
+    # Third fix plan, group 19: an Allow that arrives after Stop is refused
+    # through the gate so the refusal is recorded; the call never runs.
+    ("daemon/routes/chat.py", "chat_stream.gen"): Site((REFUSAL_ONLY,)),
     # A folder's plugin check: the carrier's own check is read first
     # (`asks_first`); a command that would ask is not run, the model is told
     # to run it with its own command tool. Its follow-up calls
@@ -261,7 +264,8 @@ def test_every_registry_invoke_is_in_the_table_and_no_entry_is_stale():
     )
     # The scan really sees the calls (a parser that finds nothing passes the
     # loop above vacuously).
-    assert sum(registry_sites.values()) == 11
+    # 11 at v1.520.0; 12 since group 19's refusal-only call in the stream lane.
+    assert sum(registry_sites.values()) == 12
 
 
 @pytest.mark.parametrize("key", sorted(SITES), ids=lambda k: f"{k[0]}::{k[1]}")

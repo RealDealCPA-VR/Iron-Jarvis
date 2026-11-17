@@ -671,6 +671,36 @@ class TurnLog:
         self.chat_deleted = False
         #: CS6: usage rows this turn wrote before its chat was named.
         self.usage_rows: list[str] = []
+        #: Third plan G19: the turn registry's handle of this turn (set by
+        #: :meth:`TurnLogs.start`) — a Stop from ANY path (the route, Stop
+        #: and archive, the night, an attempt) is read off it — and the time
+        #: the stop route wrote on the record (:meth:`ask_stop`).
+        self.handle: Any = None
+        self._stop_asked_at: Any = None
+
+    # -- Stop is written down (third plan G19) -------------------------------
+    def ask_stop(self, when: Any) -> None:
+        """The user asked this turn to stop at *when*: every later write of
+        the record carries it (the first press wins; never cleared)."""
+        if self._stop_asked_at is None and when is not None:
+            self._stop_asked_at = when
+
+    @property
+    def stop_asked_at(self) -> Any:
+        """When a stop was asked for this turn (the route's mark, else the
+        registry handle's own stop time), or None. In memory: the live paths
+        need no database read."""
+        if self._stop_asked_at is not None:
+            return self._stop_asked_at
+        handle = self.handle
+        if handle is not None and getattr(handle, "stopped", False):
+            return getattr(handle, "stopped_at", None) or utcnow()
+        return None
+
+    @property
+    def stop_asked(self) -> bool:
+        """Was this turn asked to stop (by any Stop, not the orphan guard)?"""
+        return self.stop_asked_at is not None
 
     # -- the stored frames ---------------------------------------------------
     @property
@@ -1017,13 +1047,19 @@ class TurnLog:
         write runs is in the next one, never half in this one); the
         ``json.dumps`` of them runs in :func:`_write_record`, on the worker
         thread that writes it."""
-        return {
+        values = {
             "thread_id": self.thread_id,
             "status": self.status,
             "frames_json": [[e, d] for e, d in self.frames],
             "updated_at": utcnow(),
             "home": self.home,
         }
+        # Third plan G19: the stop mark rides every write once asked (and
+        # :func:`_write_record` never clears one already on the record).
+        asked = self.stop_asked_at
+        if asked is not None:
+            values["stop_asked_at"] = asked
+        return values
 
     def persist_interval(self) -> float:
         """Seconds between two writes of the running record (v1.384.0 review:
@@ -1085,16 +1121,149 @@ def _write_record(engine: Any, turn_id: str, started_at: Any, values: dict[str, 
         if not isinstance(values.get("frames_json", ""), str):
             # v1.418.0 (C3.6): serialised HERE, off the loop.
             values = {**values, "frames_json": json.dumps(values["frames_json"])}
-        with session_scope(engine) as db:
-            row = db.get(ChatTurnRecord, turn_id)
-            if row is None:
-                row = ChatTurnRecord(id=turn_id, started_at=started_at)
-            for k, v in values.items():
-                setattr(row, k, v)
-            db.add(row)
-            db.commit()
+        from sqlalchemy.exc import IntegrityError
+
+        # Third plan G19: twice at most — the stop mark (:func:`write_stop_mark`)
+        # may create the row between this write's read and its insert.
+        for attempt in (1, 2):
+            with session_scope(engine) as db:
+                row = db.get(ChatTurnRecord, turn_id)
+                if row is None:
+                    row = ChatTurnRecord(id=turn_id, started_at=started_at)
+                else:
+                    # A row the stop mark made first starts when the turn did.
+                    row.started_at = started_at
+                for k, v in values.items():
+                    if k == "stop_asked_at" and (v is None or row.stop_asked_at is not None):
+                        continue  # third plan G19: never cleared, first press kept
+                    setattr(row, k, v)
+                db.add(row)
+                try:
+                    db.commit()
+                    return
+                except IntegrityError:
+                    db.rollback()
+                    if attempt == 2:
+                        raise
     except Exception:  # noqa: BLE001 — the live turn never fails on its record
         log.warning("could not save chat turn %s", turn_id, exc_info=True)
+
+
+# --------------------------------------------------------------------------- #
+# STOP IS WRITTEN DOWN (third plan G19: RB1, CS4). A Stop used to be a flag in
+# memory only (``core/turns``): a restart in the seconds after it lost it, and
+# the coding resume pass then carried the stopped reply on by itself. The stop
+# route now writes WHEN the stop was asked on the turn's record BEFORE it acts
+# on it (:func:`record_stop`), the live log carries it on every later write
+# (``TurnLog.stop_asked``), and :func:`stop_asked` is what every carry-on reads.
+# --------------------------------------------------------------------------- #
+#: The longest the stop route waits for the mark to be written before it
+#: stops the turn anyway (the write goes on in its thread).
+STOP_MARK_TIMEOUT_S = 3.0
+#: The stop route's 404 words (with ``"finished": true``): the reply had
+#: already finished, so nothing was stopped. The Chat page reads the flag and
+#: shows the finished reply instead of "Stopped.".
+STOP_FINISHED_DETAIL = "That reply had already finished."
+
+
+def write_stop_mark(engine: Any, turn_id: str, when: Any) -> bool:
+    """Write *when* as turn ``turn_id``'s ``stop_asked_at`` — the first press
+    is kept, a later one changes nothing. A record that does not exist yet
+    (the turn has not written its first) is CREATED with the mark, so there
+    is no moment in which the stop is in memory only; the turn's own first
+    write then fills it in. True when the record carries a mark. BLOCKING;
+    never raises."""
+    tid = str(turn_id or "").strip()
+    if not tid:
+        return False
+    try:
+        from sqlalchemy import update
+        from sqlalchemy.exc import IntegrityError
+
+        for _attempt in (1, 2):
+            with session_scope(engine) as db:
+                res = db.exec(  # type: ignore[call-overload]
+                    update(ChatTurnRecord)
+                    .where(ChatTurnRecord.id == tid)  # type: ignore[arg-type]
+                    .where(ChatTurnRecord.stop_asked_at.is_(None))  # type: ignore[union-attr]
+                    .values(stop_asked_at=when)
+                )
+                db.commit()
+                if int(getattr(res, "rowcount", 0) or 0):
+                    return True
+                if db.get(ChatTurnRecord, tid) is not None:
+                    return True  # already marked by an earlier press
+                db.add(ChatTurnRecord(id=tid, started_at=when, stop_asked_at=when))
+                try:
+                    db.commit()
+                    return True
+                except IntegrityError:
+                    db.rollback()  # the turn's own first write won: mark it
+        return False
+    except Exception:  # noqa: BLE001 — the stop still happens (the caller logs)
+        log.warning("could not write the stop of chat turn %s", tid, exc_info=True)
+        return False
+
+
+async def record_stop(engine: Any, turn_id: str, when: Any) -> bool:
+    """:func:`write_stop_mark` off the event loop, SHIELDED (a shutdown in
+    that instant does not drop the write) and bounded by
+    :data:`STOP_MARK_TIMEOUT_S`. False (logged) when it failed or took too
+    long — the caller stops the turn either way. Never raises except a
+    cancel of the caller itself."""
+    try:
+        return bool(await asyncio.wait_for(
+            asyncio.shield(asyncio.to_thread(write_stop_mark, engine, turn_id, when)),
+            timeout=STOP_MARK_TIMEOUT_S,
+        ))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a slow disk never holds a Stop
+        log.warning("the stop of chat turn %s was not written in time; it stops anyway",
+                    turn_id, exc_info=True)
+        return False
+
+
+def stop_asked(engine: Any, turn_id: str) -> bool:
+    """Was turn ``turn_id`` asked to stop? The live turn this process holds
+    answers from memory (``TurnLog.stop_asked``); otherwise its record's
+    ``stop_asked_at``. False for an unknown id or a turn never stopped.
+    BLOCKING (one primary-key read of one column); never raises."""
+    tid = str(turn_id or "").strip()
+    if not tid:
+        return False
+    try:
+        lg = _LIVE.get(tid)
+        if lg is not None and lg.stop_asked:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from sqlmodel import select
+
+        with session_scope(engine) as db:
+            got = db.exec(
+                select(ChatTurnRecord.stop_asked_at).where(ChatTurnRecord.id == tid)
+            ).first()
+        return got is not None and (got[0] if isinstance(got, tuple) else got) is not None
+    except Exception:  # noqa: BLE001 — unknown reads as "not asked"
+        log.warning("could not read whether chat turn %s was stopped", tid, exc_info=True)
+        return False
+
+
+def record_exists(engine: Any, turn_id: str) -> bool:
+    """Does turn ``turn_id`` have a record (one primary-key read)? BLOCKING;
+    never raises (False when unreadable)."""
+    try:
+        from sqlmodel import select
+
+        with session_scope(engine) as db:
+            return db.exec(
+                select(ChatTurnRecord.id).where(ChatTurnRecord.id == str(turn_id))
+            ).first() is not None
+    except Exception:  # noqa: BLE001
+        log.warning("could not read chat turn %s's record", turn_id, exc_info=True)
+        return False
 
 
 class TurnLogs:
@@ -1162,6 +1331,12 @@ class TurnLogs:
         """Run ``frames`` (the lane's SSE iterator) as its own task."""
         lg = TurnLog(turn_id, thread_id or self._links.pop(turn_id, ""))
         lg.engine = self.engine
+        # Third plan G19: the turn's stop handle (registered by the lane
+        # before this start), so a Stop from any path rides its record —
+        # an early Stop (kept for an id not yet known) included.
+        from ..core.turns import TURNS
+
+        lg.handle = TURNS.handle(turn_id)
         self._logs[turn_id] = lg
         try:
             _LIVE[turn_id] = lg

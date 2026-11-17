@@ -12340,6 +12340,72 @@ def _counts_for_its_chat(turn):
     return counted
 
 
+def stopped_post_answer() -> dict[str, Any]:
+    """What ``POST /chat`` answers for a turn its Stop ended (third plan G19):
+    no reply, said as stopped — never a reply it did not write."""
+    return {"reply": "", "stopped": True, "tools_used": [], "provider": "", "model": ""}
+
+
+def _registers_its_turn(turn):
+    """The POST lane's turn REGISTERS its name like the stream lane's (third
+    plan G19, CS4; MIRROR NOTE, lock-step: ``routes/chat.stream_chat_turn``
+    registers in ``core.turns.TURNS`` and its ``_tracked`` ends a turn that
+    is already stopped before its first frame).
+
+    A body with a ``turn_id`` is registered for the turn's lifetime, so
+    ``POST /chat/turns/{id}/stop`` reaches it: a Stop KEPT for that id (it
+    arrived before the turn was known) ends it here, before anything runs —
+    no model call, no step; a Stop while it runs cancels the turn at its next
+    wait (the lane's own cancel arm writes the CANCELLED usage row; a tool
+    already running on its thread finishes, as in the stream lane). Either
+    way the answer is :func:`stopped_post_answer`. No ``turn_id``: nothing is
+    registered and every byte is what it was. A decorator for the reason
+    :func:`_counts_for_its_chat` is one."""
+    import functools
+
+    from ..core.turns import TURNS
+
+    @functools.wraps(turn)
+    async def registered(platform, personas, body, *args, **kwargs):
+        turn_id = str(getattr(body, "turn_id", "") or "").strip()
+        if not turn_id:
+            return await turn(platform, personas, body, *args, **kwargs)
+        handle = TURNS.register(turn_id)
+        try:
+            if handle.stopped:
+                return stopped_post_answer()
+            me = asyncio.current_task()
+            state = {"over": False, "cancelled_by_stop": False}
+            watcher = asyncio.ensure_future(handle.wait_stopped())
+
+            def _on_stop(fut: "asyncio.Future") -> None:
+                if fut.cancelled() or state["over"] or me is None:
+                    return
+                state["cancelled_by_stop"] = True
+                me.cancel()
+
+            watcher.add_done_callback(_on_stop)
+            try:
+                result = await turn(platform, personas, body, *args, **kwargs)
+            except asyncio.CancelledError:
+                state["over"] = True
+                if state["cancelled_by_stop"] and me is not None and me.uncancel() == 0:
+                    return stopped_post_answer()
+                raise
+            else:
+                state["over"] = True
+                if state["cancelled_by_stop"] and me is not None:
+                    me.uncancel()  # the turn took its stop and ended by itself
+                return result
+            finally:
+                state["over"] = True
+                watcher.cancel()
+        finally:
+            TURNS.release(turn_id, handle)
+
+    return registered
+
+
 async def local_only_scope_for(platform, body) -> "_egress.LocalOnlyScope":
     """The LOCAL-ONLY scope one chat turn runs under (v1.332.0).
 
@@ -12772,6 +12838,7 @@ def client_owner_words(body: Any) -> str:
         return ""
 
 
+@_registers_its_turn
 @_counts_for_its_chat
 @_account_pinned_turn
 @_local_only_turn

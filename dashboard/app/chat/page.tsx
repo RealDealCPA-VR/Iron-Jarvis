@@ -11234,46 +11234,83 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // stream.run()'s throw lands in a torn-down completeChat (no POST fallback).
     if (chatBusy && stream.streaming) {
       chatGenRef.current += 1;
+      const stopGen = chatGenRef.current;
       // v1.312.0 (W4-3): tell the daemon too, by the turn's name. The daemon
       // now prepares a turn INSIDE the open stream (recall, reading files, a
       // summary) and checks Stop between steps — dropping the fetch alone
-      // left that work running for nobody. Best-effort and silent: a 404 (the
-      // turn already ended) or a dead daemon changes nothing the user sees,
-      // because the local stop below has already happened either way.
+      // left that work running for nobody.
       const stopId = turnIdRef.current;
-      if (stopId)
-        post(`/chat/turns/${encodeURIComponent(stopId)}/stop`).catch(() => {});
+      const toolsAtStop = stream.tools;
       stream.abort();
       tts.cancel(); // stop reading a reply the user just cut off
       // v1.250.0 (S-03): the live text lives in the stream's store now, and
       // the store is always current — including between frames, which is
       // exactly when Stop lands.
       const partial = (stream.textStore?.get() ?? stream.text).trim();
-      // v1.322.0 (borrowed idea: assistant-ui's cancel-restores-the-draft):
-      // stopped before the first word — usually "oops, wrong question" — so
-      // the question goes back into the box, ready to fix (only into an
-      // empty box; the "Stopped." line stays as the record).
-      if (!partial) restoreComposerDraft(messagesRef.current);
-      const sources = extractWebSources(stream.tools);
-      // v1.435.0 review: Local only changed from chat before Stop — the
-      // switch follows the daemon's write BEFORE the save below.
-      followLocalOnly(localOnlyFromTools(stream.tools));
-      const full: ChatMessage[] = [
-        ...messagesRef.current,
-        {
-          role: "assistant",
-          content: partial || "Stopped.",
-          ...(partial ? { interrupted: true } : {}),
-          ...(partial && sources.length ? { sources } : {}),
-          // Third plan point 1: the stopped reply is this turn's — the daemon
-          // writes no second one for it.
-          ...(stopId ? { turnId: stopId } : {}),
+      const sources = extractWebSources(toolsAtStop);
+      // Third plan G19 (CS4): the line is written once the daemon has said
+      // what became of the reply. It stopped it (or keeps the Stop for a
+      // reply it had not started yet: `pending`) → "Stopped." as before. It
+      // answers that the reply had ALREADY FINISHED → no "Stopped." over a
+      // finished reply: the page follows that turn once (a replay — no step
+      // runs again) and shows and saves the finished reply. No answer in a
+      // few seconds, a dead daemon or an older one → stopped here, as before.
+      let settled = false;
+      const stoppedHere = () => {
+        if (settled) return;
+        settled = true;
+        if (chatGenRef.current !== stopGen) return; // the user has moved on
+        // v1.322.0 (borrowed idea: assistant-ui's cancel-restores-the-draft):
+        // stopped before the first word — usually "oops, wrong question" — so
+        // the question goes back into the box, ready to fix (only into an
+        // empty box; the "Stopped." line stays as the record).
+        if (!partial) restoreComposerDraft(messagesRef.current);
+        // v1.435.0 review: Local only changed from chat before Stop — the
+        // switch follows the daemon's write BEFORE the save below.
+        followLocalOnly(localOnlyFromTools(toolsAtStop));
+        const full: ChatMessage[] = [
+          ...messagesRef.current,
+          {
+            role: "assistant",
+            content: partial || "Stopped.",
+            ...(partial ? { interrupted: true } : {}),
+            ...(partial && sources.length ? { sources } : {}),
+            // Third plan point 1: the stopped reply is this turn's — the daemon
+            // writes no second one for it.
+            ...(stopId ? { turnId: stopId } : {}),
+          },
+        ];
+        setMessages(full);
+        queueSave(full); // the (aborted) turn still completed a visible exchange
+        setChatBusy(false);
+        sendingRef.current = false;
+      };
+      if (!stopId) {
+        stoppedHere();
+        return;
+      }
+      const noAnswer = setTimeout(stoppedHere, 5000);
+      post(`/chat/turns/${encodeURIComponent(stopId)}/stop`).then(
+        () => {
+          clearTimeout(noAnswer);
+          stoppedHere();
         },
-      ];
-      setMessages(full);
-      queueSave(full); // the (aborted) turn still completed a visible exchange
-      setChatBusy(false);
-      sendingRef.current = false;
+        (e: unknown) => {
+          clearTimeout(noAnswer);
+          const err = e as { status?: unknown; body?: unknown } | null;
+          const finished =
+            !!err && err.status === 404 && (err.body as { finished?: unknown } | undefined)?.finished === true;
+          if (!finished || settled) {
+            stoppedHere();
+            return;
+          }
+          settled = true;
+          if (chatGenRef.current !== stopGen) return;
+          const msgs = messagesRef.current;
+          sendingRef.current = true;
+          void completeChat(msgs, attachmentsOf(msgs[msgs.length - 1]), { rejoin: stopId });
+        },
+      );
       return;
     }
     // AGENT: ask the daemon to cancel the session.

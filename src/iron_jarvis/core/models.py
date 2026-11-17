@@ -434,6 +434,12 @@ class ChatTurnRecord(SQLModel, table=True):
     #: written home again (it would be a second copy). Additive nullable
     #: column (auto-reconciled).
     home: str | None = None
+    #: Third plan G19 (RB1, CS4): WHEN the user asked this reply to stop — set
+    #: by ``POST /chat/turns/{id}/stop`` before the stop is acted on, kept by
+    #: every later write (never cleared), read by everything that might carry
+    #: a reply on by itself (``durable_turns.stop_asked``). None = never asked.
+    #: Additive nullable column (auto-reconciled).
+    stop_asked_at: datetime | None = None
 
 
 class UndoJournal(SQLModel, table=True):

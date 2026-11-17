@@ -717,7 +717,11 @@ def test_the_script_folds_steps_keeps_the_route_visible_and_replays_history():
     assert 'querySelector(".turn, .work")' in ts, "history would paint over a transcript that already holds it"
     assert "PANEL_ACTION_RESET" in ts and "PANEL_ACTION_AUTO_ALLOW" in ts
     assert "openParams(storedAuto)" in ts, "the remembered setting does not ride the open"
-    assert ts.count("openParams(storedAuto)") == 2, "one of the two opens (mount, tab switch) forgot the setting"
+    # Third fix plan (SB4): both opens (mount, tab switch) go through ONE
+    # sender that re-reads the stored switch first, so a window that still
+    # holds a stale "on" cannot send it.
+    assert ts.count("void sendOpen()") == 2, "one of the two opens (mount, tab switch) forgot the setting"
+    assert "await loadAuto()" in ts
     # The header paints the switch from the daemon's frame, never from the press.
     assert 'paintAuto(payload["auto_allow"] === true)' in ts
     press = re.search(r'el\.auto\?\.addEventListener\("click", \(\) => \{(.*?)\}\);', ts, flags=re.S)

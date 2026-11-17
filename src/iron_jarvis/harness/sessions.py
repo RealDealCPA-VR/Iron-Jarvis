@@ -1056,6 +1056,13 @@ def history_of(messages: list[dict[str, Any]], *, last_work: bool = False) -> li
 #: form (:data:`LAST_WORK_LEAD`), never the model's or a tool's words.
 REPLY_END_LEAD = "How that reply ended (recorded by Iron Jarvis, not shown to the user): "
 REPLY_CUT_OFF = "it was cut off before it finished"
+#: Third plan G19 (RB1, decision G9): the line of a reply the user STOPPED
+#: whose wind-down Iron Jarvis closing cut off. The next start never carries
+#: it on by itself (``routes/build.resume_refusal``); "Continue from where it
+#: stopped" is the user's own press when its rounds were kept. The next
+#: turn's model reads it as cut off (:func:`reply_end_note`), never as an
+#: error.
+STOPPED_LINE = "You stopped this reply. Iron Jarvis did not carry it on by itself."
 REPLY_ERROR = "it ended on an error"
 REPLY_ACCOUNT_LIMIT = "it stopped at an account's limit"
 REPLY_STEP_LIMIT = "it stopped at its step limit"
@@ -1083,7 +1090,7 @@ def reply_end_note(m: dict[str, Any], *, said: str = "") -> str:
         error = str(m.get("error") or "").strip()
         if isinstance(m.get("accountLimit"), dict) and m["accountLimit"]:
             parts.append(REPLY_ACCOUNT_LIMIT)
-        elif error and error != _interrupted_detail():
+        elif error and error not in (_interrupted_detail(), STOPPED_LINE):
             parts.append(REPLY_ERROR)
         elif m.get("interrupted") is True or error:
             parts.append(REPLY_CUT_OFF)

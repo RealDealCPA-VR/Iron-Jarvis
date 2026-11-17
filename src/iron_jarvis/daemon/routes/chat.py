@@ -504,6 +504,11 @@ CHAT_ASK_TIMEOUT_S: float | None = None
 
 #: How often a parked ask checks for Stop or a dropped connection.
 _ASK_POLL_S = 1.0
+#: Third plan G19 (SB2): the refusal a carded call gets when its card was
+#: answered Allow AFTER the reply's Stop (inside one poll, or from another
+#: window) — recorded through the registry's deny path with the card's
+#: not-answered label (``chat_turn.CARD_TIMEOUT_LABEL``); the call never runs.
+_STOPPED_BEFORE_RUN = "you stopped the reply before this call ran — it was not run"
 
 
 class HeartbeatStreamingResponse(StreamingResponse):
@@ -3322,6 +3327,12 @@ def register(app: FastAPI, d) -> None:
                 )
                 lg = logs.start(turn_id, str(getattr(body, "thread_id", "") or "").strip()[:80], gen)
                 holder["log"] = lg
+            except BaseException:
+                # Third plan G19: refused before it ran (a 400/404 eager
+                # check): a Stop for this id is "already finished" from now
+                # on, and one kept for it is dropped.
+                TURNS.note_ended(turn_id)
+                raise
             finally:
                 _STARTING_TURNS.pop((id(logs), turn_id), None)
                 if not starting.done():
@@ -3429,12 +3440,70 @@ def register(app: FastAPI, d) -> None:
         is not a running step and keeps running. In any OTHER turn a tool
         already executing is not killed: its worker thread finishes and its
         write lands (v1.228.0); no surface may imply more.
+
+        STOP IS WRITTEN DOWN (third plan G19: RB1, CS4). For a running turn
+        (a chat's or a coding session's) the press is written on the turn's
+        record FIRST (``stop_asked_at``, off the loop, shielded, bounded by
+        ``durable_turns.STOP_MARK_TIMEOUT_S``; a failed write is logged and
+        the stop still happens), then the turn is stopped in memory. A Stop
+        for an id this process has not seen yet — pressed right after Send,
+        before the turn has registered — is KEPT for it
+        (``TURNS.stop_or_keep``) and answered ``{"ok": true, "stopped": true,
+        "pending": true}``: the turn is stopped the moment it registers,
+        before its first model call or step, and its record carries the mark.
+        404 now means only that the reply ALREADY FINISHED (a turn that ran
+        here and ended, a finished log, a record): ``{"detail": "That reply
+        had already finished.", "finished": true}`` — "I stopped it" is never
+        said about a turn that had ended.
         """
-        if not TURNS.stop(turn_id):
-            raise HTTPException(
-                status_code=404, detail=f"no such running turn: {turn_id}"
+        from ...core.ids import utcnow as _utcnow
+
+        engine = d.platform.engine
+        logs = _turn_logs(d)
+
+        def _finished() -> JSONResponse:
+            return JSONResponse(
+                status_code=404, content={"detail": _durable.STOP_FINISHED_DETAIL, "finished": True},
             )
-        return {"ok": True, "stopped": True}
+
+        if TURNS.handle(turn_id) is not None:
+            when = _utcnow()
+            lg = logs.get(turn_id)
+            if lg is not None:
+                lg.ask_stop(when)  # every later write of its record carries it
+            try:
+                await _durable.record_stop(engine, turn_id, when)
+            finally:
+                # The stop happens whatever became of the write.
+                stopped = TURNS.stop(turn_id)
+            if not stopped:
+                return _finished()  # it ended while the mark was written
+            return {"ok": True, "stopped": True}
+        if logs.get(turn_id) is not None or TURNS.recently_ended(turn_id):
+            return _finished()  # it ran here and has ended (or is ending)
+        try:
+            known = await asyncio.wait_for(
+                asyncio.to_thread(_durable.record_exists, engine, turn_id),
+                timeout=_durable.STOP_MARK_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            known = False  # unreadable: keeping the Stop is the safe side
+        if known and TURNS.handle(turn_id) is None:
+            return _finished()  # a record: it ran (before a restart) and ended
+        outcome = TURNS.stop_or_keep(turn_id)
+        if outcome == "ended":
+            return _finished()
+        if outcome == "stopped":
+            # It registered while the record was read: stopped in memory a
+            # moment ago (its handle's time) — written now.
+            handle = TURNS.handle(turn_id)
+            when = getattr(handle, "stopped_at", None) or _utcnow()
+            lg = logs.get(turn_id)
+            if lg is not None:
+                lg.ask_stop(when)
+            await _durable.record_stop(engine, turn_id, when)
+            return {"ok": True, "stopped": True}
+        return {"ok": True, "stopped": True, "pending": True}
 
     @app.post("/chat/turns/{turn_id}/away")
     async def chat_turn_away(turn_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -3944,8 +4013,16 @@ async def stream_chat_turn(
         """The runner owns the pop: release in a ``finally``, so a stop
         arriving after the last frame is honestly a 404 rather than a success
         against a turn that has moved on. Registered BEFORE the first frame,
-        so a Stop pressed during preparation finds the turn (v1.312.0)."""
+        so a Stop pressed during preparation finds the turn (v1.312.0).
+
+        Third plan G19 (CS4): a turn already stopped when it is first asked
+        for a frame — a Stop KEPT for its id before it registered
+        (``TURNS.stop_or_keep``), or one that landed since — never starts:
+        no frame, no model call, no step; it ends as a stopped turn."""
         try:
+            if handle.stopped:
+                await inner.aclose()
+                return
             async with contextlib.aclosing(inner):
                 async for chunk in inner:
                     yield chunk
@@ -5622,6 +5699,10 @@ async def chat_stream(
             _rapr.pop(_rid)
             if thread_turn is not None:
                 thread_turn.unpark()
+        if not _rstopped and _rdecision not in ("deny", "timeout") and (_ti.closed or await _stop()):
+            # Third plan G19 (SB2): an Allow that arrived after Stop does
+            # nothing — the door refuses the call (recorded there) as stopped.
+            _rstopped = True
         if _rstopped:
             _rnote.answered("stopped", _ractor)
             return _risk_door.Verdict(False, _risk_door.STOPPED_TAIL)
@@ -7388,6 +7469,24 @@ async def chat_stream(
                                     # The phone's prompt expires with the card
                                     # (`approval.resolved`, only when it went).
                                     _phone.close("stopped" if _stopped else _decision)
+                            if not _stopped and _decision not in ("deny", "timeout") and await _stop():
+                                # Third plan G19 (SB2): an Allow that arrived
+                                # AFTER Stop (inside one poll, or from another
+                                # window) does nothing: the call is refused
+                                # through the registry (recorded, never run)
+                                # and the reply ends as a stopped one.
+                                _stopped = True
+                                try:
+                                    await d.platform.registry.invoke(
+                                        tc.name, tc.arguments,
+                                        _harness.ctx_for(ctx, tc) if _harness is not None else ctx,
+                                        d.platform.permissions, overrides,
+                                        allowed_names=_turn_tools,
+                                        deny_reason=_STOPPED_BEFORE_RUN,
+                                        deny_label=_chat_turn.CARD_TIMEOUT_LABEL,
+                                    )
+                                except Exception:  # noqa: BLE001 — the call is not run either way
+                                    log.warning("could not record a call refused after Stop", exc_info=True)
                             if _stopped:
                                 _inote.answered("stopped", _m_actor)
                                 # Completed rounds were billed; the ledger

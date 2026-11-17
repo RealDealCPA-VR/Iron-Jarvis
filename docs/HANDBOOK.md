@@ -2042,6 +2042,52 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Stop means stopped, and it is remembered (v1.522.0)
+
+A Stop is now written down the moment you press it, so a reply you stopped
+is never carried on by Iron Jarvis itself, and a Stop pressed too early or
+at a waiting card can no longer be lost. This is the third of seven releases
+from the third review.
+
+- **A coding reply you stopped stays stopped after a restart.** If Iron
+  Jarvis closed before a stopped reply had wound down, the next start
+  carried that reply on by itself and ran its steps, and its line said "cut
+  off by a restart". It now reads "You stopped this reply. Iron Jarvis did
+  not carry it on by itself.", with "Continue from where it stopped" as
+  your own press.
+- **A Stop pressed right after Send is kept for that reply.** It could reach
+  Iron Jarvis before the reply had started; the page then showed "Stopped."
+  while the reply ran to its end unseen, steps included. The Stop now waits
+  for the reply and ends it before its first step.
+- **Stop on a reply that had just finished shows the reply.** The page no
+  longer writes "Stopped." over an answer that was complete.
+- **Allow pressed after Stop does nothing.** In Chat, and in the browser
+  sidebar, an approval card answered after you stopped the reply is
+  withdrawn: the action is not done and the record says so.
+- **In the browser sidebar, Stop ends a reply waiting at a risk card.** It
+  used to stay "running" for up to five minutes, and Allow pressed
+  afterwards still did the action. Stop, Allow and Deny also say when the
+  press did not reach Iron Jarvis ("this browser is not connected"), and the
+  card stays so you can answer it once the browser is connected again.
+- **Two sidebar windows no longer undo each other.** Closing one no longer
+  stops the reply the other is showing. Turning "Allow all page actions" off
+  in one is no longer switched back on by the other. A reply that ends
+  because the sidebar was closed is recorded as stopped, not as finished.
+- **A risk card in the sidebar offers "Allow once" and "Deny" only.** It
+  used to offer "Allow all page actions" too: one press allowed the risky
+  action and turned the switch on for every tab.
+- **A reply that finished is never treated as waiting.** A finished coding
+  reply could get an "account limit" card and later start a hidden "carry
+  on" by itself, when a side task (a helper, the reviewer) had met the
+  limit. And a reply that was finished and saved could be carried on again
+  if the app closed in the instant after. Neither can happen now.
+- **Deleting a coding session.** Nothing Iron Jarvis starts by itself can
+  begin in a session while it is being deleted, and Delete waits for a
+  "Try on…" that is still writing its result, so the attempts' folders go to
+  the trash with the session.
+- **From the phone.** A reply asked for with a name can now be stopped the
+  same way a reply in the window can.
+
 ## A reply lives in its chat, whoever was watching (v1.521.0)
 
 A reply that finishes while you are on another page, or with the window

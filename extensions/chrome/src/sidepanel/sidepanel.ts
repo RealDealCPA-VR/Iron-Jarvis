@@ -190,6 +190,16 @@ const el = {
 /** The id of the ask the approval card is currently showing, or `""`. */
 let pendingApprovalId = "";
 
+/** Third review SB6: the last card put up, so a refused answer can put it back. */
+let lastCard: { id: string; text: string } | null = null;
+
+/**
+ * Third review SB6: "Allow all page actions" was sent and the daemon has not yet
+ * said the switch is on. Only the daemon's `state` frame saying so makes the
+ * panel remember "on": a refused answer must not be re-sent by the next open.
+ */
+let allowAllPending = false;
+
 /** The node holding the last streamed answer, so a `delta` appends to one turn. */
 let streaming: HTMLElement | null = null;
 
@@ -476,10 +486,21 @@ function paintStatus(status: BridgeStatus): void {
   }
 }
 
-function showApproval(id: string, text: string): void {
+/**
+ * Put a card up. `floor` (third review SB6, decision G18): a RISK card (a
+ * payment or password field, a destructive word, a flagged page) offers "Allow
+ * once" and "Deny" only. "Allow all page actions" would allow that risky action
+ * and turn the switch on for every tab in one press; the daemon refuses that
+ * answer for such a card too.
+ */
+function showApproval(id: string, text: string, floor: boolean): void {
   pendingApprovalId = id;
+  lastCard = { id, text };
   if (el.approvalText) {
     el.approvalText.textContent = text;
+  }
+  if (el.approveAlways) {
+    el.approveAlways.hidden = floor;
   }
   if (el.approval) {
     el.approval.hidden = false;
@@ -589,6 +610,17 @@ function cancelPicking(): void {
  * caller SAYS SO. A panel that painted the user's question into the transcript and
  * then sent nothing is a panel that looks like it is thinking forever.
  */
+/** What a press says when it did not reach Iron Jarvis (Send's own sentence). */
+const NOT_CONNECTED = "That did not reach Iron Jarvis — this browser is not connected.";
+
+/**
+ * Third review SB13: this panel's own name for its window. Every sidebar window
+ * talks over the add-on's ONE socket, so the daemon tells them apart only by
+ * this: a window closing stops the reply only when no other window is open.
+ * New for every page load; never stored.
+ */
+const PANEL_WINDOW = `w_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+
 async function post(action: string, params: Record<string, unknown> = {}): Promise<boolean> {
   try {
     const reply = (await chrome.runtime.sendMessage({
@@ -648,6 +680,12 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       }
       // v1.270.0: the one switch. Absent (an older daemon) reads as off.
       paintAuto(payload["auto_allow"] === true);
+      // Third review SB6: the card's "Allow all page actions" is remembered
+      // only once the daemon says the switch did turn on.
+      if (allowAllPending && payload["auto_allow"] === true) {
+        allowAllPending = false;
+        void rememberAuto(true);
+      }
       return;
     }
     case PANEL_EVENT_HISTORY: {
@@ -713,7 +751,9 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
     }
     case PANEL_EVENT_APPROVAL: {
       const id = typeof payload["id"] === "string" ? (payload["id"] as string) : "";
-      showApproval(id, text || "Jarvis wants to act on this page.");
+      // Third review SB6: the daemon marks a risk card `floor`; absent (an
+      // ordinary card, or an older daemon) reads as ordinary.
+      showApproval(id, text || "Jarvis wants to act on this page.", payload["floor"] === true);
       return;
     }
     case PANEL_EVENT_STEERED: {
@@ -734,6 +774,12 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       streaming = null;
       clearApproval();
       finishWork();
+      // Third review SB13: a reply that was stopped says so — in every window,
+      // including one that did not press Stop and would otherwise read it as
+      // finished.
+      if (payload["reason"] === "stopped") {
+        say("tool", "Stopped.");
+      }
       // A turn that ended without consuming a steer never will. Saying so is the
       // whole reason the note was marked pending in the first place.
       for (const [id, node] of pendingSteers) {
@@ -750,6 +796,25 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
         // microphone goes back to idle, and the sentence says what to do.
         resetVoice();
         say("error", text || "Iron Jarvis could not take dictation.");
+        return;
+      }
+      if (reason === "withdrawn") {
+        // Third review SB2: an answer pressed after Stop. The card goes, the
+        // sentence says nothing was done; the reply's own `done` ends it.
+        clearApproval();
+        say("error", text);
+        return;
+      }
+      if (reason === "risk_card_all") {
+        // Third review SB6: "Allow all page actions" was refused for a risk
+        // card. Nothing was done: the card stays up and the reply keeps
+        // waiting on it; the sentence says what to press.
+        allowAllPending = false;
+        if (pendingApprovalId === "" && lastCard) {
+          // The press hid it once it was sent; put the same card back.
+          showApproval(lastCard.id, lastCard.text, true);
+        }
+        say("error", text);
         return;
       }
       setTurn(false);
@@ -925,7 +990,7 @@ function sendNow(): void {
   const startedAt = turnStartedAt;
   // v1.267.0: the pick rides every Send; nothing is stored on the daemon for it.
   const pick = currentPick();
-  const send: Record<string, unknown> = { text, ...(pick ? pick : {}) };
+  const send: Record<string, unknown> = { text, window: PANEL_WINDOW, ...(pick ? pick : {}) };
   if (point) {
     send["pointed"] = { ...point.element, tab_id: point.tab_id };
   }
@@ -980,8 +1045,14 @@ el.stop?.addEventListener("click", () => {
   // The button is NOT flipped to idle here. Stop is a request the daemon answers
   // with `done`, and a panel that painted the turn as finished on the press would
   // be claiming an abort it cannot perform — a tool already running still finishes.
-  say("tool", "Stop requested. The step already running will finish.");
-  void post(PANEL_ACTION_STOP);
+  // Third review SB5: said only once the press reached Iron Jarvis.
+  void post(PANEL_ACTION_STOP).then((sent) => {
+    if (!sent) {
+      say("error", NOT_CONNECTED);
+      return;
+    }
+    say("tool", "Stop requested. The step already running will finish.");
+  });
 });
 
 el.steer?.addEventListener("click", () => {
@@ -1007,21 +1078,40 @@ el.steer?.addEventListener("click", () => {
   });
 });
 
-el.approve?.addEventListener("click", () => {
+/**
+ * Third review SB5: answer the card on screen, and hide it only once the answer
+ * reached Iron Jarvis. Not sent: the card stays (it was not answered and can be
+ * answered once the browser is connected again) and the panel says why.
+ */
+function answerCard(action: string, extra: Record<string, unknown> = {}): Promise<boolean> {
   const id = pendingApprovalId;
-  clearApproval();
-  void post(PANEL_ACTION_APPROVE, { id });
+  // Third review SB6: the answer names this window, so the daemon can tell a
+  // newer add-on's press from an older one's.
+  return post(action, { id, window: PANEL_WINDOW, ...extra }).then((sent) => {
+    if (!sent) {
+      say("error", NOT_CONNECTED);
+      return false;
+    }
+    if (pendingApprovalId === id) clearApproval();
+    return true;
+  });
+}
+
+el.approve?.addEventListener("click", () => {
+  void answerCard(PANEL_ACTION_APPROVE);
 });
 
-// v1.270.0: ALWAYS ALLOW, from the card. This action runs (a plain approve,
-// so an older daemon still answers it) and then the switch turns on; the
-// daemon's next `state` frame paints the header. The per-tab and per-task
-// scopes still exist in the daemon for the chat page's card; the sidebar
-// offers the one wider answer the user asked for.
+// v1.270.0: ALWAYS ALLOW, from the card: this action runs and the switch turns
+// on; the daemon's next `state` frame paints the header. Third review SB6: ONE
+// answer (`scope: "all"`) the daemon judges whole, never an Allow followed by
+// the switch: on a risk card it is refused (the button is not drawn there
+// either), so neither the action nor the switch happens. The switch is
+// remembered only when the daemon says it turned on (`allowAllPending`).
 el.approveAlways?.addEventListener("click", () => {
-  const id = pendingApprovalId;
-  clearApproval();
-  void post(PANEL_ACTION_APPROVE, { id }).then(() => setAuto(true));
+  allowAllPending = true;
+  void answerCard(PANEL_ACTION_APPROVE, { scope: "all" }).then((sent) => {
+    if (!sent) allowAllPending = false;
+  });
 });
 
 // --- the one switch and the new conversation (v1.270.0) ------------------------
@@ -1043,6 +1133,26 @@ async function loadAuto(): Promise<void> {
 }
 
 /**
+ * Third review SB4: send an `open` with the stored setting as it is NOW. The
+ * setting is shared by every sidebar window of this browser, and a window that
+ * read it once would re-send an old "on" with every tab switch after another
+ * window turned it off. Read fresh before each open (and kept fresh by the
+ * listener below); the daemon also never lets an open turn it back on.
+ */
+async function sendOpen(): Promise<boolean> {
+  await loadAuto();
+  return post(PANEL_ACTION_OPEN, openParams(storedAuto));
+}
+
+// Third review SB4: another window pressed the switch: this one holds the new
+// value from now on. Guarded: the runtime test's stub has no `chrome.storage`.
+chrome.storage?.onChanged?.addListener?.((changes, area) => {
+  if (area !== "local" || !(STORAGE_AUTO_KEY in changes)) return;
+  const value = changes[STORAGE_AUTO_KEY]?.newValue;
+  storedAuto = typeof value === "boolean" ? value : null;
+});
+
+/**
  * What an `open` carries: the remembered switch setting, when there is one. The
  * daemon's flag dies with the browser session and with Forget; the user's
  * setting does not, so every open re-asserts it and the header paints the
@@ -1050,6 +1160,9 @@ async function loadAuto(): Promise<void> {
  */
 export function openParams(auto: boolean | null): Record<string, unknown> {
   const params: Record<string, unknown> = auto === null ? {} : { auto_allow: auto };
+  // Third review SB13: which window this panel is, so a window closing stops
+  // the reply only when no other one is open.
+  params["window"] = PANEL_WINDOW;
   // Third review SB3: how many messages this panel shows, so a daemon that
   // restarted and cannot carry that conversation on says so instead of
   // answering the next question with no context.
@@ -1063,14 +1176,20 @@ function shownMessages(): number {
   return el.transcript?.querySelectorAll('.turn[data-who="you"], .turn[data-who="jarvis"]').length ?? 0;
 }
 
-async function setAuto(on: boolean): Promise<void> {
+/** Remember the switch as the user set it, for every window of this browser. */
+async function rememberAuto(on: boolean): Promise<void> {
   storedAuto = on;
   try {
     await chrome.storage?.local?.set({ [STORAGE_AUTO_KEY]: on });
   } catch {
     // No storage: the setting lasts for this panel's lifetime, which is still true.
   }
-  const sent = await post(PANEL_ACTION_AUTO_ALLOW, { on });
+}
+
+async function setAuto(on: boolean): Promise<void> {
+  await rememberAuto(on);
+  // Third review SB4: the press names its window (a newer add-on's own press).
+  const sent = await post(PANEL_ACTION_AUTO_ALLOW, { on, window: PANEL_WINDOW });
   if (!sent) {
     say("error", "That did not reach Iron Jarvis — this browser is not connected.");
   }
@@ -1092,9 +1211,7 @@ el.reset?.addEventListener("click", () => {
 });
 
 el.deny?.addEventListener("click", () => {
-  const id = pendingApprovalId;
-  clearApproval();
-  void post(PANEL_ACTION_DENY, { id });
+  void answerCard(PANEL_ACTION_DENY);
 });
 
 // --- the composer button + dictation (v1.269.0) ---------------------------------
@@ -1599,8 +1716,10 @@ void loadPick();
 // Tell the daemon the panel is gone, so a turn it is narrating to nobody can stop
 // narrating. `pagehide` rather than `unload`: Chrome does not reliably fire `unload`
 // for an extension page, and a close nobody reported leaves the daemon streaming.
+// Third review SB13: the close names this window, so it stops the reply only
+// when no other sidebar window is still open on it.
 window.addEventListener("pagehide", () => {
-  void post(PANEL_ACTION_CLOSE);
+  void post(PANEL_ACTION_CLOSE, { window: PANEL_WINDOW });
   // v1.400.9: a pick left running would swallow the user's next real click.
   cancelPicking();
 });
@@ -1634,12 +1753,13 @@ void recording.resume();
 paintVersion();
 void refresh();
 // v1.270.0: the remembered switch setting rides the first open.
-void loadAuto().then(() => post(PANEL_ACTION_OPEN, openParams(storedAuto)));
+void sendOpen();
 refreshComposer();
 
 // v1.266.0: the header's "allowed in this tab" line is about the tab the user is
 // looking at, so a tab switch asks the daemon for a fresh state frame. Guarded:
 // the panel also runs where `chrome.tabs` is absent (the runtime test's stub).
+// Third review SB4: with the stored setting read fresh, never a stale copy.
 chrome.tabs?.onActivated?.addListener?.(() => {
-  void post(PANEL_ACTION_OPEN, openParams(storedAuto));
+  void sendOpen();
 });
