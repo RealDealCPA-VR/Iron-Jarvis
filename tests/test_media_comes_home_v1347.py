@@ -212,6 +212,19 @@ async def test_a_link_that_lands_while_the_job_runs_is_where_the_result_goes(app
     engine = platform.engine
     tid = _thread(engine)
     handle = await _started(provider, kind="image")
+    # TIME STANDS STILL until the link has landed. The injected sleep advances
+    # the clock without waiting, so the job ran through its 30 seconds in a few
+    # turns of the loop: on a fast machine it had FINISHED before the row was
+    # seen below, and "nothing finished yet" read 1 (GitHub's Linux machines,
+    # twice in a row). Held here, the link is mid-run on every machine.
+    linked = asyncio.Event()
+    free_sleep = jobs._sleep
+
+    async def held_sleep(seconds: float) -> None:
+        await linked.wait()
+        await free_sleep(seconds)
+
+    jobs._sleep = held_sleep
     job_id = jobs.start_background(
         _spec(provider, handle, kind="image"), thread_id="", session_id="chat", turn_id="turn-r"
     )
@@ -226,6 +239,7 @@ async def test_a_link_that_lands_while_the_job_runs_is_where_the_result_goes(app
     assert _row_exists(engine, job_id), "the job never wrote its row"
     assert await jobs.home_turn("turn-r", tid) == 0  # nothing finished yet
     assert jobs.get_job(job_id)["thread_id"] == tid
+    linked.set()
     await jobs.drain()
     row = _row(engine, job_id)
     assert row.status == SUCCEEDED and row.thread_id == tid and row.homed_at is not None
