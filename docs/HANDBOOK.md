@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.518.0 (2026-11-15).*
+holds itself to. Current as of v1.519.0 (2026-11-15).*
 
 ---
 
@@ -2044,9 +2044,10 @@ reads; it never writes, runs commands, or starts work on its own.
 
 ## Every way in is judged, and what a program prints stays data (v1.519.0)
 
-The first of seven releases from the third review of the code against the
-north star. These are the places where something reached a tool, a file or a
-model by a way the usual check did not cover.
+A new tool in a connected app now asks before it runs even when its app is
+switched on for the chat, and sixteen other places where something reached a
+tool, a file or a model past the usual check are closed. This is the first
+of seven releases from the third review of the code against the north star.
 
 - **A new tool in a connected app asks, even with the app switched on.** When
   an update of a connected app brings a new tool that can change things, Iron
