@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.526.0
+
+**It keeps working across a restart and a dropped connection.** A coding tool that was running when Iron Jarvis restarted gets Iron Jarvis's tools back by itself, a reply in the browser sidebar follows the sidebar when its connection drops and returns, and a terminal that cannot be reopened is kept and shown instead of vanishing.
+
 ## v1.525.0
 
 **Your other tools' chats, tidied after a look in the real window.** The "Other tools" part of the chat list (v1.518.0) was looked at with the chats on a real PC, and three things were wrong.
@@ -77,7 +81,3 @@
 ## v1.508.0
 
 **A coding session recovers from its own mistakes.** Read off a real coding session with a team, where helpers kept repeating failed steps.
-
-## v1.507.1
-
-**It learns from what went wrong.** The last part of the review fixes: Iron Jarvis now notices when something went wrong and asks whether to remember it.
