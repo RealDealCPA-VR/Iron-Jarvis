@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.523.0
+
+**Done means done at night, and a picture is described only by a model that saw it.** A night task tried on several models no longer reads "Done" whatever its attempts did, its cost is counted, and the night's limits apply to every model it is tried on.
+
 ## v1.522.0
 
 **Stop means stopped, and it is remembered.** A Stop is now written down the moment you press it, so a reply you stopped is never carried on by Iron Jarvis itself, and a Stop pressed too early or at a waiting card can no longer be lost.
@@ -77,7 +81,3 @@
 ## v1.505.1
 
 **It keeps going, and asks once.** The fifth part of the review fixes: places where work could hang with nobody told, and places where Iron Jarvis asked the same question again and again.
-
-## v1.504.0
-
-**Nothing is lost.** The fourth part of the review fixes: the places where your work, or the record of it, could disappear without a way back.
