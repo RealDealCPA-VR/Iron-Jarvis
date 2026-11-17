@@ -249,10 +249,15 @@ def test_the_apps_own_daemon_folder_is_the_resources_daemon_folder():
 @pytest.mark.skipif(sys.platform != "win32", reason="the listing is Windows' own")
 def test_the_listing_runs_for_real_and_reads_back(tmp_path):
     """READ-ONLY: runs the shipped listing (Get-CimInstance) on this machine and
-    parses it; nothing is killed."""
+    parses it; nothing is killed.
+
+    The listing's own time limit is NOT what this pins (the app's is 10 s, and
+    on a loaded test machine PowerShell's start alone can take longer: this
+    test passed only on its retry in one GitHub shard, 2026-11-16). The lifted
+    code runs here with a limit of its own, well inside ``_node``'s 120 s."""
     script = "\n".join([
         'const path = require("path"); const { spawnSync } = require("child_process");',
-        _const("SWEEP_LIST_TIMEOUT_MS"),
+        "const SWEEP_LIST_TIMEOUT_MS = 90000;",
         _const("SWEEP_LIST_PS"),
         _lift("function parseProcessRows("),
         _lift("function listDaemonProcesses("),

@@ -107,6 +107,26 @@ def _protected_roots_per_test():
 
 
 @pytest.fixture(autouse=True)
+def _no_app_tool_question_left_over():
+    """An app tool's ``perm_key()`` notes "the coming question is about this
+    tool" in a context variable (``mcp/tools._ASKING_ABOUT``); the gate
+    clears it when it has asked. A test that reads a held-back tool's key
+    directly (outside a task) leaves the note in the worker's own context,
+    and the next test that asks the resolver a bare ``mcp_call`` question
+    is answered as if it were about that tool. That failed
+    ``test_wave6_ship_fixes_v13560`` on its first try in one shard
+    (2026-11-16) and passed on the retry. Each test starts and ends with
+    no note."""
+    from iron_jarvis.mcp.tools import take_asking_about
+
+    take_asking_about()
+    try:
+        yield
+    finally:
+        take_asking_about()
+
+
+@pytest.fixture(autouse=True)
 def _iron_proxy_service_per_test():
     """v1.367.0: ``iron_proxy.service._CURRENT`` is the process's live service
     (the last platform built registers itself). A test that switched it on
