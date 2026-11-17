@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.516.0 (2026-11-15).*
+holds itself to. Current as of v1.516.1 (2026-11-15).*
 
 ---
 
@@ -2041,6 +2041,37 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Linux: every test passes there, and two real faults are fixed (v1.516.1)
+
+Nothing changes on Windows in this release. It is the first step of bringing
+the Linux app level with the Windows one.
+
+Until now each release was tested on Windows only. The whole test suite was
+run on Linux for this one: 32,561 tests passed and none failed. Tests about
+things that exist only on Windows (drive letters, network shares, the
+registry, Excel, the Windows terminal) are listed by name and skipped there.
+
+Running it on Linux found two faults a person would have hit. Both are fixed
+for Linux and macOS:
+
+- **A script written in chat can open a workbook and use time zones.** The
+  guard that keeps such a script inside its own folder also refused two
+  tables Linux keeps for every program: the list of file types and the
+  time-zone database. The script stopped before it read a row. It may read
+  those two now, and nothing else outside its folder, as before.
+- **Listings and searches come back in name order.** A Linux disk hands file
+  names back in no particular order, so a listing could differ from one run
+  to the next, and a search that got stuck on one file could have nothing to
+  show from the files before it. Folders are now read in name order, as on
+  Windows.
+
+The search program added in v1.516.0 was also run on Linux, inside the
+frozen app, and works there.
+
+**Still a preview.** The Linux file on the release page does not update
+itself yet, and it needs the `libfuse2` package on a current Ubuntu before it
+will start. Both are next. Nobody has used the Linux app on a real PC yet.
 
 ## Never stalls, every cost counted, plain words (v1.516.0)
 
