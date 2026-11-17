@@ -2042,6 +2042,51 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Done means done at night, and a picture is described only by a model that saw it (v1.523.0)
+
+A night task tried on several models no longer reads "Done" whatever its
+attempts did, its cost is counted, and the night's limits apply to every
+model it is tried on. This is the fifth of seven releases from the third
+review.
+
+- **A night task tried on several models says how it really ended.** It
+  used to read "Done: open the session to keep one" even when every attempt
+  had failed or been cut off. Now: when at least one attempt finished, the
+  task reads "Needs you" and asks you to choose one, with how many finished
+  and how many did not; when none finished it reads "Failed", with what
+  happened to each. It never reads "Done".
+- **Its Last night row shows what it used.** Up to three models worked on
+  the task and the row showed no usage at all. It now adds up each model's
+  usage, per account.
+- **The pay-per-use limit covers every model at night.** A model that was
+  also the default was not checked, even at a limit of $0 or one already
+  spent. Every model is checked now. One that may not spend does not start
+  (its row says why) and the others still run; the models billed per use
+  share what is left of the night's limit between them.
+- **A model whose account cannot be read does not start.** It could start
+  with no account chosen. It now says "Your accounts are not listed yet;
+  try again in a moment."
+- **"Night tasks at once" is kept.** A task tried on three models ran all
+  three at once whatever the setting said. It now runs at most that many of
+  its models at a time and the rest wait their turn, each with its whole
+  time limit. Stop reaches one that is still waiting ("Stopped before it
+  started").
+- **A question about a screenshot is answered only by a model that saw the
+  picture.** In work that is kept on one model, and that model cannot look
+  at pictures, the screenshot is not sent anywhere and the result says so
+  (the picture is still saved, and the page's text can be read instead).
+  The result also names the provider and model the picture was sent to,
+  including when no answer came back.
+- **A screenshot is of the tab that was asked for.** If another tab is on
+  screen at that instant, no picture is taken and the tool is told why,
+  instead of a picture of the wrong page filed under the right name.
+- **A script that has just started is not read as "idle".** When a coding
+  tool in a terminal ran `npm test`, the line npm prints (`> vitest run`)
+  looked like the tool's waiting prompt, so "wait until it is done" came
+  back at once.
+- **Smaller.** A night task that cannot start says "It could not start
+  because of an internal error." and no longer shows a program's error name.
+
 ## Stop means stopped, and it is remembered (v1.522.0)
 
 A Stop is now written down the moment you press it, so a reply you stopped

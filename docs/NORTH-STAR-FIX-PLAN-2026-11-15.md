@@ -1426,14 +1426,14 @@ All four were read whole.
   live connection (there is none while access is off);
   `daemon/routes/browser.py:1027-1041` promotes the waiting one without
   checking its token again. A second Forget does close it.
-- [ ] **BR2 (1, medium, suspected).** In a run held to a model that cannot
+- [x] **BR2 (1, medium, suspected).** In a run held to a model that cannot
   take pictures, a screenshot with a question can come back with a
   "description" from a model that never saw the picture:
   `browser/screenshot.py:508-610` lacks the check `tools/images.py:253-271`
   has. Not verified: that such a run is given the screenshot tool, and what
   each adapter does with a picture it cannot take.
 - [ ] **BR3 to BR6 (low; BR3 and BR4 pass only, BR5 and BR6 suspected).** A
-  *Done so far: BR6 (v1.520.0).*
+  *Done so far: BR6 (v1.520.0); BR4, BR5 (v1.523.0).*
   Pair press that lands while Browser access is off makes that browser the
   live one anyway (`browser/extension_backend.py:818-846`; the card does not
   offer Pair then); the screenshot tool promises "the result names the
@@ -1569,7 +1569,7 @@ blocking work is off the event loop.
 
 Read whole, with the night's call sites.
 
-- [ ] **NA1 (1, medium, checked). A night task tried on several models is
+- [x] **NA1 (1, medium, checked). A night task tried on several models is
   announced "Done" whatever its attempts did.** All failed, all cut at a
   limit, or stopped by the night's own backstop: the morning notice still
   counts it under done with "open the session to keep one". The attempts'
@@ -1577,19 +1577,19 @@ Read whole, with the night's call sites.
   the night reads only fields that ending never has
   (`harness/night.py:1024-1056`); nothing in the night's code reads the
   card.
-- [ ] **NA2 (8, medium, checked). The Last night row of such a task shows
+- [x] **NA2 (8, medium, checked). The Last night row of such a task shows
   no usage.** Up to three models worked for up to the task's whole time
   limit; `harness/night_morning.py:266-276` adds only the reply's own usage
   and its helpers', and each attempt's usage sits on the card. Not checked:
   whether the app-wide usage record still counts them.
-- [ ] **NA3 (2, medium, checked for the default-model gap; the dollar limit
+- [x] **NA3 (2, medium, checked for the default-model gap; the dollar limit
   pass only). At night the pay-per-use limit is not applied to a pick that
   is the default model**, even at $0 or already spent
   (`daemon/routes/night.py:894-899` skips the night's check for such a
   task; `attempts.py:826` skips its own for the session's model, which at
   night is the default). No attempt gets the night's "what is left of the
   limit" dollar limit either (`harness/night.py:815-819`).
-- [ ] **NA4 (2, medium, suspected).** An attempt can start with no account
+- [x] **NA4 (2, medium, suspected).** An attempt can start with no account
   chosen when the accounts list could not be read: the refusal an ordinary
   reply gets is swallowed (`daemon/routes/build_attempts.py:192-195`,
   checked). Not verified: which login then answers.
@@ -1600,8 +1600,8 @@ Read whole, with the night's call sites.
   checked). The night's own commit is screened; this one is not. After
   Keep, a later Push sends it. Not verified: what the Changes view shows
   before that Push.
-- [ ] **NA6 to NA8 (low; NA6 and NA7 pass only, NA8 suspected).** A night
-  *Done so far: NA8 (v1.522.0).*
+- [x] **NA6 to NA8 (low; NA6 and NA7 pass only, NA8 suspected).** A night
+  *Done so far: NA8 (v1.522.0); NA6, NA7 (v1.523.0).*
   task that fails to start keeps the note "It could not start (KeyError)."
   (`routes/night.py:975-977`); "Runs at once" counts such a task as one
   although it runs three replies at once (`routes/night.py:1036-1047`);
@@ -1788,7 +1788,7 @@ All eighteen files in `terminals/` were read whole.
   to the log (`platform.py:403-426`; `terminals/recipes.py:545-557,
   716-718`; `dashboard/app/terminals/page.tsx:1118`).
 - [ ] **TM6 to TM20 (low; TM10, TM14, TM15 and TM20 suspected, the rest
-  *Done so far: TM14, TM15 (v1.520.0).*
+  *Done so far: TM14, TM15 (v1.520.0); TM13 (v1.523.0).*
   pass only), in the order written:**
   - Kept on this PC and in backups: each terminal's last 64 KB of output
     is written in the clear and carried by every backup, where it stays
@@ -2243,3 +2243,54 @@ What the branch's first full run on GitHub showed (group 19):
 - One older test passed only on a retry: the coding session's "at most
   three helpers at once" test, which leaned on real time in three places.
   It now waits on events only.
+
+### Group 21 as built (v1.523.0)
+
+Fixed: NA1, NA2, NA3, NA4, NA6, NA7, BR2, BR4, BR5, TM13. Four findings the
+plan put here (RB10, CS8, SB8, SB9) are in files group 20 also changes and
+go out with group 20. NA4, BR2, BR5 and TM13 were suspected or pass only;
+each was first proven with a failing test (BR5 by reading the add-on and
+pinning its source).
+
+Where it differs from the plan:
+
+- **Decision G12 was not built as written.** "A task tried on three models
+  counts as three" against "Night tasks at once" would have made every
+  default install's three-model night task fail, because that setting is 2
+  by default. As built the setting is kept another way: the task runs at
+  most that many of its models at a time, the rest wait their turn inside
+  it, and it counts for that many against the night's room. Nothing fails
+  for its size.
+- **Decision G11.** The models billed per use share ONE remainder of the
+  night's limit rather than each getting a slice, so one can use what
+  another does not need; together they cannot pass it by more than one
+  model call each.
+- **At night a model that may not start no longer stops the whole task**;
+  by day a refusal for one model still refuses the request, as before.
+- **BR5.** The add-on refuses the picture when another tab is on screen; it
+  does not return the other tab's picture under its own name.
+
+Left open:
+
+- **Found along the way: a model call made inside a tool is on no usage
+  row.** The screenshot's question, `view_image` and the reading of text in
+  pictures each ask a model, and none of the three lanes counts it. The
+  tokens now ride the screenshot tool's own record; the Usage page still
+  does not show them. It needs one seam in the two chat lanes and the agent
+  runtime, or in the router.
+- With no work kept on one model, a text-only default and no model anywhere
+  that can see, the picture stays on the text-only model, which may then
+  "describe" it (`view_image` has the same gap).
+- The screenshot's failure line still carries the provider's own error text
+  (an older test pins it), and the "no model can see" line suggests models
+  of two named companies.
+- A try-on task whose models queue may take one time limit per round (three
+  models at the default of two: up to twice the limit). A waiting attempt's
+  row says "starting". After Keep, a model that never started reads "Not
+  kept · branch kept" although it has no branch.
+- TM13: a script echo with no version in it is not recognised.
+
+Tested with stand-ins only: the models; "billed per use" (set in the test);
+the money cut-off between attempts (a unit test of the shared limit, not a
+model reporting dollars); the capture check in the add-on (source pins and
+a type check, never a browser).

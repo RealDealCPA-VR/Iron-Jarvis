@@ -68,7 +68,9 @@ STATE_WORDS = {
 #: v1.513.0 (second review T7): + "did_nothing" — it ended without changing
 #: anything (``routes/night._settle_morning``). Every kind here must be one
 #: ``night.add_note`` keeps (``night.NOTE_KINDS``; any other is filed "info").
-NEEDS_KINDS = ("declined", "unanswered", "low_trust", "account", "unmet", "did_nothing")
+#: Third plan NA1: + "attempts" — a task tried on several models whose
+#: attempts finished: the user chooses one (``night.outcome_of``).
+NEEDS_KINDS = ("declined", "unanswered", "low_trust", "account", "unmet", "did_nothing", "attempts")
 #: v1.399.0 review: the note kinds that say why a task STOPPED (its row says
 #: the first one in words).
 STOP_KINDS = ("emergency", "limit", "stopped", "restart")
@@ -216,6 +218,9 @@ EMERGENCY_NOT_COMMITTED = (
     "Emergency stop was on, so Iron Jarvis did not commit its work; it is still in its branch folder."
 )
 TRY_ON_NOTE = "It was tried on several models, each on its own branch: open the session to keep one."
+#: Third plan NA1: the same task when none of its attempts finished (its
+#: reason is the row's failure line, ``attempts.card_reading``).
+TRY_ON_NONE_NOTE = "It was tried on several models, each on its own branch; none finished."
 
 
 def commit_note_words(branch: str, sha: str) -> str:
@@ -274,6 +279,16 @@ def usage_by_account(messages: list[dict[str, Any]],
         for h in m.get("helpers") or []:
             if isinstance(h, dict):
                 add(key, h.get("usage"))
+        # Third plan NA2: a task tried on several models — each attempt's own
+        # receipt, on the account and model that served it (the ONE reading
+        # of the card, ``attempts.card_reading``). The attempts' reply line
+        # carries no usage of its own, so nothing is counted twice.
+        if m.get("attempts") is not None:
+            from .attempts import card_reading
+
+            reading = card_reading(m.get("attempts"))
+            for it in (reading or {}).get("items") or []:
+                add((it["account"].strip(), it["provider"].strip(), it["model"].strip()), it["usage"])
     out: list[dict[str, Any]] = []
     for g in groups.values():
         if not (g["input_tokens"] or g["output_tokens"] or g["_cost"]):
@@ -710,7 +725,7 @@ def prune(engine: Any, keep: int = KEEP_NIGHTS) -> int:
 
 __all__ = [
     "EMERGENCY_NOT_COMMITTED", "KEEP_NIGHTS", "NOTHING_CHANGED", "NightSummaryRecord", "PLACE", "STATE_ORDER",
-    "STATE_WORDS", "TRY_ON_NOTE", "claim_notice", "commit_message", "commit_note_words", "committed_words",
+    "STATE_WORDS", "TRY_ON_NONE_NOTE", "TRY_ON_NOTE", "claim_notice", "commit_message", "commit_note_words", "committed_words",
     "counts_of", "get_summary", "has_summary", "list_summaries", "make_summary", "night_key", "night_label",
     "notice_payload", "notice_words", "phone_line", "phone_lines", "phone_message", "prune",
     "refresh_summary", "rows_for_night", "sort_rows", "summary_row", "task_night", "usage_by_account",

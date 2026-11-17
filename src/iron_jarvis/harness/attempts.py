@@ -110,6 +110,9 @@ WHY_WORDS = {
 #: Second review D11 (v1.513.0): an attempt cut at the step limit (the
 #: session page's own words for a reply: "stopped at its step limit").
 STEP_LIMIT_WORDS = "Stopped at its step limit"
+#: Third plan NA7: an attempt that waited its turn (at night, at most "Night
+#: tasks at once" run at a time) and was stopped before it began.
+STOPPED_BEFORE_START = "Stopped before it started"
 #: Never armed in an attempt: an attempt is ONE model's own try — it starts no
 #: helpers (they would run on other models and muddy the comparison) and no
 #: attempts of its own; the question card and the plan door belong to the
@@ -804,12 +807,45 @@ def _copy_pin(pin: Any) -> Any:
                       title=str(getattr(pin, "title", "") or ""))
 
 
+def _accounts_unread(platform: Any, provider: str) -> bool:
+    """Third plan NA4: is ``provider`` a subscription model whose accounts
+    Iron-Proxy (turned on) has still not listed after one more read? Then an
+    attempt on it would start with no account pinned — whichever login the
+    tool finds would answer. An ordinary reply is refused then
+    (``routes/build.turn_account``, ``build_accounts.NOT_READ_NOTE``); an
+    attempt is too. Iron-Proxy off: no (the tool's own login, as for every
+    reply). BLOCKING (at most one read of the accounts); never raises."""
+    from . import build_accounts as BA
+
+    try:
+        svc = getattr(platform, "iron_proxy", None)
+        if svc is None or not getattr(svc, "enabled", False):
+            return False
+        if not BA.vendor_of(platform, provider):
+            return False
+        if BA.snapshot(svc) is not None:
+            return False
+        with contextlib.suppress(Exception):
+            if svc.check():
+                svc.refresh_accounts()
+        return BA.snapshot(svc) is None
+    except Exception:  # noqa: BLE001 — unsure: refused (never an unpinned start)
+        return True
+
+
 def check_target(platform: Any, target: Target, *, local_only: bool, session_pair: tuple[str, str],
-                 caller_pin: Any, scope: str) -> Any:
+                 caller_pin: Any, scope: str, every_pick: bool = False) -> Any:
     """Apply the rules to one model; returns its account pin (or None — a
     local model, an API key, Iron-Proxy off) or raises
     :class:`AttemptsRefused` in words. BLOCKING (cached reads, one month's
-    spend for a pay-per-use model)."""
+    spend for a pay-per-use model).
+
+    ``every_pick`` (third plan NA3, decision G11): the pay-per-use limit
+    applies to EVERY pick, the session's own model included — a night task's
+    session runs on the default model, and the night never spends past the
+    limit on any model (``routes/night.pay_problem``'s rule). By day the
+    session's own model is the user's own choice for the session, as
+    before."""
     from ..agents import model_team as MT
 
     if local_only and not _stays(platform, target):
@@ -823,7 +859,7 @@ def check_target(platform: Any, target: Target, *, local_only: bool, session_pai
             "Settings › Connections, or name another model; nothing started."
         )
     record = _stand_in(target)
-    if (target.provider, target.model) != session_pair:
+    if every_pick or (target.provider, target.model) != session_pair:
         cost = MT.cost_type(platform, target.provider, target.model)
         if cost == MT.COST_PAY:
             try:
@@ -858,7 +894,38 @@ def check_target(platform: Any, target: Target, *, local_only: bool, session_pai
             raise AttemptsRefused(floor)
         if pin is not None:
             led.note(scope, str(getattr(pin, "profile_id", "") or ""))
+    if pin is None and _accounts_unread(platform, target.provider):
+        # Third plan NA4: the accounts list could not be read, so no account
+        # was chosen — the ordinary reply's own refusal, never an unpinned
+        # start on whichever login the tool finds.
+        from .build_accounts import NOT_READ_NOTE
+
+        raise AttemptsRefused(f"{target.label}: {NOT_READ_NOTE} Nothing started.", 409)
     return _copy_pin(pin)
+
+
+#: Third plan NA3/NA4: the tails a refusal of the whole request ends with
+#: ("nothing started") — a night pick refused ON ITS OWN leaves the others
+#: running, so its card row drops them (:func:`pick_refusal_words`).
+_NOTHING_STARTED_RX = re.compile(
+    r"\s*(?:Name another model to try it on;\s*)?nothing started\.?\s*$|[;,]\s*$", re.I,
+)
+#: The words an attempt that never started carries on its row.
+NOT_STARTED = "Did not start"
+
+
+def pick_refusal_words(said: str) -> str:
+    """One pick's refusal as its card row says it (third plan NA3, NA4): the
+    sentence without the whole request's "nothing started" (the other
+    attempts did start). Pure."""
+    out = str(said or "").strip()
+    for _ in range(2):
+        out = _NOTHING_STARTED_RX.sub("", out).strip()
+    out = re.sub(r"[;,]\s*Name another model\.?$|\.\s*Name another model\.?$", ".", out).strip()
+    out = re.sub(r",?\s*or name another model\.?$", ".", out).strip()
+    if out and out[-1] not in ".!?":
+        out += "."
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1254,6 +1321,11 @@ class Attempt:
     #: Second review D11 (v1.513.0): its turn was cut at the step limit
     #: ({limit} — the end frame's ``step_limit``).
     step_limit: "dict[str, Any] | None" = None
+    #: Third plan NA7: when THIS attempt began (``reply_cap.WALL`` seconds,
+    #: 0.0 = not yet) — its time limit counts from here, never from the
+    #: attempts turn's start (an attempt that waited its turn keeps its
+    #: whole limit).
+    wall_start: float = 0.0
 
     def metered_usd(self) -> float:
         """The METERED dollars this attempt spent (a subscription's list-price
@@ -1430,6 +1502,9 @@ class Attempt:
         limit = getattr(self.pin, "limit", None) if self.pin is not None else None
         if self.cancelled and not self.done:
             self.state, self.why, self.words = "stopped", "stopped", WHY_WORDS["stopped"]
+            if not self.t0:
+                # Third plan NA7: Stop reached it while it waited its turn.
+                self.words = STOPPED_BEFORE_START
         elif self.done and self.cap_met:
             from .reply_cap import limit_words
 
@@ -1455,6 +1530,27 @@ class Attempt:
         else:
             self.state, self.why = "failed", "failed"
             self.words = f"{WHY_WORDS['failed']}: {self.error}" if self.error else WHY_WORDS["failed"]
+
+
+def not_started(aid: str, target: Target, said: str, *, thread_id: str, turn_id: str,
+                cost: str = "") -> Attempt:
+    """Third plan NA3, NA4: a night task's pick that may not run (its
+    pay-per-use limit, its accounts not read, its account's floor ...) as an
+    attempt that ENDED before it started — "failed", its reason in words on
+    its row, no branch, no folder — so the card and the night's ending both
+    say what happened to it while the other picks run. Pure."""
+    why = pick_refusal_words(said)
+    label = str(target.label or "")
+    if label and why.startswith(label + ": "):
+        why = why[len(label) + 2:]
+    a = Attempt(id=aid, target=target, pin=None, git={}, folder="", sid=attempt_sid(thread_id, aid),
+                turn_id=f"{turn_id}.{aid}", cost=cost)
+    a.error = _short(why, ERROR_CHARS)
+    a.state, a.why = "failed", "failed"
+    a.words = _short(f"{NOT_STARTED}: {why}" if why else NOT_STARTED, 600)
+    a.ended = a.since
+    a.ms = 0
+    return a
 
 
 #: The SESSION's way out in an account's own limit sentence
@@ -1509,6 +1605,17 @@ class Plan:
     #: message (``BuildTurnBody.device_id``), so a per-device setting an
     #: attempt changes lands on that screen ("" = none, as before).
     device_id: str = ""
+    #: Third plan NA3 (decision G11): a night task's attempts on models
+    #: billed per use share what is LEFT of the pay-per-use limit (dollars,
+    #: ``routes/night.pay_room``) — ONE remainder for all of them together
+    #: (:class:`SharedCap`), never the whole remainder each. None = no such
+    #: limit (by day, or no pick billed per use).
+    pay_room: "float | None" = None
+    #: Third plan NA7 (decision G12, the lead's rebuild): at most this many
+    #: attempts RUN at once — at night "Night tasks at once"; the others wait
+    #: their turn inside the task (:func:`run_attempts`). None = all at once
+    #: (by day, as before).
+    max_running: "int | None" = None
 
     def by_id(self, aid: str) -> "Attempt | None":
         return next((a for a in self.attempts if a.id == aid), None)
@@ -1669,11 +1776,17 @@ class SharedCap:
     The attempts ignored the cap entirely before: three attempts of a capped
     session ran unbounded."""
 
-    def __init__(self, plan: "Plan", me: "Attempt", minutes: "int | None", usd: "float | None") -> None:
+    def __init__(self, plan: "Plan", me: "Attempt", minutes: "int | None", usd: "float | None",
+                 pay_usd: "float | None" = None) -> None:
         self.plan = plan
         self.me = me
         self.minutes = minutes
         self.usd = usd
+        #: Third plan NA3: what is left of the night's pay-per-use limit —
+        #: shared by every attempt billed per use (this one's own spend so
+        #: far plus the METERED spend of the OTHER pay-per-use attempts), so
+        #: together they can never be handed more than the remainder.
+        self.pay_usd = pay_usd
 
     def met(self, cost_so_far: float) -> "dict[str, Any] | None":
         from .reply_cap import ReplyCap
@@ -1684,18 +1797,34 @@ class SharedCap:
                 continue
             with contextlib.suppress(TypeError, ValueError):
                 others += max(0.0, float(a.usage.get("cost_usd") or 0.0))
-        cap = ReplyCap(minutes=self.minutes, usd=self.usd, started_at=self.plan.started_at, spent_usd=others)
-        return cap.met(cost_so_far)
+        if self.minutes or self.usd is not None:
+            # Third plan NA7: the time counts from when THIS attempt began
+            # (an attempt that waited its turn keeps its whole limit); by day
+            # every attempt begins with the turn, as before.
+            began = self.me.wall_start or self.plan.started_at
+            cap = ReplyCap(minutes=self.minutes, usd=self.usd, started_at=began, spent_usd=others)
+            got = cap.met(cost_so_far)
+            if got is not None:
+                return got
+        if self.pay_usd is not None:
+            paid = sum(a.metered_usd() for a in self.plan.attempts if a is not self.me and a.cost == "pay")
+            if paid + max(0.0, float(cost_so_far or 0.0)) >= float(self.pay_usd):
+                return {"kind": "cost", "limit": float(self.pay_usd)}
+        return None
 
 
 def attempt_cap(plan: "Plan", a: "Attempt") -> "SharedCap | None":
-    """The session's cap for one attempt (None = the session has none)."""
+    """The session's cap for one attempt (None = the session has none) —
+    and (third plan NA3) for an attempt billed per use in a night task, the
+    night's pay-per-use remainder, shared (:attr:`Plan.pay_room`)."""
     from .reply_cap import SETUP_KEY, clean
 
     rec = clean(plan.setup.get(SETUP_KEY)) if isinstance(plan.setup, dict) else None
-    if rec is None:
+    pay = plan.pay_room if (plan.pay_room is not None and a.cost == "pay") else None
+    if rec is None and pay is None:
         return None
-    return SharedCap(plan, a, rec.get("minutes"), rec.get("usd"))
+    rec = rec or {}
+    return SharedCap(plan, a, rec.get("minutes"), rec.get("usd"), pay_usd=pay)
 
 
 async def _end_programs(sid: str) -> None:
@@ -1721,7 +1850,10 @@ async def _run_one(platform: Any, personas: dict, plan: Plan, a: Attempt, queue:
     from ..daemon.chat_stream import stream_chat_turn
     from ..daemon.durable_turns import parse_chunk
 
+    from . import reply_cap as _rc
+
     a.t0 = time.monotonic()
+    a.wall_start = _rc.WALL()
     try:
         try:
             gen = await stream_chat_turn(
@@ -1912,10 +2044,28 @@ async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterat
         for a in plan.attempts:
             a.last_said = time.monotonic()
             yield _sse(EVENT, {**a.frame(), "card": head})
+        # Third plan NA7: at night at most ``plan.max_running`` attempts run
+        # at once; the others wait their turn HERE (their row says "starting"
+        # until then). Stop cancels a waiting one too: it never starts, and
+        # its row says it was stopped before it started.
+        gate = (asyncio.Semaphore(plan.max_running)
+                if plan.max_running and plan.max_running > 0 else None)
+
+        async def lane(a: Attempt) -> None:
+            if gate is None:
+                await _run_one(platform, personas, plan, a, queue, stopped)
+                return
+            async with gate:
+                if stopped():
+                    a.cancelled = True
+                    queue.put_nowait(("end", a.id, "", ""))
+                    return
+                await _run_one(platform, personas, plan, a, queue, stopped)
+
         for a in plan.attempts:
-            tasks[a.id] = loop.create_task(
-                _run_one(platform, personas, plan, a, queue, stopped), context=_arm(plan, a),
-            )
+            if a.ended is not None:
+                continue  # third plan NA3/NA4: a pick that did not start
+            tasks[a.id] = loop.create_task(lane(a), context=_arm(plan, a))
         open_ids = set(tasks)
         stop_wait = asyncio.ensure_future(handle.wait_stopped())
         try:
@@ -2094,6 +2244,78 @@ def card_from_frames(frames: dict[str, dict[str, Any]], *, cut_off: bool) -> "di
         return None
     head = next((i["card"] for i in items if isinstance(i.get("card"), dict)), {})
     return saved_card({**head, "items": items}, cut_off=cut_off)
+
+
+# --------------------------------------------------------------------------- #
+# ONE reading of a card: how each attempt ended, what the task is, what it used
+# --------------------------------------------------------------------------- #
+
+#: The task as a whole (third plan NA1, decision G10): at least one attempt
+#: finished — the user chooses one; none did — the task failed. Never "done":
+#: nobody picks a winner but the user.
+READ_NEEDS_YOU = "needs_you"
+READ_FAILED = "failed"
+
+
+def _item_ended(it: dict[str, Any]) -> str:
+    """One attempt's ending in the card's own words ("Finished", "Failed:
+    ...", "Stopped at its step limit (40 steps)", "Did not start: ...")."""
+    words = str(it.get("words") or "").strip()
+    if words:
+        return words
+    return WHY_WORDS.get(str(it.get("why") or ""), WHY_WORDS["stopped"])
+
+
+def card_reading(raw: Any) -> "dict[str, Any] | None":
+    """THE reading of an attempts card (third plan NA1, NA2) — the night's
+    ending (``night.outcome_of``), the Last night row's usage
+    (``night_morning.usage_by_account``) and the morning's words all read
+    it; None when ``raw`` is no card. Pure.
+
+    ``{"state", "words", "finished", "ended", "items": [{id, label,
+    finished, ended, usage, account, provider, model}]}``:
+
+    * an attempt FINISHED its work when its state is "done" (it ended on its
+      own words — never a stop, a limit, a step limit, a failure, a cut-off);
+    * ``state`` :data:`READ_NEEDS_YOU` when at least one finished — "Needs
+      you: choose one" with how many finished and how many did not;
+      :data:`READ_FAILED` when none did, with what happened to each;
+    * each item's ``usage`` is the attempt's own receipt (tokens, the cost
+      when known, a subscription's list-price flag), on the model and
+      account that SERVED it."""
+    card = saved_card(raw)
+    if card is None:
+        return None
+    items: list[dict[str, Any]] = []
+    for it in card["items"]:
+        usage = it.get("usage") if isinstance(it.get("usage"), dict) else {}
+        items.append({
+            "id": str(it.get("id") or ""),
+            "label": str(it.get("label") or it.get("model") or it.get("provider") or "a model"),
+            "finished": it.get("state") == "done",
+            "ended": _item_ended(it),
+            "usage": dict(usage),
+            "account": str(it.get("account_name") or ""),
+            "provider": str(it.get("served_provider") or it.get("provider") or ""),
+            "model": str(it.get("served_model") or it.get("model") or ""),
+        })
+    done = sum(1 for i in items if i["finished"])
+    total = len(items)
+    rest = total - done
+    tried = f"It was tried on {total} model{'s' if total != 1 else ''}"
+    if done:
+        if rest:
+            said = (f"{tried}: {done} finished and {rest} did not. Choose one: open the session "
+                    "and keep the one you want.")
+        else:
+            said = (f"{tried} and {'it' if total == 1 else 'all ' + str(total)} finished. Choose one: "
+                    "open the session and keep the one you want.")
+        state = READ_NEEDS_YOU
+    else:
+        each = "; ".join(f"{i['label']}: {i['ended'].rstrip('.')}" for i in items)
+        said = f"{tried} and none finished ({each})."
+        state = READ_FAILED
+    return {"state": state, "words": said, "finished": done, "ended": rest, "items": items}
 
 
 # --------------------------------------------------------------------------- #
@@ -2510,4 +2732,5 @@ __all__ = [
     "attempt_sid", "card_from_frames", "card_of", "ceiling_for", "changed_files", "check_target", "keep",
     "make_worktrees", "parse_request", "resolve", "run_attempts", "running_for", "saved_card",
     "start_point", "summary_words", "thread_of_attempt",
+    "NOT_STARTED", "READ_FAILED", "READ_NEEDS_YOU", "card_reading", "not_started", "pick_refusal_words",
 ]

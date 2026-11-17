@@ -743,7 +743,8 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="ask", section="Night shift", advanced=True, check=_night_time, placeholder="07:00",
       aliases=("night window end", "night shift end")),
     S("night_max_at_once", "Night tasks at once", "automation", "number",
-      "How many night tasks may run at the same time. Never two in the same folder.",
+      "How many night replies may run at the same time; a task tried on several models runs that "
+      "many of its models at a time. Never two tasks in the same folder.",
       tier="ask", section="Night shift", advanced=True, check=_range(1, 8),
       aliases=("night tasks at once", "night shift at once")),
     S("night_task_minutes", "Time limit per night task (minutes)", "automation", "number",

@@ -129,6 +129,16 @@ NO_VISION_ROUTER = (
     "so open it or call view_image on its path instead"
 )
 
+#: Third plan BR2: the run is kept on one model (a coding session's or a team
+#: member's own model) and that model cannot take pictures. Nothing was sent,
+#: so nothing can be passed off as a description; what was kept and what still
+#: works are said in the same breath. ``{model}`` is the held pair.
+HELD_NO_VISION_ANSWER = (
+    "this work runs on {model}, which cannot look at pictures, so the screenshot "
+    "was not sent to it and nothing described it. The picture is saved at the "
+    "path above; read the page's text with browser_read_page instead"
+)
+
 #: ``media_type`` -> the filename suffix that keeps ``media_kind`` happy. PNG is
 #: what ``chrome.tabs.captureVisibleTab`` returns by default; JPEG is its one
 #: documented alternative. Anything else is refused rather than saved with a
@@ -342,14 +352,29 @@ class VisionAnswer:
 
     text: str = ""
     refusal: str = ""
+    #: Who the picture was for (third plan BR4): the pair that answered, or on
+    #: a failed call the pair it was asked of. None when no model was asked.
     provider: str | None = None
     model: str | None = None
     asked: bool = False
     role_applied: bool = False
+    #: The call's ``input_tokens`` / ``output_tokens`` when reported (BR4).
+    usage: dict[str, int] | None = None
+    #: The call raised: it was asked of ``provider``, with no answer back.
+    failed: bool = False
 
     @property
     def ok(self) -> bool:
         return bool(self.text) and not self.refusal
+
+    def sent_to_words(self) -> str:
+        """The summary line naming who was asked to look (BR4), or ""."""
+        who = _pair_words(self.provider, self.model)
+        if not who:
+            return ""
+        if self.failed:
+            return f"The picture was for {who}; that call failed before an answer came back."
+        return f"The picture was sent to {who} to look at."
 
 
 @dataclass(frozen=True)
@@ -410,6 +435,12 @@ class ScreenshotOutcome:
             data["model"] = self.vision.model
         elif self.refusal:
             data["answer_unavailable"] = self.refusal
+            # BR4: who was asked, on an empty or failed answer too.
+            if self.vision.provider or self.vision.model:
+                data["provider"] = self.vision.provider
+                data["model"] = self.vision.model
+        if self.vision.usage:
+            data["vision_usage"] = dict(self.vision.usage)
         return data
 
     def summary(self) -> str:
@@ -423,6 +454,11 @@ class ScreenshotOutcome:
             f"Saved a screenshot of the page as artifact {self.saved.name} "
             f"(v{self.saved.version}) at {self.saved.abs_path}"
         ]
+        # Third plan BR4: the tool promises the result names who was sent the
+        # picture, so it does, whether or not a description came back.
+        sent = self.vision.sent_to_words()
+        if sent:
+            lines.append(sent)
         if self.answered:
             lines.append(self.answer)
         elif self.refusal:
@@ -530,6 +566,8 @@ async def ask_vision(
 
     * no resolver, or a resolver that hands back nothing → :data:`NO_VISION_ROUTER`
     * bytes over the provider payload cap → a refusal naming the size
+    * a run kept on one model that cannot take pictures (``providers.hold``)
+      → :data:`HELD_NO_VISION_ANSWER`, and nothing is sent (third plan BR2)
     * the provider raised → a refusal naming the failure
     * the model answered with empty text → :data:`NO_VISION_ANSWER`, the honest
       sentence ``tools/images.py`` already uses for "this model has no eyes".
@@ -558,16 +596,43 @@ async def ask_vision(
             ),
         )
 
-    vision = resolve_role(
-        config,
-        getattr(router, "manager", None),
-        "vision",
-        fallback_provider=None,
-        fallback_model=None,
-    )
-    route_kwargs: dict[str, Any] = (
-        {"provider": vision.provider, "model": vision.model} if vision.applied else {}
-    )
+    # A RUN KEPT ON ONE MODEL (third plan BR2): a coding session's turn or a
+    # model team member's run (``providers.hold``) looks with ITS OWN model,
+    # never the vision role's, which may be another provider, and the router
+    # never moves a held picture to a model that can see. So the check
+    # ``view_image`` makes comes first, through the same shared function: a
+    # model that cannot take pictures is not sent this one, and nothing it
+    # wrote can come back as the page's description.
+    from ..providers.hold import current_hold, held_model_cannot_see
+
+    manager = getattr(router, "manager", None)
+    hold = current_hold()
+    if hold is not None:
+        if held_model_cannot_see(manager):
+            return VisionAnswer(
+                asked=True,
+                refusal=HELD_NO_VISION_ANSWER.format(model=_pair_words(hold.provider, hold.model)),
+            )
+        route_kwargs: dict[str, Any] = (
+            {"provider": hold.provider, "model": hold.model} if hold.provider else {}
+        )
+        role_applied = False
+    else:
+        vision = resolve_role(
+            config,
+            manager,
+            "vision",
+            fallback_provider=None,
+            fallback_model=None,
+        )
+        route_kwargs = (
+            {"provider": vision.provider, "model": vision.model} if vision.applied else {}
+        )
+        role_applied = vision.applied
+    # BR4: who the picture is for, named even when the call fails (no route
+    # result then). The pair asked for, else the router's default.
+    asked_provider = route_kwargs.get("provider") or getattr(router, "default_provider", None)
+    asked_model = route_kwargs.get("model") or None
     message = LLMMessage(
         role="user",
         content=question or DEFAULT_QUESTION,
@@ -594,20 +659,64 @@ async def ask_vision(
                 f"the vision call failed ({type(exc).__name__}: {exc}) — the "
                 "screenshot was saved, so retry or open it"
             ),
-            role_applied=vision.applied,
+            provider=_text_or_none(asked_provider),
+            model=_text_or_none(asked_model),
+            failed=True,
+            role_applied=role_applied,
         )
-    text = (getattr(getattr(result, "response", None), "text", "") or "").strip()
+    response = getattr(result, "response", None)
+    text = (getattr(response, "text", "") or "").strip()
+    # The pair that ANSWERED (after any failover), not the one asked for.
+    provider = _text_or_none(getattr(result, "provider", None)) or _text_or_none(asked_provider)
+    model = _text_or_none(getattr(result, "model", None)) or (
+        _text_or_none(asked_model) if provider == _text_or_none(asked_provider) else None
+    )
+    usage = _usage_of(response)
     if not text:
         return VisionAnswer(
-            asked=True, refusal=NO_VISION_ANSWER, role_applied=vision.applied
+            asked=True,
+            refusal=NO_VISION_ANSWER,
+            provider=provider,
+            model=model,
+            usage=usage,
+            role_applied=role_applied,
         )
     return VisionAnswer(
         text=text,
-        provider=getattr(result, "provider", None),
-        model=getattr(result, "model", None),
+        provider=provider,
+        model=model,
+        usage=usage,
         asked=True,
-        role_applied=vision.applied,
+        role_applied=role_applied,
     )
+
+
+def _text_or_none(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _pair_words(provider: str | None, model: str | None) -> str:
+    """``provider (model)``, or whichever half is known; "" when neither."""
+    p, m = _text_or_none(provider), _text_or_none(model)
+    if p and m and m != p:
+        return f"{p} ({m})"
+    return p or m or ""
+
+
+def _usage_of(response: Any) -> dict[str, int] | None:
+    """The call's token counts, when the provider reported any (BR4: the
+    vision call is a model call like any other, and its cost is stated)."""
+    usage = getattr(response, "usage", None)
+    if not isinstance(usage, Mapping):
+        return None
+    out: dict[str, int] = {}
+    for key in ("input_tokens", "output_tokens"):
+        try:
+            out[key] = int(usage.get(key) or 0)
+        except (TypeError, ValueError):
+            out[key] = 0
+    return out if any(out.values()) else None
 
 
 async def capture_screenshot(
@@ -728,6 +837,7 @@ __all__ = [
     "DEFAULT_LABEL",
     "DEFAULT_MEDIA_TYPE",
     "DEFAULT_QUESTION",
+    "HELD_NO_VISION_ANSWER",
     "MAX_VISION_BYTES",
     "MEDIA_SUFFIXES",
     "NAME_PREFIX",

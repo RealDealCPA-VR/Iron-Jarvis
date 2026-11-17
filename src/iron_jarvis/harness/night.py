@@ -98,7 +98,11 @@ NOTE_KINDS = ("declined", "unanswered", "low_trust", "limit", "env", "error", "s
               # own finish check left open (``outcome_of``) — filed as "info"
               # before, so a "Needs you" row carried no reason. T7: a task
               # that ended without changing anything (``routes/night``).
-              "unmet", "did_nothing")
+              "unmet", "did_nothing",
+              # Third plan NA1 (decision G10): a task tried on several models
+              # whose attempts finished — the user chooses one
+              # (``outcome_of`` from ``attempts.card_reading``).
+              "attempts")
 
 #: The command tools the night posture grants for the turn (decision 4):
 #: "runs commands inside its own branch folder without asking" — the model's
@@ -1088,7 +1092,64 @@ def outcome_of(task: dict[str, Any], line: "dict[str, Any] | None") -> tuple[str
         notes.append(("unmet", NOT_FINISHED_WORDS))
     if state == DONE and finish_needs_you(fin):
         state = NEEDS_YOU
+    # Third plan NA1 (decision G10): a task tried on several models ends from
+    # its attempts' card — the ONE reading (``attempts.card_reading``): "Needs
+    # you: choose one" when at least one finished, "Failed" when none did;
+    # never "done" (nobody but the user picks one). Its reply line carries
+    # only the card and the summary, never the fields read above.
+    reading = attempts_reading(line)
+    if reading is not None and state in (DONE, NEEDS_YOU):
+        if reading["state"] == FAILED:
+            state = FAILED
+            notes.append(("error", reading["words"]))
+        else:
+            state = NEEDS_YOU
+            notes.append(("attempts", reading["words"]))
     return state, notes
+
+
+def attempts_reading(line: Any) -> "dict[str, Any] | None":
+    """The ONE reading of a reply line's attempts card
+    (``attempts.card_reading``), None when the line carries none. Pure."""
+    if not isinstance(line, dict):
+        return None
+    from . import attempts as A
+
+    return A.card_reading(line.get(A.LINE_KEY))
+
+
+def _picks_of(task: "dict[str, Any] | None") -> int:
+    picks = (task or {}).get("try_on") or []
+    return len(picks) if isinstance(picks, list) else 0
+
+
+def task_weight(task: "dict[str, Any] | None", config: Any) -> int:
+    """How many replies a night task runs AT ONCE (third plan NA7, decision
+    G12): a task tried on several models runs one per model, at most "Night
+    tasks at once" of them at a time (its other attempts wait their turn
+    inside it, ``attempts.Plan.max_running``) — so it always fits a night
+    that is otherwise free; any other task, one. What "Night tasks at once"
+    counts. Pure."""
+    return max(1, min(_picks_of(task), max_at_once(config)))
+
+
+def task_rounds(task: "dict[str, Any] | None", config: Any) -> int:
+    """How many turns of its time limit a night task may need back to back
+    (third plan NA7): a task tried on more models than run at once runs them
+    in rounds, each attempt with its own limit; any other task, one. Pure."""
+    picks = _picks_of(task)
+    if picks <= 1:
+        return 1
+    at_once = task_weight(task, config)
+    return max(1, -(-picks // at_once))
+
+
+def overrun_after_s(task: "dict[str, Any] | None", config: Any, grace_s: float) -> float:
+    """How long a night task's turn may run before the night loop's backstop
+    stops it (third plan NA7): what is left of its limit, once per round its
+    attempts need (an attempt that waited its turn is never stopped for the
+    time it waited), plus ``grace_s``. Pure."""
+    return 60.0 * minutes_left(task, config) * task_rounds(task, config) + float(grace_s)
 
 
 #: v1.513.0 (second review T5): the reason a task needs the user when its
@@ -1240,7 +1301,7 @@ __all__ = [
     "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
     "card_wait_seconds", "current", "edit_task", "finish_needs_you", "finish_task", "finish_unmet",
     "flush_notes", "get_task", "unmet_words", "finish_loop_unfinished", "NOT_FINISHED_WORDS",
-    "DID_NOTHING_WORDS", "ended_doing_nothing",
+    "DID_NOTHING_WORDS", "ended_doing_nothing", "attempts_reading", "task_weight", "task_rounds", "overrun_after_s",
     "last_reply_line", "list_tasks", "mark_running", "max_at_once", "move_task", "note_unattended_turn",
     "morning_of", "outcome_of", "posture_setup", "remove_task", "reset_turn", "running_task_for",
     "set_morning", "set_session",

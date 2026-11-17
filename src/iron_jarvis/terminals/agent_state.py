@@ -195,6 +195,34 @@ _PROMPT = re.compile(
     re.I,
 )
 
+#: Third plan TM13: npm (and pnpm, and yarn running a script) ECHO a script
+#: before running it, as two `>` lines:
+#:
+#:     > project@1.0.0 test            (package@version script [folder])
+#:     > vitest run                    (the command itself)
+#:
+#: Both look exactly like a prompt with a draft in it, so a pane whose agent
+#: had just started `npm test` read as idle. The first line is recognisable
+#: by its `name@version` (a draft that starts with one word glued to an `@`
+#: and a version number is not something a person types); the second is the
+#: `>` line directly under it.
+_SCRIPT_ECHO_HEAD = re.compile(
+    r"^\s*>\s+(?:@[\w.\-]+/)?[\w.\-]+@\d[\w.\-+]*\s+\S"
+)
+
+
+def _script_echo_rows(lines: list[str]) -> set[int]:
+    """Indexes of `lines` that are a package manager's echo of a script."""
+    rows: set[int] = set()
+    for i, line in enumerate(lines):
+        if _SCRIPT_ECHO_HEAD.match(line):
+            rows.add(i)
+            nxt = i + 1
+            if nxt < len(lines) and lines[nxt].lstrip().startswith(">"):
+                rows.add(nxt)
+    return rows
+
+
 #: SNIFFING — how we recognise a CLI nobody told us about, because the user
 #: typed its name themselves instead of using Launch. A small set on purpose:
 #: each pattern is written against that CLI's real output. `known_clis()` is
@@ -321,7 +349,14 @@ def classify(
     # A prompt only means "ready" when we know an agent is there. A bare `>`
     # in an ordinary shell is not an idle agent, it is a shell.
     if which is not None:
-        for line in reversed(lines[-3:]):
+        # A script's echo (TM13) is not a prompt, and it is also the newest
+        # thing that happened: a prompt ABOVE it is the one the script was
+        # started from, so reading stops there rather than skipping it.
+        echo = _script_echo_rows(lines)
+        for i in range(len(lines) - 1, max(len(lines) - 4, -1), -1):
+            if i in echo:
+                break
+            line = lines[i]
             if _PROMPT.search(line):
                 state = AgentState.IDLE if seen else AgentState.DONE
                 return PaneActivity(state, which, line)

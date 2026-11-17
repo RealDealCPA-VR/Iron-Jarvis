@@ -288,14 +288,41 @@ const CAPTURE_ATTEMPTS: chrome.extensionTypes.ImageDetails[] = [
 /** How many bytes of a response frame the image itself may use. */
 export const IMAGE_BUDGET_BYTES = MAX_FRAME_BYTES - 8192;
 
+/** The id of the tab on screen in `windowId`, or undefined when none can be read. */
+async function onScreenTabId(windowId: number): Promise<number | undefined> {
+  try {
+    const [onScreen] = await chrome.tabs.query({ active: true, windowId });
+    return onScreen?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Third plan BR5: the tab asked for was not the one on screen when the picture
+ * was taken, so no picture is returned. The add-on's own sentence rides the
+ * error frame, and the daemon passes an add-on's message on verbatim
+ * (`extension_backend._resolve_response`), so no new code is needed.
+ * PAGE_CHANGED is the nearest code: what the browser shows changed under the
+ * call, and nothing was done.
+ */
+function notOnScreen(): BridgeError {
+  const err = new BridgeError("PAGE_CHANGED");
+  err.message =
+    "That tab was not the one on screen, so no picture was taken. " +
+    "Call browser_screenshot again to bring it on screen.";
+  return err;
+}
+
 /**
  * `screenshot`: the visible area of one tab, as base64 image bytes (D14).
  *
  * Two honest refusals rather than a wrong picture:
  *
- *   * a tab that is not the one on screen cannot be photographed at all, and
- *     activating it to try would change what the user is looking at inside a READ
- *     tool. So it refuses and says which tab is in the way.
+ *   * a tab that is not the one on screen cannot be photographed at all. Since
+ *     v1.274.0 it is brought on screen first; and when it is STILL not the one on
+ *     screen right before or right after the capture (third plan BR5), no picture
+ *     is returned, because the picture would be of another page.
  *   * `full_page` cannot be honoured. `captureVisibleTab` is the viewport, and a
  *     full-page capture means scrolling the user's page and stitching the frames —
  *     an action, and Ship 3 at the earliest. The result therefore carries
@@ -343,6 +370,15 @@ export async function captureVisible(
   const windowId = tab.windowId;
   let largest = 0;
   for (const attempt of CAPTURE_ATTEMPTS) {
+    // Third plan BR5: `captureVisibleTab` photographs whichever tab is on
+    // screen in the WINDOW at that instant, not the tab asked for. The tab may
+    // never have come on screen (the wait above is bounded) or the user may
+    // have switched since, so the window's on-screen tab is checked right
+    // before AND right after each capture: a picture of another page is never
+    // returned filed under this tab.
+    if ((await onScreenTabId(windowId)) !== tabId) {
+      throw notOnScreen();
+    }
     let dataUrl: string;
     try {
       dataUrl = await chrome.tabs.captureVisibleTab(windowId, attempt);
@@ -350,6 +386,9 @@ export async function captureVisible(
       throw new BridgeError("EXTENSION_ERROR", {
         detail: `the screenshot of tab ${tab.id} failed: ${reason(err)}`,
       });
+    }
+    if ((await onScreenTabId(windowId)) !== tabId) {
+      throw notOnScreen();
     }
     const parsed = /^data:([^;,]+);base64,(.*)$/.exec(dataUrl ?? "");
     if (!parsed || !parsed[1] || !parsed[2]) {
@@ -361,7 +400,7 @@ export async function captureVisible(
     largest = Math.max(largest, data.length);
     if (data.length <= IMAGE_BUDGET_BYTES) {
       return {
-        tab_id: tab.id ?? -1,
+        tab_id: tabId,
         media_type: mediaType,
         data_b64: data,
         bytes: data.length,

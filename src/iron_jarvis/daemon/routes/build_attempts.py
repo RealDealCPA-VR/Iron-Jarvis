@@ -193,22 +193,66 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
             caller_pin, _provider = await asyncio.to_thread(turn_account, platform, thread_id, setup)
         except HTTPException:
             caller_pin = None
-        pins = []
-        try:
-            for t in targets:
-                pins.append(await asyncio.to_thread(
-                    A.check_target, platform, t, local_only=local_only, session_pair=session_pair,
-                    caller_pin=caller_pin, scope=f"build:{thread_id}:{turn_id}",
-                ))
-            start = await asyncio.to_thread(A.start_point, row)
-            made = await asyncio.to_thread(A.make_worktrees, start, targets)
-        except A.AttemptsRefused as exc:
-            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
         from ...agents import model_team as _mt
 
+        night = night_task is not None
+        pins: list[Any] = []
+        #: Third plan NA3/NA4: at night a pick that may not run is said on
+        #: its own row and the others still run (nobody is there to name
+        #: another model); by day every refusal is one sentence before
+        #: anything starts, as before.
+        refused: dict[int, str] = {}
+        try:
+            for n, t in enumerate(targets):
+                try:
+                    pins.append(await asyncio.to_thread(
+                        A.check_target, platform, t, local_only=local_only, session_pair=session_pair,
+                        caller_pin=caller_pin, scope=f"build:{thread_id}:{turn_id}",
+                        # Decision G11: at night the pay-per-use limit applies
+                        # to every pick, the default model included.
+                        every_pick=night,
+                    ))
+                except A.AttemptsRefused as exc:
+                    if not night:
+                        raise
+                    pins.append(None)
+                    refused[n] = str(exc)
+            if night and len(refused) == len(targets):
+                # None may run: the night task ends "Failed" with each reason.
+                raise A.AttemptsRefused(
+                    "None of the models to try it on could start: "
+                    + " ".join(A.pick_refusal_words(refused[n]) for n in range(len(targets))),
+                    409,
+                )
+            room = None
+            if night:
+                # Decision G11: the attempts billed per use share what is
+                # LEFT of the pay-per-use limit — read once, here.
+                from .night import pay_room as _pay_room
+
+                for n, t in enumerate(targets):
+                    if n not in refused:
+                        got_room = await asyncio.to_thread(_pay_room, platform, t.provider, t.model)
+                        if got_room is not None:
+                            room = got_room
+                            break
+            start = await asyncio.to_thread(A.start_point, row)
+            made_for = [t for n, t in enumerate(targets) if n not in refused]
+            made = await asyncio.to_thread(A.make_worktrees, start, made_for)
+        except A.AttemptsRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+
         attempts: list[A.Attempt] = []
-        for n, (target, pin, got) in enumerate(zip(targets, pins, made), start=1):
+        made_iter = iter(made)
+        for n, (target, pin) in enumerate(zip(targets, pins), start=1):
             aid = f"{A.ID_PREFIX}{n}"
+            if (n - 1) in refused:
+                attempts.append(A.not_started(
+                    aid, target, refused[n - 1], thread_id=thread_id, turn_id=turn_id,
+                    cost=_mt.cost_type(platform, target.provider, target.model),
+                ))
+                continue
+            got = next(made_iter)
             provider = str(getattr(pin, "ij_provider", "") or "") if pin is not None else ""
             if provider and provider != target.provider:
                 # The account's vendor CLI serves it (a keyless API name).
@@ -232,6 +276,11 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
             ceiling=A.ceiling_for(platform), rounds=rounds, local_only=local_only,
             # v1.434.0 (Wave 2, F): which screen asked (a night task has none).
             device_id=str(getattr(body, "device_id", "") or ""),
+            pay_room=room,
+            # Third plan NA7 (decision G12): at night at most "Night tasks at
+            # once" attempts run at a time; the rest wait their turn inside
+            # the task. By day every attempt starts at once, as before.
+            max_running=_night.max_at_once(platform.config) if night else None,
         )
         question: dict[str, Any] = {"role": "user", "content": text or task, "turnId": turn_id}
         saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])

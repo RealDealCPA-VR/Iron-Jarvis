@@ -399,7 +399,8 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
                     commit = dict(done["recovered"])
                     notes.append(("commit", M.commit_note_words(branch, commit["sha"])))
                 elif done.get("nothing"):
-                    commit_note = M.TRY_ON_NOTE if task.get("try_on") else M.NOTHING_CHANGED
+                    commit_note = ((M.TRY_ON_NONE_NOTE if state == N.FAILED else M.TRY_ON_NOTE)
+                                   if task.get("try_on") else M.NOTHING_CHANGED)
                     nothing_changed = True
                 else:
                     commit_note = str(done.get("note") or "")
@@ -691,10 +692,13 @@ async def settle_running(d: Any) -> list[str]:
             lg = _turn_logs(d).get(turn) if turn else None
             started = _naive(getattr(lg, "started_at", None)) if lg is not None else None
             # v1.398.0 review: what is LEFT of the task's limit (its earlier
-            # turns' time counts), never a fresh limit per turn.
-            limit_s = 60.0 * N.minutes_left(task, platform.config)
+            # turns' time counts), never a fresh limit per turn. Third plan
+            # NA7: once per round of a task tried on more models than run at
+            # once (each attempt has its own limit from when IT starts; one
+            # that waited its turn is never stopped for the wait).
+            after_s = N.overrun_after_s(task, platform.config, OVERRUN_GRACE_S)
             if (turn and started is not None and now is not None
-                    and (now - started).total_seconds() > limit_s + OVERRUN_GRACE_S):
+                    and (now - started).total_seconds() > after_s):
                 # The backstop: the reply cap ends a reply at a step
                 # boundary; a step that never returns is stopped here —
                 # v1.398.0 review: the STEP itself too (a turn's Stop waits
@@ -973,8 +977,12 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
         except SessionBusy:
             why = "Its session was already busy."
         except Exception as exc:  # noqa: BLE001 — one task never stops the night
+            # Third plan NA6: plain words on the row (never an exception's
+            # name); the log keeps the detail.
+            from ...core.failures import plain_failure
+
             log.warning("night task %s did not start", tid, exc_info=True)
-            why = f"It could not start ({type(exc).__name__})."
+            why = plain_failure("It could not start because of an internal error.", exc)
         from .build import UNATTENDED_REFUSAL
 
         if why == UNATTENDED_REFUSAL:
@@ -1028,23 +1036,29 @@ async def _night_pass(d: Any) -> dict[str, list[str]]:
         return out
     engine = platform.engine
     running = await asyncio.to_thread(N.rows_in, engine, N.RUNNING)
-    room = N.max_at_once(config) - len(running)
+    # Third plan NA7 (decision G12): "Night tasks at once" counts REPLIES — a
+    # task tried on several models runs up to that many of its attempts at a
+    # time (``night.task_weight``; the rest wait their turn inside it).
+    room = N.max_at_once(config) - sum(N.task_weight(t, config) for t in running)
     busy = {S.folder_key(t["folder"]) for t in running}
     if room <= 0:
         return out
     queued = await asyncio.to_thread(N.rows_in, engine, N.QUEUED)
     for task in queued:
+        weight = N.task_weight(task, config)
         if room <= 0:
             break
         key = S.folder_key(task["folder"])
         if key in busy:
             continue  # one per folder: it waits for the folder's task to end
+        if weight > room:
+            break  # it waits for room (the tasks after it keep their order)
         if not _hold(d, task["id"]):
             break  # every "Runs at once" slot is busy: nothing more this pass
         started = await start_task(d, task)
         if started:
             busy.add(key)
-            room -= 1
+            room -= weight
             out["started"].append(task["id"])
         else:
             _release(d, task["id"])
