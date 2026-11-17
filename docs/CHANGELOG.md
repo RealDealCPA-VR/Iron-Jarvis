@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.522.0
+
+**Stop means stopped, and it is remembered.** A Stop is now written down the moment you press it, so a reply you stopped is never carried on by Iron Jarvis itself, and a Stop pressed too early or at a waiting card can no longer be lost.
+
 ## v1.521.0
 
 **A reply lives in its chat, whoever was watching.** A reply that finishes while you are on another page, or with the window closed, is now written into its chat by Iron Jarvis itself, and the browser sidebar's conversation is a chat like the others.
@@ -77,7 +81,3 @@
 ## v1.504.0
 
 **Nothing is lost.** The fourth part of the review fixes: the places where your work, or the record of it, could disappear without a way back.
-
-## v1.503.0
-
-**"Done" means done.** The third part of the review fixes.
