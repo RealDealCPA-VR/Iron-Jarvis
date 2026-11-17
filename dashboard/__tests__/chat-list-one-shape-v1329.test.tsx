@@ -323,7 +323,13 @@ describe("inside a project chat the rail is the grouped list", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(THREAD_POLL_MS * 3);
     });
-    expect(H.gets.length).toBe(start);
+    // v1.518.0: the list's "Other tools" part reads its chats ONCE, three
+    // seconds after it appears (never with the page). That is one read, not
+    // a poll: it may land in this window, and it must not come a second time.
+    const later = H.gets.slice(start);
+    expect(later.filter((p) => p !== "/work-record/other-tools")).toEqual([]);
+    expect(later.length).toBeLessThanOrEqual(1);
+    expect(H.gets.filter((p) => p === "/work-record/other-tools").length).toBeLessThanOrEqual(1);
   });
 
   it("CONTROL: with no project the list is grouped and nothing is folded", async () => {
