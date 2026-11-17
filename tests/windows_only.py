@@ -87,6 +87,34 @@ WINDOWS_ONLY: dict[str, tuple[str, ...]] = {
         "test_the_earlier_tiers_did_not_change",
         "test_the_team_tasks_did_not_change",
     ),
+    # Two recorded runs whose commands FAILED in cmd.exe (a here-document, a
+    # nested quote) and succeed in a POSIX shell: the recording is Windows'.
+    "test_finish_replay_v1386.py": (
+        "test_control_without_the_finish_check_the_glm_run_still_fails",
+        "test_the_glm_run_is_shown_its_scratch_test_file_and_then_passes",
+    ),
+    # The hint for a POSIX command typed into cmd.exe: the test turns the
+    # process into "Windows" (os.name), which pathlib refuses elsewhere. The
+    # rule itself (`_posix_guess_hint`) is still checked on every system.
+    "test_shell_honesty_v1205.py": (
+        "test_hint_fires_on_failed_posix_command",
+        "test_no_hint_on_non_posix_failure",
+        "test_no_hint_on_successful_command",
+    ),
+    # Drive letters, backslashes, a share (``\\server\share``) and "other
+    # capitals are the same folder": Windows' spellings. The same rules in
+    # Linux spelling: test_a_folder_belongs_to_one_client_posix.
+    "test_clients_store_v1499.py": (
+        "test_a_folder_belongs_to_one_client",
+        "test_rename_aliases_and_folders_change_and_say_so",
+    ),
+    "test_work_recaps_review2_v1492.py": ("test_remember_a_folder_spelled_another_way",),
+    "test_review_fixes_tools_v1499_3.py": ("test_a_workspace_on_a_share_keeps_its_own_paths",),
+    # The registry, and a path on another computer told by its spelling.
+    "test_script_power_review_v1473.py": (
+        "test_a_script_cannot_even_ask_about_a_path_on_another_computer",
+        "test_a_script_cannot_read_the_windows_registry",
+    ),
 }
 
 

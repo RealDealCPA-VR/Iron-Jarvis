@@ -764,6 +764,9 @@ def test_the_generated_adapter_keeps_order_carries_the_session_and_drains(tmp_pa
         proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n")
         proc.stdin.flush()
         proc.stdin.close()  # and then the client goes away
+        # communicate() flushes stdin first, and off Windows a closed one
+        # raises there ("I/O operation on closed file").
+        proc.stdin = None
         out, err = proc.communicate(timeout=60)
     finally:
         server.shutdown()

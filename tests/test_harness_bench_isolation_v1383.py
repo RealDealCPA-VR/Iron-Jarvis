@@ -100,7 +100,14 @@ async def test_repeat_twos_agent_finds_nothing_of_repeat_one_beside_it(tmp_path,
         assert not _mentions(peek["prompt"], home), "the prompt names the bench root"
         leaked = sorted(k for k, v in peek["env"].items() if _mentions(v, home))
         assert leaked == [], f"{key}: the agent's environment names the bench root in {leaked}"
-        assert not {"PWD", "OLDPWD"} & {k.upper() for k in peek["env"]}
+        if os.name == "nt":
+            assert not {"PWD", "OLDPWD"} & {k.upper() for k in peek["env"]}
+        else:
+            # The stand-in is started through /bin/sh here, and a POSIX shell
+            # sets PWD itself: to the run's OWN folder, never the one handed
+            # down (no value names the bench root: `leaked` above).
+            assert peek["env"].get("PWD") in (None, peek["cwd"]), peek["env"].get("PWD")
+            assert peek["env"].get("OLDPWD") in (None, "", peek["cwd"]), peek["env"].get("OLDPWD")
         # The folder came home: graded, marked and reusable where it always was.
         assert (work / "peek-token.txt").is_file() and (res.config_dir / "runs" / key / "complete.json").is_file()
     assert _agent_folders(agent_parent) == [other], "a temporary agent folder was left behind"

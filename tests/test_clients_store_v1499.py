@@ -22,6 +22,7 @@ All names and paths are made up; nothing is looked up on disk.
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -133,6 +134,27 @@ def _chat(p, folder, *, title="Work", local_only=False):
 # --------------------------------------------------------------------------- #
 # One client per folder
 # --------------------------------------------------------------------------- #
+@pytest.mark.skipif(os.name == "nt", reason="the Linux and macOS spelling of the test below")
+def test_a_folder_belongs_to_one_client_posix(platform):
+    """The same rules for folders spelled the POSIX way (the test below is
+    Windows': drive letters, backslashes, capitals that do not matter)."""
+    store.create(platform, folder="/srv/acme/smith", name="Smith")
+    store.create(platform, folder="/data/clients/jones", name="Jones")
+    assert _refused(store.create, platform, folder="/srv/acme", name="Hartleys") == (
+        "/srv/acme holds Smith's folder. Pick Hartleys' own folder.")
+    assert _refused(store.create, platform, folder="/data/clients", name="Hartleys") == (
+        "/data/clients holds Jones' folder. Pick Hartleys' own folder.")
+    assert _refused(store.create, platform, folder="/srv/acme/smith/hartleys", name="Hartleys") == (
+        "/srv/acme/smith/hartleys is inside Smith's folder. Pick a folder that is only Hartleys'.")
+    # The same folder spelled another way: a doubled slash, one at the end, "..".
+    for same in ("/srv/acme//smith/", "/srv/acme/x/../smith"):
+        assert _refused(store.create, platform, folder=same, name="Hartleys") == (
+            "That folder is Smith's already. A folder belongs to one client."), same
+    # The top, and relative names.
+    for top in ("/", "Hartleys", ".."):
+        assert "top of a drive or a share" in _refused(store.create, platform, folder=top, name="Hartleys"), top
+
+
 def test_a_folder_belongs_to_one_client(platform):
     smith = store.create(platform, folder=r"D:\Acme\Smith", name="Smith")["client"]["id"]
     clients = store.create(platform, folder=r"C:\Clients\Jones", name="Jones")["client"]["id"]

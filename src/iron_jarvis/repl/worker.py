@@ -966,7 +966,7 @@ def install_confinement() -> bool:
         # folders are added here (the parent cannot know a frozen build's):
         # without them a later `import statistics` would be refused.
         if read_roots:
-            read_roots = tuple(dict.fromkeys(read_roots + _runtime_roots()))
+            read_roots = tuple(dict.fromkeys(read_roots + _runtime_roots() + _system_data_roots()))
     # Import ctypes BEFORE arming the hook. On Windows `ctypes/__init__.py`
     # evaluates `windll.kernel32.GetLastError` at import time, so a blanket FFI
     # refusal does not merely stop a cell loading a DLL — it makes `import
@@ -999,6 +999,44 @@ def _runtime_roots() -> tuple[str, ...]:
         getattr(sys, "_MEIPASS", ""), os.path.dirname(sys.executable or ""),
         *sys.path,
     ]
+    roots: list[str] = []
+    for part in raw:
+        if not part:
+            continue
+        try:
+            roots.append(_canonical(part))
+        except Exception:  # pragma: no cover - unresolvable entry, skip it
+            continue
+    return tuple(dict.fromkeys(roots))
+
+
+def _system_data_roots() -> tuple[str, ...]:
+    """Off Windows, the two tables the standard library keeps OUTSIDE its own
+    folders, canonical: the file-type table (`mimetypes.knownfiles`, such as
+    /etc/mime.types) and the time-zone database (`zoneinfo.TZPATH`, such as
+    /usr/share/zoneinfo).
+
+    On Windows they are the registry (refused, and read as "no such key") and
+    the bundled `tzdata` package, so nothing is added there. Without them an
+    isolated script on Linux or macOS could not `import openpyxl` (it calls
+    `mimetypes.init()`, which opens the table) or build a `ZoneInfo`. Each is
+    a fixed system file every program may read; nothing of the user's lives
+    there."""
+    if os.name == "nt":
+        return ()
+    raw: list[str] = []
+    try:
+        import mimetypes
+
+        raw.extend(str(p) for p in mimetypes.knownfiles)
+    except Exception:  # pragma: no cover - no such table in this build
+        pass
+    try:
+        import zoneinfo
+
+        raw.extend(str(p) for p in zoneinfo.TZPATH)
+    except Exception:  # pragma: no cover - no zoneinfo in this build
+        pass
     roots: list[str] = []
     for part in raw:
         if not part:

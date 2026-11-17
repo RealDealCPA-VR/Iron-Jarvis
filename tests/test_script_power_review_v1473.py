@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 
 import pytest
@@ -329,7 +330,9 @@ def test_the_libraries_that_look_in_the_registry_still_work(world):
         'print("ABS", os.path.exists(os.path.abspath("f0.txt")), os.path.isdir(os.getcwd()))\n'
     ))
     assert r.ok, (r.output, r.error)
-    assert "TYPE application/pdf" in r.output and "SYSTEM Windows" in r.output
+    import platform
+
+    assert "TYPE application/pdf" in r.output and f"SYSTEM {platform.system()}" in r.output
     assert "LOCAL True True True True False True" in r.output and "ABS True True" in r.output
 
 
@@ -784,7 +787,8 @@ def test_a_script_imports_the_standard_library_and_a_short_list_only(world):
     PDF, pywin32 is the whole Windows API. An allow-list, because a list of
     what to refuse can never be complete."""
     present = [n for n in NATIVE if _importable(n.partition(".")[0])]
-    assert "lxml.etree" in present and "win32api" in present, present
+    # pywin32 exists on Windows only; lxml everywhere.
+    assert "lxml.etree" in present and ("win32api" in present or os.name != "nt"), present
     for how in ('__import__(name, fromlist=["x"])', "importlib.import_module(name)"):
         r = _run(world, (
             "import importlib, json\n"
@@ -802,6 +806,27 @@ def test_a_script_imports_the_standard_library_and_a_short_list_only(world):
         assert "IMPORTED" not in said.values(), (how, said)
         for name in present:
             assert said[name] == "blocked", (how, name, said)
+
+
+def test_the_system_tables_a_script_may_read_are_added_off_windows_only():
+    """Linux and macOS keep the file-type table and the time-zone database
+    outside Python's own folders; a script that opens a workbook reads the
+    first (`mimetypes.init()` in openpyxl) and a `ZoneInfo` reads the second.
+    On Windows nothing is added: the registry and the bundled tzdata serve."""
+    from iron_jarvis.repl import worker
+
+    roots = worker._system_data_roots()
+    if os.name == "nt":
+        assert roots == ()
+        return
+    import mimetypes
+    import zoneinfo
+
+    assert roots, "no system table may be read: a workbook cannot be opened in a script"
+    assert set(roots) == {worker._canonical(str(p)) for p in [*mimetypes.knownfiles, *zoneinfo.TZPATH]}
+    # Fixed system files only: never the user's home, never the working folder.
+    home = worker._canonical(os.path.expanduser("~"))
+    assert not any(worker._within(r, home) or worker._within(home, r) for r in roots), roots
 
 
 def test_a_native_library_cannot_be_loaded_under_a_borrowed_name(world):

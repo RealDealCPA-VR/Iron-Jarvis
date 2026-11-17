@@ -159,7 +159,11 @@ def test_doctor_says_it_and_names_the_backup(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
     out = " ".join(res.output.split())
     assert "database set aside" in out
-    assert good.name in out
+    # The file name whatever width the table was drawn at: on GitHub's Linux
+    # machines it came out 80 wide whatever COLUMNS said, and the name was
+    # cut across two rows.
+    flat = "".join(ch for ch in res.output if not ch.isspace() and ch not in "\u2502\u2503")
+    assert good.name in flat
     assert "Some required checks failed" in out
 
 

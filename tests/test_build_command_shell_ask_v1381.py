@@ -580,6 +580,10 @@ async def test_a_later_turn_asks_for_the_commands_own_line_and_nothing_else(app,
     from iron_jarvis.sandbox import git_bash
 
     reworded = 'cmd //c "echo IJ-STATUS"' if git_bash.find() is not None else 'cmd /c "echo IJ-STATUS"'
+    import os
+
+    if os.name != "nt":
+        reworded = 'sh -c "echo IJ-STATUS"'  # no cmd.exe: the same rewording in this system's shell
     wire(app, Script([bash("l1", reworded), bash("l2", "echo IJ-OTHER"), "Done."]))
     drop, task = await start(app, sid, "cs-later-1", text="now run its status line")
     card = await nth_card(app, "cs-later-1", 0)

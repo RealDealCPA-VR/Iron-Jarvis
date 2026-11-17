@@ -41,6 +41,7 @@ Event, and the bound is crossed by the injected clock.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -825,12 +826,22 @@ def test_terminal_help_follows_the_folder_the_pane_is_in_now(scene, monkeypatch)
         return seen["systems"][-1]
 
     assert BLOCK_H in assist("")  # just opened: where it started
-    sep = "\\"
-    assert BLOCK_H in assist(f"PS {scene.hartleys}{sep}2026> dir\r\n")
+    if os.name == "nt":
+        sep = "\\"
+
+        def at(folder: object, typed: str = "") -> str:  # PowerShell's prompt
+            return f"PS {folder}> {typed}"
+    else:
+        sep = "/"
+
+        def at(folder: object, typed: str = "") -> str:  # bash's prompt
+            return f"pat@box:{folder}$ {typed}"
+
+    assert BLOCK_H in assist(at(f"{scene.hartleys}{sep}2026", "dir") + "\r\n")
     assert "# Client:" not in assist(
-        f"PS {scene.hartleys}> cd ..{sep}Smith{sep}2025\r\nPS {scene.smith}{sep}2025> ")
+        at(scene.hartleys, f"cd ..{sep}Smith{sep}2025") + "\r\n" + at(f"{scene.smith}{sep}2025"))
     assert "cash basis" not in assist("")
-    assert BLOCK_H in assist(f"\r\nPS {scene.hartleys}{sep}2026{sep}payroll> ")
+    assert BLOCK_H in assist("\r\n" + at(f"{scene.hartleys}{sep}2026{sep}payroll"))
     # A cd with no prompt to follow it: not known, so no client.
     session._tail.clear()
     assert "# Client:" not in assist(f"cd ..{sep}Smith\r\n")

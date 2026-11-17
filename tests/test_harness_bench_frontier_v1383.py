@@ -325,8 +325,11 @@ def test_the_page_check_is_unscored_when_no_browser_can_start(tmp_path, monkeypa
     nowhere = str(tmp_path / "nowhere")
     for name in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
         monkeypatch.setenv(name, nowhere)
+    # Off Windows Edge sits in a shared folder (/usr/bin/msedge), so a folder
+    # is dropped when it HOLDS msedge, whatever it is called.
     monkeypatch.setenv("PATH", os.pathsep.join(p for p in os.environ["PATH"].split(os.pathsep)
-                                               if "edge" not in p.lower()))
+                                               if "edge" not in p.lower()
+                                               and not shutil.which("msedge", path=p)))
     assert not edge_installed()  # the skip's own test sees what the check sees
     g = grade(task, work, tmp_path / "g")
     assert g.passed is None and "exit code 3" in g.reason, (g.reason, g.output[-500:])

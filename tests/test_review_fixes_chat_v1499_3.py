@@ -41,7 +41,9 @@ def test_an_object_after_a_placeholder_in_braces_is_read():
 
 
 def test_a_deep_nest_is_no_value_and_never_an_exception():
-    assert jsonish.loads_lenient("[" * 5000 + "]" * 5000) is None
+    # Deeper than any system's parser goes: Windows stops near 3,000 levels,
+    # Linux and macOS near 10,000 (5,000 parsed there, and was a value).
+    assert jsonish.loads_lenient("[" * 100_000 + "]" * 100_000) is None
 
 
 def test_hostile_text_is_tried_a_bounded_number_of_times(monkeypatch):
