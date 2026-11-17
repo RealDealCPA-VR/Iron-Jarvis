@@ -387,7 +387,11 @@ if (absent.length) {
       // NOT flipped to idle on the press: a tool already running finishes, and the
       // daemon's `done` is what ends the turn.
       expect(document.body.dataset.turn).toBe("running");
-      expect(transcript()).toContain("The step already running will finish");
+      // Third fix plan (SB5): said only once the press has reached the
+      // worker, never on the click alone.
+      await waitFor(() =>
+        expect(transcript()).toContain("The step already running will finish"),
+      );
       await waitFor(() =>
         expect(h.sent.some((m) => m["action"] === "stop")).toBe(true),
       );
@@ -457,7 +461,8 @@ if (absent.length) {
       expect(el("approval-text").textContent).toBe("Jarvis wants to click Pay now.");
 
       (el("approve") as HTMLButtonElement).click();
-      expect((el("approval") as HTMLElement).hidden).toBe(true);
+      // Third fix plan (SB5): hidden once the answer went out, not on the click.
+      await waitFor(() => expect((el("approval") as HTMLElement).hidden).toBe(true));
       await waitFor(() => {
         const answer = h.sent.find((m) => m["action"] === "approve");
         expect(answer).toBeTruthy();
@@ -479,27 +484,55 @@ if (absent.length) {
   /* ------------------------------------------------------------------------ */
 
   describe("one approval per tab (v1.266.0)", () => {
-    it("Always allow approves the card and then turns the switch on (v1.270.0)", async () => {
+    it("Allow all page actions is ONE answer; the daemon turns the switch on (third plan SB6)", async () => {
       const h = await panelReady({ state: "connected", access: "interactive", paired: true });
       h.emit("approval", { id: "ask_9", text: "Jarvis wants to click Next." });
       expect((el("approval") as HTMLElement).hidden).toBe(false);
 
       (el("approve-always") as HTMLButtonElement).click();
-      expect((el("approval") as HTMLElement).hidden).toBe(true);
-      await waitFor(() => {
-        const answer = h.sent.find((m) => m["action"] === "approve");
-        expect(answer).toBeTruthy();
-        const params = (answer?.["params"] ?? {}) as Record<string, unknown>;
-        expect(params["id"]).toBe("ask_9");
-        // A plain approve — no scope — so an older daemon still runs the call.
-        expect(params["scope"]).toBeUndefined();
-        const flip = h.sent.find((m) => m["action"] === "auto_allow");
-        expect(flip).toBeTruthy();
-        expect(((flip?.["params"] ?? {}) as Record<string, unknown>)["on"]).toBe(true);
-      });
-      // The approve went first: the card's call is answered before the switch.
-      const order = h.sent.filter((m) => m["action"] === "approve" || m["action"] === "auto_allow");
-      expect(order[0]?.["action"]).toBe("approve");
+      await waitFor(() => expect((el("approval") as HTMLElement).hidden).toBe(true));
+      const answer = h.sent.find((m) => m["action"] === "approve");
+      expect(answer).toBeTruthy();
+      const params = (answer?.["params"] ?? {}) as Record<string, unknown>;
+      expect(params["id"]).toBe("ask_9");
+      // One answer that says "all": the daemon allows this call and turns the
+      // switch on (and refuses it on a risk card). The panel no longer sends
+      // the switch itself, so a refused answer cannot leave it on.
+      expect(params["scope"]).toBe("all");
+      expect(h.sent.some((m) => m["action"] === "auto_allow")).toBe(false);
+    });
+
+    it("a risk card offers Allow once and Deny only (third plan SB6, decision G18)", async () => {
+      const h = await panelReady({ state: "connected", access: "interactive", paired: true });
+      h.emit("approval", { id: "ask_r", text: "Jarvis wants to click Pay now.", floor: true });
+      expect((el("approval") as HTMLElement).hidden).toBe(false);
+      expect((el("approve-always") as HTMLElement).hidden).toBe(true);
+      expect((el("approve") as HTMLElement).hidden).toBe(false);
+      // An ordinary card after it shows all three again.
+      h.emit("approval", { id: "ask_o", text: "Jarvis wants to click Next." });
+      expect((el("approve-always") as HTMLElement).hidden).toBe(false);
+    });
+
+    it("a press that did not reach Iron Jarvis says so and keeps the card (third plan SB5)", async () => {
+      const h = await panelReady({ state: "connected", access: "interactive", paired: true });
+      h.emit("approval", { id: "ask_n", text: "Jarvis wants to click Next." });
+      h.delivered = false; // the add-on's connection is down
+      (el("approve") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("did not reach Iron Jarvis"));
+      // Not answered, so it stays to be answered once the browser is connected.
+      expect((el("approval") as HTMLElement).hidden).toBe(false);
+      h.delivered = true;
+      (el("approve") as HTMLButtonElement).click();
+      await waitFor(() => expect((el("approval") as HTMLElement).hidden).toBe(true));
+    });
+
+    it("Stop that did not reach Iron Jarvis never says it was requested (third plan SB5)", async () => {
+      const h = await panelReady({ state: "connected", access: "read_only", paired: true });
+      startTurn(h);
+      h.delivered = false;
+      (el("stop") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("did not reach Iron Jarvis"));
+      expect(transcript()).not.toContain("The step already running will finish");
     });
 
     it("the header says this tab is allowed only when the daemon says so", async () => {

@@ -2229,4 +2229,17 @@ Left open:
 Tested with stand-ins only: the models; a whole coding reply was not driven
 through the stop route in the Stop tests (the coding tests write the mark
 with the real writer); the sidebar panel was never run in Chrome or Edge
-(source pins and a type check), and needs the new add-on in the browser.
+(its built bundle is run by the dashboard suite's side panel test, which
+now covers Stop, a press that was not sent, the risk card's two buttons
+and "Allow all" as one answer), and needs the new add-on in the browser.
+
+What the branch's first full run on GitHub showed (group 19):
+
+- Three tests of the side panel failed. The dashboard suite runs the BUILT
+  add-on, and the lead's local copy of that build was stale, so they passed
+  here. They pinned the old behaviour (a line said, a card hidden, on the
+  click itself); they now wait for the press to go out, and four tests were
+  added that run this group's sidebar behaviour in the real bundle.
+- One older test passed only on a retry: the coding session's "at most
+  three helpers at once" test, which leaned on real time in three places.
+  It now waits on events only.

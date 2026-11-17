@@ -313,7 +313,11 @@ async def test_at_most_three_helpers_run_at_once_and_a_fourth_waits_its_turn(app
         running["now"] += 1
         running["max"] = max(running["max"], running["now"])
         try:
-            await asyncio.wait_for(gate.wait(), timeout=10)
+            # No limit of its own: it waits for the test's gate. (It had a
+            # 10 s limit, shorter than the waits below; on a loaded machine a
+            # helper could give up before the gate opened. This test passed
+            # only on its retry in one GitHub shard, 2026-11-17.)
+            await gate.wait()
         finally:
             running["now"] -= 1
         return "finished my part"
@@ -324,13 +328,18 @@ async def test_at_most_three_helpers_run_at_once_and_a_fourth_waits_its_turn(app
     ]
     wire(app, Model(main=[calls, "all four done"], helper=lambda t, r, rec: work_until_released()))
     task = asyncio.create_task(_run(app, sid, "four parts", "hh-cap"))
-    queued = await until(lambda: [d for e, d in turn_frames(app, "hh-cap")
-                                  if e == "helper" and d.get("state") == "queued"])
-    assert queued and "3 helpers are already working" in queued[0]["note"]
-    await until(lambda: running["now"] == 3)
-    await asyncio.sleep(0.2)
-    assert running["now"] == 3  # the 4th is still waiting
-    gate.set()
+    try:
+        queued = await until(lambda: [d for e, d in turn_frames(app, "hh-cap")
+                                      if e == "helper" and d.get("state") == "queued"], 120)
+        assert queued and "3 helpers are already working" in queued[0]["note"]
+        assert await until(lambda: running["now"] == 3, 120)
+        # The 4th is QUEUED (the frame above says so) and stays waiting while
+        # the loop runs on: many turns of the loop, no wall clock.
+        for _ in range(200):
+            await asyncio.sleep(0)
+        assert running["now"] == 3
+    finally:
+        gate.set()  # also on a failure, so no helper is left waiting
     frames = await task
     assert running["max"] == 3
     ends = {d["id"]: d["state"] for d in _helper_frames(frames) if d.get("ended")}
