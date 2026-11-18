@@ -1035,6 +1035,14 @@ def _runtime_checks(platform, *, probe: bool) -> list[dict]:
             _result("browser_bridge", False, f"browser check failed: {exc}", level=RECOMMENDED)
         )
 
+    # The connected apps' bridge (v1.538.0, fourth review group 29).
+    try:
+        checks.append(check_connector_bridge(platform.config.home))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            _result("connector_bridge", False, f"bridge check failed: {exc}", level=RECOMMENDED)
+        )
+
     # The second copy of the backups (v1.249.0, R-05): only when one is set up.
     # An unplugged drive is named here — and on Settings → Maintenance — instead
     # of each backup quietly skipping the copy it was asked to make.
@@ -1127,6 +1135,52 @@ def _runtime_checks(platform, *, probe: bool) -> list[dict]:
         )
 
     return checks
+
+
+def check_connector_bridge(home) -> dict:
+    """Whether a CHECKED copy of the connected apps' bridge is installed
+    (v1.538.0, fourth review group 29). ``mcpserver/apps.ensure_bridge`` puts
+    it in ``<home>/bridge/`` and writes ``bridge-id.txt`` only after the copy
+    answered ``--check``, so the id file is the proof. Reads two small files;
+    never starts the program. RECOMMENDED: without it, connected apps still
+    work, through the main program, until an update or Quit."""
+    from ..mcpserver import apps as _apps
+
+    name = "connector_bridge"
+    folder = Path(home) / "bridge"
+    shipped_dir = _apps.shipped_bridge_dir()
+    installed = _apps.installed_bridge(home) is not None
+    shipped_id = _apps._read_id(Path(shipped_dir) / _apps.BRIDGE_ID_FILE) if shipped_dir else ""
+    if not installed:
+        if not shipped_dir:
+            return _result(
+                name, True,
+                "running from source: connected apps (Claude desktop, Claude Code, Codex) start "
+                "Iron Jarvis's main program; there is no separate bridge program.",
+                level=RECOMMENDED,
+            )
+        return _result(
+            name, False,
+            f"no checked copy of the bridge program is in {folder}, so connected apps (Claude "
+            "desktop, Claude Code, Codex) start Iron Jarvis's main program and lose their "
+            "connection during an update or Quit.",
+            fix="Restart Iron Jarvis. If this stays, reinstall Iron Jarvis.",
+            level=RECOMMENDED,
+        )
+    if shipped_id and shipped_id != _apps._read_id(folder / _apps.BRIDGE_ID_FILE):
+        return _result(
+            name, False,
+            f"the bridge program in {folder} is from an older version; this version's copy has "
+            "not been checked yet. Connected apps keep using the older copy, which still works.",
+            fix="Restart Iron Jarvis.",
+            level=RECOMMENDED,
+        )
+    return _result(
+        name, True,
+        f"connected apps (Claude desktop, Claude Code, Codex) reach Iron Jarvis through a "
+        f"checked copy of the bridge program in {folder}; an update or Quit does not stop it.",
+        level=RECOMMENDED,
+    )
 
 
 def check_model_targets(platform) -> dict:

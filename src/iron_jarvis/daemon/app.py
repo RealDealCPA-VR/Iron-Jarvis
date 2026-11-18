@@ -70,6 +70,10 @@ _BOOT_SLOW_MS = 50.0  # under this a phase is noise, not an explanation
 #: Third plan G23 (CS9): the bound on each start pass over the stored chat
 #: turn records (run on a worker thread; the start goes on past it).
 _TURN_PASS_TIMEOUT_S = 60.0
+#: v1.538.0 (fourth review group 29): the bound on the start step that puts the
+#: connected apps' bridge in the home (a copy, a 20 s ``--check``, a swap that
+#: may wait on Defender) and moves the apps' entries over to it.
+_BRIDGE_REFRESH_TIMEOUT_S = 60.0
 #: Third plan G23: a living document's regeneration that failed outside the
 #: model call (which answers in its own words) says this, on its row and in
 #: the 502; the raw text goes to the log.
@@ -80,6 +84,25 @@ _LIVEDOC_FAILED = "That living document could not be written. Try again."
 #: default per-pack connect timeout (15 s), so a slow-but-healthy pack is
 #: waited for and only a hung one is not.
 MCP_READY_WAIT_S = 20.0
+
+
+def refresh_bridge(home: Any) -> None:
+    """v1.538.0 (fourth review group 29, MS2/MS3, decision D7): put the
+    installed app's bridge program in ``<home>/bridge/`` once it answered
+    ``--check`` (``mcpserver/apps.ensure_bridge``), then move the connected
+    apps' own entries over to the checked copy there, when there is one
+    (``apps.migrate_entries``). Blocking: the start runs it on a worker
+    thread, bounded. When an installed app's bridge could not be put in place
+    (missing, failed its check, in use), this raises with ensure_bridge's own
+    plain words AFTER the move, so the step's health line says so; the apps
+    keep the copy they have, or the main program (the way back)."""
+    from ..mcpserver import apps as _apps
+
+    state = _apps.ensure_bridge(home)
+    _apps.migrate_entries(home)
+    note = str(getattr(state, "note", "") or "")
+    if note and _apps.shipped_bridge_dir() is not None:
+        raise RuntimeError(note)
 
 
 def _boot_line(total_ms: float, steps: "dict[str, float]") -> str:
@@ -1738,6 +1761,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # dashboard toggle takes effect without a daemon restart. Disable
         # explicitly via IRONJARVIS_AUTONOMY=off.
         bg_tasks: dict[str, asyncio.Task] = {}
+
+        # v1.538.0 (fourth review group 29): the connected apps' bridge is put
+        # in the home and the apps moved over to it, on a worker thread,
+        # bounded, in the background: the start does not wait on its 20 s
+        # `--check`. A failure is the step's health line ("refresh_bridge").
+        bg_tasks["refresh_bridge"] = asyncio.create_task(
+            _rehydrate_step(
+                "refresh_bridge",
+                lambda: refresh_bridge(platform.config.home),
+                off_loop_s=_BRIDGE_REFRESH_TIMEOUT_S,
+            )
+        )
 
         async def _autonomy_loop() -> None:
             try:

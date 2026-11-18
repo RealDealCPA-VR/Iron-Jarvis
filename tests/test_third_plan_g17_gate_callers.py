@@ -219,6 +219,9 @@ SITES: dict[tuple[str, str], Site] = {
         # card; and no capability family admits an app tool (proved below).
         cards=(NOT_HELD,),
     ),
+    # Fourth fix plan, MS8: a tool outside the grant is answered 403 at the
+    # door and recorded through the deny seam; the tool never runs.
+    ("mcpserver/server.py", "_record_refusal"): Site((REFUSAL_ONLY,), cards=(NO_GRANT,)),
     # A batch of file changes: each step tool's own check, and the guard for
     # Git's and Iron Jarvis's own files (`guarded_target`), refuse the batch.
     ("tools/apply_changes.py", "ApplyChangesTool.execute"): Site(
@@ -296,8 +299,9 @@ def test_every_registry_invoke_is_in_the_table_and_no_entry_is_stale():
     )
     # The scan really sees the calls (a parser that finds nothing passes the
     # loop above vacuously).
-    # 11 at v1.520.0; 12 since group 19's refusal-only call in the stream lane.
-    assert sum(registry_sites.values()) == 12
+    # 11 at v1.520.0; 12 since group 19's refusal-only call in the stream lane;
+    # 13 since MS8's refusal-only call at the MCP door (fourth fix plan).
+    assert sum(registry_sites.values()) == 13
 
 
 @pytest.mark.parametrize("key", sorted(SITES), ids=lambda k: f"{k[0]}::{k[1]}")

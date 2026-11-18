@@ -12,8 +12,9 @@ Every pin drives the REAL app factory (``create_app``) with ``IRONJARVIS_TOKEN``
 set — the shipped configuration, whose middleware once hid ``/mcp`` from 43
 green tests — and the REAL registry the platform built, so the write tools the
 gate must refuse are really registered beside the ones it admits. The call pins
-read the ToolInvocation row back out of the database: a call that reached
-``registry.invoke`` leaves one, a call the gate stopped leaves none.
+read the ToolInvocation row back out of the database: a call that ran leaves
+an ok row, and (since the fourth fix plan, MS8) a call the door stopped leaves
+exactly one refused row.
 """
 
 from __future__ import annotations
@@ -232,7 +233,10 @@ def test_memory_read_runs_too(memory_app):
 
 @pytest.mark.parametrize("name", MEMORY_WRITE_TOOLS)
 def test_a_write_tool_is_refused_even_with_memory_granted(memory_app, name):
-    """403 before ``invoke``: nothing written, nothing ledgered, no box offered."""
+    """403 at the door: nothing written, one refused row, no box offered.
+
+    Moved on purpose (fourth fix plan, MS8): the refusal is recorded through
+    ``invoke``'s deny path (exactly one failed row), and nothing runs."""
     session_id = memory_app.initialize()
     before = memory_app.platform.memory.read("user", "planted")
     response = memory_app.call(
@@ -245,7 +249,9 @@ def test_a_write_tool_is_refused_even_with_memory_granted(memory_app, name):
     assert "Tick" not in capability_refused_message(name), (
         "a tool no capability unlocks must not send the user to tick a box"
     )
-    assert memory_app.ledger_rows(name) == [], f"{name} reached registry.invoke"
+    rows = memory_app.ledger_rows(name)
+    assert len(rows) == 1 and rows[0].ok is False, f"{name}: expected one refused row, got {rows}"
+    assert capability_refused_message(name) in rows[0].output
     assert memory_app.platform.memory.read("user", "planted") == before
 
 
@@ -262,7 +268,10 @@ def test_a_browser_only_pane_gets_no_memory_tool(tmp_path, monkeypatch):
     assert response.status_code == 403, response.text
     assert response.json()["detail"] == capability_refused_message("memory_search")
     assert "include Memory" in response.json()["detail"]
-    assert app.ledger_rows("memory_search") == []
+    # Moved on purpose (fourth fix plan, MS8): one refused row, nothing run.
+    rows = app.ledger_rows("memory_search")
+    assert len(rows) == 1 and rows[0].ok is False, rows
+    assert capability_refused_message("memory_search") in rows[0].output
 
 
 def test_a_pane_with_nothing_enforced_is_refused_fail_closed(tmp_path, monkeypatch):

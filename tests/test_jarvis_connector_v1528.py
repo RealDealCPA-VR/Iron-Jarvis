@@ -285,8 +285,13 @@ def test_an_apps_key_reaches_no_other_tool(scene, name):
     assert r.json()["error"]["message"] == (
         f"{name} is not one of the tools Iron Jarvis gives Claude desktop: it has chat_record and work_search only."
     )
+    # Moved on purpose (fourth fix plan, MS8): refused AND recorded. Exactly one
+    # failed row, in the door's own sentence (or invoke's unknown-name words),
+    # and nothing ran (tests/test_fourth_review_server_v1538.py watches the tool).
     with session_scope(scene.engine) as db:
-        assert [x for x in db.exec(select(ToolInvocation)) if x.tool == name] == []
+        rows = [x for x in db.exec(select(ToolInvocation)) if x.tool == name]
+    assert len(rows) == 1 and rows[0].ok is False, rows
+    assert r.json()["error"]["message"] in rows[0].output or "unknown tool" in rows[0].output
 
 
 def test_a_pane_that_claims_the_record_box_gets_nothing_for_it():

@@ -46,6 +46,7 @@
     "afterPack": "./afterPack.js",
     "extraResources": [
       { "from": "../packaging/dist/ironjarvis", "to": "daemon" },
+      { "from": "../packaging/dist/bridge", "to": "bridge" },
       { "from": "../dashboard/.next/standalone", "to": "dashboard" },
       { "from": "resources/vosk-model", "to": "vosk-model" },
       { "from": "vendor/iron-proxy", "to": "iron-proxy" },

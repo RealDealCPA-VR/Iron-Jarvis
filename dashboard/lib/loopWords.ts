@@ -209,6 +209,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Keys in titles saved by an older version weren't hidden yet",
     href: "/memory",
   },
+  // v1.538.0 (fourth review group 29): the program Claude desktop, Claude
+  // Code and Codex start to reach Iron Jarvis is put in place at start.
+  refresh_bridge: {
+    label: "Connected apps",
+    problem: "The program your connected apps use to reach Iron Jarvis wasn't updated",
+    href: "/chat",
+  },
   reconcile_sessions: {
     label: "Cut-off tasks",
     problem: "Tasks the restart cut off weren't tidied up",

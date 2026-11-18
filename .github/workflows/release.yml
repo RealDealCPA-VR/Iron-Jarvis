@@ -355,6 +355,20 @@ jobs:
           } finally {
             if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           }
+          # v1.538.0 (group 29): the connected apps' bridge, built by the same
+          # spec, must exist with its content id and answer `--check` (no
+          # network, no key), or connected apps would be cut off by the update.
+          $bridge = "packaging/dist/bridge/ironjarvis-bridge.exe"
+          if (-not (Test-Path $bridge)) { throw "the connected apps' bridge is missing after build: $bridge" }
+          $bridgeId = ("" + (Get-Content -Raw "packaging/dist/bridge/bridge-id.txt")).Trim()
+          if ($bridgeId -notmatch '^[0-9a-f]{64}$') { throw "packaging/dist/bridge/bridge-id.txt does not hold one content id: '$bridgeId'" }
+          $out = Join-Path $env:RUNNER_TEMP "bridge-check.txt"
+          $c = Start-Process -FilePath $bridge -ArgumentList @("--check") -PassThru -NoNewWindow -RedirectStandardOutput $out
+          $null = $c.Handle
+          if (-not $c.WaitForExit(60000)) { Stop-Process -Id $c.Id -Force; throw "the bridge's --check did not finish within 60s" }
+          $said = ("" + (Get-Content -Raw $out)).Trim()
+          if ($c.ExitCode -ne 0 -or $said -ne "ironjarvis-bridge ok") { throw "the bridge's --check failed (exit $($c.ExitCode)): '$said'" }
+          Write-Host "bridge ok: $((Get-Item $bridge).Length) bytes, id $bridgeId"
 
       # NOT published from here: build-installer.ps1 without -Publish runs
       # electron-builder with `--publish never`.
@@ -403,7 +417,10 @@ jobs:
             exit 0
           }
           $daemon = Join-Path $rel "win-unpacked/resources/daemon/ironjarvis.exe"
-          $files = @($installer.FullName, (Join-Path $rel "win-unpacked/Iron Jarvis.exe"), $daemon)
+          # v1.538.0 (group 29): the connected apps' bridge is signed like every
+          # program electron-builder copies; checked here, and run signed below.
+          $bridge = Join-Path $rel "win-unpacked/resources/bridge/ironjarvis-bridge.exe"
+          $files = @($installer.FullName, (Join-Path $rel "win-unpacked/Iron Jarvis.exe"), $daemon, $bridge)
           foreach ($f in $files) {
             if (-not (Test-Path $f)) { throw "expected a signed file at $f" }
             $sig = Get-AuthenticodeSignature -LiteralPath $f
@@ -429,6 +446,13 @@ jobs:
           } finally {
             if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           }
+          $out = Join-Path $env:RUNNER_TEMP "bridge-check-signed.txt"
+          $c = Start-Process -FilePath $bridge -ArgumentList @("--check") -PassThru -NoNewWindow -RedirectStandardOutput $out
+          $null = $c.Handle
+          if (-not $c.WaitForExit(60000)) { Stop-Process -Id $c.Id -Force; throw "the SIGNED bridge's --check did not finish within 60s" }
+          $said = ("" + (Get-Content -Raw $out)).Trim()
+          if ($c.ExitCode -ne 0 -or $said -ne "ironjarvis-bridge ok") { throw "the SIGNED bridge's --check failed (exit $($c.ExitCode)): '$said'" }
+          Write-Host "signed bridge ok"
           "signed=true" >> $env:GITHUB_OUTPUT
 
       # electron-builder writes the files under productName ("Iron Jarvis Setup

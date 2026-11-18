@@ -192,11 +192,22 @@ def summarize(
                 out["title"] = title_of(typed_words(prompt))
         named = _name_of(rec) or named
         out["ended"] = iso(rec.get("timestamp")) or out["ended"]
+    # v1.538.0 (fourth review OT8): a first record bigger than the head
+    # window (a long first prompt, a pasted picture) leaves the head empty.
+    # Every record carries ``cwd``, so the folder comes from the tail then,
+    # and with no title and no recorded name, the first prompt the tail holds.
+    later = ""
     for _, rec in tail:
         out["ended"] = iso(rec.get("timestamp")) or out["ended"]
         named = _name_of(rec) or named
+        if not out["project"]:
+            out["project"] = s(rec.get("cwd"))
+        if not later and not out["title"]:
+            later = _prompt_text(rec)
     if not out["title"] and named:
         out["title"] = title_of(named)
+    if not out["title"] and later:
+        out["title"] = title_of(typed_words(later))
     if not out["project"]:
         out["project"] = path.parent.name
     return out

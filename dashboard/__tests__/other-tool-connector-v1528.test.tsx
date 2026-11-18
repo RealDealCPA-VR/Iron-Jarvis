@@ -36,7 +36,11 @@ import { CONNECT_WORDS, FIRST_READ_MS, decodeOtherApps, decodeOtherTools } from 
 const AT = "2026-11-16T10:00:00+00:00";
 
 function app(over: Record<string, unknown>) {
-  return { app: "claude-desktop", label: "Claude desktop", installed: true, connected: false, entry_missing: false, count: 0, last: "", ...over };
+  return {
+    app: "claude-desktop", label: "Claude desktop", installed: true, connected: false, entry_missing: false,
+    // v1.538.0: the row's three new fields (the daemon always sends them now).
+    entry_left: false, entry_stale: false, waiting_for_app: false, count: 0, last: "", ...over,
+  };
 }
 
 const CLAUDE_CHAT = {
@@ -91,7 +95,10 @@ describe("the answer", () => {
 
   it("reads which apps can be connected, and nothing it does not know", () => {
     expect(decodeOtherApps({ apps: [app({}), { app: "someone-else", installed: true }, "x"] })).toEqual([
-      { app: "claude-desktop", label: "Claude desktop", installed: true, connected: false, entryMissing: false, count: 0, last: "" },
+      {
+        app: "claude-desktop", label: "Claude desktop", installed: true, connected: false, entryMissing: false,
+        entryLeft: false, entryStale: false, waitingForApp: false, count: 0, last: "",
+      },
     ]);
   });
 });

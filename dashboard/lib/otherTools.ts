@@ -66,6 +66,14 @@ export interface OtherApp {
   connected: boolean;
   /** Connected here, but the app's own list lost the entry. */
   entryMissing: boolean;
+  /** v1.538.0 (OT4): not connected, but Iron Jarvis is still in the app's own
+   *  list (a Disconnect that could not change its file): Remove finishes it. */
+  entryLeft: boolean;
+  /** v1.538.0 (MS2): connected, but the app's entry names an older or missing
+   *  Iron Jarvis program: Connect again. */
+  entryStale: boolean;
+  /** v1.538.0 (C-OT-2): connected, and the app has not used it yet. */
+  waitingForApp: boolean;
   /** Chats it reported, and when it last did. */
   count: number;
   last: string;
@@ -153,6 +161,25 @@ export const CONNECT_WORDS: Record<string, string> = {
     "Lets Claude Code add a summary to each session, look up your earlier work and see what is running in Iron Jarvis, through Claude Code's own setting. What it looks up (titles, folders, file names, short summaries) goes to Claude's model with the rest of that session; client work and Local only work are never shared. New Claude Code sessions use it.",
 };
 export const DISCONNECT_WORDS = "It stops recording here and can no longer look anything up. What it recorded stays.";
+/** v1.538.0 (OT4): the Remove press for an entry left in the app's own list,
+ *  and what it says once armed (a second press sends). */
+export const REMOVE_PRESS = "Remove";
+export const REMOVE_AGAIN = "Remove for good? Press again";
+
+/** v1.538.0 (OT4): Iron Jarvis is still in the app's own list, though it is
+ *  not connected. */
+export function entryLeftWords(label: string): string {
+  return `${label} still lists Iron Jarvis in its settings.`;
+}
+
+/** v1.538.0 (MS2, C-OT-2): the connected app's status line. An entry naming
+ *  an older program comes first (the app cannot reach Iron Jarvis); then an
+ *  app that has not used it since Connect; else "Connected". */
+export function appStatusWords(app: OtherApp): string {
+  if (app.entryStale) return `Connected, but ${app.label} points at an older Iron Jarvis. Press Connect again.`;
+  if (app.waitingForApp) return `Connected · ${app.label} has not used it yet. Restart ${app.label} if it was open.`;
+  return `Connected${app.count ? ` · ${app.count} recorded` : ""}`;
+}
 /** Build › Code's own "open a saved conversation" request. */
 export const OPEN_SAVED_PATH = "/build/app/sessions";
 /** Chats shown per folder before "Show more". */
@@ -241,6 +268,10 @@ export function decodeOtherApps(raw: unknown): OtherApp[] {
       installed: o.installed === true,
       connected: o.connected === true,
       entryMissing: o.entry_missing === true,
+      // v1.538.0: an older daemon sends none of these: absent is false.
+      entryLeft: o.entry_left === true,
+      entryStale: o.entry_stale === true,
+      waitingForApp: o.waiting_for_app === true,
       count: typeof o.count === "number" && Number.isFinite(o.count) ? o.count : 0,
       last: text(o.last, 60),
     });

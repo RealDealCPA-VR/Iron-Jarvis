@@ -1075,6 +1075,71 @@ def _grant_now(d, grant) -> Any:
         return None
 
 
+async def _door_context(d, grant, platform) -> Any:
+    """The ``ToolContext`` an MCP call runs (or is refused) under: the pane's
+    folder, its Code project, and the ledger's ``mcp:<pane>`` session.
+
+    One builder for :func:`_call_tool` and :func:`_record_refusal`, so a
+    refused row lands under the same asker as a call that ran. The two
+    lookups are BLOCKING and run through ``asyncio.to_thread``.
+    """
+    from ..tools.base import ToolContext
+
+    workspace = await asyncio.to_thread(_pane_workspace, d, grant.pane_id)
+    project_id = await asyncio.to_thread(_code_project, d, grant.pane_id, workspace)
+    return ToolContext(
+        workspace=workspace,
+        session_id=harness_session_id(grant.pane_id),
+        # DELIBERATELY EMPTY (v1.238.0 review): ``agent_run_id`` is the indexed
+        # column every agent view resolves to an ``AgentRun`` row, and an MCP
+        # call belongs to no run. It used to carry the same ``mcp:<pane>`` string
+        # as the session id, which named a run that does not exist and rendered
+        # as a broken row wherever a surface followed it. Plan section 10 maps the
+        # harness onto the session_id column, and that is the whole mapping.
+        agent_run_id="",
+        config=platform.config,
+        event_bus=platform.event_bus,
+        engine=platform.engine,
+        project_id=project_id,
+    )
+
+
+async def _record_refusal(d, grant, name: str, arguments: Any, sentence: str) -> None:
+    """Record a call the door refused (403) for a tool outside the grant.
+
+    MS8 (fourth fix plan): the roster is the contract, so a tool the asker was
+    not given is refused AND recorded. The refusal goes through
+    ``registry.invoke`` with ``deny_reason`` (the door's own sentence), whose
+    deny path writes one ``ToolInvocation`` row and a ``tool.denied`` event and
+    runs nothing of the tool (no undo capture, no check, no ``execute``). A
+    name the registry does not know is recorded by ``invoke``'s own
+    unknown-name branch. The result is discarded: the caller still gets the
+    403. Never raises: a refusal that cannot be recorded is logged, and the
+    403 stands.
+    """
+    registry = _registry(d)
+    platform = getattr(d, "platform", None)
+    if registry is None or platform is None:
+        return
+    try:
+        from ..agents.runtime import _tool_deadline
+
+        ctx = await _door_context(d, grant, platform)
+        await registry.invoke(
+            name,
+            dict(arguments) if isinstance(arguments, dict) else {},
+            ctx,
+            platform.permissions,
+            allowed_names=set(permitted_tool_names(d, grant)),
+            deny_reason=sentence,
+            deny_label="not granted",
+            deadline_s=_tool_deadline(platform.config),
+        )
+    except Exception:  # noqa: BLE001 - the 403 is the answer; the row is a record
+        logger.warning("/mcp could not record the refusal of %s for pane %s",
+                       name, getattr(grant, "pane_id", ""), exc_info=True)
+
+
 async def _call_tool(d, grant, name: str, arguments: dict[str, Any], *,
                      sessions: "McpSessionRegistry | None" = None,
                      session_id: str = "") -> dict[str, Any]:
@@ -1102,7 +1167,6 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any], *,
     platform = getattr(d, "platform", None)
     if registry is None or platform is None:
         raise JsonRpcError(INTERNAL_ERROR, "the tool registry is not available")
-    from ..tools.base import ToolContext
     from ..tools.permissions import PermissionMode
 
     allowed = set(permitted_tool_names(d, grant))
@@ -1117,8 +1181,7 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any], *,
         deny_reason, session_grant = await _ask_the_user(
             d, tool, name, perm, arguments, grant.pane_id
         )
-    workspace = await asyncio.to_thread(_pane_workspace, d, grant.pane_id)
-    project_id = await asyncio.to_thread(_code_project, d, grant.pane_id, workspace)
+    ctx = await _door_context(d, grant, platform)
     if session_grant:
         # CHECKED AGAIN AFTER THE CARD (MC5), as late as possible before the
         # call: the user pressed Allow, but the card may have waited 45 s, and
@@ -1141,21 +1204,6 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any], *,
             allowed = set(permitted_tool_names(d, now))
     from ..agents.runtime import _tool_deadline
 
-    ctx = ToolContext(
-        workspace=workspace,
-        session_id=harness_session_id(grant.pane_id),
-        # DELIBERATELY EMPTY (v1.238.0 review): ``agent_run_id`` is the indexed
-        # column every agent view resolves to an ``AgentRun`` row, and an MCP
-        # call belongs to no run. It used to carry the same ``mcp:<pane>`` string
-        # as the session id, which named a run that does not exist and rendered
-        # as a broken row wherever a surface followed it. Plan section 10 maps the
-        # harness onto the session_id column, and that is the whole mapping.
-        agent_run_id="",
-        config=platform.config,
-        event_bus=platform.event_bus,
-        engine=platform.engine,
-        project_id=project_id,
-    )
     result = await registry.invoke(
         name,
         dict(arguments or {}),
@@ -1216,6 +1264,7 @@ async def dispatch(
       all**, whatever its method - checked first, so nothing runs for it.
     """
     method = request.method
+    # C-MS-2 CALL SITE (lead): valid key passed; app_of_grant(grant.pane_id) -> note first use
     # NO ID, NO RESPONSE - the rule, before any handler runs (v1.238.0 review).
     # JSON-RPC 2.0: "The Server MUST NOT reply to a Notification"; MCP's
     # Streamable HTTP says 202 with no body. This used to test the METHOD NAME
@@ -1286,15 +1335,19 @@ async def dispatch(
             )
         refusal = _door_refusal(d, grant, sessions, session_id, name)
         if refusal is not None:
-            # 403, and BEFORE ``invoke``: the registry would refuse it too (gate
-            # 3, ``allowed_names``), but that refusal is a tool RESULT the
-            # harness's model reads as a failed tool. A capability the pane does
-            # not hold is a fact about the credential, and it belongs in the
-            # status line where a harness author will see it.
+            # 403, answered at the door rather than as a tool RESULT: a
+            # capability the pane does not hold is a fact about the credential,
+            # and it belongs in the status line where a harness author will see
+            # it. MS8 (fourth fix plan): it is ALSO recorded - through
+            # ``invoke``'s deny path, with the same sentence, so Activity shows
+            # one refused row under the asker and nothing of the tool runs
+            # ("A tool the turn was not given is refused and recorded").
             logger.warning(
                 "/mcp refused %s for pane %s: capability not granted", name, grant.pane_id
             )
             status, code, sentence = refusal
+            if status == 403:
+                await _record_refusal(d, grant, name, request.params.get("arguments"), sentence)
             return McpReply(
                 payload=error_response(request.id, code, sentence),
                 status_code=status,

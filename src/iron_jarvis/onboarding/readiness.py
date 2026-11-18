@@ -36,6 +36,7 @@ DEV_TOOLCHAIN_CHECKS = frozenset({"python", "uv", "git", "gh", "node", "pnpm", "
 #: snake_case id). An unknown future row falls back to its name, de-underscored.
 CHECK_LABELS: dict[str, str] = {
     "browser": "A web browser for browsing tasks",
+    "connector_bridge": "The connected apps' bridge",
     "pdf scan routing": "Spotting scanned pages inside PDFs",
     "local_ocr": "Reading scanned pages on this PC",
     "old Office files": "Reading old .doc and .xls files",

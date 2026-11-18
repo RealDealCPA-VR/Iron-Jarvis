@@ -47,6 +47,8 @@ import {
   APP_TOOL,
   CONNECT_WORDS,
   DISCONNECT_WORDS,
+  REMOVE_AGAIN,
+  REMOVE_PRESS,
   FIRST_READ_MS,
   FOLDER_LIMIT,
   LIVE_ELSEWHERE_S,
@@ -62,9 +64,11 @@ import {
   appConnectPath,
   appDisconnectPath,
   appForTool,
+  appStatusWords,
   decodeOtherApps,
   decodeOtherTools,
   decodeWatch,
+  entryLeftWords,
   madeSessionId,
   newCount,
   newestOf,
@@ -160,6 +164,8 @@ export default function OtherToolChats({
   const [note, setNote] = useState<{ id: string; words: string } | null>(null);
   const [shownChat, setShownChat] = useState<string | null>(null);
   const [watch, setWatch] = useState<{ id: string; got: Watch | null; failed: boolean } | null>(null);
+  // v1.538.0 (OT4): the app whose Remove was pressed once (a second press sends).
+  const [removeArmed, setRemoveArmed] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [appNote, setAppNote] = useState<{ app: string; words: string } | null>(null);
   // v1.531.0: the whole part folds to its heading, remembered per place.
@@ -307,7 +313,8 @@ export default function OtherToolChats({
 
   if (tools === null) return null;
   const lines = linesOf(tools, apps);
-  const offers = apps.filter((a) => a.installed && (!a.connected || a.entryMissing));
+  // v1.538.0 (MS2): an entry naming an older Iron Jarvis is offered Connect too.
+  const offers = apps.filter((a) => a.installed && (!a.connected || a.entryMissing || a.entryStale));
   if (lines.length === 0 && offers.length === 0 && !appNote) return null;
   const shown = lines.find((t) => t.tool === openTool) ?? null;
 
@@ -579,8 +586,11 @@ export default function OtherToolChats({
                 {app && app.connected ? (
                   <>
                     <div className="flex items-center gap-1.5 px-2.5 pt-1 text-[11px] text-zinc-600">
-                      <span data-testid={`other-app-connected-${app.app}`} className="min-w-0 flex-1 truncate">
-                        Connected{app.count ? ` · ${app.count} recorded` : ""}
+                      <span
+                        data-testid={`other-app-connected-${app.app}`}
+                        className={`min-w-0 flex-1 ${app.entryStale || app.waitingForApp ? "leading-relaxed" : "truncate"}`}
+                      >
+                        {appStatusWords(app)}
                       </span>
                       <button
                         type="button"
@@ -610,9 +620,38 @@ export default function OtherToolChats({
           >
             <Plug size={12} aria-hidden="true" className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              {a.entryMissing ? `Connect ${a.label} again` : `Connect ${a.label}`}
+              {a.entryMissing || a.entryStale ? `Connect ${a.label} again` : `Connect ${a.label}`}
             </span>
           </button>
+          {/* Said once: the open tool's own line says it there. */}
+          {a.entryStale && APP_TOOL[a.app] !== openTool ? (
+            <p data-testid={`other-app-stale-${a.app}`} className="px-2.5 pb-1 text-[11px] leading-relaxed text-zinc-500">
+              {appStatusWords(a)}
+            </p>
+          ) : null}
+          {a.entryLeft ? (
+            <div className="flex items-center gap-1.5 px-2.5 pb-1 text-[11px] text-zinc-500">
+              <span data-testid={`other-app-left-${a.app}`} className="min-w-0 flex-1 leading-relaxed">
+                {entryLeftWords(a.label)}
+              </span>
+              <button
+                type="button"
+                data-testid={`other-app-remove-${a.app}`}
+                disabled={busy !== null}
+                onClick={() => {
+                  if (removeArmed !== a.app) {
+                    setRemoveArmed(a.app);
+                    return;
+                  }
+                  setRemoveArmed(null);
+                  void change(a.app, false);
+                }}
+                className={`${SMALL_BUTTON} shrink-0 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200`}
+              >
+                {busy === `app:${a.app}` ? "Working…" : removeArmed === a.app ? REMOVE_AGAIN : REMOVE_PRESS}
+              </button>
+            </div>
+          ) : null}
           {confirm?.app === a.app && confirm.connect ? confirmBlock(a, true) : null}
           {!lines.some((t) => t.tool === APP_TOOL[a.app] && t.tool === openTool) ? appNoteLine(a.app) : null}
         </div>

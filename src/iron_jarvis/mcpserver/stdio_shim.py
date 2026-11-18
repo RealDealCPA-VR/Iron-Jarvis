@@ -72,7 +72,10 @@ MCP_TOKEN_ENV = "IRONJARVIS_MCP_TOKEN"
 #: v1.528.0: a CONNECTED APP (Claude desktop, Codex) starts the bridge with
 #: the PATH of its key file in Iron Jarvis's own secrets folder
 #: (``mcpserver/apps.py``), so the key itself is never written into the other
-#: app's settings. Read only when ``IRONJARVIS_MCP_TOKEN`` is not set.
+#: app's settings. When it is set the key file WINS over an inherited
+#: ``IRONJARVIS_MCP_TOKEN`` (MS4b, fourth fix plan): only a connected app's own
+#: entry sets it, and an app started from a Build terminal inherits that
+#: terminal's token, whose grant is the terminal's, not the app's.
 MCP_TOKEN_FILE_ENV = "IRONJARVIS_MCP_TOKEN_FILE"
 #: The most of a key file read (a key is 43 characters).
 TOKEN_FILE_MAX = 4096
@@ -132,6 +135,26 @@ NO_KEY_FILE_MESSAGE = (
     "Iron Jarvis's key for this app is not on this PC any more: connect this app again in "
     "Iron Jarvis (Other tools, in the chat list), then restart this app"
 )
+
+#: MS6 (fourth fix plan): what a connected app's model reads when Iron Jarvis
+#: refuses its key as unknown and the key file holds no NEW key (it is the same
+#: key, or it is gone). A 401 is refused before any tool, so nothing ran.
+APP_KEY_ENDED_MESSAGE = (
+    "Iron Jarvis no longer accepts this app's key (it was disconnected, or connected "
+    "again): connect this app in Iron Jarvis again (Other tools, in the chat list). "
+    "The call was not made."
+)
+
+#: The ``reason`` code ``/mcp``'s 401 body carries for a key no store knows
+#: (``routes/mcpserver.py``; ``panetokens.REASON_UNKNOWN_TOKEN`` is the
+#: definition, spelled here for the same reason as the names above).
+UNKNOWN_TOKEN_REASON = "unknown_token"
+
+#: ``ironjarvis-bridge --check`` (group 29): the program answers that it can
+#: start, with no network call and no key read, so Iron Jarvis can try a new
+#: copy before it is swapped in. Exactly this one line on stdout, exit 0.
+CHECK_FLAG = "--check"
+CHECK_LINE = "ironjarvis-bridge ok"
 
 
 def token_from_file(path: str) -> str:
@@ -318,9 +341,13 @@ class StdioShim:
         timeout: float = DEFAULT_TIMEOUT_S,
         sleep: Callable[[float], None] | None = None,
         retry_delays: Iterable[float] | None = None,
+        key_file: str = "",
     ) -> None:
         self.url = str(url or "")
         self.token = str(token or "")
+        #: A connected app's key file (MS6, C-MS-1): re-read once when Iron
+        #: Jarvis refuses the key as unknown. "" for a Build terminal's token.
+        self.key_file = str(key_file or "")
         self.poster = poster if poster is not None else UrllibPoster()
         self.timeout = float(timeout)
         #: Injected so a test drives the backoff with no real wait.
@@ -388,9 +415,25 @@ class StdioShim:
             # The daemon answers a notification with an empty 202 and no body.
             # Even if it answered with one, a notification takes no reply.
             return None
+        repeated = False
+        if self.key_file and self._key_unknown(reply):
+            # MS6 / C-MS-1: a 401 is refused before any tool, so nothing ran.
+            # One re-read of the key file per refused call, never a loop: a NEW
+            # key (Connect pressed again) is taken, the session started again
+            # and the call repeated once; otherwise `_relay` names the remedy.
+            if not self._take_new_key():
+                return self._relay(request_id, reply)
+            self.session_id = ""
+            if method != "initialize" and self._initialize is not None:
+                refusal = self._reinitialise()
+                if refusal is not None:
+                    return self._relay(request_id, refusal)
+            reply = self._post(payload, retry=True)
+            repeated = True
         if method == "initialize":
             self._protocol_version = _protocol_of(reply)
-        elif sent_session and self._initialize is not None and self._session_lost(reply):
+        elif (not repeated and sent_session and self._initialize is not None
+              and self._session_lost(reply)):
             # MC3: Iron Jarvis restarted (or this session sat idle an hour) and
             # forgot it. Start a new one from the tool's own handshake, then
             # repeat THIS call once; never a loop.
@@ -431,6 +474,27 @@ class StdioShim:
         error = decoded.get("error") if isinstance(decoded, dict) else None
         return isinstance(error, dict) and error.get("code") == INVALID_REQUEST
 
+    @staticmethod
+    def _key_unknown(reply: HttpReply) -> bool:
+        """Did ``/mcp`` refuse the key as one no store knows (MS6)?
+
+        Matched on the status and the ``reason`` code of the 401 body
+        (``{"detail": ..., "reason": "unknown_token"}``), never the wording."""
+        if reply.status != 401:
+            return False
+        decoded = payload_from_body((reply.headers or {}).get("content-type", ""), reply.text)
+        return isinstance(decoded, dict) and decoded.get("reason") == UNKNOWN_TOKEN_REASON
+
+    def _take_new_key(self) -> bool:
+        """Re-read the key file; take a key that is there and DIFFERENT (C-MS-1).
+
+        ``False`` when the file holds the same key or none (MS6)."""
+        fresh = token_from_file(self.key_file) if self.key_file else ""
+        if not fresh or fresh == self.token:
+            return False
+        self.token = fresh
+        return True
+
     def _reinitialise(self) -> HttpReply | None:
         """Start a new session from the coding tool's own handshake (MC3).
 
@@ -467,6 +531,10 @@ class StdioShim:
             else:
                 message = UNREACHABLE_MESSAGE.format(url=self.url)
             return error_line(request_id, INTERNAL_ERROR, message)
+        if self.key_file and self._key_unknown(reply):
+            # MS6: the daemon's one 401 sentence is the Build terminal's; a
+            # connected app reads its own remedy.
+            return error_line(request_id, INTERNAL_ERROR, APP_KEY_ENDED_MESSAGE)
         decoded = payload_from_body((reply.headers or {}).get("content-type", ""), reply.text)
         if isinstance(decoded, dict) and decoded.get("jsonrpc") == "2.0" and \
                 str(decoded.get("id", "")).startswith(REINIT_ID_PREFIX):
@@ -523,14 +591,24 @@ def main(
 
     Returns 2 when it was started with no token, after saying so on ``stderr`` —
     the harness's own log is where a launch problem has to appear.
+
+    ``argv[1] == "--check"`` prints :data:`CHECK_LINE` and returns 0 at once.
     """
     args = list(argv if argv is not None else sys.argv)
+    if len(args) > 1 and args[1] == CHECK_FLAG:
+        # Before the environment is read: no key, no network, one line.
+        out = stdout if stdout is not None else sys.stdout
+        out.write(CHECK_LINE + "\n")
+        out.flush()
+        return 0
     environ = dict(env if env is not None else os.environ)
     url = (args[1] if len(args) > 1 else "") or environ.get(MCP_URL_ENV, "")
     token = environ.get(MCP_TOKEN_ENV, "")
     err = stderr if stderr is not None else sys.stderr
     key_file = environ.get(MCP_TOKEN_FILE_ENV, "")
-    if not token and key_file:
+    if key_file:
+        # MS4b: a connected app's own entry set the key file, so it wins over a
+        # token inherited from a Build terminal (that terminal's grant).
         token = token_from_file(key_file)
         if not token:
             err.write(NO_KEY_FILE_MESSAGE + "\n")
@@ -547,6 +625,9 @@ def main(
         return 2
     factory = shim_factory if shim_factory is not None else StdioShim
     shim = factory(url, token)
+    if key_file:
+        # Set after construction so an injected factory keeps its (url, token) shape.
+        shim.key_file = key_file
     return shim.run(stdin if stdin is not None else _utf8_stdin(),
                     stdout if stdout is not None else _utf8_stdout())
 
@@ -590,6 +671,9 @@ if __name__ == "__main__":  # pragma: no cover - process entry point
 
 
 __all__ = [
+    "APP_KEY_ENDED_MESSAGE",
+    "CHECK_FLAG",
+    "CHECK_LINE",
     "DEFAULT_TIMEOUT_S",
     "MCP_TOKEN_ENV",
     "MCP_URL_ENV",

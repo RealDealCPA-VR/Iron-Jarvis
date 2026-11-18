@@ -322,3 +322,103 @@ coll = COLLECT(
     upx_exclude=[],
     name="ironjarvis",
 )
+
+# --- The connected apps' bridge (v1.538.0, fourth review group 29: MS2/MS3) --
+# Claude desktop, Claude Code and Codex start Iron Jarvis's bridge from their
+# own settings. Naming the daemon's exe inside the install folder cut them off
+# at every update and Quit (the installer and the desktop's sweep stop every
+# program in that folder), and on a Linux AppImage that path is a temporary
+# mount. So the bridge is its OWN small one-file program, built from
+# mcpserver/stdio_shim.py ITSELF: it is standard library only, and importing
+# it through the package would pull in mcpserver/__init__ -> jsonrpc -> most of
+# the app. The daemon copies it to <home>/bridge/ at start
+# (mcpserver/apps.ensure_bridge) once `--check` answers, and only when the
+# content id below changed (every release re-signs, so the bytes always do).
+# Output: packaging/dist/bridge/ironjarvis-bridge(.exe) + bridge-id.txt, which
+# desktop/package.json ships to resources/bridge/ and desktop/afterPack.js
+# requires. Pins: tests/test_fourth_review_bridge_packaging_v1538.py.
+BRIDGE_SCRIPT = os.path.join(SRC, "iron_jarvis", "mcpserver", "stdio_shim.py")
+BRIDGE_NAME = "ironjarvis-bridge"  # NEVER "ironjarvis": a pin keeps the two apart
+BRIDGE_DIR = "bridge"
+BRIDGE_ID_FILE = "bridge-id.txt"
+BRIDGE_EXCLUDES = ["iron_jarvis", "ssl"]  # it only ever talks to 127.0.0.1 over http
+#: The bridge starts once per connected app's session; a bundle past this
+#: means something big was pulled in by mistake.
+BRIDGE_MAX_BYTES = 25 * 1024 * 1024
+
+
+def _bridge_content_id(data: bytes) -> str:
+    """The bridge's content id: lowercase sha256 of stdio_shim.py with its line
+    endings made LF. The SAME as ``mcpserver.apps.bridge_content_id`` (a test
+    pins the two agree); spelled here because the spec must not import the app."""
+    import hashlib
+
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
+bridge_a = Analysis(
+    [BRIDGE_SCRIPT],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=BRIDGE_EXCLUDES,
+    noarchive=False,
+    optimize=0,
+)
+# Fail the BUILD when the bridge pulled in the app or TLS after all.
+_bridge_leaks = sorted(
+    entry[0]
+    for entry in list(bridge_a.pure) + list(bridge_a.binaries)
+    if os.path.basename(str(entry[0])).split(".")[0] in ("iron_jarvis", "ssl", "_ssl")
+)
+if _bridge_leaks:
+    raise SystemExit(f"[ironjarvis.spec] the bridge must not bundle {_bridge_leaks}")
+
+bridge_pyz = PYZ(bridge_a.pure)
+
+# A one-file EXE is written straight into DISTPATH; point it at
+# DISTPATH/bridge for this one build (PyInstaller makes the folder), then put
+# DISTPATH back.
+from PyInstaller.config import CONF as _CONF  # noqa: E402
+
+_distpath = _CONF["distpath"]
+_CONF["distpath"] = os.path.join(DISTPATH, BRIDGE_DIR)
+try:
+    bridge_exe = EXE(
+        bridge_pyz,
+        bridge_a.scripts,
+        bridge_a.binaries,
+        bridge_a.datas,
+        [],
+        name=BRIDGE_NAME,
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=True,  # it speaks JSON-RPC over stdin/stdout
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
+finally:
+    _CONF["distpath"] = _distpath
+
+_bridge_size = os.path.getsize(bridge_exe.name)
+if _bridge_size > BRIDGE_MAX_BYTES:
+    raise SystemExit(
+        f"[ironjarvis.spec] the bridge is {_bridge_size} bytes, over {BRIDGE_MAX_BYTES}: "
+        "something big was bundled into it"
+    )
+with open(BRIDGE_SCRIPT, "rb") as _fh:
+    _bridge_id = _bridge_content_id(_fh.read())
+with open(os.path.join(DISTPATH, BRIDGE_DIR, BRIDGE_ID_FILE), "w", encoding="ascii", newline="\n") as _fh:
+    _fh.write(_bridge_id + "\n")
+print(f"[ironjarvis.spec] bridge: {bridge_exe.name} ({_bridge_size} bytes, id {_bridge_id})")

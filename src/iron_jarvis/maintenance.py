@@ -149,6 +149,10 @@ def create_backup(
     # v1.466.0: undo records, before-copies and reading copies of workbooks
     # open in Excel (documents/excel_live.py): transient, swept by age.
     excel_live_dir = (home / "excel-live").resolve()
+    # v1.538.0 (fourth review group 29): the connected apps' bridge program,
+    # copied from the installed app at every start (mcpserver/apps.ensure_bridge):
+    # a program, not the user's state, and held open while an app runs it.
+    bridge_dir = (home / "bridge").resolve()
     # v1.424.0 (D4): Iron Jarvis's plugin folder for the owner's Claude Code
     # setup on other accounts, in a dev or test home: COPIES of the owner's own
     # skills/commands/agents (v1.424.0 review: never junctions), remade at the
@@ -208,6 +212,7 @@ def create_backup(
                     or backgrounds_dir in rp.parents
                     or packages_dir in rp.parents
                     or excel_live_dir in rp.parents
+                    or bridge_dir in rp.parents
                 ):
                     continue  # skip regenerable media library (dwarfs the real state)
                 if snapshot is not None and rp == snapshot.resolve():

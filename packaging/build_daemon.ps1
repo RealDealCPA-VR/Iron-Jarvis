@@ -56,6 +56,15 @@ $Exe = Join-Path $DistPath "ironjarvis\ironjarvis.exe"
 if (-not (Test-Path $Exe)) { throw "expected exe not produced at $Exe" }
 Write-Host "Built: $Exe" -ForegroundColor Green
 
+# v1.538.0 (fourth review group 29): the same spec builds the connected apps'
+# bridge, a one-file program with its content id beside it. The installer
+# ships that folder (desktop/package.json -> resources/bridge).
+$Bridge = Join-Path $DistPath "bridge\ironjarvis-bridge.exe"
+$BridgeId = Join-Path $DistPath "bridge\bridge-id.txt"
+if (-not (Test-Path $Bridge)) { throw "expected bridge not produced at $Bridge" }
+if (-not (Test-Path $BridgeId)) { throw "expected bridge id not produced at $BridgeId" }
+Write-Host "Built: $Bridge" -ForegroundColor Green
+
 if ($Verify) {
     $StateDir = Join-Path $env:TEMP ("ironjarvis-freeze-verify-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null

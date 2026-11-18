@@ -34,6 +34,25 @@ exports.default = async function afterPack(context) {
     }
   }
 
+  // The connected apps' bridge (v1.538.0, fourth review group 29). extraResources
+  // copies packaging/dist/bridge -> resources/bridge; the daemon copies it into
+  // the user's home at start, and Claude desktop, Claude Code and Codex start
+  // THAT copy, so an update or Quit no longer cuts them off. A build without it
+  // would leave every connected app on the install folder. Checked BEFORE the
+  // dashboard step below, which returns early on a machine with no dashboard
+  // build: a missing bridge always fails the BUILD.
+  const bridgeDir = path.join(context.appOutDir, "resources", "bridge");
+  const bridgeExe = path.join(bridgeDir, context.electronPlatformName === "win32" ? "ironjarvis-bridge.exe" : "ironjarvis-bridge");
+  if (!fs.existsSync(bridgeExe) || fs.statSync(bridgeExe).size === 0) {
+    throw new Error(`[afterPack] the connected apps' bridge is missing or empty: ${bridgeExe} — packaging/ironjarvis.spec builds it into packaging/dist/bridge`);
+  }
+  const bridgeIdFile = path.join(bridgeDir, "bridge-id.txt");
+  const bridgeId = fs.existsSync(bridgeIdFile) ? fs.readFileSync(bridgeIdFile, "utf8").trim() : "";
+  if (!/^[0-9a-f]{64}$/.test(bridgeId)) {
+    throw new Error(`[afterPack] ${bridgeIdFile} is missing or does not hold one content id — packaging/ironjarvis.spec writes it beside the bridge`);
+  }
+  console.log(`[afterPack] bridge staged -> ${bridgeExe} (id ${bridgeId})`);
+
   const src = path.join(__dirname, "..", "dashboard", ".next", "standalone", "node_modules");
   const dst = path.join(context.appOutDir, "resources", "dashboard", "node_modules");
   if (!fs.existsSync(src)) {
@@ -88,7 +107,7 @@ exports.default = async function afterPack(context) {
   // `to:` target to build.extraResources means adding it here in the same
   // change; tests/test_browser_packaging_v1239.py pins the two lists together.
   const version = context.packager.appInfo.version;
-  const manifest = integrity.buildManifest(resourcesDir, ["daemon", "dashboard", "vosk-model", "browser-addon", "iron-proxy"], version);
+  const manifest = integrity.buildManifest(resourcesDir, ["daemon", "bridge", "dashboard", "vosk-model", "browser-addon", "iron-proxy"], version);
   const count = Object.keys(manifest.files).length;
   if (count < MANIFEST_FLOOR) {
     throw new Error(`[afterPack] install manifest has only ${count} files — the bundle is hollow`);

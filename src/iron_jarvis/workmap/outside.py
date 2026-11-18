@@ -377,6 +377,10 @@ def light(tool: str, path: Path, mtime_ns: int, size: int) -> dict[str, Any] | N
         log.debug("other tools: %s could not be read", path, exc_info=True)
         return None
     origin, source = _started_by(tool, head)
+    if not origin and tool == CLAUDE:
+        # v1.538.0 (OT8): every Claude Code record names what started it, so a
+        # head window with nothing readable (a huge first record) asks the tail.
+        origin, source = _started_by(tool, tail)
     folder = str(fields.get("project") or "").strip()
     if not _ABSOLUTE.match(folder):
         folder = ""  # a folder NAME (Claude Code's slug) is not a folder
@@ -457,16 +461,40 @@ def _when(value: Any) -> str:
     return stamp.replace(tzinfo=timezone.utc).isoformat() if stamp else ""
 
 
-def cowork_sessions() -> list[dict[str, Any]]:
+def cowork_sessions(strict: bool = False) -> list[dict[str, Any]]:
     """BLOCKING: the Cowork sessions Claude desktop keeps on this PC, newest
     first (its own small record per session: title, times, the folders the
-    owner chose). Archived ones are left out. Nothing is written."""
+    owner chose). Archived ones are left out. Nothing is written.
+
+    v1.538.0 (fourth review OT7): a file that goes between the listing and
+    its stat is skipped alone (it is gone, so its row going is right). A
+    folder that is not there means no sessions; a folder that is there but
+    cannot be read RAISES under ``strict`` (the work record then keeps its
+    rows: ``candidates`` and ``live_state``) and answers empty otherwise.
+    ``Path.glob`` itself says nothing about a folder it cannot read."""
     if not READS_DISK:
         return []
     root = cowork_root()
     try:
-        files = [(p.stat().st_mtime_ns, p.stat().st_size, p) for p in root.glob("*/*/local_*.json")]
+        with os.scandir(root):
+            pass
+    except FileNotFoundError:
+        return []
     except OSError:
+        if strict:
+            raise
+        return []
+    files: list[tuple[int, int, Path]] = []
+    try:
+        for p in root.glob("*/*/local_*.json"):
+            try:
+                st = p.stat()
+            except OSError:
+                continue  # gone between the listing and its stat
+            files.append((st.st_mtime_ns, st.st_size, p))
+    except OSError:
+        if strict:
+            raise
         return []
     files.sort(key=lambda f: f[0], reverse=True)
     out: list[dict[str, Any]] = []
@@ -534,6 +562,95 @@ def _codex_reports(engine: Any) -> list[dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- #
+# network folders (v1.538.0, fourth review OT9)
+# --------------------------------------------------------------------------- #
+#: Windows' drive types (``GetDriveTypeW``): a network drive, a fixed disk.
+DRIVE_REMOTE = 4
+DRIVE_FIXED = 3
+#: The bound on the child that asks Windows a drive's type. ``GetDriveTypeW``
+#: can wait on a disconnected mapped drive, so it never runs in the daemon.
+DRIVE_ASK_S = 8.0
+#: How long an answer is kept per drive letter (a letter is rarely re-mapped).
+DRIVE_KEEP_S = 600.0
+#: Seconds for :data:`DRIVE_KEEP_S`; tests set it.
+drive_clock = time.monotonic
+#: Tests set it to try the Windows path anywhere.
+ON_WINDOWS = os.name == "nt"
+#: A network path by its text: ``\\server\share``, ``//server/share``,
+#: ``\\?\UNC\server\share`` (not ``\\?\C:\``, a local path spelled long).
+_NETWORK = re.compile(r"^(?:[\\/]{2}[?.][\\/]UNC[\\/]|[\\/]{2}(?![?.][\\/]))", re.I)
+_LETTER = re.compile(r"^(?:[\\/]{2}[?.][\\/])?([A-Za-z]):")
+_drive_lock = threading.Lock()
+#: drive letter -> (asked at, its drive type)
+_drives: dict[str, tuple[float, int]] = {}
+
+
+def _powershell() -> str:
+    return os.path.join(os.environ.get("SystemRoot") or r"C:\Windows",
+                        "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
+def _ask_drives(letters: list[str]) -> dict[str, int]:
+    """BLOCKING, never on the event loop: each drive letter's Windows drive
+    type (``GetDriveTypeW``, through .NET's ``DriveInfo``), asked in a child
+    process started through ``core/procs`` and killed at :data:`DRIVE_ASK_S`.
+    A child that runs out of time answers :data:`DRIVE_REMOTE` for every
+    letter (a drive that makes Windows wait is a network drive); a child that
+    cannot start or answer leaves the letter out. Never raises."""
+    from ..core import procs
+
+    letters = [x.upper() for x in letters if len(x) == 1 and x.isascii() and x.isalpha()]
+    if not letters:
+        return {}
+    script = ("foreach($l in " + ",".join(f"'{x}'" for x in letters) + ")"
+              "{$l+'='+[int][System.IO.DriveInfo]::new($l+':\\').DriveType}")
+    try:
+        res = procs.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
+                        timeout=DRIVE_ASK_S)
+    except Exception:  # noqa: BLE001 — no child: the folder is looked at as before
+        log.debug("other tools: the drive types could not be asked", exc_info=True)
+        return {}
+    if res.timed_out:
+        log.debug("other tools: asking the drive types of %s ran out of time", letters)
+        return {x: DRIVE_REMOTE for x in letters}
+    out: dict[str, int] = {}
+    for line in procs.text(res.stdout).splitlines():
+        letter, _, kind = line.strip().partition("=")
+        if letter.upper() in letters and kind.strip().isdigit():
+            out[letter.upper()] = int(kind.strip())
+    return out
+
+
+def on_a_network(folder: str) -> bool:
+    """BLOCKING, never on the event loop: is ``folder`` on a network share,
+    so that asking the disk about it could wait for the network's timeout?
+    A network path by its TEXT; on Windows a folder on a mapped network drive
+    by the drive's type, asked once per letter (kept :data:`DRIVE_KEEP_S`;
+    the system drive is never asked). Anything else, or a drive whose type
+    could not be asked, is False (the folder is looked at as before)."""
+    text = str(folder or "")
+    if _NETWORK.match(text):
+        return True
+    m = _LETTER.match(text)
+    if not ON_WINDOWS or m is None:
+        return False
+    letter = m.group(1).upper()
+    if letter == (os.environ.get("SystemDrive") or "C:")[:1].upper():
+        return False  # Windows runs from it: a disk of this PC, never asked
+    now = drive_clock()
+    with _drive_lock:
+        hit = _drives.get(letter)
+    if hit is None or now - hit[0] > DRIVE_KEEP_S:
+        kind = _ask_drives([letter]).get(letter)
+        if kind is None:
+            return False
+        hit = (now, kind)
+        with _drive_lock:
+            _drives[letter] = hit
+    return hit[1] == DRIVE_REMOTE
+
+
+# --------------------------------------------------------------------------- #
 # the sidebar's list
 # --------------------------------------------------------------------------- #
 def _grouped(chats: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -585,7 +702,9 @@ def listing_view(used: "set[str] | None" = None, engine: Any = None) -> dict[str
                 hidden += 1
                 continue
             if chat["folder"] not in there:  # one look per folder per listing
-                there[chat["folder"]] = os.path.isdir(chat["folder"])
+                # v1.538.0 (OT9): a network folder is taken as present with no
+                # disk call (an offline share answers only after a timeout).
+                there[chat["folder"]] = on_a_network(chat["folder"]) or os.path.isdir(chat["folder"])
             if not there[chat["folder"]]:
                 hidden += 1  # HIDDEN_GONE: it cannot be continued
                 continue
@@ -616,8 +735,14 @@ def listing_view(used: "set[str] | None" = None, engine: Any = None) -> dict[str
     except Exception:  # noqa: BLE001 — the reports are one source of this group
         log.debug("other tools: Claude's reported chats could not be read", exc_info=True)
         whole = False
+    try:
+        sessions = cowork_sessions(strict=True)
+    except OSError:  # v1.538.0 (OT7): a folder that cannot be read is said, not shown empty
+        log.debug("other tools: Claude's Cowork sessions could not be read", exc_info=True)
+        sessions = []
+        whole = False
     claude_chat += [{k: c[k] for k in ("id", "title", "folder", "started", "ended", "summary", "link")}
-                    for c in cowork_sessions()]
+                    for c in sessions]
     found[CLAUDE_CHAT] = claude_chat
     tools: list[dict[str, Any]] = []
     for tool in REF_TOOLS:
@@ -770,7 +895,7 @@ def candidates(db: Any, candidate: Callable[..., Any]) -> tuple[list[Any], bool]
                 out.append(candidate(f"{KIND_OUTSIDE}:{ref}", KIND_OUTSIDE, ref, stamp, build))
     if CLAUDE_CHAT in tools:
         chats = reported_claude(engine)  # a read that fails RAISES: rows are left as they are
-        sessions = cowork_sessions()
+        sessions = cowork_sessions(strict=True)  # so does a folder that cannot be read (OT7)
         for chat in [*chats, *sessions]:
             ref = ref_of(CLAUDE_CHAT, chat["id"])
             stamp = f"{chat['ended']}|{chat['title']}|{chat.get('summary', '')[:40]}|{chat.get('folder', '')}"
@@ -804,7 +929,9 @@ def live_state(db: Any, refs: list[str]) -> dict[str, dict[str, Any]]:
             for i in have:
                 out[ref_of(CLAUDE_CHAT, f"r:{i}")] = {"local_only": False, "archived": False}
         if any(w.startswith("c:") for w in wanted):
-            live = {c["id"] for c in cowork_sessions()}
+            # v1.538.0 (OT7): a folder that cannot be read RAISES, so the
+            # record keeps those rows (and tells nothing from them meanwhile).
+            live = {c["id"] for c in cowork_sessions(strict=True)}
             for w in wanted:
                 if w.startswith("c:") and w in live:
                     out[ref_of(CLAUDE_CHAT, w)] = {"local_only": False, "archived": False}
@@ -843,10 +970,13 @@ def forget_cache() -> None:
     with _lock:
         _light.clear()
         _paths.clear()
+    with _drive_lock:
+        _drives.clear()
 
 
 __all__ = [
     "CLAUDE", "CODEX", "LABELS", "LISTED", "READS_DISK", "SWITCH", "SWITCH_DEFAULT", "TOOLS",
     "allow", "allowed", "by_a_program", "candidates", "find", "forget_cache", "hidden_reason",
-    "is_scratch", "light", "listing_view", "live_state", "project_of", "ref_of", "split_ref", "used_ids",
+    "is_scratch", "light", "listing_view", "live_state", "on_a_network", "project_of", "ref_of", "split_ref",
+    "used_ids",
 ]

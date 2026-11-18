@@ -98,7 +98,10 @@ def _with_clients(platform, folders: list[dict[str, Any]]) -> None:
 OTHER_TOOLS_UNREADABLE = "Your chats in other tools could not be read right now. Try again in a moment."
 APPS_NOT_READY = "Iron Jarvis is still starting. Try again in a moment."
 WATCH_GONE = "That session is not on this PC any more, or it is not one Iron Jarvis lists."
-APPS_UNKNOWN = "Iron Jarvis connects to Claude desktop or Codex."
+#: v1.538.0 (MS5): the same words as ``mcpserver/apps.UNKNOWN_APP`` (all three
+#: apps; spelled here because this module never imports ``mcpserver`` at load,
+#: and a test ties the two).
+APPS_UNKNOWN = "Iron Jarvis connects to Claude desktop, Claude Code or Codex."
 
 
 def _apps_view(d) -> list[dict[str, Any]]:
@@ -126,7 +129,7 @@ def _apps_view(d) -> list[dict[str, Any]]:
 async def _apps_change(d, name: str, *, connect: bool) -> dict[str, Any]:
     import asyncio
 
-    from ...mcpserver.apps import APP_CLAUDE, APPS, LABELS, AppConnectError
+    from ...mcpserver.apps import AFTER_CONNECT, APPS, LABELS, AppConnectError
     from ...platform import own_mcp_url
 
     apps = getattr(d.platform, "app_connections", None)
@@ -143,9 +146,9 @@ async def _apps_change(d, name: str, *, connect: bool) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     label = LABELS[name]
     if connect:
-        then = (f"Restart {label} to start using it." if name == APP_CLAUDE
-                else "New Codex chats use it; restart Codex if it is open.")
-        words = f"{label} is connected. {then}"
+        # v1.538.0 (MS5): each app's own sentence (Claude Code is never told
+        # about Codex).
+        words = f"{label} is connected. {AFTER_CONNECT[name]}"
     else:
         words = f"{label} is no longer connected. What it recorded stays."
     return {**row, "words": words}
