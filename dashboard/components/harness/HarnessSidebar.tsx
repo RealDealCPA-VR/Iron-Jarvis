@@ -24,6 +24,9 @@
  *  - Terminals: the live Build terminals with the state dots Build draws
  *    (GET /terminals/activity, polled by CodeView). Pressing one opens it
  *    in Build (v1.406.0: Build is the terminals; this list is in Chat › Code).
+ *    v1.537.0 (the owner: "collapsed by default"): the heading folds the
+ *    rows away and starts folded until opened (lib/sidebarFolds keeps the
+ *    choice); folded, it says how many need you, are working, or are open.
  *  - Keys (v1.420.0, fix plan C2.9): the list is the harness's for its keys
  *    (lib/harnessKeys HARNESS_LIST_ATTR), and ↑/↓ move between session rows.
  */
@@ -33,6 +36,7 @@ import {
   Archive,
   ArchiveRestore,
   Check,
+  ChevronDown,
   ChevronRight,
   Columns2,
   FolderOpen,
@@ -62,6 +66,7 @@ import { FolderDefaultsButton, FolderDefaultsPanel } from "@/components/folders/
 import type { CodeDefaults } from "@/lib/folderDefaults";
 // v1.530.0: Claude Code and Codex sessions running beside the IJ harness.
 import OtherToolChats from "@/components/chat/OtherToolChats";
+import { useSidebarFold } from "@/lib/sidebarFolds";
 
 /** v1.420.0 (fix plan C2.9): the attribute that marks a session row (↑/↓
  *  move between them) and the one that marks the list as the harness's. */
@@ -519,6 +524,17 @@ function ArchivedFold({
   );
 }
 
+/** What the folded "Terminals" heading says, so a fold hides nothing
+ *  silently: how many need you, else how many are working, else how many
+ *  are open; nothing when none are. */
+export function terminalsNote(terminals: Pick<RailPane, "state">[]): string {
+  const needs = terminals.filter((t) => t.state === "blocked").length;
+  if (needs > 0) return `${needs} needs you`;
+  const working = terminals.filter((t) => t.state === "working").length;
+  if (working > 0) return `${working} working`;
+  return terminals.length > 0 ? `${terminals.length} open` : "";
+}
+
 export function HarnessSidebar({
   folders,
   listError,
@@ -618,6 +634,7 @@ export function HarnessSidebar({
   // v1.377.0: search the sessions by title and folder name (the chat list's
   // search as the model: a quiet box, Escape clears it first).
   const [query, setQuery] = useState("");
+  const [terminalsFolded, toggleTerminals] = useSidebarFold("terminals");
   // v1.379.0: "/resume" (Claude Code's own name) — the caret in that box.
   const searchRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
@@ -779,10 +796,30 @@ export function HarnessSidebar({
         aria-label="Terminals"
         className="max-h-[40%] shrink-0 space-y-0.5 overflow-y-auto border-t hairline pt-2"
       >
-        <h3 className="flex items-center gap-1.5 px-2 text-[12px] font-medium text-zinc-400">
-          <SquareTerminal size={12} aria-hidden /> Terminals
+        <h3>
+          <button
+            type="button"
+            data-testid="harness-terminals-fold"
+            aria-expanded={!terminalsFolded}
+            title={terminalsFolded ? "Show your terminals" : "Fold your terminals away"}
+            onClick={toggleTerminals}
+            className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-left text-[12px] font-medium text-zinc-400 hover:text-zinc-200"
+          >
+            <SquareTerminal size={12} aria-hidden className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">Terminals</span>
+            {terminalsFolded && terminalsNote(terminals) ? (
+              <span data-testid="harness-terminals-note" className="shrink-0 text-[11px] font-normal text-accent-soft/90">
+                {terminalsNote(terminals)}
+              </span>
+            ) : null}
+            {terminalsFolded ? (
+              <ChevronRight size={11} aria-hidden="true" className="shrink-0" />
+            ) : (
+              <ChevronDown size={11} aria-hidden="true" className="shrink-0" />
+            )}
+          </button>
         </h3>
-        {terminals.length === 0 ? (
+        {terminalsFolded ? null : terminals.length === 0 ? (
           <p className="px-2 text-[12px] text-zinc-600">No terminals open.</p>
         ) : (
           terminals.map((t) => {

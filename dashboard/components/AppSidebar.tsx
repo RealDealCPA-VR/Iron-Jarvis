@@ -5,6 +5,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   AppWindow,
+  ChevronDown,
+  ChevronRight,
   Code2,
   FolderKanban,
   HelpCircle,
@@ -24,6 +26,8 @@ import { Button } from "@/components/ui";
 import { MoodOrb } from "@/components/MoodOrb";
 import { RunningNow } from "@/components/RunningNow";
 import SidebarChats from "@/components/chat/SidebarChats";
+import OtherToolChats from "@/components/chat/OtherToolChats";
+import { useSidebarFold } from "@/lib/sidebarFolds";
 import { announceChatView, useChatSurfaceView } from "@/lib/chatSurface";
 import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
 import { toggleSidebarFromButton, useSidebarHidden } from "@/lib/sidebarState";
@@ -192,16 +196,40 @@ function NavRow({
 /** The projects under the chats: the active ones, newest first as the daemon
  *  lists them, at most six. The list comes from the same store as the chats
  *  (lib/chatList), so the sidebar reads /projects once, and it reads NO chats
- *  (on the chat surface the page's rail holds them). */
+ *  (on the chat surface the page's rail holds them).
+ *
+ *  v1.537.0 (the owner: "collapsed by default"): the heading folds the list
+ *  away and starts folded until the owner opens it (lib/sidebarFolds keeps
+ *  the choice). Folded, the heading says how many projects it holds. */
 function SidebarProjects({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname() ?? "";
   const all = useChatProjects();
+  const [folded, toggle] = useSidebarFold("projects");
   const projects = (all ?? []).filter((p) => p.status !== "archived").slice(0, 6);
   if (projects.length === 0) return null;
   return (
     <div data-testid="sidebar-projects">
-      <div className="px-2.5 pb-1 pt-3 text-[12px] font-medium text-zinc-500">Projects</div>
-      {projects.map((p) => {
+      <button
+        type="button"
+        data-testid="sidebar-projects-fold"
+        aria-expanded={!folded}
+        title={folded ? "Show your projects" : "Fold your projects away"}
+        onClick={toggle}
+        className="flex w-full min-w-0 items-center gap-1 rounded-md px-2.5 pb-1 pt-3 text-left text-[12px] font-medium text-zinc-500 hover:text-zinc-300"
+      >
+        <span className="min-w-0 flex-1 truncate">Projects</span>
+        {folded ? (
+          <span data-testid="sidebar-projects-count" className="shrink-0 text-[11px] font-normal text-zinc-600">
+            {projects.length}
+          </span>
+        ) : null}
+        {folded ? (
+          <ChevronRight size={11} aria-hidden="true" className="shrink-0" />
+        ) : (
+          <ChevronDown size={11} aria-hidden="true" className="shrink-0" />
+        )}
+      </button>
+      {folded ? null : projects.map((p) => {
         const href = `/projects/${p.id}`;
         const on = pathname === href;
         return (
@@ -512,6 +540,13 @@ export function SidebarBody({
             />
           ) : (
             <SidebarChats onNavigate={onNavigate} />
+          )}
+          {/* v1.537.0 (the owner: "Other tools should appear right by
+              Projects"): the chats had in Claude Code and Codex sit just
+              above Projects under every chat list, folded until opened.
+              Chat › Code and Build carry their own (HarnessSidebar). */}
+          {onBuild || codeList ? null : (
+            <OtherToolChats onNavigate={onNavigate} go={(href) => router.push(href)} />
           )}
           <SidebarProjects onNavigate={onNavigate} />
       </div>

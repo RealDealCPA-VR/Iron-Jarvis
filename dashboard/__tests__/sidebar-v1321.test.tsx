@@ -164,6 +164,9 @@ describe("the conversation list", () => {
   it("projects are listed (archived ones are not)", async () => {
     render(<AppSidebar />);
     const projects = await screen.findByTestId("sidebar-projects");
+    // v1.537.0 (moved on purpose): the list starts folded; one press opens
+    // it (sidebar-folds-v1537 pins the fold itself).
+    fireEvent.click(within(projects).getByTestId("sidebar-projects-fold"));
     expect(within(projects).getByRole("link", { name: "Q3 Bookkeeping" }).getAttribute("href")).toBe("/projects/p1");
     expect(projects.textContent).not.toContain("Gone");
   });

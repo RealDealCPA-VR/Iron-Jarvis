@@ -532,7 +532,6 @@ import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import ThreadGroups, { GROUP_LIMIT, ShowOlderChats, ThreadSnippet } from "@/components/chat/ThreadGroups";
-import OtherToolChats from "@/components/chat/OtherToolChats";
 import {
   CHAT_SEARCH_FALLBACK_WORDS,
   fetchOlderThreads,
@@ -12872,10 +12871,6 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       onPress={() => void loadOlderThreads()}
                     />
                   ) : null}
-                  {/* v1.518.0: the chats had in Claude Code and Codex, closed
-                      until pressed (the sidebar's list on other pages has
-                      the same row). */}
-                  {!threadQuery.trim() ? <OtherToolChats onNavigate={closeChatSlot} /> : null}
                   </>
                 )}
                 {/* v1.328.0: work an archive could not stop from here is

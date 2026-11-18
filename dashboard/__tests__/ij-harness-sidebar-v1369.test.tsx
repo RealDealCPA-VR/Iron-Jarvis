@@ -169,9 +169,14 @@ describe("sessions grouped by folder", () => {
 });
 
 describe("the Terminals group", () => {
+  // v1.537.0 (moved on purpose): the group starts folded; one press opens it
+  // (sidebar-folds-v1537 pins the fold itself).
+  beforeEach(() => window.localStorage.clear());
+
   it("lists the live terminals with the rail's state dots, and opens one through the page's path", () => {
     const p = sidebar();
     const group = screen.getByTestId("harness-terminals");
+    fireEvent.click(within(group).getByTestId("harness-terminals-fold"));
     expect(within(group).getByTestId("harness-terminal-row-t1")).toHaveTextContent("builder");
     expect(within(group).getByTestId("pane-dot-blocked")).toBeInTheDocument();
     expect(within(group).getByTestId("pane-dot-shell")).toBeInTheDocument();
@@ -181,6 +186,7 @@ describe("the Terminals group", () => {
 
   it("says so when none is open", () => {
     sidebar({ terminals: [] });
+    fireEvent.click(screen.getByTestId("harness-terminals-fold"));
     expect(screen.getByTestId("harness-terminals")).toHaveTextContent("No terminals open.");
   });
 });

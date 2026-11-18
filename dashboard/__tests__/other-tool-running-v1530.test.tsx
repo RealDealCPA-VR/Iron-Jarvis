@@ -34,7 +34,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import OtherToolChats from "@/components/chat/OtherToolChats";
-import { FIRST_READ_MS, WATCH_REREAD_MS, WORKING_REREAD_MS } from "@/lib/otherTools";
+import { FIRST_READ_MS, FOLDED_KEY, WATCH_REREAD_MS, WORKING_REREAD_MS } from "@/lib/otherTools";
 
 const AT = "2026-11-17T10:00:00+00:00";
 
@@ -84,6 +84,9 @@ beforeEach(() => {
   postAnswer = () => ({ id: "hs_made" });
   push.mockReset();
   window.localStorage.clear();
+  // v1.537.0: the chat list's part starts folded; these pins are about what
+  // it shows once the owner has opened it (sidebar-folds-v1537 pins the fold).
+  window.localStorage.setItem(FOLDED_KEY, JSON.stringify({ chat: false }));
 });
 
 afterEach(() => {

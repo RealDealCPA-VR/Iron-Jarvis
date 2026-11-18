@@ -33,6 +33,8 @@
 //
 // v1.518.0: under it, "Other tools" (OtherToolChats): the chats the owner had
 // in Claude Code and Codex, closed until pressed, absent when there are none.
+// v1.537.0: that part moved to AppSidebar, just above Projects, so it sits in
+// the same place under every chat list (this one and the chat page's rail).
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -40,7 +42,6 @@ import { Archive, Search } from "lucide-react";
 
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { isSidebarChat } from "@/components/chat/CommThreadBanner";
-import OtherToolChats from "@/components/chat/OtherToolChats";
 import ThreadGroups, { GROUP_LIMIT, ShowOlderChats, ThreadSnippet } from "@/components/chat/ThreadGroups";
 import {
   CHAT_SEARCH_FALLBACK_WORDS,
@@ -120,7 +121,6 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
           Your chats appear here.
         </p>
         <ArchivedChatsLink onNavigate={onNavigate} />
-        <OtherToolChats onNavigate={onNavigate} go={(href) => router.push(href)} />
       </div>
     );
   }
@@ -197,7 +197,6 @@ export default function SidebarChats({ onNavigate }: { onNavigate?: () => void }
         />
       ) : null}
       <ArchivedChatsLink onNavigate={onNavigate} />
-      <OtherToolChats onNavigate={onNavigate} go={(href) => router.push(href)} />
     </div>
   );
 }
