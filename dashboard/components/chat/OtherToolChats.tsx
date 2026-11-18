@@ -70,10 +70,12 @@ import {
   newestOf,
   openSavedBody,
   quietWords,
+  readFolded,
   readSeen,
   stepsPath,
   withFirstSight,
   withoutChat,
+  writeFolded,
   writeSeen,
   type OtherApp,
   type OtherChat,
@@ -160,6 +162,8 @@ export default function OtherToolChats({
   const [watch, setWatch] = useState<{ id: string; got: Watch | null; failed: boolean } | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [appNote, setAppNote] = useState<{ app: string; words: string } | null>(null);
+  // v1.531.0: the whole part folds to its heading, remembered per place.
+  const [folded, setFolded] = useState(false);
   const readAt = useRef(0);
   const alive = useRef(true);
 
@@ -181,6 +185,10 @@ export default function OtherToolChats({
       // A list that could not be read draws nothing: the part is an extra,
       // and the list above it is never held up or replaced by it.
     }
+  }, [mode]);
+
+  useEffect(() => {
+    setFolded(readFolded(mode));
   }, [mode]);
 
   useEffect(() => {
@@ -474,9 +482,39 @@ export default function OtherToolChats({
 
   const workingCount = (t: OtherTool) => t.folders.reduce((n, f) => n + f.chats.filter((c) => c.working).length, 0);
 
+  const workingAll = mode === "code" ? lines.reduce((n, t) => n + workingCount(t), 0) : 0;
+  const freshAll = lines.reduce((n, t) => n + newCount(t, seen), 0);
+  const foldedNote = workingAll > 0 ? `${workingAll} working` : freshAll > 0 ? `${freshAll} new` : "";
+  const fold = () => {
+    const next = !folded;
+    setFolded(next);
+    writeFolded(mode, next);
+  };
+
   return (
     <div data-testid={`other-tools${mode === "code" ? "-code" : ""}`} className={className}>
-      <p className="px-2.5 pb-0.5 pt-1 text-[11px] text-zinc-600">Other tools</p>
+      <button
+        type="button"
+        data-testid="other-tools-fold"
+        aria-expanded={!folded}
+        title={folded ? "Show your other tools" : "Fold your other tools away"}
+        onClick={fold}
+        className="flex w-full min-w-0 items-center gap-1 rounded-md px-2.5 pb-0.5 pt-1 text-left text-[11px] text-zinc-600 hover:text-zinc-400"
+      >
+        <span className="min-w-0 flex-1 truncate">Other tools</span>
+        {folded && foldedNote ? (
+          <span data-testid="other-tools-folded-note" className="shrink-0 text-accent-soft/90">
+            {foldedNote}
+          </span>
+        ) : null}
+        {folded ? (
+          <ChevronRight size={11} aria-hidden="true" className="shrink-0" />
+        ) : (
+          <ChevronDown size={11} aria-hidden="true" className="shrink-0" />
+        )}
+      </button>
+      {folded ? null : (
+      <>
       {lines.map((t) => {
         const fresh = newCount(t, seen);
         const busyNow = mode === "code" ? workingCount(t) : 0;
@@ -582,6 +620,8 @@ export default function OtherToolChats({
       {appNote && !offers.some((a) => a.app === appNote.app) && !lines.some((t) => appForTool(apps, t.tool)?.app === appNote.app && t.tool === openTool)
         ? appNoteLine(appNote.app)
         : null}
+      </>
+      )}
     </div>
   );
 }

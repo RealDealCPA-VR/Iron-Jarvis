@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.531.0
+
+**Fold the other tools away.** The **Other tools** part of a list (Claude Code and Codex in Chat › Code, Claude Chat in the chat list) now folds.
+
 ## v1.530.0
 
 **Watch Claude Code and Codex from Chat › Code, and they see Iron Jarvis.** Your Claude Code and Codex sessions now sit where coding happens: in **Chat › Code**, beside your Iron Jarvis sessions.
@@ -77,7 +81,3 @@
 ## v1.513.0
 
 **"Done" means done in a coding session.** The fifth of eight releases from the second review.
-
-## v1.512.0
-
-**Stop means stopped.** The fourth of eight releases from the second review.

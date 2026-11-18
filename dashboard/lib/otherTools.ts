@@ -271,6 +271,28 @@ export function writeSeen(seen: Seen): void {
   }
 }
 
+/** v1.531.0 (the owner: "I can't minimize the other tools"): whether the
+ *  "Other tools" part is folded to its heading, kept per place (the chat
+ *  list, Chat › Code) in this browser. Open until folded. */
+export const FOLDED_KEY = "ij_other_tools_folded";
+
+export function readFolded(mode: OtherToolsMode): boolean {
+  try {
+    return obj(JSON.parse(window.localStorage.getItem(FOLDED_KEY) || "{}"))?.[mode] === true;
+  } catch {
+    return false;
+  }
+}
+
+export function writeFolded(mode: OtherToolsMode, folded: boolean): void {
+  try {
+    const now = obj(JSON.parse(window.localStorage.getItem(FOLDED_KEY) || "{}")) ?? {};
+    window.localStorage.setItem(FOLDED_KEY, JSON.stringify({ ...now, [mode]: folded }));
+  } catch {
+    // Storage is a convenience: without it the part opens each time.
+  }
+}
+
 function at(iso: string): number {
   const t = Date.parse(iso);
   return Number.isNaN(t) ? 0 : t;

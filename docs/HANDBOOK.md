@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.530.0 (2026-11-17).*
+holds itself to. Current as of v1.531.0 (2026-11-18).*
 
 ---
 
@@ -2041,6 +2041,16 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Fold the other tools away (v1.531.0)
+
+The **Other tools** part of a list (Claude Code and Codex in Chat › Code,
+Claude Chat in the chat list) now folds. Press its heading, **Other tools**,
+to fold it to one line; press it again to open it. While it is folded, the
+line still says how many sessions are working (or, in the chat list, how
+many chats are new), so you can keep an eye on them without the room they
+take. Each list remembers its own choice, so it stays folded after a
+restart until you open it again.
 
 ## Watch Claude Code and Codex from Chat › Code, and they see Iron Jarvis (v1.530.0)
 
