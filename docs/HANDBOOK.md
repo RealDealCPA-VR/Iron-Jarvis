@@ -2042,6 +2042,41 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Connected apps keep working by themselves (v1.538.0)
+
+The sixth of nine releases from the fourth review.
+
+- **An update or Quit no longer cuts off your connected apps.** Claude
+  desktop, Claude Code and Codex used to start a program inside Iron
+  Jarvis's install folder, which every update replaces. They now start a
+  small separate program that Iron Jarvis keeps in its own folder. Iron
+  Jarvis replaces it only when a new version answers a test run, so it
+  always has a working one. Apps you connected before move over by
+  themselves the first time this version starts, and each one asks for one
+  restart.
+- **Connect again reaches an app that is already open.** If you press
+  Connect again, an app that is running picks up its new key on its next
+  call, with no restart. If its key no longer works at all, the app is told
+  to connect it again in Iron Jarvis (Other tools, in the chat list), and
+  nothing runs.
+- **The row says what is going on.** After Connect it says when the app will
+  start using Iron Jarvis ("Restart Claude desktop to start using it.", "New
+  Claude Code sessions use it; one that is open now needs a restart."). Until
+  the app's first call it says "has not used it yet". When an app points at
+  an older Iron Jarvis it says so and offers Connect again.
+- **Disconnect says what really changed.** If the other app's settings file
+  is busy, Iron Jarvis still stops accepting the app's key, says the file
+  still lists it, and gives a Remove button to finish once the app is
+  closed. A file that is busy for a moment is tried again first. Settings of
+  your own that Codex wrote next to Iron Jarvis's entry are kept. Only the
+  newest 3 copies of another app's settings file are kept.
+- **A tool a connected app may not use is recorded as refused** in the
+  activity log, and nothing runs.
+- **Other tools' chats are listed more reliably.** A chat whose first
+  message is very large (a pasted picture) keeps its folder and title, one
+  file that disappears no longer empties the list, and a chat in a network
+  folder is listed without waiting on the network.
+
 ## A tidier sidebar: Terminals, Other tools and Projects start folded (v1.537.0)
 
 The lower part of the sidebar now starts out of the way, and you open what

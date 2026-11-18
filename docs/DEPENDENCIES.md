@@ -161,6 +161,7 @@ function runs.
 | `fleet` | providers | 12 | **6**: agents, daemon, envelope, platform, providers, settings | core, providers | none |
 | `personas` | memory | 5 | **6**: agents, daemon, guide, harness_bench, platform, settings | core | none |
 | `maintenance` | daemon | 1 | **5**: agents, daemon, harness, onboarding, settings | core | iron_proxy |
+| `mcpserver` | connections | 6 | **5**: daemon, hosted, onboarding, platform, workmap | __init__, core, hosted, mcp, workmap | agents, browser, computeruse, daemon, platform, projects, tools |
 | `memory` | memory | 18 | **5**: agents, daemon, inbox, learning, platform | computeruse, core, ltm, search, tools | detections, learning, profile, providers, workmap |
 | `motivation` | automations | 4 | **5**: daemon, improvement, inbox, platform, settings | agents, core, tools | providers, settings |
 | `reflex` | automations | 5 | **5**: daemon, platform, settings, webhooks, workflows | core | __init__, agents, comm, computeruse, providers, workflows |
@@ -173,7 +174,6 @@ function runs.
 | `goals` | automations | 5 | **4**: daemon, inbox, platform, settings | core | agents, eval, providers, tools, workflows |
 | `guide` | memory | 3 | **4**: agents, daemon, onboarding, platform | tools | __init__, agents, capability_search, core, personas, settings, workflows |
 | `history` | tools | 5 | **4**: daemon, hosted, learning, workmap | none | providers |
-| `mcpserver` | connections | 6 | **4**: daemon, hosted, platform, workmap | __init__, core, hosted, mcp, workmap | agents, browser, computeruse, daemon, projects, tools |
 | `search` | chat | 5 | **4**: core, daemon, memory, platform | core, tools | agents, providers, workmap |
 | `webhooks` | automations | 7 | **4**: daemon, integrations, platform, settings | core, tools | reflex, settings |
 | `artifacts` | agents | 3 | **3**: creative, daemon, platform | core | none |
@@ -186,6 +186,7 @@ function runs.
 | `inbox` | memory | 3 | **3**: daemon, platform, settings | tools | capability, coach, core, daemon, goals, harness, learning, memory, motivation, settings, skills, workmap |
 | `integrations` | connections | 7 | **3**: daemon, platform, settings | core, tools | detections, webhooks |
 | `media` | documents | 10 | **3**: daemon, platform, tools | core, detections, providers | creative, daemon |
+| `platform` | daemon | 1 | **3**: daemon, harness_bench, mcpserver | agents, artifacts, assignments, blackboard, browser, codelab, comm, computeruse, connections, core, documents, eval, filesearch, improvement, integrations, learning, ltm, mcp, memory, motivation, personas, providers, reflex, sandbox, scheduling, search, secrets, sentinels, skills, templates, terminals, tools, webhooks, workflows, worklist | brain, capability, capability_search, coach, daemon, fleet, goals, guide, harness, hosted, inbox, iron_proxy, mcpserver, media, profile, repl, settings, workmap |
 | `repl` | context | 3 | **3**: daemon, platform, tools | none | core, sandbox |
 | `sentinels` | automations | 5 | **3**: daemon, platform, settings | core, tools | harness, settings |
 | `worklist` | agents | 4 | **3**: agents, daemon, platform | blackboard, core, tools | agents |
@@ -194,9 +195,8 @@ function runs.
 | `connections` | connections | 7 | **2**: daemon, platform | core | providers |
 | `excel_worker` | documents | 1 | **2**: daemon, documents | none | none |
 | `filesearch` | documents | 4 | **2**: daemon, platform | core, tools | documents |
-| `onboarding` | dashboard | 4 | **2**: daemon, tools | core | __init__, browser, connectors, daemon, documents, guide, harness, learning, maintenance, mcp, providers, terminals, voice |
+| `onboarding` | dashboard | 4 | **2**: daemon, tools | core | __init__, browser, connectors, daemon, documents, guide, harness, learning, maintenance, mcp, mcpserver, providers, terminals, voice |
 | `peers` | messaging | 5 | **2**: agents, daemon | core, daemon | agents, comm, detections |
-| `platform` | daemon | 1 | **2**: daemon, harness_bench | agents, artifacts, assignments, blackboard, browser, codelab, comm, computeruse, connections, core, documents, eval, filesearch, improvement, integrations, learning, ltm, mcp, memory, motivation, personas, providers, reflex, sandbox, scheduling, search, secrets, sentinels, skills, templates, terminals, tools, webhooks, workflows, worklist | brain, capability, capability_search, coach, daemon, fleet, goals, guide, harness, hosted, inbox, iron_proxy, mcpserver, media, profile, repl, settings, workmap |
 | `secrets` | tools | 4 | **2**: core, platform | core, tools | none |
 | `templates` | agents | 1 | **2**: daemon, platform | core | none |
 | `voice` | chat | 1 | **2**: daemon, onboarding | none | none |

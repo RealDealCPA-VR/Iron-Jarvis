@@ -4270,3 +4270,42 @@ Left open:
   one message"; that fits a run poorly.
 - Not tried on the installed app: closing the window while a reply hands
   off; "Start it now"; pressing a finished chat-started run's tray notice.
+
+### Group 29 as built (v1.538.0)
+
+Fixed: MS2, MS3, MS4b, MS5, MS6, MS7, MS8, OT4, OT6, OT7, OT8, OT9, OT10,
+C-MS-1, C-OT-1, C-OT-2, with owner decisions D7 (apps connected before move
+over at the first start) and D15 (the newest 3 copies). Six implementers
+(Opus 5.5); the lead read every diff, renamed the doctor row away from a
+retired word, and ran a release dry run before release.
+
+Where it differs from the plan:
+
+- No `packaging/bridge_entry.py`: `stdio_shim.py` is the PyInstaller script
+  itself (as the double-check said).
+- MS6 needed no daemon change: `/mcp` already answers a refused key with
+  `reason: "unknown_token"`; a test now holds it.
+- C-OT-2's first use is noted by the door's own key lookup
+  (`AppConnections.resolve`), not a call in `server.py`.
+- OT9's drive check runs in a Windows PowerShell child (`DriveInfo`), not a
+  new mode of the packaged program, because packaging changed in the same
+  release.
+- OT7: `live_state` is strict too, or the record would still drop Cowork
+  rows when the folder cannot be read.
+- The "has not used it yet" line shows once the app's line is opened; a
+  stale entry is also offered "Connect again" while closed.
+
+Left open:
+
+- The one-file bridge unpacks into the temporary folder each time it starts;
+  Defender and Smart App Control on the installed app, and its start time,
+  are still to be tried. If it fails there, the bridge becomes a one-folder
+  program.
+- Renaming a running signed bridge in the app's folder, and Defender holding
+  a just-written copy, are tried only by tests with stand-in programs.
+- The 403 when a grant enables nothing at all is still not recorded (MS8
+  covered the per-tool refusal).
+- Linux runs the bridge build but not its `--check` in `linux-release.yml`.
+- Not tried on the installed app: an update with Claude desktop connected;
+  Connect again with Claude Code open; Disconnect with Claude desktop open;
+  a disconnected mapped drive; a Claude Code chat that starts with a picture.
