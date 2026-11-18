@@ -202,6 +202,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "The usage of replies the restart cut off wasn't counted",
     href: "/usage",
   },
+  // v1.532.0 (fourth review D1): keys in titles saved by older versions are
+  // masked once at start (workmap/masked_once.py).
+  mask_stored_work: {
+    label: "Hidden keys in saved titles",
+    problem: "Keys in titles saved by an older version weren't hidden yet",
+    href: "/memory",
+  },
   reconcile_sessions: {
     label: "Cut-off tasks",
     problem: "Tasks the restart cut off weren't tidied up",
