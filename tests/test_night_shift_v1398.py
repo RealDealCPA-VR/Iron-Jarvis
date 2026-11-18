@@ -704,6 +704,22 @@ async def test_the_team_rides_the_models_message_and_try_on_starts_attempts(app,
     question = next(m for m in messages_of(app, started["thread_id"]) if m["role"] == "user")
     assert question["content"] == "TEAM: split the parser", "the question line shows the user's words alone"
 
+    # v1.532.0: the team task must have ENDED before the next pass. A task tried
+    # on two models needs both of "Night tasks at once" (2) slots, so while the
+    # team task still counts as running the pass leaves it queued. The reply's
+    # text lands before the turn ends (its finish and commit run after it), so
+    # waiting for the text alone passed or failed by the runner's speed (it
+    # passed only on GitHub's retry). Wait for the task itself to settle.
+    async def team_settled() -> bool:
+        await night_routes.settle_running(app.state.d)
+        return N.get_task(engine, team["id"])["state"] != N.RUNNING
+
+    for _ in range(1500):  # up to 30 s: waits for the task, not a clock
+        if await team_settled():
+            break
+        await asyncio.sleep(0.02)
+    assert N.get_task(engine, team["id"])["state"] != N.RUNNING, "the team task never ended"
+
     # Try on: the attempts' own start, as Iron Jarvis's (started_by night).
     seen: list = []
 
