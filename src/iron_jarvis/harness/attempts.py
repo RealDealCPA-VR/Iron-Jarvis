@@ -110,6 +110,9 @@ WHY_WORDS = {
 #: Second review D11 (v1.513.0): an attempt cut at the step limit (the
 #: session page's own words for a reply: "stopped at its step limit").
 STEP_LIMIT_WORDS = "Stopped at its step limit"
+#: Fourth review CS4 (decision D4 A): the user switched the session to Plan
+#: while the attempt ran — from its next step it changed nothing more.
+PLAN_NOW_WORDS = "Stopped making changes when you switched on Plan"
 #: Third plan NA7: an attempt that waited its turn (at night, at most "Night
 #: tasks at once" run at a time) and was stopped before it began.
 STOPPED_BEFORE_START = "Stopped before it started"
@@ -1326,6 +1329,12 @@ class Attempt:
     #: attempts turn's start (an attempt that waited its turn keeps its
     #: whole limit).
     wall_start: float = 0.0
+    #: Fourth review CS2: its turn ended on its done frame WITHOUT finishing
+    #: — ``reply_end.LENGTH`` / ``reply_end.CUT_OFF`` ("" = not cut short).
+    cut: str = ""
+    #: Fourth review CS4: Plan was switched on while it ran (the stream
+    #: lane's done frame says ``plan_now``).
+    plan_now: bool = False
 
     def metered_usd(self) -> float:
         """The METERED dollars this attempt spent (a subscription's list-price
@@ -1450,6 +1459,12 @@ class Attempt:
             sl = data.get("step_limit") if isinstance(data.get("step_limit"), dict) else data.get("stepLimit")
             if isinstance(sl, dict):
                 self.step_limit = dict(sl)
+            # Fourth review CS2: cut short (the ONE reading of a reply that
+            # ended on its done frame without finishing).
+            from .reply_end import cut_short
+
+            self.cut = cut_short(data)
+            self.plan_now = data.get("plan_now") is True
             from .finish import saved_record
 
             self.finish = saved_record(data.get("finish"))
@@ -1505,12 +1520,22 @@ class Attempt:
             if not self.t0:
                 # Third plan NA7: Stop reached it while it waited its turn.
                 self.words = STOPPED_BEFORE_START
+        elif self.done and self.cut:
+            # Fourth review CS2 (decision D12): cut short is the model's
+            # failure, never "Finished" — read BEFORE a limit, the night's
+            # order (R13). Keep is still offered for the files it changed.
+            from .reply_end import CUT_WORDS
+
+            said = CUT_WORDS.get(self.cut, CUT_WORDS["length"]).rstrip(".")
+            self.state, self.why = "failed", "failed"
+            self.words = f"{WHY_WORDS['failed']}: {said[:1].lower()}{said[1:]}"
         elif self.done and self.cap_met:
-            from .reply_cap import limit_words
+            from .reply_cap import which_limit
 
             self.state, self.why = "stopped", "stopped"
-            kind = "cost" if self.cap_met.get("kind") == "cost" else "time"
-            self.words = f"Stopped at this session's {kind} limit ({limit_words(self.cap_met)})"
+            # Fourth review CS5: the limit by name — the session's own, or
+            # what was left of the month's pay-per-use limit.
+            self.words = f"Stopped at {which_limit(self.cap_met)}"
         elif self.done and self.step_limit is not None:
             # Second review D11 (v1.513.0): cut at the step limit is not
             # "Finished" — the card's warning tone, and Keep only for its
@@ -1519,6 +1544,10 @@ class Attempt:
             n = self.step_limit.get("limit")
             count = (f" ({n:,} steps)" if isinstance(n, int) and not isinstance(n, bool) and n > 0 else "")
             self.words = f"{STEP_LIMIT_WORDS}{count}"
+        elif self.done and self.plan_now:
+            # Fourth review CS4 (decision D4 A): Plan switched on while it
+            # ran — it changed nothing from then on; never "Finished".
+            self.state, self.why, self.words = "stopped", "stopped", PLAN_NOW_WORDS
         elif self.done:
             self.state, self.why, self.words = "done", "finished", WHY_WORDS["finished"]
         elif isinstance(limit, dict) and limit:
@@ -1616,6 +1645,12 @@ class Plan:
     #: their turn inside the task (:func:`run_attempts`). None = all at once
     #: (by day, as before).
     max_running: "int | None" = None
+    #: Fourth review CS4 (decision D4 A): the session's level watch
+    #: (``routes/build.LevelWatch``, built from its STORED level when the
+    #: attempts turn started) — armed in every attempt's context, so a
+    #: stricter level or Plan the user sets while they run reaches each from
+    #: its next step. None = none (as before).
+    level_watch: Any = None
 
     def by_id(self, aid: str) -> "Attempt | None":
         return next((a for a in self.attempts if a.id == aid), None)
@@ -1718,7 +1753,8 @@ def _arm(plan: Plan, a: Attempt) -> contextvars.Context:
     """The context ONE attempt's task is created in: its own account pin
     (None too — it never inherits another's), its model HELD (no fallback,
     no failover), its own branch, a Build session's failure words, the
-    session's command rule and standing summary."""
+    session's command rule and standing summary, and (fourth review CS4) the
+    session's level watch."""
     from ..iron_proxy.pin import set_pin
     from ..providers import failure_words as _fw
     from ..providers.hold import set_hold
@@ -1739,6 +1775,14 @@ def _arm(plan: Plan, a: Attempt) -> contextvars.Context:
         # v1.403.0: each attempt does the WHOLE task alone — never as the
         # session's team lead (Try on several models stays separate).
         _team.set_team(None)
+        watch = getattr(plan, "level_watch", None)  # a plan built before CS4 has none
+        if watch is not None:
+            # Fourth review CS4 (decision D4 A, G14): the level and Plan the
+            # user sets while the attempts run reach this one from its next
+            # step (the lane matches it by the session's thread id).
+            from ..daemon.routes.build import arm_level_watch
+
+            arm_level_watch(watch)
 
     ctx.run(arm)
     return ctx
@@ -1789,7 +1833,7 @@ class SharedCap:
         self.pay_usd = pay_usd
 
     def met(self, cost_so_far: float) -> "dict[str, Any] | None":
-        from .reply_cap import ReplyCap
+        from .reply_cap import PAY_LEFT, ReplyCap
 
         others = 0.0
         for a in self.plan.attempts:
@@ -1809,7 +1853,8 @@ class SharedCap:
         if self.pay_usd is not None:
             paid = sum(a.metered_usd() for a in self.plan.attempts if a is not self.me and a.cost == "pay")
             if paid + max(0.0, float(cost_so_far or 0.0)) >= float(self.pay_usd):
-                return {"kind": "cost", "limit": float(self.pay_usd)}
+                # Fourth review CS5: whose limit — never "this session's".
+                return {"kind": "cost", "limit": float(self.pay_usd), "of": PAY_LEFT}
         return None
 
 
@@ -2116,7 +2161,13 @@ async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterat
         # Review: what each attempt spent counts toward the pay-per-use limit.
         await _keep_spend(platform, plan)
         card = card_of(plan)
-        yield _sse("done", {"reply": summary_words(card), LINE_KEY: card})
+        end: dict[str, Any] = {"reply": summary_words(card), LINE_KEY: card}
+        if handle.stopped:
+            # Fourth review CS3: the turn was STOPPED (Stop, archive, delete,
+            # shutdown): ``routes/build.recorded_turn`` then records it as
+            # stopped and sends no "finished" notice.
+            end["stopped"] = True
+        yield _sse("done", end)
     finally:
         # Cut off (a shutdown cancels this turn) or closed early: nothing an
         # attempt started may outlive it.

@@ -39,6 +39,7 @@ import { RewindControl } from "@/components/harness/RewindControl";
 import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/harnessLook";
 import { CapMetLine, SummarizedLine } from "@/components/harness/HarnessLongJobs";
 import { decodeCapMet, decodeSummarized } from "@/lib/buildLongJobs";
+import { cutShort } from "@/lib/replyEnd";
 import { SavedHelperRows } from "@/components/harness/HarnessHelpers";
 import { AttemptsCardView } from "@/components/harness/HarnessAttempts";
 import { TeamReplyLine } from "@/components/harness/HarnessTeam";
@@ -116,7 +117,9 @@ export function replyLineParts(m: BuildMessage): ReplyLinePart[] {
   if (fin) parts.push({ key: "finish", text: finishWords(fin), warn: finishWarn(fin) });
   const failed = failedSteps(steps as { ok?: boolean | null }[]);
   if (failed) parts.push({ key: "failed", text: `${failed} failed`, warn: true });
-  if (m.truncated || m.interrupted) parts.push({ key: "cut", text: "cut off", warn: true });
+  // Fourth review C-CS-1: cut short is the ONE twin's reading (lib/replyEnd),
+  // so a cut the route never recovered from says "cut off" too.
+  if (cutShort(m) || m.interrupted) parts.push({ key: "cut", text: "cut off", warn: true });
   return parts;
 }
 
@@ -504,7 +507,7 @@ function HarnessMessageRowImpl({
                 // The line above already says how long it worked ("Worked
                 // for" is said once): the fold lists what it did.
                 timing={null}
-                cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
+                cutOff={cutShort(m) ? "truncated" : m.interrupted ? "interrupted" : null}
                 // Part 3, Phase 2: the reply's finish check, in one sentence.
                 finish={decodeFinish(m.finish)}
               />

@@ -4170,3 +4170,36 @@ passed only on its retry: a task tried on two models needs both "Night tasks
 at once" slots, and the test started it before the first task had ended. The
 test now waits for the first task to settle. Explained from the code, not
 reproduced here.
+
+### Group 26 as built (v1.534.0)
+
+Fixed: CS1, CS2, CS3, CS4 (owner decision D4 A), CS5, owner decision D12,
+and C-CS-1, C-CS-2, C-CS-3. Three implementers (Opus 5.5); the lead read
+every diff and turned the night's new branch red by removing it.
+
+Where it went further than the plan:
+
+- An attempts turn that is stopped is recorded "stopped", so it is not counted
+  as finished anywhere (R14).
+- The bell's icon and the activity list learned the new outcome "choose" too.
+- The Last night row reads the attempts card through the existing session
+  route instead of a new field on the morning summary (the design's daemon
+  change was outside the files of that part).
+- The lead made the attempts' level watch read tolerantly (`getattr`): an
+  older test built a plan without it, and the local wide run caught it.
+
+Left open:
+
+- Saved cards from before keep "Finished" for a cut attempt.
+- `stopped: true` is set for any stop of an attempts turn (Stop, archive,
+  delete, shutdown); group 27 records who stopped it.
+- Not tried on the installed app: the tray's "choose" words; Keep from the
+  Last night row after a real night.
+
+Also in v1.533.0 (found by GitHub's full suite): the CI timings file covered
+under 90% of test files, so the 174 untimed files were measured here and
+merged in; and two tests passed only on their retry
+(`test_grounding_deadline_v1418::test_a_turn_whose_hops_all_answered_carries_no_late_key`,
+`test_harness_helpers_review_v1372::test_a_folder_rule_reaches_the_helper`),
+not reproduced here; the first now pins "every hop answered" with a deadline
+a runner cannot beat, the second waits up to 90 s for the frame it asserts.

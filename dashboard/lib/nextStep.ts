@@ -31,6 +31,7 @@ import { offerKind, offeredAction, type OfferKind } from "@/lib/closingOffer";
 import { finishNotDone, testsFailing, type FinishRecord } from "@/lib/stepWords";
 import { KEEP_GOING_TEXT, decodeFinish, decodeStepLimit } from "@/lib/buildSessions";
 import { decodeCapMet } from "@/lib/buildLongJobs";
+import { CUT_WORDS, cutShort, type CutKind } from "@/lib/replyEnd";
 
 /** What "Yes, do it" sends — the same as typing it. */
 export const YES_TEXT = "Yes, go ahead.";
@@ -98,6 +99,13 @@ export interface ReplyFacts {
   failed: boolean;
   /** The reply was cut off mid-answer (its own Continue is the press). */
   cutOff: boolean;
+  /** Fourth review C-CS-1: the reply was CUT SHORT (lib/replyEnd, the
+   *  daemon's reading): the box says so and offers Keep going. Absent or ""
+   *  = it was not (or a restart cut it off: that has its own Continue). */
+  cut?: CutKind | "";
+  /** Fourth review CS5: the cap it met was what was left of this month's
+   *  pay per use limit, not the session's own. */
+  payLeft?: boolean;
 }
 
 /** A coding session's branch, as the Branch view reads it (lib/buildGit). */
@@ -246,8 +254,26 @@ export function codeNextStep(r: ReplyFacts, git: GitFacts | null): NextStep | nu
   }
   const actions: NextAction[] = [];
   let left = "";
-  if (r.stopped) {
-    left = r.stopped === "cap" ? "It stopped at this session's limit before it finished." : "It stopped before it finished.";
+  if (r.cut) {
+    // Fourth review C-CS-1: a reply cut short did not finish — said in the
+    // daemon's own words (read before a limit, as the daemon reads it), with
+    // the existing Keep going (sent only by the user's press).
+    left = CUT_WORDS[r.cut];
+    actions.push({
+      kind: "keep_going",
+      label: "Keep going",
+      title: `Carry on from where it was cut off (sends "${NEXT_KEEP_GOING_TEXT}")`,
+      how: "send",
+      text: NEXT_KEEP_GOING_TEXT,
+      testid: "harness-keep-going",
+    });
+  } else if (r.stopped) {
+    left =
+      r.stopped !== "cap"
+        ? "It stopped before it finished."
+        : r.payLeft
+          ? "It stopped at what was left of this month's pay per use limit before it finished."
+          : "It stopped at this session's limit before it finished.";
     actions.push({
       kind: "keep_going",
       label: "Keep going",
@@ -273,7 +299,7 @@ export function codeNextStep(r: ReplyFacts, git: GitFacts | null): NextStep | nu
     left = `${plural(f.unmet, "point")} of the request still need${f.unmet === 1 ? "s" : ""} work.`;
   }
   // The offer is read only off a reply that ended whole.
-  const offer = r.cutOff || r.stopped ? null : offerAction(r.content, changed ? git : null);
+  const offer = r.cutOff || r.cut || r.stopped ? null : offerAction(r.content, changed ? git : null);
   if (offer) {
     actions.push(offer.action);
     if (!left) left = offer.recap;
@@ -331,15 +357,22 @@ export function codeReplyFacts(m: {
   accountLimit?: unknown;
   errorKind?: unknown;
   truncated?: unknown;
+  route?: unknown;
   interrupted?: unknown;
 }): ReplyFacts {
+  // Fourth review C-CS-1: cut short is read through the ONE twin. A reply a
+  // restart cut off keeps its own Continue (never a second press here).
+  const cut = cutShort(m);
+  const cap = decodeCapMet(m.capMet);
   return {
     content: typeof m.content === "string" ? m.content : "",
     documents: Array.isArray(m.documents) ? m.documents.length : 0,
     finish: decodeFinish(m.finish),
-    stopped: decodeStepLimit(m.stepLimit) ? "step_limit" : decodeCapMet(m.capMet) ? "cap" : null,
+    stopped: decodeStepLimit(m.stepLimit) ? "step_limit" : cap ? "cap" : null,
     failed: !!m.error || !!m.accountLimit || m.errorKind === "refusal",
-    cutOff: !!m.truncated || !!m.interrupted,
+    cutOff: !!cut || !!m.interrupted,
+    cut: m.interrupted ? "" : cut,
+    payLeft: cap?.of === "pay_left",
   };
 }
 
@@ -366,6 +399,7 @@ export interface ChatReplyShape {
   content?: unknown;
   documents?: unknown;
   truncated?: unknown;
+  route?: unknown;
   interrupted?: unknown;
   refused?: unknown;
   panelError?: unknown;
@@ -380,6 +414,6 @@ export function chatReplyFacts(m: ChatReplyShape): ReplyFacts {
     finish: null,
     stopped: null,
     failed: !!m.refused || !!m.panelError,
-    cutOff: !!m.truncated || !!m.interrupted,
+    cutOff: !!cutShort(m) || !!m.interrupted,
   };
 }

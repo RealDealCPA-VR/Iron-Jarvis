@@ -106,6 +106,10 @@ export interface SessionCap {
 export interface CapMet {
   kind: CapKind;
   limit: number;
+  /** Fourth review CS5: whose dollar limit it was — "pay_left" when what was
+   *  left of this month's pay per use limit set it (the daemon's
+   *  `reply_cap.PAY_LEFT`); absent for the session's own cap. */
+  of?: "pay_left";
 }
 
 export const CAP_MAX_MINUTES = 10_080;
@@ -128,7 +132,7 @@ export function decodeCapMet(raw: unknown): CapMet | null {
   if (!r || (r.kind !== "time" && r.kind !== "cost")) return null;
   const limit = r.limit;
   if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) return null;
-  return { kind: r.kind, limit };
+  return r.kind === "cost" && r.of === "pay_left" ? { kind: r.kind, limit, of: "pay_left" } : { kind: r.kind, limit };
 }
 
 export function usdWords(usd: number): string {
@@ -149,8 +153,12 @@ export function limitAdjective(minutes: number): string {
 }
 
 /** What the screen says under a reply that met the session's cap (the
- *  daemon's twin: harness/reply_cap.met_words). */
+ *  daemon's twin: harness/reply_cap.met_words). Fourth review CS5: a stop at
+ *  what was left of this month's pay per use limit names THAT limit (the
+ *  session's own cap words stay as they were). */
 export function capMetWords(c: CapMet): string {
+  if (c.kind === "cost" && c.of === "pay_left")
+    return `This reply stopped at what was left of this month's ${usdWords(c.limit)} pay per use limit.`;
   return c.kind === "cost"
     ? `This reply stopped at this session's ${usdWords(c.limit)} cost limit (list price).`
     : `This reply stopped at this session's ${limitAdjective(c.limit)} time limit.`;

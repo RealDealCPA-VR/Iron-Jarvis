@@ -121,6 +121,7 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
         _STARTING,
         ARCHIVED_SENTENCE,
         COMPACTING_SENTENCE,
+        LevelWatch,
         SessionBusy,
         _command_rule,
         _running_turn,
@@ -151,6 +152,15 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
         if getattr(row, "archived_at", None) is not None:
             raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
         setup = _setup_of(row)
+        # Fourth review CS4 (decision D4 A, G14): ONE level watch from the
+        # session's STORED level (never the night's posture below), armed in
+        # every attempt's context (``attempts._arm``): a stricter level or
+        # Plan set while they run reaches each from its next step. Plan is
+        # off here (a session in Plan is refused below).
+        level_watch = LevelWatch(
+            engine=platform.engine, thread_id=thread_id,
+            level=str(setup.get("approval_mode") or ""), plan=False,
+        )
         night_task = None
         if started_by != _night.BY_PERSON:
             night_task = await asyncio.to_thread(_night.running_task_for, platform.engine, thread_id)
@@ -281,6 +291,7 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
             # once" attempts run at a time; the rest wait their turn inside
             # the task. By day every attempt starts at once, as before.
             max_running=_night.max_at_once(platform.config) if night else None,
+            level_watch=level_watch,
         )
         question: dict[str, Any] = {"role": "user", "content": text or task, "turnId": turn_id}
         saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])

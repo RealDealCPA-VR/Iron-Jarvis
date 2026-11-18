@@ -9087,6 +9087,12 @@ async def chat_stream(
         _cap_receipt = _reply_cap_mod.receipt(_cap_met)
         if _cap_receipt is not None:
             done_frame["cap"] = _cap_receipt
+        # Fourth review CS4 (decision D4 A): Plan was switched on while this
+        # coding reply ran, so it changed nothing from then on — ONLY then
+        # (an attempt's row reads it: never "Finished"). The stream lane
+        # only: the POST lane runs no coding session (no level watch).
+        if _plan_now:
+            done_frame["plan_now"] = True
         # ESCALATION CARRIES THE TURN (v1.344.0, P1): present on EVERY
         # escalation (possibly []), absent otherwise — the page hands it to
         # POST /sessions. MIRROR NOTE (lock-step): chat_turn.py's response

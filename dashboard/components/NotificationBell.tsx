@@ -1141,10 +1141,11 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       // FINISHED, nothing less. Stopped at its limit (waits for Keep going) is
       // the pause sign; could not finish (a Build › Code reply cut at the
       // model's length limit is one) and "something needs you" are the warning.
+      // Fourth review C-CS-3: "choose" (attempts ready to pick from) too.
       icon:
         p.outcome === "limit"
           ? PauseCircle
-          : p.outcome === "failed" || p.outcome === "needs_you"
+          : p.outcome === "failed" || p.outcome === "needs_you" || p.outcome === "choose"
             ? AlertTriangle
             : CheckCircle2,
       title: buildFinishedHeadline(p.outcome),

@@ -463,6 +463,28 @@
       "href": "/chat?view=code&session=bs_cap"
     },
     {
+      "case": "build-turn-choose",
+      "event": {
+        "id": "evt_build_choose",
+        "type": "build.turn_finished",
+        "session_id": "build:bs_try",
+        "ts": "2026-10-19T03:17:00",
+        "payload": {
+          "thread_id": "bs_try",
+          "turn_id": "bt_try1",
+          "title": "Write the notes",
+          "seconds": 150,
+          "outcome": "choose"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "title": "Your attempts are ready: choose the one to keep",
+      "body": "Write the notes · took 2 min 30 s",
+      "href": "/chat?view=code&session=bs_try"
+    },
+    {
       "case": "build-app-turn-finished",
       "event": {
         "id": "evt_build_app_done",

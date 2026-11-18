@@ -251,6 +251,10 @@ export function buildFinishedHeadline(outcome: unknown): string {
   // Third plan RB10: stopped at its step or reply limit, waiting for Keep going —
   // it did not finish (the same words as the notifier and the tray).
   if (outcome === "limit") return "Your coding session stopped at its limit and needs you";
+  // Fourth review C-CS-3: a "Try on several models" turn ended with one or more
+  // attempts finished — the user picks the one to keep (the same words as the
+  // notifier and the tray).
+  if (outcome === "choose") return "Your attempts are ready: choose the one to keep";
   return outcome === "failed" ? "Your coding session could not finish" : "Your coding session finished";
 }
 

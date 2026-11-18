@@ -255,7 +255,9 @@ def test_na3_three_attempts_cannot_together_be_handed_more_than_the_remainder():
     assert cap is not None
     assert cap.met(0.1) is None
     met = cap.met(0.25)  # 0.5 + 0.3 + 0.25 >= 1.0: the shared remainder is used up
-    assert met == {"kind": "cost", "limit": 1.0}, met
+    # Fourth review CS5: the met cap says whose limit it was (the month's
+    # pay-per-use remainder), never "this session's".
+    assert met == {"kind": "cost", "limit": 1.0, "of": "pay_left"}, met
     assert A.attempt_cap(plan, free) is None, "a free model's attempt got the pay-per-use limit"
 
 

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.533.0 (2026-11-18).*
+holds itself to. Current as of v1.534.0 (2026-11-18).*
 
 ---
 
@@ -2041,6 +2041,33 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Done means done, for attempts and the night (v1.534.0)
+
+The third of nine releases from the fourth review.
+
+- **A reply cut off before it finished is never called finished.** When a
+  model's answer ran out of room, or kept being cut off, a night task read
+  "Done" in the morning and an attempt read "Finished". Both now read as not
+  finished, with a line saying why ("Its answer was cut off at the model's
+  output limit, so it did not finish."). The night still keeps that task's
+  work in its commit, and an attempt that changed files can still be kept.
+- **A cut-off coding reply offers Keep going.** The box under it now says it
+  was cut off and offers Keep going, which sends "continue" when you press
+  it.
+- **"Try on several models" says what to do when it ends.** When one or more
+  attempts finished, the bell, the tray and your phone say "Your attempts are
+  ready: choose the one to keep". When none finished, they say it could not
+  finish. A run you stopped no longer announces itself as finished.
+- **Keep an attempt from the Last night row.** A night task tried on several
+  models lists how each attempt ended, with Keep beside the ones you can
+  keep. Nothing is kept until you press it.
+- **Attempts follow the level you set while they run.** Making the level
+  stricter, or switching on Plan, while attempts are running now reaches
+  them from their next step, as it does for any other reply.
+- **The pay per use limit is named as such.** An attempt or night task
+  stopped by what was left of this month's pay per use limit said "this
+  session's cost limit". It now names the monthly limit.
 
 ## Every new address asks, and cards say why (v1.533.0)
 

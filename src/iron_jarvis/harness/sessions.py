@@ -1080,6 +1080,13 @@ REPLY_ACCOUNT_LIMIT = "it stopped at an account's limit"
 REPLY_STEP_LIMIT = "it stopped at its step limit"
 REPLY_TIME_CAP = "it stopped at this session's time limit"
 REPLY_COST_CAP = "it stopped at this session's cost limit"
+#: Fourth review CS5: the dollars were what was left of the month's
+#: pay-per-use limit (``reply_cap.PAY_LEFT``), never the session's own cap.
+REPLY_PAY_LEFT = "it stopped at what was left of this month's pay per use limit"
+#: Fourth review CS1: it ended on its done frame without finishing
+#: (``reply_end.cut_short``: its answer cut off at the output limit, or its
+#: answers cut off and never recovered).
+REPLY_LENGTH_CUT = "its answer was cut off before it finished"
 REPLY_TESTS_FAILED = "Iron Jarvis's own check at its end found failing tests"
 REPLY_NO_WORDS = "it wrote no answer"
 #: What the "last work" note says of a failed finish-check run (the same fact
@@ -1089,12 +1096,15 @@ _CHECK_FAILED_SAID = "(failed) (Iron Jarvis's own check)"
 
 def reply_end_note(m: dict[str, Any], *, said: str = "") -> str:
     """``"[How that reply ended …: it ended on an error.]"`` for a reply line
-    that carries one of its failure marks (``interrupted`` / ``error``,
-    ``stepLimit``, ``capMet``, a finish record with ``tests == "failed"``);
+    that carries one of its failure marks (``interrupted`` / ``error``, cut
+    short — ``reply_end.cut_short`` —, ``stepLimit``, ``capMet``, a finish
+    record with ``tests == "failed"``);
     "" for a healthy reply. Fixed words only — never the error's text, a file
     name or anything the model or a tool wrote. ``said``: the "last work" note
     riding the same reply (its failed finish-check run is not said again).
     Never raises."""
+    from .reply_end import cut_short
+
     try:
         if m.get("role") != "assistant":
             return ""
@@ -1106,11 +1116,19 @@ def reply_end_note(m: dict[str, Any], *, said: str = "") -> str:
             parts.append(REPLY_ERROR)
         elif m.get("interrupted") is True or error:
             parts.append(REPLY_CUT_OFF)
+        elif cut_short(m):
+            # Fourth review CS1: the ONE reading of a reply cut short.
+            parts.append(REPLY_LENGTH_CUT)
         if isinstance(m.get("stepLimit"), dict):
             parts.append(REPLY_STEP_LIMIT)
         cap = m.get("capMet")
         if isinstance(cap, dict):
-            parts.append(REPLY_COST_CAP if cap.get("kind") == "cost" else REPLY_TIME_CAP)
+            from .reply_cap import pay_left
+
+            parts.append(
+                REPLY_PAY_LEFT if pay_left(cap)
+                else REPLY_COST_CAP if cap.get("kind") == "cost" else REPLY_TIME_CAP
+            )
         finish = m.get("finish")
         if isinstance(finish, dict) and finish.get("tests") == "failed":
             # The note says "ran `…` (failed) (Iron Jarvis's own check)" for

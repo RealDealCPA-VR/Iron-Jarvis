@@ -356,6 +356,15 @@ export function hasLiveFolders(card: AttemptsCard): boolean {
   );
 }
 
+/** Is Keep offered on this attempt of a settled card (when nothing runs and
+ *  the session is not archived)? A finished attempt, or one that changed
+ *  files before it ended — a cut or failed one too: its work is there to
+ *  keep, and the card says how it ended. The ONE rule for the session's card
+ *  and the Last night row (fourth review C-CS-2). */
+export function keepOffered(card: AttemptsCard, a: AttemptView): boolean {
+  return !card.kept && !card.fromSession && a.keepable && !a.trashed && (a.why === "finished" || a.files.length > 0);
+}
+
 /** The one line under the card before Keep is pressed. */
 export function cardLead(card: AttemptsCard): string {
   if (card.fromSession) {

@@ -59,6 +59,7 @@ from sqlmodel import Field, SQLModel, select
 
 from ..core.db import session_scope
 from ..core.ids import new_id, utcnow
+from .reply_end import CUT_WORDS, cut_short
 
 log = logging.getLogger(__name__)
 
@@ -1042,6 +1043,14 @@ def outcome_of(task: dict[str, Any], line: "dict[str, Any] | None") -> tuple[str
         else:
             state = FAILED
             notes.append(("error", str(line.get("error") or "The reply failed.")))
+    elif (cut := cut_short(line)):
+        # Fourth review CS1 (decision D12): a reply that ended on its done
+        # frame without finishing — cut off at the model's output limit, or
+        # its answers cut off and never recovered — is FAILED, never "done".
+        # Read BEFORE a limit, as the day notice and the attempts card read
+        # it (R13). Its work is still committed (``routes/night``).
+        state = FAILED
+        notes.append(("error", CUT_WORDS.get(cut, CUT_WORDS["length"])))
     elif isinstance(line.get("capMet"), dict):
         state = STOPPED
         cap = line["capMet"]

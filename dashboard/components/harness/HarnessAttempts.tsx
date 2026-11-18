@@ -34,6 +34,7 @@ import {
   filesWords,
   hasLiveFolders,
   keepAttempt,
+  keepOffered,
   liveWords,
   testsWords,
   timeWords,
@@ -162,10 +163,7 @@ export function AttemptsCardView({
             attempt={a}
             // A finished attempt, or one that changed files before it was
             // stopped (its work is there to keep, the card says how it ended).
-            keepable={
-              canKeep && !card.kept && !card.fromSession && a.keepable && !a.trashed &&
-              (a.why === "finished" || a.files.length > 0)
-            }
+            keepable={canKeep && keepOffered(card, a)}
             working={busy === a.id}
             disabled={!!busy}
             onKeep={() => void keep(a)}

@@ -481,12 +481,17 @@ def build_finished_title(payload: dict) -> str:
     Third plan RB10: ``limit`` — the reply stopped at its step limit or at
     the session's reply limit (minutes or dollars) and waits for the user's
     Keep going: it did not finish, so it never says "finished". The twins:
-    desktop/main.js (the tray) and dashboard/lib/buildLinks.ts (the bell)."""
+    desktop/main.js (the tray) and dashboard/lib/buildLinks.ts (the bell).
+
+    Fourth review C-CS-3: ``choose`` — a "Try on several models" turn ended
+    with one or more attempts finished; the user picks the one to keep."""
     outcome = _text(payload.get("outcome"))
     if outcome == "failed":
         return "Your coding session could not finish"
     if outcome == "limit":
         return BUILD_LIMIT_TITLE
+    if outcome == "choose":
+        return BUILD_CHOOSE_TITLE
     if outcome == "needs_you":
         return "Your coding session finished, but something needs you"
     return "Your coding session finished"
@@ -494,6 +499,8 @@ def build_finished_title(payload: dict) -> str:
 
 #: Third plan RB10: the headline of a coding reply that stopped at its limit.
 BUILD_LIMIT_TITLE = "Your coding session stopped at its limit and needs you"
+#: Fourth review C-CS-3: the headline of an attempts turn with a finished attempt.
+BUILD_CHOOSE_TITLE = "Your attempts are ready: choose the one to keep"
 
 
 def _build_finished_line(payload: dict) -> str:

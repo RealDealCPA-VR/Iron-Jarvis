@@ -38,6 +38,12 @@ MAX_USD = 10_000.0
 MIN_USD = 0.01
 #: The two caps (the done frame's ``cap.kind``).
 KINDS = ("time", "cost")
+#: Fourth review CS5: WHOSE dollar limit a met cost cap was — what was left
+#: of the model team's monthly pay-per-use limit (a night turn or a night
+#: attempt on a model billed per use), never the session's own cap. Carried
+#: on the met cap as ``"of"`` BESIDE the setting: :func:`clean` and
+#: :func:`strict` never keep it (nobody sets it; Iron Jarvis states it).
+PAY_LEFT = "pay_left"
 
 
 def clean(raw: Any) -> "dict[str, Any] | None":
@@ -93,11 +99,32 @@ def minutes_words(minutes: float) -> str:
     return f"{m} minute" + ("" if m == 1 else "s")
 
 
+def pay_left(met: Any) -> bool:
+    """Was this met cap what was left of the month's pay-per-use limit
+    (:data:`PAY_LEFT`)? Pure."""
+    return isinstance(met, dict) and met.get("kind") == "cost" and met.get("of") == PAY_LEFT
+
+
 def limit_words(met: dict[str, Any]) -> str:
-    """"30 minutes" / "$5.00" — the cap that was met."""
+    """"30 minutes" / "$5.00 of list-price cost" — the cap that was met;
+    "$0.40 left of this month's pay per use limit" for :data:`PAY_LEFT`."""
+    if pay_left(met):
+        return f"{usd_words(float(met.get('limit') or 0))} left of this month's pay per use limit"
     if met.get("kind") == "cost":
         return f"{usd_words(float(met.get('limit') or 0))} of list-price cost"
     return minutes_words(float(met.get("limit") or 0))
+
+
+def which_limit(met: dict[str, Any]) -> str:
+    """The limit that was met, named with its amount: "this session's time
+    limit (30 minutes)", "this session's cost limit ($5.00 of list-price
+    cost)", or (fourth review CS5) "what was left of this month's pay per use
+    limit ($0.40)"."""
+    if pay_left(met):
+        return f"what was left of this month's pay per use limit ({usd_words(float(met.get('limit') or 0))})"
+    if met.get("kind") == "cost":
+        return f"this session's cost limit ({limit_words(met)})"
+    return f"this session's time limit ({limit_words(met)})"
 
 
 @dataclass
@@ -110,39 +137,51 @@ class ReplyCap:
     usd: "float | None" = None
     started_at: float = 0.0
     spent_usd: float = 0.0
+    #: Fourth review CS5: whose dollar limit ``usd`` is — :data:`PAY_LEFT`
+    #: when what was left of the month's pay-per-use limit set it, "" for the
+    #: session's own cap. Set beside the setting, never read from it.
+    of: str = ""
 
     def met(self, cost_so_far: float) -> "dict[str, Any] | None":
         """``{"kind": "time"|"cost", "limit": n}`` once a cap is met, else
-        None. Time is checked first."""
+        None. Time is checked first. A cost cap the pay-per-use remainder set
+        also says ``"of": "pay_left"``."""
         if self.minutes and WALL() - float(self.started_at) >= float(self.minutes) * 60.0:
             return {"kind": "time", "limit": int(self.minutes)}
         if self.usd is not None and float(self.spent_usd) + float(cost_so_far or 0.0) >= float(self.usd):
-            return {"kind": "cost", "limit": float(self.usd)}
+            got: dict[str, Any] = {"kind": "cost", "limit": float(self.usd)}
+            if self.of == PAY_LEFT:
+                got["of"] = PAY_LEFT
+            return got
         return None
 
 
-def from_setup(setup: Any, *, started_at: float, spent_usd: float = 0.0) -> "ReplyCap | None":
+def from_setup(setup: Any, *, started_at: float, spent_usd: float = 0.0, of: str = "") -> "ReplyCap | None":
     """The session's cap for a reply that began at ``started_at`` (None =
-    no cap: the default)."""
+    no cap: the default). ``of`` (fourth review CS5): :data:`PAY_LEFT` when
+    the dollars in ``setup`` are what was left of the month's pay-per-use
+    limit — passed beside the setting, because :func:`clean` keeps only
+    ``minutes`` and ``usd``."""
     rec = clean(setup.get(SETUP_KEY)) if isinstance(setup, dict) else None
     if rec is None:
         return None
     return ReplyCap(
         minutes=rec.get("minutes"), usd=rec.get("usd"),
         started_at=float(started_at), spent_usd=max(0.0, float(spent_usd or 0.0)),
+        of=PAY_LEFT if (of == PAY_LEFT and rec.get("usd") is not None) else "",
     )
 
 
 def instruction(met: dict[str, Any]) -> str:
-    """The tool-less answer's instruction at a cap (the step limit's idea)."""
-    which = (
-        f"this session's cost limit ({limit_words(met)})" if met.get("kind") == "cost"
-        else f"this session's time limit ({limit_words(met)})"
-    )
+    """The tool-less answer's instruction at a cap (the step limit's idea).
+    Fourth review CS5: a stop at what was left of the month's pay-per-use
+    limit names THAT limit, never the session's."""
+    which = which_limit(met)
+    reached = "that limit" if pay_left(met) else "the session's limit"
     return (
         f"You have reached {which}, so no more tools can run in this reply. The user can press "
         "Keep going to let you carry on from exactly here. Write a short progress report now, "
-        "from the results above: start with one sentence saying you reached the session's limit; "
+        f"from the results above: start with one sentence saying you reached {reached}; "
         "then what you have done so far (the files you changed and where, the commands you ran and "
         "what they showed, what you found out); then the next steps you will take when the user "
         "says keep going. Never say that nothing was done: if you only read and searched, say what "
@@ -157,10 +196,14 @@ def receipt(met: "dict[str, Any] | None") -> "dict[str, Any] | None":
     limit = met.get("limit")
     if met["kind"] == "time":
         return {"kind": "time", "limit": int(limit or 0)}
-    return {"kind": "cost", "limit": round(float(limit or 0), 2)}
+    out: dict[str, Any] = {"kind": "cost", "limit": round(float(limit or 0), 2)}
+    if pay_left(met):
+        # Fourth review CS5: whose limit it was (only this one value).
+        out["of"] = PAY_LEFT
+    return out
 
 
 __all__ = [
-    "KINDS", "MAX_MINUTES", "MAX_USD", "MIN_USD", "ReplyCap", "SETUP_KEY", "WALL", "clean", "from_setup",
-    "instruction", "limit_words", "receipt", "strict",
+    "KINDS", "MAX_MINUTES", "MAX_USD", "MIN_USD", "PAY_LEFT", "ReplyCap", "SETUP_KEY", "WALL", "clean",
+    "from_setup", "instruction", "limit_words", "pay_left", "receipt", "strict", "which_limit",
 ]

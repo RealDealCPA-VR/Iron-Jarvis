@@ -14,12 +14,30 @@
  * Throw away (two presses: the branch's folder goes to the trash, the branch
  * is KEPT). Older nights are listed below, newest first (the last 14).
  *
+ * Fourth review C-CS-2: a task tried on several models lists each attempt's
+ * ending — read from the session's own saved card (GET the session; the card
+ * is the ONE reading, after CS2 a cut attempt there is "failed") — with Keep
+ * on each one the session's card would offer it on (lib/buildAttempts
+ * keepOffered). The press goes through the existing keep route; nothing is
+ * kept without it, even when only one finished (picking one stays the
+ * user's).
+ *
  * No new card styles: Tonight's row look, the calm Badge and ConfirmButton.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, ExternalLink, Loader2, Sunrise } from "lucide-react";
 import { Badge, ConfirmButton } from "@/components/ui";
+import {
+  afterKeepWords,
+  attemptName,
+  decodeAttemptsCard,
+  endWords,
+  keepAttempt,
+  keepOffered,
+  type AttemptsCard,
+} from "@/lib/buildAttempts";
+import { getSession } from "@/lib/buildSessions";
 import { providerDisplay } from "@/lib/onboarding";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import {
@@ -46,6 +64,27 @@ function errorWords(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** A try-on task's attempts, as its session's newest saved card has them. */
+interface RowAttempts {
+  card: AttemptsCard;
+  turnId: string;
+  /** Nothing runs in the session and it is not archived (the keep route's
+   *  own checks; it still answers in words when it refuses). */
+  canKeep: boolean;
+}
+
+async function readRowAttempts(threadId: string): Promise<RowAttempts | null> {
+  const v = await getSession(threadId);
+  if (!v) return null;
+  for (let i = v.messages.length - 1; i >= 0; i--) {
+    const m = v.messages[i];
+    if (m.role !== "assistant" || !m.turnId || !m.attempts) continue;
+    const card = decodeAttemptsCard(m.attempts);
+    if (card) return { card, turnId: m.turnId, canKeep: !v.running && !v.archived };
+  }
+  return null;
+}
+
 function NightTaskRow({
   row,
   onChanged,
@@ -61,6 +100,34 @@ function NightTaskRow({
   const words = nightStateWords(row.state);
   const s = row.session;
   const live = s.exists && s.hasBranch && !s.removed;
+  // Fourth review C-CS-2: a try-on task's attempts, read from its session.
+  const tried = row.tryOn > 0 && s.exists && !!row.threadId;
+  const [attempts, setAttempts] = useState<RowAttempts | null>(null);
+  const [keeping, setKeeping] = useState<string | null>(null);
+  const readAttempts = useCallback(async () => {
+    if (!tried) return;
+    try {
+      setAttempts(await readRowAttempts(row.threadId));
+    } catch {
+      setAttempts(null);
+    }
+  }, [tried, row.threadId]);
+  useEffect(() => {
+    void readAttempts();
+  }, [readAttempts, row.state]);
+
+  async function keep(turnId: string, attempt: string) {
+    if (keeping || busy) return;
+    setKeeping(attempt);
+    setProblem(null);
+    setSaid(null);
+    const out = await keepAttempt(row.threadId, turnId, attempt);
+    setKeeping(null);
+    if (out.ok) setSaid([out.words, out.note].filter(Boolean).join(" ") || "Kept.");
+    else setProblem(out.words);
+    await readAttempts();
+    onChanged();
+  }
 
   async function act(kind: "push" | "pr", fn: () => Promise<string | null>) {
     if (busy) return;
@@ -110,6 +177,38 @@ function NightTaskRow({
               {n}
             </li>
           ))}
+        </ul>
+      ) : null}
+      {attempts ? (
+        <ul data-testid={`last-night-attempts-${row.id}`} className="space-y-0.5 text-[12px] text-zinc-300">
+          {attempts.card.items.map((a) => {
+            const after = afterKeepWords(attempts.card, a);
+            return (
+              <li
+                key={a.id}
+                data-testid={`last-night-attempt-${row.id}-${a.id}`}
+                className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"
+              >
+                <span className="min-w-0 flex-1 break-words">
+                  {attemptName(a)}: {endWords(a)}
+                  {after ? ` · ${after}` : ""}
+                </span>
+                {attempts.canKeep && row.state !== "running" && keepOffered(attempts.card, a) ? (
+                  <button
+                    type="button"
+                    data-testid={`last-night-keep-${row.id}-${a.id}`}
+                    disabled={!!keeping || !!busy}
+                    title="Keeps this attempt's work in the task's session. The other attempts' folders go to the trash; their branches stay."
+                    onClick={() => void keep(attempts.turnId, a.id)}
+                    className={QUIET_BUTTON}
+                  >
+                    {keeping === a.id ? <Loader2 size={12} className="animate-spin" aria-hidden /> : null}
+                    Keep
+                  </button>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
       <p data-testid={`last-night-facts-${row.id}`} className="break-words text-[12px] text-zinc-400">

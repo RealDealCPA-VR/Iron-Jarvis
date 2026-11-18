@@ -600,6 +600,13 @@ _LEVEL_WATCH: "contextvars.ContextVar[LevelWatch | None]" = contextvars.ContextV
 )
 
 
+def arm_level_watch(watch: "LevelWatch | None") -> "contextvars.Token[LevelWatch | None]":
+    """Arm ``watch`` for the reply driven in this context (the ONE setter:
+    :func:`start_build_turn` for a reply, ``harness/attempts._arm`` for each
+    attempt — fourth review CS4). Returns the token to reset it with."""
+    return _LEVEL_WATCH.set(watch)
+
+
 def current_level_watch(thread_id: Any) -> "LevelWatch | None":
     """The armed :class:`LevelWatch` of the coding-session reply for
     ``thread_id`` running in this context, else None (every other turn)."""
@@ -2222,7 +2229,7 @@ async def _announce_account_limit(platform: Any, thread_id: str, limit: "dict[st
 
 def finished_notice_outcome(status: str, done: Any = None, fin: Any = None) -> str:
     """How the bell, the tray and the phone say a long reply ENDED: "done" |
-    "limit" | "needs_you" | "failed" (the ``outcome`` of ``build.turn_finished``, the
+    "limit" | "needs_you" | "choose" | "failed" (the ``outcome`` of ``build.turn_finished``, the
     one field ``comm/notifier.build_finished_title``, the desktop app and the
     dashboard's bell read). Pure; junk reads as no.
 
@@ -2241,13 +2248,26 @@ def finished_notice_outcome(status: str, done: Any = None, fin: Any = None) -> s
     * every other reply that ended on its ``done`` frame is "done".
 
     The same marks the reply line keeps (``truncated``, ``stepLimit``,
-    ``capMet``) and that :func:`plan_run_due` reads as "not clean"."""
+    ``capMet``) and that :func:`plan_run_due` reads as "not clean". The cut
+    is read through the ONE reading (``harness/reply_end.cut_short``, fourth
+    review CS1).
+
+    Fourth review CS3: an ATTEMPTS turn ends on its card, never on its done
+    frame's own marks — the same reading the night uses
+    (``attempts.card_reading``): "choose" when one or more attempts
+    finished (C-CS-3: "Your attempts are ready: choose the one to keep"; the
+    user picks one), "failed" when none did."""
     if status != "done":
         return "failed"
     d = done if isinstance(done, dict) else {}
-    route = d.get("route")
-    cut = route.get("cut_off") if isinstance(route, dict) else None
-    if d.get("truncated") or (isinstance(cut, dict) and not cut.get("recovered")):
+    from ...harness import attempts as _attempts
+
+    if _attempts.LINE_KEY in d:
+        reading = _attempts.card_reading(d.get(_attempts.LINE_KEY))
+        return "choose" if reading is not None and reading["state"] == _attempts.READ_NEEDS_YOU else "failed"
+    from ...harness.reply_end import cut_short
+
+    if cut_short(d):
         return "failed"
     if isinstance(d.get("step_limit"), dict) or isinstance(d.get("cap"), dict):
         return "limit"
@@ -2534,13 +2554,11 @@ def plan_run_due(watch: "_ReplyWatch") -> bool:
     done = watch.done
     if done is None or watch.error is not None or watch.account_limit:
         return False
-    if done.get("truncated") or done.get("step_limit") or done.get("cap"):
+    from ...harness.reply_end import cut_short
+
+    if cut_short(done) or done.get("step_limit") or done.get("cap"):
         return False
     if done.get("unread_steers"):
-        return False
-    route = done.get("route")
-    cut = route.get("cut_off") if isinstance(route, dict) else None
-    if isinstance(cut, dict) and not cut.get("recovered"):
         return False
     return True
 
@@ -2766,6 +2784,14 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         # ("interrupted") keeps the wait (v1.368.0 review, `_turn_served`).
         with contextlib.suppress(BaseException):
             await asyncio.shield(end(status))
+        if status == "done" and isinstance(watch.done, dict) and watch.done.get("stopped") is True:
+            # Fourth review CS3 (R14): an ATTEMPTS turn that was stopped still
+            # ends on its done frame (its card says how each attempt ended,
+            # and its line is already written); the frame says it was
+            # stopped. From here on it is a stopped turn: no "finished"
+            # notice, never noted as finished work, and the Stop closes the
+            # session's agent browser as for any reply.
+            status = "stopped"
         # v1.391.0: a turn that ENDED (done, failed, stopped) is never resumed:
         # its kept conversation goes. A turn a shutdown cut off keeps it.
         # v1.422.0 (B1): a FAILED turn whose rounds were kept for "Continue
@@ -3903,6 +3929,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
         origin = _naive_utc(resume.get("origin_at")) if resume is not None else None
         record.origin_at = origin
+        #: Fourth review CS5: the reply's dollar cap is what was LEFT of the
+        #: month's pay-per-use limit (it lowered the session's own, or there
+        #: was none) — said as that limit, never "this session's cost limit".
+        cap_of = ""
         if night_task is not None:
             # v1.398.0 review: on a model billed per use, a night turn may
             # spend only what is left of the user's pay-per-use limit (its
@@ -3917,6 +3947,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 _cap = dict(setup.get(RC.SETUP_KEY) or {})
                 if not _cap.get("usd") or float(_cap["usd"]) > room:
                     _cap["usd"] = round(room, 2)
+                    cap_of = RC.PAY_LEFT
                 setup = {**setup, RC.SETUP_KEY: _cap}
         # v1.392.0 review: the cap's clock counts the time the reply RAN —
         # its cut-off part(s), then this one from now — never the time Iron
@@ -3926,6 +3957,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             setup,
             started_at=RC.WALL() - (float(resume.get("ran_s") or 0.0) if resume is not None else 0.0),
             spent_usd=float(resume.get("spent_usd") or 0.0) if resume is not None else 0.0,
+            of=cap_of,
         )
         # v1.511.0 (second review T2): the git guard's reading of the folder
         # (is it in a repository?) — found ONCE, off the loop, armed below.
@@ -3982,7 +4014,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         # STORED when the reply starts (never the night's or an unattended
         # start's own), so the lane sees one the user sets while it runs.
         _stored = _setup_of(row)
-        level_token = _LEVEL_WATCH.set(LevelWatch(
+        level_token = arm_level_watch(LevelWatch(
             engine=platform.engine, thread_id=thread_id,
             level=str(_stored.get("approval_mode") or ""), plan=_stored.get("mode") == S.MODE_PLAN,
         ))

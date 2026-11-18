@@ -238,10 +238,12 @@ describe("the table: a reply's record → the recap and its buttons", () => {
       actions: null,
     },
     {
+      // Fourth review C-CS-1 (moved on purpose): a reply cut at its length
+      // says it did not finish and offers Keep going — still never its offer.
       name: "a cut-off reply never reads its offer",
       reply: line({ truncated: true, content: "Want me to also add tests?" }),
-      recap: "Changed 1 file.",
-      actions: [],
+      recap: "Changed 1 file. Its answer was cut off at the model's output limit, so it did not finish.",
+      actions: ["keep_going"],
     },
     {
       name: "a step-limited reply never reads its offer (Keep going is the press)",

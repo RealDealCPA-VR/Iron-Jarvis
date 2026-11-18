@@ -4658,14 +4658,17 @@ function runOutcomeNotice(entry) {
       // v1.503.0: "needs_you" = the finish check found failing tests or open points (the bell's words).
       // Third plan RB10: "limit" = stopped at its step or reply limit, waiting for Keep going
       // (comm/notifier.build_finished_title, dashboard/lib/buildLinks.ts: the same words).
+      // Fourth review C-CS-3: "choose" = a "Try on several models" turn with a finished attempt.
       title:
         p.outcome === "failed"
           ? "Your coding session could not finish"
           : p.outcome === "limit"
             ? "Your coding session stopped at its limit and needs you"
-            : p.outcome === "needs_you"
-              ? "Your coding session finished, but something needs you"
-              : "Your coding session finished",
+            : p.outcome === "choose"
+              ? "Your attempts are ready: choose the one to keep"
+              : p.outcome === "needs_you"
+                ? "Your coding session finished, but something needs you"
+                : "Your coding session finished",
       body: bits.join(" · ") || RUN_OUTCOME_NO_DETAIL,
       href: app
         ? `/terminals?view=code&code=${encodeURIComponent(thread)}`

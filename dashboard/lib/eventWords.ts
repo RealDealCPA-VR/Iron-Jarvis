@@ -274,9 +274,12 @@ function statusDetail(v: unknown): string {
  *  `outcome`). Owner decision 5 (third plan RB10): "limit" — stopped at its
  *  step or reply limit, waiting for Keep going — was shown as the bare word
  *  "Limit"; it says what the bell says (lib/buildLinks.buildFinishedHeadline).
+ *  Fourth review C-CS-3: "choose" — attempts ready to pick from — says what
+ *  to do, never the bare word "Choose".
  *  Every other outcome is the one status vocabulary. */
 function finishedDetail(v: unknown): string {
   if (typeof v === "string" && v.trim().toLowerCase() === "limit") return "Stopped at its limit";
+  if (typeof v === "string" && v.trim().toLowerCase() === "choose") return "Choose the one to keep";
   return statusDetail(v);
 }
 
