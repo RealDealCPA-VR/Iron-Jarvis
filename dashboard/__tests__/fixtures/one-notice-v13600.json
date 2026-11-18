@@ -703,6 +703,31 @@
       }
     },
     {
+      "case": "chat-helper-finished-opens-its-chat",
+      "event": {
+        "id": "evt_chat_helper_in_chat",
+        "type": "session.completed",
+        "session_id": "session_ch3",
+        "ts": "2026-10-31T09:02:00",
+        "payload": {
+          "status": "completed",
+          "ok": true,
+          "summary": "The **report** is in reports/q3.md.",
+          "origin": "chat",
+          "project_id": null,
+          "outcome": "completed",
+          "chat_thread_id": "chat_q3"
+        }
+      },
+      "pings": false,
+      "attention": false,
+      "tray": {
+        "title": "The agent you started from chat finished",
+        "body": "The report is in reports/q3.md.",
+        "href": "/chat?thread=chat_q3"
+      }
+    },
+    {
       "case": "chat-turn-finished",
       "event": {
         "id": "evt_chat_turn_done",

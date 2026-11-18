@@ -4238,3 +4238,35 @@ was clean). The tray planner it runs reads no clock; one possible cause,
 not confirmed: `core/db.persist_event` gives up after about 2 s of retries
 when the database is busy, so an event can be missing from the activity log
 on a loaded machine. That is a product gap to look at, not fixed here.
+
+### Group 28 as built (v1.536.0)
+
+Fixed: DT1 (owner decisions D6 and D13), DT2, C-DT-1, C-DT-3. Three
+implementers (Opus 5.5); the lead read every diff and turned the hand-off test
+red by dropping the daemon's hand-off call (5 red) and by sending no turn name
+to the guard (2 red).
+
+Where it differs from the plan:
+
+- The not-started line for "Iron Jarvis closed first" says "Press Start it
+  now to start it." (the plan said "Send your message again"), because the
+  line now has that press.
+- A refusal that trying again can change ends "Press Start it now to try
+  again."; a door's own refusal says only what to change.
+- The bell got no change for C-DT-1: it has no row for a chat-started run,
+  on purpose. The tray notice opens the chat.
+- After a 30-second timeout no retry is armed; the hand-off carries on
+  shielded and writes its own line, and the start-up pass covers what is
+  left.
+
+Left open:
+
+- A hand-off caught by shutdown after its run was made but before it
+  started: the start-up pass names that run, which may not have started.
+- When the chat has a stored setup, its folder, provider, model and account
+  are used (the door checks the account again); a grant answered from the
+  bell and not saved in the setup is left out, so the run asks again.
+- A Local only refusal keeps its own words, which end "or allow it for this
+  one message"; that fits a run poorly.
+- Not tried on the installed app: closing the window while a reply hands
+  off; "Start it now"; pressing a finished chat-started run's tray notice.

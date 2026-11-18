@@ -768,19 +768,30 @@ class InboundPoller:
             return ""
 
     @staticmethod
-    def recap_task(history: list[dict[str, str]], text: str) -> str:
+    def recap_task(history: "list[Any]", text: str) -> str:
         """The escalated-session task: a thread-tail recap block + the request.
 
         ``history`` is ChatBody-shaped ``[{role, content}]`` INCLUDING the
         current request as its last entry (exactly what the turn just ran on);
         the request is lifted out into ``Request:`` and the up-to-6 messages
         before it become the context block, each capped at 500 chars.
+
+        Fourth plan G28 (DT1): also the task of a run the daemon starts for a
+        chat reply that handed off with no window open
+        (``daemon/chat_hand_off``) — the ONE recap helper, so an entry may be
+        a chat's message as the body carries it (an object with ``role`` and
+        ``content``) as well as a dict; anything else is left out.
         """
-        tail = [m for m in history[:-1] if str(m.get("content") or "").strip()]
+
+        def _get(m: Any, key: str) -> str:
+            got = m.get(key) if isinstance(m, dict) else getattr(m, key, None)
+            return str(got or "")
+
+        tail = [m for m in list(history or [])[:-1] if _get(m, "content").strip()]
         tail = tail[-_RECAP_MESSAGES:]
         lines = [
-            f"{'user' if m.get('role') == 'user' else 'assistant'}: "
-            f"{str(m.get('content') or '').strip()[:_RECAP_CHARS]}"
+            f"{'user' if _get(m, 'role') == 'user' else 'assistant'}: "
+            f"{_get(m, 'content').strip()[:_RECAP_CHARS]}"
             for m in tail
         ]
         if not lines:

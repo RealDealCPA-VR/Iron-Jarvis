@@ -3367,6 +3367,7 @@ def register(app: FastAPI, d) -> None:
                 )
                 lg = logs.start(turn_id, str(getattr(body, "thread_id", "") or "").strip()[:80], gen)
                 holder["log"] = lg
+                lg.hand_off = _durable._hand_off.plan(d, body)  # G28 (DT1): None for a Build pane's turn
             except BaseException:
                 # Third plan G19: refused before it ran (a 400/404 eager
                 # check — or the request was dropped while it was prepared,

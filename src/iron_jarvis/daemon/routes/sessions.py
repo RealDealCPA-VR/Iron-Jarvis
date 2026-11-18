@@ -446,116 +446,135 @@ async def _first_hand_off(d, turn: str) -> dict[str, Any] | None:
     return None if row is None else _session_row(d, row)
 
 
+async def open_session_door(d, body: SessionCreate, *, before_start: Any = None) -> dict[str, Any]:
+    """The whole ``POST /sessions`` door (lifted out of the route in fourth
+    plan G28, DT1, behaviour unchanged): the hand-off guard, the run made,
+    stamped and started, answered as the route answers it. Raises what the
+    route raised (``HTTPException``; ``LocalOnlyRefused``, which the app
+    turns into its 409). The route and ``daemon/chat_hand_off`` (a reply
+    that hands off with no window open) both call it, so both go through ONE
+    guard. ``before_start`` (async, given the new run's id) runs after the
+    run is made and stamped and before it starts — the chat's hand-off line
+    is written there, so a run that ends at once cannot land its reply above
+    it. A run the turn already started is answered as it is (not called)."""
+    # ONE RUN PER HAND-OFF (v1.529.0). Two windows on one chat each end
+    # the reply that hands off, and each posts it: the turn's name
+    # (``handed_from_turn``) admits one run, and the second window gets
+    # that run back (same id, its status) instead of a second one. Held
+    # per name, so two requests at once cannot both miss the lookup;
+    # read from the rows, so it holds across a restart. No name: today.
+    turn = body.handed_from_turn
+    async with hand_off_guard.held(d.platform.engine, turn):
+        first = await _first_hand_off(d, turn)
+        if first is not None:
+            return first
+        session = await _open_session(d, body)
+        if turn:
+            await asyncio.to_thread(
+                hand_off_guard.stamp, d.platform.engine, session.id, turn
+            )
+            session.handed_from_turn = turn
+    if before_start is not None:
+        await before_start(session.id)
+    if body.wait:
+        session = await d.orchestrator.run_session(session.id)
+    else:
+        # A parked spawn returns None (v1.167.0): the governor marked the
+        # row QUEUED, so re-read it — serializing the stale in-memory
+        # object here claimed "active" for work that never started.
+        if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
+            session = d.orchestrator.get_session(session.id) or session
+    return _session_row(d, session)
+
+
+async def _open_session(d, body: SessionCreate):
+    """Make (never start) the run ``POST /sessions`` asks for."""
+    # THE FOLDER RIDES THE ESCALATION (v1.189.0). Validated with the SAME
+    # tests the chat lane applies to its workspace — and unlike chat's
+    # silent fallback, an EXPLICIT folder that fails them is an honest 400:
+    # the caller named a folder on purpose, and running the job in a
+    # scratch dir instead would reproduce the exact failure this field
+    # exists to close (every write refused as outside-workspace, in a
+    # workspace the user never chose).
+    workspace_root = (body.workspace_root or "").strip() or None
+    if workspace_root:
+        from ...core.fs_policy import usable_workspace_root
+
+        # v1.228.0: the predicate now PROBES writability (creates a file),
+        # so it leaves the loop — a user-picked share can stall.
+        if not await asyncio.to_thread(usable_workspace_root, workspace_root):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "workspace_root must be an existing, absolute, "
+                    "non-protected folder this app may write in "
+                    "(missing, protected, not a directory, or not "
+                    f"writable): {workspace_root} — pick a folder you can "
+                    "save files in"
+                ),
+            )
+    # THE CHAT'S ACCOUNT RIDES THE HAND-OFF (v1.424.0 review): a chat put
+    # on one Iron-Proxy account hands its work over on THAT account —
+    # checked here by the one rule (``iron_proxy.choice``; the provider
+    # the run will use, else the configured default), a 409 in words
+    # before any session; admitted, kept in the run's options, where the
+    # runtime arms it for every lease of the run (and a continue keeps
+    # it). None named: exactly as before.
+    run_options: dict[str, Any] = {"local_only": True} if body.local_only else {}
+    account = " ".join(str(body.account or "").split())
+    if account:
+        from ...iron_proxy import choice as _choice
+
+        _row, why = await asyncio.to_thread(
+            _choice.check, d.platform, account, str(body.provider or ""),
+            str(body.model or "") if body.provider else "", who="agent",
+        )
+        if why:
+            raise HTTPException(status_code=409, detail=why)
+        run_options["account"] = account
+    try:
+        session = await d.orchestrator.create_session(
+            body.task,
+            _agent_type(body.agent_type),
+            body.provider,
+            model=body.model,
+            self_dev=body.self_dev,
+            project_id=body.project_id or None,
+            allow_tools=body.allow_tools or None,
+            workspace_root=workspace_root,
+            origin=body.origin,
+            # Contract 4 (v1.174.0): the caller's per-session step budget.
+            # Already range-validated by SessionCreate (a 422 outside
+            # 1..200); None = the configured default.
+            max_steps=body.max_steps,
+            # THE POSTURE RIDES (v1.232.0, A7); yolo is normalised away
+            # inside create_session, the one door every session passes.
+            approval_mode=body.approval_mode,
+            # LOCAL ONLY RIDES TOO (v1.332.0): stored on the row; a
+            # provider off this network is refused inside create_session.
+            options=run_options or None,
+            # v1.344.0: what the chat already ran this turn (the done
+            # frame's prior_tool_results) rides into the row's options so
+            # the run does not redo those reads.
+            prior_tool_results=body.prior_tool_results,
+            # v1.345.0: the chat this work was asked in — the daemon
+            # appends the run's final line to it (agents/chat_delivery).
+            chat_thread_id=body.chat_thread_id,
+        )
+    except LocalOnlyRefused:
+        raise  # v1.332.0: the app's 409 local-only shape, not a 400
+    except (PermissionError, RuntimeError) as exc:  # self-dev gating
+        raise HTTPException(status_code=400, detail=plain_failure("That task could not start.", exc))
+    return session
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.post("/sessions")
     async def create_session(body: SessionCreate) -> dict[str, Any]:
-        # ONE RUN PER HAND-OFF (v1.529.0). Two windows on one chat each end
-        # the reply that hands off, and each posts it: the turn's name
-        # (``handed_from_turn``) admits one run, and the second window gets
-        # that run back (same id, its status) instead of a second one. Held
-        # per name, so two requests at once cannot both miss the lookup;
-        # read from the rows, so it holds across a restart. No name: today.
-        turn = body.handed_from_turn
-        async with hand_off_guard.held(d.platform.engine, turn):
-            first = await _first_hand_off(d, turn)
-            if first is not None:
-                return first
-            session = await _open_session(body)
-            if turn:
-                await asyncio.to_thread(
-                    hand_off_guard.stamp, d.platform.engine, session.id, turn
-                )
-                session.handed_from_turn = turn
-        if body.wait:
-            session = await d.orchestrator.run_session(session.id)
-        else:
-            # A parked spawn returns None (v1.167.0): the governor marked the
-            # row QUEUED, so re-read it — serializing the stale in-memory
-            # object here claimed "active" for work that never started.
-            if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
-                session = d.orchestrator.get_session(session.id) or session
-        return _session_row(d, session)
-
-    async def _open_session(body: SessionCreate):
-        """Make (never start) the run ``POST /sessions`` asks for."""
-        # THE FOLDER RIDES THE ESCALATION (v1.189.0). Validated with the SAME
-        # tests the chat lane applies to its workspace — and unlike chat's
-        # silent fallback, an EXPLICIT folder that fails them is an honest 400:
-        # the caller named a folder on purpose, and running the job in a
-        # scratch dir instead would reproduce the exact failure this field
-        # exists to close (every write refused as outside-workspace, in a
-        # workspace the user never chose).
-        workspace_root = (body.workspace_root or "").strip() or None
-        if workspace_root:
-            from ...core.fs_policy import usable_workspace_root
-
-            # v1.228.0: the predicate now PROBES writability (creates a file),
-            # so it leaves the loop — a user-picked share can stall.
-            if not await asyncio.to_thread(usable_workspace_root, workspace_root):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "workspace_root must be an existing, absolute, "
-                        "non-protected folder this app may write in "
-                        "(missing, protected, not a directory, or not "
-                        f"writable): {workspace_root} — pick a folder you can "
-                        "save files in"
-                    ),
-                )
-        # THE CHAT'S ACCOUNT RIDES THE HAND-OFF (v1.424.0 review): a chat put
-        # on one Iron-Proxy account hands its work over on THAT account —
-        # checked here by the one rule (``iron_proxy.choice``; the provider
-        # the run will use, else the configured default), a 409 in words
-        # before any session; admitted, kept in the run's options, where the
-        # runtime arms it for every lease of the run (and a continue keeps
-        # it). None named: exactly as before.
-        run_options: dict[str, Any] = {"local_only": True} if body.local_only else {}
-        account = " ".join(str(body.account or "").split())
-        if account:
-            from ...iron_proxy import choice as _choice
-
-            _row, why = await asyncio.to_thread(
-                _choice.check, d.platform, account, str(body.provider or ""),
-                str(body.model or "") if body.provider else "", who="agent",
-            )
-            if why:
-                raise HTTPException(status_code=409, detail=why)
-            run_options["account"] = account
-        try:
-            session = await d.orchestrator.create_session(
-                body.task,
-                _agent_type(body.agent_type),
-                body.provider,
-                model=body.model,
-                self_dev=body.self_dev,
-                project_id=body.project_id or None,
-                allow_tools=body.allow_tools or None,
-                workspace_root=workspace_root,
-                origin=body.origin,
-                # Contract 4 (v1.174.0): the caller's per-session step budget.
-                # Already range-validated by SessionCreate (a 422 outside
-                # 1..200); None = the configured default.
-                max_steps=body.max_steps,
-                # THE POSTURE RIDES (v1.232.0, A7); yolo is normalised away
-                # inside create_session, the one door every session passes.
-                approval_mode=body.approval_mode,
-                # LOCAL ONLY RIDES TOO (v1.332.0): stored on the row; a
-                # provider off this network is refused inside create_session.
-                options=run_options or None,
-                # v1.344.0: what the chat already ran this turn (the done
-                # frame's prior_tool_results) rides into the row's options so
-                # the run does not redo those reads.
-                prior_tool_results=body.prior_tool_results,
-                # v1.345.0: the chat this work was asked in — the daemon
-                # appends the run's final line to it (agents/chat_delivery).
-                chat_thread_id=body.chat_thread_id,
-            )
-        except LocalOnlyRefused:
-            raise  # v1.332.0: the app's 409 local-only shape, not a 400
-        except (PermissionError, RuntimeError) as exc:  # self-dev gating
-            raise HTTPException(status_code=400, detail=plain_failure("That task could not start.", exc))
-        return session
+        # The whole door, guard included (fourth plan G28: lifted so the
+        # daemon's own hand-off goes through the same one).
+        return await open_session_door(d, body)
 
     @app.post("/missions", status_code=201)
     async def create_mission(body: MissionCreate) -> dict[str, Any]:

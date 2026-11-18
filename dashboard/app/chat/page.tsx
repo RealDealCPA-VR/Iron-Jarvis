@@ -768,6 +768,11 @@ interface ChatMessage {
    *  when the pick could not be honoured (a remote has no session here): the
    *  line says the work runs on this PC and names the @ that reaches it. */
   droppedRemote?: string;
+  /** Fourth review C-DT-3: `"not started"` on the line Iron Jarvis writes
+   *  when a reply's hand-off to an agent run could not start (refused, or
+   *  Iron Jarvis closed first). The line shows its own words and one press,
+   *  "Start it now", that starts the run under the turn's name. */
+  handOff?: string;
   /** v1.349.0: how the hand-off's run went (lib/agentRun AgentRunStamp),
    *  stamped by finalize and read back only through `readAgentRun`. */
   agentRun?: AgentRunStamp;
@@ -954,11 +959,20 @@ const STILL_ANSWERING_WORDS =
 const LOST_CONTACT_WORDS =
   "Lost contact with Iron Jarvis for a minute. It is still working on this reply, which will show here.";
 /** Third plan CS3: after the silence, Iron Jarvis says the reply is no longer
- *  running (it never started, failed, or was cut off by a restart). */
+ *  running (SILENCE_GONE_WORDS: a turn it does not know; since the fourth
+ *  review DT2 a failed or cut-off one is followed once more instead). */
 const STILL_WORKING_AWAY_WORDS =
   "Iron Jarvis is still working on this reply, but this page keeps losing contact with it. The reply will be saved in this chat when it is done.";
 const SILENCE_GONE_WORDS =
   "Nothing came back from Iron Jarvis for a minute, and this reply is no longer running. What it already wrote is kept. Press Retry to ask again.";
+/** Fourth review DT2: contact was lost twice over a reply that has ENDED
+ *  (finished, stopped, failed or cut off) — it is not "still working", and
+ *  Iron Jarvis writes it into this chat itself. */
+const ENDED_AWAY_WORDS =
+  "This page keeps losing contact with Iron Jarvis. The reply has ended, and Iron Jarvis will save it in this chat.";
+/** Fourth review C-DT-3: the `handOff` value on the line Iron Jarvis writes
+ *  when a reply's hand-off could not start (daemon `chat_append.LINE_KEYS`). */
+const HAND_OFF_NOT_STARTED = "not started";
 // v1.336.0's rejoin rule and the turn's name live in lib/turnRejoin.ts since
 // v1.339.0, so the Build pane's chat follows its turns the same way.
 
@@ -1693,6 +1707,9 @@ function categorizeTool(t: ToolOption): ToolCategory {
 
 /** Compact "Conversation so far:" recap prepended to a new agent session. */
 function conversationRecap(msgs: ChatMessage[]): string {
+  // Fourth review C-DT-3: a hand-off line that did not start is not part of
+  // the conversation ("Start it now" replaces it with the run).
+  msgs = msgs.filter((m) => m.handOff !== HAND_OFF_NOT_STARTED);
   if (msgs.length === 0) return "";
   const lines = msgs.slice(-HANDOFF_TURNS).map((m) => {
     const who = m.role === "user" ? "User" : "Assistant";
@@ -3098,6 +3115,10 @@ export interface RowHandlers {
   /** v1.284.0: "Have builder do this" — the panel seat proposed; a REAL
    *  session of that agent carries it out, with the conversation as recap. */
   handOff: (index: number) => void;
+  /** Fourth review C-DT-3: "Start it now" under line `index`, a hand-off
+   *  that did not start — the run for the same question, under the turn's
+   *  name (the one-run-per-hand-off guard reuses a run already made). */
+  startHandOff: (index: number) => void;
   /** v1.305.0: the user answered the suggestion under reply `index` — store
    *  the answer on that message and save it. */
   settleSuggestion: (index: number, next: ChatSuggestion) => void;
@@ -3437,6 +3458,29 @@ const MessageRow = memo(function MessageRow({
           onRetry={() => h.retryTask(m.runResult?.task || "")}
           onKeepGoing={keepGoingFor(m, isLast, busy, h)}
         />
+      </div>
+    );
+  // Fourth review C-DT-3: a hand-off that did not start says so in its own
+  // words (never "Taking this on properly", which promises a run), and the
+  // newest such line offers one press that starts it, instead of retyping.
+  if (m.role === "assistant" && m.handOff === HAND_OFF_NOT_STARTED)
+    return (
+      <div className="group/msg space-y-1">
+        <div className="flex items-start gap-2 text-[13px] text-zinc-400">
+          <Bot size={13} aria-hidden="true" className="mt-[3px] shrink-0 text-accent-soft" />
+          <span>{m.content}</span>
+        </div>
+        {isLast && !busy && (
+          <button
+            type="button"
+            data-testid="start-hand-off"
+            onClick={() => h.startHandOff(i)}
+            className="-ml-2 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-accent-soft transition-colors hover:bg-accent/[0.08]"
+          >
+            <Bot size={12} aria-hidden="true" />
+            Start it now
+          </button>
+        )}
       </div>
     );
   if (m.escalated) {
@@ -9653,7 +9697,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           if (chatGenRef.current !== gen) return;
           const st = found.known ? (found.turn.status ?? "") : "";
           const running = found.known && (found.turn.running === true || st === "running");
-          const ended = found.known && !running && (st === "done" || st === "stopped");
+          // Fourth review DT2: a reply that FAILED or was cut off ended too —
+          // its replay ends in its own error, so the whole text is kept and
+          // the failure line says the reply's own reason, with Retry.
+          const ended =
+            found.known &&
+            !running &&
+            (st === "done" || st === "stopped" || st === "error" || st === "interrupted");
           if ((running || ended) && !opts.afterSilence) {
             // Follow it again, ONCE: the replay rebuilds the reply so far and
             // carries on live; a finished one is shown whole. The cut text is
@@ -9665,9 +9715,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           }
           if (running || ended) {
             // Contact was lost twice: still no Retry over a reply that runs
-            // (or ran) — Iron Jarvis writes it into this chat itself.
+            // (or ran) — Iron Jarvis writes it into this chat itself. "Still
+            // working" only for a reply that is still running (DT2).
             setMessages(history);
-            setNotice(STILL_WORKING_AWAY_WORDS);
+            setNotice(running ? STILL_WORKING_AWAY_WORDS : ENDED_AWAY_WORDS);
             return;
           }
           if (found.known || found.reachable) silenceGone = true;
@@ -11216,6 +11267,49 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     });
   }
 
+  /**
+   * Fourth review C-DT-3: "Start it now" under a hand-off that did not start
+   * (Iron Jarvis wrote it with `handOff: "not started"`: refused, or it
+   * closed first). The question it answered is handed off as the reply would
+   * have: same words and files, under the TURN'S name, so the daemon's
+   * one-run-per-hand-off guard gives back a run already made. The line is
+   * replaced by the hand-off line (one reply per turn). A refusal shows its
+   * own words again, as any hand-off's does.
+   */
+  function startHandOffAgain(index: number) {
+    if (busy || sendingRef.current) return;
+    const line = messagesRef.current[index];
+    if (!line || line.role !== "assistant" || line.handOff !== HAND_OFF_NOT_STARTED) return;
+    // Offered under the newest line only: the hand-off line takes its place.
+    if (index !== messagesRef.current.length - 1) return;
+    let asked: ChatMessage | undefined;
+    for (let j = index - 1; j >= 0; j--) {
+      const m = messagesRef.current[j];
+      if (m.role === "user" && !m.steer) {
+        asked = m;
+        break;
+      }
+    }
+    const turnId = line.turnId || asked?.turnId;
+    if (!asked || !turnId) return;
+    const before = messagesRef.current.slice(0, index);
+    messagesRef.current = before;
+    setMessages(before);
+    // The same start a send makes (`send`, Keep going).
+    sendingRef.current = true;
+    pinnedRef.current = true;
+    setShowJump(false);
+    setError(null);
+    setOffline(false);
+    void sendAgent(asked.content, {
+      escalatedFrom: {
+        atts: attachmentsOf(asked),
+        reason: line.escalated || "this one needs the full agent",
+        turnId,
+      },
+    });
+  }
+
   // Stop the in-flight turn and keep whatever streamed so far as the answer.
   // Best-effort — even if the server-side cancel fails we stop waiting locally.
   function stop() {
@@ -12199,6 +12293,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     },
     crystallize: (id) => void crystallizeThread(id),
     handOff: (index) => void handOffPanelReply(index),
+    startHandOff: (index) => startHandOffAgain(index),
     rateReply: (index, rating) => {
       const cur = messagesRef.current;
       if (!cur[index] || cur[index].role !== "assistant") return;
@@ -12438,6 +12533,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       editMessage: (index) => rowImplRef.current.editMessage(index),
       crystallize: (id) => rowImplRef.current.crystallize(id),
       handOff: (index) => rowImplRef.current.handOff(index),
+      startHandOff: (index) => rowImplRef.current.startHandOff(index),
       settleSuggestion: (index, next) =>
         rowImplRef.current.settleSuggestion(index, next),
       settleClientQuestion: (index, next) =>

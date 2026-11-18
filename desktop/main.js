@@ -4798,7 +4798,14 @@ function runOutcomeNotice(entry) {
             : outcome === "completed_with_failures"
               ? `${who} finished, but part of it failed`
               : `${who} finished. Check what it did`;
-      href = `/sessions/${encodeURIComponent(sid)}`;
+      // Fourth fix plan C-DT-1: the run's reply is already in the chat it
+      // was asked in (`chat_thread_id`, orchestrator._completion_payload),
+      // so the notice opens THAT chat, as `remote.message` does; a run with
+      // no chat opens the run.
+      const chat = typeof p.chat_thread_id === "string" ? p.chat_thread_id.trim() : "";
+      href = chat
+        ? `/chat?thread=${encodeURIComponent(chat)}`
+        : `/sessions/${encodeURIComponent(sid)}`;
     }
     return {
       id,

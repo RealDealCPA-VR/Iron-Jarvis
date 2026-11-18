@@ -24,7 +24,8 @@
           "summary": "Wrote the summary.",
           "origin": "workflow:Nightly",
           "project_id": null,
-          "outcome": "completed"
+          "outcome": "completed",
+          "chat_thread_id": null
         }
       },
       {
@@ -35,7 +36,8 @@
           "summary": "The inbox could not be reached.",
           "origin": "workflow:Nightly",
           "project_id": null,
-          "outcome": null
+          "outcome": null,
+          "chat_thread_id": null
         }
       }
     ],
@@ -90,7 +92,8 @@
           "summary": "Wrote the summary.",
           "origin": "workflow:Nightly",
           "project_id": null,
-          "outcome": "completed"
+          "outcome": "completed",
+          "chat_thread_id": null
         }
       },
       {
@@ -115,7 +118,8 @@
           "summary": "The inbox could not be reached.",
           "origin": "workflow:Nightly",
           "project_id": null,
-          "outcome": null
+          "outcome": null,
+          "chat_thread_id": null
         }
       }
     ]
@@ -143,7 +147,8 @@
           "summary": "The inbox could not be reached.",
           "origin": "workflow:Nightly",
           "project_id": null,
-          "outcome": null
+          "outcome": null,
+          "chat_thread_id": null
         }
       }
     ],
@@ -197,7 +202,8 @@
           "summary": "The inbox could not be reached.",
           "origin": "workflow:Nightly",
           "project_id": null,
-          "outcome": null
+          "outcome": null,
+          "chat_thread_id": null
         }
       }
     ]

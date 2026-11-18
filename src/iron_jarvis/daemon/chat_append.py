@@ -94,6 +94,18 @@ LINE_KEYS: tuple[str, ...] = (
     "turnId",
     "savedBy",
     "interrupted",
+    # Fourth plan G28 (DT1): a reply that handed off while no window was open
+    # — the daemon starts the run and writes the line the page's ``sendAgent``
+    # saves: the reason (``escalated``), the specialist (``escalatedTo``), a
+    # remote pick run here instead (``droppedRemote``) and the run the chat
+    # waits on (``awaitingSession``); ``handOff: "not started"`` marks the
+    # line of a hand-off that could not start (with its reason in
+    # ``escalated``: the page's "Start it now" press hands off with it).
+    "escalated",
+    "escalatedTo",
+    "droppedRemote",
+    "awaitingSession",
+    "handOff",
 )
 
 #: The ``who`` on ``CHAT_THREAD_UPDATED`` when the daemon wrote a turn's reply

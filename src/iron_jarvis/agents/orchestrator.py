@@ -598,6 +598,10 @@ def _completion_payload(session: Session, **extra: Any) -> dict:
         # says "Your objective is done" only for a completed outcome, and
         # "needs you" when an ask went unanswered — the status alone cannot.
         "outcome": getattr(session, "outcome", None) or None,
+        # Fourth fix plan C-DT-1: the chat a run was asked in (its reply is
+        # already there, ``chat_delivery``), so the tray notice opens THAT
+        # chat, not the run's page. Always present, ``None`` when none.
+        "chat_thread_id": _chat_delivery.chat_thread_of(session) or None,
     }
 
 

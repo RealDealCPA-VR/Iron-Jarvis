@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.535.0 (2026-11-18).*
+holds itself to. Current as of v1.536.0 (2026-11-18).*
 
 ---
 
@@ -2041,6 +2041,32 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A hand-off is never lost (v1.536.0)
+
+The fifth of nine releases from the fourth review.
+
+- **Work handed to an agent starts even when no window is open.** When a
+  reply in chat decides the job needs a full agent run, only an open Chat
+  page used to start that run. If you had closed the window, or the page
+  lost contact, the chat said "(no response)", you were told the answer was
+  finished, and the work never started. Now Iron Jarvis starts the run
+  itself and writes "Taking this on properly" in the chat, with the run
+  beside it. The run gets the same tools, folder, approval level and Local
+  only setting the chat has now: if you tightened any of them while the
+  reply ran, the tighter one counts. A question the run asks waits for you
+  with no time limit.
+- **When the run cannot start, the chat says why**, in plain words, and
+  offers **Start it now**, so you do not have to type the question again.
+  If Iron Jarvis closed before it could start the run, the chat says that
+  too, with the same press. Starting it never makes a second run: a run
+  already started for that reply is the one you get.
+- **A reply that failed while the page had lost contact keeps its whole
+  text** and shows its own reason, with Retry. Before, the page kept a
+  cut-off copy and said only that nothing came back. "Still working" is now
+  said only of a reply that really is still running.
+- **A finished agent run that you started from a chat opens that chat**
+  when you press its notice, because its answer is already there.
 
 ## Stop says who, and acts at once (v1.535.0)
 

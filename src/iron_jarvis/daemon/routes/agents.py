@@ -2044,6 +2044,181 @@ def delete_custom_agent(platform: Any, name: str) -> None:
         raise HTTPException(status_code=404, detail="unknown agent")
 
 
+async def _first_spawn(d, turn: str) -> dict[str, Any] | None:
+    """The run *turn* already handed off to, as the spawn door answers
+    it, or None (v1.529.0, ``agents.hand_off_guard``)."""
+    if not turn:
+        return None
+    first = await asyncio.to_thread(hand_off_guard.find_handed, d.platform.engine, turn)
+    row = await asyncio.to_thread(d.orchestrator.get_session, first) if first else None
+    return None if row is None else _session_view(row, d)
+
+
+async def spawn_door(d, name: str, body: SpawnBody, *, before_start: Any = None) -> dict[str, Any]:
+    """The whole ``POST /agents/{name}/spawn`` door (lifted out of the route in
+    fourth plan G28, DT1, behaviour unchanged): the hand-off guard, the run
+    made, stamped and started, answered as the route answers it. Raises what
+    the route raised (``HTTPException``; ``LocalOnlyRefused`` from
+    ``create_session``, which the app turns into its 409). The route and
+    ``daemon/chat_hand_off`` both call it, so both go through ONE guard.
+    ``before_start`` (async, given the new run's id) runs after the run is
+    made and stamped and before it starts (the chat's hand-off line is
+    written there). A run the turn already started is answered as it is."""
+    from ...agents.types import get_agent_definition
+    from ...core.models import AgentType
+
+    # v1.529.0: a hand-off that already started its run is answered with
+    # that run before anything else is checked (an allowance the first
+    # run spent must not turn the second window's answer into a refusal).
+    first = await _first_spawn(d, body.handed_from_turn)
+    if first is not None:
+        return first
+    definition = d.platform.agents_registry.definition(name)
+    rec = d.platform.agents_registry.get(name)
+    # WHO RAN (v1.193.0). THIS IS THE MOST COMMON WAY A USER RUNS THEIR OWN
+    # AGENT (the Agents page's Run button) and it published no
+    # ``delegation.started``, so the ledger had nothing to read back and the
+    # run was credited to ``definition.type`` — i.e. a user running their own
+    # tax-reader left ``custom:tax-reader`` reading "(no runs yet)" forever
+    # while ``builder`` absorbed the history. The name is taken from the
+    # RECORD (``rec.name``, the registry key's own casing), never from the
+    # URL segment, which ``definition()``/``get()`` may have matched
+    # differently.
+    agent_name = ""
+    if definition is not None and rec is not None:
+        agent_name = f"custom:{rec.name}"
+    if definition is None:
+        try:
+            definition = get_agent_definition(AgentType(name))
+            agent_name = definition.type.value  # a builtin IS its roster name
+        except ValueError:
+            raise HTTPException(status_code=404, detail="unknown agent")
+    elif definition.type is AgentType.SUPERVISOR:
+        # Honest refusal, not silent substitution (v1.166.0): run_session
+        # reroutes SUPERVISOR-typed sessions to the builtin run_supervised,
+        # which cannot honor this record's custom system prompt — spawning
+        # would silently discard a user-authored prompt. Unreachable via
+        # POST /agents today (base_type is hardcoded "builder"), but a
+        # directly registered record must not slip through the seam.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"dynamic agent '{name}' is based on 'supervisor': the "
+                "builtin supervisor would run and silently discard the "
+                "record's custom system prompt. Re-create it with a "
+                "non-supervisor base type, or POST /sessions with "
+                "agent_type 'supervisor' to use the builtin."
+            ),
+        )
+    # A day off or a spent allowance refuses the run HERE, before a session
+    # row exists (v1.295.0): `refusal_for` reads the month's ledger, so it
+    # leaves the loop like every other DB read on this route.
+    if rec is not None:
+        reason = await asyncio.to_thread(refusal_for, rec, d.platform.engine)
+        if reason:
+            raise HTTPException(status_code=409, detail=reason)
+        # v1.424.0 (D6): the agent's OWN account (a team member's, or —
+        # new — any custom agent's) must be one the user's account groups
+        # allow, refused in words before a session row exists.
+        reason = await asyncio.to_thread(_team.account_refusal, d.platform, rec)
+        if reason:
+            raise HTTPException(status_code=409, detail=reason)
+    # Parity with POST /sessions (v1.166.0): an explicit body.provider/model
+    # wins; the dynamic record's pinned pair is the fallback.
+    provider = body.provider or (rec.provider if (rec and rec.provider) else None)
+    model = body.model or (rec.model if (rec and rec.model) else None)
+    # The folder rides the spawn too (v1.189.0) — same contract, same
+    # honest 400, same single predicate as POST /sessions.
+    workspace_root = (body.workspace_root or "").strip() or None
+    if workspace_root:
+        from ...core.fs_policy import usable_workspace_root
+
+        # v1.228.0: writability is PROBED now — off the loop, as /sessions.
+        if not await asyncio.to_thread(usable_workspace_root, workspace_root):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "workspace_root must be an existing, absolute, "
+                    "non-protected folder this app may write in "
+                    "(missing, protected, not a directory, or not "
+                    f"writable): {workspace_root} — pick a folder you can "
+                    "save files in"
+                ),
+            )
+    # ONE RUN PER HAND-OFF (v1.529.0): a chat turn that hands off to one
+    # of YOUR agents, posted by two windows on one chat, starts one run;
+    # the second window gets that run back (same id, its status). The
+    # same order as POST /sessions: held -> lookup -> create -> stamp ->
+    # let go -> start. No name: exactly as before.
+    turn = body.handed_from_turn
+    async with hand_off_guard.held(d.platform.engine, turn):
+        first = await _first_spawn(d, turn)
+        if first is not None:
+            return first
+        session = await d.orchestrator.create_session(
+            body.task,
+            definition.type,
+            provider=provider,
+            model=model,
+            project_id=body.project_id or None,
+            allow_tools=body.allow_tools or None,
+            workspace_root=workspace_root,
+            origin=body.origin,
+            agent_name=agent_name,
+            # The chat posture rides a custom-agent escalation too (v1.232.0);
+            # when the spawn states none, the job card's posture applies
+            # (v1.295.0), and so does its per-run step budget.
+            approval_mode=body.approval_mode
+            or (str(getattr(rec, "approval_mode", "") or "") if rec is not None else ""),
+            max_steps=getattr(rec, "max_steps", None) if rec is not None else None,
+            # LOCAL ONLY RIDES THE ESCALATION (v1.332.0): stored on the row; a
+            # provider off this network is refused inside create_session (409).
+            options={"local_only": True} if getattr(body, "local_only", False) else None,
+            # v1.344.0: what the chat already ran this turn rides the
+            # custom-agent escalation too (SpawnBody.prior_tool_results).
+            prior_tool_results=getattr(body, "prior_tool_results", None),
+            # v1.345.0: the chat the custom-agent escalation was asked in —
+            # the daemon appends the run's final line to it.
+            chat_thread_id=getattr(body, "chat_thread_id", ""),
+        )
+        if turn:
+            await asyncio.to_thread(
+                hand_off_guard.stamp, d.platform.engine, session.id, turn
+            )
+            session.handed_from_turn = turn
+    if before_start is not None:
+        await before_start(session.id)
+    # Run through the orchestrator (with the dynamic definition override) so
+    # a crashed run is finalized FAILED instead of stranded ACTIVE, and
+    # post-run learning + git review fire for spawned agents too — the old
+    # hand-rolled inline runner here had none of that (v1.166.0).
+    def _run():
+        # v1.424.0 (D6): a custom agent that runs on its own model or names
+        # an account of its own runs INSIDE `member_scope` — its account
+        # pinned for every lease (the Agents page's Run button used to
+        # lease Iron-Proxy's first free account), a member's model held —
+        # entered in the run's own task (`run_as_member`), so a run the
+        # governor parks keeps it. Anyone else: exactly as before.
+        if rec is not None and (_team.runs_elsewhere(rec) or _team.has_own_account(rec)):
+            return _team.run_as_member(
+                d.platform, rec,
+                lambda: d.orchestrator.run_session(session.id, definition=definition),
+            )
+        return d.orchestrator.run_session(session.id, definition=definition)
+
+    if body.wait:
+        session = await _run()
+    else:
+        # Non-blocking spawn: the UI jumps straight to the live session view
+        # (parity with POST /sessions wait:false). A parked spawn returns
+        # None (v1.167.0) — re-read the row so the response says QUEUED,
+        # not a stale "active" for work that never started.
+        parked = d._spawn_bg(session.id, _run())
+        if parked is None:
+            session = d.orchestrator.get_session(session.id) or session
+    return _session_view(session, d)
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/tools")
@@ -4863,165 +5038,8 @@ def register(app: FastAPI, d) -> None:
             )
         return out
 
-    async def _first_spawn(turn: str) -> dict[str, Any] | None:
-        """The run *turn* already handed off to, as the spawn door answers
-        it, or None (v1.529.0, ``agents.hand_off_guard``)."""
-        if not turn:
-            return None
-        first = await asyncio.to_thread(hand_off_guard.find_handed, d.platform.engine, turn)
-        row = await asyncio.to_thread(d.orchestrator.get_session, first) if first else None
-        return None if row is None else _session_view(row, d)
-
     @app.post("/agents/{name}/spawn")
     async def spawn_agent_ep(name: str, body: SpawnBody) -> dict[str, Any]:
-        from ...agents.types import get_agent_definition
-        from ...core.models import AgentType
-
-        # v1.529.0: a hand-off that already started its run is answered with
-        # that run before anything else is checked (an allowance the first
-        # run spent must not turn the second window's answer into a refusal).
-        first = await _first_spawn(body.handed_from_turn)
-        if first is not None:
-            return first
-        definition = d.platform.agents_registry.definition(name)
-        rec = d.platform.agents_registry.get(name)
-        # WHO RAN (v1.193.0). THIS IS THE MOST COMMON WAY A USER RUNS THEIR OWN
-        # AGENT (the Agents page's Run button) and it published no
-        # ``delegation.started``, so the ledger had nothing to read back and the
-        # run was credited to ``definition.type`` — i.e. a user running their own
-        # tax-reader left ``custom:tax-reader`` reading "(no runs yet)" forever
-        # while ``builder`` absorbed the history. The name is taken from the
-        # RECORD (``rec.name``, the registry key's own casing), never from the
-        # URL segment, which ``definition()``/``get()`` may have matched
-        # differently.
-        agent_name = ""
-        if definition is not None and rec is not None:
-            agent_name = f"custom:{rec.name}"
-        if definition is None:
-            try:
-                definition = get_agent_definition(AgentType(name))
-                agent_name = definition.type.value  # a builtin IS its roster name
-            except ValueError:
-                raise HTTPException(status_code=404, detail="unknown agent")
-        elif definition.type is AgentType.SUPERVISOR:
-            # Honest refusal, not silent substitution (v1.166.0): run_session
-            # reroutes SUPERVISOR-typed sessions to the builtin run_supervised,
-            # which cannot honor this record's custom system prompt — spawning
-            # would silently discard a user-authored prompt. Unreachable via
-            # POST /agents today (base_type is hardcoded "builder"), but a
-            # directly registered record must not slip through the seam.
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"dynamic agent '{name}' is based on 'supervisor': the "
-                    "builtin supervisor would run and silently discard the "
-                    "record's custom system prompt. Re-create it with a "
-                    "non-supervisor base type, or POST /sessions with "
-                    "agent_type 'supervisor' to use the builtin."
-                ),
-            )
-        # A day off or a spent allowance refuses the run HERE, before a session
-        # row exists (v1.295.0): `refusal_for` reads the month's ledger, so it
-        # leaves the loop like every other DB read on this route.
-        if rec is not None:
-            reason = await asyncio.to_thread(refusal_for, rec, d.platform.engine)
-            if reason:
-                raise HTTPException(status_code=409, detail=reason)
-            # v1.424.0 (D6): the agent's OWN account (a team member's, or —
-            # new — any custom agent's) must be one the user's account groups
-            # allow, refused in words before a session row exists.
-            reason = await asyncio.to_thread(_team.account_refusal, d.platform, rec)
-            if reason:
-                raise HTTPException(status_code=409, detail=reason)
-        # Parity with POST /sessions (v1.166.0): an explicit body.provider/model
-        # wins; the dynamic record's pinned pair is the fallback.
-        provider = body.provider or (rec.provider if (rec and rec.provider) else None)
-        model = body.model or (rec.model if (rec and rec.model) else None)
-        # The folder rides the spawn too (v1.189.0) — same contract, same
-        # honest 400, same single predicate as POST /sessions.
-        workspace_root = (body.workspace_root or "").strip() or None
-        if workspace_root:
-            from ...core.fs_policy import usable_workspace_root
-
-            # v1.228.0: writability is PROBED now — off the loop, as /sessions.
-            if not await asyncio.to_thread(usable_workspace_root, workspace_root):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "workspace_root must be an existing, absolute, "
-                        "non-protected folder this app may write in "
-                        "(missing, protected, not a directory, or not "
-                        f"writable): {workspace_root} — pick a folder you can "
-                        "save files in"
-                    ),
-                )
-        # ONE RUN PER HAND-OFF (v1.529.0): a chat turn that hands off to one
-        # of YOUR agents, posted by two windows on one chat, starts one run;
-        # the second window gets that run back (same id, its status). The
-        # same order as POST /sessions: held -> lookup -> create -> stamp ->
-        # let go -> start. No name: exactly as before.
-        turn = body.handed_from_turn
-        async with hand_off_guard.held(d.platform.engine, turn):
-            first = await _first_spawn(turn)
-            if first is not None:
-                return first
-            session = await d.orchestrator.create_session(
-                body.task,
-                definition.type,
-                provider=provider,
-                model=model,
-                project_id=body.project_id or None,
-                allow_tools=body.allow_tools or None,
-                workspace_root=workspace_root,
-                origin=body.origin,
-                agent_name=agent_name,
-                # The chat posture rides a custom-agent escalation too (v1.232.0);
-                # when the spawn states none, the job card's posture applies
-                # (v1.295.0), and so does its per-run step budget.
-                approval_mode=body.approval_mode
-                or (str(getattr(rec, "approval_mode", "") or "") if rec is not None else ""),
-                max_steps=getattr(rec, "max_steps", None) if rec is not None else None,
-                # LOCAL ONLY RIDES THE ESCALATION (v1.332.0): stored on the row; a
-                # provider off this network is refused inside create_session (409).
-                options={"local_only": True} if getattr(body, "local_only", False) else None,
-                # v1.344.0: what the chat already ran this turn rides the
-                # custom-agent escalation too (SpawnBody.prior_tool_results).
-                prior_tool_results=getattr(body, "prior_tool_results", None),
-                # v1.345.0: the chat the custom-agent escalation was asked in —
-                # the daemon appends the run's final line to it.
-                chat_thread_id=getattr(body, "chat_thread_id", ""),
-            )
-            if turn:
-                await asyncio.to_thread(
-                    hand_off_guard.stamp, d.platform.engine, session.id, turn
-                )
-                session.handed_from_turn = turn
-        # Run through the orchestrator (with the dynamic definition override) so
-        # a crashed run is finalized FAILED instead of stranded ACTIVE, and
-        # post-run learning + git review fire for spawned agents too — the old
-        # hand-rolled inline runner here had none of that (v1.166.0).
-        def _run():
-            # v1.424.0 (D6): a custom agent that runs on its own model or names
-            # an account of its own runs INSIDE `member_scope` — its account
-            # pinned for every lease (the Agents page's Run button used to
-            # lease Iron-Proxy's first free account), a member's model held —
-            # entered in the run's own task (`run_as_member`), so a run the
-            # governor parks keeps it. Anyone else: exactly as before.
-            if rec is not None and (_team.runs_elsewhere(rec) or _team.has_own_account(rec)):
-                return _team.run_as_member(
-                    d.platform, rec,
-                    lambda: d.orchestrator.run_session(session.id, definition=definition),
-                )
-            return d.orchestrator.run_session(session.id, definition=definition)
-
-        if body.wait:
-            session = await _run()
-        else:
-            # Non-blocking spawn: the UI jumps straight to the live session view
-            # (parity with POST /sessions wait:false). A parked spawn returns
-            # None (v1.167.0) — re-read the row so the response says QUEUED,
-            # not a stale "active" for work that never started.
-            parked = d._spawn_bg(session.id, _run())
-            if parked is None:
-                session = d.orchestrator.get_session(session.id) or session
-        return _session_view(session, d)
+        # The whole door, guard included (fourth plan G28: lifted so the
+        # daemon's own hand-off goes through the same one).
+        return await spawn_door(d, name, body)

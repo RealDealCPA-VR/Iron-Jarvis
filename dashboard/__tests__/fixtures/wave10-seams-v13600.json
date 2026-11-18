@@ -23,7 +23,8 @@
           "summary": "The report folder is missing.",
           "origin": "workflow:Weekly report",
           "project_id": null,
-          "outcome": null
+          "outcome": null,
+          "chat_thread_id": null
         }
       }
     ],
@@ -77,7 +78,8 @@
           "summary": "The report folder is missing.",
           "origin": "workflow:Weekly report",
           "project_id": null,
-          "outcome": null
+          "outcome": null,
+          "chat_thread_id": null
         }
       }
     ]
@@ -92,7 +94,8 @@
           "summary": "Stopped at the inbox it could not open.",
           "origin": "schedule:morning-brief",
           "project_id": null,
-          "outcome": null
+          "outcome": null,
+          "chat_thread_id": null
         }
       }
     ],
@@ -119,7 +122,8 @@
           "summary": "Stopped at the inbox it could not open.",
           "origin": "schedule:morning-brief",
           "project_id": null,
-          "outcome": null
+          "outcome": null,
+          "chat_thread_id": null
         }
       }
     ]

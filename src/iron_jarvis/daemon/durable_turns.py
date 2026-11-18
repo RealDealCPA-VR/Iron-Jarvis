@@ -79,6 +79,7 @@ from typing import Any, AsyncIterator
 from ..core.db import session_scope
 from ..core.ids import utcnow
 from ..core.models import ChatTurnRecord
+from . import chat_hand_off as _hand_off
 
 log = logging.getLogger("iron_jarvis.daemon.durable_turns")
 
@@ -410,7 +411,8 @@ def _frame_data(data: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def reply_line(turn_id: str, frames: Any, status: str) -> "dict[str, Any] | None":
+def reply_line(turn_id: str, frames: Any, status: str, *,
+               handed_to: "str | None" = None) -> "dict[str, Any] | None":
     """The chat line a turn's stored frames make (third plan G6): what the
     Chat page would have saved for this turn, so a reply written home reads as
     the one the user would have read. None = the page would save nothing.
@@ -419,6 +421,11 @@ def reply_line(turn_id: str, frames: Any, status: str) -> "dict[str, Any] | None
     them back (all of them, or its ``drop`` characters), the ``done`` frame's
     ``reply`` winning when it has one; never thinking, steps or tool frames.
 
+    * ``done`` that handed off to the full agent (fourth plan G28, DT1), for
+      a turn with no hand-off of its own here (the start-up pass): the
+      hand-off line naming the run the turn started (``handed_to``, found by
+      :func:`write_home`), else the line that says it did not start — never
+      ``(no response)``;
     * ``done``: that text, or the page's ``(no response)``;
     * ``error``: the words written before it failed, marked ``interrupted``;
       with none, the sentence of what the turn kept (``kept_note``, with its
@@ -449,6 +456,11 @@ def reply_line(turn_id: str, frames: Any, status: str) -> "dict[str, Any] | None
         base: dict[str, Any] = {"role": "assistant", "turnId": turn_id, "savedBy": "daemon"}
         partial = acc.strip()
         if status == "done":
+            esc = _hand_off.escalation_of(frames)
+            if esc is not None:
+                if handed_to:
+                    return _hand_off.hand_off_line(turn_id, esc, handed_to)
+                return _hand_off.closed_line(turn_id, esc)
             text = (str((done or {}).get("reply") or "") or acc).strip()
             return {**base, "content": text or NO_RESPONSE}
         if status == "error":
@@ -497,18 +509,31 @@ _SETTLED = frozenset({HOME_WRITTEN, HOME_THERE, HOME_NOTHING, HOME_NOT_OURS})
 
 
 def write_home(engine: Any, turn_id: str, thread_id: str, frames: Any, status: str, *,
-               event_bus: Any = None) -> str:
+               event_bus: Any = None, line: "dict[str, Any] | None" = None) -> str:
     """Write turn ``turn_id``'s reply into its chat ``thread_id`` unless the
     chat already holds a reply for that turn (third plan G6). Returns one of
     "written", "there" (the page saved it), "nothing" (nothing to write),
     "not ours" (a messaging or coding-session thread: its own writer),
     "no chat" (none named, or it is gone) or "failed"; on the first four the
-    record is marked home. BLOCKING (the shared conversation lock and one
-    write): call it off the loop. Never raises."""
+    record is marked home. ``line`` (fourth plan G28): the line to write
+    instead of the one the frames make (the daemon's own hand-off). A turn
+    that handed off with no ``line`` names the run it started, looked up
+    (``hand_off_guard.find_handed``). BLOCKING (the shared conversation lock
+    and one write): call it off the loop. Never raises."""
     thread = str(thread_id or "").strip()
     if not thread:
         return HOME_NO_CHAT
-    line = reply_line(turn_id, frames, status)
+    if line is None:
+        handed = None
+        if status == "done" and _hand_off.escalation_of(frames) is not None:
+            try:
+                from ..agents.hand_off_guard import clean_turn, find_handed
+
+                handed = find_handed(engine, clean_turn(turn_id))
+            except Exception:  # noqa: BLE001 — unread: the "did not start" line
+                log.warning("could not look up the run chat turn %s started", turn_id,
+                            exc_info=True)
+        line = reply_line(turn_id, frames, status, handed_to=handed)
     if line is None:
         outcome = HOME_NOTHING
     else:
@@ -698,6 +723,11 @@ class TurnLog:
         self.chat_deleted = False
         #: CS6: usage rows this turn wrote before its chat was named.
         self.usage_rows: list[str] = []
+        #: Fourth plan G28 (DT1): the hand-off this turn performs when it
+        #: hands off to the full agent with nobody following it
+        #: (``chat_hand_off.HandOff``, set by the stream route for a Chat
+        #: page's turn); None = none (a Build pane's turn, a test).
+        self.hand_off: Any = None
         #: Third plan G19: the turn registry's handle of this turn (set by
         #: :meth:`TurnLogs.start`) — a Stop from ANY path (the route, Stop
         #: and archive, the night, an attempt) is read off it — and the time
@@ -1380,6 +1410,13 @@ class TurnLogs:
         #: closed loop drops it), and the writes it started.
         self._home_timers: dict[str, asyncio.TimerHandle] = {}
         self._home_tasks: set[asyncio.Task] = set()
+        #: Fourth plan G28 (DT1): the hand-offs under way (own tasks: neither
+        #: the link route nor shutdown waits on one), the turns they are for,
+        #: and whether shutdown began (then none starts: the start-up pass
+        #: writes the turn's line).
+        self._hand_off_tasks: set[asyncio.Task] = set()
+        self._handing: set[str] = set()
+        self._closing = False
         try:
             _REGISTRIES.add(self)
         except Exception:  # noqa: BLE001
@@ -1533,6 +1570,8 @@ class TurnLogs:
                 return
             if lg.followed_at_end:
                 self._home_later(lg)
+            elif self._hands_off(lg):
+                self._start_home_write(lg)  # its own task (shutdown never waits on it)
             else:
                 await self._home_now(lg)  # writes nothing for a deleted chat
             if lg.chat_deleted:  # deleted while it ran, or as its end was written
@@ -1556,6 +1595,17 @@ class TurnLogs:
         if lg.home != HOME_DUE or lg.chat_deleted or lg.status == "running":
             return ""
         frames = [[e, d] for e, d in lg.frames]  # a snapshot, on the loop
+        # Fourth plan G28 (DT1): a reply that hands off to the full agent
+        # with nobody following it — the daemon opens the run (the page's
+        # sendAgent would have). Not once shutdown began (the start-up pass
+        # writes its line); a turn with no hand-off of its own here gets the
+        # line write_home finds (the run it started, or "did not start").
+        esc = _hand_off.escalation_of(frames) if lg.status == "done" else None
+        if esc is not None:
+            if self._closing:
+                return ""
+            if lg.hand_off is not None:
+                return await self._hand_off_now(lg, frames, esc)
         try:
             outcome = await asyncio.wait_for(
                 asyncio.shield(asyncio.to_thread(
@@ -1573,6 +1623,54 @@ class TurnLogs:
         if outcome in _SETTLED:
             lg.home = HOME_DONE
         return outcome
+
+    def _hands_off(self, lg: TurnLog) -> bool:
+        """Will writing this ended turn home perform its hand-off (fourth
+        plan G28)? Then it runs as its own task, never inside a request or
+        the turn's end that shutdown waits on."""
+        try:
+            return (
+                lg.hand_off is not None and lg.status == "done" and lg.home == HOME_DUE
+                and not lg.chat_deleted and _hand_off.escalation_of(lg.frames) is not None
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _hand_off_now(self, lg: TurnLog, frames: list, esc: dict[str, Any]) -> str:
+        """Open the run the turn handed off to (``chat_hand_off``) and write
+        its line home FIRST — the door calls back before it starts the run.
+        Shielded (a cancel in that instant does not lose it) and bounded by
+        ``chat_hand_off.HAND_OFF_TIMEOUT_S``. One at a time per turn (the
+        guard would answer a second with the same run anyway). Never raises
+        but a cancellation."""
+        if lg.turn_id in self._handing:
+            return ""
+        self._handing.add(lg.turn_id)
+        got = {"outcome": ""}
+
+        async def write(line: dict[str, Any]) -> str:
+            outcome = await asyncio.to_thread(
+                write_home, self.engine, lg.turn_id, lg.thread_id, frames, lg.status,
+                event_bus=_bus_for(self.engine), line=line,
+            )
+            if outcome in _SETTLED:
+                lg.home = HOME_DONE
+            got["outcome"] = outcome
+            return outcome
+
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(lg.hand_off(lg.turn_id, lg.thread_id, esc, write)),
+                timeout=_hand_off.HAND_OFF_TIMEOUT_S,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — the next start writes its line
+            log.warning("chat turn %s: its hand-off did not finish", lg.turn_id, exc_info=True)
+            return HOME_FAILED
+        finally:
+            self._handing.discard(lg.turn_id)
+        return got["outcome"]
 
     def _home_later(self, lg: TurnLog, delay: "float | None" = None) -> None:
         """The write home after :data:`HOME_GRACE_S` (one per turn)."""
@@ -1592,12 +1690,15 @@ class TurnLogs:
         )
 
     def _start_home_write(self, lg: TurnLog) -> "asyncio.Task | None":
+        # Fourth plan G28: a write that hands off is kept apart — shutdown
+        # waits on the short writes home, never on a hand-off.
+        tasks = self._hand_off_tasks if self._hands_off(lg) else self._home_tasks
         try:
             task = asyncio.ensure_future(self._home_now(lg))
         except RuntimeError:
             return None
-        self._home_tasks.add(task)
-        task.add_done_callback(self._home_tasks.discard)
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
         return task
 
     async def home_due_now(self, turn_id: str) -> str:
@@ -1628,6 +1729,8 @@ class TurnLogs:
                 return
             if lg.followed_at_end:
                 self._home_later(lg)
+            elif self._hands_off(lg):
+                self._start_home_write(lg)  # G28: never inside the link request
             else:
                 await self._home_now(lg)
         except Exception:  # noqa: BLE001 — the link itself already landed
@@ -1673,6 +1776,10 @@ class TurnLogs:
         try:
             if status not in ("done", "error") or _surface_of(lg) != "chat":
                 return
+            # Fourth plan G28 (DT1): a reply that handed off is not finished
+            # work — the run speaks for itself when it is done.
+            if status == "done" and _hand_off.escalation_of(lg.frames) is not None:
+                return
             thread = str(lg.thread_id or "").strip()
             if not thread:
                 return
@@ -1697,6 +1804,10 @@ class TurnLogs:
 
     async def shutdown(self) -> None:
         """Lifespan exit: cut every running turn off and keep what it wrote."""
+        # Fourth plan G28 (DT1): no hand-off starts from here on (its record
+        # stays "due"; the start-up pass writes the turn's line), and one
+        # under way is not waited for (its own task, shielded and bounded).
+        self._closing = True
         # Third plan G6: a write home still in its grace is not waited for —
         # its record stays "due" and the next start writes it home.
         for timer in list(self._home_timers.values()):
