@@ -139,14 +139,18 @@ export function quietWords(seconds: number): string {
 export const OTHER_TOOLS_PATH = "/work-record/other-tools";
 export const appConnectPath = (app: string) => `/work-record/other-apps/${encodeURIComponent(app)}/connect`;
 export const appDisconnectPath = (app: string) => `/work-record/other-apps/${encodeURIComponent(app)}/disconnect`;
-/** What Connect does, said before the press that does it. */
+/** What Connect does, said before the press that does it. v1.532.0 (fourth
+ *  review OT5): honest about what leaves this PC. What a connected app looks up
+ *  (titles, folders, file names, short summaries) becomes part of that app's
+ *  chat, which goes to its own model; work for a client and Local only work
+ *  are never told to another app (the daemon's outside wall, group 24). */
 export const CONNECT_WORDS: Record<string, string> = {
   "claude-desktop":
-    "Adds Iron Jarvis to the tools Claude desktop can use. Claude then records each chat it has here and can look up your earlier work. Nothing leaves this PC. Restart Claude afterwards.",
+    "Lets Claude desktop record its chats here and look up your earlier work. What it looks up (titles, folders, file names, short summaries) goes to Claude's model with the rest of that chat; client work and Local only work are never shared. Restart Claude afterwards.",
   codex:
-    "Adds Iron Jarvis to the tools Codex can use. Codex then adds a summary to each chat, can look up your earlier work and can see what is running in Iron Jarvis. Nothing leaves this PC.",
+    "Lets Codex add a summary to each chat, look up your earlier work and see what is running in Iron Jarvis. What it looks up (titles, folders, file names, short summaries) goes to Codex's model with the rest of that chat; client work and Local only work are never shared.",
   "claude-code":
-    "Adds Iron Jarvis to the tools Claude Code can use, through Claude Code's own setting. Claude Code then adds a summary to each session, can look up your earlier work and can see what is running in Iron Jarvis. Nothing leaves this PC. New Claude Code sessions use it.",
+    "Lets Claude Code add a summary to each session, look up your earlier work and see what is running in Iron Jarvis, through Claude Code's own setting. What it looks up (titles, folders, file names, short summaries) goes to Claude's model with the rest of that session; client work and Local only work are never shared. New Claude Code sessions use it.",
 };
 export const DISCONNECT_WORDS = "It stops recording here and can no longer look anything up. What it recorded stays.";
 /** Build › Code's own "open a saved conversation" request. */

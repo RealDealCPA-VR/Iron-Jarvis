@@ -388,7 +388,8 @@ def light(tool: str, path: Path, mtime_ns: int, size: int) -> dict[str, Any] | N
         "id": sid,
         "folder": folder,
         "home": project_of(folder) if folder else "",
-        "title": _SPACES.sub(" ", str(fields.get("title") or "")).strip()[:TITLE_CHARS],
+        # v1.532.0 (fourth review OT2): masked, as the record keeps it.
+        "title": keys.clean_line(fields.get("title"), TITLE_CHARS),
         "started": fields.get("started") or fields.get("ended") or stamp,
         "ended": fields.get("ended") or stamp,
         "origin": origin,
@@ -487,7 +488,7 @@ def cowork_sessions() -> list[dict[str, Any]]:
             stamp = _iso_of_ns(mtime_ns)
             row = {
                 "id": f"c:{sid}",
-                "title": _SPACES.sub(" ", str(data.get("title") or "")).strip()[:TITLE_CHARS],
+                "title": keys.clean_line(data.get("title"), TITLE_CHARS),
                 "folder": chosen[0] if chosen else "",
                 "started": _when(data.get("createdAt")) or stamp,
                 "ended": _when(data.get("lastActivityAt")) or stamp,
@@ -648,7 +649,7 @@ def _naive(iso: Any) -> datetime | None:
 
 
 def _note(summary: Any) -> str:
-    return storable_text(_SPACES.sub(" ", str(summary or "")).strip())[:NOTE_CHARS]
+    return keys.clean_line(summary, NOTE_CHARS)  # v1.532.0: masked before the cut
 
 
 def _claude_chat_row(chat: dict[str, Any]) -> dict[str, Any] | None:
@@ -670,6 +671,52 @@ def _claude_chat_row(chat: dict[str, Any]) -> dict[str, Any] | None:
         "started_at": _naive(chat.get("started")),
         "updated_at": _naive(chat.get("ended")) or datetime.now(timezone.utc).replace(tzinfo=None),
     }
+
+
+def _own_report(tool: str, chat: dict[str, Any], reports: list[dict[str, Any]],
+                files: list[tuple[int, int, str, Path]], used: "set[str]",
+                roots: list[str]) -> dict[str, Any] | None:
+    """BLOCKING: the report that is THIS chat's, the answer the sidebar gives
+    (v1.532.0, fourth review OT3). The chat's reports (same folder, in its
+    time) are matched against the chat AND every rival that could take one:
+    the tool's other listed chats whose file was written no earlier than the
+    match window before the earliest of those reports, read through
+    :func:`light`'s cache, in the listing's order. Never against the chat
+    alone: a later chat's report that also falls in this chat's tail is that
+    later chat's."""
+    from datetime import timedelta
+
+    from .reported import CODEX_MATCH_AFTER, CODEX_MATCH_BEFORE, _at, match_reports
+
+    fkey = keys.folder_key(chat.get("folder") or "")
+    start, end = _at(chat.get("started") or ""), _at(chat.get("ended") or "")
+    if not fkey or start is None or end is None:
+        return None
+    mine: list[dict[str, Any]] = []
+    for rep in reports:
+        when = _at(rep.get("ended") or "")
+        if (when is not None and keys.folder_key(rep.get("folder") or "") == fkey
+                and start - CODEX_MATCH_BEFORE <= when <= end + CODEX_MATCH_AFTER):
+            mine.append(rep)
+    if not mine:
+        return None
+    earliest = min(w for w in (_at(r.get("ended") or "") for r in mine) if w is not None)
+    floor = earliest - CODEX_MATCH_AFTER - timedelta(minutes=1)
+    floor_ns = int(floor.replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+    chats: list[dict[str, Any]] = []
+    for mtime_ns, size, sid, path in files:
+        if sid == chat.get("id"):
+            chats.append(chat)
+            continue
+        if sid in used or mtime_ns < floor_ns:
+            continue
+        other = light(tool, path, mtime_ns, size)
+        if other is None or hidden_reason(other, used, roots):
+            continue
+        chats.append(other)
+    if not any(c is chat for c in chats):
+        chats.insert(0, chat)
+    return match_reports(mine, chats).get(chat["id"])
 
 
 def candidates(db: Any, candidate: Callable[..., Any]) -> tuple[list[Any], bool]:
@@ -698,7 +745,8 @@ def candidates(db: Any, candidate: Callable[..., Any]) -> tuple[list[Any], bool]
                 if sid in used:
                     continue  # already a Build › Code session: that row is the record
 
-                def build(_db: Any, *, tool=tool, path=path, mtime_ns=mtime_ns, size=size) -> dict[str, Any] | None:
+                def build(_db: Any, *, tool=tool, path=path, mtime_ns=mtime_ns, size=size,
+                          files=files) -> dict[str, Any] | None:
                     chat = light(tool, path, mtime_ns, size)
                     if chat is None or hidden_reason(chat, frozenset(), roots):
                         return None
@@ -713,9 +761,7 @@ def candidates(db: Any, candidate: Callable[..., Any]) -> tuple[list[Any], bool]
                         "updated_at": _naive(chat["ended"]) or _naive(_iso_of_ns(mtime_ns)),
                     }
                     if reports.get(tool):
-                        from .reported import match_reports
-
-                        rep = match_reports(reports[tool], [chat]).get(chat["id"])
+                        rep = _own_report(tool, chat, reports[tool], files, used, roots)
                         row["note"] = _note(rep.get("summary")) if rep else ""
                     return row
 

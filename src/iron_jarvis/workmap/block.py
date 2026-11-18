@@ -25,8 +25,11 @@ Rules, each pinned:
   this network (``egress.may_recall_local_only_chats``, the fabric recall's
   rule). Fails closed.
 * Archived work is never listed (the Memory page still shows it).
-* Every line goes through ``core/promptguard.scan_context``; a flagged line
-  is left out (a title is somebody's typing).
+* Every line is masked (``failure_words.mask_failure_text``, strict) and
+  goes through ``core/promptguard.scan_context``; a flagged line, or one that
+  cannot be masked, is left out (a title is somebody's typing).
+* ``outside`` (another app asks): Local only and kept-home work is always
+  withheld, and the wall is ``clients.wall.outside_and_map``.
 * The turn's own conversation is never listed as earlier work.
 * BLOCKING (SQLite); the gather runs it off the loop. Never raises.
 
@@ -129,10 +132,19 @@ def _clip(text: str, cap: int) -> str:
 
 
 def _safe(line: str) -> str:
-    """The line as the scanner hands it back, or "" when it reads as an
-    instruction to the model."""
+    """The line, every secret-looking value masked (the shared mask and the
+    shapes it lacks), as the scanner hands it back; "" when it reads as an
+    instruction to the model, or when it cannot be masked (fail closed).
+    Every line the work block and "Running now" hand out passes here, so a
+    title from memory or from a row stored before masking is masked too."""
     from ..core.promptguard import scan_context
+    from ..providers.failure_words import mask_failure_text
 
+    try:
+        line = mask_failure_text(line, strict=True)
+    except Exception:  # noqa: BLE001 — a line that cannot be masked is not told
+        log.debug("work record: a line could not be masked; left out", exc_info=True)
+        return ""
     res = scan_context(line, source="work record", cap=None)
     return "" if res.blocked else (res.text or line)
 
@@ -302,10 +314,13 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             return ""
         wm.refresh(budget=TURN_REBUILD)
         now = now or datetime.now(timezone.utc).replace(tzinfo=None)
-        withhold = _withhold_local_only()
+        # Another app's model is never on this network: Local only and
+        # kept-home work is always withheld from it, whatever the scope says.
+        withhold = True if outside else _withhold_local_only()
         # THE WALL (v1.499.0): built from this turn's own folder and words
-        # (v1.528.0: never from another app's, see ``outside``).
-        turn, cmap = wall.turn_and_map(engine, "", "") if outside else wall.turn_and_map(engine, folder, query)
+        # (v1.528.0: never from another app's, see ``outside``; it is told no
+        # client's work of any kind, ``wall.outside_and_map``).
+        turn, cmap = wall.outside_and_map(engine) if outside else wall.turn_and_map(engine, folder, query)
 
         def allowed(r: dict[str, Any]) -> bool:
             if r["archived"]:

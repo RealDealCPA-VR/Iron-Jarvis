@@ -1288,6 +1288,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
             lambda: _settle_open_calls(platform.engine),
             off_loop_s=_TURN_PASS_TIMEOUT_S,
         )
+        # v1.532.0 (fourth review OT2, owner decision D1): work-record rows and
+        # reported chats stored before the mask are masked once, in place
+        # (again when the mask widens). Off the loop, bounded.
+        from ..workmap.masked_once import mask_stored as _mask_stored
+
+        await _rehydrate_step(
+            "mask_stored_work", lambda: _mask_stored(platform.engine), off_loop_s=_TURN_PASS_TIMEOUT_S
+        )
         # Third plan G6 / RB9: AFTER the coding sessions' replies were put
         # back (above), a chat reply that never reached its chat is written
         # into it, and only THEN are old turn records removed — never one

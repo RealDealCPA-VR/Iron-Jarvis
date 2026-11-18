@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.531.0 (2026-11-18).*
+holds itself to. Current as of v1.532.0 (2026-11-18).*
 
 ---
 
@@ -2041,6 +2041,40 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## What other apps are told (v1.532.0)
+
+The first of nine releases from the fourth review. Claude desktop, Claude
+Code and Codex can look up your earlier work in Iron Jarvis once you press
+Connect for them (Other tools, in the chat list). This release makes sure
+what they are told is only what may leave this PC.
+
+- **Client work is never told to another app.** That was true for clients you
+  confirmed. Work for a client Iron Jarvis is still asking you about, or in a
+  folder that looks like a client's, was told. Now another app is told nothing
+  that belongs to any client, confirmed or not.
+- **Local only work is never told to another app.** The "Running now" lines
+  an app sees at the top of a lookup listed every coding session running in
+  Iron Jarvis, Local only ones included. They now list only work that may
+  leave this PC, and say "Nothing Iron Jarvis may share with this app is
+  running right now." otherwise.
+- **A key or password in a title is hidden.** If the first words of a chat
+  (in Iron Jarvis, Claude Code or Codex) held an API key or a password, that
+  title was kept as typed in your work record, shown on the Memory page and
+  told to other apps. Such values now read `***`, wherever they are stored or
+  shown. Titles saved by older versions are masked once when this version
+  starts, on this PC.
+- **More kinds of keys are recognised:** Stripe, GitLab, npm, Google sign-in
+  secrets, web tokens (JWT), private key blocks and Microsoft (Entra) app
+  secrets, as well as the kinds already masked.
+- **Connect says plainly what is shared.** The Connect words said "Nothing
+  leaves this PC". What a connected app looks up (titles, folders, file names,
+  short summaries) goes to that app's own model with the rest of its chat. The
+  words now say so, and that client work and Local only work are never shared.
+- **Each coding chat keeps its own summary.** A Codex or Claude Code chat could
+  show the summary of a later chat in the same folder.
+- **Titles in other alphabets are kept apart.** Two chats an app reported on
+  the same day with titles in, say, Cyrillic were kept as one.
 
 ## Fold the other tools away (v1.531.0)
 

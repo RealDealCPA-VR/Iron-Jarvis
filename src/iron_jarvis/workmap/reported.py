@@ -104,18 +104,51 @@ def _paths(value: Any, most: int) -> list[str]:
     return out
 
 
+#: v1.532.0: how much of an app's text is looked at before it is masked.
+_MASK_SCAN = 16000
+
+
+def masked(text: Any) -> str:
+    """v1.532.0 (fourth review OT2): an app's text with every secret-looking
+    value masked (``keys.mask_line``), BEFORE it is cut. The ONE helper for
+    the title, summary and link :func:`record` keeps, the key
+    :func:`key_for_args` computes for an Undo, and the arguments the ledger
+    keeps (``connector_tools.ChatRecordTool.redact_args``)."""
+    return keys.mask_line(str(text or "")[:_MASK_SCAN]) if text else ""
+
+
+def _title(args: dict[str, Any]) -> str:
+    return _line(masked(args.get("title")), TITLE_CHARS)
+
+
+def masked_args(args: Any) -> dict[str, Any]:
+    """A copy of a ``chat_record`` call's arguments with every text masked."""
+    out: dict[str, Any] = {}
+    for k, v in (args or {}).items() if isinstance(args, dict) else ():
+        if isinstance(v, str):
+            out[k] = masked(v)
+        elif isinstance(v, list):
+            out[k] = [masked(x) if isinstance(x, str) else x for x in v]
+        else:
+            out[k] = v
+    return out
+
+
 def chat_key(app: str, title: str, chat_id: str, when: datetime) -> str:
-    """What makes two reports one chat."""
+    """What makes two reports one chat. v1.532.0 (fourth review MS9): the
+    title's own words in any letters (Unicode, case-folded), else its folded
+    text, so "Отчёт 2024" and "План 2024" are two chats."""
     if chat_id:
         return f"id:{chat_id}"
-    words = " ".join(re.findall(r"[a-z0-9]+", title.lower()))[:80]
+    folded = title.casefold()
+    words = " ".join(re.findall(r"\w+", folded))[:80] or " ".join(folded.split())[:80]
     return f"day:{when.date().isoformat()}:{words}"
 
 
 def key_for_args(app: str, args: dict[str, Any], *, now: datetime | None = None) -> str:
     """The ``chat_key`` :func:`record` would use for these arguments ("" when
     it would refuse them)."""
-    title = _line(args.get("title"), TITLE_CHARS)
+    title = _title(args)
     if app not in APPS or not title:
         return ""
     return chat_key(app, title, _line(args.get("chat_id"), CHAT_ID_CHARS), now or utcnow())
@@ -163,13 +196,13 @@ def record(engine: Any, app: str, args: dict[str, Any], *, now: datetime | None 
     sentence for a call that cannot be kept."""
     if app not in APPS:
         raise ValueError(NOT_AN_APP)
-    title = _line(args.get("title"), TITLE_CHARS)
+    title = _title(args)
     if not title:
         raise ValueError(NO_TITLE)
-    summary = _lines(args.get("summary"), SUMMARY_CHARS)
+    summary = _lines(masked(args.get("summary")), SUMMARY_CHARS)
     folders = _paths(args.get("folders"), FOLDERS_MAX)
     files = _paths(args.get("files"), FILES_MAX)
-    link = _line(args.get("link"), LINK_CHARS)
+    link = _line(masked(args.get("link")), LINK_CHARS)
     if link and not _LINK.match(link):
         link = ""  # only a web address: never a file or a program to start
     given_id = _line(args.get("chat_id"), CHAT_ID_CHARS)

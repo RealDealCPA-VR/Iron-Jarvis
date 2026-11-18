@@ -98,10 +98,8 @@ def _iso(value: Any) -> str:
 
 
 def _one_line(text: Any, cap: int) -> str:
-    words = " ".join(str(text or "").split())
-    if len(words) > cap:
-        words = words[: cap - 1].rstrip() + "…"
-    return storable_text(words)
+    # v1.532.0 (fourth review OT2): masked before it is cut (``keys.clean_line``).
+    return keys.clean_line(text, cap)
 
 
 def _json(text: Any) -> Any:
@@ -257,10 +255,11 @@ def thread_candidates(db: Any, roots: dict[str, str],
         is_archived = archived is not None
         jn = journal.get(f"build:{ref}", (0, 0)) if build_thread else (0, 0)
         # The title is part of the stamp: a coding session's rename does not
-        # move ``updated_at``.
+        # move ``updated_at``. v1.532.0: the CLEANED title, so no secret sits
+        # in the stamp column.
         stamp = (
             f"{_iso(updated)}|{folder}|{int(local)}|{int(is_archived)}|{jn[0]}.{jn[1]}"
-            f"|{str(title or '')[:TITLE_CHARS]}"
+            f"|{keys.clean_line(title, TITLE_CHARS)}"
         )
 
         def build(db2: Any, *, ref=ref, kind=kind, folder=folder, local=local,

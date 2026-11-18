@@ -39,6 +39,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from typing import Any, AsyncIterator, Iterable, Iterator, Sequence
 
 from .. import keys
@@ -120,10 +121,11 @@ def parent_folder(path: object) -> str:
     return raw[:cut] if cut > 0 else ""
 
 
-def _segment_names(folder: object, cmap: ClientMap) -> set[str]:
+def _segment_names(folder: object, cmap: ClientMap, table: Any = None) -> set[str]:
     """The CONFIRMED clients whose name (or alias) is one whole segment of
     ``folder``'s path, in any case (``D:\\Scans\\hartleys`` names Hartleys).
     ``names.path_parts`` already leaves out the drive and ``Users\\<name>``.
+    ``table`` another names table (the waiting names, for an outside asker).
     Never raises."""
     try:
         sigs = {names.signature(p) for p in names.path_parts(folder)}
@@ -131,7 +133,7 @@ def _segment_names(folder: object, cmap: ClientMap) -> set[str]:
         if not sigs:
             return set()
         found: set[str] = set()
-        for cid, entry in (cmap.names or {}).items():
+        for cid, entry in ((cmap.names if table is None else table) or {}).items():
             try:
                 _name, sig, aliases = entry
             except (TypeError, ValueError):
@@ -181,6 +183,24 @@ def _named(text: object, cmap: ClientMap) -> frozenset[str]:
         return frozenset()
 
 
+def _waiting_named(text: object, folder: object, cmap: ClientMap) -> frozenset[str]:
+    """The WAITING names ``text`` or a whole segment of ``folder`` names, as
+    owners (``waiting:<id>``). Only for an asker that is another app: the
+    owner's own turns never use waiting names. Never raises (an error names
+    an unknown owner: unsure, not told)."""
+    try:
+        table = cmap.waiting_names or {}
+        if not table:
+            return frozenset()
+        words = str(text or "")[:TEXT_MAX]
+        got = set(names.named_in(words, table)) if words.strip() else set()
+        got |= _segment_names(folder, cmap, table)
+        return frozenset(_WAITING + str(i) for i in got if i in table)
+    except Exception:  # noqa: BLE001 — unsure: owned
+        log.debug("clients: waiting names could not be read", exc_info=True)
+        return frozenset({_WAITING + "?"})
+
+
 def turn_and_map(engine: Any, folder: object, user_text: object) -> tuple[TurnWall, ClientMap]:
     """:func:`turn_wall` and the map it was read from, for a caller that
     then asks :func:`may_tell` about many rows (the work block). A map that
@@ -213,6 +233,19 @@ def turn_and_map(engine: Any, folder: object, user_text: object) -> tuple[TurnWa
         return TurnWall(ok=False, folder_key=key), store.EMPTY_MAP
 
 
+def outside_and_map(engine: Any) -> tuple[TurnWall, ClientMap]:
+    """The wall of an asker that is ANOTHER APP (``work_search`` over the
+    connector) and the map: no folder and no words (that app's model wrote
+    both, never the owner), marked ``outside``, so :func:`may_tell` rule 2b
+    tells it nothing that has an owner of any kind. A map that cannot be
+    read answers no to everything (``ok=False`` with no folder). BLOCKING;
+    never raises."""
+    turn, cmap = turn_and_map(engine, "", "")
+    if not turn.ok:
+        return TurnWall(ok=False, folder_key="", outside=True), store.EMPTY_MAP
+    return replace(turn, outside=True), cmap
+
+
 def turn_wall(engine: Any, folder: object, user_text: object) -> TurnWall:
     """The wall for one turn: its folder's owner (``client:<id>`` /
     ``waiting:<id>`` / ``folder:<key>`` / None, after ``keys.home_folder`` +
@@ -240,6 +273,8 @@ def may_tell(
 
     1. ``not turn.ok``: only rows in exactly the turn's folder.
     2. The row owner is None: True.
+    2b. ``turn.outside`` (another app asks): False. Its named attribution
+       also knows the WAITING names (title, file stems, snippet, segments).
     3. ``turn.owner`` is set: True only if the row owner is exactly
        ``turn.owner`` (a named set must equal ``{turn.owner}``).
     4. The row owner is confirmed: True only if it is in ``turn.named``
@@ -263,8 +298,12 @@ def may_tell(
             owners = frozenset(
                 {_CLIENT + i for i in _named(text, cmap)} | _path_owners(cmap, folder, files)
             )
+            if wall.outside:  # another app: waiting names own their work too
+                owners |= _waiting_named(text, folder, cmap)
         if not owners:  # 2.
             return True
+        if wall.outside:  # 2b. another app is told no client's work
+            return False
         if wall.owner is not None:  # 3.
             return owners == frozenset({wall.owner})
         # 4. pointers only. A row whose owners MIX kinds (a confirmed client
@@ -418,6 +457,7 @@ def narrowed(parent: TurnWall, own: TurnWall) -> TurnWall:
             named=frozenset(p.named) & frozenset(o.named),
             ok=True,
             folder_key=key,
+            outside=bool(p.outside or o.outside),
         )
     except Exception:  # noqa: BLE001 — unsure: closed
         log.debug("clients: a child's wall could not be narrowed", exc_info=True)
@@ -624,6 +664,7 @@ __all__ = [
     "may_tell",
     "narrowed",
     "on_owner_screen",
+    "outside_and_map",
     "parent_folder",
     "owner_screen",
     "scoped_frames",

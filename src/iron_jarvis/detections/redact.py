@@ -20,6 +20,17 @@ import re
 MASK = "***"
 
 _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    # v1.532.0 (D2): a PEM private key block, header through END line. FIRST,
+    # so no later rule masks a piece of the body and stops this one short. The
+    # body is base64 and spaces only (no `-`), so it stops at the END line, or
+    # at the first other character when the block was cut (still masked); one
+    # pass over each body, linear. A certificate or a PUBLIC key is left.
+    (
+        re.compile(
+            r"""(-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----)(?![*]{3})[A-Za-z0-9+/=\s]*(-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----)?"""
+        ),
+        r"\1" + MASK + r"\2",
+    ),
     # Authorization: Bearer <v> / Basic <v> / Token <v> / <v>
     (
         re.compile(
@@ -70,6 +81,39 @@ _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1" + MASK,
     ),
     (re.compile(r"""\b(AKIA|ASIA)[0-9A-Z]{16}\b"""), r"\1" + MASK),
+    # v1.532.0 (D2): the failure words' own shapes (providers/failure_words
+    # `_FAILURE_MASKS`, verbatim, same order) — a bare `Bearer <value>` (needs a
+    # digit and 12+ characters, so "Bearer authentication failed" stays),
+    # Google `AIza…`, xAI `xai-…`, Groq `gsk_…`, Hugging Face `hf_…`.
+    (
+        re.compile(r"(\bbearer:?\s+)(?![*]{3})(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{12,}", re.IGNORECASE),
+        r"\1" + MASK,
+    ),
+    (re.compile(r"\b(AIza)[0-9A-Za-z_-]{30,}"), r"\1" + MASK),
+    (re.compile(r"\b(xai-|gsk_|hf_)[A-Za-z0-9]{20,}"), r"\1" + MASK),
+    # v1.532.0 (D2): Stripe secret / restricted keys, live and test.
+    (re.compile(r"\b((?:sk|rk)_(?:live|test)_)[A-Za-z0-9]{16,}"), r"\1" + MASK),
+    # GitLab personal access token, Google OAuth client secret.
+    (re.compile(r"\b(glpat-|GOCSPX-)[A-Za-z0-9_-]{20,}"), r"\1" + MASK),
+    # npm access token (30+ letters and digits: "npm_install" stays).
+    (re.compile(r"\b(npm_)[A-Za-z0-9]{30,}"), r"\1" + MASK),
+    # A JWT: three base64url parts split by dots, the first starting `eyJ`. A
+    # match starts only where a run of base64url characters starts (the
+    # lookbehind), so a long `eyJa-eyJa-…` run is read once, not from each
+    # `eyJ` in it; the parts cannot hold a dot, so each is read once.
+    (
+        re.compile(r"(?<![A-Za-z0-9_-])(eyJ)[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+        r"\1" + MASK,
+    ),
+    # An Entra (Azure AD) client secret pasted bare: three characters, a digit,
+    # `Q~`, then 31-34 more (37-40 in all), standing alone (nothing of the
+    # same characters on either side). Narrow on purpose: the `<digit>Q~` mark
+    # is what tells it from an ordinary word. All of it is masked (its first
+    # characters are secret too).
+    (
+        re.compile(r"(?<![A-Za-z0-9_~.-])[A-Za-z0-9_~.]{3}\dQ~[A-Za-z0-9_~.-]{31,34}(?![A-Za-z0-9_~-])"),
+        MASK,
+    ),
 )
 
 

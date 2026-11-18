@@ -36,8 +36,21 @@ def typed_words(text: str) -> str:
 
 
 def title_of(text: str) -> str:
-    """One line, whitespace collapsed, clipped to ``TITLE_CAP``."""
-    return clip(" ".join(text.split()), TITLE_CAP)
+    """One line, whitespace collapsed, clipped to ``TITLE_CAP``.
+
+    v1.532.0 (fourth review OT2): secret-looking values are masked (the work
+    record's mask, ``providers.failure_words.mask_failure_text(strict=True)``)
+    BEFORE the cut, so a key that crosses the last character is never cut into
+    a stub the mask no longer knows. A mask that faults gives no title, never
+    an unmasked one."""
+    folded = " ".join(text.split())
+    try:
+        from ..providers.failure_words import mask_failure_text
+
+        folded = " ".join(mask_failure_text(folded[:TEXT_CAP], strict=True).split())
+    except Exception:  # noqa: BLE001 — fail closed
+        return ""
+    return clip(folded, TITLE_CAP)
 
 
 def s(value: Any) -> str:

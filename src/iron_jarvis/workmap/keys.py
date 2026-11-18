@@ -121,6 +121,50 @@ def words(text: object) -> set[str]:
     }
 
 
+#: v1.532.0 (fourth review OT2): how much of a text is looked at before it is
+#: masked and cut (a first prompt can be a whole paste; a line is far shorter).
+_MASK_SCAN = 8000
+
+
+def mask_line(text: object) -> str:
+    """``text`` with every secret-looking value masked: THE mask of the work
+    record (the shared mask plus the shapes it lacks,
+    ``providers.failure_words.mask_failure_text(strict=True)``), used where a
+    row is stored (``index.WorkMap._write``), at every source
+    (:func:`clean_line`), by the reported chats (``reported``) and by the
+    start-up pass over old rows (``masked_once``). A step that faults RAISES:
+    a caller drops the text rather than keep it unmasked. Idempotent."""
+    from ..providers.failure_words import mask_failure_text
+
+    return mask_failure_text(str(text or ""), strict=True)
+
+
+def clean_line(text: object, cap: int) -> str:
+    """One stored line: masked (:func:`mask_line`), THEN spaces folded, THEN
+    cut at ``cap`` with "…", then made storable. Masking before the cut means
+    a key is never cut into a stub the mask no longer knows."""
+    from ..core.db import storable_text
+
+    words = " ".join(mask_line(str(text or "")[:_MASK_SCAN]).split())
+    if len(words) > cap:
+        words = words[: cap - 1].rstrip() + "…"
+    return storable_text(words)
+
+
+def mask_id() -> str:
+    """Which mask :func:`mask_line` is: a digest of every rule it applies, so
+    a pass that remembers the mask it ran knows when a wider one arrived."""
+    import hashlib
+
+    from ..detections import redact
+    from ..providers import failure_words
+
+    h = hashlib.sha256()
+    for rx, repl in (*redact._RULES, *failure_words._FAILURE_MASKS):
+        h.update(f"{rx.pattern}\x00{int(rx.flags)}\x00{repl}\x01".encode("utf-8"))
+    return h.hexdigest()[:24]
+
+
 def _no_apostrophes(text: str) -> str:
     """"Hartley's" and "Hartleys" are one name."""
     return text.replace("'", "").replace("’", "")
@@ -142,11 +186,14 @@ __all__ = [
     "GENERIC_FOLDER_WORDS",
     "STOP_WORDS",
     "WORKTREES_SUFFIX",
+    "clean_line",
     "file_name",
     "folder_key",
     "folder_name",
     "home_folder",
     "inside",
+    "mask_id",
+    "mask_line",
     "named_words",
     "words",
 ]

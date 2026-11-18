@@ -504,6 +504,11 @@ def failure_facts(exc: BaseException | None) -> _Facts:
 #: out here, for the live frame and the line alike. Each rule needs a digit or
 #: a long run, so a sentence ("Bearer authentication failed") is never touched;
 #: every rule is linear (no nested repetition).
+#:
+#: v1.532.0 (D2): the shared mask now carries these same three rules (verbatim,
+#: pinned by ``tests/test_fourth_review_mask_shapes_v1532.py``), so every
+#: surface that masks catches them; they stay here as the belt for a shared
+#: mask that faults (masking twice changes nothing).
 _FAILURE_MASKS: tuple[tuple["re.Pattern[str]", str], ...] = (
     (
         re.compile(r"(\bbearer:?\s+)(?![*]{3})(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{12,}", re.IGNORECASE),

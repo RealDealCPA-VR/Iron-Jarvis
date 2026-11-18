@@ -80,6 +80,13 @@ class ChatRecordTool(_ConnectorTool):
         "required": ["title"],
     }
 
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """v1.532.0 (fourth review OT2): the ledger keeps the arguments with
+        every text masked (``reported.masked``), as the row itself is kept."""
+        from . import reported
+
+        return reported.masked_args(args)
+
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> "dict[str, Any] | None":
         """The row as it was before this report (None = there was none), so
         Undo removes a new row or puts back what a repeat report replaced."""

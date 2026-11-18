@@ -255,6 +255,11 @@ class WorkMap:
             for cand in chunk:
                 try:
                     values = cand.build(db)
+                    if values is not None:
+                        # v1.532.0 (fourth review OT2): the one place a row is
+                        # built masks its words; a mask that faults skips the row.
+                        values = {**values, **{col: keys.mask_line(values[col])
+                                               for col in ("title", "note") if values.get(col)}}
                 except Exception:  # noqa: BLE001 — one bad row never stops the rest
                     log.debug("work record: %s could not be built", cand.id, exc_info=True)
                     self._skip[cand.id] = cand.stamp

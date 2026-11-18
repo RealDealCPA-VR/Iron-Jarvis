@@ -201,9 +201,12 @@ def test_running_now_tells_coding_work_and_keeps_a_clients_behind_the_wall(scene
     hartleys.mkdir(parents=True)
     clients.create(scene.platform, folder=str(hartleys), name="Hartleys")
     rows = [
-        {"where": "Chat › Code", "title": "Speed up the import", "folder": str(scene.folder), "waiting": False},
-        {"where": "Build › Code (Codex)", "title": "Hartleys reconciliation", "folder": str(hartleys), "waiting": True},
-        {"where": "Chat › Code", "title": "Tidy the tests", "folder": str(scene.folder), "waiting": True},
+        {"where": "Chat › Code", "title": "Speed up the import", "folder": str(scene.folder), "waiting": False,
+         "held": False},
+        {"where": "Build › Code (Codex)", "title": "Hartleys reconciliation", "folder": str(hartleys), "waiting": True,
+         "held": False},
+        {"where": "Chat › Code", "title": "Tidy the tests", "folder": str(scene.folder), "waiting": True,
+         "held": False},
     ]
     monkeypatch.setattr(running, "_rows", lambda platform: rows)
     text = running.running_block(scene.platform)
@@ -234,7 +237,8 @@ def test_work_search_with_nothing_answers_what_runs(scene, monkeypatch):
     from iron_jarvis.workmap.connector_tools import WorkSearchTool
 
     monkeypatch.setattr(running, "_rows", lambda platform: [
-        {"where": "Chat › Code", "title": "Speed up the import", "folder": str(scene.folder), "waiting": False}])
+        {"where": "Chat › Code", "title": "Speed up the import", "folder": str(scene.folder), "waiting": False,
+         "held": False}])
     ctx = ToolContext(workspace=scene.tmp, session_id="mcp:app:codex", agent_run_id="",
                       config=scene.platform.config, event_bus=scene.platform.event_bus, engine=scene.engine)
     got = asyncio.run(WorkSearchTool(scene.platform).execute({}, ctx))

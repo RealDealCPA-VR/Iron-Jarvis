@@ -411,7 +411,7 @@ def test_work_search_with_nothing_says_what_runs_in_iron_jarvis(scene):
     door = _door(scene)
     r = door.call("work_search", {})
     assert r.json()["result"]["isError"] is False
-    assert "Nothing is running in Iron Jarvis right now." in r.json()["result"]["content"][0]["text"]
+    assert "Nothing Iron Jarvis may share with this app is running right now." in r.json()["result"]["content"][0]["text"]
 
 
 # --------------------------------------------------------------------------- #

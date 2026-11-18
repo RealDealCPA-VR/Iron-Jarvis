@@ -2593,3 +2593,1544 @@ Left open:
   Usage total that jumps after a restart; a long Build › Code reply that
   still shows the check mark; two runs in Sessions for one hand-off from a
   chat open in two windows.
+
+## Fourth review (2026-11-18, at v1.531.0)
+
+Scope: the code shipped in the 13 releases after v1.516.0 (about 15,400 lines
+of product code), which no earlier review had read: the third fix plan
+(groups 17 to 23), the Linux releases, and the "other tools" chats and
+connectors. Eight read-only reviewers, one per area, read a copy of master at
+v1.531.0. Nothing was changed, run or committed.
+
+**Validated** = the lead re-read the lines and found no guard.
+**Reviewer only** = traced by the reviewer, not re-read by the lead (lows).
+**Suspected** = one step could not be confirmed from the code.
+
+48 findings: 3 high, 16 medium, 29 low. One duplicate merged (CS6 = DT4).
+The reviewers' full reports, with every line reference and the "Holds"
+lists, are the `r4_*.md` files in the local notes folder `.claude/worktrees/fourth-review-notes/` (not committed: those files quote a private repository).
+
+### High
+
+- **MS1. "Running now" tells another app the title and folder of a Local only coding session.** [validated, behaviour 2]
+  `workmap/running.py` `running_block` checks only the client wall; the
+  Local only / kept-home withhold that `block.work_block` applies is
+  missing. Every `work_search` call from Claude desktop, Claude Code or Codex
+  starts with these lines, which go to that app's cloud model.
+- **OT1. A waiting (not yet confirmed) client's work is told to another app.** [validated, behaviour 2]
+  An outside asker's wall has no folder and no words, so `wall.may_tell`
+  rule 6 lets a row owned by a waiting client through. `docs/rules/memory.md`
+  promises "a confirmed or waiting client's work is never told to another
+  app"; the only test uses a confirmed client. Same gap in "Running now".
+- **OT2. A secret typed in the first words of a Claude Code or Codex chat goes unmasked into memory, prompts and other apps.** [validated, behaviour 1]
+  The chat title is taken raw (`history/common.py`, `workmap/outside.py`),
+  stored, and told through `block._safe`, whose prompt-guard scan does not
+  mask secrets (checked with a made-up key-shaped string: kept as is). It
+  then reaches the Memory page, later prompts in that folder, and
+  `work_search` answers. Reported titles and summaries share the gap.
+
+### Medium
+
+- **MS2. Every Iron Jarvis update kills the connected apps' bridge.** [validated, behaviour 3]
+  The connector runs `ironjarvis.exe mcp-stdio` from the app's own folder;
+  the installer runs `taskkill /F /T /IM ironjarvis.exe` and the desktop's
+  sweep kills every process in that folder. Recording and lookups stop until
+  the other app is restarted, and nothing says so.
+- **MS3. On a Linux AppImage the connector points at a temporary mount path.** [validated, Linux only]
+  `launch_argv` uses `sys.executable` (under `/tmp/.mount_*`); after a close
+  or update the other app's entry points nowhere, and the status still says
+  connected.
+- **MS4. The connector's name `iron-jarvis` clashes with the Build terminal recipe's, and the bridge prefers an inherited token.** [suspected, behaviour 4]
+  Depends on Claude Code's precedence between scopes and on whether each
+  tool passes its environment on.
+- **OT3. A Codex or Claude Code chat can carry another chat's summary.** [validated, correctness]
+  Reports are matched against one chat at a time (`outside.py` calls
+  `match_reports(reports, [chat])`), so a later chat's report that falls in
+  an earlier chat's 30-minute window lands on the earlier one. The sidebar
+  matches across all chats, so screen and record disagree.
+- **OT4. A failed Disconnect says "nothing was changed" after the key was already deleted.** [validated, behaviour 1]
+  `apps.disconnect` deletes the state and the key file first, then the
+  settings change raises `NOT_WRITTEN` / `CLI_FAILED`, both ending "so
+  nothing was changed". The screen then offers only Connect, and the other
+  app keeps a broken entry.
+- **OT5. The Connect words say "Nothing leaves this PC", but lookups go to that app's model.** [validated, behaviour 1]
+  `dashboard/lib/otherTools.ts` `CONNECT_WORDS`, all three apps. Every
+  `work_search` answer (titles, folders, files, summaries, running sessions)
+  becomes a tool result in Anthropic's or OpenAI's model.
+- **OT6. Codex settings added after Connect can be deleted by Disconnect or a second Connect.** [suspected, behaviour 3]
+  Removes everything between the begin and end markers, and the end marker
+  is the file's last line. Depends on where Codex writes new tables.
+- **CS1. A night task whose reply was cut off reads "Done".** [validated, behaviour 4]
+  `harness/night.outcome_of` never reads `truncated` or an unrecovered
+  `route.cut_off`; the daytime notice (`finished_notice_outcome`) does.
+- **CS2. An attempt cut off at the output limit is "Finished".** [validated, behaviour 1]
+  `Attempt.fold` / `settle` ignore `truncated` and `cut_off`; the card
+  offers Keep on it, and at night it counts as finished.
+- **CS3. A daytime "Try on several models" turn is announced finished even when every attempt failed.** [validated, behaviour 1]
+  Its done frame carries only the reply and the card; `finished_notice_outcome`
+  sees no failure mark and says "done".
+- **CS4. A level change or Plan made while attempts run says it applies from the next step, but attempts never take it.** [validated, behaviour 1]
+  The level watch is set only in `start_build_turn`; attempts start through
+  `maybe_start` and never see it.
+- **TM1. "With Iron Jarvis's tools" for Codex starts Codex signed out, in an empty home inside the project.** [validated, behaviour 1]
+  The Codex recipe sets `CODEX_HOME=<project>/.jarvis-codex`, applied after
+  the account's own `CODEX_HOME` (`manager._with_pane_env` puts the pane's
+  variables last). If the user signs in there, the credential file lands in
+  the project folder.
+- **TM2. On Linux and Mac, a terminal whose shell was removed is dropped silently at a restart and its history deleted.** [validated in part, Linux/Mac only]
+  A failed `execvpe` is exit 127, read as "the shell ended by itself"; the
+  page hides dead panes and the snapshot drops its history. Windows lists
+  the same case with Try again.
+- **BS1. In a Local only sidebar reply, the sidebar's switch answers the Local only "Allow once" card.** [validated, behaviour 2]
+  `panel._auto_allow` resolves every offered card except risk cards as
+  "once"; the panel's card never carries `once_only`, so the rule that
+  nothing but the card itself answers a Local only card is bypassed. "Allow
+  all page actions" is also offered on cards it can never cover.
+- **PG1. An outgoing webhook can be re-pointed with no per-call question.** [validated, behaviour 2]
+  `webhook_add` asks every time for an outgoing address; `webhook_update`
+  (and its base class) has no such check, so "Allow for this conversation"
+  or a "Run without asking" setting lets it send Iron Jarvis's events to any
+  host.
+- **DT1. A reply that hands off to the full agent never does so when no window is open.** [validated, behaviour 4]
+  The daemon never performs the hand-off (no escalate path under `daemon/`
+  in `durable_turns`); only the page does, and its quiet rebuild on reopen
+  deliberately skips it. The chat shows "(no response)" and nothing starts.
+
+### Low (reviewer only unless marked)
+
+- **LX1** [validated, downgraded from medium] The release page's "latest" has
+  no Linux files for about 40 minutes after each release, and v1.523.0,
+  v1.524.0 and v1.526.0 never got them. The download page's own script
+  repoints both links at the newest release that has the files, so they work
+  whenever that script runs; only its fallback links 404 in the gaps.
+- **LX2** A version can be published without the update rehearsal when none
+  of the 40 newest releases has Linux files, and the job then says it is the
+  first Linux release.
+- **LX3** A partly finished Linux upload stops that version for good (later
+  runs see "a Linux file" and leave it; no update file).
+- **LX4** [suspected] The Linux "start at sign-in" entry escapes the program
+  path in the wrong form for paths with `$`, `\` or `%`.
+- **MS5** Connecting Claude Code says "New Codex chats use it; restart Codex".
+- **MS6** A disconnected app is told to restart "the coding tool in the Build terminal".
+- **MS7** Connecting Claude Code holds the connectors' lock for up to 60 s.
+- **MS8** A call for a tool outside an app's grant is refused with no ledger row.
+- **MS9** Same-day `chat_record` calls whose titles have no Latin letters or digits collapse into one row.
+- **OT7** One Claude desktop file vanishing mid-listing drops every such row until the next refresh.
+- **OT8** [suspected] A chat whose first prompt is over 256 KB is left out.
+- **OT9** [suspected] An unbounded folder check per row can hold the list on an offline share.
+- **OT10** Every Connect and Disconnect copies the other app's whole settings file (often holding other tokens) into `backups/other-apps/`, never pruned.
+- **CS5** The night's shared pay-per-use remainder stops an attempt with "this session's cost limit" words.
+- **CS6 / DT4** Stops Iron Jarvis makes itself (time limit, Emergency stop, archive) are recorded as the user's Stop: "You stopped this reply", also told to the model on Continue.
+- **TM3** The files "With Iron Jarvis's tools" creates or changes in the project are never named; the page drops the daemon's sentences.
+- **TM4** The restart-at-size wait (up to 15 s) holds back typed keys, and re-arms on each resize.
+- **TM5** A slow skill-library read in the pane's "ask AI" answers "no such skill".
+- **BS2** A Stop pressed before the sidebar's reply registers is dropped, though the sidebar says "Stop requested".
+- **BS3** Under Local only, a screenshot question names a provider "the picture was for" that was never sent anything, beside a line saying nothing was sent.
+- **BS4** The "tab not on screen" refusal shows a code and a tool name on the sidebar's step line.
+- **PG2** [suspected] A lone carriage return may hide the rest of a command from the `;` guard while cmd.exe still runs it.
+- **PG3** A script could run a locked app's read tool with no card if "locked" and "kept on your own models" ever come apart (latent today).
+- **PG4** A finished reply whose usage row failed to save is later recorded as "cut off when Iron Jarvis stopped".
+- **PG5** Decision G2 was built safer than written, and its "as built" note does not say so.
+- **DT2** After a minute of silence, a reply that FAILED is saved as the page's cut copy and its real failure reason is never shown.
+- **DT3** A Stop pressed while the turn is being refused answers "already finished", then shows a 404 naming the turn id.
+- **DT5** A deleted chat's running reply leaves its record for up to 7 days if the app closes before the reply ends.
+- **DT6** [by design, questionable] Stop waits up to 3 s for its database write before stopping the reply in memory.
+
+### What held (summary of the reviewers' "Holds")
+
+- PG6 (the chained-delete command) is closed for every `2>&1` form tried,
+  inside `cmd /c`, after `&&`, `if`, `for`, and with `^` escapes.
+- The third review's PG1 (held-back app tool) holds in both chat lanes and
+  agent runs; standing grants never lift a held tool.
+- Every model call is counted once in the new ledger, and nothing is
+  written on the event loop.
+- A daemon-saved and page-saved reply never double up; a reply survives the
+  app closing mid-turn; a stopped coding reply is never carried on after a
+  restart.
+- The tools door: no token, the install token or a pairing token is refused;
+  an app's key opens only "record"; every call goes through the roster and
+  cards; the bridge talks to loopback only.
+- Nothing in the Linux work changes the Windows path, workflows or update
+  files; a red Linux run cannot publish.
+- Terminal output reaching a model is fenced; "Continue on X" really sends
+  the account; nothing re-runs after a restart.
+
+## Fourth fix plan (groups 24 to 32)
+
+**The owner said "Yes, as recommended" on 2026-11-18 to every decision,
+D1 to D15** (so D11, "Allow on this site", is not in this plan). Building
+runs on branch `fix/fourth-review` in its own worktree, one release per
+group, nine releases (D14).
+
+The owner said: "first do a deep full plan before fixing anything, make it
+extremely detailed and validated. We want something that reaches for the
+north star while at the same time making the user experience easier and more
+convenient." This is the plan only. Nothing below is built; building starts
+on the owner's go-ahead.
+
+### Where this comes from, and how it was validated
+
+1. **The review** (`FOURTH-REVIEW-v1.531.0.md`, in the local notes folder `.claude/worktrees/fourth-review-notes/` (not committed: those files quote a private repository)): eight
+   read-only reviewers read the code of the 13 releases after v1.516.0
+   (about 15,400 lines). 48 findings. The lead re-read every high and medium
+   one in the code.
+2. **The second pass** (`d4_<area>.md`, in the local notes folder `.claude/worktrees/fourth-review-notes/` (not committed: those files quote a private repository), about 290 KB): eight
+   planners, one per area, each tried to DISPROVE every finding of its area,
+   then designed the fix at its cause, with the test that must fail first,
+   the mutation that turns it red, the existing tests that pin today's
+   behaviour, the files touched, the risk and the words on screen. Each also
+   proposed at most three convenience improvements, under one rule: never
+   loosen a consent gate, never send data anywhere new, never spend on an
+   account the user did not choose.
+3. **The lead's checks of the designs** against the code: the bridge in MS2
+   imports the standard library only (`mcpserver/stdio_shim.py:53-65`), so a
+   small separate program is possible; every work-record row is built in one
+   function (`workmap/index.py:255-272`), so masking there covers them all;
+   Build › Code already gives Codex the tools with per-run `-c` options
+   (`hosted/jarvis_tools.py:215-218`), which TM1's fix reuses; the approval
+   registry already stores `once_only` per card (`core/approvals.py:203-247`),
+   which BS1's fix reads; the chat page hands off to the full agent without
+   asking (`dashboard/app/chat/page.tsx` "ONE SURFACE"), so DT1's daemon
+   hand-off is the consent the user already gives, not a new one; no settings
+   change tool has its own "ask every time" check (`settings/tools.py`), so
+   PG1 is as wide as its planner says; the card's fallback line is "This chat
+   is local only" (`ApprovalCard.tsx:587-590`), so PG-A is real; the step
+   layer's "stopped by you" is fixed text (`harness/stall.py:97-100`), so CS6
+   reaches the ledger.
+
+#### What the second pass changed
+
+- Smaller than written: LX1 (the page's script already repoints its links;
+  the release notes never promised Linux files early), TM2 (only an
+  uninstalled shell triggers it), MS4 (low until a run proves it), and half
+  of LX3's suggested fix (it would have removed a repair step).
+- Cannot be settled from code (proven only by a run or a real app): OT6,
+  OT8, OT9, MS4, PG2, LX4 (how each desktop parses the entry). Each gets a
+  red-first test where stand-ins can show it, and a "try on the installed
+  app" item where they cannot.
+- None was "not a defect".
+- **Two new findings** came up in the second pass:
+  - **LX5** [low, Linux]: the Linux app's "repair" and "go back a version"
+    messages tell the user to download the Windows `.exe`
+    (`desktop/main.js:2529-2530`, shown at `:2835`, `:6519`, `:6566`).
+  - **PG-A** [low, behaviour 1]: a card that asks every time for a reason of
+    its own (adding an outgoing webhook, a tool server, an app) says "This
+    chat is local only, so this asks every time." in a chat that is not
+    Local only (`routes/chat.py:7358-7367` sets a reason only when the check
+    has one; `ApprovalCard.tsx:587-590` falls back to the Local only line).
+- Larger than written, the ones that matter:
+  - **OT2**: Iron Jarvis's own chat and agent-run titles (`collect.py:281`,
+    `:437-443`) and reported titles, summaries and links (`reported.py`)
+    have the same unmasked-secret gap, and the shared mask misses Stripe,
+    GitLab, npm and Google OAuth keys, JWTs, private key blocks and bare
+    Entra or AWS secrets.
+  - **MS2**: every Quit cuts the connected apps too, not only updates.
+  - **CS3**: an attempts turn the user STOPPED is also announced finished.
+  - **CS6/DT4**: the activity ledger row of a step stopped by the night limit
+    or Emergency stop also says "stopped by you".
+  - **PG1**: three address settings (`ollama_base_url`, `custom_base_url`,
+    `voice_transcribe_base_url`) can be re-pointed with no per-change
+    question either, and the webhook card shows full addresses where D6
+    says host only.
+  - **TM1**: Codex's own history also lands in the project, and the folder
+    Iron Jarvis makes there is never removed.
+  - **BS2**: closing the sidebar right after Send leaves the reply running,
+    and paid for, with nobody watching.
+  - **DT1**: such a turn also sends a false "Jarvis finished your chat's
+    answer" notice.
+
+**50 findings now: 3 high (OT1, MS1, OT2), 14 medium (MS2, MS3, OT3, OT4,
+OT5, OT6, CS1, CS2, CS3, CS4, TM1, BS1, PG1, DT1), 33 low.** One duplicate
+merged (CS6 = DT4).
+
+### How the fixes are made (the method of the first three plans, with three lessons added)
+
+1. **Fix the cause once.** The ten shared causes below each get one piece of
+   code that every site calls.
+2. **A scan test keeps each cause closed** where source can be read for it
+   (the stop calls name who stopped, the reply-ending keys are read in one
+   place, every place-changing tool has its own check, a recipe never sets an
+   account's home).
+3. **Order follows the north star**: data leaving the PC or crossing clients
+   first, then consent, then false "done", then Stop and loss, then what keeps
+   working on its own, then reach and words.
+4. **One release per group.** Touched test files locally (at most 4 workers),
+   the full suite on GitHub on the branch, one bump, straight to master, the
+   release run green with no retried test and the installer confirmed. A
+   group the user sees adds its Handbook section and the changelog; notes for
+   agents go in `docs/rules/<area>.md`.
+5. **Who does what.** Opus 5.5 implementers at high effort, one set of files
+   per agent, never two agents in one file; the lead reads every diff, proves
+   each new test red by mutating the code it pins, and corrects before the
+   commit.
+6. **Lesson 1 (from TM2, TM4, OT1):** an earlier test passed because it
+   stubbed the very layer that decides (a backend that raises, a socket loop
+   replaced, a confirmed client only). Every new test goes through the real
+   layer: the real wall, the real POSIX backend, the real socket, the real
+   `/mcp` door, the real chat lane.
+7. **Lesson 2:** the planners read a copy of master without
+   `dashboard/__tests__`; each group's first step greps that folder for every
+   sentence and function it changes (`capMetWords`, `codeNextStep`,
+   `LEVEL_APPLIES_WORDS`, `LastNightList`, `CONNECT_WORDS`, the card lines).
+8. **Lesson 3:** a design that needs the packaged app (the bridge, the
+   installer, the Linux desktop entry, the add-on) is not "done" until it has
+   been tried there; each group lists those items, and the closing state
+   names the ones nobody has tried.
+
+### The shared causes this time
+
+| Cause | The one piece | Closes |
+|---|---|---|
+| Another app is asked about like the owner's own chat | One outside wall: `wall.outside_and_map()` and rule 2b in `may_tell` (an outside asker is told no work that has an owner of any kind), used by `work_block(outside=True)` and "Running now"; "Running now" also withholds Local only and kept-home rows | OT1, MS1 |
+| Outside text is stored before it is masked | One clean-line helper (mask, then fold, then cut, then store) used by every title, note and reported text; the mask widened once, in lock-step with the dashboard's | OT2 (+ the mask widening) |
+| "Asks every time where data goes" lives per tool, one at a time | One helper `outbound_address_check(new, old, what)` used by every tool and setting that changes an address; a table of destinations and a scan test over the real registry | PG1, C-PG-1 |
+| A card's kind is lost on its way to an automatic answerer | The registry's `once_only` mark on every card, set by whoever files it; any answer by a grant on such a card is refused | BS1, PG-A |
+| "Was this reply cut short?" read in five places, three of them wrong | `harness/reply_end.cut_short(d)` and its words, used by the night, attempts, the notice, the history note and the dashboard; a scan test refuses a second reading | CS1, CS2, CS3 |
+| A stop is a fact without its author | `stopped_by` on the turn handle, the turn record and the step layer ("you", "time limit", "Emergency stop", unknown); every stop call names itself, checked by a scan test | CS6/DT4, DT6 |
+| Only a page performs what a turn decided | The daemon performs the hand-off when a turn ends with nobody watching, through the one-run-per-hand-off guard | DT1, C-DT-3 |
+| A long-lived program that another app starts is named inside the replaceable install | A small separate bridge program kept in Iron Jarvis's own folder, refreshed at start and replaced while it runs | MS2, MS3 |
+| A recipe's settings override the account the user picked | Codex gets Iron Jarvis's tools by per-run options, never a new home; a recipe may never set an account's home variable | TM1, (MS4a) |
+| "Latest has every file" (false since Linux files arrive later) | Linux links name a version that has the files; the Linux workflow reads all releases and counts "all three files" as done | LX1, LX2, LX3, LX5 |
+
+### Groups and order
+
+| Group | Theme | North star | Findings | Convenience | Owner decisions |
+|---|---|---|---|---|---|
+| 24 | What another app is told | 2, 1 | OT1, MS1, OT2, OT5, MS9, OT3 | — | D1, D2 |
+| 25 | Every place data goes asks, and cards say why | 2, 1, 7 | PG1, PG-A, BS1, PG3 | C-PG-2, C-PG-3, C-BS-1 | D3 |
+| 26 | Done means done for attempts and the night | 1, 4 | CS1, CS2, CS3, CS4, CS5 | C-CS-1, C-CS-2, C-CS-3 | D4, D12 |
+| 27 | Stop says who, and is quick | 1, 3 | CS6/DT4, DT3, DT6, BS2, DT5 | C-BS-2 | D5 |
+| 28 | A hand-off is never lost | 4, 5 | DT1, DT2 | C-DT-1, C-DT-3 | D6, D13 |
+| 29 | Connected apps keep working by themselves | 3, 4, 7 | MS2, MS3, MS4b, MS5, MS6, MS7, MS8, OT4, OT6, OT7, OT8, OT9, OT10 | C-MS-1, C-OT-1, C-OT-2 (= C-MS-2) | D7, D15 |
+| 30 | Terminals stay on your account and your folder stays yours | 1, 2, 3 | TM1, MS4a, TM3, TM2, TM4, TM5 | C-TM-1, C-TM-2, C-TM-3 | D8, D9 |
+| 31 | Linux: the right file, always | 1, 3, 7 | LX1, LX2, LX3, LX4, LX5 | C-LX-1, C-LX-2 | D10 |
+| 32 | Smaller words and the outside-places row | 7, 2, 1 | BS3, BS4, PG2, PG4, PG5 | C-PG-1, C-BS-3 | D11 |
+
+Every finding is in exactly one group: 6 + 4 + 5 + 5 + 2 + 13 + 6 + 5 + 5 =
+51 entries for 50 findings (MS4 is split into its two halves, MS4a in 30 and
+MS4b in 29).
+
+**Why this order.** Groups 24 and 25 close the three high findings and the
+gates (data leaving the PC, consent). 26 to 28 remove false "done" and lost
+work. 29 and 30 are the largest convenience wins (connected apps and
+terminals that keep working with nothing to press) and the biggest
+packaging risk, so they come after the safety work is shipped. 31 is about
+Linux, but `desktop/main.js` and the Updates card ship in the Windows
+installer too, so it releases through `release.yml` like every group (the
+Windows words stay pinned) and its tag is pushed by hand because
+`linux-release.yml` changes. 32 is words and one Settings row.
+
+**Versions.** Each group takes the next free version when it releases
+(master is v1.531.0 today; other sessions release meanwhile, so fetch before
+every bump and every push). Groups 29 and 31 touch packaging or a workflow:
+a release dry run first, and the tag pushed by hand for a workflow change.
+
+---
+
+### Group 24: What another app is told
+
+**Why first.** All three high findings: client work, Local only work and
+secrets reaching another company's cloud model through `work_search`.
+
+#### OT1 [high]: a waiting client's work is told to another app
+- **Cause:** the outside wall is built as "no folder, no words", and the
+  wall's rule 6 lets a row owned by a waiting or provisional client through
+  for such an asker (`workmap/clients/wall.py:266-284`), although
+  `docs/rules/memory.md` L48 promises the opposite. The only test uses a
+  confirmed client.
+- **Fix:** `TurnWall` gains `outside: bool`; `wall.outside_and_map(engine)`
+  builds it (an unreadable map answers no to everything); `may_tell` gains
+  rule 2b right after rule 2: an outside asker is told nothing that has an
+  owner of any kind (confirmed, waiting, provisional, or proved by its files
+  or a named path). `block.py:308` and `running.py:86` both call it.
+- **The user sees:** a lookup by another app for a client's folder answers
+  "nothing found". The owner's own chats are unchanged
+  (`test_clients_wall_v1499.py:229` stays as it is).
+- **Test, red first:** `tests/test_fourth_review_other_tools_v15XX.py`, in the
+  `firm` scene: `work_block(outside=True)` for a waiting client's folder, its
+  name and a provisional `Clients/Smith` folder tells no title; Downloads is
+  still told; the same calls without `outside` keep today's answers; the same
+  through the real `/mcp` door. Mutations: delete rule 2b; go back to
+  `turn_and_map("", "")`.
+- **Files:** `workmap/clients/__init__.py`, `clients/wall.py`, `block.py`.
+
+#### MS1 [high]: "Running now" tells another app a Local only coding session
+- **Cause:** "Running now" (`workmap/running.py`) copied the client wall but
+  not the Local only and kept-home withhold that `work_block` applies
+  (`block.py:305-313`).
+- **Fix:** each running row carries `held` (Chat › Code: the row's
+  `local_only` or `keep_home`, OR-ed with one live re-ask through
+  `collect.live_state`, failing closed; Build › Code: held when the tool is
+  not one that sends to the tool's own vendor anyway, the record's rule at
+  `collect.py:336`). A row is told only when it is not held AND the outside
+  wall allows it. `NOTHING` becomes "Nothing Iron Jarvis may share with this
+  app is running right now."
+- **Test, red first:** `tests/test_fourth_review_running_v15XX.py` through
+  `WorkSearchTool` and the real `_rows` (only `running_replies` replaced): a
+  Local only Chat › Code thread is not told, the same thread without Local
+  only is; a thread switched to Local only after its row was built is still
+  not told; a Build › Code session on Pi is not told, one on Codex is. Each
+  removed check turns its case red.
+- **Pins to change:** `test_running_elsewhere_v1530.py:197-216, 232-243`
+  (their stub rows gain `"held": False`); `connections.md` L42's quoted words.
+- **Files:** `workmap/running.py`.
+
+#### OT2 [high, larger]: secrets in titles, notes and reports are stored and told unmasked
+- **Cause:** text from other tools' chat files, Iron Jarvis's own chat and
+  run titles, and what an app reports through `chat_record` is cut and
+  stored as typed; the prompt-guard scan finds instructions, it does not mask
+  secrets (checked by the lead with a made-up key-shaped string: kept as is).
+- **Fix:**
+  1. `WorkMap._write` (`index.py:255-272`), the one place a work-record row is
+     built, masks `title` and `note` (`mask_failure_text(strict=True)`: the
+     shared mask plus the shapes it lacks). A masking error skips the row.
+  2. One helper `keys.clean_line` (mask, then fold spaces, then cut, then
+     `storable_text`), used by `outside.light`, `cowork_sessions`, `_note`
+     and `collect._one_line`, so the sidebar, "Running elsewhere" and the
+     record show the same masked title. Masking before the cut means a key is
+     never cut into a shape the mask misses. **Corrected by the
+     double-check:** Claude Code's and Codex's titles are already cut at 120
+     characters in `history/common.title_of` (`common.py:13, 38-40`) before
+     `outside` sees them, so the mask goes INSIDE `title_of`, before its cut
+     (`history/common.py` joins agent B's files). And the work record's
+     change-stamp holds the raw title too (`collect.py:261-264`): the stamp
+     is built from the cleaned title, so no secret sits in the `stamp`
+     column. Belt and braces for what is TOLD: `block._safe` masks every line
+     it hands out too, which also covers Build › Code titles in "Running now"
+     (they come from memory, never from stored rows).
+  3. `reported.py`: title, summary and link masked through ONE helper used
+     by both `record` and `key_for_args` (a report without a chat id is keyed
+     by its title's words, so Undo must compute the same key).
+- **The user sees:** `sk-***` where a key was. No new words.
+- **Test, red first:** fake values built in the test (`"sk-" + "test-" +
+  "x" * 30`, `password=example-only`) in a Claude Code chat's first prompt, a
+  Codex report's summary and an agent run's task: none of `WorkEntry`,
+  `work_block`, `work_search`, `GET /work-record/other-tools` or the
+  `reportedchat` row contains them, each shows `***`; a `chat_record` with
+  the secret in its title and no chat id, then Undo, removes the row.
+  Mutations: drop the mask in `_write`; in `record`; mask `record` but not
+  `key_for_args`.
+- **Files:** `workmap/index.py`, `keys.py`, `outside.py`, `collect.py`,
+  `reported.py`.
+- **Decisions D1 (rows already stored) and D2 (widen the mask).**
+- **D2, if yes:** one agent changes `detections/redact.py` `_RULES` and
+  `dashboard/lib/stepDetail.ts` `DETAIL_MASK_RULES` together (pinned by
+  `test_redact_linear_v1349`), folds in the failure-words extras (`AIza`,
+  `hf_`, `gsk_`, `xai-`, a bare Bearer token) and adds Stripe
+  `sk_live_`/`rk_live_`, GitLab `glpat-`, npm `npm_`, Google OAuth
+  `GOCSPX-`, a JWT, a PEM private key block and an Entra client secret
+  shape, each with a linear-time pattern and a fake test value that is not
+  shaped like a real key.
+
+#### OT5 [medium]: Connect says "Nothing leaves this PC"
+- **Fix (true only once OT1 and MS1 are in, so same release):**
+  `dashboard/lib/otherTools.ts` `CONNECT_WORDS`:
+  - Claude desktop: "Lets Claude desktop record its chats here and look up
+    your earlier work. What it looks up (titles, folders, file names, short
+    summaries) goes to Claude's model with the rest of that chat; client work
+    and Local only work are never shared. Restart Claude afterwards."
+  - Codex: "Lets Codex add a summary to each chat, look up your earlier work
+    and see what is running in Iron Jarvis. What it looks up (titles,
+    folders, file names, short summaries) goes to Codex's model with the rest
+    of that chat; client work and Local only work are never shared."
+  - Claude Code: "Lets Claude Code add a summary to each session, look up
+    your earlier work and see what is running in Iron Jarvis, through Claude
+    Code's own setting. What it looks up (titles, folders, file names, short
+    summaries) goes to Claude's model with the rest of that session; client
+    work and Local only work are never shared. New Claude Code sessions use
+    it."
+- **Test:** `dashboard/__tests__/other-tool-connect-words-v15XX.test.tsx`: no
+  value says "Nothing leaves this PC"; each says "goes to" and "never
+  shared".
+
+#### MS9 [low, larger] and OT3 [medium]
+- **MS9:** `reported.chat_key` uses Unicode words on the case-folded title and
+  falls back to the folded text; "Отчёт 2024" and "План 2024" are two rows,
+  "Résumé" is kept whole. Same file and same function as OT2's step 3: one
+  agent.
+- **OT3:** in `outside.build`, match a chat's reports against that chat AND
+  its rivals in the same folder and window (read through the existing
+  `light` cache), the same answer the sidebar gives. Test: Codex chat A
+  (10:00-10:20) and B (10:25-10:40), reports at 10:21 and 10:41: each row
+  keeps its own summary; going back to `[chat]` turns it red.
+  `test_a_candidate_is_listed_without_opening_any_file` stays green.
+
+#### Agents for group 24
+- A: OT1 + MS1 (`clients/*`, `block.py`, `running.py`).
+- B: OT2 + MS9 + OT3 (`index.py`, `keys.py`, `outside.py`, `collect.py`,
+  `reported.py`).
+- C: the mask widening if D2 is yes (`detections/redact.py`, `stepDetail.ts`).
+- D: OT5 (`otherTools.ts` and its test).
+
+#### Rules and Handbook
+`memory.md` L48 (the OT1 pin), L962 (masking now covers the work record and
+reported chats); `connections.md` L42. Handbook: "What other apps are told".
+
+---
+
+### Group 25: Every place data goes asks, and cards say why
+
+#### PG1 [medium, larger]: an outgoing webhook, and three server addresses, can be re-pointed with no per-change question
+- **Cause:** "ask every time when this changes where data goes" lives in each
+  tool's own check, one at a time. `webhook_update` has none
+  (`settings/records.py:3176-3225`), nor does any settings-change tool
+  (`settings/tools.py`, no `spend_check`), so a conversation grant or "Run
+  without asking" lets them send Iron Jarvis's events or model calls to any
+  host. The webhook card also shows full addresses where D6 says host only.
+- **Fix:**
+  1. `webhooks.tools.outbound_address_check(new_url, old_url=, what=)`:
+     webhook_add's check moved into one helper (Allow once only, "Don't ask"
+     kept as the user's own posture, refused with nobody to ask, reason
+     "address", host only).
+  2. `WebhookUpdateTool.spend_check`: no new address, an incoming webhook, or
+     the same address = no opinion; otherwise the helper. `redact_args` and
+     `_describe_webhook` show the host only.
+  3. `SettingDef.destination` on `ollama_base_url`, `custom_base_url` and
+     `voice_transcribe_base_url`; `_ConfigChangeBase.spend_check` asks
+     through the helper for a new, non-empty value. The Settings level is
+     unchanged.
+  4. `tools/destinations.py`: the table of every tool and setting that sets
+     where data goes (the planner's catalog search: the four gaps above,
+     seven tools that already ask, the ones that are not this case), read by
+     the scan test and later by C-PG-1.
+- **The user sees:** "Send Iron Jarvis's events to hooks.example.com from now
+  on, instead of old.example.com (webhook “deploys”)" with Allow once and
+  Deny.
+- **Test, red first:** `tests/test_fourth_review_destinations_v15XX.py`:
+  (a) the stream lane with a conversation grant shows a card, and after Deny
+  the address is unchanged; (b) a workflow Tool call step with the tool set
+  to allow is refused in words, with a ledger row; (c) a `config_change` of
+  `custom_base_url` cards; (d) pausing a webhook still runs with no card;
+  (e) a scan over the real registry: every tool with an address-shaped
+  argument is in the table, each "asks" row really asks, every `*_url`
+  setting has `destination`. Mutation: delete the new check, (a)(b)(e) red.
+- **Decision D3** (how wide).
+
+#### PG-A [low, new] and C-PG-2: cards that ask every time say the true reason
+- **Fix:** the reason travels on every once-only card (the new "address"
+  reason, the existing ones); the Local only line shows only when Local only
+  really forced the card; any other unexplained once-only card says "This
+  asks you every time, whatever your approval setting."; an "address" card is
+  a safety card where Enter never allows it: "Sending Iron Jarvis's things to
+  a new address asks you every time, whatever your approval setting."
+- **Test:** `dashboard/__tests__/approval-true-reason-v15XX.test.tsx` and a
+  lane test that a `webhook_add` card outside Local only carries reason
+  "address". Files: `routes/chat.py` (the card frame, lines 7350-7370),
+  `chat_turn.py` mirror if the POST lane builds the same frame,
+  `ApprovalCard.tsx`, `onceReason.ts`, `records_apps.py` (one argument).
+
+#### BS1 [medium]: in a Local only sidebar reply, the sidebar's switch answers the card that only the card may answer
+- **Cause:** the panel's card drops the lane's `once_only`
+  (`browser/panel.py:2595-2614`), and the switch answers every offered card
+  except the sidebar's own risk cards as "once" (`:2097-2101`). Every other
+  automatic answerer already skips once-only cards (`agents/runtime.py:4430-
+  4449`, `session_grants.py:352-359`).
+- **Fix:** the registry's `once_only` mark is the one field. The chat lane
+  files each card with its kind (`routes/chat.py:7422-7429`, the same test the
+  lane uses for its interruption count); the registry refuses an answer by a
+  grant on a once-only or priced card (the card keeps waiting) and offers a
+  read-only `once_kind(id)`; the sidebar's risk card files `once_only` too
+  and its separate risk set is deleted; the switch skips any card with a
+  kind; "Allow all page actions" is refused on such a card in its words; the
+  card goes out with `floor: true`, which every add-on since v1.522.0 already
+  draws as Allow once and Deny only (no add-on rebuild needed for the safety
+  part). This also keeps PG1's new address card out of the switch's reach.
+- **The user sees (C-BS-1, needs the rebuilt add-on):** under the card "Local
+  only is on, so every page action asks first. Auto-allow does not cover
+  it."; turning Auto-allow on leaves the card up and answerable.
+- **Test, red first:** through `RealApp` (the real lane, registry and
+  turns): a Local only sidebar reply's card, then the switch turned on: the
+  card is still waiting and the step has not run; the registry refuses a
+  grant's "once" on a once-only card; "Allow all" on such a card is refused
+  in words.
+- **Rule to change:** the v1.270.0 entry in `docs/rules/browser.md` and the
+  docstring at `panel.py:150-151` ("turning the switch on answers every card
+  the sidebar offered"): behaviour 2 wins.
+
+#### PG3 [low, latent]
+`tool_script._fixed_refusal` holds back every tool `asks_each_use` names, and
+`on_call` passes `card_allow=frozenset()`. Test with a locked, not
+own-models, read-only stand-in tool armed in a normal chat; add a
+`card_allow` column to `test_third_plan_g17_gate_callers.py` (it also covers
+`mcpserver/server.py:1159`).
+
+#### C-PG-3: a tool set to Run without asking says its one exception
+The tool's row in Settings and the chat lookup say "Still asks every time it
+would send to a new address." Small; reads `tools/destinations.py`.
+
+#### Agents for group 25
+- A: PG1 + `tools/destinations.py` + C-PG-3 (`webhooks/tools.py`,
+  `settings/records.py`, `settings/tools.py`, `settings/schema.py`).
+- B: BS1 (`core/approvals.py`, `browser/panel.py`, the card-filing lines of
+  `routes/chat.py`).
+- C: PG-A / C-PG-2 (the card-frame lines of `routes/chat.py` AFTER B, the
+  dashboard card files). One agent at a time in `routes/chat.py`.
+- D: PG3 (`tools/tool_script.py`, the gate-callers test).
+
+---
+
+### Group 26: Done means done for attempts and the night
+
+#### CS1, CS2, CS3 [medium]: a cut-off reply read as finished in three places
+- **Cause:** "was this reply cut short?" is read in five places;
+  `routes/build.finished_notice_outcome` reads it right, the night's
+  `outcome_of` (`harness/night.py:1028-1094`), `Attempt.fold`/`settle`
+  (`harness/attempts.py:1439-1461, 1522`) and the attempts turn's done frame
+  (`attempts.py:2119`) do not.
+- **Fix:** new leaf module `harness/reply_end.py`: `cut_short(d)` returns
+  "length" (`truncated`), "cut_off" (an unrecovered `route.cut_off`) or "",
+  for a done frame or a reply line alike; `CUT_WORDS` for each.
+  - `night.outcome_of`: a cut reply is FAILED with the cut words (owner
+    decision 5 of v1.529.0: a cut reply is "failed").
+  - `Attempt.fold`/`settle`: a cut attempt is "failed", Keep still offered
+    for the files it changed; `card_reading` and `summary_words` follow.
+  - `finished_notice_outcome` for an attempts turn reads the card through
+    `card_reading`: "needs_you" when one or more attempts finished,
+    "failed" when none did; the attempts done frame carries `stopped: true`
+    after a Stop, and `recorded_turn` then sends no "finished" notice.
+  - `sessions.reply_end_note` (the history note for the next turn's model)
+    and a dashboard twin `lib/replyEnd.ts` read the same function.
+  - Drift guard: a scan test fails if `night.py`, `attempts.py`,
+    `sessions.py`, `build.py` or `build_attempts.py` reads `truncated` or
+    `cut_off` outside `reply_end.py` (one allowed copy where `_ReplyWatch`
+    copies the frame into the line).
+- **Tests, red first:** `tests/test_fourth_review_reply_end_v15XX.py`: a night
+  task whose reply ended `truncated` is FAILED, not DONE, and its commit
+  note says so (the night commits a task whatever it ended as, except
+  Emergency stop, `routes/night.py:370-376`; corrected by the double-check); an attempt cut at the output limit is "failed" and the card says
+  so; an attempts turn whose attempts all failed is announced "could not
+  finish"; an attempts turn stopped by the user sends no "finished" notice.
+  Mutations: each caller back to its own reading.
+
+#### CS4 [medium]: a level change or Plan while attempts run does not reach them
+- **Fix (D4, recommended A):** attempts take the change live, like a normal
+  reply (decision G14). `maybe_start` builds one `LevelWatch` from the
+  session's stored level; `attempts._arm` sets it through a new public
+  `routes/build.arm_level_watch`; the stream lane's done frame gains
+  `plan_now: true` so an attempt halted by Plan ends "Stopped making changes
+  when you switched on Plan".
+- **Test:** an attempt running at "edit" when the level drops to "read only"
+  runs no further write step; the PATCH's "applies now" is then true.
+
+#### CS5 [low, larger]
+A met cap gains `"of": "pay_left"` when what is left of the monthly
+pay-per-use limit set it, carried through `ReplyCap`, `SharedCap`,
+`receipt`, `limit_words`, `instruction`, `settle`, the history note and
+`capMetWords`: "what was left of this month's pay per use limit ($X)". The
+session's own cap words stay byte for byte (`test_build_reply_cap_v1392.py:178`).
+
+#### Convenience
+- **C-CS-1:** a coding reply cut off at its length says so in the next-step
+  box and offers Keep going (today a small "cut off" chip and nothing to
+  press). Behaviour 4.
+- **C-CS-2:** Keep a finished attempt straight from the Last night row,
+  through the existing keep route; nothing is kept without the press.
+- **C-CS-3:** a notice "Your attempts are ready: choose the one to keep"
+  (outcome "choose") in the notifier, the tray (`desktop/main.js`) and the
+  bell (`lib/buildLinks.ts`), together.
+
+#### Agents for group 26
+One agent at a time in `build.py` and `attempts.py`, in the order CS1, CS3,
+CS2, CS5, CS4 (the planner's order). The dashboard twin and C-CS-1/2 in a
+second agent after the daemon side lands.
+
+---
+
+### Group 27: Stop says who, and is quick
+
+#### CS6 / DT4 [low, larger]: stops Iron Jarvis made are recorded as the user's
+- **Fix:** `stopped_by` with four values ("you", "time_limit", "emergency",
+  unknown) on `TurnHandle` (`stop(by=)`, `stop_or_keep(by="you")`), a new
+  nullable column `ChatTurnRecord.stopped_by`, `write_stop_mark(by="you")`,
+  `TurnLog.stopped_by`, a reader `durable_turns.stop_fact`, and
+  `stall.stop_step(by=)`. `stop_asked` stays true for every stop, so no
+  stopped reply is ever carried on (G9 unchanged). Every caller names itself
+  (user routes, archive, stop-step, night Cancel and the sidebar: "you"; the
+  night backstop: "time_limit"; Emergency stop: "emergency"; attempts pass
+  their parent's; the end hook: unknown). A scan test checks every
+  `TURNS.stop`, `stop_or_keep` and `stop_step` call names `by=`.
+- **Words:**
+
+| Who | The reply's line | Told to the model on Continue | The step's ledger row |
+|---|---|---|---|
+| you | "You stopped this reply. Iron Jarvis did not carry it on by itself." (unchanged) | today's note | today's words |
+| time limit | "Iron Jarvis stopped this reply at its time limit and did not carry it on by itself." | "[Iron Jarvis stopped your reply here because it reached its time limit, and the user has now asked you to continue it. …]" | "stopped by Iron Jarvis when the reply reached its time limit — …" |
+| Emergency stop | "This reply was stopped by Emergency stop. Iron Jarvis did not carry it on by itself." | "[Your reply was stopped here by Emergency stop, …]" | "stopped by Emergency stop — …" |
+| unknown | "This reply was stopped before it finished. Iron Jarvis did not carry it on by itself." | "[Your reply was stopped here before it finished, …]" | "stopped while it was running — …" |
+
+- The night's `outcome_of` reads a `stoppedBy` line as STOPPED, not FAILED.
+
+#### DT3 [low]: a Stop pressed while the turn is being refused answers "already finished"
+`core/turns.py` gains `note_refused` (same lifetime as `_ended`, drops a kept
+Stop); `stop_or_keep` answers "refused"; `routes/chat.py:3362` calls it; the
+stop route answers 200 `{stopped: true, ran: false}` and writes nothing; the
+page's existing 200 path writes "Stopped." Pin to change:
+`test_third_plan_g19_stop_written.py:405-412` (it pins the defect).
+
+#### DT6 [low, by design, rule to change]: Stop waits up to 3 s before stopping
+Stop route order becomes: `ask_stop`, `TURNS.stop` at once, then the bounded
+`record_stop`, then the answer. Restart protection is equal (the live log's
+last write already carries the mark). Rule `chat.md` L2853 changes; pin
+`test_third_plan_g19_stop_written.py:85-111` changes.
+
+#### BS2 [low, larger]: the sidebar's early Stop, and closing it right after Send
+One sidebar helper uses `TURNS.stop_or_keep` for both Stop and close
+(`panel.py:2168`, `:1045-1047`); "stopped" and "pending" count as stopped,
+"refused" and "ended" as nothing running. The add-on needs no change.
+
+#### DT5 [low]: a deleted chat's running reply leaves its record
+`maybe_persist` writes nothing once the chat is deleted; `persist_now`
+deletes the row instead; the stop route skips the record write for such a
+turn. Test: delete, then `shutdown()`: no record (today an "interrupted" row
+stays for 7 days).
+
+#### C-BS-2
+A Stop in the sidebar is saved in its conversation as "(You stopped this
+reply.)" instead of "(Iron Jarvis gave no answer.)", so the next question does
+not lead the model to redo the stopped request.
+
+#### Decision D5 (C-DT-2): deleting a chat stops its running reply
+Recommended yes: today the reply runs on for up to an hour using model calls
+for a chat that no longer exists; the delete dialog says so; a hand-off agent
+run is not stopped. Pin to change: `test_third_plan_g18_reply_home.py:546`.
+
+#### Agents for group 27
+One agent for `core/turns.py`, `durable_turns.py` and the stop route of
+`routes/chat.py` (CS6, DT3, DT6, DT5, C-DT-2 in that order); one for
+`harness/stall.py` and the night callers (CS6's step half); one for
+`browser/panel.py` (BS2, C-BS-2) after the first lands.
+
+---
+
+### Group 28: A hand-off is never lost
+
+#### DT1 [medium, larger]: a reply that hands off to the full agent never does when no window is open
+- **Cause:** only the Chat page performs the hand-off (`sendAgent`); the
+  daemon writes the plain line of a reply nobody followed, and the page's
+  quiet rebuild on reopen deliberately skips the hand-off
+  (`page.tsx:9603-9606`). The chat shows "(no response)" and a tray notice
+  says the answer is finished.
+- **Fix (D6, recommended: the daemon performs it):** new
+  `daemon/chat_hand_off.py` keeps the consent-carrying fields `sendAgent`
+  sends (request, a short recap of the chat, attachments, skill, tools and
+  grants, approval mode, folder, project, provider and model, Local only
+  never weaker, account), each taken as the STRICTER of the turn's body
+  and the chat's setup as stored now (the user may have turned Local only
+  on, tightened the level or removed a tool while the reply ran, and
+  `sendAgent` would have read the newer setup), and opens the run
+  through the same door code as `POST /sessions` and
+  `/agents/{name}/spawn` (their bodies lifted into shared functions, behaviour
+  unchanged, `test_one_run_per_hand_off_v1529.py` as the gate), through
+  `hand_off_guard`, so a page that also hands off gets the same run back.
+  `TurnLogs._home_now` hands off first (shielded, 30 s bound) for a done turn
+  that escalated, then writes the hand-off line; the start-up pass looks up
+  `find_handed` and writes the hand-off line or the "did not start" line,
+  never "(no response)"; `_announce_finished` skips an escalated turn. The
+  page needs no behaviour change (the daemon's line has the exact shape
+  `sendAgent` saves).
+- **The user sees:** "Taking this on properly: <reason>." with the live run;
+  or "This needs an agent run, and it could not start: <the door's own
+  sentence>."; or "This needs an agent run, and Iron Jarvis closed before it
+  could start one. Send your message again to start it."
+- **Test, red first:** `tests/test_fourth_review_hand_off_unwatched_v15XX.py`
+  through the real app, the real stream route and the real doors: a turn that
+  ends unwatched makes exactly one run with the turn's name, origin, chat,
+  tools and Local only, and no line says "(no response)"; the page's own
+  hand-off then gets the same run back; a page that followed and saved
+  within the grace starts nothing from the daemon; Local only with a cloud
+  model makes no run and the line carries the refusal; no
+  `chat.turn_finished` notice for an escalated turn. Mutation: drop the
+  hand-off call.
+- **Risk:** a run started with nobody watching may wait on a card; the bell
+  lists it. Try on the installed app: window closed before the reply ends,
+  then the chat opened; the same with two windows.
+
+#### DT2 [low]: after a minute of silence, a FAILED reply keeps a cut copy and no reason
+`page.tsx:9655`: an "error" or "interrupted" turn is followed once more (a
+replay runs nothing), so the full text, steps and files are kept and the
+turn's own reason is shown with Retry. Rule `chat.md` L2841 wording.
+
+#### Convenience
+- **C-DT-1:** a run started from chat opens its chat when the tray notice or
+  the bell row is pressed (today `/sessions/<id>`), as `remote.message`
+  already does. Files: `orchestrator.py` (`_completion_payload` adds
+  `chat_thread_id`), `desktop/main.js`, `NotificationBell.tsx`.
+- **C-DT-3:** "Start it now" on a hand-off that did not start: one press that
+  calls `sendAgent` with the turn's name (through the guard), instead of
+  retyping the question.
+
+---
+
+### Group 29: Connected apps keep working by themselves
+
+The largest convenience win and the largest packaging change. A release dry
+run first; Defender and Smart App Control are watched on the installed app.
+
+#### MS2 [medium, larger] and MS3 [medium, Linux AppImage]: updates and Quit cut the connected apps; the AppImage path is temporary
+- **Cause:** the connector names `ironjarvis.exe mcp-stdio` inside the
+  install folder (`mcpserver/apps.py:192-198`); an install must replace that
+  folder and the installer and the desktop's sweep kill everything in it
+  (`desktop/installer.nsh:10-13`, `main.js:2694-2707`, run before each
+  install, on every Quit when the daemon is ours, and on three restart
+  sweeps). On a Linux AppImage the same path is a temporary mount.
+- **Fix:** a second, small, standard-library-only program
+  `ironjarvis-bridge` built from `mcpserver/stdio_shim.py` through a new
+  `packaging/bridge_entry.py` in the same `ironjarvis.spec`, shipped in
+  `resources/bridge/`, signed like every other program. `apps.ensure_bridge`
+  copies it to `<home>/bridge/`; an out-of-date copy is renamed aside while it
+  runs (Windows allows that) and replaced, old copies removed when free;
+  `launch_argv` names that copy; the daemon refreshes it at start off the
+  loop; `status_of` gains `entry_stale`; backups skip `<home>/bridge/`. The
+  installer and the sweep are unchanged, and a pin keeps the bridge's file
+  name different from `ironjarvis.exe`.
+- **The user sees:** nothing to do. During an update the app's model reads
+  the existing "not answering right now (it may be restarting)" sentence and
+  the bridge's own reconnect (MC3, v1.526.0) takes over.
+- **Test, red first:** `tests/test_fourth_review_bridge_v15XX.py`: the connect
+  entry is not under the install folder; Windows only, a real running copy is
+  replaced while it runs and survives; static pins on the installer, the
+  sweep, the spec and `package.json`; `entry_stale` for an entry naming the
+  old program; with a `/tmp/.mount_x` path, the Codex entry names
+  `<home>/bridge/`.
+- **Decision D7** (how apps connected before this release move over).
+
+#### MS4b [low, suspected]: the bridge prefers an inherited token over its key file
+When `IRONJARVIS_MCP_TOKEN_FILE` is set, the key file wins over an inherited
+`IRONJARVIS_MCP_TOKEN` (only a connected app's own entry sets that variable,
+`apps.py:280`). Rule `connections.md` L49 text changes. To settle the effect:
+in a Build › Code session with Memory ticked, list the Iron Jarvis tools.
+
+#### MS5, MS6, MS7, MS8 [low]
+- **MS5:** a per-app `apps.AFTER_CONNECT` table; Claude Code: "New Claude Code
+  sessions use it; one that is open now needs a restart."; the unknown-app
+  sentence names all three apps.
+- **MS6:** a bridge started with a key file reads the 401's
+  `reason: "unknown_token"`, re-reads its key file, and if unchanged or gone
+  says "Iron Jarvis no longer accepts this app's key (it was disconnected, or
+  connected again): connect this app in Iron Jarvis again (Other tools, in
+  the chat list). The call was not made."
+- **MS7:** a separate `_change_lock` covers Connect and Disconnect (with the
+  `claude mcp` runs); `_lock` covers only the state and key files, so calls
+  never wait on a Connect press. Same function as OT4: one agent.
+- **MS8:** keep the 403 and also record the refusal through
+  `registry.invoke(..., deny_reason=...)`. CLAUDE.md's "refused and recorded"
+  wins over the deliberate "no row" stance; three tests change from "no row"
+  to "exactly one denied row, nothing run"
+  (`test_jarvis_connector_v1528.py:280-289`,
+  `test_mcp_memory_capability_v1290.py:233-248, 254-264`).
+
+#### OT4 [medium]: a failed Disconnect says "nothing was changed" after deleting the key
+`AppConnectError` keeps its `why`; a failed entry removal after the key is
+gone raises a new sentence; `status_of` gains `entry_left`; the row shows a
+Remove button (two-press confirm) on the existing disconnect path.
+- Failed Disconnect: "Claude desktop can no longer reach Iron Jarvis, but its
+  settings still list it (<the kept reason, for example "the file is in use"
+  or "the file is not valid JSON">). Close Claude desktop, then press
+  Remove." (The reason is the kept `why`, never a fixed "the file is
+  locked"; corrected by the double-check.)
+- Claude Code: "…but Claude Code did not take it off its list (<its last
+  line>). Press Remove to try again."
+- Failed re-Connect: "Claude Code took Iron Jarvis off its list but did not
+  add it back (<its last line>). Press Connect Claude Code again."
+- Test: a stand-in OS lock on that one file; Disconnect gives 409 with the new
+  words, the key is refused, `entry_left` is true; un-patched, Disconnect
+  again restores the file and clears `entry_left`.
+
+#### OT6 [medium, suspected], OT7, OT8, OT9, OT10 [low]
+- **OT6:** Disconnect and re-Connect remove Iron Jarvis's Codex tables by
+  table, not everything between the markers; any other table inside is
+  kept; the result must parse as the original minus our tables, or nothing is
+  written and the press is refused in words naming the backup. Test: a
+  `[projects.'C:\work']` table inserted before the end marker survives.
+  Settle on the installed app: Connect, trust a new folder in Codex, read the
+  file.
+- **OT7:** one file vanishing mid-listing skips only that file; a folder that
+  cannot be read keeps the rows.
+- **OT8:** `claude_code.summarize` takes `cwd` from the tail when the head has
+  none (a first prompt over 256 KB, a pasted picture). Settle with one real
+  chat.
+- **OT9:** network paths (UNC by text, mapped drives by
+  `GetDriveTypeW`, cached per letter) are taken as present with no disk call.
+  Try on a PC with a disconnected mapped drive.
+- **OT10:** keep the newest 3 copies of another app's settings file.
+
+#### Convenience
+- **C-MS-1:** "Connect again" reaches an app that is already running: on a
+  refused key the bridge re-reads its key file, and if the key changed it
+  swaps it, replays the session start and repeats the call once (a 401
+  proves nothing ran). No restart.
+- **C-OT-1:** a busy settings file is tried 3 times over about 3 seconds
+  before the press fails.
+- **C-OT-2 (= C-MS-2):** the row says "Connected · Claude desktop has not used
+  it yet. Restart Claude desktop if it was open." until that app's first
+  call (written once per key, never per call), then clears itself. Also
+  covers the one restart D7 asks for.
+
+#### Agents for group 29
+- A: `mcpserver/apps.py` alone (MS2's copy/refresh, MS3, MS5, MS7, OT4,
+  OT6, OT10, C-OT-1, C-OT-2's state).
+- B: packaging (`packaging/bridge_entry.py`, `ironjarvis.spec`,
+  `desktop/package.json`, `maintenance.py`, the start-up line in
+  `daemon/app.py`).
+- C: `mcpserver/stdio_shim.py` (MS4b, MS6, C-MS-1).
+- D: `mcpserver/server.py` (MS8).
+- E: `workmap/outside.py`, `history/claude_code.py` (OT7, OT8, OT9), after
+  group 24 has landed.
+- F: the dashboard row (`otherTools.ts`, `OtherToolChats.tsx`,
+  `routes/work_map.py` words).
+
+---
+
+### Group 30: Terminals stay on your account, and your folder stays yours
+
+#### TM1 [medium, larger]: a Codex terminal "with Iron Jarvis's tools" starts signed out in an empty home inside the project
+- **Cause:** the Codex recipe sets `CODEX_HOME=<project>/.jarvis-codex`
+  (`terminals/recipes.py:945-953`), merged after the account's own home
+  (`terminals/manager.py:215-220`); Codex's history and any sign-in made
+  there land in the project and are never removed.
+- **Fix:** the recipe stops setting `CODEX_HOME` and writing `.jarvis-codex`;
+  it passes Codex's per-run options, as Build › Code does:
+  `-c mcp_servers.iron-jarvis-code.url=<url> -c
+  mcp_servers.iron-jarvis-code.bearer_token_env_var=IRONJARVIS_MCP_TOKEN`
+  (values bare so they type unquoted in PowerShell 5.1, cmd and bash; a
+  server name other than `iron-jarvis`, which the connector writes into the
+  user's own Codex settings). Offered only when `--config` is in Codex's help.
+  `_prepare_recipe` drops `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`
+  from any recipe's variables and logs it, for both shapes a preparer
+  returns (rule to add to `build.md`). A with-tools Codex now loads the
+  user's own `config.toml` (all their servers, the connector included); its
+  launch line says so, as Claude's does.
+- **Test:** the recipe's env never holds an account home; the launch argv
+  holds the two options; the pane's env keeps the account's `CODEX_HOME`.
+  Pins that change (they pin the defect):
+  `test_launch_recipes_v1238.py::test_codex_writes_a_pane_scoped_config_and_points_at_it_by_env`,
+  `test_codex_frozen_shim_v1291.py`,
+  `test_build_app_spine_review_v1414.py:244-270`.
+- **Try on the installed app:** `codex --help` shows `--config`; Codex with
+  tools opens signed in on its chip's account; `/mcp` lists
+  `iron-jarvis-code`; nothing new in the folder.
+
+#### MS4a [low, suspected]: the terminal recipe's server name equals the connector's
+Renamed `iron-jarvis-terminal` for Claude's project entry, under either D9
+option. **Corrected by the double-check:** option B does not remove the clash
+by itself: Build › Code passes `--mcp-config` WITHOUT `--strict-mcp-config`,
+so the user-scope connector `iron-jarvis` would also load inside the
+terminal. The terminal keeps `--strict-mcp-config` (as today's recipe does)
+and a distinct name. An old terminal-shaped `iron-jarvis` entry in a
+project's `.mcp.json` is NOT edited at close (that would be a new write into
+the user's folder; `remove_config_writes` has no caller today): it is named
+once in the TM3 note, like a leftover `.jarvis-codex` folder.
+
+#### TM3 [low, larger]: files written into the project are never named
+- **Decision D9 (recommended B):** write nothing into the project; Claude's
+  file goes into Iron Jarvis's own folder through `--mcp-config <abs path>`,
+  as Build › Code does, and is deleted when the terminal closes. If A
+  (keep writing, name them), the sentences:
+  - "Iron Jarvis created {path} so {label} can use its tools."
+  - "Iron Jarvis added its "iron-jarvis" entry to {path}; everything else in
+    that file is as it was."
+  - "It holds no password or key, and it stays after this terminal closes:
+    delete it whenever you like."
+  - With B: "Nothing was written in your folder: {label} has Iron Jarvis's
+    tools for this terminal only."
+- Leftover `.jarvis-codex` folders from earlier versions: named once in that
+  folder's terminal, never deleted (D9).
+
+#### TM2 [low, smaller, Linux/Mac]
+A close-on-exec pipe in `PosixPtyBackend.start` only, so a shell that cannot
+start raises like Windows does and the existing restore code keeps and lists
+the terminal with its history. The shared exit-code rule
+(`exit_says_pty_failed(127) is False`) is pinned on every OS, so Windows is
+unchanged. **Corrected by the double-check:** the Linux gate runs only
+after a release, on its tag, and `tests.yml` has no Linux Python job, so the
+real-fork test is proven red then green on a push-triggered trial branch
+copy of `linux-release.yml`'s test job (as LX4's real-parser test is),
+before the group's commit.
+
+#### TM4, TM5 [low]
+- **TM4:** the restart-at-size runs as one background task per socket, so
+  keys are read at once; "could not be started again" is said once per
+  failure streak. Tested through the real socket.
+- **TM5 (decision D8, recommended refuse in words):** a timed-out skill read
+  answers 503 "Your skill library did not answer in time, so nothing was
+  asked. Ask again, or choose "skill: auto"."; a missing skill stays 404.
+
+#### Convenience
+- **C-TM-1:** "Open with <usual shell>" on a "program is gone" row: same id,
+  folder and history (today: a retry that fails again, or Close, which
+  deletes the history). Windows too.
+- **C-TM-2:** a "with tools" terminal opens on the account of the terminal it
+  was opened from, and the dialog says "Opens on {account}". Today there is
+  no way to get Iron Jarvis's tools on a chosen account.
+- **C-TM-3:** Pi is ready the moment it starts, using its own `-e
+  <extension>` (the file Build › Code already writes, kept in Iron Jarvis's
+  folder), instead of a hand-typed step and a file in the project.
+
+---
+
+### Group 31: Linux, the right file always
+
+Nothing here changes the Windows app or `release.yml`; each design says how a
+test or a dry run proves it.
+
+- **LX1 [low] (decision D10):** the download page's no-script links bake a
+  versioned link (`releases/download/v<ver>/<name>`) read hourly from the raw
+  `updates-linux/latest-linux.yml` (no API rate limit, no token), with a
+  link check before publishing that is red on today's page. This is in the
+  website's own repository (`RealDealCPA-VR/realdealcpa-ai`); a push there
+  needs the owner's go-ahead. In Iron Jarvis only `ci.md` L595-598 ("a
+  permanent link") changes. The missing Linux files of v1.523.0, v1.524.0
+  and v1.526.0 are NOT backfilled: two failed the Linux tests, one was
+  replaced by a newer release, and updates go to the newest anyway.
+- **LX2 [low]:** `scripts/linux_release_plan.py` reads all releases
+  (`--paginate`) and the branch's version; "none found" when the branch names
+  an older version is a failed check, not "first". Dry run:
+  `-f version=1.526.0 -f dry_run=true` plans "rehearse from 1.525.0".
+- **LX3 [low]:** a release's Linux state is none, complete, partial or
+  broken; a partial one is finished file by file (the update file last,
+  never replacing a file GitHub already has with different bytes); the
+  branch step stays as the repair it is (the reviewer's "end the job" would
+  have removed it). Pins that change: `test_linux_release_workflow_v1517.py`
+  L122, L132-135 (they pin "leaving it"), L161.
+- **LX4 [low]:** the autostart entry escapes in both layers the spec
+  describes (`\\$`, `\\\\`, `%%`); a path with a control character is refused
+  in words. Proved against real parsers on the Linux runner (desktop-file-
+  validate, GLib's `Gio.DesktopAppInfo` launching a recorder script at each
+  odd path, the systemd autostart generator), with a missing-path negative
+  control. Pin `test_linux_desktop_v1519.py:130-135` changes (it pins the
+  defect).
+- **LX5 [low, new]:** Linux words for "repair" and "go back a version" that
+  name the `.deb` or AppImage and open the releases list; Windows keeps its
+  exact words (pinned).
+- **C-LX-1:** two permanent short links, `realdealcpa.ai/IJ/linux/deb/` and
+  `/IJ/linux/appimage/` (static, work with scripts off), named in the
+  Handbook, the release notes and LX5's dialogs.
+- **C-LX-2:** the Updates card says how this Linux copy updates (AppImage:
+  "This copy updates itself: a new version installs when you close the app
+  or press Restart & install."; .deb: a line that promises only what has
+  been tried (the `.deb`'s own self-update through pkexec has never been
+  rehearsed, `ci.md` L602; until it is, the line says "Updates arrive by
+  themselves; installing one may ask for your password." and the `.deb`
+  update joins the "try on the installed app" list; corrected by the
+  double-check); unpacked folder: "This copy cannot update itself…") in place of "Auto-update isn't available in this
+  build."; Windows sends no field, so its card is unchanged.
+
+---
+
+### Group 32: Smaller words and the outside-places row
+
+- **BS3 [low, larger]:** under Local only a screenshot question is refused
+  "the picture was not sent anywhere", with no provider named, no "retry"
+  and no "allow X for this one message"; the tool's data names no provider
+  either. The Settings label in the sentence is read off the screen first.
+- **BS4 [low, larger]:** the sidebar's failed-step line drops a leading error
+  code and cuts at the first sentence that names a tool (every failed step,
+  not only "tab not on screen"); the model's own text is unchanged.
+- **PG2 [low, suspected]:** `cmd_line()` (text up to the first LF, every CR
+  removed) replaces `_first_line`; `typed_lines()` for `process_write`,
+  `console_lines()` for `pane_send` (`str.splitlines()` also breaks at
+  `\v \f \x1c-\x1e \x85 U+2028 U+2029`). Proved first on Windows CI with real
+  `cmd.exe` and harmless commands in a temp folder (`echo one\r two> out.txt`;
+  a throwaway delete). Either way the change only refuses more.
+- **PG4 [low]:** a finished reply whose usage row failed is marked
+  (`OpenModelCall.ended`, `TurnLedger.mark_ended`) and settled as "This reply
+  ended, but its usage could not be saved then; the model calls it made are
+  counted here", not "cut off". Try on the installed app: the new column
+  appears on a copy of a real database.
+- **PG5 [low]:** the plan's G2 note gains: "The exception decision G2 names
+  was not built either: no approval lifts a tool's own "asks every time"
+  check in a workflow's Tool call step, "Always for this workflow" included,
+  because that check is answered one call at a time in every lane and a Tool
+  call step cannot wait for an answer; the step is refused in words that
+  point to an Agent step or to chat."
+- **C-PG-1:** a "Sending outside this PC" row in Settings › Permissions & ledger
+  (the existing "What Jarvis can reach" block, `AccessSummary.tsx`, fed by
+  `GET /settings/access`): every live outside place (webhooks by host,
+  destinations, model servers, web services, tool servers, a Notion memory
+  base, the speech server, the apps connected to the tools door), how each is
+  asked, and a link to its page. Replaces six screens; reads
+  `tools/destinations.py` from group 25.
+- **C-BS-3 (decision D11):** "Allow on this site" in place of "Allow all page
+  actions" on a sidebar card; the every-tab switch stays in the header.
+
+---
+
+### Decisions for the owner (a recommendation with each)
+
+- **D1. Rows already stored with a secret in them (OT2).** A: a one-time pass
+  at start, on this PC, rewriting only rows the mask changes, logging only
+  the count. B: leave them. **Recommended A**: the stored rows are what
+  another app is told today. Backups already taken keep old copies either
+  way.
+- **D2. Widen the secret mask (OT2).** **Recommended yes**, in group 24: it
+  misses common keys people paste (Stripe, GitLab, npm, Google OAuth, JWTs,
+  private key blocks). Some ordinary words may be masked ("token: parser").
+- **D3. How wide "asks every time for a new address" goes (PG1).** A: the
+  webhook only. B: the webhook plus the three model and speech server
+  addresses. C: also `voice_backend=openai` and `default_provider`.
+  **Recommended B**: those three change where your model calls and voice go;
+  C would ask about choices you make often and are not new addresses.
+- **D4. A level change or Plan while attempts run (CS4).** A: the attempts take
+  it live, like a normal reply. B: the screen says running attempts keep
+  their level. **Recommended A** (decision G14; trust before convenience).
+- **D5. Deleting a chat stops its running reply (C-DT-2).** **Recommended
+  yes**; the delete dialog says so, and an agent run it handed off to keeps
+  going.
+- **D6. Where a hand-off happens when no window is open (DT1).** A: the daemon
+  does it at once, through the one-run guard. B: the page does it when the
+  chat is next opened. **Recommended A**: B is a stall (the work waits until
+  you open that chat) and dies with the 7-day record.
+- **D7. Apps connected before the new bridge (MS2).** A: at the first start,
+  Iron Jarvis rewrites only its own entry's command in each connected app
+  (a backup kept) and the row asks for one restart of that app. B: nothing
+  moves until you press Connect again on each row. **Recommended A**: your
+  Connect press already consented to that entry ("approve once, then it
+  carries on"); it changes the rule that an app's settings change only on
+  your press, for this one migration.
+- **D8. A slow skill library in a terminal's "ask AI" (TM5).** Refuse in words,
+  or answer without the skill and say so. **Recommended refuse**: an answer
+  without the skill you picked is not what you asked for.
+- **D9. Files in your project for "with Iron Jarvis's tools" (TM3).** A: keep
+  writing them and name them. B: write nothing in your project; keep them in
+  Iron Jarvis's folder and delete them when the terminal closes.
+  **Recommended B**: nothing to commit by mistake, and the name clash with
+  the connector goes away. Leftover `.jarvis-codex` folders from earlier
+  versions are named, never deleted.
+- **D10. The Linux download links (LX1).** A: versioned links baked into the
+  page by the website's hourly build (a change in the website's repository).
+  B: the smallest page-only change. **Recommended A**, and a push to the
+  website only on your go-ahead.
+- **D11. "Allow on this site" on a sidebar card (C-BS-3).** **Recommended
+  NOT in this plan** (revised by the double-check): a site grant would live
+  in the browser runtime that the Chat page's replies also read
+  (`routes/chat.py:6647-6655`, `browser/service.py:1332-1341`), so it would
+  cover chat replies too; it would last until Forget, and no screen lists
+  it. Today grants are by tab only (`browser/grants.py:91-160`). It needs
+  its own design (what it covers, how long, where it is listed and removed)
+  before it is a choice.
+- **D12. A cut-off reply is "failed" for night tasks and attempts too
+  (CS1, CS2).** Owner decision 5 (v1.529.0) covered Build › Code only;
+  extending it is a new choice. **Recommended yes**: a reply cut at its
+  length did not do the job, and nothing downstream is hurt (the night still
+  commits, Keep is still offered for an attempt's good files).
+- **D13. A hand-off the daemon starts with no window open waits for you on any
+  question (DT1).** A: it runs as a chat-started run, so a question waits
+  for you (with no time limit) and the bell says it is waiting. B: an
+  unattended run, so its first question fails it. **Recommended A**:
+  behaviour 4 ("asks only what only the user can answer") with the bell as
+  the "never stalls silently".
+- **D14. Nine releases or seven (27+28 and 31+32 merged).** **Recommended
+  nine.**
+- **D15. Keep only the newest 3 copies of another app's settings file
+  (OT10).** These are your other apps' files (they can hold other tokens).
+  **Recommended yes.**
+
+### Rule texts that change (notes for agents, in `docs/rules/`)
+
+- `memory.md` L48, L962; `connections.md` L42, L49; `browser.md` the
+  v1.270.0 switch entry; `chat.md` L2818, L2841, L2853; `agents.md` L1096
+  ("four doors"); `build.md` (a recipe never sets an account's home);
+  `desktop.md` L438 ("the shell and the service" name `$APPIMAGE`);
+  `providers.md` L1481 (wording); `ci.md` L595-598.
+- Pins that today hold a defect as correct and must change: listed under each
+  finding above (DT3, DT6, MS8, TM1, LX3, LX4).
+
+### Try on the installed app (stand-ins cannot show these)
+
+1. Connect Claude desktop, install an update: `work_search` answers once Iron
+   Jarvis is back, with no restart (MS2); Windows Defender and Smart App
+   Control accept the bridge in `%APPDATA%`.
+2. The Linux AppImage connector after a close and an update (MS3).
+3. Codex with tools in a Build terminal opens signed in on its account, with
+   nothing new in the folder (TM1); `codex --help` shows `--config`.
+4. A Stop pressed right after Send in the browser sidebar; closing the sidebar
+   right after Send (BS2).
+5. A chat that hands off with the window closed, then opened; the same with
+   two windows (DT1).
+6. A night task that runs past its limit, then an update, then the morning
+   row (CS6).
+7. Disconnect while Claude desktop is open (OT4); Codex settings after
+   trusting a new folder, then Disconnect (OT6); a disconnected mapped drive
+   in the other-tools list (OT9).
+8. The Linux autostart with an unusual path; the Linux Updates card (LX4,
+   C-LX-2).
+9. The rebuilt add-on's card line under Local only (BS1, C-BS-1).
+
+### What this plan does not do
+
+- No new product area: every convenience item connects or finishes an
+  existing surface.
+- No loosened gate: every convenience item was checked against "never loosen
+  consent, never send data anywhere new, never spend on an account you did not
+  choose". The two that change who may press (C-BS-3 narrower,
+  D7 a one-time migration of an entry you already approved) are your
+  decisions.
+- Earlier owner decisions stand: G9 (no stopped reply is carried on), G10
+  (failing tests on a finished attempt are shown, not a failure), G14
+  (a stricter level applies from the next step), decision 5 (a cut reply is
+  "failed"), decision 8 (the gate reads the lock), decision 9 (one run per
+  hand-off).
+- Still open from before and not in this plan: A4 (the account manager's model
+  routes need no token on this PC; the owner's change in Iron-Proxy), a
+  night task's own pay-per-use spend not counted toward the monthly limit
+  (`build.md` 2435), and the third plan's "try on the installed app" list.
+
+### Added after a second look at the plan (2026-11-18)
+
+Checked on the owner's running app and the docs site (read only):
+
+- **Nothing has leaked on the owner's PC yet.** The running app (v1.530.0)
+  reports Claude desktop, Codex and Claude Code installed but none connected
+  to Iron Jarvis, so OT1, MS1 and OT2 have not reached another app here. The
+  product is public, though: anyone on v1.528.0 to v1.531.0 who pressed
+  Connect is exposed. Group 24 stays first and should not wait for the rest.
+- **The public docs (realdealcpa-ai-ij) say nothing about connecting Claude
+  desktop, Claude Code or Codex to Iron Jarvis, the other-tools chats, or
+  Linux**; the home page still says "a desktop app for Windows". The plan
+  updates the in-app Handbook only. Each group that changes what a user sees
+  also updates the matching docs page (a Mintlify branch, published on the
+  owner's go-ahead), starting with group 24's honest Connect words.
+
+Not in the plan until now:
+
+- **Other sessions and the same files** (corrected by the double-check: the
+  earlier line here was stale). The main checkout is on
+  `feat/other-tools-chats` at v1.518.0 and its ONLY uncommitted change is
+  `docs/NORTH-STAR-FIX-PLAN-2026-11-15.md` (+727 lines, the third review's
+  section, already on master). Nobody has uncommitted work in `workmap/*`
+  today. Still, before group 24 and before each later group: `git fetch`,
+  look at the newest master commits for the group's files, and check with
+  any session still working on Linux (`desktop/main.js`,
+  `linux-release.yml`: groups 26, 28, 29, 31) or other tools. One writer
+  per file at a time. The untracked `site/` and `docs-site/` folders in the
+  main checkout are not the website's repository; D10 and the docs updates
+  edit the real repositories, never those folders.
+- **Signing the new bridge program (group 29)** (corrected by the
+  double-check). There is no signing list: electron-builder 26.15.6 signs
+  every `.exe` that `extraResources` copies, so the bridge would be signed
+  with no change. What IS a list is the release's CHECK step
+  (`release.yml:405-406`): it verifies the signatures of three named files
+  and starts only the daemon, so an unsigned or broken bridge would not fail
+  the release. Group 29 adds the bridge to that check (signature valid, and a
+  signed `--check` run). That is a workflow change: tried first with
+  `gh workflow run release.yml --ref <branch> -f dry_run=true`, and the tag is
+  pushed by hand.
+- **A way back for group 29.** The updater only moves forward. Group 29 keeps
+  the old connection working until the new bridge has answered once on that
+  PC (the entry is rewritten by D7 only after `ensure_bridge` has run the
+  copy and it answered), so a broken bridge falls back instead of cutting
+  every connected app.
+- **Nine releases is nine updates and nine full GitHub runs.** If the owner
+  prefers fewer interruptions, 27 and 28 (Stop and hand-off, same files) can
+  be one release, and 31 and 32 another: seven releases. Recommended: keep
+  nine; smaller releases are easier to review and to undo.
+- **Mac.** Nothing here is built for a Mac (it waits on the Apple account),
+  but the new bridge and the autostart work are written so a Mac build is
+  not blocked (no Windows-only file name in shared code).
+- **Measuring "easier".** Nothing measures whether the convenience work
+  removed chores. Each convenience item adds one counter to the existing
+  local metrics (how often an app needed a restart to reconnect, how often a
+  hand-off started with no window open), read in the weekly report; never
+  sent anywhere.
+- **The "try on the installed app" lists keep growing.** Three plans' worth of
+  items have never been tried on the real app. A Windows cloud machine (the
+  owner's InstaBox account offers Windows) could run them with the packaged
+  installer and made-up data, never the owner's; it costs money, so only on
+  the owner's go-ahead.
+- **The owner's app is on v1.530.0**, one behind the newest published
+  (v1.531.0).
+
+### Corrections from the double-check (2026-11-18)
+
+Four fresh checkers read the plan and the designs against master (with the
+dashboard tests this time) and tried to break them. Their reports are
+`c4_G24-25.md`, `c4_G26-28.md`, `c4_G29-30.md` and `c4_G31-32-whole.md`
+in the local notes folder `.claude/worktrees/fourth-review-notes/` (not committed: those files quote a private repository). The lead re-read the claims that change a design (the
+title cut in `history/common.py`, the raw title in the stamp, the card's
+`forced` field, `backup_mirror_dir`, `reply_cap.clean`, the existing
+`"stopped_by": "unwatched"` key, `finish.STOPPED_BY_YOU`, the recap helper in
+`comm/inbound.py`, the bridge's import chain, the release's signature check,
+the Linux-only test run, the fourth Linux dialog, and the main checkout's
+real state): all held. The false statements are corrected where they stand
+above; everything else is here, by group, and is part of the plan.
+
+Confirmed sound by the checkers (no change): the outside wall has only two
+callers; `_write` is the only writer of work-record rows and masking there
+causes no rebuild loop; every add-on since v1.522.0 draws a `floor` card
+with Allow once and Deny only; refusing a grant's answer on a once-only card
+breaks no legitimate automatic answerer (the phone, the night, the bench and
+workflows answer under their own names or file no cards); onboarding and the
+Settings page save through the config writer, not `config_change`; new
+nullable columns are added by the app itself at start
+(`core/db.py:843-885`); "stop in memory first" is as safe across a crash as
+"write first"; Codex takes a bare `-c` value as a string; `claude
+--mcp-config` adds to the user's servers unless strict; TM2 touches nothing
+on Windows; the counts (3 high, 14 medium, 33 low, 51 entries) and the
+group order hold.
+
+#### Group 24
+- **OT1, also waiting names:** for an outside asker, named attribution also
+  knows waiting clients' names (today it knows confirmed ones only,
+  `wall.py:170-181`), so a waiting client's work in an unowned folder named
+  only by its title is not told either. Without it, OT5's "client work is
+  never shared" over-promises.
+- **MS1:** keep the hardening `work_block(outside=True)` → always withhold
+  Local only and kept-home rows (one line).
+- **D1 has an owner:** agent B writes the one-time pass (off the event loop,
+  at start, bounded), with a done-marker that records WHICH mask ran (so D2's
+  wider mask reaches old rows once more), using the same `clean_line` as the
+  write path, and also cleaning `reportedchat.chat_key` and the stamps.
+  Test: rows masked after one start, nothing written on the second, a run
+  with the narrower mask goes red.
+- **The `chat_record` ledger row:** the tool gets `redact_args`, and its
+  output does not echo the title unmasked (`registry.py:1665`).
+- **Test values** for D2's new shapes are assembled at run time from
+  pieces in the test, never one literal shaped like a real key.
+- **Tests to add:** the secret is absent from the `stamp` column, from
+  `chat_key` and from the ledger row; a key that crosses character 120 of a
+  Claude Code first prompt; `test_running_elsewhere_v1530.py:219-229` stays
+  unstubbed as the control for the Pi case.
+
+#### Group 25
+- **PG-A needs an explicit reason on every once-only frame:** the lane sends
+  `once_reason` always (`local_only`, `locked`, `looked_up`, `night`, or the
+  check's own), because `forced` is only an argument to `card_why` today
+  (`routes/chat.py:7398-7408`), not a field on the frame. The card keeps
+  today's Local only line when it gets `local_only`, so three dashboard pins
+  stay green and are listed as the guard: `approval-card-why-v1417.test.tsx`,
+  `local-only-always-ask-v1332.test.tsx:95-99`,
+  `media-in-chat-v1346.test.tsx:145-149`. Lane tests: a Local only card
+  carries `once_reason: "local_only"`; a `webhook_add` card outside Local
+  only carries `"address"`. PG-A also covers `apply_changes`, the
+  destructive Excel live steps and every locked-app card.
+- **D3 option B gains `backup_mirror_dir`**: it copies the whole Iron Jarvis
+  folder, database and vault included (`maintenance.py:180-200`), to any
+  folder, synced or networked. The scan test (e) looks for that setting by
+  name, not only `*_url`.
+- **The ask fires only for the tool that would actually make the change**
+  (`tier_for(value) == self.TIER`), so `config_set` and
+  `config_change_protected` never show a card whose Allow is then refused;
+  the current value is read off the event loop. A new address on THIS PC
+  (loopback) does not ask: nothing leaves the PC.
+- **BS1's files** also include `sidepanel.ts`, `sidepanel.html`, `browser.md`
+  and a dashboard test; `test_panel_switch_skips_risk_v1402.py` names
+  `_floor_offered`, which BS1 deletes: it changes, and a new test proves an
+  ordinary sidebar card is still answered by the switch through the real
+  registry.
+- **C-PG-2** also edits `records_tools.py` and `auto_approve.ONCE_REASON_WHY`;
+  **C-PG-3** also edits `capability_search/tool.py` and a Settings component.
+
+#### Group 26
+- **CS5:** `reply_cap.clean()` keeps only `minutes` and `usd`
+  (`reply_cap.py:43-59`), so the met cap's `"of": "pay_left"` travels beside
+  the cleaned cap, never through `clean`; a test checks `strict()` still
+  refuses a PATCH that carries `of`.
+- **A stopped attempts turn** gets status "stopped" (not "done") at the
+  cause, so the experience library does not record it as finished.
+- **Cut and limit** are read in the same order in the night and in attempts.
+- **C-CS-2** keeps Keep on a cut attempt whose files are good.
+- **D12** is now an explicit decision.
+
+#### Group 27
+- **Who stopped it, corrected:** no stop function defaults to "you". The
+  default is unknown everywhere; only the user's own stop route, a kept
+  Stop, archive and delete pass `by="you"` explicitly. The night backstop
+  and Emergency stop call `stop_step` with their own value.
+- **The scan** also covers stops made on a handle directly (`h.stop()` at
+  `routes/chat.py:443`, Stop and archive).
+- **The key name:** `stopped_by` already holds `"unwatched"`
+  (`durable_turns.py:1405`); the new fact uses one key with documented
+  values, or a separate key, never two meanings in one.
+- **Also covered:** `harness/finish.py:255` (`STOPPED_BY_YOU`) and
+  `agents/fix_request.py:517-534` (`_STOP_MARKERS` learns the new ledger
+  words, or steps stopped by a limit read as defects).
+- **DT5 and DT6 ship together** (a stop mark written after a turn's record
+  was forgotten would insert a bare row).
+- **Pin:** the one-argument `stop_spy` in
+  `test_third_plan_g19_stop_written.py:96-107` breaks as soon as `by=`
+  exists.
+- **Agents:** A: `core/turns.py`, `durable_turns.py`, the stop route and
+  `core/models.py` (CS6, DT3, DT6, DT5, C-DT-2); B: `harness/stall.py`,
+  `harness/night.py`, `routes/night.py`, `agents/fix_request.py`,
+  `harness/finish.py` (CS6's step half); C, after A:
+  `routes/build.py` (`keep_stopped_reply`, the resume notes),
+  `harness/sessions.py`, `harness/attempts.py`; D, after A:
+  `browser/panel.py` (BS2, C-BS-2).
+
+#### Group 28
+- **The recap:** the daemon reuses the one existing helper
+  `comm/inbound.recap_task` (the phone's hand-off: up to 6 messages, 500
+  characters each), widened to take the chat's messages, instead of a third
+  copy. It is the new run's task text, not the model's history, which is
+  what "history is budgeted, never sliced" governs; the helper's limits are
+  named constants (D13 does not change them).
+- **The line keys:** the daemon's hand-off line carries `escalatedTo`
+  (`page.tsx:10585`); `LINE_KEYS` admits it.
+- **Order:** the hand-off line is written BEFORE the run starts, so a run
+  that ends at once cannot land its reply above it.
+- **No hand-off during shutdown**, and the 30-second hand-off never holds the
+  link route or shutdown (they skip it, the start-up pass catches up).
+- **Words:** the door's folder sentence is turned into plain words (no
+  `workspace_root`); `LocalOnlyRefused` is caught by the helper (it is not
+  an HTTP error).
+- **The daemon always opens a new run**; continuing an earlier run stays a
+  press in an open window. Said in the Handbook.
+- **Lifting the doors:** the WHOLE route body, guard included, moves into the
+  shared function, and a mutation where the helper skips the guard must give
+  two rows.
+- **Tests to add:** Local only turned on in the stored setup gives no cloud
+  run; the hand-off line comes before the run's reply.
+- **Agents:** A: `daemon/chat_hand_off.py`, `durable_turns.py`,
+  `chat_append.py`, the one line in `routes/chat.py` (after group 27 is
+  merged); B: `routes/sessions.py`, `routes/agents.py` (the lifted doors);
+  C: `page.tsx` (DT2, C-DT-3); D: `orchestrator.py`, `desktop/main.js`,
+  `NotificationBell.tsx` (C-DT-1).
+
+#### Group 29
+- **The bridge build:** the PyInstaller Analysis script is
+  `mcpserver/stdio_shim.py` itself, with `iron_jarvis` and `ssl` excluded
+  (importing it through the package would pull in `mcpserver/__init__` →
+  `jsonrpc` → most of the app); a test pins that the bundle holds no
+  `iron_jarvis` module and stays under a size bound. Its output folder is
+  set so `resources/bridge/` holds it on both platforms, and `afterPack.js`
+  fails the build when it is missing (and inventories "bridge", which
+  `test_browser_packaging_v1239.py:198-215` requires).
+- **Replace only when it changed:** a build-time content id, not the bytes
+  (every release re-signs with a new timestamp, so the bytes always differ).
+- **A way back every time:** the new copy runs `--check` (through
+  `core/procs`) before every swap; a copy that fails is not swapped; with no
+  checked bridge, the entry falls back to `ironjarvis.exe mcp-stdio`. The
+  `os.replace` after a copy retries, because Defender may hold the new file.
+  Test: a `.new` copy that fails `--check` is not swapped in (with
+  `sort.exe` as the stand-in program, not a copied venv `python.exe`).
+- **A known cost:** a one-file program unpacks into `%TEMP%\_MEI*` at each
+  start (once per Claude desktop start and per Claude Code or Codex session),
+  and a forced kill leaves that folder; it is a common Defender trigger. It
+  joins the "try on the installed app" list with start time measured; if it
+  fails there, the bridge becomes a small one-folder program in a versioned
+  folder instead (decided then, before release).
+- **D7's migration** runs under `_change_lock`; if Claude Code's `add` fails
+  after its `remove`, the row says "Connect again"; it resets
+  `first_used_at` so the restart line shows. `_read_state` keeps
+  `first_used_at` (today it keeps only `sha256` and `minted_at`).
+- **OT9's drive check** (`GetDriveTypeW` can wait on a disconnected drive)
+  runs in a child process through `core/procs`, bounded, cached per letter,
+  per the hard rule on native bindings; UNC paths are judged by text.
+- **Owners:** agent C also writes `--check` in `stdio_shim.py`; agent B also
+  `afterPack.js` and the doctor row; F follows A (MS5's words are split
+  between them).
+- **Pins:** `other-tool-connector-v1528.test.tsx:93-95` (exact `toEqual` on the
+  decoded app) and `:113` change when the new fields arrive.
+
+#### Group 30
+- **Agents:** A: `terminals/recipes.py` and `terminals/manager.py` (TM1,
+  MS4a, C-TM-2, C-TM-3); B: `terminals/backend.py` (TM2); C, after A:
+  `routes/terminals.py` and `terminals/session.py` (TM3, TM4, TM5,
+  C-TM-1); D: `dashboard/app/terminals/page.tsx`, `TerminalPane.tsx`,
+  `NotReopenedList.tsx`.
+- **D9 option B leaves files** in `<home>/terminals-mcp/` for a terminal that
+  died with the daemon: swept at start.
+- **After TM2,** a missing shell path in `POST /terminals` on Linux answers in
+  words, not a 500.
+- **Pins:** for D9 B, `test_third_plan_g20_terminals.py:330-356`,
+  `test_harness_path_wiring_v1238.py:149-150`,
+  `test_launch_recipes_v1238.py:330-470`; for TM1, three in
+  `test_launch_recipes_v1238.py:497-530` plus `CODEX_HELP`, and
+  `test_the_hosted_server_name_is_its_own` (its `_apply_codex_overrides`
+  raises on the bare URL).
+- **Order:** group 29 before 30 (a with-tools Codex now loads the user's
+  `config.toml` and may write its trust table there, OT6's trigger).
+
+#### Group 31
+- **LX5 has a fourth dialog:** `abortUpdateInstall`'s "download the file named
+  Iron-Jarvis-Setup-<version>.exe" (`desktop/main.js:5826-5832`), reached on
+  Linux through `applyPendingUpdate`. Pinned within a 900-character window by
+  `test_desktop_plain_dialogs_v1450.py:67-77`; also
+  `test_desktop_lifecycle_v1192.py:382-389` (870 of 900 characters used) and
+  `test_desktop_reliability_v1249.py:704-716` (lifts the function with two
+  constants). One small helper, lifted with the constants, keeps all three.
+- **LX4's setup step** (the apt install in the `python` job of
+  `linux-release.yml`) and its `trial/linux-autostart` branch are part of the
+  group; `refreshLinuxAutostart` deletes an entry it cannot write safely
+  (a control character in the path), never leaves a false On.
+- **LX3's "what publish would do" step** gets its own tooling checkout in
+  `rehearsal`.
+- **C-LX-1 waits for D10:** the short links 404 until the website change is
+  live, so D10 names C-LX-1 and the site change goes first.
+- **Agents:** A: `desktop/main.js` (LX4, LX5, C-LX-2's shell field) and
+  `UpdatesPage.tsx`; B: `linux-release.yml` and
+  `scripts/linux_release_plan.py` (LX2, LX3, LX4's apt step).
+
+#### Group 32
+- **BS4:** the sidebar's failed-step line keeps only the tool's first
+  sentence (the rest is often written to the model: "Ask the user to open
+  the Browser page…"), with the error code dropped.
+- **BS3's test goes through the real router gate** (required, not optional).
+- **PG4 can deadlock as designed:** `closing()` holds a non-reentrant lock
+  (`call_ledger.py:369-373`) and today's `except` runs after it is released;
+  the end-row write is restructured so `mark_ended` runs inside the same
+  hold and never takes the lock itself.
+- **PG2:** joining text across a lone CR changes what `is_interactive_cmd`
+  reads (`cmd_guard.py:579-590`); that part ships only if probe 1 shows cmd
+  removes the CR. Otherwise only the "refuse more" half ships.
+- **Words:** "tool server" is a retired word; C-PG-1's row and PG-A's lines
+  say "extension" (VOCABULARY.md).
+- **Pins:** C-PG-1 breaks `test_receipt_seams_v13520.py:331`
+  (`set(body) == {"reads","writes"}`) and `test_access_summary_v13520.py:101`.
+- **Agents:** A: `browser/panel.py`, `browser/screenshot.py` (BS3, BS4);
+  B: `sandbox/cmd_guard.py` and the one line each in `harness/process.py`
+  and `tools/pane_tools.py` (PG2); C: `eval/call_ledger.py` and the end-row
+  write in `daemon/chat_turn.py` (PG4); D: `access_summary.py` and the
+  Settings component (C-PG-1); the plan note (PG5) is the lead's.
+
+#### Rule texts also changing (added to the list above)
+`ci.md` L558 entry (LX2, LX3) and L602 (the `.deb` rehearsal, if done);
+`desktop.md` L438 also in LX4's wording; `build.md` L1415 and the TM2 entry;
+`connections.md` L50-52 (OT4, OT6, OT10); a new `tools.md` entry (PG1, the
+destinations table and scan).
+
+#### Try on the installed app (added to the list above)
+- PG1: re-point a webhook after "Allow for this conversation".
+- PG4: the new column on a copy of the database, made on this PC by the
+  owner.
+- TM3 option B and TM4 on a real terminal; C-TM-3 with real Pi.
+- MS4 and MS4b; OT8 (a picture as a chat's first message).
+- C-CS-3 and C-DT-1: the tray's words and the tray click.
+- MS2: the bridge's start time, the `%TEMP%` folder, Defender.
+- LX1 with scripts off; the `.deb`'s own update (C-LX-2).
+
+### Before group 24 starts
+
+1. This plan and the review are in the repository (this file, "## Fourth
+   review" and "## Fourth fix plan"), committed with group 24. The eight
+   design files and the four check reports are in the local notes folder `.claude/worktrees/fourth-review-notes/` (not committed: those files quote a private repository).
+2. The work runs in its own worktree (this folder is another session's).
+3. The owner's answers to D1-D15 are written into the plan before the group
+   that needs each (D14, the number of releases, before group 24).
+
+### Group 24 as built (v1.532.0)
+
+Fixed: OT1, MS1, OT2, OT5, MS9, OT3, and decisions D1 (stored rows masked
+once) and D2 (the wider mask). Three implementers (Opus 5.5) and the lead
+(OT5); the lead read every diff and turned each new test red by mutating the
+code it pins (rule 2b; the stamp's mask; one key shape).
+
+Where it went further than the plan:
+
+- The waiting names also count when they are a whole folder segment, for an
+  outside asker only (stricter; the owner's chats are unchanged).
+- The Python copy of the mask had to be mirrored into the browser add-on's
+  `mask.ts` too (an existing byte-for-byte pin).
+- `masked_once` re-keys a reported chat whose key came from its title's
+  words, and appends the row id on a clash.
+
+Left open:
+
+- Old `chat_record` rows in the ledger and the undo journal keep their raw
+  arguments (the pass covers the work record and reported chats only).
+- `harness/step_target.py`, `harness/night_commit.py` and
+  `dashboard/lib/configCards.ts` keep their own secret lists.
+- A title with ordinary words such as "token: parser" now reads
+  "token: ***" (the mask's existing rule).
+- Not tried on the installed app: a connected Claude desktop or Codex asking
+  `work_search` (none is connected on the owner's PC).

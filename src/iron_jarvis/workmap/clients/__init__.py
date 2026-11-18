@@ -96,10 +96,14 @@ Owner of a folder (text only, after ``home_folder`` + ``folder_key``):
 waiting home; else ``folder:<key>`` for the first name segment after a
 Clients-type segment; else None. Owner of a row or passage: its folder's
 owner; when that is None, NAMED ATTRIBUTION: the confirmed clients its title,
-file stems or snippet name (``names.named_in``).
+file stems or snippet name (``names.named_in``); for an ``outside`` turn
+also the WAITING names they (or the folder's segments) name.
 
 1. ``not turn.ok``: only rows in exactly the turn's folder.
 2. Row owner None: True (the Phase 1 and 2 rules hold).
+2b. ``turn.outside`` (another app asks, ``wall.outside_and_map``): False for
+   a row with an owner of any kind (confirmed, waiting, provisional, or
+   proved by its files or a named segment).
 3. ``turn.owner`` set: True only if the row owner is exactly ``turn.owner``
    (a named set must equal ``{turn.owner}``).
 4. Row owner confirmed: True only if it is in ``turn.named`` (pointers only,
@@ -334,6 +338,9 @@ class TurnWall:
     ok: bool = True
     #: The turn's folder key ("" for a turn with no folder).
     folder_key: str = ""
+    #: The asker is ANOTHER APP over the connector, not the owner
+    #: (``wall.outside_and_map``): told nothing that has an owner (rule 2b).
+    outside: bool = False
 
 
 #: No client, and the client map read fine: what ``wall.current()`` answers
