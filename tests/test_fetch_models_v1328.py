@@ -80,6 +80,17 @@ def client(tmp_path_factory):
     return TestClient(create_app(str(tmp_path_factory.mktemp("b6home"))))
 
 
+@pytest.fixture(autouse=True)
+def _roomy_bound(monkeypatch):
+    """The probe's real 5 s bound is a wall clock. On v1.538.0's branch run the
+    first test of this module passed only on its retry (its first failure was
+    not printed); the bound is the one timing-sensitive part of a test that
+    talks to a local server, so a loaded runner is the likely cause. Only
+    ``test_the_probe_is_bounded`` is about the bound, and it sets its own;
+    every other test gets room."""
+    monkeypatch.setattr(conn_routes, "_ENDPOINT_PROBE_TIMEOUT_S", 30.0)
+
+
 @pytest.fixture
 def server():
     s = _Server()
