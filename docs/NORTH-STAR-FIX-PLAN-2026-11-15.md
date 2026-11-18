@@ -4134,3 +4134,39 @@ Left open:
   "token: ***" (the mask's existing rule).
 - Not tried on the installed app: a connected Claude desktop or Codex asking
   `work_search` (none is connected on the owner's PC).
+
+### Group 25 as built (v1.533.0)
+
+Fixed: PG1 (owner decision D3 option B, with `backup_mirror_dir`), PG-A and
+C-PG-2, BS1 with C-BS-1, PG3, C-PG-3. Four implementers (Opus 5.5); the lead
+read every diff and turned each new test red by mutating the code it pins
+(the webhook-change check, the gate-side `card_allow`, the registry's grant
+refusal, the agent run's reason).
+
+Where it went further than the plan (lead's review):
+
+- `webhook_add` also keeps the host only in its card and ledger row (it kept
+  the full address; `webhook_update` already did after PG1).
+- An agent run's ask also names its reason (`agents/runtime.py`), so the
+  mission screens never fall back to the Local only line.
+- An address on this PC does not ask for `webhook_add` either (before, a
+  webhook to 127.0.0.1 asked).
+- `mcp_server_add` and `app_import` ask with their own reason "extension",
+  a safety card: Enter no longer allows them.
+
+Left open:
+
+- There is no per-tool permission row on the Settings page, so C-PG-3's line
+  shows only in chat (the lookup and `config_list`).
+- `voice_backend=openai` and `default_provider` stay out of scope (D3
+  option B).
+- Not tried on the installed app: re-pointing a webhook after "Allow for this
+  conversation"; the rebuilt add-on's card line under Local only.
+
+Also in v1.532.0 (found by GitHub's full suite, not by the local run): the new
+start-up step had no plain-words name (`loopWords.ts`), and
+`test_night_shift_v1398::test_the_team_rides_the_models_message_and_try_on_starts_attempts`
+passed only on its retry: a task tried on two models needs both "Night tasks
+at once" slots, and the test started it before the first task had ended. The
+test now waits for the first task to settle. Explained from the code, not
+reproduced here.

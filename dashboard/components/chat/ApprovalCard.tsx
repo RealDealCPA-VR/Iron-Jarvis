@@ -584,7 +584,29 @@ export function ApprovalCard({
         <p data-testid="approval-looked-up-once" className="text-[11px] leading-relaxed text-zinc-400">
           Jarvis found this tool by looking it up, so it asks every time, whatever your approval setting.
         </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "address" ? (
+        // Fourth review PG1 / C-PG-2: a new place Iron Jarvis's things go
+        // (src/iron_jarvis/webhooks/tools.py outbound_address_check). A
+        // safety card: Enter never allows it (lib/onceReason).
+        <p data-testid="approval-address-once" className="text-[11px] leading-relaxed text-zinc-400">
+          Sending Iron Jarvis&apos;s things to a new address asks you every time, whatever your approval setting.
+        </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "extension" ? (
+        // C-PG-2: adding an extension or an app (settings/records_tools.py,
+        // records_apps.py). A safety card.
+        <p data-testid="approval-extension-once" className="text-[11px] leading-relaxed text-zinc-400">
+          Adding an extension or an app asks you every time, whatever your approval setting.
+        </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason !== undefined && approval.onceReason !== "local_only" ? (
+        // Fourth review PG-A: a card that asks every time for a reason of
+        // its own (a locked app, a batch of changes, its own check) never
+        // says "local only" — the daemon names the reason on every card.
+        <p data-testid="approval-every-time" className="text-[11px] leading-relaxed text-zinc-400">
+          This asks you every time, whatever your approval setting.
+        </p>
       ) : onceOnly && !planAsk && !buildPlanAsk ? (
+        // Local only forced it ("local_only"), or no reason came (an older
+        // daemon, a listing row): today's line, byte for byte.
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.
         </p>

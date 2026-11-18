@@ -174,6 +174,11 @@ ONCE_REASON_WHY: dict[str, str] = {
     # v1.473.0 review: `apply_changes`. One approval covers exactly the
     # changes its card listed, so the next batch is asked about again.
     "batch": "it makes several file changes at once, so each batch is asked about on its own",
+    # Fourth review PG1 / C-PG-2: a new place Iron Jarvis's things go
+    # (webhooks.tools.outbound_address_check), and a new extension or app
+    # (settings/records_tools, records_apps).
+    "address": "it sends Iron Jarvis's things to a new address, so it is asked about every time",
+    "extension": "it adds an extension or an app, so it is asked about every time",
 }
 MAX_WHY_CHARS = 400
 

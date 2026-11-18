@@ -41,7 +41,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from ..core.ids import new_id
-from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, SpendCheck, Tool, ToolContext, ToolResult
 from . import schema
 from .device import valid_device_id
 #: v1.442.0 (Wave 7 group C): how chat writes ``device.theme_colors`` (the
@@ -369,6 +369,7 @@ class ConfigListTool(Tool):
             + (ACCOUNT_GROUPS_HOW if r["key"] == "account_groups" else "")
             + (THEME_COLORS_HOW if r["key"] == "device.theme_colors" else "")
             + (_model_choices(self.platform) if r["key"] == "default_model" else "")
+            + (_still_asks_note() if r["key"] == "permissions.{tool}" else "")
             for r in rows
         ]
         lines += [f"{s['label']} ({s['key']}) → config_secret (a secure card; never ask for the value)" for s in secrets]
@@ -377,6 +378,21 @@ class ConfigListTool(Tool):
             output="\n".join(lines) if lines else "No setting matches those words.",
             data={"settings": rows, "secrets": secrets},
         )
+
+
+def _still_asks_note() -> str:
+    """C-PG-3 (fourth fix plan): the per-tool approval row names the one
+    exception to "Run without asking" — the tools that still ask every time
+    they would send to a new address (``tools/destinations.py``)."""
+    from ..tools import destinations
+
+    names = sorted(t for t in destinations.DESTINATION_TOOLS if destinations.still_asks(t))
+    if not names:
+        return ""
+    return (
+        " Set to Run without asking, these tools still ask every time they would send to a new "
+        f"address: {', '.join(names)}."
+    )
 
 
 #: How many models the default-model line names (each "provider model (name)").
@@ -557,6 +573,40 @@ class _ConfigChangeBase(Tool):
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         key = str(args.get("key") or "")
         return {"key": key, "value": _shown_value(self.platform, key, args.get("value"))}
+
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
+        """Fourth fix plan PG1 (D3 option B): a setting that sets WHERE Iron
+        Jarvis's data goes (``SettingDef.destination``: a model server's
+        address, the speech server's, the backup copy folder) asks every time
+        it is set to a NEW place, Allow once only, whatever grant or level
+        this tool has — through the one check webhooks use
+        (``webhooks.tools.outbound_address_check``; an address on this PC does
+        not ask). Only the tool that would really make the change asks
+        (``tier_for(value) == TIER``): any other is refused by ``execute``, and
+        a card whose Allow is then refused would be a lie. Clearing the value
+        (narrowing), the same value and every other setting: no opinion."""
+        try:
+            d, key, value = self._resolve(args)
+        except Exception:  # noqa: BLE001 — an unknown key: execute says so
+            return None
+        if not getattr(d, "destination", "") or d.pattern:
+            return None
+        if not isinstance(value, str) or not value.strip() or d.tier_for(value) != self.TIER:
+            return None
+
+        def _current() -> Any:
+            return _writer(self.platform).current(key, device_id=ctx.device_id)
+
+        try:
+            current = await asyncio.to_thread(_current)
+        except Exception:  # noqa: BLE001 — not readable: asked as a new place
+            current = None
+        old = str(current or "").strip()
+        if old == value.strip():
+            return None
+        from ..webhooks.tools import outbound_address_check
+
+        return outbound_address_check(value, old_url=old or None, what=d.destination)
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         try:

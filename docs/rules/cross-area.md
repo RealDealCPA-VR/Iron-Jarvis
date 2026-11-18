@@ -9,28 +9,28 @@ How to use this file: read the contents list, then read only the entries your ch
 
 - L38: **A failed run reads in plain words at EVERY door; one Sign in press; every built-in worded; a waiting chat is seen where the user is; Continue after connecting elsewhere; the phone honest about apps** (v1.388.0)
 - L150: **APPROVE ONCE, THEN OFF TO THE RACES: every ask is counted, an approved plan runs, runs you start do not stop at 12, and a closing offer is acted on unless it is the user's call** (v1.402.0)
-- L223: **No notice lost: ONE window speaks, a workflow's notice stands in only for the step that ENDED it, a schedule's line names its failed step; the Connect door and the Guide are read from ONE table, both ways; a place is named once** (v1.361.0)
-- L312: **ONE notice per outcome and per ask on this PC; the Connect door only for the user's own data; the user's model server by its name everywhere; every daemon answer in the canon's words** (v1.360.0)
-- L397: **A run speaks in the log's words, the Connect door never waits for the model, a model is named the menu's way in every list, and Emergency stop leaves nothing unattended running OR parked** (v1.359.0)
-- L488: **Every surface gives ONE verdict per run; chat picks the right tools; the Directory and chat agree; another computer comes in by a setting** (v1.358.0)
-- L622: **Another Jarvis is a teammate through ONE door; every pack lives in ONE catalog file; a saved web service is callable, carded and kept away; the vocabulary is a SCAN** (v1.357.0)
-- L731: **A switched-off pack reads OFF on every surface; an app that signs in on this PC is ONE row from every door; the calm chip is the default** (v1.356.0)
-- L815: **A failure carries its press on BOTH lanes; a pack has ONE add/remove door; an imported placeholder is ASKED, never stored** (v1.355.0)
-- L909: **ONE sentence per cause, in the app's name, wherever the user meets it** (v1.354.0)
-- L991: **ONE place for each kind of thing, and a refusal leaves the door the other surfaces already use** (v1.353.0)
-- L1077: **One vocabulary, one receipt, one approval language** (v1.352.0)
-- L1164: **Every surface tells the truth about an outcome — ONE verdict vocabulary, and Emergency stop stops what starts on its own** (v1.351.0)
-- L1270: **Fast where people wait: the turn, the boot, the poll** (v1.311.0)
-- L1321: **Wave 1 of the chat-first plan: 17 verified bugs fixed** (v1.433.0)
-- L1441: **Wave 6 of the chat-first plan: four features reconnected, dead code gone, and every uncalled route has a written reason** (v1.440.0)
-- L1501: **The first ten minutes** (v1.445.0)
-- L1538: **Nothing silent** (v1.446.0)
-- L1568: **Wave B of the readiness plan: "did it work?" is answered everywhere** (v1.449.0)
-- L1698: **Wave C of the readiness plan: the first run and the connections** (v1.450.0)
-- L1835: **Wave D of the readiness plan: Settings, words, the automations pages, Help** (v1.451.0)
-- L1961: **The owner's four answers (2026-11-08): plain page names, coding straight in the folder, ticked tools run unasked, Gmail/Slack apps skipped** (v1.452.0)
-- L2011: **Waves E–H of the v1.452.0 re-audit plan (0j.5): one word for each thing, "did it work?" to the end, chat finds the right thing, one Connections home** (v1.452.0)
-- L2091: **Words and lines that differ by system read ONE module name (`_ON_WINDOWS`), never `os.name` at the call, so a test reads both systems' words on any machine** (v1.519.0)
+- L225: **No notice lost: ONE window speaks, a workflow's notice stands in only for the step that ENDED it, a schedule's line names its failed step; the Connect door and the Guide are read from ONE table, both ways; a place is named once** (v1.361.0)
+- L314: **ONE notice per outcome and per ask on this PC; the Connect door only for the user's own data; the user's model server by its name everywhere; every daemon answer in the canon's words** (v1.360.0)
+- L399: **A run speaks in the log's words, the Connect door never waits for the model, a model is named the menu's way in every list, and Emergency stop leaves nothing unattended running OR parked** (v1.359.0)
+- L490: **Every surface gives ONE verdict per run; chat picks the right tools; the Directory and chat agree; another computer comes in by a setting** (v1.358.0)
+- L624: **Another Jarvis is a teammate through ONE door; every pack lives in ONE catalog file; a saved web service is callable, carded and kept away; the vocabulary is a SCAN** (v1.357.0)
+- L733: **A switched-off pack reads OFF on every surface; an app that signs in on this PC is ONE row from every door; the calm chip is the default** (v1.356.0)
+- L817: **A failure carries its press on BOTH lanes; a pack has ONE add/remove door; an imported placeholder is ASKED, never stored** (v1.355.0)
+- L911: **ONE sentence per cause, in the app's name, wherever the user meets it** (v1.354.0)
+- L993: **ONE place for each kind of thing, and a refusal leaves the door the other surfaces already use** (v1.353.0)
+- L1079: **One vocabulary, one receipt, one approval language** (v1.352.0)
+- L1166: **Every surface tells the truth about an outcome — ONE verdict vocabulary, and Emergency stop stops what starts on its own** (v1.351.0)
+- L1272: **Fast where people wait: the turn, the boot, the poll** (v1.311.0)
+- L1323: **Wave 1 of the chat-first plan: 17 verified bugs fixed** (v1.433.0)
+- L1443: **Wave 6 of the chat-first plan: four features reconnected, dead code gone, and every uncalled route has a written reason** (v1.440.0)
+- L1503: **The first ten minutes** (v1.445.0)
+- L1540: **Nothing silent** (v1.446.0)
+- L1570: **Wave B of the readiness plan: "did it work?" is answered everywhere** (v1.449.0)
+- L1700: **Wave C of the readiness plan: the first run and the connections** (v1.450.0)
+- L1837: **Wave D of the readiness plan: Settings, words, the automations pages, Help** (v1.451.0)
+- L1963: **The owner's four answers (2026-11-08): plain page names, coding straight in the folder, ticked tools run unasked, Gmail/Slack apps skipped** (v1.452.0)
+- L2013: **Waves E–H of the v1.452.0 re-audit plan (0j.5): one word for each thing, "did it work?" to the end, chat finds the right thing, one Connections home** (v1.452.0)
+- L2093: **Words and lines that differ by system read ONE module name (`_ON_WINDOWS`), never `os.name` at the call, so a test reads both systems' words on any machine** (v1.519.0)
 <!-- contents:end -->
 
 ## Rules
@@ -207,8 +207,10 @@ How to use this file: read the contents list, then read only the entries your ch
   authorises those; offered work that runs out of steps keeps the run's
   answer (`OFFER_CUT_LEAD`). Same release (a pre-existing gap the review
   found): the browser sidebar's allow-everything switch answered a waiting
-  RISK card (payment, password, destructive word) — risk cards live in
-  `PanelTurns._floor_offered` and the switch skips them. Goldens: only
+  RISK card (payment, password, destructive word) — risk cards are filed
+  once-only (`once_reason: "browser_risk"`) and the switch skips every card
+  with a kind (`ChatApprovals.once_kind`; `_floor_offered` is gone since
+  v1.533.0). Goldens: only
   `team_first_off_golden_v1400.json` moved (each dialect's system prompt
   gained exactly "\n\n" + ASK_POLICY). OPEN: a plan run is a person's turn,
   so Emergency stop does not refuse it; Enter still answers the plan door;

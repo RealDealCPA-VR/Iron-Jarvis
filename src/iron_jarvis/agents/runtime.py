@@ -3989,6 +3989,12 @@ class AgentRuntime:
         _lock_ask = any(self._locked(c.name) for c in calls)
         if _lock_ask:
             _cost_kw["once_only"] = True
+        # Fourth review PG-A (lead's review, MIRROR NOTE: routes/chat.py's
+        # card frame): every once-only ask names its reason, so no surface
+        # falls back to "This chat is local only" for an ask that is not:
+        # the check's own reason first, else "locked", else "once".
+        if _cost_kw.get("once_only") and not _cost_kw.get("once_reason"):
+            _cost_kw["once_reason"] = "locked" if _lock_ask else "once"
         # Readiness 0j.5 item 13: WHO asks and WHY, as the chat stream lane's
         # approval frame says it since v1.417.0 (MIRROR NOTE: routes/chat.py's
         # `_frame["why"]` / `_frame["asker"]`). An agent run's call is always
@@ -4105,6 +4111,9 @@ class AgentRuntime:
             requested["can_always"] = False
             if getattr(spend, "reason", ""):
                 requested["once_reason"] = spend.reason
+        # Fourth review PG-A: the card names its reason (see `_cost_kw` above).
+        if requested.get("once_only") and not requested.get("once_reason"):
+            requested["once_reason"] = "locked" if _lock_ask else "once"
         # v1.505.0 (north-star 5.2, D10): WHERE "Always" keeps the grant, as a
         # word the card says ("Always for this schedule" / "... workflow").
         # Additive and ONLY for those two scopes, so every other card's event

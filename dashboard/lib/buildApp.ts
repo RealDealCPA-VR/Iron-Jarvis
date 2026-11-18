@@ -23,7 +23,7 @@
  * what a user reads never says "app view" or "harness" (VOCABULARY.md).
  */
 
-import { onceReasonOf } from "./onceReason";
+import { isSafetyOnceReason } from "./onceReason";
 import { type CarryMark, decodeCarryMark } from "./buildCodeCarry";
 import { SUBSCRIPTION_CLI_ROWS } from "./subscriptionClis";
 import { secondsText } from "./durationWords";
@@ -2282,7 +2282,7 @@ export function enterAllowsCodeAsk(ask: OpenAsk | null | undefined, dangerousMod
   // "Approve, then full access" is a posture change Full access's own rule
   // (two presses) keeps off the keyboard.
   if (ask.thenMode === "full" || ask.setsMode === "full") return false;
-  return !(ask.onceOnly && onceReasonOf(ask.onceReason) !== undefined);
+  return !(ask.onceOnly && isSafetyOnceReason(ask.onceReason));
 }
 
 export const CODE_CLICK_TO_ALLOW_HINT = "Click Allow once to allow it · Esc to deny";

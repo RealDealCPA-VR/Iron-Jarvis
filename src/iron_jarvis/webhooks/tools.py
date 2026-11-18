@@ -14,9 +14,123 @@ of the system — observability, outbound deliveries, notifier — can react).
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..tools.base import Reversibility, SpendCheck, Tool, ToolContext, ToolResult
+
+#: Fourth fix plan PG1 / C-PG-2: why an address card asks every time.
+ADDRESS_REASON = "address"
+_LOOPBACK_NAMES = frozenset({"localhost", "localhost.localdomain"})
+_DRIVE = re.compile(r"^[A-Za-z]:(?:[\\/]|$)")
+
+
+def _is_folder(value: str) -> bool:
+    """A folder path (a drive, a share, a POSIX or home path), not an address."""
+    v = value.strip()
+    return bool(_DRIVE.match(v)) or v.startswith(("\\\\", "//", "/", "~"))
+
+
+def _host(value: str) -> str:
+    """The address's host, lower-case ("" when there is none). An address
+    typed without a scheme ("gpu-box:8000") is read as one."""
+    v = value.strip()
+    if not v:
+        return ""
+    try:
+        return str(ipaddress.ip_address(v.strip("[]")))  # a bare IP ("::1")
+    except ValueError:
+        pass
+    try:
+        return (urlsplit(v if "://" in v else "//" + v).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _on_this_pc(host: str) -> bool:
+    if host in _LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _folder_place(value: str) -> str:
+    """A folder named by its drive or share and the folder under it
+    (``D:\\Backups``, ``\\\\nas\\share``, ``/mnt``); "a folder in …" when the
+    path goes deeper."""
+    v = value.strip()
+    parts = [p for p in re.split(r"[\\/]+", v) if p]
+    if not parts:
+        return "another folder"
+    if v.startswith(("\\\\", "//")):
+        keep, shown = 2, "\\\\" + "\\".join(parts[:2])
+    elif _DRIVE.match(v):
+        keep, shown = 2, parts[0] + "\\" + (parts[1] if len(parts) > 1 else "")
+    else:
+        keep = 2 if parts[0] == "~" else 1
+        shown = ("" if parts[0] == "~" else "/") + "/".join(parts[:keep])
+    return shown if len(parts) <= keep else f"a folder in {shown}"
+
+
+def outbound_address_check(
+    new_url: str, *, old_url: str | None = None, what: str = "Iron Jarvis's events", note: str = ""
+) -> SpendCheck | None:
+    """THE check for every tool that sets WHERE Iron Jarvis's data goes from
+    now on (fourth fix plan PG1; ``tools/destinations.py`` lists them).
+
+    v1.502.0 (north-star D6) built it for an outbound webhook; it is one helper
+    now, so a webhook's new address, a model server's, the speech server's and
+    the backup copy folder are asked about the same way, in every lane, through
+    the seam they all read (the runtime pauses, the stream lane cards, the POST
+    lane refuses, a workflow step refuses in words):
+
+    * "Allow once" and Deny only, every time (``once_only``): no conversation
+      grant, standing approval or "Run without asking" covers the next place;
+    * "Don't ask" is the user's own posture and is kept (``dont_ask_skips``);
+    * nobody there to answer (a schedule, a rule, the phone): refused in words
+      (``attended_only``);
+    * ``reason`` "address", so the card says why it asks every time;
+    * the words name the HOST only (a webhook address can be its own secret),
+      or a folder's drive or share.
+
+    ``None`` (no opinion) for a new address on THIS PC (loopback: nothing
+    leaves the PC). Never raises."""
+    value = str(new_url or "").strip()
+    folder = _is_folder(value)
+    if folder:
+        where = _folder_place(value)
+        old_where = _folder_place(str(old_url)) if str(old_url or "").strip() else ""
+    else:
+        host = _host(value)
+        if host and _on_this_pc(host):
+            return None
+        where = host or "another address"
+        old_host = _host(str(old_url or ""))
+        old_where = old_host
+        if host and old_host == host and value != str(old_url or "").strip():
+            # Two addresses on one host (two Slack webhooks): say so.
+            where, old_where = f"a different address on {host}", ""
+    # "…whole folder, database included, to D:\Backups": an aside in *what*
+    # is closed before "to".
+    words = f"{'Copy' if folder else 'Send'} {what}{',' if ',' in what else ''} to {where} from now on"
+    if old_where and old_where != where:
+        words += f", instead of {old_where}"
+    if note:
+        words += f" ({note})"
+    return SpendCheck(
+        ask=True,
+        words=words,
+        # Each one is its own question: "Allow once" and Deny, never a
+        # standing grant that would cover the next address.
+        once_only=True,
+        reason=ADDRESS_REASON,
+        dont_ask_skips=True,
+        attended_only=True,
+    )
 
 
 class WebhookAddTool(Tool):
@@ -35,6 +149,19 @@ class WebhookAddTool(Tool):
     # removes the webhook, or puts back the one a re-used slug replaced) —
     # settings.records holds the snapshot/restore.
     reversibility = Reversibility.REVERSIBLE
+
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Fourth fix plan (D6, lead's review of PG1): the card, the ledger and
+        the chat history carry the new address's HOST only, as
+        ``webhook_update`` does — a webhook address can be its own secret."""
+        from ..settings.records import _webhook_host_only
+
+        out = dict(args or {})
+        url = out.get("target_url")
+        if isinstance(url, str) and url.strip():
+            out["target_url"] = _webhook_host_only(url)
+        return out
+
     input_schema = {
         "type": "object",
         "properties": {
@@ -61,21 +188,9 @@ class WebhookAddTool(Tool):
         chat's ask is. An inbound webhook has no opinion (allow, as before)."""
         if args.get("direction", "inbound") != "outbound":
             return None
-        from urllib.parse import urlsplit
-
-        try:
-            host = urlsplit(str(args.get("target_url") or "").strip()).hostname or ""
-        except ValueError:
-            host = ""
-        where = host or "another address"
-        return SpendCheck(
-            ask=True,
-            words=f"Send Iron Jarvis's events to {where} from now on (a new outbound webhook)",
-            # Each one is its own question: "Allow once" and Deny, never a
-            # standing grant that would cover the next address.
-            once_only=True,
-            dont_ask_skips=True,
-            attended_only=True,
+        # Fourth fix plan PG1: the one check every place-setting tool reads.
+        return outbound_address_check(
+            str(args.get("target_url") or ""), note="a new outbound webhook"
         )
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:

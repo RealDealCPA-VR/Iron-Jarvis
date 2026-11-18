@@ -7365,6 +7365,21 @@ async def chat_stream(
                                     # so the screen could not treat it as the
                                     # safety card it is (its Enter allowed it).
                                     _frame["once_reason"] = _sc.reason
+                                else:
+                                    # Fourth review PG-A: EVERY once-only card
+                                    # names why (the card's fallback line is
+                                    # Local only's, so a locked app's card, or
+                                    # one its own check asks with no reason,
+                                    # said "local only" in a chat that is not).
+                                    # The same order as `forced` below; "once"
+                                    # = its own check (a live-Excel deletion)
+                                    # or the plan door.
+                                    _frame["once_reason"] = (
+                                        "local_only" if _local_ask
+                                        else "night" if _night_card
+                                        else "locked" if _lock_card
+                                        else "once"
+                                    )
                             if _night_card and tc.name in _looked_up:
                                 # v1.479.0 (review): a looked-up tool's card
                                 # is "Allow once" and "Deny" only, and a
@@ -7415,6 +7430,20 @@ async def chat_stream(
                                 rule=_auto_kept.get(id(tc), ""),
                                 strict=approval_mode == "always_ask",
                             )
+                            # Fourth review BS1: the card is FILED with its
+                            # kind — the cards the lane later narrows to
+                            # "once" (below) — so the registry refuses a
+                            # grant's answer on it (the sidebar's switch, any
+                            # surface) and `once_kind` tells a surface what it
+                            # is. The same test as the interruption count.
+                            _card_once = bool(
+                                _local_ask or _once_only or _spend_card or _lock_card
+                                or (_night_card and tc.name in _looked_up)
+                            )
+                            _card_reason = str(
+                                _frame.get("once_reason")
+                                or ("local_only" if _local_ask else "priced" if _spend_card else "")
+                            )
                             if _count > 1:
                                 _examples = [
                                     _redacted(_c) for _c in _group[:3]
@@ -7422,11 +7451,15 @@ async def chat_stream(
                                 _ap_id, _fut = _apr.request(
                                     tc.name, safe_args,
                                     count=_count, examples=_examples,
+                                    once_only=_card_once, once_reason=_card_reason,
                                 )
                                 _frame["count"] = _count
                                 _frame["examples"] = _examples
                             else:
-                                _ap_id, _fut = _apr.request(tc.name, safe_args)
+                                _ap_id, _fut = _apr.request(
+                                    tc.name, safe_args,
+                                    once_only=_card_once, once_reason=_card_reason,
+                                )
                             _frame["id"] = _ap_id
                             # v1.402.0 (the autonomy metrics): this card, for
                             # COUNTING ONLY — `interrupt.asked` now, and
@@ -7446,14 +7479,8 @@ async def chat_stream(
                                     else str(getattr(body, "thread_id", "") or "")
                                 ),
                                 turn_id=_step_turn,
-                                once_only=bool(
-                                    _local_ask or _once_only or _spend_card or _lock_card
-                                    or (_night_card and tc.name in _looked_up)
-                                ),
-                                reason=str(
-                                    _frame.get("once_reason")
-                                    or ("local_only" if _local_ask else "priced" if _spend_card else "")
-                                ),
+                                once_only=_card_once,
+                                reason=_card_reason,
                                 args_hash=str(_frame.get("args_hash") or ""),
                                 # (review) a new chat's first turn learns its
                                 # chat when the page's first save links it.

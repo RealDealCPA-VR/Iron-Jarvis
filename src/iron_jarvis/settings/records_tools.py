@@ -1129,6 +1129,8 @@ class McpServerAddTool(R._RecordTool):
             ask=True,
             words=plan.preview(),
             once_only=True,
+            # Fourth review C-PG-2: the card says why it asks every time.
+            reason="extension",
             dont_ask_skips=not _leaves_a_local_only_chat(url),
         )
 

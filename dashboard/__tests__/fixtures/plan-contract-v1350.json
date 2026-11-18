@@ -51,6 +51,7 @@
           "quarantined": false,
           "can_always": false,
           "once_only": true,
+          "once_reason": "once",
           "why": "it ends planning and starts the work",
           "asker": "model"
         }

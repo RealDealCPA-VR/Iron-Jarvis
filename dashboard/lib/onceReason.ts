@@ -26,19 +26,50 @@
  * - "looked_up" (v1.479.0): a tool Jarvis brought into the reply by looking
  *   it up (src/iron_jarvis/capability_search/join.py): your words did not
  *   name it, so its card is Allow once / Deny and Enter never allows it.
+ * - "address" (fourth review PG1 / C-PG-2): a new place Iron Jarvis's things
+ *   go (an outgoing webhook, a model server, the backup copy folder —
+ *   src/iron_jarvis/webhooks/tools.py outbound_address_check). A safety card.
+ * - "extension" (C-PG-2): adding an extension or an app
+ *   (src/iron_jarvis/settings/records_tools.py, records_apps.py). A safety
+ *   card.
+ *
+ * NOT safety cards (Enter allows once, as before), each with the reason the
+ * stream lane now sends on EVERY once-only card (fourth review PG-A):
+ * "local_only" (this chat is Local only), "locked" (a locked app asks before
+ * each use), "night" (the night shift asks), "batch" (several file changes at
+ * once), "once" (its own check asks every time, or the plan door). Only
+ * "local_only" — or no reason at all, from an older daemon or a listing row —
+ * keeps the Local only line.
  *
  * Kept OUT of lib/useChatStream.ts on purpose: ~50 test files mock that
  * module with a fixed list of exports, and lib/buildHelpers reads this too.
  */
 
-export type OnceReason =
-  | "git" | "page" | "command" | "memory" | "guarded" | "privacy" | "undo" | "looked_up";
+/** The reasons whose card Enter never allows (a click, or Tab then Enter). */
+export type SafetyOnceReason =
+  | "git" | "page" | "command" | "memory" | "guarded" | "privacy" | "undo" | "looked_up"
+  | "address" | "extension";
 
+export type OnceReason = SafetyOnceReason | "local_only" | "locked" | "night" | "batch" | "once";
+
+/** The SAFETY reasons (tests/test_chat_history_review_v14350.py reads this list). */
 const REASONS: ReadonlySet<string> = new Set([
   "git", "page", "command", "memory", "guarded", "privacy", "undo", "looked_up",
+  "address", "extension",
+]);
+
+/** Every reason a card reads: the safety ones and the plain ones. */
+const KNOWN: ReadonlySet<string> = new Set([
+  ...REASONS, "local_only", "locked", "night", "batch", "once",
 ]);
 
 /** The reason as a card reads it, or undefined for anything else. */
 export function onceReasonOf(raw: unknown): OnceReason | undefined {
-  return typeof raw === "string" && REASONS.has(raw) ? (raw as OnceReason) : undefined;
+  return typeof raw === "string" && KNOWN.has(raw) ? (raw as OnceReason) : undefined;
+}
+
+/** Whether a reason makes the card a SAFETY card: Enter never allows it
+ *  (lib/dockAsk.enterAllows, lib/buildApp.enterAllowsCodeAsk). */
+export function isSafetyOnceReason(raw: unknown): raw is SafetyOnceReason {
+  return typeof raw === "string" && REASONS.has(raw);
 }

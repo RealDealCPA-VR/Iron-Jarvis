@@ -86,6 +86,7 @@ from typing import Any
 
 from ..core import progress
 from .base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
+from .permissions import asks_each_use
 
 log = logging.getLogger("iron_jarvis.tools.tool_script")
 
@@ -439,6 +440,14 @@ class ToolScriptTool(Tool):
                 f"`{name}` is new in its app and is held for the user's first "
                 "look; call it directly so they can approve it"
             )
+        # Fourth review PG3: every tool that asks before each use (owner
+        # decision 8: a LOCKED app's tools too, read from the lock itself,
+        # never from "kept on your own models"). A script is never a card.
+        if asks_each_use(tool):
+            return (
+                f"`{name}` asks the user before each use; call it directly so "
+                "they can allow it"
+            )
         return ""
 
     def callable_names(self, scope: Any) -> list[str]:
@@ -625,6 +634,11 @@ class ToolScriptTool(Tool):
                 deadline_s=scope.deadline_s,
                 grants=scope.grants,
                 scopes=scope.scopes,
+                # PG3: no card answers about THIS call ride a script, so a
+                # tool that asks before each use is never lifted here by a
+                # name the chat armed into `session_allow` (the registry
+                # forwards this for such a tool only).
+                card_allow=frozenset(),
             )
             # The script now holds what this call read (public web pages are
             # not private, so they are not noted). A call that FAILED counts

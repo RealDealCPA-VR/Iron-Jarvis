@@ -1526,12 +1526,35 @@ def restore_webhook(platform: Any, slug: str, prior: dict[str, Any] | None) -> s
     return f"undo: {'recreated' if cur is None else 'restored'} the webhook '{slug}'"
 
 
+def _webhook_host_only(url: Any) -> str:
+    """A webhook address as the card, the ledger and the model see it: its
+    host only (fourth fix plan PG1, D6 — the path can be its own secret)."""
+    from urllib.parse import urlsplit
+
+    text = str(url or "").strip()
+    try:
+        parts = urlsplit(text)
+        host = parts.hostname or ""
+    except ValueError:
+        return "another address"
+    if not host:
+        return "another address" if text else ""
+    return f"{parts.scheme}://{host}/…" if parts.scheme else host
+
+
 def _describe_webhook(w: dict[str, Any] | None) -> str | None:
     if w is None:
         return None
     if w.get("direction") == "outbound":
         types = ", ".join(str(t) for t in w.get("event_types") or []) or "no events"
-        text = f"sends {types} to {w.get('target_url')}"
+        # Fourth fix plan PG1 (D6): the host only, never the full address.
+        try:
+            from urllib.parse import urlsplit
+
+            host = urlsplit(str(w.get("target_url") or "")).hostname or "another address"
+        except ValueError:
+            host = "another address"
+        text = f"sends {types} to {host}"
     else:
         text = "receives calls"
     return text + ("" if w.get("enabled", True) else " (paused)")
@@ -3194,6 +3217,40 @@ class WebhookUpdateTool(_RecordTool):
 
     def _target(self, args: dict[str, Any]) -> str:
         return str(args.get("slug") or "").strip()
+
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Fourth fix plan PG1 (D6): the card, the ledger and the chat history
+        carry the new address's HOST only — a webhook address can be its own
+        secret."""
+        out = dict(args or {})
+        url = out.get("target_url")
+        if isinstance(url, str) and url.strip():
+            out["target_url"] = _webhook_host_only(url)
+        return out
+
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
+        """Fourth fix plan PG1: pointing an outbound webhook at a NEW address
+        sends Iron Jarvis's events there from now on, so it asks every time,
+        whatever grant or level the tool has (``webhook_add``'s own check,
+        ``webhooks.tools.outbound_address_check``). No new address (a pause, a
+        resume, other event types), an incoming webhook, no such webhook (each
+        refused or unchanged by ``execute``) or the same address: no opinion,
+        the tool's own level decides as before."""
+        url = (args or {}).get("target_url")
+        if not isinstance(url, str) or not url.strip():
+            return None
+        try:
+            before = await asyncio.to_thread(snap_webhook, self.platform, self._target(args))
+        except Exception:  # noqa: BLE001 — unsure: the ordinary card
+            return None
+        if before is None or before.get("direction") != "outbound":
+            return None
+        old = str(before.get("target_url") or "").strip()
+        if url.strip() == old:
+            return None
+        from ..webhooks.tools import outbound_address_check
+
+        return outbound_address_check(url, old_url=old, note=f"webhook “{before.get('slug')}”")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         slug = self._target(args)

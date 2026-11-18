@@ -1034,7 +1034,8 @@ class AppImportTool(R._RecordTool):
         preview = import_preview(found, spec)
         if not preview:
             return None
-        return SpendCheck(ask=True, words=preview, once_only=True, dont_ask_skips=True)
+        # Fourth review C-PG-2: the card says why it asks every time.
+        return SpendCheck(ask=True, words=preview, once_only=True, reason="extension", dont_ask_skips=True)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = self._target(args)

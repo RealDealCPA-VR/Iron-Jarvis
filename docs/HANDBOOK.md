@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.532.0 (2026-11-18).*
+holds itself to. Current as of v1.533.0 (2026-11-18).*
 
 ---
 
@@ -2041,6 +2041,37 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Every new address asks, and cards say why (v1.533.0)
+
+The second of nine releases from the fourth review.
+
+- **Pointing Iron Jarvis's data somewhere new asks you every time.** Adding an
+  outgoing webhook already did. Now changing one does too, and so does
+  changing the address of your model server, your Ollama server or your
+  speech-to-text server, or the Backup copy folder (which copies Iron
+  Jarvis's whole folder, database included). "Allow for this conversation"
+  and "Run without asking" do not cover it: the card names the new place, by
+  its host or its drive, and offers Allow once or Deny. An address on this PC
+  itself does not ask, since nothing leaves the PC. Webhook addresses are
+  shown and kept by their host only.
+- **A tool set to "Run without asking" says its one exception.** In chat, its
+  line says "Still asks every time it would send to a new address."
+- **A card that asks every time says the real reason.** Some cards said "This
+  chat is local only, so this asks every time." in a chat that was not Local
+  only. Each now says why it asks: a new address, a new extension or app, an
+  app you locked, or "This asks you every time, whatever your approval
+  setting." On a new-address or new-extension card, Enter does not allow it:
+  press Allow once.
+- **In the browser sidebar, Auto-allow no longer answers a card it should
+  not.** In a Local only chat, turning Auto-allow on while a card waited
+  allowed it. Now such a card stays up for you to answer, and (with the
+  updated add-on) says "Local only is on, so every page action asks first.
+  Auto-allow does not cover it." "Allow all page actions" is refused on it in
+  words.
+- **A script never runs a tool that asks before each use.** A tool from an
+  app you locked is refused inside a script, with words telling it to call
+  the tool directly so you get the card.
 
 ## What other apps are told (v1.532.0)
 

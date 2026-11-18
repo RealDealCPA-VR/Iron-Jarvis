@@ -5,7 +5,9 @@ the browser risk door's card (a payment or password field, a destructive word,
 a flagged page — ``PanelTurns.resolve_risk_ask``) was added to the same
 ``_offered`` set the switch resolves wholesale, so turning "allow everything"
 on while such a card waited APPROVED it. The switch now skips those cards
-(``_floor_offered``); an ordinary card it still answers.
+(fourth review BS1: read from the approval registry's own mark,
+``ChatApprovals.once_kind``, which the risk card is filed with); an ordinary
+card it still answers.
 """
 
 from __future__ import annotations

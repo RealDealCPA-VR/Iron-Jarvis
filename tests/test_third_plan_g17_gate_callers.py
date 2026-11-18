@@ -22,6 +22,20 @@ three leftovers (PG3's words, PG5's command line, the night commit's seam).
    A new call, or a changed count, fails with a sentence telling the author
    what to decide.
 
+   A SECOND COLUMN (fourth review PG3): how each call keeps a tool that asks
+   before each use (``tools.permissions.asks_each_use``: a held-back app
+   tool, or any tool of a LOCKED app) from being lifted by a name the caller
+   put in ``session_allow``. The gate reads ``session_allow`` for such a
+   tool only when the caller passes no ``card_allow``:
+
+   * ``CARD``: the call passes ``card_allow`` (the user's card answers about
+     that call, or ``frozenset()`` where there can be none);
+   * ``NO_GRANT``: the call hands the gate no ``session_allow`` at all;
+   * ``NOT_HELD``: the call can only reach tools that are not app tools,
+     proved here against the real registry;
+   * ``KEY_ONLY``: ``session_allow`` holds only the tool's permission key,
+     which never lifts such a tool (``test_locked_app_gate_v1529``).
+
 2. The low-trust words name the code tools (``core/trust.CODE_DENY``).
 3. ``ironjarvis tools`` shows a stored "ask" for web search / web fetch as
    Settings shows it (``settings/writer.current``): allow.
@@ -48,6 +62,12 @@ SRC = ROOT / "src" / "iron_jarvis"
 READS = "reads the tool's own check"
 CANNOT_REACH = "cannot reach a tool with a check"
 REFUSAL_ONLY = "refusal only"
+
+# The second column (PG3): how a tool that asks before each use is kept.
+CARD = "passes card_allow"
+NO_GRANT = "hands the gate no session_allow"
+NOT_HELD = "cannot reach an app tool"
+KEY_ONLY = "hands only the permission key"
 
 #: The names a caller's code uses to read a tool's own check.
 _CHECK_READERS = frozenset({"spend_checks_for", "_spend_checks_for", "spend_check"})
@@ -149,6 +169,9 @@ class Site:
     must_call: tuple[tuple[str, str], ...] = ()
     #: CANNOT_REACH: the reason, in one line.
     why: str = ""
+    #: The second column, one per call in source order: CARD, NO_GRANT,
+    #: NOT_HELD (proved in NOT_HELD_PROOFS) or KEY_ONLY.
+    cards: tuple[str, ...] = ()
 
 
 #: THE TABLE. Keyed by (file under src/iron_jarvis, enclosing function).
@@ -156,58 +179,67 @@ SITES: dict[tuple[str, str], Site] = {
     # The agent runtime: one spend map per step, read by its pause and by
     # the deny path of every call of the step.
     ("agents/runtime.py", "AgentRuntime._perceive_act_body._invoke"): Site(
-        (READS,), lanes=("AgentRuntime._perceive_act_body",),
+        (READS,), lanes=("AgentRuntime._perceive_act_body",), cards=(CARD,),
     ),
     # The POST chat lane: no card, a check that asks is refused.
     ("daemon/chat_turn.py", "run_chat_turn._registry_invoke"): Site(
-        (READS,), lanes=("run_chat_turn",),
+        (READS,), lanes=("run_chat_turn",), cards=(CARD,),
     ),
     # The stream chat lane: a check that asks shows its card.
     ("daemon/routes/chat.py", "chat_stream.gen._registry_invoke"): Site(
-        (READS,), lanes=("chat_stream.gen",),
+        (READS,), lanes=("chat_stream.gen",), cards=(CARD,),
     ),
     # Third fix plan, group 19: an Allow that arrives after Stop is refused
     # through the gate so the refusal is recorded; the call never runs.
-    ("daemon/routes/chat.py", "chat_stream.gen"): Site((REFUSAL_ONLY,)),
+    ("daemon/routes/chat.py", "chat_stream.gen"): Site((REFUSAL_ONLY,), cards=(NO_GRANT,)),
     # A folder's plugin check: the carrier's own check is read first
     # (`asks_first`); a command that would ask is not run, the model is told
     # to run it with its own command tool. Its follow-up calls
     # (process_read / process_stop) have no check (proved below).
     ("daemon/chat_turn.py", "harness_check_runner.invoke"): Site(
         (READS,), lanes=("harness_check_runner.asks_first",),
-        must_call=(("harness_check_runner.run", "asks_first"),),
+        must_call=(("harness_check_runner.run", "asks_first"),), cards=(NOT_HELD,),
     ),
     # The finish check's and the project checkers' follow-up calls.
     ("daemon/chat_turn.py", "finish_invoke.invoke"): Site(
         (CANNOT_REACH,),
         why="only process_read / process_stop of a test run already started (harness/finish, harness/checkers)",
+        cards=(NOT_HELD,),
     ),
     # The documents batch button.
     ("daemon/routes/documents.py", "register.documents_batch_run"): Site(
         (CANNOT_REACH,), why="the one tool name batch_documents, written in the call",
+        cards=(NO_GRANT,),
     ),
     # The MCP server for coding tools: the capability families only.
     ("mcpserver/server.py", "_call_tool"): Site(
         (CANNOT_REACH,),
         why="only the names mcpserver.CAPABILITY_TOOLS admits (Browser, Memory's readers, Hand off)",
+        # Its `session_allow` is only the answer a person just gave on a
+        # card; and no capability family admits an app tool (proved below).
+        cards=(NOT_HELD,),
     ),
     # A batch of file changes: each step tool's own check, and the guard for
     # Git's and Iron Jarvis's own files (`guarded_target`), refuse the batch.
     ("tools/apply_changes.py", "ApplyChangesTool.execute"): Site(
         (READS,), lanes=("ApplyChangesTool._step_problem",),
-        must_call=(("ApplyChangesTool.execute", "_step_problem"),),
+        must_call=(("ApplyChangesTool.execute", "_step_problem"),), cards=(NOT_HELD,),
     ),
     # A tool script: each call's own check refuses it (call it directly);
     # only readers are reachable, so the file-edit guard never applies.
     ("tools/tool_script.py", "ToolScriptTool.execute.on_call"): Site(
         (READS,), lanes=("ToolScriptTool._refusal",),
         must_call=(("ToolScriptTool.execute.on_call", "_refusal"),),
+        # PG3: a script is never a card about a call; `_fixed_refusal`
+        # holds such a tool back, and the gate is told so too.
+        cards=(CARD,),
     ),
     # A workflow's tool step (PG2): the refusal is recorded through the deny
     # seam, then the real call runs only when the check did not ask.
     ("workflows/engine.py", "WorkflowEngine._run_tool_step"): Site(
         (REFUSAL_ONLY, READS), lanes=("WorkflowEngine._own_check_refusal",),
         must_call=(("WorkflowEngine._run_tool_step", "_own_check_refusal"),),
+        cards=(NO_GRANT, KEY_ONLY),
     ),
 }
 
@@ -417,6 +449,152 @@ def test_a_tool_script_cannot_reach_a_file_edit_the_guard_reads(platform):
     assert reachable
     for name in reachable:
         assert script._fixed_refusal(name, platform.registry.get(name)), name  # noqa: SLF001
+
+
+# --------------------------------------------------------------------------- #
+# The second column (fourth review PG3): a tool that asks before each use is
+# never lifted by a name the caller put in `session_allow`.
+# --------------------------------------------------------------------------- #
+
+
+def _passes(call: ast.Call, kw: str) -> bool:
+    """The call passes ``kw=``, directly or inside a ``**{"kw": ...}``."""
+    for k in call.keywords:
+        if k.arg == kw:
+            return True
+        if k.arg is None:
+            for n in ast.walk(k.value):
+                if isinstance(n, ast.Dict) and any(
+                    isinstance(key, ast.Constant) and key.value == kw for key in n.keys
+                ):
+                    return True
+    return False
+
+
+def _key_only(fn: ast.AST, call: ast.Call) -> bool:
+    """``session_allow=<name>``, and every value given to that name in the
+    function is ``None`` or a list of ``<tool>.perm_key()`` calls."""
+    (value,) = [k.value for k in call.keywords if k.arg == "session_allow"]
+    if not isinstance(value, ast.Name):
+        return False
+    given = [
+        n.value for n in ast.walk(fn)
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == value.id for t in n.targets)
+    ]
+
+    def ok(v: ast.AST) -> bool:
+        if isinstance(v, ast.Constant) and v.value is None:
+            return True
+        return isinstance(v, ast.List) and bool(v.elts) and all(
+            isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and e.func.attr == "perm_key"
+            for e in v.elts
+        )
+
+    return bool(given) and all(ok(v) for v in given)
+
+
+_DECIDE_CARD = (
+    "Decide how this call keeps a tool that asks before each use "
+    "(tools.permissions.asks_each_use: a held-back app tool, or any tool of a "
+    "LOCKED app) from being lifted by a name in its session_allow — the gate "
+    "reads session_allow for such a tool when no card_allow is passed — and "
+    "set its `cards` in SITES: CARD (pass card_allow: the user's card answers "
+    "about that call, or frozenset() where there can be none), NO_GRANT, "
+    "NOT_HELD (prove it in NOT_HELD_PROOFS) or KEY_ONLY."
+)
+
+
+@pytest.mark.parametrize("key", sorted(SITES), ids=lambda k: f"{k[0]}::{k[1]}")
+def test_each_call_keeps_a_tool_that_asks_before_each_use_the_way_the_table_says(key):
+    rel, fn = key
+    site = SITES[key]
+    assert len(site.cards) == len(site.hows), f"{key}: one `cards` entry per call. {_DECIDE_CARD}"
+    tree = _tree(rel)
+    funcs = _functions(tree)
+    calls = sorted(
+        (c for f, c, r in _invoke_calls(tree) if f == fn and _is_registry(r)),
+        key=lambda c: (c.lineno, c.col_offset),
+    )
+    for call, card in zip(calls, site.cards):
+        grants = _passes(call, "session_allow") or len(call.args) > 5
+        if card == CARD:
+            assert _passes(call, "card_allow"), (
+                f"{rel}:{call.lineno} is listed as CARD but passes no card_allow. {_DECIDE_CARD}"
+            )
+        elif card == NO_GRANT:
+            assert not grants, (
+                f"{rel}:{call.lineno} is listed as NO_GRANT but hands the gate a "
+                f"session_allow. {_DECIDE_CARD}"
+            )
+        elif card == NOT_HELD:
+            assert key in NOT_HELD_PROOFS, f"{key}: a NOT_HELD call needs its proof. {_DECIDE_CARD}"
+        else:
+            assert card == KEY_ONLY, key
+            assert _key_only(funcs[fn], call), (
+                f"{rel}:{call.lineno} is listed as KEY_ONLY but its session_allow is not "
+                f"only the tool's permission key. {_DECIDE_CARD}"
+            )
+
+
+def test_a_call_that_hands_names_and_no_card_allow_is_proved(platform):
+    """Every NOT_HELD call, against the REAL registry: it can reach only
+    tools that are not app tools (only an app tool is held back or locked)."""
+    from iron_jarvis.mcp.tools import MCPRemoteTool
+    from iron_jarvis.tools.permissions import asks_each_use
+
+    listed = {k for k, s in SITES.items() if NOT_HELD in s.cards}
+    assert listed == set(NOT_HELD_PROOFS), (listed, sorted(NOT_HELD_PROOFS))
+    for key, reach in NOT_HELD_PROOFS.items():
+        names = reach(platform)
+        assert names, key
+        for name in names:
+            tool = platform.registry.get(name)
+            assert tool is not None, (key, name)
+            assert not isinstance(tool, MCPRemoteTool) and not name.startswith("mcp__"), (key, name)
+            assert asks_each_use(tool) is False, (key, name)
+
+
+def _check_runner_reach(platform) -> "set[str]":
+    names = _literal_first_args("daemon/chat_turn.py", "invoke", within="harness_check_runner")
+    assert all(isinstance(n, str) for n in names), names
+    return set(names)
+
+
+def _finish_reach(platform) -> "set[str]":
+    names = _literal_first_args("harness/finish.py", "invoke") + _literal_first_args("harness/checkers.py", "stop")
+    assert all(isinstance(n, str) for n in names), names
+    return set(names)
+
+
+def _mcp_server_reach(platform) -> "set[str]":
+    from iron_jarvis.mcpserver.server import CAPABILITY_TOOLS
+
+    # No family admits an app tool's name, whatever app is connected later.
+    for cap in CAPABILITY_TOOLS.values():
+        assert not cap.admits("mcp__someapp__read_items"), cap
+        assert not str(cap.prefix or "").startswith("mcp"), cap
+        assert not any(str(n).startswith("mcp__") for n in (cap.names or ())), cap
+    return {n for n in platform.registry.names() if any(c.admits(n) for c in CAPABILITY_TOOLS.values())}
+
+
+def _batch_reach(platform) -> "set[str]":
+    from iron_jarvis.tools.apply_changes import BATCH_TOOLS
+
+    # A step whose tool is not on the list is refused before any call.
+    execute = _functions(_tree("tools/apply_changes.py"))["ApplyChangesTool.execute"]
+    assert _calls(execute, "plan_problem")
+    fn = _functions(_tree("tools/apply_changes.py"))["plan_problem"]
+    assert any(isinstance(n, ast.Name) and n.id == "BATCH_TOOLS" for n in ast.walk(fn))
+    return {n for n in BATCH_TOOLS if platform.registry.get(n) is not None}
+
+
+#: NOT_HELD, proved: the names each such call can reach.
+NOT_HELD_PROOFS: "dict[tuple[str, str], Callable[[object], set[str]]]" = {
+    ("daemon/chat_turn.py", "harness_check_runner.invoke"): _check_runner_reach,
+    ("daemon/chat_turn.py", "finish_invoke.invoke"): _finish_reach,
+    ("mcpserver/server.py", "_call_tool"): _mcp_server_reach,
+    ("tools/apply_changes.py", "ApplyChangesTool.execute"): _batch_reach,
+}
 
 
 def test_a_batch_reads_the_guard_for_git_and_iron_jarvis_files_itself():

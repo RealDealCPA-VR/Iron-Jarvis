@@ -165,6 +165,8 @@ const el = {
   transcript: document.getElementById("transcript"),
   approval: document.getElementById("approval"),
   approvalText: document.getElementById("approval-text"),
+  // Fourth review C-BS-1: why Auto-allow does not answer this card.
+  approvalNote: document.getElementById("approval-note"),
   approve: document.getElementById("approve") as HTMLButtonElement | null,
   approveAlways: document.getElementById("approve-always") as HTMLButtonElement | null,
   tabAllowed: document.getElementById("tab-allowed"),
@@ -191,7 +193,7 @@ const el = {
 let pendingApprovalId = "";
 
 /** Third review SB6: the last card put up, so a refused answer can put it back. */
-let lastCard: { id: string; text: string } | null = null;
+let lastCard: { id: string; text: string; note: string } | null = null;
 
 /**
  * Third review SB6: "Allow all page actions" was sent and the daemon has not yet
@@ -554,12 +556,20 @@ function paintStatus(status: BridgeStatus): void {
  * once" and "Deny" only. "Allow all page actions" would allow that risky action
  * and turn the switch on for every tab in one press; the daemon refuses that
  * answer for such a card too.
+ *
+ * `note` (fourth review C-BS-1): one line under a card Auto-allow does not
+ * answer (a Local only card: "Local only is on, so every page action asks
+ * first. Auto-allow does not cover it."). Empty: no line.
  */
-function showApproval(id: string, text: string, floor: boolean): void {
+function showApproval(id: string, text: string, floor: boolean, note = ""): void {
   pendingApprovalId = id;
-  lastCard = { id, text };
+  lastCard = { id, text, note };
   if (el.approvalText) {
     el.approvalText.textContent = text;
+  }
+  if (el.approvalNote) {
+    el.approvalNote.textContent = note;
+    el.approvalNote.hidden = note === "";
   }
   if (el.approveAlways) {
     el.approveAlways.hidden = floor;
@@ -818,7 +828,10 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       const id = typeof payload["id"] === "string" ? (payload["id"] as string) : "";
       // Third review SB6: the daemon marks a risk card `floor`; absent (an
       // ordinary card, or an older daemon) reads as ordinary.
-      showApproval(id, text || "Jarvis wants to act on this page.", payload["floor"] === true);
+      // Fourth review C-BS-1: a card Auto-allow does not answer (Local only)
+      // carries one line saying so; absent (an older daemon) draws none.
+      const note = typeof payload["note"] === "string" ? (payload["note"] as string) : "";
+      showApproval(id, text || "Jarvis wants to act on this page.", payload["floor"] === true, note);
       return;
     }
     case PANEL_EVENT_STEERED: {
@@ -877,7 +890,7 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
         allowAllPending = false;
         if (pendingApprovalId === "" && lastCard) {
           // The press hid it once it was sent; put the same card back.
-          showApproval(lastCard.id, lastCard.text, true);
+          showApproval(lastCard.id, lastCard.text, true, lastCard.note);
         }
         say("error", text);
         return;

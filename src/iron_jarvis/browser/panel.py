@@ -148,8 +148,13 @@ the extension so I don't have to keep approving." ``auto_allow {on}`` flips
 ``TabGrants.grant_all`` (browser/grants.py) — the SAME grant the per-tab card
 wrote, widened to every tab — so the chat lane's ordinary card predicate finds
 the call covered and never cards. Nothing in the lane changed for this. Turning
-it on also answers the card that is up, so the turn the user was staring at
-continues. The risk door inside each acting tool never reads grants, so a
+it on also answers the ORDINARY card that is up, so the turn the user was
+staring at continues. Fourth review BS1: a card answered one action at a time
+(a risk card, a Local only card: any card the approval registry holds with a
+kind, ``ChatApprovals.once_kind``) stays up and answerable, is drawn ``floor``
+with a line saying Auto-allow does not cover it, and refuses "Allow all page
+actions"; the registry itself refuses a grant's answer on it. The risk door
+inside each acting tool never reads grants, so a
 payment, a password, a "delete", a flagged page or an unreadable target still
 stop at their own card — the Handbook's promise, kept. The ``state`` frame
 carries ``auto_allow`` so the header paints a fact, and ``open`` may carry the
@@ -237,6 +242,69 @@ RISK_CARD_ALL_OLDER = (
     "That risky action was allowed once. Allow all page actions was not turned"
     " on: a risky action is always asked about one at a time."
 )
+
+#: Fourth review BS1: the kind a risk card is filed with in the approval
+#: registry (``ChatApprovals.once_kind``), and the kind of a Local only card
+#: (the chat lane's ``once_reason``).
+RISK_CARD_KIND = "browser_risk"
+LOCAL_ONLY_CARD_KIND = "local_only"
+
+#: BS1: "Allow all page actions" on a Local only card, and on any other card
+#: answered one action at a time (read as nothing, like a risk card's).
+LOCAL_ONLY_CARD_ALL_REFUSED = (
+    "Local only is on, so each page action is allowed one at a time. Nothing"
+    " was done and Allow all page actions was not turned on. Choose Allow once"
+    " or Deny."
+)
+ONCE_CARD_ALL_REFUSED = (
+    "This action is asked about every time, so nothing was done and Allow all"
+    " page actions was not turned on. Choose Allow once or Deny."
+)
+#: BS1: an older add-on's "Allow all page actions" (a plain Allow, then the
+#: switch) on such a card: the action ran once, the switch is refused.
+LOCAL_ONLY_CARD_ALL_OLDER = (
+    "That action was allowed once. Allow all page actions was not turned on:"
+    " Local only is on, so each page action is asked about one at a time."
+)
+ONCE_CARD_ALL_OLDER = (
+    "That action was allowed once. Allow all page actions was not turned on:"
+    " this action is asked about every time."
+)
+
+#: C-BS-1: the one line under a card the switch does not answer, so a person
+#: who turned Auto-allow on is not surprised by it. A risk card says its
+#: reason in its own text, so it has none.
+LOCAL_ONLY_CARD_NOTE = (
+    "Local only is on, so every page action asks first. Auto-allow does not cover it."
+)
+ONCE_CARD_NOTE = "This is asked about every time. Auto-allow does not cover it."
+
+
+def _all_refused(kind: str) -> str:
+    """BS1: the words refusing "Allow all page actions" on a card of ``kind``."""
+    if kind == RISK_CARD_KIND:
+        return RISK_CARD_ALL_REFUSED
+    if kind == LOCAL_ONLY_CARD_KIND:
+        return LOCAL_ONLY_CARD_ALL_REFUSED
+    return ONCE_CARD_ALL_REFUSED
+
+
+def _all_older(kind: str) -> str:
+    """BS1: the words for an older add-on's allow-all on a card of ``kind``."""
+    if kind == LOCAL_ONLY_CARD_KIND:
+        return LOCAL_ONLY_CARD_ALL_OLDER
+    if kind and kind != RISK_CARD_KIND:
+        return ONCE_CARD_ALL_OLDER
+    return RISK_CARD_ALL_OLDER
+
+
+def _card_note(kind: str) -> str:
+    """C-BS-1: the line under a card of ``kind`` ("" for none)."""
+    if not kind or kind == RISK_CARD_KIND:
+        return ""
+    if kind == LOCAL_ONLY_CARD_KIND:
+        return LOCAL_ONLY_CARD_NOTE
+    return ONCE_CARD_NOTE
 
 #: What the panel is told when a queued steer note was never consumed. The
 #: panel renders its own sentence for this from the ``done`` frame; this is the
@@ -714,12 +782,10 @@ class PanelTurns:
         #: ownership check of its own, so without this the panel could answer
         #: an ask filed by an agent session on another thread — proven, and the
         #: only thing that had ever stopped it was that ids are unguessable.
+        #: Fourth review BS1: which of them the switch may answer is read from
+        #: the registry's own mark (``ChatApprovals.once_kind``), the one field
+        #: — the risk door's cards and the lane's Local only cards included.
         self._offered: set[str] = set()
-        #: v1.402.0: the cards the browser RISK DOOR put up (a payment or
-        #: password field, a destructive word, a flagged page) — a subset of
-        #: :attr:`_offered` the allow-everything switch never answers: each
-        #: one is still a person's own decision (:meth:`_auto_allow`).
-        self._floor_offered: set[str] = set()
         #: Monotonic timestamps of the turns started inside the rolling
         #: window. See :data:`PANEL_TURNS_PER_WINDOW`.
         self._starts: list[float] = []
@@ -802,8 +868,10 @@ class PanelTurns:
         #: SB6: this panel just allowed a RISK card once with an answer that
         #: named no window (an older add-on). Read by the very next action
         #: only: an older add-on's "Allow all page actions" is exactly that
-        #: Allow followed by the switch, which must not turn on.
-        self._risk_allowed_unnamed = False
+        #: Allow followed by the switch, which must not turn on. Fourth review
+        #: BS1: the KIND of the card so allowed (``ChatApprovals.once_kind``:
+        #: "browser_risk", "local_only", …), ``""`` for none.
+        self._risk_allowed_unnamed = ""
         #: Third review SB1: the cards of the running reply that are up, by id,
         #: with the frame each was shown with — so a panel that opens (or
         #: re-opens on a new connection) while one waits is shown it again and
@@ -922,7 +990,7 @@ class PanelTurns:
         params = params if isinstance(params, dict) else {}
         # SB6: only the action right after an older add-on's Allow on a risk
         # card can be the second half of its "Allow all page actions".
-        risk_allowed_unnamed, self._risk_allowed_unnamed = self._risk_allowed_unnamed, False
+        risk_allowed_unnamed, self._risk_allowed_unnamed = self._risk_allowed_unnamed, ""
         if act in (P.PANEL_ACTION_OPEN, P.PANEL_ACTION_SEND):
             # SB13: a window that opens or sends is a window that is open.
             self._window_open(params.get("window"), conn)
@@ -992,9 +1060,11 @@ class PanelTurns:
                 # SB6: an older add-on's "Allow all page actions" on a risk
                 # card — the Allow went through as Allow once; the switch does
                 # not turn on. Said, and the header repainted with the truth.
+                # Fourth review BS1: any card answered one at a time, in the
+                # words for its kind.
                 await self.emit(
                     conn, P.PANEL_EVENT_ERROR,
-                    {"text": RISK_CARD_ALL_OLDER, "reason": "risk_card_all"},
+                    {"text": _all_older(risk_allowed_unnamed), "reason": "risk_card_all"},
                 )
                 await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
                 return
@@ -1173,9 +1243,12 @@ class PanelTurns:
 
         registry = _approvals(SimpleNamespace(platform=self.platform))
         safe_args = args if isinstance(args, dict) else {}
-        ap_id, fut = registry.request(name or "browser action", safe_args)
+        # Fourth review BS1: filed with its kind, so no grant (the switch)
+        # answers it and every reader of the registry knows what it is.
+        ap_id, fut = registry.request(
+            name or "browser action", safe_args, once_only=True, once_reason=RISK_CARD_KIND,
+        )
         self._offered.add(ap_id)
-        self._floor_offered.add(ap_id)
         # v1.402.0 review (the autonomy metrics): this card, for COUNTING
         # ONLY, like every other card — a browser risk check is a once-only
         # SAFETY card (never "avoidable"). The sidebar keeps no saved
@@ -1799,7 +1872,6 @@ class PanelTurns:
         # be answered any more anyway (their turn has gone), and keeping them
         # would only widen what this panel may resolve.
         self._offered.clear()
-        self._floor_offered.clear()
         self._cards.clear()
         # SB2/SB13: a new reply has been asked to stop by nobody yet.
         self._stop_asked = False
@@ -2068,17 +2140,37 @@ class PanelTurns:
             logger.debug("auto-allow could not be set", exc_info=True)
             return False
 
+    def _once_kind(self, approval_id: str) -> str:
+        """Fourth review BS1: the kind of card ``approval_id`` is, read from
+        the approval registry (``ChatApprovals.once_kind``): ``""`` for an
+        ordinary card the switch may answer, else "browser_risk",
+        "local_only", … — a card answered one action at a time. A registry
+        that cannot say (a stand-in) reads as ordinary; the real one refuses
+        a grant's answer on such a card by itself."""
+        from ..daemon.routes.chat import _approvals
+
+        try:
+            read = getattr(_approvals(SimpleNamespace(platform=self.platform)), "once_kind", None)
+            return str(read(approval_id) or "") if callable(read) else ""
+        except Exception:  # noqa: BLE001 — a card's kind never breaks the socket
+            logger.debug("panel: card kind could not be read", exc_info=True)
+            return ""
+
     async def _auto_allow(self, conn: Any, params: dict[str, Any]) -> None:
         """Flip the one switch, answer the card that is up, and say what is true.
 
         The switch is ``TabGrants.grant_all`` — the grant the per-tab card
         already wrote, widened to every tab — so the chat lane's card predicate
         skips the ordinary card with no change of its own. Turning it ON also
-        resolves every card this panel has offered and not yet answered, as
-        ``once``: the user pressed "always" while looking at one, and a switch
-        that left that card waiting would look broken. Ids already answered
-        resolve False and are ignored. The ``state`` frame that follows is what
-        the header paints from — a fact, recorded before it is said.
+        resolves every ORDINARY card this panel has offered and not yet
+        answered, as ``once``: the user pressed "always" while looking at one,
+        and a switch that left that card waiting would look broken. Fourth
+        review BS1: a card answered one action at a time (a risk card, a Local
+        only card, any card the registry holds with a kind) is left up and
+        answerable — only the card itself answers it, and the registry
+        refuses the switch's answer anyway. Ids already answered resolve
+        False and are ignored. The ``state`` frame that follows is what the
+        header paints from — a fact, recorded before it is said.
         """
         on = bool(params.get("on"))
         # SB4: a press is the switch's one truth (see :meth:`_restore_switch`).
@@ -2094,7 +2186,11 @@ class PanelTurns:
             # v1.402.0: never a RISK card (payment, password, a destructive
             # word, a flagged page): turning the switch on while one waits
             # approved it — the one card the switch must never answer.
-            for approval_id in list(self._offered - self._floor_offered):
+            # Fourth review BS1: nor any other card with a kind (a Local only
+            # card): the registry's mark is the one field.
+            for approval_id in list(self._offered):
+                if self._once_kind(approval_id):
+                    continue
                 try:
                     # v1.402.0: settled by the switch the person just turned
                     # on — a grant, not a second answer (the autonomy metrics).
@@ -2250,16 +2346,19 @@ class PanelTurns:
                 conn, P.PANEL_EVENT_ERROR, {"text": CARD_WITHDRAWN, "reason": "withdrawn"}
             )
             return
-        floor = approval_id in self._floor_offered
+        # Fourth review BS1: the card's kind, from the registry's one mark (a
+        # risk card, a Local only card, …); "" for an ordinary card.
+        kind = self._once_kind(approval_id)
         allow_all = action == P.PANEL_ACTION_APPROVE and scope == SCOPE_ALL
-        if allow_all and floor:
+        if allow_all and kind:
             # SB6 (third review, decision G18): a RISK card is answered one
             # action at a time. "Allow all page actions" on it is read as
             # nothing — not run, the switch unchanged, the card still up —
-            # whatever add-on sent it, and the panel is told why.
+            # whatever add-on sent it, and the panel is told why. BS1: so is
+            # every card with a kind, in the words for its kind.
             await self.emit(
                 conn, P.PANEL_EVENT_ERROR,
-                {"text": RISK_CARD_ALL_REFUSED, "reason": "risk_card_all"},
+                {"text": _all_refused(kind), "reason": "risk_card_all"},
             )
             return
         if action != P.PANEL_ACTION_APPROVE:
@@ -2292,10 +2391,11 @@ class PanelTurns:
             )
             return
         self._cards.pop(approval_id, None)  # SB1: answered, never shown again
-        if floor and decision == "once" and not named:
+        if kind and decision == "once" and not named:
             # SB6: an older add-on's "Allow all page actions" is this Allow
-            # and then the switch; the next action reads this mark.
-            self._risk_allowed_unnamed = True
+            # and then the switch; the next action reads this mark (BS1: the
+            # card's kind, for the words).
+            self._risk_allowed_unnamed = kind
         if allow_all:
             # SB6: the card's "Allow all page actions" is a press of the switch.
             await self._auto_allow(conn, {"on": True})
@@ -2608,6 +2708,16 @@ class PanelTurns:
                 "tool": tool,
                 "text": f"Iron Jarvis wants to {what}{ask}",
             }
+            # Fourth review BS1: a card the lane filed with a kind (Local
+            # only, …) is answered one action at a time: `floor`, which every
+            # add-on since v1.522.0 draws as Allow once and Deny only, and
+            # (C-BS-1) one line saying why Auto-allow does not cover it.
+            kind = self._once_kind(approval_id) if approval_id else ""
+            if kind:
+                card["floor"] = True
+                note = _card_note(kind)
+                if note:
+                    card["note"] = note
             if approval_id:
                 # SB1: shown again to a panel that opens while it waits.
                 self._cards[approval_id] = dict(card)

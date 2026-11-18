@@ -202,6 +202,18 @@ async def test_a_run_from_chat_pauses_on_a_locked_apps_tool_it_was_handed(rt):  
     assert [r.ok for r in _rows(rt, s.id) if r.tool == LDRAFT] == [False]
 
 
+async def test_a_run_names_why_a_locked_apps_card_asks(rt):  # noqa: F811
+    """v1.533.0 (fourth review PG-A, lead's review): an agent run's card for
+    a locked app's tool carries ``once_reason: "locked"`` on the event and the
+    registry entry, so no screen falls back to "This chat is local only"
+    (the stream lane's frame does the same since group 25)."""
+    _locked_tools(rt.platform)
+    s = await _run(rt, [_calls(LDRAFT, "m1")], ["deny"], allow=HANDED)
+    assert _cards(rt, s.id) == [LDRAFT]
+    req = [p["payload"] for p in rt.published if p["type"] == "approval.requested"][0]
+    assert req.get("once_only") is True and req.get("once_reason") == "locked", req
+
+
 async def test_a_run_allow_once_then_the_next_call_asks_again(rt):  # noqa: F811
     client = _locked_tools(rt.platform)
     s = await _run(rt, [_calls(LDRAFT, "m1"), _calls(LDRAFT, "m2")], ["once", "deny"], allow=HANDED)

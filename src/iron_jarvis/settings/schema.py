@@ -96,6 +96,13 @@ class SettingDef:
     #: form (raises ValueError with words, like ``check``). For a value with
     #: a shape of its own (``device.theme_colors``).
     normalize: Callable[[Any], Any] | None = field(default=None, compare=False, repr=False)
+    #: Fourth fix plan PG1 (D3 option B): this row sets WHERE Iron Jarvis's
+    #: data goes; plain words for what goes there ("your chats when your model
+    #: server answers them"). Chat's change of it to a new place off this PC
+    #: asks every time, Allow once only (``settings/tools._ConfigChangeBase.
+    #: spend_check``); the tier, and so the Settings page, is unchanged.
+    #: ``tools/destinations.py`` lists every such row.
+    destination: str = ""
 
     @property
     def field_name(self) -> str:
@@ -412,7 +419,8 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("ollama_base_url", "Ollama server URL", "models", "string",
       "Point at a local Ollama server. Leave blank to turn local models off.",
       tier="ask", section="Local and custom models", advanced=True,
-      aliases=("ollama", "local model server"), placeholder="http://127.0.0.1:11434"),
+      aliases=("ollama", "local model server"), placeholder="http://127.0.0.1:11434",
+      destination="your chats when Ollama answers them"),
     S("ollama_model", "Ollama model", "models", "string",
       "Default model on that Ollama server.", tier="allow",
       section="Local and custom models", advanced=True, placeholder="llama3.1"),
@@ -422,7 +430,8 @@ SETTINGS: tuple[SettingDef, ...] = (
       # v1.434.0 (chat-first plan, Wave 2 group E): the words people use for
       # one ("add my LM Studio server at 192.168.1.20:1234").
       aliases=("lm studio", "vllm", "custom endpoint", "model server", "openai compatible",
-               "custom endpoint url")),
+               "custom endpoint url"),
+      destination="your chats when your model server answers them"),
     S("custom_model", "Your model server's model", "models", "string",
       "The model that server uses by default.", tier="allow",
       section="Local and custom models", advanced=True, aliases=("custom endpoint model",)),
@@ -521,7 +530,8 @@ SETTINGS: tuple[SettingDef, ...] = (
       aliases=("dictation", "speech to text", "voice typing", "whisper")),
     S("voice_transcribe_base_url", "Voice: speech-to-text server address", "models", "string",
       "Optional dedicated whisper server for dictation. Its key is set under Connections.",
-      tier="ask", section="Voice", advanced=True, aliases=("speech-to-text endpoint",)),
+      tier="ask", section="Voice", advanced=True, aliases=("speech-to-text endpoint",),
+      destination="what you dictate"),
     S("voice_transcribe_model", "Voice: speech-to-text model", "models", "string",
       "The transcription model that server serves. Empty = auto-discover.",
       tier="allow", section="Voice", advanced=True),
@@ -1026,7 +1036,10 @@ SETTINGS: tuple[SettingDef, ...] = (
       section="Self-development"),
     S("backup_mirror_dir", "Backup copy folder", "system", "string",
       "Also copy every backup to this folder (another drive, a synced folder).", tier="ask",
-      section="Backups", aliases=("backup folder",)),
+      section="Backups", aliases=("backup folder",),
+      # Fourth fix plan (D3 option B, widened): a backup is the whole home,
+      # database and vault included (maintenance.py), so a new folder asks.
+      destination="Iron Jarvis's whole folder, database included"),
     S("backup_mirror_media", "Copy media with backups", "system", "bool",
       "Include generated media in the backup copy.", tier="allow", section="Backups"),
     # v1.405.0: THE UPDATE CHANNEL. The desktop shell reads it from

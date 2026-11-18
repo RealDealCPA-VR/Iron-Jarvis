@@ -352,6 +352,10 @@ class ChatApprovals:
         for approval_id, m in list(self._meta.items()):
             if m.get("session_id") != sid or m.get("tool") not in names:
                 continue
+            if _clean_actor(actor) == "grant" and _one_at_a_time(m):
+                # Fourth review BS1: a grant never settles a card answered
+                # one action at a time (see :meth:`resolve`).
+                continue
             entry = self._pending.get(approval_id)
             if entry is not None and not entry[0].done():
                 m.setdefault("actor", _clean_actor(actor))
@@ -366,6 +370,18 @@ class ChatApprovals:
         it BEFORE :meth:`pop`, which forgets the ask."""
         meta = self._meta.get(str(approval_id or ""))
         return str((meta or {}).get("actor") or "")
+
+    def once_kind(self, approval_id: str) -> str:
+        """What kind of card ``approval_id`` is (fourth review BS1), read-only:
+        ``""`` for an ordinary ask (or an unknown id), else the ask's
+        ``once_reason`` ("local_only", "browser_risk", "git", …) or ``"once"``
+        for a once-only or priced ask filed with no reason. A card with a kind
+        is answered one action at a time by the person: no grant answers it
+        (:meth:`resolve`), and a surface draws it with Allow once and Deny."""
+        meta = self._meta.get(str(approval_id or ""))
+        if meta is None or not _one_at_a_time(meta):
+            return ""
+        return str(meta.get("once_reason") or "once")
 
     def resolve(self, approval_id: str, decision: str, *, actor: str = "app") -> bool:
         """Answer a pending request. False = unknown/expired/already answered,
@@ -383,13 +399,21 @@ class ChatApprovals:
         ``actor`` (v1.402.0, the autonomy metrics): who answered — ``app``
         (a press in Iron Jarvis, the default), ``phone`` (a reply on the
         user's phone), ``bench`` (the benchmark answering for nobody). The
-        FIRST answer that reaches a still-open ask names it."""
+        FIRST answer that reaches a still-open ask names it.
+
+        Fourth review BS1: an answer by a ``grant`` (a switch, a sibling's
+        wider answer) on an ask filed ``once_only`` or with a ``cost_note`` is
+        refused: False, and the ask keeps waiting for the person. Such a card
+        is answered one action at a time, from the card itself, whatever
+        surface holds the switch."""
         if decision not in DECISIONS:
             return False
         entry = self._pending.get(approval_id)
         if entry is None:
             return False
         meta = self._meta.get(approval_id)
+        if _clean_actor(actor) == "grant" and meta is not None and _one_at_a_time(meta):
+            return False
         if meta is not None and not entry[0].done():
             meta.setdefault("actor", _clean_actor(actor))
         return self._deliver(entry, decision)
@@ -528,6 +552,13 @@ _NOTE_TASKS: "set[asyncio.Task[Any]]" = set()
 def _clean_actor(actor: Any) -> str:
     text = str(actor or "").strip().lower()
     return text if text in ACTORS else "app"
+
+
+def _one_at_a_time(meta: dict[str, Any]) -> bool:
+    """Fourth review BS1: an ask answered one action at a time (filed
+    ``once_only``, or priced with a ``cost_note``), the one field every
+    automatic answerer reads."""
+    return meta.get("once_only") is True or bool(meta.get("cost_note"))
 
 
 def _short(value: Any) -> str:

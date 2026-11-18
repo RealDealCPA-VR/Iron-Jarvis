@@ -162,6 +162,13 @@ def entry_line(platform: Any, entry: _index.Capability) -> tuple[str, dict[str, 
         except Exception:  # noqa: BLE001 — the table's own word stands
             asks_found = False
         line = f"{entry.title}: tool {entry.tool}. {_how_it_runs(mode, entry.changes, asks_found)}".rstrip()
+        if mode == "allow":
+            # C-PG-3 (fourth fix plan): "Run without asking" has one
+            # exception, said here so chat can answer "why did it ask again?".
+            from ..tools import destinations
+
+            if destinations.still_asks(entry.tool):
+                line += " " + destinations.STILL_ASKS_LINE
         return line, row
     if entry.kind == "setting":
         mode = _mode(platform, entry.tool)

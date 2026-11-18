@@ -499,6 +499,11 @@
         /* v1.400.9: a form's card lists one step per line. */
         white-space: pre-line;
       }
+      /* Fourth review C-BS-1: why Auto-allow does not answer this card. */
+      #approval p#approval-note {
+        font-size: 12px;
+        color: var(--muted);
+      }
       .row {
         display: flex;
         flex-wrap: wrap;
@@ -888,7 +893,7 @@
              instruct Jarvis still ask either way — the daemon's floor. Painted
              from the daemon's `state` frame; the setting is remembered in this
              browser and re-asserted on every open. -->
-        <button class="switch" id="auto" type="button" role="switch" aria-checked="false" title="Auto-allow: on, Jarvis acts on pages without asking each time. Payments, passwords, deletions and pages that tried to instruct Jarvis still ask.">
+        <button class="switch" id="auto" type="button" role="switch" aria-checked="false" title="Auto-allow: on, Jarvis acts on pages without asking each time. Payments, passwords, deletions and pages that tried to instruct Jarvis still ask. In a Local only chat every page action still asks.">
           <span class="knob" aria-hidden="true"></span>
           <span>Auto-allow</span>
         </button>
@@ -922,6 +927,9 @@
          with placeholder words is a card the user learns to click through. -->
     <div id="approval" hidden>
       <p id="approval-text"></p>
+      <!-- Fourth review C-BS-1: one line under a card Auto-allow does not
+           answer (Local only), from the daemon's `note`; hidden otherwise. -->
+      <p id="approval-note" hidden></p>
       <div class="row">
         <button class="primary" id="approve" type="button" title="Runs this one action.">Allow once</button>
         <!-- v1.270.0: the switch, from the card. This action runs and Auto-allow

@@ -24,7 +24,7 @@ import type { PendingApproval } from "@/lib/useChatStream";
 import type { McpAsk, McpElicitationAsk, McpSamplingAsk } from "@/lib/mcpInteract";
 import type { CloudAsk } from "@/lib/localOnly";
 import type { AskUserAsk } from "@/lib/buildSessions";
-import { onceReasonOf } from "@/lib/onceReason";
+import { isSafetyOnceReason } from "@/lib/onceReason";
 
 export type DockAskItem =
   | { kind: "approval"; id: string; approval: PendingApproval }
@@ -99,7 +99,7 @@ export function withHeadFirst(list: readonly DockAskItem[], headId: string | nul
 export function enterAllows(item: DockAskItem | null | undefined): boolean {
   if (!item || item.kind !== "approval") return true;
   const a = item.approval;
-  return !(a.onceOnly === true && onceReasonOf(a.onceReason) !== undefined);
+  return !(a.onceOnly === true && isSafetyOnceReason(a.onceReason));
 }
 
 /** v1.417.0 (C1.7): what the dock says, briefly and in the warn tone, when
