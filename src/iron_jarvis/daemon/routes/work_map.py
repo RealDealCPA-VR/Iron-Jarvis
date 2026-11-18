@@ -97,6 +97,7 @@ def _with_clients(platform, folders: list[dict[str, Any]]) -> None:
 
 OTHER_TOOLS_UNREADABLE = "Your chats in other tools could not be read right now. Try again in a moment."
 APPS_NOT_READY = "Iron Jarvis is still starting. Try again in a moment."
+WATCH_GONE = "That session is not on this PC any more, or it is not one Iron Jarvis lists."
 APPS_UNKNOWN = "Iron Jarvis connects to Claude desktop or Codex."
 
 
@@ -173,6 +174,24 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=503, detail=OTHER_TOOLS_UNREADABLE) from exc
         out["apps"] = _apps_view(d)
         return out
+
+    @app.get("/work-record/other-tools/{tool}/{chat_id}/steps")
+    async def other_tool_steps(tool: str, chat_id: str) -> dict[str, Any]:
+        """v1.530.0: one Claude Code or Codex session's newest steps, read
+        again from the end of its own file (Chat › Code's "Running elsewhere"
+        watch). Read-only; masked; the session is found among the LISTED ones
+        by its id, never by a path."""
+        import asyncio
+
+        from ...workmap import outside
+
+        try:
+            got = await asyncio.to_thread(outside.watch, tool, chat_id)
+        except Exception as exc:  # noqa: BLE001 — said, never an empty view
+            raise HTTPException(status_code=503, detail=OTHER_TOOLS_UNREADABLE) from exc
+        if got is None:
+            raise HTTPException(status_code=404, detail=WATCH_GONE)
+        return got
 
     @app.post("/work-record/other-apps/{name}/connect")
     async def other_app_connect(name: str) -> dict[str, Any]:

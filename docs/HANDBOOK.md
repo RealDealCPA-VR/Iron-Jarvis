@@ -2042,6 +2042,47 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Watch Claude Code and Codex from Chat › Code, and they see Iron Jarvis (v1.530.0)
+
+Your Claude Code and Codex sessions now sit where coding happens: in
+**Chat › Code**, beside your Iron Jarvis sessions. So while you work there you
+can keep an eye on what those tools are doing in the background, and they can
+see what Iron Jarvis is doing.
+
+**In Chat › Code's list, under Other tools** (above Terminals):
+
+- **Claude Code** and **Codex**, each session by folder. A session its tool is
+  writing to right now says **working**, with its newest step under its title
+  ("Ran: pytest -q", "Changed parser.py"). The tool's own line says how many
+  are working.
+- **Press a session to watch it:** its newest steps, which keep moving while it
+  works.
+- **Continue here** opens it as a coding session on that same tool. It is
+  offered at once only for a session that has been quiet for ten minutes. For
+  one written to since, it may still be open in Claude Code or Codex, so you
+  are asked to close it there first and press **It's closed in …, continue
+  here**. Two programs writing one conversation would garble it, and Iron
+  Jarvis now refuses that everywhere, including Build › Code's own list of
+  saved sessions.
+- **Connect Claude Code** and **Connect Codex** are here too.
+
+**In the chat list, under Other tools:** only **Claude Chat** now (Claude
+desktop's Chat tab and Cowork), since those are conversations, not coding
+sessions. Connect Claude desktop stays there.
+
+**The other way round.** A connected Claude Code or Codex can ask Iron Jarvis
+what is running right now: which Chat › Code and Build › Code sessions are
+working, in which folder, and whether one is waiting for you. Every lookup
+starts with that, so before it changes files another session is working on,
+it can know. Work for a client is never shared with another app.
+
+**Claude Code can be connected now** (Codex and Claude desktop could already).
+Iron Jarvis asks Claude Code itself to add it (Claude Code's own `claude mcp
+add` command), because Claude Code rewrites its settings file all the time;
+Disconnect asks it to remove it the same way. New Claude Code sessions in a
+terminal use it; Claude desktop's Code tab should too, but that is not checked
+yet.
+
 ## Every model call counted, and the open decisions settled (v1.529.0)
 
 Eight of the ten points the third fix plan left for you to decide, built as

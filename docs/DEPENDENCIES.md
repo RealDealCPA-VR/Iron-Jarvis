@@ -146,7 +146,7 @@ function runs.
 | `learning` | memory | 7 | **10**: coach, daemon, improvement, inbox, memory, onboarding, platform, profile, settings, workmap | core, tools | agents, detections, history, memory, profile, settings, workmap |
 | `sandbox` | tools | 9 | **10**: agents, daemon, harness, iron_proxy, mcp, platform, providers, repl, scheduling, tools | core, tools | detections, git, harness |
 | `terminals` | build | 18 | **9**: daemon, harness_bench, hosted, mcp, onboarding, platform, profile, providers, tools | browser, core, detections, iron_proxy, providers | connectors, daemon |
-| `workmap` | memory | 17 | **9**: agents, daemon, inbox, learning, mcpserver, memory, platform, search, settings | core, tools | agents, daemon, detections, harness, history, hosted, iron_proxy, learning, mcpserver, projects, providers |
+| `workmap` | memory | 18 | **9**: agents, daemon, inbox, learning, mcpserver, memory, platform, search, settings | core, tools | agents, daemon, detections, harness, history, hosted, iron_proxy, learning, mcpserver, projects, providers |
 | `browser` | browser | 19 | **8**: daemon, hosted, mcpserver, onboarding, platform, providers, terminals, tools | computeruse, core, providers, tools | comm, daemon, detections, harness, skills |
 | `comm` | messaging | 12 | **8**: browser, daemon, peers, platform, providers, reflex, settings, workflows | core, tools | agents, daemon, harness, providers, scheduling, workflows |
 | `eval` | providers | 10 | **8**: agents, daemon, goals, harness, harness_bench, platform, providers, tools | core, providers | daemon, harness, tools |

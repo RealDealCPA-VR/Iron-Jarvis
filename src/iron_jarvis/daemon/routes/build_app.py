@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from ...core.failures import plain_failure
 from ...hosted import service as S
@@ -36,6 +36,11 @@ class AppSessionCreate(BaseModel):
     #: Open a conversation the harness already SAVED for this folder
     #: (``GET /build/app/sessions?folder=…&disk=1``).
     harness_session_id: str | None = None
+    #: v1.530.0: the owner said the saved conversation is closed in its own
+    #: app (a second press); without it one written to in the last ten
+    #: minutes is refused (``hosted.service.LIVE_ELSEWHERE_S``). Strict: only
+    #: a real true says so.
+    elsewhere_closed: StrictBool = False
 
 
 class AppSessionPatch(BaseModel):

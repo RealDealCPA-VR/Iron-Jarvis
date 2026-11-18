@@ -33,6 +33,12 @@ export interface OtherChat {
   summary: string;
   /** v1.528.0: a web link back to the chat in its own app ("" when none). */
   link: string;
+  /** v1.530.0: its tool wrote to it a moment ago (Claude Code, Codex). */
+  working: boolean;
+  /** v1.530.0: seconds since its tool last wrote to it (-1 = not known). */
+  quietS: number;
+  /** v1.530.0: its newest step in plain words ("Ran: pytest -q"). */
+  doing: string;
 }
 
 export interface OtherFolder {
@@ -66,9 +72,69 @@ export interface OtherApp {
 }
 
 /** Which tool's list an app's chats appear in. */
-export const APP_TOOL: Record<string, string> = { "claude-desktop": "claude-chat", codex: "codex" };
+export const APP_TOOL: Record<string, string> = {
+  "claude-desktop": "claude-chat",
+  codex: "codex",
+  "claude-code": "claude-code",
+};
 /** The line drawn for a connected app that has reported nothing yet. */
-export const TOOL_LABEL: Record<string, string> = { "claude-chat": "Claude Chat", codex: "Codex" };
+export const TOOL_LABEL: Record<string, string> = { "claude-chat": "Claude Chat", codex: "Codex", "claude-code": "Claude Code" };
+
+/** v1.530.0: where the part is drawn, and what it shows there. The chat
+ *  list holds conversations (Claude desktop's Chat tab); Chat › Code holds
+ *  the coding tools running beside the IJ harness, to be watched. */
+export type OtherToolsMode = "chat" | "code";
+export const MODE_TOOLS: Record<OtherToolsMode, readonly string[]> = {
+  chat: ["claude-chat"],
+  code: ["claude-code", "codex"],
+};
+export const MODE_APPS: Record<OtherToolsMode, readonly string[]> = {
+  chat: ["claude-desktop"],
+  code: ["claude-code", "codex"],
+};
+/** A session written to within this long cannot be continued here without
+ *  the owner saying it is closed there (the daemon's LIVE_ELSEWHERE_S). */
+export const LIVE_ELSEWHERE_S = 600;
+/** Chat › Code reads the list again this often while a session is working. */
+export const WORKING_REREAD_MS = 15_000;
+/** The watch view reads its steps again this often while it is open and
+ *  the session is working. */
+export const WATCH_REREAD_MS = 4_000;
+export const stepsPath = (tool: string, id: string) =>
+  `/work-record/other-tools/${encodeURIComponent(tool)}/${encodeURIComponent(id)}/steps`;
+
+export interface WatchStep {
+  at: string;
+  kind: string;
+  words: string;
+}
+
+export interface Watch {
+  working: boolean;
+  quietS: number;
+  steps: WatchStep[];
+}
+
+export function decodeWatch(raw: unknown): Watch | null {
+  const o = obj(raw);
+  if (!o) return null;
+  const steps: WatchStep[] = [];
+  for (const s of Array.isArray(o.steps) ? o.steps : []) {
+    const so = obj(s);
+    const words = text(so?.words, 400).trim();
+    if (so && words) steps.push({ at: text(so.at, 60), kind: text(so.kind, 20), words });
+  }
+  const quiet = typeof o.quiet_s === "number" && Number.isFinite(o.quiet_s) ? o.quiet_s : -1;
+  return { working: o.working === true, quietS: quiet, steps };
+}
+
+/** "40 s" / "3 min" / "2 h" for a quiet time. */
+export function quietWords(seconds: number): string {
+  if (seconds < 0) return "";
+  if (seconds < 60) return `${Math.floor(seconds)} s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min`;
+  return `${Math.floor(seconds / 3600)} h`;
+}
 
 export const OTHER_TOOLS_PATH = "/work-record/other-tools";
 export const appConnectPath = (app: string) => `/work-record/other-apps/${encodeURIComponent(app)}/connect`;
@@ -78,7 +144,9 @@ export const CONNECT_WORDS: Record<string, string> = {
   "claude-desktop":
     "Adds Iron Jarvis to the tools Claude desktop can use. Claude then records each chat it has here and can look up your earlier work. Nothing leaves this PC. Restart Claude afterwards.",
   codex:
-    "Adds Iron Jarvis to the tools Codex can use. Codex then adds a summary to each chat and can look up your earlier work. Nothing leaves this PC.",
+    "Adds Iron Jarvis to the tools Codex can use. Codex then adds a summary to each chat, can look up your earlier work and can see what is running in Iron Jarvis. Nothing leaves this PC.",
+  "claude-code":
+    "Adds Iron Jarvis to the tools Claude Code can use, through Claude Code's own setting. Claude Code then adds a summary to each session, can look up your earlier work and can see what is running in Iron Jarvis. Nothing leaves this PC. New Claude Code sessions use it.",
 };
 export const DISCONNECT_WORDS = "It stops recording here and can no longer look anything up. What it recorded stays.";
 /** Build › Code's own "open a saved conversation" request. */
@@ -135,6 +203,9 @@ export function decodeOtherTools(raw: unknown): OtherTool[] {
           summary: text(co.summary, 1200).trim(),
           // Only a web address is ever drawn as a link.
           link: /^https:\/\/\S+$/.test(link) ? link : "",
+          working: co.working === true,
+          quietS: typeof co.quiet_s === "number" && Number.isFinite(co.quiet_s) ? co.quiet_s : -1,
+          doing: text(co.doing, 300).trim(),
         });
       }
       if (chats.length) folders.push({ folder, name: text(fo.name, 200).trim() || folder || "No folder", chats });
@@ -235,9 +306,18 @@ export function withFirstSight(tools: OtherTool[], seen: Seen): Seen {
   return next;
 }
 
-/** The request that opens one of these chats as a coding session. */
-export function openSavedBody(tool: string, folder: string, id: string) {
-  return { harness: tool, folder, harness_session_id: id };
+/** The request that opens one of these chats as a coding session.
+ *  `closedThere` (v1.530.0): the owner said it is closed in its own app,
+ *  for a session written to a moment ago. */
+export function openSavedBody(tool: string, folder: string, id: string, closedThere = false) {
+  return closedThere
+    ? { harness: tool, folder, harness_session_id: id, elsewhere_closed: true }
+    : { harness: tool, folder, harness_session_id: id };
+}
+
+/** Any session in these tools working now. */
+export function anyWorking(tools: OtherTool[]): boolean {
+  return tools.some((t) => t.folders.some((f) => f.chats.some((c) => c.working)));
 }
 
 /** The id of the session the daemon made (flat, or under `session`). */

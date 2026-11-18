@@ -41,8 +41,11 @@ from .models import ReportedChat
 
 APP_CLAUDE = "claude-desktop"
 APP_CODEX = "codex"
-APPS: tuple[str, ...] = (APP_CLAUDE, APP_CODEX)
-APP_LABELS = {APP_CLAUDE: "Claude desktop", APP_CODEX: "Codex"}
+#: v1.530.0: Claude Code itself; like Codex, its report only adds a summary
+#: to the Claude Code chat it belongs to.
+APP_CLAUDE_CODE = "claude-code"
+APPS: tuple[str, ...] = (APP_CLAUDE, APP_CODEX, APP_CLAUDE_CODE)
+APP_LABELS = {APP_CLAUDE: "Claude desktop", APP_CODEX: "Codex", APP_CLAUDE_CODE: "Claude Code"}
 
 TITLE_CHARS = 120
 SUMMARY_CHARS = 1200
@@ -264,6 +267,12 @@ CODEX_MATCH_BEFORE = timedelta(minutes=1)
 CODEX_MATCH_AFTER = timedelta(minutes=30)
 
 
+def match_reports(reports: list[dict[str, Any]], chats: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """v1.530.0: :func:`match_codex`'s rule for any coding tool whose chats
+    are read from its own files (Codex, Claude Code)."""
+    return match_codex(reports, chats)
+
+
 def match_codex(reports: list[dict[str, Any]], chats: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """``{codex chat id: report}``: each Codex report given to the ONE Codex
     chat in the same folder whose time it falls in (the nearest end wins). A
@@ -295,5 +304,5 @@ def match_codex(reports: list[dict[str, Any]], chats: list[dict[str, Any]]) -> d
 
 __all__ = [
     "APPS", "APP_CLAUDE", "APP_CODEX", "APP_LABELS", "FILES_MAX", "FOLDERS_MAX", "SUMMARY_CHARS",
-    "TITLE_CHARS", "app_of_session", "chat_key", "match_codex", "record", "rows", "stats", "view",
+    "TITLE_CHARS", "APP_CLAUDE_CODE", "app_of_session", "chat_key", "match_codex", "match_reports", "record", "rows", "stats", "view",
 ]

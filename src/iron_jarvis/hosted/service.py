@@ -290,6 +290,39 @@ def _start_failed_words(harness: str, exc: BaseException) -> str:
     return plain_failure(f"{name} did not start.", exc)
 
 
+#: v1.530.0: a saved conversation written to within this many seconds may
+#: still be running in its tool's own app (Claude desktop, a terminal, the
+#: Codex app), so it is not continued here unless the owner says it is
+#: closed there. Ten minutes: a tool runs a long command without writing.
+LIVE_ELSEWHERE_S = 600.0
+#: Wall time (a file's write time is wall time; ``self.clock`` is monotonic).
+#: Tests set it.
+wall_clock = time.time
+
+
+def live_elsewhere_quiet(found: dict[str, Any], now: float) -> "float | None":
+    """Seconds since the tool last wrote this saved conversation, when that
+    is under :data:`LIVE_ELSEWHERE_S` (it may still be running elsewhere);
+    None when it has been quiet longer, or the time is not known."""
+    try:
+        mtime = float(found.get("mtime") or 0)
+    except (TypeError, ValueError):
+        return None
+    if mtime <= 0:
+        return None
+    quiet = max(0.0, float(now) - mtime)
+    return quiet if quiet < LIVE_ELSEWHERE_S else None
+
+
+def ago_words(seconds: float) -> str:
+    """"40 seconds" / "3 minutes" for a sentence."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s} second{'s' if s != 1 else ''}"
+    m = s // 60
+    return f"{m} minute{'s' if m != 1 else ''}"
+
+
 def same_folder(a: Any, b: Any) -> bool:
     try:
         return os.path.normcase(os.path.normpath(str(a))) == os.path.normcase(os.path.normpath(str(b)))
@@ -1782,6 +1815,13 @@ class HostedService:
                 )
                 if found is None:
                     raise Refused(f"{W.label(harness)} has no saved conversation with that id in this folder.", 404)
+                # v1.530.0: written to a moment ago = maybe still running in
+                # the tool's own app or a terminal Iron Jarvis does not know
+                # (``_holder`` sees only its own rows and terminals). Opened
+                # only when the owner says it is closed there.
+                quiet = live_elsewhere_quiet(found, wall_clock())
+                if quiet is not None and body.get("elsewhere_closed") is not True:
+                    raise Refused(W.LIVE_ELSEWHERE.format(label=W.label(harness), ago=ago_words(quiet)), 409)
                 title = title or clip(found.get("title") or "", 120)
             row = await asyncio.to_thread(
                 store.create, self.engine, harness=harness, folder=folder, title=title,

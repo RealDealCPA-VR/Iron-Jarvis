@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.530.0
+
+**Watch Claude Code and Codex from Chat › Code, and they see Iron Jarvis.** Your Claude Code and Codex sessions now sit where coding happens: in **Chat › Code**, beside your Iron Jarvis sessions.
+
 ## v1.529.0
 
 **Every model call counted, and the open decisions settled.** Eight of the ten points the third fix plan left for you to decide, built as recommended.
@@ -77,7 +81,3 @@
 ## v1.512.0
 
 **Stop means stopped.** The fourth of eight releases from the second review.
-
-## v1.511.0
-
-**Every OK is for what will really happen.** The third of eight releases from the second review.

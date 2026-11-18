@@ -62,8 +62,16 @@ logger = get_logger(__name__)
 
 APP_CLAUDE = "claude-desktop"
 APP_CODEX = "codex"
-APPS: tuple[str, ...] = (APP_CLAUDE, APP_CODEX)
-LABELS = {APP_CLAUDE: "Claude desktop", APP_CODEX: "Codex"}
+#: v1.530.0: Claude Code itself (a terminal, and Claude desktop's Code tab,
+#: which reads Claude Code's own settings, not Claude desktop's). Its settings
+#: are changed ONLY through its own command (``claude mcp add`` / ``remove``):
+#: Claude Code rewrites its settings file all the time, so Iron Jarvis only
+#: READS it, to check the entry.
+APP_CLAUDE_CODE = "claude-code"
+APPS: tuple[str, ...] = (APP_CLAUDE, APP_CODEX, APP_CLAUDE_CODE)
+LABELS = {APP_CLAUDE: "Claude desktop", APP_CODEX: "Codex", APP_CLAUDE_CODE: "Claude Code"}
+#: The most one ``claude mcp`` command may take.
+CLI_TIMEOUT_S = 30.0
 #: The connector's name in the other app's own list.
 SERVER_NAME = "iron-jarvis"
 #: The box an app's key opens (``mcpserver/server.CAPABILITY_TOOLS``).
@@ -85,7 +93,9 @@ NOT_INSTALLED = "{label} is not set up on this PC, so there is nothing to connec
 NOT_ANOTHER = "{label} already has a tool named \"iron-jarvis\" that Iron Jarvis did not add, so it was left as it is."
 UNREADABLE = "{label}'s settings file could not be read, so nothing was changed: {why}"
 NOT_WRITTEN = "{label}'s settings file could not be changed, so nothing was changed: {why}"
-UNKNOWN_APP = "Iron Jarvis connects to Claude desktop or Codex."
+UNKNOWN_APP = "Iron Jarvis connects to Claude desktop, Claude Code or Codex."
+CLI_FAILED = "Claude Code did not take the change, so nothing was changed: {why}"
+NO_CLI_IN_TESTS = "A test never runs the real claude program."
 
 
 class AppConnectError(Exception):
@@ -126,16 +136,53 @@ def codex_config_path() -> Path:
     return Path.home() / ".codex" / "config.toml"
 
 
+def claude_code_config_path() -> Path:
+    """Claude Code's own settings file (``.claude.json`` in
+    ``CLAUDE_CONFIG_DIR``, else in the home folder). READ only."""
+    if TEST_ROOT:
+        return Path(TEST_ROOT) / ".claude.json"
+    home = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
+    return Path(home) / ".claude.json" if home else Path.home() / ".claude.json"
+
+
 def config_path(app: str) -> Path:
     if app == APP_CLAUDE:
         return claude_config_path()
     if app == APP_CODEX:
         return codex_config_path()
+    if app == APP_CLAUDE_CODE:
+        return claude_code_config_path()
     raise AppConnectError(UNKNOWN_APP)
 
 
+def claude_cli() -> "list[str] | None":
+    """The argv prefix that starts Claude Code, or None (not installed).
+    Through the Code view's own lookup, the one chokepoint tests replace."""
+    from ..hosted.process import binary_for
+
+    return binary_for("claude-code")
+
+
+def run_cli(argv: list[str]) -> tuple[int, str]:
+    """Run one ``claude`` command through the bounded process helper:
+    ``(exit code, its words)``. Tests replace this; with ``TEST_ROOT`` set
+    the real one refuses (a test never runs the real program)."""
+    if TEST_ROOT:
+        raise AppConnectError(NO_CLI_IN_TESTS)
+    from ..core import procs
+
+    res = procs.run(argv, timeout=CLI_TIMEOUT_S)
+    if getattr(res, "timed_out", False):
+        return 124, "it did not answer in time"
+    words = (res.stdout or b"").decode("utf-8", "replace") + (res.stderr or b"").decode("utf-8", "replace")
+    return int(res.returncode), words.strip()
+
+
 def installed(app: str) -> bool:
-    """Is the app set up on this PC (its settings folder exists)?"""
+    """Is the app set up on this PC? (Its settings folder exists; for Claude
+    Code, its program is installed.)"""
+    if app == APP_CLAUDE_CODE:
+        return claude_cli() is not None
     try:
         return config_path(app).parent.is_dir()
     except AppConnectError:
@@ -369,17 +416,64 @@ def _codex_has_other(text: str) -> bool:
     return isinstance(servers, dict) and SERVER_NAME in servers
 
 
+_cc_cache: dict[str, Any] = {}
+
+
+def _claude_code_entry() -> Any:
+    """Claude Code's own ``mcpServers.iron-jarvis`` entry (user scope), READ
+    from its settings file (cached per size and modified time: the file is
+    large and rewritten often). None when there is none or it cannot be read."""
+    path = claude_code_config_path()
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if _cc_cache.get("key") != key:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        servers = data.get("mcpServers") if isinstance(data, dict) else None
+        _cc_cache.update(key=key, entry=(servers or {}).get(SERVER_NAME) if isinstance(servers, dict) else None)
+    return _cc_cache.get("entry")
+
+
 def _entry_present(app: str) -> bool:
     if app == APP_CLAUDE:
         data, _raw = _read_claude(LABELS[app])
         return _ours((data.get("mcpServers") or {}).get(SERVER_NAME))
     if app == APP_CODEX:
         return bool(_BLOCK.search(_codex_text()))
+    if app == APP_CLAUDE_CODE:
+        return _ours(_claude_code_entry())
     raise AppConnectError(UNKNOWN_APP)
+
+
+def _cli_change(argv_tail: list[str]) -> None:
+    exe = claude_cli()
+    if exe is None:
+        raise AppConnectError(NOT_INSTALLED.format(label=LABELS[APP_CLAUDE_CODE]))
+    code, words = run_cli([*exe, *argv_tail])
+    if code != 0:
+        raise AppConnectError(CLI_FAILED.format(why=(words.splitlines() or ["it said nothing"])[-1][:200]))
+    _cc_cache.clear()
 
 
 def _add_entry(app: str, entry: dict[str, Any], home: Path) -> None:
     label = LABELS[app]
+    if app == APP_CLAUDE_CODE:
+        current = _claude_code_entry()
+        if current is not None and not _ours(current):
+            raise AppConnectError(NOT_ANOTHER.format(label=label))
+        path = claude_code_config_path()
+        if path.is_file():
+            _keep_copy(path, home)
+        if current is not None:  # ours from an earlier Connect: replaced
+            _cli_change(["mcp", "remove", "--scope", "user", SERVER_NAME])
+        env = [f"--env={k}={v}" for k, v in entry["env"].items()]
+        _cli_change(["mcp", "add", "--scope", "user", *env, SERVER_NAME, "--", entry["command"], *entry["args"]])
+        return
     if app == APP_CLAUDE:
         data, _raw = _read_claude(label)
         servers = dict(data.get("mcpServers") or {})
@@ -417,6 +511,14 @@ def _add_entry(app: str, entry: dict[str, Any], home: Path) -> None:
 
 def _remove_entry(app: str, home: Path) -> None:
     label = LABELS[app]
+    if app == APP_CLAUDE_CODE:
+        if not _ours(_claude_code_entry()):
+            return  # not ours (or gone): left as it is
+        path = claude_code_config_path()
+        if path.is_file():
+            _keep_copy(path, home)
+        _cli_change(["mcp", "remove", "--scope", "user", SERVER_NAME])
+        return
     if app == APP_CLAUDE:
         data, _raw = _read_claude(label)
         servers = dict(data.get("mcpServers") or {})
@@ -448,7 +550,7 @@ def _remove_entry(app: str, home: Path) -> None:
 
 
 __all__ = [
-    "APPS", "APP_CLAUDE", "APP_CODEX", "AppConnectError", "AppConnections", "CAPABILITY", "LABELS",
+    "APPS", "APP_CLAUDE", "APP_CLAUDE_CODE", "APP_CODEX", "AppConnectError", "claude_cli", "claude_code_config_path", "run_cli", "AppConnections", "CAPABILITY", "LABELS",
     "PANE_PREFIX", "SERVER_NAME", "TOKEN_FILE_ENV", "claude_config_path", "codex_config_path",
     "config_path", "installed", "launch_argv",
 ]

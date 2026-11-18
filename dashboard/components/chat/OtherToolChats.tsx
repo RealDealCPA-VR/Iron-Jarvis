@@ -1,30 +1,37 @@
 "use client";
 
 // v1.518.0 — "Other tools": the owner's chats in Claude Code and Codex, one
-// quiet row at the foot of the chat list.
+// quiet row at the foot of a list.
 //
-// CALM BY DESIGN. Closed, it is one line: a tool's mark, its name, and "3 new"
-// when chats were written since the owner last looked. With no such chats on
-// this PC the row is not drawn at all. The list is read once, three seconds
-// after the sidebar appears (never part of a page's first paint), and again
-// only when a tool is opened and the list is a minute old. Nothing polls.
-//
-// OPEN, a tool lists its chats by folder, five per folder and then "Show
-// more". Pressing a chat opens it as a coding session on that tool (the
-// request Build › Code's own "saved by …" rows make), so the next message
-// continues it there; the chat then belongs to the coding sessions' list and
-// leaves this one. A press the daemon refuses says why under the row.
+// CALM BY DESIGN. Closed, it is one line per tool: its mark, its name, and
+// "3 new" when chats were written since the owner last looked. With nothing to
+// show the part is not drawn at all. The list is read once, three seconds
+// after the part appears (never part of a page's first paint).
 //
 // v1.528.0 — CLAUDE CHAT AND THE CONNECTOR. Claude desktop's Chat tab keeps
-// its chats on claude.ai, so they reach this list only once the owner
-// CONNECTS Claude desktop: one press here adds Iron Jarvis to Claude's own
-// connectors, and Claude then records each chat. Those rows (and Claude's
-// Cowork sessions) are carried on in Claude: a press shows what is known
-// (Claude's own summary, a link back) instead of opening anything. Codex can
-// be connected the same way; its chats were already here, and a connected
-// Codex adds a summary to each. Connect and Disconnect each say what they do
-// first and need a second press; an app that is not on this PC is not
-// offered. Nothing else changes another app.
+// its chats on claude.ai, so they reach Iron Jarvis only once the owner
+// CONNECTS Claude desktop: one press adds Iron Jarvis to Claude's own tools,
+// and Claude then records each chat. Those rows (and Claude's Cowork
+// sessions) are carried on in Claude: a press shows what is known (Claude's
+// own summary, a link back) instead of opening anything. Connect and
+// Disconnect each say what they do first and need a second press; an app that
+// is not on this PC is not offered. Nothing else changes another app.
+//
+// v1.530.0 — TWO PLACES, BY WHAT THE ROWS ARE (the owner: "the other tools are
+// more applicable on Chat › Code … if the user is using the IJ harness while
+// using other harnesses in the background, they can monitor it").
+//
+//  * mode "chat" (the chat list): Claude Chat only — conversations.
+//  * mode "code" (Chat › Code's session list, beside the IJ harness): Claude
+//    Code and Codex — coding sessions to WATCH. A session its tool wrote to a
+//    moment ago is "working", with its newest step under its title; while one
+//    is working the list is read again every 15 s, and nothing is read while
+//    none is. Pressing a session opens its watch view (its newest steps, read
+//    again every 4 s while it works). "Continue here" (a coding session on that
+//    tool in Build › Code) is offered at once only for a session that has been
+//    quiet for 10 minutes; for one written to since, the owner must say it is
+//    closed in its own app first, because two programs writing one
+//    conversation garble it (the daemon refuses it without that word too).
 //
 // The words follow lib/otherTools; theme tokens only, the sidebar's own ghost
 // rows (SidebarChats' "Archived chats" is the pattern).
@@ -37,32 +44,43 @@ import { brandIcon } from "@/components/BrandGlyph";
 import { failureOf } from "@/lib/loadFailed";
 import { formatAge } from "@/lib/threadStatus";
 import {
+  APP_TOOL,
   CONNECT_WORDS,
   DISCONNECT_WORDS,
   FIRST_READ_MS,
   FOLDER_LIMIT,
+  LIVE_ELSEWHERE_S,
+  MODE_APPS,
+  MODE_TOOLS,
   OPEN_SAVED_PATH,
   OTHER_TOOLS_PATH,
   STALE_MS,
   TOOL_LABEL,
-  APP_TOOL,
+  WATCH_REREAD_MS,
+  WORKING_REREAD_MS,
+  anyWorking,
   appConnectPath,
   appDisconnectPath,
   appForTool,
   decodeOtherApps,
   decodeOtherTools,
+  decodeWatch,
   madeSessionId,
   newCount,
   newestOf,
   openSavedBody,
+  quietWords,
   readSeen,
+  stepsPath,
   withFirstSight,
   withoutChat,
   writeSeen,
   type OtherApp,
   type OtherChat,
   type OtherTool,
+  type OtherToolsMode,
   type Seen,
+  type Watch,
 } from "@/lib/otherTools";
 
 /** Where a coding session on a real tool opens (lib/buildApp.buildCodeHref;
@@ -73,10 +91,12 @@ export function codeSessionHref(id: string): string {
 
 export const OPEN_FAILED = "That chat could not be opened.";
 export const CHANGE_FAILED = "That did not work. Nothing was changed.";
+export const WATCH_FAILED = "Its steps could not be read just now.";
 export const WAITING_WORDS: Record<string, string> = {
   "claude-chat":
     "Connected. Restart Claude desktop if you have not. Each chat appears here when Claude records it.",
   codex: "Connected. New Codex chats add a summary here.",
+  "claude-code": "Connected. New Claude Code sessions add a summary here.",
 };
 
 const ROW =
@@ -96,7 +116,7 @@ function ToolMark({ tool }: { tool: string }) {
 }
 
 /** Leave for another page without the app router (the chat page mounts this
- *  row and is drawn in places that have none: a pop-out window). */
+ *  part and is drawn in places that have none: a pop-out window). */
 function leaveFor(href: string): void {
   window.location.assign(href);
 }
@@ -118,10 +138,16 @@ type Confirm = { app: string; connect: boolean } | null;
 export default function OtherToolChats({
   onNavigate,
   go = leaveFor,
+  mode = "chat",
+  className = "mt-1 min-w-0",
 }: {
   onNavigate?: () => void;
   /** How to go to the opened session: the sidebar passes its router's push. */
   go?: (href: string) => void;
+  /** v1.530.0: the chat list ("chat") or Chat › Code's session list ("code"). */
+  mode?: OtherToolsMode;
+  /** The part's frame (Chat › Code gives it a border of its own). */
+  className?: string;
 }) {
   const [tools, setTools] = useState<OtherTool[] | null>(null);
   const [apps, setApps] = useState<OtherApp[]>([]);
@@ -131,6 +157,7 @@ export default function OtherToolChats({
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<{ id: string; words: string } | null>(null);
   const [shownChat, setShownChat] = useState<string | null>(null);
+  const [watch, setWatch] = useState<{ id: string; got: Watch | null; failed: boolean } | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [appNote, setAppNote] = useState<{ app: string; words: string } | null>(null);
   const readAt = useRef(0);
@@ -139,21 +166,22 @@ export default function OtherToolChats({
   const read = useCallback(async () => {
     try {
       const raw = await get<unknown>(OTHER_TOOLS_PATH);
-      const got = decodeOtherTools(raw);
+      const wanted = MODE_TOOLS[mode];
+      const got = decodeOtherTools(raw).filter((t) => wanted.includes(t.tool));
       if (!alive.current) return;
       readAt.current = Date.now();
       setTools(got);
-      setApps(decodeOtherApps(raw));
+      setApps(decodeOtherApps(raw).filter((a) => MODE_APPS[mode].includes(a.app)));
       // The first sight of a tool marks everything in it as seen.
       const before = readSeen();
       const after = withFirstSight(got, before);
       if (after !== before) writeSeen(after);
       setSeen(after);
     } catch {
-      // A list that could not be read draws nothing: the row is an extra,
-      // and the chat list above it is never held up or replaced by it.
+      // A list that could not be read draws nothing: the part is an extra,
+      // and the list above it is never held up or replaced by it.
     }
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
     alive.current = true;
@@ -164,10 +192,39 @@ export default function OtherToolChats({
     };
   }, [read]);
 
+  // Chat › Code: while a session works, read the list again (its dot and
+  // its newest step move); while none does, nothing is read.
+  const working = mode === "code" && tools !== null && anyWorking(tools);
+  useEffect(() => {
+    if (!working) return;
+    const timer = setTimeout(() => void read(), WORKING_REREAD_MS);
+    return () => clearTimeout(timer);
+  }, [working, tools, read]);
+
+  const readSteps = useCallback(async (tool: string, id: string) => {
+    try {
+      const got = decodeWatch(await get<unknown>(stepsPath(tool, id)));
+      if (!alive.current) return;
+      setWatch((prev) => (prev && prev.id === id ? { id, got, failed: got === null } : prev));
+    } catch {
+      if (alive.current) setWatch((prev) => (prev && prev.id === id ? { ...prev, failed: true } : prev));
+    }
+  }, []);
+
+  // The watch view reads its steps again while it is open and working.
+  const watchedWorking = watch?.got?.working === true;
+  useEffect(() => {
+    if (!watch || !watchedWorking || !openTool) return;
+    const id = watch.id;
+    const timer = setTimeout(() => void readSteps(openTool, id), WATCH_REREAD_MS);
+    return () => clearTimeout(timer);
+  }, [watch, watchedWorking, openTool, readSteps]);
+
   const toggle = useCallback(
     (tool: OtherTool) => {
       setNote(null);
       setShownChat(null);
+      setWatch(null);
       if (openTool === tool.tool) {
         setOpenTool(null);
         return;
@@ -185,13 +242,26 @@ export default function OtherToolChats({
     [openTool, read],
   );
 
+  const toggleWatch = useCallback(
+    (tool: string, id: string) => {
+      setNote(null);
+      if (watch?.id === id) {
+        setWatch(null);
+        return;
+      }
+      setWatch({ id, got: null, failed: false });
+      void readSteps(tool, id);
+    },
+    [watch, readSteps],
+  );
+
   const open = useCallback(
-    async (tool: string, folder: string, id: string) => {
+    async (tool: string, folder: string, id: string, closedThere = false) => {
       if (busy) return;
       setBusy(id);
       setNote(null);
       try {
-        const made = madeSessionId(await post<unknown>(OPEN_SAVED_PATH, openSavedBody(tool, folder, id)));
+        const made = madeSessionId(await post<unknown>(OPEN_SAVED_PATH, openSavedBody(tool, folder, id, closedThere)));
         if (!made) throw new Error(OPEN_FAILED);
         if (!alive.current) return;
         setTools((prev) => (prev ? withoutChat(prev, tool, id) : prev));
@@ -267,31 +337,101 @@ export default function OtherToolChats({
       </p>
     ) : null;
 
-  const chatRow = (t: OtherTool, c: OtherChat) => {
-    if (t.openable) {
-      return (
-        <div key={c.id} className="min-w-0">
-          <button
-            type="button"
-            data-testid={`other-chat-${c.id}`}
-            disabled={busy !== null}
-            title={`${c.title}${c.summary ? `\n${c.summary}` : ""}\nOpens as a coding session on ${t.label}.`}
-            onClick={() => void open(t.tool, c.folder, c.id)}
-            className={`${ROW} text-zinc-400 disabled:cursor-wait disabled:opacity-60`}
-          >
-            <span className="min-w-0 flex-1 truncate">{c.title}</span>
-            <span className="shrink-0 text-[11px] text-zinc-600">
-              {busy === c.id ? "Opening…" : formatAge(c.ended)}
-            </span>
-          </button>
-          {note?.id === c.id ? (
-            <p role="status" data-testid="other-chat-note" className="px-2.5 pb-1 text-[11px] leading-relaxed text-zinc-500">
-              {note.words}
-            </p>
+  const noteLine = (c: OtherChat) =>
+    note?.id === c.id ? (
+      <p role="status" data-testid="other-chat-note" className="px-2.5 pb-1 text-[11px] leading-relaxed text-zinc-500">
+        {note.words}
+      </p>
+    ) : null;
+
+  /** A coding session to watch (Chat › Code). */
+  const codeRow = (t: OtherTool, c: OtherChat) => {
+    const isShown = watch?.id === c.id;
+    const live = watch?.id === c.id && watch.got ? watch.got : null;
+    const quiet = live ? live.quietS : c.quietS;
+    const stillInUse = quiet >= 0 && quiet < LIVE_ELSEWHERE_S;
+    return (
+      <div key={c.id} className="min-w-0">
+        <button
+          type="button"
+          data-testid={`other-chat-${c.id}`}
+          aria-expanded={isShown}
+          title={`${c.title}${c.summary ? `\n${c.summary}` : ""}`}
+          onClick={() => toggleWatch(t.tool, c.id)}
+          className={`${ROW} h-auto min-h-7 py-1 text-zinc-400`}
+        >
+          {c.working ? (
+            <span data-testid={`other-chat-working-${c.id}`} className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden="true" />
           ) : null}
-        </div>
-      );
-    }
+          <span className="min-w-0 flex-1">
+            <span className="block truncate">{c.title}</span>
+            {c.working && c.doing ? (
+              <span data-testid={`other-chat-doing-${c.id}`} className="block truncate text-[11px] text-zinc-600">
+                {c.doing}
+              </span>
+            ) : null}
+          </span>
+          <span className={`shrink-0 text-[11px] ${c.working ? "text-accent-soft" : "text-zinc-600"}`}>
+            {c.working ? "working" : formatAge(c.ended)}
+          </span>
+        </button>
+        {isShown ? (
+          <div data-testid={`other-chat-watch-${c.id}`} className="mx-2.5 mb-1.5 rounded-lg bg-white/[0.03] p-2 text-[11px] leading-relaxed">
+            {watch?.failed ? (
+              <p className="text-zinc-500">{WATCH_FAILED}</p>
+            ) : !live ? (
+              <p className="text-zinc-600">Reading its steps…</p>
+            ) : live.steps.length === 0 ? (
+              <p className="text-zinc-600">No steps to show yet.</p>
+            ) : (
+              <ol className="space-y-0.5">
+                {live.steps.slice(-8).map((s, i) => (
+                  <li key={`${s.at}-${i}`} className={`truncate ${s.kind === "said" ? "text-zinc-400" : "text-zinc-500"}`} title={s.words}>
+                    {s.words}
+                  </li>
+                ))}
+              </ol>
+            )}
+            {c.summary ? <p className="mt-1 whitespace-pre-line text-zinc-400">{c.summary}</p> : null}
+            <div className="mt-1.5">
+              {stillInUse ? (
+                <>
+                  <p data-testid={`other-chat-in-use-${c.id}`} className="text-zinc-500">
+                    {t.label} wrote to it {quietWords(quiet)} ago, so it may still be open there. Continue it here only
+                    once it is closed in {t.label}.
+                  </p>
+                  <button
+                    type="button"
+                    data-testid={`other-chat-closed-there-${c.id}`}
+                    disabled={busy !== null}
+                    onClick={() => void open(t.tool, c.folder, c.id, true)}
+                    className={`${SMALL_BUTTON} mt-1 text-zinc-300 hover:bg-white/[0.06]`}
+                  >
+                    {busy === c.id ? "Opening…" : `It's closed in ${t.label}, continue here`}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  data-testid={`other-chat-continue-${c.id}`}
+                  disabled={busy !== null}
+                  onClick={() => void open(t.tool, c.folder, c.id)}
+                  className={`${SMALL_BUTTON} text-zinc-300 hover:bg-white/[0.06]`}
+                >
+                  {busy === c.id ? "Opening…" : "Continue here"}
+                </button>
+              )}
+            </div>
+          </div>
+        ) : null}
+        {noteLine(c)}
+      </div>
+    );
+  };
+
+  /** A Claude Chat conversation (the chat list): read-only. */
+  const chatRow = (t: OtherTool, c: OtherChat) => {
+    if (t.openable) return codeRow(t, c);
     const isShown = shownChat === c.id;
     return (
       <div key={c.id} className="min-w-0">
@@ -332,11 +472,14 @@ export default function OtherToolChats({
     );
   };
 
+  const workingCount = (t: OtherTool) => t.folders.reduce((n, f) => n + f.chats.filter((c) => c.working).length, 0);
+
   return (
-    <div data-testid="other-tools" className="mt-1 min-w-0">
+    <div data-testid={`other-tools${mode === "code" ? "-code" : ""}`} className={className}>
       <p className="px-2.5 pb-0.5 pt-1 text-[11px] text-zinc-600">Other tools</p>
       {lines.map((t) => {
         const fresh = newCount(t, seen);
+        const busyNow = mode === "code" ? workingCount(t) : 0;
         const isOpen = shown?.tool === t.tool;
         const app = appForTool(apps, t.tool);
         return (
@@ -350,7 +493,11 @@ export default function OtherToolChats({
             >
               <ToolMark tool={t.tool} />
               <span className="min-w-0 flex-1 truncate">{t.label}</span>
-              {fresh > 0 && !isOpen ? (
+              {busyNow > 0 && !isOpen ? (
+                <span data-testid={`other-tool-working-${t.tool}`} className="shrink-0 text-[11px] text-accent-soft">
+                  {busyNow} working
+                </span>
+              ) : fresh > 0 && !isOpen ? (
                 <span data-testid={`other-tool-new-${t.tool}`} className="shrink-0 text-[11px] text-accent-soft/90">
                   {fresh} new
                 </span>

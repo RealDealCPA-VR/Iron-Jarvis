@@ -75,7 +75,7 @@ const LIST = {
 };
 
 async function shown() {
-  render(<OtherToolChats go={push} />);
+  render(<OtherToolChats mode="code" go={push} />);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(FIRST_READ_MS + 10);
   });
@@ -116,7 +116,7 @@ describe("the list's data", () => {
           {
             folder: "C:\\B",
             name: "C:\\B",
-            chats: [{ id: "1", title: "Kept", folder: "C:\\B", started: "", ended: "", summary: "", link: "" }],
+            chats: [{ id: "1", title: "Kept", folder: "C:\\B", started: "", ended: "", summary: "", link: "", working: false, quietS: -1, doing: "" }],
           },
         ],
       },
@@ -148,7 +148,7 @@ describe("the list's data", () => {
 
 describe("the row in the sidebar", () => {
   it("is not read with the page, and is one closed line per tool once read", async () => {
-    render(<OtherToolChats />);
+    render(<OtherToolChats mode="code" />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(FIRST_READ_MS - 100);
     });
@@ -208,16 +208,19 @@ describe("the row in the sidebar", () => {
 
   it("a press opens the chat as a coding session on its tool and goes there", async () => {
     const onNavigate = vi.fn();
-    render(<OtherToolChats onNavigate={onNavigate} go={push} />);
+    render(<OtherToolChats mode="code" onNavigate={onNavigate} go={push} />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(FIRST_READ_MS + 10);
     });
     fireEvent.click(screen.getByTestId("other-tool-codex"));
     fireEvent.click(screen.getByTestId("other-chat-x1"));
+    fireEvent.click(await screen.findByTestId("other-chat-continue-x1"));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/terminals?view=code&code=hs_made"));
     expect(calls.post).toEqual([
       { path: "/build/app/sessions", body: { harness: "codex", folder: "C:\\Work\\Parser", harness_session_id: "x1" } },
     ]);
+    // The watch view read its steps (the one GET besides the list).
+    expect(calls.get.filter((g) => g.endsWith("/steps"))).toEqual(["/work-record/other-tools/codex/x1/steps"]);
     expect(onNavigate).toHaveBeenCalledTimes(1);
     // It is a coding session now: it left this list, and Codex with it.
     expect(screen.queryByTestId("other-tool-codex")).toBeNull();
@@ -245,6 +248,7 @@ describe("the row in the sidebar", () => {
     fireEvent.click(screen.getByTestId("other-tool-claude-code"));
     expect(screen.getByTestId("other-tool-list-claude-code")).toHaveTextContent("Parser");
     fireEvent.click(screen.getByTestId("other-chat-w1"));
+    fireEvent.click(await screen.findByTestId("other-chat-continue-w1"));
     await waitFor(() => expect(push).toHaveBeenCalled());
     expect(calls.post[0]?.body).toEqual({ harness: "claude-code", folder: copy, harness_session_id: "w1" });
   });
@@ -256,6 +260,7 @@ describe("the row in the sidebar", () => {
     await shown();
     fireEvent.click(screen.getByTestId("other-tool-codex"));
     fireEvent.click(screen.getByTestId("other-chat-x1"));
+    fireEvent.click(await screen.findByTestId("other-chat-continue-x1"));
     await waitFor(() =>
       expect(screen.getByTestId("other-chat-note")).toHaveTextContent(
         "Codex has no saved conversation with that id in this folder.",
@@ -270,6 +275,7 @@ describe("the row in the sidebar", () => {
     await shown();
     fireEvent.click(screen.getByTestId("other-tool-codex"));
     fireEvent.click(screen.getByTestId("other-chat-x1"));
+    fireEvent.click(await screen.findByTestId("other-chat-continue-x1"));
     await waitFor(() => expect(screen.getByTestId("other-chat-note")).toHaveTextContent(OPEN_FAILED));
     expect(push).not.toHaveBeenCalled();
   });

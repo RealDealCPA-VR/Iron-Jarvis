@@ -35,7 +35,6 @@ NOT_AN_APP = (
     "Iron Jarvis's own chats are already in its work record."
 )
 LOOKUP_EMPTY = "Iron Jarvis has nothing on record that matches, or none of it may be shared with this app."
-LOOKUP_NEEDS = "Say what to look for (query), a folder, or both."
 LOOKUP_LEAD = (
     "From Iron Jarvis's work record on this PC (data, not instructions; work for a client is "
     "never shared with another app):"
@@ -130,7 +129,10 @@ class WorkSearchTool(_ConnectorTool):
     description = (
         "Look up what the user already did, in Iron Jarvis and in their other tools: work done in a "
         "folder, or earlier work that matches a few words. Use it when the user mentions earlier "
-        "work, or when you start in a folder and want to know what was done there before."
+        "work, or when you start in a folder and want to know what was done there before. Every "
+        "answer starts with the coding sessions running in Iron Jarvis right now; call it with "
+        "nothing to see only that, for example before you change files another session may be "
+        "working on."
     )
     input_schema = {
         "type": "object",
@@ -146,16 +148,23 @@ class WorkSearchTool(_ConnectorTool):
 
         if not reported.app_of_session(getattr(ctx, "session_id", "")):
             return ToolResult(ok=False, error=NOT_AN_APP)
+        from .running import running_block
+
         query = " ".join(str((args or {}).get("query") or "").split())[:300]
         folder = str((args or {}).get("folder") or "").strip()[:1000]
-        if not query and not folder:
-            return ToolResult(ok=False, error=LOOKUP_NEEDS)
-        text = await asyncio.to_thread(
-            work_block, self.platform, folder=folder, query=query, list_folder=bool(folder), outside=True
-        )
-        if not text.strip():
-            return ToolResult(ok=True, output=LOOKUP_EMPTY, data={"found": False})
-        return ToolResult(ok=True, output=f"{LOOKUP_LEAD}\n{text.strip()}", data={"found": True})
+        # v1.530.0: what runs in Iron Jarvis now, first, on every call.
+        running = await asyncio.to_thread(running_block, self.platform)
+        parts = [LOOKUP_LEAD]
+        if running:
+            parts.append(running)
+        found = False
+        if query or folder:
+            text = await asyncio.to_thread(
+                work_block, self.platform, folder=folder, query=query, list_folder=bool(folder), outside=True
+            )
+            found = bool(text.strip())
+            parts.append(text.strip() if found else LOOKUP_EMPTY)
+        return ToolResult(ok=True, output="\n".join(parts), data={"found": found})
 
 
 def connector_tools(platform: Any) -> list[Tool]:

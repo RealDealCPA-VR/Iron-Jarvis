@@ -364,6 +364,14 @@ HELD_BY_ROW = (
     "This conversation is already open in another Code-view session — use that one, "
     "or archive it first."
 )
+#: v1.530.0: the tool's own saved conversation was written to a moment ago,
+#: so it may still be running in the tool's own app or a terminal outside
+#: Iron Jarvis. Two programs writing one conversation garble it.
+LIVE_ELSEWHERE = (
+    "{label} wrote to this conversation {ago} ago, so it may still be running there. It was "
+    "not opened here: two programs writing one conversation would garble it. Watch it from "
+    "Chat › Code, or close it in {label} and choose \"It's closed there\"."
+)
 HELD_BY_TERMINAL = (
     "This conversation is open in a Build terminal — exit {label} there first (type {exit}), "
     "then send your message here."

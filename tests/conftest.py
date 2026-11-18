@@ -237,6 +237,27 @@ def _no_real_coding_tool():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _saved_conversations_written_before_the_test():
+    """v1.530.0: Build › Code will not continue a tool's saved conversation
+    written to in the last ten minutes (``hosted.service.LIVE_ELSEWHERE_S``:
+    it may still be running in the tool's own app). A test writes its saved
+    conversation a moment before it opens it, standing in for one saved long
+    ago, so the session's wall clock for that rule runs an hour ahead. A test
+    of the rule sets ``service.wall_clock`` back to the real time itself
+    (``tests/test_running_elsewhere_v1530.py``)."""
+    import time as _time
+
+    from iron_jarvis.hosted import service
+
+    prev = service.wall_clock
+    service.wall_clock = lambda: _time.time() + 3600.0
+    try:
+        yield
+    finally:
+        service.wall_clock = prev
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _other_tools_never_read_the_real_homes():
     """v1.518.0: the work record lists the owner's chats in Claude Code and
     Codex from those tools' own folders (``workmap/outside.py``). A bare test

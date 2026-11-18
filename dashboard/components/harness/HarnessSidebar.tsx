@@ -18,6 +18,9 @@
  *    (a folder that is a Jarvis project's root shows and renames the
  *    PROJECT's name — the daemon's one store). Each group's "+" starts a new
  *    session in that folder.
+ *  - Other tools (v1.530.0): Claude Code and Codex sessions on this PC,
+ *    the ones working now marked, each with its newest step and a watch view
+ *    (components/chat/OtherToolChats, mode "code").
  *  - Terminals: the live Build terminals with the state dots Build draws
  *    (GET /terminals/activity, polled by CodeView). Pressing one opens it
  *    in Build (v1.406.0: Build is the terminals; this list is in Chat › Code).
@@ -57,6 +60,8 @@ import { HARNESS_LIST_ATTR, HARNESS_ROW_ATTR, moveRowFocus } from "@/lib/harness
 // v1.426.0 (Wave 6 lane B, E5): a folder's defaults for new sessions.
 import { FolderDefaultsButton, FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
 import type { CodeDefaults } from "@/lib/folderDefaults";
+// v1.530.0: Claude Code and Codex sessions running beside the IJ harness.
+import OtherToolChats from "@/components/chat/OtherToolChats";
 
 /** v1.420.0 (fix plan C2.9): the attribute that marks a session row (↑/↓
  *  move between them) and the one that marks the list as the harness's. */
@@ -763,6 +768,12 @@ export function HarnessSidebar({
         ) : null}
       </div>
 
+      {/* v1.530.0: the coding tools running elsewhere (Claude Code, Codex),
+          to watch beside the IJ harness; absent when there are none. */}
+      <OtherToolChats
+        mode="code"
+        className="max-h-[45%] min-w-0 shrink-0 overflow-y-auto border-t hairline pt-1"
+      />
       <section
         data-testid="harness-terminals"
         aria-label="Terminals"

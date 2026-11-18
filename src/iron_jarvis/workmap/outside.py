@@ -57,6 +57,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -261,6 +262,102 @@ def _iso_of_ns(ns: int) -> str:
     return datetime.fromtimestamp(ns / 1e9, tz=timezone.utc).isoformat()
 
 
+# --------------------------------------------------------------------------- #
+# what a session is doing (v1.530.0): Chat › Code's "Running elsewhere"
+# --------------------------------------------------------------------------- #
+#: Written to within this many seconds: "working now".
+WORKING_S = 90.0
+#: Steps the watch view shows (newest last).
+STEPS_MAX = 12
+STEP_CHARS = 160
+#: Wall time; tests set it.
+wall_clock = time.time
+
+
+def _step_words(ev: dict[str, Any], label: str) -> tuple[str, str] | None:
+    """``(kind, words)`` for one of the history reader's events, masked and
+    cut; None for a step not worth a line."""
+    from ..hosted.events import clip
+
+    action = str(ev.get("action") or "")
+    name = keys.file_name(ev.get("path") or "") or str(ev.get("path") or "")
+    if action == "prompt.submitted" and ev.get("text"):
+        return "asked", "You: " + clip(" ".join(str(ev["text"]).split()), STEP_CHARS)
+    if action == "response.completed" and ev.get("text"):
+        return "said", f"{label}: " + clip(" ".join(str(ev["text"]).split()), STEP_CHARS)
+    if action in ("command.executed", "container.exec") and ev.get("command"):
+        return "ran", "Ran: " + clip(" ".join(str(ev["command"]).split()), STEP_CHARS)
+    if action == "file.write" and name:
+        return "changed", f"Changed {clip(name, STEP_CHARS)}"
+    if action == "file.read" and name:
+        return "read", f"Read {clip(name, STEP_CHARS)}"
+    if action == "file.delete" and name:
+        return "deleted", f"Deleted {clip(name, STEP_CHARS)}"
+    if action == "network.request":
+        return "web", "Looked something up on the web"
+    if action == "tool.called" and ev.get("tool"):
+        return "used", f"Used {clip(tool_words(str(ev['tool'])), 80)}"
+    return None
+
+
+def tool_words(name: str) -> str:
+    """A tool's name as a person reads it: a connector's tool
+    (``mcp__Claude_Browser__browser_batch``) is its own name and its
+    connector's ("browser batch (Claude Browser)"); any other is as named."""
+    if name.startswith("mcp__"):
+        parts = [p for p in name.split("__")[1:] if p]
+        if len(parts) >= 2:
+            server, own = parts[0], "__".join(parts[1:])
+            return f"{own.replace('_', ' ')} ({server.replace('_', ' ')})"
+    return name
+
+
+def _steps(tool: str, mod: Any, path: Path, sid: str, records: list) -> list[dict[str, Any]]:
+    """The newest :data:`STEPS_MAX` steps in the records given (the end of the
+    file), oldest first. Never raises."""
+    try:
+        events = mod.map_events(records, path, sid)
+    except Exception:  # noqa: BLE001 — a step line is extra
+        return []
+    out: list[dict[str, Any]] = []
+    for ev in events:
+        got = _step_words(ev, LABELS.get(tool, tool))
+        if got is not None:
+            out.append({"at": str(ev.get("ts") or ""), "kind": got[0], "words": got[1]})
+    return out[-STEPS_MAX:]
+
+
+def quiet_for(mtime_ns: int) -> float:
+    """Seconds since the file was last written."""
+    return max(0.0, wall_clock() - mtime_ns / 1e9)
+
+
+def watch(tool: str, chat_id: str) -> dict[str, Any] | None:
+    """BLOCKING: one listed session's newest steps, read again from the end
+    of its file (nothing is kept between calls): ``{id, tool, title, folder,
+    working, quiet_s, steps: [{at, kind, words}]}``; None when no listed
+    session of that tool has that id (never a path join)."""
+    if not READS_DISK or tool not in TOOLS:
+        return None
+    from ..history import index as HI
+
+    for mtime_ns, size, sid, path in _files(tool)[0]:
+        if sid != chat_id:
+            continue
+        chat = light(tool, path, mtime_ns, size)
+        try:
+            head, tail = HI._head_tail(path, size)
+        except OSError:
+            return None
+        quiet = quiet_for(mtime_ns)
+        return {
+            "id": sid, "tool": tool, "title": (chat or {}).get("title") or "",
+            "folder": (chat or {}).get("folder") or "", "working": quiet < WORKING_S,
+            "quiet_s": int(quiet), "steps": _steps(tool, _mod(tool), path, sid, tail or head),
+        }
+    return None
+
+
 def light(tool: str, path: Path, mtime_ns: int, size: int) -> dict[str, Any] | None:
     """BLOCKING: one chat's title, folder, times and what started it, from
     the first and last window of its file (cached per size and modified
@@ -284,9 +381,11 @@ def light(tool: str, path: Path, mtime_ns: int, size: int) -> dict[str, Any] | N
     if not _ABSOLUTE.match(folder):
         folder = ""  # a folder NAME (Claude Code's slug) is not a folder
     stamp = _iso_of_ns(mtime_ns)
+    sid = str(mod.id_from_path(path) or "")
+    steps = _steps(tool, mod, path, sid, tail or head)
     out = {
         "tool": tool,
-        "id": str(mod.id_from_path(path) or ""),
+        "id": sid,
         "folder": folder,
         "home": project_of(folder) if folder else "",
         "title": _SPACES.sub(" ", str(fields.get("title") or "")).strip()[:TITLE_CHARS],
@@ -294,6 +393,8 @@ def light(tool: str, path: Path, mtime_ns: int, size: int) -> dict[str, Any] | N
         "ended": fields.get("ended") or stamp,
         "origin": origin,
         "source": source,
+        # v1.530.0: the newest step in plain words ("Ran: pytest -q").
+        "doing": next((s["words"] for s in reversed(steps) if s["kind"] != "said"), ""),
     }
     with _lock:
         _light[str(path)] = (key, out)
@@ -415,10 +516,20 @@ def reported_claude(engine: Any) -> list[dict[str, Any]]:
     } for r in reported.rows(engine, reported.APP_CLAUDE)]
 
 
-def _codex_reports(engine: Any) -> list[dict[str, Any]]:
+#: v1.530.0: the connected app whose reports add a summary to a coding
+#: tool's chats (read from that tool's own files).
+REPORTING_APP = {CODEX: "codex", CLAUDE: "claude-code"}
+
+
+def _reports_for(engine: Any, tool: str) -> list[dict[str, Any]]:
     from . import reported
 
-    return reported.rows(engine, reported.APP_CODEX) if engine is not None else []
+    app = REPORTING_APP.get(tool)
+    return reported.rows(engine, app) if engine is not None and app else []
+
+
+def _codex_reports(engine: Any) -> list[dict[str, Any]]:
+    return _reports_for(engine, CODEX)
 
 
 # --------------------------------------------------------------------------- #
@@ -478,19 +589,26 @@ def listing_view(used: "set[str] | None" = None, engine: Any = None) -> dict[str
                 hidden += 1  # HIDDEN_GONE: it cannot be continued
                 continue
             # ``folder`` is where the chat ran, which is where it is opened.
+            # v1.530.0: working now (written a moment ago), how long quiet,
+            # and its newest step, for Chat › Code's "Running elsewhere".
+            quiet = quiet_for(mtime_ns)
             chats.append({"id": chat["id"], "title": chat["title"], "folder": chat["folder"],
-                          "started": chat["started"], "ended": chat["ended"]})
+                          "started": chat["started"], "ended": chat["ended"],
+                          "working": quiet < WORKING_S, "quiet_s": int(quiet),
+                          "doing": chat.get("doing") or ""})
         found[tool] = chats
-    if found.get(CODEX):
+    for tool in REPORTING_APP:
+        if not found.get(tool):
+            continue
         try:
-            from .reported import match_codex
+            from .reported import match_reports
 
-            for cid, rep in match_codex(_codex_reports(engine), found[CODEX]).items():
-                for chat in found[CODEX]:
+            for cid, rep in match_reports(_reports_for(engine, tool), found[tool]).items():
+                for chat in found[tool]:
                     if chat["id"] == cid:
                         chat["summary"] = rep.get("summary") or ""
         except Exception:  # noqa: BLE001 — a summary is extra
-            log.debug("other tools: Codex's reports could not be read", exc_info=True)
+            log.debug("other tools: %s's reports could not be read", tool, exc_info=True)
     claude_chat: list[dict[str, Any]] = []
     try:
         claude_chat += reported_claude(engine)
@@ -569,8 +687,8 @@ def candidates(db: Any, candidate: Callable[..., Any]) -> tuple[list[Any], bool]
     if READS_DISK and (tools & set(TOOLS)):
         used = used_ids(db)
         roots = _scratch_roots()
-        codex_reports = _codex_reports(engine) if CODEX in tools else []
-        codex_mark = f"{len(codex_reports)}:{max((r['ended'] for r in codex_reports), default='')}"
+        reports = {t: (_reports_for(engine, t) if t in tools else []) for t in REPORTING_APP}
+        marks = {t: f"{len(r)}:{max((x['ended'] for x in r), default='')}" for t, r in reports.items()}
         for tool in TOOLS:
             if tool not in tools:
                 continue
@@ -594,15 +712,15 @@ def candidates(db: Any, candidate: Callable[..., Any]) -> tuple[list[Any], bool]
                         "started_at": _naive(chat["started"]),
                         "updated_at": _naive(chat["ended"]) or _naive(_iso_of_ns(mtime_ns)),
                     }
-                    if tool == CODEX and codex_reports:
-                        from .reported import match_codex
+                    if reports.get(tool):
+                        from .reported import match_reports
 
-                        rep = match_codex(codex_reports, [chat]).get(chat["id"])
+                        rep = match_reports(reports[tool], [chat]).get(chat["id"])
                         row["note"] = _note(rep.get("summary")) if rep else ""
                     return row
 
                 ref = ref_of(tool, sid)
-                stamp = f"{mtime_ns}|{size}" + (f"|{codex_mark}" if tool == CODEX else "")
+                stamp = f"{mtime_ns}|{size}" + (f"|{marks[tool]}" if tool in marks else "")
                 out.append(candidate(f"{KIND_OUTSIDE}:{ref}", KIND_OUTSIDE, ref, stamp, build))
     if CLAUDE_CHAT in tools:
         chats = reported_claude(engine)  # a read that fails RAISES: rows are left as they are
