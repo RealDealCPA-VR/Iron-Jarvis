@@ -63,6 +63,20 @@ already ENDED here is remembered for a while too (:meth:`TurnRegistry.
 recently_ended`), so a late Stop is still "already finished", never kept.
 Every stop carries WHEN it was asked (:attr:`TurnHandle.stopped_at`): the
 durable layer writes it on the turn's record (``durable_turns``).
+
+WHO STOPPED IT (fourth plan G27, CS6/DT4): every stop also carries WHO asked
+for it (:attr:`TurnHandle.stop_author`), one of :data:`STOP_AUTHORS`: the
+user ("you"), Iron Jarvis at a reply's time limit ("time_limit"), Emergency
+stop ("emergency"), or "" = not recorded. NO stop function defaults to
+"you": a caller that does not say gets "", whose words are neutral and true,
+never a false "you stopped this". The first stop wins (its time AND its
+author). Every stop still counts as a stop: nothing carries a stopped reply
+on, whoever stopped it (decision G9).
+
+A TURN REFUSED BEFORE IT RAN (fourth plan G27, DT3): an id the stream route
+refused (a 400/404 eager check) is filed by :meth:`TurnRegistry.note_refused`,
+apart from the turns that ran and ended, so a Stop for it answers "it never
+ran" (``stop_or_keep`` -> ``"refused"``), not "already finished".
 """
 
 from __future__ import annotations
@@ -88,6 +102,21 @@ PENDING_STOP_MAX = 256
 #: Stop for one of them is "already finished", never kept for later.
 ENDED_KEEP_S = 600.0
 ENDED_MAX = 1024
+
+#: Fourth plan G27 (CS6/DT4): who stopped a turn. A closed list; "" = not
+#: recorded (an older record, a caller that did not say). Never defaulted to
+#: "you" anywhere: only the user's own presses name it.
+STOP_BY_YOU = "you"
+STOP_BY_TIME_LIMIT = "time_limit"
+STOP_BY_EMERGENCY = "emergency"
+STOP_BY_UNKNOWN = ""
+STOP_AUTHORS = (STOP_BY_YOU, STOP_BY_TIME_LIMIT, STOP_BY_EMERGENCY, STOP_BY_UNKNOWN)
+
+
+def stop_author(by: Any) -> str:
+    """*by* if it is one of :data:`STOP_AUTHORS`, else "" (not recorded)."""
+    text = str(by or "").strip()
+    return text if text in STOP_AUTHORS else STOP_BY_UNKNOWN
 
 
 class ThreadTurn:
@@ -152,6 +181,7 @@ class TurnHandle:
     __slots__ = (
         "turn_id", "_stopped", "_steers", "_steer_lock", "_steers_closed",
         "_wake", "_loop", "_held_steers", "_owed_steers", "stopped_at",
+        "stop_author",
     )
 
     def __init__(self, turn_id: str) -> None:
@@ -160,6 +190,9 @@ class TurnHandle:
         #: Third plan G19: WHEN the stop was asked (the first press; None
         #: while not stopped) — what the turn's record carries.
         self.stopped_at: datetime | None = None
+        #: Fourth plan G27 (CS6): WHO asked that first stop (one of
+        #: :data:`STOP_AUTHORS`; "" while not stopped or not recorded).
+        self.stop_author: str = STOP_BY_UNKNOWN
         # v1.287.0: the runner's wake-up, bound by the runner on its own loop
         # the first time it parks (see :meth:`wait_stopped`). None until then.
         self._wake: asyncio.Event | None = None
@@ -188,9 +221,13 @@ class TurnHandle:
         future (see the module docstring)."""
         return self._stopped
 
-    def stop(self, asked_at: datetime | None = None) -> None:
+    def stop(self, asked_at: datetime | None = None, *, by: str = STOP_BY_UNKNOWN) -> None:
+        """Ask this turn to stop. *by* says who (:data:`STOP_AUTHORS`; ""
+        when the caller does not say). The first stop keeps its time and its
+        author; a later one only re-wakes the runner."""
         if self.stopped_at is None:
             self.stopped_at = asked_at or utcnow()
+            self.stop_author = stop_author(by)
         self._stopped = True
         # Wake a runner parked on the model (v1.287.0). The flag is written
         # FIRST and the runner binds its event BEFORE it reads the flag, so
@@ -307,24 +344,29 @@ class TurnRegistry:
         #: Third plan G19 (CS4): the clock the kept stops and the ended ids
         #: age by (seconds, monotonic) — a test sets its own.
         self.clock: Callable[[], float] = clock or time.monotonic
-        #: turn id -> (kept at, asked at): a Stop for a turn not known yet.
-        self._pending: "OrderedDict[str, tuple[float, datetime]]" = OrderedDict()
+        #: turn id -> (kept at, asked at, who asked): a Stop for a turn not
+        #: known yet (fourth plan G27: its author rides with it).
+        self._pending: "OrderedDict[str, tuple[float, datetime, str]]" = OrderedDict()
         #: turn id -> ended at: turns that ran here and ended (released).
         self._ended: "OrderedDict[str, float]" = OrderedDict()
+        #: Fourth plan G27 (DT3): turn id -> refused at: turns refused before
+        #: they ran (same lifetime and bound as ``_ended``).
+        self._refused: "OrderedDict[str, float]" = OrderedDict()
 
     def _prune(self, now: float) -> None:
-        """Drop kept stops and ended ids past their time (lock held). Both
-        are in insertion order, so the old ones are at the front."""
+        """Drop kept stops, ended and refused ids past their time (lock
+        held). All are in insertion order, so the old ones are at the front."""
         while self._pending:
-            key, (kept, _asked) = next(iter(self._pending.items()))
-            if now - kept <= PENDING_STOP_TTL_S:
+            key, kept_entry = next(iter(self._pending.items()))
+            if now - kept_entry[0] <= PENDING_STOP_TTL_S:
                 break
             self._pending.popitem(last=False)
-        while self._ended:
-            key, ended = next(iter(self._ended.items()))
-            if now - ended <= ENDED_KEEP_S:
-                break
-            self._ended.popitem(last=False)
+        for seen in (self._ended, self._refused):
+            while seen:
+                key, at = next(iter(seen.items()))
+                if now - at <= ENDED_KEEP_S:
+                    break
+                seen.popitem(last=False)
 
     def register(self, turn_id: str) -> TurnHandle:
         """Claim ``turn_id`` for a turn that is about to run.
@@ -338,7 +380,7 @@ class TurnRegistry:
         Third plan G19 (CS4): a Stop kept for this id (:meth:`stop_or_keep`,
         not yet past its time) is applied HERE — the handle comes back
         already stopped, with the press's own time, so the turn ends before
-        its first model call or step.
+        its first model call or step (with the press's author too).
         """
         key = str(turn_id)
         handle = TurnHandle(key)
@@ -346,19 +388,22 @@ class TurnRegistry:
             self._prune(self.clock())
             kept = self._pending.pop(key, None)
             self._ended.pop(key, None)
+            self._refused.pop(key, None)
             self._turns[key] = handle
         if kept is not None:
-            handle.stop(kept[1])
+            handle.stop(kept[1], by=kept[2])
         return handle
 
-    def stop_or_keep(self, turn_id: str) -> str:
+    def stop_or_keep(self, turn_id: str, *, by: str = STOP_BY_UNKNOWN) -> str:
         """Stop the running turn ``turn_id``, or KEEP the Stop for it when no
         such turn is known yet (third plan G19, CS4). Returns ``"stopped"``,
-        ``"pending"`` (kept: :meth:`register` applies it) or ``"ended"`` (it
-        ran here and ended — nothing to stop, nothing kept). One decision
-        under the lock, so a turn registering at the same moment is either
-        stopped here or handed the kept stop — never neither. A second Stop
-        for a kept id keeps the first press (and its time)."""
+        ``"pending"`` (kept: :meth:`register` applies it), ``"ended"`` (it
+        ran here and ended — nothing to stop, nothing kept) or ``"refused"``
+        (fourth plan G27, DT3: it was refused before it ran — nothing ran,
+        nothing kept). One decision under the lock, so a turn registering at
+        the same moment is either stopped here or handed the kept stop —
+        never neither. A second Stop for a kept id keeps the first press (its
+        time and its author, *by*)."""
         key = str(turn_id)
         with self._lock:
             now = self.clock()
@@ -367,12 +412,14 @@ class TurnRegistry:
             if handle is None:
                 if key in self._ended:
                     return "ended"
+                if key in self._refused:
+                    return "refused"
                 if key not in self._pending:
                     while len(self._pending) >= PENDING_STOP_MAX:
                         self._pending.popitem(last=False)
-                    self._pending[key] = (now, utcnow())
+                    self._pending[key] = (now, utcnow(), stop_author(by))
                 return "pending"
-        handle.stop()
+        handle.stop(by=by)
         return "stopped"
 
     def pending_stop(self, turn_id: str) -> bool:
@@ -393,9 +440,9 @@ class TurnRegistry:
             return str(turn_id) in self._ended
 
     def note_ended(self, turn_id: str) -> None:
-        """``turn_id`` will not run (it was refused before it registered, or it
-        ended): a Stop for it is "already finished", and a Stop kept for it is
-        dropped (third plan G19)."""
+        """``turn_id`` ran here and ended: a Stop for it is "already
+        finished", and a Stop kept for it is dropped (third plan G19). A turn
+        refused before it ran is :meth:`note_refused` (fourth plan G27)."""
         key = str(turn_id or "")
         if not key:
             return
@@ -405,10 +452,33 @@ class TurnRegistry:
             self._pending.pop(key, None)
             if key in self._turns:
                 return
+            self._refused.pop(key, None)
             self._ended.pop(key, None)
             while len(self._ended) >= ENDED_MAX:
                 self._ended.popitem(last=False)
             self._ended[key] = now
+
+    def note_refused(self, turn_id: str) -> None:
+        """``turn_id`` was refused before it ran (fourth plan G27, DT3: the
+        stream route's eager check said 400/404 — or its request was dropped
+        while it was being prepared, which also ran nothing). A Stop for it
+        answers ``"refused"`` from now on (nothing ran, so nothing is
+        stopped or written), and a Stop kept for it is dropped. Same
+        lifetime and bound as the ended ids; a later :meth:`register` of the
+        same id clears it, so the same id sent again runs."""
+        key = str(turn_id or "")
+        if not key:
+            return
+        with self._lock:
+            now = self.clock()
+            self._prune(now)
+            self._pending.pop(key, None)
+            if key in self._turns:
+                return
+            self._refused.pop(key, None)
+            while len(self._refused) >= ENDED_MAX:
+                self._refused.popitem(last=False)
+            self._refused[key] = now
 
     def handle(self, turn_id: str) -> TurnHandle | None:
         """The running turn's handle, or None (v1.376.0): a tool whose action
@@ -420,13 +490,15 @@ class TurnRegistry:
         with self._lock:
             return self._turns.get(str(turn_id))
 
-    def stop(self, turn_id: str) -> bool:
-        """Ask a running turn to stop. False = unknown or already finished."""
+    def stop(self, turn_id: str, *, by: str = STOP_BY_UNKNOWN) -> bool:
+        """Ask a running turn to stop, as *by* (:data:`STOP_AUTHORS`; every
+        caller names itself — the default is "not recorded", never "you").
+        False = unknown or already finished."""
         with self._lock:
             handle = self._turns.get(str(turn_id))
         if handle is None:
             return False
-        handle.stop()
+        handle.stop(by=by)
         return True
 
     def steer(self, turn_id: str, text: str) -> bool:

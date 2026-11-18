@@ -36,7 +36,7 @@ import pytest
 
 from iron_jarvis.browser import protocol as P
 from iron_jarvis.browser.grants import TabGrants
-from iron_jarvis.browser.panel import PANEL_HISTORY_MESSAGES
+from iron_jarvis.browser.panel import PANEL_HISTORY_MESSAGES, STOPPED_BY_YOU
 from iron_jarvis.browser.tools import BrowserPressKeyTool
 from iron_jarvis.computeruse.policy import ComputerUsePolicy
 from iron_jarvis.core.turns import TURNS
@@ -258,7 +258,8 @@ def test_a_stopped_turn_keeps_the_half_answer_the_user_read(tmp_path, monkeypatc
 
         turns = _open(app)["turns"]
         assert [t["role"] for t in turns] == ["user", "assistant"], turns
-        assert turns[1]["text"] == _FIRST, turns
+        # Fourth plan G27 (C-BS-2): what was read, then that the person stopped it.
+        assert turns[1]["text"] == f"{_FIRST}\n\n{STOPPED_BY_YOU}", turns
         assert _SECOND not in turns[1]["text"]
 
 

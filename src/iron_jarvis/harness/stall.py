@@ -69,6 +69,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import threading
 import time
@@ -105,6 +106,17 @@ TURN_STOPPED_LEDGER_NOTE = (
     "stopped by you while it was running (you stopped the reply) — "
     "anything it did before it was stopped may have landed"
 )
+#: Fourth plan G27 (CS6): WHO stopped a step, for a stop the user did not
+#: make (``core.turns.STOP_AUTHORS``; "" = not recorded) — the head of its
+#: ledger row (the user's own stops keep the two notes above, unchanged).
+#: ``agents/fix_request._STOP_MARKERS`` reads each as a stop, never a defect,
+#: and ``finish`` words a test run cut by the turn's stop with the same words.
+STOPPED_BY_WORDS: dict[str, str] = {
+    "time_limit": "stopped by Iron Jarvis when the reply reached its time limit",
+    "emergency": "stopped by Emergency stop",
+    "": "stopped while it was running",
+}
+_LANDED = " — anything it did before it was stopped may have landed"
 #: Why a step task was stopped: Stop the step, or the reply's own Stop.
 STOP_STEP = "step"
 STOP_TURN = "turn"
@@ -454,16 +466,74 @@ async def _settle(task: "asyncio.Task[Any]") -> None:
 _STEPS_LOCK = threading.Lock()
 #: turn id -> call id -> (task, tool name)
 _STEPS: dict[str, dict[str, tuple["asyncio.Task[Any]", str]]] = {}
-#: The step tasks the USER stopped, and why (:data:`STOP_STEP` — Stop the
-#: step — or :data:`STOP_TURN` — the reply's own Stop, v1.422.0). The
+#: The step tasks that were stopped, why (:data:`STOP_STEP` — Stop the
+#: step — or :data:`STOP_TURN` — the reply's own Stop, v1.422.0) and who
+#: stopped them (fourth plan G27, CS6: ``core.turns.STOP_AUTHORS``). The
 #: registry and :func:`run_step` read it.
-_STOPPED: "weakref.WeakKeyDictionary[asyncio.Task[Any], str]" = weakref.WeakKeyDictionary()
+_STOPPED: "weakref.WeakKeyDictionary[asyncio.Task[Any], tuple[str, str]]" = weakref.WeakKeyDictionary()
+#: Fourth plan G27 (CS6): who stopped the step whose result :func:`run_step`
+#: is handing the model right now — the lane's result callbacks name only the
+#: tool, so the words below read the author from here (None: not set).
+_RESULT_BY: "contextvars.ContextVar[str | None]" = contextvars.ContextVar("stall_result_by", default=None)
 
 
-def stopped_result(name: str = "", after_s: "float | None" = None) -> str:
-    """What the model is told about a step the user stopped (plain words)."""
-    window = minutes_words(STALL_AFTER_S if after_s is None else after_s)
+def _author(by: Any) -> str:
+    """``by`` as one of ``core.turns.STOP_AUTHORS`` ("" for anything else)."""
+    from ..core.turns import stop_author
+
+    return stop_author(by)
+
+
+def _result_by(by: "str | None") -> str:
+    """Who stopped the step being worded: ``by`` when given, else the one
+    :func:`run_step` is handing over; "" (not recorded) when neither says —
+    never "you" by default (fourth plan G27)."""
+    return _author(by if by is not None else (_RESULT_BY.get() or ""))
+
+
+def _told(make: "Callable[[], Any]", by: str) -> Any:
+    """``make()`` (a lane's result callback) with :data:`_RESULT_BY` set to
+    ``by`` while it runs."""
+    token = _RESULT_BY.set(_author(by))
+    try:
+        return make()
+    finally:
+        _RESULT_BY.reset(token)
+
+
+#: Fourth plan G27 (CS6): what the model's result says about a step someone
+#: other than the user stopped (the reply was stopped with it).
+_OTHER_STOPPED = {
+    "time_limit": "{what} was stopped by Iron Jarvis when your reply reached its time limit.",
+    "emergency": "{what} was stopped by Emergency stop.",
+    "": "{what} was stopped while it was running.",
+}
+_NOT_STARTED_BY = {
+    "you": "the user stopped the reply before it started",
+    "time_limit": "Iron Jarvis stopped the reply at its time limit before it started",
+    "emergency": "Emergency stop stopped the reply before it started",
+    "": "the reply was stopped before it started",
+}
+
+
+def _other_stopped(what: str, by: str) -> str:
+    return (
+        _OTHER_STOPPED.get(by, _OTHER_STOPPED[""]).format(what=what)
+        + " It did not finish, and anything it did before it was stopped may have taken effect. "
+        "Do not start it again unless the user asks."
+    )
+
+
+def stopped_result(name: str = "", after_s: "float | None" = None, *, by: "str | None" = None) -> str:
+    """What the model is told about a stopped step (plain words): the user's
+    Stop the step as before; a stop Iron Jarvis or Emergency stop made says
+    who (fourth plan G27, CS6). ``by`` None: the author :func:`run_step` is
+    handing over."""
     what = f"The {name} step" if name else "This step"
+    who = _result_by(by)
+    if who != "you":
+        return _other_stopped(what, who)
+    window = minutes_words(STALL_AFTER_S if after_s is None else after_s)
     return (
         f"{what} was stopped by the user: it had shown no progress for {window}. It did not finish, "
         "and anything it did before it was stopped may have taken effect. Carry on without it; do "
@@ -471,11 +541,14 @@ def stopped_result(name: str = "", after_s: "float | None" = None) -> str:
     )
 
 
-def turn_stopped_result(name: str = "") -> str:
+def turn_stopped_result(name: str = "", *, by: "str | None" = None) -> str:
     """v1.422.0 (B2): what the model's result says about a step that was
-    running when the user stopped the whole reply (plain words; never that it
-    succeeded)."""
+    running when the reply was stopped (plain words; never that it
+    succeeded) — and who stopped it (fourth plan G27, CS6)."""
     what = f"The {name} step" if name else "This step"
+    who = _result_by(by)
+    if who != "you":
+        return _other_stopped(what, who)
     return (
         f"{what} was stopped by the user, who stopped the reply while it was running. It did not "
         "finish, and anything it did before it was stopped may have taken effect. Do not start it "
@@ -483,13 +556,14 @@ def turn_stopped_result(name: str = "") -> str:
     )
 
 
-def not_started_result(name: str = "") -> str:
+def not_started_result(name: str = "", *, by: "str | None" = None) -> str:
     """v1.422.0 review (B2): what the model's result says about a step the
-    reply had NOT started yet when the user stopped it — it never ran (plain
-    words; never that it succeeded)."""
+    reply had NOT started yet when it was stopped — it never ran (plain
+    words; never that it succeeded) — and who stopped it (fourth plan G27)."""
     what = f"The {name} step" if name else "This step"
+    why = _NOT_STARTED_BY.get(_result_by(by), _NOT_STARTED_BY[""])
     return (
-        f"{what} was not run: the user stopped the reply before it started. Nothing it would "
+        f"{what} was not run: {why}. Nothing it would "
         "have done took effect. Do not start it again unless the user asks."
     )
 
@@ -517,18 +591,32 @@ def stop_reason(task: "asyncio.Task[Any] | None" = None) -> str:
     task = _task_or_current(task)
     if task is None:
         return ""
-    return str(_STOPPED.get(task, "") or "")
+    return str((_STOPPED.get(task) or ("", ""))[0] or "")
+
+
+def stop_by(task: "asyncio.Task[Any] | None" = None) -> str:
+    """Fourth plan G27 (CS6): who stopped this task (default: the current
+    one) — one of ``core.turns.STOP_AUTHORS``; "" when not stopped or not
+    recorded."""
+    task = _task_or_current(task)
+    if task is None:
+        return ""
+    return str((_STOPPED.get(task) or ("", ""))[1] or "")
 
 
 def stop_note() -> str:
     """v1.422.0 (B2): the words the registry writes on the ledger row of the
-    CURRENT task's call when the user stopped it ("" when they did not)."""
+    CURRENT task's call when it was stopped ("" when it was not). The user's
+    stops keep their words; a stop Iron Jarvis's time limit or Emergency stop
+    made, or one nobody recorded, says so (fourth plan G27, CS6) — never
+    "stopped by you"."""
     reason = stop_reason()
-    if reason == STOP_TURN:
-        return TURN_STOPPED_LEDGER_NOTE
-    if reason == STOP_STEP:
-        return STOPPED_LEDGER_NOTE
-    return ""
+    if not reason:
+        return ""
+    by = stop_by()
+    if by == "you":
+        return TURN_STOPPED_LEDGER_NOTE if reason == STOP_TURN else STOPPED_LEDGER_NOTE
+    return STOPPED_BY_WORDS.get(by, STOPPED_BY_WORDS[""]) + _LANDED
 
 
 def _turn_handle(turn_id: str) -> Any:
@@ -579,7 +667,7 @@ async def run_step(turn_id: str, call_id: str, name: str,
     if race:
         early = _turn_handle(str(turn_id or ""))
         if early is not None and early.stopped:
-            return (not_started or turn_stopped or stopped)()
+            return _told(not_started or turn_stopped or stopped, getattr(early, "stop_author", ""))
     task: "asyncio.Task[Any]" = asyncio.ensure_future(make())
     key, cid = str(turn_id or ""), str(call_id or "")
     with _STEPS_LOCK:
@@ -595,18 +683,20 @@ async def run_step(turn_id: str, call_id: str, name: str,
                 await asyncio.wait({task}, timeout=STOP_GRACE_S)
             if stop_wait.done() and not task.done():
                 # THE REPLY'S STOP REACHES THE RUNNING STEP (v1.422.0, B2). A
-                # reason Stop the step set first stays (its words).
+                # reason Stop the step set first stays (its words). Who
+                # stopped the reply is the handle's (fourth plan G27, CS6).
                 if task not in _STOPPED:
-                    _STOPPED[task] = STOP_TURN
+                    _STOPPED[task] = (STOP_TURN, _author(getattr(handle, "stop_author", "")))
                 task.cancel()
         return await task
     except asyncio.CancelledError:
         cur = asyncio.current_task()
         mine = cur is not None and cur.cancelling() > 0
         if task in _STOPPED and task.done() and not mine:
-            if _STOPPED.get(task) == STOP_TURN and turn_stopped is not None:
-                return turn_stopped()
-            return stopped()
+            reason, by = _STOPPED.get(task) or ("", "")
+            if reason == STOP_TURN and turn_stopped is not None:
+                return _told(turn_stopped, by)
+            return _told(stopped, by)
         if not task.done():
             task.cancel()
         raise
@@ -627,8 +717,11 @@ def running_steps(turn_id: str) -> list[str]:
         return list((_STEPS.get(str(turn_id or "")) or {}).keys())
 
 
-def stop_step(turn_id: str, call_id: str) -> bool:
-    """Cancel ONE running step of a turn (the user's Stop the step). False
+def stop_step(turn_id: str, call_id: str, *, by: str = "") -> bool:
+    """Cancel ONE running step of a turn (the user's Stop the step, the
+    night's time limit, Emergency stop). ``by`` names who stops it (fourth
+    plan G27, CS6: ``core.turns.STOP_AUTHORS``; "" = not recorded, never
+    "you" by default) — its ledger row and the model's result say so. False
     when no such step runs (it finished, or the id is not this turn's)."""
     with _STEPS_LOCK:
         entry = (_STEPS.get(str(turn_id or "")) or {}).get(str(call_id or ""))
@@ -637,7 +730,7 @@ def stop_step(turn_id: str, call_id: str) -> bool:
     task = entry[0]
     if task.done():
         return False
-    _STOPPED[task] = STOP_STEP
+    _STOPPED[task] = (STOP_STEP, _author(by))
     try:
         home = task.get_loop()
         try:
@@ -804,6 +897,7 @@ class PhoneAsk:
 __all__ = [
     "CLOCK", "DEADLINE_GRACE_S", "PHONE_AFTER_S", "SAFETY_REASONS", "STALL_AFTER_S", "STALL_FRAME", "STOPPED_LEDGER_NOTE",
     "STOP_GRACE_S", "STOP_STEP", "STOP_TURN", "TURN_STOPPED_LEDGER_NOTE", "not_started_result", "stop_note", "stop_reason",
+    "STOPPED_BY_WORDS", "stop_by",
     "turn_stopped_result",
     "StallWatch", "TICK_S", "keep", "listening", "minutes_words", "model_words", "notice_words", "now",
     "phone_may_ask", "progress_scope", "run_step", "running_steps", "step_words", "stop_step",

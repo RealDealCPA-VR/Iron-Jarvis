@@ -524,6 +524,12 @@ _STOP_MARKERS = (
     "client disconnected while the tool was running",
     "iron jarvis stopped while this was running",
     "emergency stop is on",
+    # Fourth plan G27 (CS6): a step stopped by the reply's time limit, by
+    # Emergency stop, or by a stop nobody recorded (``stall.STOPPED_BY_WORDS``
+    # — a test pins that every one of them is here).
+    "stopped by iron jarvis when the reply reached its time limit",
+    "stopped by emergency stop",
+    "stopped while it was running",
     "the approval request timed out",
     "declined this call when asked",
     "left for the user:",

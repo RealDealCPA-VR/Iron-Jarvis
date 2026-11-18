@@ -408,7 +408,9 @@ describe("the thread menu: whole pixels, tone tokens, plain copy", () => {
   it("its items, the delete row and the no-projects note follow the rules (source pin)", () => {
     const page = read("app/chat/page.tsx");
     const start = page.indexOf("const item =\n");
-    const end = page.indexOf('{deleteArmedId === mt.id ? "Delete for good? Press again" : "Delete chat"}');
+    // v1.535.0: the armed words come from lib/deleteWords (they add a line
+    // when the chat has a reply running).
+    const end = page.indexOf('{deleteArmedId === mt.id ? deleteArmedWords(mt.running === true) : "Delete chat"}');
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const menu = page.slice(start, end + 200);

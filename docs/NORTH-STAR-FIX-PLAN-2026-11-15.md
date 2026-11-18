@@ -4203,3 +4203,38 @@ merged in; and two tests passed only on their retry
 `test_harness_helpers_review_v1372::test_a_folder_rule_reaches_the_helper`),
 not reproduced here; the first now pins "every hop answered" with a deadline
 a runner cannot beat, the second waits up to 90 s for the frame it asserts.
+
+### Group 27 as built (v1.535.0)
+
+Fixed: CS6/DT4, DT3, DT6, BS2, DT5, C-BS-2, and owner decision D5
+(C-DT-2: deleting a chat stops its reply). Four implementers (Opus 5.5) and
+the lead (the Delete button's line); the lead read every diff and turned
+DT3's test red by marking a refused turn "ended" again.
+
+Where it went further than the plan:
+
+- The stored key is `stop_author`, so the orphan guard's existing
+  `"stopped_by": "unwatched"` keeps its one meaning.
+- When a stop arrives after Iron Jarvis's own stop, the first stop's time and
+  author are kept.
+- A sidebar reply the lane refuses drops its kept Stop at once.
+- A reply stopped before it answered is saved as "(You stopped this reply
+  before it answered.)", matching the existing pair for a closed sidebar.
+
+Left open:
+
+- A user's own Stop of a night turn, pressed in the session rather than the
+  night's Cancel, still reads FAILED with "You stopped this reply…".
+- `stoppedBy` is written on lines the resume pass writes and on stopped
+  attempts lines; a reply stopped live with no restart ends without it (its
+  words are right either way). The dashboard does not keep `stoppedBy` yet.
+- Not tried on the installed app: Stop right after Send in the sidebar;
+  closing the sidebar right after Send; deleting a chat mid-reply.
+
+Also in v1.534.0's runs:
+`test_integrate_wave10_v13600::test_in_the_tray_main_js_says_each_failed_outcome_once_from_the_real_audit`
+passed only on its retry on the branch run (3 of 3 here, and the release run
+was clean). The tray planner it runs reads no clock; one possible cause,
+not confirmed: `core/db.persist_event` gives up after about 2 s of retries
+when the database is busy, so an event can be missing from the activity log
+on a loaded machine. That is a product gap to look at, not fixed here.

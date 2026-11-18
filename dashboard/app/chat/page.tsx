@@ -104,6 +104,7 @@ import {
   X,
 } from "lucide-react";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
+import { deleteArmedWords } from "@/lib/deleteWords";
 import {
   ARCHIVED_THREADS_PATH,
   archiveChat,
@@ -12126,7 +12127,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   >
                     <Trash2 size={15} className="shrink-0" />
                     <span className="min-w-0 flex-1">
-                      {deleteArmedId === threadId ? "Delete for good? Press again" : "Delete chat"}
+                      {deleteArmedId === threadId ? deleteArmedWords(busy) : "Delete chat"}
                     </span>
                   </button>
                   {/* v1.335.0: what this chat has used (read when the
@@ -13240,7 +13241,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           onClick={() => pressDelete(mt.id)}
                         >
                           <Trash2 size={14} className="shrink-0" />
-                          {deleteArmedId === mt.id ? "Delete for good? Press again" : "Delete chat"}
+                          {deleteArmedId === mt.id ? deleteArmedWords(mt.running === true) : "Delete chat"}
                         </button>
                       </m.div>
                     );

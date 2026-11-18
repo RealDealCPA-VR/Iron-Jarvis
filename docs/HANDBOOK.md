@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.534.0 (2026-11-18).*
+holds itself to. Current as of v1.535.0 (2026-11-18).*
 
 ---
 
@@ -2041,6 +2041,37 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Stop says who, and acts at once (v1.535.0)
+
+The fourth of nine releases from the fourth review.
+
+- **A stopped reply says who stopped it.** A reply Iron Jarvis stopped itself
+  (a night task reaching its time limit, Emergency stop) said "You stopped
+  this reply", and the step that was running was recorded as stopped by you.
+  It now says what really stopped it: "Iron Jarvis stopped this reply at its
+  time limit", "This reply was stopped by Emergency stop", or, when you did,
+  the same words as before. A night task stopped by its limit or by Emergency
+  stop reads "stopped" in the morning, not "failed". Nothing stopped is ever
+  carried on by itself, whoever stopped it.
+- **Stop takes effect at once.** Stop used to wait for the record to be
+  written (up to three seconds when the PC was busy) before stopping the
+  reply, which could start another step meanwhile. It now stops first and
+  records after.
+- **Stop right after Send.** Pressing Stop before a reply had properly
+  started could answer that it had "already finished", then show an error.
+  It now says it was stopped, and nothing ran. In the browser sidebar, a
+  Stop pressed that early was lost and the reply ran to its end; it now
+  stops it. Closing the sidebar right after Send stops the reply too, so
+  nothing runs, and costs, with nobody watching.
+- **A stopped sidebar reply is remembered as stopped.** It is saved as "(You
+  stopped this reply.)", so your next question does not lead Iron Jarvis to
+  do the stopped request again.
+- **Deleting a chat stops the reply it is writing.** Before, the reply ran on
+  for a chat that no longer existed. The Delete button says so when a reply
+  is running ("Deleting it also stops the reply it is writing."). An agent
+  run the chat already handed work to keeps going. Nothing of a deleted
+  chat's reply is kept afterwards.
 
 ## Done means done, for attempts and the night (v1.534.0)
 

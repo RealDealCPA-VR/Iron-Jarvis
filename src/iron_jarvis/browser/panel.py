@@ -185,7 +185,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..core.logging import get_logger
-from ..core.turns import TURNS
+from ..core.turns import STOP_BY_YOU, TURNS
 from . import protocol as P
 
 logger = get_logger(__name__)
@@ -218,6 +218,12 @@ CARD_WITHDRAWN = "That request was withdrawn when the reply was stopped, so noth
 #: reopened panel, the chat list nor the next question reads it as finished).
 STOPPED_ON_CLOSE = "(Stopped when the sidebar was closed.)"
 STOPPED_ON_CLOSE_EMPTY = "(Stopped when the sidebar was closed, before it answered.)"
+
+#: Fourth plan G27 (C-BS-2): a reply the person stopped with Stop (or Esc) is
+#: written so, after what was read, never as "(Iron Jarvis gave no answer.)":
+#: the next question then does not lead the model to redo the stopped request.
+STOPPED_BY_YOU = "(You stopped this reply.)"
+STOPPED_BY_YOU_EMPTY = "(You stopped this reply before it answered.)"
 
 #: SB13: how many open sidebar windows are remembered, and the longest window
 #: name kept. A bound, not a count anyone reaches: one per browser window.
@@ -1112,7 +1118,9 @@ class PanelTurns:
             # SB7: a dictation nobody can see any more is dropped, its
             # transcription with it.
             self._cancel_voice()
-            if self._turn_id and TURNS.stop(self._turn_id):
+            # G27 (BS2): a close right after Send stops the reply too, even
+            # before it registered (the Stop is kept and applied then).
+            if self._stop_own_turn():
                 self._stop_asked = True
                 self._closed_stop = True
             return
@@ -1943,12 +1951,16 @@ class PanelTurns:
         if self.history_limit > 0:
             del self._history[: -self.history_limit]
 
-    async def _remember_exchange(self, *, stopped_on_close: bool = False) -> None:
+    async def _remember_exchange(
+        self, *, stopped_on_close: bool = False, stopped_by_you: bool = False
+    ) -> None:
         """Write the running turn's question and what the user READ, once.
 
         ``stopped_on_close`` (SB13, third review): the reply was stopped by the
         last sidebar window closing, so the answer is written with
         :data:`STOPPED_ON_CLOSE` after it (nobody was watching it end).
+        ``stopped_by_you`` (fourth plan G27, C-BS-2): the person pressed Stop,
+        so it is written with :data:`STOPPED_BY_YOU` (a close wins: its words).
 
         Called at every exit — the ``done`` branch of :meth:`_translate` (before
         the frame is sent), the failure branch and the ``finally`` of
@@ -1966,6 +1978,8 @@ class PanelTurns:
         read = "".join(self._answer).strip()
         if stopped_on_close:
             answer = f"{read}\n\n{STOPPED_ON_CLOSE}" if read else STOPPED_ON_CLOSE_EMPTY
+        elif stopped_by_you:
+            answer = f"{read}\n\n{STOPPED_BY_YOU}" if read else STOPPED_BY_YOU_EMPTY
         else:
             answer = ("".join(self._answer) or "(Iron Jarvis gave no answer.)").strip()
         self._remember("user", question)
@@ -2260,8 +2274,23 @@ class PanelTurns:
             f" {wait_s} seconds, or use the Iron Jarvis window."
         )
 
+    def _stop_own_turn(self) -> bool:
+        """Stop this sidebar's reply as the person's own Stop; True when it
+        was stopped (fourth plan G27, BS2).
+
+        ``TURNS.stop`` knows only a registered turn, and the sidebar's reply
+        registers several awaits after its Send was answered: a Stop (or the
+        last window closing) in that gap was lost and the reply ran to its
+        end. ``stop_or_keep`` KEEPS such a Stop and the registry applies it
+        when the turn registers, so the reply never starts. "stopped" and
+        "pending" are stopped; "refused" (refused before it ran), "ended" and
+        anything else are nothing running."""
+        if not self._turn_id:
+            return False
+        return TURNS.stop_or_keep(self._turn_id, by=STOP_BY_YOU) in ("stopped", "pending")
+
     async def _stop(self, conn: Any) -> None:
-        if self._turn_id and TURNS.stop(self._turn_id):
+        if self._stop_own_turn():
             # SB2: from here every card of this reply is withdrawn.
             self._stop_asked = True
             return
@@ -2508,6 +2537,9 @@ class PanelTurns:
         from ..providers.failure_words import reset_surface, set_sidebar_surface
 
         surface_token = set_sidebar_surface()
+        # G27 (BS2): the lane handed back its stream, so the turn registered.
+        # Before that, a raise is the lane refusing it before it ran.
+        started = False
         try:
             gen = await stream_chat_turn(
                 self.platform,
@@ -2525,6 +2557,7 @@ class PanelTurns:
                 # matched no rule — the sidebar could only talk.
                 arm_family=ceiling,
             )
+            started = True
             async for chunk in gen:
                 for event, data in parse_sse(chunk):
                     if event == "done":
@@ -2537,6 +2570,10 @@ class PanelTurns:
             raise
         except Exception as exc:  # noqa: BLE001 — an honest failure, never silence
             logger.debug("panel turn failed", exc_info=True)
+            if not started:
+                # G27 (BS2): refused before it ran. A Stop kept for it is
+                # dropped now, and a Stop from here on is "nothing running".
+                TURNS.note_refused(turn_id)
             # v1.270.0: what was read is remembered BEFORE the panel is told.
             await self._remember_exchange()
             # v1.516.0 (second review B12): never the exception's own text on
@@ -2564,8 +2601,11 @@ class PanelTurns:
             # written now, before the stop's own terminal frame below.
             # SB13: a reply the last sidebar window's closing stopped is
             # written as stopped, so nothing reads it as finished.
+            # G27 (C-BS-2): so is one the person stopped with Stop.
+            stopped_here = self._stop_asked and not emitted_done and not ended_on_error
             await self._remember_exchange(
-                stopped_on_close=self._closed_stop and not emitted_done and not ended_on_error
+                stopped_on_close=self._closed_stop and stopped_here,
+                stopped_by_you=stopped_here,
             )
             if not emitted_done:
                 # A STOPPED turn returns with no terminal `done` frame — it

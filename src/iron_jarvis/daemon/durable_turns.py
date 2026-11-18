@@ -704,25 +704,56 @@ class TurnLog:
         #: the stop route wrote on the record (:meth:`ask_stop`).
         self.handle: Any = None
         self._stop_asked_at: Any = None
+        #: Fourth plan G27 (CS6): who asked the stop the route marked.
+        self._stop_author: str = ""
 
     # -- Stop is written down (third plan G19) -------------------------------
-    def ask_stop(self, when: Any) -> None:
-        """The user asked this turn to stop at *when*: every later write of
-        the record carries it (the first press wins; never cleared)."""
+    def ask_stop(self, when: Any, by: str = "") -> None:
+        """A stop was asked for this turn at *when*, by *by* (``core.turns.
+        STOP_AUTHORS``; "" = not recorded, never "you" by default): every
+        later write of the record carries both (the first press wins; never
+        cleared)."""
         if self._stop_asked_at is None and when is not None:
+            from ..core.turns import stop_author
+
             self._stop_asked_at = when
+            self._stop_author = stop_author(by)
+
+    def _stop_mark(self) -> "tuple[Any, str] | None":
+        """``(when, who)`` of the FIRST stop asked for this turn — the
+        route's mark or the registry handle's own stop, whichever came first
+        (fourth plan G27: a Stop pressed after Iron Jarvis's own stop never
+        rewrites who stopped it) — or None. In memory: no database read."""
+        marks: list[tuple[Any, str]] = []
+        if self._stop_asked_at is not None:
+            marks.append((self._stop_asked_at, self._stop_author))
+        handle = self.handle
+        if handle is not None and getattr(handle, "stopped", False):
+            marks.append((
+                getattr(handle, "stopped_at", None) or utcnow(),
+                str(getattr(handle, "stop_author", "") or ""),
+            ))
+        if not marks:
+            return None
+        try:
+            return min(marks, key=lambda m: m[0])
+        except TypeError:  # two clocks that cannot be compared: the route's
+            return marks[0]
 
     @property
     def stop_asked_at(self) -> Any:
         """When a stop was asked for this turn (the route's mark, else the
-        registry handle's own stop time), or None. In memory: the live paths
-        need no database read."""
-        if self._stop_asked_at is not None:
-            return self._stop_asked_at
-        handle = self.handle
-        if handle is not None and getattr(handle, "stopped", False):
-            return getattr(handle, "stopped_at", None) or utcnow()
-        return None
+        registry handle's own stop time — the earlier of the two), or None.
+        In memory: the live paths need no database read."""
+        mark = self._stop_mark()
+        return mark[0] if mark is not None else None
+
+    @property
+    def stop_author(self) -> str:
+        """Who asked that stop (``core.turns.STOP_AUTHORS``); "" when not
+        stopped or not recorded (fourth plan G27, CS6)."""
+        mark = self._stop_mark()
+        return mark[1] if mark is not None else ""
 
     @property
     def stop_asked(self) -> bool:
@@ -1083,9 +1114,11 @@ class TurnLog:
         }
         # Third plan G19: the stop mark rides every write once asked (and
         # :func:`_write_record` never clears one already on the record).
-        asked = self.stop_asked_at
-        if asked is not None:
-            values["stop_asked_at"] = asked
+        # Fourth plan G27 (CS6): and who asked it, beside it.
+        mark = self._stop_mark()
+        if mark is not None:
+            values["stop_asked_at"] = mark[0]
+            values["stop_author"] = mark[1]
         return values
 
     def persist_interval(self) -> float:
@@ -1094,6 +1127,11 @@ class TurnLog:
         return max(PERSIST_EVERY_S, self._chars / PERSIST_BYTES_PER_S)
 
     def maybe_persist(self, engine: Any) -> None:
+        if self.chat_deleted:
+            # Fourth plan G27 (DT5): the chat is gone — nothing of this turn
+            # is written any more (its end, :meth:`persist_now`, deletes the
+            # record instead, after any write already in flight).
+            return
         now = time.monotonic()
         if not self._dirty:
             return
@@ -1138,6 +1176,13 @@ class TurnLog:
             with contextlib.suppress(Exception):
                 await self._persisting
         self._dirty = False
+        if self.chat_deleted:
+            # Fourth plan G27 (DT5): a deleted chat's turn leaves no record —
+            # on a normal end and on a shutdown's cut alike (the driver's
+            # ``finally`` calls this). The write awaited above may have
+            # re-created the row the delete removed: it goes here.
+            await asyncio.to_thread(forget_records, engine, [self.turn_id])
+            return
         await asyncio.to_thread(
             _write_record, engine, self.turn_id, self.started_at, self._row_values()
         )
@@ -1160,9 +1205,12 @@ def _write_record(engine: Any, turn_id: str, started_at: Any, values: dict[str, 
                 else:
                     # A row the stop mark made first starts when the turn did.
                     row.started_at = started_at
+                marked = row.stop_asked_at is not None
                 for k, v in values.items():
-                    if k == "stop_asked_at" and (v is None or row.stop_asked_at is not None):
-                        continue  # third plan G19: never cleared, first press kept
+                    if k in ("stop_asked_at", "stop_author") and (v is None or marked):
+                        # Third plan G19: never cleared, first press kept —
+                        # fourth plan G27: and who asked it stays with it.
+                        continue
                     setattr(row, k, v)
                 db.add(row)
                 try:
@@ -1180,12 +1228,15 @@ def _write_record(engine: Any, turn_id: str, started_at: Any, values: dict[str, 
 # STOP IS WRITTEN DOWN (third plan G19: RB1, CS4). A Stop used to be a flag in
 # memory only (``core/turns``): a restart in the seconds after it lost it, and
 # the coding resume pass then carried the stopped reply on by itself. The stop
-# route now writes WHEN the stop was asked on the turn's record BEFORE it acts
-# on it (:func:`record_stop`), the live log carries it on every later write
-# (``TurnLog.stop_asked``), and :func:`stop_asked` is what every carry-on reads.
+# route now marks the live log, stops the turn in memory AT ONCE (fourth plan
+# G27, DT6: a slow disk never lets another step start), then writes WHEN the
+# stop was asked, and WHO asked it, on the turn's record (:func:`record_stop`)
+# before it answers; the live log carries both on every later write
+# (``TurnLog.stop_asked``), and :func:`stop_asked` / :func:`stop_fact` are
+# what every carry-on reads.
 # --------------------------------------------------------------------------- #
 #: The longest the stop route waits for the mark to be written before it
-#: stops the turn anyway (the write goes on in its thread).
+#: answers anyway (the write goes on in its thread; the turn is stopped).
 STOP_MARK_TIMEOUT_S = 3.0
 #: The stop route's 404 words (with ``"finished": true``): the reply had
 #: already finished, so nothing was stopped. The Chat page reads the flag and
@@ -1193,8 +1244,10 @@ STOP_MARK_TIMEOUT_S = 3.0
 STOP_FINISHED_DETAIL = "That reply had already finished."
 
 
-def write_stop_mark(engine: Any, turn_id: str, when: Any) -> bool:
-    """Write *when* as turn ``turn_id``'s ``stop_asked_at`` — the first press
+def write_stop_mark(engine: Any, turn_id: str, when: Any, by: str = "") -> bool:
+    """Write *when* as turn ``turn_id``'s ``stop_asked_at``, and *by* (who
+    asked it: ``core.turns.STOP_AUTHORS``; "" = not recorded, never "you" by
+    default) as its ``stop_author``, in one guarded update — the first press
     is kept, a later one changes nothing. A record that does not exist yet
     (the turn has not written its first) is CREATED with the mark, so there
     is no moment in which the stop is in memory only; the turn's own first
@@ -1207,20 +1260,23 @@ def write_stop_mark(engine: Any, turn_id: str, when: Any) -> bool:
         from sqlalchemy import update
         from sqlalchemy.exc import IntegrityError
 
+        from ..core.turns import stop_author
+
+        who = stop_author(by)
         for _attempt in (1, 2):
             with session_scope(engine) as db:
                 res = db.exec(  # type: ignore[call-overload]
                     update(ChatTurnRecord)
                     .where(ChatTurnRecord.id == tid)  # type: ignore[arg-type]
                     .where(ChatTurnRecord.stop_asked_at.is_(None))  # type: ignore[union-attr]
-                    .values(stop_asked_at=when)
+                    .values(stop_asked_at=when, stop_author=who)
                 )
                 db.commit()
                 if int(getattr(res, "rowcount", 0) or 0):
                     return True
                 if db.get(ChatTurnRecord, tid) is not None:
                     return True  # already marked by an earlier press
-                db.add(ChatTurnRecord(id=tid, started_at=when, stop_asked_at=when))
+                db.add(ChatTurnRecord(id=tid, started_at=when, stop_asked_at=when, stop_author=who))
                 try:
                     db.commit()
                     return True
@@ -1232,15 +1288,15 @@ def write_stop_mark(engine: Any, turn_id: str, when: Any) -> bool:
         return False
 
 
-async def record_stop(engine: Any, turn_id: str, when: Any) -> bool:
+async def record_stop(engine: Any, turn_id: str, when: Any, by: str = "") -> bool:
     """:func:`write_stop_mark` off the event loop, SHIELDED (a shutdown in
     that instant does not drop the write) and bounded by
     :data:`STOP_MARK_TIMEOUT_S`. False (logged) when it failed or took too
-    long — the caller stops the turn either way. Never raises except a
-    cancel of the caller itself."""
+    long — the turn is stopped either way. Never raises except a cancel of
+    the caller itself."""
     try:
         return bool(await asyncio.wait_for(
-            asyncio.shield(asyncio.to_thread(write_stop_mark, engine, turn_id, when)),
+            asyncio.shield(asyncio.to_thread(write_stop_mark, engine, turn_id, when, by)),
             timeout=STOP_MARK_TIMEOUT_S,
         ))
     except asyncio.CancelledError:
@@ -1251,18 +1307,22 @@ async def record_stop(engine: Any, turn_id: str, when: Any) -> bool:
         return False
 
 
-def stop_asked(engine: Any, turn_id: str) -> bool:
-    """Was turn ``turn_id`` asked to stop? The live turn this process holds
-    answers from memory (``TurnLog.stop_asked``); otherwise its record's
-    ``stop_asked_at``. False for an unknown id or a turn never stopped.
-    BLOCKING (one primary-key read of one column); never raises."""
+def stop_fact(engine: Any, turn_id: str) -> "tuple[Any, str] | None":
+    """``(when, who)`` of the stop asked for turn ``turn_id`` — who is one
+    of ``core.turns.STOP_AUTHORS`` ("" = not recorded, e.g. a record older
+    than the column) — or None when it was never asked to stop (or the id is
+    unknown). The live turn this process holds answers from memory;
+    otherwise its record (fourth plan G27, CS6/DT4). BLOCKING (one
+    primary-key read of two columns); never raises (unreadable = None)."""
     tid = str(turn_id or "").strip()
     if not tid:
-        return False
+        return None
     try:
         lg = _LIVE.get(tid)
-        if lg is not None and lg.stop_asked:
-            return True
+        if lg is not None:
+            mark = lg._stop_mark()
+            if mark is not None:
+                return mark
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -1270,12 +1330,26 @@ def stop_asked(engine: Any, turn_id: str) -> bool:
 
         with session_scope(engine) as db:
             got = db.exec(
-                select(ChatTurnRecord.stop_asked_at).where(ChatTurnRecord.id == tid)
+                select(ChatTurnRecord.stop_asked_at, ChatTurnRecord.stop_author)
+                .where(ChatTurnRecord.id == tid)
             ).first()
-        return got is not None and (got[0] if isinstance(got, tuple) else got) is not None
+        if got is None or got[0] is None:
+            return None
+        from ..core.turns import stop_author
+
+        return got[0], stop_author(got[1])
     except Exception:  # noqa: BLE001 — unknown reads as "not asked"
         log.warning("could not read whether chat turn %s was stopped", tid, exc_info=True)
-        return False
+        return None
+
+
+def stop_asked(engine: Any, turn_id: str) -> bool:
+    """Was turn ``turn_id`` asked to stop — by ANYONE (decision G9: no
+    stopped reply is ever carried on, whoever stopped it)? The live turn this
+    process holds answers from memory (``TurnLog.stop_asked``); otherwise its
+    record's ``stop_asked_at`` (:func:`stop_fact`). False for an unknown id
+    or a turn never stopped. BLOCKING; never raises."""
+    return stop_fact(engine, turn_id) is not None
 
 
 def record_exists(engine: Any, turn_id: str) -> bool:
@@ -1560,14 +1634,18 @@ class TurnLogs:
             log.warning("chat turn %s: its reply could not be written home on link", lg.turn_id,
                         exc_info=True)
 
-    def forget_thread(self, thread_id: str) -> None:
+    def forget_thread(self, thread_id: str) -> "list[str]":
         """CS7: the chat *thread_id* was deleted. Its finished turns leave
-        memory now; a running one is marked, and its record goes when it
-        ends (whether a running turn stops is the delete's own rule: it does
-        not stop it). Called from any thread; never raises."""
+        memory now; a running one is marked: nothing of it is written any
+        more and its record goes when it ends (fourth plan G27, DT5). Whether
+        a running turn stops is the delete's own rule (since fourth plan
+        G27, D5: it does — ``routes/chat.delete_thread``, which stops the
+        ids returned: this chat's turns still running). Called from any
+        thread; never raises."""
         tid = str(thread_id or "").strip()
+        running: list[str] = []
         if not tid:
-            return
+            return running
         try:
             for turn_id, linked in list(self._links.items()):
                 if linked == tid:
@@ -1576,12 +1654,15 @@ class TurnLogs:
                 if str(lg.thread_id or "") != tid:
                     continue
                 lg.chat_deleted = True
+                if lg.status == "running":
+                    running.append(turn_id)
                 if lg.status != "running" and (lg.task is None or lg.task.done()):
                     self._logs.pop(turn_id, None)
                     with contextlib.suppress(Exception):
                         _LIVE.pop(turn_id, None)
         except Exception:  # noqa: BLE001
             log.warning("could not forget the turns of deleted chat %s", tid, exc_info=True)
+        return running
 
     async def _announce_finished(self, lg: TurnLog, status: str) -> None:
         """``chat.turn_finished`` (v1.420.0, C6.10) for a CHAT reply longer
@@ -1978,15 +2059,19 @@ def drop_thread_records(db: Any, thread_id: str) -> int:
         return 0
 
 
-def forget_thread(engine: Any, thread_id: str) -> None:
+def forget_thread(engine: Any, thread_id: str) -> "list[str]":
     """CS7: chat *thread_id* was deleted — every turn registry on *engine*
-    forgets its turns (:meth:`TurnLogs.forget_thread`). Never raises."""
+    forgets its turns (:meth:`TurnLogs.forget_thread`). Returns the ids of
+    its turns still running (fourth plan G27: the delete stops them). Never
+    raises."""
+    running: list[str] = []
     try:
         for reg in list(_REGISTRIES):
             if getattr(reg, "engine", None) is engine:
-                reg.forget_thread(thread_id)
+                running.extend(reg.forget_thread(thread_id) or [])
     except Exception:  # noqa: BLE001
         log.warning("could not forget the turns of deleted chat %s", thread_id, exc_info=True)
+    return running
 
 
 def _thread_rows(engine: Any, thread_ids: "set[str]", *, messages: bool) -> dict[str, Any]:

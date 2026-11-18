@@ -73,7 +73,7 @@ from ..chat_stream import stream_chat_turn
 from ..schemas import ChatArchiveBody, ChatBody, ChatMessageBody
 from ...core import auto_approve as _auto_approve
 from ...core.ids import utcnow
-from ...core.turns import TURNS
+from ...core.turns import STOP_BY_YOU, TURNS
 from ...harness import session_grants as _session_grants
 from ...harness import sessions as S
 
@@ -392,18 +392,49 @@ CONTINUE_GONE = (
 #: Third plan G19 (RB1, decision G9): why the start-up pass does not carry a
 #: reply on — the user pressed Stop on it (``durable_turns.stop_asked``).
 STOPPED_REFUSAL = "you stopped it"
+#: Fourth plan G27 (CS6/DT4): that reason by WHO stopped it (the record's
+#: ``stop_author``, ``durable_turns.stop_fact``; "" = not recorded). Whoever
+#: stopped it, it is never carried on by itself (decision G9).
+STOPPED_REFUSALS: dict[str, str] = {
+    "you": STOPPED_REFUSAL,
+    "time_limit": "Iron Jarvis stopped it at its time limit",
+    "emergency": "Emergency stop stopped it",
+    "": "it was stopped before it finished",
+}
 #: ...the model's note at the end of such a reply's kept conversation when the
 #: user pressed "Continue from where it stopped" (never "an error", never "a
 #: restart": the user stopped it and now asks for it to go on).
-STOPPED_RESUME_NOTE = (
-    "[The user stopped your reply here, and has now asked you to continue it. Your work so far is"
+_STOPPED_RESUME_REST = (
+    " Your work so far is"
     " above, exactly as it was. A tool call that was cut off says so in its result: a call that only"
     " reads is safe to run again; for anything else, check whether it took effect before doing it"
     " again. Carry on with the reply from where you stopped, and do not repeat work that is already"
     " done.]"
 )
-#: ...and that continue turn's hidden question line.
+STOPPED_RESUME_NOTE = (
+    "[The user stopped your reply here, and has now asked you to continue it." + _STOPPED_RESUME_REST
+)
+#: Fourth plan G27 (CS6/DT4): that note by who stopped the reply — the
+#: user's own Stop keeps :data:`STOPPED_RESUME_NOTE` byte for byte.
+STOPPED_RESUME_NOTES: dict[str, str] = {
+    "you": STOPPED_RESUME_NOTE,
+    "time_limit": (
+        "[Iron Jarvis stopped your reply here because it reached its time limit, and the user has"
+        " now asked you to continue it." + _STOPPED_RESUME_REST
+    ),
+    "emergency": (
+        "[Your reply was stopped here by Emergency stop, and the user has now asked you to continue"
+        " it." + _STOPPED_RESUME_REST
+    ),
+    "": (
+        "[Your reply was stopped here before it finished, and the user has now asked you to"
+        " continue it." + _STOPPED_RESUME_REST
+    ),
+}
+#: ...and that continue turn's hidden question line (the user's own Stop),
 STOPPED_RESUME_QUESTION = "Continue the reply I stopped, from where it stopped."
+#: ...or a stop the user did not make (fourth plan G27: never "I stopped").
+STOPPED_RESUME_QUESTION_OTHER = "Continue the stopped reply, from where it stopped."
 
 
 class BuildStopStepBody(BaseModel):
@@ -1484,6 +1515,13 @@ class _ReplyWatch:
             card = saved_card(done.get(_ATTEMPTS_KEY))
             if card is not None:
                 line[_ATTEMPTS_KEY] = card
+            if done.get("stopped") is True:
+                # Fourth plan G27 (CS6): an attempts turn that was STOPPED
+                # ends on its done frame (fourth review CS3), which says who
+                # stopped it — kept on the line as every stopped reply's is.
+                from ...core.turns import stop_author as _stop_author
+
+                line["stoppedBy"] = _stop_author(done.get("stoppedBy"))
             # v1.403.0 (the coding-session team): who led, who worked, who
             # reviewed, how many pieces went out, and every time the lead did
             # a piece itself (``harness/team.saved_record``) — only on a team
@@ -3903,10 +3941,15 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             from ...providers.adapters.base import LLMMessage
 
             note = RR.FAILED_RESUME_NOTE if resume_failed else RR.RESUME_NOTE
-            if resume_failed and await asyncio.to_thread(stop_was_asked, platform.engine, resume_turn):
-                # Third plan G19 (RB1, decision G9): the user stopped that
-                # reply — the note says so, never "an error".
-                note = STOPPED_RESUME_NOTE
+            stopped_by = (
+                await asyncio.to_thread(stop_author_of, platform.engine, resume_turn)
+                if resume_failed else None
+            )
+            if stopped_by is not None:
+                # Third plan G19 (RB1, decision G9): that reply was stopped —
+                # the note says so, never "an error"; fourth plan G27 (CS6):
+                # and says who stopped it.
+                note = STOPPED_RESUME_NOTES.get(stopped_by, STOPPED_RESUME_NOTES[""])
             record = RR.ReplyRecord(
                 platform.engine, thread_id, turn_id,
                 resume_tail=[*resume["tail"], LLMMessage(
@@ -4641,8 +4684,10 @@ def resume_refusal(engine: Any, thread_id: str, turn_id: str, waiting: bool) -> 
     from ...core.db import session_scope
     from ...core.models import ChatTurnRecord
 
-    if stop_was_asked(engine, turn_id):
-        return STOPPED_REFUSAL
+    stopped_by = stop_author_of(engine, turn_id)
+    if stopped_by is not None:
+        # Fourth plan G27 (CS6): whoever stopped it (one of STOPPED_REFUSALS).
+        return STOPPED_REFUSALS.get(stopped_by, STOPPED_REFUSALS[""])
     if waiting:
         return "it was waiting on you when Iron Jarvis stopped"
     with session_scope(engine) as db:
@@ -4684,6 +4729,27 @@ def stop_was_asked(engine: Any, turn_id: str) -> bool:
         return False
 
 
+def stop_author_of(engine: Any, turn_id: str) -> "str | None":
+    """Fourth plan G27 (CS6/DT4): WHO stopped reply ``turn_id`` — "you",
+    "time_limit", "emergency" or "" (not recorded) — read from its record
+    (``durable_turns.stop_fact``), or None when it was never stopped (or
+    that is unknown or unreadable, as :func:`stop_was_asked`). BLOCKING;
+    never raises."""
+    reader = getattr(_durable, "stop_fact", None)
+    if reader is None or not turn_id:
+        return None
+    try:
+        fact = reader(engine, str(turn_id))
+    except Exception:  # noqa: BLE001 — unknown is "not asked", as the reader's own rule
+        log.warning("reading who stopped reply %s failed", turn_id, exc_info=True)
+        return None
+    if fact is None:
+        return None
+    from ...core.turns import stop_author
+
+    return stop_author(fact[1])
+
+
 def reply_ended(messages: "list[dict[str, Any]]", turn_id: str) -> bool:
     """Third plan G19 (RB5): does the session already hold reply
     ``turn_id``'s line as a reply that ENDED (finished, failed or stopped)?
@@ -4711,9 +4777,13 @@ def keep_stopped_reply(engine: Any, thread_id: str, turn_id: str) -> bool:
     past the question; else they go. Its line says it was stopped
     (``sessions.STOPPED_LINE``), with ``canContinue`` when its rounds were
     kept — written when the session holds its question but no line yet.
+    Fourth plan G27 (CS6/DT4): the line says WHO stopped it
+    (``sessions.stopped_line``, from the record: :func:`stop_author_of`) and
+    carries the author as ``stoppedBy``.
     Returns whether the rounds were kept. BLOCKING; never raises."""
     from ...harness import reply_record as RR
 
+    by = stop_author_of(engine, turn_id) or ""
     kept = False
     try:
         loaded = RR.load(engine, turn_id)
@@ -4725,8 +4795,8 @@ def keep_stopped_reply(engine: Any, thread_id: str, turn_id: str) -> bool:
     if not kept:
         RR.drop(engine, turn_id)
     changes: dict[str, Any] = {
-        "interrupted": True, "error": S.STOPPED_LINE, "errorTitle": None, "errorDetail": None,
-        "canContinue": True if kept else None,
+        "interrupted": True, "error": S.stopped_line(by), "errorTitle": None, "errorDetail": None,
+        "canContinue": True if kept else None, "stoppedBy": by,
     }
     try:
         if not S.amend_reply(engine, thread_id, turn_id, changes):
@@ -4815,7 +4885,7 @@ async def _resume_after_restart(d: Any) -> list[str]:
         if not thread_id or logs.get(turn_id) is not None:
             continue  # not a session's, or this process runs it
         why = await asyncio.to_thread(resume_refusal, engine, thread_id, turn_id, rec["waiting"])
-        if why == STOPPED_REFUSAL:
+        if why in STOPPED_REFUSALS.values():
             # Third plan G19 (RB1, decision G9): shown as stopped, and
             # "Continue from where it stopped" is the user's own press.
             log.info("not carrying on the reply %s of session %s: %s", turn_id, thread_id, why)
@@ -6029,9 +6099,11 @@ def register(app: FastAPI, d: Any) -> None:
 
             text = _RR.FAILED_RESUME_QUESTION
             # Third plan G19 (RB1, decision G9): a reply the user stopped is
-            # continued in those words, never "stopped on an error".
-            if await asyncio.to_thread(stop_was_asked, platform.engine, continue_turn):
-                text = STOPPED_RESUME_QUESTION
+            # continued in those words, never "stopped on an error" — fourth
+            # plan G27 (CS6): "I stopped" only when the user did.
+            stopped_by = await asyncio.to_thread(stop_author_of, platform.engine, continue_turn)
+            if stopped_by is not None:
+                text = STOPPED_RESUME_QUESTION if stopped_by == "you" else STOPPED_RESUME_QUESTION_OTHER
         # v1.373.0 review: a blank entry is no file — `{"files": ["  "]}` used
         # to pass this check and start a turn that sent the model nothing.
         has_files = any(str(p or "").strip() for p in [*(body.attachments or []), *(body.files or [])])
@@ -6143,9 +6215,10 @@ def register(app: FastAPI, d: Any) -> None:
 
         if body.reply:
             # The reply first: once the step is stopped, the next thing the
-            # reply does is look for a Stop — and finds it.
-            TURNS.stop(turn)
-        if not _stall.stop_step(turn, body.step_id):
+            # reply does is look for a Stop — and finds it. Fourth plan G27
+            # (CS6): both are the user's own press.
+            TURNS.stop(turn, by=STOP_BY_YOU)
+        if not _stall.stop_step(turn, body.step_id, by=STOP_BY_YOU):
             if body.reply:
                 return {"ok": True, "turn_id": turn, "step_id": body.step_id, "step": False}
             raise HTTPException(status_code=404, detail=STEP_GONE)

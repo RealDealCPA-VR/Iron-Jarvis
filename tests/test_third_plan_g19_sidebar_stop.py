@@ -176,10 +176,12 @@ def test_sb2_stop_ends_a_risk_card_wait_and_a_late_allow_does_not_act(tmp_path, 
         # The reply ended as stopped AFTER the card: the panel's `done` clears it.
         stopped_at = conn.index(P.PANEL_EVENT_DONE, reason="stopped")
         assert stopped_at > conn.index(P.PANEL_EVENT_APPROVAL)
-        # What the user read is kept.
+        # What the user read is kept (fourth plan G27, C-BS-2: written as
+        # stopped by the person, so the next question does not redo it).
         assert turns._history == [
             {"role": "user", "content": "delete my account on this page"},
-            {"role": "assistant", "content": "Looking at the page."},
+            {"role": "assistant",
+             "content": f"Looking at the page.\n\n{panel_mod.STOPPED_BY_YOU}"},
         ], turns._history
 
         # A late Allow for the withdrawn card answers nothing and says so.

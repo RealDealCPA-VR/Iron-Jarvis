@@ -493,8 +493,11 @@ async def test_control_the_eager_checks_still_land_as_status_codes_and_release_t
     assert status == 404, body
     assert "no such skill" in json.dumps(body)
     assert not TURNS.is_running("w4-eager-404")
+    # Fourth plan G27 (DT3): a Stop for it says so — nothing ran (it used to
+    # be 404 "That reply had already finished.", untrue for a refused turn).
     stop = await _asgi(app, "POST", "/chat/turns/w4-eager-404/stop")
-    assert stop[0] == 404, stop
+    assert stop[0] == 200 and stop[1].get("ran") is False, stop
+    assert not TURNS.is_running("w4-eager-404")
 
 
 # =========================================================================== #

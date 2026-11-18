@@ -346,6 +346,8 @@ async def test_an_attempts_turn_the_user_stopped_sends_no_finished_notice_and_is
     frames = frames_of(raw)
     assert frames[-1][0] == "done", frames[-3:]
     assert frames[-1][1].get("stopped") is True, frames[-1][1]
+    # Fourth plan G27 (CS6): the user's own Stop, said on the frame.
+    assert frames[-1][1].get("stoppedBy") == "you", frames[-1][1]
     await until(lambda: turn_log(app, "att-stop") is not None and turn_log(app, "att-stop").status != "running")
     platform = app.state.platform
     finished = [e for e in platform.event_bus.history if e.type == EventType.BUILD_TURN_FINISHED

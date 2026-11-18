@@ -483,6 +483,14 @@ class ChatTurnRecord(SQLModel, table=True):
     #: a reply on by itself (``durable_turns.stop_asked``). None = never asked.
     #: Additive nullable column (auto-reconciled).
     stop_asked_at: datetime | None = None
+    #: Fourth plan G27 (CS6/DT4): WHO asked that stop — "you" (the user),
+    #: "time_limit" (Iron Jarvis at the reply's time limit), "emergency"
+    #: (Emergency stop) or "" (not recorded). None = no stop, or a record
+    #: written before this column (read as ""). Written with
+    #: ``stop_asked_at`` and kept with it (the first stop wins). Its own key:
+    #: the orphan guard's ``"stopped_by": "unwatched"`` frame field is a
+    #: different fact. Additive nullable column (auto-reconciled).
+    stop_author: str | None = None
 
 
 class UndoJournal(SQLModel, table=True):

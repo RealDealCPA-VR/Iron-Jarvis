@@ -140,10 +140,12 @@ def _emergency(d: Any) -> bool:
     return emergency_stop_on(getattr(d.platform, "config", None))
 
 
-def _stop_turn(turn: str) -> bool:
+def _stop_turn(turn: str, *, by: str) -> bool:
     """Stop a night task's turn AND its running steps (a turn's Stop waits for
     the step in flight, so a hung command ran on for its whole deadline).
-    True when the turn was running. Thread-safe; never raises."""
+    ``by`` names who stops it (fourth plan G27, CS6: the user's Cancel "you",
+    Emergency stop "emergency"). True when the turn was running. Thread-safe;
+    never raises."""
     from ...core.turns import TURNS
     from ...harness.stall import running_steps, stop_step
 
@@ -151,11 +153,21 @@ def _stop_turn(turn: str) -> bool:
         return False
     stopped = False
     with contextlib.suppress(Exception):
-        stopped = bool(TURNS.stop(turn))
+        stopped = bool(TURNS.stop(turn, by=by))
     with contextlib.suppress(Exception):
         for call_id in running_steps(turn):
-            stop_step(turn, call_id)
+            stop_step(turn, call_id, by=by)
     return stopped
+
+
+def _stop_author_of(task: "dict[str, Any] | None", emergency: bool) -> str:
+    """Who a night task's stop note names (fourth plan G27, CS6): Emergency
+    stop (on now, or its note) "emergency"; else the user's Cancel "you"."""
+    from ...core.turns import STOP_BY_EMERGENCY, STOP_BY_YOU
+
+    if emergency or (task is not None and N.has_note(task, "emergency")):
+        return STOP_BY_EMERGENCY
+    return STOP_BY_YOU
 
 
 class _StoppedWhileStarting(Exception):
@@ -682,7 +694,7 @@ async def settle_running(d: Any) -> list[str]:
                 # turn existed. Only a turn Iron Jarvis started by itself
                 # (never one the user typed into the session). It settles
                 # once the turn is over.
-                _stop_turn(turn)
+                _stop_turn(turn, by=_stop_author_of(task, emergency))
                 continue
             # The backstop counts THIS turn's own time (a reply carried on
             # after a restart starts a new turn; the hours Iron Jarvis was
@@ -704,11 +716,14 @@ async def settle_running(d: Any) -> list[str]:
                 # v1.398.0 review: the STEP itself too (a turn's Stop waits
                 # for the step in flight, so a hung command ran on for its
                 # whole deadline).
+                # Fourth plan G27 (CS6): Iron Jarvis's time limit stopped it —
+                # never "stopped by you" on the step's row or the reply.
+                from ...core.turns import STOP_BY_TIME_LIMIT
                 from ...harness.stall import running_steps, stop_step
 
                 for call_id in running_steps(turn):
-                    stop_step(turn, call_id)
-                if TURNS.stop(turn):
+                    stop_step(turn, call_id, by=STOP_BY_TIME_LIMIT)
+                if TURNS.stop(turn, by=STOP_BY_TIME_LIMIT):
                     await asyncio.to_thread(
                         N.add_note, engine, tid, "limit",
                         f"Stopped: it ran past its {N.task_minutes(platform.config)}-minute limit.",
@@ -962,8 +977,14 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
             # landed while the turn was being made stops it now, the way the
             # Cancel route stops a running one. The settle pass ends the task
             # STOPPED once the turn is over.
-            if _emergency(d) or await _has_stop(engine, tid):
-                _stop_turn(turn_id)
+            if _emergency(d):
+                _stop_turn(turn_id, by=_stop_author_of(None, True))
+            elif await _has_stop(engine, tid):
+                try:
+                    now_task = await asyncio.to_thread(N.get_task, engine, tid)
+                except Exception:  # noqa: BLE001 — the stop matters more than its author
+                    now_task = None
+                _stop_turn(turn_id, by=_stop_author_of(now_task, False))
             return True
         except _StoppedWhileStarting:
             # Nothing started: the task ends STOPPED with the user's own note
@@ -1235,7 +1256,7 @@ def cancel_night_task(d: Any, task_id: str) -> dict[str, Any]:
     starts (stopped); a running one's turn — and its running step — is
     stopped. Answers ``{task, stopped_turn}``. BLOCKING; raises
     :class:`~iron_jarvis.harness.night.NightRefused` (404 / 409) in words."""
-    from ...core.turns import TURNS
+    from ...core.turns import STOP_BY_YOU, TURNS
 
     engine = d.platform.engine
     task = N.get_task(engine, task_id)
@@ -1251,13 +1272,14 @@ def cancel_night_task(d: Any, task_id: str) -> dict[str, Any]:
 
     turn = _running_turn(d, task["thread_id"]) if task["thread_id"] else ""
     if turn:
-        TURNS.stop(turn)
+        # Fourth plan G27 (CS6): the user's own Cancel ("you").
+        TURNS.stop(turn, by=STOP_BY_YOU)
         # v1.398.0 review: and its running step (a hung command ran on
         # for its whole deadline after Stop).
         from ...harness.stall import running_steps, stop_step
 
         for call_id in running_steps(turn):
-            stop_step(turn, call_id)
+            stop_step(turn, call_id, by=STOP_BY_YOU)
     wake_night_loop()
     return {"task": N.get_task(engine, task_id), "stopped_turn": turn}
 

@@ -1722,7 +1722,9 @@ def _end_hook(session_id: "str | None") -> list[int]:
             turns = list(_LIVE.get(thread, set())) if thread and SID_SEP not in thread else []
     for turn in turns:
         with contextlib.suppress(Exception):
-            TURNS.stop(turn)
+            # Fourth plan G27 (CS6): who asked is not known here (an archive,
+            # a delete or a shutdown all end here) — recorded as such.
+            TURNS.stop(turn, by="")
     return []
 
 
@@ -2072,7 +2074,10 @@ async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterat
     async def stop_all() -> None:
         for a in plan.attempts:
             with contextlib.suppress(Exception):
-                TURNS.stop(a.turn_id)
+                # Fourth plan G27 (CS6): each attempt is stopped by whoever
+                # stopped its parent turn ("" when it was not stopped: a
+                # shutdown cuts it off).
+                TURNS.stop(a.turn_id, by=handle.stop_author)
         for t in tasks.values():
             if not t.done():
                 t.cancel()
@@ -2167,6 +2172,9 @@ async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterat
             # shutdown): ``routes/build.recorded_turn`` then records it as
             # stopped and sends no "finished" notice.
             end["stopped"] = True
+            # Fourth plan G27 (CS6): and who stopped it ("you", "time_limit",
+            # "emergency", "" = not recorded) — the reply line keeps it.
+            end["stoppedBy"] = handle.stop_author
         yield _sse("done", end)
     finally:
         # Cut off (a shutdown cancels this turn) or closed early: nothing an

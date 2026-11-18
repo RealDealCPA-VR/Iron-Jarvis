@@ -995,14 +995,16 @@ def stop_unattended_turns(engine: Any = None, *, note: str = EMERGENCY_NOTE) -> 
     (``TurnRegistry.stop`` wakes the turn's own loop); a night task's record
     keeps the note. Returns ``turn:<id>`` for each turn asked to stop.
     BLOCKING (the note); never raises."""
-    from ..core.turns import TURNS
+    from ..core.turns import STOP_BY_EMERGENCY, TURNS
 
     from .stall import running_steps, stop_step
 
     stopped: list[str] = []
     for turn_id, (thread_id, by) in unattended_turns().items():
         try:
-            if TURNS.stop(turn_id):
+            # Fourth plan G27 (CS6): Emergency stop names itself — the reply's
+            # line and each step's row say so, never "stopped by you".
+            if TURNS.stop(turn_id, by=STOP_BY_EMERGENCY):
                 stopped.append(f"turn:{turn_id}")
             # v1.398.0 review: and its RUNNING STEPS, now — a turn's Stop
             # waits for the step in flight (v1.392.0's open line), so a hung
@@ -1010,7 +1012,7 @@ def stop_unattended_turns(engine: Any = None, *, note: str = EMERGENCY_NOTE) -> 
             # default) after Emergency stop. Each step is cancelled the way
             # "Stop the step" does it (a command's tree is killed).
             for call_id in running_steps(turn_id):
-                stop_step(turn_id, call_id)
+                stop_step(turn_id, call_id, by=STOP_BY_EMERGENCY)
         except Exception:  # noqa: BLE001 — one turn never keeps the rest going
             log.warning("Emergency stop could not stop coding turn %s", turn_id, exc_info=True)
             continue
@@ -1026,6 +1028,23 @@ def stop_unattended_turns(engine: Any = None, *, note: str = EMERGENCY_NOTE) -> 
 # --------------------------------------------------------------------------- #
 
 
+#: Fourth plan G27 (CS6): the note kind of a reply stopped by someone other
+#: than the user (``stoppedBy`` on its line); anything else is "stopped".
+_STOP_NOTE_KIND = {"time_limit": "limit", "emergency": "emergency"}
+
+
+def _stopped_by_other(line: dict[str, Any]) -> "str | None":
+    """Who stopped this reply when its line says so (``stoppedBy``) and it
+    was not the user ("time_limit", "emergency", or "" = not recorded); None
+    for a line that does not say, or says the user (read as before)."""
+    if not line.get("interrupted") or not isinstance(line.get("stoppedBy"), str):
+        return None
+    from ..core.turns import STOP_BY_YOU, stop_author
+
+    by = stop_author(line.get("stoppedBy"))
+    return None if by == STOP_BY_YOU else by
+
+
 def outcome_of(task: dict[str, Any], line: "dict[str, Any] | None") -> tuple[str, list[tuple[str, str]]]:
     """The ended state of a task whose turn is over, and the notes to keep,
     from the reply line ``recorded_turn`` wrote (``line``, None when there is
@@ -1036,6 +1055,14 @@ def outcome_of(task: dict[str, Any], line: "dict[str, Any] | None") -> tuple[str
     elif line is None:
         state = STOPPED
         notes.append(("stopped", "The task ended without a reply."))
+    elif (stopped_by := _stopped_by_other(line)) is not None:
+        # Fourth plan G27 (CS6): a reply Iron Jarvis's time limit or
+        # Emergency stop stopped (its line says who, ``stoppedBy``) is
+        # STOPPED, never FAILED with "You stopped this reply" as the error.
+        state = STOPPED
+        kind = _STOP_NOTE_KIND.get(stopped_by, "stopped")
+        if not has_note(task, kind):
+            notes.append((kind, str(line.get("error") or "") or "The reply was stopped before it finished."))
     elif line.get("error"):
         if line.get("interrupted") and "restart" in str(line.get("error") or "").lower():
             state = STOPPED

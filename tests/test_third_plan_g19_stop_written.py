@@ -54,6 +54,7 @@ def _clean_registry():
         with TURNS._lock:
             getattr(TURNS, "_pending", {}).clear()
             getattr(TURNS, "_ended", {}).clear()
+            getattr(TURNS, "_refused", {}).clear()
 
     _clear()
     yield
@@ -82,9 +83,12 @@ def _counting_tools(app) -> list:
 # --------------------------------------------------------------------------- #
 # 1. Stop on a running turn: written BEFORE it is acted on, kept for ever after
 # --------------------------------------------------------------------------- #
-async def test_stop_writes_the_mark_before_the_turn_is_stopped_and_every_later_write_keeps_it(
+async def test_stop_writes_the_mark_before_it_answers_and_every_later_write_keeps_it(
     tmp_path, monkeypatch,
 ):
+    """Fourth plan G27 (DT6): the turn is stopped in memory AT ONCE, then the
+    mark is written (bounded); the route answers only after the write, so the
+    mark is on the record when it does — and on every later write."""
     app = create_app(str(tmp_path))
     engine = app.state.platform.engine
     gate, calls = asyncio.Event(), []
@@ -93,24 +97,24 @@ async def test_stop_writes_the_mark_before_the_turn_is_stopped_and_every_later_w
     await _open(app, {"messages": MSG, "turn_id": "run-1"}, drop=drop, stop_after="first half")
     lg = app.state.platform.turn_logs.get("run-1")
     assert lg is not None and lg.status == "running"
+    handle = TURNS.handle("run-1")
 
-    # WHAT THE RECORD SAID at the instant the turn was stopped in memory.
+    # WHAT THE TURN WAS at the instant the mark was written.
     seen: dict = {}
-    real_stop = TURNS.stop
+    real_write = dt.write_stop_mark
 
-    def stop_spy(turn_id):
-        rec = _record(engine, turn_id)
-        seen["mark_at_stop"] = rec.stop_asked_at if rec is not None else None
-        seen["status_at_stop"] = lg.status
-        return real_stop(turn_id)
+    def write_spy(engine_, turn_id, when, *a, **kw):
+        seen["stopped_at_write"] = handle.stopped
+        return real_write(engine_, turn_id, when, *a, **kw)
 
-    monkeypatch.setattr(TURNS, "stop", stop_spy)
+    monkeypatch.setattr(dt, "write_stop_mark", write_spy)
     status, out = await _req(app, "POST", "/chat/turns/run-1/stop")
     assert (status, out) == (200, {"ok": True, "stopped": True})
-    assert seen["mark_at_stop"] is not None, "the stop was acted on before it was written"
-    assert seen["status_at_stop"] == "running"
+    assert seen["stopped_at_write"] is True, "the stop waited for the disk"
+    rec = _record(engine, "run-1")
+    assert rec is not None and rec.stop_asked_at is not None, "the route answered before the mark was written"
     assert lg.stop_asked is True
-    mark = seen["mark_at_stop"]
+    mark = rec.stop_asked_at
 
     gate.set()
     await _until(lambda: lg.task.done())
@@ -141,6 +145,8 @@ async def test_a_stop_from_any_path_rides_the_record(tmp_path):
     await _until(lambda: lg.task.done())
     assert lg.status == "stopped" and lg.stop_asked
     assert _record(engine, "any-1").stop_asked_at is not None
+    # Fourth plan G27 (CS6): a caller that did not say who is not "you".
+    assert _record(engine, "any-1").stop_author == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -402,14 +408,19 @@ async def test_a_stop_for_a_finished_reply_is_404_finished_from_memory_and_from_
     assert _record(app.state.platform.engine, "fin-1").stop_asked_at is None
 
 
-async def test_a_stop_for_a_turn_refused_before_it_ran_is_404(tmp_path):
+async def test_a_stop_for_a_turn_refused_before_it_ran_says_nothing_ran(tmp_path):
+    """Fourth plan G27 (DT3): it used to answer 404 "That reply had already
+    finished." for a reply that never ran. Now 200, ``ran: false``, nothing
+    written or kept (the page's 200 path says "Stopped.")."""
     app = create_app(str(tmp_path))
     status, _ = await _req(app, "POST", "/chat/stream", {
         "messages": MSG, "skill": "no-such-skill-g19", "turn_id": "refused-1",
     })
     assert status == 404
     status, out = await _req(app, "POST", "/chat/turns/refused-1/stop")
-    assert status == 404 and out.get("finished") is True
+    assert (status, out) == (200, {"ok": True, "stopped": True, "ran": False})
+    assert _record(app.state.platform.engine, "refused-1") is None
+    assert not TURNS.pending_stop("refused-1")
 
 
 # --------------------------------------------------------------------------- #

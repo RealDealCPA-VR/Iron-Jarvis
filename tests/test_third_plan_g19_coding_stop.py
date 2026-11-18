@@ -87,7 +87,8 @@ def stop_mark(monkeypatch):
         engine = app.state.platform.engine
         writer = getattr(durable_turns, "write_stop_mark", None)
         if writer is not None:  # the stop route's own write (it makes a record not yet written)
-            assert writer(engine, turn_id, utcnow())
+            # Fourth plan G27: the user's own press says who it was.
+            assert writer(engine, turn_id, utcnow(), by="you")
             return
         with session_scope(engine) as db:
             rec = db.get(ChatTurnRecord, turn_id)

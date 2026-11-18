@@ -543,9 +543,11 @@ async def test_a_turn_still_running_when_its_chat_is_deleted_leaves_no_record(tm
     await _until(lambda: _record(engine, "del-2") is not None)
     status, _ = await _req(app, "DELETE", f"/chat/threads/{tid}")
     assert status == 200
-    assert lg.status == "running"  # deleting a chat never stopped its reply
-    gate.set()
+    # Fourth plan G27 (owner decision D5): deleting a chat stops its reply,
+    # as the user's own stop (it used to run on for up to an hour).
     await _until(lambda: lg.task.done())
+    assert lg.status == "stopped" and lg.stop_author == "you"
+    gate.set()
     assert _record(engine, "del-2") is None
     assert app.state.platform.turn_logs.get("del-2") is None
 

@@ -78,7 +78,8 @@ async def test_stop_during_a_long_test_run_stops_the_program_and_records_not_run
                                            "first output", refused=False, invoke=run))
     try:
         await asyncio.wait_for(run.reading.wait(), 5)
-        TURNS.stop(TURN)
+        # Fourth plan G27 (CS6): the user's Stop names the user.
+        TURNS.stop(TURN, by="you")
         # Promptly: never the rest of a 30-second slice or the 120-second budget.
         await asyncio.wait_for(asyncio.shield(taking), 5)
     finally:

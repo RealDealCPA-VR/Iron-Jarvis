@@ -47,7 +47,7 @@ from ...core.approvals import surface_for as _interrupt_surface
 from ...core.grants import args_hash as _grant_hash
 from ...core import risk_door as _risk_door
 from ...core import auto_approve as _auto
-from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
+from ...core.turns import CHAT_INFLIGHT, STOP_BY_YOU, TURNS, thread_key
 from ...tools.reversible import call_reversible_flag as _call_reversible_flag
 from ...eval import call_ledger as _call_ledger
 from ...providers import egress as _egress
@@ -336,7 +336,9 @@ def _refuse_build_session(row: Any) -> None:
 def delete_thread(engine: Any, thread_id: str) -> bool:
     """Delete a conversation AND its history-search docs in one transaction;
     False = no such thread. An IJ harness session's programs are stopped too
-    (v1.367.0). BLOCKING: a sync route runs it in the threadpool."""
+    (v1.367.0), and so is a reply the chat is still writing (fourth plan
+    G27, D5), as the user's own stop; a hand-off agent run is not. BLOCKING:
+    a sync route runs it in the threadpool."""
     from ...core.db import search_index
     from ...core.models import ChatThreadRecord, is_build_thread
     from ..chat_append import drop_older, ensure_older_table
@@ -363,9 +365,19 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
                         exc_info=True)
         db.commit()
     # CS7: ...and in memory — a finished turn of it is unknown from now on (its
-    # stream answers 404); a running one is not stopped (deleting a chat never
-    # stopped its reply), and its record goes when it ends.
-    _durable.forget_thread(engine, thread_id)
+    # stream answers 404); a running one is marked (nothing of it is written
+    # any more) and its record goes when it ends. Marked FIRST, so a turn the
+    # stop below ends at once never writes its record back.
+    running = _durable.forget_thread(engine, thread_id)
+    # Fourth plan G27 (D5, C-DT-2): its running replies stop — the user's own
+    # stop (nothing can show or use that reply any more): the turns held under
+    # the chat's key, and its daemon-owned turns (a new chat's first turn is
+    # linked to it only later). An agent run it handed off to is its own run
+    # with its own Stop: not stopped here.
+    for h in _thread_handles(thread_key(thread_id)):
+        h.stop(by=STOP_BY_YOU)
+    for turn_id in running:
+        TURNS.stop(turn_id, by=STOP_BY_YOU)
     if build:
         _end_build_programs(thread_id)
     return True
@@ -440,7 +452,7 @@ async def archive_thread(engine: Any, thread_id: str, stop: bool, *, noun: str =
         key = thread_key(thread_id)
         handles = _thread_handles(key)
         for h in handles:
-            h.stop()
+            h.stop(by=STOP_BY_YOU)  # the user's own press: "Stop and archive"
         if handles:
             loop = asyncio.get_running_loop()
             deadline = loop.time() + max(0.0, float(ARCHIVE_STOP_GRACE_S))
@@ -3357,9 +3369,12 @@ def register(app: FastAPI, d) -> None:
                 holder["log"] = lg
             except BaseException:
                 # Third plan G19: refused before it ran (a 400/404 eager
-                # check): a Stop for this id is "already finished" from now
-                # on, and one kept for it is dropped.
-                TURNS.note_ended(turn_id)
+                # check — or the request was dropped while it was prepared,
+                # which ran nothing too): a Stop kept for this id is dropped.
+                # Fourth plan G27 (DT3): filed as REFUSED, not ended, so a
+                # Stop for it answers "stopped, nothing ran" — never "that
+                # reply had already finished".
+                TURNS.note_refused(turn_id)
                 raise
             finally:
                 _STARTING_TURNS.pop((id(logs), turn_id), None)
@@ -3470,10 +3485,16 @@ def register(app: FastAPI, d) -> None:
         write lands (v1.228.0); no surface may imply more.
 
         STOP IS WRITTEN DOWN (third plan G19: RB1, CS4). For a running turn
-        (a chat's or a coding session's) the press is written on the turn's
-        record FIRST (``stop_asked_at``, off the loop, shielded, bounded by
-        ``durable_turns.STOP_MARK_TIMEOUT_S``; a failed write is logged and
-        the stop still happens), then the turn is stopped in memory. A Stop
+        (a chat's or a coding session's) the live log is marked, the turn is
+        stopped in memory AT ONCE (fourth plan G27, DT6), and then the press
+        is written on the turn's record (``stop_asked_at`` and, fourth plan
+        G27, ``stop_author`` = "you"; off the loop, shielded, bounded by
+        ``durable_turns.STOP_MARK_TIMEOUT_S``; a failed write is logged)
+        before the route answers. A turn already stopped by Iron Jarvis keeps
+        that first stop's time and author. A turn whose chat was deleted gets
+        no record (DT5). A Stop for a turn refused before it ran answers
+        ``{"ok": true, "stopped": true, "ran": false}`` and writes nothing
+        (DT3). A Stop
         for an id this process has not seen yet — pressed right after Send,
         before the turn has registered — is KEPT for it
         (``TURNS.stop_or_keep``) and answered ``{"ok": true, "stopped": true,
@@ -3494,18 +3515,39 @@ def register(app: FastAPI, d) -> None:
                 status_code=404, content={"detail": _durable.STOP_FINISHED_DETAIL, "finished": True},
             )
 
-        if TURNS.handle(turn_id) is not None:
-            when = _utcnow()
+        def _first_stop(handle: Any) -> tuple[Any, str]:
+            """(when, who) this press writes: an earlier stop's own, if the
+            turn was already stopped (the first stop wins — a Stop pressed
+            after Iron Jarvis's own stop never rewrites who stopped it),
+            else now, by the user (fourth plan G27, CS6)."""
+            if handle is not None and getattr(handle, "stopped", False):
+                return (getattr(handle, "stopped_at", None) or _utcnow(),
+                        str(getattr(handle, "stop_author", "") or ""))
+            return _utcnow(), STOP_BY_YOU
+
+        async def _write_mark(lg: Any, when: Any, by: str) -> None:
+            """The bounded write of the mark. Fourth plan G27 (DT5): a turn
+            whose chat was deleted gets no record — none written, and a row
+            the write re-created as the chat was deleted is removed."""
+            if lg is not None and lg.chat_deleted:
+                return
+            await _durable.record_stop(engine, turn_id, when, by)
+            if lg is not None and lg.chat_deleted:
+                await asyncio.to_thread(_durable.forget_records, engine, [turn_id])
+
+        handle = TURNS.handle(turn_id)
+        if handle is not None:
+            when, by = _first_stop(handle)
             lg = logs.get(turn_id)
             if lg is not None:
-                lg.ask_stop(when)  # every later write of its record carries it
-            try:
-                await _durable.record_stop(engine, turn_id, when)
-            finally:
-                # The stop happens whatever became of the write.
-                stopped = TURNS.stop(turn_id)
+                lg.ask_stop(when, by)  # every later write of its record carries it
+            # Fourth plan G27 (DT6): stopped in memory AT ONCE — a slow disk
+            # never lets the reply start another step — then written
+            # (bounded); the answer waits for the write.
+            stopped = TURNS.stop(turn_id, by=STOP_BY_YOU)
             if not stopped:
-                return _finished()  # it ended while the mark was written
+                return _finished()  # it ended a moment ago: nothing written
+            await _write_mark(lg, when, by)
             return {"ok": True, "stopped": True}
         if logs.get(turn_id) is not None or TURNS.recently_ended(turn_id):
             return _finished()  # it ran here and has ended (or is ending)
@@ -3518,18 +3560,22 @@ def register(app: FastAPI, d) -> None:
             known = False  # unreadable: keeping the Stop is the safe side
         if known and TURNS.handle(turn_id) is None:
             return _finished()  # a record: it ran (before a restart) and ended
-        outcome = TURNS.stop_or_keep(turn_id)
+        outcome = TURNS.stop_or_keep(turn_id, by=STOP_BY_YOU)
         if outcome == "ended":
             return _finished()
+        if outcome == "refused":
+            # Fourth plan G27 (DT3): it was refused before it ran — nothing
+            # ran, nothing is written or kept; the page's 200 path says
+            # "Stopped." and puts the question back in the box.
+            return {"ok": True, "stopped": True, "ran": False}
         if outcome == "stopped":
             # It registered while the record was read: stopped in memory a
-            # moment ago (its handle's time) — written now.
-            handle = TURNS.handle(turn_id)
-            when = getattr(handle, "stopped_at", None) or _utcnow()
+            # moment ago (its handle's time and author) — written now.
+            when, by = _first_stop(TURNS.handle(turn_id))
             lg = logs.get(turn_id)
             if lg is not None:
-                lg.ask_stop(when)
-            await _durable.record_stop(engine, turn_id, when)
+                lg.ask_stop(when, by)
+            await _write_mark(lg, when, by)
             return {"ok": True, "stopped": True}
         return {"ok": True, "stopped": True, "pending": True}
 

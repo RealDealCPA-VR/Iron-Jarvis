@@ -258,6 +258,19 @@ STOPPED_BY_YOU = "stopped by you"
 _PROCESS_STOP_WAIT_S = 10.0
 
 
+def stopped_why(stop: Any) -> str:
+    """Fourth plan G27 (CS6): why a test run the turn's stop cut is NOT RUN,
+    naming who stopped the turn (``stop`` is its ``TurnHandle``): the user's
+    Stop :data:`STOPPED_BY_YOU`; Iron Jarvis's time limit, Emergency stop or
+    a stop nobody recorded in the step ledger's words
+    (``stall.STOPPED_BY_WORDS``) — never "stopped by you" for those."""
+    from ..core.turns import stop_author
+    from .stall import STOPPED_BY_WORDS
+
+    by = stop_author(getattr(stop, "stop_author", ""))
+    return STOPPED_BY_YOU if by == "you" else STOPPED_BY_WORDS.get(by, STOPPED_BY_WORDS[""])
+
+
 def _turn_stop(invoke: Any) -> Any:
     """The running turn's Stop handle (``core/turns``) for the turn the
     check's own ``invoke`` belongs to (``chat_turn.finish_invoke`` names it),
@@ -4292,7 +4305,7 @@ class FinishCheck:
                     # Stopped by the user: the program is stopped, and the run
                     # is NOT RUN (no exit status exists) — never "failed".
                     await invoke("process_stop", {"id": handle})
-                    run.verdict, run.why = TESTS_NOT_RUN, STOPPED_BY_YOU
+                    run.verdict, run.why = TESTS_NOT_RUN, stopped_why(stop)
                     run.output = "\n".join(o for o in outputs if o)
                     return
                 if data.get("running"):

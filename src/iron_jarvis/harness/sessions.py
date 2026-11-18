@@ -167,6 +167,10 @@ LINE_KEYS: tuple[str, ...] = (
     # the failed reply's turn id (never ``resumedFrom``: the screen would
     # call it a restart's carry-on).
     "canContinue", "continuedFrom",
+    # Fourth plan G27 (CS6/DT4): on a reply that was STOPPED, who stopped it
+    # ("you", "time_limit", "emergency", "" = not recorded — the
+    # :data:`STOPPED_LINES` keys).
+    "stoppedBy",
     # v1.392.0 (the long-jobs plan's Phase 3): on a reply, the summary it
     # wrote of its own older rounds to fit the model ({steps, times} —
     # "Summarized N earlier steps to fit the model"), and the session's cap it
@@ -1075,6 +1079,48 @@ REPLY_CUT_OFF = "it was cut off before it finished"
 #: turn's model reads it as cut off (:func:`reply_end_note`), never as an
 #: error.
 STOPPED_LINE = "You stopped this reply. Iron Jarvis did not carry it on by itself."
+#: Fourth plan G27 (CS6/DT4): that line by WHO stopped the reply
+#: (``core.turns.STOP_AUTHORS``, read from the reply's record:
+#: ``durable_turns.stop_fact``) — "" = not recorded (an older record, a
+#: caller that did not say), whose words are neutral and true. The user's own
+#: Stop keeps :data:`STOPPED_LINE` byte for byte. The line also carries the
+#: author as ``stoppedBy``.
+STOPPED_LINES: dict[str, str] = {
+    "you": STOPPED_LINE,
+    "time_limit": "Iron Jarvis stopped this reply at its time limit and did not carry it on by itself.",
+    "emergency": "This reply was stopped by Emergency stop. Iron Jarvis did not carry it on by itself.",
+    "": "This reply was stopped before it finished. Iron Jarvis did not carry it on by itself.",
+}
+#: ...and how the next turn's model reads such a reply (:func:`reply_end_note`):
+#: the user's Stop as before (cut off), the others by who stopped it.
+REPLY_STOPPED_BY: dict[str, str] = {
+    "you": "it was cut off before it finished",
+    "time_limit": "Iron Jarvis stopped it at its time limit",
+    "emergency": "it was stopped by Emergency stop",
+    "": "it was stopped before it finished",
+}
+
+
+def stopped_line(by: Any) -> str:
+    """The line of a stopped reply that was not carried on, for *by* (who
+    stopped it; anything not in :data:`STOPPED_LINES` reads as not recorded)."""
+    return STOPPED_LINES.get(str(by or ""), STOPPED_LINES[""])
+
+
+def stopped_by_of(m: dict[str, Any]) -> "str | None":
+    """Who stopped the reply of line *m* (``stoppedBy``, else the author
+    whose :data:`STOPPED_LINES` words it carries as its error), or None when
+    the line is not such a stopped reply's. Pure; never raises."""
+    by = m.get("stoppedBy")
+    if isinstance(by, str) and by in STOPPED_LINES:
+        return by
+    error = str(m.get("error") or "").strip()
+    for who, words in STOPPED_LINES.items():
+        if error == words:
+            return who
+    return None
+
+
 REPLY_ERROR = "it ended on an error"
 REPLY_ACCOUNT_LIMIT = "it stopped at an account's limit"
 REPLY_STEP_LIMIT = "it stopped at its step limit"
@@ -1110,10 +1156,15 @@ def reply_end_note(m: dict[str, Any], *, said: str = "") -> str:
             return ""
         parts: list[str] = []
         error = str(m.get("error") or "").strip()
+        # Fourth plan G27 (CS6): a stopped reply is read by who stopped it.
+        stopped_by = stopped_by_of(m)
+        stopped_words = stopped_line(stopped_by) if stopped_by is not None else ""
         if isinstance(m.get("accountLimit"), dict) and m["accountLimit"]:
             parts.append(REPLY_ACCOUNT_LIMIT)
-        elif error and error not in (_interrupted_detail(), STOPPED_LINE):
+        elif error and error not in (_interrupted_detail(), stopped_words):
             parts.append(REPLY_ERROR)
+        elif stopped_by is not None and (m.get("interrupted") is True or error):
+            parts.append(REPLY_STOPPED_BY[stopped_by])
         elif m.get("interrupted") is True or error:
             parts.append(REPLY_CUT_OFF)
         elif cut_short(m):
