@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.533.0
+
+**Every new address asks, and cards say why.** The second of nine releases from the fourth review.
+
 ## v1.532.0
 
 **What other apps are told.** The first of nine releases from the fourth review.
@@ -77,7 +81,3 @@
 ## v1.515.0
 
 **Secrets at rest, and what leaves this PC.** The seventh of eight releases from the second review.
-
-## v1.514.0
-
-**What helpers, tools and servers report.** The sixth of eight releases from the second review.
