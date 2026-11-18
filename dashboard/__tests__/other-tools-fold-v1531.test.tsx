@@ -91,10 +91,14 @@ describe("the Other tools part folds (v1.531.0)", () => {
     expect(screen.queryByTestId("other-tool-claude-code")).toBeNull();
     cleanup();
 
-    // The chat list keeps its own choice (open).
+    // The chat list keeps its own choice. v1.537.0 (moved on purpose): with
+    // none made it starts folded, and opening it there leaves Code folded.
     answer = { tools: [{ ...ALL.tools[0], tool: "claude-chat", label: "Claude Chat", openable: false }], apps: [] };
     await shown("chat");
-    expect((await screen.findByTestId("other-tools-fold")).getAttribute("aria-expanded")).toBe("true");
+    const chatFold = await screen.findByTestId("other-tools-fold");
+    expect(chatFold.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(chatFold);
     expect(screen.getByTestId("other-tool-claude-chat")).toBeTruthy();
+    expect(JSON.parse(window.localStorage.getItem(FOLDED_KEY) || "{}")).toEqual({ code: true, chat: false });
   });
 });

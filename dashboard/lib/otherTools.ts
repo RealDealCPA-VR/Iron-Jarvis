@@ -308,14 +308,22 @@ export function writeSeen(seen: Seen): void {
 
 /** v1.531.0 (the owner: "I can't minimize the other tools"): whether the
  *  "Other tools" part is folded to its heading, kept per place (the chat
- *  list, Chat › Code) in this browser. Open until folded. */
+ *  list, Chat › Code) in this browser.
+ *
+ *  v1.537.0 (the owner: "these sections should be collapsed by default"):
+ *  in the chat list it starts FOLDED until the owner opens it; Chat › Code
+ *  keeps it open until folded. A choice the owner made always wins. */
 export const FOLDED_KEY = "ij_other_tools_folded";
+
+/** How each place starts when the owner never picked: the chat list folded. */
+export const FOLDED_BY_DEFAULT: Record<OtherToolsMode, boolean> = { chat: true, code: false };
 
 export function readFolded(mode: OtherToolsMode): boolean {
   try {
-    return obj(JSON.parse(window.localStorage.getItem(FOLDED_KEY) || "{}"))?.[mode] === true;
+    const picked = obj(JSON.parse(window.localStorage.getItem(FOLDED_KEY) || "{}"))?.[mode];
+    return typeof picked === "boolean" ? picked : FOLDED_BY_DEFAULT[mode];
   } catch {
-    return false;
+    return FOLDED_BY_DEFAULT[mode];
   }
 }
 

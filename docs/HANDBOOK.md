@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.536.0 (2026-11-18).*
+holds itself to. Current as of v1.537.0 (2026-11-18).*
 
 ---
 
@@ -2041,6 +2041,25 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A tidier sidebar: Terminals, Other tools and Projects start folded (v1.537.0)
+
+The lower part of the sidebar now starts out of the way, and you open what
+you want with one press.
+
+- **Terminals** (in **Chat › Code**, under Other tools) starts folded to its
+  heading. While folded, the heading still says what is going on: how many
+  terminals need you, else how many are working, else how many are open.
+  Press **Terminals** to open the list.
+- **Other tools** in the chat list (your Claude Chat chats) moved down: it
+  now sits just above **Projects** at the bottom of the sidebar, the same
+  place it has in Chat › Code. It starts folded, and still says how many
+  chats are new.
+- **Projects** starts folded too, with how many projects it holds beside the
+  heading. Press **Projects** to see them.
+
+Each part remembers your choice: open one and it stays open after a restart,
+until you fold it again.
 
 ## A hand-off is never lost (v1.536.0)
 

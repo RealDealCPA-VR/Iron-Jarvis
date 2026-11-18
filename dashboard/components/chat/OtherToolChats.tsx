@@ -74,6 +74,7 @@ import {
   newestOf,
   openSavedBody,
   quietWords,
+  FOLDED_BY_DEFAULT,
   readFolded,
   readSeen,
   stepsPath,
@@ -169,7 +170,8 @@ export default function OtherToolChats({
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [appNote, setAppNote] = useState<{ app: string; words: string } | null>(null);
   // v1.531.0: the whole part folds to its heading, remembered per place.
-  const [folded, setFolded] = useState(false);
+  // v1.537.0: it starts the way its place starts (the chat list folded).
+  const [folded, setFolded] = useState(() => FOLDED_BY_DEFAULT[mode]);
   const readAt = useRef(0);
   const alive = useRef(true);
 

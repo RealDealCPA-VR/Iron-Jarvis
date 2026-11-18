@@ -219,7 +219,10 @@ test("a terminal from the left pane, and back", async ({ page }) => {
   await page.getByTestId("harness-pane-tab-terminal").click();
   await page.getByTestId("pane-terminal-open").click();
   // The new terminal is a normal Build terminal: it shows in the left pane.
-  const row = page.locator('[data-testid^="harness-terminal-row-"]').first();
+  // v1.537.0: the Terminals group starts folded; one press opens it.
+  const fold = page.getByTestId("harness-terminals-fold");
+  if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+  const row =page.locator('[data-testid^="harness-terminal-row-"]').first();
   await expect(row).toBeVisible({ timeout: 30_000 });
   const termId = ((await row.getAttribute("data-testid")) ?? "").replace("harness-terminal-row-", "");
   await expect(page.getByTestId("pane-terminal")).toBeVisible();
