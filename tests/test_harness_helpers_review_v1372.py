@@ -186,11 +186,14 @@ async def test_a_folder_rule_reaches_the_helper(app, work):
         "description": "write", "prompt": "Write notes.txt.", "subagent_type": "general-purpose",
     })], "ok"], helper=helper))
     task = asyncio.create_task(_run(app, sid, "go", "hr-rules"))
+    # v1.533.0: bounds of 90 s (were 20 and 30): the test passed only on
+    # GitHub's retry, not reproduced here; it still waits for the very frame
+    # it asserts, so a fast run is as fast as before.
     waiting = await until(lambda: [d for e, d in turn_frames(app, "hr-rules")
-                                   if e == "helper" and d.get("state") == "waiting"], 20)
+                                   if e == "helper" and d.get("state") == "waiting"], 90)
     assert waiting and waiting[0]["ask"]["tool"] == "write_file"
     assert (await _asgi_post(app, f"/chat/approvals/{waiting[0]['ask']['id']}", {"decision": "deny"}))[0] == 200
-    await asyncio.wait_for(task, 30)
+    await asyncio.wait_for(task, 90)
     assert not (work / "notes.txt").exists()
     tools = _helper_tools(model)
     assert "process_start" not in tools and "write_file" in tools

@@ -98,6 +98,11 @@ def test_a_stalled_hop_lets_the_turn_start_and_names_itself(tmp_path, monkeypatc
 
 @pytest.mark.parametrize("lane", LANES)
 def test_a_turn_whose_hops_all_answered_carries_no_late_key(tmp_path, monkeypatch, lane):
+    # v1.533.0: what this pins is "every hop answered, so nothing is named
+    # late", not the deadline's length (the deadline itself is pinned with a
+    # deadline of zero below). With the real 2.5 s, a slow optional hop on a
+    # busy runner was named late and the test passed only on GitHub's retry.
+    monkeypatch.setattr(chat_turn, "GROUNDING_SOFT_S", 120.0)
     client = _client(tmp_path)
     _scripted_router(client.app.state.platform, monkeypatch, [], "ok.")
     body, _frames = _post_turn(client, lane, {
