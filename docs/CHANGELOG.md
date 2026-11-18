@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.536.0
+
+**A hand-off is never lost.** The fifth of nine releases from the fourth review.
+
 ## v1.535.0
 
 **Stop says who, and acts at once.** The fourth of nine releases from the fourth review.
@@ -77,7 +81,3 @@
 ## v1.517.0
 
 **The Linux app updates itself, and comes as two files.** Nothing changes on Windows in this release.
-
-## v1.516.1
-
-**Linux: every test passes there, and two real faults are fixed.** Nothing changes on Windows in this release.
