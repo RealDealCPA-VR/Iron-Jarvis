@@ -596,8 +596,12 @@ def _record(home: Any, sid: str, folder: str, entry: dict[str, Any], name: str) 
     ref = CK.ref_for(sid, name)
     if CK.keep(folder, ref, str(entry.get("tree") or "")):
         entry["ref"] = ref
-    dropped = _add_tree(home, sid, entry)
-    CK.drop(folder, [str(r.get("ref") or "") for r in dropped])
+        # The repository's own git directory: where the ref lives once the
+        # folder itself is gone (a removed worktree; ``forget_session``).
+        repo = CK.repo_of(folder)
+        if repo:
+            entry["repo"] = repo
+    CK.drop_rows(folder, _add_tree(home, sid, entry))
 
 
 def _ref_stamp(at: str) -> str:

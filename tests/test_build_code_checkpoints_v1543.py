@@ -203,8 +203,12 @@ def test_a_restore_returns_every_file_byte_for_byte_and_moves_the_new_ones_to_th
     assert not (repo / "deep").exists()  # the folders the new files left empty go too
     trash = Path(got["trash"])
     assert trash.is_relative_to(home / "trash") and trash.parts[-2:] == ("code-rewind", SID)
-    assert (trash / "new.py").read_bytes() == b"new = 1\n"
-    assert (trash / "deep" / "er" / "n.txt").read_bytes() == b"n\n"
+    assert (trash / "made-since" / "new.py").read_bytes() == b"new = 1\n"
+    assert (trash / "made-since" / "deep" / "er" / "n.txt").read_bytes() == b"n\n"
+    # The version git wrote over is kept too (b.py was not there: nothing to keep).
+    assert (trash / "replaced" / "a.py").read_bytes() == b"a = 1\n# more\n"
+    assert got["replaced"] == 1 and not (trash / "replaced" / "b.py").exists()
+    assert "kept there too" in got["words"]
     assert "2 put back" in got["words"] and "2 made since moved" in got["words"]
 
 
@@ -227,7 +231,7 @@ def test_a_restore_leaves_the_staging_area_the_branch_and_the_commits_alone(repo
     assert _git(repo, "ls-files", "-s") == index
     assert _git(repo, "rev-parse", "HEAD") == head and _git(repo, "branch", "--show-current").strip() == "main"
     assert "1 commit made since then is still in git" in got["words"]
-    assert (Path(got["trash"]) / "c.py").read_bytes() == b"c = 1\n"
+    assert (Path(got["trash"]) / "made-since" / "c.py").read_bytes() == b"c = 1\n"
 
 
 def test_one_file_in_the_way_means_nothing_changes(repo, home, monkeypatch):
@@ -265,13 +269,11 @@ def test_a_failed_restore_returns_the_folder_to_how_it_was(repo, home, monkeypat
     real = CK._restore_paths
     calls: list[str] = []
 
-    def half(folder, tree, rels):
-        calls.append(tree)
-        if len(calls) == 1:  # git writes the files, then stops with an error
-            real(folder, tree, rels)
-            assert (repo / "b.py").exists()  # the deleted file was made again
-            return types.SimpleNamespace(ok=False, err="fatal: unable to write file b.py", timed_out=False)
-        return real(folder, tree, rels)
+    def half(folder, tree, rels, index_dir):
+        calls.append(tree)  # git writes the files, then stops with an error
+        real(folder, tree, rels, index_dir)
+        assert (repo / "b.py").exists()  # the deleted file was made again
+        return types.SimpleNamespace(ok=False, err="fatal: unable to write file b.py", timed_out=False)
 
     monkeypatch.setattr(CK, "_restore_paths", half)
     with pytest.raises(CK.RestoreRefused) as said:
@@ -281,7 +283,7 @@ def test_a_failed_restore_returns_the_folder_to_how_it_was(repo, home, monkeypat
     # The changed file has the tool's version again, the file git made again
     # is gone again (moved aside, never deleted), the new files are back.
     assert _files(repo) == as_is
-    assert len(calls) == 2
+    assert len(calls) == 1  # the way back is the kept copies, not a second git write
     aside = list((home / "trash").glob("*/code-rewind/" + SID + "/rolled-back/b.py"))
     assert len(aside) == 1 and aside[0].read_bytes() == b"b = 0\n"
     # Nothing was changed, so there is nothing to undo.
@@ -301,8 +303,8 @@ def test_a_file_that_became_a_folder_goes_back_and_so_does_the_other_way_round(r
     (repo / "was_dir").write_bytes(b"now a file\n")  # a folder became a file
     got = CK.restore(home, SID, _row(repo), "t1")
     assert _files(repo) == start
-    assert (Path(got["trash"]) / "a.py" / "inner.txt").read_bytes() == b"inner\n"
-    assert (Path(got["trash"]) / "was_dir").read_bytes() == b"now a file\n"
+    assert (Path(got["trash"]) / "made-since" / "a.py" / "inner.txt").read_bytes() == b"inner\n"
+    assert (Path(got["trash"]) / "made-since" / "was_dir").read_bytes() == b"now a file\n"
 
 
 def test_a_session_in_a_folder_inside_the_repository_touches_only_that_folder(repo, home):
@@ -328,7 +330,7 @@ def test_names_git_would_read_as_patterns_are_restored_as_plain_names(repo, home
     made = CK.plan(home, SID, _row(repo), "t1")
     assert sorted(made["back"]) == ["[x].py", "x.py"]
     # Only the bracketed name is asked for: its pattern must not also take x.py.
-    CK._restore_paths(str(repo), made["tree"], ["[x].py"])
+    CK._restore_paths(str(repo), made["tree"], ["[x].py"], home / "idx")
     assert (repo / "[x].py").read_bytes() == b"one\n"
     assert (repo / "x.py").read_bytes() == b"other, the user's own edit\n"
 
@@ -338,7 +340,7 @@ def test_more_files_than_the_limit_is_refused_untouched(repo, home, monkeypatch)
     _work(repo)
     as_is = _files(repo)
     monkeypatch.setattr(CK, "RESTORE_MAX_FILES", 3)
-    assert CK.public(CK.plan(home, SID, _row(repo), "t1"))["too_many"] is True
+    assert "4 files changed" in CK.public(CK.plan(home, SID, _row(repo), "t1"))["too_many"]
     with pytest.raises(CK.RestoreRefused) as said:
         CK.restore(home, SID, _row(repo), "t1")
     assert "4 files changed" in said.value.sentence and _files(repo) == as_is

@@ -174,9 +174,19 @@ export function RewindDialog({
                 {commitsStayWords(plan.commitsSince)}
               </p>
             ) : null}
+            {plan.tooMany ? (
+              <p role="status" data-testid="code-rewind-too-many" className="text-[12px] text-tone-danger">
+                {plan.tooMany}
+              </p>
+            ) : null}
             {plan.blocked ? (
               <p role="status" data-testid="code-rewind-blocked" className="text-[12px] text-tone-danger">
                 {plan.blocked}
+              </p>
+            ) : null}
+            {plan.endings && plan.backCount > 0 ? (
+              <p data-testid="code-rewind-endings" className="text-[12px] text-zinc-400">
+                {plan.endings}
               </p>
             ) : null}
             {changes > 0 ? <p className="text-[12px] text-zinc-500">{REWIND_FOOT}</p> : null}

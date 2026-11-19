@@ -160,6 +160,7 @@ TOOL_BUSY_FILES = ("{label} is still working in this folder (a reply of its own,
                    "until it ends first.")
 HELPER_BUSY_FILES = "A helper this session started is still working in this folder: wait until it ends first."
 OTHER_SESSION = "Another session is working on a reply in this folder: wait until it ends first."
+READ_FIRST = "Read what would change first: the files are put back only from the list you saw."
 FILES_ONLY_NOTE = ("The conversation was not changed, so {label} may still think its changes are there: "
                    "tell it the files were put back.")
 FILES_BACK_AGAIN = ("The conversation could not be rewound, so the folder's files were returned to how they "
@@ -791,12 +792,25 @@ def _stripped(ev: dict[str, Any]) -> dict[str, Any]:
 
 
 # -- the folder's files (v1.543.0) ------------------------------------------------
-async def _run(lock: Any, fn: Any) -> Any:
-    """``fn()`` in a worker thread, under the session's git lock when the
-    route gave one (``build_git._locked``)."""
+async def _run(lock: Any, fn: Any, folder: str = "") -> Any:
+    """``fn()`` in a worker thread, under the locks the route gave
+    (``lock(fn, folder)``: the session's git lock, and one for the FOLDER so
+    two sessions in one folder never write it at once)."""
     if lock is None:
         return await asyncio.to_thread(fn)
-    return await asyncio.to_thread(lock, fn)
+    return await asyncio.to_thread(lock, fn, folder)
+
+
+def _need_expect(expect: str) -> str:
+    """The preview's id is REQUIRED for a press that writes the folder: it is
+    what proves the user saw this very list (review: it was optional, so the
+    "folder changed since you read it" check could be skipped)."""
+    from .service import Refused
+
+    text = str(expect or "").strip()
+    if not text:
+        raise Refused(READ_FIRST, 400)
+    return text
 
 
 def _same_folder_running(svc: Any, row: Any) -> bool:
@@ -878,6 +892,7 @@ def _say(svc: Any, row: Any, text: str) -> None:
 
 def _restored(got: dict[str, Any]) -> dict[str, Any]:
     return {"back": int(got.get("back") or 0), "moved": int(got.get("moved") or 0),
+            "replaced": int(got.get("replaced") or 0),
             "trash": str(got.get("trash") or ""), "words": str(got.get("words") or "")}
 
 
@@ -898,7 +913,7 @@ async def preview(svc: Any, sid: str, to: str, *, lock: Any = None) -> dict[str,
     history, _dropped, _merged = await _history(svc, row, live)
     _idx, turn = _turn_of(history, to)
     try:
-        made = await _run(lock, lambda: CK.plan(svc.home, row.id, row, turn))
+        made = await _run(lock, lambda: CK.plan(svc.home, row.id, row, turn), str(row.folder or ""))
     except CK.RestoreRefused as r:
         raise _as_refused(r) from None
     out = CK.public(made)
@@ -923,6 +938,7 @@ async def rewind_files(svc: Any, sid: str, to: str, expect: str = "", *, lock: A
     to = str(to or "").strip()
     if not to:
         raise Refused("Name the message to rewind to.", 400)
+    expect = _need_expect(expect)
     row = await svc._row(sid)
     live = svc.live.get(sid)
     await _files_free(svc, row, live)
@@ -931,7 +947,8 @@ async def rewind_files(svc: Any, sid: str, to: str, expect: str = "", *, lock: A
     live = live or svc._live(row)
     svc._claim(live, "being rewound")
     try:
-        got = await _run(lock, lambda: CK.restore(svc.home, row.id, row, turn, expect=str(expect or "")))
+        got = await _run(lock, lambda: CK.restore(svc.home, row.id, row, turn, expect=expect),
+                         str(row.folder or ""))
     except CK.RestoreRefused as r:
         raise _as_refused(r) from None
     finally:
@@ -954,7 +971,7 @@ async def undo_files(svc: Any, sid: str, *, lock: Any = None) -> dict[str, Any]:
     live = live or svc._live(row)
     svc._claim(live, "being rewound")
     try:
-        got = await _run(lock, lambda: CK.undo(svc.home, row.id, row))
+        got = await _run(lock, lambda: CK.undo(svc.home, row.id, row), str(row.folder or ""))
     except CK.RestoreRefused as r:
         raise _as_refused(r) from None
     finally:
@@ -985,6 +1002,8 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
     if not to:
         raise Refused("Name the message to rewind to.", 400)
     with_files = bool(files)  # (``files`` below is the message's own attachments)
+    if with_files:
+        expect = _need_expect(expect)
     row, live = await _checks(svc, sid, rewind=True)
     lab = label(row.harness)
     if with_files:
@@ -1004,7 +1023,8 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
         if not with_files:
             return
         try:
-            restored = await _run(lock, lambda: CK.restore(svc.home, row.id, row, turn_id, expect=str(expect or "")))
+            restored = await _run(lock, lambda: CK.restore(svc.home, row.id, row, turn_id, expect=str(expect)),
+                                  str(row.folder or ""))
         except CK.RestoreRefused as r:
             raise _as_refused(r) from None
 
@@ -1086,7 +1106,7 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
         # v1.543.0: the files went back and the conversation did not follow:
         # the folder is returned to how it was just before, and that is said.
         try:
-            await _run(lock, lambda: CK.undo(svc.home, row.id, row))
+            await _run(lock, lambda: CK.undo(svc.home, row.id, row), str(row.folder or ""))
             said = FILES_BACK_AGAIN
         except Exception:  # noqa: BLE001 — said, and Undo rewind stays offered
             log.warning("could not return a folder's files after a failed rewind", exc_info=True)

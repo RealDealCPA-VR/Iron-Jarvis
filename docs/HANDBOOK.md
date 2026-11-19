@@ -2072,10 +2072,18 @@ Then you choose:
 | **Files only** | Puts the files back and leaves the conversation as it is. The tool may still think its changes are there, so tell it. |
 | **Cancel** | Nothing changes. |
 
+**Nothing is removed or written over without a copy.** Before a file is
+written over, the version it replaces is copied to Iron Jarvis's trash. A
+file made since the message is moved there. The rewind's result names the
+trash folder; inside it, `replaced` holds the versions that were written
+over and `made-since` holds the files that were moved.
+
 **Undo rewind.** After a rewind that changed files, an **Undo rewind** button
 appears above the message box (press it twice). It puts the folder back
-exactly as it was just before the rewind. It is there until you send your next
-message. It undoes the file changes only; the conversation stays rewound.
+exactly as it was just before the rewind, byte for byte. It is there until
+you send your next message. It undoes the file changes only; the
+conversation stays rewound. What the undo itself replaces is kept in the
+trash too.
 
 **Every tool gets its files back.** Grok, Antigravity and OpenCode cannot
 rewind a conversation, so their messages offer **Put files back to here…**
@@ -2086,28 +2094,47 @@ instead: the same list, with one button.
 - It never touches git's own records: your branch, your commits and what you
   have staged stay exactly as they are.
 - It leaves files that git ignores alone (build output, `node_modules`,
-  `.env`): they are in no checkpoint.
-- It leaves a repository inside the folder (a submodule) and links as they
-  are, and says so in the list.
+  `.env`): they are in no checkpoint, so nothing could bring them back. This
+  holds for a file git ignores now, and for a file that the checkpoint's own
+  rules ignored. The list and the result say which files were left.
+- It never deletes something that is in no checkpoint to make room. If a
+  folder now stands where a file used to be and holds such files (or a
+  repository of its own, or a link to another folder), nothing is changed
+  and the list says which file is in the way.
+- It leaves a repository inside the folder (a submodule), links, and a file
+  whose name changed only in upper or lower case as they are, and says so.
 - If even one file cannot be written right now (another program has it open),
   nothing is changed at all, and the list names the file.
 - If the folder changed after you read the list, nothing is changed: read the
   list again.
 - It waits while a reply runs, while the tool or a helper is still working in
-  the folder, while another session is working on a reply in the same folder,
-  and while the conversation is open in a terminal. The box says which.
+  the folder, while another Build › Code session is working on a reply in the
+  same folder, and while the conversation is open in a terminal. The box says
+  which. It cannot see other programs: close an editor's unsaved work or a
+  running build first.
 - If the tool refuses to rewind the conversation after the files went back,
   the files are returned to how they were, and the message says so.
-- More than 5,000 changed files is refused: use git for that one.
+- More than 5,000 changed files is refused, and the box says so: use git for
+  that one.
 
 **Good to know.**
 
 - Checkpoints live inside the folder's own git repository, under a hidden
   name (`refs/ironjarvis/`). They do not appear in `git log`, in your
-  branches or in your tags, and they are never pushed. Deleting the session
-  removes them.
-- A file comes back with the line endings git writes on this PC. If git is
-  set to convert line endings here, a restored file has the converted ones.
+  branches or in your tags. A normal push, fetch or clone does not carry
+  them. A mirror push (`git push --mirror`), a mirror clone and a bundle of
+  everything DO carry them, with the folder's files as they were at each
+  message, including files you had not committed. Delete the session first
+  if you are about to mirror the repository somewhere others can read.
+  Deleting the session removes its checkpoints.
+- **Line endings.** Where git is set to change line endings in a folder
+  (`core.autocrlf`, or a `.gitattributes` file), a checkpoint does not record
+  which kind a file had. So a file that goes back keeps the kind of line
+  endings it has now: a Windows-style file stays Windows-style. Two cases can
+  still differ from what they were: a file whose line endings themselves were
+  changed since that message, and a file that was deleted (it comes back with
+  the ones git writes). The box says so before you choose, and the version
+  that was replaced is in the trash. Undo is exact.
 - Messages sent before this version have no kept checkpoint. They keep the
   two-press **Rewind to here**, which changes the conversation only.
 - The Changes tab's **Revert this file** is unchanged, with one fix: when the

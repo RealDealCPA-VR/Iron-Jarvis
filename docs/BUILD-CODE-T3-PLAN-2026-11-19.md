@@ -12,6 +12,16 @@ Two things differ from the text below, both on purpose:
   Coding tools commit often, and stopping there would make rewind unusable.
 - A rewind also waits while another session is working on a reply in the same
   folder. The plan did not name that case.
+- "Byte for byte" holds for Undo, and for a rewind wherever git changes no
+  line endings. Where it does, a checkpoint does not record which kind a file
+  had, so a restored file keeps the kind it has now. That is exact unless the
+  line endings themselves were changed since the message, or the file was
+  deleted (the preview says so). Exact bytes in those two cases would need a
+  second snapshot of each message: an open decision.
+- An independent review of the first version found that git itself deletes
+  what stands in a restored file's way and writes over files it ignores. The
+  restore now refuses or leaves those, and copies everything it replaces to
+  the trash first.
 
 It comes from a comparison with t3code, an open-source app that drives the
 same coding tools. Three of its ideas are worth having. Ideas only: no t3code

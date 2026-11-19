@@ -3848,6 +3848,12 @@ class HostedService:
                 # v1.429.0: the session's own setting — no Pi process needed.
                 await self._pi_setting(live, row, *builtin)
                 return
+            # v1.543.0: a message is starting, so no earlier rewind can be
+            # undone any more — said here, whether or not the folder's
+            # checkpoint below is recorded in time.
+            from . import checkpoints as CK
+
+            await asyncio.to_thread(CK.close_undo, self.home, live.sid)
             await PN.record_turn_start_async(self.home, live.sid, str(getattr(row, "folder", "") or ""), turn.id,
                                              uid=str(user.get("at") or ""))  # v1.543.0: the checkpoint's message
             async with live.lock:

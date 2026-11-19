@@ -63,7 +63,7 @@ export const REWIND_READING = "Reading the folder…";
 export const REWIND_READ_AGAIN = "Read again";
 export const REWIND_NOTHING = "The folder's files are already as they were when this message started.";
 export const REWIND_FOOT =
-  "Files that git ignores are not touched. You can undo the file changes until you send your next message.";
+  "Files that git ignores are not touched. Every version that is replaced is kept in Iron Jarvis's trash, and you can undo the file changes until you send your next message.";
 export const UNDO_REWIND = "Undo rewind";
 export const UNDO_REWIND_CONFIRM = "Undo? Files go back";
 export const UNDO_REWIND_WORDS = "The last rewind changed files in this folder.";
@@ -139,7 +139,12 @@ export interface RewindPlan {
   problems: RewindFileNote[];
   problemsCount: number;
   commitsSince: number;
-  tooMany: boolean;
+  /** The daemon's sentence when more files changed than one rewind puts back
+   *  ("" otherwise). */
+  tooMany: string;
+  /** The daemon's sentence when git changes line endings in this folder, so a
+   *  restored file may differ in them ("" otherwise). */
+  endings: string;
   /** Why the files cannot go back right now ("" when they can). */
   blocked: string;
   /** This tool can rewind the conversation from this message too. */
@@ -187,7 +192,8 @@ export function decodeRewindPlan(raw: unknown): RewindPlan | null {
     problems,
     problemsCount: count(r.problems_count, problems.length),
     commitsSince: count(r.commits_since, 0),
-    tooMany: r.too_many === true,
+    tooMany: str(r.too_many, 500),
+    endings: str(r.endings, 500),
     blocked: str(r.blocked, 500),
     conversation: r.conversation === true,
   };

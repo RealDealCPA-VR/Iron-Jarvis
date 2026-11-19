@@ -153,7 +153,8 @@ const PLAN = {
   problems: [],
   problems_count: 0,
   commits_since: 2,
-  too_many: false,
+  too_many: "",
+  endings: "",
   blocked: "",
   conversation: true,
   to: AT2,
@@ -330,6 +331,55 @@ describe("the preview", () => {
     expect(screen.queryByTestId("code-rewind-go")).toBeNull();
   });
 
+  it("over the limit it says the daemon's sentence instead of silently dropping the buttons", () => {
+    const words = "6200 files changed since this message, which is more than Iron Jarvis puts back in one go. Use git for this one.";
+    const plan = decodeRewindPlan({ ...PLAN, can: false, too_many: words });
+    render(<RewindDialog {...base} plan={plan} error={null} conversation />);
+    expect(screen.getByTestId("code-rewind-too-many").textContent).toBe(words);
+    expect(screen.queryByTestId("code-rewind-go")).toBeNull();
+  });
+
+  it("says when git changes line endings here, and only when a file goes back", () => {
+    const words = "git changes line endings in this folder (core.autocrlf is input), so a file that goes back may have different line endings than it had.";
+    const { unmount } = render(
+      <RewindDialog {...base} plan={decodeRewindPlan({ ...PLAN, endings: words })} error={null} conversation />,
+    );
+    expect(screen.getByTestId("code-rewind-endings").textContent).toBe(words);
+    unmount();
+    render(
+      <RewindDialog
+        {...base}
+        plan={decodeRewindPlan({ ...PLAN, endings: words, back: [], back_count: 0 })}
+        error={null}
+        conversation
+      />,
+    );
+    expect(screen.queryByTestId("code-rewind-endings")).toBeNull();
+  });
+
+  it("Files only sends the files press, never the conversation's", () => {
+    const onFiles = vi.fn();
+    const onBoth = vi.fn();
+    const onConversation = vi.fn();
+    render(
+      <RewindDialog
+        {...base}
+        onFiles={onFiles}
+        onBoth={onBoth}
+        onConversation={onConversation}
+        plan={decodeRewindPlan(PLAN)}
+        error={null}
+        conversation
+      />,
+    );
+    fireEvent.click(screen.getByTestId("code-rewind-files"));
+    expect(onFiles).toHaveBeenCalledWith(PLAN.id);
+    expect(onBoth).not.toHaveBeenCalled();
+    expect(onConversation).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("code-rewind-go"));
+    expect(onBoth).toHaveBeenCalledWith(PLAN.id);
+  });
+
   it("with nothing to put back it says so and offers the conversation alone", () => {
     const plan = decodeRewindPlan({ ...PLAN, back: [], back_count: 0, new: [], new_count: 0, left: [], left_count: 0 });
     render(<RewindDialog {...base} plan={plan} error={null} conversation />);
@@ -489,6 +539,65 @@ describe("in the Code view", () => {
     fireEvent.click(await screen.findByTestId("code-rewind-go", {}, { timeout: 10_000 }));
     await waitFor(() => expect(screen.getByTestId("code-note").textContent).toContain("nothing was changed"));
     expect(screen.getAllByTestId("code-user")).toHaveLength(2);
+  });
+
+  it("Files only, in the Code view, posts the files route and leaves the conversation", async () => {
+    open("a1", FULL);
+    H.gets[PREVIEW("a1", AT2)] = PLAN;
+    H.answers["/build/app/sessions/a1/rewind/files"] = { ok: true, note: "The folder's files are back." };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await openMenu(1);
+    fireEvent.click(screen.getByTestId("code-user-rewind-ask"));
+    fireEvent.click(await screen.findByTestId("code-rewind-files", {}, { timeout: 10_000 }));
+    await waitFor(() => expect(H.posts.some((p) => p.path === "/build/app/sessions/a1/rewind/files")).toBe(true));
+    expect(H.posts.find((p) => p.path === "/build/app/sessions/a1/rewind/files")!.body).toEqual({
+      to: AT2,
+      expect: PLAN.id,
+    });
+    expect(H.posts.some((p) => p.path === "/build/app/sessions/a1/rewind")).toBe(false);
+  });
+
+  it("a preview that arrives late for another message is not shown", async () => {
+    open("a1", FULL);
+    // The first message's preview never answers until we let it.
+    let answerFirst: (v: unknown) => void = () => {};
+    H.gets[PREVIEW("a1", AT1)] = new Promise((resolve) => {
+      answerFirst = resolve;
+    });
+    H.gets[PREVIEW("a1", AT2)] = { ...PLAN, back: ["second-message.py"], back_count: 1 };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await openMenu(0);
+    fireEvent.click(screen.getByTestId("code-user-rewind-ask"));
+    await screen.findByTestId("code-rewind-reading", {}, { timeout: 10_000 });
+    fireEvent.click(screen.getByTestId("code-rewind-cancel"));
+    await openMenu(1);
+    fireEvent.click(screen.getByTestId("code-user-rewind-ask"));
+    await waitFor(() => expect(screen.getByTestId("code-rewind-back").textContent).toContain("second-message.py"));
+    // Now the FIRST message's answer lands: it is for a dialog that is gone.
+    answerFirst({ ...PLAN, id: "ffffffffffffffff", back: ["first-message.py"], back_count: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByTestId("code-rewind-back").textContent).toContain("second-message.py");
+    expect(screen.getByTestId("code-rewind-back").textContent).not.toContain("first-message.py");
+    fireEvent.click(screen.getByTestId("code-rewind-go"));
+    await waitFor(() => expect(H.posts.some((p) => p.path === "/build/app/sessions/a1/rewind")).toBe(true));
+    expect(H.posts.find((p) => p.path === "/build/app/sessions/a1/rewind")!.body).toEqual({
+      to: AT2,
+      files: true,
+      expect: PLAN.id,
+    });
+  });
+
+  it("Undo rewind is not offered while a reply runs", async () => {
+    open("a1", { ...FULL, undo_rewind: true });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-undo-rewind", {}, { timeout: 10_000 });
+    cleanup();
+    open("a1", { ...FULL, undo_rewind: true });
+    (H.gets["/build/app/sessions/a1"] as Record<string, unknown>).running = "t-live";
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    // The reply is running on screen (its Stop is there), and Undo is not.
+    await screen.findByTestId("code-stop", {}, { timeout: 10_000 });
+    expect(screen.queryByTestId("code-undo-rewind")).toBeNull();
   });
 
   it("an older Iron Jarvis (no files_at) reads no preview and keeps the two presses", async () => {

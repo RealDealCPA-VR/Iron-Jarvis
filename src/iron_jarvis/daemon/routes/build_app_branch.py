@@ -74,9 +74,20 @@ def register(app: FastAPI, d: Any) -> None:
             return _refused(r)
 
     def _lock(sid: str) -> Any:
+        """``lock(fn, folder)``: the session's git lock (the Changes pane's
+        Revert takes the same one), then one for the FOLDER — two sessions
+        that work in one folder never write it at the same time."""
+        import os
+
         from .build_git import _locked
 
-        return lambda fn: _locked(f"app:{sid}", fn)
+        def run(fn: Any, folder: str = "") -> Any:
+            key = os.path.normcase(os.path.abspath(folder)) if folder else ""
+            if not key:
+                return _locked(f"app:{sid}", fn)
+            return _locked(f"app:{sid}", lambda: _locked(f"code-folder:{key}", fn))
+
+        return run
 
     def _busy(g: B.GitRefused) -> JSONResponse:
         return JSONResponse(status_code=g.status, content={"detail": str(g)})
