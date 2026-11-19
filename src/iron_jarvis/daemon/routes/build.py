@@ -3911,7 +3911,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
             model_text = await asyncio.to_thread(
                 CC.with_block, model_text, noted,
-                event_bus=getattr(platform, "event_bus", None), session_id=thread_id)
+                event_bus=getattr(platform, "event_bus", None), session_id=S.session_id_for(thread_id))
         # Third plan RB11: an "Allow for this session" answer an earlier reply
         # could not save is written now, and this reply runs with it.
         kept_grants = await _restore_unsaved_grants(platform.engine, thread_id)

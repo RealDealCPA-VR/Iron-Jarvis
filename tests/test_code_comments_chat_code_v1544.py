@@ -86,7 +86,7 @@ async def test_a_comment_that_cannot_be_sent_starts_nothing(app, work):
     sid = new_session(app, work)["id"]
     script = wire(app, Script(["never"]))
     for n, (comments, words) in enumerate((
-        ([_comment(path="../outside.py")], CC.BAD_PATH),
+        ([_comment(path="../outside.py")], "is not in this session's folder (outside.py)"),
         ([_comment(words="  ")], CC.NO_WORDS),
     )):
         status, raw = await open_turn(app, sid, {"text": "fix", "turn_id": f"cc-x{n}", "comments": comments})
@@ -148,3 +148,47 @@ async def test_three_waiting_messages_full_of_comments_can_be_kept(app, work):
     status, got = await asgi(app, "PUT", f"/chat/threads/{sid}/queue",
                              {"items": [{"text": "a", "comments": full}] * 3})
     assert status == 200 and got["queued"] == 3
+
+
+async def test_the_turn_after_a_message_of_comments_alone_is_not_lost_from_history(app, work):
+    """With no words, the question line dropped out of the next turn's
+    history: a reply with no question (the bug once fixed for pictures)."""
+    sid = new_session(app, work)["id"]
+    script = wire(app, Script(["Done.", "Next."]))
+    await open_turn(app, sid, {"text": "", "turn_id": "cc-h1", "comments": [_comment()]})
+    status, _ = await open_turn(app, sid, {"text": "and now?", "turn_id": "cc-h2"})
+    assert status == 200
+    history = _user_messages(script.calls[-1])
+    assert history[0] == "[sent 1 comment on changed code: app.py]" and history[-1] == "and now?"
+    assert not any(CC.HEADING in m or "return sum" in m for m in history)
+
+
+async def test_a_blocked_quote_is_reported_for_the_coding_session(app, work, monkeypatch):
+    from iron_jarvis.harness import sessions as S
+
+    seen: list[dict] = []
+    real = CC.with_block
+
+    def spy(text, comments, **kw):
+        seen.append(kw)
+        return real(text, comments, **kw)
+
+    monkeypatch.setattr(CC, "with_block", spy)
+    sid = new_session(app, work)["id"]
+    wire(app, Script(["Done."]))
+    status, _ = await open_turn(app, sid, {"text": "fix", "turn_id": "cc-bus", "comments": [_comment()]})
+    assert status == 200
+    assert seen and seen[0]["session_id"] == S.session_id_for(sid) != sid
+
+
+async def test_waiting_messages_in_any_language_can_be_kept(app, work):
+    """The size is counted in characters as written, not with every
+    non-ASCII character turned into a six-character escape."""
+    sid = new_session(app, work)["id"]
+    for sample in ("\u4e2d", "\u0436", '"'):
+        full = [_comment(quote=sample * CC.QUOTE_CHARS, words=sample * CC.WORDS_CHARS)] * CC.MAX_COMMENTS
+        status, got = await asgi(app, "PUT", f"/chat/threads/{sid}/queue",
+                                 {"items": [{"text": "a", "comments": full}] * 3})
+        assert status == 200 and got["queued"] == 3, (sample, got)
+    status, view = await asgi(app, "GET", f"/build/sessions/{sid}")
+    assert len(view["queued"]) == 3

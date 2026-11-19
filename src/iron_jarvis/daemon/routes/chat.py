@@ -628,7 +628,10 @@ MAX_THREAD_QUEUE = 3
 #: each with up to 4,000 characters of quoted code and 2,000 of words), so
 #: three of them no longer fit in 200,000: the page ignores a refused save
 #: and the messages were then lost on a reload.
-MAX_THREAD_QUEUE_CHARS = 600_000
+#: (Measured WITHOUT turning every non-ASCII character into a six-character
+#: escape: review — one waiting message of Chinese or Cyrillic comments was
+#: 720,000 "characters" and was refused.)
+MAX_THREAD_QUEUE_CHARS = 1_000_000
 
 
 def _queued_of(row) -> list:
@@ -2279,7 +2282,7 @@ def register(app: FastAPI, d) -> None:
                     item["comments"] = noted
             kept.append(item)
         items = kept
-        text = json.dumps(items) if items else ""
+        text = json.dumps(items, ensure_ascii=False) if items else ""
         if len(text) > MAX_THREAD_QUEUE_CHARS:
             raise HTTPException(status_code=413, detail="the waiting messages are too large to keep")
         with session_scope(d.platform.engine) as db:

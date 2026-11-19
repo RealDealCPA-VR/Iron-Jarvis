@@ -38,8 +38,8 @@ log = logging.getLogger(__name__)
 #: Attempts take the words of the message only (the files and the "/" skill
 #: of a message are not given to every attempt yet).
 WORDS_ONLY = (
-    "Trying on several models takes the message's words only. Send the files, the skill or the "
-    "command in a message of their own first, then ask to try it; nothing started."
+    "Trying on several models takes the message's words only. Send the files, the skill, the "
+    "command or the comments in a message of their own first, then ask to try it; nothing started."
 )
 
 
@@ -192,7 +192,10 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
         # said, and nothing starts.
         if (list(getattr(body, "attachments", None) or []) or list(getattr(body, "files", None) or [])
                 or str(getattr(body, "skill", "") or "").strip() or str(getattr(body, "folder_skill", "") or "").strip()
-                or str(getattr(body, "command", "") or "").strip()):
+                or str(getattr(body, "command", "") or "").strip()
+                # v1.544.0 (review): comments on changed code too — the
+                # attempts started without them and the chips were gone.
+                or list(getattr(body, "comments", None) or [])):
             raise HTTPException(status_code=400, detail=WORDS_ONLY)
         if S.mode_of(row) == S.MODE_PLAN:
             raise HTTPException(status_code=409, detail=A.PLAN_MODE)

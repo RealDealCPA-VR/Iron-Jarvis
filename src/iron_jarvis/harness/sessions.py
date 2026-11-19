@@ -1055,6 +1055,12 @@ def history_of(messages: list[dict[str, Any]], *, last_work: bool = False) -> li
             # the model never learned a picture had been sent.
             # v1.373.0: a file picked with "@" alone counts the same way.
             content = sent_files_line(_listed(m.get("attachmentPaths")) + _listed(m.get("filePaths")))
+        if role == "user" and not content.strip() and m.get("comments"):
+            # v1.544.0 (review): comments on changed code sent ALONE — the
+            # same vanishing question (the files' names only, never the code).
+            from .code_comments import sent_line
+
+            content = sent_line(m.get("comments"))
         # Second review S5 (v1.513.0): how a reply ENDED (cut off, an error,
         # the step limit, the session's cap, failing tests at the finish
         # check), in Iron Jarvis's own fixed words — and a failed reply with

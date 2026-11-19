@@ -537,7 +537,14 @@ async def _pi_entry(svc: Any, row: Any, driver: Any, uid: str) -> str:
     tail = msgs[len(msgs) - len(sent):]
     for (_, text), m in zip(sent, tail):
         a, b = _norm(text), _norm(str(m.get("text") or ""))
-        if not (a == b or (len(a) >= 400 and b.startswith(a[:390]))):
+        # The stored text is CUT at 400 characters (``note_sent``; the cut
+        # ends with an ellipsis). v1.544.0 (review): the old test, "at least
+        # 400 characters AFTER the white space is folded", was false for any
+        # cut text with a line break in it — every message with a comment —
+        # and then every message of that conversation was refused.
+        cut = str(text).endswith("…")
+        head = a[:-1].rstrip()[:390] if cut else a
+        if not (a == b or (cut and len(head) >= 40 and b.startswith(head))):
             raise Refused(PI_LIST_DIFFERS)
     return str(tail[ids.index(uid)]["entryId"])
 

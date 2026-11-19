@@ -3617,12 +3617,16 @@ class HostedService:
         builtin = await self._pi_typed(row, live, text, files) if row.harness == PI and not carry else None
         if row.harness in (CLAUDE, GROK) and not carry:
             builtin = await self._typed_setting(row, live, text, files)
-        if builtin is not None and comments:
+        if comments:
             # v1.544.0: a command of the tool's own takes no comments (as it
-            # takes no files): they stay in the box for a message.
-            from ..harness.code_comments import NOT_WITH_COMMAND
+            # takes no files): they stay in the box for a message. Review:
+            # this covers ANY "/command", not only the ones Iron Jarvis runs
+            # itself — Codex and OpenCode match "/compact" by its exact text,
+            # so a comment block after it made it plain words.
+            from ..harness import code_comments as CC
 
-            raise Refused(NOT_WITH_COMMAND, 400)
+            if builtin is not None or CC.looks_like_command(text):
+                raise Refused(CC.NOT_WITH_COMMAND, 400)
         # v1.511.0 (A12): a stored "load them" press is read against the
         # folder's trust afresh before Pi starts again (never --approve over
         # the user's later "do not trust").
@@ -3650,7 +3654,9 @@ class HostedService:
         turn.carry = dict(carry) if carry else None
         # v1.422.0: a carry-on Iron Jarvis sends by itself never names the
         # session (its words are the app's, not the user's).
-        live.title = (row.title or "").strip() or ("" if carry or builtin else first_message_title(text))
+        # (v1.544.0: a first message of comments alone is titled by the first comment's words.)
+        titled = text if text.strip() or not comments else str(comments[0].get("words") or "")
+        live.title = (row.title or "").strip() or ("" if carry or builtin else first_message_title(titled))
         self.turns[turn_id] = turn
         live.turn = turn
         live.last_active = self.clock()
@@ -3661,7 +3667,7 @@ class HostedService:
         # title (a name the user gave is theirs) and only once the turn is
         # really running (a refused send titles nothing).
         if not (row.title or "").strip() and not carry and not builtin:
-            title = first_message_title(text)
+            title = first_message_title(titled)
             if title:
                 try:
                     await asyncio.to_thread(store.update, self.engine, sid, title=title)
