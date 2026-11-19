@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.540.0
+
+**Linux, the right file always.** The eighth of nine releases from the fourth review.
+
 ## v1.539.0
 
 **Terminals stay on your account, and your folder stays yours.** The seventh of nine releases from the fourth review.
@@ -77,7 +81,3 @@
 ## v1.521.0
 
 **A reply lives in its chat, whoever was watching.** A reply that finishes while you are on another page, or with the window closed, is now written into its chat by Iron Jarvis itself, and the browser sidebar's conversation is a chat like the others.
-
-## v1.520.0
-
-**Every way in is judged, and what a program prints stays data.** A new tool in a connected app now asks before it runs even when its app is switched on for the chat, and sixteen other places where something reached a tool, a file or a model past the usual check are closed.
