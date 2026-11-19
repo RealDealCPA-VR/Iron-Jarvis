@@ -293,7 +293,15 @@ def _ask(door: Door, name: str, arguments: dict, decision: str | None, *, token:
             ids = approvals.pending_ids()
             if not ids:
                 continue
-            seen["listing"] = other.get("/chat/approvals/pending", headers=auth).json()
+            # Wait for what is asserted: the bell's row, which the listing
+            # builds from the card's recorded event, can land a moment after
+            # the id (a loaded runner once read an empty listing here, and the
+            # test passed only on its retry, v1.539.0's branch run).
+            listing = other.get("/chat/approvals/pending", headers=auth).json()
+            if not any(str(r.get("session_id", "")).startswith("mcp:")
+                       for r in listing.get("approvals") or []):
+                continue
+            seen["listing"] = listing
             seen["pending"] = [m for sid in (f"mcp:{PANE}", f"mcp:code:{CODE_SID}")
                                for m in approvals.pending_for(sid)]
             if decision is not None:
