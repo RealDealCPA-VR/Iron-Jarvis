@@ -210,6 +210,14 @@ import {
 import { harnessKeysHint, useHarnessKeys } from "@/lib/harnessKeys";
 import { isDesktopShell } from "@/lib/desktopShell";
 import type { RewindExtras } from "@/lib/buildRewind";
+import { CommentChips, useCodeComments } from "@/components/harness/CommentChips";
+import {
+  commentsBody,
+  getComments,
+  restoreComments,
+  takeComments,
+  type CommentBody,
+} from "@/lib/codeComments";
 import { finishedPageSteps } from "@/lib/agentBrowser";
 import {
   AtMenu,
@@ -377,6 +385,10 @@ interface TurnExtras {
   /** v1.449.0: "Send to <model> once" — the ONE cloud provider this message
    *  may go to (`allow_cloud_once`; the daemon honours it for this turn). */
   cloudOnce?: string;
+  /** v1.544.0: the comments on changed code that ride this message
+   *  (lib/codeComments). They left the store with the box's words: a message
+   *  that never starts puts them back. */
+  comments?: readonly CommentBody[];
 }
 
 /** The live reply: subscribed HERE, so the session does not re-render per token.
@@ -705,6 +717,10 @@ export function HarnessSession({
   // it is shown); carried on from where this window left it (lib/turnCache).
   const [timeline] = useState(() => createLiveTimeline(kept?.page.timeline));
   const [view, setView] = useState<BuildSessionView | null>(() => viewFor<BuildSessionView>(threadId));
+  // v1.544.0: the comments on changed code waiting above the box (the Changes
+  // view adds them under the session's id: lib/codeComments). None while
+  // Iron Jarvis has not said it takes them.
+  const waitingComments = useCodeComments(view?.takesComments ? threadId : null);
   const viewRef = useRef<BuildSessionView | null>(null);
   viewRef.current = view;
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1170,6 +1186,9 @@ export function HarnessSession({
             setError((e) => (e ? `${e} ${note}` : note));
           }
         }
+        // v1.544.0: and its comments on changed code, above the box again.
+        // (An Iron Jarvis that hands comments back is one that takes them.)
+        if (extras.comments?.length) restoreComments(threadId, extras.comments);
         setRewindNote(extras.commitsNote || null);
       }
       setUndone(new Set());
@@ -1178,7 +1197,7 @@ export function HarnessSession({
       onChanged();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [load, refreshUndo, onChanged],
+    [load, refreshUndo, onChanged, threadId],
   );
 
   // ----------------------------------------------------------- the turn
@@ -1416,8 +1435,10 @@ export function HarnessSession({
       if (extras.attachments.length) restoreUploads(extras.attachments);
       // v1.397.0: the "Try on…" picks go back on the chip.
       if (extras.tryOn?.length) setTryOn(extras.tryOn);
+      // v1.544.0: its comments on changed code go back above the box.
+      if (extras.comments?.length) restoreComments(threadId, extras.comments);
     },
-    [restoreUploads],
+    [restoreUploads, threadId],
   );
 
   /** v1.384.0: keep the running reply as it stands (lib/turnCache), so a
@@ -1544,6 +1565,8 @@ export function HarnessSession({
                 // v1.449.0: a Local only refusal's "Send to <model> once"
                 // (the chat page's field; this turn only).
                 ...(extras?.cloudOnce ? { allow_cloud_once: extras.cloudOnce } : {}),
+                // v1.544.0: the comments on changed code that ride it.
+                ...(extras?.comments?.length ? { comments: commentsBody(extras.comments) } : {}),
                 ...(preview ? { preview_url: preview } : {}),
                 // v1.434.0 (Wave 2, F): which screen asked (the chat page's
                 // field) — a per-device setting changed in this session
@@ -1933,7 +1956,18 @@ export function HarnessSession({
     // v1.397.0: the "Try on…" picks ride the next message from the box —
     // review: and a waiting message keeps its own.
     const trying: TryOnPick[] = fromBox ? tryOnRef.current : (item.tryOn ?? []);
-    if (!text && files.length === 0 && picks.length === 0 && !picked && !command && !trying.length) return;
+    // v1.544.0: the comments waiting above the box ride a message FROM THE
+    // BOX (a message may be comments alone); a waiting or retried message
+    // carries its own. A note (below) leaves them where they are.
+    const takes = view.takesComments;
+    const boxComments = fromBox && takes ? getComments(threadId).length : 0;
+    const ownComments: readonly CommentBody[] = fromBox || !takes ? [] : (item.comments ?? []);
+    if (
+      !text && files.length === 0 && picks.length === 0 && !picked && !command && !trying.length &&
+      !boxComments && !ownComments.length
+    ) {
+      return;
+    }
     if (busy) {
       // A note while it works is words only; the files and the skill wait
       // in the box.
@@ -1946,6 +1980,10 @@ export function HarnessSession({
     }
     const paths = files.map((f) => f.path);
     const filePaths = picks.map((f) => f.path);
+    // (Taken out of the store with the box's words; a message that never
+    // starts puts them back: restoreToBox.)
+    const noted: readonly CommentBody[] = fromBox ? (boxComments ? takeComments(threadId) : []) : ownComments;
+    const notedBody = commentsBody(noted);
     if (fromBox) {
       setInput("");
       clearDraft(draftKeyOf(threadId));
@@ -1967,6 +2005,7 @@ export function HarnessSession({
       ...(filePaths.length ? { filePaths } : {}),
       ...(picked ? { skill: picked.name } : {}),
       ...(command ? { command } : {}),
+      ...(notedBody.length ? { comments: notedBody } : {}),
     });
     await runTurn(text, undefined, {
       attachments: files,
@@ -1975,6 +2014,7 @@ export function HarnessSession({
       ...(command ? { command, typed: typedLine } : {}),
       ...(trying.length ? { tryOn: trying } : {}),
       ...(item?.cloudOnce ? { cloudOnce: item.cloudOnce } : {}),
+      ...(noted.length ? { comments: noted } : {}),
     });
   }
 
@@ -2091,7 +2131,9 @@ export function HarnessSession({
     const files = att.filesRef.current;
     const picks = atFilesRef.current;
     const trying = tryOnRef.current;
-    if (!text && files.length === 0 && picks.length === 0 && trying.length === 0) return;
+    // v1.544.0: the comments above the box wait with THIS message.
+    const has = !!view?.takesComments && getComments(threadId).length > 0;
+    if (!text && files.length === 0 && picks.length === 0 && trying.length === 0 && !has) return;
     if (att.busyRef.current) {
       setError("A file is still being attached. Queue the message when it is done.");
       return;
@@ -2107,6 +2149,7 @@ export function HarnessSession({
       ...(files.length ? { attachments: files } : {}),
       // Review (v1.397.0): the "Try on…" picks wait with THIS message.
       ...(trying.length ? { tryOn: trying } : {}),
+      ...(has ? { comments: commentsBody(takeComments(threadId)) } : {}),
     };
     const next = [...queued, item];
     setQueued(next);
@@ -3102,7 +3145,8 @@ export function HarnessSession({
   // v1.371.0: a picture alone is a message; one still going up is waited for.
   // v1.373.0: so is a file picked with "@".
   const sendReady =
-    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0 || !!skill || tryOn.length > 0) &&
+    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0 || !!skill || tryOn.length > 0 ||
+      waitingComments.length > 0) &&
     !!view &&
     !offline &&
     !compacting &&
@@ -3864,6 +3908,9 @@ export function HarnessSession({
               onRemoveFile={(i) => setAtFiles((cur) => cur.filter((_, j) => j !== i))}
             />
             <AttachmentChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
+            {/* v1.544.0: the comments on changed code that go with the next
+                message (above the box; the toolbar row is unchanged). */}
+            <CommentChips storeKey={view.takesComments ? threadId : null} />
             {att.problem ? (
               <p data-testid="harness-attach-problem" role="alert" className="px-3 pt-1 text-[12px] text-tone-warn">
                 {att.problem}

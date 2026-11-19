@@ -43,9 +43,28 @@
  *
  * The rows are DiffView's own (`parseUnified`, `UnifiedRows`, `SplitRows`):
  * one parser, one way of drawing a line.
+ *
+ * COMMENT (v1.544.0, lib/codeComments): with `comments` on, each hunk offers
+ * "Comment" beside "Open at line N". The press opens ONE dialog owned HERE
+ * (the wide view draws every file two or three times, so a form inside a row
+ * would exist several times): the file, the lines, the quoted block and a box
+ * for the user's words. Save puts the comment in the session's store; the
+ * message box shows it as a chip and sends it with the next message. The rows
+ * get one plain value (`comments`) and one callback made once: a streamed
+ * word still redraws no file. Enter and Escape in the dialog never leave it.
  */
 
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+} from "react";
 import { ChevronDown, ChevronRight, Loader2, Maximize2, Undo2, X } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import {
@@ -71,6 +90,24 @@ import {
   withMark,
   writeMarks,
 } from "@/lib/changesReview";
+import {
+  COMMENT,
+  COMMENTS_FULL,
+  COMMENT_DIALOG_TITLE,
+  COMMENT_FOOT,
+  COMMENT_NEEDS_WORDS,
+  COMMENT_SAVE,
+  COMMENT_TITLE,
+  COMMENT_WORDS_LABEL,
+  MAX_COMMENTS,
+  WORDS_CHARS,
+  addComment,
+  commentLines,
+  getComments,
+  hunkComment,
+  noteFileMarks,
+  type CommentBody,
+} from "@/lib/codeComments";
 
 const ACTION =
   "inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none";
@@ -152,8 +189,24 @@ function useNearScreen(ref: RefObject<HTMLElement | null>, enabled: boolean): bo
   return seen;
 }
 
-/** One file's rows, capped, with "Open at line N" on each hunk. */
-function FileRows({ change, wide, index }: { change: FileChange; wide: boolean; index: number }) {
+/** A hunk's Comment press: the file's path and the hunk's header. */
+type OnComment = (path: string, header: string) => void;
+
+/** One file's rows, capped, with "Open at line N" (and, with `comments`,
+ *  "Comment") on each hunk. */
+function FileRows({
+  change,
+  wide,
+  index,
+  comments,
+  onComment,
+}: {
+  change: FileChange;
+  wide: boolean;
+  index: number;
+  comments: boolean;
+  onComment: OnComment;
+}) {
   const [all, setAll] = useState(false);
   const rows = useMemo(() => parseUnified(change.diff), [change.diff]);
   const changeLines = useMemo(() => hunkChangeLines(rows), [rows]);
@@ -164,16 +217,35 @@ function FileRows({ change, wide, index }: { change: FileChange; wide: boolean; 
   const deleted = change.status === "deleted";
   const hunkAction = (text: string) => {
     const line = deleted ? undefined : changeLines.get(text);
-    if (!line) return null;
+    if (!line && !comments) return null;
     return (
-      <OpenInEditorButton
-        path={change.path}
-        line={line}
-        words={`Open at line ${line}`}
-        icon={false}
-        testId={`review-hunk-open-${index}`}
-        className="font-sans"
-      />
+      <>
+        {comments ? (
+          // v1.544.0: a deleted file's block can be commented on too.
+          <button
+            type="button"
+            data-testid={`review-hunk-comment-${index}`}
+            // Which block (a file has several): the name starts with the
+            // word on the press.
+            aria-label={line ? `${COMMENT} on the block at line ${line}` : `${COMMENT} on this block`}
+            title={COMMENT_TITLE}
+            onClick={() => onComment(change.path, text)}
+            className={`${ACTION} shrink-0 font-sans`}
+          >
+            {COMMENT}
+          </button>
+        ) : null}
+        {line ? (
+          <OpenInEditorButton
+            path={change.path}
+            line={line}
+            words={`Open at line ${line}`}
+            icon={false}
+            testId={`review-hunk-open-${index}`}
+            className="font-sans"
+          />
+        ) : null}
+      </>
     );
   };
 
@@ -225,15 +297,19 @@ function LazyRows({
   wide,
   index,
   lazy,
+  comments,
+  onComment,
 }: {
   change: FileChange;
   wide: boolean;
   index: number;
   lazy: boolean;
+  comments: boolean;
+  onComment: OnComment;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useNearScreen(ref, lazy);
-  if (near) return <FileRows change={change} wide={wide} index={index} />;
+  if (near) return <FileRows change={change} wide={wide} index={index} comments={comments} onComment={onComment} />;
   const lines = Math.min((change.diff ?? "").split("\n").length, REVIEW_ROWS_PER_FILE);
   return (
     <div
@@ -262,6 +338,10 @@ interface FileProps {
   /** This file's undo is running / another file's is. */
   undoBusy: boolean;
   undoLocked: boolean;
+  /** v1.544.0: each hunk offers "Comment" (a plain value; the press is a
+   *  callback made once). */
+  comments: boolean;
+  onComment: OnComment;
   onFold: (mark: string, folded: boolean) => void;
   onReviewed: (mark: string, on: boolean) => void;
   onUndo: (actionId: string, path: string) => void;
@@ -281,6 +361,8 @@ const ReviewFile = memo(function ReviewFile({
   undoReason,
   undoBusy,
   undoLocked,
+  comments,
+  onComment,
   onFold,
   onReviewed,
   onUndo,
@@ -369,12 +451,139 @@ const ReviewFile = memo(function ReviewFile({
       </div>
       {folded ? null : (
         <div id={bodyId} className="min-w-0 pb-2">
-          <LazyRows change={change} wide={wide} index={index} lazy={lazy} />
+          <LazyRows
+            change={change}
+            wide={wide}
+            index={index}
+            lazy={lazy}
+            comments={comments}
+            onComment={onComment}
+          />
         </div>
       )}
     </section>
   );
 });
+
+/** What the Comment dialog is about: one changed block of one file. */
+interface CommentDraft extends Pick<CommentBody, "path" | "side" | "start" | "end" | "quote"> {
+  label: string;
+  mark: string;
+}
+
+const DIALOG_QUIET =
+  "inline-flex h-8 items-center rounded-lg px-3 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50";
+const DIALOG_MAIN =
+  "inline-flex h-8 items-center rounded-lg border border-accent/30 bg-accent/[0.08] px-3 text-[13px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50";
+
+/** v1.544.0: the ONE Comment dialog of a review (never one per row). Its own
+ *  keys stay inside it: Enter is a new line in the words (Ctrl+Enter saves),
+ *  Escape closes THIS dialog only (never the wide view under it), and neither
+ *  reaches the message box or a question card. */
+function CommentDialog({
+  draft,
+  full,
+  onSave,
+  onClose,
+}: {
+  draft: CommentDraft;
+  /** The message already carries as many comments as it can. */
+  full: boolean;
+  /** Answers why it was not saved (null = saved). */
+  onSave: (words: string) => string | null;
+  onClose: () => void;
+}) {
+  const [words, setWords] = useState("");
+  const [problem, setProblem] = useState<string | null>(full ? COMMENTS_FULL : null);
+  const lines = commentLines(draft);
+  const ready = words.trim() !== "" && !full;
+  function save() {
+    if (full) return;
+    if (!words.trim()) {
+      setProblem(COMMENT_NEEDS_WORDS);
+      return;
+    }
+    const why = onSave(words);
+    if (why) setProblem(why);
+  }
+  function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.key === "Escape") {
+      // Stopped HERE (React's and the browser's): the wide view's own dialog
+      // listens for Escape on the document, and must stay open.
+      e.stopPropagation();
+      e.preventDefault();
+      onClose();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.stopPropagation();
+      if ((e.ctrlKey || e.metaKey) && (e.target as HTMLElement).tagName === "TEXTAREA") {
+        e.preventDefault();
+        save();
+      }
+    }
+  }
+  return (
+    <Modal label={COMMENT_DIALOG_TITLE} onClose={onClose} className="w-full max-w-xl" testId="review-comment-dialog">
+      <div className="flex min-h-0 flex-col gap-3 px-5 pb-4 pt-5" onKeyDown={onKeyDown}>
+        <h2 className="text-[15px] font-medium text-zinc-100">{COMMENT_DIALOG_TITLE}</h2>
+        <p data-testid="review-comment-where" className="min-w-0 break-all text-[12px] text-zinc-400">
+          <span className="font-mono text-zinc-300">{draft.label}</span>
+          {lines ? <span>{`, ${lines.includes("–") ? "lines" : "line"} ${lines}`}</span> : null}
+          {draft.side === "old" ? <span> (as it was before the change)</span> : null}
+        </p>
+        <pre
+          data-testid="review-comment-quote"
+          tabIndex={0}
+          aria-label="The lines you are commenting on"
+          className="max-h-[32vh] min-h-0 overflow-auto whitespace-pre rounded-lg bg-white/[0.04] px-3 py-2 font-mono text-[12px] leading-relaxed text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+        >
+          {draft.quote}
+        </pre>
+        <label className="flex flex-col gap-1 text-[12px] text-zinc-400">
+          {COMMENT_WORDS_LABEL}
+          <textarea
+            data-testid="review-comment-words"
+            // The dialog opens on the words (Modal keeps a control that takes
+            // focus itself).
+            autoFocus
+            rows={3}
+            maxLength={WORDS_CHARS}
+            value={words}
+            onChange={(e) => {
+              setWords(e.target.value);
+              if (!full) setProblem(null);
+            }}
+            className="min-h-[4.5rem] resize-y rounded-lg bg-white/[0.04] px-3 py-2 text-[13px] text-zinc-100 placeholder:text-zinc-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+          />
+        </label>
+        {problem ? (
+          <p role="alert" data-testid="review-comment-problem" className="text-[12px] text-tone-danger">
+            {problem}
+          </p>
+        ) : (
+          <p className="text-[12px] text-zinc-500">{COMMENT_FOOT}</p>
+        )}
+        <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+          <button type="button" className={DIALOG_QUIET} onClick={onClose} data-testid="review-comment-cancel">
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={DIALOG_MAIN}
+            onClick={save}
+            disabled={!ready}
+            title="Save this comment (Ctrl+Enter)"
+            data-testid="review-comment-save"
+          >
+            {COMMENT_SAVE}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 export function ChangesReview({
   changes,
@@ -384,6 +593,8 @@ export function ChangesReview({
   undoFor,
   onUndo,
   onUndone,
+  comments = false,
+  commentView = "",
 }: {
   changes: FileChange[];
   /** Whose review marks (the session's thread id). */
@@ -400,6 +611,14 @@ export function ChangesReview({
   onUndo?: (actionId: string, path: string) => void | Promise<void>;
   /** Called after `onUndo` settled without an error (read the changes again). */
   onUndone?: () => void;
+  /** v1.544.0: offer "Comment" on each hunk (only when Iron Jarvis says it
+   *  takes comments with a message; an older one would drop them). The
+   *  comments wait in lib/codeComments under `sessionId`. */
+  comments?: boolean;
+  /** Which view of the changes this is ("session", "branch", "turn"): the
+   *  same file has another diff in another view, so "changed since" is
+   *  judged within one view. */
+  commentView?: string;
 }) {
   const [marks, setMarks] = useState<string[]>(() => readMarks(sessionId));
   useEffect(() => setMarks(readMarks(sessionId)), [sessionId]);
@@ -470,6 +689,44 @@ export function ChangesReview({
   const undoOf = (path: string): ChangeUndoState | null =>
     undoFor && onUndo ? (undoFor(path) ?? null) : null;
 
+  // v1.544.0: the ONE Comment dialog. The press is made once (the files it
+  // reads come through a ref), so no file redraws for it.
+  const [draft, setDraft] = useState<CommentDraft | null>(null);
+  const keyedRef = useRef(keyed);
+  keyedRef.current = keyed;
+  const openComment = useCallback((path: string, header: string) => {
+    const hit = keyedRef.current.find((k) => k.c.path === path);
+    if (!hit) return;
+    const body = hunkComment(parseUnified(hit.c.diff ?? ""), header, hit.c.status === "deleted");
+    if (!body) return;
+    setDraft({ ...body, path, label: hit.c.rel || hit.c.name || hit.c.path, mark: hit.mark });
+  }, []);
+  const saveComment = (words: string): string | null => {
+    if (!draft) return null;
+    const res = addComment(sessionId, {
+      path: draft.path,
+      side: draft.side,
+      start: draft.start,
+      end: draft.end,
+      quote: draft.quote,
+      words,
+      mark: draft.mark,
+      view: commentView,
+    });
+    if (!res.ok) return res.why;
+    setDraft(null);
+    return null;
+  };
+  // A file that changed again after a comment was written on it: its chip
+  // says "changed since" (the store writes only when something changed).
+  useEffect(() => {
+    if (!comments) return;
+    noteFileMarks(sessionId, commentView, new Map(keyed.map((k) => [k.c.path, k.mark])));
+  }, [comments, sessionId, commentView, keyed]);
+  // No comments any more (another session's review, an older Iron Jarvis):
+  // an open dialog goes with them.
+  useEffect(() => setDraft(null), [sessionId, comments]);
+
   if (!changes.length) return null;
   const lazy = changes.length >= LAZY_FROM_FILES;
   const sum = changes.some((c) => c.added != null || c.removed != null);
@@ -515,6 +772,8 @@ export function ChangesReview({
             undoReason={undo?.reason ?? null}
             undoBusy={undoing === c.path}
             undoLocked={undoing !== null}
+            comments={comments}
+            onComment={openComment}
             onFold={toggleFold}
             onReviewed={setReviewed}
             onUndo={runUndo}
@@ -593,6 +852,16 @@ export function ChangesReview({
             {files(true)}
           </div>
         </Modal>
+      ) : null}
+      {/* After the wide view, so it opens over it. */}
+      {comments && draft ? (
+        <CommentDialog
+          key={`${draft.path}:${draft.start}:${draft.end}`}
+          draft={draft}
+          full={getComments(sessionId).length >= MAX_COMMENTS}
+          onSave={saveComment}
+          onClose={() => setDraft(null)}
+        />
       ) : null}
     </div>
   );

@@ -25,6 +25,7 @@
 import { matchProjectEntries, type ProjectListing } from "@/lib/atMenuFiles";
 import { modelRowName } from "@/lib/onboarding";
 import type { BuildMode } from "@/lib/buildSessions";
+import { commentCountWords, commentsBody, decodeComments, type CommentBody } from "@/lib/codeComments";
 
 /** The session's own "/" commands. v1.374.0 (part 2, Phase 3): "/compact"
  *  presses the same Compact the meter offers (it says in words when there is
@@ -503,6 +504,9 @@ export interface QueuedItem {
    *  ONE cloud provider this message may go to (`allow_cloud_once` on the
    *  turn; the daemon honours it for that turn only). Never saved. */
   cloudOnce?: string;
+  /** v1.544.0: the comments on changed code that wait with THIS message
+   *  (lib/codeComments); they ride it when it is sent. */
+  comments?: CommentBody[];
 }
 
 function str(v: unknown, cap: number): string {
@@ -548,7 +552,9 @@ export function decodeQueuedItem(raw: unknown): QueuedItem | null {
     tries.push({ provider, model, label: str(o?.label, 200) || model || provider });
   }
   if (tries.length) item.tryOn = tries;
-  if (!text.trim() && !files.length && !ups.length && !tries.length) return null;
+  const noted = decodeComments(r.comments);
+  if (noted.length) item.comments = noted;
+  if (!text.trim() && !files.length && !ups.length && !tries.length && !noted.length) return null;
   return item;
 }
 
@@ -564,6 +570,7 @@ export function queuedItemBody(item: QueuedItem): Record<string, unknown> {
     ...(item.tryOn?.length
       ? { try_on: item.tryOn.map((t) => ({ provider: t.provider, model: t.model, label: t.label })) }
       : {}),
+    ...(item.comments?.length ? { comments: commentsBody(item.comments) } : {}),
   };
 }
 
@@ -575,6 +582,7 @@ export function queuedWords(item: QueuedItem): string {
   if (n) parts.push(n === 1 ? "1 file" : `${n} files`);
   if (item.skill) parts.push(`skill ${item.skill.name}`);
   if (item.tryOn?.length) parts.push(item.tryOn.length === 1 ? `try on ${item.tryOn[0].label}` : `try on ${item.tryOn.length} models`);
+  if (item.comments?.length) parts.push(commentCountWords(item.comments.length));
   return parts.join(" · ");
 }
 

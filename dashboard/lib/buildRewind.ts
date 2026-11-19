@@ -14,6 +14,7 @@
  */
 
 import type { PickedSkill } from "@/lib/buildComposer";
+import { decodeComments, type CommentBody } from "@/lib/codeComments";
 import { ApiError, get, post } from "@/lib/api";
 
 export interface RewindFile {
@@ -55,6 +56,8 @@ export interface RewindPreview {
   commitsNote: string;
   /** v1.377.0 review: the message's "/" skill, with where it came from. */
   skill: PickedSkill | null;
+  /** v1.544.0: the comments on changed code the message carried. */
+  comments: CommentBody[];
 }
 
 /** What a rewind hands back to the box beside the message's words. */
@@ -65,6 +68,9 @@ export interface RewindExtras {
   /** v1.377.0 review: the "/" skill the message carried, with where it came
    *  from (null: none, or an older line that did not say where). */
   skill: PickedSkill | null;
+  /** v1.544.0: the comments on changed code the message carried (they go
+   *  back above the box); [] = none, or an older Iron Jarvis. */
+  comments: CommentBody[];
 }
 
 export type RewindOutcome =
@@ -126,6 +132,7 @@ function extrasOf(r: Record<string, unknown>): RewindExtras {
     pickedFiles: strs(r.picked_files),
     commitsNote: str(r.commits_note),
     skill: pickedSkillOf(r.skill, r.skill_source),
+    comments: decodeComments(r.comments),
   };
 }
 

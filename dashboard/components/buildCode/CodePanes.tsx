@@ -36,6 +36,7 @@ import {
 import { get, post } from "@/lib/api";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { ChangesReview } from "@/components/harness/ChangesReview";
+import { buildCodeCommentsKey } from "@/lib/codeComments";
 import { ConfirmButton } from "@/components/ui";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { Row, Section } from "@/components/harness/HarnessSessionRail";
@@ -168,6 +169,7 @@ export const CodePanes = memo(function CodePanes({
   events,
   running,
   onSend,
+  comments = false,
 }: {
   session: CodeSession;
   tools: readonly CodingTool[];
@@ -178,6 +180,9 @@ export const CodePanes = memo(function CodePanes({
   /** v1.415.0: send a message as the user would (Claude Code's own
    *  `/compact`, from the Context drop-down). */
   onSend?: (text: string) => void;
+  /** v1.544.0: this Iron Jarvis takes comments on changed code with a
+   *  message: the Changes view offers "Comment" on each block. */
+  comments?: boolean;
 }) {
   codePanesDraws.count += 1;
   const [tab, setTab] = useState<CodePaneTab>("changes");
@@ -256,7 +261,13 @@ export const CodePanes = memo(function CodePanes({
         className="relative min-h-0 flex-1 overflow-y-auto px-1"
       >
         {tab === "changes" ? (
-          <ChangesPane sessionId={session.id} toolName={toolName} refresh={refresh} running={running} />
+          <ChangesPane
+            sessionId={session.id}
+            toolName={toolName}
+            refresh={refresh}
+            running={running}
+            comments={comments}
+          />
         ) : null}
         {tab === "usage" ? (
           <UsagePane session={session} toolName={toolName} refresh={refresh} running={running} />
@@ -296,11 +307,13 @@ function ChangesPane({
   toolName,
   refresh,
   running,
+  comments,
 }: {
   sessionId: string;
   toolName: string;
   refresh: number;
   running: boolean;
+  comments: boolean;
 }) {
   // v1.420.0 (C4.12): "This message" beside "Whole session" (the whole
   // session stays the default — what the pane always listed).
@@ -377,7 +390,16 @@ function ChangesPane({
           ) : null}
           {/* The v1.405.0 review: every diff inline, Reviewed marks, Open in
               VS Code / Cursor — and no Undo (Iron Jarvis did not write these). */}
-          <ChangesReview changes={data.changes} sessionId={`code:${sessionId}`} more={data.more} />
+          <ChangesReview
+            changes={data.changes}
+            sessionId={buildCodeCommentsKey(sessionId)}
+            more={data.more}
+            // v1.544.0: Comment on a block; the comment waits above the
+            // message box (the same key the box reads) and rides the next
+            // message. Each scope has its own diff of a file.
+            comments={comments}
+            commentView={scope}
+          />
           {data.noUndo ? (
             <p data-testid="code-changes-no-undo" className={QUIET}>
               {data.noUndo}

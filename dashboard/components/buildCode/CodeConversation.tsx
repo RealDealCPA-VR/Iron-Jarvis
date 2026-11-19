@@ -42,6 +42,7 @@ import { friendlyModelName } from "@/lib/friendlyModelName";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/harnessLook";
 import { SentAttachments } from "@/components/harness/HarnessAttachments";
+import { SentComments } from "@/components/harness/CommentChips";
 import { REPLY_ACTION_BTN } from "@/components/chat/replyActions";
 import { ConfirmButton } from "@/components/ui";
 import { MENU_BUTTON_HOVER_FADE, useMenuClose } from "@/components/buildCode/useMenuClose";
@@ -606,6 +607,8 @@ const Item = memo(function Item({
             {item.text.trim() ? <div className={HARNESS_USER_BUBBLE}>{item.text}</div> : null}
           </div>
           {item.files.length ? <SentAttachments paths={item.files} /> : null}
+          {/* v1.544.0: the comments on changed code it carried (read only). */}
+          <SentComments comments={item.comments} />
         </div>
       );
     case "steer":

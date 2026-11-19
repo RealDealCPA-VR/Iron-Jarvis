@@ -50,6 +50,8 @@ import { SentAttachments } from "@/components/harness/HarnessAttachments";
 import { SentPicks } from "@/components/harness/HarnessComposerMenus";
 import { BRANCH_LABEL, BRANCH_TITLE_QUESTION, BRANCH_TITLE_REPLY, type BranchAt } from "@/lib/buildNext";
 import type { RewindExtras } from "@/lib/buildRewind";
+import { decodeComments } from "@/lib/codeComments";
+import { SentComments } from "@/components/harness/CommentChips";
 import { accountMoveLine, decodeAccountLimit, decodeAccountMove, limitCardWords } from "@/lib/buildAccounts";
 import {
   decodeFinish,
@@ -293,6 +295,7 @@ function HarnessMessageRowImpl({
     [m],
   );
   const lineParts = useMemo(() => (m.role === "assistant" ? replyLineParts(m) : []), [m]);
+  const sentComments = useMemo(() => (m.role === "user" ? decodeComments(m.comments) : []), [m]);
   // v1.405.0: the reply's changes window (the user message before it, its
   // own timing and documents) — read once per message, never per render.
   const turnWin = useMemo(() => {
@@ -321,6 +324,8 @@ function HarnessMessageRowImpl({
           {/* v1.373.0: the folder's files picked with "@", and the
               skill picked with "/". */}
           <SentPicks files={m.filePaths} skill={m.skill} />
+          {/* v1.544.0: the comments on changed code it carried (read only). */}
+          <SentComments comments={sentComments} />
           {/* v1.370.0: rewind to before this message (two presses;
               a refusal is listed in words). Only a message the
               daemon wrote has a turn to rewind to. */}

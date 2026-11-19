@@ -22,6 +22,7 @@ import { pickedSkillOf } from "@/lib/buildRewind";
 import { atFileFromPath, fileFromPath } from "@/lib/buildNext";
 import { KEEP_GOING_TEXT, type BuildMessage } from "@/lib/buildSessions";
 import type { QueuedItem } from "@/lib/buildComposer";
+import { decodeComments } from "@/lib/codeComments";
 
 /** The press's words — the ones the daemon's sentences already say. */
 export const RETRY_WORDS = "Retry";
@@ -114,12 +115,17 @@ export function retryItemFor(
   // start with "/model" ran the session's own /model command.
   const command = typeof q.command === "string" ? q.command.trim() : "";
   const text = command ? commandWords(content, command) : content;
-  if (!command && !text.trim() && !skill && files.length === 0 && attachments.length === 0) return null;
+  // v1.544.0: the comments on changed code it carried go again with it.
+  const comments = decodeComments(q.comments);
+  if (!command && !text.trim() && !skill && files.length === 0 && attachments.length === 0 && comments.length === 0) {
+    return null;
+  }
   return {
     text,
     ...(skill ? { skill } : {}),
     ...(files.length ? { files } : {}),
     ...(attachments.length ? { attachments } : {}),
+    ...(comments.length ? { comments } : {}),
     resend: { command },
   };
 }

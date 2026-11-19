@@ -216,6 +216,10 @@ export interface BuildSessionView extends BuildSessionRow {
   /** v1.403.0: the session's TEAM (lib/sessionTeam) — the lead, the workers
    *  and the reviewer with each member's state; null = it works alone. */
   team: SessionTeam | null;
+  /** v1.544.0: this Iron Jarvis takes comments on changed code with a
+   *  message (`takes_comments`). An older one says nothing: the screen then
+   *  offers no Comment and no chips (a comment is never silently dropped). */
+  takesComments: boolean;
 }
 
 /** A transcript line: the chat page's own message shape (the daemon keeps
@@ -239,6 +243,9 @@ export type BuildMessage = PaneMessage & {
    *  folder, and the skill picked with "/" (what rode it beside the words). */
   filePaths?: string[];
   skill?: string;
+  /** v1.544.0: on a question, the comments on changed code that rode it
+   *  (raw; lib/codeComments decodeComments). */
+  comments?: unknown;
   /** v1.379.0: the question was one of Claude Code's own commands. */
   command?: string;
   /** v1.374.0: on a reply, how full the conversation was for the model that
@@ -473,6 +480,8 @@ const LINE_KEYS = [
   // v1.373.0 (part 2, Phase 2): what rode a question — "@" files, a "/" skill.
   "filePaths",
   "skill",
+  // v1.544.0: the comments on changed code that rode a question.
+  "comments",
   // v1.377.0 review: where that skill came from ("folder" | "yours").
   "skillSource",
   // v1.374.0 (part 2, Phase 3): a reply's reading of how full the
@@ -614,6 +623,7 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
     workFolder: r.no_folder === true ? str(r.work_folder, 1000) : "",
     workRoot: r.no_folder === true ? str(r.work_root, 1000) : "",
     team: decodeSessionTeam(r.team),
+    takesComments: r.takes_comments === true,
   };
 }
 

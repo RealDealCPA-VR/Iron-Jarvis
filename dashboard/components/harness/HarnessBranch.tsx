@@ -78,9 +78,13 @@ export function BranchView({
   onArchived,
   press = null,
   onPressed,
+  comments = false,
 }: {
   /** The session's thread id. */
   sessionId: string;
+  /** v1.544.0: offer "Comment" on each changed block (this Iron Jarvis
+   *  takes comments with a message). */
+  comments?: boolean;
   /** v1.406.0 part 4: a press asked for from the next-step box. */
   press?: BranchPress | null;
   /** The press was made (or could not be: nothing to commit). */
@@ -624,7 +628,7 @@ export function BranchView({
       ) : (
         // v1.405.0: the branch's whole diff, every file inline (no Undo:
         // committed work is not in the undo journal).
-        <ChangesReview changes={changes} sessionId={sessionId} more={more} />
+        <ChangesReview changes={changes} sessionId={sessionId} more={more} comments={comments} commentView="branch" />
       )}
     </div>
   );

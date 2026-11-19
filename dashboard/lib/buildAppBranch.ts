@@ -1,7 +1,8 @@
 /**
  * v1.441.0 — Build › Code's Branch from here and Rewind to here: the words and
  * what the daemon's view says each tool can do (`branch` of
- * `GET /build/app/sessions/{id}`; hosted/branching.py). Import-free.
+ * `GET /build/app/sessions/{id}`; hosted/branching.py). Imports only
+ * lib/codeComments (itself import-free), for a rewound message's comments.
  *
  * - `fork`   — "Branch" in the session row's ⋯ (the whole conversation).
  * - `forkAt` — "Branch from here" on one of the user's own messages.
@@ -21,6 +22,8 @@
  * - `undoRewind` — the newest rewind changed files and can still be undone.
  * An older Iron Jarvis sends neither: no preview, the two-press rewind as before.
  */
+
+import { decodeComments, type CommentBody } from "@/lib/codeComments";
 
 export interface BranchFacts {
   fork: boolean;
@@ -206,6 +209,9 @@ export interface BranchAnswer {
   text: string;
   files: string[];
   note: string;
+  /** v1.544.0: the comments on changed code the rewound message carried
+   *  (they go back above the box with its words); [] = none. */
+  comments: CommentBody[];
 }
 
 export function decodeBranchAnswer(raw: unknown): BranchAnswer | null {
@@ -219,5 +225,6 @@ export function decodeBranchAnswer(raw: unknown): BranchAnswer | null {
     text: str(r.text, 100_000),
     files: Array.isArray(r.files) ? r.files.filter((f): f is string => typeof f === "string").slice(0, 20) : [],
     note: str(r.note, 1_000),
+    comments: decodeComments(r.comments),
   };
 }

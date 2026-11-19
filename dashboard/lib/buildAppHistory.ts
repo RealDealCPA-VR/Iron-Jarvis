@@ -20,6 +20,7 @@
  */
 
 import { decodeCodeEvent, isFullAccess, type CodeEvent, type CodingTool } from "@/lib/buildApp";
+import { commentCountWords, decodeComments, type CommentBody } from "@/lib/codeComments";
 
 function obj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -134,6 +135,8 @@ export interface QueuedMessage {
   id: string;
   text: string;
   files: string[];
+  /** v1.544.0: the comments on changed code that wait with it (absent = none). */
+  comments?: CommentBody[];
 }
 
 export interface QueueState {
@@ -150,10 +153,12 @@ export function decodeQueue(raw: unknown): QueueState | null {
     const o = obj(q);
     const id = o ? str(o.id, 80).trim() : "";
     if (!o || !id) continue;
+    const comments = decodeComments(o.comments);
     queued.push({
       id,
       text: str(o.text, 100_000),
       files: Array.isArray(o.files) ? o.files.filter((f): f is string => typeof f === "string").slice(0, 20) : [],
+      ...(comments.length ? { comments } : {}),
     });
   }
   return { queued, held: r.queue_held === true };
@@ -181,8 +186,12 @@ export function workingPlaceholder(toolName: string): string {
 /** A queued row's one line. */
 export function queuedLine(q: QueuedMessage): string {
   const text = q.text.trim().split(/\r?\n/)[0] ?? "";
-  if (text) return text.length > 120 ? `${text.slice(0, 119)}…` : text;
-  return q.files.length === 1 ? "1 file" : `${q.files.length} files`;
+  // v1.544.0: the comments that wait with it are said beside its words.
+  const noted = q.comments?.length ? commentCountWords(q.comments.length) : "";
+  const and = noted ? ` · ${noted}` : "";
+  if (text) return `${text.length > 120 ? `${text.slice(0, 119)}…` : text}${and}`;
+  if (!q.files.length && noted) return noted;
+  return `${q.files.length === 1 ? "1 file" : `${q.files.length} files`}${and}`;
 }
 
 export const MAX_QUEUED = 5;

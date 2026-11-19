@@ -477,6 +477,7 @@ function ChangesPane({
           onArchived={onSessionGone}
           press={press}
           onPressed={onPressed}
+          comments={view.takesComments}
         />
       </div>
     );
@@ -576,6 +577,10 @@ function SessionChanges({
           undoFor={undoFor}
           onUndo={onUndo}
           onUndone={() => setRound((n) => n + 1)}
+          // v1.544.0: Comment on a block; it waits above the message box
+          // (the same key the box reads) and rides the next message.
+          comments={view.takesComments}
+          commentView="session"
         />
       )}
     </div>

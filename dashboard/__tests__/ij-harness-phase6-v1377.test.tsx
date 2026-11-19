@@ -751,6 +751,9 @@ describe("the rewind control hands back what rode the message", () => {
         commitsNote: "",
         // v1.377.0 review: the skill rides too (none here) — moved on purpose.
         skill: null,
+        // v1.544.0: so do its comments on changed code (none here) — moved
+        // on purpose.
+        comments: [],
       }),
     );
   });

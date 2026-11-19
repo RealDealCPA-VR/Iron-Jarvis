@@ -125,6 +125,16 @@ import {
   useHarnessAttachments,
   type HarnessFile,
 } from "@/components/harness/HarnessAttachments";
+import { CommentChips, useCodeComments } from "@/components/harness/CommentChips";
+import {
+  buildCodeCommentsKey,
+  commentsBody,
+  getComments,
+  restoreComments,
+  takeComments,
+  type CodeComment,
+  type CommentBody,
+} from "@/lib/codeComments";
 import {
   OPEN_IN_TERMINAL,
   keepsLastTitle,
@@ -435,6 +445,16 @@ function SessionPane({
   const [viewCommands, setViewCommands] = useState<ToolCommand[] | null>(null);
   /** v1.411.0: the conversation keeps its last model and effort (Pi). */
   const [keepsLast, setKeepsLast] = useState(false);
+  /** v1.544.0: this Iron Jarvis takes comments on changed code with a
+   *  message (the view's `takes_comments`). False until it says so: an older
+   *  one would drop them, so no Comment button and no chips are offered. */
+  const [takesComments, setTakesComments] = useState(false);
+  const takesCommentsRef = useRef(false);
+  takesCommentsRef.current = takesComments;
+  /** The comments waiting above the box (the Changes view adds them under the
+   *  same key: lib/codeComments). */
+  const commentsKey = buildCodeCommentsKey(sessionId);
+  const waitingComments = useCodeComments(takesComments ? commentsKey : null);
   /** v1.431.0: a Pi folder's own extensions Pi skips here (one press loads
    *  them for this session), or the session already loads them. */
   const [piFolder, setPiFolder] = useState<PiFolder | null>(null);
@@ -649,6 +669,10 @@ function SessionPane({
         setSummaryFacts(archiveSummaryFacts(raw));
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
+        // (The ref at once: a send right after this read must not wait for
+        // the next draw to know.)
+        takesCommentsRef.current = view.takesComments;
+        setTakesComments(view.takesComments);
         setPiFolder(view.piFolder);
         setHelpers(view.helpers);
         setHandedFrom(view.handedFrom);
@@ -809,6 +833,7 @@ function SessionPane({
     setFetchedCommands(null);
     setViewCommands(null);
     setKeepsLast(false);
+    setTakesComments(false);
     setDropped(0);
     setInfo(null);
     setEarlierEvents([]);
@@ -1018,6 +1043,9 @@ function SessionPane({
       setQueued([]);
       if (!items.length) return;
       setText((cur) => wordsBack(cur, items));
+      // v1.544.0: their comments go back above the box with their words
+      // (a daemon that hands comments back is one that takes them).
+      restoreComments(buildCodeCommentsKey(sessionId), items.flatMap((i) => i.comments ?? []));
       const back = items.flatMap((i) => i.files);
       if (back.length) setFiles((cur) => [...cur, ...back.filter((f) => !cur.includes(f))]);
       setInfo(queuedBackWords(toolLabel(sessionToolRef.current, toolsRef.current), items.length));
@@ -1046,15 +1074,21 @@ function SessionPane({
     const uploads: HarnessFile[] = att.filesRef.current.slice();
     const picks = picksRef.current.slice();
     const all = [...uploads.map((f) => f.path), ...picks];
-    if (!words && !all.length) return;
+    // v1.544.0: the comments above the box wait with this message (a message
+    // may be comments alone). They leave the box with its words.
+    const key = buildCodeCommentsKey(session.id);
+    const has = takesCommentsRef.current && getComments(key).length > 0;
+    if (!words && !all.length && !has) return;
     setNote(null);
     setText("");
     setFiles([]);
     att.clear();
+    const noted: CodeComment[] = has ? takeComments(key) : [];
     try {
       const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/queue`, {
         text: words,
         ...(all.length ? { files: all } : {}),
+        ...(noted.length ? { comments: commentsBody(noted) } : {}),
       });
       const q = decodeQueue(raw);
       if (q) {
@@ -1067,12 +1101,14 @@ function SessionPane({
       if (code === "not_working") {
         setRunning(false);
         runningRef.current = false;
-        void sendRef.current?.(words, all);
+        // (Its comments go with it: they left the box with its words.)
+        void sendRef.current?.(words, all, noted);
         return;
       }
       setText((cur) => (cur.trim() ? cur : words));
       setFiles((cur) => (cur.length ? cur : picks));
       att.restore(uploads);
+      restoreComments(key, noted);
       setNote(errorWords(e, "Your message could not wait for the reply — send it again once it ends."));
     }
   }, [session, att]);
@@ -1131,7 +1167,12 @@ function SessionPane({
     }
   }, [session, older.cursor, loadingEarlier]);
 
-  const send = useCallback(async (handed?: string, handedFiles?: string[]) => {
+  /** `handed`: a message that skips the box (the first message, Retry, a
+   *  pane's press, a note or waiting message whose reply had ended). v1.544.0:
+   *  only a message FROM THE BOX takes the comments waiting above it; a handed
+   *  one carries just the comments handed with it (`handedComments`), and the
+   *  waiting ones stay as chips. */
+  const send = useCallback(async (handed?: string, handedFiles?: string[], handedComments?: readonly CommentBody[]) => {
     if (!session) return;
     // v1.412.0: a send waits for the pictures still going up (never goes
     // without them — the v1.275.0 rule); it reads the box when it runs.
@@ -1149,12 +1190,25 @@ function SessionPane({
     const uploads: HarnessFile[] = handed === undefined ? att.filesRef.current.slice() : [];
     const picks = handed === undefined ? picksRef.current.slice() : [];
     const sent = handed === undefined ? [...uploads.map((f) => f.path), ...picks] : (handedFiles ?? []);
-    if ((!words && !sent.length) || runningRef.current) return;
+    const commentsKeyNow = buildCodeCommentsKey(session.id);
+    const fromBoxComments = handed === undefined && takesCommentsRef.current && getComments(commentsKeyNow).length > 0;
+    if ((!words && !sent.length && !fromBoxComments && !handedComments?.length) || runningRef.current) return;
+    // The comments this message carries: taken out of the store with the
+    // box's words (a refusal puts them back), or the ones handed with it.
+    const noted: readonly CommentBody[] =
+      handed === undefined ? (fromBoxComments ? takeComments(commentsKeyNow) : []) : (handedComments ?? []);
+    const notedBody = commentsBody(noted);
     const gen = genRef.current;
     const turnId = mintTurnId();
     followedTurnsRef.current.add(turnId); // v1.418.0 (C4.8)
     sendSeqRef.current += 1;
-    const mine: CodeEvent = { type: "user", at: new Date().toISOString(), text: words, files: sent };
+    const mine: CodeEvent = {
+      type: "user",
+      at: new Date().toISOString(),
+      text: words,
+      files: sent,
+      ...(notedBody.length ? { comments: notedBody } : {}),
+    };
     optimisticRef.current = mine;
     setEvents((prev) => [...prev, mine]);
     const typed = typedNow;
@@ -1193,7 +1247,12 @@ function SessionPane({
     await follow(
       gen,
       `${SESSIONS}/${encodeURIComponent(session.id)}/turn`,
-      { text: words, turn_id: turnId, ...(sent.length ? { files: sent } : {}) },
+      {
+        text: words,
+        turn_id: turnId,
+        ...(sent.length ? { files: sent } : {}),
+        ...(notedBody.length ? { comments: notedBody } : {}),
+      },
       null,
       (words2) => {
         // Refused before anything ran: no bubble for a message that never
@@ -1204,6 +1263,8 @@ function SessionPane({
         // A handed message's files come back by path (they went up already).
         setFiles((cur) => (cur.length ? cur : handed === undefined ? picks : (handedFiles ?? [])));
         att.restore(uploads);
+        // v1.544.0: and its comments, above the box again.
+        restoreComments(commentsKeyNow, noted);
         setNote(words2);
       },
     );
@@ -1464,6 +1525,8 @@ function SessionPane({
         const a = decodeBranchAnswer(raw);
         if (!a) throw new Error("The conversation could not be rewound.");
         setText((cur) => (cur.trim() ? cur : a.text));
+        // v1.544.0: the message's comments go back above the box too.
+        restoreComments(buildCodeCommentsKey(sessionIdNow), a.comments);
         setInfo(a.note);
         await load({ follow: true });
       } catch (e) {
@@ -1551,7 +1614,8 @@ function SessionPane({
       const it = conv.items[i];
       if (it.kind === "user") {
         if (it.carry) void continueCutRef.current?.();
-        else void sendRef.current?.(it.text, it.files);
+        // (The same message again: its words, its files and its comments.)
+        else void sendRef.current?.(it.text, it.files, takesCommentsRef.current ? it.comments : undefined);
         return;
       }
     }
@@ -2251,6 +2315,9 @@ function SessionPane({
               </p>
             ) : null}
             <AttachmentChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
+            {/* v1.544.0: the comments on changed code that go with the next
+                message (above the box; the toolbar row is unchanged). */}
+            <CommentChips storeKey={takesComments ? commentsKey : null} />
             {att.problem ? (
               <p data-testid="code-attach-problem" role="alert" className="px-3 pt-1 text-[12px] text-tone-warn">
                 {att.problem}
@@ -2353,7 +2420,7 @@ function SessionPane({
                 <button
                   type="button"
                   data-testid="code-send"
-                  disabled={!text.trim() && !att.files.length && !files.length}
+                  disabled={!text.trim() && !att.files.length && !files.length && !waitingComments.length}
                   onClick={() => void send()}
                   aria-label="Send"
                   className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
@@ -2414,6 +2481,7 @@ function SessionPane({
           events={paneEvents}
           running={running}
           onSend={sendFromPanes}
+          comments={takesComments}
         />
       </aside>
       </div>

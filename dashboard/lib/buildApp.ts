@@ -27,6 +27,7 @@ import { isSafetyOnceReason } from "./onceReason";
 import { type CarryMark, decodeCarryMark } from "./buildCodeCarry";
 import { SUBSCRIPTION_CLI_ROWS } from "./subscriptionClis";
 import { secondsText } from "./durationWords";
+import { commentLines, decodeComments, type CommentBody } from "./codeComments";
 
 // ── the view and the address ────────────────────────────────────────────────
 
@@ -1041,7 +1042,9 @@ type CodeEventBody =
   /** v1.422.0: `carry` = a message Iron Jarvis sent BY ITSELF to carry the
    *  reply on (after a restart, an account's reset, a move) — drawn as a
    *  quiet line, never as the user's bubble. */
-  | { type: "user"; at: string; text: string; files: string[]; carry?: CarryMark }
+  /** v1.544.0: `comments` = the comments on changed code that rode the
+   *  message (lib/codeComments; absent = none). */
+  | { type: "user"; at: string; text: string; files: string[]; carry?: CarryMark; comments?: CommentBody[] }
   /** v1.418.0 (C4.2): `parent` = the helper step (Claude Code's Task /
    *  Agent) this text, thinking or step ran inside (absent = the
    *  conversation itself). */
@@ -1165,12 +1168,14 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
       };
     case "user": {
       const carry = decodeCarryMark(r.carry);
+      const comments = decodeComments(r.comments);
       return {
         type,
         at,
         text: str(r.text, 100_000),
         files: Array.isArray(r.files) ? r.files.filter((f): f is string => typeof f === "string").slice(0, 20) : [],
         ...(carry ? { carry } : {}),
+        ...(comments.length ? { comments } : {}),
       };
     }
     case "text":
@@ -1410,6 +1415,10 @@ export interface CodeSessionView {
   helpers: CodeHelper[];
   /** v1.474.0: for a helper, the session that started it. */
   handedFrom: { id: string; title: string; label: string } | null;
+  /** v1.544.0: this Iron Jarvis takes comments on changed code with a
+   *  message (`takes_comments`). An older one says nothing: the screen then
+   *  offers no Comment and no chips (a comment is never silently dropped). */
+  takesComments: boolean;
 }
 
 /** v1.474.0 (Hand off): one helper session another session's tool started. */
@@ -1529,6 +1538,7 @@ export function decodeCodeSessionView(raw: unknown): CodeSessionView | null {
       const id = h ? str(h.id, 200).trim() : "";
       return h && id ? { id, title: str(h.title, 300).trim(), label: str(h.label, 60).trim() } : null;
     })(),
+    takesComments: r.takes_comments === true,
   };
 }
 
@@ -1571,7 +1581,8 @@ export type OpenAsk = ApprovalEvent | QuestionEvent;
 
 export type ConvItem =
   /** v1.441.0: `at` names the message (Branch from here / Rewind to here). */
-  | { kind: "user"; key: string; text: string; files: string[]; carry?: CarryMark; at?: string }
+  /** v1.544.0: `comments` = the comments on changed code it carried. */
+  | { kind: "user"; key: string; text: string; files: string[]; carry?: CarryMark; at?: string; comments?: CommentBody[] }
   | { kind: "text"; key: string; text: string; done: boolean }
   /** v1.418.0 (C4.3): `live` while the thinking is the newest thing the
    *  running turn said; `seconds` = how long it thought (null = unknown). */
@@ -1861,7 +1872,15 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
       if (ev.model) s.model = ev.model;
       break;
     case "user":
-      s.items.push({ kind: "user", key: key("u"), text: ev.text, files: ev.files, at: ev.at, ...(ev.carry ? { carry: ev.carry } : {}) });
+      s.items.push({
+        kind: "user",
+        key: key("u"),
+        text: ev.text,
+        files: ev.files,
+        at: ev.at,
+        ...(ev.carry ? { carry: ev.carry } : {}),
+        ...(ev.comments?.length ? { comments: ev.comments } : {}),
+      });
       s.planAt = null;
       s.settled = false;
       s.turnAt = ev.at;
@@ -2379,6 +2398,11 @@ export function conversationMarkdown(
       head("user");
       if (it.text.trim()) out.push(it.text.trim());
       if (it.files.length) out.push(`Attached: ${it.files.map((f) => f.split(/[\\/]/).pop() || f).join(", ")}`);
+      // v1.544.0: the comments on changed code the message carried.
+      for (const c of it.comments ?? []) {
+        const lines = commentLines(c);
+        out.push(`Comment on ${c.path}${lines ? ` (${lines.includes("–") ? "lines" : "line"} ${lines})` : ""}: ${c.words.trim()}`);
+      }
       speaker = "user";
     } else if (it.kind === "steer") {
       head("user");
@@ -2422,7 +2446,7 @@ export const EXPORT_READING = "Reading the whole session for the export…";
 export function hasExportableItems(events: readonly CodeEvent[]): boolean {
   return foldConversation(events).items.some(
     (it) =>
-      (it.kind === "user" && !it.carry && (it.text.trim() !== "" || it.files.length > 0)) ||
+      (it.kind === "user" && !it.carry && (it.text.trim() !== "" || it.files.length > 0 || !!it.comments?.length)) ||
       (it.kind === "steer" && it.text.trim() !== "") ||
       (it.kind === "text" && it.text.trim() !== "") ||
       it.kind === "tool",

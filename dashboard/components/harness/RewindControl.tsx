@@ -96,6 +96,8 @@ export function RewindControl({
           pickedFiles: out.pickedFiles.length ? out.pickedFiles : preview.pickedFiles,
           commitsNote: out.commitsNote || preview.commitsNote,
           skill: out.skill ?? preview.skill,
+          // v1.544.0: the comments on changed code it carried.
+          comments: out.comments.length ? out.comments : preview.comments,
         });
         return;
       }

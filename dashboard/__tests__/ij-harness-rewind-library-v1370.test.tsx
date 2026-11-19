@@ -135,7 +135,15 @@ describe("Rewind to here: two presses, the refusal in words", () => {
     // v1.377.0: the message's own files ride with its words (none here).
     await waitFor(() =>
       // v1.377.0 review: the message's "/" skill rides too (none here).
-      expect(onRewound).toHaveBeenCalledWith("Add a cart", { attachments: [], pickedFiles: [], commitsNote: "", skill: null }),
+      // v1.544.0: and its comments on changed code (none here) — moved on
+      // purpose.
+      expect(onRewound).toHaveBeenCalledWith("Add a cart", {
+        attachments: [],
+        pickedFiles: [],
+        commitsNote: "",
+        skill: null,
+        comments: [],
+      }),
     );
     expect(posts("/build/sessions/s1/rewind")).toEqual([
       { method: "POST", path: "/build/sessions/s1/rewind", body: { to: "t1" } },
