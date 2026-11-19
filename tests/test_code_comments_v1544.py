@@ -307,6 +307,30 @@ async def test_a_rewind_gives_the_comments_back_with_the_words(app, work, claude
     await stop_all(app)
 
 
+async def test_the_message_is_recorded_for_the_tool_as_it_was_sent(app, work, claude_home, tmp_path, monkeypatch):
+    """Pi finds a message to rewind to by matching the recorded text against
+    its own list of what it RECEIVED: the record must hold the text as sent
+    (with the comment block), not the words as typed."""
+    _fake(monkeypatch, tmp_path / "fake.log")
+    svc = S.service_for(app.state.platform)
+    noted: list[str] = []
+    real = svc._note_sent
+
+    async def spy(live, row, user, before, text):
+        noted.append(text)
+        return await real(live, row, user, before, text)
+
+    monkeypatch.setattr(svc, "_note_sent", spy)
+    async with client(app) as c:
+        sid = (await new_session(c, work))["id"]
+        r = await c.post(f"/build/app/sessions/{sid}/turn",
+                         json={"text": "fix it", "turn_id": "t1", "comments": [_comment()]})
+        assert r.status_code == 200, r.text
+    assert len(noted) == 1 and noted[0] == _to_the_tool(tmp_path / "fake.log")[0]
+    assert CC.HEADING in noted[0]
+    await stop_all(app)
+
+
 def test_a_waiting_message_keeps_its_comments_across_a_restart(tmp_path):
     home = tmp_path / "home"
     q = Q.SessionQueue(home, "app_1")

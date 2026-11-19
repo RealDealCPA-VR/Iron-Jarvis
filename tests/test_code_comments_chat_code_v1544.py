@@ -91,9 +91,10 @@ async def test_a_comment_that_cannot_be_sent_starts_nothing(app, work):
     )):
         status, raw = await open_turn(app, sid, {"text": "fix", "turn_id": f"cc-x{n}", "comments": comments})
         assert status == 400 and words in raw
+    # A command takes no comments (said before the command is even looked up).
     status, raw = await open_turn(app, sid, {"text": "", "turn_id": "cc-cmd", "command": "review",
                                              "comments": [_comment()]})
-    assert status == 400
+    assert status == 400 and CC.NOT_WITH_COMMAND in raw
     assert script.calls == [] and messages_of(app, sid) == []
 
 
