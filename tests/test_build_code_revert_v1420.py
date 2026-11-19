@@ -315,7 +315,13 @@ async def test_the_press_reverts_through_the_route_under_the_sessions_git_lock(t
         turn = (await c.get(f"/build/app/sessions/{sid}/changes", params={"scope": "turn"})).json()
         assert turn["source"] == "git"
     await stop_all(app)
-    assert keys == [f"app:{sid}", f"app:{sid}"]
+    # v1.543.0: each press also takes the FOLDER's lock (a rewind's
+    # whole-folder restore takes the same one), inside the session's.
+    from iron_jarvis.hosted import checkpoints as CK
+
+    folder_key = CK.lock_key(str(repo))
+    assert folder_key.startswith("code-folder:")
+    assert keys == [f"app:{sid}", folder_key, f"app:{sid}", folder_key]
 
 
 async def test_the_route_refuses_while_a_reply_runs(tmp_path, repo):

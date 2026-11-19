@@ -377,8 +377,10 @@ def test_the_restore_goes_through_a_private_index_never_the_users_own(repo, home
     assert lock.read_bytes() == b"held by another git"
     assert (repo / ".git" / "index").read_bytes() == index
     lock.unlink()
-    # Nothing of the private index is left behind.
-    assert list(CK._index_dir(home).glob("*")) == []
+    # Nothing of the private index is left behind (only the empty folder git
+    # is pointed at for hooks, so the user's own hooks stay out of it).
+    left = sorted(p.name for p in CK._index_dir(home).glob("*"))
+    assert left == ["no-hooks"] and list((CK._index_dir(home) / "no-hooks").iterdir()) == []
 
 
 def test_git_gets_time_to_write_and_a_git_that_ran_out_of_time_is_said(repo, home, monkeypatch):
@@ -633,3 +635,339 @@ def test_a_name_that_changed_only_in_upper_or_lower_case_is_left_and_never_moved
     CK.restore(home, SID, _row(repo), "t1")
     assert (repo / "README.md").read_bytes() == b"read me\n" and (repo / "a.py").read_bytes() == b"a = 0\n"
     assert not list((home / "trash").rglob("README.md"))
+
+
+# --------------------------------------------------------------------------- #
+# the second review
+# --------------------------------------------------------------------------- #
+
+
+def _events(turn: str = "t1") -> list[dict]:
+    return [{"type": "user", "turn": turn, "at": "2026-11-19T10:00:00+00:00"}]
+
+
+def test_the_per_file_revert_never_deletes_a_file_that_stands_where_the_folder_must_go(repo, home):
+    """Shipped since v1.420.0: reverting ``sub/s.py`` when ``sub`` is now a
+    FILE let git delete that file to make the folder, with no copy."""
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    shutil.rmtree(repo / "sub")
+    (repo / "sub").write_bytes(b"the user's own file, in no checkpoint\n")
+    as_is = _files(repo)
+    with pytest.raises(PN.RevertRefused) as said:
+        PN.revert_file(home, SID, _row(repo), _events(), "Codex", rel="sub/s.py", blob="", scope="turn", turn="t1")
+    assert "stands where it must go" in said.value.sentence and "s.py" in said.value.sentence
+    assert _files(repo) == as_is and not (home / "trash").exists()
+    # The ordinary revert of a deleted file still works.
+    (repo / "a.py").unlink()
+    got = PN.revert_file(home, SID, _row(repo), _events(), "Codex", rel="a.py", blob="", scope="turn", turn="t1")
+    assert got["ok"] and (repo / "a.py").read_bytes() == b"a = 0\n"
+
+
+def test_line_endings_are_left_alone_where_the_checkpoint_is_exact(repo, home):
+    """``core.autocrlf=false``: the checkpoint holds the file's own bytes.
+    The tool flipped the endings; the rewind must return the checkpoint's,
+    not re-apply the tool's (review: it did, and never converged)."""
+    (repo / "req.http").write_bytes(b"GET /\r\nHost: x\r\n")
+    (repo / "unix.txt").write_bytes(b"one\ntwo\n")
+    start = _files(repo)
+    tree = PN.record_turn_start(home, SID, str(repo), "t1")
+    (repo / "req.http").write_bytes(b"GET /\nHost: y\n")  # flipped to LF
+    (repo / "unix.txt").write_bytes(b"one\r\nTWO\r\n")  # flipped to CRLF
+    CK.restore(home, SID, _row(repo), "t1")
+    assert _files(repo) == start
+    assert PN.snapshot_tree(str(repo)) == tree and CK.plan(home, SID, _row(repo), "t1")["back"] == []
+
+
+def test_a_rule_that_names_the_line_endings_or_says_not_text_is_never_overridden(repo, home):
+    _git(repo, "config", "core.autocrlf", "true")
+    (repo / ".gitattributes").write_bytes(b"*.sh text eol=lf\n*.bat text eol=crlf\n*.csv -text\n*.dat binary\n")
+    files = {"run.sh": b"echo 0\n", "run.bat": b"echo 0\r\n", "t.csv": b"a,b\r\n1,2\r\n", "d.dat": b"x\r\ny\r\n"}
+    for name, data in files.items():
+        (repo / name).write_bytes(data)
+    _git(repo, "add", "-A")
+    tree = PN.record_turn_start(home, SID, str(repo), "t1")
+    (repo / "run.sh").write_bytes(b"echo 1\r\n")  # every one flipped by the tool
+    (repo / "run.bat").write_bytes(b"echo 1\n")
+    (repo / "t.csv").write_bytes(b"a,b\n9,9\n")
+    (repo / "d.dat").write_bytes(b"x\nz\n")
+    CK.restore(home, SID, _row(repo), "t1")
+    for name, data in files.items():
+        assert (repo / name).read_bytes() == data, name
+    assert PN.snapshot_tree(str(repo)) == tree
+
+
+def test_a_binary_file_with_no_nul_byte_keeps_every_byte(repo, home):
+    """Under ``core.autocrlf=true`` too: git keeps a blob that holds CRLF as
+    it is, so the checkpoint is exact and nothing is rewritten."""
+    for setting in ("false", "true"):
+        _git(repo, "config", "core.autocrlf", setting)
+        (repo / "key.bin").write_bytes(b"\x89P\r\n\x1a\xff\x01\x02")
+        _git(repo, "add", "key.bin")
+        turn = "bin-" + setting
+        PN.record_turn_start(home, SID, str(repo), turn)
+        (repo / "key.bin").write_bytes(b"\x89P\n\x1a\xff\x09\x02")
+        CK.restore(home, SID, _row(repo), turn)
+        assert (repo / "key.bin").read_bytes() == b"\x89P\r\n\x1a\xff\x01\x02", setting
+
+
+def test_line_endings_are_kept_in_a_folder_inside_the_repository_too(repo, home):
+    _git(repo, "config", "core.autocrlf", "input")
+    (repo / "sub" / "run.bat").write_bytes(b"@echo off\r\necho hi\r\n")
+    PN.record_turn_start(home, SID, str(repo / "sub"), "t1")
+    (repo / "sub" / "run.bat").write_bytes(b"@echo off\r\necho bye\r\n")
+    CK.restore(home, SID, _row(repo / "sub"), "t1")
+    assert (repo / "sub" / "run.bat").read_bytes() == b"@echo off\r\necho hi\r\n"
+
+
+@pytest.mark.skipif(sys.platform != "win32" and not hasattr(os.stat_result, "st_birthtime"),
+                    reason="this system does not say when a file was made")
+def test_a_file_that_was_there_before_the_message_is_never_called_made_since(repo, home):
+    """The rule that ignored it lived OUTSIDE the session folder's own
+    .gitignore files (the repository's root .gitignore, .git/info/exclude)
+    and was removed since: the two-phase check cannot see that. The file was
+    MADE before the checkpoint, so the checkpoint ignored it. Real birth
+    times here: the checkpoint is said to be a minute from now, as if the
+    files were a minute older."""
+    import datetime as dt
+    import time
+
+    (repo / ".gitignore").write_bytes(b"*.log\n*.env\n")
+    (repo / ".git" / "info" / "exclude").write_bytes(b"local.cfg\n")
+    (repo / "sub" / ".env").write_bytes(b"KEY=mine\n")
+    (repo / "sub" / "local.cfg").write_bytes(b"mine too\n")
+    born = CK._born(os.lstat(repo / "sub" / ".env"))
+    assert born is not None and abs(born - time.time()) < 120  # this system does say
+    tree = PN.record_turn_start(home, SID, str(repo / "sub"), "t1")
+    (repo / ".gitignore").write_bytes(b"*.log\n")  # both rules removed since
+    (repo / ".git" / "info" / "exclude").write_bytes(b"")
+    later = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=60)
+    made = CK._plan(home, SID, str(repo / "sub"), tree, since=later)
+    left = {x["rel"]: x["why"] for x in made["left"]}
+    assert left == {".env": CK.WHY_OLDER, "local.cfg": CK.WHY_OLDER} and made["new"] == []
+    # With the checkpoint's real time (the files are NEWER than it by the
+    # clock here? no: they were made before it) the same answer comes out of
+    # the public plan.
+    again = CK.plan(home, SID, _row(repo / "sub"), "t1")
+    assert {x["rel"] for x in again["left"]} | set(again["new"]) == {".env", "local.cfg"}
+
+
+def test_made_before_the_message_is_read_from_the_files_own_birth(repo, home, monkeypatch):
+    """The rule itself, with the birth times given: older than the checkpoint
+    is left, newer is "made since", and a file that stands in a restored
+    file's way is never left there by this rule."""
+    import datetime as dt
+
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    row = _rows(home, "start")[0]
+    at = PN._at(row["at"])
+    (repo / "old.env").write_bytes(b"mine\n")
+    (repo / "new.py").write_bytes(b"made\n")
+    (repo / "a.py").write_bytes(b"a = 1\n")
+    births = {"old.env": at.timestamp() - 3600, "new.py": at.timestamp() + 5}
+    monkeypatch.setattr(CK, "_born", lambda st: births.get(getattr(st, "_name", ""), None))
+    real = CK._lstat
+
+    def named(path):
+        st = real(path)
+        if st is None:
+            return None
+        box = types.SimpleNamespace(st_mode=st.st_mode, st_size=st.st_size, _name=os.path.basename(path))
+        return box
+
+    monkeypatch.setattr(CK, "_lstat", named)
+    monkeypatch.setattr(CK, "_link", lambda path, st: False)
+    made = CK._plan(home, SID, str(repo), row["tree"], since=at)
+    assert made["new"] == ["new.py"] and {"rel": "old.env", "why": CK.WHY_OLDER} in made["left"]
+    assert CK._plan(home, SID, str(repo), row["tree"])["new"] == ["new.py", "old.env"]  # no time given: no rule
+    assert isinstance(at, dt.datetime)
+
+
+def test_a_rewind_that_changed_nothing_leaves_nothing_to_undo(repo, home):
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    got = CK.restore(home, SID, _row(repo), "t1")
+    assert got["words"].startswith(CK.DONE_NOTHING)
+    assert not CK.can_undo(home, SID)
+    (repo / "a.py").write_bytes(b"a = the user's own later work\n")
+    with pytest.raises(CK.RestoreRefused) as said:
+        CK.undo(home, SID, _row(repo))
+    assert said.value.sentence == CK.NOTHING_TO_UNDO
+    assert (repo / "a.py").read_bytes() == b"a = the user's own later work\n"
+
+
+def test_attributes_go_back_before_the_files_they_govern(repo, home):
+    """The tool removed an eol line from ``.gitattributes``. A file whose
+    name sorts BEFORE it was written under the tool's rules."""
+    (repo / ".gitattributes").write_bytes(b"*.cfg text eol=crlf\n")
+    (repo / "-early.cfg").write_bytes(b"one\r\n")
+    _git(repo, "add", "-A")
+    start = _files(repo)
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    (repo / ".gitattributes").write_bytes(b"")
+    (repo / "-early.cfg").write_bytes(b"two\n")
+    CK.restore(home, SID, _row(repo), "t1")
+    assert _files(repo) == start
+    assert CK._is_rules("x/.gitattributes") and CK._is_rules(".gitignore") and not CK._is_rules("a.py")
+
+
+def test_files_git_is_told_not_to_watch_are_said_and_not_touched(repo, home):
+    _git(repo, "update-index", "--assume-unchanged", "a.py")
+    _git(repo, "update-index", "--skip-worktree", "b.py")
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    (repo / "a.py").write_bytes(b"a = changed, unseen by git\n")
+    (repo / "b.py").write_bytes(b"b = changed, unseen by git\n")
+    (repo / "sub" / "s.py").write_bytes(b"s = 1\n")
+    made = CK.plan(home, SID, _row(repo), "t1")
+    left = {x["rel"]: x["why"] for x in made["left"]}
+    assert left == {"a.py": CK.WHY_UNWATCHED, "b.py": CK.WHY_UNWATCHED} and made["back"] == ["sub/s.py"]
+    got = CK.restore(home, SID, _row(repo), "t1")
+    assert (repo / "a.py").read_bytes() == b"a = changed, unseen by git\n" and "2 left as they are" in got["words"]
+
+
+def test_what_the_preview_allows_the_press_does(repo, home):
+    """Four states where the plan said yes and the press then refused."""
+    # 1. an EMPTY folder (and one holding only empty folders) where a file was
+    (repo / "thing").write_bytes(b"a file\n")
+    (repo / "other").write_bytes(b"another\n")
+    _git(repo, "add", "-A")
+    start = _files(repo)
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    (repo / "thing").unlink()
+    (repo / "thing").mkdir()
+    (repo / "other").unlink()
+    (repo / "other" / "empty" / "deeper").mkdir(parents=True)
+    (repo / "other" / "new.py").write_bytes(b"new\n")
+    assert CK.plan(home, SID, _row(repo), "t1")["can"] is True
+    CK.restore(home, SID, _row(repo), "t1")
+    assert _files(repo) == start
+    # 2. a folder that held a .gitignore is now a file
+    (repo / "conf").mkdir()
+    (repo / "conf" / ".gitignore").write_bytes(b"*.tmp\n")
+    (repo / "conf" / "c.ini").write_bytes(b"c\n")
+    _git(repo, "add", "-A")
+    start = _files(repo)
+    PN.record_turn_start(home, SID, str(repo), "t2")
+    shutil.rmtree(repo / "conf")
+    (repo / "conf").write_bytes(b"now a file\n")
+    assert CK.plan(home, SID, _row(repo), "t2")["can"] is True
+    got = CK.restore(home, SID, _row(repo), "t2")
+    assert _files(repo) == start
+    assert (Path(got["trash"]) / "made-since" / "conf").read_bytes() == b"now a file\n"
+    # 3. a file the checkpoint's rules ignore sits inside a folder that must
+    #    become a file again: it cannot stay there, so it moves to the trash
+    (repo / ".gitignore").write_bytes(b"*.log\n*.keep\n")
+    (repo / "slot").write_bytes(b"a file\n")
+    _git(repo, "add", "-A")
+    start = _files(repo)
+    PN.record_turn_start(home, SID, str(repo), "t3")
+    (repo / ".gitignore").write_bytes(b"*.log\n")
+    (repo / "slot").unlink()
+    (repo / "slot").mkdir()
+    (repo / "slot" / "x.keep").write_bytes(b"kept\n")
+    assert CK.plan(home, SID, _row(repo), "t3")["can"] is True
+    got = CK.restore(home, SID, _row(repo), "t3")
+    assert _files(repo) == start and got["stayed"] == 0
+    assert (Path(got["trash"]) / "made-since" / "slot" / "x.keep").read_bytes() == b"kept\n"
+
+
+def test_an_empty_folder_is_only_ever_removed_when_it_holds_nothing_at_all(repo, home):
+    (repo / "d" / "empty").mkdir(parents=True)
+    (repo / "e" / "full").mkdir(parents=True)
+    (repo / "e" / "full" / "f.txt").write_bytes(b"f\n")
+    CK._drop_empty_folders(str(repo), ["d", "e", "a.py", "nope"])
+    assert not (repo / "d").exists()
+    assert (repo / "e" / "full" / "f.txt").read_bytes() == b"f\n" and (repo / "a.py").exists()
+
+
+def test_the_users_own_hooks_do_not_run_inside_the_restore(repo, home):
+    hooks = repo / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    mark = repo.parent / "hook-ran.txt"
+    (hooks / "post-checkout").write_bytes(
+        b"#!/bin/sh\necho ran > '" + str(mark).replace("\\", "/").encode() + b"'\n")
+    os.chmod(hooks / "post-checkout", 0o755)
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    (repo / "a.py").write_bytes(b"a = 1\n")
+    CK.restore(home, SID, _row(repo), "t1")
+    assert (repo / "a.py").read_bytes() == b"a = 0\n" and not mark.exists()
+
+
+def test_a_file_that_cannot_be_read_is_never_written_over_blind(repo, home, monkeypatch):
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    (repo / "a.py").write_bytes(b"a = 1\n")
+    (repo / "sub" / "s.py").write_bytes(b"s = 1\n")
+    as_is = _files(repo)
+    real = CK._lstat
+    armed = {"on": False}
+
+    def blind(path):
+        return None if armed["on"] and str(path).endswith("a.py") else real(path)
+
+    real_copy = CK._copy_replaced
+
+    def copy(*a, **k):
+        armed["on"] = True  # the file cannot be stat'ed from here on
+        try:
+            return real_copy(*a, **k)
+        finally:
+            armed["on"] = False
+
+    monkeypatch.setattr(CK, "_lstat", blind)
+    monkeypatch.setattr(CK, "_copy_replaced", copy)
+    said = _refused(home, repo)
+    assert CK.WHY_NO_COPY in said.sentence and said.status == 409 and _files(repo) == as_is
+
+
+def test_the_second_look_refuses_each_thing_it_is_there_for(repo, home, tmp_path):
+    outside = tmp_path / "empty-outside"
+    outside.mkdir()
+    # a file that appeared where a "gone" file must be made
+    CK._still_clear(str(repo), ["a.py"], set())  # an ordinary file to write over: fine
+    with pytest.raises(CK._Stopped):
+        CK._still_clear(str(repo), ["a.py"], {"a.py"})
+    # a FILE where the path's own folder must be
+    with pytest.raises(CK._Stopped):
+        CK._still_clear(str(repo), ["a.py/inner.txt"], set())
+    # a link where the path's own folder must be
+    _junction(repo / "jump", outside)
+    with pytest.raises(CK._Stopped):
+        CK._still_clear(str(repo), ["jump/x.txt"], set())
+    # A folder that holds only a junction to an EMPTY outside folder is not
+    # "only new files": the link is never walked into.
+    (repo / "box").mkdir()
+    _junction(repo / "box" / "out", outside)
+    assert CK._only_new_inside(str(repo / "box"), "box", set()) is False
+
+
+def test_a_made_since_file_another_program_holds_stops_the_restore_before_anything_moves(repo, home, monkeypatch):
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    _work(repo)
+    as_is = _files(repo)
+    real = CK._writable
+    monkeypatch.setattr(CK, "_writable", lambda p: False if p.endswith("new.py") else real(p))
+    made = CK.plan(home, SID, _row(repo), "t1")
+    assert made["problems"] == [{"rel": "new.py", "why": CK.WHY_LOCKED}] and "new.py" not in made["new"]
+    assert _refused(home, repo).sentence == CK.PROBLEMS and _files(repo) == as_is
+
+
+def test_a_file_the_users_index_tracks_still_stays_when_the_rules_ignore_it(repo, home):
+    """The question is the RULES alone (``--no-index``): a file the user
+    staged since is otherwise never "ignored" to git, and it was moved."""
+    (repo / ".gitignore").write_bytes(b"*.log\n*.env\n")
+    (repo / ".env").write_bytes(b"KEY=mine\n")
+    _git(repo, "add", "-A")
+    PN.record_turn_start(home, SID, str(repo), "t1")
+    (repo / ".gitignore").write_bytes(b"*.log\n")
+    _git(repo, "add", "-f", ".env")  # staged since, by the tool
+    assert CK._ignored_now(str(repo), [".env"]) == set()  # by the rules of now: not ignored
+    got = CK.restore(home, SID, _row(repo), "t1")
+    assert (repo / ".env").read_bytes() == b"KEY=mine\n" and got["stayed"] == 1 and got["moved"] == 0
+    assert not list((home / "trash").rglob(".env"))
+
+
+def test_the_way_back_clears_the_folders_it_emptied(repo, home):
+    root = home / "trash" / "y"
+    (repo / "deep" / "made").mkdir(parents=True)
+    (repo / "deep" / "made" / "again.txt").write_bytes(b"git made this again\n")
+    assert CK._roll_back(str(repo), root, [], ["deep/made/again.txt"], []) is True
+    assert not (repo / "deep").exists()
+    assert (root / "rolled-back" / "deep" / "made" / "again.txt").read_bytes() == b"git made this again\n"

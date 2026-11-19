@@ -144,6 +144,8 @@ WHY_LINK = "it is a link"
 WHY_PATH = "its path cannot be used here"
 WHY_IGNORED = "git ignores it now, so it is in no checkpoint"
 WHY_CASE = "only the upper or lower case of its name changed"
+WHY_OLDER = "it was there before that message, so git ignored it then and it is in no checkpoint"
+WHY_UNWATCHED = "git is told not to watch it, so it is in no checkpoint"
 WHY_FOLDER = "a folder stands in its place and holds files that are in no checkpoint"
 WHY_PARENT = "a file that is in no checkpoint stands where its folder must go"
 WHY_NO_COPY = "a copy of a file could not be kept first"
@@ -233,6 +235,14 @@ def repo_of(folder: str) -> str:
             _REPOS.clear()
         _REPOS[key] = out
     return out
+
+
+def lock_key(folder: str) -> str:
+    """The name of the lock every write of a folder's files takes: one per
+    REPOSITORY (a session in ``repo`` and one in ``repo/sub`` share it; two
+    spellings of one folder do too), or per folder outside a repository."""
+    where = repo_of(folder) or (os.path.abspath(folder) if folder else "")
+    return "code-folder:" + os.path.normcase(where) if where else ""
 
 
 def keep(folder: str, ref: str, tree: str) -> bool:
@@ -497,8 +507,38 @@ def _endings(folder: str) -> str:
     return ""
 
 
-def _plan(home: Any, sid: str, folder: str, tree: str, *, head: str = "") -> dict[str, Any]:
-    """What putting *folder* back to *tree* would do. Reads only."""
+def _born(st: os.stat_result) -> float | None:
+    """When the file was MADE, where the system says (Windows; macOS). None
+    elsewhere: a change time is not a birth time."""
+    born = getattr(st, "st_birthtime", None)
+    if born is None and os.name == "nt":
+        born = st.st_ctime
+    return float(born) if born else None
+
+
+def _unwatched(folder: str) -> list[str]:
+    """The files in the folder git is TOLD not to watch (``assume-unchanged``,
+    ``skip-worktree``) and that are on disk: ``git add`` skips them, so a
+    checkpoint holds the index's old version of them, never the file. Never
+    raises."""
+    try:
+        got = PN._git(["ls-files", "-v", "-z", "--", "."], folder)
+        if not got.ok:
+            return []
+        out = []
+        for entry in got.out.split("\0"):
+            tag, _, rel = entry.partition(" ")
+            if rel and (tag == "S" or tag.islower()) and os.path.lexists(os.path.join(folder, *rel.split("/"))):
+                out.append(rel)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _plan(home: Any, sid: str, folder: str, tree: str, *, head: str = "", since: Any = None) -> dict[str, Any]:
+    """What putting *folder* back to *tree* would do. Reads only. *since*:
+    when that tree was recorded (a datetime) — a file MADE before it that the
+    tree does not hold was ignored then, whatever the rules say now."""
     now = PN.snapshot_tree(folder, keep=PN.kept_index(home, sid))
     left: list[dict[str, str]] = []
     problems: list[dict[str, str]] = []
@@ -557,13 +597,31 @@ def _plan(home: Any, sid: str, folder: str, tree: str, *, head: str = "") -> dic
         if status == "D":
             gone.append(clean)
     new: list[str] = []
+    # A file made BEFORE the checkpoint that the checkpoint does not hold was
+    # ignored then (a tree holds every file git did not ignore): it is in no
+    # checkpoint, so it is never called "made since" (review: a rule in the
+    # repository's root .gitignore, in .git/info/exclude or in a global file
+    # was removed since, and the user's own .env went to the trash).
+    cutoff = since.timestamp() - 2.0 if since is not None else None
+    needed = set(back)
     for status, clean in rows:
         if status != "A" or clean in case_only:
             continue
-        if not _writable(os.path.join(folder, *clean.split("/"))):
+        path = os.path.join(folder, *clean.split("/"))
+        st = _lstat(path)
+        born = _born(st) if st is not None else None
+        in_the_way = any(b == clean or b.startswith(clean + "/") or clean.startswith(b + "/") for b in needed)
+        if cutoff is not None and born is not None and born < cutoff and not in_the_way:
+            left.append({"rel": clean, "why": WHY_OLDER})
+            continue
+        if not _writable(path):
             problems.append({"rel": clean, "why": WHY_LOCKED})
             continue
         new.append(clean)
+    listed = {x["rel"] for x in left}
+    for rel in _unwatched(folder):
+        if rel not in listed:
+            left.append({"rel": rel, "why": WHY_UNWATCHED})
     commits = 0
     if head:
         got = PN._git(["rev-list", "--count", f"{head}..HEAD"], folder)
@@ -629,7 +687,8 @@ def plan(home: Any, sid: str, row: Any, turn_id: str) -> dict[str, Any]:
     try:
         if not tree_kept(folder, tree):
             raise RestoreRefused(CHECKPOINT_GONE)
-        return _plan(home, sid, folder, tree, head=str(entry.get("head") or ""))
+        return _plan(home, sid, folder, tree, head=str(entry.get("head") or ""),
+                     since=PN._at(entry.get("at")))
     except PN.GitUnreadable as gone:
         raise RestoreRefused(gone.words) from None
 
@@ -656,9 +715,14 @@ def _restore_paths(folder: str, tree: str, rels: list[str], index_dir: Any) -> A
     where.mkdir(parents=True, exist_ok=True)
     idx = where / f"{uuid.uuid4().hex}.idx"
     env = git_env({"GIT_INDEX_FILE": str(idx)})
+    # The user's own hooks stay out of it (measured: ``post-checkout`` ran
+    # inside the restore and saw the PRIVATE index as the repository's state).
+    no_hooks = where / "no-hooks"
+    no_hooks.mkdir(exist_ok=True)
     try:
         return run_git(
-            ["-c", "core.quotepath=off", "restore", f"--source={tree}", "--worktree",
+            ["-c", "core.quotepath=off", "-c", f"core.hooksPath={no_hooks}",
+             "restore", f"--source={tree}", "--worktree",
              "--pathspec-from-file=-", "--pathspec-file-nul"],
             Path(folder), env=env, identity=False, encoding="utf-8", timeout=RESTORE_S, input=body,
         )
@@ -698,7 +762,9 @@ def _copy_replaced(folder: str, dest_root: Path, rels: list[str], copied: list[t
         src = os.path.join(folder, *rel.split("/"))
         st = _lstat(src)
         if st is None or not stat.S_ISREG(st.st_mode) or _link(src, st):
-            continue
+            # git read it a moment ago (it is in the folder's tree), so "not
+            # there" here means it cannot be read: never written over blind.
+            raise OSError(f"no copy can be made of {rel}")
         dest = dest_root.joinpath(*rel.split("/"))
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, str(dest))
@@ -723,6 +789,42 @@ def _still_clear(folder: str, back: list[str], gone: set[str]) -> None:
                 break
             if _link(at, ast) or not stat.S_ISDIR(ast.st_mode):
                 raise _Stopped(WHY_IN_THE_WAY)
+
+
+def _drop_empty_folders(folder: str, rels: list[str]) -> None:
+    """A folder that stands where a file must go and holds NO file at all
+    (only empty folders) is removed: it holds nothing, and git would refuse
+    nothing there anyway (review: the preview said yes and the press then
+    refused). A folder with any file or link in it is not touched."""
+    for rel in rels:
+        top = os.path.join(folder, *rel.split("/"))
+        st = _lstat(top)
+        if st is None or _link(top, st) or not stat.S_ISDIR(st.st_mode):
+            continue
+        dirs: list[str] = []
+        clean = True
+        todo = [top]
+        while todo and clean and len(dirs) <= WALK_MAX:
+            at = todo.pop()
+            dirs.append(at)
+            try:
+                entries = list(os.scandir(at))
+            except OSError:
+                clean = False
+                break
+            for e in entries:
+                est = _lstat(e.path)
+                if est is None or _link(e.path, est) or not stat.S_ISDIR(est.st_mode):
+                    clean = False
+                    break
+                todo.append(e.path)
+        if not clean or len(dirs) > WALK_MAX:
+            continue
+        for d in sorted(dirs, key=len, reverse=True):
+            try:
+                os.rmdir(d)
+            except OSError:
+                break
 
 
 def _prune_empty(folder: str, rels: list[str]) -> None:
@@ -783,7 +885,10 @@ def _roll_back(folder: str, root: Path, copied: list[tuple[str, str]], made_agai
 
 
 def _is_rules(rel: str) -> bool:
-    return rel.rsplit("/", 1)[-1] == ".gitignore"
+    """A file that changes how git reads OTHER files: its ignore rules, and
+    its attributes (a filter or eol line removed since — review: files that
+    sort before ``.gitattributes`` were written under the tool's rules)."""
+    return rel.rsplit("/", 1)[-1] in (".gitignore", ".gitattributes")
 
 
 def _ignored_now(folder: str, rels: list[str]) -> set[str]:
@@ -857,14 +962,60 @@ def _style(data: bytes) -> str:
     return "lf" if crlf == 0 else ""
 
 
-def _keep_endings(folder: str, copied: list[tuple[str, str]], skip: set[str]) -> int:
+def _autocrlf(folder: str) -> str:
+    try:
+        got = PN._git(["config", "--get", "core.autocrlf"], folder)
+        return got.out.strip().lower() if got.ok else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _attrs(folder: str, rels: list[str]) -> dict[str, dict[str, str]]:
+    """``{rel: {"text": .., "eol": ..}}`` as git reads the attributes NOW."""
+    out: dict[str, dict[str, str]] = {}
+    got = PN._git(["check-attr", "-z", "--stdin", "text", "eol"], folder, input="\0".join(rels).encode("utf-8"))
+    parts = str(got.out or "").split("\0") if got.ok else []
+    for i in range(0, len(parts) - 2, 3):
+        out.setdefault(parts[i], {})[parts[i + 1]] = parts[i + 2]
+    return out
+
+
+def _tree_blobs(folder: str, tree: str) -> dict[str, str]:
+    """``{rel: blob id}`` of the checkpoint's files under the folder."""
+    got = PN._git(["ls-tree", "-r", "-z", tree], folder)
+    out: dict[str, str] = {}
+    for entry in (str(got.out or "").split("\0") if got.ok else []):
+        head, _, rel = entry.partition("\t")
+        cols = head.split(" ")
+        if rel and len(cols) == 3 and cols[1] == "blob":
+            out[rel] = cols[2]
+    return out
+
+
+def _blob_id(data: bytes, like: str) -> str:
+    h = hashlib.sha256() if len(like) == 64 else hashlib.sha1()
+    h.update(b"blob %d\0" % len(data))
+    h.update(data)
+    return h.hexdigest()
+
+
+def _keep_endings(folder: str, tree: str, copied: list[tuple[str, str]], skip: set[str]) -> int:
     """After git's write: a restored file whose line endings are uniformly
     ONE kind, where the version it replaced was uniformly the OTHER, is
-    rewritten in the replaced version's kind (the module docstring says why).
-    Only the line endings change; a file with mixed endings, no line at all
-    or a NUL byte is left exactly as git wrote it. Returns how many it
-    changed. Never raises."""
-    changed = 0
+    rewritten in the replaced version's kind — but ONLY where the checkpoint
+    cannot say which kind the file had, i.e. git's own conversion decides it:
+
+    * ``core.autocrlf`` is on, or the file's ``text`` attribute is set;
+    * no ``eol=`` attribute names the kind, and the file is not ``-text`` or
+      ``binary`` (then git's answer is the user's own rule, or exact);
+    * the checkpoint's blob IS the file with LF endings (so both kinds of
+      the file are that same blob to git, and ``git status`` stays clean).
+
+    Anywhere else the checkpoint is exact and git's write is left alone
+    (review: this ran on every restore and re-applied the endings a tool had
+    flipped, and changed a byte in a binary file with no NUL in it). Returns
+    how many it changed. Never raises."""
+    todo: list[tuple[str, Path, bytes, str]] = []
     for rel, copy in copied:
         if rel in skip:
             continue
@@ -879,6 +1030,29 @@ def _keep_endings(folder: str, copied: list[tuple[str, str]], skip: set[str]) ->
             have = _style(now)
             if not want or not have or want == have:
                 continue
+            todo.append((rel, dest, now, want))
+        except OSError:
+            continue
+    if not todo:
+        return 0
+    changed = 0
+    try:
+        converts = _autocrlf(folder) in ("true", "input")
+        attrs = _attrs(folder, [rel for rel, _d, _n, _w in todo])
+        blobs = _tree_blobs(folder, tree)
+    except Exception:  # noqa: BLE001 — unknown means: leave git's write alone
+        return 0
+    for rel, dest, now, want in todo:
+        mine = attrs.get(rel) or {}
+        text, eol = mine.get("text", "unspecified"), mine.get("eol", "unspecified")
+        if text == "unset" or eol != "unspecified":
+            continue
+        if not (converts or text in ("set", "auto")):
+            continue
+        blob = blobs.get(rel) or ""
+        if not blob or _blob_id(_flat(now), blob) != blob:
+            continue
+        try:
             dest.write_bytes(now.replace(b"\n", b"\r\n") if want == "crlf" else _flat(now))
             changed += 1
         except OSError:
@@ -903,6 +1077,7 @@ def _apply(home: Any, sid: str, folder: str, tree: str, made: dict[str, Any], *,
         """Steps 2 to 5 for one group of paths."""
         _move_new(folder, root / MADE, some_new, moved)
         _prune_empty(folder, [rel for rel, _ in moved])
+        _drop_empty_folders(folder, some_back)
         _still_clear(folder, some_back, was_gone)
         try:
             _copy_replaced(folder, root / REPLACED, [r for r in some_back if r not in was_gone], copied)
@@ -923,9 +1098,16 @@ def _apply(home: Any, sid: str, folder: str, tree: str, made: dict[str, Any], *,
         if rules_new or rules_back:
             # The ignore rules go back first; a "made since" file the
             # checkpoint's own rules ignore is in no checkpoint: it stays.
-            step(rules_new, rules_back)
-            rest = [r for r in new if not _is_rules(r)]
-            keep_here = _ignored_now(folder, rest)
+            # A "made since" file that stands where a rules file's own
+            # folder must go moves out with them (review: it was checked
+            # before it had moved, and the press refused).
+            first = set(rules_new) | {n for n in new if any(r.startswith(n + "/") for r in rules_back)}
+            step([n for n in new if n in first], rules_back)
+            rest = [r for r in new if r not in first]
+            # ... and one that sits inside a folder that must become a file
+            # cannot stay there: it moves to the trash with the others.
+            keep_here = {p for p in _ignored_now(folder, rest)
+                         if not any(p.startswith(b + "/") for b in back)}
             stayed = [r for r in rest if r in keep_here]
             step([r for r in rest if r not in keep_here], [r for r in back if not _is_rules(r)])
         else:
@@ -944,7 +1126,7 @@ def _apply(home: Any, sid: str, folder: str, tree: str, made: dict[str, Any], *,
             raise RestoreRefused(FAILED_ROLLED_BACK.format(why=why), 409) from None
         raise RestoreRefused(FAILED_PARTIAL.format(why=why, trash=str(root)), 500) from None
     settled = _exact_endings(folder, back, exact_from) if exact_from is not None else set()
-    _keep_endings(folder, copied, settled)
+    _keep_endings(folder, tree, copied, settled)
     kept = bool(moved or copied)
     return {"back": len(back), "moved": len(moved), "replaced": len(copied), "stayed": len(stayed),
             "trash": str(root) if kept else ""}
@@ -999,6 +1181,10 @@ def restore(home: Any, sid: str, row: Any, turn_id: str, *, expect: str = "") ->
             # are skipped; review: marking it "undone" ended the search).
             PN.mark_tree(home, sid, before, HOW_BEFORE, void=True)
         raise
+    if not result["back"] and not result["moved"]:
+        # Nothing was changed, so there is nothing to undo (review: Undo was
+        # still offered and later swept the user's own work back).
+        PN.mark_tree(home, sid, before, HOW_BEFORE, void=True)
     # Where this rewind's own copies are: an undo makes line endings exact
     # from them.
     PN.mark_tree(home, sid, before, HOW_BEFORE, trash=str(result.get("trash") or ""))
@@ -1040,6 +1226,29 @@ def close_undo(home: Any, sid: str) -> None:
         log.warning("could not close a Code-view session's rewind undo", exc_info=True)
 
 
+def close_undo_in_folder(home: Any, engine: Any, sid: str, folder: str) -> None:
+    """A message is starting in *folder*: no rewind of ANY session that works
+    in it (or in a folder inside it, or one that holds it) can be undone any
+    more (review: another session's message left Undo offered, and Undo then
+    put that message's work back). Never raises."""
+    close_undo(home, sid)
+    try:
+        if not folder or PN._network(folder):
+            return
+        from . import store
+
+        mine = os.path.normcase(os.path.abspath(folder))
+        for row in store.list_rows(engine, archived=True):
+            other = str(getattr(row, "folder", "") or "")
+            if row.id == sid or not other or PN._network(other):
+                continue
+            theirs = os.path.normcase(os.path.abspath(other))
+            if theirs == mine or theirs.startswith(mine + os.sep) or mine.startswith(theirs + os.sep):
+                close_undo(home, row.id)
+    except Exception:  # noqa: BLE001
+        log.warning("could not close the rewind undo of the folder's other sessions", exc_info=True)
+
+
 def undo_row(home: Any, sid: str) -> tuple[dict[str, Any] | None, bool]:
     """``(row, late)``: the newest rewind that is still to be undone (one
     already undone, or one that changed nothing, is skipped), and whether a
@@ -1074,6 +1283,9 @@ def undo(home: Any, sid: str, row: Any) -> dict[str, Any]:
     try:
         if not tree_kept(folder, tree):
             raise RestoreRefused(CHECKPOINT_GONE)
+        # (No ``since`` here: the files a rewind made again carry their OLD
+        # creation time on Windows — a name deleted and made again within
+        # seconds keeps it — so "made before" says nothing in an undo.)
         made = _plan(home, sid, folder, tree)
     except PN.GitUnreadable as gone:
         raise RestoreRefused(gone.words) from None

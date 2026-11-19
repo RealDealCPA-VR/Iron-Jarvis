@@ -3853,7 +3853,8 @@ class HostedService:
             # checkpoint below is recorded in time.
             from . import checkpoints as CK
 
-            await asyncio.to_thread(CK.close_undo, self.home, live.sid)
+            await asyncio.to_thread(CK.close_undo_in_folder, self.home, self.engine, live.sid,
+                                    str(getattr(row, "folder", "") or ""))
             await PN.record_turn_start_async(self.home, live.sid, str(getattr(row, "folder", "") or ""), turn.id,
                                              uid=str(user.get("at") or ""))  # v1.543.0: the checkpoint's message
             async with live.lock:

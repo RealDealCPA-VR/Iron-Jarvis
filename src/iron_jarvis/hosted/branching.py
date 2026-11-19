@@ -801,6 +801,19 @@ async def _run(lock: Any, fn: Any, folder: str = "") -> Any:
     return await asyncio.to_thread(lock, fn, folder)
 
 
+def _still_free(svc: Any, row: Any) -> None:
+    """BLOCKING, called INSIDE the locks, right before the folder is written:
+    the wait for a lock can be long, and a reply may have started meanwhile
+    (review: the who-may-write check ran only before the wait)."""
+    from . import checkpoints as CK
+
+    live = svc.live.get(row.id)
+    if live is not None and live.turn is not None and live.turn.running:
+        raise CK.RestoreRefused(REPLY_RUNS)
+    if _same_folder_running(svc, row):
+        raise CK.RestoreRefused(OTHER_SESSION)
+
+
 def _need_expect(expect: str) -> str:
     """The preview's id is REQUIRED for a press that writes the folder: it is
     what proves the user saw this very list (review: it was optional, so the
@@ -947,8 +960,11 @@ async def rewind_files(svc: Any, sid: str, to: str, expect: str = "", *, lock: A
     live = live or svc._live(row)
     svc._claim(live, "being rewound")
     try:
-        got = await _run(lock, lambda: CK.restore(svc.home, row.id, row, turn, expect=expect),
-                         str(row.folder or ""))
+        def act() -> dict[str, Any]:
+            _still_free(svc, row)
+            return CK.restore(svc.home, row.id, row, turn, expect=expect)
+
+        got = await _run(lock, act, str(row.folder or ""))
     except CK.RestoreRefused as r:
         raise _as_refused(r) from None
     finally:
@@ -971,7 +987,11 @@ async def undo_files(svc: Any, sid: str, *, lock: Any = None) -> dict[str, Any]:
     live = live or svc._live(row)
     svc._claim(live, "being rewound")
     try:
-        got = await _run(lock, lambda: CK.undo(svc.home, row.id, row), str(row.folder or ""))
+        def act() -> dict[str, Any]:
+            _still_free(svc, row)
+            return CK.undo(svc.home, row.id, row)
+
+        got = await _run(lock, act, str(row.folder or ""))
     except CK.RestoreRefused as r:
         raise _as_refused(r) from None
     finally:
@@ -1023,8 +1043,12 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
         if not with_files:
             return
         try:
-            restored = await _run(lock, lambda: CK.restore(svc.home, row.id, row, turn_id, expect=str(expect)),
-                                  str(row.folder or ""))
+            def act() -> dict[str, Any]:
+                if _same_folder_running(svc, row):
+                    raise CK.RestoreRefused(OTHER_SESSION)
+                return CK.restore(svc.home, row.id, row, turn_id, expect=str(expect))
+
+            restored = await _run(lock, act, str(row.folder or ""))
         except CK.RestoreRefused as r:
             raise _as_refused(r) from None
 

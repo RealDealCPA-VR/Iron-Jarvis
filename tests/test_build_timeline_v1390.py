@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,12 @@ MODEL_S = 0.2
 READ_S = 0.4
 #: The two files the reads take different times over (one round, together).
 READ_TIMES = {"app.py": 0.2, "util.py": READ_S}
+#: v1.543.0: how long each slowed read REALLY slept, by file name, on the
+#: product's own clock (``perf_counter``). On Windows ``asyncio.sleep(d)`` can
+#: measure less than ``d``, so a step's length is compared with what its own
+#: sleep took, never with the number that was asked for (the first test of
+#: this file passed only on CI's retry while it compared with ``d - 20 ms``).
+READ_SLEPT_MS: dict[str, float] = {}
 USAGE = {"input_tokens": 1200, "output_tokens": 300}
 
 
@@ -84,8 +91,12 @@ class Timed:
     async def _move(self, system, messages, tools):
         main = _is_main(system)
         results = [str(getattr(m, "content", "") or "") for m in messages or () if getattr(m, "role", "") == "tool"]
-        self.calls.append({"main": main, "tools": [t["name"] for t in tools or []]})
+        call: dict[str, Any] = {"main": main, "tools": [t["name"] for t in tools or []]}
+        self.calls.append(call)
+        t0 = time.perf_counter()
         await asyncio.sleep(MODEL_S)
+        # What this call's own wait measured (see READ_SLEPT_MS).
+        call["slept_ms"] = (time.perf_counter() - t0) * 1000
         if main:
             move = self.main.pop(0) if (self.main and tools) else "Done."
         else:
@@ -132,7 +143,9 @@ def slow_reads(app, monkeypatch) -> None:
     async def slow(*a, **kw):
         args = a[0] if a and isinstance(a[0], dict) else kw.get("args") or {}
         name = Path(str(args.get("path") or args.get("file_path") or "")).name
+        t0 = time.perf_counter()
         await asyncio.sleep(READ_TIMES.get(name, READ_S))
+        READ_SLEPT_MS[name] = (time.perf_counter() - t0) * 1000
         return await real(*a, **kw)
 
     monkeypatch.setattr(tool, "execute", slow)
@@ -196,10 +209,13 @@ async def test_a_build_reply_line_keeps_every_steps_start_and_every_model_call(a
     # EVERY billed model call is on the line, in order, with its numbers.
     calls = line["calls"]
     assert len(calls) == len(main_calls)
-    for c in calls:
+    for c, mine in zip(calls, main_calls):
         assert (c["provider"], c["model"]) == CLAUDE
         assert isinstance(c["start"], int) and c["start"] >= 0
-        assert isinstance(c["ms"], int) and c["ms"] >= int(MODEL_S * 1000) - 20
+        # The call's length holds the model's own wait: measured on the same
+        # clock, around a shorter span, so it can never be more than the
+        # rounding of one millisecond below it (no sleep's nominal length).
+        assert isinstance(c["ms"], int) and c["ms"] >= int(mine["slept_ms"]) - 1 > 0
         assert c["usage"]["input_tokens"] == USAGE["input_tokens"]
         assert c["usage"]["output_tokens"] == USAGE["output_tokens"]
         assert c["usage"]["cost_usd"] > 0
@@ -479,7 +495,7 @@ async def test_a_helper_row_says_its_model_its_own_usage_and_its_steps_times(app
     h_start, h_end = h["start"], h["end"]
     duration = line["timing"]["ms"]
     assert 0 <= h_start < h_end <= duration
-    assert work_step["ms"] >= int(READ_S * 1000) - 20
+    assert work_step["ms"] >= int(READ_SLEPT_MS["util.py"]) - 1 > 0  # what its own wait measured
     assert h_start <= work_step["start"] and work_step["start"] + work_step["ms"] <= h_end
     # The call that started it is marked (the helper's row stands in for it).
     [delegate] = [s for s in line["steps"] if s.get("helper")]

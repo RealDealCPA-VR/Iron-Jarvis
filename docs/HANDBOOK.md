@@ -2081,9 +2081,10 @@ over and `made-since` holds the files that were moved.
 **Undo rewind.** After a rewind that changed files, an **Undo rewind** button
 appears above the message box (press it twice). It puts the folder back
 exactly as it was just before the rewind, byte for byte. It is there until
-you send your next message. It undoes the file changes only; the
-conversation stays rewound. What the undo itself replaces is kept in the
-trash too.
+the next message is sent in that folder, by this session or by another one
+working there. It undoes the file changes only; the conversation stays
+rewound. What the undo itself replaces is kept in the trash too. A rewind
+that changed no file offers no Undo.
 
 **Every tool gets its files back.** Grok, Antigravity and OpenCode cannot
 rewind a conversation, so their messages offer **Put files back to here…**
@@ -2095,8 +2096,11 @@ instead: the same list, with one button.
   have staged stay exactly as they are.
 - It leaves files that git ignores alone (build output, `node_modules`,
   `.env`): they are in no checkpoint, so nothing could bring them back. This
-  holds for a file git ignores now, and for a file that the checkpoint's own
-  rules ignored. The list and the result say which files were left.
+  holds for a file git ignores now, for a file that the checkpoint's own
+  rules ignored, and for a file that was already there before the message
+  but is not in its checkpoint. Files that git is told not to watch
+  (`assume-unchanged`, `skip-worktree`) are left too. The list and the
+  result say which files were left.
 - It never deletes something that is in no checkpoint to make room. If a
   folder now stands where a file used to be and holds such files (or a
   repository of its own, or a link to another folder), nothing is changed
@@ -2127,19 +2131,28 @@ instead: the same list, with one button.
   message, including files you had not committed. Delete the session first
   if you are about to mirror the repository somewhere others can read.
   Deleting the session removes its checkpoints.
-- **Line endings.** Where git is set to change line endings in a folder
-  (`core.autocrlf`, or a `.gitattributes` file), a checkpoint does not record
-  which kind a file had. So a file that goes back keeps the kind of line
-  endings it has now: a Windows-style file stays Windows-style. Two cases can
-  still differ from what they were: a file whose line endings themselves were
-  changed since that message, and a file that was deleted (it comes back with
-  the ones git writes). The box says so before you choose, and the version
-  that was replaced is in the trash. Undo is exact.
+- **Line endings.** In most folders a checkpoint holds each file exactly,
+  line endings included, and a rewind returns it exactly. Where git is set
+  to change line endings (`core.autocrlf`, or a `text` rule in
+  `.gitattributes`), a checkpoint does not record which kind a file had. For
+  those files a rewind keeps the kind the file has now: a Windows-style file
+  stays Windows-style. Two cases can still differ from what they were: a
+  file whose line endings themselves were changed since that message, and a
+  file that was deleted (it comes back with the ones git writes). A rule
+  that names the line endings (`eol=`) or says a file is not text is always
+  followed as written. The box says when any of this applies, and the
+  version that was replaced is in the trash. Undo is exact.
+- **A busy PC.** A message waits at most three seconds for its checkpoint.
+  If the folder cannot be read in that time, that one message has no
+  checkpoint and offers the conversation-only rewind.
+- Your own git hooks do not run during a rewind.
 - Messages sent before this version have no kept checkpoint. They keep the
   two-press **Rewind to here**, which changes the conversation only.
-- The Changes tab's **Revert this file** is unchanged, with one fix: when the
-  record for a message is gone, it now says so and leaves the file alone.
-  Before, it could move one of your own new files to the trash.
+- The Changes tab's **Revert this file** is unchanged, with two fixes. When
+  the record for a message is gone, it now says so and leaves the file
+  alone; before, it could move one of your own new files to the trash. And
+  when a file of yours now stands where the reverted file's folder used to
+  be, it refuses and says so; before, git deleted that file to make room.
 - The conversation itself notes each rewind that changed files, so you can
   see later what was done.
 

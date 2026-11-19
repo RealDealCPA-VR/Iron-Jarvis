@@ -132,8 +132,16 @@ def register(app: FastAPI, d: Any) -> None:
                 turn=body.turn, running=_turn_running(live), old_rel=body.old_rel,
             )
 
+        def locked_act() -> dict[str, Any]:
+            # v1.543.0: the folder's own lock too (a rewind's whole-folder
+            # restore takes it; ``checkpoints.lock_key``).
+            from ...hosted import checkpoints as CK
+
+            key = CK.lock_key(str(getattr(row, "folder", "") or ""))
+            return _locked(f"app:{sid}", (lambda: _locked(key, act)) if key else act)
+
         try:
-            out = await asyncio.to_thread(_locked, f"app:{sid}", act)
+            out = await asyncio.to_thread(locked_act)
         except PN.RevertRefused as r:
             raise HTTPException(status_code=r.status, detail=r.sentence) from None
         except B.GitRefused as g:

@@ -483,6 +483,12 @@ REVERT_MOVED = (
     "branch, its commits and every other file are as they were."
 )
 REVERT_FAILED = "git could not put {name} back: {why}."
+#: v1.543.0 (review): git DELETES a file that stands where the reverted
+#: file's folder must go (and a folder where the file must go).
+REVERT_IN_THE_WAY = (
+    "{name} was left as it is: something that is in no checkpoint stands where it must go, "
+    "and putting it back would delete that. Move it away first."
+)
 #: v1.543.0: a checkpoint recorded before they were kept can be gone (git's
 #: own clean-up). Then nothing is put back and nothing is moved.
 REVERT_NO_CHECKPOINT = (
@@ -1250,7 +1256,19 @@ def revert_file(home: Any, sid: str, row: Any, events: list[dict[str, Any]], too
     old = _clean_rel(folder, old_rel) if old_rel else ""
     moved = ""
     kept = ""
+    from . import checkpoints as CK
+
+    def clear(rel_: str) -> bool:
+        """Nothing that git would delete stands where *rel_* must go."""
+        try:
+            CK._still_clear(folder, [rel_], set())
+            return True
+        except CK._Stopped:
+            return False
+
     if _in_tree(folder, base, clean):
+        if not clear(clean):
+            raise RevertRefused(REVERT_IN_THE_WAY.format(name=name))
         if os.path.lexists(path):
             # v1.510.0 (H5): git rewrites the file in place, so the version it
             # replaces (the tool's work, the user's own edits) is COPIED to
@@ -1265,7 +1283,8 @@ def revert_file(home: Any, sid: str, row: Any, events: list[dict[str, Any]], too
             raise RevertRefused(REVERT_ADDED.format(name=name))
         if os.path.lexists(path):
             moved = _to_trash(home, sid, folder, clean)
-    if old and old != clean and not os.path.lexists(os.path.join(folder, *old.split("/"))) and _in_tree(folder, base, old):
+    if (old and old != clean and not os.path.lexists(os.path.join(folder, *old.split("/")))
+            and _in_tree(folder, base, old) and clear(old)):
         _g_write(["restore", f"--source={base}", "--worktree", "--", _literal(old)], folder)
     if moved:
         words = REVERT_MOVED.format(name=name, when=when, trash=moved)

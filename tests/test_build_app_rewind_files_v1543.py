@@ -57,6 +57,21 @@ def work(tmp_path) -> Path:
     return folder
 
 
+@pytest.fixture(autouse=True)
+def _a_checkpoint_for_every_message(monkeypatch):
+    """A message waits at most 3 s for its checkpoint; on a loaded PC it then
+    simply has none (the product's own limit, said in the Handbook). These
+    tests are about what happens WITH a checkpoint, so they wait for it: run
+    beside other git-heavy tests the 3 s were missed and a test found no
+    checkpoint to rewind to."""
+    real = PN.record_turn_start_async
+
+    async def patient(home, sid, folder, turn_id, *, bound=120.0, uid=""):
+        return await real(home, sid, folder, turn_id, bound=120.0, uid=uid)
+
+    monkeypatch.setattr(PN, "record_turn_start_async", patient)
+
+
 @pytest.fixture()
 def claude_home(tmp_path, monkeypatch) -> Path:
     home = tmp_path / "claude-home"
@@ -342,10 +357,16 @@ async def test_the_files_wait_while_anything_still_works_in_the_folder(app, work
         plan = (await c.get(f"/build/app/sessions/{sid}/rewind/preview", params={"to": ats[1]})).json()
         assert "open in a terminal" in plan["blocked"]  # the preview says why before the press
         monkeypatch.setattr(svc, "_in_a_terminal", lambda r: False)
-        # 2. another session has a reply running in this same folder
+        # 2. another session has a reply running in this same folder: refused
+        #    at the FIRST look, before any lock is waited for (the second look,
+        #    inside the lock, is pinned by its own test).
+        waited: list[str] = []
+        real_locked = BG._locked
+        monkeypatch.setattr(BG, "_locked", lambda key, fn: (waited.append(key), real_locked(key, fn))[1])
         monkeypatch.setattr(BR, "_same_folder_running", lambda s, row: True)
         r = await c.post(f"/build/app/sessions/{sid}/rewind/files", json={"to": ats[1], "expect": "any"})
         assert r.status_code == 409 and r.json()["detail"] == BR.OTHER_SESSION
+        assert waited == []
         r = await c.post(f"/build/app/sessions/{sid}/rewind/undo")
         assert r.status_code == 409 and r.json()["detail"] == BR.OTHER_SESSION
         monkeypatch.undo()
@@ -482,7 +503,11 @@ async def test_every_read_and_write_of_the_folder_holds_the_sessions_lock_and_th
             return _inner(*a, **k)
 
         monkeypatch.setattr(CK, name, watched)
-    folder_key = "code-folder:" + os.path.normcase(os.path.abspath(str(work)))
+    # One lock per REPOSITORY: a session in a folder inside it shares it.
+    folder_key = CK.lock_key(str(work))
+    assert folder_key == "code-folder:" + os.path.normcase(str(work / ".git"))
+    (work / "inner").mkdir()
+    assert CK.lock_key(str(work / "inner")) == folder_key
     both = (f"app:{sid}", folder_key)
     async with client(app) as c:
         plan = (await c.get(f"/build/app/sessions/{sid}/rewind/preview", params={"to": ats[1]})).json()
@@ -522,6 +547,9 @@ async def test_a_rewind_with_files_waits_for_another_sessions_reply_and_changes_
         r = await c.post(f"/build/app/sessions/{sid}/rewind", json={"to": at2, "files": True, "expect": plan["id"]})
         assert r.status_code == 409 and r.json()["detail"] == BR.OTHER_SESSION
         assert _files(work) == as_is
+        # Refused at the first look: not even the log's safety copy was made.
+        home = S.service_for(app.state.platform).home
+        assert not list(Path(home, "trash").glob("*/hosted-rewind/*"))
         view = (await c.get(f"/build/app/sessions/{sid}")).json()
         assert [e["text"] for e in view["events"] if e["type"] == "user"] == ["first one", "second one"]
         # The conversation alone still rewinds (it writes nothing in the folder).
@@ -616,4 +644,50 @@ async def test_the_preview_carries_the_line_ending_note_and_the_limit_in_words(a
         plan = (await c.get(f"/build/app/sessions/{sid}/rewind/preview", params={"to": ats[1]})).json()
     assert "core.autocrlf is input" in plan["endings"]
     assert plan["can"] is False and "3 files changed" in plan["too_many"]
+    await stop_all(app)
+
+
+async def test_another_sessions_message_in_the_folder_ends_this_sessions_undo(
+        app, work, claude_home, tmp_path, monkeypatch):
+    """Session one rewinds; session two, in the same folder, then sends a
+    message. Undo in session one would put that message's work back."""
+    one, ats, _ = await _plain_session(app, work, "grok")
+    _fake(monkeypatch, CLAUDE_FIX, tmp_path / "fake.log")
+    async with client(app) as c:
+        plan = (await c.get(f"/build/app/sessions/{one}/rewind/preview", params={"to": ats[1]})).json()
+        r = await c.post(f"/build/app/sessions/{one}/rewind/files", json={"to": ats[1], "expect": plan["id"]})
+        assert r.status_code == 200 and r.json()["branch"]["undo_rewind"] is True
+        (work / "inner").mkdir()
+        two = (await new_session(c, work / "inner"))["id"]  # a folder INSIDE session one's
+        await _turn(c, two, "do some work", "t-two")
+        (work / "a.py").write_bytes(b"a = session two's work\n")
+        assert (await c.get(f"/build/app/sessions/{one}")).json()["branch"]["undo_rewind"] is False
+        r = await c.post(f"/build/app/sessions/{one}/rewind/undo")
+        assert r.status_code == 409 and r.json()["detail"] == CK.UNDO_TOO_LATE
+        assert (work / "a.py").read_bytes() == b"a = session two's work\n"
+    await stop_all(app)
+
+
+async def test_a_reply_that_started_while_the_press_waited_for_the_lock_is_seen(app, work, monkeypatch):
+    """The who-may-write check runs before the wait for the folder's lock,
+    which can be long. It is looked at again once the lock is held."""
+    sid, ats, _ = await _plain_session(app, work, "grok")
+    as_is = _files(work)
+    async with client(app) as c:
+        plan = (await c.get(f"/build/app/sessions/{sid}/rewind/preview", params={"to": ats[1]})).json()
+
+        async def free(svc, row, live):  # the first look saw nothing
+            return None
+
+        monkeypatch.setattr(BR, "_files_free", free)
+        monkeypatch.setattr(BR, "_same_folder_running", lambda s, row: True)  # ...then a reply started
+        r = await c.post(f"/build/app/sessions/{sid}/rewind/files", json={"to": ats[1], "expect": plan["id"]})
+        assert r.status_code == 409 and r.json()["detail"] == BR.OTHER_SESSION
+        assert _files(work) == as_is
+        monkeypatch.setattr(BR, "_same_folder_running", lambda s, row: False)
+        r = await c.post(f"/build/app/sessions/{sid}/rewind/files", json={"to": ats[1], "expect": plan["id"]})
+        assert r.status_code == 200, r.text
+        monkeypatch.setattr(BR, "_same_folder_running", lambda s, row: True)
+        r = await c.post(f"/build/app/sessions/{sid}/rewind/undo")
+        assert r.status_code == 409 and r.json()["detail"] == BR.OTHER_SESSION
     await stop_all(app)
