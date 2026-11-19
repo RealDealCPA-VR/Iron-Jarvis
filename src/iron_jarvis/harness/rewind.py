@@ -77,6 +77,13 @@ class RewindError(Exception):
         self.status = status
 
 
+def _comments(raw: Any) -> list[dict[str, Any]]:
+    """v1.544.0: a question's comments on changed code, read back."""
+    from .code_comments import from_event
+
+    return from_event(raw)
+
+
 @dataclass
 class RewindPlan:
     to: str
@@ -106,6 +113,8 @@ class RewindPlan:
     skill: str = ""
     #: v1.377.0 review: "folder" | "yours" | "" (an older line said nothing).
     skill_source: str = ""
+    #: v1.544.0: the comments on changed code that rode the question.
+    comments: list[dict[str, Any]] = field(default_factory=list)
     #: v1.397.0 review: a kept attempt in the rewound turns stays in the
     #: session — said beside the commands note ("" when none).
     attempts_note: str = ""
@@ -118,6 +127,7 @@ class RewindPlan:
             "picked_files": list(self.picked_files),
             "skill": self.skill,
             "skill_source": self.skill_source,
+            "comments": list(self.comments),
             "turns": list(self.turns),
             "files": list(self.files),
             "problems": list(self.problems),
@@ -564,6 +574,7 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
         picked_files=_paths(question.get("filePaths")),
         skill=str(question.get("skill") or "").strip()[:200] if isinstance(question.get("skill"), str) else "",
         skill_source=(question.get("skillSource") if question.get("skillSource") in ("folder", "yours") else ""),
+        comments=_comments(question.get("comments")),
     )
     disk = _Disk()
     seen_files: dict[str, dict[str, Any]] = {}

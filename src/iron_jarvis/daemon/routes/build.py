@@ -380,6 +380,9 @@ class BuildTurnBody(BaseModel):
     #: honoured only when it names the turn's chosen provider, never
     #: remembered). "" = nothing allowed, exactly as before.
     allow_cloud_once: str = Field(default="", max_length=80)
+    #: v1.544.0: comments on changed code that ride this message
+    #: (``harness/code_comments``): ``[{path, side, start, end, quote, words}]``.
+    comments: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
 
 
 #: v1.422.0 (B1): the 409 when "Continue from where it stopped" finds nothing
@@ -3455,7 +3458,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            low_trust: str = "",
                            on_night_note: Any = None,
                            device_id: str = "",
-                           allow_cloud_once: str = "") -> Any:
+                           allow_cloud_once: str = "",
+                           comments: "list[dict[str, Any]] | None" = None) -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -3651,6 +3655,19 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 picked = await asyncio.to_thread(S.folder_files, folder, list(files))
             except S.FolderFileRefused as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
+        # v1.544.0: comments on changed code — each path inside this session's
+        # folder, or nothing is started (``harness/code_comments``). A command
+        # takes none, as in Build › Code.
+        noted: list[dict[str, Any]] = []
+        if comments:
+            from ...harness import code_comments as CC
+
+            try:
+                noted = CC.clean(str(folder or ""), list(comments))
+            except CC.CommentRefused as exc:
+                raise HTTPException(status_code=exc.status, detail=exc.sentence) from None
+            if noted and (command or "").strip():
+                raise HTTPException(status_code=400, detail=CC.NOT_WITH_COMMAND)
         # The lane reads this many attachments per turn and drops the rest
         # without a word (``chat_turn._MAX_ATTACHMENTS``). A file sent must be
         # READ, or the saved question would claim it was sent: a message that
@@ -3883,6 +3900,16 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # v1.398.0: words for the MODEL only (a night task's "use your
             # team"); the question line keeps what was asked.
             model_text = (model_text + "\n\n" + model_note.strip()).strip()
+        if noted and resume is None:
+            # v1.544.0: what the MODEL reads for the comments — the user's
+            # words outside the fence, the path and the quoted code masked,
+            # scanned and inside it. This message only: the question line
+            # keeps the words as typed and the comments beside them.
+            from ...harness import code_comments as CC
+
+            model_text = await asyncio.to_thread(
+                CC.with_block, model_text, noted,
+                event_bus=getattr(platform, "event_bus", None), session_id=thread_id)
         # Third plan RB11: an "Allow for this session" answer an earlier reply
         # could not save is written now, and this reply runs with it.
         kept_grants = await _restore_unsaved_grants(platform.engine, thread_id)
@@ -4138,6 +4165,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 question["attachmentPaths"] = list(attachments)
             if picked:
                 question["filePaths"] = list(picked)
+            if noted:
+                from ...harness import code_comments as CC
+
+                question["comments"] = CC.for_event(noted)  # v1.544.0 (masked)
             if resume is not None:
                 # v1.422.0 (B1): a continue after an error says so in its own
                 # key (the screen never reads it as a restart's carry-on).
@@ -5192,6 +5223,8 @@ def register(app: FastAPI, d: Any) -> None:
         folder = S.checkout_of(row)
         names = S.folder_names(engine_of(), [folder]) if folder else {}
         view = S.session_view(row, states=TURNS.thread_states(), names=names, full=True)
+        # v1.544.0: this daemon takes comments on changed code with a message.
+        view["takes_comments"] = True
         try:
             queued = json.loads(getattr(row, "queued_json", "") or "[]")
         except (TypeError, ValueError):
@@ -6110,7 +6143,7 @@ def register(app: FastAPI, d: Any) -> None:
         picks = bool((body.skill or "").strip() or (body.folder_skill or "").strip() or (body.command or "").strip()
                      # v1.397.0: "Try on…" with an empty box tries the last question.
                      or body.try_on)
-        if not text and not has_files and not picks:
+        if not text and not has_files and not picks and not body.comments:
             # v1.371.0: a picture alone is a message (the chat page's rule,
             # v1.275.0) — v1.373.0: so is a file picked with "@"; v1.379.0:
             # so is a skill or a command typed with "/" (Claude Code runs
@@ -6189,7 +6222,8 @@ def register(app: FastAPI, d: Any) -> None:
                                         folder_skill=body.folder_skill,
                                         command=body.command,
                                         device_id=body.device_id or "",
-                                        allow_cloud_once=body.allow_cloud_once or "")
+                                        allow_cloud_once=body.allow_cloud_once or "",
+                                        comments=list(body.comments or []))
         except SessionBusy:
             return JSONResponse(
                 status_code=409,

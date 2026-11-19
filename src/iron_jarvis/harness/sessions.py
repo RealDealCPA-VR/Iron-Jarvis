@@ -132,6 +132,9 @@ LINE_KEYS: tuple[str, ...] = (
     # from the session's folder (:func:`folder_files`) and the skill picked
     # with "/" — what rode the turn beside the words.
     "filePaths", "skill",
+    # v1.544.0: on a question, the comments on changed code that rode it
+    # (``code_comments.for_event``: masked, bounded).
+    "comments",
     # v1.377.0 review: where that skill came from ("folder" | "yours"), so a
     # rewind or a branch can put it back in the box.
     "skillSource",
