@@ -2042,6 +2042,32 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## One place for where your work goes, and plainer words (v1.541.0)
+
+The last of nine releases from the fourth review.
+
+- **"Sending outside this PC" in Settings › Permissions & ledger.** One row
+  now lists every place Iron Jarvis can send something to that is switched
+  on: webhooks, alert destinations, model servers on other computers, web
+  services, extensions, memory bases outside this PC (such as Notion), the
+  speech server, a backup folder on a network share, and the apps using
+  Iron Jarvis. Each shows its host (never a key or a full address), how it
+  is asked, and a Change link to its page. The AI services that answer your
+  chats stay under Models.
+- **A screenshot in a Local only chat says the picture went nowhere.** When
+  the model that would look at pictures is outside this PC, the answer says
+  the picture was not sent anywhere and where to pick a model on this PC,
+  without naming a provider or offering a retry.
+- **A failed step in the browser sidebar is one plain sentence**, without an
+  error code or instructions meant for the model.
+- **A hidden line break no longer slips a command past the `;` check.** On
+  Windows, a carriage return in the middle of a command is ignored by the
+  command prompt, so `del` could receive the words after a `;`. Iron Jarvis
+  now reads the line the way the command prompt does and refuses it.
+- **A finished reply whose usage could not be saved is no longer "cut off".**
+  It reads "This reply ended, but its usage could not be saved then; the
+  model calls it made are counted here".
+
 ## Linux, the right file always (v1.540.0)
 
 The eighth of nine releases from the fourth review. It changes only the Linux

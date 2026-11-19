@@ -1490,7 +1490,13 @@ How to use this file: read the contents list, then read only the entries your ch
   an `OpenModelCall` until the reply's end row deletes them IN THE SAME
   transaction (`chat_turn._write_chat_usage`, under the ledger's lock), and
   the start-up step `settle_open_model_calls` folds what an earlier daemon
-  left into one FAILED row per reply (`CUT_OFF_WORDS`). Writes run on one
+  left into one FAILED row per reply (`CUT_OFF_WORDS`). A reply whose end
+  row FAILED is not "cut off" (v1.541.0, fourth review PG4):
+  `_write_chat_usage` calls `TurnLedger.mark_ended` inside the same
+  `closing()` hold (it never takes the ledger's non-reentrant lock and never
+  sets `closed`), `OpenModelCall.ended` keeps the reply's state, and the
+  start settles it with that state and `ENDED_UNSAVED_WORDS`; pin
+  `tests/test_fourth_review_usage_ended_v1541.py`. Writes run on one
   worker thread, capped at 2,000 waiting. Left open: OCR of a chat
   attachment, the `/documents` OCR and some background engines (goals,
   coach, recap, team notes, the judge outside chat) are still on no row; an

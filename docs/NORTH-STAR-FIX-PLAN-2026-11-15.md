@@ -2050,6 +2050,12 @@ Where it differs from the plan:
   call sites, none other missing it). Moving the check into the gate would
   need each of those callers to say whether it had asked; a mistake there
   refuses work that is allowed today. Left for a later decision.
+  The exception decision G2 names was not built either: no approval lifts
+  a tool's own "asks every time" check in a workflow's Tool call step,
+  "Always for this workflow" included, because that check is answered one
+  call at a time in every lane and a Tool call step cannot wait for an
+  answer; the step is refused in words that point to an Agent step or to
+  chat. (Added by the fourth review, PG5.)
 - **PG8, the folder of a terminal an agent opens.** The implementer confined
   it to the session's folder. The lead widened that to the rule for what
   Iron Jarvis may read (never a protected folder, another computer, or
@@ -4376,3 +4382,33 @@ Left open:
   not checked on a real desktop session; older systemd was not tried.
 - Not tried on the installed app: the Linux Updates card line; the four
   recovery dialogs; start at sign-in from an ordinary and an odd folder.
+
+### Group 32 as built (v1.541.0)
+
+Fixed: BS3, BS4, PG2, PG4, PG5 (the note above), C-PG-1. C-BS-3 was not built
+(owner decision D11: not in this plan). Four implementers (Opus 5.5); the
+lead read every diff and wrote the PG5 note.
+
+Where it differs from the plan:
+
+- PG2: the probe on real cmd.exe showed cmd removes a lone CR and runs the
+  rest as one command (`echo one<CR> two> out.txt` wrote `one two`; `del /q
+  a.tmp<CR>; victim.txt` deleted victim.txt), so both halves shipped,
+  including the `is_interactive_cmd` change.
+- PG4: `mark_ended` does not set `closed`, so a call still queued for the
+  writer is counted and carries the mark.
+- C-PG-1 lists a little more than the brief (ssh, http_rag and cloud-drive
+  memory bases, a backup folder on a network share, extensions that run as a
+  program on this PC); cloud AI services are pointed to under Models. The
+  pin `test_access_summary_v13520.py:101` did not need to change.
+
+Left open:
+
+- BS3's Settings place was read from source, not the running app.
+- `console_lines` treating a CR as Enter in a terminal pane was not probed
+  with a real ConPTY.
+- The destination words assume configured alerts go out without asking;
+  read from the code, not a run on the live app.
+- Not tried on the installed app: the new Settings row with real places; a
+  Local only screenshot question; a failed sidebar step; the usage column
+  on a copy of a real database.
