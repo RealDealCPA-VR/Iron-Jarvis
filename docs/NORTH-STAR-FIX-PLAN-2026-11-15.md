@@ -4342,3 +4342,37 @@ Left open:
 - Not tried on the installed app: Codex with tools (signed in, `/mcp` lists
   `iron-jarvis-code`, nothing new in the folder); Claude with tools; Pi;
   "Open with your usual shell"; typing during a restart at a new size.
+
+### Group 31 as built (v1.540.0)
+
+Fixed: LX2, LX3, LX4, LX5, C-LX-2. Three implementers (Opus 5.5); the lead
+read every diff, ran the Linux release dry run
+(`-f version=1.526.0 -f dry_run=true`: "read 383 releases; updates-linux
+names 1.538.0", "the Linux release of v1.526.0 (publish=false; Linux files:
+none; rehearse from: 1.525.0)", and "What publish would do": upload the
+AppImage, the .deb, then latest-linux.yml), and proved LX4 on a throwaway
+trial branch against the real desktop tools.
+
+Where it differs from the plan:
+
+- LX4 does NOT escape odd paths in two layers as the plan said. The trial
+  showed that no spelling of a path with `"`, `'`, `\`, `$`, `` ` `` or `%`
+  starts under both GLib and systemd (systemd 259's manager refuses quotes
+  and backslashes in a program path; GLib and the generator look for the
+  program before they undo `%%`). Such paths are refused in words instead,
+  and the entry is only double-quoted. The final trial: 38 passed (including
+  a real start under `systemctl --user`); red with the refusal removed (4
+  failed) and red with the two-layer version put back (3 failed).
+- The "go back a version" and "repair" words name the file and open the
+  releases list; they do not use the short website links (C-LX-1).
+
+Left open:
+
+- LX1 and C-LX-1 (the website's download links and the two short links)
+  wait for the owner's go-ahead to push to the website's repository.
+- The `.deb`'s own self-update through pkexec has never been rehearsed; the
+  card's `.deb` line promises only that installing may ask for a password.
+- GNOME starting autostart apps through systemd's generator is inferred,
+  not checked on a real desktop session; older systemd was not tried.
+- Not tried on the installed app: the Linux Updates card line; the four
+  recovery dialogs; start at sign-in from an ordinary and an odd folder.

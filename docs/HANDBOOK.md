@@ -2042,6 +2042,31 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Linux, the right file always (v1.540.0)
+
+The eighth of nine releases from the fourth review. It changes only the Linux
+app; Windows is as it was.
+
+- **Start at sign-in works or says why.** On Linux, Iron Jarvis writes its
+  start-at-sign-in entry only when the desktop can really start the app from
+  where it is. If the app sits in a folder whose name has a quote, an
+  apostrophe, a backslash, `$`, `` ` ``, `%` or an invisible character, the
+  switch stays off and says why: move the app to a folder with an ordinary
+  name. An old entry that could never start is removed at the next start, so
+  the switch never reads On over nothing.
+- **The help names the right file.** When Linux Iron Jarvis needs repairing,
+  going back a version, or installing an update by hand, it now names the
+  `.deb` or AppImage (whichever you use) and opens the list of releases,
+  instead of the Windows installer.
+- **The Updates card says how this copy updates.** An AppImage: "This copy
+  updates itself: a new version installs when you close the app or press
+  Restart & install." A `.deb`: "Updates arrive by themselves; installing one
+  may ask for your password." A plain folder: it cannot update itself, with a
+  link to the releases.
+- **Every Linux release gets its files.** The release reads every past
+  release, finishes a half-published one file by file with the update file
+  last, and never replaces a file already published with a different one.
+
 ## Terminals stay on your account, and your folder stays yours (v1.539.0)
 
 The seventh of nine releases from the fourth review.
