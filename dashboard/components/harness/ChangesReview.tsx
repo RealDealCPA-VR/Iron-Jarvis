@@ -52,6 +52,14 @@
  * message box shows it as a chip and sends it with the next message. The rows
  * get one plain value (`comments`) and one callback made once: a streamed
  * word still redraws no file. Enter and Escape in the dialog never leave it.
+ *
+ * A LINE, OR A RANGE (v1.544.0, phase 3b): with `comments` on, each line's
+ * number is a button ("Comment on line 14"): a press opens the same one
+ * dialog for that line; Shift+press on another number of the file makes it
+ * the lines between the two, in either order, on ONE side (a removed line is
+ * commented on by its old number, and never mixed into a range of new lines).
+ * The line pressed first is state of the ONE file's rows (`FileRows`), so a
+ * press redraws that file's rows and nothing else.
  */
 
 import {
@@ -77,6 +85,7 @@ import {
   parseUnified,
   statusWord,
   type DiffRow,
+  type LinePress,
 } from "@/components/chat/DiffView";
 import type { ChangeUndoState, FileChange } from "@/components/chat/ChangedFiles";
 import { OpenInEditorButton } from "@/components/harness/OpenInEditor";
@@ -95,6 +104,7 @@ import {
   COMMENTS_FULL,
   COMMENT_DIALOG_TITLE,
   COMMENT_FOOT,
+  COMMENT_LINE_TITLE,
   COMMENT_NEEDS_WORDS,
   COMMENT_SAVE,
   COMMENT_TITLE,
@@ -102,11 +112,17 @@ import {
   MAX_COMMENTS,
   WORDS_CHARS,
   addComment,
+  commentLineLabel,
   commentLines,
   getComments,
   hunkComment,
+  lineOfRow,
+  linesComment,
   noteFileMarks,
+  pressLines,
   type CommentBody,
+  type CommentSide,
+  type LineRef,
 } from "@/lib/codeComments";
 
 const ACTION =
@@ -191,6 +207,8 @@ function useNearScreen(ref: RefObject<HTMLElement | null>, enabled: boolean): bo
 
 /** A hunk's Comment press: the file's path and the hunk's header. */
 type OnComment = (path: string, header: string) => void;
+/** A press on a line's number: the file's path, the side and the lines. */
+type OnLines = (path: string, side: CommentSide, start: number, end: number) => void;
 
 /** One file's rows, capped, with "Open at line N" (and, with `comments`,
  *  "Comment") on each hunk. */
@@ -200,14 +218,43 @@ function FileRows({
   index,
   comments,
   onComment,
+  onLines,
 }: {
   change: FileChange;
   wide: boolean;
   index: number;
   comments: boolean;
   onComment: OnComment;
+  onLines: OnLines;
 }) {
   const [all, setAll] = useState(false);
+  // v1.544.0 (3b): the line pressed last — what a Shift+press extends from.
+  // Kept HERE (this file's rows), so a press redraws no other file.
+  const [anchor, setAnchor] = useState<LineRef | null>(null);
+  // The file changed again: its numbers moved, so a range starts afresh.
+  useEffect(() => setAnchor(null), [change.diff]);
+  const path = change.path;
+  const linePress = useMemo<LinePress | undefined>(
+    () =>
+      comments
+        ? {
+            title: COMMENT_LINE_TITLE,
+            label: (row) => commentLineLabel(lineOfRow(row)),
+            pressed: (row) => {
+              const at = lineOfRow(row);
+              return !!anchor && !!at && at.side === anchor.side && at.line === anchor.line;
+            },
+            onPress: (row, shift) => {
+              const at = lineOfRow(row);
+              if (!at) return;
+              const picked = pressLines(anchor, at, shift);
+              setAnchor(picked.anchor);
+              onLines(path, picked.side, picked.start, picked.end);
+            },
+          }
+        : undefined,
+    [comments, anchor, path, onLines],
+  );
   const rows = useMemo(() => parseUnified(change.diff), [change.diff]);
   const changeLines = useMemo(() => hunkChangeLines(rows), [rows]);
   const limit = all ? MAX_DIFF_ROWS : REVIEW_ROWS_PER_FILE;
@@ -265,8 +312,8 @@ function FileRows({
   }
   return (
     <div data-testid={`review-rows-${index}`} className="min-w-0 font-mono text-[12px] leading-relaxed">
-      <UnifiedRows rows={shown} always={!wide} hunkAction={hunkAction} />
-      {wide ? <SplitRows rows={split} hunkAction={hunkAction} /> : null}
+      <UnifiedRows rows={shown} always={!wide} hunkAction={hunkAction} linePress={linePress} />
+      {wide ? <SplitRows rows={split} hunkAction={hunkAction} linePress={linePress} /> : null}
       {hidden > 0 ? (
         all ? (
           <p className="border-t border-white/[0.06] px-3 py-2 font-sans text-[12px] text-zinc-500">
@@ -299,6 +346,7 @@ function LazyRows({
   lazy,
   comments,
   onComment,
+  onLines,
 }: {
   change: FileChange;
   wide: boolean;
@@ -306,10 +354,22 @@ function LazyRows({
   lazy: boolean;
   comments: boolean;
   onComment: OnComment;
+  onLines: OnLines;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useNearScreen(ref, lazy);
-  if (near) return <FileRows change={change} wide={wide} index={index} comments={comments} onComment={onComment} />;
+  if (near) {
+    return (
+      <FileRows
+        change={change}
+        wide={wide}
+        index={index}
+        comments={comments}
+        onComment={onComment}
+        onLines={onLines}
+      />
+    );
+  }
   const lines = Math.min((change.diff ?? "").split("\n").length, REVIEW_ROWS_PER_FILE);
   return (
     <div
@@ -342,6 +402,8 @@ interface FileProps {
    *  callback made once). */
   comments: boolean;
   onComment: OnComment;
+  /** v1.544.0 (3b): a line's number was pressed (made once, like the rest). */
+  onLines: OnLines;
   onFold: (mark: string, folded: boolean) => void;
   onReviewed: (mark: string, on: boolean) => void;
   onUndo: (actionId: string, path: string) => void;
@@ -363,6 +425,7 @@ const ReviewFile = memo(function ReviewFile({
   undoLocked,
   comments,
   onComment,
+  onLines,
   onFold,
   onReviewed,
   onUndo,
@@ -458,6 +521,7 @@ const ReviewFile = memo(function ReviewFile({
             lazy={lazy}
             comments={comments}
             onComment={onComment}
+            onLines={onLines}
           />
         </div>
       )}
@@ -701,6 +765,14 @@ export function ChangesReview({
     if (!body) return;
     setDraft({ ...body, path, label: hit.c.rel || hit.c.name || hit.c.path, mark: hit.mark });
   }, []);
+  // v1.544.0 (3b): the same dialog for one line, or a range of lines.
+  const openLines = useCallback((path: string, side: CommentSide, start: number, end: number) => {
+    const hit = keyedRef.current.find((k) => k.c.path === path);
+    if (!hit) return;
+    const body = linesComment(parseUnified(hit.c.diff ?? ""), side, start, end);
+    if (!body) return;
+    setDraft({ ...body, path, label: hit.c.rel || hit.c.name || hit.c.path, mark: hit.mark });
+  }, []);
   const saveComment = (words: string): string | null => {
     if (!draft) return null;
     const res = addComment(sessionId, {
@@ -774,6 +846,7 @@ export function ChangesReview({
             undoLocked={undoing !== null}
             comments={comments}
             onComment={openComment}
+            onLines={openLines}
             onFold={toggleFold}
             onReviewed={setReviewed}
             onUndo={runUndo}
@@ -856,7 +929,7 @@ export function ChangesReview({
       {/* After the wide view, so it opens over it. */}
       {comments && draft ? (
         <CommentDialog
-          key={`${draft.path}:${draft.start}:${draft.end}`}
+          key={`${draft.path}:${draft.side}:${draft.start}:${draft.end}`}
           draft={draft}
           full={getComments(sessionId).length >= MAX_COMMENTS}
           onSave={saveComment}

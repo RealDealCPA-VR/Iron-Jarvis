@@ -57,6 +57,8 @@ export const COMMENT_CHANGED_SINCE_TITLE = "This file changed after you wrote th
 export const COMMENT_NEEDS_WORDS = "Say what you want changed first.";
 export const COMMENTS_FULL = `A message carries at most ${MAX_COMMENTS} comments. Send some first, then add the rest.`;
 export const COMMENT_CHIPS_LABEL = "Comments that go with your next message";
+export const COMMENT_LINE_TITLE =
+  "Comment on this line. Then hold Shift and press another line to comment on the lines between.";
 
 export type CommentSide = "new" | "old";
 
@@ -144,6 +146,75 @@ export function hunkComment(
   if (!own.length) return null;
   const side: CommentSide = deleted ? "old" : "new";
   return { side, ...rangeOfHunk(own, side), quote: quoteOfHunk(own) };
+}
+
+// ── one line, or a range of lines ───────────────────────────────────────────
+
+/** One line of a file, as a comment names it. */
+export interface LineRef {
+  side: CommentSide;
+  line: number;
+}
+
+/** Which line a drawn row IS for a comment: its NEW number when it has one
+ *  (an added or unchanged line), else its old one (a removed line). Null for
+ *  a hunk's header. */
+export function lineOfRow(row: DiffRow): LineRef | null {
+  if (row.kind === "hunk") return null;
+  if (typeof row.newNo === "number") return { side: "new", line: row.newNo };
+  if (typeof row.oldNo === "number") return { side: "old", line: row.oldNo };
+  return null;
+}
+
+/** The accessible name of a line number's press. */
+export function commentLineLabel(at: LineRef | null): string {
+  if (!at) return COMMENT;
+  return at.side === "old" ? `${COMMENT} on removed line ${at.line}` : `${COMMENT} on line ${at.line}`;
+}
+
+/** A press on a line's number. A plain press is that ONE line. Shift+press is
+ *  the range between the line pressed before (`anchor`) and this one, in
+ *  either order, when both are on one side; across sides (or with no line
+ *  pressed before) it starts again at this line: a range never mixes old and
+ *  new lines. Answers the lines, and the line the next Shift+press extends
+ *  from. */
+export function pressLines(
+  anchor: LineRef | null,
+  pressed: LineRef,
+  shift: boolean,
+): { side: CommentSide; start: number; end: number; anchor: LineRef } {
+  if (shift && anchor && anchor.side === pressed.side) {
+    return {
+      side: pressed.side,
+      start: Math.min(anchor.line, pressed.line),
+      end: Math.max(anchor.line, pressed.line),
+      anchor,
+    };
+  }
+  return { side: pressed.side, start: pressed.line, end: pressed.line, anchor: pressed };
+}
+
+/** What a Comment on a line or a range of lines holds before the user's
+ *  words: exactly the rows that ARE those lines on `side`, with their marks,
+ *  cut at QUOTE_CHARS. A new-side range holds its added and unchanged lines
+ *  (never the removed ones drawn between them); an old-side range holds its
+ *  removed lines and the unchanged ones between them. `a` and `b` in either
+ *  order. Null when the file draws no such line. */
+export function linesComment(
+  rows: readonly DiffRow[],
+  side: CommentSide,
+  a: number,
+  b: number,
+): Pick<CommentBody, "side" | "start" | "end" | "quote"> | null {
+  const start = Math.min(a, b);
+  const end = Math.max(a, b);
+  const own = rows.filter((r) => {
+    if (r.kind === "hunk") return false;
+    const n = side === "old" ? r.oldNo : r.newNo;
+    return typeof n === "number" && n >= start && n <= end;
+  });
+  if (!own.length) return null;
+  return { side, start, end, quote: quoteOfHunk(own) };
 }
 
 // ── words ───────────────────────────────────────────────────────────────────

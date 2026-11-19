@@ -55,6 +55,21 @@ export function hunkStart(text: string): { oldStart: number; newStart: number } 
  *  pane's "Open at line N"); absent = the plain header, as before. */
 export type HunkAction = (hunkText: string) => ReactNode;
 
+/** v1.544.0: a press on a line's NUMBER (the review pane's "Comment on line
+ *  14"; Shift+press extends to a range). Absent = the plain number, exactly
+ *  as before. A row's pressable number is its NEW one when it has one (an
+ *  added or unchanged line), else its old one (a removed line): one press a
+ *  row, in either layout. */
+export interface LinePress {
+  /** The number was pressed (`shift`: with Shift held). */
+  onPress: (row: DiffRow, shift: boolean) => void;
+  /** The press's accessible name ("Comment on line 14"). */
+  label: (row: DiffRow) => string;
+  title?: string;
+  /** This is the line the next Shift+press extends from (drawn pressed). */
+  pressed?: (row: DiffRow) => boolean;
+}
+
 /** Read a unified diff (as `POST /chat/changes` writes it) into rows. The
  *  `---`/`+++` header pair is skipped; `\ No newline at end of file` is not a
  *  line of either file and is skipped too. */
@@ -145,7 +160,47 @@ function Marker({ kind }: { kind: DiffRow["kind"] }) {
   return <span> </span>;
 }
 
-function Num({ n }: { n?: number }) {
+/** One number's press, bound to its row (see `LinePress`). */
+interface NumPress {
+  label: string;
+  title?: string;
+  pressed: boolean;
+  onPress: (shift: boolean) => void;
+}
+
+/** The press for `row`'s number in the `col` gutter: only for the row's own
+ *  number (new when it has one, else old), and only when the caller asked. */
+function numPress(press: LinePress | undefined, row: DiffRow, col: "old" | "new"): NumPress | undefined {
+  if (!press || row.kind === "hunk") return undefined;
+  const own = typeof row.newNo === "number" ? "new" : "old";
+  if (own !== col) return undefined;
+  return {
+    label: press.label(row),
+    title: press.title,
+    pressed: press.pressed?.(row) ?? false,
+    onPress: (shift) => press.onPress(row, shift),
+  };
+}
+
+function Num({ n, press }: { n?: number; press?: NumPress }) {
+  if (press && n !== undefined) {
+    // v1.544.0: a real button (Tab reaches it, Enter and Space press it).
+    return (
+      <button
+        type="button"
+        data-line-press=""
+        aria-label={press.label}
+        aria-pressed={press.pressed}
+        title={press.title}
+        onClick={(e) => press.onPress(e.shiftKey)}
+        className={`w-10 shrink-0 cursor-pointer select-none rounded-sm pr-2 text-right tabular-nums transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 motion-reduce:transition-none ${
+          press.pressed ? "bg-accent/[0.08] text-accent-soft" : "text-zinc-600"
+        }`}
+      >
+        {n}
+      </button>
+    );
+  }
   return (
     <span className="w-10 shrink-0 select-none pr-2 text-right tabular-nums text-zinc-600">
       {n ?? ""}
@@ -206,10 +261,13 @@ export function UnifiedRows({
   rows,
   always = false,
   hunkAction,
+  linePress,
 }: {
   rows: DiffRow[];
   always?: boolean;
   hunkAction?: HunkAction;
+  /** v1.544.0: a press on a line's number; absent = plain numbers. */
+  linePress?: LinePress;
 }) {
   return (
     <div data-testid="diff-unified" className={always ? "" : "md:hidden"}>
@@ -218,8 +276,8 @@ export function UnifiedRows({
           <HunkRow key={i} text={r.text} action={hunkAction} />
         ) : (
           <div key={i} data-kind={r.kind} className={`flex ${lineTone(r.kind)}`}>
-            <Num n={r.oldNo} />
-            <Num n={r.newNo} />
+            <Num n={r.oldNo} press={numPress(linePress, r, "old")} />
+            <Num n={r.newNo} press={numPress(linePress, r, "new")} />
             <span className="w-4 shrink-0 select-none">
               <Marker kind={r.kind} />
             </span>
@@ -233,12 +291,12 @@ export function UnifiedRows({
   );
 }
 
-function SplitCell({ row, side }: { row?: DiffRow; side: "left" | "right" }) {
+function SplitCell({ row, side, linePress }: { row?: DiffRow; side: "left" | "right"; linePress?: LinePress }) {
   if (!row) return <div className="min-w-0 bg-white/[0.02]" data-side={side} />;
   const n = side === "left" ? row.oldNo : row.newNo;
   return (
     <div data-side={side} data-kind={row.kind} className={`flex min-w-0 ${lineTone(row.kind)}`}>
-      <Num n={n} />
+      <Num n={n} press={numPress(linePress, row, side === "left" ? "old" : "new")} />
       <span className="w-4 shrink-0 select-none">
         <Marker kind={row.kind} />
       </span>
@@ -250,8 +308,16 @@ function SplitCell({ row, side }: { row?: DiffRow; side: "left" | "right" }) {
 }
 
 /** Side by side (before | after). Shown from `md` (v1.405.0: `hunkAction`
- *  as in `UnifiedRows`). */
-export function SplitRows({ rows, hunkAction }: { rows: SplitRow[]; hunkAction?: HunkAction }) {
+ *  as in `UnifiedRows`; v1.544.0: `linePress` too). */
+export function SplitRows({
+  rows,
+  hunkAction,
+  linePress,
+}: {
+  rows: SplitRow[];
+  hunkAction?: HunkAction;
+  linePress?: LinePress;
+}) {
   return (
     <div data-testid="diff-split" className="hidden md:block">
       {rows.map((r, i) =>
@@ -263,8 +329,8 @@ export function SplitRows({ rows, hunkAction }: { rows: SplitRow[]; hunkAction?:
             data-testid="diff-split-row"
             className="grid grid-cols-2 divide-x divide-white/[0.06]"
           >
-            <SplitCell row={r.left} side="left" />
-            <SplitCell row={r.right} side="right" />
+            <SplitCell row={r.left} side="left" linePress={linePress} />
+            <SplitCell row={r.right} side="right" linePress={linePress} />
           </div>
         ),
       )}

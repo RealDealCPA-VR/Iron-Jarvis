@@ -52,6 +52,9 @@ const H = vi.hoisted(() => {
     release: null as (() => void) | null,
     /** How many times a file's rows / a file's own row drew. */
     draws: { rows: 0, files: 0 },
+    /** The same, per press: `review-open-N` is drawn on every draw of file
+     *  N's own row, `review-hunk-open-N` on every draw of its LINES. */
+    byId: {} as Record<string, number>,
   };
 });
 
@@ -148,7 +151,9 @@ vi.mock("@/components/harness/OpenInEditor", async (orig) => {
   return {
     ...real,
     OpenInEditorButton: (p: React.ComponentProps<typeof real.OpenInEditorButton>) => {
-      if (String(p.testId ?? "").startsWith("review-open-")) H.draws.files += 1;
+      const id = String(p.testId ?? "");
+      if (id.startsWith("review-open-")) H.draws.files += 1;
+      if (id) H.byId[id] = (H.byId[id] ?? 0) + 1;
       return R.createElement(real.OpenInEditorButton, p);
     },
   };
@@ -161,7 +166,7 @@ import { ChangesReview } from "@/components/harness/ChangesReview";
 import { CommentChips, SentComments } from "@/components/harness/CommentChips";
 import { IjHarnessView } from "@/components/harness/IjHarnessView";
 import type { FileChange } from "@/components/chat/ChangedFiles";
-import { parseUnified } from "@/components/chat/DiffView";
+import { DiffBody, parseUnified } from "@/components/chat/DiffView";
 import { markOf } from "@/lib/changesReview";
 import { decodeCodeEvent, decodeCodeSessionView, foldConversation, type CodeEvent } from "@/lib/buildApp";
 import { decodeQueue, queuedLine } from "@/lib/buildAppHistory";
@@ -186,17 +191,22 @@ import {
   buildCodeCommentsKey,
   clearComments,
   commentChipWords,
+  commentLineLabel,
   commentsBody,
   decodeComments,
   getComments,
   hunkComment,
+  lineOfRow,
+  linesComment,
   noteFileMarks,
+  pressLines,
   quoteOfHunk,
   removeComment,
   restoreComments,
   subscribeComments,
   takeComments,
   type CommentBody,
+  type LineRef,
 } from "@/lib/codeComments";
 
 /* ---- fixtures ----------------------------------------------------------- */
@@ -247,6 +257,7 @@ beforeEach(() => {
   H.hold = null;
   H.release = null;
   H.draws = { rows: 0, files: 0 };
+  H.byId = {};
   __resetLooking();
   __resetSplitMemory();
   window.localStorage.clear();
@@ -1024,7 +1035,17 @@ describe("Build › Code", () => {
 
 const terminal = { find: () => null, open: async () => null, render: () => <div />, close: () => {} };
 
-function chatView(id: string, o: { running?: boolean; takes?: boolean; messages?: Record<string, unknown>[] } = {}) {
+interface ChatOpts {
+  running?: boolean;
+  takes?: boolean;
+  messages?: Record<string, unknown>[];
+  /** More of the view's own fields (a session on its own branch: `git`). */
+  over?: Record<string, unknown>;
+  /** More reads the daemon answers (there before the view first asks). */
+  gets?: Record<string, unknown>;
+}
+
+function chatView(id: string, o: ChatOpts = {}) {
   const running = o.running === true;
   return {
     id,
@@ -1052,6 +1073,7 @@ function chatView(id: string, o: { running?: boolean; takes?: boolean; messages?
     queued: [],
     turn_id: running ? "tr1" : "",
     ...(o.takes === false ? {} : { takes_comments: true }),
+    ...(o.over ?? {}),
   };
 }
 
@@ -1091,7 +1113,7 @@ const chat = { turns: [] as { url: string; body: Record<string, unknown> }[], re
 let live: ReturnType<typeof openStream>;
 let turnStream: ReturnType<typeof openStream>;
 
-function openChat(id: string, o: { running?: boolean; takes?: boolean; messages?: Record<string, unknown>[] } = {}) {
+function openChat(id: string, o: ChatOpts = {}) {
   chat.turns = [];
   chat.refuse = "";
   live = openStream();
@@ -1103,6 +1125,7 @@ function openChat(id: string, o: { running?: boolean; takes?: boolean; messages?
     [`/build/sessions/${id}`]: chatView(id, o),
     "/build/accounts": new H.ApiError("no such route", 404),
     "/editor/options": { editors: [], preferred: "" },
+    ...(o.gets ?? {}),
   };
   H.reply["/chat/changes"] = { changes: [cart(), notes()], files: 2, added: 2, removed: 1, truncated_files: false };
   window.localStorage.setItem("ij.build.pane", "changes");
@@ -1260,5 +1283,328 @@ describe("Chat › Code", () => {
       ),
     );
     expect(chatBox().value).toBe("fix these");
+  });
+});
+
+/* ============================================ one line, or a range (phase 3b) */
+
+const F = "C:\\work\\shop\\f.py";
+// a (10|10) · -b (old 11) · -c (old 12) · +B (11) · +C (12) · +D (13) · e (13|14)
+const LINES_DIFF = "--- a/f.py\n+++ b/f.py\n@@ -10,4 +10,5 @@\n a\n-b\n-c\n+B\n+C\n+D\n e";
+const lined = (diff = LINES_DIFF): FileChange => ({
+  path: F,
+  rel: "f.py",
+  name: "f.py",
+  status: "modified",
+  added: 3,
+  removed: 2,
+  diff,
+});
+
+/** The gutter's press for a line (every drawing of it). */
+const lineBtns = (n: number, removed = false) =>
+  screen.getAllByRole("button", { name: removed ? `Comment on removed line ${n}` : `Comment on line ${n}` });
+const lineBtn = (n: number, removed = false) => lineBtns(n, removed)[0];
+async function cancelDialog() {
+  fireEvent.click(screen.getByTestId("review-comment-cancel"));
+  await waitFor(() => expect(screen.queryByTestId("review-comment-dialog")).toBeNull());
+}
+/** The drawn line rows of the one-column layout, as markup. */
+const lineRowsOf = (root: Element) =>
+  Array.from(root.querySelectorAll('[data-testid="diff-unified"] > [data-kind]'))
+    .filter((el) => el.getAttribute("data-kind") !== "hunk")
+    .map((el) => el.outerHTML);
+
+describe("a line, or a range of lines", () => {
+  it("the helpers: which line a row is, what a press picks, what the lines quote", () => {
+    const rows = parseUnified(LINES_DIFF);
+    expect(rows.map((r) => lineOfRow(r))).toEqual([
+      null,
+      { side: "new", line: 10 },
+      { side: "old", line: 11 },
+      { side: "old", line: 12 },
+      { side: "new", line: 11 },
+      { side: "new", line: 12 },
+      { side: "new", line: 13 },
+      { side: "new", line: 14 },
+    ]);
+    expect(commentLineLabel({ side: "new", line: 14 })).toBe("Comment on line 14");
+    expect(commentLineLabel({ side: "old", line: 11 })).toBe("Comment on removed line 11");
+    const n = (line: number): LineRef => ({ side: "new", line });
+    const o = (line: number): LineRef => ({ side: "old", line });
+    // A plain press: that one line, whatever was pressed before.
+    expect(pressLines(n(11), n(13), false)).toEqual({ side: "new", start: 13, end: 13, anchor: n(13) });
+    // Shift: the range between, in either order; the first line stays the anchor.
+    expect(pressLines(n(11), n(13), true)).toEqual({ side: "new", start: 11, end: 13, anchor: n(11) });
+    expect(pressLines(n(14), n(10), true)).toEqual({ side: "new", start: 10, end: 14, anchor: n(14) });
+    // Shift with nothing pressed before, or across sides: a new single line.
+    expect(pressLines(null, n(12), true)).toEqual({ side: "new", start: 12, end: 12, anchor: n(12) });
+    expect(pressLines(n(12), o(11), true)).toEqual({ side: "old", start: 11, end: 11, anchor: o(11) });
+    expect(pressLines(o(11), n(12), true)).toEqual({ side: "new", start: 12, end: 12, anchor: n(12) });
+    // The quote is exactly those lines, with their marks.
+    expect(linesComment(rows, "new", 12, 12)).toEqual({ side: "new", start: 12, end: 12, quote: "+C" });
+    expect(linesComment(rows, "new", 14, 10)).toEqual({ side: "new", start: 10, end: 14, quote: " a\n+B\n+C\n+D\n e" });
+    expect(linesComment(rows, "old", 11, 12)).toEqual({ side: "old", start: 11, end: 12, quote: "-b\n-c" });
+    expect(linesComment(rows, "old", 10, 13)).toEqual({ side: "old", start: 10, end: 13, quote: " a\n-b\n-c\n e" });
+    expect(linesComment(rows, "new", 40, 50)).toBeNull();
+    const long = parseUnified(`@@ -1,1 +1,900 @@\n${Array.from({ length: 900 }, (_, i) => `+line number ${i}`).join("\n")}`);
+    expect(linesComment(long, "new", 1, 900)!.quote).toHaveLength(QUOTE_CHARS);
+  });
+
+  it("without the flag the gutter is exactly DiffView's own: no button, the same markup", () => {
+    const own = render(<DiffBody change={lined()} />);
+    const plain = lineRowsOf(own.container);
+    expect(plain).toHaveLength(7);
+    // The markup the diff dialog always drew for a line (two plain numbers).
+    expect(plain[0]).toBe(
+      '<div data-kind="same" class="flex ">' +
+        '<span class="w-10 shrink-0 select-none pr-2 text-right tabular-nums text-zinc-600">10</span>' +
+        '<span class="w-10 shrink-0 select-none pr-2 text-right tabular-nums text-zinc-600">10</span>' +
+        '<span class="w-4 shrink-0 select-none"><span> </span></span>' +
+        '<span class="min-w-0 whitespace-pre-wrap break-all pr-3 text-zinc-300">a</span></div>',
+    );
+    expect(own.container.querySelector("button")).toBeNull();
+    expect(own.container.querySelector("[data-line-press], [role='button'], [tabindex]")).toBeNull();
+    own.unmount();
+    const off = render(<ChangesReview changes={[lined()]} sessionId="s1" />);
+    const rows = screen.getByTestId("review-rows-0");
+    expect(lineRowsOf(rows)).toEqual(plain);
+    expect(rows.querySelector("[data-line-press]")).toBeNull();
+    off.unmount();
+    // With the flag: one press a line, and only the number differs.
+    render(<ChangesReview changes={[lined()]} sessionId="s1" comments />);
+    expect(screen.getByTestId("review-rows-0").querySelectorAll("button[data-line-press]")).toHaveLength(7);
+    expect(lineBtns(10)).toHaveLength(1); // an unchanged line: its NEW number only
+  });
+
+  it("a press on a line's number opens the one dialog for that line", async () => {
+    render(<ChangesReview changes={[lined()]} sessionId="s1" comments commentView="session" />);
+    fireEvent.click(lineBtn(12));
+    const box = await screen.findByTestId("review-comment-words");
+    expect(screen.getAllByTestId("review-comment-dialog")).toHaveLength(1);
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, line 12");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("+C");
+    fireEvent.change(box, { target: { value: "Name this" } });
+    fireEvent.click(screen.getByTestId("review-comment-save"));
+    await waitFor(() => expect(screen.queryByTestId("review-comment-dialog")).toBeNull());
+    expect(commentsBody(getComments("s1"))).toEqual([
+      { path: F, side: "new", start: 12, end: 12, quote: "+C", words: "Name this" },
+    ]);
+    expect(getComments("s1")[0].mark).toBe(markOf(lined()));
+    expect(getComments("s1")[0].view).toBe("session");
+  });
+
+  it("Shift+press makes it the lines between the two, in either direction", async () => {
+    render(<ChangesReview changes={[lined()]} sessionId="s1" comments />);
+    fireEvent.click(lineBtn(11));
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, line 11");
+    await cancelDialog();
+    fireEvent.click(lineBtn(13), { shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, lines 11–13");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("+B\n+C\n+D");
+    await cancelDialog();
+    // The other way round: press the LAST line first, then Shift+press above.
+    fireEvent.click(lineBtn(14));
+    await screen.findByTestId("review-comment-dialog");
+    await cancelDialog();
+    fireEvent.click(lineBtn(10), { shiftKey: true });
+    const box = await screen.findByTestId("review-comment-words");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, lines 10–14");
+    // The removed lines drawn between them are not lines of the new file.
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe(" a\n+B\n+C\n+D\n e");
+    fireEvent.change(box, { target: { value: "Tidy these" } });
+    fireEvent.click(screen.getByTestId("review-comment-save"));
+    await waitFor(() => expect(screen.queryByTestId("review-comment-dialog")).toBeNull());
+    expect(commentsBody(getComments("s1"))).toEqual([
+      { path: F, side: "new", start: 10, end: 14, quote: " a\n+B\n+C\n+D\n e", words: "Tidy these" },
+    ]);
+  });
+
+  it("a removed line is commented on as it was, by its old number", async () => {
+    render(<ChangesReview changes={[lined()]} sessionId="s1" comments />);
+    fireEvent.click(lineBtn(11, true));
+    const box = await screen.findByTestId("review-comment-words");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, line 11 (as it was before the change)");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("-b");
+    fireEvent.change(box, { target: { value: "Why did this go?" } });
+    fireEvent.click(screen.getByTestId("review-comment-save"));
+    await waitFor(() => expect(screen.queryByTestId("review-comment-dialog")).toBeNull());
+    expect(commentsBody(getComments("s1"))).toEqual([
+      { path: F, side: "old", start: 11, end: 11, quote: "-b", words: "Why did this go?" },
+    ]);
+  });
+
+  it("a Shift+press across sides starts again at that line; a range never mixes old and new", async () => {
+    render(<ChangesReview changes={[lined()]} sessionId="s1" comments />);
+    fireEvent.click(lineBtn(12));
+    await screen.findByTestId("review-comment-dialog");
+    await cancelDialog();
+    fireEvent.click(lineBtn(11, true), { shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, line 11 (as it was before the change)");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("-b");
+    await cancelDialog();
+    // From there a Shift+press on another REMOVED line is a range of old lines.
+    fireEvent.click(lineBtn(12, true), { shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, lines 11–12 (as it was before the change)");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("-b\n-c");
+  });
+
+  it("the number is a real button the keyboard reaches, and the line pressed first says so", async () => {
+    render(<ChangesReview changes={[lined()]} sessionId="s1" comments />);
+    const btn = lineBtn(13) as HTMLButtonElement;
+    // A <button type="button">: Tab reaches it, and Enter or Space press it
+    // (the browser turns those keys into the click this test sends).
+    expect(btn.tagName).toBe("BUTTON");
+    expect(btn.type).toBe("button");
+    expect(btn.disabled).toBe(false);
+    expect(btn.getAttribute("tabindex")).toBeNull();
+    expect(btn.textContent).toBe("13");
+    btn.focus();
+    expect(document.activeElement).toBe(btn);
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(btn);
+    await screen.findByTestId("review-comment-dialog");
+    await cancelDialog();
+    expect(lineBtn(13).getAttribute("aria-pressed")).toBe("true");
+    expect(lineBtn(12).getAttribute("aria-pressed")).toBe("false");
+    expect(lineBtn(11, true).getAttribute("aria-pressed")).toBe("false");
+    // A keyboard's Shift+Enter arrives as a click with Shift held.
+    fireEvent.click(lineBtn(11), { shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, lines 11–13");
+  });
+
+  it("the wide view: a line press in either drawing opens the ONE dialog", async () => {
+    render(<ChangesReview changes={[lined()]} sessionId="s1" comments />);
+    fireEvent.click(screen.getByTestId("review-wide-open"));
+    await screen.findByTestId("review-wide");
+    // The pane, and the wide view's two layouts: one press each, three in all.
+    expect(lineBtns(12)).toHaveLength(3);
+    expect(lineBtns(11, true)).toHaveLength(3);
+    expect(lineBtns(10)).toHaveLength(3);
+    fireEvent.click(lineBtns(12)[2]); // the side-by-side drawing
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getAllByTestId("review-comment-dialog")).toHaveLength(1);
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, line 12");
+    await cancelDialog();
+    // The same drawing's other layout extends it.
+    fireEvent.click(lineBtns(13)[1], { shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getAllByTestId("review-comment-dialog")).toHaveLength(1);
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, lines 12–13");
+    expect(screen.getByTestId("review-wide")).toBeTruthy();
+  });
+
+  it("a file that changes again forgets the line pressed before (its numbers moved)", async () => {
+    const { rerender } = render(<ChangesReview changes={[lined()]} sessionId="s1" comments />);
+    fireEvent.click(lineBtn(11));
+    await screen.findByTestId("review-comment-dialog");
+    await cancelDialog();
+    rerender(<ChangesReview changes={[lined(`${LINES_DIFF}\n+f`)]} sessionId="s1" comments />);
+    await waitFor(() => expect(lineBtn(11).getAttribute("aria-pressed")).toBe("false"));
+    fireEvent.click(lineBtn(13), { shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, line 13");
+  });
+
+  it("a line press redraws its own file's rows only; marking one file Reviewed redraws that file only", async () => {
+    render(<ChangesReview changes={[lined(), notes()]} sessionId="s1" comments />);
+    for (const id of ["review-open-0", "review-open-1", "review-hunk-open-0", "review-hunk-open-1"]) {
+      expect(H.byId[id]).toBeGreaterThan(0); // each IS counted
+    }
+    const before = { ...H.byId };
+    fireEvent.click(lineBtn(12));
+    await screen.findByTestId("review-comment-dialog");
+    await cancelDialog();
+    fireEvent.click(lineBtn(13), { shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    await cancelDialog();
+    // The other file: not its row, not its lines. This file: its lines only.
+    expect(H.byId["review-open-1"]).toBe(before["review-open-1"]);
+    expect(H.byId["review-hunk-open-1"]).toBe(before["review-hunk-open-1"]);
+    expect(H.byId["review-open-0"]).toBe(before["review-open-0"]);
+    expect(H.byId["review-hunk-open-0"]).toBeGreaterThan(before["review-hunk-open-0"]);
+    const settled = { ...H.byId };
+    fireEvent.click(screen.getByTestId("review-mark-0"));
+    expect(H.byId["review-open-0"]).toBeGreaterThan(settled["review-open-0"]);
+    expect(H.byId["review-open-1"]).toBe(settled["review-open-1"]);
+    expect(H.byId["review-hunk-open-1"]).toBe(settled["review-hunk-open-1"]);
+  });
+});
+
+/* ============================================ Chat › Code: the Branch view */
+
+describe("Chat › Code's Branch view", () => {
+  afterEach(() => {
+    live?.end();
+    turnStream?.end();
+  });
+
+  it("Comment there adds the comment under the session's own key, as a branch comment", async () => {
+    const WT = "C:\\work\\shop.ij-worktrees\\session-3f2a";
+    const branchCart = { ...cart(), path: `${WT}\\cart.py` };
+    const gitStatus = {
+      exists: true,
+      ahead: 1,
+      behind: 0,
+      uncommitted: 1,
+      remote: "origin",
+      pushed: false,
+      unpushed: 1,
+      in_base: false,
+      base_exists: true,
+      base_checked_out_at: "C:\\work\\shop",
+      commits: [{ sha: "1a2b3c4", subject: "Add the cart" }],
+      pr_draft: { title: "Add the cart", body: "" },
+      compare_url: "",
+      gh: { installed: true, signed_in: true, note: "" },
+    };
+    const gitDiff = {
+      changes: [branchCart],
+      files: 1,
+      added: 1,
+      removed: 1,
+      truncated_files: false,
+      base: "main",
+      merge_base: "abc123def456",
+    };
+    openChat("s5", {
+      gets: { "/build/sessions/s5/git": gitStatus, "/build/sessions/s5/git/diff": gitDiff },
+      over: {
+        folder: WT,
+        git: {
+          branch: "ij/session-3f2a",
+          base: "main",
+          base_commit: "abc123def456",
+          worktree: WT,
+          checkout: "C:\\work\\shop",
+          repo: "C:\\work\\shop",
+          merged: false,
+          merged_into: "",
+          removed: false,
+          pr_url: "",
+        },
+      },
+    });
+    expect(await screen.findByText("Added the cart.", {}, { timeout: 10_000 })).toBeInTheDocument();
+    // The Changes tab opened on the Branch view (the session has its own branch).
+    await screen.findByTestId("changes-review", {}, { timeout: 10_000 });
+    expect(screen.getByTestId("harness-session").getAttribute("data-session")).toBe("s5");
+    await commentThroughDialog("Use a constant");
+    const [c] = getComments("s5");
+    expect(commentsBody([c])).toEqual([{ ...SENT, path: branchCart.path }]);
+    expect(c.view).toBe("branch");
+    expect(getComments("build:s5")).toHaveLength(0);
+    await waitFor(() =>
+      expect(within(screen.getByTestId("harness-composer")).getByTestId("comment-chip").textContent).toBe(
+        "cart.py 1–2: Use a constant",
+      ),
+    );
+    // A line's number is a press there too.
+    expect(lineBtns(2).length).toBeGreaterThan(0);
   });
 });
