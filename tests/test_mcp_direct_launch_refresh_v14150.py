@@ -246,6 +246,26 @@ def test_the_real_check_runs_the_npm_beside_npx_with_the_packs_env_and_folder(
     assert dl.check(s) is None and "outdated" not in dl.record_for(s)
 
 
+def _gone_within(pid: int, seconds: float) -> bool:
+    """True once ``pid`` has exited (or is a zombie), waiting at most
+    ``seconds``. The close kills the server's tree but waits only a short grace
+    for it; one instant ``pid_exists`` + ``status()`` here passed only on its
+    retry on v1.542.1's release run (a busy runner ends a killed process later,
+    and a process ending between the two calls raised ``NoSuchProcess``)."""
+    import psutil
+
+    end = time.monotonic() + seconds
+    while True:
+        try:
+            if not psutil.pid_exists(pid) or psutil.Process(pid).status() == "zombie":
+                return True
+        except psutil.NoSuchProcess:
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
+
+
 @needs_node
 def test_a_running_direct_server_keeps_its_files_and_answers_through_a_daily_check(
     tmp_path, state, monkeypatch  # noqa: F811
@@ -254,8 +274,6 @@ def test_a_running_direct_server_keeps_its_files_and_answers_through_a_daily_che
     says a newer version is out; the server's folder is untouched and it still
     answers; the next start goes through npx, the ask after it makes the one
     after that direct again."""
-    import psutil
-
     c = make_npx_cache(tmp_path, "pkg", "pkg", "1.0.0")
     cfg = pack_cfg(tmp_path, c, "pkg")
     write_fake_npm(tmp_path)
@@ -276,7 +294,7 @@ def test_a_running_direct_server_keeps_its_files_and_answers_through_a_daily_che
         pid = client.transport.pid
     finally:
         mcp_tools_mod.close_tools_clients(tools)
-    assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == "zombie"
+    assert _gone_within(pid, 30)
     tools, client = _load(cfg)  # the next start: through npx
     try:
         assert _tree(client.transport.pid)[0] == "cmd.exe"
