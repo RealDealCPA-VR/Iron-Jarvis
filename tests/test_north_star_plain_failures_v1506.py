@@ -226,6 +226,7 @@ WORDING_HELPERS = {
     "_plain_validation_words",  # routes/agents: the extension import's validation words
     "_unavailable_sentence",  # terminals/pane_accounts: the account manager's words
     "_read_failed_words",  # routes/fleet (v1.516.0): plain_failure for the polled read, logged once per five minutes
+    "_why_not_reopened",  # terminals/manager: a terminal's program in words, else plain_failure (v1.539.0 uses it for POST /terminals)
 }
 
 _BUILTIN_NAMES = set(dir(builtins))
