@@ -9,6 +9,17 @@ with ``code: not_offered`` when the tool itself cannot do it.
 * ``POST /build/app/sessions/{id}/rewind {to}`` — the conversation drops
   message ``to`` and everything after it, through the tool's own way; files
   are not touched (``note`` says what was done).
+
+v1.543.0, the folder's files (``hosted/checkpoints``; each write under the
+session's git lock, in a worker thread):
+
+* ``GET  …/rewind/preview?to=`` — what putting the files back to before that
+  message would do (reads only): the files that go back, the new ones that
+  move to the trash, what is left as it is, and an ``id``.
+* ``POST …/rewind {to, files: true, expect}`` — conversation AND files
+  (``expect`` = the preview's ``id``).
+* ``POST …/rewind/files {to, expect}`` — the files only (every tool).
+* ``POST …/rewind/undo`` — undo the newest rewind's file changes.
 """
 
 from __future__ import annotations
@@ -16,8 +27,10 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from ...harness import branches as B
 from ...hosted import branching as BR
 from ...hosted import service as S
 from .build_app import _refused
@@ -29,6 +42,24 @@ class ForkBody(BaseModel):
 
 class RewindBody(BaseModel):
     to: str = Field(default="", max_length=200)
+    #: v1.543.0: also put the folder's files back (the preview's ``id`` in
+    #: ``expect``). Left out, nothing in the folder is touched.
+    files: bool = False
+    expect: str = Field(default="", max_length=80)
+
+
+class RewindFilesBody(BaseModel):
+    to: str = Field(default="", max_length=200)
+    expect: str = Field(default="", max_length=80)
+
+
+def _files_refused(r: S.Refused) -> JSONResponse:
+    """A refusal, with the files that stood in the way when there are any."""
+    out = _refused(r)
+    problems = getattr(r, "problems", None)
+    if problems:
+        return JSONResponse(status_code=r.status, content={"detail": r.sentence, "problems": list(problems)})
+    return out
 
 
 def register(app: FastAPI, d: Any) -> None:
@@ -42,9 +73,47 @@ def register(app: FastAPI, d: Any) -> None:
         except S.Refused as r:
             return _refused(r)
 
+    def _lock(sid: str) -> Any:
+        from .build_git import _locked
+
+        return lambda fn: _locked(f"app:{sid}", fn)
+
+    def _busy(g: B.GitRefused) -> JSONResponse:
+        return JSONResponse(status_code=g.status, content={"detail": str(g)})
+
     @app.post("/build/app/sessions/{sid}/rewind")
     async def app_rewind(sid: str, body: RewindBody) -> Any:
         try:
-            return await BR.rewind(svc(), sid, body.to)
+            return await BR.rewind(svc(), sid, body.to, files=bool(body.files), expect=body.expect,
+                                   lock=_lock(sid))
         except S.Refused as r:
-            return _refused(r)
+            return _files_refused(r)
+        except B.GitRefused as g:
+            return _busy(g)
+
+    @app.get("/build/app/sessions/{sid}/rewind/preview")
+    async def app_rewind_preview(sid: str, to: str = "") -> Any:
+        try:
+            return await BR.preview(svc(), sid, str(to or "")[:200], lock=_lock(sid))
+        except S.Refused as r:
+            return _files_refused(r)
+        except B.GitRefused as g:
+            return _busy(g)
+
+    @app.post("/build/app/sessions/{sid}/rewind/files")
+    async def app_rewind_files(sid: str, body: RewindFilesBody) -> Any:
+        try:
+            return await BR.rewind_files(svc(), sid, body.to, body.expect, lock=_lock(sid))
+        except S.Refused as r:
+            return _files_refused(r)
+        except B.GitRefused as g:
+            return _busy(g)
+
+    @app.post("/build/app/sessions/{sid}/rewind/undo")
+    async def app_rewind_undo(sid: str) -> Any:
+        try:
+            return await BR.undo_files(svc(), sid, lock=_lock(sid))
+        except S.Refused as r:
+            return _files_refused(r)
+        except B.GitRefused as g:
+            return _busy(g)

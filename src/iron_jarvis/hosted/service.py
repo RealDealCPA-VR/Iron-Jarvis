@@ -2642,6 +2642,11 @@ class HostedService:
                 self.live.pop(sid, None)
             await asyncio.to_thread(live.log.close)
             await asyncio.to_thread(store.delete, self.engine, sid)
+            # v1.543.0: its checkpoints' hidden refs leave the folder's
+            # repository with it (before a folder of its own is removed).
+            from . import checkpoints as CK
+
+            await asyncio.to_thread(CK.forget_session, self.home, sid, str(getattr(row, "folder", "") or ""))
             await asyncio.to_thread(self._drop_own_folder, row)
             moved = await asyncio.to_thread(self._trash_events, sid)
             # v1.425.0 (C3): the session's kept index (a cache of its folder,
@@ -3843,7 +3848,8 @@ class HostedService:
                 # v1.429.0: the session's own setting — no Pi process needed.
                 await self._pi_setting(live, row, *builtin)
                 return
-            await PN.record_turn_start_async(self.home, live.sid, str(getattr(row, "folder", "") or ""), turn.id)
+            await PN.record_turn_start_async(self.home, live.sid, str(getattr(row, "folder", "") or ""), turn.id,
+                                             uid=str(user.get("at") or ""))  # v1.543.0: the checkpoint's message
             async with live.lock:
                 # v1.512.0 (second review H2): looked at again once the lock
                 # is held — a Stop, a delete, an archive or a shutdown that

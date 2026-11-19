@@ -89,13 +89,20 @@ import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
 import { scrollToLatest } from "@/lib/transcriptRepin";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { CodeConversation, type MessageActions } from "@/components/buildCode/CodeConversation";
+import { RewindDialog } from "@/components/buildCode/RewindDialog";
 import {
   BRANCH_ROW,
   BRANCH_ROW_TITLE,
+  UNDO_REWIND,
+  UNDO_REWIND_CONFIRM,
+  UNDO_REWIND_TITLE,
+  UNDO_REWIND_WORDS,
   decodeBranch,
   decodeBranchAnswer,
+  decodeRewindPlan,
   type BranchAnswer,
   type BranchFacts,
+  type RewindPlan,
 } from "@/lib/buildAppBranch";
 import { CodePanes } from "@/components/buildCode/CodePanes";
 import { WorkingSign } from "@/components/buildCode/WorkingSign";
@@ -349,6 +356,9 @@ function keepSameBranch(prev: BranchFacts | null, next: BranchFacts | null): Bra
   if (prev.fork !== next.fork || prev.forkAt !== next.forkAt || prev.rewind !== next.rewind) return next;
   if (prev.note !== next.note || prev.at.size !== next.at.size) return next;
   for (const a of next.at) if (!prev.at.has(a)) return next;
+  // v1.543.0: the folder's file checkpoints.
+  if (prev.undoRewind !== next.undoRewind || prev.filesAt.size !== next.filesAt.size) return next;
+  for (const a of next.filesAt) if (!prev.filesAt.has(a)) return next;
   return prev;
 }
 
@@ -1440,15 +1450,17 @@ function SessionPane({
   );
 
   /** v1.441.0: Rewind to here — the conversation drops that message and
-   *  everything after it; its words come back to the box. */
+   *  everything after it; its words come back to the box. v1.543.0:
+   *  `expect` (the preview's id) means "and put the folder's files back". */
   const rewindTo = useCallback(
-    async (at: string) => {
+    async (at: string, expect?: string) => {
       if (!sessionIdNow || branching) return;
       setBranching(true);
       setNote(null);
       setInfo(null);
       try {
-        const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(sessionIdNow)}/rewind`, { to: at });
+        const body = expect === undefined ? { to: at } : { to: at, files: true, expect };
+        const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(sessionIdNow)}/rewind`, body);
         const a = decodeBranchAnswer(raw);
         if (!a) throw new Error("The conversation could not be rewound.");
         setText((cur) => (cur.trim() ? cur : a.text));
@@ -1456,6 +1468,7 @@ function SessionPane({
         await load({ follow: true });
       } catch (e) {
         setNote(errorWords(e, "The conversation could not be rewound."));
+        if (expect !== undefined) await load({ follow: true }).catch(() => {});
       } finally {
         setBranching(false);
       }
@@ -1463,12 +1476,73 @@ function SessionPane({
     [sessionIdNow, branching, load],
   );
 
+  /** v1.543.0: the rewind preview for one message (what its files would do). */
+  const [rewindAsk, setRewindAsk] = useState<{ at: string; plan: RewindPlan | null; error: string | null } | null>(
+    null,
+  );
+  const askRewind = useCallback(
+    async (at: string) => {
+      if (!sessionIdNow) return;
+      setRewindAsk({ at, plan: null, error: null });
+      const mine = (cur: { at: string } | null) => cur !== null && cur.at === at;
+      try {
+        const raw = await get<unknown>(
+          `${SESSIONS}/${encodeURIComponent(sessionIdNow)}/rewind/preview?to=${encodeURIComponent(at)}`,
+        );
+        const plan = decodeRewindPlan(raw);
+        if (!plan) throw new Error("The folder could not be read.");
+        setRewindAsk((cur) => (mine(cur) ? { at, plan, error: null } : cur));
+      } catch (e) {
+        const words = errorWords(e, "The folder could not be read.");
+        setRewindAsk((cur) => (mine(cur) ? { at, plan: null, error: words } : cur));
+      }
+    },
+    [sessionIdNow],
+  );
+
+  /** v1.543.0: the folder's files only (the conversation stays), or the undo
+   *  of the newest rewind's file changes. */
+  const filesPress = useCallback(
+    async (url: string, body: Record<string, unknown>, fallback: string) => {
+      if (!sessionIdNow || branching) return;
+      setBranching(true);
+      setNote(null);
+      setInfo(null);
+      try {
+        const raw = await post<{ note?: unknown }>(url, body);
+        const said = raw && typeof raw.note === "string" ? raw.note.slice(0, 1000) : "";
+        if (said) setInfo(said);
+      } catch (e) {
+        setNote(errorWords(e, fallback));
+      } finally {
+        await load({ follow: true }).catch(() => {});
+        setBranching(false);
+      }
+    },
+    [sessionIdNow, branching, load],
+  );
+  const undoRewind = useCallback(
+    () =>
+      filesPress(
+        `${SESSIONS}/${encodeURIComponent(sessionIdNow)}/rewind/undo`,
+        {},
+        "The rewind could not be undone.",
+      ),
+    [filesPress, sessionIdNow],
+  );
+
   const messageActions = useMemo<MessageActions | null>(
     () =>
       branch && sessionIdNow && sessionSource !== "disk"
-        ? { facts: branch, busy: running || branching, onBranch: (at) => void branchFrom(at), onRewind: rewindTo }
+        ? {
+            facts: branch,
+            busy: running || branching,
+            onBranch: (at) => void branchFrom(at),
+            onRewind: (at) => rewindTo(at),
+            onRewindAsk: (at) => void askRewind(at),
+          }
         : null,
-    [branch, sessionIdNow, sessionSource, running, branching, branchFrom, rewindTo],
+    [branch, sessionIdNow, sessionSource, running, branching, branchFrom, rewindTo, askRewind],
   );
 
   const retryFailed = useCallback(() => {
@@ -1992,6 +2066,51 @@ function SessionPane({
             <p role="status" data-testid="code-info" className="mb-2 text-[12px] text-zinc-500">
               {info}
             </p>
+          ) : null}
+          {/* v1.543.0: the newest rewind changed files — one way back, until
+              the next message. */}
+          {branch?.undoRewind && !running ? (
+            <div data-testid="code-undo-rewind-row" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
+              <p className="min-w-0 text-[12px] text-zinc-500">{UNDO_REWIND_WORDS}</p>
+              <span data-testid="code-undo-rewind" className="shrink-0">
+                <ConfirmButton
+                  label={UNDO_REWIND}
+                  confirmLabel={UNDO_REWIND_CONFIRM}
+                  title={UNDO_REWIND_TITLE}
+                  disabled={branching}
+                  onConfirm={undoRewind}
+                />
+              </span>
+            </div>
+          ) : null}
+          {rewindAsk ? (
+            <RewindDialog
+              plan={rewindAsk.plan}
+              error={rewindAsk.error}
+              busy={branching}
+              conversation={Boolean(branch?.rewind && branch.at.has(rewindAsk.at))}
+              onClose={() => setRewindAsk(null)}
+              onReadAgain={() => void askRewind(rewindAsk.at)}
+              onBoth={(expect) => {
+                const at = rewindAsk.at;
+                setRewindAsk(null);
+                void rewindTo(at, expect);
+              }}
+              onConversation={() => {
+                const at = rewindAsk.at;
+                setRewindAsk(null);
+                void rewindTo(at);
+              }}
+              onFiles={(expect) => {
+                const at = rewindAsk.at;
+                setRewindAsk(null);
+                void filesPress(
+                  `${SESSIONS}/${encodeURIComponent(sessionIdNow)}/rewind/files`,
+                  { to: at, expect },
+                  "The files could not be put back.",
+                );
+              }}
+            />
           ) : null}
           {/* v1.512.0 (second review H1): told to stop, still running — the
               daemon's words as sent, and the kept-open line's own Close

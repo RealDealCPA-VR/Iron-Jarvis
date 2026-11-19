@@ -416,7 +416,8 @@ def tool_changes(events: list[dict[str, Any]], folder: str) -> dict[str, Any]:
 #: its one writer; this record has one writer too (this module, under
 #: :data:`_TREES_LOCK`) and the service never reads it.
 TREES_FILE = "turn_trees.json"
-#: How many recorded trees one session keeps (newest kept).
+#: How many recorded trees one session kept before v1.543.0 (one limit for
+#: every kind). Each kind now has its own (``checkpoints.MAX_STARTS`` …).
 MAX_TREES = 60
 #: An idle read records the folder again only after this long (a pane open
 #: on an idle session reads it again on every press of Refresh).
@@ -482,6 +483,16 @@ REVERT_MOVED = (
     "branch, its commits and every other file are as they were."
 )
 REVERT_FAILED = "git could not put {name} back: {why}."
+#: v1.543.0: a checkpoint recorded before they were kept can be gone (git's
+#: own clean-up). Then nothing is put back and nothing is moved.
+REVERT_NO_CHECKPOINT = (
+    "The checkpoint for this message is no longer kept, so {name} was left as it is. "
+    "Revert it from the whole session's list instead."
+)
+TURN_CHECKPOINT_GONE = (
+    "The checkpoint for this message is no longer kept, so its own changes cannot be told "
+    "apart. The whole session's changes are listed instead."
+)
 #: v1.510.0 (H5): a changed file is COPIED to the trash before git writes
 #: over it; no copy, no revert.
 REVERT_KEPT = (
@@ -539,16 +550,58 @@ def read_trees(home: Any, sid: str) -> list[dict[str, Any]]:
     return [e for e in raw if isinstance(e, dict) and isinstance(e.get("tree"), str)] if isinstance(raw, list) else []
 
 
-def _add_tree(home: Any, sid: str, entry: dict[str, Any]) -> None:
+def _write_trees(home: Any, sid: str, rows: list[dict[str, Any]]) -> None:
     import json
 
+    path = _trees_path(home, sid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rows), encoding="utf-8", newline="\n")
+    os.replace(tmp, path)
+
+
+def _add_tree(home: Any, sid: str, entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Record one tree. Returns the rows that fell out (v1.543.0: each kind
+    has its own limit, ``checkpoints.trim`` — an idle read can no longer push
+    a message's checkpoint out; the caller drops the fallen rows' refs)."""
+    from . import checkpoints as CK
+
     with _TREES_LOCK:
-        rows = read_trees(home, sid)[-(MAX_TREES - 1):] + [entry]
-        path = _trees_path(home, sid)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(rows), encoding="utf-8", newline="\n")
-        os.replace(tmp, path)
+        rows, dropped = CK.trim(read_trees(home, sid) + [entry])
+        _write_trees(home, sid, rows)
+    return dropped
+
+
+def mark_tree(home: Any, sid: str, at: str, how: str, **fields: Any) -> bool:
+    """Set *fields* on the recorded row of kind *how* made at *at*. True when
+    one was found."""
+    with _TREES_LOCK:
+        rows = read_trees(home, sid)
+        hit = False
+        for r in rows:
+            if r.get("how") == how and str(r.get("at") or "") == at:
+                r.update(fields)
+                hit = True
+        if hit:
+            _write_trees(home, sid, rows)
+    return hit
+
+
+def _record(home: Any, sid: str, folder: str, entry: dict[str, Any], name: str) -> None:
+    """v1.543.0: record *entry* AND keep its tree: a hidden ref in the
+    folder's own repository points at it, so git's clean-up never deletes a
+    checkpoint (``checkpoints``). The rows that fell out lose their refs."""
+    from . import checkpoints as CK
+
+    ref = CK.ref_for(sid, name)
+    if CK.keep(folder, ref, str(entry.get("tree") or "")):
+        entry["ref"] = ref
+    dropped = _add_tree(home, sid, entry)
+    CK.drop(folder, [str(r.get("ref") or "") for r in dropped])
+
+
+def _ref_stamp(at: str) -> str:
+    return "".join(ch for ch in at if ch.isdigit())
 
 
 #: v1.425.0 (Wave 5, C3): where a session's KEPT index lives
@@ -790,7 +843,7 @@ def _copy_index(src: str, dest: Path) -> None:
 
 
 def record_turn_start(home: Any, sid: str, folder: str, turn_id: str, *,
-                      abandon: "threading.Event | None" = None) -> str | None:
+                      abandon: "threading.Event | None" = None, uid: str = "") -> str | None:
     """The folder's tree at the START of a turn, recorded for this message's
     Changes scope (exact). The hosted service calls it (through
     :func:`record_turn_start_async`) right after it writes the turn's
@@ -804,7 +857,16 @@ def record_turn_start(home: Any, sid: str, folder: str, turn_id: str, *,
         tree = snapshot_tree(folder, keep=kept_index(home, sid))  # v1.425.0 (C3)
         if abandon is not None and abandon.is_set():
             return None
-        _add_tree(home, sid, {"how": "start", "turn": str(turn_id), "tree": tree, "at": _iso(_now_utc())})
+        from . import checkpoints as CK
+
+        at = _iso(_now_utc())
+        entry = {"how": "start", "turn": str(turn_id), "tree": tree, "at": at}
+        head = CK.head_of(folder)
+        if head:
+            entry["head"] = head  # the commits made after it stay (a rewind says how many)
+        if uid:
+            entry["uid"] = str(uid)  # the message's own id (its ``user`` event's ``at``)
+        _record(home, sid, folder, entry, "start-" + _ref_stamp(at))
         return tree
     except Exception:  # noqa: BLE001 — a record never fails a turn
         return None
@@ -816,7 +878,7 @@ TURN_START_WAIT_S = 3.0
 
 
 async def record_turn_start_async(home: Any, sid: str, folder: str, turn_id: str, *,
-                                  bound: float = TURN_START_WAIT_S) -> str | None:
+                                  bound: float = TURN_START_WAIT_S, uid: str = "") -> str | None:
     """:func:`record_turn_start` off the event loop, waited for at most
     *bound* seconds (v1.420.0 review, the service's hook). A record that
     comes back later is dropped (*abandon*); a cancel (Stop) drops it too and
@@ -828,7 +890,7 @@ async def record_turn_start_async(home: Any, sid: str, folder: str, turn_id: str
     abandon = threading.Event()
     try:
         return await asyncio.wait_for(
-            asyncio.to_thread(record_turn_start, home, sid, folder, turn_id, abandon=abandon), bound)
+            asyncio.to_thread(record_turn_start, home, sid, folder, turn_id, abandon=abandon, uid=uid), bound)
     except asyncio.CancelledError:
         abandon.set()
         raise
@@ -898,7 +960,8 @@ def note_seen(home: Any, sid: str, folder: str, events: list[dict[str, Any]]) ->
         if not inside.ok or inside.out.strip() != "true":
             return
         tree = snapshot_tree(folder, keep=kept_index(home, sid))  # v1.425.0 (C3)
-        _add_tree(home, sid, {"how": "seen", "tree": tree, "at": _iso(_now_utc())})
+        at = _iso(_now_utc())
+        _record(home, sid, folder, {"how": "seen", "tree": tree, "at": at}, "seen-" + _ref_stamp(at))
     except Exception:  # noqa: BLE001 — a record never fails a read
         return
 
@@ -1014,7 +1077,12 @@ def changes_view(row: Any, events: list[dict[str, Any]], tool: str, *, scope: st
         got = None
         if scope == SCOPE_TURN and home is not None and sid:
             turn_id, how, tree, at = turn_base(home, sid, events, turn)
-            if how in ("start", "seen"):
+            if how in ("start", "seen") and not _tree_there(folder, tree):
+                # v1.543.0: recorded, but git no longer holds it.
+                how, scope_note = "gone", TURN_CHECKPOINT_GONE
+            if how == "gone":
+                pass
+            elif how in ("start", "seen"):
                 got = git_changes(folder, since, base=tree, target=snapshot_tree(folder, keep=kept_index(home, sid)))
                 if got is not None:
                     out.update(scope=SCOPE_TURN, turn=turn_id, turn_how=how)
@@ -1109,6 +1177,15 @@ def _in_tree(folder: str, base: str, rel: str) -> bool:
     return bool(got.ok)
 
 
+def _tree_there(folder: str, base: str) -> bool:
+    """Does the repository still hold *base* (a tree or a commit)? v1.543.0:
+    a tree git cleaned up reads as "this file was not there then" — a tracked
+    file was refused as "staged" and an untracked one was moved to the trash
+    as if it were new."""
+    got = _git(["cat-file", "-e", f"{base}^{{tree}}"], folder)
+    return bool(got.ok)
+
+
 def revert_file(home: Any, sid: str, row: Any, events: list[dict[str, Any]], tool: str, *,
                 rel: Any, blob: Any, scope: str = SCOPE_SESSION, turn: str = "",
                 running: bool = False, old_rel: Any = "") -> dict[str, Any]:
@@ -1160,6 +1237,9 @@ def revert_file(home: Any, sid: str, row: Any, events: list[dict[str, Any]], too
         raise RevertRefused(gone.words) from None
     if not base:
         raise RevertRefused(REVERT_NOT_REPO.format(tool=tool))
+    if when != WHEN_SESSION and not _tree_there(folder, base):
+        # a message's recorded tree (the session's own base is a commit)
+        raise RevertRefused(REVERT_NO_CHECKPOINT.format(name=name))
     path = os.path.join(folder, *clean.split("/"))
     if _blob(path) != str(blob or ""):
         raise RevertRefused(REVERT_CHANGED.format(name=name))

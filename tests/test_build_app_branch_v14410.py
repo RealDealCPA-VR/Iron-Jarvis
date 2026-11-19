@@ -100,7 +100,9 @@ async def test_each_message_sent_keeps_the_tools_own_reference(app, work, claude
     ats = _user_ats(view)
     assert len(ats) == 2 and [refs[a]["ref"] for a in ats] == uuids
     assert all(refs[a]["hid"] == hid for a in ats)
-    assert view["branch"] == {"fork": True, "fork_at": True, "rewind": True, "at": ats}
+    # v1.543.0: plus the folder's file checkpoints (none here: no repository).
+    assert view["branch"] == {"fork": True, "fork_at": True, "rewind": True, "at": ats,
+                              "files_at": [], "undo_rewind": False}
     await stop_all(app)
 
 
@@ -453,7 +455,8 @@ async def test_opencode_branches_the_whole_conversation_and_says_so(app, work, m
     monkeypatch.setattr(BR, "_running_driver", running)
     async with client(app) as c:
         view = (await c.get(f"/build/app/sessions/{row.id}")).json()
-        assert view["branch"] == {"fork": True, "fork_at": False, "rewind": False, "at": []}
+        assert view["branch"] == {"fork": True, "fork_at": False, "rewind": False, "at": [],
+                                  "files_at": [], "undo_rewind": False}
         r = await c.post(f"/build/app/sessions/{row.id}/fork", json={"at": "anything"})
         assert r.status_code == 201, r.text
         assert "whole conversation" in r.json()["note"]
@@ -468,7 +471,8 @@ async def test_tools_with_no_fork_offer_neither(app, work, harness):
     row = store.create(app.state.platform.engine, harness=harness, folder=str(work), harness_session_id="x-1")
     async with client(app) as c:
         view = (await c.get(f"/build/app/sessions/{row.id}")).json()
-        assert view["branch"] == {"fork": False, "fork_at": False, "rewind": False, "at": []}
+        assert view["branch"] == {"fork": False, "fork_at": False, "rewind": False, "at": [],
+                                  "files_at": [], "undo_rewind": False}
         listed = (await c.get("/build/app/sessions")).json()["sessions"]
         assert next(s for s in listed if s["id"] == row.id)["can_branch"] is False
         for path, body in (("fork", {}), ("rewind", {"to": "x"})):

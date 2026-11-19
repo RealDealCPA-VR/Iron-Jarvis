@@ -49,8 +49,12 @@ import {
   BRANCH_FROM_HERE,
   BRANCH_FROM_HERE_TITLE,
   MESSAGE_MENU_LABEL,
+  FILES_BACK_TITLE,
+  FILES_BACK_TO_HERE,
+  REWIND_ASK_TITLE,
   REWIND_CONFIRM,
   REWIND_TO_HERE,
+  REWIND_TO_HERE_ASK,
   REWIND_TO_HERE_TITLE,
   type BranchFacts,
 } from "@/lib/buildAppBranch";
@@ -230,19 +234,50 @@ export interface MessageActions {
   busy: boolean;
   onBranch: (at: string) => void;
   onRewind: (at: string) => void | Promise<void>;
+  /** v1.543.0: open the rewind preview for a message whose checkpoint of the
+   *  folder is kept (absent = an older caller: the two-press rewind only). */
+  onRewindAsk?: (at: string) => void;
+}
+
+/** The message menu's width (`w-48`) and a small margin, in pixels. */
+const MESSAGE_MENU_ROOM = 200;
+
+/** v1.543.0: is there room for the message menu to open LEFTWARD from its
+ *  button (its right edge on the button's right edge) inside the message's own
+ *  row? No measurement (no layout yet) answers no: rightward is never cut by
+ *  the conversation's left edge. */
+export function menuFitsLeftward(button: HTMLElement | null): boolean {
+  if (!button) return false;
+  const row = button.closest('[data-testid="code-user"]');
+  if (!row) return false;
+  return button.getBoundingClientRect().right - row.getBoundingClientRect().left >= MESSAGE_MENU_ROOM;
 }
 
 /** v1.441.0: the ⋯ beside one of the user's own messages — Branch from here,
  *  Rewind to here (two presses). Only what the tool can do is listed. */
 function MessageMenu({ at, actions }: { at: string; actions: MessageActions }) {
   const [open, setOpen] = useState(false);
+  // v1.543.0: the menu opens toward the room it has. Beside a WIDE message the
+  // ⋯ sits at the conversation's left edge, and a menu opening leftward was
+  // cut there ("…rom here"); it then opens rightward, over the message.
+  const [leftward, setLeftward] = useState(false);
   const box = useRef<HTMLDivElement | null>(null);
   const button = useRef<HTMLButtonElement | null>(null);
   const close = useCallback(() => setOpen(false), []);
   // v1.441.0 (integration I6): Escape and a press outside close it.
   useMenuClose(open, box, close, button);
+  const toggle = () => {
+    if (!open) setLeftward(menuFitsLeftward(button.current));
+    setOpen((v) => !v);
+  };
   const { facts, busy } = actions;
-  if (!facts.forkAt && !facts.rewind) return null;
+  // v1.543.0: a message can offer the conversation's actions (`at`), its
+  // files' (`filesAt`), or both.
+  const conv = facts.at.has(at);
+  const files = facts.filesAt.has(at) && Boolean(actions.onRewindAsk);
+  const canBranch = facts.forkAt && conv;
+  const canRewind = facts.rewind && conv;
+  if (!canBranch && !canRewind && !files) return null;
   return (
     <div ref={box} className="relative">
       <button
@@ -252,7 +287,7 @@ function MessageMenu({ at, actions }: { at: string; actions: MessageActions }) {
         aria-haspopup="menu"
         aria-expanded={open}
         data-testid="code-user-more"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         className={`grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 ${
           open ? "" : `${MENU_BUTTON_HOVER_FADE} [@media(hover:hover)]:group-hover/user:opacity-100`
         } focus-visible:opacity-100`}
@@ -260,8 +295,15 @@ function MessageMenu({ at, actions }: { at: string; actions: MessageActions }) {
         <MoreHorizontal size={13} />
       </button>
       {open ? (
-        <div role="menu" className="absolute right-0 top-full z-20 w-48 rounded-xl bg-ink-800 p-1 shadow-card">
-          {facts.forkAt ? (
+        <div
+          role="menu"
+          data-testid="code-user-menu"
+          data-opens={leftward ? "left" : "right"}
+          className={`absolute top-full z-20 w-48 rounded-xl bg-ink-800 p-1 shadow-card ${
+            leftward ? "right-0" : "left-0"
+          }`}
+        >
+          {canBranch ? (
             <button
               type="button"
               role="menuitem"
@@ -277,7 +319,23 @@ function MessageMenu({ at, actions }: { at: string; actions: MessageActions }) {
               {BRANCH_FROM_HERE}
             </button>
           ) : null}
-          {facts.rewind ? (
+          {files ? (
+            // v1.543.0: the preview is this action's second press.
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="code-user-rewind-ask"
+              disabled={busy}
+              title={busy ? "A reply is running: wait until it ends" : canRewind ? REWIND_ASK_TITLE : FILES_BACK_TITLE}
+              onClick={() => {
+                setOpen(false);
+                actions.onRewindAsk?.(at);
+              }}
+              className="flex w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06] disabled:opacity-50"
+            >
+              {canRewind ? REWIND_TO_HERE_ASK : FILES_BACK_TO_HERE}
+            </button>
+          ) : canRewind ? (
             <div role="menuitem" data-testid="code-user-rewind">
               <ConfirmButton
                 label={REWIND_TO_HERE}
@@ -852,7 +910,8 @@ export const CodeConversation = memo(function CodeConversation({
           onExpand={onExpand}
           copy={ends.has(item.key) ? copyFor : undefined}
           actions={
-            messageActions && item.kind === "user" && !item.carry && item.at && messageActions.facts.at.has(item.at)
+            messageActions && item.kind === "user" && !item.carry && item.at &&
+            (messageActions.facts.at.has(item.at) || messageActions.facts.filesAt.has(item.at))
               ? messageActions
               : undefined
           }

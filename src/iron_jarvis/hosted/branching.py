@@ -1,8 +1,15 @@
 """Branch from here and Rewind to here for Build › Code sessions (v1.441.0).
 
 Every action goes through the coding tool's OWN way of doing it, and a tool
-that has none offers none (the screen hides it). Files are never touched here:
-the per-file Revert in the Changes pane stays the way to put a file back.
+that has none offers none (the screen hides it).
+
+v1.543.0: a rewind can put the folder's FILES back too. The tools' own ways do
+not (measured below), so Iron Jarvis does it from the checkpoint it recorded
+when the message started (:mod:`.checkpoints`): only when the user asks for it
+(``files=True``, after a preview), files first and the conversation second, and
+put back again when the conversation step then fails. A tool with no
+conversation rewind still gets the files-only one (:func:`rewind_files`).
+Without ``files`` nothing in the folder is touched, as before.
 
 MEASURED on this PC (each without a model call unless said):
 
@@ -148,6 +155,19 @@ NOT_KEPT = "Iron Jarvis could not keep a copy of this conversation's log first, 
 NO_ANSWER = "{label} did not answer, so Iron Jarvis stopped it. Try again."
 
 FILES_SAME = "Your files were not changed: put a file back with Revert in the Changes pane."
+#: v1.543.0: the folder's files (``checkpoints``).
+TOOL_BUSY_FILES = ("{label} is still working in this folder (a reply of its own, or its helpers): wait "
+                   "until it ends first.")
+HELPER_BUSY_FILES = "A helper this session started is still working in this folder: wait until it ends first."
+OTHER_SESSION = "Another session is working on a reply in this folder: wait until it ends first."
+FILES_ONLY_NOTE = ("The conversation was not changed, so {label} may still think its changes are there: "
+                   "tell it the files were put back.")
+FILES_BACK_AGAIN = ("The conversation could not be rewound, so the folder's files were returned to how they "
+                    "were just before.")
+FILES_NOT_BACK_AGAIN = ("The conversation could not be rewound, and the folder's files could not be returned "
+                        "to how they were just before. Undo rewind is there to try again.")
+FILES_NOTICE = "Rewind: {words}"
+UNDO_NOTICE = "Undo rewind: {words}"
 FORK_MADE = "A branch of this conversation, on the same tool, model and account."
 FORK_AT_NOTE = "It holds the conversation before your message; the message is in the box to edit and send."
 FORK_FIRST_NOTE = "That was the first message, so the branch starts a new conversation."
@@ -354,6 +374,16 @@ def view_block(home: Any, row: Any) -> dict[str, Any]:
         refs = read_refs(home, row.id)
         ids = [uid for uid, r in refs.items() if r.get("hid") == hid and (r.get("ref") or row.harness == PI)]
         out["at"] = ids[-MAX_VIEW_IDS:]
+    # v1.543.0: the messages whose checkpoint of the folder is KEPT (any tool:
+    # the files can go back even where the conversation cannot), and whether
+    # the newest rewind's file changes can still be undone.
+    from . import checkpoints as CK
+    from . import panes as PN
+
+    starts = [r for r in PN.read_trees(home, row.id)
+              if r.get("how") == CK.HOW_START and r.get("ref") and r.get("uid")]
+    out["files_at"] = [str(r["uid"]) for r in starts][-MAX_VIEW_IDS:]
+    out["undo_rewind"] = CK.can_undo(home, row.id)
     return out
 
 
@@ -760,11 +790,193 @@ def _stripped(ev: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in ev.items() if k != "seq"}
 
 
+# -- the folder's files (v1.543.0) ------------------------------------------------
+async def _run(lock: Any, fn: Any) -> Any:
+    """``fn()`` in a worker thread, under the session's git lock when the
+    route gave one (``build_git._locked``)."""
+    if lock is None:
+        return await asyncio.to_thread(fn)
+    return await asyncio.to_thread(lock, fn)
+
+
+def _same_folder_running(svc: Any, row: Any) -> bool:
+    """BLOCKING: another Code-view session has a reply running in this folder
+    (or in a folder inside it, or one that holds it)."""
+    mine = os.path.normcase(os.path.abspath(str(row.folder or "")))
+    if not mine:
+        return False
+    for sid, other in list(svc.live.items()):
+        if sid == row.id or other.turn is None or not other.turn.running:
+            continue
+        try:
+            r2 = store.get(svc.engine, sid)
+        except Exception:  # noqa: BLE001
+            continue
+        theirs = os.path.normcase(os.path.abspath(str(getattr(r2, "folder", "") or ""))) if r2 else ""
+        if theirs and (theirs == mine or theirs.startswith(mine + os.sep) or mine.startswith(theirs + os.sep)):
+            return True
+    return False
+
+
+async def _files_free(svc: Any, row: Any, live: Any) -> None:
+    """Refuse, in words, while anything Iron Jarvis knows of is still writing
+    in this folder (the states the Changes pane's Revert waits for, and a
+    reply of another session here)."""
+    from . import handoff as H
+    from .service import Refused
+
+    lab = label(row.harness)
+    if getattr(row, "archived_at", None):
+        raise Refused(ARCHIVED)
+    now = svc.clock()
+    if live is not None:
+        if live.turn is not None and live.turn.running:
+            raise Refused(REPLY_RUNS)
+        if live.running and live.keeps_working(now):
+            raise Refused(HELPERS_RUN.format(label=lab))
+        replying = getattr(live, "replying_alone", None)
+        helping = getattr(live, "helpers_working", None)
+        if (getattr(live, "working_alone", False) or (callable(replying) and replying(now))
+                or (callable(helping) and helping(now))):
+            raise Refused(TOOL_BUSY_FILES.format(label=lab))
+    helpers = await asyncio.to_thread(H._helper_rows, svc, row.id)
+    if any(H._running(svc, h.id) for h in helpers):
+        raise Refused(HELPER_BUSY_FILES)
+    if await asyncio.to_thread(svc._in_a_terminal, row):
+        raise Refused(IN_TERMINAL.format(label=lab))
+    if await asyncio.to_thread(_same_folder_running, svc, row):
+        raise Refused(OTHER_SESSION)
+
+
+def _as_refused(r: Any) -> Any:
+    from .service import Refused
+
+    out = Refused(r.sentence, r.status)
+    out.problems = list(getattr(r, "problems", []) or [])  # type: ignore[attr-defined]
+    return out
+
+
+def _turn_of(history: list[dict[str, Any]], to: str) -> tuple[int, str]:
+    from .service import Refused
+
+    idx = _index_of(history, to)
+    if idx < 0:
+        raise Refused(GONE_MESSAGE, 404)
+    return idx, str(history[idx].get("turn") or "")
+
+
+def _say(svc: Any, row: Any, text: str) -> None:
+    """The session's own conversation says what happened to the folder (the
+    log only queues the line). Never fails the action."""
+    from .events import make
+
+    try:
+        svc._emit(svc._live(row), make("notice", text=text))
+    except Exception:  # noqa: BLE001 — the files are already where they are
+        log.warning("could not say a rewind's file changes in a Code-view session", exc_info=True)
+
+
+def _restored(got: dict[str, Any]) -> dict[str, Any]:
+    return {"back": int(got.get("back") or 0), "moved": int(got.get("moved") or 0),
+            "trash": str(got.get("trash") or ""), "words": str(got.get("words") or "")}
+
+
+async def preview(svc: Any, sid: str, to: str, *, lock: Any = None) -> dict[str, Any]:
+    """GET …/rewind/preview: what "put the files back to before this message"
+    would do — reads only. ``id`` is sent back with the press (a folder that
+    changed meanwhile is then refused); ``blocked`` is why it cannot be done
+    right now ("" when it can); ``conversation`` says whether this tool can
+    rewind the conversation from this message too."""
+    from . import checkpoints as CK
+    from .service import Refused
+
+    to = str(to or "").strip()
+    if not to:
+        raise Refused("Name the message to rewind to.", 400)
+    row = await svc._row(sid)
+    live = svc.live.get(sid)
+    history, _dropped, _merged = await _history(svc, row, live)
+    _idx, turn = _turn_of(history, to)
+    try:
+        made = await _run(lock, lambda: CK.plan(svc.home, row.id, row, turn))
+    except CK.RestoreRefused as r:
+        raise _as_refused(r) from None
+    out = CK.public(made)
+    blocked = ""
+    try:
+        await _files_free(svc, row, live)
+    except Refused as r:
+        blocked = r.sentence
+    block = await asyncio.to_thread(view_block, svc.home, row)
+    out.update(to=to, blocked=blocked, conversation=bool(block.get("rewind") and to in block.get("at", [])),
+               label=label(row.harness))
+    return out
+
+
+async def rewind_files(svc: Any, sid: str, to: str, expect: str = "", *, lock: Any = None) -> dict[str, Any]:
+    """POST …/rewind/files: the folder's files go back as they were when
+    message ``to`` started; the conversation is NOT changed (the way for a
+    tool with no conversation rewind, and a choice for the others)."""
+    from . import checkpoints as CK
+    from .service import Refused
+
+    to = str(to or "").strip()
+    if not to:
+        raise Refused("Name the message to rewind to.", 400)
+    row = await svc._row(sid)
+    live = svc.live.get(sid)
+    await _files_free(svc, row, live)
+    history, _dropped, _merged = await _history(svc, row, live)
+    _idx, turn = _turn_of(history, to)
+    live = live or svc._live(row)
+    svc._claim(live, "being rewound")
+    try:
+        got = await _run(lock, lambda: CK.restore(svc.home, row.id, row, turn, expect=str(expect or "")))
+    except CK.RestoreRefused as r:
+        raise _as_refused(r) from None
+    finally:
+        live.claim = ""
+    note = f"{got['words']} {FILES_ONLY_NOTE.format(label=label(row.harness))}"
+    _say(svc, row, FILES_NOTICE.format(words=note))
+    return {"ok": True, "note": note, "restored": _restored(got),
+            "branch": await asyncio.to_thread(view_block, svc.home, row)}
+
+
+async def undo_files(svc: Any, sid: str, *, lock: Any = None) -> dict[str, Any]:
+    """POST …/rewind/undo: the newest rewind's FILE changes are undone (the
+    folder goes back to how it was just before it). Only until the next
+    message; the conversation is not changed."""
+    from . import checkpoints as CK
+
+    row = await svc._row(sid)
+    live = svc.live.get(sid)
+    await _files_free(svc, row, live)
+    live = live or svc._live(row)
+    svc._claim(live, "being rewound")
+    try:
+        got = await _run(lock, lambda: CK.undo(svc.home, row.id, row))
+    except CK.RestoreRefused as r:
+        raise _as_refused(r) from None
+    finally:
+        live.claim = ""
+    _say(svc, row, UNDO_NOTICE.format(words=got["words"]))
+    return {"ok": True, "note": got["words"], "restored": _restored(got),
+            "branch": await asyncio.to_thread(view_block, svc.home, row)}
+
+
 # -- Rewind to here ------------------------------------------------------------
-async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
+async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: str = "",
+                 lock: Any = None) -> dict[str, Any]:
     """POST …/rewind: the conversation drops message ``to`` and everything
-    after it, through the tool's own way; files are not touched. Its words
-    come back for the box."""
+    after it, through the tool's own way. Its words come back for the box.
+
+    v1.543.0, ``files=True``: the folder's files go back too, as they were
+    when that message started (``checkpoints.restore``; *expect* is the
+    preview's ``id``). The files go FIRST, right before the tool is asked —
+    a refusal there leaves the conversation alone — and when the tool's step
+    then fails they are returned to how they were. Without ``files`` nothing
+    in the folder is touched."""
+    from . import checkpoints as CK
     from .driver import ControlRefused
     from .process import HarnessGone
     from .service import Refused
@@ -772,12 +984,30 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
     to = str(to or "").strip()
     if not to:
         raise Refused("Name the message to rewind to.", 400)
+    with_files = bool(files)  # (``files`` below is the message's own attachments)
     row, live = await _checks(svc, sid, rewind=True)
     lab = label(row.harness)
+    if with_files:
+        await _files_free(svc, row, live)
     history, dropped, merged = await _history(svc, row, live)
     idx = _index_of(history, to)
     if idx < 0:
         raise Refused(GONE_MESSAGE, 404)
+    turn_id = str(history[idx].get("turn") or "")
+    if with_files and not turn_id:
+        raise Refused(CK.NO_CHECKPOINT)
+    restored: dict[str, Any] | None = None
+
+    async def files_step() -> None:
+        """The folder's files, right before the tool's own (lasting) step."""
+        nonlocal restored
+        if not with_files:
+            return
+        try:
+            restored = await _run(lock, lambda: CK.restore(svc.home, row.id, row, turn_id, expect=str(expect or "")))
+        except CK.RestoreRefused as r:
+            raise _as_refused(r) from None
+
     kept = history[:idx]
     text = str(history[idx].get("text") or "")
     files = [str(f) for f in history[idx].get("files") or [] if isinstance(f, str)]
@@ -795,6 +1025,7 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
                 raise Refused(NOT_IN_TRANSCRIPT.format(label=lab))
             # Review: the old log is kept BEFORE anything changes.
             await _keep_log_first(svc, row)
+            await files_step()
             if live.running:
                 ended = await _programs_of(live)
                 await svc._stop_process(live, why="rewound")
@@ -813,12 +1044,14 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
                     turn = await asyncio.to_thread(_ref_for, svc, row, to)
                     # Review: the old log is kept BEFORE the tool drops anything.
                     await _keep_log_first(svc, row)
+                    await files_step()
                     asked = True
                     await drv.request("thread/revert", {"threadId": row.harness_session_id, "beforeTurnId": turn})
                     notes.append(REWIND_CODEX_KEPT)
                 elif row.harness == PI:
                     entry = await _pi_entry(svc, row, drv, to)
                     await _keep_log_first(svc, row)
+                    await files_step()
                     asked = True
                     res = await drv.request("fork", entryId=entry)
                     if isinstance(res, dict) and res.get("cancelled"):
@@ -840,10 +1073,27 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
                     await svc._stop_process(live2, why="rewound")
                 else:
                     ended = []
-        notes.append(FILES_SAME)
+        notes.append(str(restored["words"]) if restored is not None else FILES_SAME)
         await asyncio.to_thread(_cut_log, svc, row, live, kept, dropped, merged, new_hid, pending)
         if new_hid != row.harness_session_id:
             await asyncio.to_thread(store.update, svc.engine, row.id, harness_session_id=new_hid)
+        # v1.543.0: the dropped messages' checkpoints go with them.
+        turns = {str(e.get("turn") or "") for e in kept if e.get("type") == "user"}
+        await asyncio.to_thread(CK.forget_turns, svc.home, row.id, str(row.folder or ""), turns)
+    except Exception as exc:
+        if restored is None:
+            raise
+        # v1.543.0: the files went back and the conversation did not follow:
+        # the folder is returned to how it was just before, and that is said.
+        try:
+            await _run(lock, lambda: CK.undo(svc.home, row.id, row))
+            said = FILES_BACK_AGAIN
+        except Exception:  # noqa: BLE001 — said, and Undo rewind stays offered
+            log.warning("could not return a folder's files after a failed rewind", exc_info=True)
+            said = FILES_NOT_BACK_AGAIN
+        if isinstance(exc, Refused):
+            raise Refused(f"{exc.sentence} {said}", exc.status, code=getattr(exc, "code", "")) from None
+        raise Refused(said, 500) from exc
     finally:
         live.claim = ""
     # A fresh LiveSession (its log read again) for the cut log.
@@ -853,8 +1103,13 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
         # Review (the v1.422.0 B4 rule): a stop that ended programs the tool
         # served is said, in the conversation as it now is.
         svc._said_stopped(svc._live(made), ended, why="rewind")
+    if restored is not None:
+        _say(svc, made, FILES_NOTICE.format(words=restored["words"]))
     view = svc._with_live(store.view(made))
-    return {"session": svc._with_root(view), "text": text, "files": files, "note": " ".join(notes)}
+    out = {"session": svc._with_root(view), "text": text, "files": files, "note": " ".join(notes)}
+    if restored is not None:
+        out["restored"] = _restored(restored)
+    return out
 
 
 def _cut_log(svc: Any, row: Any, live: Any, kept: list[dict[str, Any]], dropped: int, merged: bool,

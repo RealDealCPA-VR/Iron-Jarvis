@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.542.2 (2026-11-19).*
+holds itself to. Current as of v1.543.0 (2026-11-19).*
 
 ---
 
@@ -2041,6 +2041,80 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Rewind puts your files back too (v1.543.0)
+
+Build › Code could already rewind a conversation. It could not put the
+folder's files back, so after a rewind the conversation said one thing and
+the files said another. Now one rewind can do both.
+
+**A checkpoint for every message, and it lasts.** When you send a message,
+Iron Jarvis records the folder as it is at that moment. That record is now
+kept safely, so it is still there weeks later. The folder has to be a git
+repository; in any other folder nothing changes for you.
+
+**Rewind to here… shows you first.** Point at one of your messages, press
+its ⋯, then **Rewind to here…**. Before anything changes, a box lists:
+
+- the files that go back to how they were when that message started,
+- the files made since then, which move to Iron Jarvis's trash (they are
+  never deleted),
+- anything that is left as it is, and why,
+- how many commits were made since then. Commits stay in git; git then shows
+  the difference as changes you can look at.
+
+Then you choose:
+
+| Button | What it does |
+|---|---|
+| **Rewind conversation and files** | Takes that message and everything after it out of the conversation, and puts the files back. |
+| **Conversation only** | The rewind as it was before: your files are not touched. |
+| **Files only** | Puts the files back and leaves the conversation as it is. The tool may still think its changes are there, so tell it. |
+| **Cancel** | Nothing changes. |
+
+**Undo rewind.** After a rewind that changed files, an **Undo rewind** button
+appears above the message box (press it twice). It puts the folder back
+exactly as it was just before the rewind. It is there until you send your next
+message. It undoes the file changes only; the conversation stays rewound.
+
+**Every tool gets its files back.** Grok, Antigravity and OpenCode cannot
+rewind a conversation, so their messages offer **Put files back to here…**
+instead: the same list, with one button.
+
+**What it will not do.**
+
+- It never touches git's own records: your branch, your commits and what you
+  have staged stay exactly as they are.
+- It leaves files that git ignores alone (build output, `node_modules`,
+  `.env`): they are in no checkpoint.
+- It leaves a repository inside the folder (a submodule) and links as they
+  are, and says so in the list.
+- If even one file cannot be written right now (another program has it open),
+  nothing is changed at all, and the list names the file.
+- If the folder changed after you read the list, nothing is changed: read the
+  list again.
+- It waits while a reply runs, while the tool or a helper is still working in
+  the folder, while another session is working on a reply in the same folder,
+  and while the conversation is open in a terminal. The box says which.
+- If the tool refuses to rewind the conversation after the files went back,
+  the files are returned to how they were, and the message says so.
+- More than 5,000 changed files is refused: use git for that one.
+
+**Good to know.**
+
+- Checkpoints live inside the folder's own git repository, under a hidden
+  name (`refs/ironjarvis/`). They do not appear in `git log`, in your
+  branches or in your tags, and they are never pushed. Deleting the session
+  removes them.
+- A file comes back with the line endings git writes on this PC. If git is
+  set to convert line endings here, a restored file has the converted ones.
+- Messages sent before this version have no kept checkpoint. They keep the
+  two-press **Rewind to here**, which changes the conversation only.
+- The Changes tab's **Revert this file** is unchanged, with one fix: when the
+  record for a message is gone, it now says so and leaves the file alone.
+  Before, it could move one of your own new files to the trash.
+- The conversation itself notes each rewind that changed files, so you can
+  see later what was done.
 
 ## Linux download links that always work (v1.542.0)
 
@@ -7488,7 +7562,8 @@ press its ⋯.
 - **Rewind to here** (press it twice) takes that message and everything after
   it out of the conversation, and puts the message back in the box.
 - Neither one changes your files. To put a file back, use Revert in the
-  Changes tab.
+  Changes tab. (Since v1.543.0 a rewind can put the files back too: see
+  "Rewind puts your files back too".)
 - Neither runs while a reply runs, while the tool still works in the
   background, or while the conversation is open in a terminal.
 
