@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.544.0
+
+**Comment on a changed line.** When a coding tool changes your files, you often want to say something about one exact place: "use a different name here", "this branch is wrong".
+
 ## v1.543.0
 
 **Rewind puts your files back too.** Build › Code could already rewind a conversation.
@@ -77,7 +81,3 @@
 ## v1.525.0
 
 **Your other tools' chats, tidied after a look in the real window.** The "Other tools" part of the chat list (v1.518.0) was looked at with the chats on a real PC, and three things were wrong.
-
-## v1.524.0
-
-**What the screen says is what happens.** Where a button or a line named one thing and Iron Jarvis did another, the two now agree: "Continue on X" goes to X, a setting changed while a reply runs says when it takes effect, and a box you turned off stays off.
