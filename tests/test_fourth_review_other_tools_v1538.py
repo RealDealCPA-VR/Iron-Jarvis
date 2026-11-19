@@ -324,7 +324,13 @@ def test_a_local_drive_is_still_looked_at_and_a_gone_folder_left_out(scene, monk
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows drive types")
-def test_the_real_child_answers_for_a_real_drive():
+def test_the_real_child_answers_for_a_real_drive(monkeypatch):
+    # The pin is the child's ANSWER, not its speed: a cold PowerShell on a
+    # busy runner outlasted the 8 s bound on v1.542.0's release run (an
+    # out-of-time child answers "network" for every letter), and this test
+    # passed only on its retry. The bound itself is pinned by the timeout
+    # tests above.
+    monkeypatch.setattr(outside, "DRIVE_ASK_S", 60.0)
     letter = os.environ.get("SystemDrive", "C:")[0].upper()
     kinds = outside._ask_drives([letter])
     assert kinds.get(letter) == 3  # the system drive is a fixed disk

@@ -944,8 +944,17 @@ async def test_real_edge_a_dead_driver_is_replaced_too():
         await b.open(key, site.base, preview=site.base)
         old = b.pids(key)
         backend = b._sessions[key].backend
-        psutil.Process(backend._driver).kill()
-        await asyncio.sleep(1.0)
+        driver = psutil.Process(backend._driver)
+        driver.kill()
+        # Wait for what the read judges, never a fixed sleep: the driver gone
+        # and the backend saying so. A 1 s sleep here passed only on its
+        # retry on v1.542.0's release run (a busy runner ends a killed
+        # process later than that).
+        await asyncio.to_thread(driver.wait, 30)
+        end = time.monotonic() + 30
+        while backend.alive() and time.monotonic() < end:
+            await asyncio.sleep(0.05)
+        assert not backend.alive()
         with pytest.raises(PB.BrowserProblem, match="had stopped"):
             await b.read(key, preview=site.base)
         again = await b.open(key, site.base, preview=site.base)
