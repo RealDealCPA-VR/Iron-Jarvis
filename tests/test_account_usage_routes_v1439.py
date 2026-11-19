@@ -197,7 +197,18 @@ def test_the_real_bundle_keeps_the_windows_without_parking_or_counting(tmp_path,
             "planType": "plus",
         }})
         U._tell(svc, codex["id"], "codex", rl)
+        # Wait for what is asserted (the same bounded poll as this file's other
+        # waits): on v1.540.0's Linux gate this test passed only on its retry,
+        # and reading the windows the instant after the signals is the one step
+        # here that can see the account manager a moment behind.
+        deadline = time.monotonic() + 20
         after = client.states()
+        while time.monotonic() < deadline and not (
+            {w.get("kind") for w in after[claude["id"]].get("windows") or []} >= {"5h", "7d"}
+            and {w.get("kind") for w in after[codex["id"]].get("windows") or []} >= {"primary", "secondary"}
+        ):
+            time.sleep(0.05)
+            after = client.states()
         cw = {w["kind"]: w for w in after[claude["id"]]["windows"]}
         assert cw["5h"]["usedPercent"] == 42 and cw["7d"]["usedPercent"] == 63.5
         assert cw["5h"]["resetsAt"].startswith("2100-01-01")
