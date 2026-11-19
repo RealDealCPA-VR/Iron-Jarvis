@@ -1,13 +1,13 @@
 """Fourth review, group 31 (v1.540.0): the Linux app names the right file, and
 its "start at login" entry is written the way the desktop-entry rules read it.
 
-* LX4: the autostart entry's program path is escaped in BOTH layers the
-  Desktop Entry spec describes (the quoting of an Exec argument, then the
-  string escape applied before it: ``$`` is ``\\\\$`` and ``\\`` is four
-  backslashes in the file) and a literal ``%`` is ``%%``. A path with a line
-  break or another control character cannot be written safely: it is refused
-  in words, no entry is written, and an entry already there is removed at the
-  next start (the switch never reads On while nothing starts).
+* LX4: the autostart entry names the program path in double quotes (the
+  Desktop Entry spec's quoting, for spaces and marks such as ``& ; ( ) #``). A
+  path the real Linux readers cannot start (a quote, an apostrophe, ``$``, a
+  backtick, a backslash, ``%``, a line break or another control character:
+  GLib 2.88 and systemd 259, read on a Linux runner; see ``desktopEntryExecArg``)
+  is refused in words, no entry is written, and an entry already there is
+  removed at the next start (the switch never reads On while nothing starts).
 * LX5: the four Linux recovery sentences ("repair", "go back a version", and
   the update that did not start) name the ``.deb`` or the AppImage, whichever
   this copy is, and send the user to the releases list (the newest release
@@ -117,17 +117,24 @@ def _read_exec(entry_text: str) -> list[str]:
     return _exec_args(_field_codes(_string_unescape(lines[0][len("Exec="):])))
 
 
-# The odd paths the design names: spaces, quotes, a dollar, a backtick, a
-# backslash, a percent, an apostrophe, letters outside ASCII.
+# The odd paths the shell writes: spaces, shell marks, letters outside ASCII.
 ODD = {
     "spaces": "/home/pat/My Apps/Iron Jarvis.AppImage",
+    "marks": "/home/pat/a&b;c(d)[e]{f}!g=h#i~j*k?l<m>n|o+p,q@r/Iron-Jarvis.AppImage",
+    "non_ascii": "/home/pat/Ünï/Iron-Jarvis.AppImage",
+}
+# The paths it refuses: no Linux sign-in starts them (desktopEntryExecArg).
+REFUSED = {
     "quotes": '/home/pat/My "Apps"/Iron-Jarvis.AppImage',
+    "apostrophe": "/home/pat/it's/Iron-Jarvis.AppImage",
     "dollar": "/home/pat/$HOME/Iron-Jarvis.AppImage",
     "backtick": "/home/pat/`x`/Iron-Jarvis.AppImage",
     "backslash": "/home/pat/back\\slash/Iron-Jarvis.AppImage",
     "percent": "/home/pat/100%f/Iron-Jarvis.AppImage",
-    "apostrophe": "/home/pat/it's/Iron-Jarvis.AppImage",
-    "non_ascii": "/home/pat/Ünï/Iron-Jarvis.AppImage",
+    "line_break": "/home/pat/two\nlines/Iron-Jarvis.AppImage",
+    "tab": "/home/pat/tab\there/x.AppImage",
+    "bell": "/home/pat/bell\x07/x.AppImage",
+    "delete": "/home/pat/del\x7f/x.AppImage",
 }
 
 
@@ -195,16 +202,13 @@ def test_each_odd_path_is_written_so_the_entry_rules_read_back_the_same_path_v15
 
 
 @requires_node
-def test_the_two_layers_are_written_as_the_spec_spells_them_v1540(tmp_path, monkeypatch):
+def test_the_path_is_written_in_double_quotes_and_nothing_else_v1540(tmp_path, monkeypatch):
     def exec_line(target: str) -> str:
         text = _login(tmp_path, monkeypatch, [{"do": "on"}], target)["steps"][0]["text"]
         return [ln for ln in text.split("\n") if ln.startswith("Exec=")][0]
 
-    assert exec_line("/a/$HOME/b") == 'Exec="/a/\\\\$HOME/b" --hidden'  # \\$
-    assert exec_line("/a/back\\slash") == 'Exec="/a/back\\\\\\\\slash" --hidden'  # four backslashes
-    assert exec_line('/a/"q"') == 'Exec="/a/\\\\"q\\\\"" --hidden'
-    assert exec_line("/a/`x`") == 'Exec="/a/\\\\`x\\\\`" --hidden'
-    assert exec_line("/a/100%f") == 'Exec="/a/100%%f" --hidden'
+    assert exec_line("/a/My (x) & y #1") == 'Exec="/a/My (x) & y #1" --hidden'
+    assert exec_line("/a/Ünï") == 'Exec="/a/Ünï" --hidden'
     # An ordinary path is byte for byte what it was.
     assert exec_line("/home/pat/Apps/Iron-Jarvis-x86_64.AppImage") == (
         'Exec="/home/pat/Apps/Iron-Jarvis-x86_64.AppImage" --hidden'
@@ -212,10 +216,9 @@ def test_the_two_layers_are_written_as_the_spec_spells_them_v1540(tmp_path, monk
 
 
 @requires_node
-@pytest.mark.parametrize("bad", ["/home/pat/two\nlines/Iron-Jarvis.AppImage", "/home/pat/tab\there/x.AppImage",
-                                 "/home/pat/bell\x07/x.AppImage", "/home/pat/del\x7f/x.AppImage"])
-def test_a_path_with_a_control_character_is_refused_and_never_reads_on_v1540(tmp_path, monkeypatch, bad):
-    out = _login(tmp_path, monkeypatch, [{"do": "on"}], bad)
+@pytest.mark.parametrize("name", sorted(REFUSED))
+def test_a_path_no_linux_sign_in_can_start_is_refused_and_never_reads_on_v1540(tmp_path, monkeypatch, name):
+    out = _login(tmp_path, monkeypatch, [{"do": "on"}], REFUSED[name])
     assert out["steps"][0] == {"on": False, "text": None}, out
     assert any("cannot start at login from where it is now" in line for line in out["logs"]), out["logs"]
 
@@ -243,7 +246,8 @@ def test_the_menu_says_why_it_stayed_off_and_records_off_v1540(tmp_path, monkeyp
     assert out["noted"] == [["start_with_windows", False]], "the settings would read On while nothing starts"
     assert out["dialogs"] == [{
         "message": "Iron Jarvis cannot start at login from where it is now.",
-        "detail": "The path to the app has a line break or another invisible character in it. "
+        "detail": "The path to the app has a character Linux cannot start it from at sign-in: a quote, "
+                  "an apostrophe, a backslash, $, `, %, a line break or another invisible character. "
                   "Move the app to a folder with an ordinary name, then turn this on again.",
     }], out["dialogs"]
     # An ordinary path from the menu: no dialog, recorded On.
@@ -266,14 +270,15 @@ def test_the_samples_script_writes_an_entry_per_odd_path_and_a_missing_path_cont
     assert proc.returncode == 0, proc.stderr
     cases = json.loads((out / "cases.json").read_text(encoding="utf-8"))["cases"]
     by = {c["id"]: c for c in cases}
-    for label in ("spaces", "quotes", "dollar", "backtick", "backslash", "percent", "apostrophe", "non_ascii"):
+    for label in ("spaces", "marks", "non_ascii", "everything"):
         case = by[label]
         assert case["expect"] == "starts", case
         entry = (out / case["entry"]).read_text(encoding="utf-8")
         assert _read_exec(entry) == [case["target"], "--hidden"], (label, entry)
         assert case["entry"].replace("\\", "/").endswith("/autostart/iron-jarvis.desktop")
+    for label in ("quotes", "apostrophe", "dollar", "backtick", "backslash", "percent", "line_break"):
+        assert by[label]["expect"] == "refused" and by[label]["entry"] is None, by[label]
     assert by["missing"]["expect"] == "no-unit" and not by["missing"].get("recorder")
-    assert by["line_break"]["expect"] == "refused" and by["line_break"]["entry"] is None
     assert (out / "glib_launch.py").is_file()
 
 

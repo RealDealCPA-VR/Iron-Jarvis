@@ -794,22 +794,27 @@ function linuxLaunchTarget() {
   return process.env.APPIMAGE || process.execPath;
 }
 //: v1.540.0 (fourth review LX4): the program path as ONE Exec argument, in
-//: the three layers the Desktop Entry spec reads it through: the Exec quoting
-//: (in double quotes, with " ` $ and \ escaped by a backslash), then the
-//: string escape that is undone BEFORE it (every backslash doubled, so `$` is
-//: written \\$ and `\` four backslashes), and a literal % written %%. Pure.
-//: null for a path with a control character (a line break would end the line;
-//: no layer writes one safely): the caller refuses it.
+//: double quotes (the Desktop Entry spec's quoting, for spaces and marks
+//: such as & ; ( ) # *). Pure. null for a path no Linux sign-in can start,
+//: which the caller refuses in words. Read on a Linux runner (GLib 2.88,
+//: systemd 259; tests/test_fourth_review_linux_autostart_real_v1540.py):
+//: - a control character: a line break would end the line;
+//: - " ' \ : systemd's service manager refuses such a program path
+//:   ("Executable path contains special characters", string_is_safe);
+//: - $ ` : systemd's autostart generator writes them back as \$ and \`,
+//:   which the manager then refuses the same way;
+//: - % : GLib and the generator both look for the program before %% is read
+//:   as %, so it is never found (a lone % is a field code).
+//: So nothing left needs an escape in either of the spec's two layers.
 function desktopEntryExecArg(target) {
   const s = String(target);
-  if (/[\x00-\x1f\x7f]/.test(s)) return null;
-  const quoted = '"' + s.replace(/(["`$\\])/g, "\\$1") + '"';
-  return quoted.replace(/\\/g, "\\\\").replace(/%/g, "%%");
+  if (/[\x00-\x1f\x7f"'`$\\%]/.test(s)) return null;
+  return '"' + s + '"';
 }
 //: The words for a path that cannot be written (logged, and said by the menu).
 const LINUX_AUTOSTART_REFUSED = "Iron Jarvis cannot start at login from where it is now.";
 const LINUX_AUTOSTART_REFUSED_HOW =
-  "The path to the app has a line break or another invisible character in it. Move the app to a folder with an ordinary name, then turn this on again.";
+  "The path to the app has a character Linux cannot start it from at sign-in: a quote, an apostrophe, a backslash, $, `, %, a line break or another invisible character. Move the app to a folder with an ordinary name, then turn this on again.";
 //: The entry's text, or null when the path cannot be written safely.
 function linuxAutostartEntry(target) {
   const quoted = desktopEntryExecArg(target);

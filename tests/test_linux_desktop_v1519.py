@@ -128,14 +128,15 @@ def test_a_moved_app_file_is_named_again_at_start_and_an_off_switch_stays_off(tm
 
 @requires_node
 def test_a_path_with_spaces_and_shell_marks_is_quoted_as_the_entry_rules_ask(tmp_path, monkeypatch):
-    # v1.540.0 (fourth review LX4, moved on purpose): this pinned ONE layer
-    # (\" \$ \`), which the string escape undone first reads as invalid
-    # escapes. Both layers now: each mark's backslash is doubled. Every odd
-    # path and the refusal are in tests/test_fourth_review_linux_desktop_v1540.py.
-    odd = '/home/pat/My "Apps" $HOME `x`/Iron Jarvis.AppImage'
+    # v1.540.0 (fourth review LX4, moved on purpose): this pinned ONE layer of
+    # escapes (\" \$ \`), which the string escape undone first reads as
+    # invalid, for marks systemd will not start a program from at all. Those
+    # paths are now refused in words; the marks that do start are quoted.
+    # Every odd path and the refusal are in tests/test_fourth_review_linux_desktop_v1540.py.
+    odd = "/home/pat/My Apps (x) & y #1/Iron Jarvis.AppImage"
     out = _run(tmp_path, monkeypatch, "linux", [{"do": "on"}], appimage=odd)
     line = [ln for ln in out["steps"][0]["text"].splitlines() if ln.startswith("Exec=")][0]
-    assert line == 'Exec="/home/pat/My \\\\"Apps\\\\" \\\\$HOME \\\\`x\\\\`/Iron Jarvis.AppImage" --hidden'
+    assert line == 'Exec="/home/pat/My Apps (x) & y #1/Iron Jarvis.AppImage" --hidden'
 
 
 @requires_node

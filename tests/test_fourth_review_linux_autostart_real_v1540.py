@@ -2,22 +2,31 @@
 
 Fourth review, group 31 (LX4). The autostart entry the shell writes names the
 program in ``Exec=``; the desktop-entry rules read that value through three
-layers (the string escape, the Exec quoting, ``%`` field codes). Reading the
-spec is not enough. ``scripts/linux_autostart_samples.mjs --out <dir>`` writes,
-with the SHIPPED functions lifted from ``desktop/main.js``, one entry per odd
-path (spaces, quotes, ``$``, a backtick, a backslash, ``%``, an apostrophe,
-letters outside ASCII, all at once), a recorder script AT each exact path, and
-``cases.json``. Each entry is then
+layers (the string escape, the Exec quoting, ``%`` field codes), and the real
+readers differ from the rules. Reading the spec is not enough.
+``scripts/linux_autostart_samples.mjs --out <dir>`` writes, with the SHIPPED
+functions lifted from ``desktop/main.js``, one entry per odd path the shell
+accepts (spaces, shell marks, letters outside ASCII, several at once) and none
+for the paths it refuses (quotes, an apostrophe, ``$``, a backtick, a
+backslash, ``%``, a line break), a recorder script AT each exact path, and
+``cases.json``. EVERY entry the shell wrote is then
 
 1. checked by ``desktop-file-validate`` (exit 0, no ``error:`` line);
-2. started by GLib (``Gio.DesktopAppInfo``: GNOME, Cinnamon, MATE, XFCE): the
-   recorder must have been started with exactly its path and ``--hidden``;
+2. started by GLib (``GioUnix.DesktopAppInfo``, ``Gio.`` before GLib 2.86:
+   GNOME, Cinnamon, MATE, XFCE): the recorder must have been started with
+   exactly its path and ``--hidden``;
 3. turned into a unit by systemd's autostart generator (Plasma, and GNOME
    sessions run under systemd), when the machine has it;
+4. on the CI runner only, that unit started by the user's systemd manager:
+   the recorder again reads exactly its path. The generator alone is not
+   enough: on systemd 259 it made units for paths with a quote, ``$`` or a
+   backtick that the manager then refused ("Executable path contains special
+   characters").
 
-and the negative control, an entry naming a program that does not exist, must
-not start under GLib and must get no unit from the generator: that proves the
-checks above look at the real path. A path with a line break gets no entry.
+So a writer that stops refusing a path no desktop can start goes red here,
+through the real parsers. The negative control, an entry naming a program
+that does not exist, must not start under GLib and must get no unit from the
+generator: that proves the checks above look at the real path.
 
 Runs on Linux only. On the Linux gate (``GITHUB_ACTIONS``) a missing tool
 FAILS the test instead of skipping it, so the gate cannot pass it silently;
@@ -46,12 +55,25 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="the desktop's o
 # Our own launcher (not the samples' one): it reports what happened as JSON
 # instead of an exit code, so a refusal and a crash read differently.
 _GLIB_LAUNCH = r"""
-import json, os, sys
+import json, os, sys, warnings
 import gi
-gi.require_version("Gio", "2.0")
-from gi.repository import Gio, GLib
+# GLib 2.86+ moved DesktopAppInfo to GioUnix; Gio's name prints a
+# PyGIDeprecationWarning (and will go). Either way stdout carries the answer.
+warnings.simplefilter("ignore", DeprecationWarning)
+try:
+    gi.require_version("GioUnix", "2.0")
+    from gi.repository import GioUnix as Gio
+except (ImportError, ValueError):
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio
+from gi.repository import GLib
 
-info = Gio.DesktopAppInfo.new_from_filename(sys.argv[1])
+try:
+    info = Gio.DesktopAppInfo.new_from_filename(sys.argv[1])
+except TypeError:
+    # PyGObject raises "constructor returned NULL": GLib would not load the
+    # entry (it looks for the program first, as GNOME's session does).
+    info = None
 if info is None:
     print(json.dumps({"loaded": False}))
     sys.exit(0)
@@ -87,10 +109,10 @@ def _have_gi() -> bool:
 
 
 def _cases(base: Path) -> tuple[list[dict], dict]:
-    """Run the shell's own entry writer. Returns the cases that must start, each
-    with its entry copied to ``<base>/config/autostart/sample<N>.desktop`` (one
-    folder, one generator run), and the missing-program control, copied alone
-    to ``<base>/config-missing/autostart/missing.desktop``."""
+    """Run the shell's own entry writer. Returns EVERY case it wrote an entry
+    for (each must start), each copied to ``<base>/config/autostart/sample<N>.desktop``
+    (one folder, one generator run), and the missing-program control, copied
+    alone to ``<base>/config-missing/autostart/missing.desktop``."""
     _need(shutil.which("node") is not None, "node")
     assert SAMPLES.is_file(), f"{SAMPLES} is missing"
     made = base / "made"
@@ -102,9 +124,11 @@ def _cases(base: Path) -> tuple[list[dict], dict]:
     for c in cases:
         by[c["expect"]].append(c)
     starts = by.get("starts", [])
-    assert len(starts) >= 8, f"too few odd paths to prove anything: {[c['id'] for c in starts]}"
-    # A path with a line break is refused: no entry at all.
-    assert [c["entry"] for c in by.get("refused", [])] == [None], by.get("refused")
+    # The odd paths that must be written whatever else the writer refuses.
+    assert {"spaces", "marks", "non_ascii", "everything"} <= {c["id"] for c in starts}, [c["id"] for c in starts]
+    # A refused path has no entry at all; a line break is always refused.
+    assert all(c["entry"] is None for c in by.get("refused", [])), by.get("refused")
+    assert "line_break" in {c["id"] for c in by.get("refused", [])}
     (missing,) = by["no-unit"]
     assert missing["entry"] and not Path(missing["target"]).exists()
 
@@ -183,6 +207,59 @@ def test_systemds_autostart_generator_makes_a_unit_for_each_entry(tmp_path):
     units = _units(tmp_path, tmp_path / "config", "all")
     wrong = [(s["id"], s["unit"]) for s in armed if "--hidden" not in units.get(s["unit"], "")]
     assert wrong == [], sorted(units)
+
+
+def _user_manager() -> bool:
+    if not shutil.which("systemctl") or not os.environ.get("XDG_RUNTIME_DIR"):
+        return False
+    proc = subprocess.run(["systemctl", "--user", "is-system-running"], capture_output=True, text=True, timeout=60)
+    return proc.stdout.strip() in ("running", "degraded")
+
+
+def test_systemds_service_manager_starts_each_generated_unit_with_exactly_its_path(tmp_path):
+    """The generator's unit is read again by the user's systemd manager, which
+    refuses a program path with special characters. Starting a unit reaches
+    the user's own service manager, so this runs on the CI runner only."""
+    if not ON_GATE:
+        pytest.skip("starts units under the user's own systemd manager: runs on the CI runner only")
+    _need(os.access(GENERATOR, os.X_OK), "systemd's autostart generator")
+    _need(_user_manager(), "a running systemd user manager (systemctl --user)")
+    armed, _missing = _cases(tmp_path)
+    units = _units(tmp_path, tmp_path / "config", "all")
+    here = Path(os.environ["XDG_RUNTIME_DIR"]) / "systemd" / "user"
+    here.mkdir(parents=True, exist_ok=True)
+    tag = "ijlx4" + str(os.getpid())
+    placed, wrong = [], []
+    try:
+        for i, s in enumerate(armed):
+            text = units.get(s["unit"])
+            if text is None:
+                wrong.append((s["id"], "no unit"))
+                continue
+            name = f"app-{tag}s{i}@autostart.service"
+            (here / name).write_text(text, encoding="utf-8")
+            placed.append(name)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, capture_output=True, timeout=60)
+        for i, s in enumerate(armed):
+            name = f"app-{tag}s{i}@autostart.service"
+            if name not in placed:
+                continue
+            if s["marker"].exists():
+                s["marker"].unlink()
+            # --wait: returns once the recorder has run and exited.
+            proc = subprocess.run(["systemctl", "--user", "start", "--wait", name], capture_output=True,
+                                  text=True, timeout=60)
+            argv = s["marker"].read_text(encoding="utf-8").splitlines() if s["marker"].exists() else None
+            if proc.returncode != 0 or argv != [s["path"], *s["args"]]:
+                log = subprocess.run(["journalctl", "--user", "--no-pager", "-n", "5", "-u", name],
+                                     capture_output=True, text=True, timeout=60).stdout
+                wrong.append((s["id"], proc.stderr.strip(), argv, log.strip()[-600:]))
+    finally:
+        for name in placed:
+            (here / name).unlink(missing_ok=True)
+            subprocess.run(["systemctl", "--user", "reset-failed", name], capture_output=True, timeout=60)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, timeout=60)
+    assert wrong == []
 
 
 def test_an_entry_whose_program_does_not_exist_is_never_started(tmp_path):

@@ -5,17 +5,21 @@
 // WHY. The Linux app's autostart entry (~/.config/autostart/iron-jarvis.desktop)
 // names the app's own path inside Exec=. The desktop-entry rules read that
 // value through three layers (string escape, then Exec quoting, then %
-// field codes). The node pins in tests/test_fourth_review_linux_desktop_v1540.py
+// field codes), and the desktops' own readers differ from the rules and from
+// each other. The node pins in tests/test_fourth_review_linux_desktop_v1540.py
 // check the writer against a reader written from the spec; this script makes
 // the files so the readers the desktops actually use can be run on Linux:
 // desktop-file-validate, GLib (GNOME, Cinnamon, MATE, XFCE) and systemd's
-// autostart generator (Plasma, and GNOME under systemd).
+// autostart generator plus its service manager (Plasma, and GNOME under
+// systemd).
 //
 // WHAT. The entry text is made by the SHIPPED functions, lifted from
 // desktop/main.js (desktopEntryExecArg, linuxAutostartEntry), never a copy.
-// For each odd path (spaces, quotes, $, a backtick, a backslash, %, an
-// apostrophe, letters outside ASCII, and all of them at once) it writes:
-//   <out>/cases/<id>/autostart/iron-jarvis.desktop   the entry (XDG_CONFIG_HOME=<out>/cases/<id>)
+// For each odd path (spaces, shell marks, letters outside ASCII, several at
+// once, and the marks the shell refuses: quotes, an apostrophe, $, a
+// backtick, a backslash, %) it writes:
+//   <out>/cases/<id>/autostart/iron-jarvis.desktop   the entry (XDG_CONFIG_HOME=<out>/cases/<id>),
+//       or none when the shell refuses the path (expect "refused")
 //   <out>/targets/<id>/<odd folder>/Iron-Jarvis.AppImage
 //       a recorder: a /bin/sh script AT the odd path that writes its own path
 //       ($0) and each argument, one per line, to <out>/markers/<id>.txt
@@ -24,7 +28,7 @@
 //               the systemd generator must make NO unit for it, which proves
 //               its "does the program exist" check is live on that machine
 //   line_break  a path with a line break: the writer refuses it (no entry)
-// and <out>/cases.json (what each case expects) and <out>/glib_launch.py.
+// and <out>/cases.json (what the shell wrote for each case) and <out>/glib_launch.py.
 //
 // USAGE
 //   node scripts/linux_autostart_samples.mjs --out <dir> [--no-files]
@@ -39,7 +43,9 @@
 //                                                     reads exactly <target>, then --hidden
 //   g=$(mktemp -d); XDG_CONFIG_HOME=<out>/cases/<id> XDG_CONFIG_DIRS=$(mktemp -d) \
 //     /usr/lib/systemd/user-generators/systemd-xdg-autostart-generator "$g" "$g" "$g"
-//   -> "$g/app-iron\x2djarvis@autostart.service" exists and holds --hidden
+//   -> "$g/app-iron\x2djarvis@autostart.service" exists and holds --hidden;
+//   copied under $XDG_RUNTIME_DIR/systemd/user and started with
+//   `systemctl --user start --wait`, the marker reads the same
 // and for "missing" the same generator run makes NO such unit.
 
 import fs from "node:fs";
@@ -72,17 +78,21 @@ function args(argv) {
   return out;
 }
 
-// The odd folder each case's program sits in.
+// The odd folder each case's program sits in. The shell writes an entry for
+// the first four and refuses the rest (desktopEntryExecArg says why); every
+// case gets a recorder, so a writer that stops refusing is run by the real
+// parsers too.
 const ODD = [
   ["spaces", "My Apps"],
+  ["marks", "a&b;c(d)[e]{f}!g=h#i~j*k?l<m>n|o+p,q@r"],
+  ["non_ascii", "Ünï"],
+  ["everything", "My (x) & Ünï #1 ~y"],
   ["quotes", 'My "Apps"'],
+  ["apostrophe", "it's"],
   ["dollar", "$HOME"],
   ["backtick", "`x`"],
   ["backslash", "back\\slash"],
   ["percent", "100%f"],
-  ["apostrophe", "it's"],
-  ["non_ascii", "Ünï"],
-  ["everything", "a \"b\" $c `d` e\\f 100%g it's Ü"],
 ];
 
 const sh1 = (s) => "'" + s.replace(/'/g, "'\\''") + "'"; // one single-quoted sh word
@@ -96,12 +106,21 @@ import sys
 
 import gi
 
-gi.require_version("Gio", "2.0")
-from gi.repository import Gio, GLib  # noqa: E402
+# GLib 2.86+ moved DesktopAppInfo to GioUnix (Gio's name warns, then goes).
+try:
+    gi.require_version("GioUnix", "2.0")
+    from gi.repository import GioUnix as Gio  # noqa: E402
+except (ImportError, ValueError):
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio  # noqa: E402
+from gi.repository import GLib  # noqa: E402
 
-info = Gio.DesktopAppInfo.new_from_filename(sys.argv[1])
+try:
+    info = Gio.DesktopAppInfo.new_from_filename(sys.argv[1])
+except TypeError:  # PyGObject raises when the constructor returns NULL
+    info = None
 if info is None:
-    print("GLib could not read the entry: " + sys.argv[1])
+    print("GLib could not read the entry (or found no program): " + sys.argv[1])
     sys.exit(2)
 pids = []
 
@@ -145,7 +164,8 @@ function main() {
       fs.writeFileSync(target, `#!/bin/sh\nprintf '%s\\n' "$0" "$@" > ${sh1(marker)}\n`, { mode: 0o755 });
       recorder = rel(target);
     }
-    cases.push({ id, target, entry: writeEntry(id, target), recorder, marker: rel(marker), expect: "starts", args: ["--hidden"] });
+    const entry = writeEntry(id, target);
+    cases.push({ id, target, entry, recorder, marker: rel(marker), expect: entry ? "starts" : "refused", args: ["--hidden"] });
   }
 
   const missing = `${out.split(path.sep).join("/")}/targets/missing/not here/Iron-Jarvis.AppImage`;
