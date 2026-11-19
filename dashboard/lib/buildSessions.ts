@@ -18,6 +18,7 @@ import { BUILD_SESSION_PREFIX } from "@/lib/buildLinks";
 import type { PlanStepState, PlanView } from "@/lib/planChecklist";
 import type { PaneMessage } from "@/components/terminal/paneWork";
 import { decodeQueuedItem, type QueuedItem } from "@/lib/buildComposer";
+import { clearComments } from "@/lib/codeComments";
 import { decodeSessionGit, type SessionGit } from "@/lib/buildGit";
 import { decodeBranchedFrom, type BranchedFrom } from "@/lib/buildNext";
 import type { FinishRecord, FinishReview } from "@/lib/stepWords";
@@ -730,7 +731,15 @@ export function renameFolder(path: string, name: string): Promise<unknown> {
  *  folder and the clean-up of an abandoned New session use it, and READ the
  *  answer (a refused delete is an ApiError). */
 export function deleteSession(id: string, opts: { onlyIfEmpty?: boolean } = {}): Promise<unknown> {
-  return del(`/build/sessions/${encodeURIComponent(id)}${opts.onlyIfEmpty ? "?only_if_empty=1" : ""}`);
+  return del(`/build/sessions/${encodeURIComponent(id)}${opts.onlyIfEmpty ? "?only_if_empty=1" : ""}`).then(
+    (answer) => {
+      // v1.544.0 review: a deleted session's waiting comments on changed code
+      // go with it (lib/codeComments keeps them under the session's id). Only
+      // once the daemon HAS deleted it; an archive keeps them.
+      clearComments(id);
+      return answer;
+    },
+  );
 }
 
 /** v1.412.0 review: the daemon refused an `onlyIfEmpty` delete because the

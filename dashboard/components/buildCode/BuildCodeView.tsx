@@ -128,8 +128,10 @@ import {
 import { CommentChips, useCodeComments } from "@/components/harness/CommentChips";
 import {
   buildCodeCommentsKey,
+  clearComments,
   commentsBody,
   getComments,
+  isTypedCommand,
   restoreComments,
   takeComments,
   type CodeComment,
@@ -321,6 +323,12 @@ const QUIET_BTN =
   "inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50";
 const CHIP_SELECT =
   "h-7 max-w-[12rem] cursor-pointer truncate rounded-lg border-0 bg-transparent px-1.5 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50";
+
+/** v1.544.0 review: a handed message goes only to the session it was written
+ *  in. */
+export function sameSession(current: string, onlyFor: string): boolean {
+  return current === onlyFor;
+}
 
 function errorWords(e: unknown, fallback: string): string {
   if (e instanceof ApiError && e.message) return e.message;
@@ -738,14 +746,18 @@ function SessionPane({
 
   /** Follow one turn's events (a new turn: `body`; a rejoin: none).
    *  `onRefused`: a new turn the daemon refused before any frame (409, any
-   *  status of 400 or more) — the caller puts the message back. */
+   *  status of 400 or more) — the caller puts the message back. v1.544.0
+   *  review: it is told even when this pane has MOVED ON (another session was
+   *  opened, the view was left) — `here` is false then: what belongs to the
+   *  SESSION (its comments, kept under its own key) still goes back; what
+   *  belongs to the box on screen does not. */
   const follow = useCallback(
     async (
       gen: number,
       path: string,
       body: unknown,
       carry: CodeEvent | null = null,
-      onRefused?: (words: string) => void,
+      onRefused?: (words: string, here: boolean) => void,
     ) => {
       abortRef.current?.abort();
       const ctl = new AbortController();
@@ -774,13 +786,16 @@ function SessionPane({
             tappedError = false;
             continue;
           }
-          if (gen !== genRef.current) continue;
+          const here = gen === genRef.current;
           const status = typeof ev.status === "number" ? ev.status : 0;
           if (first && status >= 400 && onRefused) {
-            onRefused(ev.title || ev.detail || "That message was not sent.");
+            // (BEFORE the moved-on check: a refused message's comments must
+            // never be lost because the user opened another session.)
+            onRefused(ev.title || ev.detail || "That message was not sent.", here);
             refused = true;
             continue;
           }
+          if (!here) continue;
           if (ev.offline) {
             // Iron Jarvis went away mid-reply: the reply goes on there; it is
             // followed again once Iron Jarvis answers.
@@ -1076,8 +1091,11 @@ function SessionPane({
     const all = [...uploads.map((f) => f.path), ...picks];
     // v1.544.0: the comments above the box wait with this message (a message
     // may be comments alone). They leave the box with its words.
-    const key = buildCodeCommentsKey(session.id);
-    const has = takesCommentsRef.current && getComments(key).length > 0;
+    // v1.544.0 review: a typed command ("/compact") takes none — they stay
+    // as chips for the next message.
+    const sid = session.id;
+    const key = buildCodeCommentsKey(sid);
+    const has = takesCommentsRef.current && !isTypedCommand(words) && getComments(key).length > 0;
     if (!words && !all.length && !has) return;
     setNote(null);
     setText("");
@@ -1101,8 +1119,10 @@ function SessionPane({
       if (code === "not_working") {
         setRunning(false);
         runningRef.current = false;
-        // (Its comments go with it: they left the box with its words.)
-        void sendRef.current?.(words, all, noted);
+        // (Its comments go with it: they left the box with its words. Only
+        // to THIS session: a send that would go anywhere else puts them back
+        // under this session's key instead.)
+        void sendRef.current?.(words, all, noted, sid);
         return;
       }
       setText((cur) => (cur.trim() ? cur : words));
@@ -1172,8 +1192,19 @@ function SessionPane({
    *  only a message FROM THE BOX takes the comments waiting above it; a handed
    *  one carries just the comments handed with it (`handedComments`), and the
    *  waiting ones stay as chips. */
-  const send = useCallback(async (handed?: string, handedFiles?: string[], handedComments?: readonly CommentBody[]) => {
+  const send = useCallback(async (
+    handed?: string,
+    handedFiles?: string[],
+    handedComments?: readonly CommentBody[],
+    /** v1.544.0 review: the session this handed message was written in — it
+     *  is never sent to another one. */
+    onlyFor?: string,
+  ) => {
     if (!session) return;
+    if (onlyFor !== undefined && !sameSession(session.id, onlyFor)) {
+      restoreComments(buildCodeCommentsKey(onlyFor), handedComments ?? []);
+      return;
+    }
     // v1.412.0: a send waits for the pictures still going up (never goes
     // without them — the v1.275.0 rule); it reads the box when it runs.
     if (handed === undefined && att.busyRef.current) {
@@ -1191,7 +1222,13 @@ function SessionPane({
     const picks = handed === undefined ? picksRef.current.slice() : [];
     const sent = handed === undefined ? [...uploads.map((f) => f.path), ...picks] : (handedFiles ?? []);
     const commentsKeyNow = buildCodeCommentsKey(session.id);
-    const fromBoxComments = handed === undefined && takesCommentsRef.current && getComments(commentsKeyNow).length > 0;
+    // v1.544.0 review: a typed command of the tool's own ("/compact",
+    // "/model opus") takes no comments: they stay as chips, unspent.
+    const fromBoxComments =
+      handed === undefined &&
+      takesCommentsRef.current &&
+      !isTypedCommand(words) &&
+      getComments(commentsKeyNow).length > 0;
     if ((!words && !sent.length && !fromBoxComments && !handedComments?.length) || runningRef.current) return;
     // The comments this message carries: taken out of the store with the
     // box's words (a refusal puts them back), or the ones handed with it.
@@ -1254,7 +1291,12 @@ function SessionPane({
         ...(notedBody.length ? { comments: notedBody } : {}),
       },
       null,
-      (words2) => {
+      (words2, here) => {
+        // v1.544.0: its comments go back above the box — under THIS
+        // session's key, so also when the user has opened another session
+        // meanwhile (they are there when this one is opened again).
+        restoreComments(commentsKeyNow, noted);
+        if (!here) return;
         // Refused before anything ran: no bubble for a message that never
         // went; the words and files go back in the box, with the reason.
         optimisticRef.current = null;
@@ -1263,8 +1305,6 @@ function SessionPane({
         // A handed message's files come back by path (they went up already).
         setFiles((cur) => (cur.length ? cur : handed === undefined ? picks : (handedFiles ?? [])));
         att.restore(uploads);
-        // v1.544.0: and its comments, above the box again.
-        restoreComments(commentsKeyNow, noted);
         setNote(words2);
       },
     );
@@ -2872,6 +2912,9 @@ export function BuildCodeView({
       setRowNote(null);
       try {
         await del<unknown>(`${SESSIONS}/${encodeURIComponent(id)}`);
+        // v1.544.0 review: its waiting comments go with it (an archive keeps
+        // them; only a delete ends them).
+        clearComments(buildCodeCommentsKey(id));
         setRowMenu(null);
         setSessions((prev) => (prev ? prev.filter((x) => x.id !== id) : prev));
         setArchivedRows((prev) => (prev ? prev.filter((x) => x.id !== id) : prev));

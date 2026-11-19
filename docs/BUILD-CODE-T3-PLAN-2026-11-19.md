@@ -3,7 +3,9 @@
 A build plan, written 2026-11-19 against master v1.542.2.
 
 **Status.** Release A (feature 1, phases 1a to 1c) is built in v1.543.0, with
-the recommended choices D1 and D2. Releases B, C and D are not built.
+the recommended choices D1 and D2. Release B (feature 3, phases 3a to 3c, in
+both Code views as D7 recommends) is built in v1.544.0. Releases C and D are
+not built.
 
 Two things differ from the text below, both on purpose:
 

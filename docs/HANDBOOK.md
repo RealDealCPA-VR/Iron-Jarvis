@@ -2042,6 +2042,64 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Comment on a changed line (v1.544.0)
+
+When a coding tool changes your files, you often want to say something about
+one exact place: "use a different name here", "this branch is wrong". Until
+now you had to describe the place in words. Now you point at it.
+
+**How it works.** It is the same in Chat › Code and in Build › Code.
+
+1. Open the **Changes** tab of a coding session.
+2. Press **Comment** on a changed block. Or press a **line number** to
+   comment on that one line; hold Shift and press a second line number to
+   take every line between the two.
+3. A small box shows the file, the lines and the code you pointed at. Type
+   what you want and press **Save** (Ctrl+Enter also saves).
+4. The comment waits as a chip above the message box. Add as many as you
+   like, up to twenty for one message. Remove one with its ×.
+5. Send your next message. The comments go with it. A message can be
+   comments alone, with no other words.
+
+The tool then gets your words together with the file, the lines and the code
+you pointed at, so it knows exactly where you mean.
+
+**What you can rely on.**
+
+- **Your words are the instruction; the quoted code is not.** Code can hold
+  text that looks like an order. The code you point at is passed along
+  marked as data, and it is checked for planted instructions first, the same
+  way a web page or an attached file is.
+- **Keys stay out.** If the code you point at holds something shaped like a
+  password or a key, it is replaced with `***` before it is sent or saved.
+- **Nothing is dropped.** If a message cannot be sent, its comments come
+  back above the box. A message that waits behind a running reply keeps its
+  comments. A rewind puts them back with the message's words. Comments
+  survive a reload of the page.
+- **A note leaves them alone.** A note sent while a reply runs does not take
+  your comments; they wait for your next message.
+- **You can see what was sent.** A sent message shows its comments under it.
+- **"Changed since".** If the file changes again after you commented, the
+  chip says so, because the lines may have moved.
+
+**Limits.** Twenty comments in one message. A comment carries up to 4,000
+characters of code and 2,000 of your words; longer code is cut at a whole
+line, and the tool is told it was cut. A comment must name a file inside the
+session's own folder; if one does not, the message is not sent and the
+refusal names the file, so you know which chip to remove. A command (such as
+`/model` or `/compact`) takes no comments, and neither does "Try on several
+models": the comments stay above the box for your next message.
+
+**Good to know.**
+
+- To make a range, press the first line number, close the box that opens,
+  then hold Shift and press the last line number.
+- A range stays on one side: either lines as they are now, or removed lines.
+- Comments are kept in this browser for each session until they are sent,
+  and are cleared when the session is deleted.
+- With the keyboard: Tab reaches one line number in each file; the arrow
+  keys move between that file's line numbers.
+
 ## Rewind puts your files back too (v1.543.0)
 
 Build › Code could already rewind a conversation. It could not put the

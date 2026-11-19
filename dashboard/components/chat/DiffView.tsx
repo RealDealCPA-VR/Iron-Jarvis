@@ -22,7 +22,7 @@
  * no longer keeps is SAID, never drawn as an empty diff.
  */
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import { diffLines, textLines, type DiffLine } from "@/lib/diff";
@@ -52,8 +52,10 @@ export function hunkStart(text: string): { oldStart: number; newStart: number } 
 }
 
 /** v1.405.0: something drawn at the end of a hunk's header row (the review
- *  pane's "Open at line N"); absent = the plain header, as before. */
-export type HunkAction = (hunkText: string) => ReactNode;
+ *  pane's "Open at line N"); absent = the plain header, as before. v1.544.0:
+ *  `index` is the hunk's POSITION among the file's hunks (0 = the first): two
+ *  blocks of a diff that joins several edits can have the same header text. */
+export type HunkAction = (hunkText: string, index: number) => ReactNode;
 
 /** v1.544.0: a press on a line's NUMBER (the review pane's "Comment on line
  *  14"; Shift+press extends to a range). Absent = the plain number, exactly
@@ -166,11 +168,26 @@ interface NumPress {
   title?: string;
   pressed: boolean;
   onPress: (shift: boolean) => void;
+  /** This number is the list's ONE Tab stop (the others are reached with the
+   *  arrow keys). */
+  tab: boolean;
+  onFocus: () => void;
+}
+
+/** The list's Tab stop, and how a focused number becomes it. */
+interface LineStop {
+  row: DiffRow | null;
+  set: (row: DiffRow) => void;
 }
 
 /** The press for `row`'s number in the `col` gutter: only for the row's own
  *  number (new when it has one, else old), and only when the caller asked. */
-function numPress(press: LinePress | undefined, row: DiffRow, col: "old" | "new"): NumPress | undefined {
+function numPress(
+  press: LinePress | undefined,
+  row: DiffRow,
+  col: "old" | "new",
+  stop: LineStop,
+): NumPress | undefined {
   if (!press || row.kind === "hunk") return undefined;
   const own = typeof row.newNo === "number" ? "new" : "old";
   if (own !== col) return undefined;
@@ -179,20 +196,51 @@ function numPress(press: LinePress | undefined, row: DiffRow, col: "old" | "new"
     title: press.title,
     pressed: press.pressed?.(row) ?? false,
     onPress: (shift) => press.onPress(row, shift),
+    tab: stop.row === row,
+    onFocus: () => stop.set(row),
   };
+}
+
+/** v1.544.0: the line numbers of one list are ONE Tab stop (a file draws up
+ *  to hundreds of them): ArrowUp and ArrowDown move between them, Home and
+ *  End go to the first and the last. On the list's own box. */
+function lineKeys(e: ReactKeyboardEvent<HTMLElement>) {
+  const from = (e.target as HTMLElement | null)?.closest?.("button[data-line-press]");
+  if (!from) return;
+  const all = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>("button[data-line-press]"));
+  const i = all.indexOf(from as HTMLButtonElement);
+  let to = -1;
+  if (e.key === "ArrowDown") to = Math.min(all.length - 1, i + 1);
+  else if (e.key === "ArrowUp") to = Math.max(0, i - 1);
+  else if (e.key === "Home") to = 0;
+  else if (e.key === "End") to = all.length - 1;
+  if (to < 0 || i < 0) return;
+  e.preventDefault();
+  all[to].focus(); // its focus makes it the Tab stop
 }
 
 function Num({ n, press }: { n?: number; press?: NumPress }) {
   if (press && n !== undefined) {
-    // v1.544.0: a real button (Tab reaches it, Enter and Space press it).
+    // v1.544.0: a real button. Enter and Space press it (Shift held extends
+    // a range); the keys are read here so Shift is never lost on the way.
     return (
       <button
         type="button"
         data-line-press=""
+        tabIndex={press.tab ? 0 : -1}
         aria-label={press.label}
         aria-pressed={press.pressed}
         title={press.title}
+        onFocus={press.onFocus}
         onClick={(e) => press.onPress(e.shiftKey)}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          press.onPress(e.shiftKey);
+        }}
+        onKeyUp={(e) => {
+          if (e.key === " ") e.preventDefault(); // (a browser's own click for Space)
+        }}
         className={`w-10 shrink-0 cursor-pointer select-none rounded-sm pr-2 text-right tabular-nums transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 motion-reduce:transition-none ${
           press.pressed ? "bg-accent/[0.08] text-accent-soft" : "text-zinc-600"
         }`}
@@ -235,8 +283,8 @@ export function statusWord(status: FileChange["status"]): string {
 }
 
 /** A hunk's separator row: its header, and the caller's action (v1.405.0). */
-function HunkRow({ text, action }: { text: string; action?: HunkAction }) {
-  const extra = action ? action(text) : null;
+function HunkRow({ text, action, index }: { text: string; action?: HunkAction; index: number }) {
+  const extra = action ? action(text, index) : null;
   if (!extra) {
     return (
       <div data-kind="hunk" className="border-y border-white/[0.06] px-3 py-1 text-zinc-600">
@@ -269,15 +317,27 @@ export function UnifiedRows({
   /** v1.544.0: a press on a line's number; absent = plain numbers. */
   linePress?: LinePress;
 }) {
+  // The ONE Tab stop among the line numbers: the one focused last, else the
+  // first line (only with `linePress`; nothing is drawn for it otherwise).
+  const [focused, setFocused] = useState<DiffRow | null>(null);
+  const stop: LineStop = {
+    row: !linePress ? null : focused && rows.includes(focused) ? focused : (rows.find((r) => r.kind !== "hunk") ?? null),
+    set: setFocused,
+  };
+  let hunks = -1;
   return (
-    <div data-testid="diff-unified" className={always ? "" : "md:hidden"}>
+    <div
+      data-testid="diff-unified"
+      className={always ? "" : "md:hidden"}
+      onKeyDown={linePress ? lineKeys : undefined}
+    >
       {rows.map((r, i) =>
         r.kind === "hunk" ? (
-          <HunkRow key={i} text={r.text} action={hunkAction} />
+          <HunkRow key={i} text={r.text} action={hunkAction} index={(hunks += 1)} />
         ) : (
           <div key={i} data-kind={r.kind} className={`flex ${lineTone(r.kind)}`}>
-            <Num n={r.oldNo} press={numPress(linePress, r, "old")} />
-            <Num n={r.newNo} press={numPress(linePress, r, "new")} />
+            <Num n={r.oldNo} press={numPress(linePress, r, "old", stop)} />
+            <Num n={r.newNo} press={numPress(linePress, r, "new", stop)} />
             <span className="w-4 shrink-0 select-none">
               <Marker kind={r.kind} />
             </span>
@@ -291,12 +351,22 @@ export function UnifiedRows({
   );
 }
 
-function SplitCell({ row, side, linePress }: { row?: DiffRow; side: "left" | "right"; linePress?: LinePress }) {
+function SplitCell({
+  row,
+  side,
+  linePress,
+  stop,
+}: {
+  row?: DiffRow;
+  side: "left" | "right";
+  linePress?: LinePress;
+  stop: LineStop;
+}) {
   if (!row) return <div className="min-w-0 bg-white/[0.02]" data-side={side} />;
   const n = side === "left" ? row.oldNo : row.newNo;
   return (
     <div data-side={side} data-kind={row.kind} className={`flex min-w-0 ${lineTone(row.kind)}`}>
-      <Num n={n} press={numPress(linePress, row, side === "left" ? "old" : "new")} />
+      <Num n={n} press={numPress(linePress, row, side === "left" ? "old" : "new", stop)} />
       <span className="w-4 shrink-0 select-none">
         <Marker kind={row.kind} />
       </span>
@@ -318,19 +388,32 @@ export function SplitRows({
   hunkAction?: HunkAction;
   linePress?: LinePress;
 }) {
+  // One Tab stop here too (see `UnifiedRows`). A row's own number is its new
+  // one when it has one (the right cell), else its old one (the left cell).
+  const [focused, setFocused] = useState<DiffRow | null>(null);
+  const lines = linePress ? rows.flatMap((r) => (r.hunk !== undefined ? [] : [r.left, r.right])) : [];
+  const stop: LineStop = {
+    row: !linePress
+      ? null
+      : focused && lines.includes(focused)
+        ? focused
+        : (lines.find((r): r is DiffRow => r !== undefined) ?? null),
+    set: setFocused,
+  };
+  let hunks = -1;
   return (
-    <div data-testid="diff-split" className="hidden md:block">
+    <div data-testid="diff-split" className="hidden md:block" onKeyDown={linePress ? lineKeys : undefined}>
       {rows.map((r, i) =>
         r.hunk !== undefined ? (
-          <HunkRow key={i} text={r.hunk} action={hunkAction} />
+          <HunkRow key={i} text={r.hunk} action={hunkAction} index={(hunks += 1)} />
         ) : (
           <div
             key={i}
             data-testid="diff-split-row"
             className="grid grid-cols-2 divide-x divide-white/[0.06]"
           >
-            <SplitCell row={r.left} side="left" linePress={linePress} />
-            <SplitCell row={r.right} side="right" linePress={linePress} />
+            <SplitCell row={r.left} side="left" linePress={linePress} stop={stop} />
+            <SplitCell row={r.right} side="right" linePress={linePress} stop={stop} />
           </div>
         ),
       )}

@@ -25,7 +25,15 @@
 
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+
+// A wait here is for the thing asserted (a dialog, a chip, a request). Its
+// 1 s default measures the RUNNER as much as the code: run beside other
+// files on a busy PC, one such wait expired with nothing wrong (twice in
+// about 75 runs of this file, on two different tests, each a stall of the
+// whole worker). 5 s keeps a wrong expectation failing with its own message,
+// well inside the 15 s a test gets (vitest.config.ts says why that is 15).
+configure({ asyncUtilTimeout: 5_000 });
 
 const H = vi.hoisted(() => {
   class ApiError extends Error {
@@ -46,7 +54,17 @@ const H = vi.hoisted(() => {
     fail: {} as Record<string, { status: number; message: string; body?: unknown }>,
     /** Build › Code's streams, in the order opened. */
     streams: [] as { path: string; body: unknown }[],
-    scripts: [] as ({ event: string; data: Record<string, unknown> } | { yield: Record<string, unknown> })[][],
+    scripts: [] as (
+      | { event: string; data: Record<string, unknown> }
+      | { yield: Record<string, unknown> }
+      /** What the reader yields once the test lets it (`H.late`), even when
+       *  the pane that asked has moved on: an answer that was already in. */
+      | { late: Record<string, unknown> }
+    )[][],
+    /** Resolves the wait of a `{ late }` entry. */
+    late: null as Promise<void> | null,
+    /** An answer of lib/api held until the test lets it go (by path). */
+    gate: {} as Record<string, Promise<void> | undefined>,
     lastWatch: null as null | { onFrame?: (event: string, data: Record<string, unknown>) => void },
     hold: null as Promise<void> | null,
     release: null as (() => void) | null,
@@ -65,8 +83,10 @@ vi.mock("@/lib/api", () => {
     if (r instanceof Error) return Promise.reject(r);
     return Promise.resolve(JSON.parse(JSON.stringify(r)));
   };
-  const send = (method: string) => (path: string, body?: unknown) => {
+  const send = (method: string) => async (path: string, body?: unknown) => {
     H.sent.push({ method, path, body });
+    const held = H.gate[path];
+    if (held) await held;
     const fail = H.fail[path];
     if (fail) return Promise.reject(new H.ApiError(fail.message, fail.status, fail.body));
     const r = H.reply[path];
@@ -101,6 +121,11 @@ vi.mock("@/lib/useChatStream", async (orig) => {
       H.lastWatch = watch ?? null;
       const frames = H.scripts.shift() ?? [];
       for (const f of frames) {
+        if ("late" in f) {
+          if (H.late) await H.late;
+          yield f.late;
+          return;
+        }
         if (signal?.aborted) return;
         if ("yield" in f) {
           yield f.yield;
@@ -159,12 +184,13 @@ vi.mock("@/components/harness/OpenInEditor", async (orig) => {
   };
 });
 
-import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
+import { BuildCodeView, sameSession } from "@/components/buildCode/BuildCodeView";
 import { CodeConversation } from "@/components/buildCode/CodeConversation";
 import { codePanesDraws } from "@/components/buildCode/CodePanes";
 import { ChangesReview } from "@/components/harness/ChangesReview";
 import { CommentChips, SentComments } from "@/components/harness/CommentChips";
 import { IjHarnessView } from "@/components/harness/IjHarnessView";
+import { queueNotSavedWords } from "@/components/harness/HarnessSession";
 import type { FileChange } from "@/components/chat/ChangedFiles";
 import { DiffBody, parseUnified } from "@/components/chat/DiffView";
 import { markOf } from "@/lib/changesReview";
@@ -174,7 +200,7 @@ import { decodeBranchAnswer } from "@/lib/buildAppBranch";
 import { decodeQueuedItem, queuedItemBody, queuedWords } from "@/lib/buildComposer";
 import { decodeRewindPreview } from "@/lib/buildRewind";
 import { retryItemFor } from "@/lib/buildRetry";
-import { decodeSessionView } from "@/lib/buildSessions";
+import { decodeSessionView, deleteSession } from "@/lib/buildSessions";
 import { __resetLooking } from "@/lib/buildWatching";
 import { __resetSplitMemory } from "@/lib/codeSplit";
 import {
@@ -196,13 +222,17 @@ import {
   decodeComments,
   getComments,
   hunkComment,
+  isTypedCommand,
   lineOfRow,
   linesComment,
   noteFileMarks,
   pressLines,
+  quoteCutWords,
+  quoteLines,
   quoteOfHunk,
   removeComment,
   restoreComments,
+  rowsOfHunkAt,
   subscribeComments,
   takeComments,
   type CommentBody,
@@ -258,6 +288,8 @@ beforeEach(() => {
   H.release = null;
   H.draws = { rows: 0, files: 0 };
   H.byId = {};
+  H.late = null;
+  H.gate = {};
   __resetLooking();
   __resetSplitMemory();
   window.localStorage.clear();
@@ -411,18 +443,64 @@ describe("the store", () => {
 
   it("a block's comment: its lines with their marks, the NEW numbers; a deleted file's old ones", () => {
     const rows = parseUnified("@@ -10,3 +12,4 @@\n a\n-b\n+c\n+d\n e\n@@ -40,1 +42,1 @@\n-z\n+y");
-    expect(hunkComment(rows, "@@ -10,3 +12,4 @@", false)).toEqual({
+    expect(hunkComment(rows, 0, false)).toEqual({
       side: "new",
       start: 12,
       end: 15,
       quote: " a\n-b\n+c\n+d\n e",
+      cut: "",
     });
-    expect(hunkComment(rows, "@@ -40,1 +42,1 @@", false)).toEqual({ side: "new", start: 42, end: 42, quote: "-z\n+y" });
-    expect(hunkComment(rows, "@@ -1,1 +1,1 @@", false)).toBeNull();
+    expect(hunkComment(rows, 1, false)).toEqual({ side: "new", start: 42, end: 42, quote: "-z\n+y", cut: "" });
+    expect(hunkComment(rows, 2, false)).toBeNull();
+    expect(hunkComment(rows, -1, false)).toBeNull();
     const gone = parseUnified("@@ -1,2 +0,0 @@\n-one\n-two");
-    expect(hunkComment(gone, "@@ -1,2 +0,0 @@", true)).toEqual({ side: "old", start: 1, end: 2, quote: "-one\n-two" });
+    expect(hunkComment(gone, 0, true)).toEqual({ side: "old", start: 1, end: 2, quote: "-one\n-two", cut: "" });
+  });
+
+  it("two blocks with the SAME header are two blocks (by position, never by the header's words)", () => {
+    // A diff that joins two edits of one file: both blocks say "@@ -1 +1 @@".
+    const rows = parseUnified("@@ -1 +1 @@\n-a\n+b\n@@ -1 +1 @@\n-c\n+d");
+    expect(rowsOfHunkAt(rows, 0).map((r) => r.text)).toEqual(["a", "b"]);
+    expect(rowsOfHunkAt(rows, 1).map((r) => r.text)).toEqual(["c", "d"]);
+    expect(hunkComment(rows, 1, false)!.quote).toBe("-c\n+d");
+    // A line too: the row's own place, not every row that carries its number.
+    expect(linesComment(rows, "new", 5, 5)!.quote).toBe("+d");
+    expect(linesComment(rows, "new", 2, 2)!.quote).toBe("+b");
+    expect(linesComment(rows, "new", 5, 2)).toMatchObject({ start: 1, end: 1, quote: "+b\n+d" });
+  });
+
+  it("a quote is cut at a WHOLE line, and says how many lines it holds", () => {
     const long = parseUnified(`@@ -1,1 +1,900 @@\n${Array.from({ length: 900 }, (_, i) => `+line number ${i}`).join("\n")}`);
-    expect(quoteOfHunk(long.slice(1))).toHaveLength(QUOTE_CHARS);
+    const q = quoteLines(long.slice(1));
+    expect(q.total).toBe(900);
+    expect(q.partial).toBe(false);
+    expect(q.quote.length).toBeLessThanOrEqual(QUOTE_CHARS);
+    // The last line quoted is whole, and the next one would not have fitted.
+    const kept = q.quote.split("\n");
+    expect(kept).toHaveLength(q.lines);
+    expect(kept.at(-1)).toBe(`+line number ${q.lines - 1}`);
+    expect(q.quote.length + 1 + `+line number ${q.lines}`.length).toBeGreaterThan(QUOTE_CHARS);
+    expect(quoteOfHunk(long.slice(1))).toBe(q.quote);
+    expect(quoteCutWords(q)).toBe(`Only the first ${q.lines} lines are quoted.`);
+    expect(hunkComment(long, 0, false)!.cut).toBe(`Only the first ${q.lines} lines are quoted.`);
+    expect(linesComment(long, "new", 1, 900)!.cut).toBe(`Only the first ${q.lines} lines are quoted.`);
+    // Nothing cut: nothing said.
+    expect(quoteCutWords(quoteLines(parseUnified("@@ -1 +1 @@\n-a\n+b").slice(1)))).toBe("");
+    expect(quoteCutWords({ lines: 1, total: 3, partial: false })).toBe("Only the first line is quoted.");
+    // One line longer than a quote: its start, and said.
+    const one = quoteLines(parseUnified(`@@ -1 +1 @@\n+${"x".repeat(QUOTE_CHARS + 100)}\n+next`).slice(1));
+    expect(one).toMatchObject({ lines: 1, total: 2, partial: true });
+    expect(one.quote).toHaveLength(QUOTE_CHARS);
+    expect(quoteCutWords(one)).toBe("Only the start of the first line is quoted.");
+  });
+
+  it("a typed command of the tool's own is told from a message and from a path", () => {
+    for (const t of ["/compact", "/model opus", "  /review app.py", "/plugin:cmd x", "/clear\n"]) {
+      expect(isTypedCommand(t)).toBe(true);
+    }
+    for (const t of ["fix /compact", "/etc/hosts is wrong", "/", "/ compact", "", "a/b"]) {
+      expect(isTypedCommand(t)).toBe(false);
+    }
   });
 
   it("a chip's words: the file, the lines, the start of the words", () => {
@@ -831,17 +909,17 @@ describe("Build › Code", () => {
 
   it("a refused send puts the words and the comments back, with the daemon's sentence", async () => {
     openCode("a1");
-    const why = "A command takes no comments. Send the comments with a message of your own.";
+    const why = "A comment names a file that is not in this session's folder, so nothing was sent.";
     H.scripts = [[{ yield: { type: "error", detail: why, status: 400 } }]];
     codeView("a1");
     await commentThroughDialog("Use a constant");
     await screen.findByTestId("comment-chip");
-    type("/review");
+    type("fix these");
     fireEvent.click(screen.getByTestId("code-send"));
     await waitFor(() => expect(screen.getByTestId("code-note").textContent).toBe(why));
-    expect(turnBody("a1")).toMatchObject({ text: "/review", comments: [SENT] });
+    expect(turnBody("a1")).toMatchObject({ text: "fix these", comments: [SENT] });
     expect(screen.getByTestId("comment-chip").textContent).toBe("cart.py 1–2: Use a constant");
-    expect((screen.getByTestId("code-box") as HTMLTextAreaElement).value).toBe("/review");
+    expect((screen.getByTestId("code-box") as HTMLTextAreaElement).value).toBe("fix these");
     expect(commentsBody(getComments("code:a1"))).toEqual([SENT]);
     // No bubble for a message that never went.
     expect(screen.getAllByTestId("code-user")).toHaveLength(1);
@@ -1180,7 +1258,7 @@ describe("Chat › Code", () => {
   });
 
   it("a message may be comments alone", async () => {
-    openChat("s1");
+    openChat("s11"); // (a session of its own: a reply left running is kept per session)
     expect(await screen.findByText("Added the cart.", {}, { timeout: 10_000 })).toBeInTheDocument();
     expect((screen.getByTestId("harness-send") as HTMLButtonElement).disabled).toBe(true);
     await commentThroughDialog("Use a constant");
@@ -1191,7 +1269,7 @@ describe("Chat › Code", () => {
   });
 
   it("a refused message puts its words and its comments back", async () => {
-    openChat("s1");
+    openChat("s12");
     expect(await screen.findByText("Added the cart.", {}, { timeout: 10_000 })).toBeInTheDocument();
     await commentThroughDialog("Use a constant");
     await screen.findByTestId("comment-chip");
@@ -1202,7 +1280,7 @@ describe("Chat › Code", () => {
     expect(chat.turns[0].body).toMatchObject({ comments: [SENT] });
     await waitFor(() => expect(screen.getByTestId("comment-chip").textContent).toBe("cart.py 1–2: Use a constant"));
     await waitFor(() => expect(chatBox().value).toBe("fix these"));
-    expect(commentsBody(getComments("s1"))).toEqual([SENT]);
+    expect(commentsBody(getComments("s12"))).toEqual([SENT]);
   });
 
   it("an OLDER Iron Jarvis (no takes_comments): no button, no chips, no `comments` sent, nothing lost", async () => {
@@ -1317,38 +1395,49 @@ const lineRowsOf = (root: Element) =>
 
 describe("a line, or a range of lines", () => {
   it("the helpers: which line a row is, what a press picks, what the lines quote", () => {
-    const rows = parseUnified(LINES_DIFF);
-    expect(rows.map((r) => lineOfRow(r))).toEqual([
+    const rows = parseUnified(LINES_DIFF); // the header, then a · -b · -c · +B · +C · +D · e
+    expect(rows.map((r, i) => lineOfRow(r, i))).toEqual([
       null,
-      { side: "new", line: 10 },
-      { side: "old", line: 11 },
-      { side: "old", line: 12 },
-      { side: "new", line: 11 },
-      { side: "new", line: 12 },
-      { side: "new", line: 13 },
-      { side: "new", line: 14 },
+      { side: "new", line: 10, at: 1 },
+      { side: "old", line: 11, at: 2 },
+      { side: "old", line: 12, at: 3 },
+      { side: "new", line: 11, at: 4 },
+      { side: "new", line: 12, at: 5 },
+      { side: "new", line: 13, at: 6 },
+      { side: "new", line: 14, at: 7 },
     ]);
     expect(commentLineLabel({ side: "new", line: 14 })).toBe("Comment on line 14");
     expect(commentLineLabel({ side: "old", line: 11 })).toBe("Comment on removed line 11");
-    const n = (line: number): LineRef => ({ side: "new", line });
-    const o = (line: number): LineRef => ({ side: "old", line });
+    const at = (i: number): LineRef => lineOfRow(rows[i], i)!;
     // A plain press: that one line, whatever was pressed before.
-    expect(pressLines(n(11), n(13), false)).toEqual({ side: "new", start: 13, end: 13, anchor: n(13) });
-    // Shift: the range between, in either order; the first line stays the anchor.
-    expect(pressLines(n(11), n(13), true)).toEqual({ side: "new", start: 11, end: 13, anchor: n(11) });
-    expect(pressLines(n(14), n(10), true)).toEqual({ side: "new", start: 10, end: 14, anchor: n(14) });
+    expect(pressLines(at(4), at(6), false)).toEqual({ side: "new", from: 6, to: 6, anchor: at(6) });
+    // Shift: the rows between, in either order; the first line stays the anchor.
+    expect(pressLines(at(4), at(6), true)).toEqual({ side: "new", from: 4, to: 6, anchor: at(4) });
+    expect(pressLines(at(7), at(1), true)).toEqual({ side: "new", from: 1, to: 7, anchor: at(7) });
     // Shift with nothing pressed before, or across sides: a new single line.
-    expect(pressLines(null, n(12), true)).toEqual({ side: "new", start: 12, end: 12, anchor: n(12) });
-    expect(pressLines(n(12), o(11), true)).toEqual({ side: "old", start: 11, end: 11, anchor: o(11) });
-    expect(pressLines(o(11), n(12), true)).toEqual({ side: "new", start: 12, end: 12, anchor: n(12) });
+    expect(pressLines(null, at(5), true)).toEqual({ side: "new", from: 5, to: 5, anchor: at(5) });
+    expect(pressLines(at(5), at(2), true)).toEqual({ side: "old", from: 2, to: 2, anchor: at(2) });
+    expect(pressLines(at(2), at(5), true)).toEqual({ side: "new", from: 5, to: 5, anchor: at(5) });
     // The quote is exactly those lines, with their marks.
-    expect(linesComment(rows, "new", 12, 12)).toEqual({ side: "new", start: 12, end: 12, quote: "+C" });
-    expect(linesComment(rows, "new", 14, 10)).toEqual({ side: "new", start: 10, end: 14, quote: " a\n+B\n+C\n+D\n e" });
-    expect(linesComment(rows, "old", 11, 12)).toEqual({ side: "old", start: 11, end: 12, quote: "-b\n-c" });
-    expect(linesComment(rows, "old", 10, 13)).toEqual({ side: "old", start: 10, end: 13, quote: " a\n-b\n-c\n e" });
+    expect(linesComment(rows, "new", 5, 5)).toEqual({ side: "new", start: 12, end: 12, quote: "+C", cut: "" });
+    expect(linesComment(rows, "new", 7, 1)).toEqual({
+      side: "new",
+      start: 10,
+      end: 14,
+      quote: " a\n+B\n+C\n+D\n e",
+      cut: "",
+    });
+    expect(linesComment(rows, "old", 2, 3)).toEqual({ side: "old", start: 11, end: 12, quote: "-b\n-c", cut: "" });
+    expect(linesComment(rows, "old", 1, 7)).toEqual({
+      side: "old",
+      start: 10,
+      end: 13,
+      quote: " a\n-b\n-c\n e",
+      cut: "",
+    });
+    expect(linesComment(rows, "old", 4, 6)).toBeNull(); // added lines are no lines of the old file
     expect(linesComment(rows, "new", 40, 50)).toBeNull();
-    const long = parseUnified(`@@ -1,1 +1,900 @@\n${Array.from({ length: 900 }, (_, i) => `+line number ${i}`).join("\n")}`);
-    expect(linesComment(long, "new", 1, 900)!.quote).toHaveLength(QUOTE_CHARS);
+    expect(linesComment(rows, "new", 0, 0)).toBeNull(); // the header is no line
   });
 
   it("without the flag the gutter is exactly DiffView's own: no button, the same markup", () => {
@@ -1453,18 +1542,12 @@ describe("a line, or a range of lines", () => {
     expect(screen.getByTestId("review-comment-quote").textContent).toBe("-b\n-c");
   });
 
-  it("the number is a real button the keyboard reaches, and the line pressed first says so", async () => {
+  it("the line pressed first says so (aria-pressed)", async () => {
     render(<ChangesReview changes={[lined()]} sessionId="s1" comments />);
     const btn = lineBtn(13) as HTMLButtonElement;
-    // A <button type="button">: Tab reaches it, and Enter or Space press it
-    // (the browser turns those keys into the click this test sends).
     expect(btn.tagName).toBe("BUTTON");
     expect(btn.type).toBe("button");
-    expect(btn.disabled).toBe(false);
-    expect(btn.getAttribute("tabindex")).toBeNull();
     expect(btn.textContent).toBe("13");
-    btn.focus();
-    expect(document.activeElement).toBe(btn);
     expect(btn.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(btn);
     await screen.findByTestId("review-comment-dialog");
@@ -1472,10 +1555,64 @@ describe("a line, or a range of lines", () => {
     expect(lineBtn(13).getAttribute("aria-pressed")).toBe("true");
     expect(lineBtn(12).getAttribute("aria-pressed")).toBe("false");
     expect(lineBtn(11, true).getAttribute("aria-pressed")).toBe("false");
-    // A keyboard's Shift+Enter arrives as a click with Shift held.
-    fireEvent.click(lineBtn(11), { shiftKey: true });
+  });
+
+  it("the keyboard: ONE Tab stop per file's lines; arrows, Home and End move; Enter and Space press", async () => {
+    render(<ChangesReview changes={[lined(), notes()]} sessionId="s1" comments />);
+    const tabbable = (i: number) =>
+      Array.from(screen.getByTestId(`review-rows-${i}`).querySelectorAll<HTMLButtonElement>("button[data-line-press]")).filter(
+        (b) => b.tabIndex === 0,
+      );
+    const all = (i: number) => screen.getByTestId(`review-rows-${i}`).querySelectorAll("button[data-line-press]");
+    // Seven line numbers in the first file, one in the second: ONE stop each
+    // (the first line), not one per line.
+    expect(all(0)).toHaveLength(7);
+    expect(tabbable(0)).toEqual([lineBtn(10)]);
+    expect(tabbable(1)).toHaveLength(1);
+    expect(Array.from(all(0)).filter((b) => b.getAttribute("tabindex") === "-1")).toHaveLength(6);
+    // The block's own Comment press stays an ordinary Tab stop.
+    expect(screen.getAllByTestId("review-hunk-comment-0")[0].getAttribute("tabindex")).toBeNull();
+    // Arrows walk the numbers in the order drawn; the focused one is the stop.
+    const first = lineBtn(10);
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(lineBtn(11, true));
+    expect(tabbable(0)).toEqual([lineBtn(11, true)]);
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(lineBtn(11));
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(lineBtn(12, true));
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(document.activeElement).toBe(lineBtn(14));
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" }); // the last: stays
+    expect(document.activeElement).toBe(lineBtn(14));
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(lineBtn(10));
+    expect(tabbable(0)).toEqual([lineBtn(10)]);
+    expect(tabbable(1)).toHaveLength(1); // the other file keeps its own stop
+    // Enter presses the focused number...
+    fireEvent.keyDown(lineBtn(11), { key: "Enter" });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, line 11");
+    await cancelDialog();
+    // ...Shift+Enter extends to the lines between...
+    fireEvent.keyDown(lineBtn(13), { key: "Enter", shiftKey: true });
     await screen.findByTestId("review-comment-dialog");
     expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, lines 11–13");
+    await cancelDialog();
+    // ...and Space presses too (Shift+Space extends).
+    fireEvent.keyDown(lineBtn(14), { key: " " });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, line 14");
+    await cancelDialog();
+    fireEvent.keyDown(lineBtn(12), { key: " ", shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-where").textContent).toBe("f.py, lines 12–14");
+    await cancelDialog();
+    // Another key does nothing.
+    fireEvent.keyDown(lineBtn(12), { key: "a" });
+    expect(screen.queryByTestId("review-comment-dialog")).toBeNull();
   });
 
   it("the wide view: a line press in either drawing opens the ONE dialog", async () => {
@@ -1606,5 +1743,331 @@ describe("Chat › Code's Branch view", () => {
     );
     // A line's number is a press there too.
     expect(lineBtns(2).length).toBeGreaterThan(0);
+  });
+});
+
+/* ===================================================== the review's findings */
+
+describe("review: nothing is lost, nothing is spent", () => {
+  const refusal = "A comment names a file that is not in this session's folder, so nothing was sent.";
+
+  /** Two Build › Code sessions; `a1` is the one opened first. */
+  function openTwo() {
+    openCode("a1");
+    H.gets["/build/app/sessions"] = { sessions: [codeSess("a1"), codeSess("a2")] };
+    H.gets["/build/app/sessions/a2"] = {
+      session: codeSess("a2"),
+      events: CODE_EVENTS,
+      running: null,
+      pending: [],
+      takes_comments: true,
+    };
+    H.gets["/build/app/sessions/a2/changes"] = { ...CODE_CHANGES, changes: [] };
+  }
+
+  it("Build › Code: a refusal that lands after another session was opened still puts the comments back", async () => {
+    openTwo();
+    let letGo: () => void = () => {};
+    H.late = new Promise<void>((r) => {
+      letGo = r;
+    });
+    H.scripts = [[{ late: { type: "error", detail: refusal, status: 400 } }]];
+    const view = render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await commentThroughDialog("Use a constant");
+    await screen.findByTestId("comment-chip");
+    type("fix these");
+    fireEvent.click(screen.getByTestId("code-send"));
+    await waitFor(() => expect(turnBody("a1")).toMatchObject({ comments: [SENT] }));
+    expect(getComments("code:a1")).toHaveLength(0); // they left the box with the words
+    // The user opens the other session before the answer is read...
+    view.rerender(<BuildCodeView initialSession="a2" linkSeq={1} onOpenedTerminal={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("code-session").getAttribute("data-session")).toBe("a2"), {
+      timeout: 10_000,
+    });
+    await screen.findByTestId("code-box", {}, { timeout: 10_000 });
+    // ...and the refusal arrives.
+    await act(async () => {
+      letGo();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    await waitFor(() => expect(commentsBody(getComments("code:a1"))).toEqual([SENT]));
+    // Under ITS session: the one on screen holds none, and shows none.
+    expect(getComments("code:a2")).toHaveLength(0);
+    expect(screen.queryByTestId("comment-chip")).toBeNull();
+    expect((screen.getByTestId("code-box") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("Build › Code: a waiting message that goes as a message after a switch goes to ITS session, and a refusal puts its comments back there", async () => {
+    openTwo();
+    // The first stream is the running reply; the second (the message) is refused.
+    const asked = { type: "user", at: AT2, text: "working on it", files: [], turn: "turn_1" };
+    (H.gets["/build/app/sessions/a1"] as Record<string, unknown>).events = [...CODE_EVENTS, asked];
+    (H.gets["/build/app/sessions/a1"] as Record<string, unknown>).running = "turn_1";
+    H.scripts = [[{ event: "user", data: asked }], [{ yield: { type: "error", detail: refusal, status: 400 } }]];
+    holdStreams();
+    let letGo: () => void = () => {};
+    H.gate["/build/app/sessions/a1/queue"] = new Promise<void>((r) => {
+      letGo = r;
+    });
+    H.fail["/build/app/sessions/a1/queue"] = { status: 409, message: "not working", body: { code: "not_working" } };
+    const view = render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-stop", {}, { timeout: 10_000 });
+    await commentThroughDialog("Use a constant");
+    await screen.findByTestId("comment-chip");
+    type("then this");
+    fireEvent.keyDown(screen.getByTestId("code-box"), { key: "Enter" });
+    await waitFor(() => expect(posted("/build/app/sessions/a1/queue")).toHaveLength(1));
+    view.rerender(<BuildCodeView initialSession="a2" linkSeq={1} onOpenedTerminal={() => {}} />);
+    await waitFor(() => expect(screen.queryByTestId("code-stop")).toBeNull());
+    H.release?.(); // (the left session's stream ends)
+    await act(async () => {
+      letGo();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    // The message went to the session it was written in, never the one on screen.
+    await waitFor(() => expect(turnBody("a1")).toMatchObject({ text: "then this", comments: [SENT] }));
+    expect(turnBody("a2")).toBeUndefined();
+    // Refused there: its comments are back under a1's key.
+    await waitFor(() => expect(commentsBody(getComments("code:a1"))).toEqual([SENT]));
+    expect(getComments("code:a2")).toHaveLength(0);
+    // The rule itself: a handed message is for one session only.
+    expect(sameSession("a1", "a1")).toBe(true);
+    expect(sameSession("a2", "a1")).toBe(false);
+  });
+
+  it("Build › Code: a typed command takes no comments — they stay as chips, now and while a reply runs", async () => {
+    openCode("a1");
+    holdStreams();
+    codeView("a1");
+    await commentThroughDialog("Use a constant");
+    await screen.findByTestId("comment-chip");
+    type("/compact");
+    fireEvent.click(screen.getByTestId("code-send"));
+    await waitFor(() => expect(turnBody("a1")).toBeTruthy());
+    expect(turnBody("a1")).toMatchObject({ text: "/compact" });
+    expect(turnBody("a1")).not.toHaveProperty("comments");
+    expect(screen.getByTestId("comment-chip").textContent).toBe("cart.py 1–2: Use a constant");
+    expect(getComments("code:a1")).toHaveLength(1);
+    // The command's own bubble shows no comment.
+    expect(within(screen.getAllByTestId("code-user").at(-1)!).queryByTestId("sent-comment")).toBeNull();
+    // While it runs, a queued command leaves them too.
+    await screen.findByTestId("code-stop");
+    H.reply["/build/app/sessions/a1/queue"] = { ok: true, id: "q1", queued: [{ id: "q1", text: "/model opus", files: [] }] };
+    type("/model opus");
+    fireEvent.keyDown(screen.getByTestId("code-box"), { key: "Enter" });
+    await waitFor(() => expect(posted("/build/app/sessions/a1/queue")).toHaveLength(1));
+    expect(posted("/build/app/sessions/a1/queue")[0].body).toEqual({ text: "/model opus" });
+    expect(screen.getByTestId("comment-chip")).toBeTruthy();
+    expect(getComments("code:a1")).toHaveLength(1);
+  });
+
+  it("Build › Code: deleting a session ends its waiting comments; a refused delete keeps them", async () => {
+    addComment("code:a1", body());
+    addComment("code:a2", body({ words: "another session's" }));
+    openCode("a1");
+    H.gets["/build/app/sessions"] = { sessions: [codeSess("a1"), codeSess("a2")] };
+    H.fail["/build/app/sessions/a2"] = { status: 409, message: "This session's reply is still running. Stop it first, then delete it." };
+    codeView("a1");
+    const press = async (id: string) => {
+      fireEvent.click(await screen.findByTestId(`code-row-more-${id}`, {}, { timeout: 10_000 }));
+      const del = screen.getByTestId(`code-row-delete-${id}`).querySelector("button") as HTMLButtonElement;
+      fireEvent.click(del);
+      fireEvent.click(del);
+    };
+    await press("a2");
+    await screen.findByTestId("code-row-note");
+    expect(getComments("code:a2")).toHaveLength(1); // refused: nothing ended
+    await press("a1");
+    await waitFor(() => expect(H.sent.some((x) => x.method === "DELETE" && x.path === "/build/app/sessions/a1")).toBe(true));
+    await waitFor(() => expect(getComments("code:a1")).toHaveLength(0));
+    expect(window.localStorage.getItem(`${COMMENTS_KEY_PREFIX}code:a1`)).toBeNull();
+    expect(getComments("code:a2")).toHaveLength(1);
+  });
+
+  it("Chat › Code: deleting a session ends its waiting comments; a refused delete keeps them", async () => {
+    addComment("s8", body());
+    addComment("s9", body());
+    H.fail["/build/sessions/s9"] = { status: 409, message: "This session's reply is still running." };
+    await expect(deleteSession("s9")).rejects.toThrow("still running");
+    expect(getComments("s9")).toHaveLength(1);
+    await deleteSession("s8");
+    expect(getComments("s8")).toHaveLength(0);
+    expect(window.localStorage.getItem(`${COMMENTS_KEY_PREFIX}s8`)).toBeNull();
+    expect(getComments("s9")).toHaveLength(1);
+  });
+
+  /** A diff that joins two edits of one file: both blocks say "@@ -1 +1 @@". */
+  const twice: FileChange = {
+    path: F,
+    rel: "f.py",
+    name: "f.py",
+    status: "modified",
+    added: 2,
+    removed: 2,
+    diff: "--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-a\n+b\n@@ -1 +1 @@\n-c\n+d",
+  };
+
+  it("the wide view's side-by-side drawing: its own ONE Tab stop, its arrows, and its second same-header block", async () => {
+    render(<ChangesReview changes={[twice]} sessionId="s1" comments />);
+    fireEvent.click(screen.getByTestId("review-wide-open"));
+    const wide = await screen.findByTestId("review-wide");
+    const split = within(wide).getByTestId("diff-split");
+    const nums = () => Array.from(split.querySelectorAll<HTMLButtonElement>("button[data-line-press]"));
+    const stops = (root: Element) =>
+      Array.from(root.querySelectorAll<HTMLButtonElement>("button[data-line-press]")).filter((b) => b.tabIndex === 0);
+    expect(nums()).toHaveLength(4); // -a | +b, then -c | +d
+    expect(stops(split)).toEqual([nums()[0]]);
+    // The one-column drawing beside it, and the pane behind, keep their own.
+    expect(stops(within(wide).getByTestId("diff-unified"))).toHaveLength(1);
+    expect(stops(screen.getAllByTestId("review-rows-0")[0])).toHaveLength(1);
+    nums()[0].focus();
+    fireEvent.keyDown(nums()[0], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(nums()[1]);
+    expect(stops(split)).toEqual([nums()[1]]);
+    fireEvent.keyDown(nums()[1], { key: "End" });
+    expect(document.activeElement).toBe(nums()[3]);
+    expect(stops(split)).toEqual([nums()[3]]);
+    // The second block's Comment, in THIS drawing.
+    fireEvent.click(within(split).getAllByTestId("review-hunk-comment-0")[1]);
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getAllByTestId("review-comment-dialog")).toHaveLength(1);
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("-c\n+d");
+  });
+
+  it("the Comment on the SECOND of two blocks with the same header quotes the second; a line press too", async () => {
+    render(<ChangesReview changes={[twice]} sessionId="s1" comments />);
+    const presses = screen.getAllByTestId("review-hunk-comment-0");
+    expect(presses).toHaveLength(2);
+    fireEvent.click(presses[1]);
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("-c\n+d");
+    await cancelDialog();
+    fireEvent.click(presses[0]);
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("-a\n+b");
+    await cancelDialog();
+    // Both blocks have a "line 1": each number presses its OWN row.
+    expect(lineBtns(1)).toHaveLength(2);
+    fireEvent.click(lineBtns(1)[1]);
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("+d");
+    await cancelDialog();
+    expect(lineBtns(1)[1].getAttribute("aria-pressed")).toBe("true");
+    expect(lineBtns(1)[0].getAttribute("aria-pressed")).toBe("false"); // the same number, another row
+    fireEvent.click(lineBtns(1)[0], { shiftKey: true });
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.getByTestId("review-comment-quote").textContent).toBe("+b\n+d");
+  });
+
+  it("a quote that is cut says so under it, and is stored ending on a whole line", async () => {
+    const many = Array.from({ length: 900 }, (_, i) => `+line number ${i}`);
+    const big: FileChange = {
+      path: F,
+      rel: "f.py",
+      name: "f.py",
+      status: "created",
+      added: 900,
+      removed: 0,
+      diff: `--- /dev/null\n+++ b/f.py\n@@ -0,0 +1,900 @@\n${many.join("\n")}`,
+    };
+    const held = quoteLines(parseUnified(big.diff).slice(1)).lines;
+    render(<ChangesReview changes={[big, cart()]} sessionId="s1" comments />);
+    fireEvent.click(screen.getByTestId("review-hunk-comment-0"));
+    const box = await screen.findByTestId("review-comment-words");
+    expect(screen.getByTestId("review-comment-cut").textContent).toBe(`Only the first ${held} lines are quoted.`);
+    fireEvent.change(box, { target: { value: "Too long" } });
+    fireEvent.click(screen.getByTestId("review-comment-save"));
+    await waitFor(() => expect(screen.queryByTestId("review-comment-dialog")).toBeNull());
+    const [c] = getComments("s1");
+    expect(c.quote.length).toBeLessThanOrEqual(QUOTE_CHARS);
+    expect(c.quote.split("\n")).toEqual(many.slice(0, held));
+    expect([c.start, c.end]).toEqual([1, 900]); // the comment is still about the whole block
+    // A block that fits says nothing.
+    fireEvent.click(screen.getByTestId("review-hunk-comment-1"));
+    await screen.findByTestId("review-comment-dialog");
+    expect(screen.queryByTestId("review-comment-cut")).toBeNull();
+  });
+});
+
+describe("review: Chat › Code", () => {
+  afterEach(() => {
+    live?.end();
+    turnStream?.end();
+  });
+
+  async function running(id: string) {
+    openChat(id, { running: true });
+    await waitFor(
+      () => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/chat/turns/tr1/stream"), expect.anything()),
+      { timeout: 10_000 },
+    );
+    await act(async () => {
+      live.push("resume", { resumed: false, running: true });
+      live.push("caught_up", { id: "" });
+      live.push("token", { text: "working " });
+      await new Promise((r) => setTimeout(r, 40));
+    });
+    await waitFor(() => expect(screen.getByTestId("harness-live-text")).toHaveTextContent("working"));
+  }
+
+  it("a waiting message that could not be saved says so, and still waits in this window", async () => {
+    await running("s6");
+    H.fail["/chat/threads/s6/queue"] = { status: 413, message: "the waiting messages are too large to keep" };
+    await commentThroughDialog("Use a constant");
+    await screen.findByTestId("comment-chip");
+    fireEvent.change(chatBox(), { target: { value: "after it" } });
+    fireEvent.keyDown(chatBox(), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(screen.getByTestId("harness-session").textContent).toContain(queueNotSavedWords(1)));
+    expect(queueNotSavedWords(1)).toBe("This waiting message could not be saved, so it will be lost if the page reloads.");
+    expect(queueNotSavedWords(2)).toContain("These waiting messages");
+    // Nothing is lost yet: it waits, with its comment.
+    expect(screen.getByTestId("harness-queued").textContent).toContain("after it · 1 comment");
+  });
+
+  it("a saved waiting message says nothing", async () => {
+    await running("s61");
+    await commentThroughDialog("Use a constant");
+    await screen.findByTestId("comment-chip");
+    fireEvent.change(chatBox(), { target: { value: "after it" } });
+    fireEvent.keyDown(chatBox(), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(screen.getByTestId("harness-queued").textContent).toContain("after it · 1 comment"));
+    await pause(30);
+    expect(screen.getByTestId("harness-session").textContent).not.toContain("could not be saved");
+  });
+
+  it("a typed command of Claude Code's own takes no comments: they stay as chips", async () => {
+    openChat("s7", {
+      gets: {
+        "/build/sessions/s7/commands": {
+          commands: [{ name: "review", description: "Review the changes", source: "project", kind: "command" }],
+        },
+      },
+    });
+    expect(await screen.findByText("Added the cart.", {}, { timeout: 10_000 })).toBeInTheDocument();
+    await commentThroughDialog("Use a constant");
+    await screen.findByTestId("comment-chip");
+    fireEvent.change(chatBox(), { target: { value: "/review app.py" } });
+    // (Enter runs it by name once the session's command list is read.)
+    const hint = await screen.findByTestId("harness-slash-invoking");
+    expect(hint.getAttribute("data-name")).toBe("review");
+    fireEvent.keyDown(chatBox(), { key: "Enter" });
+    await waitFor(() => expect(chat.turns).toHaveLength(1));
+    expect(chat.turns[0].body).toMatchObject({ command: "review", text: "app.py" });
+    expect(chat.turns[0].body).not.toHaveProperty("comments");
+    expect(screen.getByTestId("comment-chip").textContent).toBe("cart.py 1–2: Use a constant");
+    expect(getComments("s7")).toHaveLength(1);
+  });
+
+  it("while a reply runs, a message typed as \"/name …\" waits WITHOUT the comments (they stay as chips)", async () => {
+    await running("s62");
+    await commentThroughDialog("Use a constant");
+    await screen.findByTestId("comment-chip");
+    fireEvent.change(chatBox(), { target: { value: "/review app.py" } });
+    fireEvent.keyDown(chatBox(), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(H.sent.filter((x) => x.method === "PUT" && x.path === "/chat/threads/s62/queue")).toHaveLength(1));
+    const kept = H.sent.find((x) => x.method === "PUT" && x.path === "/chat/threads/s62/queue")!.body as { items: unknown[] };
+    expect(kept.items).toEqual([{ text: "/review app.py" }]);
+    expect(screen.getByTestId("comment-chip")).toBeTruthy();
+    expect(getComments("s62")).toHaveLength(1);
   });
 });

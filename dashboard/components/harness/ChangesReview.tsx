@@ -205,10 +205,12 @@ function useNearScreen(ref: RefObject<HTMLElement | null>, enabled: boolean): bo
   return seen;
 }
 
-/** A hunk's Comment press: the file's path and the hunk's header. */
-type OnComment = (path: string, header: string) => void;
-/** A press on a line's number: the file's path, the side and the lines. */
-type OnLines = (path: string, side: CommentSide, start: number, end: number) => void;
+/** A hunk's Comment press: the file's path and the hunk's POSITION among the
+ *  file's hunks (two blocks can have the same header text). */
+type OnComment = (path: string, hunk: number) => void;
+/** A press on a line's number: the file's path, the side, and the rows it
+ *  spans (positions among the file's rows). */
+type OnLines = (path: string, side: CommentSide, from: number, to: number) => void;
 
 /** One file's rows, capped, with "Open at line N" (and, with `comments`,
  *  "Comment") on each hunk. */
@@ -228,6 +230,7 @@ function FileRows({
   onLines: OnLines;
 }) {
   const [all, setAll] = useState(false);
+  const rows = useMemo(() => parseUnified(change.diff), [change.diff]);
   // v1.544.0 (3b): the line pressed last — what a Shift+press extends from.
   // Kept HERE (this file's rows), so a press redraws no other file.
   const [anchor, setAnchor] = useState<LineRef | null>(null);
@@ -240,29 +243,26 @@ function FileRows({
         ? {
             title: COMMENT_LINE_TITLE,
             label: (row) => commentLineLabel(lineOfRow(row)),
-            pressed: (row) => {
-              const at = lineOfRow(row);
-              return !!anchor && !!at && at.side === anchor.side && at.line === anchor.line;
-            },
+            // (By the row itself: another block can carry the same number.)
+            pressed: (row) => !!anchor && rows[anchor.at] === row,
             onPress: (row, shift) => {
-              const at = lineOfRow(row);
-              if (!at) return;
+              const at = lineOfRow(row, rows.indexOf(row));
+              if (!at || at.at < 0) return;
               const picked = pressLines(anchor, at, shift);
               setAnchor(picked.anchor);
-              onLines(path, picked.side, picked.start, picked.end);
+              onLines(path, picked.side, picked.from, picked.to);
             },
           }
         : undefined,
-    [comments, anchor, path, onLines],
+    [comments, anchor, path, onLines, rows],
   );
-  const rows = useMemo(() => parseUnified(change.diff), [change.diff]);
   const changeLines = useMemo(() => hunkChangeLines(rows), [rows]);
   const limit = all ? MAX_DIFF_ROWS : REVIEW_ROWS_PER_FILE;
   const shown = useMemo(() => rows.slice(0, limit), [rows, limit]);
   const split = useMemo(() => (wide ? pairRows(shown) : []), [wide, shown]);
   const hidden = rows.length - shown.length;
   const deleted = change.status === "deleted";
-  const hunkAction = (text: string) => {
+  const hunkAction = (text: string, hunk: number) => {
     const line = deleted ? undefined : changeLines.get(text);
     if (!line && !comments) return null;
     return (
@@ -276,7 +276,7 @@ function FileRows({
             // word on the press.
             aria-label={line ? `${COMMENT} on the block at line ${line}` : `${COMMENT} on this block`}
             title={COMMENT_TITLE}
-            onClick={() => onComment(change.path, text)}
+            onClick={() => onComment(change.path, hunk)}
             className={`${ACTION} shrink-0 font-sans`}
           >
             {COMMENT}
@@ -533,6 +533,8 @@ const ReviewFile = memo(function ReviewFile({
 interface CommentDraft extends Pick<CommentBody, "path" | "side" | "start" | "end" | "quote"> {
   label: string;
   mark: string;
+  /** Said under the quote when it does not hold every line ("" = it does). */
+  cut: string;
 }
 
 const DIALOG_QUIET =
@@ -605,6 +607,12 @@ function CommentDialog({
         >
           {draft.quote}
         </pre>
+        {draft.cut ? (
+          // The quote is cut at a whole line: said, never silent.
+          <p data-testid="review-comment-cut" className="text-[12px] text-zinc-500">
+            {draft.cut}
+          </p>
+        ) : null}
         <label className="flex flex-col gap-1 text-[12px] text-zinc-400">
           {COMMENT_WORDS_LABEL}
           <textarea
@@ -758,18 +766,18 @@ export function ChangesReview({
   const [draft, setDraft] = useState<CommentDraft | null>(null);
   const keyedRef = useRef(keyed);
   keyedRef.current = keyed;
-  const openComment = useCallback((path: string, header: string) => {
+  const openComment = useCallback((path: string, hunk: number) => {
     const hit = keyedRef.current.find((k) => k.c.path === path);
     if (!hit) return;
-    const body = hunkComment(parseUnified(hit.c.diff ?? ""), header, hit.c.status === "deleted");
+    const body = hunkComment(parseUnified(hit.c.diff ?? ""), hunk, hit.c.status === "deleted");
     if (!body) return;
     setDraft({ ...body, path, label: hit.c.rel || hit.c.name || hit.c.path, mark: hit.mark });
   }, []);
   // v1.544.0 (3b): the same dialog for one line, or a range of lines.
-  const openLines = useCallback((path: string, side: CommentSide, start: number, end: number) => {
+  const openLines = useCallback((path: string, side: CommentSide, from: number, to: number) => {
     const hit = keyedRef.current.find((k) => k.c.path === path);
     if (!hit) return;
-    const body = linesComment(parseUnified(hit.c.diff ?? ""), side, start, end);
+    const body = linesComment(parseUnified(hit.c.diff ?? ""), side, from, to);
     if (!body) return;
     setDraft({ ...body, path, label: hit.c.rel || hit.c.name || hit.c.path, mark: hit.mark });
   }, []);

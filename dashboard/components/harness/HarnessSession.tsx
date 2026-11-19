@@ -367,6 +367,14 @@ function sleep(ms: number) {
 /** What rides a NEW turn beside its words: the uploads (v1.371.0), the files
  *  picked with "@" and the skill picked with "/" (v1.373.0). Kept whole so a
  *  message that never started goes back in the box with all of it. */
+/** v1.544.0 review: the waiting messages could not be saved (they still wait
+ *  in this window). */
+export function queueNotSavedWords(n: number): string {
+  return n === 1
+    ? "This waiting message could not be saved, so it will be lost if the page reloads."
+    : "These waiting messages could not be saved, so they will be lost if the page reloads.";
+}
+
 interface TurnExtras {
   attachments: HarnessFile[];
   files: AtFile[];
@@ -1858,7 +1866,10 @@ export function HarnessSession({
       put(`/chat/threads/${encodeURIComponent(threadId)}/queue`, {
         items: items.map(queuedItemBody),
       }).catch(() => {
-        /* the queue still lives in this window */
+        // The queue still lives in this window. v1.544.0 review: said, never
+        // silent — a waiting message (and the comments that left the box
+        // with it) would be gone after a reload.
+        if (items.length) setError(queueNotSavedWords(items.length));
       });
     },
     [threadId],
@@ -1959,9 +1970,14 @@ export function HarnessSession({
     // v1.544.0: the comments waiting above the box ride a message FROM THE
     // BOX (a message may be comments alone); a waiting or retried message
     // carries its own. A note (below) leaves them where they are.
-    const takes = view.takesComments;
+    // v1.544.0 review: a command (typed "/name words", or sent again) takes
+    // none — the ones waiting stay as chips, unspent.
+    const takes = view.takesComments && !command;
     const boxComments = fromBox && takes ? getComments(threadId).length : 0;
     const ownComments: readonly CommentBody[] = fromBox || !takes ? [] : (item.comments ?? []);
+    // (A waiting command that still carries comments: back above the box,
+    // never dropped.)
+    if (!fromBox && command && item.comments?.length) restoreComments(threadId, item.comments);
     if (
       !text && files.length === 0 && picks.length === 0 && !picked && !command && !trying.length &&
       !boxComments && !ownComments.length
@@ -2131,8 +2147,10 @@ export function HarnessSession({
     const files = att.filesRef.current;
     const picks = atFilesRef.current;
     const trying = tryOnRef.current;
-    // v1.544.0: the comments above the box wait with THIS message.
-    const has = !!view?.takesComments && getComments(threadId).length > 0;
+    // v1.544.0: the comments above the box wait with THIS message. Review:
+    // not with one typed as "/name …" (it may run as a command, which takes
+    // none): they stay as chips for the next message.
+    const has = !!view?.takesComments && !leadingSlash(text) && getComments(threadId).length > 0;
     if (!text && files.length === 0 && picks.length === 0 && trying.length === 0 && !has) return;
     if (att.busyRef.current) {
       setError("A file is still being attached. Queue the message when it is done.");

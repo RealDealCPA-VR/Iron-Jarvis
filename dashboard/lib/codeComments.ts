@@ -97,27 +97,68 @@ export function buildCodeCommentsKey(sessionId: string): string {
 
 // ── a block's comment ───────────────────────────────────────────────────────
 
-/** The rows of the hunk whose header is `header` (without the header row). */
-export function rowsOfHunk(rows: readonly DiffRow[], header: string): DiffRow[] {
-  const at = rows.findIndex((r) => r.kind === "hunk" && r.text === header);
+/** The rows of the file's `index`-th hunk (0 = the first), without its header
+ *  row. By POSITION, never by the header's text: a diff that joins several
+ *  edits of one file can hold two blocks with the same header. */
+export function rowsOfHunkAt(rows: readonly DiffRow[], index: number): DiffRow[] {
+  let seen = -1;
+  let at = -1;
+  for (let i = 0; i < rows.length; i += 1) {
+    if (rows[i].kind !== "hunk") continue;
+    seen += 1;
+    if (seen === index) {
+      at = i;
+      break;
+    }
+  }
   if (at < 0) return [];
   const out: DiffRow[] = [];
   for (let i = at + 1; i < rows.length && rows[i].kind !== "hunk"; i += 1) out.push(rows[i]);
   return out;
 }
 
-/** The hunk's own lines with their + / - / space marks, cut at QUOTE_CHARS. */
-export function quoteOfHunk(rows: readonly DiffRow[]): string {
-  const lines: string[] = [];
+/** What a quote holds of the lines it is about. */
+export interface QuotedLines {
+  quote: string;
+  /** How many lines the quote holds, and how many there were. */
+  lines: number;
+  total: number;
+  /** The one line quoted is itself longer than a quote: only its start. */
+  partial: boolean;
+}
+
+/** The rows' own lines with their + / - / space marks: WHOLE lines, as many
+ *  as fit in QUOTE_CHARS (a quote never ends in the middle of a line). A
+ *  first line longer than that by itself is cut (`partial`). */
+export function quoteLines(rows: readonly DiffRow[]): QuotedLines {
+  const all = rows
+    .filter((r) => r.kind !== "hunk")
+    .map((r) => `${r.kind === "added" ? "+" : r.kind === "removed" ? "-" : " "}${r.text}`);
+  const kept: string[] = [];
   let size = 0;
-  for (const r of rows) {
-    if (r.kind === "hunk") continue;
-    const line = `${r.kind === "added" ? "+" : r.kind === "removed" ? "-" : " "}${r.text}`;
-    lines.push(line);
-    size += line.length + 1;
-    if (size > QUOTE_CHARS) break;
+  for (const line of all) {
+    const next = size + line.length + (kept.length ? 1 : 0);
+    if (next > QUOTE_CHARS) break;
+    kept.push(line);
+    size = next;
   }
-  return lines.join("\n").slice(0, QUOTE_CHARS);
+  if (!kept.length && all.length) {
+    return { quote: all[0].slice(0, QUOTE_CHARS), lines: 1, total: all.length, partial: true };
+  }
+  return { quote: kept.join("\n"), lines: kept.length, total: all.length, partial: false };
+}
+
+/** The hunk's own lines with their marks, whole lines within QUOTE_CHARS. */
+export function quoteOfHunk(rows: readonly DiffRow[]): string {
+  return quoteLines(rows).quote;
+}
+
+/** What the dialog says under a quote that does not hold every line ("" when
+ *  it holds them all). */
+export function quoteCutWords(q: Pick<QuotedLines, "lines" | "total" | "partial">): string {
+  if (q.partial) return q.total > 1 ? "Only the start of the first line is quoted." : "Only the start of the line is quoted.";
+  if (q.lines >= q.total) return "";
+  return q.lines === 1 ? "Only the first line is quoted." : `Only the first ${q.lines} lines are quoted.`;
 }
 
 /** The first and last line numbers the hunk touches on `side` (0, 0 when it
@@ -134,18 +175,24 @@ export function rangeOfHunk(rows: readonly DiffRow[], side: CommentSide): { star
   return { start, end };
 }
 
+/** What a comment holds before the user's words, and what the dialog says
+ *  when its quote was cut ("" = every line is quoted). */
+export interface BlockComment extends Pick<CommentBody, "side" | "start" | "end" | "quote"> {
+  cut: string;
+}
+
+function commentOfRows(own: readonly DiffRow[], side: CommentSide): BlockComment {
+  const q = quoteLines(own);
+  return { side, ...rangeOfHunk(own, side), quote: q.quote, cut: quoteCutWords(q) };
+}
+
 /** What a Comment on one changed block holds before the user's words: the
- *  NEW file's lines (the old ones for a deleted file) and the quote. Null
- *  when the file has no such block. */
-export function hunkComment(
-  rows: readonly DiffRow[],
-  header: string,
-  deleted: boolean,
-): Pick<CommentBody, "side" | "start" | "end" | "quote"> | null {
-  const own = rowsOfHunk(rows, header);
+ *  NEW file's lines (the old ones for a deleted file) and the quote. The
+ *  block is the file's `index`-th hunk. Null when the file has no such block. */
+export function hunkComment(rows: readonly DiffRow[], index: number, deleted: boolean): BlockComment | null {
+  const own = rowsOfHunkAt(rows, index);
   if (!own.length) return null;
-  const side: CommentSide = deleted ? "old" : "new";
-  return { side, ...rangeOfHunk(own, side), quote: quoteOfHunk(own) };
+  return commentOfRows(own, deleted ? "old" : "new");
 }
 
 // ── one line, or a range of lines ───────────────────────────────────────────
@@ -154,20 +201,23 @@ export function hunkComment(
 export interface LineRef {
   side: CommentSide;
   line: number;
+  /** The row's own POSITION among the file's rows (-1 = not said): two
+   *  blocks of a joined diff can carry the same line numbers. */
+  at: number;
 }
 
 /** Which line a drawn row IS for a comment: its NEW number when it has one
  *  (an added or unchanged line), else its old one (a removed line). Null for
- *  a hunk's header. */
-export function lineOfRow(row: DiffRow): LineRef | null {
+ *  a hunk's header. `at`: the row's position among the file's rows. */
+export function lineOfRow(row: DiffRow, at = -1): LineRef | null {
   if (row.kind === "hunk") return null;
-  if (typeof row.newNo === "number") return { side: "new", line: row.newNo };
-  if (typeof row.oldNo === "number") return { side: "old", line: row.oldNo };
+  if (typeof row.newNo === "number") return { side: "new", line: row.newNo, at };
+  if (typeof row.oldNo === "number") return { side: "old", line: row.oldNo, at };
   return null;
 }
 
 /** The accessible name of a line number's press. */
-export function commentLineLabel(at: LineRef | null): string {
+export function commentLineLabel(at: Pick<LineRef, "side" | "line"> | null): string {
   if (!at) return COMMENT;
   return at.side === "old" ? `${COMMENT} on removed line ${at.line}` : `${COMMENT} on line ${at.line}`;
 }
@@ -176,45 +226,53 @@ export function commentLineLabel(at: LineRef | null): string {
  *  the range between the line pressed before (`anchor`) and this one, in
  *  either order, when both are on one side; across sides (or with no line
  *  pressed before) it starts again at this line: a range never mixes old and
- *  new lines. Answers the lines, and the line the next Shift+press extends
- *  from. */
+ *  new lines. Answers the rows it spans (`from`..`to`, positions among the
+ *  file's rows) and the line the next Shift+press extends from. */
 export function pressLines(
   anchor: LineRef | null,
   pressed: LineRef,
   shift: boolean,
-): { side: CommentSide; start: number; end: number; anchor: LineRef } {
+): { side: CommentSide; from: number; to: number; anchor: LineRef } {
   if (shift && anchor && anchor.side === pressed.side) {
     return {
       side: pressed.side,
-      start: Math.min(anchor.line, pressed.line),
-      end: Math.max(anchor.line, pressed.line),
+      from: Math.min(anchor.at, pressed.at),
+      to: Math.max(anchor.at, pressed.at),
       anchor,
     };
   }
-  return { side: pressed.side, start: pressed.line, end: pressed.line, anchor: pressed };
+  return { side: pressed.side, from: pressed.at, to: pressed.at, anchor: pressed };
 }
 
 /** What a Comment on a line or a range of lines holds before the user's
- *  words: exactly the rows that ARE those lines on `side`, with their marks,
- *  cut at QUOTE_CHARS. A new-side range holds its added and unchanged lines
- *  (never the removed ones drawn between them); an old-side range holds its
- *  removed lines and the unchanged ones between them. `a` and `b` in either
- *  order. Null when the file draws no such line. */
+ *  words. The rows are taken by POSITION (`from`..`to`, either order), never
+ *  by number alone, and of those exactly the ones that ARE lines on `side`:
+ *  a new-side range holds its added and unchanged lines (never the removed
+ *  ones drawn between them); an old-side range holds its removed lines and
+ *  the unchanged ones between them. Null when there is no such line. */
 export function linesComment(
   rows: readonly DiffRow[],
   side: CommentSide,
-  a: number,
-  b: number,
-): Pick<CommentBody, "side" | "start" | "end" | "quote"> | null {
-  const start = Math.min(a, b);
-  const end = Math.max(a, b);
-  const own = rows.filter((r) => {
+  from: number,
+  to: number,
+): BlockComment | null {
+  const lo = Math.max(0, Math.min(from, to));
+  const hi = Math.min(rows.length - 1, Math.max(from, to));
+  if (!(lo <= hi)) return null;
+  const own = rows.slice(lo, hi + 1).filter((r) => {
     if (r.kind === "hunk") return false;
-    const n = side === "old" ? r.oldNo : r.newNo;
-    return typeof n === "number" && n >= start && n <= end;
+    return typeof (side === "old" ? r.oldNo : r.newNo) === "number";
   });
   if (!own.length) return null;
-  return { side, start, end, quote: quoteOfHunk(own) };
+  return commentOfRows(own, side);
+}
+
+/** The box's words start with "/name": a command of the coding tool's own
+ *  ("/compact", "/model opus"). A command takes no comments, so the ones
+ *  waiting stay above the box for the next message. A path ("/etc/hosts") is
+ *  not one. */
+export function isTypedCommand(text: string): boolean {
+  return /^\s*\/[^\s/]+(\s|$)/.test(text);
 }
 
 // ── words ───────────────────────────────────────────────────────────────────
