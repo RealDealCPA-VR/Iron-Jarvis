@@ -881,10 +881,10 @@ class ProcessWriteTool(Tool):
         if os.name == "nt" and mp.shell != "bash" and text_in:
             # v1.386.0: typed into an interactive cmd.exe, each line IS a cmd
             # line — the same `;` guard as a command cmd starts.
-            from ..sandbox.cmd_guard import is_interactive_cmd, semicolon_refusal
+            from ..sandbox.cmd_guard import is_interactive_cmd, semicolon_refusal, typed_lines
 
             if is_interactive_cmd(mp.command):
-                for line in text_in.splitlines():
+                for line in typed_lines(text_in):
                     refused = semicolon_refusal(line)
                     if refused:
                         return ToolResult(ok=False, error=refused, data={"shell": "cmd", "refused": "semicolon"})

@@ -139,6 +139,22 @@ HELD_NO_VISION_ANSWER = (
     "path above; read the page's text with browser_read_page instead"
 )
 
+#: Fourth review BS3: the chat is Local only and the model that would look at
+#: the picture runs off this network, so the router refused the call before
+#: anything was sent. Not a failed call: no provider is named (nobody got the
+#: picture), no "retry" (the user's own setting refused it) and no "allow X
+#: for this one message" (the chat page's button; a tool result has none).
+#: The place is the row as Settings draws it: group "Models", the fold "More
+#: options", the row "Model roles", whose "vision" key is this role.
+LOCAL_ONLY_NO_VISION = (
+    "this chat is local only and the model that would look at pictures runs "
+    "outside this PC and your network, so the picture was not sent anywhere. It "
+    "was saved: open it, or read the page's text with browser_read_page. To have "
+    "pictures described in Local only chats, set the \"vision\" role in "
+    "Settings › Models › More options › Model roles to a model on this PC or "
+    "your network that can see pictures"
+)
+
 #: ``media_type`` -> the filename suffix that keeps ``media_kind`` happy. PNG is
 #: what ``chrome.tabs.captureVisibleTab`` returns by default; JPEG is its one
 #: documented alternative. Anything else is refused rather than saved with a
@@ -652,6 +668,14 @@ async def ask_vision(
             **route_kwargs,
         )
     except Exception as exc:  # noqa: BLE001 — a provider failure is a refusal
+        # Fourth review BS3: a Local only refusal is a decision that nothing
+        # leaves this PC, not a failed call: nobody is named, nothing is retried.
+        from ..providers.egress import refusal_of
+
+        if refusal_of(exc) is not None:
+            return VisionAnswer(
+                asked=True, refusal=LOCAL_ONLY_NO_VISION, role_applied=role_applied
+            )
         logger.debug("browser screenshot: vision call failed", exc_info=True)
         return VisionAnswer(
             asked=True,

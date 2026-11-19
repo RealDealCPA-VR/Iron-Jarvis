@@ -11569,14 +11569,23 @@ def _write_chat_usage(d, fields: "dict[str, Any]", *, thread: str, turn: str, tu
         from ..core.models import AgentRun
 
         with hold:
-            with session_scope(d.platform.engine) as db:
-                run = AgentRun(session_id="chat", agent_type=AgentType.BUILDER,
-                               thread_id=(thread or None), **fields)
-                run_id = run.id
-                db.add(run)
+            try:
+                with session_scope(d.platform.engine) as db:
+                    run = AgentRun(session_id="chat", agent_type=AgentType.BUILDER,
+                                   thread_id=(thread or None), **fields)
+                    run_id = run.id
+                    db.add(run)
+                    if ledger is not None:
+                        ledger.close_in(db)
+                    db.commit()
+            except Exception:
+                # Fourth plan PG4: the reply ENDED; only its row failed. Mark
+                # its open calls so the next start does not call it "cut off".
+                # Still inside the SAME hold: ``mark_ended`` never takes the
+                # ledger's (non-reentrant) lock itself. It never raises.
                 if ledger is not None:
-                    ledger.close_in(db)
-                db.commit()
+                    ledger.mark_ended(fields.get("state"))
+                raise
             if ledger is not None:
                 ledger.mark_closed()
     except Exception:  # noqa: BLE001 — accounting must never break a reply

@@ -30,11 +30,19 @@
  *                    those facts are handed to the chat's chip
  *                    (lib/readFacts.noteReadFacts)
  *   Standing grants  GET /grants (live ones)
+ *   Sending outside  GET /settings/access `sends` (fourth fix plan, group 32,
+ *   this PC          C-PG-1): every live place outside this PC it sends to
+ *                    (webhooks, destinations, model servers, web services,
+ *                    extensions, memory bases, the speech server, apps using
+ *                    Iron Jarvis), by host only, how each is asked, and a
+ *                    link to the page that changes it. The words come from
+ *                    the daemon (daemon/routes/access_summary.py)
  *
  * A fact that cannot be read says so; it never reads as "nothing".
  */
 
 import { useEffect, useId, type ReactNode } from "react";
+import Link from "next/link";
 import { useApi } from "@/lib/useApi";
 import {
   READS_LINE,
@@ -56,6 +64,53 @@ import type { SchemaSetting } from "@/components/settings/SettingRow";
 export interface AccessFacts {
   reads?: ReadFacts;
   writes?: { chat_files_dir?: string };
+  /** C-PG-1: where it sends outside this PC. An older Iron Jarvis sends none. */
+  sends?: SendFacts;
+}
+
+/** One live place outside this PC (daemon/routes/access_summary.py `_row`).
+ *  `where` is a host or a service's name, never a full address. */
+export interface SendPlace {
+  kind: string;
+  kind_label?: string;
+  name?: string;
+  where?: string;
+  ask?: string;
+  asked?: string;
+  href?: string;
+}
+
+/** `places` = the live places; `unread` = the kinds that could not be read. */
+export interface SendFacts {
+  places?: SendPlace[];
+  unread?: string[];
+}
+
+/** The plural words for a kind that could not be read. */
+const UNREAD_WORDS: Record<string, string> = {
+  webhook: "webhooks",
+  destination: "destinations",
+  model_server: "model servers",
+  web_service: "web services",
+  extension: "extensions",
+  memory_base: "memory bases",
+  speech_server: "the speech-to-text server",
+  backup_copy: "the backup copy folder",
+  app: "apps using Iron Jarvis",
+};
+
+/** What the row never lists: the AI services that answer chats. */
+export const SENDS_MODELS_LINE = "The AI services that answer your chats are under Models.";
+export const SENDS_NONE = "None set up.";
+export const SENDS_UNREADABLE = "Couldn’t read where it sends.";
+export const SENDS_TOO_OLD = "Not available on this version.";
+
+/** "Couldn't read: webhooks, extensions." — a kind that could not be read is
+ *  said, never shown as nothing. "" when every kind was read. */
+export function unreadSentence(sends: SendFacts | undefined): string {
+  const kinds = (sends?.unread ?? []).filter((k) => typeof k === "string" && k);
+  if (kinds.length === 0) return "";
+  return `Couldn’t read: ${kinds.map((k) => UNREAD_WORDS[k] ?? k.replace(/_/g, " ")).join(", ")}.`;
 }
 
 /** The settings row that changes what Jarvis may read (SettingRow's id). */
@@ -151,6 +206,54 @@ function Go({ onPress, children }: { onPress?: () => void; children: ReactNode }
   );
 }
 
+/** "Sending outside this PC" (C-PG-1): each live place, how it is asked, and
+ *  a link to its page. `facts` undefined = still reading; null = the route
+ *  could not be read; no `sends` = an older Iron Jarvis. */
+function SendsList({ facts }: { facts: AccessFacts | null | undefined }) {
+  if (facts === undefined) return <>Checking…</>;
+  if (facts === null) return <>{SENDS_UNREADABLE}</>;
+  const sends = facts.sends;
+  if (!sends || typeof sends !== "object") return <>{SENDS_TOO_OLD}</>;
+  const places = (Array.isArray(sends.places) ? sends.places : []).filter((p) => p && typeof p === "object");
+  const unread = unreadSentence(sends);
+  return (
+    <>
+      {places.length === 0 ? (
+        !unread && `${SENDS_NONE} `
+      ) : (
+        <ul className="mb-1 space-y-1.5" data-testid="access-sends-list">
+          {places.map((p, i) => {
+            const label = p.kind_label || p.kind;
+            const name = (p.name ?? "").trim();
+            const where = (p.where ?? "").trim();
+            return (
+              <li key={`${p.kind}-${name}-${i}`} data-testid={`access-send-${p.kind}`}>
+                <span className="text-zinc-200">
+                  {label}
+                  {name ? ` ${name}` : ""}
+                </span>
+                {where && where !== name ? ` (${where})` : ""}
+                {p.asked ? `. ${p.asked}` : "."}
+                {p.href && (
+                  <Link
+                    href={p.href}
+                    aria-label={`Change ${label}${name ? ` ${name}` : ""}`}
+                    className="ml-1 rounded text-zinc-300 underline decoration-white/20 underline-offset-2 hover:text-zinc-100 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                  >
+                    Change
+                  </Link>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {unread && <span data-testid="access-sends-unread">{unread} </span>}
+      {SENDS_MODELS_LINE}
+    </>
+  );
+}
+
 export function AccessSummary({
   values,
   defs,
@@ -238,6 +341,9 @@ export function AccessSummary({
             "Checking…"
           )}
           <Go onPress={onGo ? () => onGo("connections", "connections-apps") : undefined}>Manage apps</Go>
+        </Row>
+        <Row label="Sending outside this PC" testId="access-sends">
+          <SendsList facts={facts} />
         </Row>
         {browserWords && (
           <Row label={browserDef?.label ?? "Your browser"} testId="access-browser">

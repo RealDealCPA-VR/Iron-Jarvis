@@ -328,7 +328,10 @@ def test_settings_access_is_served_by_the_real_app_factory(tmp_path):
     r = TestClient(app).get("/settings/access")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"reads", "writes"}
+    # Fourth fix plan, group 32 (C-PG-1, updated on purpose): + `sends`, the
+    # places outside this PC it sends to.
+    assert set(body) == {"reads", "writes", "sends"}
+    assert set(body["sends"]) == {"places", "unread"}
     # v1.356.0 (G81, updated on purpose): + the user's own folders (`chosen`)
     # and whether the installation's own limit is on (`install`).
     assert set(body["reads"]) == {"limited", "folders", "chosen", "install"}

@@ -414,9 +414,9 @@ class PaneSendTool(_PaneTool):
             if refused:
                 return ToolResult(ok=False, error=refused, data={"pane": _view(session)})
             if _is_cmd_pane(session):
-                from ..sandbox.cmd_guard import semicolon_refusal
+                from ..sandbox.cmd_guard import console_lines, semicolon_refusal
 
-                for line in text.splitlines():
+                for line in console_lines(text):
                     refused = semicolon_refusal(line)
                     if refused:
                         return ToolResult(

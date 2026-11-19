@@ -322,6 +322,11 @@ class OpenModelCall(SQLModel, table=True):
     #: When the reply began (its row's ``created_at``).
     started_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
+    #: Fourth plan PG4: the reply ENDED but its end row could not be saved —
+    #: the state that row would have had ("completed", "failed"), written by
+    #: ``TurnLedger.mark_ended``. None = no end was seen (a stop cut it off).
+    #: Additive nullable column (auto-reconciled at start).
+    ended: str | None = None
 
 
 class ToolInvocation(SQLModel, table=True):

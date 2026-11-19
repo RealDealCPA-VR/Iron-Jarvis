@@ -13,8 +13,12 @@ start`` installs packages named ``npm`` and ``start``).
 :func:`semicolon_refusal` answers ONE plain sentence for such a command, "" for
 any other, before anything runs. It reads the text the way cmd.exe runs it:
 
-* only the FIRST line runs (``cmd /c`` stops at the first line break -- measured),
-  so text after it is ignored;
+* only the FIRST line runs (``cmd /c`` stops at the first LF -- measured),
+  so text after it is ignored; a CR is NOT a line end: cmd removes every CR
+  from the line and runs the rest (measured, fourth plan PG2: ``echo one<CR>
+  two> out.txt`` wrote ``one two``), and ``\\v`` / ``\\f`` stay characters of
+  the line (:func:`cmd_line`; :func:`typed_lines` for an interactive cmd on a
+  pipe, :func:`console_lines` for a terminal pane, where a CR is Enter);
 * the line is split into commands at cmd's own operators -- ``&``, ``&&``,
   ``|``, ``||`` -- outside double quotes, ``^`` escaping the next character
   (cmd ignores single quotes); an ``&`` right after ``>`` / ``<`` duplicates
@@ -141,9 +145,25 @@ def refusal_sentence(program: str) -> str:
     )
 
 
-def _first_line(command: str) -> str:
-    """What ``cmd /c`` runs: the text up to the first line break."""
-    return re.split(r"[\r\n]", command, maxsplit=1)[0]
+def cmd_line(command: str) -> str:
+    """What ``cmd /c`` runs: the text up to the first LF, with every CR
+    removed (fourth plan PG2, measured: cmd deletes a CR from the line and
+    runs the rest, so ``del /q a<CR>; b`` deletes ``b``)."""
+    return command.split("\n", 1)[0].replace("\r", "")
+
+
+def typed_lines(text: str) -> list[str]:
+    """The lines an interactive cmd READING A PIPE runs (``process_write``):
+    split at LF only, every CR removed (measured through ``cmd /q /k``).
+    Not ``str.splitlines``: it also breaks at ``\\v \\f \\x1c-\\x1e \\x85
+    U+2028 U+2029``, which cmd keeps as characters of the line."""
+    return [line.replace("\r", "") for line in text.split("\n")]
+
+
+def console_lines(text: str) -> list[str]:
+    """The lines a terminal pane's cmd runs (``pane_send``): a CR is Enter
+    there, so split at CR and LF only (not ``str.splitlines``, as above)."""
+    return re.split(r"[\r\n]", text)
 
 
 def _segments(line: str) -> list[str]:
@@ -533,7 +553,7 @@ def _judge(segment: str, depth: int, nest: int = 0) -> str:
 
 
 def _scan(line: str, depth: int = 0) -> str:
-    for segment in _segments(_first_line(line)):
+    for segment in _segments(cmd_line(line)):
         prog = _judge(segment, depth)
         if prog:
             return prog
@@ -546,7 +566,7 @@ def semicolon_refusal(command: object) -> str:
     cheap, never raises."""
     try:
         text = str(command or "")
-        if ";" not in _first_line(text):
+        if ";" not in cmd_line(text):
             return ""
         prog = _scan(text)
     except Exception:  # noqa: BLE001 — a guard that crashes must not stop a turn
@@ -562,7 +582,7 @@ def has_unquoted_semicolon(command: object) -> bool:
     word (`set PATH=%PATH%;C:\\x`) is cmd's own and never counts. Never
     raises."""
     try:
-        line = _first_line(str(command or ""))
+        line = cmd_line(str(command or ""))
         quoted = False
         for i, ch in enumerate(line):
             if ch == '"':
@@ -581,7 +601,7 @@ def is_interactive_cmd(command: object) -> bool:
     reading its input as command lines (``cmd``, ``cmd /k ...``, never ``cmd
     /c ...``)? Then what ``process_write`` types into it is a cmd line too."""
     try:
-        words = _words(_leading(_first_line(str(command or ""))))
+        words = _words(_leading(cmd_line(str(command or ""))))
         if not words or _program_name(words[0][0]) != "cmd":
             return False
         return not any(w.lower() == "/c" for w, _s, _e, _q in words[1:])
@@ -589,4 +609,4 @@ def is_interactive_cmd(command: object) -> bool:
         return False
 
 
-__all__ = ["is_interactive_cmd", "refusal_sentence", "semicolon_refusal"]
+__all__ = ["cmd_line", "console_lines", "is_interactive_cmd", "refusal_sentence", "semicolon_refusal", "typed_lines"]

@@ -65,6 +65,12 @@ CUT_OFF_WORDS = (
     "This reply was cut off when Iron Jarvis stopped (a restart or a crash); "
     "the model calls it had already made are counted here"
 )
+#: Fourth plan PG4: the words on that row for a reply that ENDED but whose
+#: own usage row could not be saved then (:meth:`TurnLedger.mark_ended`).
+ENDED_UNSAVED_WORDS = (
+    "This reply ended, but its usage could not be saved then; "
+    "the model calls it made are counted here"
+)
 #: The words on a tool call's own row, by tool (the row's ``result``).
 TOOL_WORDS: dict[str, str] = {
     "view_image": "A picture was looked at for a step",
@@ -320,6 +326,8 @@ class TurnLedger:
         self.started_at = started_at
         self.lock = threading.Lock()
         self.closed = False
+        #: PG4: the reply's end state once its end row failed (else None).
+        self.ended: str | None = None
 
     def note(self, provider: str, model: str, usage: Mapping, cost: float) -> None:
         """Queue one counted call (on the loop: cheap, never raises)."""
@@ -361,14 +369,17 @@ class TurnLedger:
                 if self.closed:
                     return
                 with session_scope(self.engine) as db:
-                    db.add(OpenModelCall(**fields))
+                    # PG4: a call that lands after a failed end row carries its mark.
+                    db.add(OpenModelCall(**fields, ended=self.ended))
                     db.commit()
         except Exception:  # noqa: BLE001 — the end row still counts the call
             log.debug("could not keep a reply's model call", exc_info=True)
 
     @contextlib.contextmanager
     def closing(self) -> Iterator[None]:
-        """Hold the ledger while the end row's transaction runs (BLOCKING)."""
+        """Hold the ledger while the end row's transaction runs (BLOCKING).
+        NOT reentrant: nothing called inside it takes ``self.lock`` again
+        (:meth:`mark_ended` runs inside it and never does)."""
         with self.lock:
             yield
 
@@ -383,6 +394,33 @@ class TurnLedger:
 
     def mark_closed(self) -> None:
         self.closed = True
+
+    def mark_ended(self, state: Any) -> None:
+        """Fourth plan PG4: the reply ENDED but its end row failed. Mark its
+        open calls with the state that row would have had, so the next start
+        does not call it "cut off". BLOCKING; never raises.
+
+        The caller runs this INSIDE :meth:`closing` (the same hold as the end
+        row), so it never takes ``self.lock`` itself: that lock is not
+        reentrant and the end row's thread would wait on itself forever.
+        ``closed`` stays False: the failed row took no call with it, so a call
+        still waiting for the worker lands afterwards, carrying the mark."""
+        value = str(getattr(state, "value", state) or "") or "completed"
+        self.ended = value
+        if self.engine is None:
+            return
+        try:
+            from sqlmodel import update
+
+            from ..core.db import session_scope
+            from ..core.models import OpenModelCall
+
+            with session_scope(self.engine) as db:
+                db.exec(update(OpenModelCall).where(OpenModelCall.owner == self.key)
+                        .values(ended=value))
+                db.commit()
+        except Exception:  # noqa: BLE001 — the calls kept so far stay unmarked
+            log.debug("could not mark a reply's model calls as ended", exc_info=True)
 
 
 class JournaledTally(UsageTally):
@@ -440,6 +478,15 @@ def settle_open_calls(engine: Any) -> int:
             turn = next((c.turn_id for c in calls if c.turn_id), "")
             last = calls[-1]
             ids = [c.id for c in calls]
+            # PG4: a reply that ENDED (its end row failed) keeps its own state.
+            ended = next((c.ended for c in calls if getattr(c, "ended", None)), None)
+            state, words = AgentState.FAILED, CUT_OFF_WORDS
+            if ended:
+                words = ENDED_UNSAVED_WORDS
+                try:
+                    state = AgentState(ended)
+                except ValueError:
+                    state = AgentState.COMPLETED
             with session_scope(engine) as db:
                 if not thread and turn:
                     thread = str(db.exec(
@@ -451,9 +498,9 @@ def settle_open_calls(engine: Any) -> int:
                     agent_type=AgentType.BUILDER,
                     provider=last.provider,
                     model=last.model,
-                    state=AgentState.FAILED,
+                    state=state,
                     steps=len(calls),
-                    result=CUT_OFF_WORDS,
+                    result=words,
                     input_tokens=sum(int(c.input_tokens or 0) for c in calls),
                     output_tokens=sum(int(c.output_tokens or 0) for c in calls),
                     cost_usd=round(sum(float(c.cost_usd or 0.0) for c in calls), 6),
@@ -474,6 +521,7 @@ def settle_open_calls(engine: Any) -> int:
 
 __all__ = [
     "CUT_OFF_WORDS",
+    "ENDED_UNSAVED_WORDS",
     "JournaledTally",
     "PROCESS_ID",
     "STEP_SESSION",

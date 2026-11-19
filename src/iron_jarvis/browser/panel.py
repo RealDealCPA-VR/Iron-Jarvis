@@ -447,13 +447,30 @@ def _step_failed_line(what: str, output: object) -> str:
     """The sidebar's line for a page action that did not succeed: "Could not
     {what}." plus the tool's reason (v1.270.1) — or, when the action went
     out and its answer was lost (third plan SB9), :data:`ANSWER_LOST_STEP`,
-    never the model's sentence nor its code."""
+    never the model's sentence nor its code.
+
+    Fourth review BS4: the tool's error is written for the model ("PAGE_CHANGED:
+    That tab was not the one on screen, so no picture was taken. Call
+    browser_screenshot again…"), so the line drops a leading error code and
+    keeps only the first sentence; the rest is the model's next step. The
+    model's own text is unchanged."""
     from .errors import UNKNOWN_OUTCOME_MESSAGE
 
     if UNKNOWN_OUTCOME_MESSAGE in str(output or ""):
         return ANSWER_LOST_STEP.format(what=what)
-    reason = _short_reason(output)
+    reason = _short_reason(_first_sentence(_STEP_CODE.sub("", " ".join(str(output or "").split()), count=1)))
     return f"Could not {what}." + (f" {reason}" if reason else "")
+
+
+#: A leading error code on a tool's error ("PAGE_CHANGED: ", BS4).
+_STEP_CODE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+:\s+")
+#: The end of a sentence: ". ", "! " or "? " (BS4).
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def _first_sentence(text: str) -> str:
+    """``text`` up to the end of its first sentence (BS4)."""
+    return _SENTENCE_END.split(text, maxsplit=1)[0] if text else text
 
 
 def _short_reason(output: object) -> str:
