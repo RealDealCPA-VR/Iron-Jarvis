@@ -382,7 +382,9 @@ class BuildTurnBody(BaseModel):
     allow_cloud_once: str = Field(default="", max_length=80)
     #: v1.544.0: comments on changed code that ride this message
     #: (``harness/code_comments``): ``[{path, side, start, end, quote, words}]``.
-    comments: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    #: (More than twenty is refused in words by ``code_comments.clean``, not by
+    #: the request model: a bare 422 says nothing a person can act on.)
+    comments: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
 
 
 #: v1.422.0 (B1): the 409 when "Continue from where it stopped" finds nothing

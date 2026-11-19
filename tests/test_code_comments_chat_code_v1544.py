@@ -116,3 +116,35 @@ async def test_the_view_says_this_daemon_takes_comments_and_a_rewind_gives_them_
     assert status == 200, plan
     assert plan["question"] == "fix it"
     assert plan["comments"] == CC.for_event(CC.clean(str(work), [_comment()]))
+
+
+async def test_a_waiting_messages_comments_are_kept_masked_and_in_their_own_shape(app, work):
+    """Chat › Code keeps its waiting messages as the page sends them. The
+    quoted code in a comment came out of a file: a key in it is never stored,
+    and nothing but a comment's own fields is kept."""
+    sid = new_session(app, work)["id"]
+    item = {"text": "later", "comments": [
+        {**_comment(quote=f'+TOKEN = "{KEYISH}"'), "extra": "dropped"}, "not a comment"]}
+    status, got = await asgi(app, "PUT", f"/chat/threads/{sid}/queue", {"items": [item, {"text": "plain"}]})
+    assert status == 200 and got["queued"] == 2
+    status, view = await asgi(app, "GET", f"/build/sessions/{sid}")
+    kept = view["queued"]
+    assert kept[0]["text"] == "later" and KEYISH not in str(kept)
+    assert kept[0]["comments"] == [{"path": "src/app.py", "side": "new", "start": 1, "end": 2,
+                                    "quote": '+TOKEN = "***"', "words": "Use math.fsum here."}]
+    assert "comments" not in kept[1]
+
+
+async def test_more_than_twenty_comments_is_refused_in_words(app, work):
+    sid = new_session(app, work)["id"]
+    wire(app, Script(["never"]))
+    status, raw = await open_turn(app, sid, {"text": "fix", "turn_id": "cc-many", "comments": [_comment()] * 21})
+    assert status == 400 and CC.TOO_MANY.format(n=CC.MAX_COMMENTS) in raw
+
+
+async def test_three_waiting_messages_full_of_comments_can_be_kept(app, work):
+    sid = new_session(app, work)["id"]
+    full = [_comment(quote="q" * CC.QUOTE_CHARS, words="w" * CC.WORDS_CHARS)] * CC.MAX_COMMENTS
+    status, got = await asgi(app, "PUT", f"/chat/threads/{sid}/queue",
+                             {"items": [{"text": "a", "comments": full}] * 3})
+    assert status == 200 and got["queued"] == 3

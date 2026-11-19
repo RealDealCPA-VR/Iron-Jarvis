@@ -624,7 +624,11 @@ class ChatReplyStreamingResponse(HeartbeatStreamingResponse):
 
 #: v1.336.0: the most messages a chat keeps waiting (the page's MAX_QUEUED).
 MAX_THREAD_QUEUE = 3
-MAX_THREAD_QUEUE_CHARS = 200_000
+#: v1.544.0: a waiting message can carry comments on changed code (twenty,
+#: each with up to 4,000 characters of quoted code and 2,000 of words), so
+#: three of them no longer fit in 200,000: the page ignores a refused save
+#: and the messages were then lost on a reload.
+MAX_THREAD_QUEUE_CHARS = 600_000
 
 
 def _queued_of(row) -> list:
@@ -2261,6 +2265,20 @@ def register(app: FastAPI, d) -> None:
         from ...core.models import ChatThreadRecord
 
         items = [i for i in (body.items or []) if isinstance(i, dict)][:MAX_THREAD_QUEUE]
+        # v1.544.0: a waiting message's comments are kept as the record keeps
+        # a sent one's — only their own fields, bounded, and the quoted code
+        # MASKED (it came out of a file; a key in it is never stored).
+        from ...harness import code_comments as CC
+
+        kept: list[dict[str, Any]] = []
+        for item in items:
+            if "comments" in item:
+                noted = CC.for_event(CC.from_event(item.get("comments")))
+                item = {k: v for k, v in item.items() if k != "comments"}
+                if noted:
+                    item["comments"] = noted
+            kept.append(item)
+        items = kept
         text = json.dumps(items) if items else ""
         if len(text) > MAX_THREAD_QUEUE_CHARS:
             raise HTTPException(status_code=413, detail="the waiting messages are too large to keep")
