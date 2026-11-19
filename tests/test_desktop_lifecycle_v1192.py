@@ -166,6 +166,9 @@ def _update_harness() -> str:
     lifted = _lift("async function applyPendingUpdate()", "function abortUpdateInstall")
     assert "quitAndInstall" in lifted and "abortUpdateInstall" in lifted
     assert lifted.startswith("async function"), "the handoff is no longer async"
+    # v1.540.0 (fourth review LX5): the abort's by-hand sentence goes through
+    # releasesHow; Windows' words on whatever machine runs this pin.
+    lifted += '\nconst UPDATE_PLATFORM = "win32";\n' + _lift("function releasesHow", "function releasesHow")
     return _UPDATE_HARNESS.replace("__LIFTED__", lifted)
 
 

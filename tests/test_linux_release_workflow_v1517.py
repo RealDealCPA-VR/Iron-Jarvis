@@ -119,7 +119,8 @@ def test_it_never_replaces_a_file_or_writes_what_windows_reads():
     assert re.findall(r"HEAD:(\S+)", code) == ["updates-linux"]
     assert set(re.findall(r"\bupdates(?:-[a-z]+)*\b", code.replace("apt-get update", ""))) == {"updates-linux"}
     publish = _steps("publish")
-    assert publish.count("gh release upload") == 2 and publish.count("git push") == 0
+    # One upload per file, inside the loop over the plan (v1.540.0, LX3).
+    assert publish.count("gh release upload") == 1 and publish.count("git push") == 0
     assert publish.count('push origin HEAD:updates-linux') == 1
     # Only the publish job touches the release or a branch.
     for name in ("plan", "python", "dashboard", "build", "rehearsal"):
@@ -129,10 +130,12 @@ def test_it_never_replaces_a_file_or_writes_what_windows_reads():
 
 def test_the_update_file_goes_up_last_and_an_older_version_never_overwrites_a_newer():
     publish = _steps("publish")
-    files = publish.index('gh release upload "v$VERSION" "out/$APPIMAGE" "out/$DEB"')
-    manifest = publish.index('gh release upload "v$VERSION" out/latest-linux.yml')
-    assert files < manifest
-    assert "already has a Linux file - leaving it" in publish
+    # v1.540.0 (LX3): one file per upload, in this order, after the plan said
+    # upload/keep/refuse; a half-done release is finished, never left.
+    plan = publish.index("linux_release_plan.py attach --release release.json --dir out")
+    loop = publish.index('for f in "$APPIMAGE" "$DEB" latest-linux.yml; do\n  if grep -qxF "upload $f" attach.txt; then')
+    assert plan < loop and 'gh release upload "v$VERSION" "out/$f"' in publish[loop:]
+    assert "already has a Linux file - leaving it" not in publish
     assert "sort -V | tail -1" in publish and "leaving it" in publish
     assert "scripts/publish_update_manifest.py" in publish  # absolute addresses, refuses a wrong version
 
@@ -158,7 +161,9 @@ def test_the_plan_wants_a_successful_release_run_and_a_published_version():
     assert '"$RUN_CONCLUSION" != "success"' in code
     assert "--exclude-drafts --exclude-pre-releases" in code
     assert '"$sha" != "$RUN_SHA"' in code
-    assert 'endswith(".AppImage") or endswith(".deb")' in code
+    # v1.540.0 (LX2, LX3): which Linux files the release has, and where the
+    # rehearsal starts, are the plan script's (its own tests pin both).
+    assert "python3 tooling/scripts/linux_release_plan.py plan" in code
 
 
 def test_each_file_is_built_alone_proven_and_started_the_way_a_person_would():

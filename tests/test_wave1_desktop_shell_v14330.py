@@ -344,6 +344,9 @@ function refreshTrayMenu() {} function friendlyUpdateError(m) { return m; }
 function _emitUpdateState(p) { calls.push("emit:" + p.status); }
 const dialog = { showMessageBoxSync() { calls.push("dialog"); } };
 const app = { quit() { calls.push("quit"); } };
+// v1.540.0 (fourth review LX5): the by-hand sentence goes through releasesHow.
+var UPDATE_PLATFORM = "win32";
+eval(fnSource("releasesHow"));
 eval(fnSource("abortUpdateInstall"));
 abortUpdateInstall(new Error("No update filepath provided"));
 process.stdout.write(JSON.stringify({

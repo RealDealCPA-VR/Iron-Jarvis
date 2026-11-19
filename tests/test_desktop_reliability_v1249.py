@@ -359,9 +359,11 @@ def _apply(mode: str, tmp_path: Path) -> dict:
     # Lifted as one piece: respawnStoppedServices is what brings the daemon
     # back, and abortUpdateInstall owns "the update is not ready" — stubbing
     # either would leave this harness asserting its own stubs.
+    # v1.540.0 (fourth review LX5): the abort's by-hand sentence goes through
+    # releasesHow; Windows' words on whatever machine runs this pin.
     lifted = _decl("UPDATE_TIDY_SHUTDOWN_MS") + "\n" + _lift(
         "function respawnStoppedServices", "function abortUpdateInstall"
-    )
+    ) + '\nconst UPDATE_PLATFORM = "win32";\n' + _lift("function releasesHow", "function releasesHow")
     assert "quitAndInstall" in lifted and "respawnStoppedServices" in lifted
     assert "clearUpdatePending()" in lifted, "the abort path is no longer lifted"
     script = _APPLY_HARNESS.replace("__LIFTED__", lifted)
@@ -708,9 +710,11 @@ process.stdout.write(JSON.stringify({ out: cases.map((c) => classifyStartupFailu
 def _classify(cases: list, tmp_path: Path) -> list[dict]:
     # v1.450.0 (Wave D, item 39): the upgrade cause names the Releases page
     # through one-line top-level constants, lifted with it.
+    # v1.540.0 (fourth review LX5): the sentence goes through releasesHow,
+    # lifted with them; Windows' words, on whatever machine runs this pin.
     releases = "\n".join(
         _decl(name) for name in ("RELEASES_PREVIOUS_HOW", "DATA_STAYS")
-    )
+    ) + '\nconst UPDATE_PLATFORM = "win32";\n' + _lift("function releasesHow", "function releasesHow")
     script = _CLASSIFY_HARNESS.replace("__RELEASES__", releases).replace(
         "__LIFTED__", _lift("function classifyStartupFailure", "function classifyStartupFailure")
     )

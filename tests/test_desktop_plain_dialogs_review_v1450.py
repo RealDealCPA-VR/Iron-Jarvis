@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 
 from tests.test_desktop_idle_v1333 import _decl, _lift, _run, requires_node
 
@@ -50,6 +49,9 @@ def test_the_raw_startup_error_is_logged_before_either_dialog_and_never_shown(tm
         _decl(n)
         for n in ("RELEASES_PAGE", "RELEASES_PREVIOUS_HOW", "RELEASES_LATEST_HOW", "DATA_STAYS", "STARTUP_LOG_LINE")
     )
+    # v1.540.0 (fourth review LX5): the sentence goes through releasesHow,
+    # lifted with the constants (Windows' words on any machine).
+    decls += '\nconst UPDATE_PLATFORM = "win32";\n' + _lift("function releasesHow(")
     script = (
         _START.replace("__DECLS__", decls)
         .replace("__CLASSIFY__", _lift("function classifyStartupFailure("))

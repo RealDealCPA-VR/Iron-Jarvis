@@ -134,7 +134,44 @@ type UpdateState = {
   error?: string | null;
   /** v1.405.0: the channel the next check reads ("fresh" | "stable"). */
   channel?: string | null;
+  /** v1.540.0 (C-LX-2): sent by a LINUX desktop only — how this copy
+   *  updates. Windows sends no such field. */
+  install?: "appimage" | "deb" | "folder" | null;
 };
+
+/** The releases list (every version, with its Linux files once they land). */
+export const RELEASES_LIST_URL = "https://github.com/RealDealCPA-VR/Iron-Jarvis/releases";
+
+/** v1.540.0 (C-LX-2): one line per Linux copy. The `.deb` line promises only
+ *  what has been tried: its own update has not been rehearsed yet. */
+export const LINUX_INSTALL_WORDS: Record<"appimage" | "deb", string> = {
+  appimage: "This copy updates itself: a new version installs when you close the app or press Restart & install.",
+  deb: "Updates arrive by themselves; installing one may ask for your password.",
+};
+
+/** The Updates card's line for how this Linux copy updates; nothing for
+ *  Windows (no `install` field) or a value this card does not know. */
+function LinuxInstallLine({ install }: { install?: UpdateState["install"] }) {
+  if (install === "appimage" || install === "deb") {
+    return (
+      <p className="mt-1 text-[12px] text-zinc-500" data-testid="update-install-line">
+        {LINUX_INSTALL_WORDS[install]}
+      </p>
+    );
+  }
+  if (install === "folder") {
+    return (
+      <p className="text-[13px] text-zinc-400" data-testid="update-install-line">
+        This copy cannot update itself. Download the newest version from the{" "}
+        <a href={RELEASES_LIST_URL} target="_blank" rel="noreferrer" className="text-accent-soft hover:text-accent">
+          releases page
+        </a>
+        .
+      </p>
+    );
+  }
+  return null;
+}
 
 interface UpdateBridge {
   getState: () => Promise<UpdateState>;
@@ -160,6 +197,9 @@ function DesktopUpdateCard({ bridge }: { bridge: UpdateBridge }) {
   const s = state?.status ?? "idle";
   const busy = s === "checking" || s === "downloading";
   const current = state?.current ?? "—";
+  // v1.540.0 (C-LX-2): an unpacked Linux folder says so in place of the
+  // "check" and "isn't available" lines.
+  const cannotUpdate = state?.install === "folder";
 
   return (
     <Card title="App updates" icon={<DownloadCloud size={15} />}>
@@ -182,7 +222,7 @@ function DesktopUpdateCard({ bridge }: { bridge: UpdateBridge }) {
 
         {/* Status line */}
         <div className="text-[13px] text-zinc-400">
-          {s === "idle" && "Click below to check for a new version."}
+          {s === "idle" && !cannotUpdate && "Click below to check for a new version."}
           {s === "checking" && (
             <span className="inline-flex items-center gap-2 text-accent-soft">
               <Loader2 size={13} className="animate-spin" /> Checking for updates…
@@ -217,7 +257,8 @@ function DesktopUpdateCard({ bridge }: { bridge: UpdateBridge }) {
             </span>
           )}
           {s === "error" && <span className="text-rose-300">Update error: {state?.error}</span>}
-          {s === "unsupported" && "Auto-update isn't available in this build."}
+          {s === "unsupported" && !cannotUpdate && "Auto-update isn't available in this build."}
+          <LinuxInstallLine install={state?.install} />
         </div>
 
         <div className="flex items-center gap-2">

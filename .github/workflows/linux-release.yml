@@ -14,8 +14,12 @@ name: Linux release
 #     `updates-linux`. It never touches the installer, its blockmap,
 #     `latest.yml`, or the branches `updates` and `updates-stable` (everything
 #     the Windows app and scripts/promote_stable.py read).
-#   * It never replaces a file (no --clobber): a release that already has the
-#     Linux app is left alone.
+#   * It never replaces a file (no --clobber): a file already on the release
+#     is kept when it has this build's bytes, and the run stops when it has
+#     other bytes (scripts/linux_release_plan.py decides, file by file).
+#   * Nothing is published without the update rehearsal: the version it starts
+#     from is found across EVERY page of releases, and "none found" after Linux
+#     was first published is a failure, not "the first".
 #   * A failure here leaves the release exactly as the Release run made it:
 #     that version then exists for Windows only, and Linux copies stay on the
 #     last version that passed.
@@ -70,7 +74,17 @@ jobs:
       version: ${{ steps.gate.outputs.version }}
       attach: ${{ steps.gate.outputs.attach }}
       previous: ${{ steps.gate.outputs.previous }}
+      first: ${{ steps.gate.outputs.first }}
+      state: ${{ steps.gate.outputs.state }}
     steps:
+      # The plan script comes from THIS workflow's commit, never the tag: a run
+      # for an older tag still decides by today's rules.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          sparse-checkout: scripts
+          persist-credentials: false
       - name: Gate - which published version, if any?
         id: gate
         env:
@@ -109,23 +123,22 @@ jobs:
               echo "the newest release (v$ver) is not from this Release run - nothing to build"; exit 0
             fi
           fi
-          if printf '%s' "$rel" | jq -e '.assets[] | select(.name | endswith(".AppImage") or endswith(".deb"))' > /dev/null; then
-            if [ "$attach" = "true" ]; then
-              echo "v$ver already has a Linux file - leaving it"; exit 0
-            fi
-          fi
-          # The newest OLDER published version that carries a Linux update file:
-          # the one the rehearsal starts. None yet = nothing to rehearse from.
-          prev="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=40" \
-            | jq -r --arg v "v$ver" '[.[] | select(.draft == false and .prerelease == false and .tag_name != $v)
-                | select(any(.assets[]; .name == "latest-linux.yml"))
-                | select(any(.assets[]; .name == "Iron-Jarvis-x86_64.AppImage"))
-                | .tag_name] | .[]' \
-            | sed 's/^v//' | while read -r p; do
-                if [ "$(printf '%s\n%s\n' "$p" "$ver" | sort -V | head -1)" = "$p" ] && [ "$p" != "$ver" ]; then echo "$p"; fi
-              done | sort -V | tail -1)"
-          say build true; say version "$ver"; say attach "$attach"; say previous "$prev"
-          echo "the Linux release of v$ver (publish=$attach; rehearse from: ${prev:-nothing yet})"
+          printf '%s' "$rel" > release.json
+          # EVERY release, every page: the version the rehearsal starts from can
+          # sit far back (a run of releases without Linux files).
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | {tag_name, draft, prerelease, assets: [.assets[] | {name, state, digest, size}]}' > releases.jsonl
+          # The version installed Linux copies are offered. Only a 404 means
+          # there is no branch yet (Linux never published); any other failure stops.
+          if gh api "repos/$GITHUB_REPOSITORY/contents/latest-linux.yml?ref=updates-linux" \
+            -H "Accept: application/vnd.github.raw" > branch.yml 2> branch.err; then :
+          elif grep -q "HTTP 404" branch.err; then : > branch.yml
+          else cat branch.err; exit 1; fi
+          # Writes build, version, attach, state, previous and first; fails (and
+          # builds nothing) when the rehearsal would be skipped although Linux was
+          # published before, or when a publishing run finds a half-done release.
+          python3 tooling/scripts/linux_release_plan.py plan --releases releases.jsonl --release release.json \
+            --version "$ver" --branch branch.yml --attach "$attach" --out "$GITHUB_OUTPUT"
 
   # THE GATE: the whole Python suite on Linux, for the published tag. Six parts,
   # three at a time (see the note on five jobs at once above).
@@ -168,6 +181,27 @@ jobs:
         run: |
           uv run pytest --collect-only -q -p no:cacheprovider > collected.txt
           uv run python scripts/ci_shards.py --shards 6 --check-collected collected.txt
+      # The start-at-sign-in entry is proven against the parsers a Linux
+      # desktop really uses: desktop-file-validate, GLib (through the system
+      # python3, never the uv one) and systemd's autostart generator (already
+      # on the runner when systemd is). Every part installs them: the test can
+      # land in any part.
+      - name: The desktop's own parsers, for the start-at-sign-in test
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends desktop-file-utils python3-gi gir1.2-glib-2.0
+          desktop-file-validate --help > /dev/null
+          /usr/bin/python3 -c "import gi; gi.require_version('Gio', '2.0'); from gi.repository import Gio; print('GLib', gi.__version__)"
+          gen=/usr/lib/systemd/user-generators/systemd-xdg-autostart-generator
+          if [ -x "$gen" ]; then echo "systemd autostart generator: $gen"; else echo "no systemd autostart generator on this runner"; fi
+      - name: Start at sign-in, against the desktop's own parsers
+        if: matrix.shard == 1
+        run: |
+          set -euo pipefail
+          t=tests/test_fourth_review_linux_autostart_real_v1540.py
+          if [ ! -f "$t" ]; then echo "v${{ needs.plan.outputs.version }} has no $t - nothing to run"; exit 0; fi
+          uv run pytest -q --no-header -p no:cacheprovider -rA "$t"
       - name: Run this part of the suite on Linux
         env:
           # GitHub's Linux machines have Docker running, which makes the shell
@@ -345,10 +379,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: v${{ needs.plan.outputs.version }}
+      # The plan script, from this workflow's commit (after the tag checkout,
+      # which empties the folder).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          sparse-checkout: scripts
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: linux-release
           path: new
+      - name: No earlier Linux version to rehearse from
+        if: needs.plan.outputs.previous == '' && needs.plan.outputs.first != 'true'
+        run: |
+          echo "::error::No earlier Linux version was found and this is not the first: nothing is published without the rehearsal."
+          exit 1
       - name: Fetch the previous Linux version
         if: needs.plan.outputs.previous != ''
         env:
@@ -361,9 +408,22 @@ jobs:
       - name: It installs the update by Restart to update
         if: needs.plan.outputs.previous != ''
         run: bash scripts/linux_update_rehearsal.sh "old/$APPIMAGE" new restart "${{ needs.plan.outputs.version }}"
-      - name: Nothing to rehearse from yet
-        if: needs.plan.outputs.previous == ''
-        run: echo "No earlier release carries a Linux update file - the next release is the first that can be rehearsed." >> "$GITHUB_STEP_SUMMARY"
+      - name: "Nothing to rehearse from: the first version with the Linux files"
+        if: needs.plan.outputs.previous == '' && needs.plan.outputs.first == 'true'
+        run: echo "This is the first version with the Linux files, so there is no earlier one to rehearse from." >> "$GITHUB_STEP_SUMMARY"
+      # Read-only: what publish would upload, keep or refuse, judged against the
+      # live release. A rebuild of a version that already has its files shows
+      # "refuse" for each: the never-replace rule, against the real release.
+      - name: What publish would do
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$VERSION" > release.json
+          { echo "What publish would do for v$VERSION (Linux files: ${{ needs.plan.outputs.state }}):"; echo '```';
+            python3 tooling/scripts/linux_release_plan.py attach --release release.json --dir new \
+              --version "$VERSION" --out would.txt --report; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -385,6 +445,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: v${{ needs.plan.outputs.version }}
+      # The plan script, from this workflow's commit (after the tag checkout,
+      # which empties the folder).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          sparse-checkout: scripts
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -399,13 +467,21 @@ jobs:
         run: |
           set -euo pipefail
           for f in "$APPIMAGE" "$DEB" latest-linux.yml; do test -s "out/$f"; done
-          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qE '\.(AppImage|deb)$|^latest-linux\.yml$'; then
-            echo "v$VERSION already has a Linux file - leaving it"; exit 0
-          fi
-          # The update file goes up LAST: a copy that falls back to GitHub's own
-          # list of releases is offered nothing until both files are there.
-          gh release upload "v$VERSION" "out/$APPIMAGE" "out/$DEB" --repo "$GITHUB_REPOSITORY"
-          gh release upload "v$VERSION" out/latest-linux.yml --repo "$GITHUB_REPOSITORY"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$VERSION" > release.json
+          # Per file: upload (not there), keep (there with THIS build's bytes) or
+          # refuse (other bytes, or never fully uploaded). Any refuse stops here,
+          # before anything is uploaded. A re-run of this job after an upload
+          # that stopped part way finishes it file by file.
+          python3 tooling/scripts/linux_release_plan.py attach --release release.json --dir out \
+            --version "$VERSION" --repo "$GITHUB_REPOSITORY" --out attach.txt
+          # One file per upload, in this order: the update file goes up LAST, so
+          # a copy that falls back to GitHub's own list of releases is offered
+          # nothing until both files are there.
+          for f in "$APPIMAGE" "$DEB" latest-linux.yml; do
+            if grep -qxF "upload $f" attach.txt; then
+              gh release upload "v$VERSION" "out/$f" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
           body="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json body -q .body)"
           if ! printf '%s' "$body" | grep -q "$APPIMAGE"; then
             printf '%s\n\n%s\n' "$body" "**Linux (preview):** \`$DEB\` for Ubuntu, Debian and Mint (a normal install), or \`$APPIMAGE\` for any other Linux (mark it as a program and run it). Both passed the whole test suite on Linux and update themselves; the package asks for your password to install an update. Nobody has used the Linux app on a real PC yet. Ignore \`latest-linux.yml\`; the app's updater reads it." > notes.md

@@ -793,10 +793,27 @@ function linuxAutostartFile() {
 function linuxLaunchTarget() {
   return process.env.APPIMAGE || process.execPath;
 }
-//: The entry's text. The path is quoted as the desktop-entry rules ask:
-//: in double quotes, with " ` $ and \ escaped.
+//: v1.540.0 (fourth review LX4): the program path as ONE Exec argument, in
+//: the three layers the Desktop Entry spec reads it through: the Exec quoting
+//: (in double quotes, with " ` $ and \ escaped by a backslash), then the
+//: string escape that is undone BEFORE it (every backslash doubled, so `$` is
+//: written \\$ and `\` four backslashes), and a literal % written %%. Pure.
+//: null for a path with a control character (a line break would end the line;
+//: no layer writes one safely): the caller refuses it.
+function desktopEntryExecArg(target) {
+  const s = String(target);
+  if (/[\x00-\x1f\x7f]/.test(s)) return null;
+  const quoted = '"' + s.replace(/(["`$\\])/g, "\\$1") + '"';
+  return quoted.replace(/\\/g, "\\\\").replace(/%/g, "%%");
+}
+//: The words for a path that cannot be written (logged, and said by the menu).
+const LINUX_AUTOSTART_REFUSED = "Iron Jarvis cannot start at login from where it is now.";
+const LINUX_AUTOSTART_REFUSED_HOW =
+  "The path to the app has a line break or another invisible character in it. Move the app to a folder with an ordinary name, then turn this on again.";
+//: The entry's text, or null when the path cannot be written safely.
 function linuxAutostartEntry(target) {
-  const quoted = '"' + String(target).replace(/(["`$\\])/g, "\\$1") + '"';
+  const quoted = desktopEntryExecArg(target);
+  if (quoted === null) return null;
   return [
     "[Desktop Entry]",
     "Type=Application",
@@ -808,13 +825,20 @@ function linuxAutostartEntry(target) {
   ].join("\n");
 }
 //: The single file may have been moved since the entry was written: an entry
-//: that is ON is rewritten at start, so it names the file as it is now.
+//: that is ON is rewritten at start, so it names the file as it is now. An
+//: entry this path cannot be written into is REMOVED (v1.540.0, LX4): kept,
+//: it would read On and start nothing, or the file the app was moved from.
 function refreshLinuxAutostart() {
   if (!IS_PACKAGED || process.platform !== "linux") return;
   try {
     const file = linuxAutostartFile();
     if (!fs.existsSync(file)) return;
     const want = linuxAutostartEntry(linuxLaunchTarget());
+    if (want === null) {
+      fs.rmSync(file, { force: true });
+      desktopLog("warn", "[login-item] " + LINUX_AUTOSTART_REFUSED + " " + LINUX_AUTOSTART_REFUSED_HOW + " The old entry was removed.");
+      return;
+    }
     if (fs.readFileSync(file, "utf8") !== want) fs.writeFileSync(file, want, { mode: 0o644 });
   } catch (err) {
     desktopLog("warn", "[login-item] could not refresh the autostart entry:", err && err.message);
@@ -836,13 +860,21 @@ function getStartAtLogin() {
   }
 }
 
+//: Returns false only when Linux refused the path (v1.540.0, LX4): no entry
+//: is written and the switch reads Off, which is true.
 function setStartAtLogin(enabled) {
   if (process.platform === "linux") {
+    let refused = false;
     try {
       const file = linuxAutostartFile();
-      if (enabled) {
+      const entry = enabled ? linuxAutostartEntry(linuxLaunchTarget()) : null;
+      if (enabled && entry === null) {
+        refused = true;
+        fs.rmSync(file, { force: true });
+        desktopLog("warn", "[login-item] " + LINUX_AUTOSTART_REFUSED + " " + LINUX_AUTOSTART_REFUSED_HOW);
+      } else if (enabled) {
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, linuxAutostartEntry(linuxLaunchTarget()), { mode: 0o644 });
+        fs.writeFileSync(file, entry, { mode: 0o644 });
       } else {
         fs.rmSync(file, { force: true });
       }
@@ -850,7 +882,7 @@ function setStartAtLogin(enabled) {
       desktopLog("error", "[login-item] could not update:", err && err.message);
     }
     refreshMenus();
-    return;
+    return refused ? false : undefined;
   }
   try {
     app.setLoginItemSettings({
@@ -869,8 +901,25 @@ function setStartAtLogin(enabled) {
  *  it. */
 function setStartAtLoginFromMenu(enabled) {
   writeDesktopSetting("startWithWindowsAsked", true);
-  setStartAtLogin(enabled);
-  noteDesktopSwitchByUser(START_WITH_WINDOWS_KEY, !!enabled); // v1.438.0
+  const refused = setStartAtLogin(enabled) === false;
+  noteDesktopSwitchByUser(START_WITH_WINDOWS_KEY, !!enabled && !refused); // v1.438.0
+  if (refused) {
+    // v1.540.0 (LX4): the click said On, the switch stays Off: say why.
+    try {
+      dialog
+        .showMessageBox({
+          type: "info",
+          buttons: ["OK"],
+          noLink: true,
+          title: "Iron Jarvis",
+          message: LINUX_AUTOSTART_REFUSED,
+          detail: LINUX_AUTOSTART_REFUSED_HOW,
+        })
+        .catch(() => {});
+    } catch {
+      /* the log already says it */
+    }
+  }
 }
 
 // --- The desktop app's own switches, in Iron Jarvis's settings (v1.438.0) --
@@ -2529,6 +2578,25 @@ const RELEASES_PAGE = "https://github.com/RealDealCPA-VR/Iron-Jarvis/releases";
 const RELEASES_PREVIOUS_HOW = "Open the Releases page (github.com/RealDealCPA-VR/Iron-Jarvis/releases), find the version listed just below this one, download its file named Iron-Jarvis-Setup-<version>.exe and run it.";
 const RELEASES_LATEST_HOW = "Open the Releases page (github.com/RealDealCPA-VR/Iron-Jarvis/releases), download the file named Iron-Jarvis-Setup-<version>.exe under the newest version and run it.";
 const DATA_STAYS = "Your settings, chats and keys stay where they are.";
+//: v1.540.0 (fourth review LX5): the sentence for THIS copy. Windows' words
+//: come back exactly as given. A Linux copy is told its own file (the .deb,
+//: else the AppImage, which an unpacked folder can use too) on the releases
+//: LIST: the newest release gets its Linux files about 40 minutes after the
+//: Windows one, and some versions have none. `windows` is one of the
+//: constants above or the update dialog's own lower-case copy of the latest.
+//: Every harness that lifts a caller lifts this with the constants.
+function releasesHow(windows, platform = UPDATE_PLATFORM) {
+  if (platform !== "linux") return windows;
+  const deb = linuxInstallKind() === "deb";
+  const file = deb ? "Iron-Jarvis-amd64.deb" : "Iron-Jarvis-x86_64.AppImage";
+  const finish = deb ? "open it to install." : "mark it as a program and run it.";
+  const page = "Open the Releases page (github.com/RealDealCPA-VR/Iron-Jarvis/releases), ";
+  const words =
+    windows === RELEASES_PREVIOUS_HOW
+      ? `${page}find the newest version below this one that has a file named ${file}, download it, then ${finish}`
+      : `${page}download the file named ${file} under the newest version that has it, then ${finish}`;
+  return windows.charAt(0) === "o" ? "o" + words.slice(1) : words;
+}
 
 // --- Failed-update recovery sentinel ------------------------------------
 // electron-updater/NSIS keep no prior version, so a bad auto-update that won't
@@ -2832,7 +2900,7 @@ function handleCorruptInstall(result) {
       "interrupted.\n\n" +
       (cached
         ? "Repair re-runs the already-downloaded installer."
-        : RELEASES_LATEST_HOW) +
+        : releasesHow(RELEASES_LATEST_HOW)) +
       " Your data, settings, and sessions are untouched.\n\n" +
       `First affected files:\n    ${examples}`,
   });
@@ -2847,7 +2915,10 @@ function handleCorruptInstall(result) {
       shell.openExternal("https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest");
     }
   } else if (choice === (cached ? 1 : 0)) {
-    shell.openExternal("https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest");
+    // Linux (v1.540.0, LX5): the list, since "latest" may not have its files yet.
+    shell.openExternal(
+      UPDATE_PLATFORM === "linux" ? RELEASES_PAGE : "https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest"
+    );
   }
   shutdown();
   app.quit();
@@ -5112,6 +5183,17 @@ function linuxCanSelfUpdate(env = process.env, resourcesDir = process.resourcesP
     return false;
   }
 }
+//: v1.540.0 (fourth review LX5, C-LX-2): WHICH Linux copy this is, by the
+//: same two signs: "appimage" (the single file), "deb" (the installed
+//: package; only the .deb is shipped as one) or "folder" (unpacked by hand).
+function linuxInstallKind(env = process.env, resourcesDir = process.resourcesPath, exists = fs.existsSync) {
+  if (env && env.APPIMAGE) return "appimage";
+  try {
+    return resourcesDir && exists(path.join(resourcesDir, "package-type")) ? "deb" : "folder";
+  } catch {
+    return "folder";
+  }
+}
 let _autoUpdater = null;
 let _updateSource = "manifest"; // "manifest" | "stable" | "feed" — which source the NEXT check reads
 let _updateRetryTimer = null;
@@ -5129,6 +5211,9 @@ let _updateState = {
   percent: 0,
   error: null,
   channel: null, // "fresh" | "stable" — the channel the last check read (v1.405.0)
+  // v1.540.0 (C-LX-2): Linux only, how THIS copy updates, for the Updates
+  // card's one line. Windows sends no such field, so its card is unchanged.
+  ...(UPDATE_PLATFORM === "linux" ? { install: linuxInstallKind() } : {}),
 };
 
 // --- Update channel: Fresh or Stable (v1.405.0) ----------------------------
@@ -5839,9 +5924,12 @@ function abortUpdateInstall(err) {
         `${friendly}\n\n` +
         "Nothing was changed and Iron Jarvis keeps working on the current version " +
         "meanwhile. It will look for the update again shortly. To install it by hand " +
-        "instead, open the Releases page (github.com/RealDealCPA-VR/Iron-Jarvis/releases), " +
-        "download the file named Iron-Jarvis-Setup-<version>.exe under the newest version " +
-        "and run it.",
+        "instead, " +
+        releasesHow(
+          "open the Releases page (github.com/RealDealCPA-VR/Iron-Jarvis/releases), " +
+            "download the file named Iron-Jarvis-Setup-<version>.exe under the newest version " +
+            "and run it."
+        ),
     });
   } catch (dlgErr) {
     desktopLog("error", "[update] could not show the abort dialog:", dlgErr && dlgErr.message);
@@ -6526,7 +6614,7 @@ function classifyStartupFailure(context) {
       message: "The step that updates your saved data for this version did not finish.",
       detail:
         "Nothing has been deleted. Press Retry. If it fails again, go back to the version " +
-        "you had: " + RELEASES_PREVIOUS_HOW + " " + DATA_STAYS,
+        "you had: " + releasesHow(RELEASES_PREVIOUS_HOW) + " " + DATA_STAYS,
     };
   }
   if (has(/ENOENT|EACCES|EPERM|not recognized as an internal|cannot find the (file|path)/i)) {
@@ -6573,7 +6661,7 @@ function handleStartupFailure(title, message, pendingUpdate, context) {
       message: `The update to version ${pendingUpdate.version || "(unknown)"} is not starting.`,
       detail:
         "Go back to the version you had, then open Iron Jarvis again. " +
-        RELEASES_PREVIOUS_HOW + " " + DATA_STAYS,
+        releasesHow(RELEASES_PREVIOUS_HOW) + " " + DATA_STAYS,
     });
     if (choice === 0) {
       shell.openExternal(RELEASES_PAGE);
