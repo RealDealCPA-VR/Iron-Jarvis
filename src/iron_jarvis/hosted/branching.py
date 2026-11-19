@@ -1033,6 +1033,9 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
     if idx < 0:
         raise Refused(GONE_MESSAGE, 404)
     turn_id = str(history[idx].get("turn") or "")
+    from ..harness.code_comments import from_event as _comments_from
+
+    noted = _comments_from(history[idx].get("comments"))
     if with_files and not turn_id:
         raise Refused(CK.NO_CHECKPOINT)
     restored: dict[str, Any] | None = None
@@ -1151,6 +1154,8 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
         _say(svc, made, FILES_NOTICE.format(words=restored["words"]))
     view = svc._with_live(store.view(made))
     out = {"session": svc._with_root(view), "text": text, "files": files, "note": " ".join(notes)}
+    if noted:
+        out["comments"] = noted  # v1.544.0: back to the box with the words
     if restored is not None:
         out["restored"] = _restored(restored)
     return out

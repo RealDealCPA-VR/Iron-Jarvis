@@ -62,6 +62,9 @@ class AppTurn(BaseModel):
     text: str = ""
     turn_id: str = ""
     files: list[str] | None = None
+    #: v1.544.0: comments on changed code that ride this message
+    #: (``harness/code_comments``): ``[{path, side, start, end, quote, words}]``.
+    comments: list[dict[str, Any]] | None = None
 
 
 class AppSteer(BaseModel):
@@ -77,6 +80,7 @@ class AppQueue(BaseModel):
 
     text: str = ""
     files: list[str] | None = None
+    comments: list[dict[str, Any]] | None = None  # v1.544.0: they wait with it
 
 
 class AppAnswer(BaseModel):
@@ -179,7 +183,7 @@ def register(app: FastAPI, d: Any) -> None:
         ``{ok, id, queued, queue_held}``. 409 ``code: not_working`` = no reply
         runs (send it as a message instead)."""
         try:
-            return await svc().queue_add(sid, body.text, body.files)
+            return await svc().queue_add(sid, body.text, body.files, body.comments)
         except S.Refused as r:
             return _refused(r)
 
@@ -261,7 +265,7 @@ def register(app: FastAPI, d: Any) -> None:
         closing this response never stops it; ``GET …/turns/{id}/stream``
         rejoins it."""
         try:
-            turn = await svc().start_turn(sid, body.text, body.turn_id, body.files)
+            turn = await svc().start_turn(sid, body.text, body.turn_id, body.files, comments=body.comments)
         except S.Refused as r:
             raise _http(r) from None
         return _follow_response(turn.follow())

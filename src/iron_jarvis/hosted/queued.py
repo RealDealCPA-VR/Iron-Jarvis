@@ -48,12 +48,23 @@ def read(home: Any, sid: str) -> dict[str, Any]:
     items = []
     for it in data.get("items") or [] if isinstance(data, dict) else []:
         if isinstance(it, dict) and isinstance(it.get("id"), str):
-            items.append({
+            item = {
                 "id": it["id"],
                 "text": str(it.get("text") or ""),
                 "files": [str(f) for f in (it.get("files") or []) if isinstance(f, str)][:MAX_FILES],
-            })
+            }
+            noted = _comments(it.get("comments"))
+            if noted:
+                item["comments"] = noted  # v1.544.0
+            items.append(item)
     return {"items": items[:MAX_QUEUED], "held": bool(isinstance(data, dict) and data.get("held"))}
+
+
+def _comments(raw: Any) -> list[dict[str, Any]]:
+    """v1.544.0: a waiting message's comments as saved (a whitelist)."""
+    from ..harness.code_comments import from_event
+
+    return from_event(raw)
 
 
 class SessionQueue:
@@ -72,12 +83,16 @@ class SessionQueue:
     def view(self) -> dict[str, Any]:
         return {"queued": [dict(i) for i in self.items], "queue_held": self.held and bool(self.items)}
 
-    def add(self, text: str, files: list[str]) -> dict[str, Any]:
-        item = {
+    def add(self, text: str, files: list[str], comments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        item: dict[str, Any] = {
             "id": f"q-{uuid.uuid4().hex[:10]}",
             "text": clip(text, TEXT_CHARS),
             "files": [clip(f, 500) for f in files][:MAX_FILES],
         }
+        if comments:
+            from ..harness.code_comments import for_event
+
+            item["comments"] = for_event(comments)  # v1.544.0: masked, as the text is
         self.items.append(item)
         self._version += 1
         return item

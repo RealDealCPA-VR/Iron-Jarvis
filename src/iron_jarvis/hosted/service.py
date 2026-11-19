@@ -2064,6 +2064,9 @@ class HostedService:
             "pending": [a.event for a in (live.asks.values() if live else [])],
         }
         out["commands"] = self.commands_for(row.harness, live, folder=row.folder or "")
+        # v1.544.0: this daemon takes comments on changed code with a message
+        # (the page offers them only when it says so: never silently dropped).
+        out["takes_comments"] = True
         # v1.441.0: Branch from here / Rewind to here — what this tool can do,
         # and the messages it can do it from.
         try:
@@ -2216,7 +2219,8 @@ class HostedService:
         with contextlib.suppress(RuntimeError):
             keep(asyncio.ensure_future(asyncio.to_thread(q.write, version, data)))
 
-    async def queue_add(self, sid: str, text: str, files: list[str] | None = None) -> dict[str, Any]:
+    async def queue_add(self, sid: str, text: str, files: list[str] | None = None,
+                        comments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """A message typed while a reply runs WAITS (sent when the reply ends
         cleanly). Refused with ``code: not_working`` when no reply runs (the
         page sends it as a message instead)."""
@@ -2224,7 +2228,8 @@ class HostedService:
         label = W.label(row.harness)
         text = str(text or "")
         files = [str(f) for f in (files or []) if str(f).strip()]
-        if not text.strip() and not files:
+        noted = self._comments_of(row, comments)
+        if not text.strip() and not files and not noted:
             raise Refused("Type a message first.", 400)
         problems = await asyncio.to_thread(self._file_problems, files, row.folder or "")
         if problems:
@@ -2238,7 +2243,7 @@ class HostedService:
         q = live.queue
         if len(q.items) >= Q.MAX_QUEUED:
             raise Refused(W.QUEUE_FULL.format(n=len(q.items), label=label))
-        item = q.add(text, files)
+        item = q.add(text, files, noted)
         self._persist_queue(q)
         return {"ok": True, "id": item["id"], **(await self._queue_view(sid, running=True))}
 
@@ -2286,7 +2291,7 @@ class HostedService:
             return
         self._persist_queue(q)
         try:
-            await self.start_turn(sid, item["text"], "", item["files"])
+            await self.start_turn(sid, item["text"], "", item["files"], comments=item.get("comments"))
         except Refused as r:
             q.put_back(item)
             q.hold()
@@ -3538,8 +3543,21 @@ class HostedService:
         return {"ok": True, "id": ref, "state": "read" if note.get("read") else "sent", "how": how}
 
     # -- turns -------------------------------------------------------------------
+    def _comments_of(self, row: Any, comments: Any) -> list[dict[str, Any]]:
+        """v1.544.0: a message's comments, checked against the session's
+        folder (``harness/code_comments.clean``); a refusal is the message's."""
+        if not comments:
+            return []
+        from ..harness import code_comments as CC
+
+        try:
+            return CC.clean(str(getattr(row, "folder", "") or ""), comments)
+        except CC.CommentRefused as c:
+            raise Refused(c.sentence, c.status) from None
+
     async def start_turn(self, sid: str, text: str, turn_id: str, files: list[str] | None = None,
-                         *, carry: dict[str, Any] | None = None) -> HostedTurn:
+                         *, carry: dict[str, Any] | None = None,
+                         comments: list[dict[str, Any]] | None = None) -> HostedTurn:
         """``carry`` (v1.422.0): a message Iron Jarvis sends BY ITSELF to carry
         a reply on (``hosted.carry_on``) — its ``user`` event carries it (the
         page shows a line, not a bubble) and it ends no wait. Any other
@@ -3556,7 +3574,8 @@ class HostedService:
             raise Refused(W.ARCHIVED)
         text = str(text or "")
         files = [str(f) for f in (files or []) if str(f).strip()]
-        if not text.strip() and not files:
+        noted = self._comments_of(row, comments)  # v1.544.0
+        if not text.strip() and not files and not noted:
             raise Refused("Type a message first.", 400)
         problems = await asyncio.to_thread(self._file_problems, files, row.folder or "")
         if problems:
@@ -3576,7 +3595,8 @@ class HostedService:
             # conversation by that folder, so a new one would lose it.
             made = await asyncio.to_thread(self._remake_own_folder, row.folder)
         try:
-            return await self._start_turn_in(row, sid, turn_id, text, files, made, forget, carry=carry)
+            return await self._start_turn_in(row, sid, turn_id, text, files, made, forget, carry=carry,
+                                             comments=noted)
         except BaseException:
             if made:
                 await asyncio.to_thread(self._take_back_folder, sid, made, forget=forget)
@@ -3584,7 +3604,8 @@ class HostedService:
 
     async def _start_turn_in(self, row: Any, sid: str, turn_id: str, text: str, files: list[str],
                              made: str = "", forget: bool = False, *,
-                             carry: dict[str, Any] | None = None) -> HostedTurn:
+                             carry: dict[str, Any] | None = None,
+                             comments: list[dict[str, Any]] | None = None) -> HostedTurn:
         live = self._live(row)
         live.account = row.account
         if live.claim:
@@ -3596,6 +3617,12 @@ class HostedService:
         builtin = await self._pi_typed(row, live, text, files) if row.harness == PI and not carry else None
         if row.harness in (CLAUDE, GROK) and not carry:
             builtin = await self._typed_setting(row, live, text, files)
+        if builtin is not None and comments:
+            # v1.544.0: a command of the tool's own takes no comments (as it
+            # takes no files): they stay in the box for a message.
+            from ..harness.code_comments import NOT_WITH_COMMAND
+
+            raise Refused(NOT_WITH_COMMAND, 400)
         # v1.511.0 (A12): a stored "load them" press is read against the
         # folder's trust afresh before Pi starts again (never --approve over
         # the user's later "do not trust").
@@ -3628,7 +3655,7 @@ class HostedService:
         live.turn = turn
         live.last_active = self.clock()
         turn.task = asyncio.ensure_future(self._drive(live, row, turn, text, files, made, forget, carry=carry,
-                                                      builtin=builtin))
+                                                      builtin=builtin, comments=comments))
         # v1.409.0 (found live): a session is titled by its first message, as
         # a chat is — never "New Claude Code session" forever. Only an EMPTY
         # title (a name the user gave is theirs) and only once the turn is
@@ -3808,10 +3835,17 @@ class HostedService:
 
     async def _drive(self, live: LiveSession, row: Any, turn: HostedTurn, text: str, files: list[str],
                      made: str = "", forget: bool = False, *, carry: dict[str, Any] | None = None,
-                     builtin: tuple[str, str] | None = None) -> None:
+                     builtin: tuple[str, str] | None = None,
+                     comments: list[dict[str, Any]] | None = None) -> None:
         user = make("user", text=clip(text, TEXT_CHARS))
         if files:
             user["files"] = [clip(f, 500) for f in files]
+        if comments:
+            # v1.544.0: the record keeps the comments beside the words (masked):
+            # the sent message shows them and a rewind puts them back.
+            from ..harness import code_comments as CC
+
+            user["comments"] = CC.for_event(comments)
         if carry:
             user["carry"] = dict(carry)  # v1.422.0: Iron Jarvis carried it on
         if builtin is not None and row.harness == PI and builtin[0] in P.SHELL_BUILTINS:
@@ -3890,8 +3924,19 @@ class HostedService:
             else:
                 before = BR.ref_before(live.driver)
                 live.ref_save = saving = asyncio.get_running_loop().create_future()
+                # v1.544.0: the comments ride the message as text the TOOL
+                # reads — the user's words outside the fence, the path and the
+                # quoted code masked, scanned and inside it. ONE place, so
+                # every tool gets the same.
+                sent_text = text
+                if comments:
+                    from ..harness import code_comments as CC
+
+                    sent_text = await asyncio.to_thread(
+                        CC.with_block, text, comments,
+                        event_bus=getattr(self.platform, "event_bus", None), session_id=live.sid)
                 try:
-                    await live.driver.send_user(text, files)
+                    await live.driver.send_user(sent_text, files)
                 except BaseException:
                     # Review: a message the tool never received is never
                     # recorded as sent (it was offered for a branch, and for
@@ -3899,7 +3944,9 @@ class HostedService:
                     if not saving.done():
                         saving.set_result(None)
                     raise
-                await self._note_sent(live, row, user, before, text)
+                # (The text as SENT: Pi's rewind finds a message by matching it
+                # against Pi's own list of what it received.)
+                await self._note_sent(live, row, user, before, sent_text)
             if turn.running:
                 await turn.finished.wait()
         except Refused as r:
