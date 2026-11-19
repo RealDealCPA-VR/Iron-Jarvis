@@ -232,6 +232,43 @@ def _capabilities_or_none(raw: Any) -> dict[str, bool] | None:
     return normalise_pane_capabilities(raw) if isinstance(raw, Mapping) else None
 
 
+#: Fourth plan TM1: every vendor CLI's account home variable. Spelled here as
+#: well as read from ``pane_accounts.SPECS`` (deferred: it imports Iron-Proxy),
+#: so the guard below still holds if that import ever fails.
+_ACCOUNT_HOME_VARS = frozenset({"CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"})
+
+
+def _account_home_vars() -> frozenset[str]:
+    try:
+        from .pane_accounts import SPECS
+
+        return _ACCOUNT_HOME_VARS | {str(s.home_var).upper() for s in SPECS.values()}
+    except Exception:  # noqa: BLE001 - the literal set still guards
+        log.debug("could not read the account home variables", exc_info=True)
+        return _ACCOUNT_HOME_VARS
+
+
+def _without_account_homes(recipe: str, env: Mapping[Any, Any]) -> dict[str, str]:
+    """A preparer's variables minus any account home variable (fourth plan
+    TM1). The terminal's ACCOUNT decides ``CLAUDE_CONFIG_DIR``, ``CODEX_HOME``
+    and ``GROK_HOME`` (``PaneAccounts.apply``); the pane's variables are merged
+    after it, so a recipe that set one moved the terminal off its account —
+    the Codex recipe did, until v1.539.0, and the terminal started signed out
+    in a home inside the project. Matched case-insensitively (Windows keeps one
+    variable per name whatever its case); each drop is logged."""
+    homes = _account_home_vars()
+    out: dict[str, str] = {}
+    for k, v in env.items():
+        if str(k).upper() in homes:
+            log.warning(
+                "launch recipe %s set the account home %s; dropped (the terminal's "
+                "account decides it)", recipe, str(k).upper(),
+            )
+            continue
+        out[str(k)] = str(v)
+    return out
+
+
 #: v1.333.0: a pane id that can name its scrollback file. Every id this app
 #: mints matches; anything else (a hand-edited snapshot) keeps its scrollback
 #: inline in the index, as every pane did before.
@@ -493,6 +530,17 @@ class TerminalManager:
         #: Set for the duration of a rehydrate: the shared deadline of
         #: :data:`RESTORE_ACCOUNTS_BUDGET_S` for legacy re-resolution.
         self._restore_deadline: float | None = None
+        #: Fourth plan D9 B: the start-up sweep of closed terminals' own files
+        #: (``recipes.sweep_terminal_files``), on its own thread. Tests join it.
+        self._files_sweep: threading.Thread | None = None
+
+    @property
+    def terminal_files_home(self) -> Path | None:
+        """Fourth plan D9 option B: Iron Jarvis's own folder (the one holding
+        the terminal snapshot), under which a with-tools terminal's own file
+        lives (``recipes.terminal_files_dir``). None without persistence: a
+        recipe that needs a file then says it could not be set up."""
+        return self.state_path.parent if self.state_path else None
 
     # --- pane accounts (v1.302.0) ------------------------------------------
 
@@ -724,7 +772,7 @@ class TerminalManager:
         from .recipes import why_not
 
         out = outcome if outcome is not None else {}
-        out.update(set_up=False, argv_extra=[], limitations=[])
+        out.update(set_up=False, argv_extra=[], limitations=[], config_writes=[])
         if required and not normalise_capabilities(capabilities):
             raise RecipeNotSetUp("No box is ticked, so there is nothing to give it.")
         inspector = getattr(self.recipe_preparer, "inspect", None)
@@ -770,6 +818,9 @@ class TerminalManager:
                 # never wrote — the config half of the feature simply does not
                 # happen.
                 cwd=cwd,
+                # Fourth plan D9 B: Iron Jarvis's own folder, where the tool's
+                # file goes (never the user's `cwd`).
+                home=str(self.terminal_files_home or ""),
             )
         except Exception as exc:  # noqa: BLE001 - see the docstring
             log.warning("launch recipe %s could not be prepared", recipe, exc_info=True)
@@ -782,19 +833,23 @@ class TerminalManager:
         if isinstance(prepared, Mapping):
             # A preparer that answers its environment only (an older seam):
             # what it says is all there is to know.
-            extra.update({str(k): str(v) for k, v in prepared.items()})
+            extra.update(_without_account_homes(recipe, prepared))
             out["set_up"] = True
             return extra
         env = getattr(prepared, "env", None)
         if isinstance(env, Mapping):
             # ONLY the environment reaches the child: ``argv_extra`` and the
             # rest are kept apart (never a bogus variable in the harness).
-            extra.update({str(k): str(v) for k, v in env.items()})
+            extra.update(_without_account_homes(recipe, env))
         set_up = bool(getattr(prepared, "set_up", False))
         out.update(
             set_up=set_up,
             argv_extra=[str(a) for a in (getattr(prepared, "argv_extra", None) or [])],
             limitations=list(getattr(prepared, "limitations", None) or []),
+            # Fourth plan TM3 (D9 B): the files the recipe wrote, so the
+            # terminal's note never says "Nothing was written in your folder"
+            # over a file that was (routes/terminals._tools_note).
+            config_writes=[str(p) for p in (getattr(prepared, "config_writes", None) or [])],
         )
         if required and not set_up:
             self._revoke_pane_tokens([pane_id])
@@ -1663,7 +1718,50 @@ class TerminalManager:
 
     def rehydrate(self, *, env: dict | None = None, backend: PtyBackend | None = None) -> int:
         """On boot, re-open every persisted session. Best-effort per entry;
-        returns how many were restored. No-op without a snapshot file."""
+        returns how many were restored. No-op without a snapshot file.
+
+        Fourth plan D9 B: then (whatever happened) the files of terminals that
+        did not come back are swept from Iron Jarvis's folder, on a thread of
+        their own (:meth:`_sweep_terminal_files_later`)."""
+        started = time.time()
+        try:
+            return self._rehydrate(env=env, backend=backend)
+        finally:
+            self._sweep_terminal_files_later(older_than=started)
+
+    def _sweep_terminal_files_later(self, *, older_than: float) -> None:
+        """``recipes.sweep_terminal_files`` for every terminal this start knows
+        (restored, still starting, kept as not reopened, being created), OFF
+        the boot thread. Files written after ``older_than`` (this start) are
+        never taken, so a terminal opened meanwhile keeps its own. Never
+        raises."""
+        home = self.terminal_files_home
+        if home is None:
+            return
+        with self._lock:
+            keep = (
+                set(self._sessions)
+                | set(self._restoring)
+                | set(self._restore_failed)
+                | set(self._pending_panes)
+            )
+
+        def run() -> None:
+            from .recipes import sweep_terminal_files
+
+            gone = sweep_terminal_files(home, keep, older_than=older_than)
+            if gone:
+                log.info("removed %d closed terminals' own files", gone)
+
+        try:
+            self._files_sweep = threading.Thread(
+                target=run, name="terminal-files-sweep", daemon=True
+            )
+            self._files_sweep.start()
+        except Exception:  # noqa: BLE001 - tidiness never blocks a boot
+            log.warning("could not tidy the terminals' own files", exc_info=True)
+
+    def _rehydrate(self, *, env: dict | None = None, backend: PtyBackend | None = None) -> int:
         if not self.state_path or not self.state_path.is_file():
             return 0
         try:

@@ -2042,6 +2042,38 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Terminals stay on your account, and your folder stays yours (v1.539.0)
+
+The seventh of nine releases from the fourth review.
+
+- **A terminal "with Iron Jarvis's tools" writes nothing in your folder.**
+  Claude Code's, Pi's and Codex's settings for Iron Jarvis's tools now live
+  in Iron Jarvis's own folder, only for that terminal, and are removed when
+  you close it. A line under the terminal says so: "Nothing was written in
+  your folder". Files an older version left in your folder (a
+  `.jarvis-codex` folder, or an Iron Jarvis entry in `.mcp.json`) are named
+  there once; Iron Jarvis never deletes or edits them.
+- **Codex with tools opens on your own account.** It used to start signed out,
+  in an empty home inside your project. It now starts on its account as
+  usual, with your own Codex settings, and gets Iron Jarvis's tools only for
+  that terminal.
+- **The tools terminal opens on the account of the terminal you opened it
+  from**, and the dialog says which ("Opens on …").
+- **Pi is ready the moment it starts** when it can load Iron Jarvis's
+  extension itself. When it cannot, the line under it gives the exact
+  command to type, with the file's full path.
+- **A terminal whose program is gone can be reopened on your usual shell**
+  ("Open with PowerShell 7"), in the same folder and with its history,
+  instead of only Try again or Close.
+- **Typing never waits on a terminal that is restarting at a new size**, and
+  "could not be started again" is said once, not at every resize.
+- **A slow skill library is said, not guessed around.** A terminal's "ask
+  AI" with a chosen skill answers "Your skill library did not answer in time,
+  so nothing was asked" instead of answering without the skill.
+- **On Linux and Mac, a terminal whose shell is missing** is kept with its
+  history and listed with the reason, and a new terminal with a missing
+  shell is refused in plain words.
+
 ## Connected apps keep working by themselves (v1.538.0)
 
 The sixth of nine releases from the fourth review.

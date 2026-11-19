@@ -1110,11 +1110,14 @@ export default function TerminalsPage() {
 
   /** "Try again": the daemon reopens it under its id, with its history
    *  (`POST /terminals/not-reopened/{id}/retry`). Null once it is open, else
-   *  the plain sentence the row shows. */
+   *  the plain sentence the row shows. Fourth plan C-TM-1: `shell: "default"`
+   *  is "Open with {usual shell}" — the same terminal on the user's usual
+   *  shell, answered and refused exactly as "Try again" is. */
   const retryNotReopened = useCallback(
-    async (id: string): Promise<string | null> => {
+    async (id: string, shell?: "default"): Promise<string | null> => {
       try {
-        const row = await post<TerminalInfo>(`/terminals/not-reopened/${encodeURIComponent(id)}/retry`);
+        const path = `/terminals/not-reopened/${encodeURIComponent(id)}/retry`;
+        const row = await (shell ? post<TerminalInfo>(path, { shell }) : post<TerminalInfo>(path));
         setOffline(false);
         dropNotReopened(id);
         if (row?.id) adoptPane(row);
@@ -1164,18 +1167,25 @@ export default function TerminalsPage() {
    *  after its boxes were ticked: the daemon makes the NEW terminal with
    *  them, sets the tool up and starts it (`POST /terminals/launch-with-tools`).
    *  Resolves to null once it is open (added and focused), else the plain
-   *  sentence the pane shows beside the boxes. */
+   *  sentence the pane shows beside the boxes.
+   *  Fourth plan C-TM-2: `account` is the account of the terminal it was
+   *  opened from (the dialog's "Opens on …"), sent as `/terminals/launch`
+   *  takes it; absent when that terminal names none (the daemon picks).
+   *  TM3: the answer's `tools` (the note, leftovers, limitations) rides the
+   *  new row, so the line under the new terminal shows it. */
   const launchWithTools = useCallback(
-    async (near: TerminalInfo, cli: string, tools: LaunchTools): Promise<string | null> => {
+    async (near: TerminalInfo, cli: string, tools: LaunchTools, account?: string): Promise<string | null> => {
       try {
-        const res = await post<{ pane?: TerminalInfo }>("/terminals/launch-with-tools", {
+        const res = await post<{ pane?: TerminalInfo; tools?: unknown }>("/terminals/launch-with-tools", {
           cli,
           near: near.id,
           capabilities: { memory: tools.memory, browser: tools.browser },
+          ...(account ? { account } : {}),
         });
         if (!res?.pane?.id) return "Iron Jarvis did not open a new terminal.";
         setOffline(false);
-        adoptPane(res.pane);
+        const row = res.pane as TerminalInfo & { tools?: unknown };
+        adoptPane(row.tools === undefined && res.tools !== undefined ? { ...row, tools: res.tools } : row);
         return null;
       } catch (e) {
         if (e instanceof ApiError && e.status === 0) setOffline(true);
@@ -1224,7 +1234,7 @@ export default function TerminalsPage() {
         paneStateLine={act?.state_line}
         onRenamed={(name) => notePaneOverride(t.id, { name: name || undefined })}
         onLaunched={(cli) => notePaneOverride(t.id, { cli })}
-        onLaunchWithCapabilities={(cli, tools) => launchWithTools(t, cli, tools)}
+        onLaunchWithCapabilities={(cli, tools, account) => launchWithTools(t, cli, tools, account)}
         onOpenedPane={adoptPane}
         liveAccounts={livePaneAccounts(t, act)}
         paneLimit={paneLimitOf(act)}

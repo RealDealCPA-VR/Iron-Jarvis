@@ -242,19 +242,26 @@ def _apply_codex_overrides(config: dict, argv: list[str]) -> dict:
 
 
 async def test_a_codex_session_never_targets_the_terminal_recipes_own_server(app, work, tmp_path, monkeypatch):
-    """A Build terminal's Codex recipe writes ``[mcp_servers."iron-jarvis"]``
-    (command + args, a stdio bridge) into a Codex config — which can be the
-    user's own. A hosted Codex session's ``-c mcp_servers.<name>.url=…`` on
-    that SAME name would leave one server with both ``command`` and ``url``."""
+    """The connected app writes ``[mcp_servers."iron-jarvis"]`` (command +
+    args, a stdio bridge) into the user's own Codex config (until v1.538 a
+    Build terminal's Codex recipe wrote the same table). A hosted Codex
+    session's ``-c mcp_servers.<name>.url=…`` on that SAME name would leave one
+    server with both ``command`` and ``url``.
+
+    Fourth plan TM1: the terminal recipe no longer writes a config, so the
+    table is written here inline, in the shape the connected app writes."""
     import tomllib
 
-    from iron_jarvis.terminals.recipes import SERVER_NAME as RECIPE_NAME
-    from iron_jarvis.terminals.recipes import CodexRecipe
+    from iron_jarvis.mcpserver.apps import SERVER_NAME as RECIPE_NAME
 
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(
-        CodexRecipe().config_text("http://127.0.0.1:1/mcp", "unused"), encoding="utf-8")
+        f'[mcp_servers."{RECIPE_NAME}"]\n'
+        'command = "C:\\\\Program Files\\\\Iron Jarvis\\\\ironjarvis.exe"\n'
+        'args = ["mcp-stdio"]\n'
+        'env = { IRONJARVIS_MCP_URL = "http://127.0.0.1:1/mcp" }\n',
+        encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     log = tmp_path / "codex.log"
     use_fake(monkeypatch, "codex_allow", log)
@@ -278,11 +285,18 @@ async def test_a_codex_session_never_targets_the_terminal_recipes_own_server(app
 
 
 def test_the_hosted_server_name_is_its_own():
-    """No recipe uses the hosted connection's name, so neither Codex's ``-c``
-    nor Claude Code's project ``.mcp.json`` (the Claude recipe's) can share it."""
+    """The hosted connection's name is never the connected app's
+    (``iron-jarvis``, written into the user's own settings), so Codex's ``-c``
+    can never merge into the app's table. Fourth plan TM1/MS4a (v1.539.0): a
+    Build terminal's Codex now uses the SAME per-process name on purpose (both
+    are one process's own tools, passed with ``-c``, nothing written), and its
+    Claude Code file a name of its own (``iron-jarvis-terminal``)."""
     import re
 
-    from iron_jarvis.terminals.recipes import SERVER_NAME as RECIPE_NAME
+    from iron_jarvis.mcpserver.apps import SERVER_NAME as APP_NAME
+    from iron_jarvis.terminals import recipes
 
-    assert JT.SERVER_NAME != RECIPE_NAME
+    assert JT.SERVER_NAME != APP_NAME
+    assert recipes.CODEX_SERVER_NAME == JT.SERVER_NAME
+    assert recipes.SERVER_NAME not in (APP_NAME, JT.SERVER_NAME)
     assert re.fullmatch(r"[a-z0-9-]+", JT.SERVER_NAME), "a bare TOML key and a sensible tool prefix"

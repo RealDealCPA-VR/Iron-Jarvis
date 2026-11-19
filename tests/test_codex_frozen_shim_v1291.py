@@ -1,14 +1,18 @@
 """v1.291.0 (io-04): the Codex Build-pane recipe's stdio bridge must START in the
 installed app, not only in a developer checkout.
 
-``CodexRecipe.config_text`` writes ``command = sys.executable`` and, before this
+``CodexRecipe.config_text`` wrote ``command = sys.executable`` and, before this
 fix, ``args = ["-m", "iron_jarvis.mcpserver.stdio_shim"]``. Frozen,
 ``sys.executable`` is ``ironjarvis.exe`` — the Typer CLI — which rejects ``-m``
 ("No such option") before any bridge exists. ``_shim_available()`` still said
 yes because the module IS bundled, so the pane reported "configured" and Codex
 got nothing. Both halves are pinned here:
 
-* the config shape follows ``sys.frozen`` (parsed as real TOML, both shapes);
+* the bridge's launch argv follows ``sys.frozen`` (``_shim_launch``, both
+  shapes). Fourth plan TM1 (v1.539.0): the Codex TERMINAL no longer writes a
+  config at all (Codex's own ``-c`` options reach ``/mcp`` over HTTP), so the
+  ``config_text`` pins are retired; the ``mcp-stdio`` bridge stays, because the
+  connected app's Codex entry starts it;
 * frozen availability is the hidden ``mcp-stdio`` subcommand being registered,
   with an anti-vacuity control that unregisters it and watches the answer flip;
 * the subcommand really bridges a JSON-RPC ``initialize`` over stdio when run
@@ -25,7 +29,6 @@ import os
 import subprocess
 import sys
 import threading
-import tomllib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -42,30 +45,21 @@ URL = "http://127.0.0.1:1/mcp"  # never contacted by the config-shape pins
 FAKE_EXE = "C:\\Program Files\\Iron Jarvis\\resources\\daemon\\ironjarvis.exe"
 
 
-def _server(text: str) -> dict:
-    cfg = tomllib.loads(text)
-    return cfg["mcp_servers"][recipes.SERVER_NAME]
-
-
 # --------------------------------------------------------------------------- #
-# The config shape follows sys.frozen
+# The bridge's launch argv follows sys.frozen
 # --------------------------------------------------------------------------- #
-def test_frozen_config_launches_the_exe_with_the_mcp_stdio_subcommand(monkeypatch):
+def test_frozen_bridge_launches_the_exe_with_the_mcp_stdio_subcommand(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", FAKE_EXE)
-    server = _server(CodexRecipe().config_text(URL, "tok"))
-    assert server["command"] == FAKE_EXE
-    assert server["args"] == ["mcp-stdio"], "the exe is the Typer CLI: it has no -m"
-    assert server["env"][recipes.MCP_URL_ENV] == URL
-    assert "tok" not in CodexRecipe().config_text(URL, "tok")
+    assert CodexRecipe()._shim_launch() == ["mcp-stdio"], (
+        "the exe is the Typer CLI: it has no -m"
+    )
 
 
-def test_dev_config_still_runs_the_shim_module_with_dash_m(monkeypatch):
+def test_dev_bridge_still_runs_the_shim_module_with_dash_m(monkeypatch):
     monkeypatch.delattr(sys, "frozen", raising=False)
     monkeypatch.setattr(sys, "executable", "C:\\venv\\Scripts\\python.exe")
-    server = _server(CodexRecipe().config_text(URL, "tok"))
-    assert server["command"] == "C:\\venv\\Scripts\\python.exe"
-    assert server["args"] == ["-m", CodexRecipe.shim_module]
+    assert CodexRecipe()._shim_launch() == ["-m", CodexRecipe.shim_module]
 
 
 # --------------------------------------------------------------------------- #
@@ -151,15 +145,13 @@ def fake_daemon():
 
 
 def _frozen_argv(monkeypatch, url: str) -> tuple[list[str], dict[str, str]]:
-    """The argv Codex would run, from the FROZEN-shaped config, with the exe
+    """The argv the bridge is started with, FROZEN-shaped, with the exe
     replaced by the dev interpreter running the exe's own entry file."""
     real_python = sys.executable  # captured BEFORE the fake exe is patched in
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", FAKE_EXE)
-    server = _server(CodexRecipe().config_text(url, "tok"))
-    assert server["command"] == FAKE_EXE
-    argv = [real_python, str(FROZEN_ENTRY), *server["args"]]
-    return argv, dict(server.get("env", {}))
+    argv = [real_python, str(FROZEN_ENTRY), *CodexRecipe()._shim_launch()]
+    return argv, {recipes.MCP_URL_ENV: url}
 
 
 def test_mcp_stdio_bridges_initialize_over_stdio_through_the_frozen_entry_point(

@@ -454,6 +454,11 @@ class TerminalSession:
         # (the next resize may try again while nothing has been typed).
         self._restarting = False
         self._restart_failed = False
+        #: Fourth plan TM3: the note under a terminal opened "with Iron
+        #: Jarvis's tools" (``{note, leftovers, limitations}``), set by the
+        #: launch route and shown on the row as ``tools``. Not saved: a
+        #: reopened terminal is not given the tools again (D19).
+        self.tools_note: dict[str, Any] | None = None
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent).
@@ -537,8 +542,11 @@ class TerminalSession:
             if not _start_within(
                 new, self.argv, self.cwd, self._respawn_env, cols, rows, RESTART_START_WAIT_S
             ):
+                # Fourth plan TM4: said once per failure streak, not again at
+                # every resize that tries once more.
+                if not self._restart_failed:
+                    self.note_on_screen(RESTART_FAILED_NOTE)
                 self._restart_failed = True
-                self.note_on_screen(RESTART_FAILED_NOTE)
                 return False
             with self._write_lock:
                 if not self._untouched or self._killed:
@@ -573,6 +581,18 @@ class TerminalSession:
             return True
         finally:
             self._restarting = False
+
+    def restart_possible(self, cols: int, rows: int) -> bool:
+        """Fourth plan TM4: would :meth:`restart_at_size` try a second start
+        at this size? The same checks it makes before it starts anything (no
+        lock, no process): the socket runs only such a resize in the
+        background, and every other resize exactly as before."""
+        if (cols, rows) == (self.cols, self.rows) or cols < 2 or rows < 2:
+            return False
+        return bool(
+            self._untouched and not self._killed and self._respawn_env is not None
+            and not self._restarting
+        )
 
     def restart_wanted(self) -> bool:
         """Third plan TM2: the last :meth:`restart_at_size` could not start the
@@ -1379,5 +1399,11 @@ class TerminalSession:
             row["accounts"] = {
                 p: {k: a[k] for k in ("id", "title", "source", "note") if k in a}
                 for p, a in self.accounts.items()
+            }
+        if self.tools_note:  # fourth plan TM3 additive: a "with tools" terminal
+            row["tools"] = {
+                "note": str(self.tools_note.get("note") or ""),
+                "leftovers": list(self.tools_note.get("leftovers") or []),
+                "limitations": list(self.tools_note.get("limitations") or []),
             }
         return row

@@ -362,7 +362,8 @@ describe("TM5 — the boxes are shown first", () => {
     const pane = src("components", "terminal", "TerminalPane.tsx");
     expect(pane).toMatch(/disabled=\{!recipeCanSetUp\(c\)\}\s*onClick=\{\(\) => \{\s*setToolsFor\(c\);/);
     expect(pane).toContain("<LaunchToolsDialog");
-    expect(pane).toContain("const why = await onLaunchWithCapabilities(toolsFor.id, tools);");
+    // Fourth plan C-TM-2: Open also hands on the account the dialog names.
+    expect(pane).toContain("const why = await onLaunchWithCapabilities(toolsFor.id, tools, account);");
     // The plain rows type into THIS terminal: never "ready".
     expect(pane).toMatch(/<RecipePlace\.Provider value="here">\s*\{installedClis\.map\(\(c\) => \{/);
   });

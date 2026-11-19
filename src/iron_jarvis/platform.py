@@ -384,8 +384,8 @@ def build_recipe_preparer(url: str):
     """The adapter between `TerminalManager`'s seam and `terminals/recipes.py`.
 
     The manager owns the token (it is the thing that revokes it) and knows the
-    pane; the recipe knows what the installed CLI can be told and writes the
-    config into the pane's own folder. This function is the only place those two
+    pane; the recipe knows what the installed CLI can be told and writes its
+    file in Iron Jarvis's own folder (`home`). This function is the only place those two
     meet. It returns the recipe's whole result (third fix plan, TM5); the
     manager merges ONLY its `.env` into the child environment, so a
     `config_writes` or `argv_extra` key can never arrive as a bogus variable in
@@ -409,6 +409,7 @@ def build_recipe_preparer(url: str):
         token: str,
         capabilities: dict[str, bool] | None = None,
         cwd: str = "",
+        home: str = "",
         **_unused: Any,
     ) -> Any:
         # Third plan TM5: the RecipeResult itself, not its env alone — the
@@ -421,7 +422,9 @@ def build_recipe_preparer(url: str):
         entry = recipes.recipe_for(recipe)
         if entry is None:  # most of the Launch catalog: no recipe, no change
             return {}
-        result = entry.prepare(pane_id, token, url, capabilities or {}, cwd=cwd)
+        # Fourth plan D9 B: `home` (Iron Jarvis's own folder) is where a
+        # terminal's own tool file goes; nothing is written in `cwd`.
+        result = entry.prepare(pane_id, token, url, capabilities or {}, cwd=cwd, home=home)
         _log.info(
             "launch recipe %s for pane %s: ok=%s method=%s wrote=%s",
             recipe,

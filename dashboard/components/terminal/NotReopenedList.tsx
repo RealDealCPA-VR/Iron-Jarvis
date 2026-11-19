@@ -13,6 +13,11 @@
  * "Try again" is `POST /terminals/not-reopened/{id}/retry` (the terminal's
  * row, or a plain sentence); "Close" asks first, as closing a terminal does,
  * then `DELETE /terminals/not-reopened/{id}` forgets it and its kept history.
+ *
+ * Fourth plan C-TM-1: a row whose program is gone carries `usual_shell` and
+ * also offers "Open with {usual_shell}": the same retry with
+ * `{"shell": "default"}`, which reopens it (same id, folder and history) on
+ * the user's usual shell instead of a program that will fail again.
  */
 
 import { useState } from "react";
@@ -26,6 +31,10 @@ export type NotReopenedPane = {
   cwd: string | null;
   /** The daemon's plain sentence, e.g. "Its program, pwsh, is no longer on this PC." */
   reason: string;
+  /** Fourth plan C-TM-1: the user's usual shell ("PowerShell 7"), named by
+   *  the daemon ONLY on a row whose program is gone; absent on every other
+   *  row. The row then offers "Open with {usualShell}". */
+  usualShell?: string;
 };
 
 /** The daemon's `restore_failed_panes`, or [] when absent or malformed. */
@@ -37,11 +46,13 @@ export function decodeNotReopened(raw: unknown): NotReopenedPane[] {
     const o = r as Record<string, unknown>;
     if (typeof o.id !== "string" || !o.id) continue;
     const reason = typeof o.reason === "string" && o.reason.trim() ? o.reason.trim() : "";
+    const usual = typeof o.usual_shell === "string" ? o.usual_shell.trim().slice(0, 60) : "";
     out.push({
       id: o.id,
       name: typeof o.name === "string" && o.name.trim() ? o.name.trim() : null,
       cwd: typeof o.cwd === "string" && o.cwd.trim() ? o.cwd.trim() : null,
       reason: reason.length <= 300 ? reason : `${reason.slice(0, 297)}…`,
+      ...(usual ? { usualShell: usual } : {}),
     });
   }
   return out;
@@ -62,8 +73,10 @@ export function NotReopenedList({
   onClose,
 }: {
   panes: NotReopenedPane[];
-  /** Resolves to null once it reopened, else the plain sentence to show. */
-  onRetry: (id: string) => Promise<string | null>;
+  /** Resolves to null once it reopened, else the plain sentence to show.
+   *  Fourth plan C-TM-1: `shell: "default"` is the "Open with {usual shell}"
+   *  press (the same terminal on the user's usual shell). */
+  onRetry: (id: string, shell?: "default") => Promise<string | null>;
   /** Resolves to null once it is forgotten, else the plain sentence to show. */
   onClose: (id: string) => Promise<string | null>;
 }) {
@@ -116,6 +129,18 @@ export function NotReopenedList({
               <RotateCcw size={12} />
               Try again
             </button>
+            {p.usualShell ? (
+              <button
+                type="button"
+                data-testid={`not-reopened-usual-${p.id}`}
+                disabled={busy !== null}
+                onClick={() => void run(p.id, (id) => onRetry(id, "default"))}
+                title="Reopen this terminal in the same folder, with its history, on your usual shell"
+                className="btn-ghost inline-flex items-center gap-1 py-1 text-xs"
+              >
+                Open with {p.usualShell}
+              </button>
+            ) : null}
             <ConfirmButton
               testId={`not-reopened-close-${p.id}`}
               disabled={busy !== null}

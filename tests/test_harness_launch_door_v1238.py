@@ -93,12 +93,14 @@ def test_the_page_actually_passes_the_handler():
     # prepared terminal (it sets up, then starts the tool), with the boxes the
     # user ticked; it used to create the pane itself and leave the start to
     # the user.
-    assert "onLaunchWithCapabilities={(cli, tools) => launchWithTools(t, cli, tools)}" in src, (
+    # Fourth fix plan C-TM-2 (v1.539.0): the account the dialog names rides too.
+    assert "onLaunchWithCapabilities={(cli, tools, account) => launchWithTools(t, cli, tools, account)}" in src, (
         "the handler does not open a prepared terminal with the ticked boxes"
     )
     start = src.index("const launchWithTools")
     body = src[start : src.index("\n  );", start)]
-    assert '"/terminals/launch-with-tools"' in body and "adoptPane(res.pane)" in body, (
+    # v1.539.0 (TM3): the new row is res.pane, with the answer's tools note on it.
+    assert '"/terminals/launch-with-tools"' in body and "const row = res.pane" in body and "adoptPane(" in body, (
         "the handler does not create a pane with the recipe. Anything else — a patch, "
         "a typed command — cannot deliver the environment the harness needs"
     )

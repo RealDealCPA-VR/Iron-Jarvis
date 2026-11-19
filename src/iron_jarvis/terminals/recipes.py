@@ -49,19 +49,22 @@ empty grant), but minting a credential into a child process that may not use it
 is a credential handed out for nothing, and the five-credential rule (plan §7) is
 worth obeying on the way out as well as at the door.
 
-**No credential is written to disk, and no file of the user's is taken away.**
-A configuration this module writes carries a REFERENCE to the pane token's
-environment variable (:data:`CONFIG_TOKEN_REFERENCE`), never the token: the one
-file Claude Code's convention says to COMMIT must not hold a credential that
-drives the user's logged-in browser. And a ``.mcp.json`` that already exists is
-MERGED, not replaced - a developer's own MCP servers survive a Jarvis launch -
-while a file that cannot be read as an object is left strictly alone and reported
-as a limitation. :func:`remove_config_writes` is the other end of that, ready for the
-pane close paths that already revoke the token (``TerminalManager.kill`` /
-``purge_dead`` / ``kill_all``) to call with the pane's ``config_writes``. Nothing
-depends on that call for safety - what is written holds no credential - so until the
-manager records a pane's writes, a leftover entry is inert configuration, not a
-credential, and a relaunch rewrites it.
+**No credential is written to disk, and nothing is written in the user's
+folder** (fourth plan, decision D9 option B, v1.539.0). A file this module
+writes carries a REFERENCE to the pane token's environment variable
+(:data:`CONFIG_TOKEN_REFERENCE`), never the token, and it lives in Iron
+Jarvis's OWN folder (:func:`terminal_files_dir`, ``<home>/terminals-mcp/<terminal
+id>.json|.js``), handed to the tool by its own per-run option (Claude Code's
+``--mcp-config <abs path>``, Pi's ``-e <abs path>``; Codex needs no file at all,
+only ``-c``). Until v1.538 Claude's entry was merged into the project's
+``.mcp.json`` and Codex got ``CODEX_HOME=<project>/.jarvis-codex`` — the second
+started Codex signed out of the user's account. :func:`leftovers_in` names what
+those versions left; nothing here deletes or edits a file of the user's.
+:func:`remove_terminal_files` takes a terminal's own files away when it closes,
+and :func:`sweep_terminal_files` those of terminals that died with the daemon.
+**A recipe never sets an account's home variable** (``CLAUDE_CONFIG_DIR``,
+``CODEX_HOME``, ``GROK_HOME``): the terminal's account decides those, and
+``TerminalManager._prepare_recipe`` drops one a preparer answers anyway.
 
 **Blocking.** Probing runs a subprocess and preparing writes files, so every
 public entry point here is synchronous and must be called OFF the event loop —
@@ -87,6 +90,7 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 from ..browser.panetokens import MCP_TOKEN_ENV, MCP_URL_ENV, normalise_capabilities
 from ..core import procs as _procs
 from ..core.logging import get_logger
+from ..hosted.jarvis_tools import SERVER_NAME as _CODE_SERVER_NAME
 from .ai_clis import _find
 
 logger = get_logger(__name__)
@@ -108,9 +112,35 @@ METHOD_HTTP = "mcp_http"
 METHOD_STDIO = "mcp_stdio"
 METHOD_NONE = "none"
 
-#: The name Jarvis's server takes in every harness configuration it writes. One
+#: The name Jarvis's server takes in a Claude Code terminal's own file. One
 #: constant so a diagnostics panel, a config file and a test cannot disagree.
-SERVER_NAME = "iron-jarvis"
+#: Fourth plan MS4a: NOT ``iron-jarvis``, the connected app's name
+#: (``mcpserver/apps.SERVER_NAME``) in the user's own Claude Code settings —
+#: the terminal keeps ``--strict-mcp-config`` and a name of its own.
+SERVER_NAME = "iron-jarvis-terminal"
+
+#: Fourth plan TM1: the name Codex's per-run ``-c mcp_servers.<name>.…`` options
+#: (and Pi's extension) use — Build › Code's (``hosted/jarvis_tools``), so one
+#: name means "this process's Iron Jarvis tools" on both coding surfaces. Never
+#: the connected app's ``iron-jarvis``: a with-tools Codex loads the user's own
+#: ``config.toml``, where the app's stdio table lives, and Codex MERGES ``-c``
+#: into a table of the same name.
+CODEX_SERVER_NAME = _CODE_SERVER_NAME
+
+#: The name an older Iron Jarvis (v1.238 to v1.538) gave its entry in a
+#: project's ``.mcp.json`` (:func:`leftovers_in`).
+OLD_SERVER_NAME = "iron-jarvis"
+
+#: Fourth plan D9 option B: a terminal's own files, under Iron Jarvis's home.
+TERMINAL_FILES_DIR = "terminals-mcp"
+#: What an older Iron Jarvis wrote in a project folder (named, never removed).
+OLD_CODEX_HOME_DIR = ".jarvis-codex"
+OLD_PROJECT_FILE = ".mcp.json"
+#: The suffixes of a terminal's own files (Claude Code's, Pi's extension, Pi's
+#: adapter for a Pi without ``-e``).
+_TERMINAL_FILE_SUFFIXES = (".json", ".js", ".mjs")
+#: A terminal id that can name a file (every id the manager mints matches).
+_FILE_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 
 #: Q04, verbatim from the plan: the sentence shown when a Claude Code build could
 #: not be told to disable its own web tools. It is a constant because it is a
@@ -132,6 +162,14 @@ CLAUDE_WEB_TOOLS_UNVERIFIED_LIMITATION = (
     "tools written, so the request to disable its own web tools may not take "
     "effect and it may reach the web without Jarvis. Browser calls through Jarvis "
     "are still logged and gated."
+)
+
+#: Fourth plan TM1: a with-tools Codex now runs on its account's own home, so
+#: it loads the user's own Codex settings too — said on the launch row, as
+#: Claude Code's row says what ``--strict-mcp-config`` leaves out.
+CODEX_OWN_SETTINGS_NOTE = (
+    "Codex also starts with your own Codex settings, so any tools you added to "
+    "Codex yourself are on in this terminal too."
 )
 
 #: What goes in the ``Authorization`` header of a written config file: a
@@ -416,9 +454,9 @@ def _write_config(path: Path, text: str) -> str:
 
     The file may hold a pane token, so it is narrowed to 0600 where the platform
     has POSIX modes. On Windows ``chmod`` is close to a no-op and this is said
-    plainly rather than claimed: the file lives in the user's own project folder
-    under the user's own account, and the token it holds dies with the pane and
-    with the process.
+    plainly rather than claimed: the file lives under the user's own account
+    (Iron Jarvis's own folder, :func:`terminal_files_dir`),
+    and what it references dies with the pane and with the process.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -429,142 +467,131 @@ def _write_config(path: Path, text: str) -> str:
     return str(path)
 
 
-def _merge_mcp_json(path: Path, entry: dict[str, Any]) -> tuple[str, bool]:
-    """Put Jarvis's one server into ``path``, KEEPING whatever is already there.
+def terminal_files_dir(home: Any) -> Path:
+    """Fourth plan D9 option B: where a terminal's own files live — under Iron
+    Jarvis's home (``<home>/terminals-mcp``), never in the user's folder."""
+    return Path(str(home)) / TERMINAL_FILES_DIR
 
-    ``.mcp.json`` is the standard project-scoped Claude Code config, so a
-    developer who has one has their own servers in it. Writing over it took those
-    servers away with no message anywhere (v1.238.0 review) - the same class of
-    dishonesty this module exists to prevent, applied to a file instead of to a
-    sentence.
 
-    Returns ``(path, merged)``, where ``merged`` is True when the file already
-    held something of the user's own. Raises :class:`ConfigWriteRefused` when the
-    existing file cannot be read as an object: a file we cannot parse is a file we
-    must not overwrite, because we cannot know what is in it.
-    """
-    data: dict[str, Any] = {}
-    merged = False
-    if path.exists():
+def _terminal_file(home: Any, terminal_id: str, suffix: str) -> Path | None:
+    """``<home>/terminals-mcp/<terminal id><suffix>``, or None when there is
+    no home or the id cannot name a file (never a path outside the folder)."""
+    tid = str(terminal_id or "")
+    if not home or not _FILE_SAFE_ID.match(tid):
+        return None
+    return terminal_files_dir(home) / f"{tid}{suffix}"
+
+
+def remove_terminal_files(home: Any, terminal_id: str) -> None:
+    """A terminal's own files go when it closes for good (Close, delete).
+
+    Never raises: a close path that could fail on a locked file would cost the
+    user the close. Nothing here is a credential (the files hold a reference to
+    the terminal's environment variable), so this is tidiness, not security."""
+    for suffix in _TERMINAL_FILE_SUFFIXES:
         try:
-            existing = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except Exception as exc:
-            raise ConfigWriteRefused(
-                f"{path} exists and could not be read as JSON, so Iron Jarvis left "
-                "it alone rather than overwrite it"
-            ) from exc
-        if not isinstance(existing, dict):
-            raise ConfigWriteRefused(
-                f"{path} exists and is not a JSON object, so Iron Jarvis left it "
-                "alone rather than overwrite it"
-            )
-        data = existing
-        servers = data.get("mcpServers")
-        if servers is not None and not isinstance(servers, dict):
-            raise ConfigWriteRefused(
-                f"{path} has an mcpServers key that is not an object, so Iron "
-                "Jarvis left it alone rather than overwrite it"
-            )
-        merged = bool(
-            [k for k in data if k != "mcpServers"]
-            or [k for k in (servers or {}) if k != SERVER_NAME]
-        )
-    servers = dict(data.get("mcpServers") or {})
-    servers[SERVER_NAME] = entry
-    data["mcpServers"] = servers
-    return _write_config(path, json.dumps(data, indent=2) + "\n"), merged
-
-
-def remove_config_writes(paths: Any) -> list[str]:
-    """Undo what a recipe wrote. For the chokepoints that revoke the pane token.
-
-    A pane's configuration should not outlive the pane: the token it points at is
-    revoked the moment the pane dies (``TerminalManager.kill`` / ``purge_dead`` /
-    ``kill_all``), and a config left behind points a harness at a credential that
-    no longer resolves. This is the file half of that revocation - and it is a
-    tidiness measure, NOT a security one, because what gets written carries a
-    reference to an environment variable rather than a credential. Say it that way
-    round in any doc: the safety is in what is written, not in what is removed.
-
-    It is deliberately narrow:
-
-    * a ``.mcp.json`` loses **only** Jarvis's own server entry, and the file is
-      deleted only when nothing else was ever in it - a user's own servers
-      survive the pane exactly as they survived its launch;
-    * any other file this module writes (the Codex config, the Pi adapter) is
-      Jarvis's own, so it is removed outright.
-
-    Never raises: a close path that could fail on a read-only folder would cost
-    the user the pane. Returns the paths actually removed or rewritten.
-    """
-    done: list[str] = []
-    for raw in list(paths or []):
-        path = Path(str(raw))
-        try:
-            if not path.exists():
-                continue
-            if path.name == ClaudeCodeRecipe.config_name:
-                data = json.loads(path.read_text(encoding="utf-8") or "{}")
-                if not isinstance(data, dict):
-                    continue
-                servers = data.get("mcpServers")
-                if isinstance(servers, dict):
-                    servers.pop(SERVER_NAME, None)
-                    data["mcpServers"] = servers
-                others = [k for k in data if k != "mcpServers"]
-                if not others and not data.get("mcpServers"):
-                    path.unlink()
-                else:
-                    path.write_text(
-                        json.dumps(data, indent=2) + "\n", encoding="utf-8"
-                    )
-                done.append(str(path))
-                continue
-            parent = path.parent
-            path.unlink()
-            done.append(str(path))
-            if parent.name == CodexRecipe.home_dir and not any(parent.iterdir()):
-                parent.rmdir()
+            path = _terminal_file(home, terminal_id, suffix)
+            if path is not None:
+                path.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001 - a close path never raises
-            logger.warning(
-                "could not remove launch-recipe config %s", raw, exc_info=True
-            )
-    return done
+            logger.warning("could not remove a terminal's own file", exc_info=True)
 
 
-def _no_folder(version: str, env: dict[str, str]) -> RecipeResult:
-    """The pane has no folder, so no configuration could be written - say so.
+def sweep_terminal_files(
+    home: Any, live_ids: Any, *, older_than: float | None = None
+) -> int:
+    """Remove the files of terminals that are not in ``live_ids`` (those that
+    died with the daemon); returns how many went. BLOCKING (a folder listing):
+    call it off the event loop. Never raises.
 
-    Returning the configuration flags for a file that was never written is how a
-    harness launches straight into a config error, with the Launch menu having
-    said nothing at all about it.
-    """
-    return RecipeResult(
-        ok=True,
-        method=METHOD_NONE,
-        version=version,
-        env=dict(env),
-        limitations=[
-            "This pane has no working folder, so Iron Jarvis could not write the "
-            "configuration that points this CLI at Jarvis. The pane launches as it "
-            "does today, without Jarvis capabilities."
-        ],
-        detail="no terminal folder",
+    ``older_than`` (a wall-clock time): a file written at or after it is
+    never taken — a terminal opened while the sweep runs keeps its file even
+    though its id was not known when ``live_ids`` was read."""
+    keep = {str(i) for i in (live_ids or ())}
+    removed = 0
+    try:
+        folder = terminal_files_dir(home) if home else None
+        if folder is None or not folder.is_dir():
+            return 0
+        for path in list(folder.iterdir()):
+            try:
+                if path.suffix not in _TERMINAL_FILE_SUFFIXES or not path.is_file():
+                    continue
+                if not _FILE_SAFE_ID.match(path.stem) or path.stem in keep:
+                    continue
+                if older_than is not None and path.stat().st_mtime >= older_than:
+                    continue
+                path.unlink(missing_ok=True)
+                removed += 1
+            except Exception:  # noqa: BLE001 - one file never stops the rest
+                logger.warning("could not remove a closed terminal's file", exc_info=True)
+    except Exception:  # noqa: BLE001 - never raises
+        logger.warning("could not tidy the terminals' own files", exc_info=True)
+    return removed
+
+
+#: How much of a project's ``.mcp.json`` :func:`leftovers_in` reads at most.
+_LEFTOVER_READ_MAX = 1024 * 1024
+
+
+def _old_terminal_entry(entry: Any) -> bool:
+    """Is ``entry`` shaped like the one an older Iron Jarvis's Claude Code
+    recipe wrote (HTTP, its header a reference to the terminal's key)?"""
+    if not isinstance(entry, Mapping) or entry.get("type") != "http":
+        return False
+    headers = entry.get("headers")
+    return (
+        isinstance(headers, Mapping)
+        and headers.get("Authorization") == f"Bearer {CONFIG_TOKEN_REFERENCE}"
     )
 
 
-def _refused_write(version: str, env: dict[str, str], why: str) -> RecipeResult:
-    """A configuration file already there that we would not overwrite."""
+def leftovers_in(folder: Any) -> list[str]:
+    """Absolute paths an older Iron Jarvis (v1.238 to v1.538) left in
+    ``folder``: a ``.jarvis-codex`` folder, and a ``.mcp.json`` whose
+    ``mcpServers`` holds an ``iron-jarvis`` entry shaped like that version's
+    terminal entry. Named so the user can decide; never deleted or edited
+    here (D9). BLOCKING (reads one small file); never raises; ``[]`` for a
+    folder that is not there."""
+    found: list[str] = []
+    try:
+        if not folder:
+            return found
+        base = Path(str(folder))
+        if not base.is_dir():
+            return found
+        codex_home = base / OLD_CODEX_HOME_DIR
+        if codex_home.is_dir():
+            found.append(str(codex_home))
+        mcp = base / OLD_PROJECT_FILE
+        if mcp.is_file() and mcp.stat().st_size <= _LEFTOVER_READ_MAX:
+            try:
+                data = json.loads(mcp.read_text(encoding="utf-8") or "{}")
+            except Exception:  # noqa: BLE001 - a file we cannot read names nothing
+                data = None
+            servers = data.get("mcpServers") if isinstance(data, dict) else None
+            if isinstance(servers, dict) and _old_terminal_entry(servers.get(OLD_SERVER_NAME)):
+                found.append(str(mcp))
+    except Exception:  # noqa: BLE001 - never raises
+        logger.debug("could not look for an older Iron Jarvis's files", exc_info=True)
+    return found
+
+
+def _no_home(version: str, env: dict[str, str]) -> RecipeResult:
+    """Fourth plan D9 option B: the tool's file lives in Iron Jarvis's own
+    folder, and with none known there is nothing to point the tool at — say so
+    rather than hand back an option naming a file that was never written."""
     return RecipeResult(
         ok=True,
         method=METHOD_NONE,
         version=version,
         env=dict(env),
         limitations=[
-            why
-            + ". The pane launches as it does today, without Jarvis capabilities."
+            "Iron Jarvis could not find its own folder to keep this terminal's "
+            "settings in, so it could not give this tool Iron Jarvis's tools. "
+            + _AS_TODAY
         ],
-        detail="existing configuration left alone",
+        detail="no Iron Jarvis folder",
     )
 
 
@@ -587,8 +614,10 @@ def _no_capabilities(cli_id: str, version: str) -> RecipeResult:
 # Claude Code (Q04)
 # --------------------------------------------------------------------------- #
 class ClaudeCodeRecipe:
-    """Claude Code: a project-scoped ``.mcp.json`` plus whatever isolation the
-    installed build advertises.
+    """Claude Code: a file of the terminal's own in Iron Jarvis's folder
+    (``<home>/terminals-mcp/<terminal id>.json``, passed as ``--mcp-config <abs
+    path>``; fourth plan D9 option B — nothing in the project) plus whatever
+    isolation the installed build advertises.
 
     Three feature detections, all against the build's own ``--help``:
 
@@ -603,7 +632,9 @@ class ClaudeCodeRecipe:
 
     cli_id = "claude"
     command = "claude"
-    config_name = ".mcp.json"
+    #: The file's place in a dry run (no terminal id yet); ``prepare`` puts the
+    #: real absolute path there.
+    config_name = f"{TERMINAL_FILES_DIR}/<terminal>.json"
 
     #: Needles, in preference order. NOT flags passed unconditionally: one is
     #: used only when the installed build's help advertised that exact spelling.
@@ -712,13 +743,11 @@ class ClaudeCodeRecipe:
 
         THE TOKEN IS NOT IN IT. The header carries
         :data:`CONFIG_TOKEN_REFERENCE` - a reference to the environment variable
-        the pane's shell already carries - because ``.mcp.json`` is the file this
-        CLI's own convention says to commit, and a literal bearer there is a
-        credential that drives the user's real, logged-in browser, published by
-        their next ``git push`` and alive until the daemon restarts. It also
-        outlives the pane, which is the one thing
-        :mod:`iron_jarvis.browser.panetokens` is written to prevent. The Codex
-        recipe already refuses to write its token; so does this one now.
+        the pane's shell already carries - so the file holds no credential even
+        though it now lives in Iron Jarvis's own folder (until v1.538 it was the
+        project's ``.mcp.json``, a file this CLI's convention says to commit). A
+        literal bearer would also outlive the pane, which is the one thing
+        :mod:`iron_jarvis.browser.panetokens` is written to prevent.
         """
         return {
             "type": "http",
@@ -727,7 +756,7 @@ class ClaudeCodeRecipe:
         }
 
     def config_text(self, url: str) -> str:
-        """The ``.mcp.json`` body for a folder that has none: one server, ours."""
+        """The terminal's own file: one server, ours, under :data:`SERVER_NAME`."""
         return json.dumps({"mcpServers": {SERVER_NAME: self.server_entry(url)}}, indent=2)
 
     def prepare(
@@ -738,7 +767,11 @@ class ClaudeCodeRecipe:
         capabilities: Mapping[str, Any] | None = None,
         *,
         cwd: str = "",
+        home: str = "",
     ) -> RecipeResult:
+        """``home`` is Iron Jarvis's own folder: the terminal's file is written
+        under it (:func:`terminal_files_dir`), never in ``cwd`` (D9 option B),
+        and ``--mcp-config`` names it by its absolute path."""
         enabled = normalise_capabilities(capabilities)
         if not enabled:
             return _no_capabilities(self.cli_id, self.detect())
@@ -746,34 +779,23 @@ class ClaudeCodeRecipe:
         if not base.ok:
             return base
         env = {MCP_URL_ENV: url, MCP_TOKEN_ENV: token}
-        if not cwd:
-            # argv_extra points at a file in the pane's folder. With no folder
-            # there is no file, and handing back `--mcp-config .mcp.json` anyway
-            # launches the CLI straight into a config error.
-            return _no_folder(base.version, env)
-        writes: list[str] = []
-        limitations = list(base.limitations)
-        path = _confined(cwd, self.config_name)
-        try:
-            written, merged = _merge_mcp_json(path, self.server_entry(url))
-        except ConfigWriteRefused as exc:
-            return _refused_write(base.version, env, str(exc))
-        writes.append(written)
-        if merged:
-            limitations.append(
-                f"This folder already had a {self.config_name}, so Iron Jarvis "
-                "added its own server to it and left everything else in place. "
-                "Delete the iron-jarvis entry whenever you like - a launch writes "
-                "it again, and it holds no credential."
-            )
+        path = _terminal_file(home, pane_id, ".json")
+        if path is None:
+            # argv_extra points at the terminal's own file. With nowhere to
+            # write it, handing back `--mcp-config <file>` anyway launches the
+            # CLI straight into a config error.
+            return _no_home(base.version, env)
+        written = _write_config(path, self.config_text(url) + "\n")
+        argv_extra = list(base.argv_extra)
+        argv_extra[1] = written  # [config_flag, <the file>, ...] from _plan
         return RecipeResult(
             ok=True,
             method=base.method,
             version=base.version,
             env=env,
-            config_writes=writes,
-            argv_extra=list(base.argv_extra),
-            limitations=limitations,
+            config_writes=[written],
+            argv_extra=argv_extra,
+            limitations=list(base.limitations),
             detail=base.detail,
         )
 
@@ -782,25 +804,33 @@ class ClaudeCodeRecipe:
 # Codex
 # --------------------------------------------------------------------------- #
 class CodexRecipe:
-    """Codex: a pane-scoped TOML config the CLI is pointed at by env var.
+    """Codex: Codex's own per-run options, nothing written anywhere.
 
-    Codex reads a TOML configuration out of its own home directory, so the
-    pane-scoped form is a directory of our own with a ``config.toml`` in it and
-    ``CODEX_HOME`` pointing at it. That variable is FEATURE-DETECTED the only way
-    an environment variable can be: the installed build's own help must name it.
+    Fourth plan TM1 (v1.539.0), the way Build › Code does it (measured on codex
+    0.157.0, ``hosted/jarvis_tools.connect``): ``-c
+    mcp_servers.<name>.url=<url> -c
+    mcp_servers.<name>.bearer_token_env_var=IRONJARVIS_MCP_TOKEN``, the token
+    in the terminal's environment only. Until v1.538 this recipe set
+    ``CODEX_HOME=<project>/.jarvis-codex`` — a whole new Codex home, where the
+    user's sign-in, settings and history live — so the terminal started signed
+    out, its account's home overridden, and a folder was left in the project.
+    The terminal now runs on ITS ACCOUNT's home and loads the user's own
+    ``config.toml`` (the launch row says so).
 
-    A Codex MCP server is launched as a child process, so the method is
-    :data:`METHOD_STDIO` through Jarvis's own shim — and the shim's presence is
-    CHECKED rather than assumed. A recipe that configured Codex to spawn a module
-    this build does not carry would produce a harness that starts, connects to
-    nothing, and reports success.
+    The values are BARE words, not TOML-quoted: Codex takes a value that does
+    not parse as TOML as a plain string, and a bare word is typed unquoted in
+    PowerShell 5.1 (which strips an embedded ``"`` from a native argument), cmd
+    and bash alike. ``-c`` is FEATURE-DETECTED: the installed build's own help
+    must name ``--config`` (``-c, --config <key=value>``).
     """
 
     cli_id = "codex"
     command = "codex"
-    home_dir = ".jarvis-codex"
-    config_name = "config.toml"
-    home_env = "CODEX_HOME"
+    #: Needle searched for in Codex's own help (never passed unadvertised).
+    config_flags = ("--config",)
+    #: Jarvis's stdio bridge, used by the connected app's Codex entry and the
+    #: frozen ``mcp-stdio`` subcommand (``test_entry_fast_paths_v1333``); the
+    #: terminal recipe no longer starts it (Codex reaches ``/mcp`` over HTTP).
     shim_module = "iron_jarvis.mcpserver.stdio_shim"
     #: The hidden CLI subcommand that runs the same shim from the frozen exe
     #: (``daemon/cli.py:mcp_stdio``) — see :meth:`_shim_launch`.
@@ -861,41 +891,24 @@ class CodexRecipe:
             return False
 
     def supports(self, version: str) -> str:
-        if not _advertises(self._help(), self.home_env):
-            return ""
-        return METHOD_STDIO if self._shim_available() else ""
+        return METHOD_HTTP if _advertises(self._help(), *self.config_flags) else ""
 
     def _plan(self, version: str) -> tuple[str, list[str], str]:
         help_text = self._help()
-        if not _advertises(help_text, self.home_env):
+        if not _advertises(help_text, *self.config_flags):
             why = (
-                "Iron Jarvis could not read this Codex build's help output, so it "
-                "could not verify how to give it a terminal-scoped configuration."
+                "Iron Jarvis could not read this Codex build's help, so it could "
+                "not check how to give it Iron Jarvis's tools for this terminal only."
                 if not help_text
-                else f"This Codex build does not advertise {self.home_env}, so "
-                "Iron Jarvis could not verify how to give it a terminal-scoped "
-                "configuration."
+                else "This Codex build does not offer the --config option, so Iron "
+                "Jarvis could not give it Iron Jarvis's tools for this terminal only."
             )
-            return (
-                METHOD_NONE,
-                [
-                    why
-                    + " The pane launches as it does today, without Jarvis "
-                    "capabilities."
-                ],
-                f"no verified {self.home_env}",
-            )
-        if not self._shim_available():
-            return (
-                METHOD_NONE,
-                [
-                    "Iron Jarvis's stdio bridge is missing from this build, so it "
-                    "could not configure Codex to reach Jarvis. The pane launches "
-                    "as it does today, without Jarvis capabilities."
-                ],
-                "stdio bridge unavailable",
-            )
-        return METHOD_STDIO, [], f"configured via {self.home_env}"
+            return METHOD_NONE, [why + " " + _AS_TODAY], "no verified --config"
+        return (
+            METHOD_HTTP,
+            [CODEX_OWN_SETTINGS_NOTE],
+            "configured via --config",
+        )
 
     def inspect(self, version: str | None = None) -> RecipeResult:
         ver = self.detect() if version is None else version
@@ -908,23 +921,16 @@ class CodexRecipe:
             detail=detail,
         )
 
-    def config_text(self, url: str, token: str) -> str:
-        """``[mcp_servers."iron-jarvis"]`` spawning Jarvis's own stdio bridge.
-
-        THE TOKEN IS NOT WRITTEN INTO THE FILE: the pane's child environment
-        already carries it, the shim reads it from there, and a child of that
-        shell inherits it. One copy of a credential is easier to reason about
-        than two, and the copy in the environment dies with the process.
-        """
-        exe = json.dumps(sys.executable)
-        args = json.dumps(self._shim_launch())
-        return (
-            "# Written by Iron Jarvis for this Build pane. Safe to delete.\n"
-            f"[mcp_servers.{json.dumps(SERVER_NAME)}]\n"
-            f"command = {exe}\n"
-            f"args = {args}\n"
-            f"env = {{ {MCP_URL_ENV} = {json.dumps(url)} }}\n"
-        )
+    @staticmethod
+    def argv_for(url: str) -> list[str]:
+        """Codex's two per-run options, values bare (see the class docstring).
+        The token is never in them: Codex reads it from the environment
+        variable the second option names."""
+        key = f"mcp_servers.{CODEX_SERVER_NAME}"
+        return [
+            "-c", f"{key}.url={url}",
+            "-c", f"{key}.bearer_token_env_var={MCP_TOKEN_ENV}",
+        ]
 
     def prepare(
         self,
@@ -934,32 +940,45 @@ class CodexRecipe:
         capabilities: Mapping[str, Any] | None = None,
         *,
         cwd: str = "",
+        home: str = "",
     ) -> RecipeResult:
+        """No file and no folder are needed: ``cwd`` and ``home`` are accepted
+        for the shared seam and not used. The env holds the address and the
+        key, and NEVER ``CODEX_HOME`` (the terminal's account decides it)."""
         enabled = normalise_capabilities(capabilities)
         if not enabled:
             return _no_capabilities(self.cli_id, self.detect())
         base = self.inspect()
         if not base.ok:
             return base
-        writes: list[str] = []
-        env = {MCP_URL_ENV: url, MCP_TOKEN_ENV: token}
-        if not cwd:
-            # Without a folder there is no CODEX_HOME to point at, so the CLI
-            # would launch with Jarvis's variables and none of its configuration.
-            return _no_folder(base.version, env)
-        home = _confined(cwd, self.home_dir)
-        path = _confined(cwd, self.home_dir, self.config_name)
-        writes.append(_write_config(path, self.config_text(url, token)))
-        env[self.home_env] = str(home)
         return RecipeResult(
             ok=True,
             method=base.method,
             version=base.version,
-            env=env,
-            config_writes=writes,
+            env={MCP_URL_ENV: url, MCP_TOKEN_ENV: token},
+            argv_extra=self.argv_for(url),
             limitations=list(base.limitations),
             detail=base.detail,
         )
+
+
+def _pi_step(runtime: str, path: str) -> str:
+    """The step a Pi without ``-e`` still needs by hand (third plan TM5). With
+    ``path`` (the adapter Iron Jarvis wrote for this terminal, fourth plan D9
+    B) the line names it, quoted so it types the same in PowerShell, cmd and
+    bash; without one (the dry run, before any terminal exists) it says where
+    the file will be."""
+    if path:
+        return (
+            "Pi does not load the Iron Jarvis adapter on its own: after it opens, run "
+            f'`{runtime} "{path}"` in that terminal to give Pi the Jarvis tools.'
+        )
+    return (
+        "Pi does not load the Iron Jarvis adapter on its own: after it opens, run "
+        f"`{runtime}` with the adapter file Iron Jarvis keeps for that terminal in "
+        "its own folder (the exact line is shown when the terminal opens) to give "
+        "Pi the Jarvis tools."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -978,6 +997,15 @@ class PiRecipe:
     If a later Pi advertises native MCP in its own help, :meth:`supports` returns
     :data:`METHOD_HTTP` and the adapter is skipped entirely — which is the second
     half of Q01: the canonical architecture must not depend on the adapter.
+
+    Fourth plan C-TM-3 (v1.539.0): a Pi whose help offers ``-e`` /
+    ``--extension`` gets Build › Code's own extension
+    (``hosted/jarvis_tools._pi_extension``: ``pi.registerMcpServer``, its header
+    a reference to the terminal's key), written in Iron Jarvis's folder
+    (``<home>/terminals-mcp/<terminal id>.js``) and passed as ``-e <abs
+    path>``: ready from the start, nothing in the project. Only a Pi without
+    ``-e`` still gets the adapter, also in Iron Jarvis's folder
+    (``<terminal id>.mjs``), with its hand-typed step naming that path.
 
     Pi's runtime is resolved exactly the way ``ai_clis`` already resolves Pi
     itself: through ``_find``, whose Windows fallbacks include
@@ -999,6 +1027,12 @@ class PiRecipe:
     #: capabilities over HTTP" on a Pi that cannot reach Jarvis at all.
     native_needles = ("--mcp-config", "--mcp-server")
 
+    #: Fourth plan C-TM-3: Pi's own option that loads an extension for one run
+    #: (measured on Pi 1.3.0 by Build › Code, ``hosted/jarvis_tools``). The
+    #: extension registers Iron Jarvis's server through Pi's own
+    #: ``pi.registerMcpServer``, so Pi has the tools the moment it starts.
+    extension_needles = ("-e", "--extension")
+
     def detect(self) -> str:
         return _first_version_line(_probe(self.command, "--version"))
 
@@ -1012,12 +1046,19 @@ class PiRecipe:
         return pi_runtime()
 
     def supports(self, version: str) -> str:
-        if _advertises(self._help(), *self.native_needles):
+        help_text = self._help()
+        if _advertises(help_text, *self.extension_needles):
+            return METHOD_HTTP
+        if _advertises(help_text, *self.native_needles):
             return METHOD_HTTP
         return METHOD_STDIO if self.runtime() else ""
 
     def _plan(self, version: str) -> tuple[str, list[str], str]:
-        if _advertises(self._help(), *self.native_needles):
+        help_text = self._help()
+        flag = _advertises(help_text, *self.extension_needles)
+        if flag:
+            return METHOD_HTTP, [], f"Iron Jarvis's extension, loaded with Pi's own {flag}"
+        if _advertises(help_text, *self.native_needles):
             return METHOD_HTTP, [], "native MCP advertised by this Pi build"
         runtime = self.runtime()
         if not runtime:
@@ -1038,15 +1079,10 @@ class PiRecipe:
         ready: bool | None = None
         if method == METHOD_STDIO:
             # Third plan TM5: the adapter is placed, but Pi does not start it —
-            # said BEFORE the press, and never "ready".
-            from .pi_adapter import ADAPTER_FILENAME
-
+            # said BEFORE the press, and never "ready". Fourth plan D9 B: the
+            # file is the terminal's own (no id yet here); ``prepare`` names it.
             ready = False
-            limitations = list(limitations) + [
-                "Pi does not load the Iron Jarvis adapter on its own: after it opens, run "
-                f"`{self.runtime()} {ADAPTER_FILENAME}` in that terminal to give Pi the "
-                "Jarvis tools."
-            ]
+            limitations = list(limitations) + [_pi_step(self.runtime(), "")]
         return RecipeResult(
             ok=method != METHOD_NONE,
             method=method,
@@ -1064,8 +1100,12 @@ class PiRecipe:
         capabilities: Mapping[str, Any] | None = None,
         *,
         cwd: str = "",
+        home: str = "",
     ) -> RecipeResult:
-        from .pi_adapter import ADAPTER_FILENAME, adapter_source
+        """``home`` is Iron Jarvis's own folder: Pi's ``-e`` extension, or for
+        a Pi without ``-e`` the adapter, is written under it
+        (:func:`terminal_files_dir`), never in ``cwd`` (D9 option B)."""
+        from .pi_adapter import adapter_source
 
         enabled = normalise_capabilities(capabilities)
         if not enabled:
@@ -1074,6 +1114,25 @@ class PiRecipe:
         if not base.ok:
             return base
         env = {MCP_URL_ENV: url, MCP_TOKEN_ENV: token}
+        flag = _advertises(self._help(), *self.extension_needles)
+        if base.method == METHOD_HTTP and flag:
+            # C-TM-3: Build › Code's own extension, in Iron Jarvis's folder.
+            from ..hosted.jarvis_tools import _pi_extension
+
+            path = _terminal_file(home, pane_id, ".js")
+            if path is None:
+                return _no_home(base.version, env)
+            written = _write_config(path, _pi_extension(url))
+            return RecipeResult(
+                ok=True,
+                method=base.method,
+                version=base.version,
+                env=env,
+                config_writes=[written],
+                argv_extra=[flag, written],
+                limitations=list(base.limitations),
+                detail=base.detail,
+            )
         if base.method == METHOD_HTTP:  # a Pi that speaks MCP itself — no adapter
             return RecipeResult(
                 ok=True,
@@ -1083,20 +1142,26 @@ class PiRecipe:
                 limitations=list(base.limitations),
                 detail=base.detail,
             )
-        if not cwd:
-            return _no_folder(base.version, env)
-        writes: list[str] = []
-        limitations = list(base.limitations)
-        path = _confined(cwd, ADAPTER_FILENAME)
-        writes.append(_write_config(path, adapter_source()))
-        # The "Pi does not load the adapter on its own" sentence rides
-        # ``base.limitations`` (inspect says it before the press, TM5).
+        # Fourth plan D9 option B: the adapter is the terminal's own file too,
+        # in Iron Jarvis's folder (``<home>/terminals-mcp/<id>.mjs``; ``.mjs``
+        # so Node reads it as an ES module), never in the user's folder.
+        path = _terminal_file(home, pane_id, ".mjs")
+        if path is None:
+            return _no_home(base.version, env)
+        written = _write_config(path, adapter_source())
+        # The hand-typed step, now naming the file by its absolute path (the
+        # dry run said it without one, before the press: TM5).
+        before = _pi_step(self.runtime(), "")
+        limitations = [
+            _pi_step(self.runtime(), written) if s == before else s
+            for s in base.limitations
+        ]
         return RecipeResult(
             ok=True,
             method=base.method,
             version=base.version,
             env=env,
-            config_writes=writes,
+            config_writes=[written],
             limitations=limitations,
             detail=base.detail,
             ready=False,
@@ -1145,11 +1210,12 @@ async def prepare_async(
     capabilities: Mapping[str, Any] | None = None,
     *,
     cwd: str = "",
+    home: str = "",
 ) -> RecipeResult | None:
     """:meth:`LaunchRecipe.prepare` off the event loop; ``None`` with no recipe."""
     recipe = recipe_for(cli_id)
     if recipe is None:
         return None
     return await asyncio.to_thread(
-        lambda: recipe.prepare(pane_id, token, url, capabilities, cwd=cwd)
+        lambda: recipe.prepare(pane_id, token, url, capabilities, cwd=cwd, home=home)
     )

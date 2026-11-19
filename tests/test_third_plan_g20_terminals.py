@@ -348,11 +348,20 @@ def test_a_with_tools_launch_is_set_up_and_starts_the_tool(client, repo, install
     grant = c.app.state.platform.terminals.pane_tokens.resolve(token)
     assert grant is not None and grant.pane_id == pane["id"] and grant.allows("memory")
     assert not grant.allows("browser"), "a box the user did not tick was granted"
-    assert (repo / ".mcp.json").is_file()
+    # Fourth plan D9 option B: nothing in the user's folder; the tool's file is
+    # the terminal's own, in Iron Jarvis's folder, named by its absolute path.
+    assert list(repo.iterdir()) == []
+    own = recipes.terminal_files_dir(c.app.state.platform.terminals.terminal_files_home)
+    own_file = own / f"{pane['id']}.json"
+    assert own_file.is_file()
+    from iron_jarvis.daemon.routes.terminals import _shell_args
+
     sid = pane["claude_session_id"]
     [typed] = be.written
+    session = c.app.state.platform.terminals.get(pane["id"])
     assert typed.startswith(
-        f"claude --session-id {sid} --mcp-config .mcp.json --strict-mcp-config --disallowed-tools "
+        f"claude --session-id {sid} --mcp-config {_shell_args(session.shell or '', [str(own_file)])} "
+        "--strict-mcp-config --disallowed-tools "
     ), typed
     assert "WebFetch,WebSearch" in typed and typed.endswith("\r")
     assert out["tools"]["set_up"] is True

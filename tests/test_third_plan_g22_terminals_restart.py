@@ -556,9 +556,14 @@ def test_tm3_the_routes_list_try_again_and_close_a_terminal_that_could_not_be_re
         terms._restore_failed_why["term_x"] = f"Its program, {GONE}, is no longer on this PC."
     body = app_client.get("/terminals").json()
     assert body["restore_failed"]["ids"] == ["term_x"]
+    from iron_jarvis.terminals.shells import default_shell
+
+    # Fourth plan C-TM-1: a row whose program is gone also names the usual
+    # shell its "Open with …" press reopens it on.
     assert body["restore_failed_panes"] == [
         {"id": "term_x", "name": "notes", "cwd": str(tmp_path),
-         "reason": f"Its program, {GONE}, is no longer on this PC."},
+         "reason": f"Its program, {GONE}, is no longer on this PC.",
+         "usual_shell": default_shell()["label"]},
     ]
     r = app_client.post("/terminals/not-reopened/term_x/retry")
     assert r.status_code == 200, r.text

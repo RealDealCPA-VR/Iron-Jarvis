@@ -53,8 +53,11 @@ import { usePolledApi } from "@/lib/useApi";
 import { terminalsHref } from "@/lib/ironProxy";
 import {
   LAUNCH_ACCOUNTS_POLL_MS,
+  accountTitle,
+  cliAccountProvider,
   launchOffer,
   paneAccountsOf,
+  type PaneAccount,
   type PaneAccounts,
   type PaneLimit,
   type ResumeFailed,
@@ -264,6 +267,95 @@ export function toolsNoneTickedWords(label: string): string {
   return `Tick at least one: with none, ${label} would start without Iron Jarvis's tools.`;
 }
 
+/** Fourth plan C-TM-2: the account a "With Iron Jarvis's tools" terminal
+ *  opens on — the one THIS terminal is on for that tool's provider — and the
+ *  value `POST /terminals/launch-with-tools` takes for it (a profile id, or
+ *  "default" for this PC's own login, as `/terminals/launch` takes it).
+ *  Null when this terminal names no account for that provider (the daemon
+ *  picks, as before), so the dialog never names an account it will not send. */
+export function toolsAccountOf(
+  accounts: PaneAccounts | null | undefined,
+  cliId: string,
+): { account: PaneAccount; choice: string } | null {
+  const provider = cliAccountProvider(cliId);
+  const account = provider ? accounts?.[provider] : undefined;
+  if (!account) return null;
+  const choice = account.id === null || account.source === "default" ? "default" : account.id;
+  return { account, choice };
+}
+
+/** Fourth plan C-TM-2: the dialog's line naming that account. */
+export function opensOnWords(account: PaneAccount): string {
+  return `Opens on ${accountTitle(account)}.`;
+}
+
+/** Fourth plan TM3: what a terminal opened with Iron Jarvis's tools says
+ *  under its header — the row's `tools` (`{note, leftovers, limitations}`):
+ *  that nothing was written in its folder, each file an older Iron Jarvis
+ *  left there, and the tool's own limitation (Pi's step by hand). Each
+ *  sentence once, in that order; [] for a plain terminal (no `tools`). */
+export function paneToolsLines(info: unknown): string[] {
+  if (!info || typeof info !== "object") return [];
+  const raw = (info as { tools?: unknown }).tools;
+  if (!raw || typeof raw !== "object") return [];
+  const t = raw as { note?: unknown; leftovers?: unknown; limitations?: unknown };
+  const out: string[] = [];
+  const add = (v: unknown) => {
+    if (typeof v !== "string") return;
+    const line = v.trim();
+    if (line && !out.includes(line)) out.push(line);
+  };
+  add(t.note);
+  if (Array.isArray(t.leftovers)) t.leftovers.forEach(add);
+  if (Array.isArray(t.limitations)) t.limitations.forEach(add);
+  return out;
+}
+
+// The terminals whose tools line was closed with ×, for this window (the
+// pane's state does not outlive a return to Build; its terminal does).
+const toolsLineDismissed = new Set<string>();
+
+/** Test seam: forget which tools lines were closed. */
+export function resetPaneToolsNote() {
+  toolsLineDismissed.clear();
+}
+
+/** Fourth plan TM3: ONE quiet line under the header of a terminal opened
+ *  with Iron Jarvis's tools (the only place these sentences show). Above the
+ *  terminal, never over it; × hides it for this window. */
+export function PaneToolsNote({ paneId, lines }: { paneId: string; lines: string[] }) {
+  const [, setClosed] = useState(0);
+  if (lines.length === 0 || toolsLineDismissed.has(paneId)) return null;
+  return (
+    <div
+      role="note"
+      data-testid={`pane-tools-note-${paneId}`}
+      className="flex shrink-0 items-start gap-2 border-b border-white/[0.06] bg-ink-900/40 px-3 py-1 text-[11px] text-zinc-400"
+    >
+      <Plug size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+      <span className="min-w-0 flex-1">
+        {lines.map((line) => (
+          <span key={line} className="block">
+            {line}
+          </span>
+        ))}
+      </span>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        data-testid={`pane-tools-note-close-${paneId}`}
+        onClick={() => {
+          toolsLineDismissed.add(paneId);
+          setClosed((n) => n + 1);
+        }}
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06]"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
 /**
  * THE BOXES FIRST (third plan TM5, decision G16). Pressing a "With Iron
  * Jarvis's tools" row shows this, inside the terminal it was pressed in:
@@ -275,12 +367,17 @@ export function toolsNoneTickedWords(label: string): string {
  */
 export function LaunchToolsDialog({
   cli,
+  account,
   onOpen,
   onCancel,
 }: {
   cli: LaunchCli;
-  /** Resolves to null when the new terminal opened, else the plain sentence. */
-  onOpen: (tools: LaunchTools) => Promise<string | null>;
+  /** Fourth plan C-TM-2: the account of the terminal it was opened from
+   *  (`toolsAccountOf`); the dialog names it and Open sends it. */
+  account?: { account: PaneAccount; choice: string } | null;
+  /** Resolves to null when the new terminal opened, else the plain sentence.
+   *  `account` is the value to send (absent: the daemon picks). */
+  onOpen: (tools: LaunchTools, account?: string) => Promise<string | null>;
   onCancel: () => void;
 }) {
   const [tools, setTools] = useState<LaunchTools>({ memory: false, browser: false });
@@ -311,7 +408,7 @@ export function LaunchToolsDialog({
     setBusy(true);
     setError(null);
     try {
-      const why = await onOpen(tools);
+      const why = account ? await onOpen(tools, account.choice) : await onOpen(tools);
       if (why) setError(why);
     } finally {
       setBusy(false);
@@ -328,6 +425,11 @@ export function LaunchToolsDialog({
       <p className="mb-2 text-[12px] text-zinc-300">
         Open {cli.label} in a new terminal with Iron Jarvis&apos;s tools. Tick what it may use:
       </p>
+      {account ? (
+        <p data-testid={`launch-tools-account-${cli.id}`} className="-mt-1 mb-2 text-[11px] text-zinc-500">
+          {opensOnWords(account.account)}
+        </p>
+      ) : null}
       <ul className="space-y-1.5">
         {boxes.map((cap) => {
           const on = tools[cap.key as keyof LaunchTools];
@@ -688,7 +790,7 @@ export function TerminalPane({
    *  Third plan TM5 (G16): called with the boxes the user ticked; resolves
    *  to null once the new terminal is open, else the plain sentence shown
    *  beside the boxes. */
-  onLaunchWithCapabilities?: (cli: string, tools: LaunchTools) => Promise<string | null>;
+  onLaunchWithCapabilities?: (cli: string, tools: LaunchTools, account?: string) => Promise<string | null>;
   /** v1.302.0: Launch → "as <another account>" started a NEW pane on that
    *  account (a running CLI cannot change accounts) — add it and focus it.
    *  Without it the page is reloaded on `/terminals?focus=<id>`. */
@@ -2008,14 +2110,16 @@ export function TerminalPane({
       {toolsFor && onLaunchWithCapabilities && (
         <LaunchToolsDialog
           cli={toolsFor}
+          account={toolsAccountOf(paneAccounts, toolsFor.id)}
           onCancel={() => setToolsFor(null)}
-          onOpen={async (tools) => {
-            const why = await onLaunchWithCapabilities(toolsFor.id, tools);
+          onOpen={async (tools, account) => {
+            const why = await onLaunchWithCapabilities(toolsFor.id, tools, account);
             if (!why) setToolsFor(null);
             return why;
           }}
         />
       )}
+      <PaneToolsNote paneId={info.id} lines={paneToolsLines(info)} />
       {showResume && (
         <ResumeStrip
           cliLabel={resumeLabel}

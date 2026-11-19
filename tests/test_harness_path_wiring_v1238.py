@@ -146,8 +146,11 @@ def test_the_recipe_actually_ran_and_wrote_the_panes_config(
     """
     session, backend = _create_claude_pane(platform, tmp_path / "pane")
 
-    config = tmp_path / "pane" / ".mcp.json"
-    assert config.is_file(), "no .mcp.json was written into the pane's folder"
+    # Fourth plan D9 option B: the terminal's own file, in Iron Jarvis's folder
+    # (never the pane's folder, which stays empty).
+    config = recipes.terminal_files_dir(platform.terminals.terminal_files_home) / f"{session.id}.json"
+    assert config.is_file(), "no config was written for the pane"
+    assert list((tmp_path / "pane").iterdir()) == [], "a file was written in the pane's folder"
     body = json.loads(config.read_text(encoding="utf-8"))
     entry = body["mcpServers"][recipes.SERVER_NAME]
     assert entry["url"] == backend.env[MCP_URL_ENV]

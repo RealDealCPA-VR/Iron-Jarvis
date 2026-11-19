@@ -59,11 +59,10 @@ Options:
   -h, --help                   display help
 """
 
+#: Fourth plan TM1: the recipe looks for Codex's own ``--config`` (``-c``).
 CODEX_HELP = """\
 Usage: codex [options]
-
-Environment:
-  CODEX_HOME   Directory holding config.toml
+  -c, --config <key=value>   Override a configuration value
 """
 
 
@@ -327,36 +326,42 @@ def test_a_fully_capable_build_reports_no_limitations(probe, claude):
 # --------------------------------------------------------------------------- #
 # Configuration is written, confined, and recorded
 # --------------------------------------------------------------------------- #
-def test_the_claude_recipe_writes_only_into_the_pane_cwd_and_records_the_path(
+def test_the_claude_recipe_writes_only_into_its_own_folder_and_records_the_path(
     probe, claude, tmp_path
 ):
+    """Fourth plan D9 option B: the file is the terminal's own, in Iron
+    Jarvis's folder (``<home>/terminals-mcp/<id>.json``), and NOTHING is
+    written in the terminal's folder."""
     probe("claude", version="1.0.0", help=FULL_CLAUDE_HELP)
-    result = claude.prepare("term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path))
+    home = tmp_path / "ij-home"
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    result = claude.prepare(
+        "term_1", TOKEN, URL, {"browser": True}, cwd=str(cwd), home=str(home)
+    )
 
     assert len(result.config_writes) == 1
     written = Path(result.config_writes[0])
     assert written.is_absolute(), "the diagnostics panel shows an absolute path"
-    assert written.parent.resolve() == tmp_path.resolve()
-    assert written.name == ".mcp.json"
+    assert written == recipes.terminal_files_dir(home) / "term_1.json"
+    assert result.argv_extra[:2] == ["--mcp-config", str(written)]
 
     body = json.loads(_read(str(written)))
     assert list(body["mcpServers"]) == [recipes.SERVER_NAME], "only Jarvis's server"
     assert body["mcpServers"][recipes.SERVER_NAME]["url"] == URL
-    # THE TOKEN IS NOT IN THE FILE. `.mcp.json` is the file this CLI's own
-    # convention says to COMMIT, so a literal bearer here is a credential that
-    # drives the user's logged-in browser, published by their next `git push`
-    # and alive until the daemon restarts.
+    # THE TOKEN IS NOT IN THE FILE: the header references the environment
+    # variable the terminal already carries.
     auth = body["mcpServers"][recipes.SERVER_NAME]["headers"]["Authorization"]
     assert TOKEN not in _read(str(written)), (
-        "the pane token is written in plaintext into the pane's project folder"
+        "the pane token is written in plaintext into a file"
     )
     assert auth == f"Bearer ${{{MCP_TOKEN_ENV}}}", (
         "the config must reference the environment variable the pane already "
         f"carries, not the secret: got {auth!r}"
     )
 
-    # nothing outside the pane's folder was touched
-    assert sorted(p.name for p in tmp_path.iterdir()) == [".mcp.json"]
+    # nothing in the terminal's folder was touched
+    assert list(cwd.iterdir()) == []
 
 
 def test_a_write_outside_the_pane_folder_is_refused(tmp_path):
@@ -368,18 +373,18 @@ def test_a_write_outside_the_pane_folder_is_refused(tmp_path):
         recipes._confined(str(tmp_path), str(Path(tmp_path).parent / "elsewhere.json"))
 
 
-def test_prepare_without_a_cwd_carries_the_token_and_claims_no_configuration(
-    probe, claude
+def test_prepare_without_a_home_carries_the_token_and_claims_no_configuration(
+    probe, claude, tmp_path
 ):
-    """No folder means no file — and therefore no flags POINTING at that file.
+    """No folder of Iron Jarvis's own means no file - and therefore no flags
+    POINTING at that file (fourth plan D9 B: the file is never in the
+    terminal's folder, so a ``cwd`` alone is not enough).
 
-    `--mcp-config .mcp.json` for a `.mcp.json` that was never written launches
-    Claude Code straight into a config error, which the user reads as a crashed
-    pane. The previous version of this test asserted only `config_writes == []`
-    and so blessed the broken combination instead of catching it.
+    `--mcp-config <file>` for a file that was never written launches Claude
+    Code straight into a config error, which the user reads as a crashed pane.
     """
     probe("claude", version="1.0.0", help=FULL_CLAUDE_HELP)
-    result = claude.prepare("term_1", TOKEN, URL, {"browser": True})
+    result = claude.prepare("term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path))
     assert result.config_writes == []
     assert result.env[MCP_TOKEN_ENV] == TOKEN
     assert "--mcp-config" not in result.argv_extra, (
@@ -387,83 +392,55 @@ def test_prepare_without_a_cwd_carries_the_token_and_claims_no_configuration(
     )
     assert result.argv_extra == []
     assert result.method == recipes.METHOD_NONE
-    assert result.limitations and "no working folder" in result.limitations[0]
+    assert result.limitations and "its own folder" in result.limitations[0]
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_an_existing_mcp_json_is_merged_never_clobbered(probe, claude, tmp_path):
-    """`.mcp.json` is the standard project-scoped Claude Code config, so a
-    developer who has one has their OWN servers in it. Taking those away with no
-    message anywhere is the same dishonesty this module exists to prevent, done
-    to a file instead of to a sentence."""
-    probe("claude", version="1.0.0", help=FULL_CLAUDE_HELP)
-    path = tmp_path / ".mcp.json"
-    path.write_text(
+@pytest.mark.parametrize(
+    "existing",
+    [
         json.dumps({"mcpServers": {"my-own-server": {"command": "mine"}}}, indent=2),
-        encoding="utf-8",
-    )
-
-    result = claude.prepare("term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path))
-
-    body = json.loads(_read(str(path)))
-    assert body["mcpServers"]["my-own-server"] == {"command": "mine"}, (
-        "the user's own MCP server was deleted by a Jarvis launch"
-    )
-    assert recipes.SERVER_NAME in body["mcpServers"]
-    assert any("already had a .mcp.json" in s for s in result.limitations), (
-        "a file of the user's was changed and nothing said so"
-    )
-
-
-def test_an_unreadable_mcp_json_is_left_strictly_alone(probe, claude, tmp_path):
-    """A file we cannot parse is a file we must not overwrite: we cannot know
-    what is in it. The refusal is a limitation the user can read, not silence."""
+        "{ this is not json",
+    ],
+    ids=["users-own-servers", "unreadable"],
+)
+def test_a_projects_own_mcp_json_is_never_touched(probe, claude, tmp_path, existing):
+    """Fourth plan D9 B: `.mcp.json` is the user's own project file (the one
+    Claude Code's convention says to commit). Until v1.538 a launch merged an
+    entry into it; now nothing in the terminal's folder is read or written,
+    whatever is in that file."""
     probe("claude", version="1.0.0", help=FULL_CLAUDE_HELP)
     path = tmp_path / ".mcp.json"
-    path.write_text("{ this is not json", encoding="utf-8")
+    path.write_text(existing, encoding="utf-8")
 
-    result = claude.prepare("term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path))
+    result = claude.prepare(
+        "term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path),
+        home=str(tmp_path / "ij-home"),
+    )
 
-    assert _read(str(path)) == "{ this is not json"
-    assert result.config_writes == []
-    assert result.method == recipes.METHOD_NONE
-    assert result.argv_extra == []
-    assert result.limitations and "left it alone" in result.limitations[0]
+    assert path.read_text(encoding="utf-8") == existing
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".mcp.json", "ij-home"]
+    assert result.set_up is True
+    assert not any(".mcp.json" in s for s in result.limitations)
 
 
-def test_the_pane_config_is_removed_the_way_the_pane_token_is_revoked(
+def test_the_terminals_file_is_removed_the_way_the_pane_token_is_revoked(
     probe, claude, tmp_path
 ):
-    """A config that outlives its pane points a harness at a credential that no
-    longer resolves. `remove_config_writes` is the file half of the revocation
-    the three close paths already do for the token — and it takes back ONLY
-    Jarvis's own entry."""
+    """A file that outlives its terminal points a tool at a key that no longer
+    resolves. `remove_terminal_files` is the file half of the revocation (the
+    terminal's close calls it) - it takes ONLY that terminal's own file."""
     probe("claude", version="1.0.0", help=FULL_CLAUDE_HELP)
-    path = tmp_path / ".mcp.json"
-    path.write_text(
-        json.dumps({"mcpServers": {"my-own-server": {"command": "mine"}}}, indent=2),
-        encoding="utf-8",
-    )
-    result = claude.prepare("term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path))
+    home = tmp_path / "ij-home"
+    one = claude.prepare("term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path), home=str(home))
+    two = claude.prepare("term_2", TOKEN, URL, {"browser": True}, cwd=str(tmp_path), home=str(home))
 
-    removed = recipes.remove_config_writes(result.config_writes)
+    recipes.remove_terminal_files(home, "term_1")
 
-    assert removed == result.config_writes
-    body = json.loads(_read(str(path)))
-    assert recipes.SERVER_NAME not in body["mcpServers"], "Jarvis's entry survived"
-    assert body["mcpServers"]["my-own-server"] == {"command": "mine"}
-
-    # A file that was ONLY ever Jarvis's goes away entirely.
-    second = tmp_path / "second"
-    second.mkdir()
-    only_ours = claude.prepare(
-        "term_2", TOKEN, URL, {"browser": True}, cwd=str(second)
-    )
-    assert (second / ".mcp.json").exists()
-    recipes.remove_config_writes(only_ours.config_writes)
-    assert list(second.iterdir()) == []
-
-    # And it never raises on a path that is already gone.
-    assert recipes.remove_config_writes(only_ours.config_writes) == []
+    assert not Path(one.config_writes[0]).exists()
+    assert Path(two.config_writes[0]).exists(), "another terminal's file went too"
+    # And it never raises on a file that is already gone.
+    recipes.remove_terminal_files(home, "term_1")
 
 
 # --------------------------------------------------------------------------- #
@@ -494,42 +471,35 @@ def test_a_pane_that_grants_nothing_gets_no_token_and_no_config(
 # --------------------------------------------------------------------------- #
 # Codex
 # --------------------------------------------------------------------------- #
-def test_codex_is_refused_when_its_build_does_not_advertise_its_home_var(probe, codex):
+def test_codex_is_refused_when_its_build_does_not_advertise_config(probe, codex):
+    """Fourth plan TM1: Codex is offered only when its own help names
+    ``--config`` (was: ``CODEX_HOME``)."""
     probe("codex", version="0.5.0", help="Usage: codex [options]\n")
     result = codex.inspect()
     assert result.ok is False
-    assert codex.home_env in result.limitations[0]
+    assert "--config" in result.limitations[0]
     assert codex.supports("0.5.0") == ""
 
 
-def test_codex_writes_a_pane_scoped_config_and_points_at_it_by_env(
-    probe, codex, tmp_path
-):
+def test_codex_writes_nothing_and_never_sets_a_home(probe, codex, tmp_path):
+    """Fourth plan TM1 (this pinned the defect until v1.539.0: a config file
+    in ``<project>/.jarvis-codex`` and ``CODEX_HOME`` pointing at it, which
+    moved the terminal off its account). Now: Codex's own per-run ``-c``
+    options, no file, no folder, no home variable."""
     probe("codex", version="0.5.0", help=CODEX_HELP)
     result = codex.prepare("term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path))
     assert result.ok is True
-    assert result.method == recipes.METHOD_STDIO
-    home = Path(result.env[codex.home_env])
-    assert home.resolve().parent == tmp_path.resolve()
-    written = Path(result.config_writes[0])
-    assert written.parent.resolve() == home.resolve()
-    assert written.name == "config.toml"
-    body = _read(str(written))
-    assert f"[mcp_servers.{json.dumps(recipes.SERVER_NAME)}]" in body
-    assert codex.shim_module in body
-    assert TOKEN not in body, "the token rides the environment, never the file"
+    assert result.method == recipes.METHOD_HTTP
+    assert "CODEX_HOME" not in result.env
+    assert result.config_writes == []
+    assert list(tmp_path.iterdir()) == []
+    name = recipes.CODEX_SERVER_NAME
+    assert result.argv_extra == [
+        "-c", f"mcp_servers.{name}.url={URL}",
+        "-c", f"mcp_servers.{name}.bearer_token_env_var={MCP_TOKEN_ENV}",
+    ]
+    assert not any(TOKEN in a for a in result.argv_extra), "the token rides the environment"
     assert result.env[MCP_TOKEN_ENV] == TOKEN
-
-
-def test_codex_is_refused_when_the_stdio_bridge_is_missing(monkeypatch, probe, codex):
-    """A build that dropped the shim would otherwise produce a harness that
-    starts, connects to nothing, and reports success."""
-    probe("codex", version="0.5.0", help=CODEX_HELP)
-    monkeypatch.setattr(recipes.CodexRecipe, "_shim_available", lambda self: False)
-    result = codex.inspect()
-    assert result.ok is False
-    assert "stdio bridge" in result.limitations[0]
-    assert codex.supports("0.5.0") == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -539,16 +509,26 @@ def test_the_pi_recipe_places_a_jarvis_owned_adapter_and_needs_no_mcp_package(
     monkeypatch, probe, pi, tmp_path
 ):
     """Q01: "Do not make Browser capability depend on a third-party Pi MCP
-    package." The adapter is Jarvis's own file, plain Node, no dependencies."""
+    package." The adapter is Jarvis's own file, plain Node, no dependencies.
+
+    Fourth plan D9 option B: it is the terminal's own file in Iron Jarvis's
+    folder (``<home>/terminals-mcp/<id>.mjs``), never in the terminal's folder,
+    and the hand-typed step names it by its absolute path."""
     probe("pi", version="0.4.0", help="Usage: pi\n  -h, --help\n")
     monkeypatch.setattr(recipes.PiRecipe, "runtime", lambda self: "/fake/bin/node")
+    home = tmp_path / "ij-home"
+    cwd = tmp_path / "project"
+    cwd.mkdir()
 
-    result = pi.prepare("term_1", TOKEN, URL, {"browser": True}, cwd=str(tmp_path))
+    result = pi.prepare(
+        "term_1", TOKEN, URL, {"browser": True}, cwd=str(cwd), home=str(home)
+    )
     assert result.ok is True
     assert result.method == recipes.METHOD_STDIO
     written = Path(result.config_writes[0])
-    assert written.parent.resolve() == tmp_path.resolve()
-    assert written.name == pi_adapter.ADAPTER_FILENAME
+    assert written == recipes.terminal_files_dir(home) / "term_1.mjs"
+    assert list(cwd.iterdir()) == [], "the adapter was put in the terminal's folder"
+    assert any(f'`/fake/bin/node "{written}"`' in s for s in result.limitations)
 
     source = _read(str(written))
     assert "require(" not in source, "no CommonJS dependency loading at all"
@@ -918,7 +898,8 @@ class _RecordingBackend(FakeBackend):
 
     def start(self, argv, cwd, env, cols, rows) -> None:  # type: ignore[override]
         self.env = dict(env) if env is not None else None
-        self.config_existed_at_spawn = self.watch.exists()
+        watch = self.watch(self.env or {}) if callable(self.watch) else self.watch
+        self.config_existed_at_spawn = watch.exists()
         super().start(argv, cwd, env, cols, rows)
 
 
@@ -937,16 +918,23 @@ def test_the_token_is_in_the_child_environment_and_the_config_is_already_written
     survives.)
     """
     probe("claude", version="1.0.0", help=FULL_CLAUDE_HELP)
-    backend = _RecordingBackend(tmp_path / ".mcp.json")
+    home = tmp_path / "ij-home"
+    # Fourth plan D9 B: the terminal's own file, in Iron Jarvis's folder.
+    backend = _RecordingBackend(
+        lambda env: recipes.terminal_files_dir(home) / f"{env['IRONJARVIS_PANE_ID']}.json"
+    )
     seen: list[dict] = []
 
     def _preparer(**kw):
         seen.append(kw)
         return claude.prepare(
-            kw["pane_id"], kw["token"], URL, kw["capabilities"], cwd=str(tmp_path)
+            kw["pane_id"], kw["token"], URL, kw["capabilities"], cwd=str(tmp_path),
+            home=kw["home"],
         ).env
 
-    manager = TerminalManager(mcp_url=URL, recipe_preparer=_preparer)
+    manager = TerminalManager(
+        mcp_url=URL, recipe_preparer=_preparer, state_path=home / "terminals.json"
+    )
     session = manager.create(
         cwd=str(tmp_path),
         backend=backend,

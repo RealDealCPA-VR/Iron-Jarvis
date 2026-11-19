@@ -4309,3 +4309,36 @@ Left open:
 - Not tried on the installed app: an update with Claude desktop connected;
   Connect again with Claude Code open; Disconnect with Claude desktop open;
   a disconnected mapped drive; a Claude Code chat that starts with a picture.
+
+### Group 30 as built (v1.539.0)
+
+Fixed: TM1, MS4a, TM2, TM3, TM4, TM5, C-TM-1, C-TM-2, C-TM-3, with owner
+decisions D8 (refuse in words) and D9 option B (nothing in the project).
+Four implementers (Opus 5.5); the lead read every diff, carried the recipe's
+`config_writes` into the terminal's outcome so the note can never claim
+"nothing was written" over a file that was, and proved TM2 on a Linux
+runner through a throwaway trial branch (57 passed as built; 4 red with the
+fix removed, including the real missing-shell and restore tests).
+
+Where it differs from the plan:
+
+- A Pi build without `-e` also keeps its adapter in Iron Jarvis's folder
+  (the design left it in the project); the command it asks you to type names
+  the full path.
+- `build_recipe_preparer.prepare` (in `platform.py`) takes `home`, the one
+  place that knows Iron Jarvis's folder.
+- "Open with your usual shell" reuses the existing retry route with a
+  `shell` field; the route reads the manager's restore state directly
+  (a `retry_restore(shell=)` in the manager would be tidier).
+- When the terminal names no account for the tool's provider, no account is
+  sent and no "Opens on" line shows (the daemon picks as before).
+
+Left open:
+
+- Codex's bare `-c` options with HTTP and `bearer_token_env_var` were
+  measured only on `codex app-server`; not tried in a real terminal.
+- A restored terminal's file stays until that terminal is closed (its token
+  is not made again, so the file is inert).
+- Not tried on the installed app: Codex with tools (signed in, `/mcp` lists
+  `iron-jarvis-code`, nothing new in the folder); Claude with tools; Pi;
+  "Open with your usual shell"; typing during a restart at a new size.

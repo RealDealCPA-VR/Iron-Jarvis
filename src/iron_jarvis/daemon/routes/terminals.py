@@ -54,6 +54,20 @@ class TerminalLaunchWithTools(BaseModel):
     cwd: str | None = None
     cols: int = 100
     rows: int = 30
+    #: Fourth plan C-TM-2: the account the new terminal opens on, by its
+    #: profile id (or ``"default"``), as ``POST /terminals/launch`` takes it:
+    #: the page sends the account of the terminal it was opened from. Absent
+    #: = the daemon's own pick (an older page).
+    account: str | None = None
+
+
+class RetryNotReopened(BaseModel):
+    """``POST /terminals/not-reopened/{id}/retry`` (fourth plan C-TM-1).
+    ``shell: "default"`` reopens it on the user's usual shell instead of the
+    program that is gone (same id, folder and history). Absent = "Try again"
+    with its own program, as before."""
+
+    shell: str | None = None
 
 
 #: The boxes a "with Iron Jarvis's tools" launch can tick: the two a coding
@@ -65,6 +79,68 @@ NO_BOX_TICKED = (
     "Tick Memory or Browser first: with neither, {label} would start without Iron "
     "Jarvis's tools, so no terminal was opened."
 )
+
+#: Fourth plan TM3 (decision D9 B): the note under a terminal opened with Iron
+#: Jarvis's tools, when nothing was written in its folder.
+NOTHING_WRITTEN_NOTE = (
+    "Nothing was written in your folder: {label} has Iron Jarvis's tools for this "
+    "terminal only."
+)
+
+#: Fourth plan TM3: a file an older Iron Jarvis left in the terminal's folder,
+#: named (never deleted or edited).
+LEFTOVER_NOTE = (
+    "An older Iron Jarvis left {path} in this folder. Nothing uses it now; delete "
+    "it whenever you like."
+)
+
+#: Fourth plan TM5 (decision D8): the skill library did not answer in time.
+SKILL_LIBRARY_SLOW = (
+    'Your skill library did not answer in time, so nothing was asked. Ask again, '
+    'or choose "skill: auto".'
+)
+
+
+def _inside(path: str, folder: str) -> bool:
+    """Is ``path`` the folder or anything under it? Text only (no disk)."""
+    try:
+        p = os.path.normcase(os.path.abspath(str(path)))
+        f = os.path.normcase(os.path.abspath(str(folder)))
+        return os.path.commonpath([p, f]) == f
+    except (TypeError, ValueError):  # another drive, or not a path
+        return False
+
+
+def _tools_note(label: str, outcome: dict[str, Any], folder: str) -> dict[str, Any]:
+    """Fourth plan TM3: what a terminal opened with Iron Jarvis's tools says
+    under it: ``note`` (that nothing was written in the folder: only when the
+    tool was set up and no file it wrote lies inside the folder), each file
+    an older Iron Jarvis left there named ONCE (``leftovers``), and the
+    recipe's own ``limitations``. BLOCKING (reads the folder): a sync route."""
+    from ...terminals.recipes import leftovers_in
+
+    writes = [str(p) for p in (outcome.get("config_writes") or [])]
+    note = ""
+    if outcome.get("set_up") and not any(_inside(p, folder) for p in writes):
+        note = NOTHING_WRITTEN_NOTE.format(label=label)
+    seen: list[str] = []
+    for path in leftovers_in(folder):
+        if path not in seen:
+            seen.append(path)
+    return {
+        "note": note,
+        "leftovers": [LEFTOVER_NOTE.format(path=p) for p in seen],
+        "limitations": list(outcome.get("limitations") or []),
+    }
+
+
+#: Fourth plan TM5: ``_off_loop``'s answer when a read did not answer in time
+#: (never a value a read returns, unlike None).
+_TIMED_OUT = object()
+
+#: Fourth plan C-TM-1: how a not-reopened row says its program is gone
+#: (``manager._why_not_reopened``'s own words).
+_PROGRAM_GONE = _re.compile(r"^Its program, .+, is no longer on this PC\b")
 
 #: Screen-snippet uploads (Win+Shift+S -> a Build pane). Both Claude Code and
 #: Codex cap an attached image around 5MB, so accepting more would only hand
@@ -734,19 +810,71 @@ def register(app: FastAPI, d) -> None:
             panes = getattr(terminals, "restore_failed_panes", None)
             rows = panes() if callable(panes) else []
             if rows:
+                # Fourth plan C-TM-1: a row whose program is gone names the
+                # user's usual shell, for its "Open with {usual_shell}" press.
+                if any(_program_gone(r) for r in rows):
+                    from ...terminals.shells import default_shell
+
+                    usual = str(default_shell().get("label") or "")
+                    for r in rows:
+                        if usual and _program_gone(r):
+                            r["usual_shell"] = usual
                 out["restore_failed_panes"] = rows
         return out
 
+    def _program_gone(row: dict[str, Any]) -> bool:
+        return row.get("kind") == "missing" or bool(_PROGRAM_GONE.match(str(row.get("reason") or "")))
+
+    def _retry_on_usual_shell(term_id: str):
+        """Fourth plan C-TM-1: ``retry_restore`` with the saved program swapped
+        for the user's usual shell — the same id, folder and history. When
+        that fails too, the row keeps its own program and reason (the 409
+        says why the usual shell did not start). BLOCKING (a spawn)."""
+        from ...terminals.shells import default_shell
+
+        terminals = d.platform.terminals
+        usual = default_shell()
+        with terminals._lock:
+            entry = terminals._restore_failed.get(term_id)
+            if entry is None:
+                raise KeyError(term_id)
+            why = terminals._restore_failed_why.get(term_id)
+            swapped = {**entry, "shell": usual["name"], "argv": list(usual["argv"])}
+            terminals._restore_failed[term_id] = swapped
+        try:
+            return terminals.retry_restore(term_id)
+        except BaseException:
+            with terminals._lock:
+                if terminals._restore_failed.get(term_id) is swapped:
+                    terminals._restore_failed[term_id] = entry
+                    if why is None:
+                        terminals._restore_failed_why.pop(term_id, None)
+                    else:
+                        terminals._restore_failed_why[term_id] = why
+            raise
+
     @app.post("/terminals/not-reopened/{term_id}/retry")
-    def retry_not_reopened(term_id: str) -> dict[str, Any]:
+    def retry_not_reopened(term_id: str, body: RetryNotReopened | None = None) -> dict[str, Any]:
         """Third plan TM3: "Try again" on a terminal that could not be
         reopened after a restart. Its row, reopened under its id with its
         history; or a 409 sentence (it stays listed), 429 at the cap, 404 when
-        there is no such terminal. Sync ``def``: the spawn blocks."""
+        there is no such terminal. Sync ``def``: the spawn blocks.
+
+        Fourth plan C-TM-1: ``{"shell": "default"}`` reopens it on the user's
+        usual shell instead of its own program (the "Open with …" press)."""
         from ...terminals.manager import ReopenFailed, SessionCapReached
 
+        wanted = (body.shell or "").strip().lower() if body is not None else ""
+        if wanted and wanted != "default":
+            raise HTTPException(
+                status_code=400, detail="A terminal can be reopened on your usual shell only."
+            )
+        usual = wanted == "default"
         try:
-            session = d.platform.terminals.retry_restore(term_id)
+            if usual:
+                session = _retry_on_usual_shell(term_id)
+            else:
+                session = d.platform.terminals.retry_restore(term_id)
         except KeyError:
             raise HTTPException(
                 status_code=404, detail="That terminal is no longer waiting to be reopened."
@@ -770,7 +898,18 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(
                 status_code=404, detail="That terminal is no longer waiting to be reopened."
             )
+        _remove_own_files(term_id)
         return {"closed": True}
+
+    def _remove_own_files(term_id: str) -> None:
+        """Fourth plan D9 B: a terminal closed for good takes its own files
+        (in Iron Jarvis's folder) with it. Never raises; BLOCKING (a file
+        delete): sync routes only."""
+        from ...terminals.recipes import remove_terminal_files
+
+        home = getattr(d.platform.terminals, "terminal_files_home", None)
+        if home is not None:
+            remove_terminal_files(home, term_id)
 
     @app.get("/terminals/shells")
     def terminal_shells() -> dict[str, Any]:
@@ -886,6 +1025,18 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=503, detail=str(exc))
         except RuntimeError as exc:  # the session cap, or another failure (own words)
             raise _open_refused(exc) from None
+        except OSError as exc:
+            # Fourth plan TM2 (Linux/Mac): a shell that cannot be started now
+            # raises like Windows does — FileNotFoundError, PermissionError
+            # or another OSError. Said in the restore's own words, never the
+            # system's text, and never a 500.
+            from ...terminals.manager import _why_not_reopened
+
+            raise HTTPException(
+                status_code=400,
+                detail="The terminal could not be opened. "
+                + _why_not_reopened(exc, {"shell": body.shell or ""}),
+            ) from None
         return pane_row(d.platform, session.info())
 
     @app.post("/terminals/{term_id}/continue-on-next", response_model=None)
@@ -1152,16 +1303,28 @@ def register(app: FastAPI, d) -> None:
         session = launch_pane(
             d.platform,
             TerminalLaunch(
-                cli=cli_id, cwd=body.cwd, near=body.near, cols=body.cols, rows=body.rows
+                cli=cli_id, cwd=body.cwd, near=body.near, cols=body.cols, rows=body.rows,
+                # Fourth plan C-TM-2: on the account of the terminal it was
+                # opened from (a refusal is launch_pane's 409, nothing opened).
+                account=body.account,
             ),
             tools=ticked,
         )
         outcome = getattr(session, "recipe_outcome", None) or {}
+        # Fourth plan TM3: the note under the new terminal, kept on it (its
+        # row's ``tools``) and answered here too.
+        note = _tools_note(cat["label"], outcome, getattr(session, "cwd", "") or "")
+        try:
+            session.tools_note = note
+        except Exception:  # noqa: BLE001 — a stand-in session without the slot
+            pass
         return {
             "pane": pane_row(d.platform, session.info()),
             "tools": {
                 "set_up": bool(outcome.get("set_up")),
-                "limitations": list(outcome.get("limitations") or []),
+                "limitations": list(note["limitations"]),
+                "note": note["note"],
+                "leftovers": list(note["leftovers"]),
             },
         }
 
@@ -1213,7 +1376,10 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/terminals/{term_id}")
     def kill_terminal(term_id: str) -> dict[str, Any]:
-        return {"killed": d.platform.terminals.kill(term_id)}
+        killed = d.platform.terminals.kill(term_id)
+        if killed:  # fourth plan D9 B: its own files go with it
+            _remove_own_files(term_id)
+        return {"killed": killed}
 
     @app.websocket("/terminals/{term_id}/ws")
     async def terminal_ws(ws: WebSocket, term_id: str) -> None:
@@ -1361,6 +1527,30 @@ def register(app: FastAPI, d) -> None:
         # One repaint nudge per attach (armed until the pane's first resize,
         # which it always sends right after opening — see TerminalPane.onopen).
         repaint_pending = True
+        # Fourth plan TM4: a restored shell's second start (up to
+        # RESTART_START_WAIT_S) runs as ONE background task per socket, so
+        # the keys after it are read at once (a key keeps the old shell). A
+        # resize arriving meanwhile is applied when it ends; the last one wins.
+        restart: dict[str, Any] = {"task": None, "size": None}
+
+        async def restart_then_resize(cols: int, rows: int, wiggle: bool) -> None:
+            try:
+                await asyncio.to_thread(session.restart_at_size, cols, rows)
+                if wiggle and rows > 1:
+                    await asyncio.to_thread(session.resize, cols, rows - 1)
+                await asyncio.to_thread(session.resize, cols, rows)
+                while True:  # no await between the last look and the end
+                    later, restart["size"] = restart["size"], None
+                    if later is None:
+                        break
+                    if later != (session.cols, session.rows):
+                        await asyncio.to_thread(session.resize, *later)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — as the receive loop: only a dead shell closes
+                if not session.alive:
+                    await close_exited()
+
         try:
             while True:
                 msg = await ws.receive()
@@ -1375,16 +1565,31 @@ def register(app: FastAPI, d) -> None:
                             obj = None
                         if isinstance(obj, dict) and obj.get("type") == "resize":
                             cols, rows = int(obj["cols"]), int(obj["rows"])
+                            running = restart["task"]
+                            if running is not None and not running.done():
+                                restart["size"] = (cols, rows)  # applied when it ends
+                                continue
                             wanted = getattr(session, "restart_wanted", None)
-                            if repaint_pending or (callable(wanted) and wanted()):
+                            possible = getattr(session, "restart_possible", None)
+                            if (
+                                (repaint_pending or (callable(wanted) and wanted()))
+                                and callable(possible) and possible(cols, rows)
+                            ):
                                 # v1.338.0: a restored shell spawned at a stale
                                 # saved size starts again at this pane's size
                                 # while nothing has been typed into it — else
                                 # its wrapped prompt and the pane disagree on
                                 # the cursor and keys land over the prompt.
                                 # Third plan TM2: bounded; one that failed is
-                                # tried again at the next resize.
-                                await asyncio.to_thread(session.restart_at_size, cols, rows)
+                                # tried again at the next resize. Fourth plan
+                                # TM4: in the background (see above), the
+                                # wiggle and the resize after it, in this order.
+                                restart["size"] = None
+                                restart["task"] = asyncio.create_task(
+                                    restart_then_resize(cols, rows, repaint_pending)
+                                )
+                                repaint_pending = False
+                                continue
                             # Scrollback replay can't reconstruct a FULL-SCREEN
                             # app's frame: a TUI (grok/claude/codex) paints only
                             # CHANGED cells, and its screen-setup sequences have
@@ -1444,6 +1649,9 @@ def register(app: FastAPI, d) -> None:
         finally:
             session.unsubscribe(sub)  # ...and hand the PTY back to the background drain
             out.cancel()
+            if restart["task"] is not None:
+                # The thread ends within its own bound; a late start is closed.
+                restart["task"].cancel()
             try:
                 await ws.close()
             except Exception:
@@ -1613,7 +1821,11 @@ def register(app: FastAPI, d) -> None:
             chosen = []
         elif want:
             # TM18: the skill library is read from disk — off the loop.
-            sk = await _off_loop(d.platform.skills.get, want, fallback=None)
+            sk = await _off_loop(d.platform.skills.get, want, fallback=_TIMED_OUT)
+            if sk is _TIMED_OUT:
+                # Fourth plan TM5 (decision D8): slow is not "missing" — the
+                # skill the user picked was not read, so nothing is asked.
+                raise HTTPException(status_code=503, detail=SKILL_LIBRARY_SLOW)
             if sk is None:
                 raise HTTPException(status_code=404, detail=f"no such skill: {want}")
             chosen = [sk]

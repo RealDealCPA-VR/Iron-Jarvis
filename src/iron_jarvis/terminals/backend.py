@@ -309,15 +309,55 @@ class PosixPtyBackend:
 
         argv = list(argv)
         child_env = dict(env) if env is not None else os.environ.copy()
-        pid, fd = _pty.fork()
+        # Fourth plan TM2: a shell that cannot START must raise here, as a
+        # Windows start does — exit code 127 alone reads as "ended by itself",
+        # and a reopened terminal on an uninstalled shell then came back dead
+        # and lost its history. `os.pipe` is close-on-exec: a successful exec
+        # closes the child's end unread; a failed one writes its errno first.
+        report_r, report_w = os.pipe()
+        try:
+            pid, fd = _pty.fork()
+        except BaseException:
+            os.close(report_r)
+            os.close(report_w)
+            raise
         if pid == 0:  # pragma: no cover - child process, never measured
             try:
+                os.close(report_r)
                 if cwd:
                     os.chdir(cwd)
                 os.execvpe(argv[0], argv, child_env)
-            except Exception:
-                os._exit(127)
+            except BaseException as exc:
+                try:
+                    code = getattr(exc, "errno", None)
+                    code = code if isinstance(code, int) and code > 0 else 0
+                    os.write(report_w, str(code).encode("ascii"))
+                except BaseException:
+                    pass
+            os._exit(127)
         # parent
+        os.close(report_w)
+        try:
+            report = _read_exec_report(report_r, PACKAGED_SPAWN_WAIT_S)
+        finally:
+            os.close(report_r)
+        failure = _exec_error(report, argv[0])
+        if failure is not None:
+            # Nothing started: close the terminal and reap the child (it has
+            # already called `_exit`), so no pid or zombie is kept for it.
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            if not self._reap(pid, _REAP_WAIT_S):  # pragma: no cover - defensive
+                import signal
+
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                self._reap(pid, _REAP_WAIT_S)
+            raise failure
         self._pid = pid
         self._fd = fd
         try:
@@ -483,6 +523,66 @@ class PosixPtyBackend:
 
 #: How long ``PosixPtyBackend.kill`` waits for a killed shell, twice at most.
 _REAP_WAIT_S = 3.0
+
+#: The most bytes a child's exec report can hold (an errno in ASCII digits).
+_EXEC_REPORT_MAX = 64
+
+
+def _read_exec_report(fd: int, wait_s: float, *, _select=None, _read=None, _clock=None) -> bytes:
+    """Fourth plan TM2: what the POSIX child wrote to its close-on-exec
+    report pipe, read until the pipe closes or ``wait_s`` passes. ``b""``
+    means the exec succeeded (the pipe closed unread) or nothing came in
+    time; either way the shell is treated as started, as before. Never
+    raises. ``_select``/``_read``/``_clock`` are stand-ins for tests."""
+    import select as _select_mod
+    import time as _time
+
+    sel = _select or _select_mod.select
+    read = _read or os.read
+    clock = _clock or _time.monotonic
+    end = clock() + wait_s
+    data = bytearray()
+    while len(data) < _EXEC_REPORT_MAX:
+        left = end - clock()
+        if left <= 0:
+            break
+        try:
+            ready, _, _ = sel([fd], [], [], left)
+        except InterruptedError:
+            continue
+        except (OSError, ValueError):
+            break
+        if not ready:
+            continue
+        try:
+            chunk = read(fd, _EXEC_REPORT_MAX)
+        except InterruptedError:
+            continue
+        except OSError:
+            break
+        if not chunk:
+            break  # EOF: the child's end is closed
+        data += chunk
+    return bytes(data)
+
+
+def _exec_error(data: bytes, argv0) -> OSError | None:
+    """Fourth plan TM2: the error a POSIX child's exec report stands for, or
+    None when there is no report (the exec succeeded). An errno becomes the
+    ``OSError`` a Windows start raises for the same case (``FileNotFoundError``
+    for ENOENT, ``PermissionError`` for EACCES), naming ``argv0``; anything
+    else is still a start failure, in plain words."""
+    if not data:
+        return None
+    text = bytes(data).decode("ascii", "replace").strip()
+    code = int(text) if text.isdigit() and len(text) <= 5 else 0
+    if 0 < code < 4096:
+        try:
+            return OSError(code, os.strerror(code), str(argv0))
+        except (ValueError, OverflowError):  # pragma: no cover - defensive
+            pass
+    name = os.path.basename(str(argv0 or "")) or "The shell"
+    return OSError(f"{name} could not be started.")
 
 
 # --------------------------------------------------------------------------- #
