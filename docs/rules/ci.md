@@ -32,9 +32,9 @@ How to use this file: read the contents list, then read only the entries your ch
 - L509: **No test starts a real coding tool, and a stand-in is never undone before its service has stopped** (v1.507.0)
 - L521: **Linux, round three: the suite is GREEN on Linux, a real gap is fixed in the product, and a Windows spelling goes on the list or gets a twin** (v1.516.1)
 - L559: **The Linux RELEASE is its own workflow with its own gate, files, branch and update rehearsal; release.yml and everything Windows reads stay untouched** (v1.517.0)
-- L610: **A test never leaves "the coming question is about this app tool" behind** (v1.520.0)
-- L623: **The dashboard's side panel test runs the BUILT add-on: rebuild it before trusting a local run** (v1.522.0)
-- L635: **The Linux release decides with `scripts/linux_release_plan.py`, run from the workflow's own commit; it reads every page of releases and judges a file by its bytes** (v1.540.0)
+- L615: **A test never leaves "the coming question is about this app tool" behind** (v1.520.0)
+- L628: **The dashboard's side panel test runs the BUILT add-on: rebuild it before trusting a local run** (v1.522.0)
+- L640: **The Linux release decides with `scripts/linux_release_plan.py`, run from the workflow's own commit; it reads every page of releases and judges a file by its bytes** (v1.540.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -595,8 +595,13 @@ does not need a bump, stop and bump it.
   `latest.yml`, `updates`, `updates-stable`, the installer or `--clobber`.
   Files: `Iron-Jarvis-x86_64.AppImage`, `Iron-Jarvis-amd64.deb` (NO version
   in the name: `AppImageUpdater.doInstall` renames a file whose name holds
-  one, which breaks a shortcut or autostart entry; and
-  `releases/latest/download/<name>` is then a permanent link). Pins:
+  one, which breaks a shortcut or autostart entry). Never hand out
+  `releases/latest/download/<name>`: the Windows release is "latest" about
+  40 minutes before its Linux files exist, so that link 404s in between. The
+  website (`RealDealCPA-VR/realdealcpa-ai`, `public/IJ/`) names the versioned
+  `releases/download/vX.Y.Z/<name>` of the newest release that HAS the file,
+  refreshed by its own sync, and its two short links `realdealcpa.ai/IJ/linux/deb/`
+  and `/IJ/linux/appimage/` (live since v1.542.0) lead there. Pins:
   `tests/test_linux_release_workflow_v1517.py`. A NEW workflow file cannot
   be dispatched from a branch, so it was tried through push-triggered copies
   on the throwaway branches `trial/linux-parity` and `trial/linux-updates`.

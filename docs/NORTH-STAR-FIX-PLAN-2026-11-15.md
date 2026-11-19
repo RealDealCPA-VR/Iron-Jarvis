@@ -4376,6 +4376,12 @@ Left open:
 
 - LX1 and C-LX-1 (the website's download links and the two short links)
   wait for the owner's go-ahead to push to the website's repository.
+  DONE 2026-11-19 on the owner's "Yes, push it": website commit 8493aa8 on
+  `RealDealCPA-VR/realdealcpa-ai` main, its deploy run green; `/IJ/` names
+  `releases/download/v1.541.0/Iron-Jarvis-amd64.deb` and `-x86_64.AppImage`,
+  both short links answer 200 and name the same files, and both files
+  download. Named in the Handbook and `ci.md` in v1.542.0. The app's Linux
+  dialogs still open the releases list, not the short links.
 - The `.deb`'s own self-update through pkexec has never been rehearsed; the
   card's `.deb` line promises only that installing may ask for a password.
 - GNOME starting autostart apps through systemd's generator is inferred,

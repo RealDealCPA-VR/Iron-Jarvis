@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.541.0 (2026-11-18).*
+holds itself to. Current as of v1.542.0 (2026-11-19).*
 
 ---
 
@@ -2041,6 +2041,21 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Linux download links that always work (v1.542.0)
+
+Nothing in the app changes in this release. The download page changed.
+
+- **The Linux buttons on [realdealcpa.ai/IJ](https://realdealcpa.ai/IJ/)
+  always reach a file.** They used to point at the newest release, which has
+  no Linux files for about 40 minutes after each Windows release. They now
+  name the newest release that has the Linux files.
+- **Two short links that stay the same:**
+  [realdealcpa.ai/IJ/linux/deb/](https://realdealcpa.ai/IJ/linux/deb/) for
+  Ubuntu, Debian and their relatives, and
+  [realdealcpa.ai/IJ/linux/appimage/](https://realdealcpa.ai/IJ/linux/appimage/)
+  for any other Linux. Each leads to that file in the newest release that has
+  it, and works with scripts turned off.
 
 ## One place for where your work goes, and plainer words (v1.541.0)
 
