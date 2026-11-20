@@ -334,11 +334,19 @@ class WorkflowRunTool(Tool):
         # reach the in-flight step session); None lets the engine build a
         # throwaway one — same split as the scheduler's workflow dispatch.
         engine = WorkflowEngine(self.platform, self.platform.orchestrator)
+        # Idea 39 (39-a): run from a chat, its end is reported in that chat.
+        from ..agents.chat_delivery import stampable_chat
+
+        report_chat = await asyncio.to_thread(
+            stampable_chat, getattr(self.platform, "engine", None), getattr(ctx, "thread_id", "")
+        )
         try:
             # v1.505.0 (north-star 5.4): the INSERT may wait behind a long
             # writer (Compact, a backup) for SQLite's busy timeout — off the
             # loop, as POST /workflows/run does.
-            rec = await asyncio.to_thread(engine.create_record, wf, **kwargs)
+            rec = await asyncio.to_thread(
+                lambda: engine.create_record(wf, **kwargs, **({"chat_thread_id": report_chat} if report_chat else {}))
+            )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
         task = self._launch(engine.run_record(rec, wf, **kwargs), rec.id)

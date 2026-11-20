@@ -2042,6 +2042,63 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Results come home to the chat that asked (v1.547.0)
+
+Something you set up from a chat now reports back into that same chat. Say
+"check this supplier's prices every Friday" and the schedule it makes says
+**Reports here** on its card. Each Friday a new message appears in that chat,
+marked with where it came from ("Schedule · Friday prices · Done"), with what
+the run found and **Open**, which goes to the schedule. You do nothing
+differently: anything set up from a chat reports there by itself.
+
+**What reports.**
+
+- A **schedule** made in a chat: each run's result, or why it did not run.
+- A **watcher** made in a chat: the files it noticed and the suggestion it
+  left, which waits for your approval on the Autonomy page.
+- A **goal** made from the chat's goal card: each try, with whether the goal
+  is satisfied yet.
+- A **workflow** run from a chat: how it ended, and which step failed if one
+  did.
+- A **night task** queued from a chat: how it ended, its branch and its notes.
+
+**Keeping it calm.**
+
+- Something that runs more than once a day keeps **one line a day** in the
+  chat. The line shows the newest result and how many there were today
+  ("· 3 today"); every run is still on its own page.
+- A watcher writes at most once an hour. What it notices in between joins
+  its next message.
+- A report never brings an archived chat back. The bell says a report
+  arrived, and pressing the row opens the chat.
+- The words are cut at 1,500 characters. The rest stays on the run, behind
+  **Open**.
+
+**Stopping and changing it.**
+
+- Every report has **Stop reporting**, and so does the record's row on the
+  Schedules, Watchers and Autonomy pages ("Reports to <chat>"). **Undo** is
+  right beside it.
+- In chat: "stop reporting the Friday prices schedule here", or "report the
+  Intake watcher in this chat". The change shows on the usual card and has
+  Undo.
+- Something made on its own page reports nowhere, as before.
+
+**What it keeps.**
+
+- The verdict word (Done, Needs you, Failed) comes from Iron Jarvis's own
+  record of the run, never from the model's closing words.
+- A report is outside words. When the chat goes on, the next reply is told
+  that the report is not your words and not its own, so a file name or a run
+  summary cannot give it orders.
+- A schedule made in a **Local only** chat runs Local only. The bell's line
+  about a report names the chat and the schedule only, never what the report
+  says.
+- If the chat a record reported to was deleted, the record stops reporting
+  and the bell says so: its results show on its own page.
+- A conversation from your phone and a coding session do not take reports
+  yet.
+
 ## Agents and terminal help know what was done before (v1.554.0)
 
 An agent you give a job in a folder now starts knowing what was done there

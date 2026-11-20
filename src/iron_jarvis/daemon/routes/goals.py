@@ -55,6 +55,7 @@ session) and are awaited directly, per the engine's own contracts.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -372,6 +373,13 @@ def register(app: FastAPI, d) -> None:
         store = getattr(d.platform, "grants", None)
         view = goal_view(record)
         view["grant_offers"] = grant_offers(record, stats, hash_stats, store)
+        # Idea 39 (39-a): "Reports to <chat>" with Stop reporting.
+        from ...agents import chat_delivery as _cd
+
+        _chat = view.get("chat_thread_id") or ""
+        view["reports_to"] = _cd.reports_to_view(
+            _chat, _cd.chat_titles(d.platform.engine, [_chat]) if _chat else {}
+        )
         # v1.299.0: exact offers ("always allow THIS command") and the live
         # standing grants this goal holds, so the card can show and revoke
         # them. Labels are the REDACTED display; args never ride here.
@@ -539,8 +547,15 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/goals")
     async def create_goal_contract(body: GoalContractCreate) -> dict[str, Any]:
+        # Idea 39 (39-a): only a saved chat (never a coding session) is kept.
+        from ...agents.chat_delivery import stampable_chat
+
+        fields = body.model_dump()
+        fields["chat_thread_id"] = await asyncio.to_thread(
+            stampable_chat, d.platform.engine, fields.get("chat_thread_id")
+        )
         try:
-            record = await _engine().create_goal(**body.model_dump(), origin="api")
+            record = await _engine().create_goal(**fields, origin="api")
         except ValueError as exc:
             # The store's refusal sentence VERBATIM — it already says why and
             # what to do instead (deny floor, budget rules, verifier rules).

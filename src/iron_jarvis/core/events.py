@@ -241,6 +241,15 @@ class EventType:
     # messages = the thread's NEW message count after the append. Published
     # only for daemon-origin writes; desktop PUT saves don't self-notify.
     CHAT_THREAD_UPDATED = "chat.thread_updated"
+    # Idea 39 (39-a): a REPORT (something set up from a chat wrote its result
+    # into that chat, ``agents/chat_delivery.report_to_chat``) arrived in a
+    # chat the user ARCHIVED — the chat stays archived (D-39.2) and the bell
+    # says so; opening the row opens the chat. {thread_id, title, kind, name}
+    # — titles only, never the report's words. And the chat a record reported
+    # to is GONE: the record's link was cleared and its results show on its
+    # own page now. {kind, name, id, href}.
+    REPORT_ARRIVED = "report.arrived"
+    REPORT_CHAT_GONE = "report.chat_gone"
     # IJ harness accounts (v1.368.0, Phase 5). A Build session's ONE account
     # could not serve its turn (parked, needs sign-in, gone) and the turn
     # ended on the account-limit card: {thread_id, title, account_name,

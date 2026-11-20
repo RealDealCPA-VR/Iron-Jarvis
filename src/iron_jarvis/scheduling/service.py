@@ -266,8 +266,12 @@ class Scheduler:
         kind: str = "workflow",
         payload: dict | None = None,
         enabled: bool = True,
+        chat_thread_id: str = "",
     ) -> ScheduledTaskRecord:
         """Persist a new scheduled task and compute its first ``next_run``.
+
+        ``chat_thread_id`` (idea 39, 39-a): the saved chat it was set up from,
+        where each fire's result is reported; "" for a page-made schedule.
 
         Exactly one of ``cron`` (recurring crontab), ``run_at`` (one-time date),
         or ``interval_seconds`` (fixed repeat) must be supplied. Raises
@@ -309,6 +313,7 @@ class Scheduler:
             kind=kind,
             payload_json=json.dumps(payload or {}, default=str),
             enabled=enabled,
+            chat_thread_id=str(chat_thread_id or "").strip(),
         )
         record.next_run = self._next_run_for_record(record) if enabled else None
         with session_scope(self.engine) as db:

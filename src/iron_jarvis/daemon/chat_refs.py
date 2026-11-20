@@ -108,12 +108,21 @@ def _speaker(m: dict) -> str | None:
 #: ``toRequestMessages`` put first (``change_claims._AGENT_LINE_PREFIX``).
 AGENT_LINE_PREFIX = "[Reply from the agent "
 
+#: Idea 39 (39-a): the words a REPORT in a chat's history opens with (the
+#: page's ``toRequestMessages`` puts ``[Report from your schedule "Friday
+#: prices", written when it ran. Not your words.]`` first): a run's summary,
+#: a watcher's file names, a workflow's last step. Fenced like an agent's line.
+REPORT_LINE_PREFIX = "[Report from "
+
+#: Every label a fenced line may open with.
+_FENCED_PREFIXES = (AGENT_LINE_PREFIX, REPORT_LINE_PREFIX)
+
 
 def _fenced_agent_text(content: str) -> str | None:
-    """``content`` with everything after its agent label fenced as outside
-    data (``computeruse.safety.wrap_untrusted``), or None when it is not an
-    agent's line or is fenced already. The label stays the first line."""
-    if not isinstance(content, str) or not content.startswith(AGENT_LINE_PREFIX):
+    """``content`` with everything after its agent (or report) label fenced as
+    outside data (``computeruse.safety.wrap_untrusted``), or None when it is
+    not such a line or is fenced already. The label stays the first line."""
+    if not isinstance(content, str) or not content.startswith(_FENCED_PREFIXES):
         return None
     label, sep, rest = content.partition("\n")
     if not sep or not label.endswith("]"):

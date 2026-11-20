@@ -54,6 +54,11 @@ class ScheduledTaskRecord(SQLModel, table=True):
     last_status: str = ""
     last_detail: str = ""
     last_session_id: str = ""
+    #: Idea 39 (39-a): the saved chat this was set up from; each result is
+    #: written there as a REPORT (``agents/chat_delivery.report_to_chat``).
+    #: "" = it reports nowhere (made on a page, or Stop reporting).
+    #: Additive; NULL on an older table reads as "".
+    chat_thread_id: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
     def decoded_payload(self) -> dict:

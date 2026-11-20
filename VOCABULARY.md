@@ -39,6 +39,7 @@ PR that ships it.
 | Anything Iron Jarvis knows how to do | **skill** | — |
 | When something happens, an agent acts (the page at /reflex, v1.452.0) | **rule**; the page is **Rules** | reflex, reflexes |
 | A folder Iron Jarvis keeps an eye on, suggesting work when files change (/sentinels, v1.452.0) | **watcher**; the page is **Watchers** | sentinel, sentinels |
+| A message that a schedule, watcher, goal, workflow, rule or run writes into the chat it was set up in (idea 39) | **report**; it stops with **Stop reporting**; a row that sends them says **Reports to** and the chat's name; a card says **Reports here** | callback, delivery |
 | The scripts and files agents made and kept (/artifacts, v1.452.0) | the page is **What agents made** | artifacts |
 | The page that shows every model server you can reach (/fleet, v1.452.0) | **Model servers** | fleet, local fleet |
 | One machine or program on your network that serves AI models (Ollama, LM Studio, vLLM, a LiteLLM proxy, the custom address in Settings; v1.455.0) | **model server**; in the model menu and receipts, **your model server** until you name it | endpoint, custom endpoint, node, fleet node |

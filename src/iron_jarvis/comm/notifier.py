@@ -201,6 +201,8 @@ EVENT_WORDS: dict[str, str] = {
     "ui.page_opened": "A page was opened",
     "config.changed": "A setting changed",
     "chat.thread_updated": "A chat was updated",
+    "report.arrived": "A report arrived in an archived chat",
+    "report.chat_gone": "The chat a report went to is gone",
     "build.account_limit": "A coding session hit its account's limit",
     "build.resumed": "A coding session carried on",
     "build.rewound": "A coding session was rewound",

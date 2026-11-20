@@ -105,6 +105,11 @@ class ScheduleCreateTool(Tool):
             )
         except _knobs.KnobError as exc:
             return ToolResult(ok=False, error=exc.detail)
+        from ..agents.chat_delivery import stampable_chat
+
+        report_chat = await asyncio.to_thread(
+            stampable_chat, getattr(self.platform, "engine", None), getattr(ctx, "thread_id", "")
+        )
         try:
             # v1.505.0 (north-star 5.4): the row's write is off the loop too
             # (the scheduler is APScheduler's thread-safe BackgroundScheduler).
@@ -116,6 +121,9 @@ class ScheduleCreateTool(Tool):
                 interval_seconds=args.get("interval_seconds"),
                 kind=kind,
                 payload=payload,
+                # Idea 39 (39-a): made in a chat, it reports there (D-39.1);
+                # Stop reporting is on its row and on each report.
+                chat_thread_id=report_chat,
             )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
@@ -128,11 +136,17 @@ class ScheduleCreateTool(Tool):
             "next_run": next_run,
         }
         card = _created_card(rec.name)
+        reports = bool(getattr(rec, "chat_thread_id", ""))
         if card:
+            if reports:
+                # Idea 39 (39-a): the card says where its results will go.
+                card["new"] = f"{card.get('new') or 'created'} \u00b7 {REPORTS_HERE_CARD}"
             data["record_change"] = card
+        data["reports_here"] = reports
         return ToolResult(
             ok=True,
-            output=f"scheduled task '{rec.name}' (next run: {next_run})",
+            output=f"scheduled task '{rec.name}' (next run: {next_run})"
+            + (f"; {REPORTS_HERE_WORDS}" if reports else ""),
             data=data,
         )
 
@@ -282,6 +296,14 @@ class ScheduleListTool(Tool):
             output=f"{total} scheduled task{'' if total == 1 else 's'}:\n" + "\n".join(shown) + more,
             data={"schedules": results[:LIST_MAX]},
         )
+
+
+#: Idea 39 (39-a): the words on a create card when the record reports here.
+REPORTS_HERE_CARD = "Reports here"
+#: Idea 39 (39-a): what a schedule made in a chat tells the model and the user.
+REPORTS_HERE_WORDS = (
+    "it reports each result in this chat (Stop reporting is on its row and on each report)"
+)
 
 
 def _created_card(name: str) -> dict[str, Any] | None:

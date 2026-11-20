@@ -106,7 +106,24 @@ LINE_KEYS: tuple[str, ...] = (
     "droppedRemote",
     "awaitingSession",
     "handOff",
+    # Idea 39 (39-a): a REPORT, a message that something set up from this chat
+    # (a schedule, a watcher, a goal, a workflow, a night task…) wrote when it
+    # ran (``agents/chat_delivery.report_to_chat``, the one report writer):
+    # where it came from (``reportFrom`` {kind, name, id, href, outcome}), its
+    # repeat key (``reportKey``: a restart or two finishers write it once), and
+    # the day-fold (``reportFold`` "<kind>:<id>:<local date>": a second report
+    # of the same record on the same day REPLACES the day's line in place,
+    # ``reportCount`` says how many it holds, ``reportSeen`` keeps the keys it
+    # replaced so a late repeat of one is still a repeat).
+    "reportFrom",
+    "reportKey",
+    "reportFold",
+    "reportCount",
+    "reportSeen",
 )
+
+#: Idea 39 (39-a): how many replaced report keys a folded line keeps.
+REPORT_SEEN_MAX = 60
 
 #: The ``who`` on ``CHAT_THREAD_UPDATED`` when the daemon wrote a turn's reply
 #: into its chat itself (third plan G6); the event also names ``turn_id``.
@@ -405,7 +422,26 @@ def _line_key(line: dict[str, Any]) -> str:
     if sid:
         return sid
     job = str(line.get("mediaJob") or "").strip()
-    return f"media:{job}" if job else ""
+    if job:
+        return f"media:{job}"
+    report = str(line.get("reportKey") or "").strip()
+    return f"report:{report}" if report else ""
+
+
+def _report_keys(line: dict[str, Any]) -> set[str]:
+    """Idea 39 (39-a): the ``report:<key>`` names a report line answers to:
+    its own ``reportKey`` and every key a day-fold replaced (``reportSeen``)."""
+    keys: set[str] = set()
+    own = str(line.get("reportKey") or "").strip()
+    if own:
+        keys.add(f"report:{own}")
+    seen = line.get("reportSeen")
+    if isinstance(seen, list):
+        for k in seen:
+            k = str(k or "").strip()
+            if k:
+                keys.add(f"report:{k}")
+    return keys
 
 
 def _turn_of(line: Any) -> str:
@@ -424,6 +460,9 @@ def _line_keys(line: dict[str, Any]) -> set[str]:
     key = _line_key(line)
     if key:
         keys.add(key)
+    # Idea 39 (39-a): a report is a repeat by its report key too (a run's
+    # report carries its session id AND ``report:run:<id>``).
+    keys |= _report_keys(line)
     turn = _turn_of(line)
     if turn:
         keys.add(f"turn:{turn}")
@@ -530,6 +569,44 @@ def _clean_line(raw: Any, stamp: str) -> dict[str, Any] | None:
     return line
 
 
+def _fold_index(msgs: list, line: dict[str, Any]) -> "int | None":
+    """Idea 39 (39-a): where the live window holds the day's line of the same
+    record (the same ``reportFold``), newest first; None when it holds none or
+    the line is not a report that folds. Pure."""
+    fold = str(line.get("reportFold") or "").strip()
+    if not fold or not isinstance(line.get("reportFrom"), dict):
+        return None
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        if isinstance(m, dict) and str(m.get("reportFold") or "").strip() == fold:
+            return i
+    return None
+
+
+def _folded(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """The day's line after one more report of the same record (idea 39,
+    39-a): the NEW report's words and source, how many reports the day's line
+    now holds (``reportCount``) and the keys it stands for (``reportSeen``,
+    the newest :data:`REPORT_SEEN_MAX`), so a late repeat of an earlier one is
+    still skipped. The line keeps its place in the chat. Pure."""
+    try:
+        count = int(old.get("reportCount") or 1)
+    except (TypeError, ValueError):
+        count = 1
+    seen = [str(k) for k in (old.get("reportSeen") or []) if isinstance(k, str) and k]
+    own = str(old.get("reportKey") or "").strip()
+    if own:
+        seen.append(own)
+    # An earlier report's session id, so a re-delivery of THAT run is a repeat.
+    sid = _session_of(old)
+    if sid and f"run:{sid}" not in seen:
+        seen.append(f"run:{sid}")
+    line = dict(new)
+    line["reportCount"] = count + 1
+    line["reportSeen"] = seen[-REPORT_SEEN_MAX:]
+    return line
+
+
 def _next_stamp(prev: datetime | None) -> datetime:
     """The PUT route's monotonic bump: the new ``updated_at`` must MOVE past the
     stored one even inside one Windows clock tick (v1.326.0)."""
@@ -589,6 +666,7 @@ def append_to_chat_thread(
     event_bus: Any = None,
     who: str = "",
     event_extra: "dict[str, Any] | None" = None,
+    unarchive: bool = True,
 ) -> dict[str, Any]:
     """Append ``lines`` to the saved chat ``thread_id`` (see the module doc).
 
@@ -597,6 +675,12 @@ def append_to_chat_thread(
     format (the page adopts it as its next ``if_updated_at``); ``why`` is ""
     on success, else one plain reason. ``who`` names the writer on the event
     (defaults to the first line's ``panelWho``, else ``"daemon"``).
+
+    Idea 39 (39-a): ``unarchive=False`` leaves an archived chat archived (a
+    report never undoes the user's archive, D-39.2); the answer then says
+    ``archived: True`` and ``title`` so the caller can ring the bell. A line
+    with ``reportFold`` whose fold is already in the live window REPLACES that
+    line in place (``folded`` counts them): one line a day per record.
     """
     thread_id = str(thread_id or "").strip()
     out: dict[str, Any] = {"ok": False, "updated_at": None, "why": "", "appended": 0, "skipped": 0}
@@ -639,6 +723,7 @@ def append_to_chat_thread(
             # ...and a reply kept inside a fork (a Try again's older reply).
             known |= {f"turn:{t}" for t in reply_turn_ids(msgs)}
             added: list[dict[str, Any]] = []
+            folded = 0
             for line in cleaned:
                 # Third plan G6: a reply for a turn that already has one is a
                 # repeat too (``turn:<id>``), like a session's second line.
@@ -647,6 +732,14 @@ def append_to_chat_thread(
                     out["skipped"] += 1
                     continue
                 known |= keys
+                # Idea 39 (39-a): the day's line of the same record takes
+                # this report's place (one line a day per record).
+                at = _fold_index(msgs, line)
+                if at is not None:
+                    msgs[at] = _folded(msgs[at], line)
+                    folded += 1
+                    added.append(msgs[at])
+                    continue
                 added.append(line)
             if not added:
                 # Nothing new — the thread is untouched, its stamp unchanged
@@ -654,7 +747,7 @@ def append_to_chat_thread(
                 out["ok"] = True
                 out["updated_at"] = r.updated_at.isoformat() if r.updated_at else None
                 return out
-            msgs = msgs + added
+            msgs = msgs + [line for line in added if not any(line is m for m in msgs)]
             # v1.499.3: what leaves the live window is KEPT (older messages),
             # in this transaction; if it cannot be kept, it stays live.
             if len(msgs) > MAX_MESSAGES and older_ok:
@@ -666,15 +759,21 @@ def append_to_chat_thread(
             r.messages_json = json.dumps(msgs)
             r.updated_at = _next_stamp(r.updated_at)
             # A reply un-archives (comm/threads.append's rule): a chat the user
-            # tucked away comes back when someone answers in it.
+            # tucked away comes back when someone answers in it. A REPORT does
+            # not (idea 39, D-39.2): archiving was the user's decision.
             if getattr(r, "archived_at", None) is not None:
-                r.archived_at = None
+                if unarchive:
+                    r.archived_at = None
+                else:
+                    out["archived"] = True
+                    out["title"] = str(r.title or "")
             db.add(r)
             _index(db, engine, r, msgs)
             db.commit()
             db.refresh(r)
             out["ok"] = True
-            out["appended"] = len(added)
+            out["appended"] = len(added) - folded
+            out["folded"] = folded
             out["updated_at"] = r.updated_at.isoformat() if r.updated_at else None
             count = len(msgs)
     except Exception as exc:  # noqa: BLE001 — never raises; the caller reads ``why``

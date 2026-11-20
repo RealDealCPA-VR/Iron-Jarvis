@@ -50,6 +50,7 @@ import { PageGrid } from "@/components/PageGrid";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 // v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
 import { UnattendedAskNote } from "@/components/UnattendedAskNote";
+import { ReportsTo } from "@/components/ReportsTo";
 // v1.446.0 (review item 23): the app-wide Emergency stop store — this page
 // feeds it from its own read and its button's answer.
 import { noteEmergencyStop } from "@/components/EmergencyStopStrip";
@@ -1335,6 +1336,8 @@ function GoalsSection() {
                       {spentVsBudget(g)} · {scheduleWords(g.schedule)} ·{" "}
                       {g.last_run_at ? `last ran ${timeAgo(g.last_run_at)}` : "never run"}
                     </div>
+                    {/* Idea 39 (39-a): set up in a chat, each try reports there. */}
+                    <ReportsTo kind="goal" id={g.id} to={g.reports_to} onChanged={goals.reload} />
                     {g.state === "tripped" && (
                       // The breaker reason VERBATIM — approving a resume you
                       // cannot read is not a decision.

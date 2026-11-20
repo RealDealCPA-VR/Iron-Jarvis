@@ -865,7 +865,23 @@ def snap_schedule(platform: Any, name: str) -> dict[str, Any] | None:
         "kind": rec.kind,
         "payload": rec.decoded_payload(),
         "enabled": bool(rec.enabled),
+        # Idea 39 (39-a): where it reports, so an Undo puts it back.
+        "id": rec.id,
+        "chat_thread_id": str(getattr(rec, "chat_thread_id", "") or ""),
     }
+
+
+def _restore_report_target(platform: Any, kind: str, record_id: str, prior: dict[str, Any]) -> None:
+    """Idea 39 (39-a): an Undo puts back the chat a record reported to (a chat
+    that is gone since stays unset: nothing can report to it). Never raises."""
+    if "chat_thread_id" not in prior or not record_id:
+        return
+    try:
+        from ..agents.chat_delivery import set_report_target
+
+        set_report_target(platform.engine, kind, record_id, str(prior.get("chat_thread_id") or ""))
+    except Exception:  # noqa: BLE001 — the rest of the Undo stands
+        pass
 
 
 def _trigger_kwargs(prior: dict[str, Any]) -> dict[str, Any]:
@@ -893,14 +909,17 @@ def restore_schedule(platform: Any, name: str, prior: dict[str, Any] | None) -> 
             payload=prior.get("payload") or {},
             enabled=bool(prior.get("enabled", True)),
         )
+        made = sch.get(name)
+        _restore_report_target(platform, "schedule", getattr(made, "id", ""), prior)
         return f"undo: recreated the schedule '{name}'"
-    sch.update_task(
+    rec = sch.update_task(
         name,
         **trig,
         kind=prior.get("kind") or "workflow",
         payload=prior.get("payload") or {},
         enabled=bool(prior.get("enabled", True)),
     )
+    _restore_report_target(platform, "schedule", getattr(rec, "id", ""), prior)
     return f"undo: restored the schedule '{name}'"
 
 
@@ -930,7 +949,26 @@ def _describe_schedule(s: dict[str, Any] | None) -> str | None:
         if t == "interval"
         else f"cron {s.get('cron')}"
     )
-    return f"{when}{'' if s.get('enabled', True) else ' (paused)'}"
+    return f"{when}{'' if s.get('enabled', True) else ' (paused)'}{_reports_words(s)}"
+
+
+def _reports_words(s: dict[str, Any]) -> str:
+    """Idea 39 (39-a): a card's line names whether the record reports to a chat."""
+    return ", reports to a chat" if s.get("chat_thread_id") else ""
+
+
+async def _report_here(platform: Any, kind: str, record_id: str, ctx: ToolContext, on: bool) -> str:
+    """Idea 39 (39-a): "report to this chat" (``on``) or "stop reporting here"
+    from chat. "" when done, else the sentence that says why not."""
+    from ..agents.chat_delivery import set_report_target, stampable_chat
+
+    chat = ""
+    if on:
+        chat = await asyncio.to_thread(stampable_chat, platform.engine, getattr(ctx, "thread_id", ""))
+        if not chat:
+            return "Reports go to a saved chat on the Chat page; this one cannot take them."
+    out = await asyncio.to_thread(set_report_target, platform.engine, kind, record_id, chat)
+    return "" if out.get("ok") else str(out.get("why") or "That could not be changed.")
 
 
 # ------------------------------------------------------------- workflows
@@ -1588,6 +1626,8 @@ def snap_sentinel(platform: Any, name: str) -> dict[str, Any] | None:
         "last_checked_at": _iso(rec.last_checked_at),
         "last_state": rec.decoded_state(),
         "last_error": rec.last_error,
+        # Idea 39 (39-a): where it reports, so an Undo puts it back.
+        "chat_thread_id": str(getattr(rec, "chat_thread_id", "") or ""),
     }
 
 
@@ -1624,6 +1664,8 @@ def restore_sentinel(platform: Any, name: str, prior: dict[str, Any] | None) -> 
         row.enabled = bool(prior.get("enabled", True))
         db.add(row)
         db.commit()
+        row_id = row.id
+    _restore_report_target(platform, "watcher", row_id, prior)
     return f"undo: {'recreated' if recreated else 'restored'} the sentinel '{name}'"
 
 
@@ -1631,7 +1673,7 @@ def _describe_sentinel(s: dict[str, Any] | None) -> str | None:
     if s is None:
         return None
     where = (s.get("config") or {}).get("path") or s.get("kind")
-    return f"watches {where}" + ("" if s.get("enabled", True) else " (paused)")
+    return f"watches {where}" + ("" if s.get("enabled", True) else " (paused)") + _reports_words(s)
 
 
 # ----------------------------------------------------------------- goals
@@ -2141,8 +2183,9 @@ class ScheduleUpdateTool(_RecordTool):
     RECORD = "schedule"
     description = (
         "Change an existing scheduled task: its timing (exactly one of `cron`, `run_at`, "
-        "`interval_seconds`), its `payload`, or pause/resume it with `enabled`. The user "
-        "approves on a card; the change has an Undo."
+        "`interval_seconds`), its `payload`, or pause/resume it with `enabled`. "
+        "`report_here`: true makes it report each result in THIS chat, false stops its "
+        "reports (Stop reporting). The user approves on a card; the change has an Undo."
     )
     input_schema = {
         "type": "object",
@@ -2153,6 +2196,7 @@ class ScheduleUpdateTool(_RecordTool):
             "interval_seconds": {"type": "integer", "minimum": 1},
             "payload": {"type": "object"},
             "enabled": {"type": "boolean"},
+            "report_here": {"type": "boolean"},
         },
         "required": ["name"],
     }
@@ -2167,6 +2211,12 @@ class ScheduleUpdateTool(_RecordTool):
         payload = args.get("payload")
         if isinstance(payload, dict) and payload.get("script") not in (None, {}):
             return ToolResult(ok=False, error=_knobs.SCRIPT_FROM_AGENT_REFUSAL)
+        # Idea 39 (39-a): "report here" / "stop reporting here" first, so a
+        # chat that cannot take reports changes nothing at all.
+        if isinstance(args.get("report_here"), bool):
+            why = await _report_here(self.platform, "schedule", before.get("id") or "", ctx, args["report_here"])
+            if why:
+                return ToolResult(ok=False, error=why)
         try:
             if isinstance(payload, dict):
                 await asyncio.to_thread(
@@ -3334,12 +3384,17 @@ class SentinelUpdateTool(_RecordTool):
     RECORD = "sentinel"
     description = (
         "Pause or resume a sentinel (an always-on watcher, by its `name`) with `enabled`. "
-        "The user approves on a card; the change has an Undo."
+        "`report_here`: true makes it report what it notices in THIS chat, false stops its "
+        "reports (Stop reporting). The user approves on a card; the change has an Undo."
     )
     input_schema = {
         "type": "object",
-        "properties": {"name": {"type": "string"}, "enabled": {"type": "boolean"}},
-        "required": ["name", "enabled"],
+        "properties": {
+            "name": {"type": "string"},
+            "enabled": {"type": "boolean"},
+            "report_here": {"type": "boolean"},
+        },
+        "required": ["name"],
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -3347,9 +3402,16 @@ class SentinelUpdateTool(_RecordTool):
         before = await asyncio.to_thread(snap_sentinel, self.platform, name)
         if before is None:
             return ToolResult(ok=False, error=f"There is no sentinel called {name!r}.")
-        if not isinstance(args.get("enabled"), bool):
+        report_here = args.get("report_here")
+        if not isinstance(args.get("enabled"), bool) and not isinstance(report_here, bool):
             return ToolResult(ok=False, error="Say `enabled`: true to resume it, false to pause it.")
-        await asyncio.to_thread(self.platform.sentinels.set_enabled, name, bool(args["enabled"]))
+        # Idea 39 (39-a): "report here" / "stop reporting here" from chat.
+        if isinstance(report_here, bool):
+            why = await _report_here(self.platform, "watcher", before.get("id") or "", ctx, report_here)
+            if why:
+                return ToolResult(ok=False, error=why)
+        if isinstance(args.get("enabled"), bool):
+            await asyncio.to_thread(self.platform.sentinels.set_enabled, name, bool(args["enabled"]))
         after = await asyncio.to_thread(snap_sentinel, self.platform, name)
         old, new = _describe_sentinel(before), _describe_sentinel(after)
         return ToolResult(

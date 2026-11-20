@@ -162,8 +162,14 @@ def _low_trust(m: dict[str, Any]) -> bool:
     ``trust``, or the trust of the agent run whose reply it is."""
     if str(m.get("trust") or "").strip().lower() == "low":
         return True
-    run = m.get("runResult")
-    return isinstance(run, dict) and str(run.get("trust") or "").strip().lower() == "low"
+    # Idea 39 (39-a): a line the DAEMON wrote (an agent's reply or a report,
+    # in a chat no page had open) carries the run's card as ``receipt``; the
+    # page renames it ``runResult`` only when it re-reads the chat.
+    for key in ("runResult", "receipt"):
+        run = m.get(key)
+        if isinstance(run, dict) and str(run.get("trust") or "").strip().lower() == "low":
+            return True
+    return False
 
 
 def lines_of(messages: Any) -> list[dict[str, Any]]:

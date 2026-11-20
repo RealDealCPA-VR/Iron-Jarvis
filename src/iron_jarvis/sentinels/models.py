@@ -51,6 +51,16 @@ class SentinelRecord(SQLModel, table=True):
     # scan error. Cleared by the next successful scan. Additive column;
     # existing DBs self-heal via ``core.db._reconcile_additive_columns``.
     last_error: str | None = None
+    #: Idea 39 (39-a): the saved chat this was set up from; each result is
+    #: written there as a REPORT (``agents/chat_delivery.report_to_chat``).
+    #: "" = it reports nowhere (made on a page, or Stop reporting).
+    #: Additive; NULL on an older table reads as "".
+    chat_thread_id: str = ""
+    #: D-39.3: a watcher writes in its chat at most once an hour. When it
+    #: last did (``report_at``), and the changes that wait to join its next
+    #: report (``report_pending_json``: a JSON list of paths, bounded).
+    report_at: datetime | None = None
+    report_pending_json: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
     def decoded_config(self) -> dict:

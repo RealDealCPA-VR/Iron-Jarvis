@@ -43,6 +43,7 @@ import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Schedule, ScheduleScript } from "@/lib/types";
 import { Modal } from "@/components/Modal";
 import { HeldOks } from "@/components/workflow/HeldOks";
+import { ReportsTo } from "@/components/ReportsTo";
 import { CHOOSE_FOLDER_WORDS, useFolderPicker } from "@/components/folders/FolderChip";
 import {
   Card,
@@ -1115,6 +1116,10 @@ export default function SchedulesPage() {
                                   name={s.name}
                                   onRemoved={reload}
                                 />
+                                {/* Idea 39 (39-a): made in a chat, it reports there. */}
+                                {s.id ? (
+                                  <ReportsTo kind="schedule" id={s.id} to={s.reports_to} onChanged={reload} />
+                                ) : null}
                               </span>
                             </span>
                           </td>

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { REPORT_KIND_WORDS } from "@/lib/reports";
 import {
   AlertTriangle,
   Bell,
@@ -306,6 +307,12 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // Readiness 0j.5 item 10: a remote agent's report-back (or its question)
   // rings; its progress lines are quiet rows.
   "remote.message",
+  // Idea 39 (39-a): a report arrived in a chat the user archived (the chat
+  // stays archived, D-39.2; the row opens it), and the chat a record reported
+  // to is gone. Quiet rows: capped by the reports themselves (one line a day
+  // per record, a watcher once an hour); Stop reporting is the off answer.
+  "report.arrived",
+  "report.chat_gone",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -726,6 +733,36 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       body: files ? `It sent ${files} file${files === 1 ? "" : "s"}.` : "",
       ...(chat ? { chat } : {}),
       ...(kind === "progress" ? { quiet: true } : { attention: true }),
+    };
+  }
+  if (e.type === "report.arrived") {
+    // Idea 39 (39-a, D-39.2): titles only, never the report's words.
+    const thread = typeof p.thread_id === "string" ? p.thread_id.trim() : "";
+    const title = typeof p.title === "string" && p.title.trim() ? p.title.trim() : "an archived chat";
+    const name = typeof p.name === "string" ? p.name.trim() : "";
+    const kind = typeof p.kind === "string" ? p.kind : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: thread ? `/chat?thread=${encodeURIComponent(thread)}` : "/chat",
+      icon: MessageSquare,
+      title: `A report arrived in ${title}`,
+      body: name ? `From your ${REPORT_KIND_WORDS[kind] ?? "task"} “${name}”. The chat stays archived.` : "The chat stays archived.",
+      quiet: true,
+    };
+  }
+  if (e.type === "report.chat_gone") {
+    const kind = typeof p.kind === "string" ? p.kind : "";
+    const name = typeof p.name === "string" ? p.name.trim() : "";
+    const words = typeof p.words === "string" && p.words.trim() ? p.words.trim() : "The chat it reported to is gone.";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: typeof p.href === "string" && p.href.startsWith("/") ? p.href : "/activity",
+      icon: MessageSquare,
+      title: name ? `Your ${REPORT_KIND_WORDS[kind] ?? "task"} “${name}” reports nowhere now` : "A report had nowhere to go",
+      body: words,
+      quiet: true,
     };
   }
   if (e.type === "autonomy.proposed") {

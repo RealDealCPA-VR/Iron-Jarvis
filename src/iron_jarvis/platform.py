@@ -2241,6 +2241,72 @@ def build_platform(
         except Exception:  # noqa: BLE001 - bookkeeping must not fail the fire
             _log.warning("could not record the scheduled memory review", exc_info=True)
 
+    def _schedule_report_options(task) -> dict:
+        """Idea 39 (39-a): the run options that make a schedule's fire report
+        into the chat it was set up from: ``chat_thread_id`` (its asks show
+        there), ``report_from`` (the run's line is this schedule's report) and
+        ``local_only`` when that chat is Local only (the fire runs Local only,
+        ``orchestrator`` reads it). ``{}`` for a schedule made on a page or
+        set to Stop reporting. BLOCKING (one row read); never raises."""
+        from .agents import chat_delivery as _cd
+
+        chat = _cd.clean_chat_thread_id(getattr(task, "chat_thread_id", "") or "")
+        if not chat:
+            return {}
+        out: dict = {
+            "chat_thread_id": chat,
+            _cd.REPORT_OPTION: {
+                "kind": "schedule", "name": task.name, "id": task.id, "href": "/schedules",
+            },
+        }
+        try:
+            from .providers.egress import thread_local_only
+
+            if thread_local_only(platform.engine, chat):
+                out["local_only"] = True
+        except Exception:  # noqa: BLE001 — unreadable: the chat decides nothing
+            _log.warning("could not read whether a schedule's chat is Local only", exc_info=True)
+        return out
+
+    async def _schedule_report(task, status: str, detail: str, fired: dict, fire_key: str) -> None:
+        """Idea 39 (39-a): a fire whose result no run of its own writes home —
+        one refused before any run, a workflow it ran, a skipped fire — is
+        reported here, once per fire (``schedule:<id>:<fire time>``). A task
+        fire whose run started reports through that run's ending; a goal's
+        try through the goal; a stop (the user's, or Emergency stop) writes
+        nothing. Never raises."""
+        from .agents import chat_delivery as _cd
+
+        chat = _cd.clean_chat_thread_id(getattr(task, "chat_thread_id", "") or "")
+        if not chat or task.kind in ("goal", "event"):
+            return
+        if task.kind == "task" and fired.get("session_id"):
+            return
+        if status == _run_outcome.STATUS_CANCELLED:
+            return
+        from .agents import outcome as _oc
+
+        word = {
+            _run_outcome.STATUS_OK: _oc.WORD_DONE,
+            _run_outcome.STATUS_NEEDS_YOU: _oc.WORD_NEEDS_YOU,
+            _run_outcome.STATUS_PARTIAL: _oc.WORD_PART_FAILED,
+            _run_outcome.STATUS_DID_NOTHING: _oc.WORD_DID_NOTHING,
+            _run_outcome.STATUS_SKIPPED: "Skipped",
+        }.get(status, _oc.WORD_FAILED)
+        report = {
+            "kind": "schedule",
+            "name": task.name,
+            "id": task.id,
+            "href": "/schedules",
+            "outcome": word,
+            "words": detail,
+            "key": f"schedule:{task.id}:{fire_key}",
+        }
+        try:
+            await asyncio.to_thread(_cd.report_to_chat, platform, chat, report)
+        except Exception:  # noqa: BLE001 — the row is the record
+            _log.warning("schedule %r could not report to its chat", task.name, exc_info=True)
+
     async def _dispatch_scheduled(task, payload: dict, fired: dict) -> str:
         """Run one fire; returns the human detail. ``fired['session_id']`` is
         set as soon as a task-kind session exists so a mid-run failure still
@@ -2440,6 +2506,13 @@ def build_platform(
             if knob["workspace_root"]:
                 # Only a run that ASKED for a folder has its rules file read.
                 fire_options["folder_rules"] = True
+            # Idea 39 (39-a): a schedule set up from a chat REPORTS there. The
+            # run carries the chat (its asks show in that chat, ``run_place``)
+            # and the schedule as its source, so the run's own ending writes
+            # the report (``chat_delivery.line_for_session``), durable through
+            # the finalizers and the boot reconcile. A chat set to Local only
+            # runs its schedule Local only.
+            fire_options.update(await asyncio.to_thread(_schedule_report_options, task))
             session = await platform.orchestrator.create_session(
                 prompt,
                 agent_type,
@@ -2754,6 +2827,10 @@ def build_platform(
         async def _fire():
             payload = json.loads(task.payload_json or "{}")
             fired: dict = {"session_id": "", "outcome": ""}
+            # Idea 39 (39-a): this fire's name in its chat report's repeat key.
+            from .core.ids import utcnow as _utcnow
+
+            fire_key = _utcnow().isoformat()
             # EMERGENCY STOP (v1.351.0, G13): a due schedule does not start,
             # whatever its kind (a task, a workflow, an event, a goal), and
             # its row says why. Nothing is delivered — the user turned the
@@ -2844,6 +2921,7 @@ def build_platform(
                 _deliver_outcome(
                     task, payload, "error", detail, bell_says=_bell_says(fired, "error")
                 )
+                await _schedule_report(task, "error", detail, fired, fire_key)
                 return
             status = _run_outcome.fire_status(fired.get("outcome"))
             _record_outcome(task.name, status, detail, fired["session_id"])
@@ -2852,6 +2930,7 @@ def build_platform(
                     task, payload, status, detail, bell_says=_bell_says(fired, status),
                     asked=str(fired.get("asked") or ""),
                 )
+                await _schedule_report(task, status, detail, fired, fire_key)
 
         return _fire()
 
@@ -3127,6 +3206,8 @@ def build_platform(
     # default install + tests see zero new behaviour. A fired Sentinel never spawns
     # a session — execution still flows through the autonomy dial + budget + approval.
     platform.sentinels = SentinelService(engine)
+    # Idea 39 (39-a): a watcher's chat report announces itself on the bus.
+    platform.sentinels.event_bus = getattr(platform, "event_bus", None)
     for tool in sentinel_tools(platform):
         platform.registry.register(tool)
 
