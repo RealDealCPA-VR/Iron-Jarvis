@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.546.0 (2026-11-19).*
+holds itself to. Current as of v1.546.1 (2026-11-19).*
 
 ---
 
@@ -2052,7 +2052,7 @@ Jarvis cannot take files sent from your phone yet.
   email with an attachment, no subject and no text) is answered with one
   sentence: "I can't take files here yet, so I couldn't use the file you
   sent. Send your request as text, or use the desktop app for files."
-  Nothing else runs.
+  Jarvis answers nothing else.
 - **A message with words and a file**: that sentence comes first ("… so I
   read your message but not the file you sent"), then Jarvis answers your
   words as it always has (for email, the subject and the text). Before,
@@ -2064,9 +2064,9 @@ Jarvis cannot take files sent from your phone yet.
 - In Slack the sentence goes where the answer goes: your direct messages,
   the thread under your message in the destination's own channel, or, for an
   @mention in another channel, your direct messages. Such a mention is now
-  always answered; before, it could go unanswered depending on the order in
-  which Slack delivered it. A file posted in another channel without an
-  @mention is left alone, as before.
+  answered whichever way Slack delivers it; before, it could go unanswered
+  depending on the order in which Slack delivered it. A file posted in
+  another channel without an @mention is left alone, as before.
 - It comes only when someone on the destination's allowlist sent the file
   (for email, only a sender your mail provider vouched for), and like every
   email answer it goes to the destination's email address. A picture inside
