@@ -510,13 +510,18 @@ def register(app: FastAPI, d) -> None:
         return p
 
     @app.get("/documents/preview")
-    def document_preview(path: str, sheet: str = "") -> dict[str, Any]:
+    def document_preview(path: str, sheet: str = "", start: int = 1) -> dict[str, Any]:
         """Structured preview of ONE document: spreadsheets as sheet tabs +
         rows (engine-read, capped), PDFs as an embed pointer (the client
-        iframes /documents/file), everything else as extracted text."""
+        iframes /documents/file), everything else as extracted text.
+
+        ``start`` (v1.547.0, idea 30-a): a sheet's rows from this row on, so
+        a figure's cell past the first 80 rows can be shown lit (the answer
+        says ``first_row``)."""
         p = _preview_path(path)
         suffix = p.suffix.lower()
         base: dict[str, Any] = {"name": p.name, "path": str(p), "suffix": suffix}
+        first = max(1, int(start or 1))
         if suffix in (".xlsx", ".xlsm"):
             from openpyxl import load_workbook
 
@@ -525,8 +530,8 @@ def register(app: FastAPI, d) -> None:
                 names = list(wb.sheetnames)
                 ws = wb[sheet] if sheet and sheet in names else wb.active
                 rows: list[list[str]] = []
-                truncated = False
-                for i, row in enumerate(ws.iter_rows(values_only=True)):
+                truncated = first > 1
+                for i, row in enumerate(ws.iter_rows(values_only=True, min_row=first)):
                     if i >= 80:
                         truncated = True
                         break
@@ -552,7 +557,7 @@ def register(app: FastAPI, d) -> None:
                     status_code=422, detail=plain_failure("That workbook could not be read.", exc)
                 )
             out = {**base, "kind": "sheet", "sheets": names, "sheet": title,
-                   "rows": rows, "truncated": truncated}
+                   "rows": rows, "truncated": truncated, "first_row": first}
             if total_rows is not None:  # read-only mode may lack dimensions
                 out["total_rows"] = int(total_rows)
             if total_cols is not None:
@@ -569,7 +574,7 @@ def register(app: FastAPI, d) -> None:
 
             delim = "\t" if suffix == ".tsv" else ","
             rows = []
-            truncated = False
+            truncated = first > 1
             total_rows = 0
             total_cols = 0
             try:
@@ -577,6 +582,8 @@ def register(app: FastAPI, d) -> None:
                     for row in _csv.reader(fh, delimiter=delim):
                         total_rows += 1  # real count — full iteration is cheap
                         total_cols = max(total_cols, len(row))
+                        if total_rows < first:
+                            continue
                         if len(rows) >= 80:
                             truncated = True
                             continue
@@ -592,7 +599,7 @@ def register(app: FastAPI, d) -> None:
                 # process-global state shared with every other csv consumer.
                 raise HTTPException(status_code=422, detail=plain_failure("That file could not be read.", exc))
             return {**base, "kind": "sheet", "sheets": ["CSV"], "sheet": "CSV",
-                    "rows": rows, "truncated": truncated,
+                    "rows": rows, "truncated": truncated, "first_row": first,
                     "total_rows": total_rows, "total_cols": total_cols}
         if suffix == ".docx":
             # WORD-FAITHFUL preview: semantic docx→HTML (headings, bold/italic,
@@ -656,6 +663,97 @@ def register(app: FastAPI, d) -> None:
         )
         return FileResponse(str(p), media_type=media, filename=p.name,
                             content_disposition_type=disposition)
+
+    @app.get("/documents/page-image")
+    def document_page_image(path: str = "", page: int = 0, find: str = "", fig: str = "",
+                            mark: str = ""):
+        """v1.547.0 (idea 30-a): page ``page`` of a PDF as a picture, with the
+        line ``find`` (a figure's recorded line) boxed and ``fig`` lit. When
+        the line is not on the page, the page comes back with the line
+        printed above it and words saying so (``X-Line-Found: 0``). The read
+        gate first; ``?token=`` like ``/documents/file`` (an <img> sends no
+        header). Sync: FastAPI runs it on the threadpool.
+
+        ``mark`` (what the page uses): a figure's record id instead of the
+        path, page, line and figure, so no line of a client's file rides a
+        web address (or the access log)."""
+        import re as _re
+
+        from fastapi.responses import Response
+
+        from ...documents import source_store as _marks
+        from ...documents.ocr import is_pdf_file
+        from ...documents.page_image import NoSuchPage, render_page
+
+        if mark:
+            if not _re.fullmatch(r"src_[0-9a-f]{8,32}", mark):
+                raise HTTPException(status_code=400, detail="That is not a figure link.")
+            found = _marks.get_marks(d.platform.engine, [mark])
+            if not found:
+                raise HTTPException(status_code=404, detail="No record of where this came from.")
+            rec = found[0]
+            path, find, fig = rec["path"], rec["context"], rec["shown"]
+            try:
+                page = int((rec.get("locator") or {}).get("page") or 0)
+            except (TypeError, ValueError):
+                page = 0
+            if page < 1:
+                raise HTTPException(status_code=422, detail="That figure was not read from a PDF page.")
+        p = _preview_path(path)
+        if not is_pdf_file(p):
+            raise HTTPException(status_code=415, detail=f"{p.name} is not a PDF.")
+        try:
+            png, found = render_page(p, int(page), find=(find or "")[:600], fig=(fig or "")[:60])
+        except NoSuchPage:
+            raise HTTPException(status_code=404, detail=f"{p.name} has no page {page}.")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=plain_failure("That page could not be drawn.", exc))
+        return Response(
+            content=png, media_type="image/png",
+            headers={"X-Line-Found": "1" if found else "0", "Cache-Control": "no-store"},
+        )
+
+    @app.get("/sources/{ids}")
+    def figure_sources(ids: str) -> dict[str, Any]:
+        """v1.547.0 (idea 30-a): where the figures a reply links were read —
+        ``ids`` is a link's ``<id>[,<id>…]``. Each mark says its file, its
+        place, the figure as the file writes it and the line it sat on
+        (secret-masked), and whether the file is still there and unchanged
+        (``present`` / ``changed``, only for a file the read policy allows).
+        Sync: FastAPI runs it on the threadpool."""
+        import re as _re
+
+        from ...documents import source_store as _marks
+        from ...documents.sources import file_hash
+
+        wanted = [i.strip() for i in (ids or "").split(",") if i.strip()]
+        if not wanted or len(wanted) > _marks.MAX_LOOKUP or any(
+            not _re.fullmatch(r"src_[0-9a-f]{8,32}", i) for i in wanted
+        ):
+            raise HTTPException(status_code=400, detail="Those are not figure links.")
+        marks = _marks.get_marks(d.platform.engine, wanted)
+        if not marks:
+            raise HTTPException(status_code=404, detail="No record of where this came from.")
+        hashes: dict[str, str] = {}
+        for m in marks:
+            m["name"] = Path(m["path"]).name
+            from ...core.fs_policy import is_protected_path
+
+            ok, _why = fs_read_ok(m["path"]) if m["path"] else (False, "")
+            ok = bool(ok) and not is_protected_path(m["path"])
+            if not ok:
+                m["context"] = ""  # the read policy says no now: not even the line
+            present = bool(ok) and Path(m["path"]).is_file()
+            m["present"] = present
+            m["changed"] = None
+            if present and m.get("file_sha256"):
+                if m["path"] not in hashes:
+                    hashes[m["path"]] = file_hash(m["path"])
+                now = hashes[m["path"]]
+                m["changed"] = bool(now) and now != m["file_sha256"]
+            for private in ("file_sha256", "thread_id", "turn_id"):
+                m.pop(private, None)
+        return {"marks": marks}
 
     @app.post("/documents/open")
     def document_open(body: DocumentOpenBody) -> dict[str, Any]:

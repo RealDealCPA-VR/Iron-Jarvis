@@ -264,6 +264,7 @@ _LATE_MODEL_MODULES = (
     "..workmap.models",       # WorkEntry — the work record: what was done, in which folder (v1.491.0)
     "..peers.models",         # PeerRecord — another computer paired with this one (v1.497.0)
     "..daemon.chat_append",   # ChatOlderMessage — a chat's messages past the live window (v1.499.3)
+    "..documents.source_store",  # SourceMark — where each figure a chat read sits (v1.547.0)
 )
 
 

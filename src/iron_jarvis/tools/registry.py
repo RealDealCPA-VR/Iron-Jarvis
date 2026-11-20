@@ -720,6 +720,15 @@ def risk_value(tool: "Tool | None") -> str | None:
 #: unreadable for the rest of the scope. So each entry records whether the call
 #: that produced it could OCR, and an OCR-capable tool never accepts an entry
 #: produced without that capability. See ``_ocr_capable``.
+def _source_map_of(result: "ToolResult | None") -> "dict[str, Any] | None":
+    """A successful reader's own map of its answer (v1.547.0, idea 30-a:
+    ``documents/sources``), or None."""
+    if result is None or not result.ok or not isinstance(result.data, dict):
+        return None
+    smap = result.data.get("source_map")
+    return smap if isinstance(smap, dict) else None
+
+
 CACHEABLE_READ_TOOLS: frozenset[str] = frozenset(
     {"read_file", "read_document", "extract_pdf"}
 )
@@ -1322,6 +1331,9 @@ class ToolRegistry:
                         ctx, name, args, decision.mode, ok=True,
                         output=cached.output, reversibility=rev_value,
                         grant_id=grant_id,
+                        # v1.547.0 (30-a): a remembered read is a read in
+                        # THIS turn too: its figures are recorded for it.
+                        source_map=_source_map_of(cached),
                     )
                     await ctx.event_bus.publish(
                         EventType.TOOL_EXECUTED,
@@ -1605,6 +1617,8 @@ class ToolRegistry:
                 risk=risk,
                 grant_id=grant_id,
                 inv_id=inv_id,
+                # v1.547.0 (idea 30-a): a reader's map of its own answer.
+                source_map=_source_map_of(result),
             )
         )
         self._interrupt_jobs.add(job)
@@ -1739,6 +1753,7 @@ class ToolRegistry:
         inv_id: str | None = None,
         undo_settle: str | None = None,
         replace_undo: bool = False,
+        source_map: "dict[str, Any] | None" = None,
     ) -> None:
         """The terminal row + ``tool.executed`` for a call that FINISHED.
 
@@ -1763,6 +1778,7 @@ class ToolRegistry:
             inv_id=inv_id,
             undo_settle=undo_settle,
             replace_undo=replace_undo,
+            source_map=source_map,
         )
         await ctx.event_bus.publish(
             EventType.TOOL_EXECUTED,
@@ -2243,9 +2259,16 @@ class ToolRegistry:
         inv_id: str | None = None,
         undo_settle: str | None = None,
         replace_undo: bool = False,
+        source_map: "dict[str, Any] | None" = None,
     ) -> str:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
         captured) and return the invocation id so the caller can tag its event.
+
+        v1.547.0 (idea 30-a): ``source_map`` — a reader's own map of its
+        answer (``ToolResult.data["source_map"]``). After the row is written,
+        on this same worker thread, the figures of the answer are recorded
+        for the chat turn (``documents/sources.record_marks``), never from a
+        model's argument. A failure there is logged; the call stands.
 
         SYNC; ``invoke`` hops every call through ``asyncio.to_thread`` (v1.226.0)
         so a per-tool-call write blocked behind a long writer (VACUUM) waits on
@@ -2403,4 +2426,13 @@ class ToolRegistry:
                 conn.execute(UndoJournal.__table__.insert(), journal)
         if dropped is not None:
             drop_preimages(ctx.config.home, dropped)
+        if ok and source_map:
+            # Only a chat turn's context carries the turn's record;
+            # `record_marks` writes nothing without one.
+            try:
+                from ..documents.sources import record_marks
+
+                record_marks(ctx, output, source_map, inv_id)
+            except Exception:  # noqa: BLE001 — a figure's record never fails a read
+                _log.warning("could not record the figures %s read", name, exc_info=True)
         return inv_id

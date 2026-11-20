@@ -59,6 +59,24 @@ def _truncate(text: str) -> tuple[str, bool]:
     return text[:_MAX_OUTPUT] + note, True
 
 
+def _source_map(path: Path, raw: str, text: str, layout: dict, note: str, lead: str) -> dict:
+    """``{"source_map": …}`` for a read's data (v1.547.0, idea 30-a): where
+    the file's own text sits in the answer (after ``lead``, at most
+    ``_MAX_OUTPUT`` characters of it) and where its pages, paragraphs or rows
+    start. ``{}`` when the place of a figure cannot be told. Never raises: a
+    map is never worth a failed read."""
+    try:
+        from .sources import source_map_for
+
+        smap = source_map_for(
+            path, raw, text, layout, note=note, start=len(lead),
+            shown=min(len(text), _MAX_OUTPUT),
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    return {"source_map": smap} if smap else {}
+
+
 #: What a caller is told when it asked for PAGES of a document whose text is
 #: pixels. OCR transcribes pages 1..cap of the WHOLE document, so honouring the
 #: request was never on offer — and doing it silently meant `page_range="3"` on
@@ -293,15 +311,18 @@ class ReadDocumentTool(Tool):
         path, (allowed, reason) = await asyncio.to_thread(_gate)
         if not allowed:
             return ToolResult(ok=False, error=reason)
+        layout: dict[str, Any] = {}
         try:
             text = await asyncio.to_thread(  # CPU-bound parse off the loop
                 extract_text,
                 path,
                 page_range=args.get("page_range"),
                 sheet=args.get("sheet"),
+                layout=layout,
             )
         except Exception as exc:  # reading real files must never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        raw = text
         # SCANNED fallback: image-only pages (and raster images) have no text
         # layer — recover via vision OCR (never the mock; the note names the
         # method) instead of handing the model empty silence about a real
@@ -317,7 +338,9 @@ class ReadDocumentTool(Tool):
             # with every line in one column.
             note = CSV_SHOWN_NOTE
         out, truncated = _truncate(text)
+        lead = ""
         if note:
+            lead = f"[{note}]\n" if out.strip() else ""
             out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
         return ToolResult(
             ok=True,
@@ -327,6 +350,7 @@ class ReadDocumentTool(Tool):
                 "chars": len(text),
                 "truncated": truncated,
                 **({"note": note} if note else {}),
+                **_source_map(path, raw, text, layout, note, lead),
             },
         )
 
@@ -579,18 +603,22 @@ class ExtractPdfTool(Tool):
         # which of two interchangeable tools the model happened to name.
         if not await asyncio.to_thread(is_pdf_file, path):
             return ToolResult(ok=False, error=f"not a PDF file: {args['path']}")
+        layout: dict[str, Any] = {}
         try:
             text = await asyncio.to_thread(  # CPU-bound parse off the loop
-                extract_text, path, page_range=args.get("page_range")
+                extract_text, path, page_range=args.get("page_range"), layout=layout,
             )
         except Exception as exc:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        raw = text
         text, note = await _with_ocr(
             path, text, self._router_resolver, ctx,
             page_range=args.get("page_range"),
         )
         out, truncated = _truncate(text)
+        lead = ""
         if note:
+            lead = f"[{note}]\n" if out.strip() else ""
             out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
         return ToolResult(
             ok=True,
@@ -600,6 +628,7 @@ class ExtractPdfTool(Tool):
                 "chars": len(text),
                 "truncated": truncated,
                 **({"note": note} if note else {}),
+                **_source_map(path, raw, text, layout, note, lead),
             },
         )
 

@@ -2042,6 +2042,52 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Press a figure to see where it came from (v1.547.0)
+
+When a reply is about a file you gave Iron Jarvis or asked it to read (a
+PDF, a Word file, a text or CSV file, or a saved spreadsheet), the figures
+in the reply are now links. Press "48,210" and the file opens beside the
+chat at the place it was read from: the PDF page drawn as a picture with
+that line boxed, the spreadsheet with that cell lit, the text file with that
+line lit, the Word page with the figure lit. Above it, **How this was worked
+out** says where in words ("Read from page 7, line 3 of statement.pdf.") and
+shows the line with the figure lit. On a phone the file opens over the chat;
+close it to come back.
+
+**Where the links come from.** Iron Jarvis keeps its own record of every
+figure it reads from a file in a chat, at the moment it reads it: the file,
+the page and line (or paragraph, table cell, sheet cell or line), and the
+line it sat on. A link is made only from that record, never from what the
+model wrote. A link the model wrote itself is turned back into plain words.
+
+**A figure with no record** has a faint dotted line. Pressing it says: "No
+record of where this came from: Jarvis worked it out or wrote it itself."
+That is a figure that is in nothing Iron Jarvis read or was given in that
+reply's turn: a total it added up, a rounded figure ("about 48.2k"), or one
+it should not have written. A figure that came from somewhere without a
+recorded place (a web page, an e-mail, your own message) is left as plain
+text.
+
+**When a value is in several places,** pressing it lists them ("In 2 places:
+statement.pdf, page 7, line 3 · budget.xlsx, cell B2 on Summary") and you
+pick one.
+
+**Good to know.**
+
+- Only replies to a turn that read a file get links. An ordinary chat is
+  unchanged, and so is anything in code, links and web addresses.
+- Small numbers, years and dates are not figures (a number under 100 counts
+  only with a currency sign, a percent sign or decimals).
+- If the file has changed since it was read, or is no longer there, the
+  press says so.
+- The record stays on this PC and is deleted with its chat. A sum or an
+  average Iron Jarvis works out is not linked yet; a figure from an agent run
+  and the figures in a document Iron Jarvis writes are not linked yet.
+- **Copy message** copies the words without the links, and a reply sent to
+  your phone has no links.
+- A scanned PDF that was only partly transcribed (its other pages kept their
+  text) gets no links, because the place of a figure in it cannot be told.
+
 ## Slack and email say when they could not take a file (v1.546.1)
 
 A file you send Jarvis in Slack or by email now gets a plain answer that it

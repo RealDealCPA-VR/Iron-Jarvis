@@ -70,6 +70,7 @@ from typing import Any
 
 from sqlmodel import select
 
+from ..core import numbers as _numbers_mod
 from ..core.db import session_scope, storable_text
 from ..core.models import BUILD_SURFACE, ChatThreadRecord
 from . import collect, keys
@@ -302,24 +303,14 @@ def build_prompt(shown: str, files: list[str]) -> str:
 # --------------------------------------------------------------------------- #
 _LABEL_RX = re.compile(r"^(done|decided|open)\s*:\s*(.+)$", re.IGNORECASE)
 _LEAD_RX = re.compile(r"^[\s>*\-•\d.)]{0,6}")
-#: A number, with the scale written after it: a short one glued on ("25k",
-#: "15B"; "2 K-1 forms" is two K-1s, not two thousand), a word after a
-#: space or hyphen ("2 million", "15-thousand", "15 grand"). A dot that starts a number after a space or a
-#: sign (".15", "$.15") makes it a decimal; after a letter ("no.4471") it is
-#: only punctuation. Linear: one pass, no overlapping starts.
-_NUMBER_RX = re.compile(
-    r"(?:(?<![\w.,])\.(\d+)|(\d+(?:[.,]\d+)*))"
-    r"(?:(k|mm|m|bn|b)\b|[\s\-]?(mil|mill|grand|thousands?|millions?|billions?|trillions?"
-    r"|hundreds?|lakhs?|crores?)\b)?",
-    re.IGNORECASE,
-)
-_THOUSANDS_RX = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?")
-_PLAIN_RX = re.compile(r"\d+(?:\.\d+)?")
-_SCALES = {
-    "k": "k", "thousand": "k", "grand": "k", "m": "m", "mm": "m", "mil": "m", "mill": "m",
-    "million": "m", "b": "b", "bn": "b", "billion": "b", "trillion": "t", "hundred": "h",
-    "lakh": "lakh", "crore": "crore",
-}
+#: How a number is read and compared lives in ``core/numbers`` since
+#: v1.547.0 (idea 30-a): the figure links in a reply read numbers the same
+#: way ("1,234.50" is "1234.5"; "25k" is not "25"). The names below are the
+#: ones this module always used.
+_NUMBER_RX = _numbers_mod.NUMBER_RX
+_number_key = _numbers_mod.number_key
+_numbers = _numbers_mod.numbers
+figures_in = _numbers_mod.figures_in
 #: A count the conversation wrote as a word is on record as its digit too
 #: ("Two deposits" supports "2 deposits"). Never the other way round.
 _NUMBER_WORDS = {
@@ -347,31 +338,6 @@ _ABBREV_RX = re.compile(r"\w\.[A-Za-z]")
 _TOKEN_TRIM = ".,;:!?()[]{}<>*`\"'“”‘’„‚«»‹›「」"
 #: "a/r", "n/a", "and/or": two short words around one slash, not a path.
 _SHORT_SLASH_RX = re.compile(r"[a-z]{1,3}/[a-z]{1,3}")
-
-
-def _number_key(digits: str, scale: str = "") -> str:
-    """One number as it is compared: "1,234.50" and "1234.5" are the same;
-    anything written another way ("12,50", "9,99,999", "1.491.0") is only
-    itself. A scale ("k", "million") is part of the number."""
-    if _THOUSANDS_RX.fullmatch(digits):
-        digits = digits.replace(",", "")
-    if _PLAIN_RX.fullmatch(digits) and "." in digits:
-        digits = digits.rstrip("0").rstrip(".")
-    word = scale.lower() if scale else ""
-    tail = _SCALES.get(word) or _SCALES.get(word.rstrip("s"), "")
-    return f"{digits}~{tail}" if tail else digits
-
-
-def _numbers(text: str):
-    """``(key, as written)`` for every number of ``text``."""
-    for m in _NUMBER_RX.finditer(text):
-        digits = "0." + m.group(1) if m.group(1) else m.group(2)
-        yield _number_key(digits, m.group(3) or m.group(4) or ""), m.group(0)
-
-
-def figures_in(text: str) -> set[str]:
-    """Every number of ``text``, as it is compared (:func:`_number_key`)."""
-    return {key for key, _raw in _numbers(text)}
 
 
 def counts_in_words(text: str) -> set[str]:

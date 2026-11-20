@@ -53,6 +53,7 @@ PR that ships it.
 | A Jarvis-owned browser profile (phase 2) | **Jarvis browser** | managed browser, headless browser |
 | The thing you load into Chrome so Jarvis can reach it | **browser add-on** | chrome extension, browser extension |
 | A person or business the owner works for, known by its folders and confirmed by the owner (/clients, v1.499.0); a name Iron Jarvis noticed in the folders is only a suggestion until the owner says yes ("Is Hartleys a client?") | **client**; the page is **Clients**; the Memory section is **Your clients** | customer, account (never shown for a client; "customer" stays a search alias) |
+| Where a figure in a reply came from: the page and line, paragraph, cell or line of the file Iron Jarvis read it from (idea 30, v1.547.0). Pressing the figure opens the file there; a figure with no record has a faint dotted line and its press says "No record of where this came from: Jarvis worked it out or wrote it itself." | **How this was worked out** (the heading above the place); the place in words is "Read from page 7, line 3 of statement.pdf." | provenance |
 
 Two-way is a per-destination *upgrade*, not a new noun (decided in the
 messaging plan, shipped v1.136.0): the toggle that creates one reads

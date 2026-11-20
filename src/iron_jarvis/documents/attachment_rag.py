@@ -137,6 +137,8 @@ def honest_scan_note(base: str, *, image: bool = False, text: str = "") -> str:
 class Chunk:
     ref: str
     text: str
+    #: Where the chunk starts in the text it was cut from (v1.547.0, 30-a).
+    start: int = 0
 
 
 @dataclass
@@ -154,6 +156,10 @@ class Extraction:
     #: subtracts these from a per-turn budget so four scans cannot silently
     #: become forty vision calls.
     ocr_pages: int = 0
+    #: v1.547.0 (30-a): where the reader's pages / paragraphs / rows start in
+    #: ``raw`` (``readers.extract_text``'s ``layout``), and ``raw`` itself.
+    layout: "dict | None" = None
+    raw: str = ""
 
 
 def pdf_text_with_pages(path: "str | Path") -> str:
@@ -175,9 +181,11 @@ def pdf_text_with_pages(path: "str | Path") -> str:
     return "\n".join(parts)
 
 
-def extract_for_rag(path: "str | Path") -> str:
+def extract_for_rag(path: "str | Path", *, layout: "dict | None" = None) -> str:
     """Full text of *path* for retrieval: PDFs page-marked, everything else via
-    the standard reader (which handles docx/xlsx/pptx/csv/txt/encodings)."""
+    the standard reader (which handles docx/xlsx/pptx/csv/txt/encodings).
+    ``layout`` (v1.547.0, optional): see ``readers.extract_text``; a PDF's
+    ``[page N]`` marks are its layout."""
     p = Path(path)
     if p.suffix.lower() == ".pdf":
         try:
@@ -186,7 +194,7 @@ def extract_for_rag(path: "str | Path") -> str:
             pass
     from .readers import extract_text
 
-    return extract_text(p)
+    return extract_text(p, layout=layout)
 
 
 def strip_page_marks(text: str) -> str:
@@ -294,7 +302,8 @@ async def extract_for_rag_async(
     ``config`` is threaded through for the cache home and the pinned vision
     role; with none in scope the transcription still runs, just uncached."""
     p = Path(path)
-    text = await asyncio.to_thread(extract_for_rag, p)
+    layout: dict = {}
+    text = await asyncio.to_thread(lambda: extract_for_rag(p, layout=layout))
     from .ocr import MAX_OCR_PAGES, OCR_MARK, is_image, ocr_document
 
     image = is_image(p)
@@ -303,7 +312,7 @@ async def extract_for_rag_async(
         # bytes; it carries its own disclosure banner inline.
         return Extraction(text=text, ocr_used=True)
     if not image and not await asyncio.to_thread(is_scan_candidate, p, text):
-        return Extraction(text=text)
+        return Extraction(text=text, layout=layout, raw=text)
     # From here nothing in `text` is content: a scan's is page scaffolding, and
     # an image's is "[image BMP 800x600, mode RGB]" — a size sentinel that a
     # fact-extraction model reads as the document. Hand back nothing rather
@@ -364,7 +373,7 @@ def chunk_text(text: str, *, chunk_chars: int = CHUNK_CHARS,
             ref = f"p.{inside[0]}"
         else:
             ref = f"part {part}"
-        chunks.append(Chunk(ref=ref, text=piece))
+        chunks.append(Chunk(ref=ref, text=piece, start=pos))
         if pos + chunk_chars >= len(text):
             break
         pos += chunk_chars - overlap
@@ -415,7 +424,8 @@ def retrieve(embedder, chunks: list[Chunk], query: str, k: int = 6) -> list[Chun
 
 
 def rag_block(name: str, text: str, query: str, embedder, *,
-              k: int = 6, char_budget: int = 2400, note: str = "") -> str:
+              k: int = 6, char_budget: int = 2400, note: str = "",
+              shown_out: "list | None" = None) -> str:
     """An HONEST retrieval block for one oversized attachment: what the doc is,
     what was retrieved (with refs), what was not, and how to reach the rest.
 
@@ -428,11 +438,16 @@ def rag_block(name: str, text: str, query: str, embedder, *,
     v1.298.0: ``text`` is SCANNED for prompt injection before it is chunked
     (``core/promptguard``, source "attachment <name>") — a flagged paragraph is
     a ``[BLOCKED: …]`` placeholder in the index, never a retrievable excerpt.
-    No cap here: ``MAX_CHUNKS`` already bounds what is indexed."""
+    No cap here: ``MAX_CHUNKS`` already bounds what is indexed.
+
+    ``shown_out`` (v1.547.0, idea 30-a; optional): a list that receives the
+    text that was indexed and the ``(start, end)`` stretches of it the block
+    shows, so the figures in those excerpts (and only those) are recorded."""
     from ..core.promptguard import guard
 
     text = guard(text, source=f"attachment {name}", cap=None)
     chunks = chunk_text(text)
+    spans: list[tuple[int, int]] = []
     capped = len(text) > 0 and (len(chunks) >= MAX_CHUNKS)
     top = retrieve(embedder, chunks, query, k=k)
     lines = [
@@ -449,6 +464,8 @@ def rag_block(name: str, text: str, query: str, embedder, *,
         room = char_budget - used
         if room <= 80:
             break
+        lead = len(ch.text) - len(ch.text.lstrip())
+        spans.append((ch.start + lead, ch.start + lead + min(len(body), room)))
         if len(body) > room:
             body = body[:room] + " […]"
         lines.append(f"\n[{ch.ref}] {body}")
@@ -463,6 +480,8 @@ def rag_block(name: str, text: str, query: str, embedder, *,
         + ". For other parts, use read_document with page_range, or"
         " excel_profile/excel_query for spreadsheets.)"
     )
+    if shown_out is not None:
+        shown_out.extend([text, spans])
     return "".join(lines)
 
 

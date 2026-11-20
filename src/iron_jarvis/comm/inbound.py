@@ -1411,7 +1411,11 @@ class InboundPoller:
             # PENDING PROMPTS: a free-form message never resolves an open gate
             # (see comm/prompts.py) — instead the OUTBOUND copy carries a
             # gentle reminder. The thread keeps the clean reply only.
-            outbound = reply + self._pending_reminder(name, msg.sender_id)
+            # v1.547.0 (idea 30-a): the saved chat keeps a figure's link to
+            # where it was read; the phone gets the words only.
+            from ..documents.sources import without_figure_links
+
+            outbound = without_figure_links(reply) + self._pending_reminder(name, msg.sender_id)
             sent = await self.send_chunked(ch, outbound, chat_id=msg.reply_to)
             return {"channel": name, "status": "chat", "thread_id": tid, "sent": sent}
 

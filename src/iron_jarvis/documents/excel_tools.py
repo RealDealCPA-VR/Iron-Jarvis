@@ -185,7 +185,32 @@ class ExcelReadTool(Tool):
             return ToolResult(ok=False, error=_open_error(exc, path))
         import json
 
-        return ToolResult(ok=True, output=json.dumps(data, ensure_ascii=False), data=data)
+        output = json.dumps(data, ensure_ascii=False)
+        # v1.547.0 (30-a): where each figure of the block sits, AFTER the
+        # answer is written (the model's answer is unchanged).
+        if path.suffix.lower() != ".xls" and data.get("rows") and not args.get("include_formulas"):
+            smap = await asyncio.to_thread(_read_cells_map, path, data, args.get("range"))
+            if smap:
+                data = {**data, "source_map": smap}
+        return ToolResult(ok=True, output=output, data=data)
+
+
+def _read_cells_map(path: Path, data: dict[str, Any], cell_range: "str | None") -> "dict | None":
+    """The ``cells`` map of an ``excel_read`` block (v1.547.0). Never raises."""
+    try:
+        from openpyxl.utils import range_boundaries
+
+        from .sources import cells_map, grid_entries
+
+        first_col, first_row = 1, 1
+        if cell_range:
+            first_col, first_row, _c, _r = range_boundaries(str(cell_range))
+        return cells_map(path, grid_entries(
+            str(data.get("sheet") or ""), data.get("rows") or [],
+            first_row=int(first_row or 1), first_col=int(first_col or 1),
+        ))
+    except Exception:  # noqa: BLE001 — a map is never worth a failed read
+        return None
 
 
 def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
@@ -580,6 +605,32 @@ def _load_table(path: Path, sheet: "str | None") -> tuple[str, list[str], list[l
     return title, headers, rows, truncated
 
 
+def _query_cells(path: Path, sheet: str, headers: list[str], rows: "list[tuple[int, list[Any]]]",
+                 *, only_col: int = -1) -> dict[str, Any]:
+    """``{"source_map": …}`` for the cells an ``excel_query`` answer shows
+    (v1.547.0, idea 30-a): ``rows`` are ``(row number, values)``; with
+    ``only_col``, just that column. ``{}`` when none holds a figure."""
+    try:
+        from .sources import cell_entry, cells_map
+
+        entries = []
+        for row_no, values in rows:
+            label = next((_cell_str(v).strip() for v in values
+                          if isinstance(v, str) and v.strip()), "")
+            for j, value in enumerate(values):
+                if only_col >= 0 and j != only_col:
+                    continue
+                entries.append(cell_entry(
+                    sheet, row_no, j + 1, value,
+                    header=headers[j] if j < len(headers) else "",
+                    label=label if not (isinstance(value, str) and value.strip() == label) else "",
+                ))
+        smap = cells_map(path, entries)
+    except Exception:  # noqa: BLE001 — a map is never worth a failed query
+        return {}
+    return {"source_map": smap} if smap else {}
+
+
 def _shown(v: Any) -> str:
     """A worked-out result as it is reported back."""
     if isinstance(v, bool):
@@ -833,8 +884,14 @@ class ExcelQueryTool(Tool):
             missing = (len(recalc.failed) + recalc.skipped) if recalc else 0
             worked = recalc.computed if recalc else 0
             conds = [c for c in (args.get("where") or []) if isinstance(c, dict)]
+            # v1.547.0 (30-a): each data row's own row number in the sheet
+            # (row 1 is the headings), kept through the filter.
+            row_nos = list(range(2, len(rows) + 2))
             if conds:
-                rows = [r for r in rows if all(_row_matches(r, c, headers) for c in conds)]
+                kept = [(n, r) for n, r in zip(row_nos, rows)
+                        if all(_row_matches(r, c, headers) for c in conds)]
+                row_nos = [n for n, _r in kept]
+                rows = [r for _n, r in kept]
 
             if op == "filter":
                 shown = rows[:limit]
@@ -848,10 +905,14 @@ class ExcelQueryTool(Tool):
                     out += FORMULAS_WORKED_OUT_NOTE.format(n=worked)
                 if missing:
                     out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
+                placed = await asyncio.to_thread(
+                    _query_cells, path, title, headers, list(zip(row_nos, shown)),
+                )
                 return ToolResult(ok=True, output=out, data={
                     "sheet": title, "matches": len(rows), "headers": headers,
                     "rows": [[_cell_str(v) for v in r] for r in shown],
                     "scan_truncated": truncated,
+                    **placed,
                 })
 
             if op == "group":
@@ -950,10 +1011,18 @@ class ExcelQueryTool(Tool):
                 out += FORMULAS_WORKED_OUT_NOTE.format(n=worked)
             if missing:
                 out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
+            # v1.547.0 (30-a): a smallest or largest value IS a cell the sheet
+            # holds (a sum or an average is worked out: idea 30-b).
+            placed: dict[str, Any] = {}
+            if op in ("min", "max"):
+                where = [(n, r) for n, r in zip(row_nos, rows)
+                         if _as_number(r[ci] if ci < len(r) else None) == value][:5]
+                placed = _query_cells(path, title, headers, where, only_col=ci)
             return ToolResult(ok=True, output=out, data={
                 "sheet": title, "op": op, "column": args.get("column"),
                 "value": value, "rows_considered": len(rows),
                 "numeric_values": len(nums), "scan_truncated": truncated,
+                **placed,
             })
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
