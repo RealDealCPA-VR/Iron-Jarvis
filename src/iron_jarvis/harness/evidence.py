@@ -13,9 +13,13 @@ takes pictures by itself only when :func:`takes` says so: the user's message
 asks ("show me it works", :func:`asks`), or the setting ``reply_pictures``
 ("Take before and after pictures by themselves") is on — and only for a turn
 a PERSON started, with a page open. Otherwise a reply that changed a screen
-file is only MARKED (``{"kind": "pictures", "screen": true, "items": []}``)
+file is only MARKED (``{"kind": "pictures", "screen": true, "items": []}``,
+with ``beforeNote``: the true reason it took none, :func:`no_before_words`)
 and the screen offers Show me under it, which takes the after picture then
-(:func:`take_after_now`). The setting starts not set (off) and Show me offers
+(:func:`take_after_now`). Show me pictures the page AS IT IS NOW, so it is
+offered only under the session's NEWEST reply, and never replaces an after
+picture a reply already has (the route ``routes/build_evidence`` refuses
+anything else in words). The setting starts not set (off) and Show me offers
 it once (:func:`offer_due`), naming its cost: an invisible browser twice per
 such reply.
 
@@ -105,6 +109,14 @@ NOT_ASKED_WORDS = (
     "No before picture: one is taken only when your message asks for it "
     "(\"show me it works\") or when pictures by themselves are on."
 )
+#: A turn that asked (or the setting is on) with no page open when it began.
+NO_PAGE_WORDS = "No before picture: no page was open in the Browser when the reply began."
+#: A turn Iron Jarvis started itself (the night, a "carry on" turn).
+STARTED_WORDS = "No before picture: Iron Jarvis started this reply itself, not a message of yours."
+#: A Show me press on a line that names no reason of its own (a copied line).
+PRESS_ONLY_WORDS = "No before picture: Show me takes only the after picture."
+#: A before picture the record names that is no longer on this PC.
+BEFORE_GONE_WORDS = "No before picture: the one taken then is no longer kept."
 BEFORE_SLOW_WORDS = "No before picture: the page did not answer in time."
 UNSEEN_WORDS = (
     "No before picture: the screen file was changed by a step Iron Jarvis does not take "
@@ -112,13 +124,19 @@ UNSEEN_WORDS = (
 )
 NO_BROWSER_WORDS = "there is no Microsoft Edge or Google Chrome on this PC"
 BRANCHED_WORDS = "This reply's pictures stay with the session it was branched from."
+#: Show me on a reply that already has its after picture: the one taken then
+#: is kept, never replaced by a picture of the page as it is now.
+HAS_AFTER_WORDS = "This reply already has its after picture, kept as it was taken."
 
 #: "show me it works", "show me that it works", "show me before and after",
-#: "before and after pictures" — linear, bounded, case-insensitive.
+#: "before and after pictures" — linear, bounded, case-insensitive. The last
+#: one names the pictures, never a thing to build ("add a before-and-after
+#: screenshots section" asks for a section, not for pictures of the page).
 _ASK_RX = re.compile(
     r"\bshow\s+me\s+(?:that\s+)?it\s+works\b"
     r"|\bshow\s+me\s+(?:the\s+)?before\s+and\s+after\b"
-    r"|\bbefore[\s-]+and[\s-]+after\s+(?:pictures?|screenshots?|shots?)\b",
+    r"|\bbefore[\s-]+and[\s-]+after\s+(?:pictures?|screenshots?|shots?)\b"
+    r"(?!\s+(?:section|slider|gallery|component|carousel|grid|block|view|page|panel|card|feature|module|widget)s?\b)",
     re.IGNORECASE,
 )
 #: How much of a message is read for the words.
@@ -130,6 +148,11 @@ _PATCH_PATH_RX = re.compile(r"^\*\*\*\s+(?:Add|Update|Delete)\s+File:\s*(.+?)\s*
 
 class PictureProblem(Exception):
     """A picture that could not be taken, in words."""
+
+
+class Refused(PictureProblem):
+    """Show me refused, nothing kept; the words are a whole sentence, said as
+    they are."""
 
 
 # --------------------------------------------------------------------------- #
@@ -150,13 +173,25 @@ def asks(text: Any) -> bool:
     return bool(_ASK_RX.search(str(text or "")[:ASK_SCAN_CHARS]))
 
 
+def no_before_words(setting: Any, text: Any, address: str, *, by_person: bool) -> str:
+    """Why this turn takes no before picture by itself, as the reply says it
+    ("" when it does take one: :func:`takes`). The true reason, in order: a
+    turn Iron Jarvis started; a message that did not ask with the setting not
+    on; no page open in the Browser when the reply began."""
+    if not by_person:
+        return STARTED_WORDS
+    if not (setting is True or asks(text)):
+        return NOT_ASKED_WORDS
+    if not address:
+        return NO_PAGE_WORDS
+    return ""
+
+
 def takes(setting: Any, text: Any, address: str, *, by_person: bool) -> bool:
     """Does this turn take its pictures by itself? Only with a page open, only
     for a turn a person started, and only when the message asks for them or
     the setting is ON (``True``; not set = off, decision D-27.1)."""
-    if not address or not by_person:
-        return False
-    return setting is True or asks(text)
+    return not no_before_words(setting, text, address, by_person=by_person)
 
 
 def written_paths(name: str, args: Any) -> list[str]:
@@ -203,7 +238,14 @@ class TurnEvidence:
     turn_id: str
     address: str = ""
     take: bool = False
+    #: Why the turn takes no before picture by itself (:func:`no_before_words`;
+    #: "" when it takes one, or when the caller named no reason).
+    why: str = ""
     screen: list[str] = field(default_factory=list)
+    #: Each screen file a write named, as it was on disk BEFORE that first
+    #: write (:func:`_fingerprint`): at the end, a file that is just as it was
+    #: (the write failed) is no change, so the reply is not marked for it.
+    seen: dict[str, Any] = field(default_factory=dict)
     before: "dict[str, Any] | None" = None
     before_note: str = ""
     tried_before: bool = False
@@ -213,12 +255,15 @@ class TurnEvidence:
 TURN: "ContextVar[TurnEvidence | None]" = ContextVar("ij_reply_evidence", default=None)
 
 
-def arm(home: Any, thread_id: str, turn_id: str, address: str, *, take: bool) -> "Token[TurnEvidence | None]":
+def arm(home: Any, thread_id: str, turn_id: str, address: str, *, take: bool,
+        why: str = "") -> "Token[TurnEvidence | None]":
     """Arm this turn's pictures (``address`` = the Browser's local address or
-    "" for none; ``take`` = :func:`takes`)."""
+    "" for none; ``take`` = :func:`takes`; ``why`` = :func:`no_before_words`,
+    the reason a turn that takes none says under Show me)."""
+    take = bool(take and address)
     return TURN.set(TurnEvidence(
         home=Path(home), thread_id=str(thread_id or ""), turn_id=str(turn_id or ""),
-        address=str(address or ""), take=bool(take and address),
+        address=str(address or ""), take=take, why="" if take else str(why or "")[:300],
     ))
 
 
@@ -233,6 +278,54 @@ def _note_screens(st: TurnEvidence, paths: list[str]) -> None:
     for p in paths:
         if p not in st.screen and len(st.screen) < 20:
             st.screen.append(p)
+
+
+#: A file whose state could not be read: counted as changed (never hides one).
+_UNKNOWN = ("?",)
+
+
+def _fingerprint(path: "Path | None") -> tuple[Any, ...]:
+    """BLOCKING (one stat): a file's state — ``(True, size, mtime_ns)``,
+    ``(False,)`` when there is none, :data:`_UNKNOWN` when it cannot be read
+    or the write named no place it can be found."""
+    if path is None:
+        return _UNKNOWN
+    try:
+        s = path.stat()
+        return (True, s.st_size, s.st_mtime_ns)
+    except FileNotFoundError:
+        return (False,)
+    except (OSError, ValueError):
+        return _UNKNOWN
+
+
+def _state_before(raw: str, workspace: Any) -> tuple[str, "Path | None", tuple[Any, ...]]:
+    """BLOCKING: ``(key, path, state)`` of a file a write names, BEFORE it
+    lands. The path is the tools' own reading (``tools/base.safe_path``: the
+    call's workspace, its refusals — another computer's path is never even
+    opened); one it refuses, or no workspace, gives no path and an unknown
+    state (counted as changed)."""
+    from ..tools.base import safe_path
+
+    if not workspace:
+        return raw, None, _UNKNOWN
+    try:
+        path = safe_path(Path(workspace), raw)
+    except Exception:  # noqa: BLE001 — the write itself says why it is refused
+        return raw, None, _UNKNOWN
+    return str(path), path, _fingerprint(path)
+
+
+def _changed_screens(st: TurnEvidence, documents: list[str]) -> list[str]:
+    """BLOCKING (a stat per file): the screen files the reply REALLY changed —
+    the ones its own results reported (``documents``), and each one a write
+    named whose state is no longer what it was before that write. A write
+    that failed leaves its file as it was: no change, so no mark."""
+    out = [d for d in documents if screen_file(d)]
+    for key, (path, was) in list(st.seen.items()):
+        if was == _UNKNOWN or _fingerprint(path) != was:
+            out.append(key)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -363,6 +456,15 @@ def _write_note(home: Any, thread_id: str, turn_id: str, note: str) -> None:
         (folder / "evidence.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 
+def _drop_reply(home: Any, thread_id: str, turn_id: str) -> None:
+    """BLOCKING: remove THIS turn's own folder (a before picture it took a
+    moment ago for a write that then failed: nothing names it, and it shows
+    no change that happened). Never raises."""
+    folder = reply_folder(home, thread_id, turn_id)
+    if folder is not None and folder.is_dir():
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 def prune(home: Any, thread_id: str, keep: int = KEEP_REPLIES) -> list[str]:
     """BLOCKING: keep the pictures of the session's newest ``keep`` replies
     (by when each was last saved); the older ones are removed. Never raises."""
@@ -477,11 +579,14 @@ def saved_record(raw: Any) -> "dict[str, Any] | None":
 # --------------------------------------------------------------------------- #
 
 
-async def before_write(name: str, args: Any) -> None:
+async def before_write(name: str, args: Any, workspace: Any = None) -> None:
     """The tool registry's hook, BEFORE a file write lands: the first write
     of a screen file in an armed turn waits for the before picture (at most
     :data:`BEFORE_WAIT_S`; then the write goes ahead and the record says
-    why). Cheap and silent when nothing is armed. Never raises (a Stop still
+    why). Each screen file's state before its first write is kept, so a
+    write that then fails is no change (:func:`_changed_screens`).
+    ``workspace``: the call's own folder (a relative path is under it).
+    Cheap and silent when nothing is armed. Never raises (a Stop still
     cancels)."""
     st = TURN.get()
     if st is None or name not in WRITERS:
@@ -493,6 +598,17 @@ async def before_write(name: str, args: Any) -> None:
     if not screens:
         return
     _note_screens(st, screens)
+    try:
+        for raw in screens:
+            if len(st.seen) >= 50:  # past 50 files: counted as changed, unread
+                st.seen.setdefault("*", (None, _UNKNOWN))
+                break
+            key, path, was = await asyncio.to_thread(_state_before, raw, workspace)
+            st.seen.setdefault(key, (path, was))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a hook never fails a write
+        log.warning("a screen file's state before a write could not be read", exc_info=True)
     if not (st.take and st.address):
         return
     # Every screen write waits here while the before is taken, so none lands
@@ -527,13 +643,21 @@ async def at_end(documents: Any = None) -> "dict[str, Any] | None":
         return None
     try:
         docs = [d for d in (documents or []) if isinstance(d, str)]
-        _note_screens(st, [d for d in docs if screen_file(d)])
-        if not st.screen:
-            return None
-        if not (st.take and st.address):
-            return {"kind": KIND, "screen": True, "items": [], "note": ""}
         async with st.lock:  # a before still being taken finishes first
             pass
+        if not await asyncio.to_thread(_changed_screens, st, docs):
+            # No screen file really changed (a write that failed leaves it as
+            # it was): no mark, no after. A before taken for that write shows
+            # nothing that happened, so it is not kept.
+            if st.before is not None:
+                await asyncio.to_thread(_drop_reply, st.home, st.thread_id, st.turn_id)
+            return None
+        if not (st.take and st.address):
+            mark: dict[str, Any] = {"kind": KIND, "screen": True, "items": [], "note": ""}
+            if st.why:
+                # The true reason there is no before picture, for Show me.
+                mark["beforeNote"] = st.why
+            return mark
         if not st.tried_before:
             st.before_note = UNSEEN_WORDS
         items = [st.before] if st.before else []
@@ -562,23 +686,43 @@ async def at_end(documents: Any = None) -> "dict[str, Any] | None":
         return None
 
 
+def has_after(raw: Any) -> bool:
+    """Does a reply line's ``evidence`` already hold its after picture?"""
+    rec = saved_record(raw)
+    return bool(rec and any(i["id"] == "after" for i in rec["items"]))
+
+
 async def take_after_now(home: Any, thread_id: str, turn_id: str, address: str,
-                         current: Any = None) -> dict[str, Any]:
+                         current: Any = None, *, still: Any = None) -> dict[str, Any]:
     """Show me: the after picture of ``address`` now, for reply ``turn_id``
-    (its before, when one was taken, is kept). Returns the reply line's new
-    ``evidence``. Raises :class:`PictureProblem` in words (nothing changed)."""
+    (its before, when one was taken, is kept). NEVER replaces an after
+    picture the reply already has (:data:`HAS_AFTER_WORDS`): that one shows
+    the page as the reply left it. ``still`` (optional, async, no
+    arguments): asked once the picture is taken and BEFORE it is kept — a
+    sentence back refuses it (:class:`Refused`) and nothing is kept (a reply
+    that started meanwhile). Returns the reply line's new ``evidence``.
+    Raises :class:`PictureProblem` in words (nothing changed)."""
     if reply_folder(home, thread_id, turn_id) is None:
         raise PictureProblem("that reply could not be named")
+    if has_after(current):
+        raise Refused(HAS_AFTER_WORDS)
     try:
         png, blocked = await asyncio.wait_for(_take(address, limit_s=PRESS_WAIT_S), PRESS_WAIT_S + 5)
     except (TimeoutError, asyncio.TimeoutError):
         raise PictureProblem("the page did not answer in time") from None
+    if still is not None:
+        words = await still()
+        if words:
+            raise Refused(str(words))
     after = await asyncio.to_thread(_save, home, thread_id, turn_id, "after", png, address, blocked)
     old = saved_record(current) or {}
     before = next((i for i in old.get("items") or [] if i.get("id") == "before"), None)
-    if before is not None and picture_file(home, thread_id, turn_id, "before") is None:
+    before_note = ""
+    if before is not None and await asyncio.to_thread(picture_file, home, thread_id, turn_id, "before") is None:
         before = None  # no longer kept: never shown as if it were
-    before_note = str(old.get("beforeNote") or "") or NOT_ASKED_WORDS
+        before_note = BEFORE_GONE_WORDS
+    if before is None and not before_note:
+        before_note = str(old.get("beforeNote") or "") or PRESS_ONLY_WORDS
     items = [before, after] if before else [after]
     rec = _record(items, before_note=before_note, folder=reply_folder(home, thread_id, turn_id))
     await asyncio.to_thread(_write_note, home, thread_id, turn_id, rec["note"])

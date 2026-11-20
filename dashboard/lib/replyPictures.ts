@@ -9,8 +9,9 @@
  * screen offers Show me (decision D-27.1: pictures only when you ask).
  *
  * "show me it works" typed alone in the session presses the same Show me as
- * the button under the newest reply that changed a screen (`isShowMeOnly`,
- * `requestShowMe`) — one press path, so the offer of the automatic setting is
+ * the button under the newest reply, when that reply changed a screen and has
+ * no after picture (`isShowMeOnly`, `showMeReply`, `requestShowMe`) — one
+ * press path, so the offer of the automatic setting is
  * made in one place. Typed with a task ("make it blue and show me it works"),
  * it is an ordinary message: the daemon reads the words and takes the before
  * and after itself.
@@ -113,14 +114,28 @@ export function isShowMeOnly(text: string): boolean {
   return flat.length > 0 && flat.length <= 60 && SHOW_ME_ONLY.test(flat);
 }
 
-/** The turn id of the newest reply that changed a screen (null when none). */
-export function newestScreenReply(messages: readonly { role?: string; turnId?: string; evidence?: unknown }[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const m = messages[i];
-    if (m.role !== "assistant") continue;
-    if (m.turnId && decodePictures(m.evidence)) return m.turnId;
-  }
-  return null;
+/** Is Show me offered under a reply? Only under the NEWEST reply (the page
+ *  is pictured as it is now: under an earlier reply it would show the later
+ *  replies' changes as that reply's own), only while the reply has no after
+ *  picture (the one it has shows the page as the reply left it, and is
+ *  kept), never in an archived session. The daemon refuses the same
+ *  (`routes/build_evidence.not_offered`). */
+export function showMeOffered(rec: ReplyPictures, at: { newest: boolean; archived: boolean }): boolean {
+  return at.newest && !at.archived && !rec.items.some((it) => it.id === "after");
+}
+
+/** The turn id of the reply "show me it works" typed alone presses: the
+ *  reply that ENDS the conversation (the daemon's own hidden "carry on"
+ *  questions aside), when it changed a screen and has no after picture yet;
+ *  null otherwise (the words are then an ordinary message). */
+export function showMeReply(
+  messages: readonly { role?: string; turnId?: string; evidence?: unknown; continuation?: unknown }[],
+): string | null {
+  const shown = messages.filter((m) => m.continuation !== true);
+  const last = shown[shown.length - 1];
+  if (!last || last.role !== "assistant" || !last.turnId) return null;
+  const rec = decodePictures(last.evidence);
+  return rec && showMeOffered(rec, { newest: true, archived: false }) ? last.turnId : null;
 }
 
 // ---- one press path: the typed words press the row's own Show me ----

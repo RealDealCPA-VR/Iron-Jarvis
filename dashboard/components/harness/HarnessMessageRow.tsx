@@ -569,9 +569,17 @@ function HarnessMessageRowImpl({
           }
         />
         {/* R2.15 (27-a): a reply that changed a screen file — its before
-            and after pictures, or Show me (only when you ask). */}
+            and after pictures, or Show me (only when you ask, and only
+            under the newest reply: it pictures the page as it is now). */}
         {m.turnId && m.evidence ? (
-          <ReplyPictures raw={m.evidence} threadId={threadId} turnId={m.turnId} busy={busy} archived={archived} />
+          <ReplyPictures
+            raw={m.evidence}
+            threadId={threadId}
+            turnId={m.turnId}
+            busy={busy}
+            archived={archived}
+            newest={newest}
+          />
         ) : null}
         {/* v1.414.0: a repeated correction, offered as a standing
             preference — the chat's own quiet Keep · Edit · Not this

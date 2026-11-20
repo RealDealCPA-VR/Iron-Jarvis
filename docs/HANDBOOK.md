@@ -2057,9 +2057,12 @@ starts an invisible browser on this PC. There are three ways:
 - **Say it in your message**: "make the button blue and show me it works".
   Iron Jarvis then takes the before picture just before the reply first
   changes a screen file, and the after picture when the reply ends.
-- **Press Show me** under a reply that changed a screen file. It takes the
-  after picture now (there is no before picture then, and the reply says so).
-  Typing just "show me it works" in the box does the same.
+- **Press Show me** under the newest reply, when it changed a screen file. It
+  takes the after picture now (there is no before picture then, and the reply
+  says why). Typing just "show me it works" in the box does the same. It
+  pictures the page as it is now, so it is not offered under an earlier reply
+  (the picture would show later changes as that reply's own), and a reply
+  that already has its after picture keeps the one taken then.
 - **Turn on Take before and after pictures by themselves** (Settings ›
   Agents & automation, or ask in chat). Then every reply that changes a
   screen file gets both pictures, which starts an invisible browser twice per
@@ -2090,7 +2093,10 @@ without a before picture.
   archived session.
 - A screen file changed only by a command (a build script, for example),
   not by Iron Jarvis's own file edits, is not noticed: such a reply has no
-  pictures and no Show me.
+  pictures and no Show me. A change that did not land (the edit failed)
+  is no change either.
+- A reply Iron Jarvis started itself (a night task, a "carry on") takes no
+  pictures by itself; Show me under it still works.
 
 ## Rewind works in folders without git too (v1.546.0)
 
