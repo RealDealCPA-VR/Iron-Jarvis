@@ -152,6 +152,10 @@ LINE_KEYS: tuple[str, ...] = (
     # (``harness/finish.saved_record``: tests, command, removed, kept,
     # points, unmet, after[, why]) — the work line's "Checked: …".
     "finish",
+    # R2.15 (27-a): on a reply that changed a screen file, its before and
+    # after pictures ({kind: "pictures", screen, items, note, ...};
+    # ``harness/evidence.saved_record``) — or only the mark, for Show me.
+    "evidence",
     # v1.390.0 (the Timeline): on a reply, each billed model call — its
     # start (ms from the reply's start), length, provider, model and usage in
     # the receipt's shape — plus the call in flight when it ended

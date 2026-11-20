@@ -2042,6 +2042,56 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Before and after pictures under a coding reply
+
+When a reply in a coding session (Chat › Code) changes how a page looks, you
+can see it: two pictures under the reply, the page **Before** the change and
+**After** it, each with the page's address and the time. Press one to see it
+full screen; Left and Right move between the two. Iron Jarvis takes the
+pictures itself, from the page really running, so they show what happened,
+not what the reply says happened.
+
+**Only when you ask.** Nothing is taken unless you ask, because each picture
+starts an invisible browser on this PC. There are three ways:
+
+- **Say it in your message**: "make the button blue and show me it works".
+  Iron Jarvis then takes the before picture just before the reply first
+  changes a screen file, and the after picture when the reply ends.
+- **Press Show me** under a reply that changed a screen file. It takes the
+  after picture now (there is no before picture then, and the reply says so).
+  Typing just "show me it works" in the box does the same.
+- **Turn on Take before and after pictures by themselves** (Settings ›
+  Agents & automation, or ask in chat). Then every reply that changes a
+  screen file gets both pictures, which starts an invisible browser twice per
+  such reply. The first time you press Show me, Iron Jarvis offers this once.
+
+You need the page open in the session's **Browser** (your dev server, for
+example `http://localhost:5173`). A screen file is a file that draws a page,
+such as `.tsx`, `.jsx`, `.vue`, `.svelte`, `.html` or `.css`.
+
+**What it says.** When the two pictures are the same, it says "The page looks
+the same before and after". When a picture could not be taken (the page did
+not answer in time, the page moved to another address, there is no Edge or
+Chrome), it says why; it never shows a made-up or older picture. A slow page
+never holds your reply up for long: after 8 seconds the change goes ahead
+without a before picture.
+
+**Good to know.**
+
+- The pictures go to you only. They are never sent to a model, so a Local
+  only session stays local (its page opens behind the same block on outside
+  addresses as the agent's own browser).
+- Only the page's address and path are kept with them, never the part after
+  `?` (it can hold keys).
+- A session keeps the pictures of its newest 40 replies, in Iron Jarvis's own
+  data folder on this PC (`reply-evidence`). They stay after a restart, and
+  they go to Iron Jarvis's trash when you delete the session.
+- Show me waits while a reply is still running, and is not offered in an
+  archived session.
+- A screen file changed only by a command (a build script, for example),
+  not by Iron Jarvis's own file edits, is not noticed: such a reply has no
+  pictures and no Show me.
+
 ## Choose what each of your other computers may do (v1.552.0)
 
 Each computer you paired with this one now has its own switches: what it may

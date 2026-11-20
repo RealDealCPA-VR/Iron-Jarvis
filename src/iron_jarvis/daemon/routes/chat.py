@@ -9272,6 +9272,16 @@ async def chat_stream(
         _team_rec = _chat_turn.team_record(_harness)
         if _team_rec is not None:
             done_frame["team"] = _team_rec
+        # R2.15 (27-a): a coding reply that changed a screen file — its
+        # before and after pictures (the after taken now), or the Show me
+        # mark. LAST, and present ONLY then (every other frame is
+        # byte-identical). Never in the model's context. MIRROR NOTE
+        # (lock-step): chat_turn.py's response carries the same key.
+        from ...harness.evidence import at_end as _evidence_at_end
+
+        _evidence_rec = await _evidence_at_end(made_docs)
+        if _evidence_rec is not None:
+            done_frame["evidence"] = _evidence_rec
         yield _sse("done", done_frame)
 
     # v1.312.0: the prep above ran AS the stream's first frames (the 400/404

@@ -194,6 +194,8 @@ import {
   type HarnessFile,
 } from "@/components/harness/HarnessAttachments";
 import { previewAddressFor } from "@/components/harness/BrowserPreview";
+// R2.15 (27-a): "show me it works" typed alone presses Show me.
+import { isShowMeOnly, newestScreenReply, requestShowMe } from "@/lib/replyPictures";
 // v1.377.0 (part 2, Phase 6): Next step, Branch from a message, the keys,
 // and what a rewind hands back to the box.
 import {
@@ -1993,6 +1995,22 @@ export function HarnessSession({
     if (view.archived) {
       setError(ARCHIVED_SEND_WORDS);
       return;
+    }
+    // R2.15 (27-a): "show me it works" typed ALONE presses Show me under the
+    // newest reply that changed a screen (one press path: that row's own).
+    // With anything else in the box it is an ordinary message (the daemon
+    // takes the before and after itself when the words ask for them).
+    if (
+      fromBox && !command && !picked && !trying.length && files.length === 0 && picks.length === 0 &&
+      !boxComments && isShowMeOnly(text)
+    ) {
+      const turn = newestScreenReply(view.messages ?? []);
+      if (turn && requestShowMe(threadId, turn)) {
+        setInput("");
+        clearDraft(draftKeyOf(threadId));
+        setCaret(0);
+        return;
+      }
     }
     const paths = files.map((f) => f.path);
     const filePaths = picks.map((f) => f.path);

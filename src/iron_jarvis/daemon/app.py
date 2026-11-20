@@ -4436,6 +4436,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_attempts as _build_attempts_routes
 
     _build_attempts_routes.register(app, d)
+    # R2.15 (27-a, harness/evidence): Show me under a coding reply, and its
+    # kept before and after pictures.
+    from .routes import build_evidence as _build_evidence_routes
+
+    _build_evidence_routes.register(app, d)
     # Open a file in VS Code / Cursor at a line (v1.405.0, harness/
     # code_editor): the coding session's review pane, steps and findings.
     from .routes import editor as _editor_routes

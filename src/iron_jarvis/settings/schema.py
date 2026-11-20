@@ -707,6 +707,19 @@ SETTINGS: tuple[SettingDef, ...] = (
       "itself; the card waits for you to press Resume when ready.",
       tier="allow",
       aliases=("resume when ready", "auto resume", "account limit", "carry on after a limit")),
+    # R2.15 (27-a, decision D-27.1, harness/evidence): before and after
+    # pictures under a coding reply, by themselves. Not set (off) until
+    # chosen; Show me offers it once. Asking always works. Read live.
+    S("reply_pictures", "Take before and after pictures by themselves", "automation", "bool",
+      "In a coding session (Chat › Code) with a page open in the Browser, a reply that changes a "
+      "screen file gets two pictures of that page under it: before the change and after it. Each "
+      "such reply starts an invisible browser on this PC twice. Off: pictures are taken only when "
+      "you ask, by pressing Show me under the reply or by saying \"show me it works\" in your "
+      "message. Not set: Show me offers this once. The pictures stay with the session (its newest "
+      "40 replies) and go to the trash when you delete it; they are never sent to a model.",
+      tier="allow", unset_ok=True,
+      aliases=("before and after pictures", "show me it works", "pictures of my page",
+               "screenshots after a change", "before and after screenshots", "reply pictures")),
     # v1.406.0 part 3 (daemon/routes/ci_watch): a coding session's pull
     # request — its failing checks fixed by the session itself, a cloud
     # reviewer's approval before Iron Jarvis pushes. Turning it ON from chat
