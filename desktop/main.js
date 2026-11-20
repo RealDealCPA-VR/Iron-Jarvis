@@ -4809,14 +4809,21 @@ function runOutcomeNotice(entry) {
     const covers = Array.isArray(p.sessions)
       ? p.sessions.filter((s) => typeof s === "string" && s !== "")
       : [];
+    // Idea 39 (39-a): a run from a chat reported its end there; the notice
+    // opens that chat (the bell's row, word for word).
+    const chat = typeof p.chat_thread_id === "string" ? p.chat_thread_id.trim() : "";
     return {
       id,
       ts: runOutcomeTsMs(entry.ts),
       title: `${name ? `Your workflow ${name}` : "A workflow"} ${
         partFailed ? "finished, but part of it failed" : "could not finish"
       }`,
-      body: partFailed ? runOutcomePartFailedBody(p.failed_steps) : "The Workflows page shows which step stopped.",
-      href: "/workflows",
+      body: partFailed
+        ? runOutcomePartFailedBody(p.failed_steps)
+        : chat
+          ? "Its report in the chat says which step stopped."
+          : "The Workflows page shows which step stopped.",
+      href: chat ? `/chat?thread=${encodeURIComponent(chat)}` : "/workflows",
       covers,
       // v1.361.0 (lane 11A): the run of the step that ENDED it ("" = a step
       // with no run of its own); absent on an event an older build wrote.
@@ -4917,12 +4924,15 @@ function runOutcomeNotice(entry) {
       : outcome === "completed_with_failures"
         ? "finished, but part of it failed"
         : "finished. Check what it did";
+  // Idea 39 (39-a): a run set up from a chat (a schedule's, a goal's try)
+  // reports in that chat, so the notice opens THAT chat (the bell's row).
+  const chat = typeof p.chat_thread_id === "string" ? p.chat_thread_id.trim() : "";
   return {
     id,
     ts: runOutcomeTsMs(entry.ts),
     title: `${RUN_OUTCOME_SUBJECT[kind](name)} ${words}`,
     body: runOutcomeClip(p.summary) || RUN_OUTCOME_NO_DETAIL,
-    href: `/sessions/${encodeURIComponent(sid)}`,
+    href: chat ? `/chat?thread=${encodeURIComponent(chat)}` : `/sessions/${encodeURIComponent(sid)}`,
     ...(kind === "workflow" ? { session: sid } : {}),
   };
 }

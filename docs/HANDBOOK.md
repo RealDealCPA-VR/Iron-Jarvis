@@ -2055,18 +2055,23 @@ differently: anything set up from a chat reports there by itself.
 
 - A **schedule** made in a chat: each run's result, or why it did not run.
 - A **watcher** made in a chat: the files it noticed and the suggestion it
-  left, which waits for your approval on the Autonomy page.
+  left, which waits for your approval on the Autonomy page. Watchers are off
+  until you turn them on: press **Turn watchers on** on the Watchers page, or
+  ask in chat. Until then a watcher notices nothing and reports nothing, and
+  its card and its answer say so.
 - A **goal** made from the chat's goal card: each try, with whether the goal
-  is satisfied yet.
+  is satisfied yet, and a try it did not make (its budget is used up, say),
+  once a day.
 - A **workflow** run from a chat: how it ended, and which step failed if one
-  did.
+  did. The bell's and the desktop notice of that run open the chat.
 - A **night task** queued from a chat: how it ended, its branch and its notes.
 
 **Keeping it calm.**
 
 - Something that runs more than once a day keeps **one line a day** in the
   chat. The line shows the newest result and how many there were today
-  ("· 3 today"); every run is still on its own page.
+  ("· 3 today"); every run is still on its own page. Once you answer in the
+  chat, that line stays as it was, and the next report starts a new line.
 - A watcher writes at most once an hour. What it notices in between joins
   its next message.
 - A report never brings an archived chat back. The bell says a report
@@ -2077,11 +2082,12 @@ differently: anything set up from a chat reports there by itself.
 **Stopping and changing it.**
 
 - Every report has **Stop reporting**, and so does the record's row on the
-  Schedules, Watchers and Autonomy pages ("Reports to <chat>"). **Undo** is
-  right beside it.
-- In chat: "stop reporting the Friday prices schedule here", or "report the
-  Intake watcher in this chat". The change shows on the usual card and has
-  Undo.
+  Schedules, Watchers and Autonomy pages ("Reports to <chat>"), and a
+  workflow run's row on the Workflows page while it runs. **Undo** is right
+  beside it. A run already going when you press it reports nothing more.
+- In chat: "stop reporting the Friday prices schedule here", "report the
+  Intake watcher in this chat", or the same for a goal. The change shows on
+  the usual card and has Undo.
 - Something made on its own page reports nowhere, as before.
 
 **What it keeps.**
@@ -2095,9 +2101,10 @@ differently: anything set up from a chat reports there by itself.
   about a report names the chat and the schedule only, never what the report
   says.
 - If the chat a record reported to was deleted, the record stops reporting
-  and the bell says so: its results show on its own page.
-- A conversation from your phone and a coding session do not take reports
-  yet.
+  and the bell says so: its results show on its own page, and the row of a
+  schedule, a night task or a workflow run says so too.
+- Something set up from a conversation on your phone, or from a coding
+  session, does not report yet, and does not say it does.
 
 ## Agents and terminal help know what was done before (v1.554.0)
 

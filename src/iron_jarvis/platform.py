@@ -2281,6 +2281,13 @@ def build_platform(
         if not chat or task.kind in ("goal", "event"):
             return
         if task.kind == "task" and fired.get("session_id"):
+            # Its run reported. When that chat was gone, the run cleared the
+            # link and noted it on the row, and the fire's own result line
+            # was written over it since: say it on the row again (review).
+            try:
+                await asyncio.to_thread(_cd.note_gone_if_cleared, platform.engine, "schedule", task.id, chat)
+            except Exception:  # noqa: BLE001 — the bell already said it
+                _log.warning("schedule %r: could not note its gone chat", task.name, exc_info=True)
             return
         if status == _run_outcome.STATUS_CANCELLED:
             return

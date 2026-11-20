@@ -428,6 +428,17 @@ function clip(text: unknown): string {
   return s.length > 140 ? `${s.slice(0, 139)}…` : s;
 }
 
+/** Idea 39 (39-a): the chat a run or a workflow run reports to
+ *  (`chat_thread_id` on `session.completed` and `workflow.completed`), "" for
+ *  none. */
+function chatOf(p: Record<string, unknown>): string {
+  return typeof p.chat_thread_id === "string" ? p.chat_thread_id.trim() : "";
+}
+
+/** Idea 39 (39-a): a failed workflow run from a chat: its report there says
+ *  which step stopped (desktop/main.js says the same words). */
+export const WORKFLOW_REPORT_BODY = "Its report in the chat says which step stopped.";
+
 /** v1.351.0 (G03): an unattended run's `session.completed` as a bell row.
  *  It FAILED or FELL SHORT → a row that RINGS: the mission rows' words
  *  ("could not finish" / "finished, but part of it failed" / "needs you"),
@@ -461,14 +472,19 @@ function unattendedCompletion(
         : v.outcome === "completed_with_failures"
           ? "finished, but part of it failed"
           : "finished. Check what it did";
+  // Idea 39 (39-a): a run set up from a chat (a schedule's, a goal's try)
+  // reports in that chat, so its row opens THAT chat (as the tray does).
+  const chat = chatOf(p);
   return {
     id: e.id,
     ts: e.ts,
-    href: sessionHref({
-      id: sid,
-      origin: typeof p.origin === "string" ? p.origin : null,
-      project_id: typeof p.project_id === "string" ? p.project_id : null,
-    }),
+    href: chat
+      ? `/chat?thread=${encodeURIComponent(chat)}`
+      : sessionHref({
+          id: sid,
+          origin: typeof p.origin === "string" ? p.origin : null,
+          project_id: typeof p.project_id === "string" ? p.project_id : null,
+        }),
     icon: v.done ? CheckCircle2 : AlertTriangle,
     title: `${UNATTENDED_SUBJECT[door.kind](door.name)} ${words}`,
     body: clip(p.summary),
@@ -627,6 +643,10 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     const status = typeof p.status === "string" ? p.status : "";
     const name = typeof p.workflow === "string" ? p.workflow.trim() : "";
     const subject = name ? `Your workflow ${name}` : "A workflow";
+    // Idea 39 (39-a): a run from a chat reported its end there, so the row
+    // opens that chat (its report says which step stopped).
+    const chat = chatOf(p);
+    const where = chat ? `/chat?thread=${encodeURIComponent(chat)}` : "/workflows";
     if (status === "failed") {
       // v1.360.0 (lane 10A): the run's step sessions, so this row stands in
       // for its failed step's row (`oneRowPerWorkflow`) — one row, one ping.
@@ -636,10 +656,10 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       return {
         id: e.id,
         ts: e.ts,
-        href: "/workflows",
+        href: where,
         icon: AlertTriangle,
         title: `${subject} could not finish`,
-        body: "The Workflows page shows which step stopped.",
+        body: chat ? WORKFLOW_REPORT_BODY : "The Workflows page shows which step stopped.",
         attention: true,
         ...(covers.length ? { covers } : {}),
         // v1.361.0 (lane 11A): which step's run ended it, so only THAT
@@ -659,7 +679,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       return {
         id: e.id,
         ts: e.ts,
-        href: "/workflows",
+        href: where,
         icon: AlertTriangle,
         title: `${subject} finished, but part of it failed`,
         body: partFailedBody(p.failed_steps),
@@ -672,7 +692,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       return {
         id: e.id,
         ts: e.ts,
-        href: "/workflows",
+        href: where,
         icon: CheckCircle2,
         title: `${subject} finished`,
         body: "",

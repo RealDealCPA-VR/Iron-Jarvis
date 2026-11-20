@@ -348,19 +348,22 @@ class SentinelService:
             proposal = self._propose(intent, rec, changed)
             if proposal is not None:
                 created.append(proposal)
-            self.report_to_chat(rec, changed)
+            self.report_to_chat(rec, changed, suggested=proposal is not None)
         return created
 
     #: Idea 39 (39-a): the most paths a watcher keeps waiting for its next report.
     REPORT_PENDING_MAX = 200
 
-    def report_to_chat(self, rec: SentinelRecord, changed: list[dict]) -> dict:
+    def report_to_chat(self, rec: SentinelRecord, changed: list[dict], *, suggested: bool = False) -> dict:
         """Idea 39 (39-a): a watcher set up from a chat says what it noticed
         there: "3 new or changed files in Intake: a.pdf, b.pdf, c.pdf." with
         the suggestion it left. At most ONE report an hour (D-39.3): changes
         noticed sooner wait on the row (``report_pending_json``) and join the
-        next report. BLOCKING (the poll runs on a worker thread). Returns
-        ``{"reported": bool, "waiting": int}``; never raises."""
+        next report. ``suggested`` (review): this poll left a suggestion that
+        waits for approval; only then does the report say so (a held-back
+        report, or a suggestion that could not be made, says nothing of one).
+        BLOCKING (the poll runs on a worker thread). Returns ``{"reported":
+        bool, "waiting": int}``; never raises."""
         from ..agents import chat_delivery as _cd
 
         out = {"reported": False, "waiting": 0}
@@ -403,8 +406,9 @@ class SentinelService:
             shown = ", ".join(names[:10]) + (f" and {len(names) - 10} more" if len(names) > 10 else "")
             n = len(names)
             words = f"{n} new or changed file{'' if n == 1 else 's'} in {rec.name}: {shown}."
-            suggestion = " ".join(str(rec.task or "a look at what changed").split()).rstrip(".")
-            words += f" Suggested: {suggestion}. It waits for your approval on the Autonomy page."
+            if suggested:
+                suggestion = " ".join(str(rec.task or "a look at what changed").split()).rstrip(".")
+                words += f" Suggested: {suggestion}. It waits for your approval on the Autonomy page."
             report = {
                 "kind": "watcher", "name": rec.name, "id": rec.id, "href": "/autonomy",
                 "outcome": "Noticed", "words": words,

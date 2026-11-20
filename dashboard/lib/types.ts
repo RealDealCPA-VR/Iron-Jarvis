@@ -268,6 +268,8 @@ export interface WorkflowRun {
   session_ids_json?: string;
   started_at?: string;
   created_at?: string;
+  /** Idea 39 (39-a): a run from a chat: where its end is reported. */
+  reports_to?: { thread_id: string; title: string } | null;
   [k: string]: unknown;
 }
 

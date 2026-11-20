@@ -139,6 +139,28 @@ describe("ReportsTo on a row", () => {
     expect(read("app/sentinels/page.tsx")).toContain('<ReportsTo kind="watcher"');
     expect(read("app/autonomy/page.tsx")).toContain('<ReportsTo kind="goal"');
   });
+
+  it("is on a Workflows run row while the run is going (review)", () => {
+    const page = read("app/workflows/page.tsx");
+    expect(page).toContain(
+      '{isLiveRun(r) && r.id != null ? (\n                          <ReportsTo kind="workflow" id={String(r.id)} to={r.reports_to} onChanged={reload} />',
+    );
+  });
+
+  it("a press on it never opens or closes the row it sits in (review)", async () => {
+    const rowClick = vi.fn();
+    render(
+      <div onClick={rowClick}>
+        <ReportsTo kind="workflow" id="wfr_1" to={{ thread_id: "chat_1", title: "Weekly" }} />
+      </div>,
+    );
+    fireEvent.click(screen.getByTestId("reports-to-stop"));
+    await waitFor(() => expect(screen.getByTestId("reports-to-undo")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("reports-to-undo"));
+    await waitFor(() => expect(H.posts.length).toBe(2));
+    expect(rowClick).not.toHaveBeenCalled();
+    expect(H.posts[0].body).toEqual({ kind: "workflow", id: "wfr_1", thread_id: "" });
+  });
 });
 
 describe("the words", () => {
