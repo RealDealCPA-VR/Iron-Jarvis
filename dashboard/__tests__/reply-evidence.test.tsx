@@ -7,8 +7,10 @@
  *    (one column below 640 px), each with its address and time, and open full
  *    screen; the daemon's own sentences ("The page looks the same before and
  *    after", why a picture is missing) are shown as sent;
- *  - D-27.1: a reply with no after picture shows ONE quiet press, Show me,
- *    which posts the session's Browser address for that reply; the first one
+ *  - D-27.1: the NEWEST reply, while it has no after picture, shows ONE quiet
+ *    press, Show me (never an earlier reply: the page is pictured as it is
+ *    now; never over an after it has), which posts the session's Browser
+ *    address for that reply; the first one
  *    ever offers the automatic setting once, naming its cost, answered through
  *    the one settings writer; a refusal is the daemon's own sentence, nothing
  *    invented;
@@ -66,9 +68,9 @@ import {
   SHOW_ME,
   decodePictures,
   isShowMeOnly,
-  newestScreenReply,
   pictureSrc,
   requestShowMe,
+  showMeReply,
 } from "@/lib/replyPictures";
 
 const ROOT = join(__dirname, "..");
@@ -101,7 +103,7 @@ function reply(evidence: unknown, turnId = "t1"): BuildMessage {
   } as BuildMessage;
 }
 
-function row(m: BuildMessage, extra: { busy?: boolean; archived?: boolean } = {}) {
+function row(m: BuildMessage, extra: { busy?: boolean; archived?: boolean; newest?: boolean } = {}) {
   return render(
     <HarnessMessageRow
       m={m}
@@ -112,7 +114,7 @@ function row(m: BuildMessage, extra: { busy?: boolean; archived?: boolean } = {}
       busy={!!extra.busy}
       isPending={false}
       branching={null}
-      newest
+      newest={extra.newest ?? true}
       carriedOn={false}
       canRewind
       prevUserAt="2026-11-20T10:00:00"
@@ -271,6 +273,23 @@ describe("Show me (only when you ask)", () => {
     expect(screen.getByTestId("reply-picture-before")).toBeTruthy();
     expect(screen.getByTestId("reply-pictures-show-me")).toBeTruthy();
   });
+
+  it("is never offered under an earlier reply: it pictures the page as it is now", () => {
+    // Review (blocking): an earlier reply's After would show the later
+    // replies' changes as its own.
+    row(reply(MARK), { newest: false });
+    expect(screen.getByTestId("reply-pictures")).toBeTruthy();
+    expect(screen.queryByTestId("reply-pictures-show-me")).toBeNull();
+    expect(requestShowMe("s1", "t1")).toBe(false); // the typed words do not reach it either
+    expect(api.calls).toEqual([]);
+  });
+
+  it("a reply that has its after picture keeps it: no press, typed or not", () => {
+    row(reply({ kind: "pictures", screen: true, items: [BEFORE, AFTER], note: "" }));
+    expect(screen.queryByTestId("reply-pictures-show-me")).toBeNull();
+    expect(requestShowMe("s1", "t1")).toBe(false);
+    expect(api.calls).toEqual([]);
+  });
 });
 
 describe('"show me it works" typed alone', () => {
@@ -283,10 +302,21 @@ describe('"show me it works" typed alone', () => {
     }
   });
 
-  it("presses Show me under the newest reply that changed a screen", async () => {
+  it("presses Show me under the newest reply, only when it changed a screen and has no after", async () => {
     api.answer = { evidence: { kind: "pictures", screen: true, items: [AFTER], note: "" }, offer: false };
-    const msgs = [reply(MARK, "t0"), { role: "user", content: "x" }, reply(MARK, "t1"), reply(undefined, "t2")];
-    expect(newestScreenReply(msgs as never)).toBe("t1");
+    const user = { role: "user", content: "x" };
+    const carryOn = { role: "user", content: "carry on", continuation: true };
+    expect(showMeReply([reply(MARK, "t0"), user, reply(MARK, "t1")] as never)).toBe("t1");
+    // The daemon's own hidden "carry on" question is not drawn, so the reply
+    // before it is still the one that ends the conversation on screen.
+    expect(showMeReply([user, reply(MARK, "t1"), carryOn] as never)).toBe("t1");
+    // A later reply that changed no screen: the earlier one is not the newest.
+    expect(showMeReply([reply(MARK, "t1"), user, reply(undefined, "t2")] as never)).toBeNull();
+    // A question after it (stopped before a word): no reply ends the conversation.
+    expect(showMeReply([reply(MARK, "t1"), user] as never)).toBeNull();
+    // The newest has its after picture: kept, nothing to press.
+    expect(showMeReply([user, reply({ ...MARK, items: [AFTER] }, "t1")] as never)).toBeNull();
+    expect(showMeReply([])).toBeNull();
     row(reply(MARK, "t1"));
     expect(requestShowMe("s1", "t9")).toBe(false); // not on screen: an ordinary message
     expect(requestShowMe("s1", "t1")).toBe(true);

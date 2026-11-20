@@ -9248,6 +9248,13 @@ async def chat_stream(
         # carries the same conditional key — edit both or neither.
         if escalate:
             done_frame["prior_tool_results"] = cap_prior_tool_results(_prior_results, platform)
+        # R2.15 (27-a): the reply's after picture (up to AFTER_WAIT_S) is
+        # taken HERE, before the unread notes are read as owed below: a Stop
+        # while it is taken then hands them back on its error frame. Its key
+        # is still added last (below).
+        from ...harness.evidence import at_end as _evidence_at_end
+
+        _evidence_rec = await _evidence_at_end(made_docs)
         # v1.287.0: present ONLY when a note was left unread (see above).
         # v1.499.3: read as OWED (the notes closed above, handed over once) —
         # read here, right before the frame goes, so a failure between the
@@ -9276,10 +9283,8 @@ async def chat_stream(
         # before and after pictures (the after taken now), or the Show me
         # mark. LAST, and present ONLY then (every other frame is
         # byte-identical). Never in the model's context. MIRROR NOTE
-        # (lock-step): chat_turn.py's response carries the same key.
-        from ...harness.evidence import at_end as _evidence_at_end
-
-        _evidence_rec = await _evidence_at_end(made_docs)
+        # (lock-step): chat_turn.py's response carries the same key. (Taken
+        # above, before the owed notes are read.)
         if _evidence_rec is not None:
             done_frame["evidence"] = _evidence_rec
         yield _sse("done", done_frame)

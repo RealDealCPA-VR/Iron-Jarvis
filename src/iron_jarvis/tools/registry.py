@@ -1353,7 +1353,7 @@ class ToolRegistry:
         if reversibility == Reversibility.REVERSIBLE and isinstance(run_args, dict):
             from ..harness.evidence import before_write as _evidence_before
 
-            await _evidence_before(name, run_args)
+            await _evidence_before(name, run_args, getattr(ctx, "workspace", None))
 
         # TX-01 undo: snapshot the INVERSE *before* the mutation, for reversible
         # tools only. Best-effort — a capture failure degrades to no-undo (the

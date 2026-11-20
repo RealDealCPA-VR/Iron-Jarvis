@@ -4073,12 +4073,16 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...harness.preview import current_preview as _current_preview
 
         _shown_page = _current_preview()
+        # The reason a reply takes none, said under Show me as it really is
+        # ("" = it takes them): a turn Iron Jarvis started (the night, a
+        # "carry on"), a message that did not ask, or no page open.
+        _no_before = _evidence.no_before_words(
+            getattr(platform.config, "reply_pictures", None), text, _shown_page,
+            by_person=started_by == _night.BY_PERSON and not continuation,
+        )
         evidence_token = _evidence.arm(
             platform.config.home, thread_id, turn_id, _shown_page,
-            take=_evidence.takes(
-                getattr(platform.config, "reply_pictures", None), text, _shown_page,
-                by_person=started_by == _night.BY_PERSON and not continuation,
-            ),
+            take=not _no_before, why=_no_before,
         )
         # v1.372.0: the session's MODEL is held for the turn and every helper
         # it starts, pinned account or not (``providers.hold``): nothing moves

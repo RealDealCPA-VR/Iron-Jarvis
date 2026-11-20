@@ -10,10 +10,13 @@
  * lightbox), Left/Right walk the two. "The page looks the same before and
  * after" and why a picture is missing are the daemon's own sentences.
  *
- * Decision D-27.1: pictures only when you ask. A reply that has no after
- * picture shows ONE quiet press, Show me (a picture of the page open in the
- * session's Browser, taken now); "show me it works" typed alone presses the
- * same one (lib/replyPictures `onShowMe`). The first Show me ever offers the
+ * Decision D-27.1: pictures only when you ask. The NEWEST reply, when it has
+ * no after picture, shows ONE quiet press, Show me (a picture of the page
+ * open in the session's Browser, taken now); "show me it works" typed alone
+ * presses the same one (lib/replyPictures `onShowMe`). It is the page AS IT
+ * IS NOW, so an earlier reply never offers it (the picture would show the
+ * later replies' changes as its own), and a reply that has its after keeps
+ * it (the daemon refuses both too). The first Show me ever offers the
  * automatic setting once, naming its cost; the answer is the one settings
  * writer's (`PUT /settings/values`), so Settings and chat's Undo see it.
  * Nothing here draws per streamed word: it is drawn under a SETTLED reply.
@@ -39,6 +42,7 @@ import {
   onShowMe,
   pictureSrc,
   pictureTime,
+  showMeOffered,
   showMePath,
   type ReplyPictures as Pictures,
 } from "@/lib/replyPictures";
@@ -56,6 +60,7 @@ export function ReplyPictures({
   turnId,
   busy,
   archived,
+  newest,
 }: {
   raw: unknown;
   threadId: string;
@@ -63,6 +68,8 @@ export function ReplyPictures({
   /** A reply is running in the session (Show me waits for it). */
   busy: boolean;
   archived: boolean;
+  /** This reply ends the conversation (Show me is offered only here). */
+  newest: boolean;
 }) {
   const fromLine = useMemo(() => decodePictures(raw), [raw]);
   // A press's answer, until the session's own line is read again (then the
@@ -75,9 +82,11 @@ export function ReplyPictures({
   const [answering, setAnswering] = useState(false);
   const [zoom, setZoom] = useState<number | null>(null);
   const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
+  // Show me: only under the newest reply, only while it has no after.
+  const offered = !!rec && showMeOffered(rec, { newest, archived });
 
   async function press() {
-    if (pressing || busy || archived) return;
+    if (!offered || pressing || busy || archived) return;
     setPressing(true);
     setError(null);
     try {
@@ -98,10 +107,14 @@ export function ReplyPictures({
     }
   }
 
-  // "show me it works" typed alone presses THIS Show me (one press path).
+  // "show me it works" typed alone presses THIS Show me (one press path) —
+  // only while it is offered.
   const pressRef = useRef(press);
   pressRef.current = press;
-  useEffect(() => onShowMe(threadId, turnId, () => void pressRef.current()), [threadId, turnId]);
+  useEffect(
+    () => (offered ? onShowMe(threadId, turnId, () => void pressRef.current()) : undefined),
+    [threadId, turnId, offered],
+  );
 
   async function answer(on: boolean) {
     if (answering) return;
@@ -119,7 +132,6 @@ export function ReplyPictures({
 
   if (!rec) return null;
   const items = rec.items;
-  const hasAfter = items.some((it) => it.id === "after");
   const pictures: LightboxPicture[] = items.map((it) => ({
     src: pictureSrc(threadId, turnId, it),
     raw: "",
@@ -176,7 +188,7 @@ export function ReplyPictures({
           {rec.note}
         </p>
       ) : null}
-      {!hasAfter && !archived ? (
+      {offered ? (
         <button
           type="button"
           data-testid="reply-pictures-show-me"
