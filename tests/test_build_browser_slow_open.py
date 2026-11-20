@@ -430,7 +430,7 @@ def test_a_failing_real_edge_test_reports_what_the_runner_was_doing(monkeypatch)
     """The plan's "process lists on failure": a ``test_real_edge*`` test that
     fails gets a section naming the busiest programs on the machine, its
     processors and memory, and how many Edge / node / python processes ran —
-    names only (CI logs are public), never command lines."""
+    names only (CI logs are public), never a command line's arguments."""
     from tests import _runner_state
 
     monkeypatch.setattr(_runner_state, "SAMPLE_S", 0.05)
@@ -455,24 +455,61 @@ def test_only_a_failing_real_edge_test_gets_the_machine_section():
     assert _hook_run("test_real_edge_something", failed=True, when="setup") == []
 
 
-def test_the_runner_state_never_reads_a_command_line(monkeypatch):
+def _posix_name() -> Any:
+    """psutil's own ``Process.name`` as it runs on Linux and macOS: a name of
+    15 characters or more (where the kernel cuts it) is finished from the
+    first word of the program's command line. Run here on this machine's own
+    processes, so a Windows run proves the Linux gate's path too."""
+    import types
+
+    import psutil
+
+    names = dict(vars(psutil))
+    names.update(POSIX=True, WINDOWS=False)
+    return types.FunctionType(psutil.Process.name.__code__, names, "name")
+
+
+#: Stands for an argument on some program's command line (a secret, say):
+#: plain words, nothing shaped like a credential.
+_AN_ARGUMENT = "--sample-argument-that-must-stay-out-of-the-log"
+
+
+@pytest.mark.parametrize("names", ["this platform's", "posix"])
+def test_no_argument_of_a_command_line_reaches_the_runner_state(monkeypatch, names):
     """A secret on some process's command line never reaches a public CI log:
-    the runner's state reads names, CPU and memory, never a command line."""
+    the runner's state prints names, CPU and memory, never an argument. On
+    Linux psutil's own ``name()`` reads a command line to finish a name the
+    kernel cut at 15 characters (every runner has such programs) and keeps
+    the file name of its first word only; so the promise is that no ARGUMENT
+    is printed, on this platform's path and on Linux's."""
     import psutil
 
     from tests import _runner_state
 
-    read: list[int] = []
+    real = psutil.Process.cmdline
+    asked: list[int] = []
 
     def cmdline(self):  # noqa: ANN001
-        read.append(self.pid)
-        return []
+        asked.append(self.pid)
+        try:
+            first = list(real(self))[:1]
+        except Exception:  # noqa: BLE001 — not ours to read: the argument alone
+            first = []
+        return [*first, _AN_ARGUMENT]
 
     monkeypatch.setattr(_runner_state, "SAMPLE_S", 0.05)
     monkeypatch.setattr(psutil.Process, "cmdline", cmdline)
-    text = _runner_state.runner_state()
-    assert "busiest programs" in text
-    assert read == []
+    if names == "posix":
+        monkeypatch.setattr(psutil.Process, "name", _posix_name())
+    try:
+        text = _runner_state.runner_state()
+    finally:
+        psutil.process_iter.cache_clear()  # no Process keeps a name the stand-in made
+    assert "busiest programs" in text, text
+    assert _AN_ARGUMENT not in text, text
+    if names == "posix":
+        # Linux's path was really taken: some name was finished from a command line.
+        assert asked, "no program here has a name of 15 characters or more"
 
 
 # --------------------------------------------------------------------------- #

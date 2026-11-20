@@ -12,7 +12,10 @@ names the busiest programs, the processors,
 memory and disk, and how many Edge, node and python processes were running.
 
 Names only: this repository's CI logs are public, and a command line can
-carry a secret, so no command line is ever read. psutil + stdlib.
+carry a secret, so no argument of a command line is ever printed. (On Linux
+and macOS psutil's own ``name()`` reads a program's command line when the
+kernel cut its name at 15 characters, and keeps only the file name of its
+first word; this file reads none.) psutil + stdlib.
 """
 
 from __future__ import annotations
