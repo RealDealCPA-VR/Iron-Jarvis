@@ -122,6 +122,8 @@ import {
   WorkflowDraftCard,
   WorkflowRunChip,
 } from "@/components/chat/WorkflowDraftCard";
+import { ReportLine } from "@/components/chat/ReportLine";
+import { type ReportFrom, reportRequestLabel } from "@/lib/reports";
 import type { RunResult } from "@/components/chat/RunResultCard";
 import { CopyIconButton, Markdown, MemoMarkdown } from "@/components/Markdown";
 import { AttachmentThumb, MediaGroup } from "@/components/MediaLightbox";
@@ -858,6 +860,15 @@ interface ChatMessage {
   panelThreadId?: string;
   /** That agent failed this round; its content is an honest error, not a reply. */
   panelError?: boolean;
+  /** Idea 39 (39-a): a REPORT: something set up from this chat (a schedule,
+   *  a watcher, a goal, a workflow run, a night task) wrote this when it ran
+   *  (`agents/chat_delivery.report_to_chat`). Drawn with `ReportLine` above
+   *  it, and labelled as outside words when the chat goes back to a model. */
+  reportFrom?: ReportFrom;
+  /** Its repeat key, the daemon's (one line per report). */
+  reportKey?: string;
+  /** How many reports this one line holds today (one line a day per record). */
+  reportCount?: number;
   /** v1.284.0: what the speakers were NOT shown — since v1.357.0 "Left out 3
    *  older messages to fit the agent's model" — on the round's first reply. Never
    *  silent: a forgotten turn the user can see is a limit, an invisible one
@@ -1173,7 +1184,12 @@ function toRequestMessages(msgs: ChatMessage[]): ChatRequestMessage[] {
   return msgs.map((m) => ({
     role: m.role,
     content:
-      m.role === "assistant" && m.panelWho
+      // Idea 39 (39-a): a report is outside words (a run's summary, a
+      // watcher's file names), never Iron Jarvis's own turn: labelled first,
+      // and the daemon fences what follows (chat_refs.REPORT_LINE_PREFIX).
+      m.role === "assistant" && m.reportFrom
+        ? `${reportRequestLabel(m.reportFrom)}\n${m.content}`
+        : m.role === "assistant" && m.panelWho
         ? `[Reply from the agent ${agentDisplayName(m.panelWho)}, on the agent panel — not Iron Jarvis]\n${m.content}`
         : m.content,
   }));
@@ -3828,7 +3844,7 @@ const MessageRow = memo(function MessageRow({
           applies the deliberately-high bar and renders nothing otherwise,
           because a false chip trains the user to ignore every chip. */}
       {isLast && !busy && (
-        <GoalBirth userText={prevUser} toolsUsed={m.toolsUsed} projectId={projectId} />
+        <GoalBirth userText={prevUser} toolsUsed={m.toolsUsed} projectId={projectId} chatThreadId={threadId} />
       )}
     </div>
   );
@@ -13662,6 +13678,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         // v1.378.0 review: a DECLINED reply is not regenerated
                         // (the same conversation is declined again).
                         !m.refused &&
+                        // Idea 39 (39-a): a report is not Jarvis's reply.
+                        !m.reportFrom &&
                         !busy;
                       return (
                         // Calm chat W1-4: each message holds itself to the
@@ -13683,6 +13701,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                               : "mx-auto w-full max-w-[760px] has-[[data-handoff-hidden]]:hidden"
                           }
                         >
+                        {m.reportFrom && m.role === "assistant" ? (
+                          <ReportLine from={m.reportFrom} count={m.reportCount} />
+                        ) : null}
                         <MessageRow
                           m={m}
                           i={i}

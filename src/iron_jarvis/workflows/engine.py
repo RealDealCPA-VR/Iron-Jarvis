@@ -557,6 +557,7 @@ class WorkflowEngine:
         inputs: dict[str, str] | None = None,
         *,
         started_by: str = "",
+        chat_thread_id: str = "",
     ) -> WorkflowRunRecord:
         """Persist a fresh ``running`` record for *workflow* and return it.
 
@@ -589,6 +590,8 @@ class WorkflowEngine:
             session_ids_json="[]",
             outputs_json=dumps(seeded) if seeded else "{}",
             started_by=STARTED_BY_PERSON if started_by == STARTED_BY_PERSON else "",
+            # Idea 39 (39-a): run from a chat, its end is reported there.
+            chat_thread_id=str(chat_thread_id or "").strip(),
         )
         with session_scope(self.platform.engine) as db:
             db.add(record)
@@ -712,6 +715,7 @@ class WorkflowEngine:
             )
         except Exception:  # noqa: BLE001 — the row is right; the notice is best effort
             log.debug("workflow.completed for a failed driver not published", exc_info=True)
+        await self._report_end(run_id, workflow_name, ended, reason=reason)
 
     def _write_driver_end(self, run_id: str, reason: str, seq: int) -> str:
         """End a row its driver left live (blocking: callers hop off the loop).
@@ -1012,7 +1016,63 @@ class WorkflowEngine:
                 ),
             },
         )
+        await self._report_end(
+            run_id, workflow.name, final_status,
+            steps=[s.name for s in steps], outputs=outputs,
+        )
         return final if final is not None else record
+
+    async def _report_end(
+        self,
+        run_id: str,
+        workflow_name: str,
+        status: str,
+        *,
+        steps: "list[str] | None" = None,
+        outputs: "dict[str, Any] | None" = None,
+        reason: str = "",
+    ) -> None:
+        """Idea 39 (39-a): a workflow run from a chat writes ONE report there
+        when it ends: how it ended (the run's own status), the step that ended
+        a failed run, else the last step's summary. A run the user stopped
+        writes nothing. Never raises."""
+        try:
+            from ..agents import chat_delivery as _cd
+            from ..agents import outcome as _oc
+
+            rec = await asyncio.to_thread(self._get_record, run_id)
+            chat = _cd.clean_chat_thread_id(getattr(rec, "chat_thread_id", "") or "")
+            if not chat or status in ("cancelled", "cancelling"):
+                return
+            names = list(steps or [])
+            outs = outputs if isinstance(outputs, dict) else {}
+            halted, skipped = step_failures(names, outs)
+            if status == "completed":
+                word, lead = _oc.WORD_DONE, ""
+            elif status == PART_FAILED_STATUS:
+                word = _oc.WORD_PART_FAILED
+                lead = "Some of its steps failed: " + ", ".join(
+                    f"“{n}”" for n, _ in skipped[:5]) + "."
+            else:
+                word = _oc.WORD_FAILED
+                lead = (f"The step “{halted[0]}” failed." if halted
+                        else (reason or "The run did not finish."))
+            body = ""
+            if halted is not None:
+                body = str(halted[1].get("summary") or "")
+            else:
+                for n in reversed(names):
+                    out = outs.get(n)
+                    if isinstance(out, dict) and str(out.get("summary") or "").strip():
+                        body = str(out.get("summary") or "")
+                        break
+            report = {
+                "kind": "workflow", "name": workflow_name, "id": run_id, "href": "/workflows",
+                "outcome": word, "reason": lead, "words": body, "key": f"workflow:{run_id}",
+            }
+            await asyncio.to_thread(_cd.report_to_chat, self.platform, chat, report)
+        except Exception:  # noqa: BLE001 — the run's own record stands
+            log.warning("workflow run %s could not report to its chat", run_id, exc_info=True)
 
     async def resume_after_answer(
         self, record: WorkflowRunRecord, answer: str
@@ -1165,6 +1225,10 @@ class WorkflowEngine:
                         (s.name for s in wf.steps), outputs
                     ),
                 },
+            )
+            await self._report_end(
+                record.id, record.workflow_name, "failed",
+                steps=[s.name for s in wf.steps], outputs=outputs,
             )
             return final if final is not None else record
         await self._persist(

@@ -142,13 +142,20 @@ def content_for_session(session: Any) -> str:
     return summary or FAILED_SENTENCE
 
 
-def line_for_session(session: Any, result: Any, who: str) -> dict[str, Any]:
+def line_for_session(session: Any, result: Any, who: str, *, now: Any = None) -> dict[str, Any]:
     """The ONE chat line a finished session leaves in the chat it was asked
     in — the page's ``finalize()`` message shape under the daemon's keys
     (see the module doc). ``result`` is ``session_result``'s dict (or None /
     a non-dict, when the ledger could not be read — then no receipt and no
     documents, exactly as the page composes when ``/result`` fails).
+
+    Idea 39 (39-a): a run its SOURCE set up from a chat (a schedule's fire)
+    carries ``options.report_from``; its line is then that source's REPORT
+    (:func:`report_line_for_session`), never an agent's reply.
     """
+    source = report_from_of(session)
+    if source is not None:
+        return report_line_for_session(session, result, source, now=now)
     line: dict[str, Any] = {
         "role": "assistant",
         "content": content_for_session(session),
@@ -209,6 +216,11 @@ def deliver_session_line(
     thread_id = chat_thread_of(session)
     if not thread_id:
         return {"ok": False, "updated_at": None, "why": "no chat", "appended": 0, "skipped": 0}
+    source = report_from_of(session)
+    if source is not None and source.get("by") == REPORT_BY_SOURCE:
+        # Idea 39 (39-a): a goal's try carries its chat only so its asks show
+        # there; the goal writes ONE report after its checks, this run none.
+        return {"ok": True, "updated_at": None, "why": "its source reports", "appended": 0, "skipped": 0}
     try:
         # Lazy, by import DIRECTION: ``daemon/`` imports the agent layer, so
         # a module-level import here would be the platform layer importing
@@ -225,6 +237,8 @@ def deliver_session_line(
             result = None
         who = participant_key_for(session)
         line = line_for_session(session, result, who)
+        if source is not None:
+            return _write_report(engine, event_bus, thread_id, line, source)
         return _chat_append.append_to_chat_thread(
             engine, thread_id, [line], event_bus=event_bus, who=who
         )
@@ -299,3 +313,450 @@ def say_in_chat(engine: Any, thread_id: str, words: str, *, event_bus: Any = Non
     except Exception:  # noqa: BLE001 — the room already has the line
         log.exception("could not add a line to chat %s", thread_id)
         return {"ok": False, "updated_at": None, "why": "could not add the line", "appended": 0, "skipped": 0}
+
+
+# --------------------------------------------------------------------------- #
+# REPORTS (idea 39, 39-a): the result of anything set up from a chat comes home
+# --------------------------------------------------------------------------- #
+#
+# ONE field and ONE writer. A record set up from a chat (a schedule, a watcher,
+# a goal, a workflow run, a night task) stores that chat's id in its own
+# ``chat_thread_id`` column; each result is written into the chat by
+# :func:`report_to_chat`, through the daemon's one chat writer
+# (``daemon.chat_append.append_to_chat_thread``). A run its source starts
+# carries ``options.report_from`` (:data:`REPORT_OPTION`) and its own line IS
+# the report (:func:`line_for_session`), kept durable by the run's finalizers
+# and the boot reconcile. Keeping it calm: a record that reports more than once
+# a day keeps ONE line a day in the chat (the day's line is replaced, its count
+# goes up); a watcher writes at most once an hour (D-39.3, the watcher's own
+# pacing); a report never un-archives a chat (D-39.2: the bell says it arrived
+# instead); and every report has Stop reporting (:func:`set_report_target`).
+
+#: Who may write a report (idea 39's shared vocabulary; later ideas add their
+#: callers, never a new kind of line).
+REPORT_KINDS: tuple[str, ...] = (
+    "schedule",
+    "watcher",
+    "goal",
+    "workflow",
+    "rule",
+    "rehearsal",
+    "run",
+    "coding_session",
+    "night",
+    "paired_computer",
+    "review",
+)
+
+#: How each kind is said in a report's first words ("From your schedule ...")
+#: and on its chip (the page's ``REPORT_KIND_WORDS``, one table).
+REPORT_KIND_WORDS: dict[str, str] = {
+    "schedule": "schedule",
+    "watcher": "watcher",
+    "goal": "goal",
+    "workflow": "workflow",
+    "rule": "rule",
+    "rehearsal": "rehearsal",
+    "run": "run",
+    "coding_session": "coding session",
+    "night": "night task",
+    "paired_computer": "other computer",
+    "review": "night review",
+}
+
+#: Where each kind's record is (the report's "Open"), unless the report names one.
+REPORT_HREFS: dict[str, str] = {
+    "schedule": "/schedules",
+    "watcher": "/sentinels",
+    "goal": "/autonomy",
+    "workflow": "/workflows",
+    "rule": "/reflex",
+    "night": "/chat?view=code",
+}
+
+#: A report's words are cut here; the rest stays on the run, behind its link
+#: ("Keep big results out of the context").
+REPORT_MAX_CHARS = 1500
+REPORT_CUT_WORDS = "… The rest is on the run."
+
+#: The run option a source's report rides under (``Session.options_json``).
+REPORT_OPTION = "report_from"
+#: ``report_from.by``: the SOURCE writes the report itself after the run (a
+#: goal, after its checks), so the run's own ending writes nothing.
+REPORT_BY_SOURCE = "source"
+
+#: Kinds that pace themselves and are never folded to one line a day (a
+#: watcher writes at most once an hour, D-39.3).
+REPORT_NOT_FOLDED: frozenset[str] = frozenset({"watcher"})
+
+#: The shortest gap between two reports of one watcher (D-39.3).
+WATCHER_REPORT_GAP_S = 3600
+
+#: The ``who`` on ``chat.thread_updated`` for a report.
+REPORT_WHO = "report"
+
+#: The bell's words when the chat a record reported to is gone.
+GONE_WORDS = "The chat this {kind} reported to is gone. Its results now show here."
+
+
+def _one_line(text: Any, cap: int = 80) -> str:
+    words = " ".join(str(text or "").split())
+    return words if len(words) <= cap else words[: cap - 1].rstrip() + "…"
+
+
+def report_lead(kind: str, name: str) -> str:
+    """A report's first sentence, from its kind and name: "From your schedule
+    “Friday prices”." Composed by code, never by a model. Pure."""
+    word = REPORT_KIND_WORDS.get(kind, "task")
+    name = _one_line(name)
+    return f"From your {word} “{name}”." if name else f"From your {word}."
+
+
+def cut_report_words(words: Any) -> str:
+    """The report's body at most :data:`REPORT_MAX_CHARS` characters; a cut
+    body says the rest is on the run. Pure."""
+    text = str(words or "").strip()
+    if len(text) <= REPORT_MAX_CHARS:
+        return text
+    return text[: REPORT_MAX_CHARS - len(REPORT_CUT_WORDS)].rstrip() + REPORT_CUT_WORDS
+
+
+def _now() -> Any:
+    """The clock a report's day is read from (local, aware). One function so a
+    test injects the day instead of waiting for one."""
+    from datetime import datetime
+
+    return datetime.now().astimezone()
+
+
+def report_fold_key(kind: str, record_id: str, now: Any = None) -> str:
+    """The day-fold of a record's report: ``<kind>:<id>:<local date>``; "" for
+    a kind that paces itself or a report with no record. Pure."""
+    from datetime import datetime
+
+    rid = str(record_id or "").strip()
+    if not rid or kind in REPORT_NOT_FOLDED:
+        return ""
+    when = now if isinstance(now, datetime) else _now()
+    if when.tzinfo is not None:
+        when = when.astimezone()
+    return f"{kind}:{rid}:{when.date().isoformat()}"
+
+
+def report_from_of(session: Any) -> "dict[str, Any] | None":
+    """The source a run reports for (``options.report_from``), or None. Junk
+    (not a dict, an unknown kind) reads None. Never raises."""
+    try:
+        from ..scheduling.knobs import session_options
+
+        options = session_options(session)
+    except Exception:  # noqa: BLE001
+        return None
+    raw = options.get(REPORT_OPTION) if isinstance(options, dict) else None
+    if not isinstance(raw, dict) or raw.get("kind") not in REPORT_KINDS:
+        return None
+    return raw
+
+
+def report_line(report: dict[str, Any], *, now: Any = None) -> "dict[str, Any] | None":
+    """The ONE chat line of a report (pure; None for a report of no known
+    kind). ``report`` is ``{kind, name, id, run_id?, outcome?, reason?, words?,
+    documents?, href?, key, receipt?}``: ``outcome`` is the badge word the
+    ledger's verdict gives (``outcome.run_ending``), ``reason`` its sentence
+    when it fell short; ``words`` the run's own summary (cut at
+    :data:`REPORT_MAX_CHARS`). The line: ``{role: "assistant", content,
+    reportFrom: {kind, name, id, href, outcome?, runId?}, reportKey,
+    reportFold?, sessionId?, receipt?, documents?}``."""
+    if not isinstance(report, dict):
+        return None
+    kind = str(report.get("kind") or "")
+    if kind not in REPORT_KINDS:
+        return None
+    name = _one_line(report.get("name"), 120)
+    rid = str(report.get("id") or "").strip()
+    run_id = str(report.get("run_id") or "").strip()
+    outcome = _one_line(report.get("outcome"), 40)
+    reason = " ".join(str(report.get("reason") or "").split())
+    body = cut_report_words(report.get("words"))
+    lead = report_lead(kind, name)
+    if reason:
+        lead = f"{lead} {reason}"
+    content = f"{lead}\n\n{body}" if body else lead
+    source: dict[str, Any] = {
+        "kind": kind,
+        "name": name,
+        "id": rid,
+        "href": str(report.get("href") or REPORT_HREFS.get(kind) or ""),
+    }
+    if outcome:
+        source["outcome"] = outcome
+    if run_id:
+        source["runId"] = run_id
+    key = str(report.get("key") or "").strip() or (f"run:{run_id}" if run_id else "")
+    line: dict[str, Any] = {"role": "assistant", "content": content, "reportFrom": source}
+    if key:
+        line["reportKey"] = key
+    fold = report_fold_key(kind, rid, now)
+    if fold:
+        line["reportFold"] = fold
+    if run_id:
+        line["sessionId"] = run_id
+    receipt = report.get("receipt")
+    if isinstance(receipt, dict) and receipt.get("found"):
+        line["receipt"] = receipt
+    docs = [str(p) for p in (report.get("documents") or []) if p]
+    if not docs and isinstance(receipt, dict):
+        docs = [str(p) for p in (receipt.get("documents") or []) if p]
+    if docs:
+        line["documents"] = docs
+    return line
+
+
+def report_line_for_session(
+    session: Any, result: Any, source: dict[str, Any], *, now: Any = None
+) -> dict[str, Any]:
+    """A source's report, written by the run it started (a schedule's fire):
+    the verdict from the LEDGER (``outcome.run_ending``), never the model's
+    closing words; the run's summary as the body; the run's receipt. Pure."""
+    from .outcome import run_ending
+
+    ending = run_ending(session)
+    sid = str(getattr(session, "id", "") or "")
+    summary = str(getattr(session, "summary", "") or "").strip()
+    report = {
+        "kind": source.get("kind"),
+        "name": source.get("name"),
+        "id": source.get("id"),
+        "href": source.get("href"),
+        "run_id": sid,
+        "outcome": ending.words,
+        "reason": "" if ending.ok else ending.reason,
+        "words": summary,
+        "key": f"run:{sid}" if sid else "",
+        "receipt": result,
+    }
+    line = report_line(report, now=now) or {"role": "assistant", "content": content_for_session(session)}
+    if sid:
+        line["sessionId"] = sid
+    return line
+
+
+def _publish_event(event_bus: Any, etype: str, payload: dict[str, Any]) -> None:
+    """Best effort: on the loop as a task, off it under ``asyncio.run`` (the
+    pattern of ``chat_append._publish``). Never raises."""
+    if event_bus is None:
+        return
+    try:
+        import asyncio
+
+        coro = event_bus.publish(etype, payload)
+        if not asyncio.iscoroutine(coro):
+            return
+        try:
+            asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:
+            asyncio.run(coro)
+    except Exception:  # noqa: BLE001 — a notice never breaks a report
+        log.warning("could not publish %s", etype, exc_info=True)
+
+
+def _write_report(
+    engine: Any, event_bus: Any, thread_id: str, line: dict[str, Any], source: dict[str, Any]
+) -> dict[str, Any]:
+    """Append one report line and say what happened. BLOCKING; never raises.
+
+    A chat that is gone clears the record's link and rings the bell
+    (``report.chat_gone``); an archived chat stays archived and the bell says a
+    report arrived (``report.arrived``, D-39.2). A phone thread or a coding
+    session refuses in words (``append_to_chat_thread``'s ``why``)."""
+    from ..core.events import EventType
+    from ..daemon import chat_append as _chat_append
+
+    out = _chat_append.append_to_chat_thread(
+        engine, thread_id, [line], event_bus=event_bus, who=REPORT_WHO, unarchive=False
+    )
+    kind = str(source.get("kind") or "")
+    name = _one_line(source.get("name"), 120)
+    rid = str(source.get("id") or "")
+    if not out.get("ok") and out.get("why") == "no such chat":
+        cleared = set_report_target(engine, kind, rid, "") if kind in REPORT_TARGET_KINDS else {}
+        out["gone"] = True
+        out["cleared"] = bool(cleared.get("ok"))
+        _publish_event(event_bus, EventType.REPORT_CHAT_GONE, {
+            "kind": kind, "name": name, "id": rid,
+            "href": str(source.get("href") or REPORT_HREFS.get(kind) or ""),
+            "words": GONE_WORDS.format(kind=REPORT_KIND_WORDS.get(kind, "task")),
+        })
+    elif out.get("ok") and out.get("archived") and (out.get("appended") or 0) > 0:
+        _publish_event(event_bus, EventType.REPORT_ARRIVED, {
+            "thread_id": thread_id, "title": _one_line(out.get("title"), 120),
+            "kind": kind, "name": name,
+        })
+    return out
+
+
+def report_to_chat(platform: Any, thread_id: str, report: dict[str, Any], *, now: Any = None) -> dict[str, Any]:
+    """Write ONE report into the chat ``thread_id`` (idea 39, 39-a): the one
+    writer every source calls. ``platform`` gives ``engine`` and
+    ``event_bus`` (anything with both). ``report`` as :func:`report_line`.
+    BLOCKING (SQLite): a caller on the loop wraps it in ``asyncio.to_thread``.
+    Returns ``append_to_chat_thread``'s answer (``gone`` when the chat no
+    longer exists); never raises."""
+    empty = {"ok": False, "updated_at": None, "why": "", "appended": 0, "skipped": 0}
+    try:
+        tid = clean_chat_thread_id(thread_id)
+        if not tid:
+            return {**empty, "why": "no chat"}
+        line = report_line(report, now=now)
+        if line is None:
+            return {**empty, "why": "not a report"}
+        engine = getattr(platform, "engine", None)
+        if engine is None:
+            return {**empty, "why": "no database"}
+        return _write_report(engine, getattr(platform, "event_bus", None), tid, line, report)
+    except Exception as exc:  # noqa: BLE001 — a report never breaks its source
+        log.exception("could not write a report into chat %s", thread_id)
+        return {**empty, "why": f"could not report: {type(exc).__name__}"}
+
+
+# --- the one field: which chat a record reports to ---------------------------
+
+
+def _record_class(kind: str) -> Any:
+    """The table whose ``chat_thread_id`` says where ``kind`` reports, or None."""
+    if kind == "schedule":
+        from ..scheduling.models import ScheduledTaskRecord
+
+        return ScheduledTaskRecord
+    if kind == "watcher":
+        from ..sentinels.models import SentinelRecord
+
+        return SentinelRecord
+    if kind == "goal":
+        from ..goals.models import GoalContractRecord
+
+        return GoalContractRecord
+    if kind == "workflow":
+        from ..workflows.models import WorkflowRunRecord
+
+        return WorkflowRunRecord
+    if kind == "night":
+        from ..harness.night import NightTaskRecord
+
+        return NightTaskRecord
+    return None
+
+
+#: The kinds whose record holds the field (the rest report through a run).
+REPORT_TARGET_KINDS: tuple[str, ...] = ("schedule", "watcher", "goal", "workflow", "night")
+
+
+def report_target_of(engine: Any, kind: str, record_id: str) -> str:
+    """The chat ``kind``'s record ``record_id`` reports to, "" for none.
+    BLOCKING; never raises."""
+    cls = _record_class(kind)
+    if cls is None or not record_id:
+        return ""
+    try:
+        from ..core.db import session_scope
+
+        with session_scope(engine) as db:
+            row = db.get(cls, str(record_id))
+            return clean_chat_thread_id(getattr(row, "chat_thread_id", "") or "") if row is not None else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def set_report_target(engine: Any, kind: str, record_id: str, thread_id: str) -> dict[str, Any]:
+    """Point ``kind``'s record ``record_id`` at the chat ``thread_id`` ("" =
+    Stop reporting). Returns ``{ok, why, previous, thread_id}``; ``previous``
+    is the chat it reported to before (the Undo puts it back). A chat id must
+    name a saved chat of the user's (never a phone thread or a coding
+    session). BLOCKING; never raises."""
+    out: dict[str, Any] = {"ok": False, "why": "", "previous": "", "thread_id": ""}
+    cls = _record_class(kind)
+    if cls is None:
+        out["why"] = f"A {REPORT_KIND_WORDS.get(kind, 'record')} does not report to a chat."
+        return out
+    tid = clean_chat_thread_id(thread_id)
+    try:
+        from ..core.db import session_scope
+        from ..core.models import ChatThreadRecord
+
+        with session_scope(engine) as db:
+            if tid:
+                chat = db.get(ChatThreadRecord, tid)
+                if chat is None:
+                    out["why"] = "That chat is not saved, so nothing can report to it."
+                    return out
+                if (getattr(chat, "owner", "user") or "user") == "daemon" or str(
+                    getattr(chat, "surface", "") or ""
+                ) == "build":
+                    out["why"] = "Reports go to a chat on the Chat page, not to this one."
+                    return out
+            row = db.get(cls, str(record_id or ""))
+            if row is None:
+                out["why"] = f"There is no such {REPORT_KIND_WORDS.get(kind, kind)}."
+                return out
+            out["previous"] = clean_chat_thread_id(getattr(row, "chat_thread_id", "") or "")
+            row.chat_thread_id = tid
+            db.add(row)
+            db.commit()
+        out["ok"] = True
+        out["thread_id"] = tid
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.exception("could not change where a %s reports", kind)
+        out["why"] = f"could not change it: {type(exc).__name__}"
+        return out
+
+
+def stampable_chat(engine: Any, thread_id: Any) -> str:
+    """The chat a create tool may stamp on its record (idea 39, 39-a): the
+    saved chat it was asked in (``ToolContext.thread_id``, set by both chat
+    lanes and by a run started from a chat), "" when there is none, it is not
+    saved, or it is a coding session (its own turns write it). A phone thread
+    is kept (its reports are refused in words until 39-c). BLOCKING; never
+    raises."""
+    tid = clean_chat_thread_id(thread_id)
+    if not tid or engine is None:
+        return ""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import ChatThreadRecord
+
+        with session_scope(engine) as db:
+            row = db.get(ChatThreadRecord, tid)
+            if row is None or str(getattr(row, "surface", "") or "") == "build":
+                return ""
+        return tid
+    except Exception:  # noqa: BLE001 — unreadable: nothing is stamped
+        return ""
+
+
+def chat_titles(engine: Any, thread_ids: Any) -> dict[str, str]:
+    """The titles of the saved chats ``thread_ids`` (one read), for a row's
+    "Reports to". A chat that is gone is absent. BLOCKING; never raises."""
+    ids = sorted({clean_chat_thread_id(t) for t in (thread_ids or []) if clean_chat_thread_id(t)})
+    if not ids:
+        return {}
+    try:
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import ChatThreadRecord as T
+
+        with session_scope(engine) as db:
+            rows = db.exec(select(T.id, T.title).where(T.id.in_(ids))).all()  # type: ignore[attr-defined]
+        return {str(r[0]): str(r[1] or "") or "Untitled chat" for r in rows}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def reports_to_view(thread_id: Any, titles: dict[str, str]) -> "dict[str, str] | None":
+    """A row's ``reports_to``: ``{thread_id, title}`` while the chat exists,
+    None for none (or a chat that is gone). Pure."""
+    tid = clean_chat_thread_id(thread_id or "")
+    if not tid or tid not in titles:
+        return None
+    return {"thread_id": tid, "title": titles[tid]}

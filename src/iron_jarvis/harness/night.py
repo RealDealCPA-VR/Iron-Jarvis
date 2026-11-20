@@ -193,6 +193,11 @@ class NightTaskRecord(SQLModel, table=True):
     #: it ends (``night_morning``): tests, files changed, usage per account,
     #: the commit — read off its records, never a model's words.
     morning_json: str = ""
+    #: Idea 39 (39-a): the saved chat this was set up from; each result is
+    #: written there as a REPORT (``agents/chat_delivery.report_to_chat``).
+    #: "" = it reports nowhere (made on a page, or Stop reporting).
+    #: Additive; NULL on an older table reads as "".
+    chat_thread_id: str = ""
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
@@ -578,9 +583,10 @@ def add_note(engine: Any, task_id: str, kind: str, text: str) -> bool:
 _RECORD_LOCK = threading.Lock()
 
 
-def finish_task(engine: Any, task_id: str, state: str) -> bool:
+def finish_task(engine: Any, task_id: str, state: str, *, event_bus: Any = None) -> bool:
     """running → an ended state (only from running; a cancelled queued task
-    goes through :func:`cancel_queued`). BLOCKING."""
+    goes through :func:`cancel_queued`). BLOCKING. Idea 39 (39-a): a task
+    queued from a chat reports how it ended there (:func:`report_ended`)."""
     from sqlalchemy import update
 
     if state not in ENDED:
@@ -593,7 +599,50 @@ def finish_task(engine: Any, task_id: str, state: str) -> bool:
             .values(state=state, ended_at=now, updated_at=now)
         )
         db.commit()
-        return bool(getattr(res, "rowcount", 0))
+        done = bool(getattr(res, "rowcount", 0))
+    if done:
+        report_ended(engine, task_id, event_bus=event_bus)
+    return done
+
+
+#: Idea 39 (39-a): the verdict word on a night task's report.
+_REPORT_WORDS = {DONE: "Done", NEEDS_YOU: "Needs you", FAILED: "Failed"}
+
+
+def report_ended(engine: Any, task_id: str, *, event_bus: Any = None) -> dict[str, Any]:
+    """Idea 39 (39-a): a night task queued from a chat writes ONE report there
+    when it ends: how it ended, its branch and commit, and its notes, read off
+    its record (never a model's words). A task the user stopped writes
+    nothing. BLOCKING; never raises."""
+    try:
+        from ..agents import chat_delivery as _cd
+
+        with session_scope(engine) as db:
+            row = db.get(NightTaskRecord, str(task_id))
+            if row is None:
+                return {"ok": False, "why": "no such task"}
+            task = view(row)
+            chat = _cd.clean_chat_thread_id(getattr(row, "chat_thread_id", "") or "")
+        if not chat or task["state"] not in _REPORT_WORDS:
+            return {"ok": False, "why": "nothing to report"}
+        parts = [f"“{' '.join(task['words'].split())[:200]}” in {task['folder']}."]
+        if task["branch"]:
+            parts.append(f"Its work is on the branch {task['branch']}"
+                         + (f" (commit {task['commit_sha'][:10]})." if task["commit_sha"] else "."))
+        for note in (task.get("notes") or [])[-5:]:
+            text = " ".join(str(note.get("text") or "").split())
+            if text:
+                parts.append(text)
+        report = {
+            "kind": "night", "name": " ".join(task["words"].split())[:60], "id": task["id"],
+            "href": "/chat?view=code", "outcome": _REPORT_WORDS[task["state"]],
+            "words": " ".join(parts), "key": f"night:{task['id']}",
+        }
+        platform = type("_P", (), {"engine": engine, "event_bus": event_bus})()
+        return _cd.report_to_chat(platform, chat, report)
+    except Exception:  # noqa: BLE001 — the task's own record stands
+        log.warning("night task %s could not report to its chat", task_id, exc_info=True)
+        return {"ok": False, "why": "could not report"}
 
 
 CANCELLED_BEFORE = "You cancelled it before it started."

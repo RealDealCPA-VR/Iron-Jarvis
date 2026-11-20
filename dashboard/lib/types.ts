@@ -555,6 +555,10 @@ export interface Schedule {
   script?: ScheduleScript | null;
   /** Skip the lessons/memory/fabric injection for this fire. */
   skip_memory?: boolean;
+  /** Idea 39 (39-a): the record's id and the chat it reports to (null =
+   *  none: made on this page, or Stop reporting). */
+  id?: string;
+  reports_to?: { thread_id: string; title: string } | null;
   [k: string]: unknown;
 }
 

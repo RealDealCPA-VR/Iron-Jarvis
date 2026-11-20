@@ -91,6 +91,8 @@ export interface GoalRecord {
   verifier?: GoalVerifier | null;
   /** The breaker reason when state === "tripped" (shown VERBATIM). */
   trip_reason?: string | null;
+  /** Idea 39 (39-a): the chat its tries report to (null = none). */
+  reports_to?: { thread_id: string; title: string } | null;
   breaker?: { reason?: string | null } | null;
   /** v1.209.0: per-tool ask receipts, keyed by tool name. DETAIL ROUTE ONLY:
    *  the list route deliberately omits this (routes/goals.py `_payload` —

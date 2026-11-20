@@ -30,6 +30,7 @@ import Link from "next/link";
 import { Check, DoorOpen, Loader2, Target, X } from "lucide-react";
 
 import { ApiError, post } from "@/lib/api";
+import { REPORTS_HERE } from "@/lib/reports";
 
 /* ------------------------------------------------------------------------ */
 /* The heuristic (exported so the test can pin the bar)                      */
@@ -155,6 +156,7 @@ export function GoalContractCard({
   userText,
   projectId,
   onDismiss,
+  chatThreadId,
 }: {
   /** The turn's USER message — the context the goal is born from. */
   userText: string;
@@ -162,6 +164,9 @@ export function GoalContractCard({
   projectId?: string | null;
   /** "Not now" — the caller hides the whole offer for this turn. */
   onDismiss?: () => void;
+  /** Idea 39 (39-a): the saved chat this card is pressed in. Each try of the
+   *  goal reports here (Stop reporting is on its row and on each report). */
+  chatThreadId?: string | null;
 }) {
   const [name, setName] = useState(() => goalNameFrom(userText));
   const [contract, setContract] = useState(() => goalContractFrom(userText));
@@ -190,6 +195,7 @@ export function GoalContractCard({
       };
       if (schedule.trim()) body.schedule = schedule.trim();
       if (projectId) body.project_id = projectId;
+      if (chatThreadId) body.chat_thread_id = chatThreadId;
       await post<{ goal: unknown }>("/goals", body);
       setCreated(true);
     } catch (e) {
@@ -309,6 +315,11 @@ export function GoalContractCard({
               <span className="inline-flex items-center gap-1.5 text-[12px] text-tone-success">
                 <Check size={13} /> Goal created
               </span>
+              {chatThreadId ? (
+                <span data-testid="goal-reports-here" className="text-[12px] text-zinc-400">
+                  {REPORTS_HERE}
+                </span>
+              ) : null}
               <Link
                 href="/autonomy"
                 className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.02] px-2.5 py-1 text-[12px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
@@ -365,10 +376,12 @@ export function GoalBirth({
   userText,
   toolsUsed,
   projectId,
+  chatThreadId,
 }: {
   userText: string;
   toolsUsed?: string[] | null;
   projectId?: string | null;
+  chatThreadId?: string | null;
 }) {
   const [dismissed, setDismissed] = useState(false);
   const [open, setOpen] = useState(false);
@@ -378,6 +391,7 @@ export function GoalBirth({
       <GoalContractCard
         userText={userText}
         projectId={projectId}
+        chatThreadId={chatThreadId}
         onDismiss={() => setDismissed(true)}
       />
     );

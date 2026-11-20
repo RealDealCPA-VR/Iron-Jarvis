@@ -722,6 +722,15 @@ class NightTaskAddTool(_BuildTool):
             return ToolResult(ok=False, error=_refusal_words(exc))
         R.bind_created(task["id"])
         _note(after=task)
+        # Idea 39 (39-a): queued from a chat, its morning facts are reported
+        # in that chat when it ends.
+        from ..agents.chat_delivery import set_report_target, stampable_chat
+
+        report_chat = await asyncio.to_thread(
+            stampable_chat, getattr(self.platform, "engine", None), getattr(ctx, "thread_id", "")
+        )
+        if report_chat:
+            await asyncio.to_thread(set_report_target, self.platform.engine, "night", task["id"], report_chat)
         start, end, open_now = _night_words(self.platform)
         when = f"between {start} and {end}" if start and end else "inside the night window"
         stop = " Emergency stop is on, so it will not start until it is turned off." if _emergency_on(self.platform) else ""

@@ -697,8 +697,15 @@ def register(app: FastAPI, d) -> None:
                     held.setdefault(g.scope_id, []).append(store.as_dict(g))
             except Exception:  # noqa: BLE001 — a store fault lists none, never breaks the page
                 held = {}
-        for t in d.platform.scheduler.list():
+        tasks = d.platform.scheduler.list()
+        # Idea 39 (39-a): "Reports to <chat>" with Stop reporting, one read.
+        from ...agents import chat_delivery as _cd
+
+        titles = _cd.chat_titles(d.platform.engine, [getattr(t, "chat_thread_id", "") for t in tasks])
+        for t in tasks:
             row = t.model_dump()
+            row["chat_thread_id"] = str(getattr(t, "chat_thread_id", "") or "")
+            row["reports_to"] = _cd.reports_to_view(row["chat_thread_id"], titles)
             payload = t.decoded_payload()
             pid = payload.get("project_id") if isinstance(payload, dict) else None
             row["project_id"] = pid if isinstance(pid, str) else ""

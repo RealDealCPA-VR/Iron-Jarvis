@@ -83,6 +83,14 @@ class SentinelAddTool(Tool):
         return await capture_create_undo(self.platform, "sentinel", str(args.get("name") or "").strip())
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        import asyncio
+
+        # Idea 39 (39-a): made in a chat, what it notices is reported there.
+        from ..agents.chat_delivery import stampable_chat
+
+        report_chat = await asyncio.to_thread(
+            stampable_chat, getattr(self.platform, "engine", None), getattr(ctx, "thread_id", "")
+        )
         try:
             rec = self.platform.sentinels.add(
                 args.get("name") or "",
@@ -92,6 +100,7 @@ class SentinelAddTool(Tool):
                 kind=args.get("kind", "file"),
                 agent_type=args.get("agent_type", "builder"),
                 risk=args.get("risk", "low"),
+                **({"chat_thread_id": report_chat} if report_chat else {}),
             )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
@@ -103,6 +112,11 @@ class SentinelAddTool(Tool):
         }
         card = _created_card(rec.name, rec.decoded_config().get("path") or rec.kind)
         if card:
+            if getattr(rec, "chat_thread_id", ""):
+                # Idea 39 (39-a): the card says where what it notices will go.
+                from ..scheduling.tools import REPORTS_HERE_CARD
+
+                card["new"] = f"{card.get('new') or ''} \u00b7 {REPORTS_HERE_CARD}".strip(" \u00b7")
             data["record_change"] = card
         return ToolResult(
             ok=True,

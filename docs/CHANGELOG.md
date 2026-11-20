@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.547.0
+
+**Results come home to the chat that asked.** Something you set up from a chat now reports back into that same chat.
+
 ## v1.546.0
 
 **Rewind works in folders without git too.** "Rewind to here" can put a folder's files back as they were when a message started (v1.543.0).
@@ -77,7 +81,3 @@
 ## v1.528.0
 
 **Claude desktop's Chat tab and Codex can record their chats here.** Claude desktop keeps the chats in its **Chat** tab on claude.ai, not on this PC, so Iron Jarvis cannot read them.
-
-## v1.527.0
-
-**Plain words, and nothing dropped without a word.** The last of seven releases from the third review: coding sessions say why they stopped waiting or could not save, failures read as sentences, and the start-up no longer slows down as the history grows.

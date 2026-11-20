@@ -164,9 +164,19 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/sentinels")
     def list_sentinels() -> dict[str, Any]:
+        # Idea 39 (39-a): each row says which chat it reports to, one read.
+        from ...agents import chat_delivery as _cd
+
+        rows = d.platform.sentinels.list()
+        titles = _cd.chat_titles(d.platform.engine, [getattr(s, "chat_thread_id", "") for s in rows])
+        out = []
+        for s in rows:
+            view = d._sentinel_view(s)
+            view["reports_to"] = _cd.reports_to_view(view.get("chat_thread_id"), titles)
+            out.append(view)
         return {
             "enabled": getattr(d.platform.config, "sentinels_enabled", False),
-            "sentinels": [d._sentinel_view(s) for s in d.platform.sentinels.list()],
+            "sentinels": out,
         }
 
     @app.post("/sentinels")

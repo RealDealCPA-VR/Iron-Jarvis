@@ -61,6 +61,11 @@ class WorkflowRunRecord(SQLModel, table=True):
     #: same ``workflow:<name>`` origin a trigger stamps, so the origin alone
     #: cannot tell them apart). Additive column; old rows read ``""``.
     started_by: str = ""
+    #: Idea 39 (39-a): the saved chat this was set up from; each result is
+    #: written there as a REPORT (``agents/chat_delivery.report_to_chat``).
+    #: "" = it reports nowhere (made on a page, or Stop reporting).
+    #: Additive; NULL on an older table reads as "".
+    chat_thread_id: str = ""
     started_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 

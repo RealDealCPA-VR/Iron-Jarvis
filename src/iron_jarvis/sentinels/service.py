@@ -25,6 +25,7 @@ never floods the backlog on the first tick.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import os
 import threading
 
@@ -58,6 +59,12 @@ class SentinelService:
         # Serialize check() so the background tick + a manual /sentinels/poll
         # (both run on threads) can't double-read last_state for one sentinel.
         self._lock = threading.Lock()
+        # Idea 39 (39-a): the bus a watcher's chat report announces itself on
+        # (``chat.thread_updated``); the platform sets it. None = the report
+        # still lands, the open page sees it on its next read.
+        self.event_bus = None
+        # The clock the hourly pacing reads (D-39.3); a test injects one.
+        self.clock = utcnow
 
     # --- persistence helpers ---------------------------------------------
 
@@ -102,8 +109,12 @@ class SentinelService:
         risk: str = "low",
         enabled: bool = True,
         config: dict | None = None,
+        chat_thread_id: str = "",
     ) -> SentinelRecord:
         """Persist a new watcher. Raises ``ValueError`` on a bad kind / dup name.
+
+        ``chat_thread_id`` (idea 39, 39-a): the chat it was set up from; what it
+        notices is reported there, at most once an hour (D-39.3).
 
         For ``kind="file"`` supply ``path`` (a file, directory, or glob) and an
         optional ``glob`` pattern relative to it. Adding a sentinel NEVER scans or
@@ -132,6 +143,7 @@ class SentinelService:
             agent_type=agent_type or "builder",
             risk=risk if risk in ("low", "med", "high") else "low",
             enabled=enabled,
+            chat_thread_id=str(chat_thread_id or "").strip(),
         )
         with session_scope(self.engine) as db:
             db.add(rec)
@@ -329,11 +341,82 @@ class SentinelService:
                 log.exception("sentinel %s check failed", rec.name)
                 continue
             if not changed:
+                # Idea 39 (D-39.3): changes held back by the hour go out once
+                # the hour is up, even when nothing new came.
+                self.report_to_chat(rec, [])
                 continue
             proposal = self._propose(intent, rec, changed)
             if proposal is not None:
                 created.append(proposal)
+            self.report_to_chat(rec, changed)
         return created
+
+    #: Idea 39 (39-a): the most paths a watcher keeps waiting for its next report.
+    REPORT_PENDING_MAX = 200
+
+    def report_to_chat(self, rec: SentinelRecord, changed: list[dict]) -> dict:
+        """Idea 39 (39-a): a watcher set up from a chat says what it noticed
+        there: "3 new or changed files in Intake: a.pdf, b.pdf, c.pdf." with
+        the suggestion it left. At most ONE report an hour (D-39.3): changes
+        noticed sooner wait on the row (``report_pending_json``) and join the
+        next report. BLOCKING (the poll runs on a worker thread). Returns
+        ``{"reported": bool, "waiting": int}``; never raises."""
+        from ..agents import chat_delivery as _cd
+
+        out = {"reported": False, "waiting": 0}
+        chat = _cd.clean_chat_thread_id(getattr(rec, "chat_thread_id", "") or "")
+        if not chat:
+            return out
+        try:
+            now = self.clock()
+            with self._lock, session_scope(self.engine) as db:
+                row = db.get(SentinelRecord, rec.id)
+                if row is None:
+                    return out
+                try:
+                    pending = json.loads(row.report_pending_json or "[]")
+                except (TypeError, ValueError):
+                    pending = []
+                pending = [str(p) for p in (pending if isinstance(pending, list) else []) if p]
+                for c in changed or []:
+                    path = str((c or {}).get("path") or "")
+                    if path and path not in pending:
+                        pending.append(path)
+                pending = pending[-self.REPORT_PENDING_MAX:]
+                last = row.report_at
+                if last is not None and getattr(last, "tzinfo", None) is None and getattr(now, "tzinfo", None):
+                    last = last.replace(tzinfo=now.tzinfo)
+                due = bool(pending) and (
+                    last is None or (now - last).total_seconds() >= _cd.WATCHER_REPORT_GAP_S
+                )
+                if not due:
+                    row.report_pending_json = json.dumps(pending)
+                    db.add(row)
+                    db.commit()
+                    out["waiting"] = len(pending)
+                    return out
+                row.report_pending_json = ""
+                row.report_at = now
+                db.add(row)
+                db.commit()
+            names = [Path(p).name or p for p in pending]
+            shown = ", ".join(names[:10]) + (f" and {len(names) - 10} more" if len(names) > 10 else "")
+            n = len(names)
+            words = f"{n} new or changed file{'' if n == 1 else 's'} in {rec.name}: {shown}."
+            suggestion = " ".join(str(rec.task or "a look at what changed").split()).rstrip(".")
+            words += f" Suggested: {suggestion}. It waits for your approval on the Autonomy page."
+            report = {
+                "kind": "watcher", "name": rec.name, "id": rec.id, "href": "/autonomy",
+                "outcome": "Noticed", "words": words,
+                "key": f"watcher:{rec.id}:{now.isoformat()}",
+            }
+            platform = type("_P", (), {"engine": self.engine, "event_bus": self.event_bus})()
+            _cd.report_to_chat(platform, chat, report)
+            out["reported"] = True
+            return out
+        except Exception:  # noqa: BLE001 — a report never breaks the sweep
+            log.warning("watcher %s could not report to its chat", getattr(rec, "name", "?"), exc_info=True)
+            return out
 
     @staticmethod
     def _propose(intent, rec: SentinelRecord, changed: list[dict]):

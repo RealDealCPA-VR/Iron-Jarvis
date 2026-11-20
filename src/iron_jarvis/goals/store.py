@@ -206,8 +206,11 @@ class GoalStore:
         budget: dict[str, Any] | None = None,
         verifier: dict[str, Any] | None = None,
         origin: str = "",
+        chat_thread_id: str = "",
     ) -> GoalContractRecord:
-        """Validate + persist one goal (raises ``ValueError`` with the reason)."""
+        """Validate + persist one goal (raises ``ValueError`` with the reason).
+        ``chat_thread_id`` (idea 39, 39-a): the chat it was set up from, where
+        each try reports (the route stamps only a saved chat)."""
         contract = str(contract_text or "").strip()
         if not contract:
             raise ValueError("a goal needs contract_text — the goal, stated checkably")
@@ -236,6 +239,7 @@ class GoalStore:
                 verifier if isinstance(verifier, dict) else {"kind": "manual"}
             ),
             origin=str(origin or "").strip()[:64],
+            chat_thread_id=str(chat_thread_id or "").strip(),
         )
         with session_scope(self.engine) as db:
             db.add(record)
@@ -570,6 +574,8 @@ def goal_view(record: GoalContractRecord) -> dict[str, Any]:
     return {
         "id": record.id,
         "name": record.name,
+        # Idea 39 (39-a): the chat its tries report to ("" = none).
+        "chat_thread_id": str(getattr(record, "chat_thread_id", "") or ""),
         "contract_text": record.contract_text,
         "agent_type": record.agent_type,
         "project_id": record.project_id,

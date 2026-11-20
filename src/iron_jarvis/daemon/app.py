@@ -3992,6 +3992,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # v1.231.0 (audit AE7): "root unreachable since <t>" / scan error.
             "last_error": getattr(s, "last_error", None),
             "created_at": s.created_at.isoformat(),
+            # Idea 39 (39-a): the chat it reports to ("" = none).
+            "chat_thread_id": str(getattr(s, "chat_thread_id", "") or ""),
         }
 
     # --- Communication channels -------------------------------------------
@@ -4369,6 +4371,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import work_map as _work_map_routes
 
     _work_map_routes.register(app, d)
+    # Idea 39 (39-a): where a schedule, watcher, goal, workflow run or night
+    # task reports (Stop reporting on its row and on each report).
+    from .routes import reports as _reports_routes
+
+    _reports_routes.register(app, d)
     # Your clients (v1.499.0, vision plan leap 3, Phase 3): the people and
     # businesses the owner works for, known by their folders and confirmed by
     # the owner; the list, each client's page, the answers and preferences.

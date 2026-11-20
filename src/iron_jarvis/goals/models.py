@@ -169,6 +169,11 @@ class GoalContractRecord(SQLModel, table=True):
     #: chat | api | "" = unattributed. Iteration sessions carry their own
     #: ``origin="goal:<id>"`` stamp.
     origin: str = ""
+    #: Idea 39 (39-a): the saved chat this was set up from; each result is
+    #: written there as a REPORT (``agents/chat_delivery.report_to_chat``).
+    #: "" = it reports nowhere (made on a page, or Stop reporting).
+    #: Additive; NULL on an older table reads as "".
+    chat_thread_id: str = ""
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     last_run_at: datetime | None = None

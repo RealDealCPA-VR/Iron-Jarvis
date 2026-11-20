@@ -2220,6 +2220,9 @@ class GoalContractCreate(BaseModel):
     allowed_grants: list[str] = Field(default_factory=list)
     budget: dict[str, Any] | None = None  # store-validated (bound or unlimited)
     verifier: dict[str, Any] | None = None  # store-validated; None = manual
+    #: Idea 39 (39-a): the saved chat the goal card was pressed in; each try
+    #: reports there. "" (a page, an older card) = it reports nowhere.
+    chat_thread_id: str = ""
 
 
 class GoalGrantsPatch(BaseModel):

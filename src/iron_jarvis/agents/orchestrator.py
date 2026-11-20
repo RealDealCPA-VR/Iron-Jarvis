@@ -2839,6 +2839,11 @@ class Orchestrator:
         # by the first answer — so a rerun never inherits it (it could only
         # record a failed answer the user did not cause).
         options.pop(_REMOTE_REPLY_OPTION, None)
+        # Idea 39 (39-a): a goal's try is reported by the GOAL after its
+        # checks; a rerun of it is the user's own run, whose line comes home.
+        _src = options.get(_chat_delivery.REPORT_OPTION)
+        if isinstance(_src, dict) and _src.get("by") == _chat_delivery.REPORT_BY_SOURCE:
+            options.pop(_chat_delivery.REPORT_OPTION, None)
         return await self.create_session(
             prev.task,
             prev.agent_type,
@@ -2974,6 +2979,8 @@ class Orchestrator:
         # v1.345.0 (lane T): the chat a run reports to belongs to ONE ask; a
         # follow-up carries its own chat or none, never the parent's.
         options.pop(_chat_delivery.CHAT_THREAD_OPTION, None)
+        # Idea 39 (39-a): ... and so does the source a run reported for.
+        options.pop(_chat_delivery.REPORT_OPTION, None)
         _chat_id = _chat_delivery.clean_chat_thread_id(chat_thread_id)
         if _chat_id:
             options[_chat_delivery.CHAT_THREAD_OPTION] = _chat_id

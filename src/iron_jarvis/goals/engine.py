@@ -85,6 +85,9 @@ GOAL_CREATED = "goal.created"
 GOAL_ITERATION_STARTED = "goal.iteration_started"
 GOAL_ITERATION_COMPLETED = "goal.iteration_completed"
 GOAL_ITERATION_REFUSED = "goal.iteration_refused"
+#: Idea 39 (39-a): the verdict words on a goal's report in its chat.
+GOAL_REPORT_SATISFIED = "Satisfied"
+GOAL_REPORT_NOT_YET = "Not yet"
 GOAL_SATISFIED = "goal.satisfied"
 GOAL_TRIPPED = "goal.tripped"
 GOAL_STOPPED = "goal.stopped"
@@ -302,6 +305,28 @@ class GoalEngine:
                 log.exception("standing grants of %s not revoked", goal_id)
         return revoked
 
+    def _report_options(self, goal: GoalContractRecord) -> dict[str, Any]:
+        """``{"options": {...}}`` for a goal that reports to a chat, else
+        ``{}``. BLOCKING (the chat's Local only read); never raises."""
+        from ..agents import chat_delivery as _cd
+
+        chat = _cd.clean_chat_thread_id(getattr(goal, "chat_thread_id", "") or "")
+        if not chat:
+            return {}
+        options: dict[str, Any] = {
+            "chat_thread_id": chat,
+            _cd.REPORT_OPTION: {"kind": "goal", "name": goal.name, "id": goal.id,
+                                "href": "/autonomy", "by": _cd.REPORT_BY_SOURCE},
+        }
+        try:
+            from ..providers.egress import thread_local_only
+
+            if thread_local_only(self.p.engine, chat):
+                options["local_only"] = True
+        except Exception:  # noqa: BLE001
+            log.warning("could not read whether goal %s's chat is Local only", goal.id, exc_info=True)
+        return {"options": options}
+
     async def run_iteration(self, goal_id: str) -> dict[str, Any]:
         """ONE iteration: gate → spawn → account → verify → checkpoint.
 
@@ -360,21 +385,63 @@ class GoalEngine:
             return await self._refuse(goal, _why)
         self._iterating.add(goal.id)
         try:
-            return await self._iterate(goal, iteration=int(spent["iterations"]) + 1)
+            result = await self._iterate(goal, iteration=int(spent["iterations"]) + 1)
         finally:
             self._iterating.discard(goal.id)
+        # Idea 39 (39-a): a goal set up from a chat reports each try there,
+        # ONCE, after its checks (its run writes nothing itself).
+        await self._report_try(goal, result)
+        return result
+
+    async def _report_try(self, goal: GoalContractRecord, result: dict[str, Any]) -> None:
+        """Write ONE report of a try into the chat the goal was set up from:
+        the verdict from the checks (satisfied, not yet with what is unmet,
+        failed), then the try's own summary. A try the user stopped writes
+        nothing. Never raises."""
+        from ..agents import chat_delivery as _cd
+
+        chat = _cd.clean_chat_thread_id(getattr(goal, "chat_thread_id", "") or "")
+        if not chat or not isinstance(result, dict) or result.get("status") == "cancelled":
+            return
+        sid = str(result.get("session_id") or "")
+        try:
+            row = await asyncio.to_thread(self._session_row, sid) if sid else None
+            summary = str(getattr(row, "summary", "") or "").strip()
+            if result.get("satisfied"):
+                outcome, reason = GOAL_REPORT_SATISFIED, ""
+            elif result.get("status") == "completed":
+                unmet = str(result.get("unmet") or result.get("pending") or "").strip()
+                outcome = GOAL_REPORT_NOT_YET
+                reason = f"Not satisfied yet: {unmet}" if unmet else "Not satisfied yet."
+            else:
+                outcome = "Failed"
+                reason = str(result.get("reason") or "").strip() or "The try did not finish."
+            report = {
+                "kind": "goal", "name": goal.name, "id": goal.id, "href": "/autonomy",
+                "run_id": sid, "outcome": outcome, "reason": reason, "words": summary,
+                "key": f"goal:{goal.id}:{sid or result.get('iteration')}",
+            }
+            await asyncio.to_thread(_cd.report_to_chat, self.p, chat, report)
+        except Exception:  # noqa: BLE001 — the goal's own record stands
+            log.warning("goal %s could not report its try", goal.id, exc_info=True)
 
     # -- the iteration body ----------------------------------------------------
 
     async def _iterate(self, goal: GoalContractRecord, iteration: int) -> dict[str, Any]:
         started = time.monotonic()
         task_text = self._compose_task(goal)
+        # Idea 39 (39-a): a goal set up from a chat — its try's asks show in
+        # that chat, the GOAL writes the report (``by: source``), and a Local
+        # only chat keeps the try Local only. Passed only then, so every
+        # other goal's call is as before.
+        report_kw = await asyncio.to_thread(self._report_options, goal)
         session = await self.orch.create_session(
             task_text,
             _agent_type(goal.agent_type),
             project_id=goal.project_id,  # context spine, threaded
             allow_tools=goal.decoded_grants(),
             origin=_goal_origin(goal.id),
+            **report_kw,
         )
         await self.p.event_bus.publish(
             GOAL_ITERATION_STARTED,

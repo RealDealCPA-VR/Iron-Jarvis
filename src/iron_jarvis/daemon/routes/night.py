@@ -679,7 +679,7 @@ async def settle_running(d: Any) -> list[str]:
                 continue
             await asyncio.to_thread(N.add_note, engine, tid, "error",
                                     "Iron Jarvis stopped before this task's session was made.")
-            await asyncio.to_thread(N.finish_task, engine, tid, N.FAILED)
+            await asyncio.to_thread(N.finish_task, engine, tid, N.FAILED, event_bus=getattr(d.platform, "event_bus", None))
             _release(d, tid)
             settled.append(tid)
             continue
@@ -732,7 +732,7 @@ async def settle_running(d: Any) -> list[str]:
         row = await asyncio.to_thread(S.get_row, engine, thread)
         if row is None:
             await asyncio.to_thread(N.add_note, engine, tid, "stopped", "Its coding session was deleted.")
-            await asyncio.to_thread(N.finish_task, engine, tid, N.STOPPED)
+            await asyncio.to_thread(N.finish_task, engine, tid, N.STOPPED, event_bus=getattr(d.platform, "event_bus", None))
             _release(d, tid)
             settled.append(tid)
             continue
@@ -868,7 +868,7 @@ async def settle_running(d: Any) -> list[str]:
                     state = N.NEEDS_YOU
         for kind, text in notes:
             await asyncio.to_thread(N.add_note, engine, tid, kind, text)
-        await asyncio.to_thread(N.finish_task, engine, tid, state)
+        await asyncio.to_thread(N.finish_task, engine, tid, state, event_bus=getattr(d.platform, "event_bus", None))
         _release(d, tid)
         settled.append(tid)
     return settled
@@ -989,7 +989,7 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
         except _StoppedWhileStarting:
             # Nothing started: the task ends STOPPED with the user's own note
             # (already written by the Cancel); the caller gives its slot back.
-            await asyncio.to_thread(N.finish_task, engine, tid, N.STOPPED)
+            await asyncio.to_thread(N.finish_task, engine, tid, N.STOPPED, event_bus=getattr(d.platform, "event_bus", None))
             return False
         except CreateRefused as exc:
             why = str(exc)
@@ -1010,10 +1010,10 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
             # v1.398.0 review: Emergency stop turned on while it was starting
             # — STOPPED by it (as every running task is), never "failed".
             await asyncio.to_thread(N.add_note, engine, tid, "emergency", N.EMERGENCY_NOTE)
-            await asyncio.to_thread(N.finish_task, engine, tid, N.STOPPED)
+            await asyncio.to_thread(N.finish_task, engine, tid, N.STOPPED, event_bus=getattr(d.platform, "event_bus", None))
             return False
         await asyncio.to_thread(N.add_note, engine, tid, "error", why)
-        await asyncio.to_thread(N.finish_task, engine, tid, N.FAILED)
+        await asyncio.to_thread(N.finish_task, engine, tid, N.FAILED, event_bus=getattr(d.platform, "event_bus", None))
         return False
     finally:
         _STARTING_TASKS.discard(tid)

@@ -29,6 +29,7 @@ import {
   ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { ReportsTo } from "@/components/ReportsTo";
 // v1.316.0 (agent-names-raw-lowercase): THE agent-name rule — built-ins
 // read as words ("maintainer" → "Maintainer"), a custom agent keeps the name
 // the user typed. The workflow editor's map knew only its own five agents.
@@ -52,6 +53,8 @@ interface Sentinel {
    *  the last scan succeeded. */
   last_error?: string | null;
   created_at: string;
+  /** Idea 39 (39-a): the chat it reports to (null = none). */
+  reports_to?: { thread_id: string; title: string } | null;
 }
 
 interface SentinelsResponse {
@@ -648,6 +651,8 @@ export default function SentinelsPage() {
                           <Dot on={!!s.enabled} />
                           <span className="text-zinc-100">{s.name}</span>
                         </span>
+                        {/* Idea 39 (39-a): made in a chat, it reports there. */}
+                        <ReportsTo kind="watcher" id={s.id} to={s.reports_to} onChanged={reload} />
                       </td>
                       <td className="px-2 py-2.5">
                         <Badge value={s.kind} tone="cyan" />
