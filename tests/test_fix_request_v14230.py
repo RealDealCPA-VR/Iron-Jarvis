@@ -623,7 +623,10 @@ def test_the_route_answers_the_report(tmp_path, held_clock):
     assert res.status_code == 200
     body = res.json()
     # v1.423.0 review: and how many of them the text lists.
-    assert set(body) == {"text", "problems", "listed", "complete", "since", "until", "sessions"}
+    # R0.2 (additive): and how much Local only work was left out.
+    assert set(body) == {"text", "problems", "listed", "complete", "since", "until", "sessions",
+                         "local_only_left_out"}
+    assert body["local_only_left_out"] == 0
     assert body["listed"] == 3 and body["complete"] is True
     assert body["problems"] == 3 and body["sessions"] == 1
     assert body["since"] == "2026-10-26T12:00:00Z" and body["until"] == "2026-11-02T12:00:00Z"

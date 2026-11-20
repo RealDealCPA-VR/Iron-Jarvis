@@ -1,9 +1,12 @@
 """COPY AS A FIX REQUEST's route (v1.423.0, Wave 3 lane B).
 
 ``GET /team/fix-request?days=7&session=<thread id>`` → ``{"text",
-"problems", "listed", "complete", "since", "until", "sessions"}`` (v1.423.0
-review: ``listed`` — how many problems the text holds; ``complete`` — False
-when a source could not be read): the Markdown report of the
+"problems", "listed", "complete", "since", "until", "sessions",
+"local_only_left_out"}`` (v1.423.0 review: ``listed`` — how many problems the
+text holds; ``complete`` — False when a source could not be read; R0.2:
+``local_only_left_out`` — Local only work left out, never handed on; a
+Local only session asked for alone answers ``agents/fix_request.
+SCOPE_LOCAL_ONLY`` with a 200): the Markdown report of the
 problems Iron Jarvis's own coding sessions and model team ran into
 (``agents/fix_request`` — what it reads, what it leaves out and why), for the
 owner to paste to the coding agent that works on Iron Jarvis.

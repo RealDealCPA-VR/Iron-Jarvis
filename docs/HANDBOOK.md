@@ -2042,6 +2042,29 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Copy as a fix request leaves out Local only work (v1.546.1)
+
+A coding session you keep **Local only** is now never in the report that
+"Copy as a fix request" makes for a coding agent: not its errors, its
+commands, a reviewer's findings or even its name. Before, the report read
+every coding session alike, so Local only work could reach a coding model
+when you pasted it.
+
+- **What counts as Local only.** A session that is Local only now, or that
+  is kept local because it read one of your apps, or that ran any reply,
+  helper or step Local only before, even if you switched Local only off
+  afterwards. Such a session is left out whole. A helper or an objective's
+  teammate that ran Local only is left out on its own.
+- **It says what it left out.** The report has a line such as "Left out: 1
+  Local only coding session (Local only work never goes into a fix
+  request)". When nothing else was found, the button shows that line instead
+  of "Nothing to report".
+- **In a Local only session's own Session tab**, the button says "This coding
+  session is Local only, so nothing from it goes into a fix request." and
+  copies nothing.
+- **When Iron Jarvis cannot tell.** A session or a run whose Local only
+  setting cannot be read is left out too, and the report says so.
+
 ## Scroll back to the start of a long chat (v1.548.0)
 
 In a long chat, scroll up and the earlier messages load in place, back to
@@ -9082,6 +9105,8 @@ Jarvis.
     anything a low-trust run read. A failed command shows only the shell's own
     error, never what else it printed, and a write or edit shows a file's size,
     never its text.
+  - A coding session you keep Local only is never in it (since v1.546.1; see
+    "Copy as a fix request leaves out Local only work").
   - Secrets are masked, but the report still holds your commands, file paths
     and errors: read it before you paste it anywhere.
 

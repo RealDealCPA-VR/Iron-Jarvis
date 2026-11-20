@@ -21,7 +21,10 @@
  *    the report could list only some — the daemon's `listed`);
  *  - "Nothing to report from the last 7 days" — and copies NOTHING; when a
  *    source could not be read (`complete: false`), the daemon's own line,
- *    which names it (never a silent "nothing found");
+ *    which names it (never a silent "nothing found"); R0.2: when Local only
+ *    work was left out (`local_only_left_out`), the daemon's own line too, in
+ *    the quiet tone ("This coding session is Local only, so nothing from it
+ *    goes into a fix request." in a Local only session's Session tab);
  *  - a copy that could not reach the clipboard is never reported as one (the
  *    DraftCard rule): the text is shown in a box to select by hand;
  *  - any other failure in words.
@@ -84,7 +87,7 @@ export function fixRequestTitle(session?: string | null, days: number = FIX_REQU
 export const CLIPBOARD_UNAVAILABLE =
   "Your clipboard could not be reached, so nothing was copied. Select the report below and copy it.";
 
-type Report = { text: string; problems: number; listed?: number; complete: boolean };
+type Report = { text: string; problems: number; listed?: number; complete: boolean; localOnly: number };
 
 function count(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined;
@@ -101,7 +104,24 @@ function decode(raw: unknown): Report | null {
     // v1.423.0 review: `complete: false` — a source could not be read, or
     // calls were left out; an older Iron Jarvis says nothing (complete).
     complete: r.complete !== false,
+    // R0.2: Local only work the daemon left out (it never goes into a fix
+    // request); an older Iron Jarvis says nothing (none).
+    localOnly: count(r.local_only_left_out) ?? 0,
   };
+}
+
+/** What the status line says when the report holds no problem: the short
+ *  words, or the daemon's own line when it has more to say — a source it
+ *  could not read (`warn`), or Local only work it left out (`quiet`: the
+ *  user's own choice, never a fault). Never a bare "nothing to report" over
+ *  work that was left out. */
+export function nothingSaid(
+  report: { text: string; complete: boolean; localOnly: number },
+  days: number = FIX_REQUEST_DAYS,
+): { tone: "quiet" | "warn"; text: string } {
+  if (!report.complete) return { tone: "warn", text: report.text };
+  if (report.localOnly > 0) return { tone: "quiet", text: report.text };
+  return { tone: "quiet", text: nothingWords(days) };
 }
 
 /** An older Iron Jarvis has no such route: FastAPI's own 404 ("Not Found"). */
@@ -143,12 +163,9 @@ export function FixRequestButton({
       }
       if (report.problems <= 0) {
         // Never a silent "nothing found" (v1.423.0 review): when a source
-        // could not be read, the daemon's own line says which.
-        setSaid(
-          report.complete
-            ? { tone: "quiet", text: nothingWords(days) }
-            : { tone: "warn", text: report.text },
-        );
+        // could not be read, the daemon's own line says which; R0.2: and
+        // when Local only work was left out, its line says so.
+        setSaid(nothingSaid(report, days));
         return;
       }
       // The app's own copy path (the desktop bridge first, then the browser),

@@ -103,6 +103,24 @@ defects):
   unreadable, or the session deleted) is left out too — nobody can say it
   was not in a low-trust reply — and that count is said as well.
 
+LOCAL ONLY (R0.2 of ``docs/BUILD-OUT-PLAN-2026-11-20.md``): the report is
+pasted into a coding model's prompt, and Local only work must never reach a
+model off this network that way. A coding session is LOCAL ONLY — and left out
+WHOLE, every call, reply, helper, finding and its id — when ANY record says
+it ran Local only (:func:`_line_ran_local_only`, :func:`_local_only_work`):
+its setup now (``providers/egress.setup_says_local_only``, the toggle or an
+app holding it local), a reply line's ``route.local_only`` or a Local only
+refusal (``errorKind``), one of its helpers' ``options.local_only``, or the
+event bus's ``local_only`` stamp on one of its ``tool.executed`` /
+``tool.denied`` / ``autonomy.nudged`` events (the one record of a Local only
+reply that FAILED: its line has no route). A session switched off later is
+still left out: it ran Local only work. A helper or an objective's teammate
+whose own run was Local only is left out on its own. FAIL CLOSED: a session
+or run whose Local only setting cannot be read is left out too, and makes the
+report incomplete. What was left out is counted and said; ONE coding session
+asked for that is Local only answers :data:`SCOPE_LOCAL_ONLY` and nothing
+else (not even its title).
+
 EVERY value that came from a model, a tool, a file or the user (an error, an
 argument, a path, a title, a member's name) is masked
 (``providers/failure_words.mask_failure_text`` = ``detections.redact.mask`` +
@@ -178,6 +196,24 @@ INSTRUCTION = (
     "Iron Jarvis repository; each problem says where it happened, what was seen, what was "
     "expected and the evidence."
 )
+
+
+#: R0.2: why Local only work is left out (said beside the count).
+LOCAL_ONLY_WHY = "Local only work never goes into a fix request"
+#: R0.2: the whole answer for ONE coding session asked for that is Local only
+#: (or whose Local only setting could not be read) — nothing from it, not even
+#: its title.
+SCOPE_LOCAL_ONLY = "This coding session is Local only, so nothing from it goes into a fix request."
+SCOPE_LOCAL_ONLY_UNKNOWN = (
+    "Whether this coding session is Local only could not be read, so nothing from it goes into a "
+    "fix request."
+)
+#: R0.2: named under "Could not read" when the event log's Local only stamps
+#: could not be listed (each event read later still has its own stamp read).
+STAMPS_UNREAD = "which work ran Local only"
+#: R0.2: the events whose ``local_only`` stamp marks Local only work (the bus
+#: stamps every event published under the scope: ``core/events``).
+STAMPED_EVENT_TYPES = ("tool.executed", "tool.denied", "autonomy.nudged")
 
 
 class UnknownSession(LookupError):
@@ -1236,6 +1272,15 @@ class Gathered:
     model_mistakes: int = 0
     recovered_left_out: int = 0
     probes_left_out: int = 0
+    #: R0.2: Local only work left out — the coding sessions (whole), the
+    #: helper or teammate runs outside them, and those whose Local only
+    #: setting could not be read (fail closed). ``scope_local_only`` is
+    #: "local" / "unknown" when the ONE session asked for is (or may be)
+    #: Local only: then nothing else is read.
+    local_only_sessions_left_out: int = 0
+    local_only_runs_left_out: int = 0
+    local_only_unknown_left_out: int = 0
+    scope_local_only: str = ""
     unreadable: list[str] = field(default_factory=list)
     problems: list[Problem] = field(default_factory=list)
 
@@ -1348,6 +1393,171 @@ def _harness_who(session_id: str, called_as: Any) -> str:
     return _HARNESS_WHO.get(str(called_as or ""), "") or _lead_who(session_id)
 
 
+# --------------------------------------------------------------------------- #
+# R0.2: Local only work (left out, counted, said)
+# --------------------------------------------------------------------------- #
+
+LOCAL = "local"
+UNKNOWN = "unknown"
+
+
+def _local_flag_sql(col: str) -> str:
+    """A run's own Local only flag read in SQL from its options column: the
+    value of ``local_only`` (JSON true reads 1), 0 when it has no options and
+    -1 when its options cannot be read (fail closed)."""
+    return (
+        f"CASE WHEN {col} IS NULL OR trim({col}) = '' THEN 0 WHEN json_valid({col}) "
+        f"THEN json_extract({col}, '$.local_only') ELSE -1 END"
+    )
+
+
+def _flag_state(value: Any) -> str:
+    """:data:`LOCAL` / :data:`UNKNOWN` / "" for a value :func:`_local_flag_sql`
+    read. Anything that is not plainly off counts as on (fail closed)."""
+    if value is None or value is False:
+        return ""
+    if isinstance(value, (int, float)):
+        return UNKNOWN if value == -1 else (LOCAL if value else "")
+    return "" if str(value).strip().lower() in ("", "0", "false", "null") else LOCAL
+
+
+def _line_ran_local_only(m: Any) -> bool:
+    """A coding session's line that says its reply ran Local only: the route's
+    receipt (``egress.route_flags``) or a Local only refusal."""
+    if not isinstance(m, dict):
+        return False
+    route = m.get("route")
+    if isinstance(route, dict) and route.get("local_only") is True:
+        return True
+    return str(m.get("errorKind") or "") == "local_only"
+
+
+class _LocalOnlyWork:
+    """Which coding sessions and runs ran Local only (:func:`_local_only_work`)
+    and what was left out because of it (counted once each)."""
+
+    def __init__(self, *, threads: set[str], unknown_threads: set[str], runs: set[str],
+                 read_threads: set[str], saved: "frozenset[str] | None") -> None:
+        self.threads = threads
+        self.unknown_threads = unknown_threads
+        self.runs = runs
+        self.read_threads = read_threads
+        #: every saved chat switched Local only now (``egress.local_only_thread_ids``),
+        #: None when it could not be read.
+        self.saved = saved
+        self.sessions_out: set[str] = set()
+        self.runs_out: set[str] = set()
+        self.unknown_out: set[str] = set()
+        self.stamps_unread = False
+
+    def thread(self, thread: str) -> str:
+        """A coding session's state: :data:`LOCAL`, :data:`UNKNOWN` (its setup
+        could not be read) or ""."""
+        if thread in self.threads or (self.saved is not None and thread in self.saved):
+            return LOCAL
+        if thread in self.unknown_threads:
+            return UNKNOWN
+        return ""
+
+    def run(self, sid: str, flag: Any, build: Any) -> str:
+        """A helper or teammate run's state: its own flag, the bus's stamp, or
+        the state of the coding session it worked for (one whose replies were
+        not read and the saved Local only chats unreadable: not known)."""
+        state = _flag_state(flag)
+        if state:
+            return state
+        if sid in self.runs:
+            return LOCAL
+        b = str(build or "")
+        if b:
+            state = self.thread(b)
+            if state:
+                return state
+            if b not in self.read_threads and self.saved is None:
+                return UNKNOWN
+        return ""
+
+    def leave_out(self, state: str, *, thread: str = "", run: str = "", build: Any = "") -> None:
+        """Count one thing left out: the WHOLE coding session when it is the
+        session that is (or may be) Local only, else the one run."""
+        b = str(build or "")
+        if not thread and b and self.thread(b) == state:
+            thread = b
+        if state == LOCAL:
+            (self.sessions_out if thread else self.runs_out).add(thread or run)
+        else:
+            self.unknown_out.add(f"t:{thread}" if thread else f"r:{run}")
+
+
+def _local_only_work(engine: Any, *, threads: list[tuple],
+                     lines_by_thread: "dict[str, list[dict[str, Any]]]", helpers: "list[tuple] | None",
+                     lo: str, hi: str) -> "_LocalOnlyWork":
+    """R0.2: which coding sessions ran Local only, read BEFORE anything else
+    so every source leaves the same sessions out (the module docstring).
+    *threads* are the read ``(id, title, messages, setup)`` rows, *helpers*
+    the helper / teammate rows read for the window (``[11]`` = the coding
+    session, ``[13]`` = the run's own flag). BLOCKING; never raises. Its
+    ``stamps_unread`` is True when the stamps could not be listed (named
+    last, under "Could not read")."""
+    local: set[str] = set()
+    unknown: set[str] = set()
+    runs: set[str] = set()
+    read: set[str] = set()
+    for row in threads:
+        tid = str(row[0])
+        read.add(tid)
+        raw = row[3]
+        if raw:
+            try:
+                setup = json.loads(raw)
+            except (TypeError, ValueError):
+                setup = None
+            if not isinstance(setup, dict):
+                unknown.add(tid)  # a setup that cannot be read: fail closed
+            else:
+                from ..providers import egress as _egress
+
+                if _egress.setup_says_local_only(raw):
+                    local.add(tid)
+        if any(_line_ran_local_only(m) for m in lines_by_thread.get(tid, ())):
+            local.add(tid)
+    for row in helpers or ():
+        if _flag_state(row[13]) == LOCAL and row[11]:
+            local.add(str(row[11]))
+    # The bus's stamp (``core/events.EventBus._stamp_local_only``) on a call
+    # of a coding session or a run: the one record of a Local only reply
+    # that failed. One DISTINCT read over the window.
+    try:
+        types = ", ".join(f"'{t}'" for t in STAMPED_EVENT_TYPES)
+        for (sid,) in _rows(
+            engine,
+            f"SELECT DISTINCT session_id FROM eventrecord WHERE type IN ({types}) AND created_at >= :lo "
+            "AND created_at <= :hi AND session_id IS NOT NULL AND instr(payload_json, '\"local_only\"') > 0 "
+            "AND json_valid(payload_json) AND json_extract(payload_json, '$.local_only') = 1",
+            lo=lo, hi=hi,
+        ):
+            sid = str(sid or "")
+            if sid.startswith("build:"):
+                local.add(bare_thread(sid))
+            elif sid:
+                runs.add(sid)
+    except Exception:  # noqa: BLE001 — named; each event read later keeps its own stamp
+        log.warning("fix request: the Local only stamps unreadable", exc_info=True)
+        stamps_unread = True
+    else:
+        stamps_unread = False
+    saved: "frozenset[str] | None" = None
+    try:
+        from ..providers import egress as _egress
+
+        saved = _egress.local_only_thread_ids(engine)
+    except Exception:  # noqa: BLE001 — None: a session not read is not known
+        saved = None
+    work = _LocalOnlyWork(threads=local, unknown_threads=unknown, runs=runs, read_threads=read, saved=saved)
+    work.stamps_unread = stamps_unread
+    return work
+
+
 def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "datetime | None" = None,
            version: "str | None" = None, os_name: "str | None" = None) -> Gathered:
     """What the records say (the module docstring). BLOCKING; never raises,
@@ -1419,18 +1629,73 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             known_threads.add(tid)
         lines_by_thread[tid] = [m for m in msgs if isinstance(m, dict)] if isinstance(msgs, list) else []
 
+    # ---- helper / teammate runs: READ here (R0.2: a helper that ran Local
+    # only marks its coding session before any source is read), used below.
+    from ..agents.team import MISSION_MEMBER_ORIGIN
+    from ..harness.helpers import BUILD_SESSION_OPTION, HELPER_ORIGIN, REVIEW_ONLY_OPTION
+
+    helper_rows: "list[tuple] | None" = None
+    helper_fault: "Exception | None" = None
+    try:
+        if scope:
+            helper_rows = _rows(
+                engine,
+                "SELECT id, origin, agent_name, agent_type, provider, model, status, summary, "
+                "failure_detail, trust, created_at, json_extract(options_json, :key), "
+                f"json_extract(options_json, :rkey), {_local_flag_sql('options_json')} FROM session "
+                "WHERE origin = :ho AND json_valid(options_json) AND json_extract(options_json, :key) = :t "
+                "AND created_at >= :lo AND created_at <= :hi ORDER BY created_at DESC LIMIT :n",
+                ho=HELPER_ORIGIN, key=f"$.{BUILD_SESSION_OPTION}", t=scope, lo=s_lo, hi=s_hi,
+                n=MAX_HELPER_RUNS, rkey=f"$.{REVIEW_ONLY_OPTION}",
+            )
+        else:
+            helper_rows = _rows(
+                engine,
+                "SELECT id, origin, agent_name, agent_type, provider, model, status, summary, "
+                "failure_detail, trust, created_at, CASE WHEN json_valid(options_json) "
+                "THEN json_extract(options_json, :key) END, CASE WHEN json_valid(options_json) "
+                f"THEN json_extract(options_json, :rkey) END, {_local_flag_sql('options_json')} FROM session "
+                "WHERE origin IN (:ho, :mo) AND created_at >= :lo AND created_at <= :hi "
+                "ORDER BY created_at DESC LIMIT :n",
+                ho=HELPER_ORIGIN, mo=MISSION_MEMBER_ORIGIN, key=f"$.{BUILD_SESSION_OPTION}",
+                rkey=f"$.{REVIEW_ONLY_OPTION}", lo=s_lo, hi=s_hi, n=MAX_HELPER_RUNS,
+            )
+    except Exception as exc:  # noqa: BLE001 — named where the runs are read
+        helper_fault = exc
+
+    # ---- R0.2: Local only work (the module docstring) ---------------------- #
+    # (Not ``lw``: the replies' loop below uses that name for a review's words.)
+    local_work = _local_only_work(engine, threads=threads, lines_by_thread=lines_by_thread,
+                                  helpers=helper_rows, lo=s_lo, hi=s_hi)
+    if scope:
+        state = local_work.thread(scope)
+        if state:
+            # ONE session asked for that is (or may be) Local only: nothing
+            # else is read, and its title is not said either.
+            out.scope_title = ""
+            out.scope_local_only = state
+            if state == LOCAL:
+                out.local_only_sessions_left_out = 1
+            else:
+                out.local_only_unknown_left_out = 1
+            return out
+
     # Low-trust replies: their time windows (the lead's calls inside are
     # never read), or the whole session's lead calls when a window is missing.
     low_windows: dict[str, list[tuple[datetime, datetime]]] = {}
     low_all: set[str] = set()
     replies: list[tuple[str, dict[str, Any], "datetime | None"]] = []
     for tid, msgs in lines_by_thread.items():
+        local_state = local_work.thread(tid)
         for m in msgs:
             if m.get("role") != "assistant":
                 continue
             at = _utc(m.get("at"))
             if at is None or not (since <= at <= until):
                 continue
+            if local_state:
+                local_work.leave_out(local_state, thread=tid)
+                continue  # R0.2: nothing of a Local only session is read
             if str(m.get("trust") or "").strip().lower() == "low":
                 out.low_trust_left_out += 1
                 timing = m.get("timing") if isinstance(m.get("timing"), dict) else {}
@@ -1458,8 +1723,8 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             sql, rparams["t"] = sql + " AND thread_id = :t", scope
         for tid, started in _rows(engine, sql, **rparams):
             tid = str(tid or "")
-            if tid not in known_threads:
-                continue
+            if tid not in known_threads or local_work.thread(tid):
+                continue  # R0.2: a Local only session is left out whole, never "running"
             begun = _utc(started) or since
             out.running_left_out += 1
             if tid not in running_from or begun < running_from[tid]:
@@ -1575,13 +1840,15 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             engine,
             "SELECT t.session_id, t.tool, t.created_at, s.origin, s.agent_name, s.agent_type, "
             "s.provider, s.model, s.trust, CASE WHEN json_valid(s.options_json) "
-            "THEN json_extract(s.options_json, '$.build_session') END, t.called_as, t.ok, t.args_json "
+            "THEN json_extract(s.options_json, '$.build_session') END, t.called_as, t.ok, t.args_json, "
+            f"{_local_flag_sql('s.options_json')} "
             "FROM toolinvocation AS t LEFT JOIN session AS s ON s.id = t.session_id "
             f"WHERE t.created_at >= :lo AND t.created_at <= :hi AND {clause} "
             "ORDER BY t.created_at DESC LIMIT :n",
             lo=s_lo, hi=s_hi, n=MAX_LEAD_CALLS, **params,
         )
-        for sid, tool, created, origin, aname, atype, prov, model, trust, build, called, ok, a_json in got:
+        for (sid, tool, created, origin, aname, atype, prov, model, trust, build, called, ok, a_json,
+             lflag) in got:
             sid = str(sid or "")
             at = _utc(created)
             if ok in (1, True, "1"):
@@ -1590,6 +1857,10 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                 continue  # the team review's own call: read off the reply line
             if sid.startswith("build:"):
                 thread = bare_thread(sid)
+                local_state = local_work.thread(thread)
+                if local_state:
+                    local_work.leave_out(local_state, thread=thread)
+                    continue  # R0.2: a Local only session's calls are never counted
                 threads_seen.add(thread)
                 if _in_low(thread, at):
                     continue
@@ -1597,6 +1868,10 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                     continue  # an attempt not known to have ended at full trust
                 totals[(_harness_who(sid, called), leads.at(thread, at), str(tool))] += 1
             else:
+                local_state = local_work.run(sid, lflag, build)
+                if local_state:
+                    local_work.leave_out(local_state, run=sid, build=build)
+                    continue  # R0.2: a Local only run's calls are never counted
                 if str(trust or "").strip().lower() == "low":
                     continue
                 if build:
@@ -1632,14 +1907,16 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
         got = _rows(
             engine,
             "SELECT t.id, t.session_id, t.tool, t.output, t.args_json, t.created_at, s.origin, "
-            "s.agent_name, s.agent_type, s.provider, s.model, s.trust, t.called_as "
+            "s.agent_name, s.agent_type, s.provider, s.model, s.trust, t.called_as, "
+            "CASE WHEN json_valid(s.options_json) THEN json_extract(s.options_json, :bskey) END, "
+            f"{_local_flag_sql('s.options_json')} "
             "FROM toolinvocation AS t LEFT JOIN session AS s ON s.id = t.session_id "
             f"WHERE t.ok = 0 AND t.created_at >= :lo AND t.created_at <= :hi AND {clause} "
             "ORDER BY t.created_at DESC LIMIT :n",
-            lo=s_lo, hi=s_hi, n=MAX_FAILED_CALLS, **params,
+            lo=s_lo, hi=s_hi, n=MAX_FAILED_CALLS, bskey=f"$.{BUILD_SESSION_OPTION}", **params,
         )
         for (iid, sid, tool, output, args_json, created, origin, aname, atype, prov, model, trust,
-             called) in got:
+             called, build, lflag) in got:
             sid, tool, called = str(sid or ""), str(tool or ""), str(called or "")
             at = _utc(created)
             if called == REVIEW_CALLED_AS:
@@ -1649,6 +1926,10 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                 continue
             if sid.startswith("build:"):
                 thread = bare_thread(sid)
+                local_state = local_work.thread(thread)
+                if local_state:
+                    local_work.leave_out(local_state, thread=thread)
+                    continue  # R0.2: nothing of a Local only session is read
                 if thread not in known_threads:
                     out.unknown_trust_left_out += 1
                     continue
@@ -1658,6 +1939,10 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                     continue  # an attempt not known to have ended at full trust
                 who, mw, surface = _harness_who(sid, called), leads.at(thread, at), "a coding session"
             else:
+                local_state = local_work.run(sid, lflag, build)
+                if local_state:
+                    local_work.leave_out(local_state, run=sid, build=build)
+                    continue  # R0.2: nothing of a Local only run is read
                 if str(trust or "").strip().lower() == "low":
                     continue
                 who, mw, surface = _who_of_session(origin, aname, atype, prov, model)
@@ -1697,40 +1982,23 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
         if "the tool-call ledger" not in out.unreadable:
             out.unreadable.append("the tool-call ledger")
 
-    # ---- helper / teammate runs -------------------------------------------- #
-    from ..agents.team import MISSION_MEMBER_ORIGIN
-    from ..harness.helpers import BUILD_SESSION_OPTION, HELPER_ORIGIN, REVIEW_ONLY_OPTION
-
+    # ---- helper / teammate runs (read above, before the Local only pass) --- #
     pieces: Counter[tuple[str, str]] = Counter()
-    helper_sessions: dict[str, tuple[str, str, str, bool]] = {}
+    #: sid -> (who, model words, surface, low trust, R0.2 Local only state,
+    #: the coding session it worked for).
+    helper_sessions: dict[str, tuple[str, str, str, bool, str, str]] = {}
     try:
-        if scope:
-            got = _rows(
-                engine,
-                "SELECT id, origin, agent_name, agent_type, provider, model, status, summary, "
-                "failure_detail, trust, created_at, NULL, json_extract(options_json, :rkey) FROM session "
-                "WHERE origin = :ho AND json_valid(options_json) AND json_extract(options_json, :key) = :t "
-                "AND created_at >= :lo AND created_at <= :hi ORDER BY created_at DESC LIMIT :n",
-                ho=HELPER_ORIGIN, key=f"$.{BUILD_SESSION_OPTION}", t=scope, lo=s_lo, hi=s_hi,
-                n=MAX_HELPER_RUNS, rkey=f"$.{REVIEW_ONLY_OPTION}",
-            )
-        else:
-            got = _rows(
-                engine,
-                "SELECT id, origin, agent_name, agent_type, provider, model, status, summary, "
-                "failure_detail, trust, created_at, CASE WHEN json_valid(options_json) "
-                "THEN json_extract(options_json, :key) END, CASE WHEN json_valid(options_json) "
-                "THEN json_extract(options_json, :rkey) END FROM session "
-                "WHERE origin IN (:ho, :mo) AND created_at >= :lo AND created_at <= :hi "
-                "ORDER BY created_at DESC LIMIT :n",
-                ho=HELPER_ORIGIN, mo=MISSION_MEMBER_ORIGIN, key=f"$.{BUILD_SESSION_OPTION}",
-                rkey=f"$.{REVIEW_ONLY_OPTION}", lo=s_lo, hi=s_hi, n=MAX_HELPER_RUNS,
-            )
+        if helper_rows is None:
+            raise helper_fault or RuntimeError("the helpers' runs were not read")
         for (sid, origin, aname, atype, prov, model, status, summary, detail, trust, created, build,
-             review_only) in got:
+             review_only, lflag) in helper_rows:
             who, mw, surface = _who_of_session(origin, aname, atype, prov, model)
             low = str(trust or "").strip().lower() == "low"
-            helper_sessions[str(sid)] = (who, mw, surface, low)
+            local_state = local_work.run(str(sid), lflag, build)
+            helper_sessions[str(sid)] = (who, mw, surface, low, local_state, str(build or ""))
+            if local_state:
+                local_work.leave_out(local_state, run=str(sid), build=build)
+                continue  # R0.2: nothing of a Local only run is read or counted
             if build:
                 threads_seen.add(str(build))
             if low:
@@ -1784,18 +2052,29 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                 missing.add(sid)
             wanted.append((sid, p, _utc(created)))
         if missing and not scope:
-            for sid, origin, aname, atype, prov, model, trust in _rows(
+            for sid, origin, aname, atype, prov, model, trust, build, lflag in _rows(
                 engine,
-                "SELECT id, origin, agent_name, agent_type, provider, model, trust FROM session "
+                "SELECT id, origin, agent_name, agent_type, provider, model, trust, "
+                "CASE WHEN json_valid(options_json) THEN json_extract(options_json, :key) END, "
+                f"{_local_flag_sql('options_json')} FROM session "
                 "WHERE origin IN (:ho, :mo) AND id IN (SELECT value FROM json_each(:ids))",
                 ho=HELPER_ORIGIN, mo=MISSION_MEMBER_ORIGIN, ids=json.dumps(sorted(missing)[:MAX_EVENTS]),
+                key=f"$.{BUILD_SESSION_OPTION}",
             ):
                 who, mw, surface = _who_of_session(origin, aname, atype, prov, model)
-                helper_sessions[str(sid)] = (who, mw, surface, str(trust or "").strip().lower() == "low")
+                helper_sessions[str(sid)] = (who, mw, surface, str(trust or "").strip().lower() == "low",
+                                             local_work.run(str(sid), lflag, build), str(build or ""))
         for sid, p, at in wanted:
             call = str(p.get("call") or "").strip()
+            # R0.2: the event's own stamp (the bus stamps what Local only
+            # work publishes) — read even when the stamps could not be listed.
+            stamped = LOCAL if p.get("local_only") is True else ""
             if sid.startswith("build:"):
                 thread = bare_thread(sid)
+                local_state = local_work.thread(thread) or stamped
+                if local_state:
+                    local_work.leave_out(local_state, thread=thread)
+                    continue
                 if thread not in known_threads:
                     out.unknown_trust_left_out += 1
                     continue
@@ -1807,7 +2086,13 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                 who, mw, surface = _lead_who(sid), leads.at(thread, at), "a coding session"
             else:
                 known = helper_sessions.get(sid)
-                if known is None or known[3]:
+                if known is None:
+                    continue
+                local_state = known[4] or stamped
+                if local_state:
+                    local_work.leave_out(local_state, run=sid, build=known[5])
+                    continue
+                if known[3]:
                     continue
                 who, mw, surface = known[0], known[1], known[2]
             shown = f"wrote a tool call as text ({call})" if call else "wrote a tool call as text"
@@ -1877,11 +2162,26 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                 ))
 
     # ---- the reviewers' findings (v1.423.0, Wave 3 lane D) ---------------- #
+    def _local_finding(thread: str) -> bool:
+        """R0.2: a finding of a Local only session is left out (and counted)."""
+        local_state = local_work.thread(thread)
+        if local_state:
+            local_work.leave_out(local_state, thread=thread)
+        return bool(local_state)
+
     finding_totals = _gather_findings(
         engine, out, occurrences, scope=scope, lo=s_lo, hi=s_hi, lines_by_thread=lines_by_thread,
         known_threads=known_threads, in_low=_in_low, leads=leads, threads_seen=threads_seen,
+        local_out=_local_finding,
     )
 
+    out.local_only_sessions_left_out = len(local_work.sessions_out)
+    out.local_only_runs_left_out = len(local_work.runs_out)
+    out.local_only_unknown_left_out = len(local_work.unknown_out)
+    if local_work.stamps_unread:
+        out.unreadable.append(STAMPS_UNREAD)
+    # (Every source leaves a Local only session out BEFORE it adds to
+    # ``threads_seen``, so it is never counted as covered.)
     out.sessions = len({t for t in threads_seen if t})
     out.attempts_low_left_out = len(attempts_low)
     out.attempts_unknown_left_out = len(attempts_unknown)
@@ -1945,7 +2245,8 @@ def _place_words(path: Any, line: Any) -> str:
 
 def _gather_findings(engine: Any, out: Gathered, occurrences: list[Occurrence], *, scope: str, lo: str,
                      hi: str, lines_by_thread: "dict[str, list[dict[str, Any]]]", known_threads: set[str],
-                     in_low: Any, leads: "_LeadModels", threads_seen: set[str]) -> "dict[tuple[str, str, str], int]":
+                     in_low: Any, leads: "_LeadModels", threads_seen: set[str],
+                     local_out: Any = None) -> "dict[tuple[str, str, str], int]":
     """v1.423.0 (Wave 3 lane D): the TEAM PROCESS problems the reviewers'
     findings (``agents/team_findings.TeamFinding``) reveal — about the
     team's way of working, which the developer can improve in Iron Jarvis
@@ -1977,7 +2278,9 @@ def _gather_findings(engine: Any, out: Gathered, occurrences: list[Occurrence], 
     coding session (a mission's review is never asked); NOTHING from a reply
     that ended at LOW trust (its time window, as for the lead's calls); and
     FAIL CLOSED — a finding of a session whose replies could not be read is
-    left out and counted. Every value is cleaned when it is shown
+    left out and counted; R0.2: a finding of a Local only coding session is
+    left out before anything else (``local_out(thread)`` says so and counts
+    it). Every value is cleaned when it is shown
     (:func:`clean`: mask → scan → cut). Returns the "N of M" totals, keyed
     ``(kind, who, model)``. BLOCKING; never raises (an unreadable table is
     named)."""
@@ -2025,6 +2328,8 @@ def _gather_findings(engine: Any, out: Gathered, occurrences: list[Occurrence], 
             continue  # a mission's review is never asked (and has no reply line to judge trust by)
         thread = bare_thread(fscope)
         at = _utc(created)
+        if local_out is not None and local_out(thread):
+            continue  # R0.2: a Local only session's findings are never read
         if thread not in known_threads:
             out.findings_unknown_left_out += 1  # fail closed: its replies (and their trust) unread
             continue
@@ -2211,13 +2516,45 @@ def _plural(n: int, one: str, many: str | None = None) -> str:
     return f"{n} {one if n == 1 else (many or one + 's')}"
 
 
+def _local_only_words(sessions: int, runs: int) -> str:
+    """R0.2: the Local only work left out ("1 Local only coding session and
+    2 helper or teammate runs that ran Local only")."""
+    parts = []
+    if sessions:
+        parts.append(_plural(sessions, "Local only coding session"))
+    if runs:
+        parts.append(f"{_plural(runs, 'helper or teammate run')} that ran Local only")
+    return " and ".join(parts)
+
+
+def _local_only_unknown_words(n: int) -> str:
+    """R0.2: work whose Local only setting could not be read (fail closed)."""
+    return (
+        f"{_plural(n, 'coding session or helper run', 'coding sessions or helper runs')} whose Local only "
+        "setting could not be read"
+    )
+
+
 def nothing_line(g: Gathered) -> str:
+    if g.scope_local_only:
+        # R0.2: ONE session asked for that is (or may be) Local only — said
+        # alone, without its title or anything read from it.
+        return SCOPE_LOCAL_ONLY if g.scope_local_only == LOCAL else SCOPE_LOCAL_ONLY_UNKNOWN
     where = (
         f"in this coding session (“{g.scope_title}”)" if g.scope_id and g.scope_title
         else "in this coding session" if g.scope_id
         else "in the coding sessions and their model team"
     )
     extra = f" (could not read: {', '.join(g.unreadable)})" if g.unreadable else ""
+    local = g.local_only_sessions_left_out + g.local_only_runs_left_out
+    if local:
+        extra += (
+            f" ({_local_only_words(g.local_only_sessions_left_out, g.local_only_runs_left_out)} "
+            f"{'was' if local == 1 else 'were'} left out: {LOCAL_ONLY_WHY})"
+        )
+    if g.local_only_unknown_left_out:
+        n = g.local_only_unknown_left_out
+        extra += f" ({_local_only_unknown_words(n)} {'was' if n == 1 else 'were'} left out)"
     if g.unknown_trust_left_out:
         extra += f" ({_unknown_words(g.unknown_trust_left_out)} were left out)"
     if g.findings_unknown_left_out:
@@ -2353,6 +2690,12 @@ def render_listed(g: Gathered, *, max_problems: int = MAX_PROBLEMS,
         # v1.423.0 (lane D): the reviewers' findings the problems below read.
         f"{_plural(g.findings, 'reviewer finding')} the lead was asked to answer"
     )
+    if g.local_only_sessions_left_out or g.local_only_runs_left_out:
+        # R0.2: Local only work is left out first, and said first.
+        words = _local_only_words(g.local_only_sessions_left_out, g.local_only_runs_left_out)
+        facts.append(f"- Left out: {words} ({LOCAL_ONLY_WHY})")
+    if g.local_only_unknown_left_out:
+        facts.append(f"- Left out: {_local_only_unknown_words(g.local_only_unknown_left_out)}")
     if g.low_trust_left_out:
         facts.append(
             f"- Left out: {_plural(g.low_trust_left_out, 'reply or helper run', 'replies or helper runs')} "
@@ -2408,7 +2751,7 @@ def render_listed(g: Gathered, *, max_problems: int = MAX_PROBLEMS,
 def build_report(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "datetime | None" = None,
                  version: "str | None" = None, os_name: "str | None" = None) -> dict[str, Any]:
     """``{"text", "problems", "listed", "complete", "since", "until",
-    "sessions"}`` — the route's answer. BLOCKING (call it off the loop); never
+    "sessions", "local_only_left_out"}`` — the route's answer. BLOCKING (call it off the loop); never
     raises except :class:`UnknownSession`. ``problems`` counts every problem
     found; v1.423.0 review: ``listed`` how many of them the text holds (at
     most :data:`MAX_PROBLEMS`, fewer when the character cap is met), and
@@ -2432,10 +2775,15 @@ def build_report(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", no
         "problems": len(g.problems),
         "listed": listed,
         "complete": (not g.unreadable and not g.unknown_trust_left_out and not g.findings_unknown_left_out
-                     and not g.attempts_unknown_left_out),
+                     and not g.attempts_unknown_left_out and not g.local_only_unknown_left_out),
         "since": iso_z(g.since),
         "until": iso_z(g.until),
         "sessions": g.sessions,
+        # R0.2 (additive, LAST): the coding sessions and runs left out as
+        # Local only work (or whose Local only setting could not be read) —
+        # the button says the report's own line when nothing else was found.
+        "local_only_left_out": (g.local_only_sessions_left_out + g.local_only_runs_left_out
+                                + g.local_only_unknown_left_out),
     }
 
 
@@ -2448,4 +2796,6 @@ __all__ = [
     # v1.423.0 (lane D)
     "FINDING_KINDS", "FINDING_KIND_WORDS", "LEFT_OUT_UNMASKED", "LEFT_OUT_UNSCANNED", "REPEAT_MIN_SESSIONS",
     "finding_kind",
+    # R0.2 (Local only work is left out)
+    "LOCAL_ONLY_WHY", "SCOPE_LOCAL_ONLY", "SCOPE_LOCAL_ONLY_UNKNOWN", "STAMPED_EVENT_TYPES", "STAMPS_UNREAD",
 ]
