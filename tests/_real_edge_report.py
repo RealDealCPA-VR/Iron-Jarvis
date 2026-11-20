@@ -20,7 +20,7 @@ cleared), so its own failure report already carries both attempts' sections
 (pinned in ``tests/test_build_browser_slow_open.py``).
 
 Names only (the CI logs are public): the sections are what the test itself
-captured, and the machine section reads no command line.
+captured, and the machine section prints no argument of a command line.
 """
 
 from __future__ import annotations
