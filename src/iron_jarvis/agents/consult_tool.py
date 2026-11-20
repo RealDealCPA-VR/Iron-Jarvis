@@ -546,7 +546,7 @@ class ConsultTool(Tool):
         self, plan: _Consultation, question: str, context: str, ctx: ToolContext
     ) -> ToolResult:
         if plan.entry.kind == "remote":
-            return await self._ask_remote(plan, question, context)
+            return await self._ask_remote(plan, question, context, ctx)
         return await self._ask_local(plan, question, context, ctx)
 
     async def _ask_local(
@@ -642,7 +642,8 @@ class ConsultTool(Tool):
         )
 
     async def _ask_remote(
-        self, plan: _Consultation, question: str, context: str
+        self, plan: _Consultation, question: str, context: str,
+        ctx: "ToolContext | None" = None,
     ) -> ToolResult:
         """A ``remote:<name>`` teammate, through delegate's own remote path.
 
@@ -650,6 +651,9 @@ class ConsultTool(Tool):
         ``detect_injection`` + ``wrap_untrusted`` to the reply AND to a failure
         body. A remote answer is attacker-reachable text; a second copy of that
         fence here would be a second thing to forget to update.
+
+        Leap 06-a: ``ctx`` rides along, so in a rehearsal the question is
+        held there (one rehearsed row), never sent.
         """
         from .delegate_tool import DelegateTool
 
@@ -660,11 +664,14 @@ class ConsultTool(Tool):
             "work has been handed to you, so do not claim to have done any.\n\n"
             + self._user_message(question, context, plan.asker)
         )
-        res = await DelegateTool(self.platform)._delegate_remote(plan.entry, task)
+        res = await DelegateTool(self.platform)._delegate_remote(plan.entry, task, ctx=ctx)
         data = dict(res.data or {})
         data.setdefault("target", plan.entry.name)
         if not res.ok:
             return ToolResult(ok=False, output="", error=res.error, data=data)
+        if data.get("rehearsed"):
+            # Leap 06-a: held in a rehearsal — nobody answered.
+            return ToolResult(ok=True, output=res.output, data=data)
         # The name rides OUTSIDE the fence — it is ours, not the remote's.
         return ToolResult(
             ok=True,

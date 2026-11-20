@@ -76,6 +76,7 @@ vi.mock("@/components/PageHeader", () => ({
 import ReflexPage from "@/app/reflex/page";
 import SchedulesPage from "@/app/schedules/page";
 import { RehearsalReport, REHEARSAL_POLL_MS } from "@/components/RehearsalReport";
+import { RowMenu, rowMenuPlace } from "@/components/RowMenu";
 import { ConfigCards } from "@/components/chat/ConfigCards";
 import { decodeConfigCards } from "@/lib/configCards";
 import { toActivity, isRehearsalRun } from "@/components/NotificationBell";
@@ -140,13 +141,18 @@ describe("the report card", () => {
     );
     expect(screen.getByText("Rehearsing. Nothing is being changed.")).toBeInTheDocument();
     expect(screen.getByTestId("rehearsal-stop-reh_1")).toBeInTheDocument();
+    expect(api.gets.length).toBe(0);
     await act(async () => {
-      vi.advanceTimersByTime(REHEARSAL_POLL_MS);
+      await vi.advanceTimersByTimeAsync(REHEARSAL_POLL_MS);
     });
-    vi.useRealTimers();
-    await waitFor(() => expect(screen.getByTestId("rehearsal-sentence-reh_1").textContent).toBe(READY.sentence));
-    const reads = api.gets.length;
-    expect(reads).toBe(1);
+    expect(api.gets).toEqual(["/rehearsals/reh_1"]);
+    expect(screen.getByTestId("rehearsal-sentence-reh_1").textContent).toBe(READY.sentence);
+    // It ended: the clock runs on for many more turns and nothing is read.
+    // (MUTATION: drop the `if (!running) return;` guard -> red.)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REHEARSAL_POLL_MS * 5);
+    });
+    expect(api.gets.length).toBe(1);
   });
 
   it("a rehearsal that could not run says why, and that nothing was changed", () => {
@@ -195,12 +201,53 @@ describe("Rules: Rehearse replaces Test, Run now moves to the row's menu", () =>
     expect(api.posts.some((p) => p.path.endsWith("/test"))).toBe(false);
   });
 
+  it("a rule that starts a workflow offers no Rehearse (it would only refuse)", async () => {
+    seed();
+    const rules = (api.responses["/reflex/rules"] as { rules: Record<string, unknown>[] }).rules;
+    rules.push({ ...rules[0], id: "reflex_2", name: "triage", action: "workflow", target: "Triage" });
+    render(<ReflexPage />);
+    await screen.findByTestId("reflex-more-reflex_2");
+    expect(screen.getByTestId("reflex-rehearse-reflex_1")).toBeInTheDocument();
+    expect(screen.queryByTestId("reflex-rehearse-reflex_2")).toBeNull();
+  });
+
   it("Run now, in the row's menu, still fires the rule for real", async () => {
     seed();
     render(<ReflexPage />);
     fireEvent.click(await screen.findByTestId("reflex-more-reflex_1"));
     fireEvent.click(await screen.findByTitle("Run this rule now, for real, with a test signal"));
     await waitFor(() => expect(api.posts.map((p) => p.path)).toEqual(["/reflex/rules/reflex_1/test"]));
+  });
+});
+
+describe("the row's … menu stays on a 390 px screen", () => {
+  it("opens on the side that has room: at the left of a wrapped phone row, never off the screen", () => {
+    // Found in the browser at 390 px: a wrapped Rules row puts "…" at the
+    // left, and the right-aligned menu started 70 px off the screen.
+    expect(rowMenuPlace({ left: 46, right: 74, bottom: 450, width: 28 }, 390)).toEqual({
+      top: 454, left: 46, maxWidth: 336,
+    });
+    // At the right of a desktop row it lines up with the button's right edge.
+    expect(rowMenuPlace({ left: 1193, right: 1221, bottom: 300, width: 28 }, 1280)).toEqual({
+      top: 304, right: 59, maxWidth: 1213,
+    });
+  });
+
+  it("the drawn menu is placed by that rule", () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    try {
+      render(<RowMenu label="More" testId="row-more" items={[{ label: "Run now", title: "Run now", onSelect: () => {} }]} />);
+      const press = screen.getByTestId("row-more");
+      press.getBoundingClientRect = () =>
+        ({ left: 46, right: 74, top: 420, bottom: 450, width: 28, height: 30, x: 46, y: 420, toJSON: () => ({}) }) as DOMRect;
+      fireEvent.click(press);
+      const menu = screen.getByRole("menu");
+      expect(menu.style.left).toBe("46px");
+      expect(menu.style.right).toBe("");
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+    }
   });
 });
 

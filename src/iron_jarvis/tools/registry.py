@@ -174,6 +174,21 @@ def tool_deadline_expired() -> bool:
     return cm is not None and cm.expired()
 
 
+def tool_deadline_left() -> float | None:
+    """Seconds left before the registry's per-call deadline cuts the running
+    tool off (None when it has none). For a tool that WAITS on something
+    (leap 06-a: ``rehearse`` on the phone waits for its report) and must
+    answer before the deadline does."""
+    cm = _DEADLINE_SCOPE.get()
+    when = cm.when() if cm is not None else None
+    if when is None:
+        return None
+    try:
+        return when - asyncio.get_running_loop().time()
+    except RuntimeError:
+        return None
+
+
 @dataclasses.dataclass(frozen=True)
 class CallScope:
     """What the caller of ``ToolRegistry.invoke`` handed it for the call now
@@ -2303,9 +2318,11 @@ class ToolRegistry:
         )
         await ctx.event_bus.publish(
             EventType.TOOL_REHEARSED,
+            # No argument text rides the event (as ``tool.executed``): the
+            # words are on the ledger row, read by the report.
             {"tool": name, "would": would, "invocation_id": inv_id,
              "reversibility": rev_value, "risk_class": risk,
-             "kind": effect.kind, "words": effect.words},
+             "kind": effect.kind},
             session_id=ctx.session_id,
         )
         return ToolResult(

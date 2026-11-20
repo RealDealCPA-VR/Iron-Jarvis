@@ -221,8 +221,12 @@ describe("(a) ONE status table covers every outcome wave 1 stores", () => {
     expect(words).toEqual(["Working", "Queued", "Done", "Failed", "Stopped"]);
     const outcomes = [...outcome.matchAll(/^OUTCOME_[A-Z_]+ = "([a-z_]+)"/gm)].map((m) => m[1]);
     // v1.503.0 (north-star 3.11, moved on purpose): + "did_nothing".
-    expect(outcomes.sort()).toEqual(["completed", "completed_with_failures", "did_nothing", "needs_you"]);
+    // Leap 06-a (moved on purpose): + "rehearsed", a rehearsal's run.
+    expect(outcomes.sort()).toEqual([
+      "completed", "completed_with_failures", "did_nothing", "needs_you", "rehearsed",
+    ]);
     expect(statusWords("completed", "completed").word).toBe("Done");
+    expect(statusWords("completed", "rehearsed").word).toBe("Rehearsed");
     // The SAME words for the same verdict, on a session and on a schedule.
     expect(statusWords("completed", "needs_you").word).toBe(scheduleRunWords("needs_you").word);
     expect(statusWords("completed", "completed_with_failures").word).toBe(scheduleRunWords("partial").word);

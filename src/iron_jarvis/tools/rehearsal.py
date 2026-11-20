@@ -26,8 +26,10 @@ What is NOT held (it runs for real):
 Everything else is held, an undeclared tool included: the fail-safe
 direction. :data:`SIDE_DOORS` lists the effects that do not pass
 ``registry.invoke`` (a schedule's pre-run script, its delivery line, the chat
-delivery, the post-run lessons, a remote agent's hand-off); each records one
-rehearsed row through :func:`record_side_door` and does nothing.
+delivery, the post-run lessons, a rule's or a helper's hand-off to a remote
+agent, an outgoing webhook); each records one rehearsed row through
+:func:`record_side_door` and does nothing. :func:`event_is_rehearsal` tells
+a reader of the bus (an outgoing webhook) that an event is a rehearsal's.
 """
 
 from __future__ import annotations
@@ -98,6 +100,41 @@ def rehearsal_of(session: Any) -> str:
     except Exception:  # noqa: BLE001
         return ""
     return str(value).strip() if isinstance(value, str) else ""
+
+
+def event_is_rehearsal(event: Any, engine: Any = None) -> bool:
+    """Does ``event`` belong to a REHEARSAL's run? Its type is
+    ``tool.rehearsed``; its payload says so (``rehearsal: True``, the outcome
+    ``rehearsed``); or, with an ``engine``, the session it names carries a
+    rehearsal in its OWN options (``agent.completed`` and ``tool.executed``
+    carry no mark of their own). BLOCKING with an engine (one indexed read):
+    a sync event handler runs off the loop. Never raises."""
+    try:
+        if isinstance(event, dict):
+            etype, payload, sid = event.get("type"), event.get("payload"), event.get("session_id")
+        else:
+            etype = getattr(event, "type", "")
+            payload = getattr(event, "payload", None)
+            sid = getattr(event, "session_id", None)
+        if str(getattr(etype, "value", etype) or "") == "tool.rehearsed":
+            return True
+        payload = payload if isinstance(payload, dict) else {}
+        if payload.get("rehearsal") is True or payload.get("outcome") == "rehearsed":
+            return True
+        sid = str(sid or payload.get("session_id") or "").strip()
+        if engine is None or not sid:
+            return False
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import Session
+
+        with session_scope(engine) as db:
+            raw = db.exec(select(Session.options_json).where(Session.id == sid)).first()
+        opts = json.loads(raw) if isinstance(raw, str) and raw else {}
+        return isinstance(opts, dict) and bool(str(opts.get(REHEARSAL_OPTION) or "").strip())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def holds(tool: Any) -> bool:
@@ -314,10 +351,23 @@ SIDE_DOORS: dict[str, SideDoor] = {
     # Not counted in the sentence (``noun`` ""): a run keeps a lesson only
     # when it has one, so the report lists it as a "may".
     "post_run_learning": SideDoor(
-        "write", "may keep a lesson from this run", "", "", "agents/orchestrator.py"
+        "write", "keep a lesson from this run, if it learned one", "", "", "agents/orchestrator.py"
     ),
     "remote_agent": SideDoor(
         "send", "hand the task to a remote agent", "send", "message", "reflex/router.py"
+    ),
+    # A helper's hand-off to a REMOTE agent (``delegate`` to ``remote:<name>``)
+    # and ``consult``'s question to one: no local run inherits the rehearsal,
+    # so ``_delegate_remote`` holds it there and sends nothing.
+    "remote_handoff": SideDoor(
+        "send", "hand the task to a remote agent", "send", "message", "agents/delegate_tool.py"
+    ),
+    # An outgoing webhook ("let Iron Jarvis tell other apps when work
+    # finishes"): listed when the rehearsal starts; the delivery itself skips
+    # every event of a rehearsal's run (``webhooks/outbound.on_event``).
+    "outbound_webhook": SideDoor(
+        "send", "tell another app through a webhook that the task finished", "send", "message",
+        "tools/rehearsal_runs.py",
     ),
 }
 

@@ -117,7 +117,10 @@ async def test_a_schedule_that_renames_files_changes_nothing_and_lists_each_rena
     assert view["status"] == "ready", view
     assert _snapshot(folder) == before, "a rehearsal changed the folder"
     renames = [w["words"] for w in view["would"] if w["kind"] == "move"]
-    assert renames == [f"rename {s} to {d}" for s, d in RENAMES]
+    # The two calls run at once (one turn's calls are gathered), so the
+    # ledger holds them in the order they were written: compare as a list
+    # of the same items, never an order the run does not promise.
+    assert sorted(renames) == sorted(f"rename {s} to {d}" for s, d in RENAMES)
     assert view["sentence"] == "This would rename 2 files. Nothing was changed."
     assert view["counts"] == {"move": 2}
     # The sentence is counted from the ledger's rows, not from the reply.

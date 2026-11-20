@@ -645,23 +645,26 @@ export default function ReflexPage() {
             />
             {/* Leap 06-a: Rehearse replaces Test (one word): it runs the rule
                 once on a sample and changes nothing. Run now — a real fire —
-                waits in the row's menu. */}
-            <button
-              type="button"
-              onClick={() => rehearse(r)}
-              disabled={acting === `rehearse:${r.id}` || rehearsals[r.id]?.status === "running"}
-              title="Run this rule once on a sample and see what it would do, changing nothing"
-              data-testid={`reflex-rehearse-${r.id}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
-            >
-              {acting === `rehearse:${r.id}` ? (
-                <LoaderInline label="Starting…" />
-              ) : (
-                <>
-                  <Eye size={13} aria-hidden="true" /> Rehearse
-                </>
-              )}
-            </button>
+                waits in the row's menu. A rule that starts a workflow cannot
+                be rehearsed yet (06-b), so it offers none (as Schedules). */}
+            {r.action !== "workflow" && (
+              <button
+                type="button"
+                onClick={() => rehearse(r)}
+                disabled={acting === `rehearse:${r.id}` || rehearsals[r.id]?.status === "running"}
+                title="Run this rule once on a sample and see what it would do, changing nothing"
+                data-testid={`reflex-rehearse-${r.id}`}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
+              >
+                {acting === `rehearse:${r.id}` ? (
+                  <LoaderInline label="Starting…" />
+                ) : (
+                  <>
+                    <Eye size={13} aria-hidden="true" /> Rehearse
+                  </>
+                )}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => startEdit(r)}
