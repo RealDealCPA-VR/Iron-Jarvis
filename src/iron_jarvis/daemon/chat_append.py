@@ -273,19 +273,59 @@ def older_count(engine: Any, thread_id: str) -> int:
         return 0
 
 
-def read_older(engine: Any, thread_id: str, *, offset: int = 0, limit: int = 200) -> list[dict]:
-    """A page of a chat's older messages, oldest first. BLOCKING."""
+#: The most older messages one read answers.
+OLDER_PAGE_MAX = 1000
+
+
+def older_window(*, offset: int = 0, limit: int = 200, before: "int | None" = None,
+                 total: int = 0) -> tuple[int, int]:
+    """Where a read of a chat's older messages starts and how many it takes
+    (48-a). With ``before`` (a position: 0 is the very first message): the
+    ``limit`` messages just before it, a position past the end read as the
+    end and a negative one as the start. Without it: ``offset`` and
+    ``limit`` as before. Pure; never raises."""
+    try:
+        limit = max(1, min(int(limit or 200), OLDER_PAGE_MAX))
+    except (TypeError, ValueError):
+        limit = 200
+    if before is not None:
+        try:
+            end = max(0, min(int(before), max(0, int(total or 0))))
+        except (TypeError, ValueError):
+            end = 0
+        start = max(0, end - limit)
+        return start, end - start
+    try:
+        return max(0, int(offset or 0)), limit
+    except (TypeError, ValueError):
+        return 0, limit
+
+
+def read_older(engine: Any, thread_id: str, *, offset: int = 0, limit: int = 200,
+               before: "int | None" = None) -> list[dict]:
+    """A page of a chat's older messages, oldest first. BLOCKING.
+
+    ``before`` (48-a, the chat page's scroll back): the ``limit`` messages
+    just before that position (see :func:`older_window`). Rows before a
+    position never change (older messages are only added at the end, or
+    deleted with their chat), so a page that holds a position can keep
+    asking from it while newer messages move."""
     from sqlmodel import select
 
     if not ensure_older_table(engine):
         return []
-    limit = max(1, min(int(limit or 200), 1000))
-    offset = max(0, int(offset or 0))
+    if before is not None:
+        offset, limit = older_window(before=before, limit=limit,
+                                     total=older_count(engine, thread_id))
+        if limit <= 0:
+            return []
+    else:
+        offset, limit = older_window(offset=offset, limit=limit)
     with session_scope(engine) as db:
         rows = db.exec(
             select(ChatOlderMessage)
             .where(ChatOlderMessage.thread_id == thread_id)
-            .order_by(ChatOlderMessage.seq)
+            .order_by(ChatOlderMessage.seq, ChatOlderMessage.id)
             .offset(offset)
             .limit(limit)
         ).all()

@@ -433,6 +433,23 @@ import { isFailedMediaLine, MEDIA_RETRY_GONE, MEDIA_TRY_AGAIN, mediaRetryText } 
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { replyLiveWords } from "@/lib/replyLive";
 import { adoptDaemonLines, daemonLineFor, panelWorkingLabel, threadIsNewer } from "@/lib/chatReread";
+// 48-a: scroll back in a chat — its earlier messages, never part of `messages`.
+import { OlderMessages } from "@/components/chat/OlderMessages";
+import {
+  decodeOlderPage,
+  gapToFill,
+  hasEarlier,
+  olderCount,
+  olderFailed,
+  olderLoading,
+  olderPagePath,
+  olderStart,
+  withEarlierPage,
+  withRowsBetween,
+  withTotal,
+  type OlderPage,
+  type OlderState,
+} from "@/lib/olderMessages";
 import { settledSplit } from "@/lib/streamSplit";
 import { useModels } from "@/lib/useModels";
 import {
@@ -1496,6 +1513,10 @@ interface ThreadDetail {
   /** v1.336.0: the messages waiting for this chat's reply (kept by the
    *  daemon across a reload). Decoded with `decodeQueued` before use. */
   queued?: unknown;
+  /** v1.499.3: how many OLDER messages the chat keeps before `messages`
+   *  (48-a: the page reads them back, a page at a time, as the reader
+   *  scrolls up). Read through `lib/olderMessages.olderCount`. */
+  older?: unknown;
 }
 
 /** v1.336.0: the waiting messages as the daemon kept them — anything that
@@ -3197,6 +3218,7 @@ const MessageRow = memo(function MessageRow({
   underRow = false,
   rowActivity,
   connectedNow = null,
+  readOnly = false,
   h,
 }: {
   m: ChatMessage;
@@ -3238,6 +3260,12 @@ const MessageRow = memo(function MessageRow({
   /** Readiness 12B (G15): the app this (newest) reply offered to connect,
    *  now connected somewhere else — null for every other row. */
   connectedNow?: ConnectedNow | null;
+  /** 48-a: an EARLIER message, drawn above the live ones and never part of
+   *  `messages` (components/chat/OlderMessages). It can be read, copied and
+   *  quoted; nothing on it edits, rates, answers, undoes or runs anything —
+   *  its `i` is its place in the chat, not an index into `messages`, so
+   *  every press that takes `i` is left out, not merely disabled. */
+  readOnly?: boolean;
   h: RowHandlers;
 }) {
   // v1.323.0: the hidden "please continue" turn of a Continue press.
@@ -3275,7 +3303,7 @@ const MessageRow = memo(function MessageRow({
           )}
         </Bubble>
         {/* v1.325.0: the versions an edit kept — always on screen. */}
-        {versions && (
+        {versions && !readOnly && (
           <div className="mt-0.5 flex justify-end">
             <BranchPicker
               pos={versions.pos}
@@ -3286,15 +3314,16 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
         {/* v1.278.0: EDIT AND RESEND — never mid-turn, never on a steer note
-            (it was read inside a turn; there is no "after it" to cut). */}
-        {((!busy && !m.steer) || when.short) && (
+            (it was read inside a turn; there is no "after it" to cut), never
+            on an earlier message (48-a). */}
+        {((!busy && !m.steer && !readOnly) || when.short) && (
           <div className="mt-0.5 flex items-center justify-end gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100">
             {when.short && (
               <time dateTime={m.at} title={when.full} data-testid="message-time" className="px-1 text-[12px] text-zinc-500">
                 {when.short}
               </time>
             )}
-            {!busy && !m.steer && (
+            {!busy && !m.steer && !readOnly && (
               <button
                 type="button"
                 onClick={() => h.editMessage(i)}
@@ -3320,7 +3349,8 @@ const MessageRow = memo(function MessageRow({
             <MemoMarkdown content={m.content} />
           </Bubble>
         )}
-        <WorkflowDraftCard draft={m.workflowDraft} />
+        {/* 48-a: an earlier message's draft is not saved or run from here. */}
+        {!readOnly && <WorkflowDraftCard draft={m.workflowDraft} />}
         {m.workflowRun && (
           <WorkflowRunChip runId={m.workflowRun.runId} name={m.workflowRun.name} />
         )}
@@ -3399,8 +3429,8 @@ const MessageRow = memo(function MessageRow({
           <RunResultCard
             result={m.runResult}
             withRow={underRow}
-            onRetry={() => h.retryTask(m.runResult?.task || "")}
-            onKeepGoing={keepGoingFor(m, isLast, busy, h)}
+            onRetry={readOnly ? undefined : () => h.retryTask(m.runResult?.task || "")}
+            onKeepGoing={readOnly ? undefined : keepGoingFor(m, isLast, busy, h)}
           />
         )}
         {/* v1.355.0 (G62): the agent reply's receipt line, in the voice of
@@ -3454,8 +3484,8 @@ const MessageRow = memo(function MessageRow({
         <RunResultCard
           result={m.runResult}
           withRow={underRow}
-          onRetry={() => h.retryTask(m.runResult?.task || "")}
-          onKeepGoing={keepGoingFor(m, isLast, busy, h)}
+          onRetry={readOnly ? undefined : () => h.retryTask(m.runResult?.task || "")}
+          onKeepGoing={readOnly ? undefined : keepGoingFor(m, isLast, busy, h)}
         />
       </div>
     );
@@ -3599,7 +3629,7 @@ const MessageRow = memo(function MessageRow({
       )}
       {/* v1.455.0 (Wave F, item 16): a media job that could not be made
           offers Try again (its own request, sent as the next message). */}
-      {isFailedMediaLine(m) && (
+      {isFailedMediaLine(m) && !readOnly && (
         <div className="mt-1">
           <button
             type="button"
@@ -3627,7 +3657,11 @@ const MessageRow = memo(function MessageRow({
           handler. Only a reply whose turn reported files has a window; the
           daemon is asked once, when the reply is on screen, by the turn's
           stored start and end (so a reopened chat shows it too). */}
-      <ReplyChanges turn={turnWindow(m, prevUserAt)} undoFor={h.undoFor} onUndo={h.undoWrite} />
+      {/* 48-a: not under an earlier message (its Undo would act from a
+          message the chat has long moved past). */}
+      {!readOnly && (
+        <ReplyChanges turn={turnWindow(m, prevUserAt)} undoFor={h.undoFor} onUndo={h.undoWrite} />
+      )}
       {/* Calm chat W1-4 (v1.326.0): ONE quiet row of 28px ghost buttons right
           under the reply: Copy, Try again, 👍 / 👎, read aloud, save to the
           project, the versions a Try again kept ("‹ 1 / 2 ›") and the time.
@@ -3672,7 +3706,7 @@ const MessageRow = memo(function MessageRow({
         )}
         {/* v1.320.0: 👍 / 👎 — a reply can be rated where it was read. Not on
             a reply still being worked on by an agent (nothing to judge yet). */}
-        {m.content.trim() && !m.awaitingSession && (
+        {m.content.trim() && !m.awaitingSession && !readOnly && (
           <ReplyRating
             rating={m.rating}
             threadId={threadId}
@@ -3683,7 +3717,7 @@ const MessageRow = memo(function MessageRow({
         )}
         {/* v1.323.0: READ ALOUD — this one reply, on a press, whether or
             not spoken replies are on; a second press stops it. */}
-        {m.content.trim() && (
+        {m.content.trim() && !readOnly && (
           <button
             type="button"
             data-testid="read-aloud"
@@ -3696,12 +3730,14 @@ const MessageRow = memo(function MessageRow({
             {reading ? <VolumeX size={12} /> : <Volume2 size={12} />}
           </button>
         )}
-        <PromoteKnowledgeButton
-          disabledReason={projectId ? null : "Bind this chat to a project first."}
-          onPromote={() => h.promote(m.content)}
-        />
+        {!readOnly && (
+          <PromoteKnowledgeButton
+            disabledReason={projectId ? null : "Bind this chat to a project first."}
+            onPromote={() => h.promote(m.content)}
+          />
+        )}
         {/* v1.325.0: the answers a Try again kept, "‹ 1 / 2 ›". */}
-        {versions && (
+        {versions && !readOnly && (
           <BranchPicker
             pos={versions.pos}
             count={versions.count}
@@ -3737,8 +3773,8 @@ const MessageRow = memo(function MessageRow({
             timing={m.timing}
             documents={m.documents}
             onOpenDocument={h.openDocument}
-            undoFor={h.undoFor}
-            onUndo={h.undoWrite}
+            undoFor={readOnly ? undefined : h.undoFor}
+            onUndo={readOnly ? undefined : h.undoWrite}
             folderRules={m.folderRules}
             threadRefs={m.threadRefs}
             refit={m.refit}
@@ -3751,7 +3787,7 @@ const MessageRow = memo(function MessageRow({
           a standing preference in the receipt's own quiet voice — directly
           under it, with Keep · Edit · Not this. Decoded again here because a
           reopened thread hands back whatever the disk held. */}
-      {suggestion && suggestion.state !== "gone" && (
+      {suggestion && suggestion.state !== "gone" && !readOnly && (
         <PreferenceSuggestion
           suggestion={suggestion}
           onSettle={(next) => h.settleSuggestion(i, next)}
@@ -3762,7 +3798,7 @@ const MessageRow = memo(function MessageRow({
           ClientQuestion). Its answer is stored on the message. A "gone" one
           stays mounted: the line shows the route's "already answered"
           sentence in this chat and nothing once the chat is reopened. */}
-      {clientQuestion && (
+      {clientQuestion && !readOnly && (
         <ClientQuestion
           question={clientQuestion}
           onSettle={(next) => h.settleClientQuestion(i, next)}
@@ -3770,19 +3806,23 @@ const MessageRow = memo(function MessageRow({
       )}
       {/* SETTINGS CARDS (redesign S3/S4): a change made in chat, with its
           Undo, and the secure card a credential is pasted into. Decoded again
-          here because a reopened thread hands back whatever the disk held. */}
-      <ConfigCards
-        cards={configCards}
-        onSettle={(ci, next) => h.settleConfigCard(i, ci, next)}
-        // v1.351.0 (G15): Continue only on the newest reply and between
-        // turns — an older card's task has already moved on.
-        onContinue={isLast && !busy ? (ci) => h.continueConnected(i, ci) : undefined}
-      />
+          here because a reopened thread hands back whatever the disk held.
+          48-a: none under an earlier message (each press acts on `i`). */}
+      {!readOnly && (
+        <ConfigCards
+          cards={configCards}
+          onSettle={(ci, next) => h.settleConfigCard(i, ci, next)}
+          // v1.351.0 (G15): Continue only on the newest reply and between
+          // turns — an older card's task has already moved on.
+          onContinue={isLast && !busy ? (ci) => h.continueConnected(i, ci) : undefined}
+        />
+      )}
       {/* DOORS (v1.199.0): links into the surfaces this turn actually touched —
           SERVER-derived from the tools that executed ok (files excluded; the
           ArtifactsRail owns files). Rides the message, so live and persisted
-          turns render alike; a pre-v1.199.0 message has none. */}
-      <DoorsStrip doors={m.doors} onOpen={(d) => h.openDoor(i, d)} />
+          turns render alike; a pre-v1.199.0 message has none. 48-a: not
+          under an earlier message (an install or sign-in door is a press). */}
+      {!readOnly && <DoorsStrip doors={m.doors} onOpen={(d) => h.openDoor(i, d)} />}
       {/* Readiness 12B (G15): the app this reply offered to connect was
           connected somewhere else — the key card's own words and Continue.
           v1.406.0 part 4: drawn INSIDE the next-step box under the newest
@@ -4989,6 +5029,24 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // chat fired scroll events far from the bottom (each one releasing the pin)
   // while it was still aimed at a bottom a late chart had already moved.
   const openingRef = useRef(true);
+  // 48-a (scroll back): the open chat's EARLIER messages, drawn above the
+  // live ones. NEVER part of `messages`: the save sends `messages` whole and
+  // the daemon works out what leaves the live window from it, so an older
+  // row in there would be saved again as a live message (and the two-window
+  // merge would see rows it never sent). Read through lib/olderMessages; the
+  // ref is the same state, current between renders.
+  const [older, setOlderState] = useState<OlderState<ChatMessage>>(() =>
+    olderStart<ChatMessage>("", 0),
+  );
+  const olderRef = useRef(older);
+  // Bumped whenever the state starts over for another chat (or New chat):
+  // a read still on its way for the chat that was left is dropped.
+  const olderGenRef = useRef(0);
+  // One fill of the rows in between at a time (see fillOlderGap).
+  const olderFillingRef = useRef(false);
+  // Where the reader's row was on screen just before an earlier page went in
+  // above it; the layout effect puts it back there (holdReadersPlace).
+  const olderPlaceRef = useRef<{ el: Element | null; top: number; height: number } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Synchronous send guard: `busy` is React state and lags a frame, so two
@@ -6096,6 +6154,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // The user may have switched conversations while the fetch was airborne.
       if (chatGenRef.current !== gen || saveTargetRef.current.id !== id) return;
       setMessages(t.messages ?? []);
+      takeOlderTotal(id, t.older); // 48-a: where its live list now starts
       // The server's array is the truth for this thread; a Retry offered
       // against an older copy of it (CL5) is retired along with that copy.
       setFailedTurn(null);
@@ -6208,11 +6267,140 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     cacheSet(path, { ...(had ?? { title: "" }), ...t, messages: server } satisfies ThreadDetail);
     messagesRef.current = server;
     setMessages(server);
+    // 48-a: the live list now starts where the daemon's count says; rows
+    // that left it meanwhile are fetched into the earlier messages.
+    takeOlderTotal(t.id, t.older);
     // The server's array is the truth for this chat; a Retry offered against
     // an older copy of it (CL5) is retired along with that copy.
     setFailedTurn(null);
     setAddressee(addresseeOf(server)); // still talking to whoever answered last
     return true;
+  }
+
+  /** 48-a: the older state, in the ref at once and on screen next render. */
+  function setOlder(next: OlderState<ChatMessage>) {
+    olderRef.current = next;
+    setOlderState(next);
+  }
+
+  /** 48-a: start over, for chat `threadId` whose live messages start at
+   *  `total` (nothing held), or for no chat (""). A read still on its way
+   *  is dropped. */
+  function resetOlder(threadId = "", total: unknown = 0) {
+    olderGenRef.current += 1;
+    olderFillingRef.current = false;
+    olderPlaceRef.current = null;
+    setOlder(olderStart<ChatMessage>(threadId, total));
+  }
+
+  /** 48-a: the page just took a live list from the daemon whose `older`
+   *  count is `total` (an adopt, a 409 merge, a messaging chat's re-read).
+   *  When the count grew, the messages that left the live list were on
+   *  screen a moment ago: just those rows are fetched and go under the held
+   *  ones, so no gap opens and nothing shows twice. An answer with no count
+   *  (an older Iron Jarvis) changes nothing. */
+  function takeOlderTotal(threadId: string | null | undefined, total: unknown) {
+    const n = olderCount(total);
+    if (!threadId || n === null) return;
+    const cur = olderRef.current;
+    // A new chat's live list starts at its first message.
+    const base = cur.threadId ? cur : olderStart<ChatMessage>(threadId, 0);
+    if (base.threadId !== threadId || n < base.total) {
+      resetOlder(threadId, n);
+      return;
+    }
+    const next = withTotal(base, threadId, n);
+    if (next !== cur) setOlder(next);
+    fillOlderGap();
+  }
+
+  /** 48-a: fetch the rows between the held ones and the live list, one read
+   *  at a time; a count that grew again meanwhile is filled after it. A
+   *  failed read leaves nothing held (the "Earlier messages" line covers
+   *  everything above the live list again), never a gap. */
+  function fillOlderGap() {
+    const s = olderRef.current;
+    const gap = gapToFill(s);
+    if (!gap || olderFillingRef.current) return;
+    olderFillingRef.current = true;
+    const gen = olderGenRef.current;
+    const id = s.threadId;
+    void (async () => {
+      let page: OlderPage<ChatMessage> | null = null;
+      try {
+        page = decodeOlderPage<ChatMessage>(
+          await get<unknown>(olderPagePath(id, gap.to, gap.to - gap.from)),
+        );
+      } catch {
+        page = null;
+      }
+      if (olderGenRef.current !== gen) return; // another chat now (reset cleared the flag)
+      olderFillingRef.current = false;
+      setOlder(withRowsBetween(olderRef.current, gap.from, gap.to, page));
+      fillOlderGap();
+    })();
+  }
+
+  /** 48-a: read the page of earlier messages just above the rows held. */
+  async function loadEarlier() {
+    const s = olderRef.current;
+    const id = s.threadId;
+    if (!id || s.loading || !hasEarlier(s)) return;
+    const gen = olderGenRef.current;
+    const before = s.loadedFrom;
+    setOlder(olderLoading(s));
+    let page: OlderPage<ChatMessage> | null = null;
+    try {
+      page = decodeOlderPage<ChatMessage>(await get<unknown>(olderPagePath(id, before)));
+    } catch {
+      page = null;
+    }
+    if (olderGenRef.current !== gen) return; // the chat was left meanwhile
+    const cur = olderRef.current;
+    if (!page) {
+      setOlder(olderFailed(cur));
+      return;
+    }
+    const next = withEarlierPage(cur, before, page);
+    if (next.loadedFrom !== cur.loadedFrom) holdReadersPlace();
+    setOlder(next);
+  }
+
+  /** 48-a: the "Earlier messages" line came into view. Only a reader who
+   *  has scrolled up gets a read: a chat that just opened (following its
+   *  newest message) reads nothing older, and a failed read waits for Try
+   *  again instead of asking again on every scroll. */
+  function onOlderReach() {
+    const s = olderRef.current;
+    if (pinnedRef.current || s.loading || s.failed) return;
+    void loadEarlier();
+  }
+
+  /** 48-a: the line, or Try again, was pressed: the reader is reading back
+   *  (the rows going in above must not pull them to the newest message). */
+  function onOlderPress() {
+    pinnedRef.current = false;
+    void loadEarlier();
+  }
+
+  /** 48-a: note where the reader's row is on screen before a page goes in
+   *  above it (the first row that has a box: every row below the new ones
+   *  moves by the same amount). The layout effect below puts it back. */
+  function holdReadersPlace() {
+    const box = scrollRef.current;
+    if (!box) return;
+    let el: Element | null = null;
+    for (const row of Array.from(box.querySelectorAll("[data-older-seq], [data-msg-index]"))) {
+      if (row.getBoundingClientRect().height > 0) {
+        el = row;
+        break;
+      }
+    }
+    olderPlaceRef.current = {
+      el,
+      top: el ? el.getBoundingClientRect().top : 0,
+      height: box.scrollHeight,
+    };
   }
 
   // A REMOTE AGENT MESSAGED BACK (v1.285.0). Its line lands in the ROOM this
@@ -6598,6 +6786,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // must not be written over them — the next save would go out under the
     // older stamp, be refused, and the merge would double the appended line.
     let stampAtSend = target.updatedAt;
+    // 48-a: the count of the copy a 409 merge built on (where its live list
+    // starts); undefined when no merge happened.
+    let mergedOlder: unknown = undefined;
     try {
       res = await put<ThreadSaveResult>(
         `/chat/threads/${target.id ?? "new"}`,
@@ -6606,6 +6797,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 409 && target.id)) throw e;
       const fresh = await get<ThreadDetail>(`/chat/threads/${target.id}`);
+      mergedOlder = fresh.older;
       const server = Array.isArray(fresh.messages) ? fresh.messages : [];
       const k = Math.min(syncedAtSend, sent.length);
       target.rebase = { local: sent.slice(0, k), server };
@@ -6649,6 +6841,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // bubbles included) instead of the stale copy this window built.
       messagesRef.current = sent;
       setMessages(sent);
+      // 48-a: the merge starts at the server's live list.
+      if (mergedOlder !== undefined) takeOlderTotal(res.id, mergedOlder);
     }
     return res;
   }
@@ -6944,6 +7138,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // paint?" below compares against exactly this array, and a GET that
       // answers before React re-renders must not read the LEFT thread's.
       messagesRef.current = cached.messages;
+      // 48-a: the copy's earlier messages start where its count says;
+      // nothing older is read until the reader reaches the top.
+      resetOlder(cached.id, cached.older);
       setCommMeta(
         daemon ? { channel: cached.comm_channel ?? "", display: cached.comm_display ?? "" } : null,
       );
@@ -7024,6 +7221,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         return;
       }
       setMessages(msgs);
+      // 48-a: the live list starts at the daemon's count. Opening reads
+      // nothing older (only reaching the top does); rows already read on
+      // the paint stay while the count is the same.
+      const heldOlder = olderRef.current;
+      if (!(heldOlder.threadId === t.id && heldOlder.total === olderCount(t.older)))
+        resetOlder(t.id, t.older);
       setThreadId(t.id);
       setOpenedTitle({ id: t.id, title: t.title ?? "" });
       setAddressee(addresseeOf(msgs)); // still talking to whoever answered last
@@ -8208,6 +8411,24 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     bottomRef,
     () => pinnedRef.current && !(messagesRef.current.length === 0 && !busyRef.current),
   );
+
+  // 48-a: an earlier page went in above the reader. Before the browser
+  // paints, move the scroll by exactly what their row moved, so the row they
+  // were reading stays where it was on screen (zero when the browser's own
+  // scroll anchoring already kept it there). The reader stays unpinned: the
+  // page must not pull them to the newest message.
+  useLayoutEffect(() => {
+    const place = olderPlaceRef.current;
+    olderPlaceRef.current = null;
+    const box = scrollRef.current;
+    if (!place || !box) return;
+    pinnedRef.current = false;
+    const moved =
+      place.el && place.el.isConnected
+        ? place.el.getBoundingClientRect().top - place.top
+        : box.scrollHeight - place.height;
+    if (moved) box.scrollTop += moved;
+  }, [older.loadedFrom]);
 
   function jumpToLatest() {
     pinnedRef.current = true;
@@ -11483,6 +11704,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     saveDraftNow();
     setFollowups(null);
     convGenRef.current += 1;
+    // 48-a: the earlier messages belong to the conversation being left.
+    resetOlder();
     // v1.345.0: an @-round still airborne belongs to the conversation being
     // left — its bubble goes with it; its reply comes home through the
     // daemon's append (see sendPanel), never through this page's state.
@@ -12552,6 +12775,62 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     }),
     [],
   );
+  // 48-a: an EARLIER message's row (MessageRow `readOnly`) draws no press
+  // that takes its index; should one ever reach it, it does nothing, since
+  // that index is the message's place in the chat, not one in `messages`.
+  // Opening a file it names is reading, so that one stays.
+  const olderRowHandlers = useMemo<RowHandlers>(() => {
+    const none = () => {};
+    return {
+      retryTask: none,
+      keepGoing: none,
+      regenerate: none,
+      switchVersion: none,
+      continueReply: none,
+      readAloud: none,
+      editMessage: none,
+      crystallize: none,
+      handOff: none,
+      startHandOff: none,
+      settleSuggestion: none,
+      settleClientQuestion: none,
+      rateReply: none,
+      retryMedia: none,
+      settleConfigCard: none,
+      continueConnected: none,
+      continueElsewhere: none,
+      openDoor: () => false,
+      promote: async () => {},
+      openDocument: (path) => rowImplRef.current.openDocument(path),
+      undoFor: () => null,
+      undoWrite: none,
+    };
+  }, []);
+  // 48-a: stable props for the memoized OlderMessages, so a page render
+  // that changes nothing there does not walk every row held.
+  const olderImplRef = useRef({ reach: onOlderReach, press: onOlderPress });
+  olderImplRef.current = { reach: onOlderReach, press: onOlderPress };
+  const olderReach = useCallback(() => olderImplRef.current.reach(), []);
+  const olderPress = useCallback(() => olderImplRef.current.press(), []);
+  const renderOlderRow = useCallback(
+    (m: ChatMessage, seq: number) => (
+      <MessageRow
+        m={m}
+        i={seq}
+        isLast={false}
+        prevUser=""
+        canRegen={false}
+        busy={false}
+        threadId={threadId}
+        projectId={projectId}
+        crystallizingId={null}
+        answeredName={answeredModelName(m.route)}
+        readOnly
+        h={olderRowHandlers}
+      />
+    ),
+    [threadId, projectId, answeredModelName, olderRowHandlers],
+  );
 
   // The ⋯ beside every row, in the chat list AND (v1.328.0) the Archived
   // view; its menu knows which list it was opened from.
@@ -13613,6 +13892,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   floor, where the column has no height to divide up. */}
               <div
                 ref={scrollRef}
+                data-testid="chat-scroll"
                 onScroll={onThreadScroll}
                 // Redesign S11 (AUDIT §8): the conversation reads in a 760 px
                 // column, centred — each row is held to it, no new wrapper.
@@ -13650,6 +13930,20 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         handlers object, so typing or streaming no longer
                         re-renders every bubble in the thread. */}
                     <QuoteSelection onQuote={quoteIntoBox} className="contents">
+                    {/* 48-a: the chat's EARLIER messages, above the live
+                        rows: "Earlier messages" at the top, read a page at a
+                        time once the reader scrolls up to it, through the
+                        same row, read-only. Their own state (`older`), never
+                        `messages`; keyed `older-<position>`, so the live
+                        rows' keys never move. */}
+                    <OlderMessages
+                      state={older}
+                      firstLiveAt={messages[0]?.at}
+                      rootRef={scrollRef}
+                      onReach={olderReach}
+                      onLoad={olderPress}
+                      renderRow={renderOlderRow}
+                    />
                     {messages.map((m, i) => {
                       // No regenerate on MESSAGING threads: the daemon owns the
                       // transcript, so a browser-side re-run could never be

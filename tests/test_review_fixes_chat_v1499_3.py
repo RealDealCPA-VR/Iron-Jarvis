@@ -579,6 +579,58 @@ def test_an_append_past_the_window_keeps_the_oldest_line(tmp_path):
     assert [m["content"] for m in CA.read_older(engine, tid)] == ["message number 0"]
 
 
+def test_the_page_before_a_position_is_the_messages_just_before_it(tmp_path):
+    """48-a (scroll back in a chat): the page asks for the ``limit`` messages
+    just BEFORE a position (``before``), still oldest first, and the answer
+    says where they start (``first_seq``). Rows before a position never
+    change (older messages are only ever added at the end), so the page can
+    keep asking with the position it holds while new messages move. The
+    ``offset`` call is unchanged."""
+    with TestClient(create_app(str(tmp_path))) as client:
+        engine = client.app.state.platform.engine
+        r = client.put("/chat/threads/new", json={"messages": [_m(i) for i in range(250)]})
+        assert r.status_code == 200, r.text
+        tid = r.json()["id"]
+        words = lambda page: [m["content"] for m in page["messages"]]  # noqa: E731
+        page = client.get(f"/chat/threads/{tid}/older?before=50&limit=20").json()
+        assert page["total"] == 50 and page["first_seq"] == 30
+        assert words(page) == [f"message number {i}" for i in range(30, 50)]
+        # The next page up: what is left before 30, oldest first.
+        page = client.get(f"/chat/threads/{tid}/older?before=30&limit=20").json()
+        assert page["first_seq"] == 10
+        assert words(page) == [f"message number {i}" for i in range(10, 30)]
+        # Fewer than a page left: the first message, and it starts at 0.
+        page = client.get(f"/chat/threads/{tid}/older?before=10&limit=20").json()
+        assert page["first_seq"] == 0
+        assert words(page) == [f"message number {i}" for i in range(10)]
+        # Nothing before the first message; a position past the end is the end.
+        page = client.get(f"/chat/threads/{tid}/older?before=0&limit=20").json()
+        assert page["messages"] == [] and page["first_seq"] == 0
+        page = client.get(f"/chat/threads/{tid}/older?before=9999&limit=5").json()
+        assert page["first_seq"] == 45 and words(page) == [f"message number {i}" for i in range(45, 50)]
+        page = client.get(f"/chat/threads/{tid}/older?before=-3&limit=5").json()
+        assert page["messages"] == [] and page["first_seq"] == 0
+        # The offset call answers as before, and says where it starts too.
+        page = client.get(f"/chat/threads/{tid}/older?offset=5&limit=3").json()
+        assert page["offset"] == 5 and page["first_seq"] == 5
+        assert words(page) == ["message number 5", "message number 6", "message number 7"]
+        page = client.get(f"/chat/threads/{tid}/older").json()
+        assert page["offset"] == 0 and page["first_seq"] == 0 and len(page["messages"]) == 50
+        # More messages move while the page holds its position: the rows
+        # before it are the same rows.
+        live = client.get(f"/chat/threads/{tid}").json()["messages"]
+        r = client.put(f"/chat/threads/{tid}", json={"messages": [*live, _m(250), _m(251)]})
+        assert r.status_code == 200
+        page = client.get(f"/chat/threads/{tid}/older?before=50&limit=20").json()
+        assert page["total"] == 52 and page["first_seq"] == 30
+        assert words(page) == [f"message number {i}" for i in range(30, 50)]
+        # The pure reader takes the same position.
+        assert [m["content"] for m in CA.read_older(engine, tid, before=2, limit=50)] == [
+            "message number 0", "message number 1",
+        ]
+        assert client.get("/chat/threads/nope/older?before=5").status_code == 404
+
+
 def test_the_compaction_header_promises_only_what_is_true():
     from iron_jarvis.context import compaction as C
 

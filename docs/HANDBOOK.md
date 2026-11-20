@@ -2042,6 +2042,32 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Scroll back to the start of a long chat (v1.547.0)
+
+In a long chat, scroll up and the earlier messages load in place, back to
+the very first one. A chat has always kept every message: the newest 200 stay
+open in the chat and the earlier ones are kept beside it (v1.499.3). Until
+now the chat page showed only the newest 200.
+
+**How it works.** At the top of a long chat there is a quiet **Earlier
+messages** line. Scroll up to it and the 50 messages before load above, and
+what you were reading stays where it was on the screen. Keep scrolling and
+the next 50 follow. A date line shows where the day changes. At the top, the
+line reads **Start of this chat**. In a chat too short to scroll, press the
+line instead.
+
+**Good to know.**
+
+- A chat opens as fast as before: nothing earlier is read until you reach
+  the top.
+- Earlier messages can be read, copied and quoted. They cannot be edited,
+  rated or tried again, and the suggestions, cards and Undo under them are
+  not shown there.
+- If they cannot be read, the line says "Could not load earlier messages."
+  with **Try again**.
+- History search already finds earlier messages.
+- Phone chats and coding sessions still keep only their newest messages.
+
 ## Ask what was done before, in any chat (v1.547.0)
 
 You can now ask Iron Jarvis about earlier work in plain words, in any chat

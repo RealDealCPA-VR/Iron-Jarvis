@@ -2236,23 +2236,34 @@ def register(app: FastAPI, d) -> None:
         }
 
     @app.get("/chat/threads/{thread_id}/older")
-    def chat_thread_older(thread_id: str, offset: int = 0, limit: int = 200) -> dict[str, Any]:
+    def chat_thread_older(
+        thread_id: str, offset: int = 0, limit: int = 200, before: int | None = None,
+    ) -> dict[str, Any]:
         """A saved chat's OLDER messages, oldest first (v1.499.3): the ones a
         long chat moved out of its live window (``messages``) instead of
         deleting. ``total`` is how many there are; page with ``offset`` /
-        ``limit`` (at most 1,000)."""
+        ``limit`` (at most 1,000). 48-a (the chat page's scroll back):
+        ``before`` asks for the ``limit`` messages just before that position
+        instead, and ``first_seq`` says where the answer starts (0 = the
+        chat's first message)."""
         from ...core.models import ChatThreadRecord
-        from ..chat_append import older_count, read_older
+        from ..chat_append import older_count, older_window, read_older
 
         with session_scope(d.platform.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
         if r is None:
             raise HTTPException(status_code=404, detail="no such thread")
+        total = older_count(d.platform.engine, thread_id)
+        start, count = older_window(offset=offset, limit=limit, before=before, total=total)
         return {
             "id": thread_id,
-            "total": older_count(d.platform.engine, thread_id),
+            "total": total,
             "offset": max(0, int(offset or 0)),
-            "messages": read_older(d.platform.engine, thread_id, offset=offset, limit=limit),
+            "first_seq": start,
+            "messages": (
+                read_older(d.platform.engine, thread_id, offset=start, limit=count)
+                if count > 0 else []
+            ),
         }
 
     @app.put("/chat/threads/{thread_id}/queue")
