@@ -7364,6 +7364,17 @@ def config_cards_from_result(name: str, result: Any) -> list[dict[str, Any]]:
         for r in reqs if isinstance(reqs, list) else []:
             if isinstance(r, dict) and r.get("name") and r.get("request_id"):
                 out.append({"kind": "secret", **{k: r.get(k) for k in ("name", "label", "help", "why", "request_id")}})
+        # Leap 06-a: "rehearse it" — the rehearsal's report card (the page's
+        # own RehearsalReport reads ``GET /rehearsals/{id}`` until it ends).
+        # Both lanes carry it through this one helper.
+        rh = data.get("rehearsal") if name == "rehearse" else None
+        if isinstance(rh, dict) and str(rh.get("id") or "").strip():
+            out.append({
+                "kind": "rehearsal",
+                "rehearsal_id": str(rh.get("id")).strip(),
+                "subject_kind": str(rh.get("kind") or ""),
+                "name": " ".join(str(rh.get("name") or "").split())[:120],
+            })
     except Exception:  # noqa: BLE001 — a card never breaks a turn
         return out
     return out

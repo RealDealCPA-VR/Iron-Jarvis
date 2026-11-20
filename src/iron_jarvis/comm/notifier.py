@@ -141,6 +141,8 @@ EVENT_WORDS: dict[str, str] = {
     "action.reverted": "Action undone",
     "tool.executed": "Ran a tool",
     "tool.denied": "Refused a tool",
+    # Leap 06-a: a rehearsal held a step (nothing was done).
+    "tool.rehearsed": "Rehearsed a step (nothing done)",
     "delegation.started": "Handed work to a teammate",
     "delegation.completed": "Teammate finished",
     "comm.desktop": "Sent a desktop notification",
@@ -887,6 +889,17 @@ def night_review_line(payload: dict) -> str:
     return f"Iron Jarvis has {n} suggestion{'' if n == 1 else 's'} from yesterday's review."
 
 
+def is_rehearsal_run(payload: Any) -> bool:
+    """Leap 06-a: a ``session.completed`` of a REHEARSAL's run (its outcome
+    ``rehearsed``, or the ``rehearsal`` mark its completion payload carries
+    for a failed or stopped one). The bell, the tray and every destination
+    say nothing for it; its report card does. The Python twin of
+    ``NotificationBell``'s ``isRehearsalRun``."""
+    if not isinstance(payload, dict):
+        return False
+    return _text(payload.get("outcome")) == "rehearsed" or payload.get("rehearsal") is True
+
+
 def bell_pings(event: Any) -> bool:
     """Does the dashboard bell raise a desktop ping for this event while a
     window is open? The Python twin of ``NotificationBell.toActivity`` for the
@@ -974,6 +987,9 @@ def bell_pings(event: Any) -> bool:
             return False
         status = _text(payload.get("status"))
         if status == "cancelled":
+            return False
+        if is_rehearsal_run(payload):
+            # Leap 06-a: a rehearsal's run is said by its own report card.
             return False
         origin = _text(payload.get("origin"))
         if origin == _MISSION_ORIGIN:
@@ -1364,6 +1380,10 @@ class Notifier:
             if in_schedule_fire():
                 return {}
             payload = _event_field(event, "payload", {}) or {}
+            # Leap 06-a: a REHEARSAL's run reaches no destination: the person
+            # who pressed Rehearse reads its report where they pressed it.
+            if is_rehearsal_run(payload):
+                return {}
             if bell_pings(event) or (
                 etype == EventType.SESSION_COMPLETED
                 and isinstance(payload, dict)

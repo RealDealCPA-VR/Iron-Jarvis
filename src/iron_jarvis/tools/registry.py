@@ -1025,6 +1025,7 @@ class ToolRegistry:
         scopes: "list[tuple[str, str]] | None" = None,
         kept_pins: "dict[str, str] | None" = None,
         card_allow: "Iterable[str] | None" = None,
+        rehearsal_would: str = "",
     ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
@@ -1231,6 +1232,27 @@ class ToolRegistry:
         # the same tool. See `risk_value`: logging only, never a gate.
         risk = risk_value(tool)
 
+        # A REHEARSAL (leap 06-a, ``tools/rehearsal``): set only by a lane from
+        # its run's own options. ``would`` is what the real run would do with
+        # this call: the engine's decision, or "ask" when the lane says it
+        # would have shown a card (``rehearsal_would``) — an ask the engine
+        # could not lift with nobody to ask is then HELD as an ask, never run
+        # and never parked. A deny, the roster and a caller's own refusal stay
+        # real refusals below, written down as "refuse".
+        from . import rehearsal as _rehearsal
+
+        rehearsing = str(getattr(ctx, "rehearsal_id", "") or "")
+        held = bool(rehearsing) and _rehearsal.holds(tool)
+        would = "ask" if rehearsal_would == "ask" else "run"
+        if (
+            held
+            and not decision.allowed
+            and not deny_reason
+            and decision.mode is PermissionMode.ASK
+            and would == "ask"
+        ):
+            decision = PermissionDecision(True, PermissionMode.ASK, "rehearsal: would ask first")
+
         if not decision.allowed:
             # Only a caller-supplied refusal may relabel itself; a decision the
             # engine really made is always "permission denied".
@@ -1239,6 +1261,7 @@ class ToolRegistry:
                 self._record,
                 ctx, name, args, decision.mode, ok=False,
                 output=decision.reason, reversibility=rev_value,
+                **({"rehearsed": True, "would": "refuse"} if rehearsing else {}),
             )
             await ctx.event_bus.publish(
                 EventType.TOOL_DENIED,
@@ -1283,6 +1306,10 @@ class ToolRegistry:
                 self._record,
                 ctx, name, args, decision.mode, ok=False,
                 output=shape_error, reversibility=rev_value,
+                # Leap 06-a: in a rehearsal a held call refused here (its
+                # shape, the task's write rules) is what the real run would
+                # meet too: the report lists it as refused.
+                **({"rehearsed": True, "would": "refuse"} if held else {}),
             )
             await ctx.event_bus.publish(
                 EventType.TOOL_EXECUTED,
@@ -1292,6 +1319,17 @@ class ToolRegistry:
                 session_id=ctx.session_id,
             )
             return ToolResult(ok=False, error=shape_error)
+
+        # THE REHEARSAL GATE (leap 06-a). Every real gate above has spoken (the
+        # roster, the permission decision, the shape, the task's write rules);
+        # a held call now stops HERE — before the read cache, the Undo capture,
+        # the intent and execute. One ledger row says what it would have done
+        # (``rehearsed`` + ``would``), the event is ``tool.rehearsed`` (never
+        # ``tool.executed``) and the model is told to carry on as if it worked.
+        if held:
+            return await self._rehearse(
+                ctx, tool, name, args, decision, rev_value, risk, would, grant_id
+            )
 
         # READ CACHE (contract 3, v1.174.0) — checked AFTER authorization, never
         # before it. The plan sketched this between the tool lookup and the
@@ -1445,6 +1483,10 @@ class ToolRegistry:
                 _tscope = _TASK_SCOPE.set(getattr(ctx, "task_scope", None))
                 from ..eval import call_ledger as _call_ledger
 
+                # Leap 06-a: a call that RUNS inside a rehearsal (a read, a
+                # helper's hand-off) carries it, so a helper agent's run
+                # created in it inherits the rehearsal (``create_session``).
+                _rscope = _rehearsal._CURRENT.set(rehearsing) if rehearsing else None
                 try:
                     # v1.529.0 (owner decision 3): a model call the tool makes
                     # (a picture's question, reading a scan) is on a usage row
@@ -1454,6 +1496,8 @@ class ToolRegistry:
                 finally:
                     if _awake_deadline is not None:
                         _awake_deadline.cancel()
+                    if _rscope is not None:
+                        _rehearsal._CURRENT.reset(_rscope)
                     _TASK_SCOPE.reset(_tscope)
                     _CALL_SCOPE.reset(_call)
                     _DEADLINE_SCOPE.reset(_scope)
@@ -2251,6 +2295,50 @@ class ToolRegistry:
         """Wire the session-namespace registry in (called once by platform)."""
         self._repl = registry
 
+    async def _rehearse(
+        self,
+        ctx: ToolContext,
+        tool: Tool,
+        name: str,
+        args: dict,
+        decision: PermissionDecision,
+        rev_value: str,
+        risk: Any,
+        would: str,
+        grant_id: str,
+    ) -> ToolResult:
+        """A HELD call in a rehearsal (leap 06-a): nothing executes, no intent
+        and no Undo row are written; ONE ``rehearsed`` ledger row with
+        ``would`` and a ``tool.rehearsed`` event. Never parks on an approval
+        (the lane already passed it by). The words are built from the call's
+        REDACTED arguments, and never quote what a write would contain."""
+        from . import rehearsal as _rehearsal
+
+        try:
+            safe = tool.redact_args(args) if isinstance(args, dict) else {}
+        except Exception:  # noqa: BLE001 — the words fall back to the tool's name
+            safe = {}
+        effect = _rehearsal.effect_of(name, safe, tool)
+        output = _rehearsal.held_output(effect, would)
+        inv_id = await asyncio.to_thread(
+            self._record,
+            ctx, name, args, decision.mode, ok=True,
+            output=output, reversibility=rev_value, grant_id=grant_id,
+            rehearsed=True, would=would,
+        )
+        await ctx.event_bus.publish(
+            EventType.TOOL_REHEARSED,
+            {"tool": name, "would": would, "invocation_id": inv_id,
+             "reversibility": rev_value, "risk_class": risk,
+             "kind": effect.kind, "words": effect.words},
+            session_id=ctx.session_id,
+        )
+        return ToolResult(
+            ok=True,
+            output=output,
+            data={"rehearsed": True, "would": would, "kind": effect.kind},
+        )
+
     def _record(
         self,
         ctx: ToolContext,
@@ -2269,6 +2357,8 @@ class ToolRegistry:
         undo_settle: str | None = None,
         replace_undo: bool = False,
         source_map: "dict[str, Any] | None" = None,
+        rehearsed: bool = False,
+        would: str = "",
     ) -> str:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
         captured) and return the invocation id so the caller can tag its event.
@@ -2278,6 +2368,9 @@ class ToolRegistry:
         on this same worker thread, the figures of the answer are recorded
         for the chat turn (``documents/sources.record_marks``), never from a
         model's argument. A failure there is logged; the call stands.
+
+        ``rehearsed`` / ``would`` (leap 06-a): a rehearsal's row — a held call
+        or a refusal inside a rehearsal, with what the real run would do.
 
         SYNC; ``invoke`` hops every call through ``asyncio.to_thread`` (v1.226.0)
         so a per-tool-call write blocked behind a long writer (VACUUM) waits on
@@ -2339,6 +2432,8 @@ class ToolRegistry:
             shell_syntax=(
                 str(getattr(ctx, "shell_syntax", "") or "") if name in _COMMAND_TOOLS else ""
             ),
+            rehearsed=bool(rehearsed),
+            would=str(would or ""),
         )
         journal: "dict[str, Any] | None" = None
         if undo:

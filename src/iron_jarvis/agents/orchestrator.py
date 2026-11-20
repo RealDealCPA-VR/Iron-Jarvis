@@ -602,7 +602,17 @@ def _completion_payload(session: Session, **extra: Any) -> dict:
         # already there, ``chat_delivery``), so the tray notice opens THAT
         # chat, not the run's page. Always present, ``None`` when none.
         "chat_thread_id": _chat_delivery.chat_thread_of(session) or None,
+        # Leap 06-a: a REHEARSAL's run says so (only then, so every other
+        # payload is unchanged): the bell and every notice stay quiet for it,
+        # failed or stopped too (``comm/notifier.is_rehearsal_run``).
+        **({"rehearsal": True} if _is_rehearsal(session) else {}),
     }
+
+
+def _is_rehearsal(session: Session) -> bool:
+    from ..tools.rehearsal import rehearsal_of
+
+    return bool(rehearsal_of(session))
 
 
 def _stored_options(session: Session) -> dict:
@@ -1196,6 +1206,14 @@ class Orchestrator:
         from ..providers import egress as _egress
 
         options = dict(options) if isinstance(options, dict) else {}
+        # A REHEARSAL (leap 06-a) spreads down like Local only: a run created
+        # while a rehearsal's call runs (a helper agent's hand-off) is part of
+        # it, so its writes are held in turn. A door's own value is kept.
+        from ..tools import rehearsal as _rehearsal
+
+        _inherited = _rehearsal.current()
+        if _inherited and not str(options.get(_rehearsal.REHEARSAL_OPTION) or "").strip():
+            options[_rehearsal.REHEARSAL_OPTION] = _inherited
         # WHO STARTED IT (v1.352.0): only the kwarg writes the marker.
         if started_by_person:
             options[PERSON_STARTED_OPTION] = True
@@ -1704,7 +1722,17 @@ class Orchestrator:
             # Phase 7: if this ran on a git worktree, build a review — never
             # auto-merge.
             gs = self._git_sessions.get(session.id)
-            if gs is not None:
+            from ..tools.rehearsal import rehearsal_of as _rehearsal_of
+
+            if gs is not None and _rehearsal_of(session):
+                # Leap 06-a: a rehearsal changed nothing, so there is nothing
+                # to review: its worktree goes, as a failed run's does.
+                self._git_sessions.pop(session.id, None)
+                try:
+                    await asyncio.to_thread(gs.discard)
+                except Exception:  # noqa: BLE001
+                    log.exception("worktree cleanup failed after rehearsal %s", session.id)
+            elif gs is not None:
                 try:
                     review = build_review(
                         gs,
@@ -2266,7 +2294,21 @@ class Orchestrator:
         delegate/spawn tools, so multi-agent work teaches the system too. Does
         NOT build a git review — that is git-worktree-only and stays in
         ``run_session``.
+
+        Leap 06-a: a REHEARSAL's run learns nothing (no score, no outcome
+        record, no lesson, no skill suggestion, no search entry): it is one
+        rehearsed row ("would keep a lesson from this run") instead.
         """
+        from ..tools import rehearsal as _rehearsal
+
+        if _rehearsal.rehearsal_of(session):
+            # A low-trust run would keep no lesson either (below), so its
+            # rehearsal promises none.
+            if _normalize_trust(getattr(session, "trust", "")) != _TRUST_LOW:
+                _rehearsal.record_side_door(
+                    self.p.engine, session_id=session.id, door="post_run_learning",
+                )
+            return
         # Phase 9: score the run (never fatal to the session).
         try:
             self.p.evaluator.evaluate(session.id)
@@ -2438,6 +2480,15 @@ class Orchestrator:
         try:
             if not _chat_delivery.chat_thread_of(session):
                 return {"ok": False, "why": "no chat", "appended": 0, "skipped": 0}
+            # Leap 06-a: a REHEARSAL's run posts nothing anywhere — its line
+            # is one rehearsed row ("would post the result in the chat").
+            from ..tools import rehearsal as _rehearsal
+
+            if _rehearsal.rehearsal_of(session):
+                _rehearsal.record_side_door(
+                    self.p.engine, session_id=session.id, door="chat_delivery",
+                )
+                return {"ok": False, "why": "rehearsal", "appended": 0, "skipped": 0}
             # The provider manager + config let the delivered card judge
             # where the run's model ran (v1.352.0, G21) exactly as GET
             # /sessions/{id}/result does — without them the flag is dropped.

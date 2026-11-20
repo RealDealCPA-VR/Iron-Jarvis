@@ -3875,6 +3875,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'remove the repeating task please',
         'turn off that scheduled thing',
     ),
+    'rehearse': (
+        'try my rule without it doing anything',
+        'what would my morning schedule do',
+        'do a dry run of that automation',
+        'show me what the rule would change first',
+        'test the schedule without touching my files',
+        'practice run of my email rule',
+        'see what it would do before it runs for real',
+        'run it once as a rehearsal',
+    ),
     'schedule_list': (
         'what reminders do I have set up',
         'show me all my scheduled tasks',

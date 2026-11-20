@@ -32,6 +32,7 @@ from . import (  # noqa: F401
     profile,
     projects,
     reflex,
+    rehearsals,
     routing,
     search,
     sessions,

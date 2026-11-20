@@ -59,6 +59,8 @@ export const EVENT_WORDS: Record<string, string> = {
   "action.reverted": "Action undone",
   "tool.executed": "Ran a tool",
   "tool.denied": "Refused a tool",
+  // Leap 06-a: a rehearsal held a step (nothing was done).
+  "tool.rehearsed": "Rehearsed a step (nothing done)",
   // v1.314.0 (UX wave 2): the events the Activity page printed raw.
   "delegation.started": "Handed work to a teammate",
   "delegation.completed": "Teammate finished",
@@ -349,6 +351,7 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
       break;
     case "tool.executed":
     case "tool.denied":
+    case "tool.rehearsed":
     case "trust.lowered":
     case "grant.created":
     case "grant.revoked":

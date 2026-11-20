@@ -275,6 +275,7 @@ _LATE_MODEL_MODULES = (
     "..documents.source_store",  # SourceMark — where each figure a chat read sits (v1.549.0)
     "..improve.models",       # NightReviewRecord — what one night's review did (17-a)
     "..fleet.pull_models",    # ModelDownload — a model downloaded from the library (next leaps 43-a)
+    "..tools.rehearsal_store",  # RehearsalRecord — a rehearsal of a rule or a schedule (leap 06-a)
 )
 
 

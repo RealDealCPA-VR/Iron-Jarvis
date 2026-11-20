@@ -277,6 +277,8 @@ describe("the Schedules page row", () => {
       last_status: "needs_you",
       last_detail: NEEDS_YOU_DETAIL,
     };
+    // Leap 06-a: Run now waits in the row's menu.
+    fireEvent.click(await screen.findByTestId("schedule-more-nightly"));
     fireEvent.click(await screen.findByTitle("Run now"));
     const note = await screen.findByTestId("schedule-run-warn");
     expect(note.textContent).toContain('"nightly" needs you');
@@ -295,6 +297,8 @@ describe("the Schedules page row", () => {
       last_status: "skipped",
       last_detail: "Emergency stop is on, so this run was skipped.",
     };
+    // Leap 06-a: Run now waits in the row's menu.
+    fireEvent.click(await screen.findByTestId("schedule-more-nightly"));
     fireEvent.click(await screen.findByTitle("Run now"));
     const note = await screen.findByTestId("schedule-run-warn");
     expect(note.textContent).toContain('"nightly" did not run — Emergency stop is on');
@@ -303,6 +307,8 @@ describe("the Schedules page row", () => {
   it("Run now on a clean run still says Ran ✓ (control)", async () => {
     mountPage([row()]);
     api.postResponses["/schedules/nightly/run"] = { ran: "nightly", last_status: "ok", last_detail: "Done." };
+    // Leap 06-a: Run now waits in the row's menu.
+    fireEvent.click(await screen.findByTestId("schedule-more-nightly"));
     fireEvent.click(await screen.findByTitle("Run now"));
     expect(await screen.findByText('Ran "nightly" ✓ — Done.')).toBeInTheDocument();
     expect(screen.queryByTestId("schedule-run-warn")).toBeNull();

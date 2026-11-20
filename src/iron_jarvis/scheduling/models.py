@@ -60,6 +60,9 @@ class ScheduledTaskRecord(SQLModel, table=True):
     #: Additive; NULL on an older table reads as "". Indexed (the plan;
     #: ``core.db._HOT_INDEXES`` gives an older table the same index).
     chat_thread_id: str = Field(default="", index=True)
+    #: Leap 06-a: when the user pressed Keep it on a rehearsal of this
+    #: schedule (None = never). Additive column (auto-reconciled).
+    rehearsed_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
     def decoded_payload(self) -> dict:

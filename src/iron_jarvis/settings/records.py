@@ -372,6 +372,16 @@ _REFLEX_WORDS = re.compile(
     re.IGNORECASE,
 )
 _GRANT_WORDS = re.compile(r"\b(?:grants?|always[ -]allow(?:s|ed|ing)?)\b", re.IGNORECASE)
+#: Leap 06-a: "rehearse it", "a dry run of the intake rule", "what would my
+#: morning schedule do?" — the ``rehearse`` tool (it changes nothing).
+_REHEARSE_WORDS = re.compile(
+    r"\brehears(?:e|es|ed|ing|al|als)\b"
+    r"|\bdry[\s-]?runs?\b"
+    r"|\bwhat\s+would\b[^.?!\n]{0,60}\b(?:rules?|schedules?)\b[^.?!\n]{0,30}\bdo\b"
+    r"|\b(?:test|try)\b[^.?!\n]{0,40}\b(?:rules?|schedules?)\b[^.?!\n]{0,40}\bwithout\b[^.?!\n]{0,30}"
+    r"\b(?:changing|doing|touching|running)\b",
+    re.IGNORECASE,
+)
 #: "undo that" (the brief's must-work example) and its close variants.
 _UNDO_WORDS = re.compile(
     r"\bundo (?:that|it|this|the last (?:change|setting)|my last change)\b", re.IGNORECASE
@@ -577,8 +587,9 @@ _POLITE_REQUEST = re.compile(
     r"\b(?:can|could|would|will)\s+you\b|\bplease\b|\bkindly\b|\bgo\s+ahead\b",
     re.IGNORECASE,
 )
-#: The record tools a question may still arm: they only READ.
-_RECORD_READERS = frozenset({"goal_list", "schedule_list"})
+#: The record tools a question may still arm: they only READ (leap 06-a: a
+#: rehearsal changes nothing — "what would my morning schedule do?").
+_RECORD_READERS = frozenset({"goal_list", "schedule_list", "rehearse"})
 
 
 #: v1.448.0 (Wave A, A1 review): "Have my coding sessions run with a
@@ -801,6 +812,9 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
         out += ["grant_revoke"]
     if _UNDO_WORDS.search(t):
         out += ["config_undo"]
+    if _REHEARSE_WORDS.search(t):
+        # Leap 06-a: a rehearsal of a rule or a schedule (changes nothing).
+        out += ["rehearse"]
     return list(dict.fromkeys(out))
 
 

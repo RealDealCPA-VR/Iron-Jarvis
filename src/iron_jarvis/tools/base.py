@@ -92,6 +92,13 @@ class ToolContext:
     #: the reply can link each one to its page, line or cell. None (an agent
     #: run, a schedule): no figure is recorded.
     source_turn: Any = None
+    #: Leap 06-a: the REHEARSAL this call belongs to ("" = a real call). Set
+    #: only by a lane from its run's own options (``options["rehearsal_id"]``,
+    #: ``tools/rehearsal.rehearsal_of``), never from a model argument. With
+    #: one, ``registry.invoke`` runs a call that only reads and HOLDS every
+    #: other: nothing executes, one ``rehearsed`` ledger row says what it
+    #: would have done (``tools/rehearsal.holds``).
+    rehearsal_id: str = ""
 
 
 @dataclass

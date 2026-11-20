@@ -378,6 +378,12 @@ function mediaHref(threadId: unknown, path?: unknown): string {
  *  disagree about what "done" means. `status` says the RUN ended cleanly;
  *  `outcome` (Session.outcome, the ledger's verdict on the JOB) says whether
  *  the work was done — "done" needs POSITIVE proof: outcome "completed". */
+/** Leap 06-a: a rehearsal's run (its outcome "rehearsed", or the
+ *  `rehearsal` mark a failed or stopped one carries). */
+export function isRehearsalRun(p: Record<string, unknown>): boolean {
+  return p.outcome === "rehearsed" || p.rehearsal === true;
+}
+
 function runVerdict(p: Record<string, unknown>): {
   cancelled: boolean;
   ran: boolean;
@@ -580,6 +586,10 @@ const BROWSER_RUN_ICON: Record<BrowserRunTone, LucideIcon> = {
 export function toActivity(e: IJEvent): ActivityItem | null {
   const p = e.payload ?? {};
   if (e.type === "session.completed") {
+    // Leap 06-a: a REHEARSAL's run rings nothing — the person who pressed
+    // Rehearse reads its report where they pressed it. The twin of the
+    // daemon's comm/notifier.is_rehearsal_run.
+    if (isRehearsalRun(p)) return null;
     // v1.351.0 (G03): a run nobody was watching (a schedule, a goal, a
     // workflow step, a reflex, the phone, autonomy) tells the user how it
     // ended — before this only missions rang, so a 7 am schedule that failed
