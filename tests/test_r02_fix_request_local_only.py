@@ -368,6 +368,98 @@ def test_a_helper_of_a_session_whose_replies_cannot_be_read_still_knows_local_on
     assert "'head' is not recognized" in out["text"]
 
 
+def test_a_helper_is_not_known_when_neither_its_session_nor_the_saved_list_can_be_read(tmp_path, monkeypatch):
+    """FAIL CLOSED: the sessions' replies cannot be read AND the saved Local
+    only list cannot be read. A helper with no Local only flag of its own
+    (made before its session was switched to Local only) cannot be known: it
+    is left out, said, and the report is incomplete."""
+    from iron_jarvis.providers import egress
+
+    engine = _engine(tmp_path)
+    _seed(engine, setup={"provider": "custom", "model": "glm-5.3-flash", "local_only": True})
+    monkeypatch.setattr(egress, "local_only_thread_ids", lambda engine: None)
+    real = FR._rows
+
+    def flaky(engine_, sql, **params):
+        if "FROM chatthreadrecord" in sql:
+            raise RuntimeError("database is locked")
+        return real(engine_, sql, **params)
+
+    monkeypatch.setattr(FR, "_rows", flaky)
+    out = _report(engine)
+    text = out["text"]
+    assert MARK not in text, text
+    # Both helpers (this session's and the other one's) are not known; with
+    # nothing else left to report, the "Nothing to report" line says so.
+    assert out["problems"] == 0, text
+    assert "(2 coding sessions or helper runs whose Local only setting could not be read were left out)" in text, text
+    assert out["complete"] is False and out["local_only_left_out"] == 2
+
+
+def test_a_teammate_run_the_event_log_stamped_local_only_is_left_out_on_its_own(tmp_path):
+    """A run whose own options carry no Local only flag, but whose call the
+    bus stamped Local only (a session seen under the scope): the one pass over
+    the stamps is enough, and its calls are in no "N of M"."""
+    engine = _engine(tmp_path)
+    _seed_done_means(engine)
+    member = "session_10camember04"
+    with session_scope(engine) as db:
+        # The same member and model as the other session's helper, so its
+        # shell call that WORKED would read "3 of 7" if it were counted.
+        db.add(Session(id=member, origin=MISSION_MEMBER_ORIGIN, agent_name="custom:glm-worker", provider="custom",
+                       model="glm-5.3-flash", status=SessionStatus.COMPLETED, trust="full",
+                       options_json="{}", created_at=AT))
+        _call(db, iid="tool_member_l4", sid=member, tool="read_file", ok=False, verdict=PermissionMode.ALLOW,
+              args={"path": f"{MARK}.md"}, output=f"no such file: {MARK}.md", at=AT + timedelta(minutes=1))
+        _call(db, iid="tool_member_ok4", sid=member, tool="shell", ok=True, args={"command": "git status"},
+              output="ok", at=AT + timedelta(minutes=2))
+        _event(db, eid="evt_member_stamp", type_="tool.executed", sid=member,
+               payload={"tool": "read_file", "ok": False, "invocation_id": "tool_member_l4", "local_only": True},
+               at=AT + timedelta(minutes=1))
+        db.commit()
+    out = _report(engine)
+    text = out["text"]
+    assert MARK not in text, text
+    assert ("- Left out: 1 helper or teammate run that ran Local only (Local only work never goes into "
+            "a fix request)") in text, text
+    assert "3 of 6 shell calls by this member failed this way" in text, text
+    assert out["local_only_left_out"] == 1 and out["complete"] is True
+
+
+def test_a_failed_reply_is_not_known_when_the_stamps_cannot_be_listed(tmp_path, monkeypatch):
+    """A reply that FAILED keeps no route, so the bus's stamp is the one
+    record that it ran Local only. When the stamps cannot be listed, a session
+    with such a reply (and nothing else saying Local only) is not known: left
+    out whole, said, and the report is incomplete."""
+    engine = _engine(tmp_path)
+    failed = _reply(AT, content="", error="The model dropped mid-answer.")
+    failed.pop("route")
+    _seed(engine, lines=[failed])
+    # The control: with the stamps listed and none on it, the session is read.
+    assert MARK in _report(engine)["text"]
+    real = FR._rows
+
+    def flaky(engine_, sql, **params):
+        if "'$.local_only'" in sql and "FROM eventrecord" in sql:
+            raise RuntimeError("database is locked")
+        return real(engine_, sql, **params)
+
+    monkeypatch.setattr(FR, "_rows", flaky)
+    out = _report(engine)
+    text = out["text"]
+    assert MARK not in text and "chat_10ca10ca" not in text, text
+    assert "- Left out: 1 coding session or helper run whose Local only setting could not be read" in text, text
+    assert "which work ran Local only" in text
+    # None of its calls (nor its helper's) is counted in an "N of M".
+    assert "3 of 6 shell calls by this member failed this way" in text, text
+    assert "1 of 1 delegate calls by this lead failed this way" in text, text
+    assert out["complete"] is False and out["local_only_left_out"] == 1
+    # The other session's reply kept its route: it is read as before.
+    assert "'head' is not recognized" in text
+    asked = _report(engine, session=LOCAL)
+    assert asked["text"] == FR.SCOPE_LOCAL_ONLY_UNKNOWN and asked["complete"] is False
+
+
 # --------------------------------------------------------------------------- #
 # one session asked for, and fail closed
 # --------------------------------------------------------------------------- #

@@ -117,7 +117,11 @@ reply that FAILED: its line has no route). A session switched off later is
 still left out: it ran Local only work. A helper or an objective's teammate
 whose own run was Local only is left out on its own. FAIL CLOSED: a session
 or run whose Local only setting cannot be read is left out too, and makes the
-report incomplete. What was left out is counted and said; ONE coding session
+report incomplete — a setup or options that is not JSON; a helper of a
+session whose replies were not read while the saved Local only list cannot
+be read either; and, when the stamps cannot be listed, a session with a reply
+in the window that kept no route (failed or stopped: the stamp was its one
+record). What was left out is counted and said; ONE coding session
 asked for that is Local only answers :data:`SCOPE_LOCAL_ONLY` and nothing
 else (not even its title).
 
@@ -209,7 +213,8 @@ SCOPE_LOCAL_ONLY_UNKNOWN = (
     "fix request."
 )
 #: R0.2: named under "Could not read" when the event log's Local only stamps
-#: could not be listed (each event read later still has its own stamp read).
+#: could not be listed (each event read later still has its own stamp read,
+#: and a session with a reply that kept no route is then not known).
 STAMPS_UNREAD = "which work ran Local only"
 #: R0.2: the events whose ``local_only`` stamp marks Local only work (the bus
 #: stamps every event published under the scope: ``core/events``).
@@ -1432,6 +1437,17 @@ def _line_ran_local_only(m: Any) -> bool:
     return str(m.get("errorKind") or "") == "local_only"
 
 
+def _reply_kept_no_route(m: Any, since: "datetime | None") -> bool:
+    """A coding session's reply line that kept no route (the reply failed or
+    was stopped, ``daemon/routes/build``): the bus's stamp is the one record
+    that it ran Local only. Only one that ended in the window, or whose time
+    cannot be read: the stamps are read for the window."""
+    if not isinstance(m, dict) or m.get("role") != "assistant" or isinstance(m.get("route"), dict):
+        return False
+    at = _utc(m.get("at"))
+    return at is None or since is None or at >= since
+
+
 class _LocalOnlyWork:
     """Which coding sessions and runs ran Local only (:func:`_local_only_work`)
     and what was left out because of it (counted once each)."""
@@ -1491,14 +1507,16 @@ class _LocalOnlyWork:
 
 def _local_only_work(engine: Any, *, threads: list[tuple],
                      lines_by_thread: "dict[str, list[dict[str, Any]]]", helpers: "list[tuple] | None",
-                     lo: str, hi: str) -> "_LocalOnlyWork":
+                     lo: str, hi: str, since: "datetime | None" = None) -> "_LocalOnlyWork":
     """R0.2: which coding sessions ran Local only, read BEFORE anything else
     so every source leaves the same sessions out (the module docstring).
     *threads* are the read ``(id, title, messages, setup)`` rows, *helpers*
     the helper / teammate rows read for the window (``[11]`` = the coding
-    session, ``[13]`` = the run's own flag). BLOCKING; never raises. Its
-    ``stamps_unread`` is True when the stamps could not be listed (named
-    last, under "Could not read")."""
+    session, ``[13]`` = the run's own flag), *since* the window's start.
+    BLOCKING; never raises. Its ``stamps_unread`` is True when the stamps
+    could not be listed (named last, under "Could not read"); then a read
+    session with a reply in the window that kept no route, and nothing else
+    saying Local only, is not known (fail closed)."""
     local: set[str] = set()
     unknown: set[str] = set()
     runs: set[str] = set()
@@ -1546,6 +1564,15 @@ def _local_only_work(engine: Any, *, threads: list[tuple],
         stamps_unread = True
     else:
         stamps_unread = False
+    if stamps_unread:
+        # FAIL CLOSED: a reply that failed or was stopped keeps no route, so
+        # its stamp is the one record that it ran Local only. Without the
+        # stamps, a session with such a reply (nothing else saying Local only)
+        # is not known. (A run's own ``options.local_only`` is written when it
+        # is made, ``orchestrator.create_session``: its stamp is a second record.)
+        for tid, msgs in lines_by_thread.items():
+            if tid not in local and any(_reply_kept_no_route(m, since) for m in msgs):
+                unknown.add(tid)
     saved: "frozenset[str] | None" = None
     try:
         from ..providers import egress as _egress
@@ -1666,7 +1693,7 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
     # ---- R0.2: Local only work (the module docstring) ---------------------- #
     # (Not ``lw``: the replies' loop below uses that name for a review's words.)
     local_work = _local_only_work(engine, threads=threads, lines_by_thread=lines_by_thread,
-                                  helpers=helper_rows, lo=s_lo, hi=s_hi)
+                                  helpers=helper_rows, lo=s_lo, hi=s_hi, since=since)
     if scope:
         state = local_work.thread(scope)
         if state:
