@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.546.0
+
+**Rewind works in folders without git too.** "Rewind to here" can put a folder's files back as they were when a message started (v1.543.0).
+
 ## v1.545.0
 
 **Switch the coding tool in the same session.** A coding session in Build › Code used to stay on the tool it started with.
@@ -77,7 +81,3 @@
 ## v1.527.0
 
 **Plain words, and nothing dropped without a word.** The last of seven releases from the third review: coding sessions say why they stopped waiting or could not save, failures read as sentences, and the start-up no longer slows down as the history grows.
-
-## v1.526.0
-
-**It keeps working across a restart and a dropped connection.** A coding tool that was running when Iron Jarvis restarted gets Iron Jarvis's tools back by itself, a reply in the browser sidebar follows the sidebar when its connection drops and returns, and a terminal that cannot be reopened is kept and shown instead of vanishing.

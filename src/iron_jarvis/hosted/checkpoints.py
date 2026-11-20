@@ -70,6 +70,9 @@ read the style from and keeps git's; the plan says all of this (``endings``).
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import functools
 import hashlib
 import logging
 import os
@@ -143,8 +146,10 @@ WHY_SUBMODULE = "it is a repository of its own"
 WHY_LINK = "it is a link"
 WHY_PATH = "its path cannot be used here"
 WHY_IGNORED = "git ignores it now, so it is in no checkpoint"
+WHY_IGNORED_OWN = "checkpoints leave it out (a folder such as node_modules, or a .gitignore rule)"
 WHY_CASE = "only the upper or lower case of its name changed"
 WHY_OLDER = "it was there before that message, so git ignored it then and it is in no checkpoint"
+WHY_OLDER_OWN = "it was there before that message and was left out then, so it is in no checkpoint"
 WHY_UNWATCHED = "git is told not to watch it, so it is in no checkpoint"
 WHY_FOLDER = "a folder stands in its place and holds files that are in no checkpoint"
 WHY_PARENT = "a file that is in no checkpoint stands where its folder must go"
@@ -166,6 +171,11 @@ DONE_NOTHING = "The folder's files were already as they were when that message s
 DONE_COMMITS = " {n} commit{s} made since then {are} still in git, so git shows the difference as changes."
 DONE_LEFT = " {n} left as {they} ({why})."
 DONE_STAYED = " {n} that git ignores again stayed where {they}."
+DONE_STAYED_OWN = " {n} that checkpoints leave out stayed where {they}."
+TOO_MANY_OWN = (
+    "{n} files changed since this message, which is more than Iron Jarvis puts back in one go."
+)
+WHY_SLOW_OWN = "the folder could not be read in time"
 UNDONE = "The rewind's file changes were undone: the folder is as it was just before it."
 UNDONE_KEPT = " What the undo replaced is kept in Iron Jarvis's trash."
 
@@ -208,6 +218,343 @@ def _usable(path: str) -> bool:
     return bool(path) and not PN._network(path) and os.path.isdir(path)
 
 
+# --------------------------------------------------------------------------- #
+# v1.546.0 (Release D, phase 1d): a folder that is NOT a git repository
+# --------------------------------------------------------------------------- #
+#
+# A session whose folder is in no repository keeps its checkpoints in a
+# repository of Iron Jarvis's OWN, one per session, outside the folder:
+# ``<home>/workspaces/code-checkpoints/<sid>.git``. git is told where it is
+# for each call (``GIT_DIR``) and that the session's folder is its work tree
+# (``GIT_WORK_TREE``), so everything above and below — the snapshot through a
+# private index, the hidden ref, the plan, the copy-first restore, Undo — is
+# the SAME code, and NOTHING is written into the user's folder (no ``.git``).
+#
+# * Under ``workspaces/``: a backup leaves it out (it is a copy of the user's
+#   files, and those are the user's to back up), and it goes with the session.
+# * Its own settings: no line-ending conversion (a restore is byte for byte),
+#   no file-mode noise, long paths, the user's global ignore and attribute
+#   files left out (what a checkpoint holds never depends on this PC's git
+#   settings).
+# * Its own ignore list (``info/exclude``): the folders every walk of this app
+#   leaves out (``tools.builtins._SKIP_DIRS``: ``node_modules``, ``.venv``,
+#   build output…). A ``.gitignore`` in the folder is honoured too. What is
+#   left out is in no checkpoint: a rewind neither puts it back nor removes it.
+# * Bounded like the project map's walk: at most :data:`OWN_MAX_FILES` files
+#   and :data:`OWN_MAX_BYTES` in all. A folder past either gets NO checkpoint
+#   for that message, and the Changes tab says why.
+#
+# Which store a call uses is decided at the few entry points that know the
+# session (:func:`in_own_store`) and read where git is spawned
+# (:func:`store_env`): a context variable, set for ONE folder, so a call about
+# any other folder inside the same block is untouched.
+
+#: Where the sessions' own stores live (beside the kept indexes: not backed up).
+OWN_DIR = ("workspaces", "code-checkpoints")
+#: The most files one checkpoint of a non-git folder holds (the restore's own limit).
+OWN_MAX_FILES = 5_000
+#: The most bytes those files are in all.
+OWN_MAX_BYTES = 256 * 1024 * 1024
+#: Beside the store's own files: why the newest message got no checkpoint ("" = it got one).
+OWN_NOTE_FILE = "ij-note.txt"
+OWN_WORDS = (
+    "Iron Jarvis keeps its own copy of this folder's files at each message (on this PC, in its own data "
+    "folder), so \"Rewind to here\" can put them back."
+)
+OWN_TOO_MANY = (
+    "This folder holds more than {n:,} files Iron Jarvis would have to copy, so the newest message has no "
+    "checkpoint and \"Rewind to here\" cannot put its files back. Folders such as node_modules are not "
+    "counted; a .gitignore file in the folder leaves more out."
+)
+OWN_TOO_BIG = (
+    "The files in this folder are more than {mb:,} MB in all, so the newest message has no checkpoint and "
+    "\"Rewind to here\" cannot put its files back. A .gitignore file in the folder leaves files out."
+)
+OWN_SLOW = (
+    "Iron Jarvis could not read this folder's files in time, so the newest message has no checkpoint and "
+    "\"Rewind to here\" cannot put its files back."
+)
+OWN_NOT_READ = (
+    "Iron Jarvis could not copy this folder's files ({why}), so the newest message has no checkpoint and "
+    "\"Rewind to here\" cannot put its files back."
+)
+OWN_LATE = (
+    "Copying this folder's files took longer than a message waits for it, so the newest message has no "
+    "checkpoint and \"Rewind to here\" cannot put its files back."
+)
+#: A preview, rewind or Undo that could not read the folder (no git named).
+OWN_UNREAD = "Iron Jarvis could not read this folder's files: {why}."
+#: What a refusal or a result says in a folder git does not know (it has no
+#: git to "ignore" anything): the same facts, without the word.
+_OWN_SAYS: dict[str, str] = {
+    WHY_IGNORED: WHY_IGNORED_OWN, WHY_OLDER: WHY_OLDER_OWN, DONE_STAYED: DONE_STAYED_OWN,
+    TOO_MANY: TOO_MANY_OWN, WHY_GIT_SLOW: WHY_SLOW_OWN,
+}
+
+_OWN: "contextvars.ContextVar[tuple[str, str] | None]" = contextvars.ContextVar("ij_code_own_store", default=None)
+
+
+def own_store(home: Any, sid: Any) -> Path | None:
+    """Where session *sid*'s own checkpoint store is (or would be)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid or ""))[:120].strip(".")
+    if home is None or not safe:
+        return None
+    return Path(str(home)).joinpath(*OWN_DIR, f"{safe}.git")
+
+
+def has_own_store(home: Any, sid: Any) -> bool:
+    """BLOCKING (one stat): does this session keep its checkpoints in a store
+    of its own? Decided once, at its first checkpoint, and for good: a folder
+    that becomes a git repository later goes on with the store it has."""
+    path = own_store(home, sid)
+    try:
+        return path is not None and (path / "HEAD").is_file()
+    except OSError:
+        return False
+
+
+def _key(folder: str) -> str:
+    return os.path.normcase(os.path.abspath(folder)) if folder else ""
+
+
+def store_env(folder: Any) -> dict[str, str]:
+    """What git is told for a call in *folder* while the session's own store
+    is in use (:func:`in_own_store`): where the repository is and that the
+    folder is its work tree. ``{}`` for every other folder and every other time."""
+    cur = _OWN.get()
+    if cur is None or not folder or _key(str(folder)) != cur[0]:
+        return {}
+    return {"GIT_DIR": cur[1], "GIT_WORK_TREE": str(folder)}
+
+
+@contextlib.contextmanager
+def in_own_store(home: Any, sid: Any, folder: Any):
+    """Inside the block, git calls for *folder* use session *sid*'s OWN store
+    — when it has one (else nothing changes: the folder's own repository)."""
+    path = own_store(home, sid)
+    if not folder or path is None or not has_own_store(home, sid):
+        yield None
+        return
+    token = _OWN.set((_key(str(folder)), str(path)))
+    try:
+        yield path
+    finally:
+        _OWN.reset(token)
+
+
+def _stored(fn: Any) -> Any:
+    """``fn(home, sid, row_or_folder, …)`` run inside the session's own store
+    when it has one."""
+    @functools.wraps(fn)
+    def inner(home: Any, sid: Any, where: Any, *args: Any, **kwargs: Any) -> Any:
+        folder = where if isinstance(where, str) else str(getattr(where, "folder", "") or "")
+        with in_own_store(home, sid, folder):
+            return fn(home, sid, where, *args, **kwargs)
+
+    return inner
+
+
+#: The folders a checkpoint of a plain folder leaves out, at any depth: what a
+#: TOOL makes and makes again (package installs, caches, other version
+#: control's own data), never a name a person gives a folder of their work
+#: (the review: "Build", "Target", "dist" or "venv" may be a client's folder,
+#: and a checkpoint without it put nothing back and said "already as it was").
+OWN_LEFT_OUT = (
+    "node_modules", ".venv", "__pycache__", ".next", ".turbo", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", ".gradle", "site-packages", ".hg", ".svn",
+)
+#: The store reads the folder's files as bytes: never a line-ending or
+#: encoding filter of the folder's own ``.gitattributes`` (outranks it).
+OWN_ATTRIBUTES = "* -text -filter -ident -working-tree-encoding\n"
+
+
+def own_exclude() -> str:
+    """The store's own ignore list (``info/exclude``): :data:`OWN_LEFT_OUT`."""
+    return "# Iron Jarvis: left out of this session's checkpoints\n" + "".join(f"{n}/\n" for n in OWN_LEFT_OUT)
+
+
+def _own_info(store_dir: Path) -> None:
+    """The store's own ignore list and attributes, written when they are not
+    what this version says (a store made by an earlier one is brought up to
+    date at its next use). Raises ``OSError``."""
+    info = store_dir / "info"
+    info.mkdir(exist_ok=True)
+    for name, text in (("exclude", own_exclude()), ("attributes", OWN_ATTRIBUTES)):
+        path = info / name
+        try:
+            same = path.read_text(encoding="utf-8") == text
+        except OSError:
+            same = False
+        if not same:
+            path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def make_own_store(home: Any, sid: Any) -> Path:
+    """BLOCKING: the session's own store, made when it is not there yet (an
+    empty repository with its own settings; nothing of the user's is in it
+    yet). Raises :class:`~.panes.GitUnreadable` / ``OSError`` when it cannot
+    be made."""
+    from ..git.integration import git_env, run_git
+    from ..harness import branches as B
+
+    path = own_store(home, sid)
+    if path is None:
+        raise OSError("no home")
+    if (path / "HEAD").is_file():
+        _own_info(path)
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    made = path.with_name(path.name + f".{uuid.uuid4().hex[:8]}.new")
+
+    def run(args: list[str]) -> Any:
+        return run_git(args, path.parent, env=git_env(), identity=False, encoding="utf-8", timeout=B.QUICK_S)
+
+    try:
+        got = run(["init", "--bare", "--quiet", str(made)])
+        if not got.ok:
+            raise PN.GitUnreadable(got)
+        for name, value in (("core.bare", "false"), ("core.autocrlf", "false"), ("core.safecrlf", "false"),
+                            ("core.fileMode", "false"), ("core.longpaths", "true"),
+                            ("core.excludesFile", ""), ("core.attributesFile", ""),
+                            ("gc.autoDetach", "false")):
+            got = run(["--git-dir", str(made), "config", name, value])
+            if not got.ok:
+                raise PN.GitUnreadable(got)
+        _own_info(made)
+        try:
+            os.replace(made, path)
+        except OSError:
+            if not (path / "HEAD").is_file():  # (another message made it meanwhile: fine)
+                raise
+    finally:
+        shutil.rmtree(made, ignore_errors=True)
+    return path
+
+
+def forget_own_store(home: Any, sid: Any) -> bool:
+    """BLOCKING, never raises: a deleted session's own store goes with it (a
+    copy of files that are still in the user's folder: never moved to the
+    trash). True when there was one."""
+    path = own_store(home, sid)
+    try:
+        if path is None or not path.is_dir():
+            return False
+        shutil.rmtree(path, onerror=_writable_then_again)
+        return not path.exists()
+    except OSError:
+        log.debug("could not remove a session's own checkpoint store", exc_info=True)
+        return False
+
+
+def _writable_then_again(fn: Any, path: str, _exc: Any) -> None:
+    """git's object files are read-only (Windows refuses to delete them)."""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        fn(path)
+    except OSError:
+        pass
+
+
+def own_fits(folder: str) -> str:
+    """BLOCKING, in the session's own store: "" when a checkpoint of *folder*
+    stays inside the limits, else why not, in words. Counted as git itself
+    will read it (its ignore rules applied); a file that cannot be read is
+    counted as empty. Raises :class:`~.panes.GitUnreadable`."""
+    got = PN._git(["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "."], folder)
+    if not got.ok:
+        raise PN.GitUnreadable(got)
+    names = {n for n in got.out.split("\0") if n}
+    if len(names) > OWN_MAX_FILES:
+        return OWN_TOO_MANY.format(n=OWN_MAX_FILES)
+    total = 0
+    for rel in names:
+        try:
+            total += os.lstat(os.path.join(folder, *rel.split("/"))).st_size
+        except OSError:
+            continue
+        if total > OWN_MAX_BYTES:
+            return OWN_TOO_BIG.format(mb=OWN_MAX_BYTES // (1024 * 1024))
+    return ""
+
+
+def _own_limits(folder: str) -> None:
+    """Inside the session's own store: refuse, in words, BEFORE the folder is
+    copied for a preview, a rewind or an Undo, when a copy would pass the
+    limits (the copy of the folder as it is now is kept by a rewind)."""
+    if _OWN.get() is None:
+        return
+    why = own_fits(folder)
+    if why:
+        raise RestoreRefused(why.split(", so ")[0] + ", so nothing was changed.")
+
+
+def unread_note(gone: Any) -> str:
+    """Why the folder could not be copied, for the Changes tab: a time-out,
+    or the reason git gave (masked, one line)."""
+    got = getattr(gone, "got", None)
+    if got is None or getattr(got, "timed_out", False):
+        return OWN_SLOW
+    return OWN_NOT_READ.format(why=PN._git_reason(got))
+
+
+def _unread_words(gone: Any) -> str:
+    """A preview's, rewind's or Undo's refusal when git did not read the folder."""
+    if _OWN.get() is None:
+        return str(getattr(gone, "words", "") or "")
+    got = getattr(gone, "got", None)
+    why = PN.GIT_TIMED_OUT if got is None or getattr(got, "timed_out", False) else PN._git_reason(got)
+    return OWN_UNREAD.format(why=why)
+
+
+def own_note(home: Any, sid: Any) -> str:
+    """BLOCKING, never raises: why the session's newest message got no
+    checkpoint in its own store ("" = it got one, or it has no store)."""
+    path = own_store(home, sid)
+    try:
+        return (path / OWN_NOTE_FILE).read_text(encoding="utf-8").strip()[:600] if path is not None else ""
+    except OSError:
+        return ""
+
+
+def set_own_note(home: Any, sid: Any, words: str) -> None:
+    path = own_store(home, sid)
+    try:
+        if path is None or not path.is_dir():
+            return
+        note = path / OWN_NOTE_FILE
+        if words:
+            note.write_text(words, encoding="utf-8")
+        else:
+            note.unlink(missing_ok=True)
+    except OSError:
+        log.debug("could not note why a message got no checkpoint", exc_info=True)
+
+
+def own_words(home: Any, sid: Any) -> str:
+    """BLOCKING, never raises: the sentence the Changes tab adds for a session
+    that keeps its own checkpoints ("" for one that does not)."""
+    if not has_own_store(home, sid):
+        return ""
+    return own_note(home, sid) or OWN_WORDS
+
+
+def tidy_own_store(folder: str) -> None:
+    """BLOCKING, in the session's own store, never raises: let git pack the
+    store when it has grown (``gc --auto``: it does nothing most times, never
+    runs in the background here, and keeps everything a checkpoint's ref
+    names)."""
+    try:
+        PN._run_git(["gc", "--auto", "--quiet"], folder, reads=False)
+    except Exception:  # noqa: BLE001
+        log.debug("could not tidy a session's own checkpoint store", exc_info=True)
+
+
+def _say(words: str) -> str:
+    """*words* as said while the session's own store is in use: the folder has
+    no git, so nothing in it is "ignored by git"."""
+    return _OWN_SAYS.get(words, words) if _OWN.get() is not None else words
+
+
 def repo_of(folder: str) -> str:
     """The repository's own (common) git directory, absolute: where a ref
     lives even after *folder* itself is gone (a removed worktree, a deleted
@@ -215,6 +562,11 @@ def repo_of(folder: str) -> str:
     key = os.path.normcase(os.path.abspath(folder)) if folder else ""
     if not key:
         return ""
+    own = store_env(folder)
+    if own:
+        # v1.546.0: the session's own store — never remembered for the FOLDER
+        # (another session in it, or the folder's own repository later, is not this).
+        return own["GIT_DIR"]
     if key in _REPOS:
         return _REPOS[key]
     out = ""
@@ -263,7 +615,7 @@ def _delete_refs(names: list[str], *, folder: str = "", repo: str = "") -> None:
 
     body = "".join(f"delete {r}\n" for r in names).encode("utf-8")
     if _usable(folder):
-        _g(["update-ref", "--stdin"], folder, reads=False, input=body)
+        PN._run_git(["update-ref", "--stdin"], folder, reads=False, input=body)
     elif _usable(repo):
         _g(["--git-dir", repo, "update-ref", "--stdin"], repo, reads=False, input=body)
 
@@ -298,6 +650,10 @@ def forget_session(home: Any, sid: str, folder: str) -> int:
     worktree) leaves nothing behind. Returns how many it named. Never raises.
     Call it BEFORE the session's record is moved away."""
     try:
+        # v1.546.0: a store of its own goes with it. And the sweep below still
+        # runs: a folder that became a repository later (or a folder above it)
+        # may hold names of this session too (review: they outlived it).
+        forget_own_store(home, sid)
         root = ref_for(sid, "x").rsplit("/", 1)[0] if ref_for(sid, "x") else ""
         if not root:
             return 0
@@ -326,6 +682,7 @@ def forget_session(home: Any, sid: str, folder: str) -> int:
         return 0
 
 
+@_stored
 def forget_turns(home: Any, sid: str, folder: str, kept_turns: set[str]) -> int:
     """A conversation rewind dropped messages: their checkpoints go with them
     (no message is left to rewind to). Returns how many. Never raises."""
@@ -490,6 +847,8 @@ def _parent_in_the_way(folder: str, rel: str, new: set[str]) -> bool:
 def _endings(folder: str) -> str:
     """Why a restored file's line endings can differ from what it had ("" when
     nothing here changes them). Never raises."""
+    if _OWN.get() is not None:
+        return ""  # v1.546.0: the store reads and writes bytes (``OWN_ATTRIBUTES``)
     try:
         got = PN._git(["config", "--get", "core.autocrlf"], folder)
         value = got.out.strip().lower() if got.ok else ""
@@ -585,7 +944,7 @@ def _plan(home: Any, sid: str, folder: str, tree: str, *, head: str = "", since:
             else:
                 # On disk, yet not in the folder's tree: git ignores it now.
                 # Its content is in NO checkpoint, so it is never written over.
-                left.append({"rel": clean, "why": WHY_IGNORED})
+                left.append({"rel": clean, "why": _say(WHY_IGNORED)})
             continue
         if _parent_in_the_way(folder, clean, new_all):
             problems.append({"rel": clean, "why": WHY_PARENT})
@@ -612,7 +971,7 @@ def _plan(home: Any, sid: str, folder: str, tree: str, *, head: str = "", since:
         born = _born(st) if st is not None else None
         in_the_way = any(b == clean or b.startswith(clean + "/") or clean.startswith(b + "/") for b in needed)
         if cutoff is not None and born is not None and born < cutoff and not in_the_way:
-            left.append({"rel": clean, "why": WHY_OLDER})
+            left.append({"rel": clean, "why": _say(WHY_OLDER)})
             continue
         if not _writable(path):
             problems.append({"rel": clean, "why": WHY_LOCKED})
@@ -629,7 +988,7 @@ def _plan(home: Any, sid: str, folder: str, tree: str, *, head: str = "", since:
             commits = int(got.out.strip())
     plan_id = hashlib.sha1(f"{tree}:{now}".encode("ascii", "replace")).hexdigest()[:16]
     return {
-        "id": plan_id, "tree": tree, "now": now,
+        "id": plan_id, "tree": tree, "now": now, "own": _OWN.get() is not None,
         "back": back, "gone": gone, "new": new, "left": left, "problems": problems,
         "commits_since": commits,
         "endings": _endings(folder) if back else "",
@@ -671,10 +1030,14 @@ def public(plan: dict[str, Any]) -> dict[str, Any]:
         "problems": names(plan["problems"]), "problems_count": len(plan["problems"]),
         "commits_since": int(plan.get("commits_since") or 0),
         "endings": str(plan.get("endings") or ""),
-        "too_many": TOO_MANY.format(n=n) if n > RESTORE_MAX_FILES else "",
+        "too_many": (TOO_MANY_OWN if plan.get("own") else TOO_MANY).format(n=n) if n > RESTORE_MAX_FILES else "",
+        # v1.546.0: kept in Iron Jarvis's own store (a folder in no git
+        # repository): the screen's words then name no git.
+        "own": bool(plan.get("own")),
     }
 
 
+@_stored
 def plan(home: Any, sid: str, row: Any, turn_id: str) -> dict[str, Any]:
     """What "put the files back to before this message" would do (reads
     only). Raises :class:`RestoreRefused` when there is no usable
@@ -687,10 +1050,11 @@ def plan(home: Any, sid: str, row: Any, turn_id: str) -> dict[str, Any]:
     try:
         if not tree_kept(folder, tree):
             raise RestoreRefused(CHECKPOINT_GONE)
+        _own_limits(folder)  # v1.546.0
         return _plan(home, sid, folder, tree, head=str(entry.get("head") or ""),
                      since=PN._at(entry.get("at")))
     except PN.GitUnreadable as gone:
-        raise RestoreRefused(gone.words) from None
+        raise RestoreRefused(_unread_words(gone)) from None
 
 
 # --------------------------------------------------------------------------- #
@@ -714,7 +1078,7 @@ def _restore_paths(folder: str, tree: str, rels: list[str], index_dir: Any) -> A
     where = Path(index_dir)
     where.mkdir(parents=True, exist_ok=True)
     idx = where / f"{uuid.uuid4().hex}.idx"
-    env = git_env({"GIT_INDEX_FILE": str(idx)})
+    env = git_env({"GIT_INDEX_FILE": str(idx), **store_env(folder)})  # (v1.546.0: or the session's own store)
     # The user's own hooks stay out of it (measured: ``post-checkout`` ran
     # inside the restore and saw the PRIVATE index as the repository's state).
     no_hooks = where / "no-hooks"
@@ -1090,7 +1454,7 @@ def _apply(home: Any, sid: str, folder: str, tree: str, made: dict[str, Any], *,
             written.extend(some_back)
             got = _restore_paths(folder, tree, some_back, _index_dir(home))
             if not got.ok:
-                raise _Stopped(WHY_GIT_SLOW if getattr(got, "timed_out", False) else PN._git_reason(got))
+                raise _Stopped(_say(WHY_GIT_SLOW) if getattr(got, "timed_out", False) else PN._git_reason(got))
 
     try:
         rules_new = [r for r in new if _is_rules(r)]
@@ -1148,7 +1512,7 @@ def _words(result: dict[str, Any], made: dict[str, Any]) -> str:
         words += DONE_LEFT.format(n=len(left), they="it is" if len(left) == 1 else "they are", why="; ".join(whys))
     stayed = int(result.get("stayed") or 0)
     if stayed:
-        words += DONE_STAYED.format(n=stayed, they="it is" if stayed == 1 else "they are")
+        words += _say(DONE_STAYED).format(n=stayed, they="it is" if stayed == 1 else "they are")
     return words
 
 
@@ -1156,9 +1520,10 @@ def _refuse_unless_possible(made: dict[str, Any]) -> None:
     if made["problems"]:
         raise RestoreRefused(PROBLEMS, problems=list(made["problems"][:LIST_SHOWN]))
     if not made["can"]:
-        raise RestoreRefused(TOO_MANY.format(n=len(made["back"]) + len(made["new"])))
+        raise RestoreRefused(_say(TOO_MANY).format(n=len(made["back"]) + len(made["new"])))
 
 
+@_stored
 def restore(home: Any, sid: str, row: Any, turn_id: str, *, expect: str = "") -> dict[str, Any]:
     """Put the session's folder back as it was when *turn_id* started.
 
@@ -1268,6 +1633,7 @@ def can_undo(home: Any, sid: str) -> bool:
     return row is not None and not late
 
 
+@_stored
 def undo(home: Any, sid: str, row: Any) -> dict[str, Any]:
     """Undo the newest rewind's FILE changes: the folder goes back to its
     ``before_rewind`` checkpoint, through the same steps as a restore (what
@@ -1283,12 +1649,13 @@ def undo(home: Any, sid: str, row: Any) -> dict[str, Any]:
     try:
         if not tree_kept(folder, tree):
             raise RestoreRefused(CHECKPOINT_GONE)
+        _own_limits(folder)  # v1.546.0
         # (No ``since`` here: the files a rewind made again carry their OLD
         # creation time on Windows — a name deleted and made again within
         # seconds keeps it — so "made before" says nothing in an undo.)
         made = _plan(home, sid, folder, tree)
     except PN.GitUnreadable as gone:
-        raise RestoreRefused(gone.words) from None
+        raise RestoreRefused(_unread_words(gone)) from None
     _refuse_unless_possible(made)
     copies = str(entry.get("trash") or "")
     result = _apply(home, sid, folder, tree, made,

@@ -67,6 +67,10 @@ export const REWIND_READ_AGAIN = "Read again";
 export const REWIND_NOTHING = "The folder's files are already as they were when this message started.";
 export const REWIND_FOOT =
   "Files that git ignores are not touched. Every version that is replaced is kept in Iron Jarvis's trash, and you can undo the file changes until you send your next message.";
+/** v1.546.0: the same for a folder in no git repository (Iron Jarvis keeps
+ *  its own copy of the files at each message). */
+export const REWIND_FOOT_OWN =
+  "Folders such as node_modules, and files a .gitignore file leaves out, are not touched. Every version that is replaced is kept in Iron Jarvis's trash, and you can undo the file changes until you send your next message.";
 export const UNDO_REWIND = "Undo rewind";
 export const UNDO_REWIND_CONFIRM = "Undo? Files go back";
 export const UNDO_REWIND_WORDS = "The last rewind changed files in this folder.";
@@ -152,6 +156,8 @@ export interface RewindPlan {
   blocked: string;
   /** This tool can rewind the conversation from this message too. */
   conversation: boolean;
+  /** v1.546.0: the folder is in no git repository; Iron Jarvis kept its own copy. */
+  own: boolean;
 }
 
 function names(v: unknown): string[] {
@@ -199,6 +205,7 @@ export function decodeRewindPlan(raw: unknown): RewindPlan | null {
     endings: str(r.endings, 500),
     blocked: str(r.blocked, 500),
     conversation: r.conversation === true,
+    own: r.own === true,
   };
 }
 

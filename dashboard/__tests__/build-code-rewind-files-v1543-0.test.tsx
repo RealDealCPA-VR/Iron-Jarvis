@@ -75,6 +75,8 @@ import {
   FILES_BACK_TO_HERE,
   REWIND_BOTH,
   REWIND_CONVERSATION_ONLY,
+  REWIND_FOOT,
+  REWIND_FOOT_OWN,
   REWIND_FILES_PRESS,
   REWIND_NOTHING,
   REWIND_TO_HERE,
@@ -289,6 +291,19 @@ describe("where the menu opens", () => {
 describe("the preview", () => {
   const noop = () => {};
   const base = { busy: false, onClose: noop, onReadAgain: noop, onBoth: noop, onConversation: noop, onFiles: noop };
+
+  it("v1.546.0: in a folder with no git, the footnote names no git", () => {
+    const { unmount } = render(<RewindDialog {...base} plan={decodeRewindPlan(PLAN)} error={null} conversation />);
+    expect(screen.getByTestId("code-rewind-foot").textContent).toBe(REWIND_FOOT);
+    unmount();
+    render(<RewindDialog {...base} plan={decodeRewindPlan({ ...PLAN, own: true })} error={null} conversation />);
+    const foot = screen.getByTestId("code-rewind-foot").textContent ?? "";
+    expect(foot).toBe(REWIND_FOOT_OWN);
+    expect(foot).not.toMatch(/\bgit\b/);
+    // Only a literal true is "own".
+    expect(decodeRewindPlan({ ...PLAN, own: "yes" })!.own).toBe(false);
+    expect(decodeRewindPlan(PLAN)!.own).toBe(false);
+  });
 
   it("lists what goes back, what moves, what is left and the commits that stay", () => {
     render(<RewindDialog {...base} plan={decodeRewindPlan(PLAN)} error={null} conversation />);

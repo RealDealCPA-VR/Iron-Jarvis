@@ -142,10 +142,26 @@ def tool_paths(events: list[dict[str, Any]], folder: str) -> dict[str, list[dict
 # --------------------------------------------------------------------------- #
 
 
-def _git(args: list[str], cwd: str, *, input: bytes | None = None) -> Any:
-    from ..harness.branches import _g
+def _run_git(args: list[str], cwd: str, *, reads: bool, input: bytes | None = None) -> Any:
+    """One git call for a session's folder. v1.546.0: while the session's OWN
+    checkpoint store is in use for *cwd* (a folder that is no git repository,
+    ``checkpoints.in_own_store``), git is told where that store is and that
+    *cwd* is its work tree; otherwise exactly the call it always was."""
+    from ..harness import branches as B
+    from . import checkpoints as CK
 
-    return _g(args, cwd, reads=True, input=input)
+    own = CK.store_env(cwd)
+    if not own:
+        return B._g(args, cwd, reads=reads, input=input)
+    from ..git.integration import git_env, run_git
+
+    env = git_env({**({"GIT_OPTIONAL_LOCKS": "0"} if reads else {}), **own})
+    return run_git(["-c", "core.quotepath=off", *args], Path(cwd), timeout=B.QUICK_S, env=env,
+                   identity=False, input=input, encoding="utf-8")
+
+
+def _git(args: list[str], cwd: str, *, input: bytes | None = None) -> Any:
+    return _run_git(args, cwd, reads=True, input=input)
 
 
 class GitUnreadable(Exception):
@@ -156,6 +172,14 @@ class GitUnreadable(Exception):
         why = GIT_TIMED_OUT if getattr(got, "timed_out", False) else _git_reason(got)
         super().__init__(why)
         self.words = GIT_UNREADABLE.format(why=why)
+        #: v1.546.0: git's own answer (is it "not a git repository"?).
+        self.got = got
+
+    @property
+    def not_a_repository(self) -> bool:
+        got = self.got
+        return (not getattr(got, "timed_out", False)
+                and "not a git repository" in str(getattr(got, "err", "") or "").lower())
 
 
 def _git_reason(got: Any) -> str:
@@ -711,7 +735,10 @@ def _write_tree(folder: str, idx: str, *, watch_rules: bool = False) -> str:
     from ..git.integration import git_env, run_git
     from ..harness import branches as B
 
-    env = git_env({"GIT_INDEX_FILE": idx, "GIT_OPTIONAL_LOCKS": "0"})
+    from . import checkpoints as CK
+
+    # (v1.546.0: ``store_env`` — the session's own store for a folder git does not know.)
+    env = git_env({"GIT_INDEX_FILE": idx, "GIT_OPTIONAL_LOCKS": "0", **CK.store_env(folder)})
 
     def run(args: list[str]) -> Any:
         return run_git(["-c", "core.quotepath=off", *args], Path(folder), env=env,
@@ -861,25 +888,86 @@ def record_turn_start(home: Any, sid: str, folder: str, turn_id: str, *,
     when the folder is not a repository or git did not answer. *abandon*
     set (the service stopped waiting): the tree is NOT recorded — the tool
     may already be changing files, so a late tree is not the start."""
+    from . import checkpoints as CK
+
     try:
         if not folder or _network(folder) or not os.path.isdir(folder):
             return None
-        tree = snapshot_tree(folder, keep=kept_index(home, sid))  # v1.425.0 (C3)
-        if abandon is not None and abandon.is_set():
-            return None
-        from . import checkpoints as CK
+        if not CK.has_own_store(home, sid):
+            try:
+                return _record_start(home, sid, folder, turn_id, abandon, uid)
+            except GitUnreadable as gone:
+                if not gone.not_a_repository or _git_on_disk(folder):
+                    # (A ``.git`` here or above it is a repository git cannot
+                    # read right now — a worktree whose main one is away —
+                    # never a folder for a store of Iron Jarvis's own.)
+                    return None
+            # v1.546.0 (Release D): the folder is in NO git repository — the
+            # session keeps its checkpoints in a store of its own from here on.
+            try:
+                CK.make_own_store(home, sid)
+            except Exception:  # noqa: BLE001 — the message goes on, with no checkpoint
+                import logging
 
-        at = _iso(_now_utc())
-        entry = {"how": "start", "turn": str(turn_id), "tree": tree, "at": at}
-        head = CK.head_of(folder)
-        if head:
-            entry["head"] = head  # the commits made after it stay (a rewind says how many)
-        if uid:
-            entry["uid"] = str(uid)  # the message's own id (its ``user`` event's ``at``)
-        _record(home, sid, folder, entry, "start-" + _ref_stamp(at))
-        return tree
+                logging.getLogger(__name__).warning(
+                    "could not make a session's own checkpoint store", exc_info=True)
+                return None
+        with CK.in_own_store(home, sid, folder):
+            # A folder past the limits gets no checkpoint for this message,
+            # and that is said (never a copy of a huge folder made on each message).
+            try:
+                why = CK.own_fits(folder)
+                if not why:
+                    tree = _record_start(home, sid, folder, turn_id, abandon, uid)
+                    if tree:
+                        CK.set_own_note(home, sid, "")
+                        CK.tidy_own_store(folder)
+                        return tree
+                    why = CK.OWN_LATE  # the message stopped waiting for it
+            except GitUnreadable as gone:
+                why = CK.unread_note(gone)
+            # What the Changes tab says is then true of the newest message.
+            CK.set_own_note(home, sid, why)
+            return None
     except Exception:  # noqa: BLE001 — a record never fails a turn
         return None
+
+
+def _git_on_disk(folder: str) -> bool:
+    """BLOCKING, never raises: is there a ``.git`` (folder or file) in
+    *folder* or in a folder above it?"""
+    try:
+        at = os.path.abspath(folder)
+        for _ in range(64):
+            if os.path.lexists(os.path.join(at, ".git")):
+                return True
+            up = os.path.dirname(at)
+            if up == at:
+                return False
+            at = up
+    except (OSError, ValueError):
+        return True  # not known: never a store of Iron Jarvis's own
+    return False
+
+
+def _record_start(home: Any, sid: str, folder: str, turn_id: str, abandon: "threading.Event | None",
+                  uid: str) -> str | None:
+    """The snapshot and its record (:func:`record_turn_start`), in whichever
+    store is in use. Raises :class:`GitUnreadable`."""
+    from . import checkpoints as CK
+
+    tree = snapshot_tree(folder, keep=kept_index(home, sid))  # v1.425.0 (C3)
+    if abandon is not None and abandon.is_set():
+        return None
+    at = _iso(_now_utc())
+    entry = {"how": "start", "turn": str(turn_id), "tree": tree, "at": at}
+    head = CK.head_of(folder)
+    if head:
+        entry["head"] = head  # the commits made after it stay (a rewind says how many)
+    if uid:
+        entry["uid"] = str(uid)  # the message's own id (its ``user`` event's ``at``)
+    _record(home, sid, folder, entry, "start-" + _ref_stamp(at))
+    return tree
 
 
 #: How long a message waits for its start to be recorded (v1.420.0 review):
@@ -955,6 +1043,10 @@ def note_seen(home: Any, sid: str, folder: str, events: list[dict[str, Any]]) ->
         last_end = turns[-1]["end"] if turns else None
         if turns and last_end is None:
             return  # a turn runs: this is not a "before"
+        from . import checkpoints as CK
+
+        if CK.has_own_store(home, sid):
+            return  # v1.546.0: its checkpoints are in its own store, and an idle read is git's
         seen = [e for e in read_trees(home, sid) if e.get("how") == "seen"]
         if seen:
             when = _at(seen[-1].get("at"))
@@ -1085,7 +1177,9 @@ def changes_view(row: Any, events: list[dict[str, Any]], tool: str, *, scope: st
     turn_id = ""
     try:
         got = None
-        if scope == SCOPE_TURN and home is not None and sid:
+        if scope == SCOPE_TURN and home is not None and sid and not _own_words(home, sid):
+            # (v1.546.0: a session that keeps its own store has no git
+            # checkpoints of the folder, even once it is a repository.)
             turn_id, how, tree, at = turn_base(home, sid, events, turn)
             if how in ("start", "seen") and not _tree_there(folder, tree):
                 # v1.543.0: recorded, but git no longer holds it.
@@ -1128,8 +1222,12 @@ def changes_view(row: Any, events: list[dict[str, Any]], tool: str, *, scope: st
         from ..harness import branches as B
 
         got = tool_changes(events, folder)
-        words = NO_GIT_WORDS if B.git_path() is None else TOOL_WORDS
-        out.update(source="tool", words=words.format(tool=tool))
+        words = (NO_GIT_WORDS if B.git_path() is None else TOOL_WORDS).format(tool=tool)
+        # v1.546.0 (Release D): a folder in no git repository still has
+        # checkpoints (the session's own store) — said here, with why not
+        # when the newest message got none.
+        kept = _own_words(home, sid) if home is not None and sid else ""
+        out.update(source="tool", words=f"{words} {kept}" if kept else words)
     changes = got["changes"]
     out.update(
         changes=changes,
@@ -1140,6 +1238,12 @@ def changes_view(row: Any, events: list[dict[str, Any]], tool: str, *, scope: st
         by_tool=sum(1 for c in changes if c.get("by_tool")),
     )
     return out
+
+
+def _own_words(home: Any, sid: str) -> str:
+    from . import checkpoints as CK
+
+    return CK.own_words(home, sid)
 
 
 def _literal(rel: str) -> str:
@@ -1297,9 +1401,7 @@ def revert_file(home: Any, sid: str, row: Any, events: list[dict[str, Any]], too
 
 def _g_write(args: list[str], cwd: str) -> Any:
     """One git call that WRITES the working folder (never the index)."""
-    from ..harness.branches import _g
-
-    return _g(args, cwd, reads=False)
+    return _run_git(args, cwd, reads=False)
 
 
 def _to_trash(home: Any, sid: str, folder: str, rel: str) -> str:

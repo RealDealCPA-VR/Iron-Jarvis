@@ -165,6 +165,7 @@ async def test_the_preview_lists_the_files_and_changes_nothing(app, work, claude
         assert sorted(got["back"]) == ["a.py", "one.py"] and got["new"] == ["two.py"]
         assert got["can"] is True and got["blocked"] == "" and got["conversation"] is True
         assert got["label"] == "Claude Code" and len(got["id"]) == 16 and "tree" not in got
+        assert got["own"] is False  # v1.546.0: a git folder's checkpoints are in its own repository
         assert _files(work) == as_is
         r = await c.get(f"/build/app/sessions/{sid}/rewind/preview", params={"to": "no-such-message"})
         assert r.status_code == 404

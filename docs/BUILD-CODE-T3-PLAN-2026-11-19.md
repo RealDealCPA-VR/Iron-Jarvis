@@ -6,7 +6,15 @@ A build plan, written 2026-11-19 against master v1.542.2.
 the recommended choices D1 and D2. Release B (feature 3, phases 3a to 3c, in
 both Code views as D7 recommends) is built in v1.544.0. Release C (feature 2,
 phases 2a to 2c, with D4, D5 and D6 as recommended) is built in v1.545.0.
-Release D is not built.
+Release D (phase 1d, the yes to D3) is built in v1.546.0.
+
+For Release D, the details the text left for later: the private store is a
+git repository of Iron Jarvis's own, one per session, under
+`<home>/workspaces/code-checkpoints/` (not `<home>/hosted/<sid>/`: `workspaces`
+is left out of backups, like the kept indexes). Nothing is written into the
+user's folder. The limits are 5,000 files (the restore's own limit, not the
+project map's walk limit) and 256 MB; folders such as `node_modules` and a
+`.gitignore` leave files out.
 
 For Release C, these differ from the text of feature 2 below, on purpose:
 

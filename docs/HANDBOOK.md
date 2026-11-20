@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.545.0 (2026-11-19).*
+holds itself to. Current as of v1.546.0 (2026-11-19).*
 
 ---
 
@@ -2041,6 +2041,51 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Rewind works in folders without git too (v1.546.0)
+
+"Rewind to here" can put a folder's files back as they were when a message
+started (v1.543.0). Until now that needed the folder to be in a git
+repository. Now it also works in a folder that is in no git repository.
+
+**How it works.** In a folder that is not a git repository, Iron Jarvis keeps
+its own copy of the folder's files each time you send a message. The copy is
+in Iron Jarvis's own data folder on this PC, one per session. Nothing is
+written into your folder: no `.git` folder appears, and nothing changes for
+your own tools.
+
+Everything else is as in a git folder: the preview shows which files go back
+and which new files move to Iron Jarvis's trash, the second press does it,
+every version that is replaced is kept in the trash first, and **Undo
+rewind** returns the files until your next message. Files come back byte for
+byte, line endings and binary files included.
+
+**What is left out.** Folders that coding tools make and remake by
+themselves (such as `node_modules`, `.venv`, `__pycache__` and `.next`) are
+in no copy, so a rewind neither puts them back nor removes them. A folder you
+named yourself, such as `Build` or `Target`, is always copied. A `.gitignore`
+file in the folder leaves more out, as it would for git.
+
+**Limits.** A copy holds at most 5,000 files and 256 MB in all. A folder
+past either gets no copy for that message, and the Changes tab says why. The
+same happens when the folder cannot be read in time, or when a file in it
+cannot be read (another program has it open), and the Changes tab names the
+reason. A preview or a rewind of a folder past the limits is refused before
+anything is copied. A folder on a network share gets no copy.
+
+**Good to know.**
+
+- The copies are your files, kept on this PC. They hold everything in the
+  folder that is not left out, including files such as `.env` with keys in
+  them. They are left out of Iron Jarvis's backups, kept while the session is
+  archived, and removed when you delete the session.
+- Once a session keeps its own copies, it goes on doing so even if the folder
+  later becomes a git repository, and it writes nothing into that repository.
+- A folder that is inside a git repository git cannot read right now (a
+  worktree whose main folder is missing) gets no copy: it is still a
+  repository.
+- The Changes tab of a folder without git still lists the files the tool's
+  own edit steps changed; "This message" still needs git.
 
 ## Switch the coding tool in the same session (v1.545.0)
 

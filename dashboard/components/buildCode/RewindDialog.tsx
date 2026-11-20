@@ -25,6 +25,7 @@ import {
   REWIND_FILES_ONLY,
   REWIND_FILES_PRESS,
   REWIND_FOOT,
+  REWIND_FOOT_OWN,
   REWIND_NOTHING,
   REWIND_READ_AGAIN,
   REWIND_READING,
@@ -189,7 +190,11 @@ export function RewindDialog({
                 {plan.endings}
               </p>
             ) : null}
-            {changes > 0 ? <p className="text-[12px] text-zinc-500">{REWIND_FOOT}</p> : null}
+            {changes > 0 ? (
+              <p data-testid="code-rewind-foot" className="text-[12px] text-zinc-500">
+                {plan.own ? REWIND_FOOT_OWN : REWIND_FOOT}
+              </p>
+            ) : null}
           </div>
         ) : null}
         <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
