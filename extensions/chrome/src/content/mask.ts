@@ -16,14 +16,14 @@ export const DETAIL_MASK_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   // v1.532.0 (D2): a PEM private key block, header through END line (first, so
   // no later rule cuts its body short; a cut block is still masked).
   [
-    /(-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----)(?![*]{3})[A-Za-z0-9+\/=\s]*(-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----)?/g,
+    /(-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----)(?![*]{3})[A-Za-z0-9+\/=\s\\]*(-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----)?/g,
     `$1${MASK}$2`,
   ],
   // Authorization: Bearer <v> / Basic <v> / Token <v> / <v>
   [/(\bauthorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token)\s+)?)[^\s"',;]+/gi, `$1${MASK}`],
   // key = value / "key": "value" for secret-named keys (refresh_token=…, pwd:…)
   [
-    /((?:api[_-]?key|access[_-]?key|client[_-]?secret|token|password|passwd|secret|pwd)["']?\s*[=:]\s*["']?)(?![*]{3})[^\s"'&,;}]+/gi,
+    /((?:api[_-]?key|access[_-]?key|private[_-]?key|secret[_-]?key|account[_-]?key|client[_-]?secret|token|password|passwd|secret|pwd)["']?\s*[=:]\s*["']?)(?![*]{3})[^\s"'&,;}]+/gi,
     `$1${MASK}`,
   ],
   // curl -u user:pass / --user user:pass
