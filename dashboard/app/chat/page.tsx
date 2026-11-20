@@ -3432,6 +3432,7 @@ const MessageRow = memo(function MessageRow({
             withRow={underRow}
             onRetry={readOnly ? undefined : () => h.retryTask(m.runResult?.task || "")}
             onKeepGoing={readOnly ? undefined : keepGoingFor(m, isLast, busy, h)}
+            readOnly={readOnly}
           />
         )}
         {/* v1.355.0 (G62): the agent reply's receipt line, in the voice of
@@ -3487,6 +3488,8 @@ const MessageRow = memo(function MessageRow({
           withRow={underRow}
           onRetry={readOnly ? undefined : () => h.retryTask(m.runResult?.task || "")}
           onKeepGoing={readOnly ? undefined : keepGoingFor(m, isLast, busy, h)}
+          // 48-a: and no Revert or Stop under an earlier message.
+          readOnly={readOnly}
         />
       </div>
     );

@@ -2065,7 +2065,9 @@ line instead.
 - A chat opens as fast as before: opening it reads nothing earlier.
 - Earlier messages can be read, copied and quoted. They cannot be edited,
   rated or tried again, and the suggestions, cards and Undo under them are
-  not shown there.
+  not shown there. An agent's earlier reply keeps **Open run** but shows no
+  **Revert** or **Stop**: the run's own page stops it, and the Activity page
+  undoes what it changed.
 - If they cannot be read, the line says "Could not load earlier messages."
   with **Try again**. What you already scrolled back to stays on screen.
 - History search already finds earlier messages.

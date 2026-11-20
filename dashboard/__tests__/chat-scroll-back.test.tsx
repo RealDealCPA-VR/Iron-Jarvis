@@ -16,7 +16,8 @@
  *    passed 200 messages before v1.499.4 lost its first ones, and its top
  *    says "Earlier messages were not kept before this version";
  *  - a failed page says so and offers Try again, never an empty top;
- *  - older rows are read-only: copy yes, edit and rate no;
+ *  - older rows are read-only: copy yes, edit and rate no, and an agent
+ *    run's reply shows no Revert, Stop or Try again (the live one does);
  *  - the page adopting a newer copy whose count grew fetches just the rows in
  *    between, so nothing the reader saw disappears and nothing shows twice;
  *    when that read fails the held rows stay and a line with Try again marks
@@ -132,6 +133,7 @@ vi.mock("react-markdown", () => ({ default: ({ children }: { children?: string }
 vi.mock("remark-gfm", () => ({ default: () => {} }));
 
 import ChatPage from "@/app/chat/page";
+import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import { __resetApiCache, cachedGet } from "@/lib/apiCache";
 import {
   atStartOfChat,
@@ -460,6 +462,72 @@ describe("scroll back in a chat (48-a)", () => {
     expect(screen.getAllByRole("button", { name: "Edit and resend" }).length).toBeGreaterThan(0);
   });
 
+  it("an earlier message offers no Undo: no Revert, Stop or Try again under a run, no changed-files line", async () => {
+    // A run that is still saved as active and has three actions it could undo.
+    const RUN = {
+      found: true,
+      session_id: "s9",
+      status: "active",
+      task: "tidy the folder",
+      summary: "",
+      steps: 3,
+      tools_used: [{ tool: "move_file", count: 3 }],
+      tools_failed: [],
+      files_created: [],
+      files_changed: [],
+      errors: [],
+      revertable: 3,
+      duration_s: 10,
+      outcome: null,
+      provider: "claude-cli",
+      model: "claude-opus-5-5",
+      agent_name: null,
+      agent_type: "builder",
+      route_note: "",
+      activity: [],
+    };
+    // A reply whose turn wrote a file: its changed-files line (with Undo).
+    const WROTE = { documents: ["C:/work/notes.txt"], timing: { startedAt: 1_763_000_000_000, endedAt: 1_763_000_005_000 } };
+    const at = "2026-10-06T12:00:00+00:00";
+    const make = (i: number): Msg =>
+      i === 4999
+        ? { role: "assistant", content: "older run reply", runResult: RUN, at }
+        : i === 4997
+          ? { role: "assistant", content: "older agent reply", panelWho: "remote:hermes", runResult: RUN, at }
+          : i === 4995
+            ? { role: "assistant", content: "older wrote a file", ...WROTE, at }
+            : olderMsg(i);
+    const live = Array.from({ length: 200 }, (_, i) =>
+      i === 199
+        ? { ...liveMsg(i), content: "live run reply", runResult: RUN }
+        : i === 197
+          ? { ...liveMsg(i), content: "live wrote a file", ...WROTE }
+          : liveMsg(i),
+    );
+    storeThread(5000, live);
+    serveOlder(5000, make);
+    render(<ChatPage />);
+    await screen.findByText("live run reply");
+    // The control: the live reply offers them (the card loads lazily).
+    const liveRow = document.querySelector('[data-msg-index="199"]') as HTMLElement;
+    expect(await within(liveRow).findByRole("button", { name: /Revert \(3\)/ }, { timeout: 10_000 })).toBeInTheDocument();
+    expect(within(liveRow).getByRole("button", { name: /Stop/ })).toBeInTheDocument();
+    expect(within(liveRow).getByRole("button", { name: /Try again/ })).toBeInTheDocument();
+    const liveWrote = document.querySelector('[data-msg-index="197"]') as HTMLElement;
+    expect(within(liveWrote).getByTestId("reply-changes")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("older-more"));
+    await screen.findByText("older run reply");
+    const block = screen.getByTestId("older-messages");
+    // Both earlier run replies drew their card; neither offers a press on the run.
+    expect(await within(block).findAllByTestId("run-result-card", {}, { timeout: 10_000 })).toHaveLength(2);
+    expect(within(block).queryAllByRole("button", { name: /Revert|Stop|Undo|Try again|Keep going/ })).toHaveLength(0);
+    // Opening the run is reading, so it stays.
+    expect(within(block).getAllByTestId("run-result-open")).toHaveLength(2);
+    // The earlier reply that wrote a file is there, without its changed-files line.
+    expect(within(block).getByText("older wrote a file")).toBeInTheDocument();
+    expect(within(block).queryAllByTestId("reply-changes")).toHaveLength(0);
+  });
+
   it("New chat leaves the earlier messages behind, and a read still on its way lands nowhere", async () => {
     await openLongChat();
     fireEvent.click(await screen.findByTestId("older-more"));
@@ -577,6 +645,37 @@ describe("scroll back in a chat (48-a)", () => {
     await waitFor(() => expect(cachedGet<{ older?: unknown }>("/chat/threads/t7")?.older).toBe(3));
     const cached = cachedGet<{ messages: Msg[]; older?: unknown }>("/chat/threads/t7");
     expect(cached?.messages[0].content).toBe("live 3");
+  });
+});
+
+describe("RunResultCard readOnly: an earlier message's run card acts on nothing", () => {
+  const run = (over: Record<string, unknown>) =>
+    ({
+      found: true, session_id: "s9", status: "active", task: "tidy the folder", summary: "",
+      steps: 3, tools_used: [{ tool: "move_file", count: 3 }], tools_failed: [], files_created: [],
+      files_changed: [], errors: [], revertable: 3, duration_s: 10, outcome: null,
+      provider: "claude-cli", model: "claude-opus-5-5", agent_name: null, agent_type: "builder",
+      route_note: "", activity: [], ...over,
+    }) as unknown as RunResult;
+  const PRESSES = { name: /Revert|Stop|Try again|Keep going/ };
+  const ACTIVE = run({});
+  const AT_LIMIT = run({ status: "failed", summary: "stopped: reached max steps before completion" });
+
+  it("draws no Try again, Keep going, Revert or Stop even when handed them, in both shapes", () => {
+    for (const withRow of [false, true]) {
+      for (const result of [ACTIVE, AT_LIMIT]) {
+        // The control: the same card, live, offers them.
+        const live = render(<RunResultCard result={result} withRow={withRow} onRetry={() => {}} onKeepGoing={() => {}} />);
+        expect(screen.queryAllByRole("button", PRESSES).length).toBeGreaterThanOrEqual(2);
+        live.unmount();
+        const earlier = render(
+          <RunResultCard result={result} withRow={withRow} onRetry={() => {}} onKeepGoing={() => {}} readOnly />,
+        );
+        expect(screen.queryAllByRole("button", PRESSES)).toHaveLength(0);
+        expect(screen.queryByTestId("run-result-actions")).toBeNull();
+        earlier.unmount();
+      }
+    }
   });
 });
 

@@ -291,6 +291,10 @@ def start_kept(created_at: Any, older: int, live: int = 0, *,
     first messages on a version that deleted them, and nothing on disk says
     whether it did: False, so the screen says so instead of claiming the
     start. Unknown or unreadable ``created_at`` on a long chat: False.
+    ``since`` is when v1.499.4 was published, not when this PC installed it
+    (nothing on disk records that). The PC's first kept move is no better a
+    bound: the first chat ever to pass the cap was made before that move, so
+    it would always read as not kept although it lost nothing.
     Pure; never raises."""
     try:
         if int(older or 0) <= 0 and int(live or 0) < MAX_MESSAGES:

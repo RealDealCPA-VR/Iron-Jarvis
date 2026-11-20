@@ -346,6 +346,7 @@ export function RunResultCard({
   onKeepGoing,
   onReverted,
   withRow = false,
+  readOnly = false,
 }: {
   result: RunResult;
   /** Re-run the same task (POST /sessions/{id}/rerun happens upstream). */
@@ -361,6 +362,10 @@ export function RunResultCard({
    *  what model, where, "Open run"). Draw only what that row does not say,
    *  as quiet lines: no box, no headline, no second "answered by". */
   withRow?: boolean;
+  /** 48-a: the reply is an EARLIER message (page.tsx MessageRow `readOnly`):
+   *  it is read, never acted on, so no Try again, Keep going, Revert or Stop
+   *  is drawn under it. "Open run" stays (opening is reading). */
+  readOnly?: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -373,12 +378,14 @@ export function RunResultCard({
   const stopped = end === "stopped";
   const atLimit = end === "step_limit";
   // v1.402.0: "Keep going" — only under a run that stopped at its limit.
-  const keepGoing = atLimit ? onKeepGoing : undefined;
+  const keepGoing = atLimit && !readOnly ? onKeepGoing : undefined;
+  const retry = readOnly ? undefined : onRetry;
   // v1.352.0 (G16): a run that ended early (stopped, or at its step limit)
   // is neither the red failure nor a "finished" run the notes below judge.
   const endedEarly = failed || stopped || atLimit;
   const didNothing = !result.tools_used.length;
-  const canRevert = result.revertable > 0;
+  const canRevert = !readOnly && result.revertable > 0;
+  const canStop = !readOnly && result.status === "active";
   // Finished, but short of the job (v1.227.0): amber, never the green tick.
   const short =
     !endedEarly &&
@@ -438,7 +445,7 @@ export function RunResultCard({
     // v1.358.0 (lane 8C): ONE receipt. The row above says how the run ended,
     // what it did, the model, the folder and "Open run"; this says only the
     // rest, in the calm chat's quiet lines.
-    const hasActions = !!onRetry || !!keepGoing || canRevert || result.status === "active";
+    const hasActions = !!retry || !!keepGoing || canRevert || canStop;
     return (
       <div data-testid="run-result-rest" data-end={end} className="mt-1.5 grid max-w-[640px] gap-1.5">
         {/* The honesty case: a run that finished without touching a single
@@ -536,8 +543,8 @@ export function RunResultCard({
                 <Play size={12} aria-hidden="true" /> {KEEP_GOING_LABEL}
               </button>
             )}
-            {onRetry && (
-              <button type="button" onClick={onRetry} className={`${REST_BUTTON} hover:text-zinc-200`}>
+            {retry && (
+              <button type="button" onClick={retry} className={`${REST_BUTTON} hover:text-zinc-200`}>
                 <RotateCcw size={12} aria-hidden="true" /> Try again
               </button>
             )}
@@ -553,7 +560,7 @@ export function RunResultCard({
                 {busy === "revert" ? "Reverting…" : `Revert (${result.revertable})`}
               </button>
             )}
-            {result.status === "active" && (
+            {canStop && (
               <button
                 type="button"
                 onClick={() => void cancel()}
@@ -753,10 +760,10 @@ export function RunResultCard({
             <Play size={12} aria-hidden="true" /> {KEEP_GOING_LABEL}
           </button>
         )}
-        {onRetry && (
+        {retry && (
           <button
             type="button"
-            onClick={onRetry}
+            onClick={retry}
             className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[12px] font-medium text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
           >
             <RotateCcw size={12} /> Try again
@@ -773,7 +780,7 @@ export function RunResultCard({
             <Undo2 size={12} /> {busy === "revert" ? "Reverting…" : `Revert (${result.revertable})`}
           </button>
         )}
-        {result.status === "active" && (
+        {canStop && (
           <button
             type="button"
             onClick={() => void cancel()}
