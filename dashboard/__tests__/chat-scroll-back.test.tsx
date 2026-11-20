@@ -11,11 +11,19 @@
  *    it was on screen);
  *  - a save after that sends ONLY the live messages (the older rows are never
  *    part of `messages`; mutation: put them in and this goes red);
- *  - the end says "Start of this chat";
+ *  - the end says "Start of this chat", but only when the daemon says the
+ *    first kept message is the chat's very first (`start_kept`): a chat that
+ *    passed 200 messages before v1.499.4 lost its first ones, and its top
+ *    says "Earlier messages were not kept before this version";
  *  - a failed page says so and offers Try again, never an empty top;
  *  - older rows are read-only: copy yes, edit and rate no;
  *  - the page adopting a newer copy whose count grew fetches just the rows in
- *    between, so nothing the reader saw disappears and nothing shows twice.
+ *    between, so nothing the reader saw disappears and nothing shows twice;
+ *    when that read fails the held rows stay and a line with Try again marks
+ *    where the missing rows go;
+ *  - a reader who scrolls up while the line is already in view gets the page
+ *    (no new observer report comes then);
+ *  - a save merged over another window's copy caches that copy's count.
  *
  * Harness: the chat page rendered for real, only the transport hooks mocked
  * (as chat-persistence-v1232).
@@ -47,6 +55,8 @@ const H = vi.hoisted(() => {
       getResponses: {} as Record<string, unknown>,
       /** Answers every `/chat/threads/t7/older?...` read. */
       older: null as null | ((before: number, limit: number) => unknown),
+      /** How many of the next thread saves answer 409 (another window saved). */
+      conflicts: 0,
     },
     stream: { result: { reply: "streamed reply" } as Record<string, unknown> },
     events: { list: [] as { id: string; type: string; payload: unknown }[] },
@@ -73,6 +83,10 @@ vi.mock("@/lib/api", () => ({
   post: async () => ({}),
   put: async (path: string, body: Record<string, unknown>) => {
     H.api.puts.push({ path, body });
+    if (H.api.conflicts > 0 && /^\/chat\/threads\/t7$/.test(path)) {
+      H.api.conflicts -= 1;
+      throw new H.FakeApiError("updated from another window", 409);
+    }
     const m = /^\/chat\/threads\/(.+)$/.exec(path);
     return { id: m && m[1] !== "new" ? m[1] : "t7", title: "t", updated_at: `2026-11-20T10:00:0${H.api.puts.length % 10}+00:00` };
   },
@@ -118,15 +132,17 @@ vi.mock("react-markdown", () => ({ default: ({ children }: { children?: string }
 vi.mock("remark-gfm", () => ({ default: () => {} }));
 
 import ChatPage from "@/app/chat/page";
-import { __resetApiCache } from "@/lib/apiCache";
+import { __resetApiCache, cachedGet } from "@/lib/apiCache";
 import {
   atStartOfChat,
   dayKey,
   decodeOlderPage,
+  gapRetry,
   gapToFill,
   hasEarlier,
   olderPagePath,
   olderStart,
+  startWords,
   withEarlierPage,
   withRowsBetween,
   withTotal,
@@ -146,14 +162,15 @@ const liveMsg = (i: number, shift = 0): Msg => ({
 });
 
 /** The daemon's older messages: `make(i)` for 0..total-1, paged like the
- *  route (the `limit` just before `before`). */
-function serveOlder(total: number, make: (i: number) => Msg = olderMsg) {
+ *  route (the `limit` just before `before`). `startKept`: the route's
+ *  `start_kept` (false for a long chat made before v1.499.4). */
+function serveOlder(total: number, make: (i: number) => Msg = olderMsg, startKept = true) {
   H.api.older = (before, limit) => {
     const end = Math.max(0, Math.min(before, total));
     const start = Math.max(0, end - limit);
     const messages: Msg[] = [];
     for (let i = start; i < end; i++) messages.push(make(i));
-    return { id: "t7", total, offset: 0, first_seq: start, messages };
+    return { id: "t7", total, offset: 0, first_seq: start, start_kept: startKept, messages };
   };
 }
 
@@ -231,6 +248,7 @@ function resetApi() {
   H.api.gets.length = 0;
   H.api.puts.length = 0;
   H.api.older = null;
+  H.api.conflicts = 0;
   for (const k of Object.keys(H.api.getResponses)) delete H.api.getResponses[k];
   H.api.getResponses["/models"] = { models: [] };
   H.api.getResponses["/chat/personas"] = { personas: [] };
@@ -368,6 +386,38 @@ describe("scroll back in a chat (48-a)", () => {
     expect(olderReads()).toHaveLength(2);
   });
 
+  it("never says 'Start of this chat' over a chat whose first messages were not kept", async () => {
+    // A chat made before v1.499.4 that passed 200 messages then lost its
+    // first ones; the daemon says its start is not known (`start_kept`).
+    storeThread(60);
+    serveOlder(60, olderMsg, false);
+    render(<ChatPage />);
+    await screen.findByText("live 199");
+    fireEvent.click(await screen.findByTestId("older-more"));
+    await screen.findByText("older 10");
+    fireEvent.click(screen.getByTestId("older-more"));
+    await screen.findByText("older 0");
+    const top = screen.getByTestId("older-start");
+    expect(top).toHaveTextContent("Earlier messages were not kept before this version");
+    expect(top).not.toHaveTextContent("Start of this chat");
+    expect(screen.queryByText("Start of this chat")).toBeNull();
+  });
+
+  it("scrolling up loads when the line was already in view while following the newest message", async () => {
+    await openLongChat();
+    await screen.findByTestId("older-more");
+    // The chat is only a little taller than the window: the line is in view
+    // at once, while the reader follows the newest message (ignored then).
+    reachTop();
+    await act(async () => {});
+    expect(olderReads()).toHaveLength(0);
+    // The reader scrolls up; the line's view does not change, so no new
+    // report comes. Leaving the bottom is the reach.
+    scrollToTop();
+    expect(await screen.findByText("older 4999")).toBeInTheDocument();
+    expect(olderReads()).toEqual(["/chat/threads/t7/older?before=5000&limit=50"]);
+  });
+
   it("a failed page says so and offers Try again, never an empty top", async () => {
     await openLongChat();
     await screen.findByTestId("older-more");
@@ -457,12 +507,84 @@ describe("scroll back in a chat (48-a)", () => {
     }
     expect(screen.getByTestId("older-start")).toBeInTheDocument();
   });
+
+  it("a failed read of the rows in between keeps what the reader holds and offers Try again", async () => {
+    const view = await openLongChat(100);
+    fireEvent.click(await screen.findByTestId("older-more"));
+    await screen.findByText("older 50");
+    expect(document.querySelectorAll("[data-older-seq]")).toHaveLength(50);
+    // Another writer added three lines: the daemon moved three to older, and
+    // reading them fails.
+    const ok = (i: number) => (i < 100 ? olderMsg(i) : liveMsg(i - 100));
+    let fail = true;
+    serveOlder(103, ok);
+    const serve = H.api.older!;
+    H.api.older = (before, limit) => (fail ? new H.FakeApiError("down", 503) : serve(before, limit));
+    H.api.getResponses["/chat/threads/t7"] = {
+      id: "t7",
+      title: "long chat",
+      messages: Array.from({ length: 200 }, (_, i) => liveMsg(i, 3)),
+      updated_at: "2026-11-19T12:30:00+00:00",
+      older: 103,
+    };
+    H.events.list = [{ id: "ev1", type: "chat.thread_updated", payload: { thread_id: "t7" } }];
+    view.rerender(<ChatPage />);
+    expect(await screen.findByText("live 202")).toBeInTheDocument();
+    const gap = await screen.findByTestId("older-gap-failed");
+    expect(gap).toHaveTextContent("Could not load earlier messages.");
+    // What the reader held is still there; nothing is asked again by itself.
+    expect(document.querySelectorAll("[data-older-seq]")).toHaveLength(50);
+    expect(screen.getByText("older 50")).toBeInTheDocument();
+    expect(olderReads()).toEqual([
+      "/chat/threads/t7/older?before=100&limit=50",
+      "/chat/threads/t7/older?before=103&limit=3",
+    ]);
+    await act(async () => {});
+    expect(olderReads()).toHaveLength(2);
+    // Try again reads the rows in between, and the line goes.
+    fail = false;
+    fireEvent.click(within(gap).getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(document.querySelectorAll("[data-older-seq]")).toHaveLength(53));
+    expect(screen.queryByTestId("older-gap-failed")).toBeNull();
+    for (const words of ["live 0", "live 1", "live 2", "older 99"]) {
+      expect(screen.getAllByText(words)).toHaveLength(1);
+    }
+    expect(olderReads()).toHaveLength(3);
+  });
+
+  it("a save merged over another window's copy keeps that copy's count with it", async () => {
+    await openLongChat(0);
+    // Another window saved meanwhile: three more lines, three moved to older.
+    serveOlder(3, (i) => liveMsg(i));
+    H.api.getResponses["/chat/threads/t7"] = {
+      id: "t7",
+      title: "long chat",
+      messages: Array.from({ length: 200 }, (_, i) => liveMsg(i, 3)),
+      updated_at: "2026-11-19T12:30:00+00:00",
+      older: 3,
+    };
+    H.api.conflicts = 1;
+    const box = await screen.findByPlaceholderText(/Message Iron Jarvis/);
+    fireEvent.change(box, { target: { value: "a new question" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(
+        H.api.puts.some((p) => (p.body.messages as Msg[]).some((m) => m.content === "streamed reply")),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(H.api.conflicts).toBe(0));
+    // The copy a reopen paints from starts where its count says.
+    await waitFor(() => expect(cachedGet<{ older?: unknown }>("/chat/threads/t7")?.older).toBe(3));
+    const cached = cachedGet<{ messages: Msg[]; older?: unknown }>("/chat/threads/t7");
+    expect(cached?.messages[0].content).toBe("live 3");
+  });
 });
 
 describe("lib/olderMessages: the held rows are always one run that ends at the live ones", () => {
-  const page = (firstSeq: number, n: number, total = 100) => ({
+  const page = (firstSeq: number, n: number, total = 100, startKept = true) => ({
     firstSeq,
     total,
+    startKept,
     messages: Array.from({ length: n }, (_, i) => ({ role: "user", content: `m${firstSeq + i}` })),
   });
 
@@ -475,7 +597,25 @@ describe("lib/olderMessages: the held rows are always one run that ends at the l
     expect(decodeOlderPage({ total: 5, offset: 0, messages: [] })).toBeNull(); // no first_seq
     expect(decodeOlderPage({ first_seq: 2, total: 5, messages: "x" })).toBeNull();
     expect(decodeOlderPage({ first_seq: 2, total: 5, messages: [{ role: "user" }, 3, null, { x: 1 }] }))
-      .toEqual({ firstSeq: 2, total: 5, messages: [{ role: "user" }] });
+      .toEqual({ firstSeq: 2, total: 5, messages: [{ role: "user" }], startKept: false });
+    // The start is known only when the daemon says so.
+    expect(decodeOlderPage({ first_seq: 0, total: 5, start_kept: true, messages: [] })?.startKept).toBe(true);
+    expect(decodeOlderPage({ first_seq: 0, total: 5, start_kept: "yes", messages: [] })?.startKept).toBe(false);
+  });
+
+  it("claims the start of a chat only when its first message was kept", () => {
+    const kept = withEarlierPage(olderStart<Msg>("t", 30), 30, page(0, 30, 30, true));
+    expect(atStartOfChat(kept)).toBe(true);
+    expect(startWords(kept)).toBe("Start of this chat");
+    const lost = withEarlierPage(olderStart<Msg>("t", 30), 30, page(0, 30, 30, false));
+    expect(atStartOfChat(lost)).toBe(true);
+    expect(startWords(lost)).toBe("Earlier messages were not kept before this version");
+    // Nothing read yet: not known.
+    expect(startWords(olderStart<Msg>("t", 30))).toBe("Earlier messages were not kept before this version");
+    // The rows in between say it too.
+    const grown = withTotal(olderStart<Msg>("t", 0), "t", 3);
+    expect(startWords(withRowsBetween(grown, 0, 3, page(0, 3, 3, true)))).toBe("Start of this chat");
+    expect(startWords(withRowsBetween(grown, 0, 3, page(0, 3, 3, false)))).not.toBe("Start of this chat");
   });
 
   it("an earlier page goes on top only when it is for the position held", () => {
@@ -506,11 +646,24 @@ describe("lib/olderMessages: the held rows are always one run that ends at the l
     const capped = withRowsBetween(grown, 100, 103, page(101, 2, 103));
     expect(capped.loadedFrom).toBe(101);
     expect(capped.rows.map((r) => r.seq)).toEqual([101, 102]);
-    // A failed fill: nothing held, the line covers everything above.
+    // A failed fill keeps what is held and marks the gap (Try again reads
+    // it); a newer count, or the press, lets the fill run again.
     const failed = withRowsBetween(grown, 100, 103, null);
-    expect(failed.rows).toEqual([]);
-    expect(failed.loadedFrom).toBe(103);
-    expect(gapToFill(failed)).toBeNull();
+    expect(failed.rows).toBe(grown.rows);
+    expect(failed.loadedFrom).toBe(90);
+    expect(failed.gapFailed).toBe(true);
+    expect(gapToFill(failed)).toEqual({ from: 100, to: 103 });
+    expect(gapRetry(failed).gapFailed).toBe(false);
+    expect(gapRetry(grown)).toBe(grown);
+    expect(withTotal(failed, "t", 104).gapFailed).toBe(false);
+    expect(withRowsBetween(failed, 100, 103, page(100, 3, 103)).gapFailed).toBe(false);
+    // With nothing held there is nothing to keep: the line covers it all.
+    const bare = withTotal(olderStart<Msg>("t", 100), "t", 103);
+    const bareFailed = withRowsBetween(bare, 100, 103, null);
+    expect(bareFailed.rows).toEqual([]);
+    expect(bareFailed.loadedFrom).toBe(103);
+    expect(bareFailed.gapFailed).toBe(false);
+    expect(gapToFill(bareFailed)).toBeNull();
     // A fill for a state that started over is ignored.
     const over = olderStart<Msg>("t", 2);
     expect(withRowsBetween(over, 100, 103, page(100, 3, 103))).toBe(over);

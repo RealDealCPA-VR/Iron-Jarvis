@@ -2045,9 +2045,9 @@ reads; it never writes, runs commands, or starts work on its own.
 ## Scroll back to the start of a long chat (v1.547.0)
 
 In a long chat, scroll up and the earlier messages load in place, back to
-the very first one. A chat has always kept every message: the newest 200 stay
-open in the chat and the earlier ones are kept beside it (v1.499.3). Until
-now the chat page showed only the newest 200.
+the first one kept. Since v1.499.4 a chat keeps every message: the newest
+200 stay open in the chat and the earlier ones are kept beside it. Until now
+the chat page showed only the newest 200.
 
 **How it works.** At the top of a long chat there is a quiet **Earlier
 messages** line. Scroll up to it and the 50 messages before load above, and
@@ -2058,13 +2058,16 @@ line instead.
 
 **Good to know.**
 
-- A chat opens as fast as before: nothing earlier is read until you reach
-  the top.
+- Before v1.499.4, a chat past 200 messages lost its oldest ones, and they
+  cannot be brought back. At the top of a long chat started before then,
+  the line reads "Earlier messages were not kept before this version"
+  instead of **Start of this chat**.
+- A chat opens as fast as before: opening it reads nothing earlier.
 - Earlier messages can be read, copied and quoted. They cannot be edited,
   rated or tried again, and the suggestions, cards and Undo under them are
   not shown there.
 - If they cannot be read, the line says "Could not load earlier messages."
-  with **Try again**.
+  with **Try again**. What you already scrolled back to stays on screen.
 - History search already finds earlier messages.
 - Phone chats and coding sessions still keep only their newest messages.
 

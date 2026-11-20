@@ -273,6 +273,36 @@ def older_count(engine: Any, thread_id: str) -> int:
         return 0
 
 
+#: When the first version that KEEPS a long chat's oldest messages reached
+#: users: v1.499.4, published 2026-11-15 17:02 UTC (built as v1.499.3, which
+#: never shipped). Before it, a chat past :data:`MAX_MESSAGES` lost its oldest
+#: messages for good on the next save.
+CHAT_OLDER_KEPT_SINCE = datetime(2026, 11, 15, 17, 2, 5, tzinfo=timezone.utc)
+
+
+def start_kept(created_at: Any, older: int, live: int = 0, *,
+               since: datetime = CHAT_OLDER_KEPT_SINCE) -> bool:
+    """Is a chat's first kept message (position 0) its VERY first one (48-a)?
+
+    The chat page says "Start of this chat" only when this is True. A chat
+    that never reached the cap (no older messages, fewer than
+    :data:`MAX_MESSAGES` live) lost nothing. One that did, and was made
+    before ``since`` (the version that started keeping), may have lost its
+    first messages on a version that deleted them, and nothing on disk says
+    whether it did: False, so the screen says so instead of claiming the
+    start. Unknown or unreadable ``created_at`` on a long chat: False.
+    Pure; never raises."""
+    try:
+        if int(older or 0) <= 0 and int(live or 0) < MAX_MESSAGES:
+            return True
+        if not isinstance(created_at, datetime):
+            return False
+        made = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+        return made >= since
+    except Exception:  # noqa: BLE001 — unsure is "not known", never a claim
+        return False
+
+
 #: The most older messages one read answers.
 OLDER_PAGE_MAX = 1000
 

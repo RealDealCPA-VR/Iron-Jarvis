@@ -16,8 +16,16 @@
  * never edited or run again. They are NOT the page's `messages` (the save
  * sends those whole); `lib/olderMessages` holds them.
  *
- * Nothing is read until the reader reaches the top: the observer only tells
- * the page the line is in view.
+ * The top says "Start of this chat" only when the daemon says the first
+ * kept message is the chat's very first (`start_kept`); a chat that passed
+ * 200 messages before v1.499.4 lost its first ones then, and its top says
+ * "Earlier messages were not kept before this version".
+ *
+ * Opening a chat reads nothing older, and no earlier page is read until
+ * the reader reaches the top: the observer only tells the page whether the
+ * line is in view. (The page does read, at once, the few rows that leave
+ * its live list when it takes a newer copy whose count grew, so what the
+ * reader was looking at stays on screen.)
  */
 
 import { Fragment, memo, useEffect, useRef, type ReactNode, type RefObject } from "react";
@@ -27,7 +35,9 @@ import {
   OLDER_WORDS,
   atStartOfChat,
   dayKey,
+  gapToFill,
   hasEarlier,
+  startWords,
   type OlderState,
 } from "@/lib/olderMessages";
 
@@ -63,8 +73,15 @@ export interface OlderMessagesProps<M extends { at?: string }> {
   rootRef?: RefObject<HTMLElement | null>;
   /** The line came into view. */
   onReach: () => void;
+  /** Whether the line is in view (within the reach margin), on every
+   *  report: the page loads when a reader who was following the newest
+   *  message scrolls up while it already is (no report comes then). */
+  onInView?: (inView: boolean) => void;
   /** The line, or Try again, was pressed. */
   onLoad: () => void;
+  /** Try again on the line between the held rows and the live ones (the
+   *  rows in between could not be read). */
+  onRetryGap?: () => void;
   /** One row, read-only (the page's own row component). */
   renderRow: (message: M, seq: number) => ReactNode;
 }
@@ -74,12 +91,16 @@ function OlderMessagesImpl<M extends { at?: string }>({
   firstLiveAt,
   rootRef,
   onReach,
+  onInView,
   onLoad,
+  onRetryGap,
   renderRow,
 }: OlderMessagesProps<M>) {
   const topRef = useRef<HTMLDivElement>(null);
   const reachRef = useRef(onReach);
   reachRef.current = onReach;
+  const inViewRef = useRef(onInView);
+  inViewRef.current = onInView;
   const more = hasEarlier(state);
 
   // A fresh observer each time the held rows grow upward: its first report
@@ -90,18 +111,26 @@ function OlderMessagesImpl<M extends { at?: string }>({
     if (!more || !el || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) reachRef.current();
+        const hit = entries.some((e) => e.isIntersecting);
+        inViewRef.current?.(hit);
+        if (hit) reachRef.current();
       },
       { root: rootRef?.current ?? null, rootMargin: REACH_MARGIN },
     );
     io.observe(el);
-    return () => io.disconnect();
+    return () => {
+      io.disconnect();
+      inViewRef.current?.(false); // until the next observer says otherwise
+    };
   }, [more, state.loadedFrom, state.threadId, rootRef]);
 
   if (!state.threadId || state.total <= 0) return null;
   const rows = state.rows;
   const lastAt = rows.length ? rows[rows.length - 1].message.at : undefined;
   const joinDay = rows.length > 0 && dayKey(firstLiveAt) !== "" && dayKey(lastAt) !== dayKey(firstLiveAt);
+  // The rows between the held ones and the live ones could not be read: a
+  // line where they go says so, and Try again reads them.
+  const gapFailed = state.gapFailed && rows.length > 0 && gapToFill(state) !== null;
   return (
     <div className="contents" data-testid="older-messages">
       {more ? (
@@ -141,7 +170,7 @@ function OlderMessagesImpl<M extends { at?: string }>({
         </div>
       ) : atStartOfChat(state) ? (
         <div data-testid="older-start" className={`${COLUMN} text-center text-[12px] text-zinc-500`}>
-          {OLDER_WORDS.start}
+          {startWords(state)}
         </div>
       ) : null}
       {rows.map((r, i) => {
@@ -158,7 +187,24 @@ function OlderMessagesImpl<M extends { at?: string }>({
           </Fragment>
         );
       })}
-      {joinDay && <DayLine at={firstLiveAt} />}
+      {gapFailed ? (
+        <div
+          data-testid="older-gap-failed"
+          role="status"
+          className={`${COLUMN} flex flex-wrap items-center justify-center gap-x-2 text-center text-[12px] text-tone-warn`}
+        >
+          <span>{OLDER_WORDS.failed}</span>
+          <button
+            type="button"
+            onClick={onRetryGap}
+            className="inline-flex h-7 items-center rounded-lg px-2 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+          >
+            {OLDER_WORDS.retry}
+          </button>
+        </div>
+      ) : (
+        joinDay && <DayLine at={firstLiveAt} />
+      )}
     </div>
   );
 }

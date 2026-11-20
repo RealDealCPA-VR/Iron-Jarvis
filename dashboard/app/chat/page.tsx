@@ -437,6 +437,7 @@ import { adoptDaemonLines, daemonLineFor, panelWorkingLabel, threadIsNewer } fro
 import { OlderMessages } from "@/components/chat/OlderMessages";
 import {
   decodeOlderPage,
+  gapRetry,
   gapToFill,
   hasEarlier,
   olderCount,
@@ -5047,6 +5048,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // Where the reader's row was on screen just before an earlier page went in
   // above it; the layout effect puts it back there (holdReadersPlace).
   const olderPlaceRef = useRef<{ el: Element | null; top: number; height: number } | null>(null);
+  // Whether the "Earlier messages" line is in view, as its observer last
+  // said (see onThreadScroll).
+  const olderInViewRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Synchronous send guard: `busy` is React state and lags a frame, so two
@@ -6316,12 +6320,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
 
   /** 48-a: fetch the rows between the held ones and the live list, one read
    *  at a time; a count that grew again meanwhile is filled after it. A
-   *  failed read leaves nothing held (the "Earlier messages" line covers
-   *  everything above the live list again), never a gap. */
+   *  failed read keeps the rows held and marks the gap with "Could not load
+   *  earlier messages." and Try again (`onOlderRetryGap`); it is not asked
+   *  again by itself until then, or until a newer count. With nothing held,
+   *  the "Earlier messages" line covers everything above the live list. */
   function fillOlderGap() {
     const s = olderRef.current;
     const gap = gapToFill(s);
-    if (!gap || olderFillingRef.current) return;
+    if (!gap || olderFillingRef.current || s.gapFailed) return;
     olderFillingRef.current = true;
     const gen = olderGenRef.current;
     const id = s.threadId;
@@ -6381,6 +6387,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   function onOlderPress() {
     pinnedRef.current = false;
     void loadEarlier();
+  }
+
+  /** 48-a: Try again on the line between the held rows and the live ones:
+   *  read the rows in between once more. */
+  function onOlderRetryGap() {
+    setOlder(gapRetry(olderRef.current));
+    fillOlderGap();
   }
 
   /** 48-a: note where the reader's row is on screen before a page goes in
@@ -6834,6 +6847,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         project_id: body.project_id ?? null,
         ...(body.setup ? { setup: body.setup } : {}),
         ...(body.persona ? { persona: body.persona } : {}),
+        // 48-a: a merged `sent` starts where the copy it built on starts;
+        // the copy's count rides with it, so a paint from this cache puts
+        // the earlier messages' join in the right place.
+        ...(mergedOlder !== undefined ? { older: mergedOlder } : {}),
       } satisfies ThreadDetail);
     }
     if (sent !== msgs && saveTargetRef.current === target) {
@@ -8397,8 +8414,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // conversation behind — there is nothing below to jump to.
     if (messages.length === 0 && !busy) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const wasPinned = pinnedRef.current;
     pinnedRef.current = nearBottom;
     setShowJump((prev) => (prev === !nearBottom ? prev : !nearBottom));
+    // 48-a: the "Earlier messages" line was already in view while the reader
+    // followed the newest message (a chat only a little taller than the
+    // window): its observer reported then, and was rightly ignored, and
+    // scrolling up does not report again. Leaving the bottom is the reach.
+    if (wasPinned && !nearBottom && olderInViewRef.current) onOlderReach();
   }
 
   // A chart or table that finishes laying out after the scroll grows the
@@ -12808,10 +12831,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   }, []);
   // 48-a: stable props for the memoized OlderMessages, so a page render
   // that changes nothing there does not walk every row held.
-  const olderImplRef = useRef({ reach: onOlderReach, press: onOlderPress });
-  olderImplRef.current = { reach: onOlderReach, press: onOlderPress };
+  const olderImplRef = useRef({ reach: onOlderReach, press: onOlderPress, retryGap: onOlderRetryGap });
+  olderImplRef.current = { reach: onOlderReach, press: onOlderPress, retryGap: onOlderRetryGap };
   const olderReach = useCallback(() => olderImplRef.current.reach(), []);
   const olderPress = useCallback(() => olderImplRef.current.press(), []);
+  const olderRetryGap = useCallback(() => olderImplRef.current.retryGap(), []);
+  const olderInView = useCallback((inView: boolean) => {
+    olderInViewRef.current = inView;
+  }, []);
   const renderOlderRow = useCallback(
     (m: ChatMessage, seq: number) => (
       <MessageRow
@@ -13941,7 +13968,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       firstLiveAt={messages[0]?.at}
                       rootRef={scrollRef}
                       onReach={olderReach}
+                      onInView={olderInView}
                       onLoad={olderPress}
+                      onRetryGap={olderRetryGap}
                       renderRow={renderOlderRow}
                     />
                     {messages.map((m, i) => {

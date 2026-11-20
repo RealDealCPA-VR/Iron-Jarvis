@@ -631,6 +631,101 @@ def test_the_page_before_a_position_is_the_messages_just_before_it(tmp_path):
         assert client.get("/chat/threads/nope/older?before=5").status_code == 404
 
 
+def test_the_start_of_a_chat_is_claimed_only_when_it_was_kept(tmp_path):
+    """48-a review: until v1.499.4 (published 2026-11-15 17:02 UTC) a chat
+    past 200 messages LOST its oldest messages on the next save. Such a chat
+    that grew past 200 again later keeps older messages from then on, so its
+    position 0 is not its first message: the answer says ``start_kept``
+    False and the page says "Earlier messages were not kept before this
+    version" instead of "Start of this chat". A chat made since then (or one
+    that never reached the cap) kept everything: True."""
+    from datetime import datetime, timedelta, timezone
+
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    since = CA.CHAT_OLDER_KEPT_SINCE
+    assert since == datetime(2026, 11, 15, 17, 2, 5, tzinfo=timezone.utc)
+    before, after = since - timedelta(seconds=1), since + timedelta(seconds=1)
+    # The pure rule: a long chat made before the version that kept them.
+    assert CA.start_kept(before, older=12) is False
+    assert CA.start_kept(before.replace(tzinfo=None), older=12) is False  # stored naive UTC
+    assert CA.start_kept(after, older=12) is True
+    assert CA.start_kept(after.replace(tzinfo=None), older=12) is True
+    assert CA.start_kept(since, older=12) is True
+    # Never reached the cap: nothing was lost, whenever it was made.
+    assert CA.start_kept(before, older=0, live=199) is True
+    assert CA.start_kept(before, older=0, live=200) is False
+    # Unsure is "not known", never a claim.
+    assert CA.start_kept(None, older=3) is False
+    assert CA.start_kept("2026-01-01", older=3) is False
+    assert CA.start_kept(after, older="x") is False
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        engine = client.app.state.platform.engine
+        r = client.put("/chat/threads/new", json={"messages": [_m(i) for i in range(230)]})
+        assert r.status_code == 200, r.text
+        tid = r.json()["id"]
+        page = client.get(f"/chat/threads/{tid}/older?before=30&limit=50").json()
+        assert page["first_seq"] == 0 and page["start_kept"] is True
+        # The same chat, made before v1.499.4 shipped.
+        with session_scope(engine) as db:
+            rec = db.get(ChatThreadRecord, tid)
+            rec.created_at = (before - timedelta(days=30)).replace(tzinfo=None)
+            db.add(rec)
+            db.commit()
+        page = client.get(f"/chat/threads/{tid}/older?before=30&limit=50").json()
+        assert page["first_seq"] == 0 and page["start_kept"] is False
+        # A short old chat never lost anything.
+        r = client.put("/chat/threads/new", json={"messages": [_m(i) for i in range(5)]})
+        short = r.json()["id"]
+        with session_scope(engine) as db:
+            rec = db.get(ChatThreadRecord, short)
+            rec.created_at = before.replace(tzinfo=None)
+            db.add(rec)
+            db.commit()
+        assert client.get(f"/chat/threads/{short}/older?before=0").json()["start_kept"] is True
+
+
+def test_the_live_messages_and_their_count_are_read_as_one(tmp_path, monkeypatch):
+    """48-a review: ``GET /chat/threads/{id}`` answers the live ``messages``
+    and ``older`` (where ``messages[0]`` sits). They were two reads, and a
+    save landing between them made the count disagree with the list (the
+    page then showed a message twice or missed one at the join). The count
+    is now read under the conversation write lock, with the record: another
+    thread cannot take that lock while the count is read."""
+    import threading
+
+    from iron_jarvis.core.db import CONVERSATION_WRITE_LOCK
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        r = client.put("/chat/threads/new", json={"messages": [_m(i) for i in range(205)]})
+        tid = r.json()["id"]
+        seen: list[bool] = []
+        real = CA.older_count
+
+        def counting(engine, thread_id):
+            # Could a writer (another thread) take the lock right now?
+            got: list[bool] = []
+
+            def probe():
+                ok = CONVERSATION_WRITE_LOCK.acquire(blocking=False)
+                if ok:
+                    CONVERSATION_WRITE_LOCK.release()
+                got.append(ok)
+
+            t = threading.Thread(target=probe)
+            t.start()
+            t.join()
+            seen.append(got[0])
+            return real(engine, thread_id)
+
+        monkeypatch.setattr(CA, "older_count", counting)
+        body = client.get(f"/chat/threads/{tid}").json()
+        assert body["older"] == 5 and len(body["messages"]) == 200
+        assert body["messages"][0]["content"] == "message number 5"
+        assert seen == [False], "the count was read while a writer could save"
+
+
 def test_the_compaction_header_promises_only_what_is_true():
     from iron_jarvis.context import compaction as C
 

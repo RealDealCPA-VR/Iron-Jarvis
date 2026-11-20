@@ -2187,8 +2187,16 @@ def register(app: FastAPI, d) -> None:
         from ...core.models import ChatThreadRecord
         from ..chat_append import older_count
 
-        with session_scope(d.platform.engine) as db:
-            r = db.get(ChatThreadRecord, thread_id)
+        # 48-a: the live messages and the ``older`` count are read under the
+        # one conversation write lock, so they describe the SAME save: the
+        # page takes ``older`` as where ``messages[0]`` sits, and a save that
+        # moved messages between the two reads would show one twice or miss
+        # one. (Two SELECTs in one session are no snapshot on this driver.)
+        # A sync route: the wait runs in the thread pool, never on the loop.
+        with _THREAD_SAVE_LOCK:
+            with session_scope(d.platform.engine) as db:
+                r = db.get(ChatThreadRecord, thread_id)
+            older = older_count(d.platform.engine, r.id) if r is not None else 0
         if r is None:
             raise HTTPException(status_code=404, detail="no such thread")
         try:
@@ -2232,7 +2240,7 @@ def register(app: FastAPI, d) -> None:
             "surface": getattr(r, "surface", None) or "chat",
             # v1.499.3 (additive): how many OLDER messages this chat keeps
             # beyond its live ``messages`` (GET .../older reads them).
-            "older": older_count(d.platform.engine, r.id),
+            "older": older,
         }
 
     @app.get("/chat/threads/{thread_id}/older")
@@ -2245,9 +2253,18 @@ def register(app: FastAPI, d) -> None:
         ``limit`` (at most 1,000). 48-a (the chat page's scroll back):
         ``before`` asks for the ``limit`` messages just before that position
         instead, and ``first_seq`` says where the answer starts (0 = the
-        chat's first message)."""
+        chat's first message). ``start_kept`` says whether position 0 is the
+        chat's VERY first message: False for a long chat made before the
+        version that started keeping (``chat_append.start_kept``), whose first
+        messages may have been deleted then."""
         from ...core.models import ChatThreadRecord
-        from ..chat_append import older_count, older_window, read_older
+        from ..chat_append import (
+            MAX_MESSAGES as _LIVE_MAX,
+            older_count,
+            older_window,
+            read_older,
+            start_kept,
+        )
 
         with session_scope(d.platform.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
@@ -2255,11 +2272,18 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such thread")
         total = older_count(d.platform.engine, thread_id)
         start, count = older_window(offset=offset, limit=limit, before=before, total=total)
+        live = 0
+        if total <= 0:  # only then does the live count decide (see start_kept)
+            try:
+                live = len(json.loads(r.messages_json or "[]"))
+            except Exception:  # noqa: BLE001 — unreadable: counted as full
+                live = _LIVE_MAX
         return {
             "id": thread_id,
             "total": total,
             "offset": max(0, int(offset or 0)),
             "first_seq": start,
+            "start_kept": start_kept(getattr(r, "created_at", None), total, live),
             "messages": (
                 read_older(d.platform.engine, thread_id, offset=start, limit=count)
                 if count > 0 else []
