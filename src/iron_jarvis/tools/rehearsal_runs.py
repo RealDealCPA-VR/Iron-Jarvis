@@ -158,6 +158,9 @@ async def start(platform: Any, kind: str, ident: str) -> dict[str, Any]:
             lambda: store.create(kind="rule", subject_id=subject.id, name=subject.name or subject.id, sample=sample)
         )
         res = await router.rehearse(subject, sample, rehearsal=rec.id)
+        if res.get("ok") and res.get("session_id"):
+            # A side door: an outgoing webhook would hear the task finish.
+            await asyncio.to_thread(_record_webhooks, platform, rec.id)
         await asyncio.to_thread(_settle_start, store, rec.id, res)
     else:
         rec = await asyncio.to_thread(
@@ -182,8 +185,39 @@ async def start(platform: Any, kind: str, ident: str) -> dict[str, Any]:
                         platform.engine, session_id=rec.id, door="schedule_delivery", words=where,
                     )
                 )
+            if subject.kind == "task":
+                # A side door: an outgoing webhook would hear the task finish.
+                await asyncio.to_thread(_record_webhooks, platform, rec.id)
             _DRIVERS[rec.id] = asyncio.ensure_future(_drive_schedule(platform, store, rec.id, subject))
     return await asyncio.to_thread(report, platform, rec.id)
+
+
+#: The events a rule's or a schedule's run sends an outgoing webhook when its
+#: task finishes (the Webhooks page's "A task finishes").
+_FINISH_EVENTS = ("session.completed", "agent.completed")
+#: The most webhooks one report lists.
+_WEBHOOKS_MAX = 10
+
+
+def _record_webhooks(platform: Any, rid: str) -> None:
+    """A SIDE DOOR (``rehearsal.SIDE_DOORS["outbound_webhook"]``): every
+    outgoing webhook that would hear the task finish is one rehearsed row,
+    written BEFORE the run so the report never grows after it is ready.
+    The delivery itself skips every event of a rehearsal's run
+    (``webhooks/outbound.on_event``). BLOCKING. Never raises."""
+    hooks = getattr(platform, "outbound_webhooks", None)
+    if hooks is None:
+        return
+    try:
+        slugs = list(hooks.subscribed_to(_FINISH_EVENTS))[:_WEBHOOKS_MAX]
+    except Exception:  # noqa: BLE001
+        return
+    for slug in slugs:
+        R.record_side_door(
+            platform.engine, session_id=rid, door="outbound_webhook",
+            words=f"tell another app through the webhook “{slug}” that the task finished",
+            target=slug,
+        )
 
 
 def _settle_start(store: RehearsalStore, rid: str, res: dict[str, Any]) -> None:
@@ -341,6 +375,22 @@ def _iso(value: Any) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _is_read(platform: Any, name: str | None) -> bool:
+    """Did a call to ``name`` that RAN in a rehearsal only read? A tool the
+    rehearsal would not hold because it only reads — never a helper's
+    hand-off, the run's own list or a side door ("It read N things")."""
+    tool_name = str(name or "")
+    if not tool_name or tool_name in R.REHEARSAL_HELPERS or tool_name in R.REHEARSAL_OWN_STATE:
+        return False
+    if tool_name in R.SIDE_DOORS:
+        return False
+    try:
+        tool = platform.registry.get(tool_name)
+    except Exception:  # noqa: BLE001
+        tool = None
+    return tool is not None and not R.holds(tool)
+
+
 def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     """The rehearsal's card: ``{id, subject, status, sentence, counts, would,
     refused, reads, guessed_after, error, kept_at, …}``. Every number and
@@ -367,7 +417,7 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     reads = 0
     for row in rows:
         if not row.rehearsed:
-            if row.ok and not row.undo_of:
+            if row.ok and not row.undo_of and _is_read(platform, row.tool):
                 reads += 1
             continue
         try:
@@ -386,8 +436,7 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         if len(would) < REPORT_ITEMS_MAX:
             would.append(item)
     summary = RehearsalStore.summary(rec)
-    sample = RehearsalStore.sample(rec)
-    sample_text = str(sample.get("text") or "")
+    made_up = RehearsalStore.sample_is_made_up(rec)
     status = rec.status
     if status == "ready":
         said = R.sentence(counted)
@@ -411,7 +460,7 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         "guessed_after": False,
         "error": str(summary.get("error") or ""),
         "sample": "" if rec.subject_kind != "rule" else (
-            "a made-up signal" if sample_text in ("", "(sample)") else "the last signal it matched"
+            "a made-up signal" if made_up else "the last signal it matched"
         ),
         "kept_at": _iso(rec.kept_at),
         "created_at": _iso(rec.created_at),
@@ -438,7 +487,8 @@ class RehearseTool(Tool):
         "is listed instead of done. Use when the user asks to rehearse, try "
         "out, dry-run or test a rule or a schedule without it doing anything. "
         "`kind` is rule or schedule; `name` is its name as the user said it. "
-        "The report shows on a card when the rehearsal ends."
+        "The report shows on a card when the rehearsal ends; where no card "
+        "can show (the phone), the result waits for the report and says it."
     )
     permission_key = "rehearse"
     reversibility = Reversibility.READONLY
@@ -469,22 +519,83 @@ class RehearseTool(Tool):
             return ToolResult(ok=False, error=exc.words)
         subject = view["subject"]["name"] or name
         what = "rule" if view["subject"]["kind"] == "rule" else "schedule"
+        gave_up = False
+        if getattr(ctx, "cannot_ask", False) and view["status"] == "running":
+            # The phone (the POST lane) draws no card and a rehearsal sends
+            # no notice, so the reply WAITS for the report and says it. One
+            # that outlasts the wait is stopped: nobody could read its report.
+            view = await _wait_for_report(self.platform, view["id"])
+            if view["status"] == "running":
+                view = await stop(self.platform, view["id"])
+                gave_up = True
         if view["status"] == "failed":
             return ToolResult(
                 ok=False,
                 error=f"The rehearsal of the {what} “{subject}” could not run: {view['error']}",
             )
+        data = {"rehearsal": {"id": view["id"], "kind": view["subject"]["kind"], "name": subject}}
+        if getattr(ctx, "cannot_ask", False):
+            return ToolResult(ok=True, output=_report_words(view, what, subject, gave_up), data=data)
         lead = (
             f"Rehearsing the {what} “{subject}”. Nothing will be changed; the report "
             "will show on the card when it is done."
             if view["status"] == "running"
             else f"Rehearsed the {what} “{subject}”. {view['sentence']}"
         )
-        return ToolResult(
-            ok=True,
-            output=lead,
-            data={"rehearsal": {"id": view["id"], "kind": view["subject"]["kind"], "name": subject}},
+        return ToolResult(ok=True, output=lead, data=data)
+
+
+#: On the phone (``ctx.cannot_ask``: a lane that draws no card) the reply
+#: waits for the report at most this long, and never past the call's own
+#: deadline (``tool_call_timeout_s``, 600 s by default); then it says the
+#: report in words.
+PHONE_WAIT_S = 540.0
+#: How often the waiting reply reads the report again.
+PHONE_POLL_S = 1.0
+#: How many items the phone's reply lists (the sentence counts them all).
+PHONE_ITEMS = 10
+
+
+async def _wait_for_report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
+    from .registry import tool_deadline_left
+
+    loop = asyncio.get_running_loop()
+    budget = PHONE_WAIT_S
+    left = tool_deadline_left()
+    if left is not None:
+        budget = min(budget, max(0.0, left - 10.0))
+    end = loop.time() + budget
+    view = await asyncio.to_thread(report, platform, rehearsal_id)
+    while view["status"] == "running" and loop.time() < end:
+        await asyncio.sleep(PHONE_POLL_S)
+        view = await asyncio.to_thread(report, platform, rehearsal_id)
+    return view
+
+
+def _report_words(view: dict[str, Any], what: str, subject: str, gave_up: bool = False) -> str:
+    """The report as a reply's words (the phone has no card)."""
+    page = "Rules" if what == "rule" else "Schedules"
+    status = view["status"]
+    if gave_up:
+        return (
+            f"The rehearsal of the {what} “{subject}” took longer than I can wait here, "
+            f"so I stopped it. Nothing was changed. Rehearse it on the {page} page to "
+            "see it through to the end."
         )
+    if status == "stopped":
+        return f"The rehearsal of the {what} “{subject}” was stopped. Nothing was changed."
+    lines = [f"Rehearsed the {what} “{subject}”. {view['sentence']}"]
+    items = list(view.get("would") or [])
+    for item in items[:PHONE_ITEMS]:
+        asks = " (it would ask you first)" if item.get("would") == "ask" else ""
+        lines.append(f"- Would {item['words']}{asks}")
+    more = int(view.get("would_total") or len(items)) - min(len(items), PHONE_ITEMS)
+    if more > 0:
+        lines.append(f"- and {more} more")
+    refused = list(view.get("refused") or [])
+    if refused:
+        lines.append("Would be refused: " + "; ".join(r["words"] for r in refused[:PHONE_ITEMS]) + ".")
+    return "\n".join(lines)
 
 
 def rehearsal_tools(platform: Any) -> list[Tool]:

@@ -91,6 +91,13 @@ def _short(value: str) -> str:
     return " ".join(_defanged(value).split())[:200]
 
 
+def _rehearsal_option() -> str:
+    """The run option a rehearsal rides on (leap 06-a)."""
+    from ..tools.rehearsal import REHEARSAL_OPTION
+
+    return REHEARSAL_OPTION
+
+
 def _render(template: str, context: dict[str, str]) -> str:
     """Fill the supported placeholders in ONE pass, never raises.
 
@@ -252,19 +259,10 @@ class ReflexRouter:
 
         try:
             if rule.action == "session":
+                # The real fire's OWN door (``_run_session``), so a change to
+                # it (its agent, its folder, its options) reaches a rehearsal.
                 trust = self._signal_trust(rule, attended=False)
-                task = _render(rule.task_template, context) or _default_task(rule, context)
-                session = await self.orch.create_session(
-                    task,
-                    AgentType.SUPERVISOR,
-                    project_id=rule.project_id or None,
-                    origin=f"reflex:{rule.name}",
-                    options={_rehearsal.REHEARSAL_OPTION: rehearsal},
-                    started_by_person=True,
-                    **trust,
-                )
-                self._launch(self.orch.run_session(session.id), session.id)
-                return {"ok": True, "kind": "session", "session_id": session.id}
+                return await self._run_session(rule, context, trust=trust, rehearsal=rehearsal)
             if rule.action == "remote_agent":
                 agent = " ".join(str(rule.target or "").split()) or "a remote agent"
                 # The row is the rehearsal's own (no run exists to hold it).
@@ -482,6 +480,7 @@ class ReflexRouter:
 
     async def _run_session(
         self, rule: ReflexRule, context: dict[str, str], *, trust: dict[str, str] | None = None,
+        rehearsal: str = "",
     ) -> dict[str, Any]:
         task = _render(rule.task_template, context) or _default_task(rule, context)
         # v1.200.0 — context spine: a rule tagged with a project spawns a
@@ -502,6 +501,14 @@ class ReflexRouter:
             # v1.502.0 (north-star 2.8): an outside signal's work starts LOW
             # (passed only then, so a test double's call is unchanged).
             **(trust or {}),
+            # Leap 06-a: a REHEARSAL's run carries it, and the person who
+            # pressed Rehearse started it (passed only then: a real fire's
+            # call is unchanged).
+            **(
+                {"options": {_rehearsal_option(): rehearsal}, "started_by_person": True}
+                if rehearsal
+                else {}
+            ),
         )
         self._launch(self.orch.run_session(session.id), session.id)
         return {"ok": True, "kind": "session", "session_id": session.id}

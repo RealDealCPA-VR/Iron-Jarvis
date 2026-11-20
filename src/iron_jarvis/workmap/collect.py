@@ -394,6 +394,8 @@ def _child_sessions(db: Any, ids: list[str]) -> set[str]:
 
 def run_candidates(db: Any, roots: dict[str, str], home: Any,
                    journal: dict[str, tuple[int, int]]) -> tuple[list[Candidate], bool]:
+    from ..tools.rehearsal import REHEARSAL_OPTION
+
     S = RunRow
     skip = _part_of_other_work()
     stmt = (
@@ -426,6 +428,12 @@ def run_candidates(db: Any, roots: dict[str, str], home: Any,
             continue
         status_word = str(getattr(status, "value", status) or "")
         options = _json(opts)
+        if isinstance(options, dict) and str(options.get(REHEARSAL_OPTION) or "").strip():
+            # Leap 06-a: a REHEARSAL changed nothing, and its closing words
+            # were told to "carry on as if it worked": it is no piece of work
+            # done, so the work record (every chat's memory of past work, the
+            # recaps) never holds it. Its report lives on its own card.
+            continue
         local = isinstance(options, dict) and options.get("local_only") is True
         jn = journal.get(ref, (0, 0))
         stamp = f"{status_word}|{_iso(finished)}|{outcome or ''}|{folder}|{int(local)}|{jn[0]}.{jn[1]}"

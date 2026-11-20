@@ -371,6 +371,11 @@ def _rows_to_events(
         turns = _Turns(db, min(stamps), max(stamps))
     out: list[dict] = []
     for r in rows:
+        if getattr(r, "rehearsed", False):
+            # Leap 06-a: a REHEARSAL's row is what a run WOULD have done (held
+            # or refused): nothing ran, nothing was fetched or written, so no
+            # rule may read it as a command run, a file written or a request.
+            continue
         sid = fixed
         if sid is None and turns is not None and r.session_id == CHAT_SESSION:
             sid = turns.session_for(r.created_at)

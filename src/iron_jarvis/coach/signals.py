@@ -112,6 +112,11 @@ def recent_runs(
         for row in rows:  # detach with every column loaded
             db.refresh(row)
             db.expunge(row)
+    # Leap 06-a: a REHEARSAL's run did nothing and was told to carry on as if
+    # it had; a run's coach never learns from it.
+    from ..tools.rehearsal import rehearsal_of
+
+    rows = [r for r in rows if not rehearsal_of(r)]
     in_window = sum(
         1 for r in rows if r.created_at and as_naive_utc(r.created_at) >= cutoff
     )

@@ -260,6 +260,21 @@ class OutboundWebhooks:
             self._index = (gen, time.monotonic(), index)
             return index
 
+    def subscribed_to(self, event_types: "Iterable[str]") -> list[str]:
+        """The slugs of the enabled outbound webhooks that would hear of any
+        of ``event_types`` (each once, in the order first met). BLOCKING on a
+        cold index. Never raises (an unreadable table answers none)."""
+        try:
+            index = self._subscribers()
+        except Exception:  # noqa: BLE001
+            return []
+        out: list[str] = []
+        for t in event_types:
+            for rec in index.get(str(t)) or ():
+                if rec.slug not in out:
+                    out.append(rec.slug)
+        return out
+
     def register(
         self,
         slug: str,
@@ -388,6 +403,16 @@ class OutboundWebhooks:
         if event_is_local_only(event, self.engine):
             return [
                 {"slug": rec.slug, "url": rec.target_url, "skipped": "local_only"}
+                for rec in records
+            ]
+        # A REHEARSAL (leap 06-a) changed nothing, so no other app hears of
+        # its run: its report lists the webhook instead
+        # (``tools/rehearsal_runs.start``, the ``outbound_webhook`` row).
+        from ..tools.rehearsal import event_is_rehearsal
+
+        if event_is_rehearsal(event, self.engine):
+            return [
+                {"slug": rec.slug, "url": rec.target_url, "skipped": "rehearsal"}
                 for rec in records
             ]
         payload = event.to_dict()

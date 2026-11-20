@@ -39,8 +39,10 @@ class RehearsalRecord(SQLModel, table=True):
     #: options, ``rehearsal_runs.sessions_of``).
     session_ids_json: str = "[]"
     run_id: str = ""
-    #: What it ran on: ``{"text": …}`` for a rule ("(sample)" when no real
-    #: signal was seen since the daemon started), ``{}`` for a schedule.
+    #: What it ran on, for the report only: ``{"made_up": bool, "text": the
+    #: signal's first words}`` for a rule (made up when no real signal was
+    #: seen since the daemon started), ``{}`` for a schedule. Always whole
+    #: JSON (each value is capped BEFORE it is written, :func:`_small`).
     sample_json: str = "{}"
     #: ``{"error": …}`` when it could not run, ``{"detail": …}`` otherwise.
     summary_json: str = "{}"
@@ -49,12 +51,44 @@ class RehearsalRecord(SQLModel, table=True):
     finished_at: datetime | None = None
 
 
+#: The words a rule's rehearsal runs on when no real signal was seen.
+MADE_UP_SAMPLE = "(sample)"
+#: How much of the signal (and of a summary's words) is kept. Each value is
+#: cut BEFORE the JSON is written, so the stored text is always whole JSON
+#: (cutting the written string made a long signal unreadable, and the report
+#: then said the rule ran on a made-up signal).
+SAMPLE_CHARS = 200
+SUMMARY_CHARS = 1000
+
+
 def _loads(raw: Any, default: Any) -> Any:
     try:
         out = json.loads(raw) if isinstance(raw, str) and raw else default
     except (TypeError, ValueError):
         return default
     return out if isinstance(out, type(default)) else default
+
+
+def _small(values: Any, limit: int) -> dict[str, str]:
+    """``values`` with every value as one line of at most ``limit`` chars."""
+    if not isinstance(values, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in list(values.items())[:20]:
+        text = " ".join(str(value if value is not None else "").split())
+        out[str(key)[:40]] = text[:limit]
+    return out
+
+
+def sample_record(sample: Any) -> dict[str, Any]:
+    """What a rehearsal keeps of the signal it ran on: whether it was made
+    up, and its first words. Never more."""
+    if not isinstance(sample, dict) or not sample:
+        return {}
+    text = " ".join(str(sample.get("text") or "").split())
+    body = " ".join(str(sample.get("body") or "").split())
+    made_up = text == MADE_UP_SAMPLE or (not text and body in ("", MADE_UP_SAMPLE))
+    return {"made_up": made_up, "text": text[:SAMPLE_CHARS]}
 
 
 class RehearsalStore:
@@ -66,7 +100,7 @@ class RehearsalStore:
             subject_kind=kind if kind in SUBJECT_KINDS else "rule",
             subject_id=str(subject_id or ""),
             subject_name=" ".join(str(name or "").split())[:200],
-            sample_json=json.dumps(sample or {}, default=str)[:4000],
+            sample_json=json.dumps(sample_record(sample)),
         )
         with session_scope(self.engine) as db:
             db.add(rec)
@@ -92,7 +126,7 @@ class RehearsalStore:
                 return None
             for key, value in fields.items():
                 if key == "summary":
-                    rec.summary_json = json.dumps(value or {}, default=str)[:4000]
+                    rec.summary_json = json.dumps(_small(value, SUMMARY_CHARS))
                 elif key == "session_ids":
                     rec.session_ids_json = json.dumps([str(s) for s in (value or []) if s])
                 elif key == "status" and value in STATUSES:
@@ -116,6 +150,15 @@ class RehearsalStore:
     @staticmethod
     def sample(rec: RehearsalRecord) -> dict[str, Any]:
         return _loads(rec.sample_json, {})
+
+    @staticmethod
+    def sample_is_made_up(rec: RehearsalRecord) -> bool:
+        """Did a rule's rehearsal run on made-up words (no real signal seen
+        since the daemon started)? A record that cannot be read says so."""
+        kept = _loads(rec.sample_json, {})
+        if isinstance(kept.get("made_up"), bool):
+            return kept["made_up"]
+        return sample_record(kept).get("made_up", True) is not False
 
     def stamp_subject(self, rec: RehearsalRecord, when: datetime) -> bool:
         """Keep it: stamp ``rehearsed_at`` on the rule or schedule."""

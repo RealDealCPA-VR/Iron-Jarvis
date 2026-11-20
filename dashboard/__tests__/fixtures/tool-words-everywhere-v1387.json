@@ -197,6 +197,7 @@
     "reflex_create",
     "reflex_delete",
     "reflex_update",
+    "rehearse",
     "remember_preference",
     "rename_file",
     "repl",
@@ -446,6 +447,7 @@
     "reflex_create": "add a rule that acts on its own",
     "reflex_delete": "remove a rule that acts on its own",
     "reflex_update": "change a rule that acts on its own",
+    "rehearse": "rehearse a rule or a schedule",
     "remember_preference": "note a preference",
     "rename_file": "rename or move a file",
     "repl": "run some code",
@@ -1103,6 +1105,10 @@
       "Changed a rule",
       "Changing a rule"
     ],
+    "rehearse": [
+      "Rehearsed a rule or a schedule",
+      "Rehearsing a rule or a schedule"
+    ],
     "remember_preference": [
       "Noted a preference",
       "Noting a preference"
@@ -1465,6 +1471,7 @@
     "reflex_create": "",
     "reflex_delete": "",
     "reflex_update": "",
+    "rehearse": "",
     "remember_preference": "",
     "rename_file": "change",
     "repl": "command",

@@ -559,6 +559,8 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "goal_delete": ("dropped a goal", "goal removal"),
     "goal_list": ("checked your goals", "goal check"),
     "schedule_list": ("listed your schedules", "schedule listing"),
+    # Leap 06-a. Twin: lib/runWords.ts AGENT_TOOLS.
+    "rehearse": ("rehearsed a rule or a schedule", "rehearsal"),
     "goal_update": ("updated a goal", "goal update"),
     "grant_revoke": ("took back an always-allow", "always-allow removal"),
     "integration_list": ("listed your web services", "service listing"),
@@ -913,6 +915,8 @@ _PRESENT: dict[str, str] = {
     # v1.438.0 (Wave 4 group A).
     "cancelled": "cancel",
     "cleared": "clear",
+    # Leap 06-a.
+    "rehearsed": "rehearse",
 }
 
 
@@ -1016,6 +1020,7 @@ _ING: dict[str, str] = {
     "stopped": "stopping", "presented": "presenting", "clicked": "clicking",
     "disconnected": "disconnecting", "forgot": "forgetting", "cancelled": "cancelling",
     "cleared": "clearing",
+    "rehearsed": "rehearsing",
 }
 
 

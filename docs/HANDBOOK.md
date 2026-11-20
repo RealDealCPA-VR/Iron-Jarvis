@@ -2049,11 +2049,12 @@ your files, pages and memory, and it uses the same model and the same agent
 the real run would. Everything it would write, rename, move, send or run is
 listed instead of done. Nothing is changed.
 
-**Where.** On **Rules**, every rule has **Rehearse** where **Test** used to
-be. On **Schedules**, a schedule that runs a task has **Rehearse** on its
-row. In chat, say "rehearse my morning schedule" or "what would the intake
-rule do?". The old Test, which fires the rule for real, is now **Run now** in
-the row's **…** menu, beside Run now for a schedule.
+**Where.** On **Rules**, a rule that starts agent work has **Rehearse** where
+**Test** used to be. On **Schedules**, a schedule that runs a task has
+**Rehearse** on its row. In chat, say "rehearse my morning schedule" or "what
+would the intake rule do?"; from your phone the reply waits for the report
+and says it. The old Test, which fires the rule for real, is now **Run now**
+in the row's **…** menu, beside Run now for a schedule.
 
 **What you see.** While it runs, the card says "Rehearsing. Nothing is being
 changed." with **Stop**. When it ends, one sentence counts what it would have
@@ -2078,10 +2079,13 @@ as it was.
   which.
 - A schedule's pre-run script is not run, its result is not sent anywhere
   (the report says where it would go), and no lesson is kept from a
-  rehearsal. A helper agent the run hands work to is rehearsed too.
-- A rehearsal rings no bell and sends no notice; its card is where you read
-  it. Its run reads **Rehearsed** on the Agent runs page. It does use your
-  model once, like a real run.
+  rehearsal. A helper agent on this PC that the run hands work to is
+  rehearsed too; work it would hand to another computer is listed, not sent.
+- A rehearsal rings no bell and sends no notice, and a webhook that tells
+  another app when a task finishes is not told (the report lists it); its
+  card is where you read it. Its run reads **Rehearsed** on the Agent runs
+  page, and it is never added to the work record, so no chat remembers it
+  as work done. It does use your model once, like a real run.
 - Not yet: a rule or a schedule that starts a **workflow** or a **goal**
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.

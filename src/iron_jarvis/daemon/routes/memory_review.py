@@ -305,9 +305,14 @@ def register(app: FastAPI, d) -> None:
                         .limit(_RECONCILE_SCAN)
                     )
                 )
+            from ...tools.rehearsal import rehearsal_of
+
             for row in rows:
                 status = getattr(row.status, "value", str(row.status))
                 if status == "active" or row.id in known:
+                    continue
+                if rehearsal_of(row):
+                    # Leap 06-a: a rehearsal of the review is no review run.
                     continue
                 recorder(
                     ok=status == "completed",

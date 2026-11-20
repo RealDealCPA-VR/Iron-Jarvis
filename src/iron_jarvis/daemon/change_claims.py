@@ -2347,9 +2347,12 @@ def judge_run_summary(
 
         with _DB(engine) as db:
             rows = db.exec(
-                select(ToolInvocation.tool, ToolInvocation.ok).where(ToolInvocation.session_id == str(session_id))
+                select(ToolInvocation.tool, ToolInvocation.ok, ToolInvocation.rehearsed).where(
+                    ToolInvocation.session_id == str(session_id)
+                )
             ).all()
-        used = [str(t or "") for t, ok in rows if ok]
+        # Leap 06-a: a rehearsed row (held: nothing ran) is never a call made.
+        used = [str(t or "") for t, ok, held in rows if ok and not held]
         line = _note(text, used, (), (), custom_tools, True, True)
         return line.replace(IN_THIS_REPLY, IN_THIS_RUN)
     except Exception:  # noqa: BLE001 — a note never breaks a run

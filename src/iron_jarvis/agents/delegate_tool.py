@@ -57,6 +57,57 @@ _EVENT_RESULT_CHARS = 240
 _WITHHELD_RX = re.compile(r"^\s*\[content withheld — suspected ([^:\]]{1,60}):", re.S)
 
 
+def _rehearsal_of_call(ctx: "ToolContext | None") -> str:
+    """Leap 06-a: the rehearsal this call belongs to — the lane's own
+    ``ctx.rehearsal_id``, else the one the running call carries
+    (``tools/rehearsal.current``, set by ``registry.invoke``). "" for a real
+    call. Never from a model argument."""
+    from ..tools import rehearsal as _rehearsal
+
+    return str(getattr(ctx, "rehearsal_id", "") or "").strip() or _rehearsal.current()
+
+
+async def _hold_remote(
+    platform: Any,
+    ctx: "ToolContext | None",
+    rehearsal_id: str,
+    *,
+    name: str,
+    task: str,
+    handoff: bool,
+    target: str,
+) -> ToolResult:
+    """Leap 06-a, a SIDE DOOR (``tools/rehearsal.SIDE_DOORS``): a hand-off
+    to (or a question for) a remote agent inside a rehearsal sends NOTHING.
+    One rehearsed row on the calling run says what would have gone to whom
+    (the task's first words, never more); the model is told to carry on."""
+    from ..tools import rehearsal as _rehearsal
+
+    quoted = " ".join(str(task or "").split())
+    if len(quoted) > 80:
+        quoted = quoted[:79] + "…"
+    words = (
+        f"hand the task to the remote agent {name}" + (f": “{quoted}”" if quoted else "")
+        if handoff
+        else f"ask the remote agent {name} a question"
+    )
+    session_id = str(getattr(ctx, "session_id", "") or "") or rehearsal_id
+    run_id = str(getattr(ctx, "agent_run_id", "") or "")
+    await asyncio.to_thread(
+        lambda: _rehearsal.record_side_door(
+            platform.engine, session_id=session_id, run_id=run_id,
+            door="remote_handoff", words=words, target=name,
+        )
+    )
+    spec = _rehearsal.SIDE_DOORS["remote_handoff"]
+    effect = _rehearsal.Effect(spec.kind, name, words, spec.verb, spec.noun)
+    return ToolResult(
+        ok=True,
+        output=_rehearsal.held_output(effect, "run"),
+        data={"target": target, "rehearsed": True, "would": "run", "kind": spec.kind},
+    )
+
+
 def _short(text: str | None, limit: int = _EVENT_RESULT_CHARS) -> str:
     """One-line, bounded version of a result for an event payload."""
     flat = " ".join((text or "").split())
@@ -1077,7 +1128,12 @@ class DelegateTool(Tool):
         ``child_session_id`` is empty (there is no session) and ``handoff_id``
         keys this handoff's two events together. The settled ``result`` is a
         shortening of the FENCED text only — never the raw reply, which is
-        attacker-reachable."""
+        attacker-reachable.
+
+        Leap 06-a: in a REHEARSAL nothing is announced and nothing is sent —
+        :meth:`_delegate_remote` holds the hand-off (one rehearsed row)."""
+        if _rehearsal_of_call(ctx):
+            return await self._delegate_remote(entry, task, handoff=True, ctx=ctx)
         handoff_id = new_id("handoff")
         edge = dict(
             session_id=ctx.session_id,
@@ -1138,11 +1194,18 @@ class DelegateTool(Tool):
         handoff: bool = False,
         chat_thread_id: str = "",
         turn_id: str = "",
+        ctx: "ToolContext | None" = None,
     ) -> ToolResult:
         """A roster-validated ``remote:<name>`` target: the existing
         RemoteAgentRegistry ask path (the same machinery reflex ``/ask`` and
         the ``delegate_remote`` tool use) — no local session, the remote's
         reply is the result.
+
+        Leap 06-a: in a REHEARSAL (``ctx.rehearsal_id``, or the rehearsal the
+        running call belongs to) nothing leaves this PC: after the real
+        checks below (the remote is there, Local only), ONE rehearsed row
+        says what would have gone to whom, and the model is told to carry on
+        (``delegate``'s hand-off and ``consult``'s question both come here).
 
         SECURITY: the reply is externally sourced. ``DelegateTool`` itself is
         not flagged ``returns_untrusted_content`` (its normal output is a
@@ -1175,6 +1238,12 @@ class DelegateTool(Tool):
                 output="",
                 error=f"{sat_out} Nothing was sent to it.",
                 data={"target": entry.name, "kind": record.kind, "local_only": True},
+            )
+        rehearsing = _rehearsal_of_call(ctx)
+        if rehearsing:
+            return await _hold_remote(
+                self.platform, ctx, rehearsing, name=name, task=task, handoff=handoff,
+                target=entry.name,
             )
         from .remote import (
             accepted_no_reply_words,

@@ -696,6 +696,10 @@
       "ok": "changed a rule",
       "failed": "tried a rule change and it failed"
     },
+    "rehearse": {
+      "ok": "rehearsed a rule or a schedule",
+      "failed": "tried a rehearsal and it failed"
+    },
     "rename_real_file": {
       "ok": "used rename real file",
       "failed": "tried rename real file and it failed"
