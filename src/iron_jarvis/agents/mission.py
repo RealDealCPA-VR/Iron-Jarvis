@@ -680,6 +680,10 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "build_defaults_clear": ("cleared a folder's defaults for new coding sessions", "folder defaults"),
     "build_team_set": ("set a folder's coding team", "folder team"),
     "build_team_clear": ("stopped using a coding team in a folder", "folder team"),
+    # 22-a (R1.9): Iron Jarvis's check after each Build › Code reply.
+    # Twin: lib/runWords.ts AGENT_TOOLS.
+    "build_checks_set": ("switched tests after each Build › Code reply on or off in a folder", "folder tests switch"),
+    "coding_reply_check": ("looked up whether a coding reply's tests passed", "test result lookup"),
 }
 
 #: browser/tools.py's 15 built-in browser tools, by EXACT name (the

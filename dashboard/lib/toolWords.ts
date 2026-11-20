@@ -177,6 +177,8 @@ const WORDS: Record<string, string> = {
   build_defaults_clear: "clear a folder's defaults for new coding sessions",
   build_team_set: "set a folder's coding team",
   build_team_clear: "stop using a coding team in a folder",
+  // 22-a (R1.9): Iron Jarvis's check after each Build › Code reply.
+  build_checks_set: "turn tests after each Build › Code reply on or off in a folder",
 };
 
 // The 15 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

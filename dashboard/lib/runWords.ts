@@ -277,6 +277,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   build_defaults_clear: { did: "Cleared a folder's defaults for new coding sessions", noun: "folder defaults" },
   build_team_set: { did: "Set a folder's coding team", noun: "folder team" },
   build_team_clear: { did: "Stopped using a coding team in a folder", noun: "folder team" },
+  // 22-a (R1.9): Iron Jarvis's check after each Build › Code reply.
+  build_checks_set: { did: "Switched tests after each Build › Code reply on or off in a folder", noun: "folder tests switch" },
+  coding_reply_check: { did: "Looked up whether a coding reply's tests passed", noun: "test result lookup" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

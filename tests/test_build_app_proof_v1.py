@@ -17,6 +17,7 @@ folder's own unittest suite.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 import sys
@@ -103,7 +104,10 @@ async def started(app, monkeypatch, work, text="add a rate limit"):
     drivers = fake_tool(svc, monkeypatch)
     row = store.create(app.state.platform.engine, harness="codex", folder=str(work))
     await svc.start_turn(row.id, text, "t1")
-    await until(lambda: row.id in drivers and drivers[row.id].sent)
+    # WAIT_S (review S1): the message waits for its start record (the git
+    # read, ``record_turn_start_async``) before the stand-in tool gets it, and
+    # a busy PC can take longer than 10 s for that.
+    await until(lambda: row.id in drivers and drivers[row.id].sent, timeout=WAIT_S)
     return svc, row, drivers
 
 
@@ -125,7 +129,7 @@ async def settle(svc, sid):
     live = svc.live[sid]
     replied = live.turn
     if replied is not None:
-        await until(lambda: live.turn is not replied)
+        await until(lambda: live.turn is not replied, timeout=WAIT_S)
     for _ in range(20):
         await asyncio.sleep(0)
     await until(lambda: not CA.judging(svc), timeout=WAIT_S)
@@ -273,7 +277,7 @@ async def test_a_proposed_command_runs_only_after_the_cards_yes(app, work, tools
     assert proofs(svc, row.id)[-1]["tests"] == "passed" and runs(tools) == 1
     # The next reply runs it with no card.
     await svc.start_turn(row.id, "and log it", "t2")
-    await until(lambda: len(drivers[row.id].sent) == 2)
+    await until(lambda: len(drivers[row.id].sent) == 2, timeout=WAIT_S)
     wrote(svc, row.id, work, "log.py", "x = 1\n", item="w2")
     reply(svc, row.id)
     await settle(svc, row.id)
@@ -281,7 +285,7 @@ async def test_a_proposed_command_runs_only_after_the_cards_yes(app, work, tools
     # The folder now proposes ANOTHER command: asked again, nothing runs.
     (hdir / "plugins.toml").write_text(f"[[checks]]\ncommand = '{cmd} \"quick\"'\n", encoding="utf-8")
     await svc.start_turn(row.id, "one more", "t3")
-    await until(lambda: len(drivers[row.id].sent) == 3)
+    await until(lambda: len(drivers[row.id].sent) == 3, timeout=WAIT_S)
     wrote(svc, row.id, work, "more.py", "x = 2\n", item="w3")
     reply(svc, row.id)
     await settle(svc, row.id)
@@ -308,6 +312,70 @@ async def test_no_on_the_card_keeps_the_folder_off(app, work, tools, monkeypatch
     await stop_all(app)
 
 
+async def test_a_command_the_card_cannot_show_whole_is_never_kept_from_a_press(app, work, tools):
+    """Review S3: consent is exactly what the card said. A proposed command
+    the screen shows changed (a backtick is drawn as ') is refused, whether
+    the press names it exactly or as the card drew it; chat can keep it."""
+    from iron_jarvis.daemon.routes import build_app_proof as R
+
+    engine = app.state.platform.engine
+    hdir = work / ".ironjarvis" / "harness"
+    hdir.mkdir(parents=True)
+    raw = command(tools) + " `quick`"
+    (hdir / "plugins.toml").write_text(f"[[checks]]\ncommand = '{raw}'\n", encoding="utf-8")
+    assert PROOF.decide(engine, str(work)) == {"state": "ask", "command": raw}
+    assert PROOF.shown_command(raw) != raw
+    row = store.create(engine, harness="codex", folder=str(work))
+    async with client(app) as c:
+        exact = await c.post(f"/build/app/sessions/{row.id}/checks", json={"command": raw, "run": True, "turn": "t1"})
+        shown = await c.post(f"/build/app/sessions/{row.id}/checks",
+                             json={"command": PROOF.shown_command(raw), "run": True, "turn": "t1"})
+    assert exact.status_code == 409 and exact.json()["detail"] == R.NOT_SHOWN_IN_FULL
+    assert shown.status_code == 409 and shown.json()["detail"] == R.NOT_SHOWN_IN_FULL
+    assert FD.read_checks(engine, str(work)) is None and runs(tools) == 0
+    await stop_all(app)
+
+
+async def test_a_yes_that_cannot_check_its_reply_now_still_answers_the_card(app, work, tools, monkeypatch):
+    """Review S5: the card's reply is no longer the newest (the user sent
+    another message that changed nothing), so the yes cannot check it now.
+    The command is kept AND the card goes: the newest record of that reply
+    says the check starts with the next reply. A second press adds nothing."""
+    (work / "test_limits.py").write_text(PASSING, encoding="utf-8")
+    hdir = work / ".ironjarvis" / "harness"
+    hdir.mkdir(parents=True)
+    cmd = command(tools)
+    (hdir / "plugins.toml").write_text(f"[[checks]]\ncommand = '{cmd}'\n", encoding="utf-8")
+    svc, row, drivers = await started(app, monkeypatch, work)
+    wrote(svc, row.id, work, "limits.py", "LIMIT = 4\n")
+    reply(svc, row.id)
+    await settle(svc, row.id)
+    [card] = proofs(svc, row.id)
+    assert card["tests"] == "ask" and card["for_turn"] == "t1"
+    await svc.start_turn(row.id, "what does it do?", "t2")
+    await until(lambda: len(drivers[row.id].sent) == 2, timeout=WAIT_S)
+    reply(svc, row.id, "It stops at four.")
+    await settle(svc, row.id)
+    async with client(app) as c:
+        yes = await c.post(f"/build/app/sessions/{row.id}/checks", json={"command": cmd, "run": True, "turn": "t1"})
+        assert yes.status_code == 200 and yes.json()["checking"] is False
+        assert FD.read_checks(app.state.platform.engine, str(work))["command"] == cmd
+        # The FIRST press already answered the card.
+        t1 = [e for e in proofs(svc, row.id) if e["for_turn"] == "t1"]
+        assert [e["tests"] for e in t1] == ["ask", "not_run"], t1
+        again = await c.post(f"/build/app/sessions/{row.id}/checks", json={"command": cmd, "run": True, "turn": "t1"})
+    assert again.status_code == 200 and again.json()["checking"] is False
+    t1 = [e for e in proofs(svc, row.id) if e["for_turn"] == "t1"]
+    assert [e["tests"] for e in t1] == ["ask", "not_run"], t1
+    assert t1[-1]["why"] == "kept" and t1[-1]["answered"] is True
+    assert t1[-1]["line"] == (
+        f"Iron Jarvis will run `{cmd}` after each reply in this folder that changes files, starting with the next "
+        "one. The tool reports 1 new file: `limits.py`."
+    )
+    assert runs(tools) == 0 and len(drivers[row.id].sent) == 2
+    await stop_all(app)
+
+
 async def test_the_folders_own_finish_file_turns_it_off(app, work, tools, monkeypatch):
     keep(app, work, command(tools))
     hdir = work / ".ironjarvis" / "harness"
@@ -319,7 +387,8 @@ async def test_the_folders_own_finish_file_turns_it_off(app, work, tools, monkey
     await settle(svc, row.id)
     [rec] = proofs(svc, row.id)
     assert rec["tests"] == "off" and rec["why"] == "folder_file" and runs(tools) == 0
-    assert rec["line"].startswith("Not checked: this folder's .ironjarvis/harness/finish.toml")
+    assert rec["line"] == "Not checked: this folder's own finish.toml (in its .ironjarvis folder) turns the check off. " \
+        "The tool reports 1 new file: `limits.py`."
     await stop_all(app)
 
 
@@ -370,7 +439,7 @@ async def test_emergency_stop_ends_the_run(app, work, tools, monkeypatch):
 async def test_a_new_message_ends_the_run(app, work, tools, monkeypatch):
     svc, row, drivers = await _long_check(app, work, tools, monkeypatch)
     await svc.start_turn(row.id, "actually, make it five", "t2")
-    await until(lambda: len(drivers[row.id].sent) == 2)
+    await until(lambda: len(drivers[row.id].sent) == 2, timeout=WAIT_S)
     await until(lambda: not CA.judging(svc), timeout=WAIT_S)
     [rec] = proofs(svc, row.id)
     assert rec["tests"] == "not_run" and rec["why"] == "new_message" and rec["for_turn"] == "t1"
@@ -469,6 +538,109 @@ def test_a_run_is_said_from_its_own_record():
     hp = PROOF.from_run("t", "make check", hostile)
     assert hp.failed and not hp.sends_back and hp.record["withheld"] is True
     assert hp.record["line"].endswith(PROOF.WITHHELD_WORDS)
+
+
+def test_a_suite_that_breaks_before_any_test_runs_is_failed_never_no_tests():
+    """Review B2: jest prints "Tests: 0 total" and exits 1 when the only
+    suite does not load; pytest says "no tests ran" after a usage error (exit
+    4). Nothing ran because the suite broke: FAILED, and the tool is sent back
+    with the output. Only a clean exit (or the runner's own "none collected"
+    exit) with a count of 0 is "no tests"."""
+    jest = (
+        " FAIL  src/limits.test.js\n  ● Test suite failed to run\n\n    SyntaxError: Unexpected token (3:1)\n\n"
+        "Test Suites: 1 failed, 1 total\nTests:       0 total\nSnapshots:   0 total\nTime:        0.512 s\n"
+        "Ran all test suites.\n"
+    )
+    jp = PROOF.from_run("t", "npm test", PROOF.RunResult(started=True, exit=1, output=jest, seconds=1.0))
+    assert jp.record["tests"] == "failed" and jp.failed and jp.sends_back
+    assert (jp.record["ran"], jp.record["passed"], jp.record["failed"]) == (0, 0, 0)
+    assert jp.record["line"] == "Checked by Iron Jarvis: `npm test` ended with an error before any test ran."
+    note = PROOF.tests_failed_note(jp)
+    assert "ended with an error before any test ran" in note and "Test suite failed to run" in note
+    assert PROOF.tests_failed_line(jp) == "the folder's tests failed before any test ran"
+    assert N.finish_tests(jp.record) == "failed"
+    gone = "ERROR: file or directory not found: tests/test_limits.py\n\nno tests ran in 0.01s\n"
+    gp = PROOF.from_run("t", "python -m pytest tests/test_limits.py",
+                        PROOF.RunResult(started=True, exit=4, output=gone, seconds=0.3))
+    assert gp.record["tests"] == "failed" and gp.sends_back
+    # A clean "nothing to run" is still "no tests" (never a failure).
+    for cmd, exit_code, out in (
+        ("npx jest --passWithNoTests", 0, "Tests:       0 total\n"),
+        ("python -m unittest", 5, "\n----------------------------------------------------------------------\n"
+                                  "Ran 0 tests in 0.000s\n\nNO TESTS RAN\n"),
+        ("cargo test", 0, "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; "
+                          "finished in 0.00s\n"),
+    ):
+        p = PROOF.from_run("t", cmd, PROOF.RunResult(started=True, exit=exit_code, output=out, seconds=0.2))
+        assert p.record["tests"] == "none" and p.record["why"] == "no_tests" and not p.sends_back, (cmd, p.record)
+
+
+def test_the_failing_output_sent_back_is_masked():
+    """Review S2: the end of the test output goes to the tool MASKED (and
+    scanned, and fenced). The value is built here at run time; it is shaped
+    like nothing real."""
+    value = "zz" + "top" + "-value-" + str(4 * 1000 + 321)
+    output = "FAIL test_limits\nconnecting with pass" + "word=" + value + "\nAssertionError: limit should stop at four\n"
+    proof = PROOF.from_run("t", "npm test", PROOF.RunResult(started=True, exit=1, output=output, seconds=1.0))
+    assert proof.failed and proof.sends_back
+    note = PROOF.tests_failed_note(proof)
+    assert value not in proof.tail and value not in note
+    assert "word=***" in note and "limit should stop at four" in note
+
+
+def test_one_check_per_folder_busy_and_a_stop_ends_the_wait(tmp_path, tools):
+    """Review S4: one check per folder at a time. While another check holds
+    the folder, a run that may not wait is "busy" and runs nothing; one that
+    waits is ended at once by its stop (never left waiting); the folder is the
+    same lock however it is spelled."""
+    import threading
+
+    folder = tmp_path / "shop"
+    folder.mkdir()
+    lock = PROOF._thread_lock(str(folder))
+    assert lock.acquire(timeout=5)
+    try:
+        busy = PROOF.run_checks(str(folder), command(tools), "s1", busy_wait_s=0)
+        assert busy.error == "busy" and not busy.started and runs(tools) == 0
+        assert PROOF.from_run("t", "x", busy).record["line"] == (
+            "Not checked: another check of this folder was still running.")
+        stop = threading.Event()
+        stop.set()
+        waited = PROOF.run_checks(str(folder) + os.sep + ".", command(tools), "s1", stop=stop, busy_wait_s=30.0)
+        assert waited.stopped and not waited.started and waited.error == "" and runs(tools) == 0
+        assert waited.seconds < 15.0, "a stop ends the wait for the folder at once"
+        said = PROOF.from_run("t", "x", waited, why_stopped="stopped").record
+        assert said["tests"] == "not_run" and said["why"] == "stopped"
+    finally:
+        lock.release()
+    # Free again: it runs.
+    ran = PROOF.run_checks(str(folder), command(tools), "s1", busy_wait_s=0)
+    assert ran.started and runs(tools) == 1
+
+
+def test_a_check_runs_below_normal_priority_owned_by_its_session(tmp_path, monkeypatch):
+    """Review S4: the run is background work (below-normal priority, the
+    whole tree) and belongs to the session (``app:<sid>``); nothing of it
+    outlives the call."""
+    from iron_jarvis.core import procs
+    from iron_jarvis.sandbox.base import SandboxResult
+    from iron_jarvis.sandbox.manager import SandboxManager
+
+    folder = tmp_path / "shop"
+    folder.mkdir()
+    seen: dict = {}
+
+    def fake(self, command, cwd, *, timeout, env, on_spawn=None, cancelled=None):
+        seen.update(background=procs.in_background_lane(), owner=procs._OWNER.get(), command=command,
+                    cwd=str(cwd), timeout=timeout)
+        return SandboxResult(stdout="Ran 2 tests in 0.010s\n\nOK\n", returncode=0)
+
+    monkeypatch.setattr(SandboxManager, "run_check", fake)
+    assert procs.in_background_lane() is False
+    res = PROOF.run_checks(str(folder), "npm test", "s9", timeout_s=42)
+    assert seen == {"background": True, "owner": "app:s9", "command": "npm test", "cwd": str(folder), "timeout": 42.0}
+    assert res.started and res.exit == 0 and "Ran 2 tests" in res.output
+    assert procs.in_background_lane() is False and procs._OWNER.get() == ""
 
 
 def test_the_folder_proposes_and_the_kept_answer_wins(tmp_path):

@@ -103,9 +103,10 @@ export function proofShape(p: ProofMark, newestAsk: boolean, checkingNow = true)
 }
 
 /** The line's tone: a check that passed, one that did not, or one that did
- *  not run (said quietly). */
+ *  not run (said quietly). A run that found no tests proved nothing: quiet,
+ *  never the check mark of a pass. */
 export function proofTone(p: ProofMark): "ok" | "warn" | "quiet" {
-  if (p.tests === "passed" || (p.tests === "none" && p.why === "no_tests")) return "ok";
+  if (p.tests === "passed") return "ok";
   if (p.tests === "failed") return "warn";
   return "quiet";
 }

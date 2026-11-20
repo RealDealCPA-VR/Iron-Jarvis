@@ -60,7 +60,7 @@ import {
   withNewerNotices,
   type CodeEvent,
 } from "@/lib/buildApp";
-import { CHECK_NO, CHECK_REWIND, CHECK_UNFINISHED, CHECK_YES, checkAnswerPath, proofShape } from "@/lib/buildAppProof";
+import { CHECK_NO, CHECK_REWIND, CHECK_UNFINISHED, CHECK_YES, checkAnswerPath, proofShape, proofTone } from "@/lib/buildAppProof";
 
 afterEach(cleanup);
 
@@ -198,6 +198,33 @@ describe("the first-time card", () => {
     expect(off && off.type === "proof" && proofShape(off.proof, true)).toBe("line");
     expect(none && none.type === "proof" && proofShape(none.proof, true)).toBe("none");
     expect(quiet && quiet.type === "proof" && proofShape(quiet.proof, true)).toBe("none");
+  });
+
+  it("a yes that could not check that reply now replaces the card with a quiet line", () => {
+    const kept = proof({
+      tests: "not_run",
+      why: "kept",
+      answered: true,
+      ran: null,
+      passed: null,
+      failed: null,
+      line: "Iron Jarvis will run `npm test` after each reply in this folder that changes files, starting with the next one.",
+    });
+    render(<CodeConversation items={foldConversation(events([...TURN, ASK, kept])).items} folder="D:\\shop" proofActions={actions()} />);
+    expect(screen.queryByTestId("code-proof-card")).toBeNull();
+    expect(screen.getByTestId("code-proof-line").textContent).toBe(
+      "Iron Jarvis will run npm test after each reply in this folder that changes files, starting with the next one.",
+    );
+    const mark = decodeCodeEvent(kept);
+    expect(mark && mark.type === "proof" && proofTone(mark.proof)).toBe("quiet");
+  });
+
+  it("only a pass gets the check mark: a run that found no tests, or broke before any ran, does not", () => {
+    const none = decodeCodeEvent(proof({ tests: "none", why: "no_tests", ran: 0, passed: 0, failed: 0, line: "Checked by Iron Jarvis: `npm test` found no tests to run." }));
+    const broke = decodeCodeEvent(proof({ tests: "failed", why: "ran", ran: 0, passed: 0, failed: 0, line: "Checked by Iron Jarvis: `npm test` ended with an error before any test ran." }));
+    expect(none && none.type === "proof" && proofTone(none.proof)).toBe("quiet");
+    expect(broke && broke.type === "proof" && proofTone(broke.proof)).toBe("warn");
+    expect(proofTone((decodeCodeEvent(proof({})) as Extract<CodeEvent, { type: "proof" }>).proof)).toBe("ok");
   });
 
   it("the answer goes to the session's own check route", () => {

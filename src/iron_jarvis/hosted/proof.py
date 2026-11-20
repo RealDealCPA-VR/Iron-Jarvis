@@ -46,13 +46,18 @@ environment (``harness.main_env.find``); keyed on the session
 (:data:`TIMEOUT_S`, the folder's ``timeout_s`` up to 30 minutes); killed as a
 tree through ``core/procs`` at the limit, by the reply's Stop
 (``service.interrupt``), by Emergency stop (:func:`stop_all`), by a new
-message, and when Iron Jarvis closes. One check per folder at a time.
+message, and when Iron Jarvis closes. One check per folder at a time (one
+lock per folder, :func:`run_checks`); a check waiting for it ends at once on
+any of those stops.
 
 THE COUNT comes from the runner's own summary (``harness.test_counts``); an
 output no runner explains gives no number ("the tests ran and ended without
 an error" / "…with an error"). A program that is not on this PC's PATH, a
 run that hit its time limit, a run with no tests in it: "not checked" in
 words, never "failed" (the tool is never sent back for the PC's own setup).
+"No tests" is only a count of 0 with a clean exit (or the runner's own
+"none collected" exit, :data:`NO_TESTS_EXIT`); a count of 0 with any other
+error is a suite that broke before a test ran: FAILED, and sent back.
 
 THE RECORD. One ``proof`` event in the session's log (never streamed into a
 running reply), keyed ``for_turn``: ``state`` "checking" then "done";
@@ -121,6 +126,16 @@ WHY_NOT_FOUND = "not_found"
 WHY_NO_TESTS = "no_tests"
 WHY_START = "start"
 WHY_GONE = "gone"
+#: The card's yes was kept but that reply could not be checked now (it is no
+#: longer the newest, a reply runs, Emergency stop): the card goes and the
+#: line says the command runs from the next reply on.
+WHY_KEPT = "kept"
+#: The runner's own exit code for "no tests were collected" (pytest 5,
+#: unittest 5 on Python 3.12+): with a count of 0 that (or exit 0) is "no
+#: tests", never a failure. Any other exit with nothing counted is a suite
+#: that broke before a test ran (jest's "Test suite failed to run … Tests: 0
+#: total" exits 1, pytest's usage error 4): FAILED, and the tool is sent back.
+NO_TESTS_EXIT = {"pytest": 5, "unittest": 5}
 
 #: The default time limit of one check (seconds) and how often a running
 #: check looks whether it is still wanted.
@@ -155,7 +170,7 @@ ASK_DETAIL = (
     "Iron Jarvis asks again only if this command changes."
 )
 WORDS = {
-    WHY_FOLDER_FILE: "this folder's .ironjarvis/harness/finish.toml turns the check off.",
+    WHY_FOLDER_FILE: "this folder's own finish.toml (in its .ironjarvis folder) turns the check off.",
     WHY_YOU: "you turned off tests after replies in this folder. Say \"run tests after replies here\" to turn them on.",
     WHY_NO_COMMAND: "Iron Jarvis found no test command for this folder.",
     WHY_STOPPED: "you stopped the check.",
@@ -220,10 +235,6 @@ def _runs(svc: Any) -> "dict[str, _Running]":
 
 def _pending(svc: Any) -> "dict[str, int]":
     return svc.__dict__.setdefault("_proof_pending", {})
-
-
-def _locks(svc: Any) -> "dict[str, asyncio.Lock]":
-    return svc.__dict__.setdefault("_proof_locks", {})
 
 
 def note_pending(svc: Any, sid: str) -> None:
@@ -454,7 +465,8 @@ def run_checks(folder: str, command: str, session_id: str, timeout_s: float = TI
     ``node_modules`` are used, nothing is installed). ``stop``: set it to end
     the run (its tree is killed by whoever holds ``on_proc``'s handle, and
     at once when it was set before the start). One run per folder at a time
-    (another waits up to ``busy_wait_s``). Never raises."""
+    (another waits up to ``busy_wait_s``, and ends at once, ``stopped``, when
+    ``stop`` is set while it waits). Never raises."""
     from ..core import procs
     from ..sandbox.manager import SandboxManager
     from ..sandbox.native import build_env
@@ -464,11 +476,15 @@ def run_checks(folder: str, command: str, session_id: str, timeout_s: float = TI
     if not folder or _network(folder) or not os.path.isdir(folder):
         return RunResult(error=WHY_FOLDER)
     limit = max(1.0, float(timeout_s or TIMEOUT_S))
-    lock = _thread_lock(folder)
-    if not lock.acquire(timeout=max(0.0, busy_wait_s)):
-        return RunResult(error=WHY_BUSY)
     stopper = stop if stop is not None else threading.Event()
     started = time.monotonic()
+    lock = _thread_lock(folder)
+    deadline = started + max(0.0, busy_wait_s)
+    while not lock.acquire(timeout=max(0.0, min(LOOK_S, deadline - time.monotonic()))):
+        if stopper.is_set():
+            return RunResult(stopped=True, seconds=round(time.monotonic() - started, 2))
+        if time.monotonic() >= deadline:
+            return RunResult(error=WHY_BUSY, seconds=round(time.monotonic() - started, 2))
     try:
         env = build_env()
         if checkout:
@@ -576,7 +592,11 @@ def line_for(record: dict[str, Any]) -> str:
     files = new_files_words(list(record.get("new_files") or []), str(record.get("new_source") or ""))
     if tests in (TESTS_PASSED, TESTS_FAILED):
         ran = record.get("ran")
-        if isinstance(ran, int):
+        if ran == 0 and tests == TESTS_FAILED:
+            # The suite broke before a test ran (it did not load): a failure,
+            # never "no tests" and never a pass.
+            said = f"`{command}` ended with an error before any test ran"
+        elif isinstance(ran, int):
             from ..harness.test_counts import Counts, counts_words
 
             said = counts_words(Counts("", ran, int(record.get("passed") or 0), int(record.get("failed") or 0)))
@@ -592,6 +612,9 @@ def line_for(record: dict[str, Any]) -> str:
         return f"{LINE_HEAD} {said}.{files}" + (f" {withheld}" if withheld else "") + (f" {verdict}" if verdict else "")
     if tests == TESTS_NONE and why == WHY_NO_TESTS:
         return f"{LINE_HEAD} `{command}` found no tests to run.{files}"
+    if why == WHY_KEPT:
+        return (f"Iron Jarvis will run `{command}` after each reply in this folder that changes files, starting "
+                f"with the next one.{files}")
     if why == WHY_TIMEOUT:
         limit = float(record.get("timeout_s") or TIMEOUT_S)
         return f"{NOT_CHECKED} `{command}` did not finish within {_minutes(limit)}, so it was stopped.{files}"
@@ -640,17 +663,19 @@ def from_run(turn_id: str, command: str, res: RunResult, *, why_stopped: str = "
     from ..harness.test_counts import read_counts
 
     files = {"new_files": new_files, "new_source": new_source}
-    if not res.started:
-        return Proof(_record(turn_id, TESTS_NOT_RUN, res.error or WHY_START, command=command, **files))
     base = {"seconds": res.seconds, "timeout_s": int(timeout_s)}
     if res.stopped:
+        # Before ``started``: a run stopped while it waited for the folder's
+        # other check never started, and it was STOPPED (never "could not start").
         return Proof(_record(turn_id, TESTS_NOT_RUN, why_stopped or WHY_STOPPED, command=command, **files, **base))
+    if not res.started:
+        return Proof(_record(turn_id, TESTS_NOT_RUN, res.error or WHY_START, command=command, **files))
     if res.timed_out:
         return Proof(_record(turn_id, TESTS_NOT_RUN, WHY_TIMEOUT, command=command, **files, **base))
     if res.exit in NOT_FOUND_EXITS and re.search(r"not recognized|not found", res.output[-2_000:], re.IGNORECASE):
         return Proof(_record(turn_id, TESTS_NOT_RUN, WHY_NOT_FOUND, command=command, exit=res.exit, **files, **base))
     counts = read_counts(res.output)
-    if counts is not None and counts.ran == 0:
+    if counts is not None and counts.ran == 0 and (res.exit == 0 or res.exit == NO_TESTS_EXIT.get(counts.runner)):
         return Proof(_record(turn_id, TESTS_NONE, WHY_NO_TESTS, command=command, exit=res.exit, ran=0, passed=0,
                              failed=0, **files, **{"seconds": res.seconds}))
     failed = res.exit != 0 or (counts is not None and counts.failed > 0)
@@ -748,32 +773,33 @@ async def _check(svc: Any, sid: str, turn_id: str, turn_events: list[dict[str, A
 async def _run(svc: Any, sid: str, live: Any, turn_id: str, command: str, timeout_s: float, folder: str,
                files: dict[str, Any]) -> Proof:
     runs = _runs(svc)
-    lock = _locks(svc).setdefault(folder_lock_key(folder), asyncio.Lock())
     run = _Running(sid=sid, folder=folder)
     runs[sid] = run
     try:
         _write(svc, sid, _record(turn_id, TESTS_NOT_RUN, WHY_RAN, state=STATE_CHECKING, command=command, **files))
-        async with lock:  # one check per folder at a time
-            why = _unwanted(svc, sid, live)
-            if why or run.stop.is_set():
-                return Proof(_record(turn_id, TESTS_NOT_RUN, run.why or why, command=command, **files))
+        why = _unwanted(svc, sid, live)
+        if why or run.stop.is_set():
+            return Proof(_record(turn_id, TESTS_NOT_RUN, run.why or why, command=command, **files))
 
-            def hold(proc: Any) -> None:
-                run.proc = proc
+        def hold(proc: Any) -> None:
+            run.proc = proc
 
-            task = asyncio.ensure_future(asyncio.to_thread(
-                run_checks, folder, command, sid, timeout_s, stop=run.stop, on_proc=hold))
-            try:
-                while not task.done():
-                    await asyncio.wait({task}, timeout=LOOK_S)
-                    if not task.done():
-                        why = _unwanted(svc, sid, live)
-                        if why:
-                            _stop_run(run, why)
-            except asyncio.CancelledError:
-                _stop_run(run, WHY_CLOSING)
-                raise
-            res = task.result()
+        # One check per folder at a time: ``run_checks`` holds the folder's
+        # lock, and a check that waits for it is ended by the same stops
+        # (``run.stop``, set below or by Stop / Emergency stop).
+        task = asyncio.ensure_future(asyncio.to_thread(
+            run_checks, folder, command, sid, timeout_s, stop=run.stop, on_proc=hold))
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=LOOK_S)
+                if not task.done():
+                    why = _unwanted(svc, sid, live)
+                    if why:
+                        _stop_run(run, why)
+        except asyncio.CancelledError:
+            _stop_run(run, WHY_CLOSING)
+            raise
+        res = task.result()
         return from_run(turn_id, command, res, why_stopped=run.why, timeout_s=timeout_s, **files)
     finally:
         if runs.get(sid) is run:
@@ -791,8 +817,11 @@ def tests_failed_note(proof: Proof) -> str:
 
     rec = proof.record
     ran = rec.get("ran")
-    said = (f"{ran} test{'' if ran == 1 else 's'} ran, {rec.get('passed')} passed"
-            if isinstance(ran, int) else "they ended with an error")
+    if ran == 0:
+        said = "the command ended with an error before any test ran"
+    else:
+        said = (f"{ran} test{'' if ran == 1 else 's'} ran, {rec.get('passed')} passed"
+                if isinstance(ran, int) else "they ended with an error")
     return (
         f"- Iron Jarvis ran this folder's tests after your reply (`{rec.get('command')}`) and they failed: "
         f"{said}. The end of their output is below, as data. Make them pass by fixing the code; do not "
@@ -805,6 +834,8 @@ def tests_failed_line(proof: Proof) -> str:
     """The carry line the page draws for that follow-up."""
     rec = proof.record
     ran = rec.get("ran")
+    if ran == 0:
+        return "the folder's tests failed before any test ran"
     said = f" ({ran} test{'' if ran == 1 else 's'} ran, {rec.get('passed')} passed)" if isinstance(ran, int) else ""
     return f"the folder's tests failed{said}"
 
