@@ -412,9 +412,9 @@ async def test_a_message_with_no_checkpoint_says_so(app, tmp_path):
     async with client(app) as c:
         assert (await c.get(f"/build/app/sessions/{row.id}")).json()["branch"]["files_at"] == []
         r = await c.get(f"/build/app/sessions/{row.id}/rewind/preview", params={"to": ev["at"]})
-        assert r.status_code == 409 and r.json()["detail"] == CK.NOT_REPO
+        assert r.status_code == 409 and r.json()["detail"] == CK.NO_CHECKPOINT
         r = await c.post(f"/build/app/sessions/{row.id}/rewind/files", json={"to": ev["at"], "expect": "any"})
-        assert r.status_code == 409 and r.json()["detail"] == CK.NOT_REPO
+        assert r.status_code == 409 and r.json()["detail"] == CK.NO_CHECKPOINT
     await stop_all(app)
 
 

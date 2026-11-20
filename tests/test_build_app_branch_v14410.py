@@ -100,9 +100,11 @@ async def test_each_message_sent_keeps_the_tools_own_reference(app, work, claude
     ats = _user_ats(view)
     assert len(ats) == 2 and [refs[a]["ref"] for a in ats] == uuids
     assert all(refs[a]["hid"] == hid for a in ats)
-    # v1.543.0: plus the folder's file checkpoints (none here: no repository).
-    assert view["branch"] == {"fork": True, "fork_at": True, "rewind": True, "at": ats,
-                              "files_at": [], "undo_rewind": False}
+    # v1.543.0: plus the folder's file checkpoints (v1.546.0: a folder in no
+    # repository has them too — each message's, when it was taken in time).
+    files_at = view["branch"].pop("files_at")
+    assert view["branch"] == {"fork": True, "fork_at": True, "rewind": True, "at": ats, "undo_rewind": False}
+    assert set(files_at) <= set(ats)
     await stop_all(app)
 
 

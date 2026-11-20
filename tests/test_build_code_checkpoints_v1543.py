@@ -354,7 +354,9 @@ def test_no_checkpoint_and_no_repository_are_said(repo, home, tmp_path):
     plain.mkdir()
     with pytest.raises(CK.RestoreRefused) as said:
         CK.plan(home, SID, _row(plain), "t1")
-    assert said.value.sentence == CK.NOT_REPO
+    # (v1.546.0: a folder in no repository gets checkpoints of its own from
+    # its next message; this one has none.)
+    assert said.value.sentence == CK.NO_CHECKPOINT
     with pytest.raises(CK.RestoreRefused) as said:
         CK.plan(home, SID, _row("\\\\host\\share\\x"), "t1")
     assert said.value.sentence == PN.ON_SHARE

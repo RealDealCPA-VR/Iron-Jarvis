@@ -123,6 +123,9 @@ CHECKPOINT_GONE = (
     "The checkpoint for this message is no longer kept, so nothing was changed."
 )
 NOT_REPO = "This folder is not in a git repository, so its files cannot be put back from here."
+#: v1.546.0: git itself is missing (a folder with no repository has checkpoints
+#: of its own now, so "not a repository" is no reason any more).
+NO_GIT = "git is not installed on this PC, so the folder's files cannot be put back from here."
 TOO_MANY = (
     "{n} files changed since this message, which is more than Iron Jarvis puts back in one "
     "go. Use git for this one."
@@ -1007,10 +1010,12 @@ def _checked(row: Any) -> str:
     from ..harness import branches as B
 
     if B.git_path() is None:
-        raise RestoreRefused(NOT_REPO)
+        raise RestoreRefused(NO_GIT)
     inside = PN._git(["rev-parse", "--is-inside-work-tree"], folder)
     if not inside.ok or inside.out.strip() != "true":
-        raise RestoreRefused(NOT_REPO)
+        # v1.546.0: a folder in no repository keeps checkpoints of its own
+        # from its next message on (``in_own_store``); this one has none yet.
+        raise RestoreRefused(NO_CHECKPOINT)
     return folder
 
 
