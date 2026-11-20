@@ -10974,6 +10974,20 @@ def _attachable_file(p: "Path") -> bool:
         return False
 
 
+async def _record_attachment_marks(d, sources: Any, text: str, smap: dict, *,
+                                   spans: "list | None" = None) -> None:
+    """v1.547.0 (30-a): an attachment's figures, recorded for the turn — off
+    the loop; a failure is logged and the turn goes on."""
+    from ..documents.sources import record_attachment
+
+    try:
+        await asyncio.to_thread(
+            record_attachment, d.platform.engine, sources, text, smap, spans=spans,
+        )
+    except Exception:  # noqa: BLE001 — a figure's record never fails a turn
+        log.warning("could not record the figures of an attachment", exc_info=True)
+
+
 async def _prepare_attachments(
     d,
     body,
@@ -10984,8 +10998,14 @@ async def _prepare_attachments(
     provider_choice: str = "",
     model_choice: str = "",
     project_root: str = "",
+    sources: Any = None,
 ) -> "tuple[list[dict[str, str]], str]":
     """This turn's attachments → ``(images, attach_block)``.
+
+    ``sources`` (v1.547.0, idea 30-a): the turn's ``SourceTurn``. The figures
+    of the text each attachment hands the model (all of it, or only the
+    excerpts retrieved for a big one) are recorded there, so the reply can
+    link them to their page, line or cell. Both lanes pass it.
 
     ONE implementation for BOTH chat lanes (v1.174.0). It used to be a
     hand-copied block in ``run_chat_turn`` and in POST /chat/stream, which is
@@ -11272,11 +11292,25 @@ async def _prepare_attachments(
                 text = _scan.text
                 if _scan.blocked:
                     publish_blocked(getattr(d.platform, "event_bus", None), "chat", _scan)
+            # v1.547.0 (30-a): where this file's figures sit (None when the
+            # place cannot be told, e.g. text the safety scan changed).
+            _smap = None
+            if sources is not None and text:
+                from ..documents.sources import source_map_for
+
+                _smap = source_map_for(
+                    p, getattr(got, "raw", "") or got.text, text,
+                    getattr(got, "layout", None), note=note,
+                )
+                if _smap is None:
+                    sources.took([])  # read, but its places could not be told
             if len(text) <= inline_budget:
                 head = f"\n\n## Attached file: {p.name}\n"
                 parts.append(
                     head + (f"[{note}]\n{text}" if note else text) + live
                 )
+                if _smap is not None:
+                    await _record_attachment_marks(d, sources, text, _smap)
             else:
                 # RETRIEVAL, not a head-clip: ground on the chunks
                 # relevant to THIS question, with location refs — the
@@ -11285,12 +11319,22 @@ async def _prepare_attachments(
                 # embedding every chunk is synchronous CPU (and, for an HTTP
                 # embedder, network) work — on the loop it froze every
                 # request in the app while the chat said nothing.
+                _shown: list = []
                 parts.append(await asyncio.to_thread(
                     rag_block,
                     p.name, text, query,
                     getattr(d.platform, "embedder", None),
                     k=rag_k, char_budget=rag_budget, note=note,
+                    shown_out=_shown if _smap is not None else None,
                 ) + live)
+                if _smap is not None and len(_shown) == 2:
+                    # Only the excerpts the model was given, in the text
+                    # they were cut from.
+                    _indexed, _spans = _shown
+                    if _indexed == text:
+                        await _record_attachment_marks(d, sources, _indexed, _smap, spans=_spans)
+                    else:
+                        sources.took([])  # read, but its places could not be told
         except Exception as exc:  # noqa: BLE001
             # A file we could not PARSE is still a file the tools can open —
             # a workbook openpyxl choked on is exactly what excel_profile
@@ -13289,6 +13333,17 @@ async def run_chat_turn(
     # steps at the same seam.
     # (The unknown "/" skill was refused at the top of the turn — v1.433.0.)
     _prep = _PREP_GROUP.get() or _PrepGroup()
+    # v1.547.0 (idea 30-a): what this turn READS, figure by figure, so the
+    # reply's figures link to their page, line or cell. Fed by the
+    # attachments below and by every reader through the tool context.
+    # MIRROR NOTE (lock-step): routes/chat.py makes the same at the same seam.
+    from ..documents.sources import SourceTurn
+
+    _fig_turn = SourceTurn(
+        thread_id=str(getattr(body, "thread_id", "") or ""),
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        engine=d.platform.engine,
+    )
     # Attachments: text formats extracted inline (scans via OCR), images to
     # VISION. SHARED with POST /chat/stream (v1.174.0) — the two lanes ran
     # hand-copied loops until a scanned PDF had to be fixed in both.
@@ -13302,6 +13357,7 @@ async def run_chat_turn(
         # project-grounded chat promised excel_edit on a file in <home>/uploads
         # that excel_edit refuses. MIRROR NOTE (lock-step): routes/chat.py.
         project_root=(resolved_proj.root or "") if resolved_proj is not None else "",
+        sources=_fig_turn,  # v1.547.0 (lock-step)
     ))
     # v1.400.9: the page blocks are the dashboard page AND the element the
     # user pointed at; ONE question decides whether there is anything to read.
@@ -13775,6 +13831,8 @@ async def run_chat_turn(
             # the body must not scope generations to a project that isn't real.
             # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
             project_id=(pid if resolved_proj is not None else None),
+            # v1.547.0 (30-a) — lock-step: the readers record their figures here.
+            source_turn=_fig_turn,
         )
         # v1.470.0 — lock-step with the stream lane: start the isolated script
         # worker now when `tool_script` is offered, so the model's first
@@ -15398,6 +15456,16 @@ async def run_chat_turn(
     if workflow_draft is not None and resolved_proj is not None and pid:
         workflow_draft["project_id"] = pid
     reply = model_text
+    # v1.547.0 (idea 30-a): the model's OWN words with their figures linked
+    # to where this turn read them (`#source/<id>`; `#source/none` for one
+    # found in nothing it was given). Worked out here, swapped in under the
+    # notes below just before the reply is returned, so every check below
+    # reads the words as the model wrote them and no note of Iron Jarvis's
+    # is linked. MIRROR NOTE (lock-step): routes/chat.py does the same.
+    from ..documents.sources import link_turn_reply, with_linked_head
+
+    _fig_head = (reply or "").strip()
+    _fig_linked = await link_turn_reply(_fig_head, _fig_turn, given=(system, msgs))
     # v1.378.0 review: the reply IS a declined nudge's sentence (see below).
     _declined_reply = False
     if workflow_draft is not None:
@@ -15539,6 +15607,10 @@ async def run_chat_turn(
     # model wrote (its path already feeds `documents` through created_paths).
     # On the SETTLED reply, after every note above. MIRROR NOTE (lock-step):
     # routes/chat.py appends the same helper before its done frame.
+    # v1.547.0 (idea 30-a): first, the model's own words swapped for their
+    # linked form (worked out where the reply settled). MIRROR NOTE
+    # (lock-step): routes/chat.py swaps them in at the same seam.
+    reply = with_linked_head(reply, _fig_head, _fig_linked)
     reply = append_inline_media(reply, media_made)
     # SUGGESTION (v1.305.0; idea from agent-personalizer, MIT): when this
     # message corrects HOW the assistant answers and the user made the same

@@ -341,9 +341,11 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
     a sync route runs it in the threadpool."""
     from ...core.db import search_index
     from ...core.models import ChatThreadRecord, is_build_thread
+    from ...documents import source_store as _marks
     from ..chat_append import drop_older, ensure_older_table
 
     older_ok = ensure_older_table(engine)  # outside the transaction
+    marks_ok = _marks.ensure_table(engine)  # outside the transaction
     with _THREAD_SAVE_LOCK, session_scope(engine) as db:
         r = db.get(ChatThreadRecord, thread_id)
         if r is None:
@@ -353,6 +355,10 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         # v1.499.3: its older messages go with it — "delete" means all of it.
         if older_ok:
             drop_older(db, thread_id)
+        # v1.547.0 (30-a): and the record of where its figures were read
+        # (not the kept ones), in this same transaction.
+        if marks_ok:
+            _marks.drop_thread(db, thread_id)
         # Third plan CS7: and its turn records (each reply's text, thinking,
         # tool inputs and results), in this same transaction.
         _durable.drop_thread_records(db, thread_id)
@@ -3735,6 +3741,16 @@ def register(app: FastAPI, d) -> None:
         from ...tools.tool_script import adopt_turn_worker
 
         await adopt_turn_worker(d.platform, turn_id, tid)
+        # v1.547.0 (30-a): where the turn's figures were read belongs to the
+        # chat now named (rows already written, and any it writes from now).
+        from ...documents import source_store as _marks
+        from ...documents.sources import link_live_turn
+
+        link_live_turn(turn_id, tid)
+        try:
+            await asyncio.to_thread(_marks.home_turn, d.platform.engine, turn_id, tid)
+        except Exception:  # noqa: BLE001 — the link itself already landed
+            log.warning("figure record: homing turn %s failed", turn_id, exc_info=True)
         # v1.428.0: a new chat's first turn that read a mailbox kept on the
         # user's own models holds the chat it was saved as Local only.
         from ...providers.egress import hold_local_only, link_turn_holds
@@ -4676,6 +4692,17 @@ async def chat_stream(
     # their order are unchanged. A Stop abandons the step it lands in and the
     # group cancels the rest. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
     _prep = prep if prep is not None else _chat_turn._PrepGroup()
+    # v1.547.0 (idea 30-a): what this turn READS, figure by figure (the
+    # attachments below and every reader through the tool context), so the
+    # reply's figures link to their page, line or cell. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn makes the same at the same seam.
+    from ...documents.sources import SourceTurn
+
+    _fig_turn = SourceTurn(
+        thread_id=str(getattr(body, "thread_id", "") or ""),
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        engine=d.platform.engine,
+    )
     _prep.start("attachments", _prepare_attachments(
         d, body,
         inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
@@ -4688,6 +4715,7 @@ async def chat_stream(
         project_root=(
             (resolved_proj.root or "") if resolved_proj is not None else ""
         ),
+        sources=_fig_turn,  # v1.547.0 (lock-step)
     ))
     # v1.400.9: the dashboard page AND the element the user pointed at — the
     # ONE question chat_turn's lane asks too (MIRROR NOTE, lock-step).
@@ -5394,6 +5422,8 @@ async def chat_stream(
             project_id=(pid if resolved_proj is not None else None),
             # v1.481.0: the task's write rules (lock-step: chat_turn).
             task_scope=(_deliv.scope if _deliv is not None else None),
+            # v1.547.0 (30-a) — lock-step: the readers record their figures here.
+            source_turn=_fig_turn,
         )
         # v1.470.0: start the isolated script worker now when `tool_script`
         # is offered, so the model's first script does not wait for a
@@ -8838,6 +8868,13 @@ async def chat_stream(
         if workflow_draft is not None and resolved_proj is not None and pid:
             workflow_draft["project_id"] = pid
         reply = reply_text or ""
+        # v1.547.0 (idea 30-a): the model's OWN words with their figures
+        # linked to where this turn read them; swapped in under the notes
+        # just before the done frame. MIRROR NOTE (lock-step): chat_turn.
+        from ...documents.sources import link_turn_reply, with_linked_head
+
+        _fig_head = (reply or "").strip()
+        _fig_linked = await link_turn_reply(_fig_head, _fig_turn, given=(system, msgs))
         # 12A review (the lane's open point 2): where the "not armed" footnote
         # is read. A turn the browser add-on's sidebar made (the panel is the
         # ONLY caller passing ``arm_family``) has no Tools menu to name; every
@@ -8958,6 +8995,8 @@ async def chat_stream(
         # turn that the settled reply does not already show is appended as
         # the markdown image syntax — before the done frame, whose `reply`
         # is what the page saves. MIRROR NOTE (lock-step): chat_turn.py.
+        # v1.547.0 (idea 30-a): first the model's words, linked (lock-step).
+        reply = with_linked_head(reply, _fig_head, _fig_linked)
         reply = append_inline_media(reply, media_made)
         # UNREAD STEER NOTES (v1.287.0). A note posted while the model wrote
         # its final answer never met a round boundary — every plain question

@@ -12,7 +12,7 @@
 
 ## v1.547.0
 
-**Ask what was done before, in any chat.** You can now ask Iron Jarvis about earlier work in plain words, in any chat and from an agent: "what did we do in this folder?", "what have we done on the price list?", "have I worked on this before?".
+**Press a figure to see where it came from.** When a reply is about a file you gave Iron Jarvis or asked it to read (a PDF, a Word file, a text or CSV file, or a saved spreadsheet), the figures in the reply are now links. **Ask what was done before, in any chat.** You can now ask Iron Jarvis about earlier work in plain words, in any chat and from an agent: "what did we do in this folder?", "what have we done on the price list?", "have I worked on this before?".
 
 ## v1.546.2
 

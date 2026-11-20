@@ -33,6 +33,8 @@ import { API_BASE } from "@/lib/api";
 import { MediaGroup, ZoomableImage } from "@/components/MediaLightbox";
 import { ExcelCellLink } from "@/components/ExcelCellLink";
 import { parseExcelCellHref } from "@/lib/excelCellLink";
+import { SourceLink } from "@/components/SourceLink";
+import { parseSourceHref } from "@/lib/sourceLink";
 import { isLocalMediaRef, localMediaSrc, localPathOf } from "@/lib/mediaLightbox";
 import { blankDraftFence, DraftCard, draftFromFence, fenceLang } from "@/components/chat/DraftCard";
 import { ChartCard } from "@/components/chat/ChartCard";
@@ -272,6 +274,10 @@ function MarkdownLink({ children, href }: { children?: ReactNode; href?: string 
   // is a press that shows it there, never a page to open.
   const cell = parseExcelCellHref(href);
   if (cell) return <ExcelCellLink target={cell}>{children}</ExcelCellLink>;
+  // v1.547.0 (idea 30-a): a figure linked to where it was read
+  // ("#source/<id>"), or one with no record ("#source/none").
+  const place = parseSourceHref(href);
+  if (place) return <SourceLink target={place}>{children}</SourceLink>;
   return (
     <a
       href={href}

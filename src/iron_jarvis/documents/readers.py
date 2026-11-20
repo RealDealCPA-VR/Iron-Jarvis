@@ -185,8 +185,15 @@ def extract_text(
     page_range: str | None = None,
     sheet: str | int | None = None,
     use_ocr_cache: bool = True,
+    layout: "dict | None" = None,
 ) -> str:
     """Return the text content of ``path``, dispatched by file suffix.
+
+    ``layout`` (v1.547.0, idea 30-a; optional): a dict the PDF, Word and
+    sheet readers fill with WHERE each page, paragraph, table row or sheet
+    row starts in the returned text (``documents/sources.source_map_for``
+    turns it into a read's map of figures). The text itself is exactly the
+    same with or without it.
 
     ``page_range`` (e.g. ``"2"``, ``"1-3"``, ``"2-"``, ``"1,4-6"``; 1-based,
     inclusive) slices PDF pages / PPTX slides. ``sheet`` (name or 0-based index)
@@ -229,7 +236,7 @@ def extract_text(
     # document and cannot honestly answer it.
     ocr_cache_ok = use_ocr_cache and not str(page_range or "").strip()
     if suffix == ".pdf":
-        text = _read_pdf(p, page_range=page_range)
+        text = _read_pdf(p, page_range=page_range, layout=layout)
         if ocr_cache_ok and text == _SCANNED_PDF_SENTINEL:
             # DROP the sentinel on a hit — do not stack the transcript on top of
             # it. Keeping both handed the model "[no extractable text — likely a
@@ -239,11 +246,15 @@ def extract_text(
             # (Images keep their size note: dimensions are real information the
             # transcription does not contain, and callers branch on it.)
             text = _cached_ocr_text(p) or text
+            if layout is not None:
+                layout.pop("pages", None)  # a transcript: its own page labels say where
+        if layout is not None and mislabel and layout.get("pages"):
+            layout["pages"] = [[n, off + len(mislabel)] for n, off in layout["pages"]]
         return mislabel + text
     if suffix == ".docx":
-        return _read_docx(p)
+        return _read_docx(p, layout=layout)
     if suffix == ".xlsx":
-        return _read_xlsx(p, sheet=sheet)
+        return _read_xlsx(p, sheet=sheet, layout=layout)
     if suffix == ".pptx":
         return _read_pptx(p, page_range=page_range)
     if suffix == ".csv":
@@ -440,7 +451,20 @@ def _page_indices(spec: str | None, total: int) -> Iterable[int]:
 # --- structured-format readers ------------------------------------------------
 
 
-def _read_pdf(p: Path, *, page_range: str | None = None) -> str:
+def _layout_starts(parts: "list[str]", limit: int = 65_536) -> "list[int]":
+    """Where each of ``parts`` starts once they are joined with newlines,
+    up to ``limit`` characters in (the model is shown far less)."""
+    out: list[int] = []
+    at = 0
+    for part in parts:
+        if at > limit:
+            break
+        out.append(at)
+        at += len(part) + 1
+    return out
+
+
+def _read_pdf(p: Path, *, page_range: str | None = None, layout: "dict | None" = None) -> str:
     _check_size(p, "PDF")
     from pypdf import PdfReader
 
@@ -458,8 +482,14 @@ def _read_pdf(p: Path, *, page_range: str | None = None) -> str:
                 "unlocked copy to read it"
             )
     pages = reader.pages
-    idxs = _page_indices(page_range, len(pages))
-    text = "\n".join((pages[i].extract_text() or "") for i in idxs)
+    idxs = list(_page_indices(page_range, len(pages)))
+    texts = [(pages[i].extract_text() or "") for i in idxs]
+    text = "\n".join(texts)
+    if layout is not None:
+        # v1.547.0 (30-a): where each page starts, by its own number.
+        layout["kind"] = "pdf"
+        if text.strip():
+            layout["pages"] = [[i + 1, at] for i, at in zip(idxs, _layout_starts(texts))]
     return _nonempty_or_sentinel(text, kind="pdf")
 
 
@@ -511,7 +541,7 @@ def _docx_notes(doc) -> list[str]:
     return notes
 
 
-def _read_docx(p: Path) -> str:
+def _read_docx(p: Path, *, layout: "dict | None" = None) -> str:
     _guard_office_encrypted(p)
     import docx
     from docx.table import Table
@@ -519,6 +549,8 @@ def _read_docx(p: Path) -> str:
 
     doc = docx.Document(str(p))
     parts: list[str] = []
+    # v1.547.0 (30-a): which part is which body paragraph / table row.
+    places: list[tuple[int, tuple]] = []
 
     # Section headers first — letterheads, document titles and running banners
     # (often the single highest-value text) live here and were dropped before.
@@ -530,11 +562,16 @@ def _read_docx(p: Path) -> str:
                     parts.append(para.text)
 
     # Body in document order so tables stay inline with surrounding paragraphs.
+    paragraph_no = table_no = 0
     for block in _iter_block_items(doc):
         if isinstance(block, Paragraph):
+            paragraph_no += 1
+            places.append((len(parts), ("p", paragraph_no)))
             parts.append(block.text)
         elif isinstance(block, Table):
-            for row in block.rows:
+            table_no += 1
+            for row_no, row in enumerate(block.rows, start=1):
+                places.append((len(parts), ("t", table_no, row_no)))
                 parts.append("\t".join(cell.text for cell in row.cells))
 
     # Section footers (page footers, disclaimers, addresses).
@@ -546,7 +583,15 @@ def _read_docx(p: Path) -> str:
                     parts.append(para.text)
 
     parts.extend(_docx_notes(doc))
-    return _nonempty_or_sentinel("\n".join(parts), kind="docx")
+    text = "\n".join(parts)
+    if layout is not None:
+        layout["kind"] = "docx"
+        starts = _layout_starts(parts)
+        layout["blocks"] = [
+            [starts[i], starts[i] + len(parts[i]), *place]
+            for i, place in places if i < len(starts)
+        ]
+    return _nonempty_or_sentinel(text, kind="docx")
 
 
 def _fmt_has_time(number_format: str | None) -> bool:
@@ -583,9 +628,15 @@ def _fmt_cell(value, number_format: str | None) -> str:
     return str(value)
 
 
-def _read_xlsx(p: Path, *, sheet: str | int | None = None) -> str:
+def _read_xlsx(p: Path, *, sheet: str | int | None = None, layout: "dict | None" = None) -> str:
     _guard_office_encrypted(p)
     from openpyxl import load_workbook
+
+    # v1.547.0 (30-a): which part is which sheet row. Rows are read from row 1
+    # and column A (openpyxl pads what the file leaves out), so part k after
+    # a sheet's "## title" is row k; a cell holding a line break stays inside
+    # its own row's part.
+    places: list[tuple[int, str, int]] = []
 
     wb = load_workbook(filename=str(p), read_only=True, data_only=True)
     # Second (lazy) pass with cached values OFF: when data_only yields None for a
@@ -636,7 +687,16 @@ def _read_xlsx(p: Path, *, sheet: str | int | None = None) -> str:
                                 fval = fcell.value
                                 if isinstance(fval, str) and fval.startswith("="):
                                     rendered[i] = fval
+                if layout is not None:
+                    places.append((len(parts), ws.title, idx + 1))
                 parts.append("\t".join(rendered))
+        if layout is not None:
+            layout["kind"] = "sheet"
+            starts = _layout_starts(parts)
+            layout["rows"] = [
+                [starts[i], starts[i] + len(parts[i]), title, row]
+                for i, title, row in places if i < len(starts)
+            ]
         return "\n".join(parts)
     finally:
         wb.close()

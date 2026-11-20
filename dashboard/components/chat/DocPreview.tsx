@@ -32,6 +32,13 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
+import {
+  cellPosition,
+  HOW_WORKED_OUT,
+  litParts,
+  readFromWords,
+  type SourceAt,
+} from "@/lib/sourceLink";
 import { diffLines, type DiffLine } from "@/lib/diff";
 import { ErrorNote, LoaderInline } from "@/components/ui";
 import { FilePickerModal } from "@/components/FilePickerModal";
@@ -62,6 +69,41 @@ export interface PreviewData {
   total_rows?: number;
   total_cols?: number;
   total_chars?: number;
+  /** v1.547.0: a sheet's first row shown (asked for with `start`). */
+  first_row?: number;
+}
+
+// --- A figure's place (v1.547.0, idea 30-a) ----------------------------------
+// A figure pressed in a reply opens its file here AT its place (`at`): a PDF
+// page as a picture with the line boxed (GET /documents/page-image), a sheet
+// with the cell lit, a text file with the line lit, a Word page with the
+// figure lit. "How this was worked out" above says where, in words.
+
+/** The row a sheet place needs on screen (a CSV's line is its row). */
+export function placeRow(at: SourceAt | undefined, path: string): number | null {
+  if (!at) return null;
+  const cell = cellPosition(at.cell);
+  if (cell) return cell.row;
+  if (at.line && /\.(csv|tsv)$/i.test(path)) return at.line;
+  return null;
+}
+
+/** The first row to ask for so a place past the first rows is shown, with a
+ *  few rows above it for context. */
+export function startFor(at: SourceAt | undefined, path: string): number {
+  const row = placeRow(at, path);
+  return row && row > 70 ? row - 10 : 1;
+}
+
+/** Word HTML with every place the figure is written lit (text only, never
+ *  inside a tag). The frame runs no script, so the light is CSS. */
+export function markFigureInHtml(html: string, shown: string | undefined): string {
+  if (!shown || !html) return html;
+  const safe = shown.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string);
+  return html
+    .split(/(<[^>]*>)/)
+    .map((part) => (part.startsWith("<") ? part : part.split(safe).join(`<mark class="ij-at">${safe}</mark>`)))
+    .join("");
 }
 
 /** Word-like page styling for the docx HTML preview. Rendered inside a fully
@@ -298,9 +340,12 @@ export function DocPreview({
   path,
   onClose,
   compareCandidates,
+  at,
 }: {
   path: string;
   onClose: () => void;
+  /** v1.547.0 (idea 30-a): open at the place a figure was read from. */
+  at?: SourceAt;
   /** Other files this preview may be compared with (C-07). Optional on
    *  purpose: the panel also asks the daemon for the rest of THIS file's
    *  folder, and a conversation's files live together (v1.244.0 gives a plain
@@ -336,6 +381,10 @@ export function DocPreview({
   const [compareWith, setCompareWith] = useState<string | null>(null);
   const [siblings, setSiblings] = useState<string[]>([]);
   const [pickCompare, setPickCompare] = useState(false);
+  // v1.547.0 (idea 30-a): the whole PDF instead of the one page, and the lit
+  // cell or line, scrolled into view once it is on screen.
+  const [showWhole, setShowWhole] = useState(false);
+  const litRef = useRef<HTMLElement | null>(null);
 
   // The original this file is a redacted copy of, by the engine's naming
   // convention (null for every non-redacted file — the row simply isn't there).
@@ -521,7 +570,7 @@ export function DocPreview({
   }
 
   const load = useCallback(
-    async (wantSheet: string) => {
+    async (wantSheet: string, start = 1) => {
       setLoading(true);
       setError(null);
       // A fresh load is a fresh attempt for the <img> too: without this,
@@ -529,7 +578,9 @@ export function DocPreview({
       // refetching the JSON while the panel stayed stuck on the error text.
       setImgError(false);
       try {
-        const q = wantSheet ? `&sheet=${encodeURIComponent(wantSheet)}` : "";
+        const q =
+          (wantSheet ? `&sheet=${encodeURIComponent(wantSheet)}` : "") +
+          (start > 1 ? `&start=${start}` : "");
         const d = await get<PreviewData>(
           `/documents/preview?path=${encodeURIComponent(path)}${q}`,
         );
@@ -575,13 +626,22 @@ export function DocPreview({
   // generation bump here is belt-and-braces with load()'s: a comparison
   // started under the OLD path must never land under the new one — that
   // would show file A's removal receipt under "a redacted copy of B".
+  // v1.547.0: a figure's place opens on its sheet, at its row (read once per
+  // mount; the page remounts the panel for another place).
+  const firstAt = useRef(at);
   useEffect(() => {
     compareGen.current += 1;
     setSheet("");
     setOpenNote(null);
     setImgError(false);
-    void load("");
+    setShowWhole(false);
+    const place = firstAt.current;
+    void load(place?.sheet ?? "", startFor(place, path));
   }, [path, load]);
+  // The lit cell or line, into view once it is drawn.
+  useEffect(() => {
+    if (!loading && data) litRef.current?.scrollIntoView?.({ block: "center" });
+  }, [loading, data]);
 
   async function openNative() {
     if (opening) return;
@@ -607,13 +667,31 @@ export function DocPreview({
   }`;
   // The Word-faithful page: server HTML wrapped in our page chrome, rendered
   // in a FULLY sandboxed frame (no scripts/forms/navigation can run).
+  // v1.547.0: a figure's place lights the figure wherever the page writes it.
   const docSrcDoc = useMemo(
     () =>
       data?.kind === "html"
-        ? `<!doctype html><html><head><meta charset="utf-8"><style>${PAGE_CSS}</style></head><body><div class="page">${data.html ?? ""}</div></body></html>`
+        ? `<!doctype html><html><head><meta charset="utf-8"><style>${PAGE_CSS}${
+            at?.shown ? ".ij-at{background:#ffe08a;outline:2px solid #ea580c;border-radius:2px;}" : ""
+          }</style></head><body><div class="page">${markFigureInHtml(data.html ?? "", at?.shown)}</div></body></html>`
         : "",
-    [data],
+    [data, at?.shown],
   );
+  // v1.547.0: the cell or line a figure's place lights.
+  const litRow = placeRow(at, path);
+  const litCol = cellPosition(at?.cell)?.col ?? at?.col ?? null;
+  const [placeBefore, placeFig, placeAfter] = litParts(at?.context ?? "", at?.shown ?? "");
+  // By the record's id when there is one: no line of the file in the address.
+  const pageImageUrl =
+    at?.page && data?.kind === "pdf"
+      ? at.id
+        ? `${API_BASE}/documents/page-image?mark=${encodeURIComponent(at.id)}${
+            tok ? `&token=${encodeURIComponent(tok)}` : ""
+          }`
+        : `${API_BASE}/documents/page-image?path=${encodeURIComponent(path)}&page=${at.page}${
+            tok ? `&token=${encodeURIComponent(tok)}` : ""
+          }`
+      : "";
   // The diff on demand: last-viewed lines vs the payload on screen (v1.166.0).
   const diff = useMemo(
     () =>
@@ -695,6 +773,24 @@ export function DocPreview({
           </button>
         </div>
       </div>
+      {/* A FIGURE'S PLACE (v1.547.0, idea 30-a): where in this file the
+          pressed figure was read, and the line it sat on with it lit. */}
+      {at && (
+        <div
+          data-testid="doc-preview-place"
+          className="shrink-0 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2"
+        >
+          <p className="text-[11px] font-medium text-zinc-400">{HOW_WORKED_OUT}</p>
+          <p className="text-[12px] text-zinc-200">{readFromWords(at, name)}</p>
+          {at.context && (
+            <p className="mt-1 break-words font-mono text-[11.5px] leading-relaxed text-zinc-400">
+              {placeBefore}
+              {placeFig && <mark className="rounded bg-accent/25 px-0.5 text-zinc-100">{placeFig}</mark>}
+              {placeAfter}
+            </p>
+          )}
+        </div>
+      )}
       {/* Where to keep it (v1.107.0). Chat's tools run inside a confined
           workspace, so anything they produce lands in the uploads scratch dir
           by construction — right for confinement, useless as a place to find a
@@ -1009,9 +1105,38 @@ export function DocPreview({
               />
             )}
           </div>
+        ) : data.kind === "pdf" && pageImageUrl && !showWhole ? (
+          // v1.547.0: the page the figure was read from, its line boxed.
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 flex-1 overflow-auto bg-[#50545a] p-2">
+              {imgError ? (
+                <p className="p-3 text-center text-[12px] text-zinc-300">
+                  The page could not be drawn. Show the whole file instead.
+                </p>
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  data-testid="doc-preview-page-image"
+                  src={pageImageUrl}
+                  alt={`Page ${at?.page} of ${name}`}
+                  onError={() => setImgError(true)}
+                  className="mx-auto block h-auto max-w-full"
+                />
+              )}
+            </div>
+            <button
+              type="button"
+              data-testid="doc-preview-whole-file"
+              onClick={() => setShowWhole(true)}
+              className="shrink-0 py-1.5 text-center text-[11px] text-zinc-400 transition-colors hover:text-zinc-200"
+            >
+              Whole file
+            </button>
+          </div>
         ) : data.kind === "pdf" ? (
           <iframe
-            src={fileUrl}
+            // v1.547.0: the whole file, at the figure's page when there is one.
+            src={at?.page ? `${fileUrl}#page=${at.page}` : fileUrl}
             title={`Preview of ${name}`}
             className="h-full w-full border-0"
           />
@@ -1068,22 +1193,40 @@ export function DocPreview({
               </div>
             )}
             <div className="min-h-0 flex-1 overflow-auto p-1.5">
+              {(data.first_row ?? 1) > 1 && (
+                // v1.547.0: a window further down the sheet, around a figure's cell.
+                <p className="px-1.5 pb-1 text-[11px] text-zinc-500">
+                  Rows {data.first_row}–{(data.first_row ?? 1) + (data.rows ?? []).length - 1}
+                </p>
+              )}
               <table className="min-w-full border-collapse text-[11px]">
                 <tbody>
                   {(data.rows ?? []).map((row, ri) => (
                     <tr key={ri}>
-                      {row.map((cell, ci) => (
-                        <td
-                          key={ci}
-                          className={`max-w-[16rem] truncate border border-white/[0.05] px-1.5 py-0.5 ${
-                            ri === 0
-                              ? "bg-white/[0.04] font-medium text-zinc-200"
-                              : "text-zinc-400"
-                          }`}
-                        >
-                          {cell}
-                        </td>
-                      ))}
+                      {row.map((cell, ci) => {
+                        const rowNo = ri + (data.first_row ?? 1);
+                        // v1.547.0: the cell a pressed figure was read from.
+                        const lit =
+                          litRow === rowNo &&
+                          litCol === ci + 1 &&
+                          (!at?.sheet || at.sheet === data.sheet);
+                        return (
+                          <td
+                            key={ci}
+                            ref={lit ? (el) => { litRef.current = el; } : undefined}
+                            data-testid={lit ? "doc-preview-lit-cell" : undefined}
+                            className={`max-w-[16rem] truncate border border-white/[0.05] px-1.5 py-0.5 ${
+                              lit
+                                ? "bg-accent/25 text-zinc-100 ring-2 ring-inset ring-accent"
+                                : rowNo === 1
+                                  ? "bg-white/[0.04] font-medium text-zinc-200"
+                                  : "text-zinc-400"
+                            }`}
+                          >
+                            {cell}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -1102,9 +1245,36 @@ export function DocPreview({
           </div>
         ) : (
           <div className="p-3">
-            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-zinc-300">
-              {data.content ?? ""}
-            </pre>
+            {at?.line ? (
+              // v1.547.0: the line a pressed figure was read from, lit.
+              <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-zinc-300">
+                {(data.content ?? "").split("\n").map((ln, i) =>
+                  i + 1 === at.line ? (
+                    <mark
+                      key={i}
+                      ref={(el) => {
+                        litRef.current = el;
+                      }}
+                      data-testid="doc-preview-lit-line"
+                      className="block rounded bg-accent/25 text-zinc-100"
+                    >
+                      {ln || " "}
+                    </mark>
+                  ) : (
+                    <span key={i} className="block">
+                      {ln || " "}
+                    </span>
+                  ),
+                )}
+              </pre>
+            ) : (
+              <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-zinc-300">
+                {data.content ?? ""}
+              </pre>
+            )}
+            {at?.line && at.line > (data.content ?? "").split("\n").length && (
+              <p className="pt-2 text-[11px] text-zinc-500">Line {at.line} is past the part shown here.</p>
+            )}
             {data.truncated && (
               <p className="pt-2 text-[11px] text-zinc-600">
                 {typeof data.total_chars === "number"
