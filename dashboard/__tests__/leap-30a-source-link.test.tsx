@@ -32,13 +32,18 @@ vi.mock("@/lib/api", () => {
   return { API_BASE: "http://api.test", get: H.get, post: H.post, ApiError, ijToken: () => "tok" };
 });
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Markdown } from "@/components/Markdown";
 import { DocPreview, markFigureInHtml, startFor } from "@/components/chat/DocPreview";
 import {
+  FILE_CHANGED,
   HOW_WORKED_OUT,
   NO_RECORD_WORDS,
   OPEN_PLACE_EVENT,
   SHOW_PLACE_TITLE,
+  atOf,
+  figureKey,
   parseSourceHref,
   placeWords,
   withoutPlaceLinks,
@@ -83,6 +88,8 @@ describe("reading a figure link", () => {
     expect(placeWords({ table: 1, row: 2, col: 2 })).toBe("table 1, row 2, column 2");
     expect(placeWords({ paragraph: 4 })).toBe("paragraph 4");
     expect(placeWords({ line: 3, col: 2 })).toBe("line 3, column 2");
+    // A CSV record: its row, as the preview shows the file.
+    expect(placeWords({ row: 3, col: 2 })).toBe("row 3, column 2");
   });
 
   it("copies the words, never the links", () => {
@@ -90,6 +97,15 @@ describe("reading a figure link", () => {
       "Total 48,210 and 73,519.",
     );
     expect(withoutPlaceLinks("See [the site](https://x.test).")).toBe("See [the site](https://x.test).");
+    expect(withoutPlaceLinks("A [1,200 [net]](<#source/src_aaaa1111aaaa1111>) b.")).toBe("A 1,200 [net] b.");
+  });
+
+  it("compares a figure the way the daemon does (the shared examples)", () => {
+    const pairs = JSON.parse(
+      readFileSync(join(process.cwd(), "__tests__", "fixtures", "figure-keys-v1547.json"), "utf-8"),
+    ) as [string, string][];
+    expect(pairs.length).toBeGreaterThanOrEqual(20);
+    for (const [text, key] of pairs) expect([text, figureKey(text)]).toEqual([text, key]);
   });
 });
 
@@ -133,8 +149,10 @@ describe("a figure in a reply", () => {
   });
 
   it("offers a chooser when the value is in several places", async () => {
+    // (Both records hold the figure's own value: the page opens no other.)
+    const rent = { ...MARK, shown: "1,200", key: "1200" };
     H.get.mockResolvedValue({
-      marks: [MARK, { ...MARK, id: "src_bbbb2222bbbb2222", path: "C:\\b.xlsx", name: "b.xlsx", kind: "sheet", locator: { sheet: "S", cell: "B2" } }],
+      marks: [rent, { ...rent, id: "src_bbbb2222bbbb2222", path: "C:\\b.xlsx", name: "b.xlsx", kind: "sheet", locator: { sheet: "S", cell: "B2" } }],
     });
     const seen: string[] = [];
     const answer = (e: Event) => {
@@ -154,6 +172,32 @@ describe("a figure in a reply", () => {
     } finally {
       window.removeEventListener(OPEN_PLACE_EVENT, answer);
     }
+  });
+
+  it("opens nothing when the record holds another value than the figure's words", async () => {
+    // Review B2: a link a model managed to write, naming a real record of
+    // another figure. The page compares the words with the record.
+    H.get.mockResolvedValue({ marks: [MARK] });
+    const seen: unknown[] = [];
+    const answer = (e: Event) => {
+      seen.push((e as CustomEvent).detail);
+      e.preventDefault();
+    };
+    window.addEventListener(OPEN_PLACE_EVENT, answer);
+    try {
+      render(<Markdown content={"Bonus [99,999](#source/src_aaaa1111aaaa1111)."} />);
+      fireEvent.click(screen.getByTestId("source-link"));
+      await waitFor(() => expect(screen.getByTestId("source-link-note")).toHaveTextContent(NO_RECORD_WORDS));
+      expect(seen).toEqual([]);
+      expect(screen.getByTestId("source-link-note")).not.toHaveTextContent("statement.pdf");
+    } finally {
+      window.removeEventListener(OPEN_PLACE_EVENT, answer);
+    }
+  });
+
+  it("carries a changed file to the panel", () => {
+    expect(atOf({ ...MARK, changed: true }).changed).toBe(true);
+    expect(atOf(MARK).changed).toBeUndefined();
   });
 
   it("with no record, a faint dotted line whose press says so", () => {
@@ -237,5 +281,61 @@ describe("the file, opened at the figure's place", () => {
       '<p title="7,450">Fee $<mark class="ij-at">7,450</mark> due</p>',
     );
     expect(markFigureInHtml("<p>x</p>", undefined)).toBe("<p>x</p>");
+    // Only the whole figure: never "120" inside "1,120" or "120.50".
+    expect(markFigureInHtml("<p>1,120 and 120.50 and 120.</p>", "120")).toBe(
+      '<p>1,120 and 120.50 and <mark class="ij-at">120</mark>.</p>',
+    );
+  });
+
+  it("lights a CSV record's cell by its row", async () => {
+    previewReturns({
+      kind: "sheet", name: "l.csv", path: "C:\\l.csv", suffix: ".csv", sheets: ["CSV"], sheet: "CSV",
+      rows: [["Payee", "Memo", "Amount"], ["Acme", "rent\nfor March", "1200.00"], ["Bolt", "tools", "48210.50"]],
+      first_row: 1,
+    });
+    render(<DocPreview path={"C:\\l.csv"} at={{ row: 3, col: 3, shown: "48210.50" }} onClose={() => {}} />);
+    const lit = await screen.findByTestId("doc-preview-lit-cell");
+    expect(lit).toHaveTextContent("48210.50");
+  });
+
+  it("says a cell past the columns shown is past the part shown", async () => {
+    previewReturns({
+      kind: "sheet", name: "b.xlsx", path: "C:\\b.xlsx", suffix: ".xlsx", sheets: ["S"], sheet: "S",
+      rows: [Array.from({ length: 30 }, (_, i) => `h${i + 1}`)],
+      first_row: 1,
+    });
+    render(<DocPreview path={"C:\\b.xlsx"} at={{ sheet: "S", cell: "AF1" }} onClose={() => {}} />);
+    expect(await screen.findByTestId("doc-preview-place-past")).toHaveTextContent(
+      "Cell AF1 is past the part shown here.",
+    );
+    expect(screen.queryByTestId("doc-preview-lit-cell")).toBeNull();
+  });
+
+  it("says the file changed in the panel, and lights no cell or line by position", async () => {
+    // Review A9 / B5: on a phone the panel covers the chat's note.
+    previewReturns({
+      kind: "sheet", name: "b.xlsx", path: "C:\\b.xlsx", suffix: ".xlsx", sheets: ["Summary"], sheet: "Summary",
+      rows: [["Item", "Q2", "Q3"], ["Rent", "1200", "999"]],
+      first_row: 1,
+    });
+    render(
+      <DocPreview path={"C:\\b.xlsx"} at={{ sheet: "Summary", cell: "C2", shown: "1250", changed: true }} onClose={() => {}} />,
+    );
+    expect(await screen.findByTestId("doc-preview-place-changed")).toHaveTextContent(FILE_CHANGED);
+    await screen.findByText("999");
+    expect(screen.queryByTestId("doc-preview-lit-cell")).toBeNull();
+    cleanup();
+    previewReturns({ kind: "text", name: "n.txt", path: "C:\\n.txt", suffix: ".txt", content: "first\nnow other words\nthird" });
+    render(<DocPreview path={"C:\\n.txt"} at={{ line: 2, shown: "6,400", changed: true }} onClose={() => {}} />);
+    await screen.findByText(/now other words/);
+    expect(screen.getByTestId("doc-preview-place-changed")).toHaveTextContent(FILE_CHANGED);
+    expect(screen.queryByTestId("doc-preview-lit-line")).toBeNull();
+  });
+
+  it("lights the line of a Markdown file in its plain lines", async () => {
+    previewReturns({ kind: "markdown", name: "n.md", path: "C:\\n.md", suffix: ".md", content: "# Title\n\nTotal 6,400 here" });
+    render(<DocPreview path={"C:\\n.md"} at={{ line: 3, shown: "6,400" }} onClose={() => {}} />);
+    const lit = await screen.findByTestId("doc-preview-lit-line");
+    expect(lit).toHaveTextContent("Total 6,400 here");
   });
 });

@@ -258,7 +258,7 @@ def extract_text(
     if suffix == ".pptx":
         return _read_pptx(p, page_range=page_range)
     if suffix == ".csv":
-        return _read_csv(p)
+        return _read_csv(p, layout=layout)
     if suffix == ".rtf":
         return _read_rtf(p)
     if suffix in _IMAGE_SUFFIXES:
@@ -757,11 +757,18 @@ def _read_pptx(p: Path, *, page_range: str | None = None) -> str:
     return _nonempty_or_sentinel("\n".join(parts), kind="pptx")
 
 
-def _read_csv(p: Path) -> str:
+def _read_csv(p: Path, *, layout: "dict | None" = None) -> str:
     # Encoding-detected: Excel/Windows CSVs are frequently UTF-8-BOM or cp1252,
     # which the old hard-coded utf-8 read corrupted into replacement chars.
     text = _decode_bytes(p.read_bytes())
     rows: list[str] = ["\t".join(row) for row in csv.reader(io.StringIO(text))]
+    if layout is not None:
+        # v1.547.0 (30-a): where each RECORD starts, by its row number. A
+        # quoted cell may hold a line break, so a record is not a line; the
+        # row is what the preview shows.
+        layout["kind"] = "csv"
+        starts = _layout_starts(rows)
+        layout["rows"] = [[at, at + len(rows[i]), i + 1] for i, at in enumerate(starts)]
     return "\n".join(rows)
 
 

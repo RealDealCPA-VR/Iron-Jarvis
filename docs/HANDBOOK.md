@@ -2065,8 +2065,8 @@ record of where this came from: Jarvis worked it out or wrote it itself."
 That is a figure that is in nothing Iron Jarvis read or was given in that
 reply's turn: a total it added up, a rounded figure ("about 48.2k"), or one
 it should not have written. A figure that came from somewhere without a
-recorded place (a web page, an e-mail, your own message) is left as plain
-text.
+recorded place (a web page, an e-mail, your own message, a picture you
+attached) is left as plain text.
 
 **When a value is in several places,** pressing it lists them ("In 2 places:
 statement.pdf, page 7, line 3 · budget.xlsx, cell B2 on Summary") and you
@@ -2075,11 +2075,15 @@ pick one.
 **Good to know.**
 
 - Only replies to a turn that read a file get links. An ordinary chat is
-  unchanged, and so is anything in code, links and web addresses.
+  unchanged, and so is anything in code, links, web addresses, file names
+  and folder paths.
 - Small numbers, years and dates are not figures (a number under 100 counts
   only with a currency sign, a percent sign or decimals).
 - If the file has changed since it was read, or is no longer there, the
-  press says so.
+  press says so. The file beside the chat says so too, and lights no cell or
+  line by where it used to be (something else may sit there now).
+- In a CSV file the place is the row and column, as the file opens beside
+  the chat (a cell that holds a line break is still one row).
 - The record stays on this PC and is deleted with its chat. A sum or an
   average Iron Jarvis works out is not linked yet; a figure from an agent run
   and the figures in a document Iron Jarvis writes are not linked yet.

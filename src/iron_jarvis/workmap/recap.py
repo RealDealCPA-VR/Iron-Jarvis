@@ -186,6 +186,13 @@ def lines_of(messages: Any) -> list[dict[str, Any]]:
             if isinstance(m.get("documents"), list) else []
         if not content.strip() and not docs:
             continue
+        if role == "assistant" and "#source/" in content:
+            # v1.547.0 (30-a): a figure's link to where it was read is read
+            # as its words; the digits of the record's id are no number on
+            # record (the recap check would accept an invented one).
+            from ..documents.sources import without_figure_links
+
+            content = without_figure_links(content)
         out.append({
             "role": role,
             "content": content.strip(),
@@ -444,6 +451,11 @@ def check(answer: str, *, shown: str, known_paths: set[str] | None = None) -> Ch
         out.said_none = True
         return out
     known = set(known_paths or set())
+    if "#source/" in (shown or ""):
+        # v1.547.0 (30-a): a figure link's words, never its record's id.
+        from ..documents.sources import without_figure_links
+
+        shown = without_figure_links(shown)
     known_figures = figures_in(shown) | counts_in_words(shown)
     seen: set[str] = set()
     for row in raw.split("\n")[:60]:

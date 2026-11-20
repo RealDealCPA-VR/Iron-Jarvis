@@ -966,7 +966,14 @@ def _share_transcript(title: str, persona: str, updated_at, msgs: list) -> str:
             continue
         who = "You" if m.get("role") == "user" else "Iron Jarvis"
         lines += ["", f"### {who}", ""]
-        lines.append(str(m.get("content") or "").strip() or "_(empty message)_")
+        text = str(m.get("content") or "")
+        if m.get("role") == "assistant" and "#source/" in text:
+            # v1.547.0 (idea 30-a): a shared chat carries a figure's words; its
+            # link to where it was read opens nothing outside the app.
+            from ...documents.sources import without_figure_links
+
+            text = without_figure_links(text)
+        lines.append(text.strip() or "_(empty message)_")
         extras = []
         names = m.get("attachmentNames") or []
         if names:
