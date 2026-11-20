@@ -271,6 +271,10 @@ export type BuildMessage = PaneMessage & {
   /** v1.384.0: the reply met its STEP LIMIT (raw; `decodeStepLimit`) — the
    *  screen says so and offers "Keep going". */
   stepLimit?: unknown;
+  /** R2.15 (27-a): a reply that changed a screen file — its before and after
+   *  pictures, or only the mark for Show me (raw; lib/replyPictures
+   *  decodePictures). */
+  evidence?: unknown;
   /** Part 3, Phase 2: what the reply's FINISH CHECK did (raw;
    *  `decodeFinish`) — the work line's "Checked: …". Absent on a reply that
    *  changed no file, and on every line an older daemon wrote. */
@@ -496,6 +500,9 @@ const LINE_KEYS = [
   "stepLimit",
   // Part 3, Phase 2: what the reply's finish check did (raw; decodeFinish).
   "finish",
+  // R2.15 (27-a): before and after pictures, or the Show me mark (raw;
+  // lib/replyPictures decodePictures).
+  "evidence",
   // v1.390.0 (the Timeline): each billed model call of the reply (raw;
   // lib/buildTimeline replyTimeline).
   "calls",

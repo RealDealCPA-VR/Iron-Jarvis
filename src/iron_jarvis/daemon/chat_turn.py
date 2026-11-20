@@ -15811,4 +15811,12 @@ async def run_chat_turn(
     _team_rec = team_record(_harness)
     if _team_rec is not None:
         out["team"] = _team_rec
+    # R2.15 (27-a): a coding reply that changed a screen file — its before and
+    # after pictures, or the Show me mark. LAST, and present ONLY then. Never
+    # in the model's context. MIRROR NOTE (lock-step): the stream done-frame.
+    from ..harness.evidence import at_end as _evidence_at_end
+
+    _evidence_rec = await _evidence_at_end(made_docs)
+    if _evidence_rec is not None:
+        out["evidence"] = _evidence_rec
     return out

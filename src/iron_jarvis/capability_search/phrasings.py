@@ -3655,6 +3655,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'process this data with Python',
         'try out this code and tell me',
     ),
+    'reply_pictures': (
+        'show me how my page looked before and after',
+        'take pictures of my site after each change',
+        'snap my web page before you edit it',
+        'let me see the screen before and after',
+        'always screenshot my page when code changes',
+        'compare my page before and after the fix',
+        'automatically picture my app after changes',
+        'stop taking pictures of my page',
+    ),
     'rest_call': (
         'get data from my saved web service',
         'pull the records from my connected service',

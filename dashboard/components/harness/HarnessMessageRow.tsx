@@ -52,6 +52,7 @@ import { BRANCH_LABEL, BRANCH_TITLE_QUESTION, BRANCH_TITLE_REPLY, type BranchAt 
 import type { RewindExtras } from "@/lib/buildRewind";
 import { decodeComments } from "@/lib/codeComments";
 import { SentComments } from "@/components/harness/CommentChips";
+import { ReplyPictures } from "@/components/harness/ReplyPictures";
 import { accountMoveLine, decodeAccountLimit, decodeAccountMove, limitCardWords } from "@/lib/buildAccounts";
 import {
   decodeFinish,
@@ -567,6 +568,11 @@ function HarnessMessageRowImpl({
             </>
           }
         />
+        {/* R2.15 (27-a): a reply that changed a screen file — its before
+            and after pictures, or Show me (only when you ask). */}
+        {m.turnId && m.evidence ? (
+          <ReplyPictures raw={m.evidence} threadId={threadId} turnId={m.turnId} busy={busy} archived={archived} />
+        ) : null}
         {/* v1.414.0: a repeated correction, offered as a standing
             preference — the chat's own quiet Keep · Edit · Not this
             line (components/chat/PreferenceSuggestion). Its answer

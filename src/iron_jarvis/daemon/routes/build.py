@@ -1511,6 +1511,13 @@ class _ReplyWatch:
             fin = saved_record(done.get("finish"))
             if fin is not None:
                 line["finish"] = fin
+            # R2.15 (27-a): the reply's before and after pictures, or the mark
+            # that it changed a screen (Show me) — present only then.
+            from ...harness.evidence import saved_record as _saved_evidence
+
+            ev = _saved_evidence(done.get("evidence"))
+            if ev is not None:
+                line["evidence"] = ev
             # v1.397.0: the ATTEMPTS card of a "try this on several models"
             # turn (``harness/attempts.saved_card`` — each attempt's model,
             # tests, files, time and usage, why it stopped, and its branch for
@@ -4044,6 +4051,21 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...harness.preview import reset_preview, set_preview
 
         preview_token = set_preview(preview_url)
+        # R2.15 (27-a, decision D-27.1): this reply's before and after
+        # pictures — taken by themselves only when the person's message asks
+        # ("show me it works") or the setting is on, with a page open; any
+        # other reply that changes a screen file is only marked for Show me.
+        from ...harness import evidence as _evidence
+        from ...harness.preview import current_preview as _current_preview
+
+        _shown_page = _current_preview()
+        evidence_token = _evidence.arm(
+            platform.config.home, thread_id, turn_id, _shown_page,
+            take=_evidence.takes(
+                getattr(platform.config, "reply_pictures", None), text, _shown_page,
+                by_person=started_by == _night.BY_PERSON and not continuation,
+            ),
+        )
         # v1.372.0: the session's MODEL is held for the turn and every helper
         # it starts, pinned account or not (``providers.hold``): nothing moves
         # the turn to another provider on its own.
@@ -4284,6 +4306,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             _compact.reset_summary(summary_token)
             reset_picked(picked_token)
             reset_hold(hold_token)
+            _evidence.reset(evidence_token)
             reset_preview(preview_token)
             if token is not None:
                 reset_pin(token)
@@ -5783,6 +5806,11 @@ def register(app: FastAPI, d: Any) -> None:
         from ...harness.page_shot import trash_session_shots
 
         trash_session_shots(d.platform.config.home, thread_id)
+        # R2.15 (27-a, decision D-27.2): and its replies' before and after
+        # pictures, beside them — moved, never deleted.
+        from ...harness.evidence import trash_session_evidence
+
+        trash_session_evidence(d.platform.config.home, thread_id)
         out: dict[str, Any] = {"deleted": thread_id}
         if moved is not None:
             out["worktree"] = {**moved, "branch": facts.get("branch", "")}
@@ -5992,6 +6020,11 @@ def register(app: FastAPI, d: Any) -> None:
         # (worked in its folder) — the copy offers no "Continue from where it
         # stopped" (the daemon refuses one anyway: `reply_record.load`).
         lines = [{k: v for k, v in m.items() if k != "canContinue"} for m in lines]
+        # R2.15 (27-a): a copied reply's before and after pictures stay in
+        # THIS session's folder; the copy keeps Show me and says so.
+        from ...harness.evidence import copied_lines as _evidence_copied
+
+        lines = _evidence_copied(lines)
         title = S.BRANCH_TITLE.format(title=(row.title or S.NEW_SESSION_TITLE))
         new_setup: dict[str, Any] = {
             k: setup[k] for k in (

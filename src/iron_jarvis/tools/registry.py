@@ -1334,6 +1334,15 @@ class ToolRegistry:
                         cached = await self._store_result(store_as, cached, ctx)
                     return cached
 
+        # R2.15 (27-a): a coding reply's BEFORE picture is taken here, before
+        # the first screen-file write of a turn that takes pictures lands (the
+        # one place a file write is journaled: both chat lanes, every helper).
+        # Nothing armed (every other call): returns at once. Never raises.
+        if reversibility == Reversibility.REVERSIBLE and isinstance(run_args, dict):
+            from ..harness.evidence import before_write as _evidence_before
+
+            await _evidence_before(name, run_args)
+
         # TX-01 undo: snapshot the INVERSE *before* the mutation, for reversible
         # tools only. Best-effort — a capture failure degrades to no-undo (the
         # tool still runs) rather than blocking the action, matching the

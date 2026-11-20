@@ -1110,6 +1110,13 @@ class Config(BaseModel):
     #: same durable wait, the same loop). Off: the limit card waits for the
     #: user's press, as before. Read live by ``routes/build``.
     build_auto_resume: bool = True
+    #: R2.15 (27-a, decision D-27.1, ``harness/evidence``): "Take before and
+    #: after pictures by themselves". True: a Chat › Code reply that changes a
+    #: screen file, with a page open in the Browser, gets a picture of the
+    #: page before the change and after it (an invisible browser started
+    #: twice). None = never chosen (off, and Show me offers it ONCE); False =
+    #: off. Asking ("show me it works") or Show me always works. Read live.
+    reply_pictures: bool | None = None
     #: v1.406.0 part 3 (``daemon/routes/ci_watch``): a coding session that
     #: opened a pull request has its CHECKS watched; a failed check is fixed
     #: in that session by itself, reviewed by ``ci_reviewer`` (a cloud
@@ -1305,6 +1312,13 @@ class Config(BaseModel):
         # v1.438.0: TOLERANT like update_channel — a hand edit never stops a
         # boot. Only a real true/false is a choice; anything else is "not
         # chosen here", the desktop shell's own reading (desktopSwitchSetting).
+        return v if isinstance(v, bool) else None
+
+    @field_validator("reply_pictures", mode="before")
+    @classmethod
+    def _clean_reply_pictures(cls, v: Any) -> "bool | None":
+        # R2.15: tolerant — a hand edit never stops a boot; only a real
+        # true/false is a choice, anything else is "never chosen" (off).
         return v if isinstance(v, bool) else None
 
     @field_validator("browsing_preferences")
