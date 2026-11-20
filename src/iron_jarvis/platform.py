@@ -1646,6 +1646,14 @@ def build_platform(
 
     for tool in connector_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # ASK THE RECORD (v1.547.0, next leaps 13-a): ``work_history``, the
+    # owner's own turns asking Iron Jarvis's record of earlier work, in chat
+    # (auto-armed) and from agents (``_KNOWLEDGE_TOOLS``). Behind the TURN's
+    # client wall; never served to another app (no MCP box names it).
+    from .workmap.tools import work_history_tools
+
+    for tool in work_history_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
     # THE LOOKUP (capability search plan, Phase 1): ``find_capability`` lets
     # the model ask what Iron Jarvis can do, in its own words, and answers
     # from one index of every built-in tool, setting, page step and "not

@@ -228,6 +228,7 @@
     "webhook_add",
     "webhook_delete",
     "webhook_update",
+    "work_history",
     "work_search",
     "workflow_create",
     "workflow_delete",
@@ -470,6 +471,7 @@
     "webhook_add": "add a webhook",
     "webhook_delete": "remove a webhook",
     "webhook_update": "change a webhook",
+    "work_history": "look up earlier work",
     "work_search": "look up earlier work",
     "workflow_create": "save a workflow",
     "workflow_delete": "remove a saved workflow",
@@ -1181,6 +1183,10 @@
       "Changed a webhook",
       "Changing a webhook"
     ],
+    "work_history": [
+      "Looked up earlier work",
+      "Looking up earlier work"
+    ],
     "work_search": [
       "Looked up earlier work",
       "Looking up earlier work"
@@ -1454,6 +1460,7 @@
     "webhook_add": "",
     "webhook_delete": "",
     "webhook_update": "",
+    "work_history": "",
     "work_search": "",
     "workflow_create": "",
     "workflow_delete": "",

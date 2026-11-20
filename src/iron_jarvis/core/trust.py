@@ -254,6 +254,8 @@ REMOTE_RUN_DENY: frozenset[str] = frozenset(
         "recall_lessons",
         "ltm_search",
         "history_search",
+        # v1.547.0 (next leaps 13-a): this computer's record of earlier work.
+        "work_history",
         "memory_read",
         "memory_search",
         "brain_read",

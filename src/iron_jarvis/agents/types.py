@@ -49,6 +49,10 @@ _KNOWLEDGE_TOOLS = [
     # gap load-bearing: the curation agent was being asked for a tool it did not
     # hold. Read-only, permission "allow".
     "history_search",
+    # v1.547.0 (next leaps 13-a): Iron Jarvis's own record of earlier work
+    # (folders, dates, outcomes, files), walled by the run's client wall.
+    # Read-only, permission "allow"; on this list or it reaches no session.
+    "work_history",
     # v1.143.0: the SUGGEST half of memory curation. Writes nothing — it queues
     # a cleanup the user must approve — and it is the only way an agent can ever
     # ask for a note to be deleted, rewritten or merged. Deliberately NOT in

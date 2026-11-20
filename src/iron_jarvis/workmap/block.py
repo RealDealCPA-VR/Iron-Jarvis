@@ -54,8 +54,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..core.db import session_scope
-from . import collect, keys
-from .index import work_map
+from . import keys
+from . import lookup as _lookup
 from .models import KIND_CHAT, KIND_CODE, KIND_OUTSIDE, KIND_RUN, KIND_TOOL_CODE
 
 log = logging.getLogger(__name__)
@@ -118,12 +118,11 @@ OUTCOME_WORDS = {
 
 
 def _withhold_local_only() -> bool:
-    try:
-        from ..providers.egress import may_recall_local_only_chats
+    """The turn's Local only rule (``lookup.withhold_local_only``, the one
+    reader's), asked through this module so a test can set it."""
+    from .lookup import withhold_local_only
 
-        return not may_recall_local_only_chats()
-    except Exception:  # noqa: BLE001 — unsure: keep them home (fail closed)
-        return True
+    return withhold_local_only()
 
 
 def _clip(text: str, cap: int) -> str:
@@ -149,11 +148,24 @@ def _safe(line: str) -> str:
     return "" if res.blocked else (res.text or line)
 
 
+def date_words(when: Any) -> str:
+    """"Mar 12, 2026" for a datetime, "" for none (``work_history``'s lines
+    carry the date, the block's only the age)."""
+    if not isinstance(when, datetime):
+        return ""
+    try:
+        return f"{when:%b} {when.day}, {when.year}"
+    except (ValueError, OSError):  # pragma: no cover — exotic dates
+        return ""
+
+
 def entry_line(row: dict[str, Any], now: datetime, *, with_folder: bool = False,
-               times: int = 1, for_name: str = "", titles_only: bool = False) -> str:
+               times: int = 1, for_name: str = "", titles_only: bool = False,
+               dated: bool = False) -> str:
     """One piece of work as one line. ``for_name`` says whose work it is
     (", for Hartleys, in …"); ``titles_only`` leaves out its file names and a
-    run's result line (a client's other folders)."""
+    run's result line (a client's other folders); ``dated`` adds the day
+    after the age (v1.547.0, ``work_history``)."""
     from ..projects.recent_activity import age_words
 
     bits = [KIND_WORDS.get(row["kind"], "work")]
@@ -163,6 +175,8 @@ def entry_line(row: dict[str, Any], now: datetime, *, with_folder: bool = False,
     if ended:
         bits.append(ended)
     bits.append(age_words(row.get("updated"), now))
+    if dated and date_words(row.get("updated")):
+        bits.append(date_words(row.get("updated")))
     line = f"- [{' · '.join(bits)}] {_clip(row.get('title') or '', TITLE_CHARS)}"
     if times > 1:
         line += f" ({times} times, newest shown)"
@@ -185,39 +199,10 @@ def entry_line(row: dict[str, Any], now: datetime, *, with_folder: bool = False,
     return line
 
 
-def _collapse(rows: list[dict[str, Any]]) -> list[tuple[dict[str, Any], int]]:
-    """Repeats of one piece of work (a schedule's nightly run) as ONE row,
-    the newest, with how many there were."""
-    seen: dict[tuple[str, str], int] = {}
-    out: list[tuple[dict[str, Any], int]] = []
-    for r in rows:  # newest first
-        key = (r["kind"], str(r.get("title") or "").lower())
-        if key in seen:
-            row, n = out[seen[key]]
-            out[seen[key]] = (row, n + 1)
-            continue
-        seen[key] = len(out)
-        out.append((r, 1))
-    return out
-
-
-def _as_it_is_now(engine: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """``rows`` whose SOURCE still exists, each with the source's own Local
-    only and archived state. RAISES when the sources cannot be asked (the
-    caller then shows nothing)."""
-    if not rows:
-        return []
-    with session_scope(engine) as db:
-        live = collect.live_state(db, [(r["kind"], r["ref"]) for r in rows])
-    out = []
-    for r in rows:
-        now = live.get((r["kind"], r["ref"]))
-        if now is None:
-            continue  # deleted since the record was built
-        out.append({**r, "local_only": r["local_only"] or now["local_only"],
-                    "archived": r["archived"] or now["archived"],
-                    "live_updated": now.get("updated", "")})
-    return out
+#: v1.547.0: the folding of repeats and the second asking of the sources
+#: live in the ONE reader (``workmap/lookup.py``), under these names here.
+_collapse = _lookup.collapse
+_as_it_is_now = _lookup.as_it_is_now
 
 
 def recap_lines(recap: "dict[str, Any] | None") -> list[str]:
@@ -256,9 +241,8 @@ def _with_recaps(engine: Any, rows: list[dict[str, Any]]) -> None:
             r["recap"] = recap_lines(got)
 
 
-#: Rows a turn's own refresh may rebuild (a long first build is finished in
-#: the background; a turn never waits for it).
-TURN_REBUILD = 60
+#: Rows a turn's own refresh may rebuild (``lookup.TURN_REBUILD``).
+TURN_REBUILD = _lookup.TURN_REBUILD
 
 
 def _possessive(name: str) -> str:
@@ -305,32 +289,23 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
     a turn with no folder and no words, and work for a client (confirmed, or
     waiting for the owner's answer) is never told to another app."""
     try:
-        from .clients import wall
-
-        engine = getattr(platform, "engine", None)
-        home = getattr(getattr(platform, "config", None), "home", None)
-        wm = work_map(engine, home)
-        if wm is None:
+        # THE ONE READER (v1.547.0, ``workmap/lookup.Reader``): the record
+        # refreshed (bounded), the Local only rule (another app's model is
+        # never on this network: Local only and kept-home work is always
+        # withheld from it, whatever the scope says) and THE WALL (v1.499.0),
+        # built from this turn's own folder and words (v1.528.0: never from
+        # another app's, see ``outside``; it is told no client's work of any
+        # kind, ``wall.outside_and_map``).
+        reader = _lookup.Reader.open(
+            platform, folder=folder, query=query, outside=outside,
+            withhold=True if outside else _withhold_local_only(),
+        )
+        if reader is None:
             return ""
-        wm.refresh(budget=TURN_REBUILD)
+        wm, engine, turn, cmap = reader.wm, reader.engine, reader.turn, reader.cmap
         now = now or datetime.now(timezone.utc).replace(tzinfo=None)
-        # Another app's model is never on this network: Local only and
-        # kept-home work is always withheld from it, whatever the scope says.
-        withhold = True if outside else _withhold_local_only()
-        # THE WALL (v1.499.0): built from this turn's own folder and words
-        # (v1.528.0: never from another app's, see ``outside``; it is told no
-        # client's work of any kind, ``wall.outside_and_map``).
-        turn, cmap = wall.outside_and_map(engine) if outside else wall.turn_and_map(engine, folder, query)
-
-        def allowed(r: dict[str, Any]) -> bool:
-            if r["archived"]:
-                return False
-            return not (withhold and (r["local_only"] or r["keep_home"]))
-
-        def told(r: dict[str, Any]) -> bool:
-            return wall.may_tell(turn, cmap, folder=r.get("folder") or "",
-                                 title=r.get("title") or "",
-                                 files=[f["path"] for f in r.get("files") or []])
+        allowed = reader.allowed
+        told = reader.told
 
         here_rows: list[dict[str, Any]] = []
         if folder and list_folder:
@@ -363,7 +338,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         asked: dict[str, dict[str, Any]] = {}
         for r in [*here_rows, *there_rows, *(r for r, _c in named_rows), *other_rows]:
             asked.setdefault(r["id"], r)
-        live = {r["id"]: r for r in _as_it_is_now(engine, list(asked.values()))}
+        live = reader.live(list(asked.values()))
         here_ids = {r["id"] for r in here_rows}
         here_rows = [live[r["id"]] for r in here_rows
                      if r["id"] in live and allowed(live[r["id"]]) and told(live[r["id"]])]
@@ -481,6 +456,6 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
 
 __all__ = [
     "BLOCK_CHARS", "CLIENT_OTHER_MAX", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD", "HERE_LEAD",
-    "HERE_MAX", "NAMED_MAX", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE", "entry_line", "recap_lines",
-    "work_block",
+    "HERE_MAX", "NAMED_MAX", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE", "date_words", "entry_line",
+    "recap_lines", "work_block",
 ]

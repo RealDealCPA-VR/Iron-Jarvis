@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.547.0
+
+**Ask what was done before, in any chat.** You can now ask Iron Jarvis about earlier work in plain words, in any chat and from an agent: "what did we do in this folder?", "what have we done on the price list?", "have I worked on this before?".
+
 ## v1.546.2
 
 **A task from another computer brings as much of its chat as fits.** When one of your other computers sends this one a task ("@desk read the notes"), the chat it was asked in rides along so the work starts with the same background.

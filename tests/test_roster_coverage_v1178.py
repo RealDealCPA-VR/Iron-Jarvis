@@ -401,6 +401,16 @@ def test_a_newly_registered_tool_reaches_some_agent_roster(platform):
     )
 
 
+def test_the_work_record_reaches_every_roster_that_searches_history(platform):
+    """v1.547.0 (next leaps 13-a): ``work_history`` sits beside
+    ``history_search`` on the knowledge rosters, so an agent can ask what was
+    done before in a folder (reach measured the runtime's way)."""
+    for agent_type in AgentType:
+        definition = get_agent_definition(agent_type)
+        if "memory_search" in definition.tools and "history_search" in definition.tools:
+            assert "work_history" in _advertised(platform.registry, definition), agent_type
+
+
 def test_the_browser_read_tier_is_reachable_from_chat(platform):
     """The one exemption above that is only honest if ANOTHER surface reaches them.
 

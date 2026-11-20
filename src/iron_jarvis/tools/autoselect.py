@@ -218,6 +218,10 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # past conversations. Same tier as recall — it only reads what was
         # already said in this app, writes nothing, and leaves the machine never.
         "history_search",
+        # The work record (v1.547.0, next leaps 13-a): READ-ONLY, Iron
+        # Jarvis's own record of which work was done in which folder, behind
+        # the turn's client wall. Same tier as history_search.
+        "work_history",
         # Saved workflows (v1.170.0): READ-ONLY discovery — name/description/
         # step count/project pin of what the user already saved. Deliberately
         # NOT workflow_run: starting a run spawns multi-minute agent work with
@@ -2776,6 +2780,30 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"history_search": 8},
+    ),
+    # --- earlier WORK, by folder (v1.547.0, next leaps 13-a) ----------------
+    # "what did we do in this folder?", "what have we done on the price
+    # list?", "have I worked on this before?", "the earlier work for
+    # Hartleys": a question about what was DONE (Iron Jarvis's own record of
+    # pieces of work: folder, date, outcome, files), which `work_history`
+    # reads. Narrow on purpose: a doing verb in the past after "did/have we"
+    # ("what did we DECIDE" stays history_search's alone, "what do we do
+    # about X" is advice, not the record), and "you" is left out ("what did
+    # you do?" right after a reply is about that reply).
+    (
+        re.compile(
+            r"\b(?:what|which)\s+(?:work\s+|things?\s+)?(?:did|have|had)\s+(?:we|i)\s+"
+            r"(?:already\s+|just\s+|ever\s+)?"
+            r"(?:do|done|work(?:ed)?\s+on|finish(?:ed)?|made|written|wrote|change[ds]?)\b"
+            r"|\b(?:have|had|did)\s+(?:we|i)\s+(?:already\s+|ever\s+)?"
+            r"(?:worked\s+on|work\s+on|done|do)\s+(?:this|that|it|these|those|anything|any\s+work)\b"
+            r"[^.?!\n]{0,40}?\b(?:before|already|yet)\b"
+            r"|\b(?:earlier|past|previous|prior|older)\s+work\b"
+            r"|\bwork\s+(?:history|record|on\s+record)\b"
+            r"|\bwhat\s+(?:was|has\s+been|got)\s+done\b",
+            re.IGNORECASE,
+        ),
+        {"work_history": 8},
     ),
     # --- saved workflows (v1.170.0) ---------------------------------------
     # "run my month-end workflow", "what workflows do I have" — the module is

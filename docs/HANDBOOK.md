@@ -2042,6 +2042,51 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Ask what was done before, in any chat (v1.547.0)
+
+You can now ask Iron Jarvis about earlier work in plain words, in any chat
+and from an agent: "what did we do in this folder?", "what have we done on
+the price list?", "have I worked on this before?". It answers from its own
+record of earlier work (the same record as **Memory › Your work, by folder**),
+never from memory of the conversation, and the step under the reply reads
+**Looked up earlier work**.
+
+**What you get.** Each piece of work on record (a chat, a coding session or
+an agent run) with its date, how it ended (failed, stopped, needs you) and
+the names of the files it wrote, up to 12 at a time (ask for up to 20). Ask
+with a few words, name a folder, or ask nothing more in a chat that works in
+a folder to hear what was done there. Where the work has a checked recap,
+its Done, Decided and Open lines come with it: for work in exactly the
+folder this chat works in, and for a client you name yourself in a chat
+that belongs to no client.
+
+Nothing to turn on: the words of your message are enough, and agents have
+it too.
+
+**What stays out.**
+
+- **Another client's work.** In a client's folder, no other client's work is
+  listed, even if the question names that client. In a chat that belongs to
+  no client, a client's work is listed only when your own message names that
+  client. The answer says how many pieces were left out and never whose.
+- **Local only work**, unless the chat itself stays on this PC or your own
+  network.
+- **Work deleted or archived a moment ago**: each piece is checked against
+  its chat, session or run before it is told.
+- **Other apps** (Claude desktop, Codex) cannot use it; they keep their own
+  lookup, which tells them no client's work.
+- **The phone.** Asked from your phone (or by work your phone started), the
+  answer holds titles, dates and how each ended only: no folders, file names,
+  links or decisions, no Local only work, and a client's work only when your
+  own message named that client.
+
+**Good to know.**
+
+- A question about a folder includes the folders under it.
+- A task from another computer cannot ask it.
+- It does not yet narrow by date ("in March") or put buttons under the reply
+  to open each piece; those are planned.
+
 ## A task from another computer brings as much of its chat as fits (v1.546.2)
 
 When one of your other computers sends this one a task ("@desk read the

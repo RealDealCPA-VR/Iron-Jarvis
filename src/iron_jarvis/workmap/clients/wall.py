@@ -258,6 +258,50 @@ def turn_wall(engine: Any, folder: object, user_text: object) -> TurnWall:
     return turn_and_map(engine, folder, user_text)[0]
 
 
+def _row_owners(
+    cmap: ClientMap, folder: object, title: object, files: Iterable[Any], snippet: object,
+    waiting: bool,
+) -> tuple[frozenset[str], str]:
+    """``(owners, home key)`` of one row or passage, the way :func:`may_tell`
+    reads them: its folder's owner, else NAMED ATTRIBUTION (the confirmed
+    clients its title, file stems or snippet name, and the owners its paths
+    prove); ``waiting`` also counts the WAITING names (an outside asker).
+    RAISES on a fault (the callers fail closed)."""
+    owner, home, _root = _owner_of_folder(cmap, folder)
+    if owner is not None:
+        return frozenset({owner}), home
+    files = list(files or ())
+    text = " \n ".join([str(title or ""), *_stems(files), str(snippet or "")])
+    owners = {_CLIENT + i for i in _named(text, cmap)} | _path_owners(cmap, folder, files)
+    if waiting:
+        owners |= _waiting_named(text, folder, cmap)
+    return frozenset(owners), home
+
+
+def owners_of(
+    cmap: ClientMap,
+    *,
+    folder: object,
+    title: str = "",
+    files: Iterable[Any] = (),
+    snippet: str = "",
+    waiting: bool = False,
+) -> frozenset[str] | None:
+    """The owners of one row (``client:<id>`` / ``waiting:<id>`` /
+    ``folder:<key>``), exactly as :func:`may_tell` reads them; ``waiting``
+    also counts the waiting names. For a reader that must know WHOSE a row is
+    after the wall let it through (v1.547.0, ``workmap/lookup``: a named
+    client's recap lines, the phone's stricter rule). None when they cannot
+    be worked out (the caller treats the row as owned). Text only; never
+    raises."""
+    try:
+        cmap = cmap if isinstance(cmap, ClientMap) else store.EMPTY_MAP
+        return _row_owners(cmap, folder, title, files, snippet, bool(waiting))[0]
+    except Exception:  # noqa: BLE001 — unsure: owned by someone it cannot name
+        log.debug("clients: a row's owners could not be read", exc_info=True)
+        return None
+
+
 def may_tell(
     turn: TurnWall,
     cmap: ClientMap,
@@ -289,17 +333,9 @@ def may_tell(
         if not wall.ok:  # 1. fail closed: exactly this folder
             return bool(wall.folder_key) and _key(folder) == wall.folder_key
         cmap = cmap if isinstance(cmap, ClientMap) else store.EMPTY_MAP
-        owner, home, _root = _owner_of_folder(cmap, folder)
-        if owner is not None:
-            owners = frozenset({owner})
-        else:  # NAMED ATTRIBUTION: an unowned row that names confirmed clients
-            files = list(files or ())
-            text = " \n ".join([str(title or ""), *_stems(files), str(snippet or "")])
-            owners = frozenset(
-                {_CLIENT + i for i in _named(text, cmap)} | _path_owners(cmap, folder, files)
-            )
-            if wall.outside:  # another app: waiting names own their work too
-                owners |= _waiting_named(text, folder, cmap)
+        # The folder's owner, else NAMED ATTRIBUTION (an unowned row that
+        # names confirmed clients; for another app, waiting names too).
+        owners, home = _row_owners(cmap, folder, title, files, snippet, wall.outside)
         if not owners:  # 2.
             return True
         if wall.outside:  # 2b. another app is told no client's work
@@ -665,6 +701,7 @@ __all__ = [
     "narrowed",
     "on_owner_screen",
     "outside_and_map",
+    "owners_of",
     "parent_folder",
     "owner_screen",
     "scoped_frames",

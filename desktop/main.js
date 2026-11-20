@@ -4277,6 +4277,7 @@ const TOOL_WORDS_BUILTIN = {
   webhook_add: "add a webhook",
   webhook_delete: "remove a webhook",
   webhook_update: "change a webhook",
+  work_history: "look up earlier work",
   work_search: "look up earlier work",
   workflow_create: "save a workflow",
   workflow_delete: "remove a saved workflow",

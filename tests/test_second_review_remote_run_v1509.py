@@ -241,6 +241,8 @@ def test_the_cross_computer_readers_are_one_set_of_real_tools(tmp_path):
     assert not (REMOTE_RUN_DENY & LOW_TRUST_DENY)
     assert not (REMOTE_RUN_DENY & deny_names(False))
     assert REMOTE_RUN_DENY <= deny_names(False, True)
+    # v1.547.0 (next leaps 13-a): this computer's record of earlier work.
+    assert "work_history" in REMOTE_RUN_DENY
 
 
 def test_remote_runs_spread_down_through_the_context():

@@ -4135,6 +4135,8 @@ CONCURRENT_READ_TOOLS: frozenset[str] = frozenset({
     # 117-minute reply made 46 grep calls) — files on disk, no live surface.
     # The harness guidance now asks for independent reads in ONE reply.
     "grep", "glob",
+    # v1.547.0 (next leaps 13-a): the work record (SQLite, its own read).
+    "work_history",
 }) - LOW_TRUST_DENY
 
 
@@ -4886,7 +4888,8 @@ _READS_ONLY_TOOLS: frozenset[str] = frozenset({
     "image_info", "view_image", "extract_pdf", "excel_read", "excel_query", "excel_profile", "excel_trace",
     "excel_formula_check", "excel_live_look", "compare_documents", "pdf_form_fields", "redact_scan",
     "find_capability", "config_list", "schedule_list", "workflow_list", "goal_list", "night_task_list",
-    "list_agents", "changes_list", "history_search", "skill_search", "brain_read", "brain_search",
+    "list_agents", "changes_list", "history_search", "work_history", "skill_search", "brain_read",
+    "brain_search",
     "blackboard_read", "mcp_list_resources", "mcp_read_resource", "integration_list", "tool_list",
     "secret_list", "downloads_list", "pixio_models", "pixio_params", "worklist_status", "calculate",
     "browser_read_page", "browser_screenshot", "browser_get_elements", "browser_list_tabs",

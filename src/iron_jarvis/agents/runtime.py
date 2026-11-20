@@ -2416,6 +2416,15 @@ class AgentRuntime:
             # A TASK FROM ANOTHER COMPUTER (v1.509.0, F1): set for the run body
             # so every child run awaited inside it is one too.
             _remote_token = REMOTE_RUN.set(run_is_remote(session))
+            # v1.547.0 (next leaps 13-a, D-13.2): a run the PHONE started
+            # (origin ``comm:<channel>``) answers the phone, and so does every
+            # child run awaited inside it (a phone turn's helper inherits the
+            # mark from the turn): what may go there is less.
+            from ..providers import failure_words as _fw_phone
+
+            _phone_token = _fw_phone.mark_answers_the_phone(
+                str(getattr(session, "origin", "") or "").startswith("comm:")
+            )
             # …and its READS are confined to its own folder (v1.509.0, lead
             # review): ``list_folder`` and the document readers take an
             # absolute path anywhere on this computer. A helper adds its own
@@ -2452,6 +2461,7 @@ class AgentRuntime:
                     REMOTE_RUN.reset(_remote_token)
                 except (ValueError, LookupError, RuntimeError):  # another context's token
                     REMOTE_RUN.set(False)
+                _fw_phone.reset_answers_the_phone(_phone_token)
         except RunStoppedByUser as stop:
             return await self._end_stopped(stop.run, session)
         except ContextTooSmall as small:

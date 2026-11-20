@@ -195,6 +195,10 @@ def default_permissions() -> dict[str, str]:
         # record behind the strictest client wall.
         "chat_record": "allow",
         "work_search": "allow",
+        # v1.547.0 (next leaps 13-a): the owner's own turns ask the work
+        # record. Read-only, behind the turn's client wall; without "allow" a
+        # headless run's ask is a deny and agents could never ask it.
+        "work_history": "allow",
         "brain_save": "allow",
         "brain_change": "ask",
         # Memory housekeeping (v1.143.0): FILE a suggest-only cleanup proposal.

@@ -4345,6 +4345,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'edit my webhook settings',
         'make the webhook send somewhere else',
     ),
+    'work_history': (
+        'what did we do in this folder',
+        'show me what was done here before',
+        'what have we worked on lately',
+        'list my past work on this project',
+        'when did we last work on this',
+        'which files did we make last time',
+        'what did we finish on the price list',
+        'remind me what happened with this before',
+    ),
     'work_recaps': (
         'tell me what we did last time in this folder',
         'remember what happened in my earlier chats here',

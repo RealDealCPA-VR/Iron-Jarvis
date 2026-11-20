@@ -796,6 +796,10 @@
       "ok": "changed a webhook",
       "failed": "tried a webhook change and it failed"
     },
+    "work_history": {
+      "ok": "looked up earlier work",
+      "failed": "tried a work lookup and it failed"
+    },
     "work_search": {
       "ok": "looked up earlier work",
       "failed": "tried a work lookup and it failed"

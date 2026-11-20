@@ -97,15 +97,52 @@ def run_surface() -> Iterator[None]:
         _SURFACE.reset(token)
 
 
+#: v1.547.0 (next leaps 13-a, decision D-13.2): True while the work in flight
+#: ANSWERS THE PHONE. Unlike :data:`_SURFACE` it is never set back by
+#: :func:`run_surface`: a helper run a phone turn starts, and a run the phone
+#: started (origin ``comm:<channel>``, marked by ``agents/runtime``), still
+#: answer the phone through the messaging service. Read by what may tell
+#: less there (``workmap/tools.py``: titles, dates and status only).
+_TO_PHONE: ContextVar[bool] = ContextVar("ij_answers_the_phone", default=False)
+
+
+def answers_the_phone() -> bool:
+    """Does the work in flight answer the phone (:data:`_TO_PHONE`, or the
+    phone's own surface)? Never raises (unsure reads as the phone: a reader
+    that asks then tells less)."""
+    try:
+        return _TO_PHONE.get() is True or current_surface() == SURFACE_PHONE
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def mark_answers_the_phone(on: bool) -> Any:
+    """Set :data:`_TO_PHONE` for what follows when ``on`` (never turned OFF
+    inside work that already answers the phone); returns the token for
+    :func:`reset_answers_the_phone`."""
+    return _TO_PHONE.set(bool(on) or _TO_PHONE.get() is True)
+
+
+def reset_answers_the_phone(token: Any) -> None:
+    """Undo :func:`mark_answers_the_phone`. Never raises."""
+    try:
+        _TO_PHONE.reset(token)
+    except Exception:  # noqa: BLE001 — another context's token
+        _TO_PHONE.set(False)
+
+
 @contextmanager
 def phone_surface() -> Iterator[None]:
     """Word every failure inside this block for the PHONE (v1.378.0 review):
     ``comm.inbound`` arms it around the phone's chat turn, and the desktop's
-    reply into a phone thread around its own."""
+    reply into a phone thread around its own. v1.547.0: the work inside it
+    answers the phone (:func:`answers_the_phone`)."""
     token = _SURFACE.set(SURFACE_PHONE)
+    phone = _TO_PHONE.set(True)
     try:
         yield
     finally:
+        _TO_PHONE.reset(phone)
         _SURFACE.reset(token)
 
 
