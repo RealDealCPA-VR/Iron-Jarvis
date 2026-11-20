@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.546.1 (2026-11-19).*
+holds itself to. Current as of v1.546.2 (2026-11-19).*
 
 ---
 
@@ -2042,6 +2042,32 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A task from another computer brings as much of its chat as fits (v1.546.2)
+
+When one of your other computers sends this one a task ("@desk read the
+notes"), the chat it was asked in rides along so the work starts with the
+same background. Until now only the newest 20 messages of that chat arrived,
+and at most 8,000 characters of them; the rest stayed behind without a word.
+
+- **As much as fits, newest whole.** The chat is now fitted the way a chat
+  here is: the newest messages that fit arrive in full, in order. The task
+  and its chat together take at most a quarter of what the model on this
+  computer can read at once (about 28,000 characters at most), unless the
+  task alone is longer, so the run keeps room for its own work. A long task
+  leaves less room for the chat.
+- **What did not fit is said.** When older messages had to stay behind, the
+  task says how many, and how the first of them began, so the run (and you,
+  reading the run) knows the chat did not start there. The count is of the
+  whole chat as the sending computer keeps it: that computer sends at most
+  its newest 80 messages (60 from a phone chat) and says how many older ones
+  it kept back, a long chat's oldest messages included (the ones the chat
+  page no longer shows after you reopen it), so those are counted too. A
+  phone chat keeps only its newest 200 messages, so its count is of those.
+  Only the ones that arrived can be quoted, and the task says how many it
+  quotes and which ("How the first 5 of them began").
+- **Nothing to do.** It works for every paired computer and for a computer
+  you connected by hand.
+
 ## Slack and email say when they could not take a file (v1.546.1)
 
 A file you send Jarvis in Slack or by email now gets a plain answer that it
@@ -2075,31 +2101,6 @@ Jarvis cannot take files sent from your phone yet.
 - Several files in a row are told once a minute, not once per file.
 
 To work with a file now, drop it into Chat in the desktop app.
-
-## A task from another computer brings as much of its chat as fits (v1.546.1)
-
-When one of your other computers sends this one a task ("@desk read the
-notes"), the chat it was asked in rides along so the work starts with the
-same background. Until now only the newest 20 messages of that chat arrived,
-and at most 8,000 characters of them; the rest stayed behind without a word.
-
-- **As much as fits, newest whole.** The chat is now fitted the way a chat
-  here is: the newest messages that fit arrive in full, in order. The task
-  and its chat together take at most a quarter of what the model on this
-  computer can read at once (about 28,000 characters at most), so the run
-  keeps room for its own work. A long task leaves less room for the chat.
-- **What did not fit is said.** When older messages had to stay behind, the
-  task says how many, and how the first of them began, so the run (and you,
-  reading the run) knows the chat did not start there. The count is of the
-  whole chat as the sending computer keeps it: that computer sends at most
-  its newest 80 messages (60 from a phone chat) and says how many older ones
-  it kept back, a long chat's oldest messages included (the ones the chat
-  page no longer shows after you reopen it), so those are counted too. A
-  phone chat keeps only its newest 200 messages, so its count is of those.
-  Only the ones that arrived can be quoted, and the task says how many it
-  quotes and which ("How the first 5 of them began").
-- **Nothing to do.** It works for every paired computer and for a computer
-  you connected by hand.
 
 ## Rewind works in folders without git too (v1.546.0)
 

@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.546.2
+
+**A task from another computer brings as much of its chat as fits.** When one of your other computers sends this one a task ("@desk read the notes"), the chat it was asked in rides along so the work starts with the same background.
+
 ## v1.546.1
 
 **Slack and email say when they could not take a file.** A file you send Jarvis in Slack or by email now gets a plain answer that it could not be used, the way Telegram already did, instead of silence.
@@ -77,7 +81,3 @@
 ## v1.529.0
 
 **Every model call counted, and the open decisions settled.** Eight of the ten points the third fix plan left for you to decide, built as recommended.
-
-## v1.528.0
-
-**Claude desktop's Chat tab and Codex can record their chats here.** Claude desktop keeps the chats in its **Chat** tab on claude.ai, not on this PC, so Iron Jarvis cannot read them.
