@@ -60,6 +60,11 @@ class InboundMessage:
     #: The poller's private-chat guard lets such a message through; every other
     #: message keeps the old rule (reply_to must be the sender's own chat).
     own_channel: bool = False
+    #: R0.3: how many files came with the message that Iron Jarvis cannot
+    #: take yet (Slack's ``file_share``, an e-mail's attachments). The
+    #: pipeline says so to an allowlisted sender in their own chat
+    #: (``InboundPoller._say_files_not_read``); the words still run.
+    files_not_read: int = 0
 
 
 def split_message(text: str, limit: int) -> list[str]:

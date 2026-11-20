@@ -93,6 +93,29 @@ INTERRUPTED_REPLY = (
 RATE_MAX_TURNS = 8
 RATE_WINDOW_SECONDS = 60.0
 
+#: R0.3: a sender is told at most this often that their files were not used,
+#: so a burst of files (an e-mail poll's batch, several Slack uploads) is told
+#: once — Telegram's notice is once per sender per poll for the same reason.
+FILES_NOT_READ_EVERY_S = 60.0
+
+
+def files_not_read_reply(count: int, *, with_words: bool) -> str:
+    """What a sender hears when Slack or e-mail brought files Iron Jarvis
+    cannot take yet (R0.3; Telegram says it in its own poll,
+    ``TelegramChannel.MEDIA_NOTICE``). ``with_words``: the message's words are
+    handled next, so the sentence says they were read."""
+    n = max(1, int(count or 1))
+    what = "the file you sent" if n == 1 else f"the {n} files you sent"
+    if with_words:
+        return (
+            f"I can't take files here yet, so I read your message but not {what}. "
+            "For files, use the desktop app."
+        )
+    return (
+        f"I can't take files here yet, so I couldn't use {what}. "
+        "Send your request as text, or use the desktop app for files."
+    )
+
 #: Escalation recap: how many thread-tail messages ride into the session task,
 #: and the per-message char cap inside the recap block.
 _RECAP_MESSAGES = 6
@@ -237,6 +260,10 @@ class InboundPoller:
         #: (deterministic tests); production uses ``time.monotonic``.
         self._clock: Callable[[], float] = clock or time.monotonic
         self._turn_times: dict[tuple[str, str], deque[float]] = {}
+        #: R0.3: when each (channel, sender) was last told its files were not
+        #: used. Written only for an allowlisted sender (after the guards in
+        #: ``_dispatch``), so it is as small as the allowlists.
+        self._files_told: dict[tuple[str, str], float] = {}
         #: PENDING PROMPTS (v1.137.0) — both optional so every existing
         #: construction keeps its behavior byte-for-byte. ``prompt_store`` is
         #: the :class:`~.prompts.PendingPromptStore`; ``answer_run`` the
@@ -676,6 +703,38 @@ class InboundPoller:
             ok = ok and bool(res.get("ok"))
         return ok
 
+    async def _say_files_not_read(
+        self, name: str, ch: Channel, msg: InboundMessage, *, with_words: bool
+    ) -> bool:
+        """Tell the sender their files were not used (R0.3). True when the
+        sentence went out now; False when it failed, or when this sender was
+        told less than ``FILES_NOT_READ_EVERY_S`` ago (a burst is told once).
+
+        Called only from ``_dispatch`` after its guards. Like Telegram's
+        notice it is a reply about what the channel can carry, not a turn: no
+        chat-thread line. Best-effort: a failed send is logged and never stops
+        the message's words from being handled. File names are never logged.
+        """
+        key = (name, str(msg.sender_id))
+        now = self._clock()
+        last = self._files_told.get(key)
+        if last is not None and now - last < FILES_NOT_READ_EVERY_S:
+            return False
+        self._files_told[key] = now
+        count = int(getattr(msg, "files_not_read", 0) or 0)
+        log.info(
+            "inbound: %d file(s) on channel %r were not used (files are not taken here yet)",
+            count,
+            name,
+        )
+        try:
+            return await self.send_chunked(
+                ch, files_not_read_reply(count, with_words=with_words), chat_id=msg.reply_to
+            )
+        except Exception:  # noqa: BLE001 — never lose the message over the sentence
+            log.warning("inbound: could not say that files were not used on %r", name, exc_info=True)
+            return False
+
     def _providers(self) -> Any:
         """The provider manager the failure words name a provider through
         (v1.420.0, C6.5), or None. Never raises."""
@@ -922,6 +981,15 @@ class InboundPoller:
             return {"channel": name, "status": "non_private", "sender": msg.sender_id}
 
         text = (msg.text or "").strip()
+        # R0.3: Slack and e-mail brought files Iron Jarvis cannot take yet.
+        # Said HERE — after the allowlist, the sender's proof and the
+        # private-chat guard, so a stranger, a bot or a group hears nothing —
+        # and before anything else, so the sentence comes first. A message
+        # with words goes on exactly as before; one without ends here.
+        if getattr(msg, "files_not_read", 0):
+            told = await self._say_files_not_read(name, ch, msg, with_words=bool(text))
+            if not text:
+                return {"channel": name, "status": "files_not_read", "sent": told}
         if not text:
             return {"channel": name, "status": "empty"}
 

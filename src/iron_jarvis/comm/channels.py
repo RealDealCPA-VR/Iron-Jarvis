@@ -415,13 +415,64 @@ def _email_body(em: Any) -> str:
                 html_body = _decode_part_text(part)
     elif em.get_content_type() == "text/html":
         html_body = _decode_part_text(em)
-    else:
+    elif em.get_content_maintype() == "text":
         plain = _decode_part_text(em)
+    # R0.3: an e-mail that is ONE file and nothing else (a single-part PDF or
+    # photo) has no words; its bytes are never read as the sender's words.
+    # ``_email_file_count`` counts it, and the reply says it was not used.
     if plain:
         return plain[:_MAX_EMAIL_BODY_CHARS].strip()
     if html_body:
         return _strip_html(html_body[:_MAX_EMAIL_BODY_CHARS])
     return ""
+
+
+#: R0.3: how many MIME parts the file count looks at before it stops (a
+#: hostile sender's message could hold thousands; the count is a courtesy).
+_MAX_EMAIL_PARTS = 500
+#: The body's own text parts: never a file, whatever name they carry
+#: (``_email_body`` may read one as the sender's words).
+_BODY_TEXT_TYPES = ("text/plain", "text/html")
+
+
+def _email_file_count(em: Any) -> int:
+    """How many files the sender attached (R0.3). Iron Jarvis cannot take a
+    file sent by e-mail yet; this number is what the reply says it left out.
+
+    A part is a file when it is marked as an attachment, or when it has a file
+    name, is not the body's text, and is not a picture INSIDE the body (a part
+    of ``multipart/related``, such as a signature logo the HTML shows). Apple
+    Mail marks an attached PDF ``inline`` with a name, so the name counts. An
+    attached e-mail is one file; what it carries is not counted again. A
+    message that is itself one file (a single non-text part) is one file.
+    Never raises: an unreadable message counts what was read before it.
+    """
+    count = 0
+    seen = 0
+    stack: list[tuple[Any, bool]] = [(em, False)]
+    try:
+        while stack and seen < _MAX_EMAIL_PARTS:
+            part, in_body = stack.pop()
+            seen += 1
+            ctype = part.get_content_type()
+            if part is em and not part.is_multipart():
+                return 1 if part.get_content_maintype() != "text" else 0
+            if part is not em:
+                disp = (part.get_content_disposition() or "").lower()
+                named = bool(part.get_filename())
+                if disp == "attachment" or (
+                    named and not in_body and ctype not in _BODY_TEXT_TYPES
+                ):
+                    count += 1
+                    continue
+            if part.is_multipart():
+                subs = part.get_payload()
+                if isinstance(subs, list):
+                    related = in_body or ctype == "multipart/related"
+                    stack.extend((s, related) for s in reversed(subs))
+    except Exception:  # noqa: BLE001 — a malformed message must never break a poll
+        _log.debug("email: could not count the attachments", exc_info=True)
+    return count
 
 
 #: The sender id of an inbound email whose From address the receiving provider
@@ -672,6 +723,9 @@ class EmailChannel(Channel):
                             "from": sender,
                             "sender_verified": verified,
                         },
+                        # R0.3: the attachments are still not read; the
+                        # pipeline tells a proven, allowed sender so.
+                        files_not_read=_email_file_count(em),
                     )
                 )
             next_offset = (

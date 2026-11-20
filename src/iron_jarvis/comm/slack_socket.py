@@ -56,6 +56,10 @@ _CHANNEL_ID_RX = re.compile(r"[CG][A-Z0-9]{6,}")
 _MENTION_RX = re.compile(r"<@[A-Z0-9]+(?:\|[^>]*)?>")
 #: How many ``(channel, ts)`` pairs are remembered to drop Slack's second copy.
 _SEEN_MAX = 256
+#: R0.3: the one message subtype that is still the person talking — a
+#: message with files. Every other subtype (an edit, a join, a bot's post)
+#: is still dropped.
+FILE_SHARE = "file_share"
 
 #: What each destination's pump has heard, in memory: ``connected_at``,
 #: ``last_event_at`` (anything Slack sent), ``last_message_at`` (a message from
@@ -298,6 +302,18 @@ class SlackSocketMode:
     def _clean(text: str) -> str:
         return _MENTION_RX.sub("", text or "").strip()
 
+    @staticmethod
+    def _file_count(event: dict) -> int:
+        """How many files came with the message (R0.3). Slack marks a message
+        with files ``subtype: file_share``; an ``app_mention`` carries its
+        files with no subtype. Iron Jarvis cannot take them yet, and the
+        pipeline says so (``InboundPoller._say_files_not_read``)."""
+        files = event.get("files")
+        count = len(files) if isinstance(files, list) else 0
+        if not count and event.get("subtype") == FILE_SHARE:
+            count = 1
+        return count
+
     # -- envelope processing (pure-ish; unit-testable) -------------------------
     async def process_envelope(self, name: str, envelope: dict) -> dict[str, Any] | None:
         """Handle ONE Socket Mode envelope; returns the handler result or None.
@@ -305,19 +321,23 @@ class SlackSocketMode:
         Where the answer goes is in the module docstring: a DM is answered in
         the DM, the destination's own channel in a thread, a mention elsewhere
         privately in a DM, and any other channel message fires the ``slack``
-        reflex rules only. Plain messages/mentions with no subtype only; a
-        bot's message (Jarvis's own replies included) is never acted on.
+        reflex rules only. Plain messages/mentions with no subtype, and
+        (R0.3) a message with files (``file_share``), whose words run as
+        any message's would while the pipeline says the files were not used;
+        a bot's message (Jarvis's own replies included) is never acted on.
         """
         if envelope.get("type") != "events_api":
             return None
         _note(name, last_event_at=_now())
         event = ((envelope.get("payload") or {}).get("event")) or {}
         etype = event.get("type")
-        if etype not in ("message", "app_mention") or event.get("subtype"):
+        subtype = event.get("subtype")
+        if etype not in ("message", "app_mention") or (subtype and subtype != FILE_SHARE):
             return None
         ch = self.notifier.get(name)
         if ch is None:
             return None
+        files = self._file_count(event)
         user = str(event.get("user") or "")
         is_bot = bool(event.get("bot_id")) or (
             bool(user) and user == self._bot_user.get(name, "")
@@ -335,6 +355,7 @@ class SlackSocketMode:
                 # DM, and it satisfies the poller's private-chat guard (reply_to
                 # == sender_id), mirroring Telegram's private-chat semantics.
                 reply_to=user,
+                files_not_read=files,
             )
             if not is_bot and ch.is_authorized(user):
                 _note(name, last_message_at=_now())
@@ -370,6 +391,7 @@ class SlackSocketMode:
                 is_bot=False,
                 reply_to=f"{channel}|{event.get('thread_ts') or ts}",
                 own_channel=True,
+                files_not_read=files,
             )
             return await self.poller._handle(name, ch, msg)  # noqa: SLF001 - by design
         if etype == "app_mention":
@@ -381,7 +403,8 @@ class SlackSocketMode:
             except Exception:  # noqa: BLE001 - the note never blocks the answer
                 log.debug("slack mention note failed on %r", name, exc_info=True)
             msg = InboundMessage(
-                sender_id=user, text=text, update_id=None, is_bot=False, reply_to=user
+                sender_id=user, text=text, update_id=None, is_bot=False, reply_to=user,
+                files_not_read=files,
             )
             return await self.poller._handle(name, ch, msg)  # noqa: SLF001 - by design
         # Any other channel message: the reflex rules only; no reply.
