@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { Children, isValidElement, useState, type ReactNode } from "react";
 import { get } from "@/lib/api";
 import {
   atOf,
   FILE_CHANGED,
   FILE_GONE,
+  marksForFigure,
   NO_RECORD_WORDS,
   openPlace,
   PLACE_FAILED,
@@ -15,6 +16,16 @@ import {
   type SourceHref,
   type SourceMark,
 } from "@/lib/sourceLink";
+
+/** The words a link shows (its children as text). */
+function textOf(node: ReactNode): string {
+  let out = "";
+  Children.forEach(node, (child) => {
+    if (typeof child === "string" || typeof child === "number") out += String(child);
+    else if (isValidElement<{ children?: ReactNode }>(child)) out += textOf(child.props.children);
+  });
+  return out;
+}
 
 /**
  * A figure in a reply, drawn as a press that shows where it was read
@@ -27,6 +38,8 @@ import {
  *   the file (a page without the preview), the place is said in words.
  * - A figure with no record (D-30.1): a faint dotted line; its press says
  *   so. Nothing is fetched.
+ * - Only a record whose value IS the figure's opens (a link whose words say
+ *   another number opens nothing and says there is no record).
  *
  * The status line is always mounted so a screen reader hears the words.
  */
@@ -58,7 +71,9 @@ export function SourceLink({ target, children }: { target: SourceHref; children?
     setWords("");
     try {
       const res = await get<{ marks: SourceMark[] }>(`/sources/${target.ids.join(",")}`);
-      const marks = res.marks ?? [];
+      // Only a record of the figure's own value opens: a link whose words
+      // say another number opens nothing (the daemon never makes one).
+      const marks = marksForFigure(textOf(children), res.marks ?? []);
       if (marks.length === 1) show(marks[0]);
       else if (marks.length > 1) setChoices(marks);
       else setWords(NO_RECORD_WORDS);

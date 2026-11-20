@@ -50,6 +50,10 @@ export type SourceAt = {
   /** The record's id: the page picture is asked for by it, so no line of
    *  the file rides a web address. */
   id?: string;
+  /** The file has changed since it was read: the preview says so and lights
+   *  no cell or line by its position (what is there now may be another
+   *  figure). */
+  changed?: boolean;
 };
 
 export interface SourceMark {
@@ -85,10 +89,12 @@ export function atOf(mark: SourceMark): SourceAt {
   }
   if (typeof loc.sheet === "string") at.sheet = loc.sheet;
   if (typeof loc.cell === "string") at.cell = loc.cell;
+  if (mark.changed === true) at.changed = true;
   return at;
 }
 
-/** The place in plain words: "page 7, line 3", "cell C7 on Summary". */
+/** The place in plain words: "page 7, line 3", "cell C7 on Summary",
+ *  "row 3, column 2" (a CSV). */
 export function placeWords(at: SourceAt): string {
   if (at.cell) return at.sheet ? `cell ${at.cell} on ${at.sheet}` : `cell ${at.cell}`;
   if (at.table) {
@@ -101,8 +107,50 @@ export function placeWords(at: SourceAt): string {
   const parts: string[] = [];
   if (at.page) parts.push(`page ${at.page}`);
   if (at.line) parts.push(`line ${at.line}`);
+  if (at.row) parts.push(`row ${at.row}`);
   if (at.col) parts.push(`column ${at.col}`);
   return parts.join(", ") || "the file";
+}
+
+// --- How a figure is compared (twin of core/numbers.number_key) -------------
+// "1,234.50" and "1234.5" are the same number; a scale is part of it ("25k"
+// is not "25"). Pinned equal to the daemon by a shared list of examples
+// (__tests__/fixtures/figure-keys-v1547.json).
+const NUMBER_RX =
+  /(?:(?<![\w.,])\.(\d+)|(\d+(?:[.,]\d+)*))(?:(k|mm|m|bn|b)\b|[\s-]?(mil|mill|grand|thousands?|millions?|billions?|trillions?|hundreds?|lakhs?|crores?)\b)?/i;
+const THOUSANDS_RX = /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
+const PLAIN_RX = /^\d+(?:\.\d+)?$/;
+const SCALES: Record<string, string> = {
+  k: "k", thousand: "k", grand: "k", m: "m", mm: "m", mil: "m", mill: "m",
+  million: "m", b: "b", bn: "b", billion: "b", trillion: "t", hundred: "h",
+  lakh: "lakh", crore: "crore",
+};
+
+/** One number as it is compared (core/numbers.number_key). */
+export function numberKey(digits: string, scale = ""): string {
+  let d = digits;
+  if (THOUSANDS_RX.test(d)) d = d.replace(/,/g, "");
+  if (PLAIN_RX.test(d) && d.includes(".")) d = d.replace(/0+$/, "").replace(/\.+$/, "");
+  const word = scale.toLowerCase();
+  const tail = SCALES[word] || SCALES[word.replace(/s+$/, "")] || "";
+  return tail ? `${d}~${tail}` : d;
+}
+
+/** The key of the first number written in `text` ("$48,210.00" → "48210"),
+ *  or "" when it holds none: what a figure link's words are compared by. */
+export function figureKey(text: string): string {
+  const m = NUMBER_RX.exec(text || "");
+  if (!m) return "";
+  const digits = m[1] !== undefined ? `0.${m[1]}` : m[2];
+  return numberKey(digits, m[3] || m[4] || "");
+}
+
+/** The places a figure link may open: only a record of the SAME value as the
+ *  figure's words. A link the daemon made always matches; anything else
+ *  (a link a model managed to write) opens nothing. */
+export function marksForFigure(words: string, marks: SourceMark[]): SourceMark[] {
+  const key = figureKey(words);
+  return key ? marks.filter((m) => m.key === key) : [];
 }
 
 /** "Read from page 7, line 3 of statement.pdf." */
@@ -135,7 +183,10 @@ export function openPlace(path: string, at: SourceAt): boolean {
   return ev.defaultPrevented;
 }
 
-const LINK_RX = /\[([^\]\n]*)\]\(\s*#source\/[^)\n]*\)/g;
+// A figure link: its words (brackets may nest one level), then the address,
+// bare or in <…>. Twin of documents/sources.py (strip_model_links).
+const LINK_RX =
+  /!?\[((?:[^[\]\n\\]|\\.|\[(?:[^[\]\n\\]|\\.)*\])*)\]\(\s*<?#source\/[^)\n]*\)/g;
 
 /** A reply's words without its figure links (Copy message keeps the words). */
 export function withoutPlaceLinks(text: string): string {

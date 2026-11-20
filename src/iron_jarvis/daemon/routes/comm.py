@@ -927,7 +927,11 @@ def register(app: FastAPI, d) -> None:
 
         reply = str(result.get("reply") or "").strip() or "(no reply)"
         _append_reply(reply)
-        sent = await poller.send_chunked(ch, reply, chat_id=sender_id)
+        # v1.547.0 (idea 30-a): the chat keeps a figure's link to where it
+        # was read; the phone gets the words only (as comm/inbound does).
+        from ...documents.sources import without_figure_links
+
+        sent = await poller.send_chunked(ch, without_figure_links(reply), chat_id=sender_id)
         return {**result, "sent": sent}
 
     # Slack redelivers an event on any non-2xx reply or network blip. This bounded

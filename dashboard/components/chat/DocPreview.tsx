@@ -34,6 +34,7 @@ import remarkGfm from "remark-gfm";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import {
   cellPosition,
+  FILE_CHANGED,
   HOW_WORKED_OUT,
   litParts,
   readFromWords,
@@ -79,12 +80,16 @@ export interface PreviewData {
 // with the cell lit, a text file with the line lit, a Word page with the
 // figure lit. "How this was worked out" above says where, in words.
 
-/** The row a sheet place needs on screen (a CSV's line is its row). */
+/** The row a sheet place needs on screen (a CSV record's row; a TSV read as
+ *  lines, its line). */
 export function placeRow(at: SourceAt | undefined, path: string): number | null {
   if (!at) return null;
   const cell = cellPosition(at.cell);
   if (cell) return cell.row;
-  if (at.line && /\.(csv|tsv)$/i.test(path)) return at.line;
+  if (/\.(csv|tsv)$/i.test(path)) {
+    if (at.row && !at.table) return at.row;
+    if (at.line) return at.line;
+  }
   return null;
 }
 
@@ -96,13 +101,18 @@ export function startFor(at: SourceAt | undefined, path: string): number {
 }
 
 /** Word HTML with every place the figure is written lit (text only, never
- *  inside a tag). The frame runs no script, so the light is CSS. */
+ *  inside a tag). The frame runs no script, so the light is CSS. Only the
+ *  whole figure: "120" is never lit inside "1,120" or "120.5". */
 export function markFigureInHtml(html: string, shown: string | undefined): string {
   if (!shown || !html) return html;
   const safe = shown.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string);
+  const whole = new RegExp(
+    `(?<![\\d.,])${safe.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\d]|[.,]\\d)`,
+    "g",
+  );
   return html
     .split(/(<[^>]*>)/)
-    .map((part) => (part.startsWith("<") ? part : part.split(safe).join(`<mark class="ij-at">${safe}</mark>`)))
+    .map((part) => (part.startsWith("<") ? part : part.replace(whole, (s) => `<mark class="ij-at">${s}</mark>`)))
     .join("");
 }
 
@@ -677,9 +687,20 @@ export function DocPreview({
         : "",
     [data, at?.shown],
   );
-  // v1.547.0: the cell or line a figure's place lights.
-  const litRow = placeRow(at, path);
-  const litCol = cellPosition(at?.cell)?.col ?? at?.col ?? null;
+  // v1.547.0: the cell or line a figure's place lights. A file that changed
+  // since it was read lights nothing by position: what sits there now may
+  // be another figure (the place header says the file changed).
+  const byPosition = !!at && !at.changed;
+  const litRow = byPosition ? placeRow(at, path) : null;
+  const litCol = byPosition ? (cellPosition(at?.cell)?.col ?? at?.col ?? null) : null;
+  const litLine = byPosition ? (at?.line ?? null) : null;
+  // The lit cell is on the sheet and rows shown here (else: say so).
+  const cellShown =
+    litRow !== null &&
+    litCol !== null &&
+    (!at?.sheet || at.sheet === data?.sheet) &&
+    litRow >= (data?.first_row ?? 1) &&
+    litCol <= ((data?.rows ?? [])[litRow - (data?.first_row ?? 1)]?.length ?? 0);
   const [placeBefore, placeFig, placeAfter] = litParts(at?.context ?? "", at?.shown ?? "");
   // By the record's id when there is one: no line of the file in the address.
   const pageImageUrl =
@@ -782,8 +803,14 @@ export function DocPreview({
         >
           <p className="text-[11px] font-medium text-zinc-400">{HOW_WORKED_OUT}</p>
           <p className="text-[12px] text-zinc-200">{readFromWords(at, name)}</p>
+          {at.changed && (
+            // Said here too: on a phone this panel covers the chat's note.
+            <p data-testid="doc-preview-place-changed" className="text-[12px] text-tone-warn">
+              {FILE_CHANGED}
+            </p>
+          )}
           {at.context && (
-            <p className="mt-1 break-words font-mono text-[11.5px] leading-relaxed text-zinc-400">
+            <p className="mt-1 break-words font-mono text-[11px] leading-relaxed text-zinc-400">
               {placeBefore}
               {placeFig && <mark className="rounded bg-accent/25 px-0.5 text-zinc-100">{placeFig}</mark>}
               {placeAfter}
@@ -1157,7 +1184,9 @@ export function DocPreview({
               </p>
             )}
           </div>
-        ) : data.kind === "markdown" ? (
+        ) : data.kind === "markdown" && !litLine ? (
+          // (v1.547.0: a figure's line in a Markdown file is shown in the
+          // plain lines below, lit; the rendered page has no lines.)
           <div className="h-full overflow-auto bg-[#50545a] px-3">
             <div className={MD_PAGE_CLASS}>
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -1231,6 +1260,12 @@ export function DocPreview({
                   ))}
                 </tbody>
               </table>
+              {litRow !== null && litCol !== null && !cellShown && (
+                // v1.547.0: the figure's cell is past the rows or columns shown.
+                <p data-testid="doc-preview-place-past" className="px-1.5 pt-2 text-[11px] text-zinc-500">
+                  {at?.cell ? `Cell ${at.cell}` : `Row ${litRow}, column ${litCol}`} is past the part shown here.
+                </p>
+              )}
               {data.truncated && (
                 <p className="px-1.5 py-2 text-[11px] text-zinc-600">
                   {/* Truncation honesty (v1.166.0): name the REAL row count
@@ -1245,11 +1280,11 @@ export function DocPreview({
           </div>
         ) : (
           <div className="p-3">
-            {at?.line ? (
+            {litLine ? (
               // v1.547.0: the line a pressed figure was read from, lit.
               <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-zinc-300">
                 {(data.content ?? "").split("\n").map((ln, i) =>
-                  i + 1 === at.line ? (
+                  i + 1 === litLine ? (
                     <mark
                       key={i}
                       ref={(el) => {
@@ -1272,8 +1307,8 @@ export function DocPreview({
                 {data.content ?? ""}
               </pre>
             )}
-            {at?.line && at.line > (data.content ?? "").split("\n").length && (
-              <p className="pt-2 text-[11px] text-zinc-500">Line {at.line} is past the part shown here.</p>
+            {litLine && litLine > (data.content ?? "").split("\n").length && (
+              <p className="pt-2 text-[11px] text-zinc-500">Line {litLine} is past the part shown here.</p>
             )}
             {data.truncated && (
               <p className="pt-2 text-[11px] text-zinc-600">

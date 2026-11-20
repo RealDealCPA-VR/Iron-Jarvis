@@ -599,6 +599,12 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
     # v1.509.0: another agent's line (a paired computer's answer) reaches the
     # model fenced as outside data, never as Iron Jarvis's own turn.
     items = fence_agent_lines(items)
+    # v1.547.0 (idea 30-a): a saved reply's figure links go back to the model
+    # as words, so it never sees a record's id to copy (and the numbers a
+    # check reads are the reply's, never the digits of an id).
+    from ..documents.sources import history_without_figure_links
+
+    items = history_without_figure_links(items)
     try:
         _win = _context_window(d, provider, model)
         return plan_history(

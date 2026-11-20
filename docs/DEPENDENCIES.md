@@ -145,11 +145,11 @@ function runs.
 | `mcp` | connections | 12 | **12**: agents, connectors, daemon, harness, hosted, ltm, mcpserver, onboarding, platform, providers, settings, tools | connectors, core, detections, tools | hosted, projects, providers, sandbox, terminals |
 | `learning` | memory | 7 | **10**: coach, daemon, improvement, inbox, memory, onboarding, platform, profile, settings, workmap | core, tools | agents, detections, history, memory, profile, settings, workmap |
 | `sandbox` | tools | 9 | **10**: agents, daemon, harness, iron_proxy, mcp, platform, providers, repl, scheduling, tools | core, tools | detections, git, harness |
+| `documents` | documents | 35 | **9**: comm, daemon, filesearch, hosted, ltm, onboarding, platform, tools, workmap | core, tools | detections, excel_worker, providers |
 | `terminals` | build | 18 | **9**: daemon, harness_bench, hosted, mcp, onboarding, platform, profile, providers, tools | browser, core, detections, hosted, iron_proxy, providers | connectors, daemon |
-| `workmap` | memory | 19 | **9**: agents, daemon, inbox, learning, mcpserver, memory, platform, search, settings | core, tools | agents, daemon, detections, harness, history, hosted, iron_proxy, learning, mcpserver, projects, providers |
+| `workmap` | memory | 19 | **9**: agents, daemon, inbox, learning, mcpserver, memory, platform, search, settings | core, tools | agents, daemon, detections, documents, harness, history, hosted, iron_proxy, learning, mcpserver, projects, providers |
 | `browser` | browser | 19 | **8**: daemon, hosted, mcpserver, onboarding, platform, providers, terminals, tools | computeruse, core, providers, tools | comm, daemon, detections, harness, skills |
 | `comm` | messaging | 12 | **8**: browser, daemon, peers, platform, providers, reflex, settings, workflows | core, tools | agents, daemon, documents, harness, providers, scheduling, workflows |
-| `documents` | documents | 35 | **8**: comm, daemon, filesearch, hosted, ltm, onboarding, platform, tools | core, tools | detections, excel_worker, providers |
 | `eval` | providers | 10 | **8**: agents, daemon, goals, harness, harness_bench, platform, providers, tools | core, providers | daemon, harness, tools |
 | `projects` | memory | 7 | **8**: agents, daemon, harness, hosted, mcp, mcpserver, scheduling, workmap | core | agents, assignments, harness, hosted, providers |
 | `workflows` | automations | 7 | **8**: agents, comm, daemon, goals, guide, platform, reflex, settings | core, tools | agents, comm, computeruse, providers, reflex, settings |

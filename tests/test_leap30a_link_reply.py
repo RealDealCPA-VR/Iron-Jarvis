@@ -96,6 +96,116 @@ def test_a_model_written_source_link_loses_its_link_and_no_read_changes_nothing(
     assert link_reply(forged, marks) == "It was [99,999](#source/src_bbbb2222bbbb2222) and x."
 
 
+_ID = "src_aaaa1111aaaa1111"
+
+
+@pytest.mark.parametrize("forged", [
+    f"Bonus was [99,999](<#source/{_ID}>).",                  # the <…> address
+    f"Bonus was [99,999](\\#source/{_ID}).",                  # a backslash escape
+    f"Bonus was [99,999](&#35;source/{_ID}).",                # a character reference
+    f"Bonus was [99,999](&#x23;source/{_ID}).",
+    f"Bonus was [99,999](#source/{_ID} \"a title\").",        # a title
+    f"Bonus was [99,999 [net]](#source/{_ID}).",              # brackets in the words
+    f"Bonus was ![99,999](#source/{_ID}).",                   # a picture
+    f"Bonus was [99,999][1].\n\n[1]: #source/{_ID}",          # a reference
+    f"Bonus was [99,999][1].\n\n[1]:\n   <#source/{_ID}> 'x'",
+    f"Bonus was [99,999][].\n\n[99,999]: #source/{_ID}",      # collapsed
+    f"Bonus was [99,999].\n\n[99,999]: #source/{_ID}",        # shortcut
+    f"Bonus was [a [99,999](#source/{_ID})](#source/{_ID}).",  # a link inside a link
+])
+def test_a_model_written_source_link_loses_its_link_whatever_way_it_is_written(forged):
+    """Review A3 / B2: the page's Markdown resolves each of these to
+    ``#source/<id>``; every one is turned back into its words, so no form of
+    a forged link reaches the page as a press that opens a record."""
+    for out in (strip_model_links(forged), link_reply(forged, [], read_any=False)):
+        assert "source/" not in out, out
+        assert "99,999" in out, out
+        assert "](" not in out and "]:" not in out, out
+    # A turn that read: the figure is judged on Iron Jarvis's own record
+    # (none here), never on the id the model wrote.
+    linked = link_reply(forged, [], read_any=True, seen=set())
+    assert _ID not in linked and "&#" not in linked and "\\#" not in linked, linked
+    assert "[99,999](#source/none)" in linked, linked
+
+
+def test_an_ordinary_link_and_reference_are_left_alone():
+    text = "See [the site](https://example.com/x) and [r][w].\n\n[w]: https://e.com/48210"
+    assert strip_model_links(text) == text
+
+
+@pytest.mark.parametrize("text,linked", [
+    # A nested list item four spaces or a tab deep is words, not code.
+    ("- Income\n    - Wages: $48,210.00\n    - Bonus: 73,519",
+     "- Income\n    - Wages: $[48,210.00](#source/src_aaaa1111aaaa1111)\n    - Bonus: [73,519](#source/none)"),
+    ("- Income\n\t- Wages: $48,210.00", "- Income\n\t- Wages: $[48,210.00](#source/src_aaaa1111aaaa1111)"),
+    ("1. Wages\n   - $48,210.00", "1. Wages\n   - $[48,210.00](#source/src_aaaa1111aaaa1111)"),
+    # An indented code block after a blank line, outside a list, is code.
+    ("Text\n\n    code 48210\n\nAfter 48210", "Text\n\n    code 48210\n\nAfter [48210](#source/src_aaaa1111aaaa1111)"),
+    # A fence inside a list item is code at any depth.
+    ("- a\n    ```\n    total 48210\n    ```\n- b 48210",
+     "- a\n    ```\n    total 48210\n    ```\n- b [48210](#source/src_aaaa1111aaaa1111)"),
+])
+def test_a_nested_list_is_linked_and_code_still_is_not(text, linked):
+    """Review A5: figures in list items indented by four spaces or a tab
+    were never linked (read as an indented code block)."""
+    marks = [_mark("src_aaaa1111aaaa1111", "48210")]
+    assert link_reply(text, marks, seen=set()) == linked
+
+
+@pytest.mark.parametrize("text", [
+    "Saved to: C:\\Users\\me\\clients\\10432\\return.pdf",
+    "I read statement 10432.pdf and client-10432-notes.txt for you.",
+    "Open C:/clients/10432/summary.xlsx to see it.",
+    "In C:\\Users\\me\\My Files\\10432\\a.pdf there.",
+    "It is in clients/10432/2026 now.",
+    "See [the 10432 line][w].\n\n[w]: https://example.com/x",
+])
+def test_no_link_lands_inside_a_file_name_a_path_or_a_reference(text):
+    """Review B6 (and its low note on reference links): a link inside a
+    path or a file name breaks the name."""
+    marks = [_mark("src_aaaa1111aaaa1111", "10432")]
+    assert link_reply(text, marks, seen=set()) == text
+
+
+def test_a_figure_beside_a_path_is_still_linked():
+    marks = [_mark("src_aaaa1111aaaa1111", "10432")]
+    out = link_reply("Invoice 10432 is in C:\\clients\\a.pdf, $10,432/yr.", marks, seen=set())
+    assert out == (
+        "Invoice [10432](#source/src_aaaa1111aaaa1111) is in C:\\clients\\a.pdf, "
+        "$[10,432](#source/src_aaaa1111aaaa1111)/yr."
+    )
+
+
+def test_a_turn_shown_a_picture_calls_no_figure_one_with_no_record():
+    """A figure read off a picture is in no text the model was given: it is
+    left plain, never "Jarvis worked it out or wrote it itself"."""
+    from iron_jarvis.documents.sources import _link_given
+    from iron_jarvis.providers.adapters.base import LLMMessage
+
+    marks = [_mark("src_aaaa1111aaaa1111", "48210")]
+    text = "Wages 48,210 and the receipt says 73,519."
+    pic = [LLMMessage(role="user", content="what is on this?", images=[{"data_b64": "AA==", "media_type": "image/png"}])]
+    assert _link_given(text, marks, True, ("system", pic)) == (
+        "Wages [48,210](#source/src_aaaa1111aaaa1111) and the receipt says 73,519."
+    )
+    words = [LLMMessage(role="user", content="what is on this?")]
+    assert "[73,519](#source/none)" in _link_given(text, marks, True, ("system", words))
+
+
+def test_a_saved_replys_links_go_back_to_the_model_as_words():
+    from iron_jarvis.documents.sources import given_figures, history_without_figure_links
+
+    linked = "Total [48,210](#source/src_19c4e2207b3a5d61) in all."
+    msgs = [{"role": "user", "content": "Is [x](#source/src_aaaa1111aaaa1111) mine?"},
+            {"role": "assistant", "content": linked}]
+    out = history_without_figure_links(msgs)
+    assert out[1]["content"] == "Total 48,210 in all."
+    assert out[0] == msgs[0]  # a user's line is never changed
+    assert msgs[1]["content"] == linked  # the saved chat is not touched
+    # The digits of a record's id are no number the model was given.
+    assert given_figures([{"role": "assistant", "content": linked}]) == {"48210"}
+
+
 def test_only_the_models_words_are_swapped_never_the_notes_under_them():
     head = "Total 48,210."
     linked = "Total [48,210](#source/src_aaaa1111aaaa1111)."
@@ -208,15 +318,147 @@ def test_a_small_attachment_given_whole_links_too(client, tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("lane", LANES)
-def test_a_plain_chat_is_left_alone(client, monkeypatch, lane):
-    text = "Last year you spent 48,210.00 and [99,999](#source/src_aaaa1111aaaa1111)."
+@pytest.mark.parametrize("text", [
+    "Last year you spent 48,210.00 and [99,999](#source/src_aaaa1111aaaa1111).",
+    # Only a written-another-way link: no "#source/" in the words at all.
+    "Last year you spent 48,210.00 and [99,999](&#35;source/src_aaaa1111aaaa1111).",
+    "Last year you spent 48,210.00 and [99,999][1].\n\n[1]: <\\#source/src_aaaa1111aaaa1111>",
+])
+def test_a_plain_chat_is_left_alone(client, monkeypatch, lane, text):
     _scripted_router(client.app.state.platform, monkeypatch, [], text)
     body, _ = _post_turn(client, lane, {
         "messages": [{"role": "user", "content": "remind me"}],
     })
     head = _head(body["reply"])
-    assert SOURCE_LINK_PREFIX not in head
+    assert "source/" not in head
     assert "48,210.00" in head and "99,999" in head
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_figure_from_the_users_own_words_stays_plain(client, tmp_path, monkeypatch, lane):
+    """Review A6(a) / B7: both lanes hand ``given=(system, msgs)`` to the
+    linker. Without it a figure the user typed would be dotted and said to
+    be one "Jarvis worked it out or wrote it itself"."""
+    pdf = make_pdf(tmp_path / "statement.pdf")
+    _scripted_router(client.app.state.platform, monkeypatch,
+                     [[ToolCall(id="c1", name="read_document", arguments={"path": str(pdf)})]],
+                     "Wages were 48,210.00; the 73,519 you mention is not in it.")
+    body, _ = _post_turn(client, lane, {
+        "messages": [{"role": "user", "content": "Is my bonus of 73,519 in the statement?"}],
+        "tools": ["read_document"],
+        "approval_mode": "yolo",
+    })
+    head = _head(body["reply"])
+    assert [t for t, _ids in _LINK.findall(head)] == ["48,210.00"], head
+    assert "the 73,519 you mention" in head
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_the_model_is_sent_a_saved_replys_words_never_its_figure_links(client, monkeypatch, lane):
+    """Review A8 / B1-B2: the history both lanes send back to the model
+    carries no record id it could copy."""
+    seen = _scripted_router(client.app.state.platform, monkeypatch, [], "Noted.")
+    _post_turn(client, lane, {"messages": [
+        {"role": "user", "content": "what were the wages?"},
+        {"role": "assistant", "content": "Total [48,210.00](#source/src_19c4e2207b3a5d61)."},
+        {"role": "user", "content": "thanks"},
+    ]})
+    sent = " ".join(str(getattr(m, "content", "")) for m in seen["messages"][0])
+    assert "Total 48,210.00." in sent
+    assert "source/" not in sent and "src_19c4e2207b3a5d61" not in sent
+
+
+def _link_route(client):
+    for route in client.app.routes:
+        if getattr(route, "path", "") == "/chat/turns/{turn_id}/thread" and "POST" in route.methods:
+            return route.endpoint
+    raise AssertionError("no turn-link route")
+
+
+def _rows_of_turn(client, turn_id: str) -> "set[str]":
+    from sqlmodel import select
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.documents import source_store as store
+
+    with session_scope(client.app.state.platform.engine) as db:
+        return {r.thread_id for r in db.exec(select(store.SourceMark).where(
+            store.SourceMark.turn_id == turn_id))}
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_new_chats_first_turn_is_homed_by_the_turn_link_route(client, tmp_path, monkeypatch, lane):
+    """Review A6(b) / B7: a new chat's first turn reads with no chat id; the
+    page links the turn after it ended, and its rows carry the chat (else
+    they are swept after two days and the first reply's links die)."""
+    pdf = make_pdf(tmp_path / "statement.pdf")
+    _scripted_router(client.app.state.platform, monkeypatch,
+                     [[ToolCall(id="c1", name="read_document", arguments={"path": str(pdf)})]],
+                     FINAL)
+    _post_turn(client, lane, {
+        "messages": [{"role": "user", "content": "what were the wages?"}],
+        "tools": ["read_document"], "approval_mode": "yolo", "turn_id": f"turn_new_{lane}",
+    })
+    assert _rows_of_turn(client, f"turn_new_{lane}") == {""}
+    r = client.post(f"/chat/turns/turn_new_{lane}/thread", json={"thread_id": f"thr_new_{lane}"})
+    assert r.status_code == 200, r.text
+    assert _rows_of_turn(client, f"turn_new_{lane}") == {f"thr_new_{lane}"}
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_turn_linked_while_it_runs_writes_its_later_reads_under_the_chat(
+        client, tmp_path, monkeypatch, lane):
+    """Review B7: the page names the chat while the turn runs (between its
+    two reads); the second read's rows carry the chat too."""
+    from iron_jarvis.providers.adapters.base import LLMResponse
+    from iron_jarvis.providers.router import RouteResult
+
+    pdf = make_pdf(tmp_path / "statement.pdf")
+    link = _link_route(client)
+    turn_id, tid = f"turn_live_{lane}", f"thr_live_{lane}"
+    rounds = [[ToolCall(id="c1", name="read_document", arguments={"path": str(pdf)})],
+              [ToolCall(id="c2", name="extract_pdf", arguments={"path": str(pdf), "page_range": "7"})]]
+    state = {"n": 0}
+
+    async def _next() -> LLMResponse:
+        n = state["n"]
+        state["n"] += 1
+        if n == 1:
+            await link(turn_id, {"thread_id": tid})  # the page's link, mid-turn
+        if n < len(rounds):
+            return LLMResponse(text="", tool_calls=list(rounds[n]), usage={"input_tokens": 3, "output_tokens": 2})
+        return LLMResponse(text=FINAL, tool_calls=[], usage={"input_tokens": 3, "output_tokens": 2})
+
+    async def fake_complete(*, system, messages, tools, **kw):
+        return RouteResult(await _next(), "mock", "mock")
+
+    async def fake_stream(*, system, messages, tools, **kw):
+        resp = await _next()
+        if resp.text:
+            yield {"type": "text", "text": resp.text}
+        yield {"type": "final", "response": resp, "provider": "mock", "model": "mock"}
+
+    platform = client.app.state.platform
+    monkeypatch.setattr(platform.router, "complete", fake_complete)
+    monkeypatch.setattr(platform.router, "stream", fake_stream)
+    _post_turn(client, lane, {
+        "messages": [{"role": "user", "content": "what were the wages?"}],
+        "tools": ["read_document", "extract_pdf"], "approval_mode": "yolo", "turn_id": turn_id,
+    })
+    assert state["n"] == 3
+    from sqlmodel import select
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ToolInvocation
+    from iron_jarvis.documents import source_store as store
+
+    with session_scope(platform.engine) as db:
+        second = {i.id for i in db.exec(select(ToolInvocation)) if i.tool == "extract_pdf"}
+        rows = [(r.thread_id, r.invocation_id) for r in db.exec(
+            select(store.SourceMark).where(store.SourceMark.turn_id == turn_id))]
+    assert second, "the second read did not run"
+    assert {t for t, inv in rows if inv in second} == {tid}
+    assert {t for t, _inv in rows} == {tid}
 
 
 def test_the_dashboard_twin_reads_the_same_link_and_words():
@@ -237,6 +479,25 @@ def test_the_dashboard_twin_reads_the_same_link_and_words():
     assert const("NO_RECORD_WORDS") == NO_RECORD_WORDS
 
 
+def test_the_page_compares_a_figure_the_way_the_daemon_does():
+    """The page opens only a record whose key is the link words' key
+    (``lib/sourceLink.figureKey``); the examples the dashboard test reads
+    are the daemon's own keys."""
+    import json
+
+    from iron_jarvis.core.numbers import numbers
+    from iron_jarvis.documents.sources import mark_key
+
+    pairs = json.loads((Path(__file__).resolve().parents[1] / "dashboard" / "__tests__" / "fixtures"
+                        / "figure-keys-v1547.json").read_text(encoding="utf-8"))
+    assert len(pairs) >= 20
+    for text, key in pairs:
+        first = next(iter(numbers(text)), ("", ""))[0]
+        assert first == key, (text, first, key)
+        if key and text.lstrip("$") == text and "%" not in text:
+            assert mark_key(text) == key, text
+
+
 def test_the_phone_gets_the_words_without_the_links():
     from iron_jarvis.documents.sources import without_figure_links
 
@@ -246,6 +507,77 @@ def test_the_phone_gets_the_words_without_the_links():
     src = (Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "comm" / "inbound.py").read_text(
         encoding="utf-8")
     assert "outbound = without_figure_links(reply)" in src
+
+
+LINKED = "Total [48,210.00](#source/src_19c4e2207b3a5d61) for the year."
+
+
+def test_a_reply_typed_on_the_pc_in_a_phone_chat_reaches_the_phone_without_links(tmp_path):
+    """Review A4: POST /comm/threads/{id}/send sent the reply with its link
+    markup to the phone. The chat keeps the links; the phone gets words."""
+    from iron_jarvis.comm import MockChannel
+
+    class _Phone(MockChannel):
+        supports_inbound = True
+
+        def has_credentials(self) -> bool:
+            return True
+
+    c = TestClient(create_app(str(tmp_path / "home")))
+    try:
+        app = c.app
+        ch = _Phone({"inbound_enabled": True, "chat_enabled": True, "allowed_senders": ["777"]})
+        app.state.platform.notifier.add_channel("tg", ch)
+        store = app.state.comm_thread_store
+        tid = store.resolve("tg", "777", "Val").id
+
+        async def scripted_turn(platform, personas, body):
+            return {"reply": LINKED, "provider": "mock", "model": "mock", "tools_used": ["read_document"]}
+
+        app.state.inbound_poller.chat_turn = scripted_turn
+        r = c.post(f"/comm/threads/{tid}/send", json={"text": "what were the wages?"})
+        assert r.status_code == 200, r.text
+        assert ch.sent, "nothing reached the phone"
+        assert "source/" not in "".join(ch.sent)
+        assert "Total 48,210.00 for the year." in "".join(ch.sent)
+        kept = [m for m in store.history_body(tid) if m["role"] == "assistant"]
+        assert kept and kept[-1]["content"] == LINKED  # the chat keeps the links
+    finally:
+        c.close()
+
+
+def test_the_recap_check_never_counts_the_digits_of_a_records_id():
+    """Review A8 / B1: "Done: 61 invoices were filed." was KEPT when the
+    reply was saved linked (the id ``src_19c4e2207b3a5d61`` holds 61 and
+    2207) and dropped when it was saved plain."""
+    from iron_jarvis.workmap.recap import check, lines_of, transcript_text
+
+    msgs = [{"role": "user", "content": "what were the wages?"}, {"role": "assistant", "content": LINKED}]
+    shown = transcript_text(lines_of(msgs))
+    assert "source/" not in shown and "Total 48,210.00 for the year." in shown
+    for invented in ("Done: 61 invoices were filed.", "Done: wages of 2207 were reported."):
+        for text in (shown, "Assistant: " + LINKED):
+            got = check(invented, shown=text)
+            assert not got.lines, (invented, got)
+    assert check("Done: wages were 48,210.", shown=shown).lines
+
+
+def test_an_earlier_chat_added_to_a_message_reaches_the_model_without_links():
+    from iron_jarvis.daemon.chat_refs import render_snapshot
+
+    text, _short = render_snapshot([{"role": "assistant", "content": LINKED}], 4000)
+    assert "source/" not in text and "48,210.00" in text
+
+
+def test_a_shared_chat_carries_the_words_not_the_links():
+    """Review A note: the chat's Share (Markdown, HTML, e-mail) is read
+    outside the app, where a figure link opens nothing."""
+    from iron_jarvis.daemon.routes.chat import _share_transcript
+
+    out = _share_transcript("Wages", "", None, [
+        {"role": "user", "content": "what were the wages?"}, {"role": "assistant", "content": LINKED},
+    ])
+    assert "source/" not in out and "Total 48,210.00 for the year." in out
 
 
 def test_an_unknown_figure_link_is_a_plain_404_and_a_bad_one_400(client):

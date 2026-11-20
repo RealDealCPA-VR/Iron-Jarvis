@@ -298,11 +298,89 @@ def test_csv_line_and_column_and_a_text_file_line(tmp_path, platform):
     assert _invoke(platform, "read_document", {"path": str(note)}, ctx).ok
     marks, reads = turn.snapshot()
     assert reads == 2
-    assert [m["locator"] for m in _by_key(marks, "1500.25")] == [{"line": 2, "col": 3}]
-    assert [m["locator"] for m in _by_key(marks, "312")] == [{"line": 3, "col": 3}]
+    # A CSV figure's place is its record's row and column (the preview's).
+    assert [m["locator"] for m in _by_key(marks, "1500.25")] == [{"row": 2, "col": 3}]
+    assert [m["locator"] for m in _by_key(marks, "312")] == [{"row": 3, "col": 3}]
     assert [m["locator"] for m in _by_key(marks, "6400")] == [{"line": 2}]
     # Dates are not figures.
     assert not [m for m in marks if m["key"] in ("2026", "01", "03")]
+
+
+def _ledger_with_a_line_break(path: Path) -> Path:
+    import csv
+
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["Payee", "Memo", "Amount"])
+        w.writerow(["Acme", "rent\nfor March", "1200.00"])  # a quoted cell with a line break
+        w.writerow(["Bolt", "tools", "48210.50"])
+        w.writerow(["", "", ""])
+        w.writerow(["Cato", "fees", "7315.25"])
+    return path
+
+
+def _preview_places(path: Path) -> dict:
+    """Each figure's row and column as the preview shows the file (csv.reader)."""
+    import csv
+
+    rows = list(csv.reader(path.open(newline="", encoding="utf-8")))
+    return {v: {"row": r, "col": c} for r, row in enumerate(rows, 1) for c, v in enumerate(row, 1)}
+
+
+def test_a_csv_cell_with_a_line_break_keeps_every_later_figure_in_its_row(tmp_path, platform):
+    """Review B3: a quoted cell holding a line break made every later figure
+    one line off (``line 4`` for the preview's row 3)."""
+    ledger = _ledger_with_a_line_break(tmp_path / "ledger.csv")
+    turn = SourceTurn(engine=platform.engine)
+    assert _invoke(platform, "read_document", {"path": str(ledger)}, _ctx(tmp_path, platform, turn)).ok
+    marks, _ = turn.snapshot()
+    want = _preview_places(ledger)
+    for value, key in (("1200.00", "1200"), ("48210.50", "48210.5"), ("7315.25", "7315.25")):
+        assert [m["locator"] for m in _by_key(marks, key)] == [want[value]], (value, marks)
+    assert want["48210.50"] == {"row": 3, "col": 3}
+
+
+def test_an_attached_csv_with_a_line_break_is_placed_by_record_too(tmp_path):
+    ledger = _ledger_with_a_line_break(tmp_path / "ledger.csv")
+    layout: dict = {}
+    text = extract_for_rag(ledger, layout=layout)
+    smap = source_map_for(ledger, text, text, layout)
+    marks = marks_for_output(text, smap)
+    assert [(m.key, m.locator) for m in marks] == [
+        ("1200", {"row": 2, "col": 3}), ("48210.5", {"row": 3, "col": 3}), ("7315.25", {"row": 5, "col": 3}),
+    ]
+
+
+def test_a_word_table_cell_after_a_cell_with_two_paragraphs_keeps_its_column():
+    """Review B4: a cell holding two paragraphs carried no tab into the
+    next line, so the figure after it was put one column left."""
+    word = S.marks_from_pages([({"table": 1, "row": 3}, "x\tnote\nmore\t1,200")], "docx")
+    assert [m.locator for m in word] == [{"table": 1, "row": 3, "col": 3}]
+
+
+def test_a_ranged_excel_read_marks_the_cell_where_the_block_starts(tmp_path, platform):
+    """Review A6(c): ``excel_read`` of ``B3:D5`` puts its first value at B3,
+    so the figure in the block's last cell is D5 (not C3)."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ledger"
+    ws["B3"] = "Item"
+    ws["C3"] = "Note"
+    ws["D3"] = "Amount"
+    ws["B5"] = "Travel"
+    ws["D5"] = 48210.5
+    book = tmp_path / "ranged.xlsx"
+    wb.save(str(book))
+    turn = SourceTurn(engine=platform.engine)
+    res = _invoke(platform, "excel_read", {"path": str(book), "sheet": "Ledger", "range": "B3:D5"},
+                  _ctx(tmp_path, platform, turn))
+    assert res.ok, res.error
+    marks, _ = turn.snapshot()
+    assert [m["locator"] for m in _by_key(marks, "48210.5")] == [{"sheet": "Ledger", "cell": "D5"}]
+    row = [r for r in _rows(platform) if r["key"] == "48210.5"][0]
+    assert "Ledger!D5" in row["context"] and "Travel" in row["context"]
 
 
 # --------------------------------------------------------------------------- #

@@ -11,7 +11,7 @@ written by code at the moment of the read, never from what a model wrote.
   the registry turns the answer and its map into MARKS (:func:`record_marks`):
   every figure in the file's text, by code (``core/numbers.figures``), with
   its place (``{page, line}``, ``{paragraph}``, ``{table, row, col}``,
-  ``{line}`` (and ``col`` for a CSV), ``{sheet, cell}``) and the line it
+  ``{line}``, ``{row, col}`` for a CSV record, ``{sheet, cell}``) and the line it
   sat on (secret-masked). They are kept in ``sourcemark``
   (``documents/source_store``). At most :data:`MAX_MARKS_PER_READ` a read.
   Marks are written only for a chat turn (its tool context carries the
@@ -23,10 +23,13 @@ written by code at the moment of the read, never from what a model wrote.
   any other figure becomes ``[73,519](#source/none)``, which the page draws
   with a faint dotted line and whose press says there is no record. Only
   when the turn read at least one file: a plain chat is left alone. A
-  ``#source/`` link the MODEL wrote is turned back into plain text first, so
-  a model can never mint one. Code, links, addresses and HTML are never
-  touched. The linked text is what the done frame carries, so the saved
-  chat keeps its links.
+  ``#source/`` link the MODEL wrote is turned back into plain text first
+  (by the address the page would resolve, in any of Markdown's forms), so a
+  model can never mint one; the history sent back to the model carries no
+  figure link, so it never sees a record's id; and the page opens a record
+  only for a figure whose value is the record's. Code, links, addresses,
+  file names and paths, and HTML are never touched. The linked text is what
+  the done frame carries, so the saved chat keeps its links.
 
 What a classifier (or this module) may never do: change what is read. Marks
 are computed from text that was already extracted for the model; nothing
@@ -37,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import json
 import logging
 import re
@@ -154,8 +158,12 @@ def _marks(segments: Iterable[tuple], *, limit: int = MAX_MARKS_PER_READ,
                 loc = dict(base)
                 if mode in ("lines", "lines_cols"):
                     loc["line"] = n
-                if mode == "lines_cols" or mode == "cols":
+                if mode == "lines_cols":
                     loc["col"] = masked.count("\t", 0, fig.start) + 1
+                elif mode == "cols":
+                    # A Word table row or a CSV record: a cell that holds a
+                    # line break carries its tabs into the next line.
+                    loc["col"] = tabs_before + masked.count("\t", 0, fig.start) + 1
                 elif mode == "cells":
                     col = tabs_before + masked.count("\t", 0, fig.start) + 1
                     row = loc.pop("row", 0)
@@ -230,6 +238,12 @@ def source_map_for(path: "str | Path", raw: str, text: str, layout: "dict | None
     if kind == "sheet" and layout.get("rows"):
         rows = _shift(layout["rows"], start, end, spans=2)
         return {**base, "kind": "sheet", "rows": rows} if rows else None
+    if kind == "csv" and layout.get("rows"):
+        # One stretch per CSV record (a quoted cell may hold a line break, so
+        # a record is not a line): the place is its row and column, the row
+        # the preview shows.
+        rows = _shift(layout["rows"], start, end, spans=2)
+        return {**base, "kind": "csv", "rows": rows} if rows else None
     if suffix in TABLE_TEXT:
         return {**base, "kind": "csv"}
     if suffix == ".pptx":
@@ -307,6 +321,11 @@ def _segments(output: str, smap: dict) -> list:
                     segs.append(({"page": int(n)}, s, output[s:e], "lines"))
     elif kind in ("text", "pptx"):
         segs.append(({}, start, output[start:end], "lines"))
+    elif kind == "csv" and smap.get("rows"):
+        for r in smap.get("rows") or []:
+            s, e = int(r[0]), min(int(r[1]), end)
+            if s < e:
+                segs.append(({"row": int(r[2])}, s, output[s:e], "cols"))
     elif kind == "csv":
         segs.append(({}, start, output[start:end], "lines_cols"))
     elif kind == "docx":
@@ -472,31 +491,135 @@ def record_attachment(engine: Any, turn: "SourceTurn | None", text: str, smap: "
 # --------------------------------------------------------------------------- #
 # the reply
 # --------------------------------------------------------------------------- #
-_FENCE_RX = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+#: A fence opens or closes a code block (at any depth: a fence inside a
+#: nested list item is indented too).
+_FENCE_RX = re.compile(r"^\s*(`{3,}|~{3,})")
+#: A list item's marker ("- ", "* ", "+ ", "1. ", "2) ").
+_LIST_ITEM_RX = re.compile(r"^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)")
+#: Link words: brackets may nest one level, and a backslash escapes.
+_LINK_TEXT = r"(?:[^\[\]\n\\]|\\.|\[(?:[^\[\]\n\\]|\\.)*\])*"
+#: A link's address: the ``<…>`` form, or a run with balanced parentheses.
+_LINK_DEST = r"<[^<>\n]*>|(?:[^\s()\\]|\\.|\((?:[^\s()\\]|\\.)*\))+"
+_LINK_TITLE = r"""(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\))"""
+#: An inline link or picture: ``[words](address "title")``.
+_INLINE_LINK_RX = re.compile(
+    r"!?\[(" + _LINK_TEXT + r")\]\([ \t]*(" + _LINK_DEST + r")?(?:[ \t]+" + _LINK_TITLE
+    + r")?[ \t]*\)"
+)
+#: A link definition, ``[label]: address`` (the address may sit on the next line).
+_DEFINITION_RX = re.compile(
+    r"^[ ]{0,3}\[((?:[^\[\]\n\\]|\\.)+)\]:[ \t]*\n?[ \t]*(" + _LINK_DEST + r")"
+    r"(?:[ \t]+" + _LINK_TITLE + r")?[ \t]*(?:\n|$)",
+    re.MULTILINE,
+)
+#: A reference to a definition: ``[words][label]``, ``[label][]``, ``[label]``.
+_REFERENCE_RX = re.compile(
+    r"\[(" + _LINK_TEXT + r")\](?:\[((?:[^\[\]\n\\]|\\.)*)\])?(?![(\[:])"
+)
+_ESCAPE_RX = re.compile(r"\\([!-/:-@\[-`{-~])")
 #: What a figure inside is never linked in: inline code, a link or picture
-#: (its words and its address), an autolink, a bare web address, an HTML tag,
-#: a link definition.
+#: (its words and its address), a reference-style link, an autolink, a bare
+#: web address, an HTML tag, a link definition.
 _PROTECTED_RX = re.compile(
     r"(`+)[^`\n]*?\1"
-    r"|!?\[[^\]\n]*\]\([^)\n]*\)"
+    r"|!?\[" + _LINK_TEXT + r"\]\([^)\n]*\)"
+    r"|!?\[" + _LINK_TEXT + r"\]\[(?:[^\[\]\n\\]|\\.)*\]"
     r"|<[a-zA-Z][^<>\n]*>|</[a-zA-Z][^<>\n]*>"
     r"|\b(?:https?|ftp|file)://[^\s)\]>]+"
     r"|\bwww\.[^\s)\]>]+"
     r"|^\s{0,3}\[[^\]\n]+\]:\s*\S.*$"
 )
-#: A ``#source/`` link a model wrote itself: its words stay, the link goes.
-_MODEL_LINK_RX = re.compile(r"\[([^\]\n]*)\]\(\s*" + re.escape(SOURCE_LINK_PREFIX) + r"[^)\n]*\)")
+#: A word of the reply (for telling a file name or a path).
+_WORD_RX = re.compile(r"\S+")
+_FILE_EXT_RX = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,4}$")
+_DRIVE_RX = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _address(dest: str) -> str:
+    """A link address as the page's Markdown reads it: the ``<…>`` form
+    opened, backslash escapes and character references resolved."""
+    d = (dest or "").strip()
+    if d.startswith("<") and d.endswith(">"):
+        d = d[1:-1]
+    return html.unescape(_ESCAPE_RX.sub(r"\1", d)).strip()
+
+
+def _is_figure_address(dest: str) -> bool:
+    return _address(dest).lower().startswith(SOURCE_LINK_PREFIX)
+
+
+def _label(text: str) -> str:
+    return " ".join(str(text or "").split()).casefold()
 
 
 def strip_model_links(text: str) -> str:
-    """``[x](#source/…)`` → ``x``: only Iron Jarvis's own record makes one."""
-    if SOURCE_LINK_PREFIX not in (text or ""):
+    """Every figure link in ``text`` turned back into its words: only Iron
+    Jarvis's own record makes one. By the address the page would RESOLVE,
+    whatever way it is written: ``[x](#source/…)``, ``[x](<#source/…>)``,
+    ``[x](\\#source/…)``, ``[x](&#35;source/…)``, link words with brackets
+    inside, and a reference (``[x][1]`` with ``[1]: #source/…``: the
+    definition goes and every use of it becomes its words)."""
+    text = str(text or "")
+    if "](" not in text and "]:" not in text:
         return text
-    return _MODEL_LINK_RX.sub(lambda m: m.group(1), text)
+    labels: set[str] = set()
+
+    def drop_definition(m: "re.Match[str]") -> str:
+        if not _is_figure_address(m.group(2)):
+            return m.group(0)
+        labels.add(_label(m.group(1)))
+        return ""
+
+    if "]:" in text:
+        text = _DEFINITION_RX.sub(drop_definition, text)
+
+    def unlink(m: "re.Match[str]") -> str:
+        return m.group(1) if _is_figure_address(m.group(2) or "") else m.group(0)
+
+    # A link inside another link's words is undone on the next pass.
+    for _ in range(4):
+        out = _INLINE_LINK_RX.sub(unlink, text)
+        if out == text:
+            break
+        text = out
+    if labels:
+        def unref(m: "re.Match[str]") -> str:
+            words, label = m.group(1), m.group(2)
+            return words if _label(label if label else words) in labels else m.group(0)
+
+        text = _REFERENCE_RX.sub(unref, text)
+    return text
 
 
-#: A reply's words without its figure links (the phone, a copy).
+#: A reply's words without its figure links (the phone, a copy, a check that
+#: reads a saved chat, the history sent back to the model).
 without_figure_links = strip_model_links
+
+
+def history_without_figure_links(messages: Any) -> list:
+    """A chat's history with the figure links of Iron Jarvis's own replies
+    turned back into words (both lanes plan their history through
+    ``chat_turn._plan_context``, which calls this): the model never sees a
+    record's id, so it has none to copy. A user's line is never changed.
+    Never raises (the messages as they came)."""
+    items = list(messages or [])
+    try:
+        out: list = []
+        for m in items:
+            role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+            if role != "assistant" or not isinstance(content, str) or SOURCE_LINK_PREFIX not in content:
+                out.append(m)
+                continue
+            plain = strip_model_links(content)
+            if isinstance(m, dict):
+                out.append({**m, "content": plain})
+            else:
+                out.append(m.model_copy(update={"content": plain}))
+        return out
+    except Exception:  # noqa: BLE001 — a link never takes out a turn
+        log.warning("could not take the figure links out of the history", exc_info=True)
+        return items
 
 
 def _places(marks: "list[dict]") -> "dict[str, list[str]]":
@@ -518,10 +641,34 @@ def _places(marks: "list[dict]") -> "dict[str, list[str]]":
     return by_key
 
 
-def _link_line(line: str, by_key: "dict[str, list[str]]", seen: "set[str] | None") -> str:
+def _is_path_word(word: str) -> bool:
+    """A word that names a file or a folder: a drive or network path, two
+    or more separators (``clients/10432/return.pdf``), or a name that ends in
+    a file type (``statement-48210.pdf``, ``10432\\return.pdf``). A link
+    inside one would break the name."""
+    w = word.strip("\"'([{<*_").rstrip(".,;:!?)]}>\"'*_")
+    if not w:
+        return False
+    if _DRIVE_RX.match(w) or w.startswith("\\\\"):
+        return True
+    if w.count("/") + w.count("\\") >= 2:
+        return True
+    return bool(_FILE_EXT_RX.search(w))
+
+
+def _blank_paths(scan: str) -> str:
+    if "." not in scan and "/" not in scan and "\\" not in scan:
+        return scan
+    return _WORD_RX.sub(
+        lambda m: "\x00" * (m.end() - m.start()) if _is_path_word(m.group(0)) else m.group(0), scan)
+
+
+def _link_line(line: str, by_key: "dict[str, list[str]]", seen: "set[str] | None",
+               dot: bool = True) -> str:
     # Protected stretches are blanked (same length) for the search, so every
     # position still points into the real line.
     scan = _PROTECTED_RX.sub(lambda m: "\x00" * (m.end() - m.start()), line)
+    scan = _blank_paths(scan)
     figs = figures(scan)
     if not figs:
         return line
@@ -533,10 +680,11 @@ def _link_line(line: str, by_key: "dict[str, list[str]]", seen: "set[str] | None
         ids = by_key.get(fig.key)
         if ids:
             target = ",".join(ids)
-        elif seen is not None and fig.key in seen:
+        elif (seen is not None and fig.key in seen) or not dot:
             # In something the model was given this turn (a page, an e-mail,
             # memory, the user's own words) but not at a recorded place:
-            # left as it is, never called "worked out".
+            # left as it is, never called "worked out". (``dot`` False: the
+            # model was shown a picture, whose figures no text can tell.)
             continue
         else:
             target = NO_RECORD
@@ -557,7 +705,9 @@ def given_figures(*texts: Any) -> "set[str]":
     def take(value: Any) -> None:
         if isinstance(value, str):
             if value:
-                out.update(figures_in(value))
+                # A saved reply's figure link: its words count, never the
+                # digits of the record's id.
+                out.update(figures_in(strip_model_links(value) if SOURCE_LINK_PREFIX in value else value))
         elif isinstance(value, dict):
             take(value.get("content"))
             take(value.get("text"))
@@ -572,33 +722,70 @@ def given_figures(*texts: Any) -> "set[str]":
     return out
 
 
+def _indent(line: str) -> int:
+    """How far a line is indented, a tab counting to the next multiple of 4."""
+    width = 0
+    for ch in line:
+        if ch == " ":
+            width += 1
+        elif ch == "\t":
+            width += 4 - width % 4
+        else:
+            break
+    return width
+
+
 def link_reply(reply: str, marks: "list[dict]", *, read_any: bool = True,
-               seen: "set[str] | None" = None) -> str:
+               seen: "set[str] | None" = None, dot: bool = True) -> str:
     """The reply with its figures linked (see the module docstring). A
     model-written ``#source/`` link always loses its link; figures are
     linked only when ``read_any`` (the turn read at least one file). With
     ``seen`` (the numbers of everything the model was given this turn), a
     figure with no mark that IS in it is left plain: only a figure found in
-    nothing the model was given is called one with no record."""
+    nothing the model was given is called one with no record. ``dot`` False
+    (the model was shown a picture): no figure is called one with no record.
+
+    Code is never touched: a fenced block, and an indented code block (four
+    spaces or a tab after a blank line, outside a list). A nested list item
+    or a list item's next line indented as deep is words, and linked."""
     text = strip_model_links(str(reply or ""))
     if not read_any or not text:
         return text
     by_key = _places(marks)
     lines = text.split("\n")
     fence = ""
+    in_code = False
+    in_list = False
+    after_blank = True
     for i, line in enumerate(lines):
         m = _FENCE_RX.match(line)
         if fence:
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
                 fence = ""
             continue
+        if not line.strip():
+            after_blank = True
+            continue
+        deep = _indent(line) >= 4
+        if in_code:
+            if deep:
+                continue
+            in_code = False
+        if deep and after_blank and not in_list:
+            # An indented code block: left alone.
+            in_code = True
+            after_blank = False
+            continue
         if m:
             fence = m.group(1)
+            after_blank = False
             continue
-        if line.startswith("    ") or line.startswith("\t"):
-            # An indented code block (or a deep list item): left alone.
-            continue
-        lines[i] = _link_line(line, by_key, seen)
+        if _LIST_ITEM_RX.match(line):
+            in_list = True
+        elif after_blank and _indent(line) == 0:
+            in_list = False  # a paragraph at the margin after a blank line ends a list
+        after_blank = False
+        lines[i] = _link_line(line, by_key, seen, dot)
     return "\n".join(lines)
 
 
@@ -619,9 +806,23 @@ def _not_the_reply(given: Any, head: str) -> list:
     return out
 
 
+def shown_a_picture(*given: Any) -> bool:
+    """True when anything the model was given carries a picture (an image
+    attached to a message): figures read off it have no text to find them in."""
+    def has(value: Any) -> bool:
+        if isinstance(value, (list, tuple)):
+            return any(has(v) for v in value)
+        if isinstance(value, dict):
+            return bool(value.get("images"))
+        return bool(getattr(value, "images", None))
+
+    return any(has(g) for g in given)
+
+
 def _link_given(head: str, marks: "list[dict]", read_any: bool, given: Any) -> str:
     seen = given_figures(*_not_the_reply(given, head)) if (read_any and given is not None) else None
-    return link_reply(head, marks, read_any=read_any, seen=seen)
+    dot = not (read_any and given is not None and shown_a_picture(given))
+    return link_reply(head, marks, read_any=read_any, seen=seen, dot=dot)
 
 
 async def link_turn_reply(head: str, turn: "SourceTurn | None", *, given: Any = None) -> str:
@@ -640,7 +841,8 @@ async def link_turn_reply(head: str, turn: "SourceTurn | None", *, given: Any = 
     if not head:
         return head
     marks, reads = turn.snapshot() if isinstance(turn, SourceTurn) else ([], 0)
-    if not reads and SOURCE_LINK_PREFIX not in head:
+    if not reads and "](" not in head and "]:" not in head:
+        # No read and no link of any kind: nothing a model could have minted.
         return head
     try:
         return await asyncio.to_thread(_link_given, head, marks, reads > 0, given)
@@ -672,7 +874,8 @@ __all__ = [
     "CONTEXT_CHARS", "MAX_IDS_PER_LINK", "MAX_MARKS_PER_READ", "MAX_MARKS_PER_TURN", "Mark",
     "NO_RECORD", "NO_RECORD_WORDS", "PAGE_LABEL_RX", "SOURCE_LINK_PREFIX", "SourceTurn",
     "cell_entry", "cells_map", "file_hash", "given_figures", "grid_entries", "link_live_turn",
-    "link_reply", "link_turn_reply", "mark_key", "marks_for_output", "marks_from_pages",
-    "record_attachment", "record_marks", "source_map_for", "strip_model_links",
-    "with_linked_head", "without_figure_links",
+    "history_without_figure_links", "link_reply", "link_turn_reply", "mark_key",
+    "marks_for_output", "marks_from_pages", "record_attachment", "record_marks",
+    "shown_a_picture", "source_map_for", "strip_model_links", "with_linked_head",
+    "without_figure_links",
 ]

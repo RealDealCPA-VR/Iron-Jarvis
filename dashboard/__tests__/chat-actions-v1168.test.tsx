@@ -412,7 +412,12 @@ describe("source hygiene — chat/page.tsx stays a TEXT file to git", () => {
     // eslint-disable-next-line no-control-regex
     expect(src).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f]/);
     // The intended separator is the printable ':' — the key template survives.
-    expect(src).toContain("key={`${previewNonce}:${previewPath}`}");
+    // v1.547.0 (idea 30-a): a third part, the place a figure opens at, joined
+    // by the same printable ':' (a new place in the same file remounts).
+    expect(src).toContain("key={`${previewNonce}:${previewPath}:${");
+    expect(src).toMatch(
+      /key=\{`\$\{previewNonce\}:\$\{previewPath\}:\$\{\s*previewAt\?\.path === previewPath \? placeKey\(previewAt\.at\) : ""\s*\}`\}/,
+    );
   });
 });
 
