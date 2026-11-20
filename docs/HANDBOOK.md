@@ -2076,6 +2076,24 @@ Jarvis cannot take files sent from your phone yet.
 
 To work with a file now, drop it into Chat in the desktop app.
 
+## A task from another computer brings as much of its chat as fits (v1.546.1)
+
+When one of your other computers sends this one a task ("@desk read the
+notes"), the chat it was asked in rides along so the work starts with the
+same background. Until now only the newest 20 messages of that chat arrived,
+and at most 8,000 characters of them; the rest stayed behind without a word.
+
+- **As much as fits, newest whole.** The chat is now fitted the way a chat
+  here is: the newest messages that fit arrive in full, in order. The task
+  and its chat together take at most a quarter of what the model on this
+  computer can read at once (about 28,000 characters at most), so the run
+  keeps room for its own work. A long task leaves less room for the chat.
+- **What did not fit is said.** When older messages had to stay behind, the
+  task says how many, and how the first of them began, so the run (and you,
+  reading the run) knows the chat did not start there.
+- **Nothing to do.** It works for every paired computer and for a computer
+  you connected by hand.
+
 ## Rewind works in folders without git too (v1.546.0)
 
 "Rewind to here" can put a folder's files back as they were when a message

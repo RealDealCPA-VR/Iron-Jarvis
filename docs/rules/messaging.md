@@ -19,6 +19,7 @@ How to use this file: read the contents list, then read only the entries your ch
 - L351: **An answer to another computer says how the run really ended, and the asking side ends the member from that, never from the kind** (v1.514.0)
 - L368: **A phone turn knows its chat, and the desk door builds the phone door's body** (v1.515.0)
 - L378: **A file the phone cannot take is said in words on Slack and email too, after the guards, never before** (v1.546.1)
+- L378: **A task from another computer carries its conversation PLANNED, never its newest N rows**
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -401,3 +402,19 @@ How to use this file: read the contents list, then read only the entries your ch
   `file_share` included; it needs a tunnel, so nobody reaches it by default.
   When 10-a lands, a file it reads leaves this count.
   Pin: `tests/test_files_not_taken_r03.py`.
+
+- **A task from another computer carries its conversation PLANNED, never its newest N rows** (build-out R0.1).
+  `task_door.build_task_text` runs every row that rode along
+  (`remote._history_messages(..., tail=None)`) through
+  `context.budget.plan_history`, the opening line and the task priced first
+  (`system_text`), `reserve=0`, against `task_room(window)`: a quarter of the
+  window the RUN will be planned against, at most `TASK_TOKENS_MAX`.
+  `planned_task_text` reads that window and ratio through the run's own
+  resolver (`chat_turn._context_window` / `_history_ratio`, the defaults a
+  door's run gets); the door calls it through `asyncio.to_thread`. What is
+  left out is counted and its openings listed inside `RECAP_RESERVE` (the
+  planner's own recap calls the person "You"); a newest row cut to fit ends
+  " …". The door must fit first: the run's planner cuts the task from its
+  END, where the newest messages are. Left open: the conversation is not
+  fenced inside the task; 41-c brings its own budget for a whole hand-over.
+  Pin: `tests/test_task_door_history_budget_r01.py`.

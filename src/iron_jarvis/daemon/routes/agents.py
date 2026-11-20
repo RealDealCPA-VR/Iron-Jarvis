@@ -3905,9 +3905,15 @@ def register(app: FastAPI, d) -> None:
         from ...agents.orchestrator import EmergencyStopOn
         from ...providers import egress as _egress
 
+        # Build-out R0.1: the sender's conversation is PLANNED against the
+        # window the run will be planned against, never cut to its last rows.
+        # Off the loop: it measures every row of a body of up to 2 MB.
+        task_text = await asyncio.to_thread(
+            td.planned_task_text, d.platform, task, body.get("history"), caller
+        )
         try:
             session = await orchestrator.create_session(
-                td.build_task_text(task, body.get("history"), caller),
+                task_text,
                 AgentType.SUPERVISOR,
                 origin=origin,
                 trust="low",

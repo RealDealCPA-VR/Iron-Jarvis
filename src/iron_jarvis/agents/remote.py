@@ -100,9 +100,13 @@ INBOUND_KINDS = ("message", "progress", "question", "done")
 INBOUND_MESSAGE_CHARS = 12_000
 
 
-def _history_messages(history: Any) -> list[dict[str, str]]:
+def _history_messages(history: Any, *, tail: int | None = _HISTORY_ROWS) -> list[dict[str, str]]:
     """``history`` rows → clean ``[{role, content}]`` (user/assistant only,
-    blank rows dropped, a bounded tail). Never raises."""
+    blank rows dropped, a bounded tail). Never raises.
+
+    ``tail=None`` keeps every row: the task door (build-out R0.1) hands them
+    all to ``context.budget.plan_history``, which decides what fits and counts
+    what it leaves out, so no row disappears without a word."""
     if not isinstance(history, list):
         return []
     out: list[dict[str, str]] = []
@@ -114,7 +118,7 @@ def _history_messages(history: Any) -> list[dict[str, str]]:
             continue
         role = "user" if str(row.get("role") or "") == "user" else "assistant"
         out.append({"role": role, "content": content[:_HISTORY_ROW_CHARS]})
-    return out[-_HISTORY_ROWS:]
+    return out if tail is None else out[-tail:]
 
 
 def _responses_text(data: Any) -> str:

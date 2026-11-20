@@ -120,9 +120,24 @@ TASK_MAX_CHARS = 12_000
 #: The whole request body's cap (history rides along).
 TASK_MAX_BODY_BYTES = 2 * 1024 * 1024
 
-#: How much of the sender's conversation the session's task carries.
-HISTORY_ROWS_IN_TASK = 20
-HISTORY_CHARS_IN_TASK = 8_000
+#: How much of the sender's conversation the session's task carries
+#: (build-out R0.1). It is PLANNED by ``context.budget.plan_history``, the
+#: planner both chat lanes use, never cut to its newest N rows: the newest
+#: messages that fit are kept whole and the rest are counted and summed up in
+#: one short list ("History is budgeted, never sliced", docs/rules/context.md).
+#: The room is for the WHOLE task (the opening line, the task, the
+#: conversation): a share of the window the run will be planned against
+#: (:func:`planned_task_text` asks the run's own resolver), never more than
+#: ``TASK_TOKENS_MAX``. The rest of that window stays the run's own: its
+#: instructions, its tools, its steps and its answer. The run's planner
+#: (``context.agent_window``) keeps the task whole and cuts it only as a last
+#: resort, from the END, which is where the newest messages are: so the door
+#: fits the conversation first.
+TASK_WINDOW_SHARE = 0.25
+TASK_TOKENS_MAX = 8_000
+
+#: The line the sender's conversation opens with inside the task.
+CONVERSATION_HEAD = "The conversation so far on that computer:"
 
 #: The reply's bound (the WHOLE call, not a per-phase httpx timeout).
 REPLY_TIMEOUT_S = 20.0
@@ -527,31 +542,126 @@ def door_for(platform: Any) -> TaskDoor:
 # --------------------------------------------------------------------------- #
 
 
-def build_task_text(task: str, history: Any, caller: str) -> str:
-    """The session's task: where it came from, the task itself, and the tail
-    of the sender's conversation (bounded; newest kept) when one rode along."""
+def task_room(window: int | None) -> int:
+    """Tokens the whole task may take: ``TASK_WINDOW_SHARE`` of the run's
+    window (the planner's own guess, ``DEFAULT_WINDOW``, when it is unknown),
+    never more than ``TASK_TOKENS_MAX``."""
+    from ..context.budget import DEFAULT_WINDOW
+
+    try:
+        win = int(window or 0)
+    except (TypeError, ValueError):
+        win = 0
+    if win <= 0:
+        win = DEFAULT_WINDOW
+    return max(1, min(TASK_TOKENS_MAX, int(win * TASK_WINDOW_SHARE)))
+
+
+def _speaker(row: dict[str, str]) -> str:
+    return "The person" if row.get("role") == "user" else "Assistant"
+
+
+#: The opening words of one left-out message, at most this many characters.
+LEFT_OUT_LINE_CHARS = 160
+
+
+def left_out_words(n: int) -> str:
+    """The sentence above the list of messages that did not fit."""
+    if n == 1:
+        return "1 earlier message was left out to fit. How it began:"
+    return f"{n} earlier messages were left out to fit. How they began:"
+
+
+def _left_out(rows: list[dict[str, str]], chars_per_token: float | None) -> str:
+    """How the left-out messages began, oldest first: one short line each,
+    the whole list never more than the room the planner held back for it
+    (``budget.RECAP_RESERVE``), so the task still fits. The count says how
+    many there were even when the list is cut short."""
+    from ..context.budget import RECAP_RESERVE, estimate_tokens
+
+    lines = [left_out_words(len(rows))]
+    for row in rows:
+        words = " ".join(row["content"].split())
+        if len(words) > LEFT_OUT_LINE_CHARS:
+            cut = words[:LEFT_OUT_LINE_CHARS]
+            words = (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip() + " …"
+        line = f"- {_speaker(row)}: {words}"
+        if estimate_tokens("\n".join([*lines, line]), chars_per_token) > RECAP_RESERVE:
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def build_task_text(
+    task: str,
+    history: Any,
+    caller: str,
+    *,
+    window: int | None = None,
+    chars_per_token: float | None = None,
+) -> str:
+    """The session's task: where it came from, the task itself, and the
+    sender's conversation when one rode along, PLANNED (build-out R0.1).
+
+    ``window`` is the window the run will be planned against (None: unknown)
+    and ``chars_per_token`` its measured ratio (None: the planner's default);
+    :func:`planned_task_text` reads both. The opening line and the task are
+    priced first (``system_text``), so a long task leaves less room for the
+    conversation; the reply's room is the run's own business (``reserve=0``).
+    Every row that rode along is either kept whole, kept cut (only the newest,
+    only when it alone does not fit, marked " …"), or counted as left out.
+    Pure and never raises on a malformed history; it measures every row, so a
+    door calls it off the event loop."""
+    from ..context.budget import plan_history
     from .remote import _history_messages
 
     text = TASK_INTRO.format(caller=clean_caller(caller)) + "\n\n" + str(task or "").strip()
-    rows = _history_messages(history)[-HISTORY_ROWS_IN_TASK:]
+    rows = _history_messages(history, tail=None)
     if not rows:
         return text
-    lines: list[str] = []
-    used = 0
-    for row in reversed(rows):
-        who = "The person" if row["role"] == "user" else "Assistant"
-        line = f"{who}: {row['content']}"
-        if used + len(line) > HISTORY_CHARS_IN_TASK:
-            room = HISTORY_CHARS_IN_TASK - used
-            if room > 200:
-                lines.append(line[:room].rstrip() + " …")
-            break
-        lines.append(line)
-        used += len(line)
-    if not lines:
-        return text
-    lines.reverse()
-    return text + "\n\nThe conversation so far on that computer:\n" + "\n".join(lines)
+    head = text + "\n\n" + CONVERSATION_HEAD
+    plan = plan_history(
+        rows,
+        window=task_room(window),
+        system_text=head,
+        chars_per_token=chars_per_token,
+        reserve=0,
+    )
+    parts = [head]
+    if plan.dropped:
+        # The planner keeps the NEWEST messages, so the ones it left out are
+        # the oldest ``plan.dropped`` rows. Its own recap is not used: it
+        # calls the person "You", and here the person is on the other computer.
+        parts.append(_left_out(rows[: plan.dropped], chars_per_token) + "\n")
+    kept = [f"{_speaker(m)}: {m['content']}" for m in plan.messages]
+    if kept and plan.clipped_last:
+        kept[-1] = kept[-1].rstrip() + " …"
+    parts.extend(kept)
+    return "\n".join(parts)
+
+
+def planned_task_text(platform: Any, task: str, history: Any, caller: str) -> str:
+    """:func:`build_task_text` against the window the run will be planned
+    against: the RUN's own resolver (``daemon.chat_turn._context_window`` and
+    ``_history_ratio``, which ``runtime`` calls each step), with the provider
+    and model a door's run gets (none named: the configured defaults, as
+    ``Orchestrator.create_session`` sets them). Blocking (it measures the
+    whole conversation, a body may be 2 MB): the door calls it through
+    ``asyncio.to_thread``. Never raises: a window that cannot be read is
+    unknown, as it is for the run."""
+    window: int | None = None
+    ratio: float | None = None
+    try:
+        from types import SimpleNamespace
+
+        from ..daemon.chat_turn import _context_window, _history_ratio
+
+        d = SimpleNamespace(platform=platform)
+        window = _context_window(d, "", "")
+        ratio = _history_ratio(d, "", "")
+    except Exception:  # noqa: BLE001 — the planner's own default window then
+        log.debug("task door: the run's window could not be read", exc_info=True)
+    return build_task_text(task, history, caller, window=window, chars_per_token=ratio)
 
 
 def pinned_reply_to(peer: Any, reply_to: str) -> str:
