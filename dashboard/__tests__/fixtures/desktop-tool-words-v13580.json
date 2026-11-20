@@ -650,6 +650,12 @@
       "desktop": "stop using a coding team in a folder"
     },
     {
+      "tool": "build_checks_set",
+      "kind": "table",
+      "card": "turn tests after each Build › Code reply on or off in a folder",
+      "desktop": "turn tests after each Build › Code reply on or off in a folder"
+    },
+    {
       "tool": "model_server_add",
       "kind": "table",
       "card": "add a model server",

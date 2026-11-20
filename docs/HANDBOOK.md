@@ -2055,8 +2055,10 @@ writes one line under the reply, from its own record:
 the exact command: *Run `npm test` after each reply in this folder?* It says
 that failing tests send the tool back to fix them, up to twice per message,
 on your plan. **Yes, after each reply** keeps that command for the folder and
-checks the reply right away. **Not in this folder** keeps the folder off. It
-asks again only if the folder's command changes (for example a new
+checks the reply right away (when that reply can no longer be checked, for
+example because you already sent another message, the card goes and the line
+says the command runs from the next reply). **Not in this folder** keeps the
+folder off. It asks again only if the folder's command changes (for example a new
 `.ironjarvis/harness/plugins.toml` check, or `pnpm` taking over from `npm`).
 Nothing runs before your yes, and a command the coding tool ran itself is
 never taken as the check.
@@ -2071,7 +2073,10 @@ says so.
 
 **When the tests fail.** The line says how many ran and passed, and the tool
 is sent back with the end of the test output (shown to it as data, never as
-instructions). After its fix the reply is checked again. If the same failure
+instructions, with anything that looks like a password or key hidden). Tests
+that break before any of them runs (a suite that does not load) count as
+failing: *ended with an error before any test ran*. Only a clean run that
+found nothing to test says *found no tests to run*, without a check mark. After its fix the reply is checked again. If the same failure
 comes back, or after two tries, the line says *This is not finished* and
 offers **Rewind to before this message** (the rewind preview first). Output
 that reads like instructions to a model is not sent back; the line says so.

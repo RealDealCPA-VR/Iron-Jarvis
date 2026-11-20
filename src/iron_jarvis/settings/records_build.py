@@ -1434,8 +1434,8 @@ class BuildChecksSetTool(_FolderTool):
             plan = await asyncio.to_thread(PROOF.decide, engine, folder)
             if plan.get("state") == "off" and plan.get("why") == PROOF.WHY_FOLDER_FILE:
                 return ToolResult(ok=False, error=(
-                    f"The folder's own .ironjarvis/harness/finish.toml turns the check off in {folder}; change "
-                    "that file first."))
+                    f"The folder's own finish.toml (in its .ironjarvis folder) turns the check off in {folder}; "
+                    "change that file first."))
             command = " ".join(str(args.get("command") or "").split())
             if not command:
                 command = str(plan.get("command") or "") if plan.get("state") in ("ask", "run") else ""
@@ -1494,7 +1494,9 @@ class CodingReplyCheckTool(Tool):
             return ToolResult(ok=True, output=f"{head} Iron Jarvis has not checked any of its replies yet.",
                               data={"session": row.id, "check": None})
         when = str(rec.get("at") or "")
-        return ToolResult(ok=True, output=f"{head} {rec.get('line')} (checked {when}; Iron Jarvis's own record.)",
+        # "written", never "checked": the newest record may be the card's
+        # question or a kept answer, not a run.
+        return ToolResult(ok=True, output=f"{head} {rec.get('line')} (Iron Jarvis's own record, written {when}.)",
                           data={"session": row.id, "check": {k: rec.get(k) for k in (
                               "tests", "why", "command", "ran", "passed", "failed", "new_files", "at", "for_turn")}})
 

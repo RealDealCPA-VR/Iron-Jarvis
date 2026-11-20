@@ -8,7 +8,9 @@
   (409) when the folder now proposes another command, or when the folder's
   own ``finish.toml`` turns the check off; then checks the reply the card
   was under (``check_again.recheck``: the same judge, tests first) when it is
-  the session's newest and nothing runs.
+  the session's newest and nothing runs. When that reply cannot be checked
+  now, the card still goes: a record under it says the command runs from the
+  next reply on (``_note_kept``), so a Yes never looks like it did nothing.
 * ``run: false`` keeps "not after replies here" for the folder; the card
   goes and the line under that reply says how to turn it back on.
 
@@ -38,8 +40,8 @@ COMMAND_CHANGED = (
 )
 #: The folder's own finish.toml has the say.
 FOLDER_FILE_OFF = (
-    "This folder's .ironjarvis/harness/finish.toml turns the check off, so nothing was kept. Change that "
-    "file to let Iron Jarvis run its tests."
+    "This folder's own finish.toml (in its .ironjarvis folder) turns the check off, so nothing was kept. "
+    "Change that file to let Iron Jarvis run its tests."
 )
 NOT_SHOWN_IN_FULL = (
     "That command cannot be shown in full on the card, so it is not kept from a press. Ask in chat: "
@@ -88,6 +90,10 @@ def register(app: FastAPI, d: Any) -> None:
         if state == "off" and plan.get("why") == PROOF.WHY_FOLDER_FILE:
             raise HTTPException(status_code=409, detail=FOLDER_FILE_OFF)
         if state == "run" and command == body.command:
+            # Already kept (a second press, or kept in chat meanwhile): the
+            # card under that reply goes, unless a check of it already began.
+            if turn:
+                await asyncio.to_thread(_note_kept, service, sid, turn, command)
             return {"ok": True, "checks": await asyncio.to_thread(FD.read_checks, engine, folder),
                     "checking": False}
         if state != "ask" or not command:
@@ -104,6 +110,11 @@ def register(app: FastAPI, d: Any) -> None:
         except FD.DefaultsRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         started = await CA.recheck(service, sid, turn) if turn else False
+        if turn and not started:
+            # That reply cannot be checked now (it is no longer the newest, a
+            # reply runs, Emergency stop is on): the command is kept, so the
+            # card goes and its line says the check starts with the next reply.
+            await asyncio.to_thread(_note_kept, service, sid, turn, command)
         return {"ok": True, "checks": kept, "checking": bool(started)}
 
 
@@ -118,6 +129,27 @@ def _note_off(service: Any, sid: str, turn: str) -> None:
     live = service.live.get(sid)
     if live is not None:
         live.log.append(make(PROOF.EVENT, **_off_record(turn)))
+
+
+def _note_kept(service: Any, sid: str, turn: str, command: str) -> None:
+    """BLOCKING: a yes that started no check of ``turn``: when that reply's
+    newest record is still the card, a record that says the command is kept
+    (from the next reply on) replaces it. Nothing when a check of it already
+    began or ended (its line is never written over)."""
+    from ...hosted.events import make
+
+    live = service.live.get(sid)
+    if live is None:
+        return
+    events, _total, _dropped = live.log.read(2000)
+    newest = next((e for e in reversed(events) if isinstance(e, dict) and e.get("type") == PROOF.EVENT
+                   and e.get("for_turn") == turn), None)
+    if newest is None or newest.get("tests") != PROOF.TESTS_ASK:
+        return
+    record = PROOF._record(turn, PROOF.TESTS_NOT_RUN, PROOF.WHY_KEPT, command=command,  # noqa: SLF001
+                           new_files=list(newest.get("new_files") or []),
+                           new_source=str(newest.get("new_source") or ""), answered=True)
+    live.log.append(make(PROOF.EVENT, **record))
 
 
 __all__ = ["CheckAnswer", "register"]

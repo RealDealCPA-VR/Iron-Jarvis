@@ -148,6 +148,10 @@
       "ok": "used your browser",
       "failed": "tried a browser step and it failed"
     },
+    "build_checks_set": {
+      "ok": "switched tests after each Build › Code reply on or off in a folder",
+      "failed": "tried a folder tests switch and it failed"
+    },
     "build_defaults_clear": {
       "ok": "cleared a folder's defaults for new coding sessions",
       "failed": "tried a folder defaults and it failed"
@@ -259,6 +263,10 @@
     "code_search": {
       "ok": "searched its saved scripts",
       "failed": "tried a script search and it failed"
+    },
+    "coding_reply_check": {
+      "ok": "looked up whether a coding reply's tests passed",
+      "failed": "tried a test result lookup and it failed"
     },
     "compare_documents": {
       "ok": "compared documents",

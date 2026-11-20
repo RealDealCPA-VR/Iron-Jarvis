@@ -41,6 +41,7 @@
     "browser_screenshot",
     "browser_scroll",
     "browser_type",
+    "build_checks_set",
     "build_defaults_clear",
     "build_defaults_set",
     "build_folder_show",
@@ -69,6 +70,7 @@
     "code_load",
     "code_run",
     "code_search",
+    "coding_reply_check",
     "compare_documents",
     "computer_use_status",
     "config_change",
@@ -283,6 +285,7 @@
     "browser_screenshot": "act in a browser tab",
     "browser_scroll": "act in a browser tab",
     "browser_type": "act in a browser tab",
+    "build_checks_set": "turn tests after each Build › Code reply on or off in a folder",
     "build_defaults_clear": "clear a folder's defaults for new coding sessions",
     "build_defaults_set": "set a folder's defaults for new coding sessions",
     "build_folder_show": "look up a folder's coding settings",
@@ -311,6 +314,7 @@
     "code_load": "open a saved script",
     "code_run": "run a saved script",
     "code_search": "search its saved scripts",
+    "coding_reply_check": "look up whether a coding reply's tests passed",
     "compare_documents": "compare documents",
     "computer_use_status": "check the computer control settings",
     "config_change": "change a setting",
@@ -585,6 +589,10 @@
       "Opened a web page",
       "Opening a web page"
     ],
+    "build_checks_set": [
+      "Switched tests after each Build › Code reply on or off in a folder",
+      "Switching tests after each Build › Code reply on or off in a folder"
+    ],
     "build_defaults_clear": [
       "Cleared a folder's defaults for new coding sessions",
       "Clearing a folder's defaults for new coding sessions"
@@ -696,6 +704,10 @@
     "code_search": [
       "Searched its saved scripts",
       "Searching its saved scripts"
+    ],
+    "coding_reply_check": [
+      "Looked up whether a coding reply's tests passed",
+      "Looking up whether a coding reply's tests passed"
     ],
     "compare_documents": [
       "Compared documents",
@@ -1267,6 +1279,7 @@
     "browser_screenshot": "browser",
     "browser_scroll": "browser",
     "browser_type": "browser",
+    "build_checks_set": "",
     "build_defaults_clear": "",
     "build_defaults_set": "",
     "build_folder_show": "",
@@ -1295,6 +1308,7 @@
     "code_load": "",
     "code_run": "",
     "code_search": "",
+    "coding_reply_check": "",
     "compare_documents": "",
     "computer_use_status": "",
     "config_change": "",
