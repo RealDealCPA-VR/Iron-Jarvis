@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import http.server
 import logging
+import os
+import re
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -59,10 +62,19 @@ class _Page:
     """A page whose ``goto`` plays the given part of a navigation through the
     backend's own handlers, then fails like Playwright."""
 
-    def __init__(self, backend: PB.EdgeBackend, steps: "list[str]", exc: Exception) -> None:
+    def __init__(self, backend: PB.EdgeBackend, steps: "list[str]", exc: Exception,
+                 late_s: float = 0.0, began_early_s: float = 0.0) -> None:
         self.backend = backend
         self.steps = steps
         self.exc = exc
+        #: How long after the open's limit the driver reports its failure:
+        #: the open's own clock (its trace's start) is moved back by the
+        #: limit and this much, never slept through.
+        self.late_s = late_s
+        #: How long the open took before the driver was asked (reading the
+        #: processors' time): the open's start alone is moved back, and by
+        #: the limit too (the driver reports right at its limit).
+        self.began_early_s = began_early_s
 
     def is_closed(self) -> bool:
         return False
@@ -81,6 +93,10 @@ class _Page:
                 b._on_navigated(self, frame)
             elif step == "domcontentloaded":
                 b._on_page_event("domcontentloaded")
+        trace = b._trace
+        if self.late_s or self.began_early_s:
+            trace.t0 -= trace.limit_s + self.late_s
+            trace.opened -= trace.limit_s + self.late_s + self.began_early_s
         raise self.exc
 
 
@@ -89,11 +105,15 @@ def _slow_open_lines(caplog) -> "list[str]":
             if r.name == LOGGER and r.levelno == logging.WARNING and "did not finish" in r.getMessage()]
 
 
+#: The product's own bound, read before any pin widens it.
+PRODUCT_FACTS_S = PB.SLOW_OPEN_FACTS_S
+
+
 @pytest.fixture(autouse=True)
 def _facts_have_time(monkeypatch):
     """The process facts' bound is a product limit, not a speed bar for a
-    loaded test machine: these pins give it room (the one pin about the
-    bound sets its own)."""
+    loaded test machine: these pins give it room (the pins about the bound
+    set their own)."""
     monkeypatch.setattr(PB, "SLOW_OPEN_FACTS_S", 60.0)
 
 
@@ -185,12 +205,14 @@ async def test_the_line_is_written_when_the_process_facts_are_late_or_the_action
     monkeypatch.setattr(PB.EdgeBackend, "_slow_open_facts", held_facts)
     caplog.set_level(logging.WARNING, logger=LOGGER)
     try:
-        # 1. Past the bound: the line goes without the facts.
+        # 1. Past the bound: the line goes without the facts. (The fake
+        # driver fails at once, well inside its 45 s: the whole 0.2 s is the
+        # facts', however long the start's reading took on a loaded PC.)
         monkeypatch.setattr(PB, "SLOW_OPEN_FACTS_S", 0.2)
         b = _backend(tmp_path)
-        b._page = _Page(b, ["route"], PlaywrightTimeout("Timeout 500ms exceeded."))
+        b._page = _Page(b, ["route"], PlaywrightTimeout("Timeout 45000ms exceeded."))
         with pytest.raises(PB.BrowserProblem):
-            await b.goto("http://127.0.0.1:5173/", 0.5)
+            await b.goto("http://127.0.0.1:5173/", 45.0)
         (line,) = _slow_open_lines(caplog)
         assert "the server never answered" in line and "could not be read in time" in line, line
         assert "late facts" not in line
@@ -212,6 +234,70 @@ async def test_the_line_is_written_when_the_process_facts_are_late_or_the_action
         assert b2._trace is None
     finally:
         release.set()
+
+
+async def test_the_facts_never_hold_an_open_more_than_their_bound_past_its_own_limit(
+        tmp_path, caplog, monkeypatch):
+    """FU-1 review: the facts are read inside the open's hard bound
+    (``OPEN_TIMEOUT_S + HARD_BOUND_EXTRA_S``), so they may use at most
+    ``SLOW_OPEN_FACTS_S`` past the open's OWN limit. A driver that reports
+    its time limit that late or later leaves them no time at all: the open
+    raises at once (its words unchanged, never the hard bound's "did not
+    answer ... so it was closed"), and the line says how late the report
+    came. A driver that reports on time still gets the facts."""
+    read: list[int] = []
+
+    def facts(self, trace):  # noqa: ANN001
+        read.append(1)
+        return "the facts"
+
+    monkeypatch.setattr(PB.EdgeBackend, "_slow_open_facts", facts)
+    monkeypatch.setattr(PB, "SLOW_OPEN_FACTS_S", 2.0)
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+
+    b = _backend(tmp_path)
+    b._page = _Page(b, ["route"], PlaywrightTimeout("Timeout 45000ms exceeded."), late_s=3.0)
+    with pytest.raises(PB.BrowserProblem) as info:
+        await b.goto("http://127.0.0.1:5173/", 45.0)
+    assert str(info.value) == "Opening 127.0.0.1:5173 did not finish within 45 s."
+    assert read == [], "the facts were read past their bound"
+    (line,) = _slow_open_lines(caplog)
+    assert "the server never answered" in line, line
+    over = re.compile(r"the browser's processes were not read: the open was (\d+\.\d) s past its limit "
+                      r"when it was reported")
+    late = over.search(line)
+    assert late and float(late.group(1)) >= 3.0, line
+    assert "the facts" not in line, line
+
+    # Reading the processors' time at the start counts too: the bound runs
+    # from when the open began, not from when the driver was asked.
+    caplog.clear()
+    b1 = _backend(tmp_path)
+    b1._page = _Page(b1, ["route"], PlaywrightTimeout("Timeout 45000ms exceeded."), began_early_s=3.0)
+    with pytest.raises(PB.BrowserProblem):
+        await b1.goto("http://127.0.0.1:5173/", 45.0)
+    assert read == [], "the facts were read past their bound (the start's reading not counted)"
+    (line,) = _slow_open_lines(caplog)
+    late = over.search(line)
+    assert late and float(late.group(1)) >= 3.0, line
+
+    # The control: reported on time, the facts are read (the bound widened:
+    # on a loaded PC reading the processors' time alone can take a second).
+    monkeypatch.setattr(PB, "SLOW_OPEN_FACTS_S", 60.0)
+    caplog.clear()
+    b2 = _backend(tmp_path)
+    b2._page = _Page(b2, ["route"], PlaywrightTimeout("Timeout 45000ms exceeded."))
+    with pytest.raises(PB.BrowserProblem):
+        await b2.goto("http://127.0.0.1:5173/", 45.0)
+    assert read == [1]
+    (line,) = _slow_open_lines(caplog)
+    assert line.endswith("the facts."), line
+
+
+def test_the_facts_bound_keeps_most_of_the_hard_bounds_margin():
+    """The 10 s the hard bound allows past an open's limit is for a driver
+    that reports late; the facts take at most a fifth of it."""
+    assert 0 < PRODUCT_FACTS_S <= PB.HARD_BOUND_EXTRA_S / 5
 
 
 def test_the_cpu_share_reads_the_processors_busy_time():
@@ -387,3 +473,153 @@ def test_the_runner_state_never_reads_a_command_line(monkeypatch):
     text = _runner_state.runner_state()
     assert "busiest programs" in text
     assert read == []
+
+
+# --------------------------------------------------------------------------- #
+# CI: a real-Edge test that passes only when run again still says what its
+# failed attempt saw (FU-1 review)
+# --------------------------------------------------------------------------- #
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_the_suites_conftest_registers_both_real_edge_hooks(pytestconfig):
+    """The hooks live in ``tests/_real_edge_report.py``; the suite's
+    conftest importing them is what registers them."""
+    from tests import _real_edge_report as R
+
+    for hook, ours in (("pytest_runtest_makereport", R.pytest_runtest_makereport),
+                       ("pytest_terminal_summary", R.pytest_terminal_summary)):
+        impls = [impl.function for impl in getattr(pytestconfig.hook, hook).get_hookimpls()]
+        assert ours in impls, f"{hook} is not registered"
+
+
+_RERUN_SAMPLE = '''\
+import asyncio, os, pathlib
+
+from iron_jarvis.harness import page_browser as PB
+
+MARKS = pathlib.Path(os.environ["ONCE_MARKS"])
+Timeout = type("TimeoutError", (Exception,), {})
+
+
+class _Page:
+    def is_closed(self):
+        return False
+
+    async def goto(self, url, wait_until="", timeout=0):
+        raise Timeout("Timeout 45000ms exceeded.")
+
+
+def _an_open_that_runs_out_of_time(tmp):
+    b = PB.EdgeBackend(edge="edge", work=tmp, guard=lambda u: PB.Verdict("ok"), note=lambda k, t: None)
+    b._page = _Page()
+    asyncio.run(b.goto("http://127.0.0.1:5173/shop", 45.0))
+
+
+def _first_time(name):
+    mark = MARKS / name
+    if mark.exists():
+        return False
+    mark.write_text("x")
+    return True
+
+
+def test_real_edge_fails_once_then_passes(tmp_path):
+    if _first_time("edge"):
+        _an_open_that_runs_out_of_time(tmp_path)
+
+
+def test_real_edge_fails_twice(tmp_path):
+    _an_open_that_runs_out_of_time(tmp_path)
+
+
+def test_real_edge_never_fails():
+    pass
+
+
+def test_something_else_fails_once_then_passes():
+    if _first_time("other"):
+        raise AssertionError("an ordinary flake")
+'''
+
+
+def _section(text: str, heading: str) -> str:
+    """The part of a pytest run's output under a ``=== heading ===`` line,
+    up to the next such line."""
+    lines = text.splitlines()
+    heading_line = re.compile(r"^=+ .+ =+$")
+    (start,) = [i for i, ln in enumerate(lines) if heading_line.match(ln) and f" {heading} " in ln]
+    rest = lines[start + 1:]
+    end = next((i for i, ln in enumerate(rest) if heading_line.match(ln)), len(rest))
+    return "\n".join(rest[:end])
+
+
+@pytest.mark.timeout(300)
+def test_a_real_edge_test_that_passes_on_its_retry_prints_what_its_failed_attempt_saw(tmp_path, monkeypatch):
+    """The shape of two of the three real-Edge incidents: a test fails once
+    and passes when CI runs it again. pytest prints a report's sections only
+    for a final failure, and ``-rR`` names the test only, so the machine
+    section and the product's own slow-open line never reached the log. Run
+    with CI's own flags (xdist, ``--reruns 1``, ``-rR``) and the suite's own
+    hooks: the run ends with a block that gives the failed attempt's words,
+    its machine section and the product's line — for the real-Edge test that
+    passed on retry only (one that failed twice prints both attempts in its
+    own failure; an ordinary test is not a real-Edge test)."""
+    import subprocess
+
+    sys.path.insert(0, str(_ROOT / "scripts"))
+    try:
+        import ci_flaky_report as flaky_report
+    finally:
+        sys.path.pop(0)
+    from tests import _real_edge_report as R
+
+    run = tmp_path / "run"
+    marks = tmp_path / "marks"
+    run.mkdir()
+    marks.mkdir()
+    (run / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    # Registered exactly as tests/conftest.py registers them.
+    (run / "conftest.py").write_text(
+        "from tests._real_edge_report import pytest_runtest_makereport, pytest_terminal_summary  # noqa: F401\n",
+        encoding="utf-8")
+    (run / "test_sample.py").write_text(_RERUN_SAMPLE, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(_ROOT), env.get("PYTHONPATH", "")) if p)
+    env["ONCE_MARKS"] = str(marks)
+    env["PYTHONIOENCODING"] = "utf-8"
+    res = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", "-n", "1",
+         "--reruns", "1", "--rerun-except", "pytest-timeout", "-rR", "test_sample.py"],
+        cwd=run, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=240, stdin=subprocess.DEVNULL,
+    )
+    text = res.stdout + res.stderr
+    assert res.returncode == 1, "the test red twice must fail the run:\n" + text
+
+    block = _section(text, R.HEADING)
+    once = "test_sample.py::test_real_edge_fails_once_then_passes"
+    assert f"{once} (attempt 1, call)" in block, block
+    # The failed attempt's own words, its machine section, the product's line.
+    assert "BrowserProblem: Opening 127.0.0.1:5173/shop did not finish within 45 s." in block, block
+    assert "Captured machine call" in block and "busiest programs" in block, block
+    assert "agent browser: Opening 127.0.0.1:5173/shop did not finish within 45 s. " \
+           "Edge never started the page's request" in block, block
+    assert block.count("busiest programs") == 1, block
+    # Only that one: an ordinary flake and a test red twice are not in it.
+    assert "test_something_else" not in block and "an ordinary flake" not in block, block
+    assert "test_real_edge_fails_twice" not in block and "never_fails" not in block, block
+
+    # The test red twice: its own failure carries BOTH attempts' machine
+    # sections (pytest keeps an item's sections across attempts) — why the
+    # block can leave it out.
+    failures = _section(text, "FAILURES")
+    assert "test_real_edge_fails_twice" in failures, failures
+    assert failures.count("Captured machine call") == 2, failures
+
+    # CI's own report of the tests that passed only on retry still reads
+    # the run right (the block adds no line it would take for a result).
+    passed_on_retry, red = flaky_report.retried(text)
+    assert sorted(passed_on_retry) == [once, "test_sample.py::test_something_else_fails_once_then_passes"], text
+    assert red == ["test_sample.py::test_real_edge_fails_twice"], text

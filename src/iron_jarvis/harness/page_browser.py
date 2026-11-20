@@ -126,9 +126,13 @@ HARD_BOUND_EXTRA_S = 10.0
 SETTLE_MAX_S = 5.0
 #: FU-1: how long an open that ran out of time waits for Edge's process
 #: facts (CPU time, the processors' load) for its log line before it gives
-#: up on them (the steps the page reached are logged regardless). Within
-#: the open's hard bound (``OPEN_TIMEOUT_S + HARD_BOUND_EXTRA_S``).
-SLOW_OPEN_FACTS_S = 5.0
+#: up on them (the steps the page reached are logged regardless). Counted
+#: from the open's OWN limit, not from when the driver reported it: an open
+#: that ran out of time raises no later than this past its limit, so the
+#: hard bound (``OPEN_TIMEOUT_S + HARD_BOUND_EXTRA_S``) keeps 8 of its 10 s
+#: for a driver that reports late (FU-1 review), and a driver that reports
+#: this late or later gets no facts at all, only the steps.
+SLOW_OPEN_FACTS_S = 2.0
 #: Closing the browser politely before its job is terminated.
 CLOSE_TIMEOUT_S = 8.0
 #: v1.376.1: how much longer than the polite close a caller of
@@ -894,11 +898,16 @@ _OPEN_NEVER = {
 
 @dataclass
 class _OpenTrace:
-    """One page load's steps, in seconds after the open began (the first
-    time each happened). ``cpu`` is this PC's processors' (busy, all) time
-    when it began; ``error`` names a failure to let the request go."""
+    """One page load's steps, in seconds after the load was asked for (the
+    first time each happened; the driver's own clock starts then too).
+    ``limit_s`` is the open's own time limit; ``opened`` is when the open
+    began, before the processors' time was read (0: ``t0``); ``cpu`` is this
+    PC's processors' (busy, all) time when it began; ``error`` names a
+    failure to let the request go."""
 
     t0: float = field(default_factory=time.monotonic)
+    limit_s: float = 0.0
+    opened: float = 0.0
     cpu: "tuple[float, float] | None" = None
     steps: dict[str, float] = field(default_factory=dict)
     detail: dict[str, str] = field(default_factory=dict)
@@ -1473,10 +1482,13 @@ class EdgeBackend:
         return ""
 
     async def goto(self, url: str, timeout_s: float) -> None:
+        # The facts' bound (:meth:`_log_slow_open`) counts from here, the
+        # reading of the processors' time included.
+        opened = time.monotonic()
         cpu = None
         with contextlib.suppress(Exception):  # the reading is extra, never a reason to fail
             cpu = await asyncio.to_thread(_cpu_now)
-        trace = _OpenTrace(cpu=cpu)
+        trace = _OpenTrace(limit_s=timeout_s, opened=opened, cpu=cpu)
         self._trace = trace
         try:
             page = self._page
@@ -1500,12 +1512,21 @@ class EdgeBackend:
         page got, Edge's own processes and their CPU time, and how busy this
         PC's processors were during the open. The address is the agent's
         words' (host and path; never the query). Bounded: the process reads
-        run off the loop and are given up after :data:`SLOW_OPEN_FACTS_S`; the
-        line is written even when the action's own bound cancels this."""
+        run off the loop and are given up :data:`SLOW_OPEN_FACTS_S` past the
+        open's OWN limit (a driver that reported late leaves them less, or
+        none); the line is written even when the action's own bound cancels
+        this."""
         steps = _describe_open(trace)
         more = "the browser's processes could not be read in time"
         try:
-            more = await asyncio.wait_for(asyncio.to_thread(self._slow_open_facts, trace), SLOW_OPEN_FACTS_S)
+            # How far past its limit the open is, counted from when it began.
+            over = time.monotonic() - ((trace.opened or trace.t0) + trace.limit_s)
+            wait = min(SLOW_OPEN_FACTS_S, SLOW_OPEN_FACTS_S - over)
+            if wait > 0:
+                more = await asyncio.wait_for(asyncio.to_thread(self._slow_open_facts, trace), wait)
+            else:
+                more = (f"the browser's processes were not read: the open was {over:.1f} s past "
+                        f"its limit when it was reported")
         except Exception:  # noqa: BLE001 — the facts are extra; the steps are the point
             pass
         finally:
