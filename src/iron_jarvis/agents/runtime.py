@@ -2419,7 +2419,11 @@ class AgentRuntime:
             # v1.547.0 (next leaps 13-a, D-13.2): a run the PHONE started
             # (origin ``comm:<channel>``) answers the phone, and so does every
             # child run awaited inside it (a phone turn's helper inherits the
-            # mark from the turn): what may go there is less.
+            # mark from the turn): what may go there is less. Conservative on
+            # purpose: the run's OWN reads of the work record get the phone's
+            # titles-only answer too (no file names), though D-13.2 limits
+            # what is SENT; 13-c and 14-d may widen what such a run reads,
+            # never what reaches the phone.
             from ..providers import failure_words as _fw_phone
 
             _phone_token = _fw_phone.mark_answers_the_phone(

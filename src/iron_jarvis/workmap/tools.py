@@ -69,14 +69,19 @@ DATA_FILES_MAX = 20
 _ABSOLUTE_RX = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\|//|/)")
 
 
-def left_out_words(count: int, *, in_client: bool, wall_ok: bool = True) -> str:
+def left_out_words(count: int, *, in_client: bool, wall_ok: bool = True, phone: bool = False) -> str:
     """The one sentence for what the wall kept back; it never names whose
-    work it was (the ``history_search`` wording, said of pieces of work)."""
+    work it was (the ``history_search`` wording, said of pieces of work).
+    On the PHONE it says only that they stay out of the phone's answer: the
+    phone rule also keeps back work under a name still waiting for the
+    owner's answer, which naming it never releases."""
     n = int(count)
     pieces = "1 piece of work" if n == 1 else f"{n} pieces of work"
     was = "was" if n == 1 else "were"
     if not wall_ok:
         return f"{pieces} {was} left out because the user's clients could not be read."
+    if phone:
+        return f"{pieces} for clients {was} left out of this answer to the phone."
     if in_client:
         return f"{pieces} from other clients' work {was} left out of this client's chat."
     return (
@@ -110,6 +115,8 @@ def answer(found: Any, *, phone: bool, now: datetime) -> ToolResult:
     lines: list[str] = []
     rows: list[dict[str, Any]] = []
     recapped = False
+    #: Rows left out here for a flagged title: never counted as "more on record".
+    dropped = 0
     for r in found.rows:
         if phone and len(rows) >= PHONE_MAX:
             break
@@ -117,6 +124,7 @@ def answer(found: Any, *, phone: bool, now: datetime) -> ToolResult:
                                 titles_only=phone, dated=True))
         title = _safe(_clip(r.get("title") or "", TITLE_CHARS))
         if not line or not title:
+            dropped += 1
             continue  # a flagged or unmaskable title is not told
         extra = [] if phone else recap_lines({"lines": r.get("recap") or []})
         recapped = recapped or bool(extra)
@@ -130,19 +138,20 @@ def answer(found: Any, *, phone: bool, now: datetime) -> ToolResult:
             "files": names, "link": "" if phone else link_for(r["kind"], r["ref"]),
             "has_recap": bool(extra), "times": int(r.get("times") or 1),
         })
+    matched = max(len(rows), int(found.matched) - dropped)
     data: dict[str, Any] = {
-        "rows": rows, "count": len(rows), "matched": int(found.matched),
+        "rows": rows, "count": len(rows), "matched": matched,
         "held_back": int(found.held_back), "building": bool(found.building),
     }
-    left = left_out_words(found.held_back, in_client=found.in_client, wall_ok=found.wall_ok) \
-        if found.held_back else ""
+    left = left_out_words(found.held_back, in_client=found.in_client, wall_ok=found.wall_ok,
+                          phone=phone) if found.held_back else ""
     if not rows:
         if left:
             # Not "nothing matched": something did, and the wall kept it.
             return ToolResult(ok=True, output=left, data=data)
         return ToolResult(ok=True, output=BUILDING if found.building else EMPTY, data=data)
     out = [LEAD, *lines]
-    more = int(found.matched) - len(rows)
+    more = matched - len(rows)
     if more > 0:
         out.append(f"(and {more} more on record; ask with a few more words or a folder to narrow it)")
     if found.building:

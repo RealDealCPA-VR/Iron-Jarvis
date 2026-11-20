@@ -243,8 +243,12 @@ def test_another_programs_words_never_enter_the_index(tmp_path):
     ("queue coding work for tonight", "night_task_add"),
     ("text size", "device.text_size"),
     ("update channel", "update_channel"),
-    # v1.547.0 (next leaps 13-a): the owner's own lookup of earlier work.
+    # v1.547.0 (next leaps 13-a): the owner's own lookup of earlier work. The
+    # first is found by the tool's own description; the second only through
+    # its everyday phrasings (without the work_history entry it is not in the
+    # first five).
     ("look up the earlier work in a folder", "work_history"),
+    ("remind me what happened with this before", "work_history"),
 ])
 def test_plain_words_find_the_entry(platform, query, want):
     assert want in [e.id for e in CI.search(platform, query, 5)]

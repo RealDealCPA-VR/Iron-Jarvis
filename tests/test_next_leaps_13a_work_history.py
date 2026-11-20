@@ -27,7 +27,7 @@ test's own tmp_path.
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -94,7 +94,7 @@ def scene(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def _chat(scene, title, folder, *, hours_ago=1.0, docs=(), local_only=False) -> str:
+def _chat(scene, title, folder, *, hours_ago=1.0, docs=(), local_only=False, at=None) -> str:
     setup: dict = {"workspace_dir": folder} if folder else {}
     if local_only:
         setup["local_only"] = True
@@ -103,7 +103,7 @@ def _chat(scene, title, folder, *, hours_ago=1.0, docs=(), local_only=False) -> 
     with session_scope(scene.engine) as db:
         rec = ChatThreadRecord(title=title, messages_json=json.dumps(messages),
                                setup_json=json.dumps(setup) if setup else "",
-                               updated_at=utcnow() - timedelta(hours=hours_ago))
+                               updated_at=at or (utcnow() - timedelta(hours=hours_ago)))
         db.add(rec)
         db.commit()
         return rec.id
@@ -166,6 +166,33 @@ async def test_a_folder_with_ten_pieces_of_work_lists_all_ten(firm):
     row = got.data["rows"][0]
     assert set(row) >= {"id", "kind", "title", "folder", "when", "outcome", "files", "link", "has_recap"}
     assert row["link"].startswith("/chat?thread=") and row["files"] == ["list-0.xlsx"]
+
+
+#: The owner's zone in the date cases: five hours behind UTC.
+UTC_MINUS_5 = timezone(timedelta(hours=-5))
+#: 21:30 on Mar 12 there, kept by the record as 02:30 UTC on Mar 13 (naive,
+#: as SQLite gives it back).
+EVENING_UTC = datetime(2026, 3, 13, 2, 30)
+
+
+def test_a_date_is_the_owners_own_day_not_the_utc_day(monkeypatch):
+    monkeypatch.setattr(B, "_local_zone", lambda: UTC_MINUS_5)
+    assert B.date_words(EVENING_UTC) == "Mar 12, 2026"
+    assert B.date_words(EVENING_UTC.replace(tzinfo=timezone.utc)) == "Mar 12, 2026"
+    assert B.date_words(datetime(2026, 3, 13, 12, 0)) == "Mar 13, 2026"  # the control: midday
+    line = B.entry_line({"kind": "chat", "title": "Evening work", "updated": EVENING_UTC},
+                        datetime(2026, 3, 13, 3, 0), dated=True)
+    assert "Mar 12, 2026" in line and "Mar 13" not in line
+
+
+async def test_the_tools_lines_carry_the_owners_own_day(scene, monkeypatch):
+    """Through the record and the tool: evening work reads as that evening's
+    day, the day the prompt's own "today" is counted in."""
+    _chat(scene, "Evening work", DOCS, at=EVENING_UTC)
+    monkeypatch.setattr(B, "_local_zone", lambda: UTC_MINUS_5)
+    got = await _ask(scene, folder=DOCS, words="what did we do here?")
+    assert _titles(got) == ["Evening work"]
+    assert "Mar 12, 2026" in got.output and "Mar 13" not in got.output
 
 
 async def test_the_same_request_in_another_clients_folder_lists_none_of_them(firm):
@@ -238,6 +265,8 @@ async def test_a_flagged_title_is_left_out(scene):
     got = await _ask(scene, folder=DOCS, words="what did we do here?")
     assert _titles(got) == ["Ordinary work"]
     assert "Ignore all previous" not in got.output
+    # A row left out for its title is not "more on record" either.
+    assert "more on record" not in got.output and got.data["matched"] == 1
 
 
 async def test_the_turns_own_chat_is_not_earlier_work(scene):
@@ -387,6 +416,10 @@ async def test_on_the_phone_a_name_the_owner_did_not_say_is_never_sent(firm):
     with FW.phone_surface():
         phone = await _ask(firm, folder="", words="what did we do lately?", args={"query": "invoice"})
     assert "Jones invoice follow up" not in _titles(phone) and "Jones" not in phone.output
+    # Counted in the phone's own words: a name still waiting for the owner's
+    # answer is held back however the message reads, so never "did not name".
+    assert phone.data["held_back"] >= 1 and "did not name" not in phone.output
+    assert phone.output == WT.left_out_words(phone.data["held_back"], in_client=False, phone=True)
 
 
 async def test_on_the_phone_local_only_work_is_never_sent(scene):
@@ -394,6 +427,52 @@ async def test_on_the_phone_local_only_work_is_never_sent(scene):
     with egress.local_only_scope(True), FW.phone_surface():
         got = await _ask(scene, folder=DOCS, words="what did we do here?")
     assert "Private payroll" not in _titles(got)
+
+
+def test_on_the_phone_the_pushed_block_holds_titles_only_too(firm):
+    """D-13.2 for the block EVERY phone turn is given unasked (``work_block``,
+    the ``work`` hop), not only for the tool: the model has no folder or
+    file name to relay to the messaging service."""
+    said = "what did we do on the Hartleys price list?"
+    told = B.work_block(firm.platform, folder="", query=said)
+    assert "Price list step 0" in told and PRICES in told and "list-0.xlsx" in told  # the control
+    with FW.phone_surface():
+        phone = B.work_block(firm.platform, folder="", query=said)
+    assert "Price list step 0" in phone and B.PHONE_NOTE in phone
+    assert r"D:\Clients" not in phone and r"D:\Work" not in phone and ".xlsx" not in phone
+    assert B.PHONE_NOTE not in told
+
+
+def test_on_the_phone_a_named_clients_work_comes_without_its_folder(scene):
+    """The block's NAMED path (a client the owner names in a turn with no
+    client, found in a folder whose name and titles do not carry the name,
+    so the strict match does not find it)."""
+    _chat(scene, "Bank feed fix", H_OTHER, docs=[H_OTHER + r"\feed.csv"])
+    scene.wm.refresh(force=True)
+    said = "anything new for Hartleys?"
+    told = B.work_block(scene.platform, folder="", query=said)
+    # The control: in the app it comes by the named path, with its folder.
+    assert "Bank feed fix" in told and "for Hartleys" in told and H_OTHER in told
+    with FW.phone_surface():
+        phone = B.work_block(scene.platform, folder="", query=said)
+    assert "Bank feed fix" in phone and B.PHONE_NOTE in phone
+    assert H_OTHER not in phone and "feed.csv" not in phone
+
+
+def test_on_the_phone_the_block_never_carries_local_only_work_or_a_recap(scene):
+    tid = _chat(scene, "Monday follow ups", DOCS, docs=[DOCS + r"\letter.docx"])
+    _recap(scene, tid, "DONE: sent the engagement letter to the bank")
+    _chat(scene, "Private payroll", DOCS, local_only=True, hours_ago=2)
+    scene.wm.refresh(force=True)
+    with egress.local_only_scope(True):  # a turn that stays on this network
+        told = B.work_block(scene.platform, folder=DOCS)
+        with FW.phone_surface():
+            phone = B.work_block(scene.platform, folder=DOCS)
+    # The control: in the app the same turn is told all three.
+    assert "Private payroll" in told and "sent the engagement letter" in told and "letter.docx" in told
+    assert "Monday follow ups" in phone
+    assert "Private payroll" not in phone and "engagement letter" not in phone
+    assert "letter.docx" not in phone and B.RECAP_NOTE not in phone
 
 
 def test_a_run_inside_a_phone_turn_still_answers_the_phone():

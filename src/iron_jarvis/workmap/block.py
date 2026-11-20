@@ -45,12 +45,17 @@ folder gets up to three TITLES from that client's other folders ("In
 Hartleys' other folders"), never files, a run's result or a recap. The
 client tables unreadable: exactly this folder, nothing else. The recap gate
 and ``WorkMap.matching`` are unchanged.
+
+THE PHONE (v1.547.0, decision D-13.2): a turn that answers the phone gets
+titles, ages and how each ended only (no folder, file names, run result or
+recap; ``PHONE_NOTE`` says so), never Local only work, and a row with an
+owner only when every owner is a client the owner's own message named.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from typing import Any
 
 from ..core.db import session_scope
@@ -92,6 +97,12 @@ WALL_NOTE = (
     "(Work on record for another client matches this message. It stays out of "
     "this client's chats; the owner can open it on that client's page.)"
 )
+#: Said once, in a turn that ANSWERS THE PHONE (decision D-13.2), when
+#: anything is listed: the lines then carry titles, when and how each ended.
+PHONE_NOTE = (
+    "(This chat answers the phone: titles, when and how each ended only. The folders, the "
+    "files and the decisions stay in the app.)"
+)
 #: A confirmed client the owner names in a turn with no client: at most this
 #: many of its newest pieces of work (titles and file names, never a recap).
 NAMED_MAX = 3
@@ -125,6 +136,17 @@ def _withhold_local_only() -> bool:
     return withhold_local_only()
 
 
+def _answers_the_phone() -> bool:
+    """Does the turn in flight answer the phone (``failure_words``, decision
+    D-13.2)? Unsure reads as the phone (tells less)."""
+    try:
+        from ..providers.failure_words import answers_the_phone
+
+        return answers_the_phone()
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _clip(text: str, cap: int) -> str:
     words = " ".join(str(text or "").split())
     return words if len(words) <= cap else words[: cap - 1].rstrip() + "…"
@@ -148,13 +170,27 @@ def _safe(line: str) -> str:
     return "" if res.blocked else (res.text or line)
 
 
+def _local_zone() -> "tzinfo | None":
+    """The zone a day is told in: this PC's own (None asks the system). A
+    test sets it; nothing else does."""
+    return None
+
+
 def date_words(when: Any) -> str:
     """"Mar 12, 2026" for a datetime, "" for none (``work_history``'s lines
-    carry the date, the block's only the age)."""
+    carry the date, the block's only the age). The day is the OWNER's: the
+    record keeps UTC (naive, as SQLite gives it back, or aware), so work done
+    at 21:30 on Mar 12 at UTC-5 (02:30 UTC on Mar 13) reads "Mar 12", the day
+    the prompt's own "today" is counted in."""
     if not isinstance(when, datetime):
         return ""
     try:
-        return f"{when:%b} {when.day}, {when.year}"
+        aware = when if when.tzinfo is not None else when.replace(tzinfo=timezone.utc)
+        local = aware.astimezone(_local_zone())
+    except (ValueError, OSError, OverflowError):  # pragma: no cover — a date the system cannot place
+        local = when
+    try:
+        return f"{local:%b} {local.day}, {local.year}"
     except (ValueError, OSError):  # pragma: no cover — exotic dates
         return ""
 
@@ -287,8 +323,17 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
     (``work_search``). Its folder and words were written by that app's
     model, never by the owner, so neither builds the wall: it is the wall of
     a turn with no folder and no words, and work for a client (confirmed, or
-    waiting for the owner's answer) is never told to another app."""
+    waiting for the owner's answer) is never told to another app.
+
+    THE PHONE (v1.547.0, decision D-13.2): a turn that answers the phone
+    (``failure_words.answers_the_phone``) is given what the phone may be
+    sent, as ``work_history`` is: titles, when and how each ended. No
+    folder, file names, run result or recap; no Local only work (the
+    reader's ``phone`` rule); a row with an owner only when every owner is a
+    confirmed client the owner's own message named. So the model has no
+    folder or file name to relay to the messaging service."""
     try:
+        phone = not outside and _answers_the_phone()
         # THE ONE READER (v1.547.0, ``workmap/lookup.Reader``): the record
         # refreshed (bounded), the Local only rule (another app's model is
         # never on this network: Local only and kept-home work is always
@@ -298,7 +343,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         # kind, ``wall.outside_and_map``).
         reader = _lookup.Reader.open(
             platform, folder=folder, query=query, outside=outside,
-            withhold=True if outside else _withhold_local_only(),
+            withhold=True if outside else _withhold_local_only(), phone=phone,
         )
         if reader is None:
             return ""
@@ -376,11 +421,13 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         # a coding session's own copy of it). Work in another folder, a
         # folder under this one included, may be another client's: its
         # title and file names say where to look, its details stay there.
+        # The phone is never told a recap (D-13.2).
         own = keys.folder_key(keys.home_folder(folder))
-        _with_recaps(engine, [
-            r for r in here_rows
-            if own and keys.folder_key(keys.home_folder(r.get("folder") or "")) == own
-        ])
+        if not phone:
+            _with_recaps(engine, [
+                r for r in here_rows
+                if own and keys.folder_key(keys.home_folder(r.get("folder") or "")) == own
+            ])
 
         lines: list[str] = []
         used = 0
@@ -403,7 +450,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         for row, times in groups:
             if len(here) >= HERE_MAX:
                 break
-            line = _safe(entry_line(row, now, times=times))
+            line = _safe(entry_line(row, now, times=times, titles_only=phone))
             if line and used + len(line) + 1 <= BLOCK_CHARS:
                 line = with_recap(line, row)
                 here.append(line)
@@ -418,7 +465,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         for row in other_kept:
             if len(others) >= CLIENT_OTHER_MAX:
                 break
-            line = _safe(entry_line(row, now, with_folder=True, titles_only=True))
+            line = _safe(entry_line(row, now, with_folder=not phone, titles_only=True))
             if line and used + len(line) + 1 <= BLOCK_CHARS:
                 others.append(line)
                 used += len(line) + 1
@@ -429,13 +476,14 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         for row in there_rows:
             if len(there) >= ELSEWHERE_MAX:
                 break
-            line = _safe(entry_line(row, now, with_folder=True))
+            line = _safe(entry_line(row, now, with_folder=not phone, titles_only=phone))
             if line and used + len(line) + 1 <= BLOCK_CHARS:
                 there.append(line)
                 used += len(line) + 1
         for row, cid in named_kept:
             name = str((cmap.names.get(cid) or ("",))[0] or "")
-            line = _safe(entry_line(row, now, with_folder=True, for_name=name))
+            line = _safe(entry_line(row, now, with_folder=not phone, for_name=name,
+                                    titles_only=phone))
             if line and used + len(line) + 1 <= BLOCK_CHARS:
                 there.append(line)
                 used += len(line) + 1
@@ -448,6 +496,8 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             return ""
         if recapped:
             lines.append(RECAP_NOTE)
+        if phone:
+            lines.append(PHONE_NOTE)
         return HEAD + "\n" + "\n".join(lines)
     except Exception:  # noqa: BLE001 — the record is extra; a turn never fails on it
         log.debug("work record: the block could not be built", exc_info=True)
@@ -456,6 +506,6 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
 
 __all__ = [
     "BLOCK_CHARS", "CLIENT_OTHER_MAX", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD", "HERE_LEAD",
-    "HERE_MAX", "NAMED_MAX", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE", "date_words", "entry_line",
-    "recap_lines", "work_block",
+    "HERE_MAX", "NAMED_MAX", "PHONE_NOTE", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE", "date_words",
+    "entry_line", "recap_lines", "work_block",
 ]
