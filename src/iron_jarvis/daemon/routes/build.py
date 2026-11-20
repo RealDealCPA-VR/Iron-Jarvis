@@ -1162,6 +1162,11 @@ class _ReplyWatch:
         #: saved by the reply's end — kept in memory for the session's next
         #: reply (:data:`_UNSAVED_GRANTS`) and said on the last frame.
         self.grant_unsaved = False
+        #: R0.2 (build-out plan): the turn ran under Local only — its reply
+        #: line says so (``localOnly``) whatever its end, so "Copy as a fix
+        #: request" still knows after the session is switched off. A reply
+        #: that failed or was stopped keeps no route (``route.local_only``).
+        self.local_only = False
 
     def stopped_trust(self) -> str:
         """Why a reply that ended WITHOUT its done / error frame ran at LOW
@@ -1622,6 +1627,10 @@ class _ReplyWatch:
             if low_reason:
                 line["trust"] = "low"
                 line["trustReason"] = low_reason
+        if self.local_only:
+            # R0.2: done, failed or stopped (``self.local_only``) — beside
+            # its question's mark, the record of a reply that ran no call.
+            line["localOnly"] = True
         if self.resumed_from:
             # v1.391.0: this reply carried on a reply a restart cut off.
             # v1.422.0 (B1): ...or one that FAILED, at the user's press.
@@ -2634,7 +2643,8 @@ def keeps_failed_record(watch: "_ReplyWatch") -> bool:
 
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
                         pin: Any = None, platform: Any = None, no_limit: bool = False,
-                        record: Any = None, account_move: "dict[str, Any] | None" = None):
+                        record: Any = None, account_move: "dict[str, Any] | None" = None,
+                        local_only: bool = False):
     """``frames`` (the lane's SSE iterator), passed through unchanged, with
     the session kept up to date: an approved plan and a conversation grant
     land as they happen, and the reply line (plus any steer notes) is written
@@ -2658,9 +2668,13 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     v1.422.0 (Wave 2 "Never lose work", B1): a turn that FAILED keeps it too —
     moved to the failed key the boot never reads (:func:`keeps_failed_record`
     says which failures) BEFORE the reply line is written, so the line can say
-    ``canContinue`` and the screen offers "Continue from where it stopped"."""
+    ``canContinue`` and the screen offers "Continue from where it stopped".
+
+    R0.2: ``local_only`` — the turn ran under Local only; its reply line says
+    so (``localOnly``), whatever its end."""
     watch = _ReplyWatch()
     watch.no_limit = bool(no_limit)
+    watch.local_only = local_only is True
     watch.resumed_from = str(getattr(record, "resumed_from", "") or "")
     watch.resume_kind = str(getattr(record, "resume_kind", "") or "restart")
     # v1.423.0 (Wave 3 lane D, item 5): the reply's LIVE trust — a reply the
@@ -4184,6 +4198,17 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 question["continuation"] = True
             if move_line:
                 question["accountMove"] = move_line
+            # R0.2: the turn runs under Local only (the toggle, or an app
+            # holding the session local: the lane's own reading) — said on
+            # its question, written BEFORE it starts, so every end keeps a
+            # record of it: one cut off by a crash and rebuilt at the next
+            # start too ("Copy as a fix request" reads it).
+            from ...providers import egress as _egress
+
+            ran_local_only = chat_body.local_only is True or setup.get("local_only") is True or bool(
+                _egress.clean_holds(setup.get(_egress.HOLDS_KEY)))
+            if ran_local_only:
+                question["localOnly"] = True
             # Third plan RB7: NOTHING IS REMOVED BEFORE THE QUESTION IS SAVED.
             # A "Resume when ready" wait is TAKEN in the same write that saves
             # the question (one locked write, right before it starts: a Cancel
@@ -4231,7 +4256,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                             exc_info=True)
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
-                no_limit=no_limit, record=record, account_move=move_line,
+                no_limit=no_limit, record=record, account_move=move_line, local_only=ran_local_only,
             ))
             # v1.393.0: the wait loop looks again the moment a turn ENDS — a
             # limit it ended on armed its wait by itself, and a move within

@@ -2054,7 +2054,10 @@ when you pasted it.
   is kept local because it read one of your apps, or that ran any reply,
   helper or step Local only before, even if you switched Local only off
   afterwards. Such a session is left out whole. A helper or an objective's
-  teammate that ran Local only is left out on its own.
+  teammate that ran Local only is left out on its own. Each message and
+  reply in a coding session now notes that it ran Local only, even a reply
+  that failed before doing anything. Only such a failed reply from before
+  this update has no note.
 - **It says what it left out.** The report has a line such as "Left out: 1
   Local only coding session (Local only work never goes into a fix
   request)". When nothing else was found, the button shows that line instead

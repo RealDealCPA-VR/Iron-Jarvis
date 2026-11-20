@@ -109,19 +109,23 @@ model off this network that way. A coding session is LOCAL ONLY — and left out
 WHOLE, every call, reply, helper, finding and its id — when ANY record says
 it ran Local only (:func:`_line_ran_local_only`, :func:`_local_only_work`):
 its setup now (``providers/egress.setup_says_local_only``, the toggle or an
-app holding it local), a reply line's ``route.local_only`` or a Local only
-refusal (``errorKind``), one of its helpers' ``options.local_only``, or the
-event bus's ``local_only`` stamp on one of its ``tool.executed`` /
-``tool.denied`` / ``autonomy.nudged`` events (the one record of a Local only
-reply that FAILED: its line has no route). A session switched off later is
-still left out: it ran Local only work. A helper or an objective's teammate
-whose own run was Local only is left out on its own. FAIL CLOSED: a session
-or run whose Local only setting cannot be read is left out too, and makes the
-report incomplete — a setup or options that is not JSON; a helper of a
-session whose replies were not read while the saved Local only list cannot
-be read either; and, when the stamps cannot be listed, a session with a reply
-in the window that kept no route (failed or stopped: the stamp was its one
-record). What was left out is counted and said; ONE coding session
+app holding it local), a line's ``localOnly`` mark (``daemon/routes/build``
+writes it on the question and the reply of every turn that runs under Local
+only, whatever its end: a reply that failed or was stopped keeps no route),
+a reply line's ``route.local_only`` or a Local only refusal (``errorKind``),
+one of its helpers' ``options.local_only``, or the event bus's ``local_only``
+stamp on one of its ``tool.executed`` / ``tool.denied`` / ``autonomy.nudged``
+events. A session switched off later is still left out: it ran Local only
+work. (A reply written before the ``localOnly`` mark existed that failed or
+was stopped before it ran a call left no record of Local only at all.) A
+helper or an objective's teammate whose own run was Local only is left out on
+its own. FAIL CLOSED: a session or run whose Local only setting cannot be
+read is left out too, and makes the report incomplete — a setup or options
+that is not JSON; a helper of a session whose replies were not read while the
+saved Local only list cannot be read either; and, when the stamps cannot be
+listed, a session with a reply in the window that kept no route and nothing
+else saying Local only (a reply from before the mark: its calls' stamps were
+its one record). What was left out is counted and said; ONE coding session
 asked for that is Local only answers :data:`SCOPE_LOCAL_ONLY` and nothing
 else (not even its title).
 
@@ -1427,10 +1431,14 @@ def _flag_state(value: Any) -> str:
 
 
 def _line_ran_local_only(m: Any) -> bool:
-    """A coding session's line that says its reply ran Local only: the route's
+    """A coding session's line that says its turn ran Local only: the turn's
+    own mark on its question and reply (``localOnly``, ``routes/build``: also
+    on a reply that failed or was stopped, which keeps no route), the route's
     receipt (``egress.route_flags``) or a Local only refusal."""
     if not isinstance(m, dict):
         return False
+    if m.get("localOnly") is True:
+        return True
     route = m.get("route")
     if isinstance(route, dict) and route.get("local_only") is True:
         return True
@@ -1439,9 +1447,11 @@ def _line_ran_local_only(m: Any) -> bool:
 
 def _reply_kept_no_route(m: Any, since: "datetime | None") -> bool:
     """A coding session's reply line that kept no route (the reply failed or
-    was stopped, ``daemon/routes/build``): the bus's stamp is the one record
-    that it ran Local only. Only one that ended in the window, or whose time
-    cannot be read: the stamps are read for the window."""
+    was stopped, ``daemon/routes/build``) and no ``localOnly`` mark (written
+    since R0.2 for a Local only turn; a line from before it may lack it): the
+    bus's stamp is then the one record that it ran Local only. Only one that
+    ended in the window, or whose time cannot be read: the stamps are read for
+    the window."""
     if not isinstance(m, dict) or m.get("role") != "assistant" or isinstance(m.get("route"), dict):
         return False
     at = _utc(m.get("at"))
@@ -1543,8 +1553,9 @@ def _local_only_work(engine: Any, *, threads: list[tuple],
         if _flag_state(row[13]) == LOCAL and row[11]:
             local.add(str(row[11]))
     # The bus's stamp (``core/events.EventBus._stamp_local_only``) on a call
-    # of a coding session or a run: the one record of a Local only reply
-    # that failed. One DISTINCT read over the window.
+    # of a coding session or a run: the record of a Local only reply that
+    # failed after a call, also from before the lines' ``localOnly`` mark.
+    # One DISTINCT read over the window.
     try:
         types = ", ".join(f"'{t}'" for t in STAMPED_EVENT_TYPES)
         for (sid,) in _rows(
@@ -1565,7 +1576,8 @@ def _local_only_work(engine: Any, *, threads: list[tuple],
     else:
         stamps_unread = False
     if stamps_unread:
-        # FAIL CLOSED: a reply that failed or was stopped keeps no route, so
+        # FAIL CLOSED: a reply that failed or was stopped keeps no route, and
+        # one from before the ``localOnly`` mark keeps nothing else either:
         # its stamp is the one record that it ran Local only. Without the
         # stamps, a session with such a reply (nothing else saying Local only)
         # is not known. (A run's own ``options.local_only`` is written when it

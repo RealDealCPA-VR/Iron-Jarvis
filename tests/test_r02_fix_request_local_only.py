@@ -12,12 +12,17 @@ session is then left out — a session switched off later still ran Local only
 work earlier):
 
 * its setup says so now (``setup.local_only``, or an app holds it local);
+* one of its turns says it ran Local only: the ``localOnly`` mark that
+  ``routes/build`` writes on the question and the reply line of every Local
+  only turn, whatever its end (the one record of a reply that failed or was
+  stopped before it ran a call: such a line keeps no route — the second
+  review's finding);
 * one of its replies ran under the toggle (the line's ``route.local_only``)
   or was refused for it (``errorKind: "local_only"``);
 * one of its helpers ran Local only (the run's ``options.local_only``);
 * the event log stamped one of its calls Local only (the bus's stamp on
-  ``tool.executed`` / ``tool.denied`` / ``autonomy.nudged``) — the only
-  record of a Local only reply that FAILED (its line has no route).
+  ``tool.executed`` / ``tool.denied`` / ``autonomy.nudged``) — a failed
+  reply's calls, also from before the line mark.
 
 A helper or an objective's teammate that ran Local only is left out on its
 own. A setting that cannot be read is left out too (fail closed) and makes
@@ -75,9 +80,10 @@ def _reply(start, minutes: int = 30, **extra) -> dict:
     return line
 
 
-def _local_thread(db, *, tid: str = LOCAL, setup: "dict | str | None" = None, lines: "list | None" = None) -> None:
+def _local_thread(db, *, tid: str = LOCAL, setup: "dict | str | None" = None, lines: "list | None" = None,
+                  question: "dict | None" = None) -> None:
     """A coding session with its own failures, each carrying the marker."""
-    msgs = [{"role": "user", "content": f"Fix the ledger {MARK}", "at": AT.isoformat()}]
+    msgs = [{"role": "user", "content": f"Fix the ledger {MARK}", "at": AT.isoformat(), **(question or {})}]
     msgs += lines if lines is not None else [_reply(AT)]
     raw = setup if isinstance(setup, str) else json.dumps(
         setup if setup is not None else {"provider": "custom", "model": "glm-5.3-flash"})
@@ -251,8 +257,17 @@ def _held_for_app() -> dict:
     return {"provider": "custom", "model": "glm-5.3-flash", egress.HOLDS_KEY: ["gmail"]}
 
 
+def _failed_before_any_call(**extra) -> dict:
+    """A reply whose own model server failed before it ran a call: no route,
+    no refusal, no call (so no stamp) — its words come from that server."""
+    line = _reply(AT, content="", error=f"Your model server stopped answering {MARK}.",
+                  errorDetail=f"connection reset by 192.168.1.20:11434 {MARK}", **extra)
+    line.pop("route")
+    return line
+
+
 @pytest.mark.parametrize("signal", ["setup", "held_for_app", "route", "refusal", "helper", "event_tool",
-                                    "event_denied"])
+                                    "event_denied", "failed_reply_mark", "question_mark"])
 def test_every_mark_of_local_only_work_leaves_the_session_out(tmp_path, signal):
     """Each record that says the session ran Local only is enough on its own,
     even when the session is switched off now."""
@@ -261,7 +276,18 @@ def test_every_mark_of_local_only_work_leaves_the_session_out(tmp_path, signal):
     setup: "dict" = plain
     lines = [_reply(AT)]
     helper_options: dict = {}
-    if signal == "setup":
+    question: dict = {}
+    if signal == "failed_reply_mark":
+        # The second review's case: the reply failed before any call (its
+        # line keeps no route, no call was stamped) and the session was
+        # switched off since — its line's own mark is the record.
+        lines = [_failed_before_any_call(localOnly=True), _reply(AT + timedelta(minutes=31))]
+    elif signal == "question_mark":
+        # The same reply rebuilt at a start after a crash (from its frames:
+        # the turn's question, written before it started, keeps the mark).
+        question = {"localOnly": True}
+        lines = [_failed_before_any_call(), _reply(AT + timedelta(minutes=31))]
+    elif signal == "setup":
         setup = {**plain, "local_only": True}
     elif signal == "held_for_app":
         setup = _held_for_app()
@@ -276,7 +302,7 @@ def test_every_mark_of_local_only_work_leaves_the_session_out(tmp_path, signal):
         if signal == "refusal":
             # The refused reply kept no route; the next one ran (switched off).
             lines.append(_reply(AT + timedelta(minutes=31)))
-        _local_thread(db, setup=setup, lines=lines)
+        _local_thread(db, setup=setup, lines=lines, question=question)
         _local_work(db, helper_options=helper_options)
         if signal == "event_tool":
             # A reply that FAILED keeps no route: the bus's stamp on its call
@@ -290,6 +316,18 @@ def test_every_mark_of_local_only_work_leaves_the_session_out(tmp_path, signal):
                             "local_only": True}, at=AT + timedelta(minutes=2))
         db.commit()
     _assert_left_out(_report(engine))
+
+
+def test_a_reply_that_failed_before_any_call_with_no_mark_is_read_the_control(tmp_path):
+    """The control for the two line marks above: the same failed reply in a
+    session that never ran Local only is read, its server's words included —
+    so those cases fail for the right reason."""
+    engine = _engine(tmp_path)
+    _seed(engine, lines=[_failed_before_any_call(), _reply(AT + timedelta(minutes=31))])
+    out = _report(engine)
+    assert f"connection reset by 192.168.1.20:11434 {MARK}" in out["text"], out["text"]
+    assert "chat_10ca10ca" in out["text"]
+    assert out["local_only_left_out"] == 0 and out["complete"] is True
 
 
 def test_a_local_only_teammate_or_helper_run_is_left_out_on_its_own(tmp_path):
@@ -544,3 +582,84 @@ def test_the_route_leaves_local_only_work_out(tmp_path, monkeypatch):
     one = client.get("/team/fix-request", params={"session": LOCAL})
     assert one.status_code == 200
     assert one.json()["text"] == FR.SCOPE_LOCAL_ONLY and one.json()["problems"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# the record: a Local only turn's own lines say so, whatever its end
+# (the second review: a reply that failed before any call kept no record)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("end", ["failed", "stopped", "done"])
+def test_the_reply_writer_marks_a_local_only_turns_line_whatever_its_end(end):
+    from iron_jarvis.daemon.routes.build import _ReplyWatch
+
+    def line_of(local_only: bool) -> dict:
+        w = _ReplyWatch()
+        w.local_only = local_only
+        if end == "failed":
+            w.see("error", json.dumps({"title": "Your model server stopped answering.",
+                                       "technical": "connection reset"}))
+        elif end == "done":
+            w.see("done", json.dumps({"reply": "Done.", "route": {"provider": "custom", "model": "glm"}}))
+        else:
+            w.steps = [{"name": "shell", "ok": True}]  # stopped after a call: a line is kept
+        [line] = [m for m in w.lines("turn_x", end) if m.get("role") == "assistant"]
+        return line
+
+    marked = line_of(True)
+    assert marked["localOnly"] is True, marked
+    if end != "done":
+        assert not isinstance(marked.get("route"), dict), "the case the mark is for: no route"
+    assert "localOnly" not in line_of(False)
+
+
+async def test_a_local_only_reply_that_failed_before_any_call_is_left_out_after_the_switch_off(tmp_path):
+    """The second review's failure, through the REAL turn route and reply
+    writer: a Local only session's reply fails before any call (its model
+    server stops answering), the user switches Local only off, and "Copy as
+    a fix request" still leaves the session out whole — its question and its
+    reply line say the turn ran Local only. The control: the same failure in
+    a session that never ran Local only is in the report."""
+    from datetime import datetime, timezone
+
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.harness import sessions as S
+    from iron_jarvis.providers.adapters.base import ProviderError
+    from tests.test_build_sessions_v1367 import messages_of, new_session, open_turn, wire
+    from tests.test_harness_gaps_failure_receipt_v1389 import _Failing
+
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+
+    async def failed_turn(folder_name: str, turn_id: str, marker: str, **extra) -> tuple[str, dict, dict]:
+        folder = tmp_path / folder_name
+        folder.mkdir()
+        sid = new_session(app, folder, **extra)["id"]
+        wire(app, _Failing(ProviderError(f"connection reset by 192.168.1.20:11434 {marker}")))
+        status, raw = await open_turn(app, sid, {"text": "Fix the ledger", "turn_id": turn_id})
+        assert status == 200, raw
+        msgs = messages_of(app, sid)
+        [question] = [m for m in msgs if m.get("role") == "user" and m.get("turnId") == turn_id]
+        [line] = [m for m in msgs if m.get("role") == "assistant" and m.get("turnId") == turn_id]
+        assert line.get("error") and not isinstance(line.get("route"), dict), line
+        assert line.get("errorKind") != "local_only", "a server that failed, not a refusal"
+        return sid, question, line
+
+    local_sid, question, line = await failed_turn("local", "lo-fail-1", MARK, local_only=True)
+    assert question["localOnly"] is True and line["localOnly"] is True, (question, line)
+    S.update(engine, local_sid, setup={"local_only": None})  # switched off since
+    plain_sid, plain_q, plain_line = await failed_turn("plain", "plain-fail-1", "PLAINMARK")
+    assert "localOnly" not in plain_q and "localOnly" not in plain_line
+
+    out = FR.build_report(engine, now=datetime.now(timezone.utc), version="1.546.1", os_name="Windows 11")
+    text = out["text"]
+    assert MARK not in text and FR.short_id(local_sid) not in text, text
+    # The control: the plain session's same failure IS read, its words included.
+    assert "PLAINMARK" in text and FR.short_id(plain_sid) in text, text
+    assert out["local_only_left_out"] == 1 and out["complete"] is True, text
+    assert LEFT_OUT_ONE in text, text
+    # Asked for alone, the switched-off session says it is Local only.
+    asked = FR.build_report(engine, session=local_sid, now=datetime.now(timezone.utc), version="1.546.1",
+                            os_name="Windows 11")
+    assert asked["text"] == FR.SCOPE_LOCAL_ONLY

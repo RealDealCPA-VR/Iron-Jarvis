@@ -486,6 +486,10 @@ async def test_local_only_refuses_a_cloud_model_in_the_list_and_nothing_starts(a
     card = card_of(frames_of(raw))
     assert [i["provider"] for i in card["items"]] == ["ollama"]
     assert {c["provider"] for c in world.calls} == {"ollama"}
+    # R0.2: the Local only turn's question and reply line say so ("Copy as a
+    # fix request" still knows once the session is switched off).
+    lines = [m for m in messages_of(app, sid) if m.get("turnId") == "lo-2"]
+    assert [m.get("localOnly") for m in lines] == [True, True], lines
 
 
 async def test_a_folder_that_is_not_a_git_repository_is_refused_in_words(app, fake, tmp_path, monkeypatch):

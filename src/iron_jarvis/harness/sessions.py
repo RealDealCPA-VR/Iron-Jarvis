@@ -199,6 +199,11 @@ LINE_KEYS: tuple[str, ...] = (
     # a fix started, the review's verdict, pushed, kept on a side branch,
     # waiting for the user, stopped, gave up, passing) — its words in content.
     "ci",
+    # R0.2 (build-out plan): on the question and the reply of a turn that ran
+    # under Local only (``routes/build``), whatever its end — a reply that
+    # failed or was stopped keeps no route — so "Copy as a fix request"
+    # (``agents/fix_request``) knows after the session is switched off.
+    "localOnly",
 )
 
 

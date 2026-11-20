@@ -297,6 +297,14 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
             level_watch=level_watch,
         )
         question: dict[str, Any] = {"role": "user", "content": text or task, "turnId": turn_id}
+        from ...providers import egress as _egress
+
+        # R0.2: said on the question and the reply line, as for every
+        # coding-session turn (``build.start_build_turn``; an app holding the
+        # session local counts too).
+        ran_local_only = local_only or bool(_egress.clean_holds(setup.get(_egress.HOLDS_KEY)))
+        if ran_local_only:
+            question["localOnly"] = True
         saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
         if not saved.get("ok"):
             raise HTTPException(status_code=404, detail="no such coding session")
@@ -314,7 +322,7 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id,
                 A.run_attempts(platform, getattr(d, "_PERSONAS", {}), plan),
-                platform=platform, no_limit=no_limit,
+                platform=platform, no_limit=no_limit, local_only=ran_local_only,
             ))
         finally:
             if night_token is not None:
