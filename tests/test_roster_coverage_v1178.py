@@ -259,6 +259,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # pinned by tests/test_records_build_v14380.py.
     "night_task_add", "night_task_list", "night_task_cancel", "night_task_move",
     "build_folder_show", "build_defaults_set", "build_defaults_clear", "build_team_set", "build_team_clear",
+    # 22-a (R1.9): Iron Jarvis's check after each Build › Code reply, on or off
+    # for a folder (a card + Undo where the user is present) and the newest
+    # check of a session (read only); chat arms them
+    # (records_build.build_tools_for); pinned by tests/test_records_build_checks_v1.py.
+    "build_checks_set", "coding_reply_check",
     # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
     # a model server, its default model, an Iron-Proxy account and a memory
     # base from chat — a card + Undo where the user is present; pinned by

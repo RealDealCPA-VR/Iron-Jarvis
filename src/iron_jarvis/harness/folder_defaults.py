@@ -198,17 +198,127 @@ def save(engine: Any, folder: str, view: str, value: Any) -> dict[str, dict[str,
     clean = CLEANERS[view](value)
     with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
         row = db.get(BuildFolderRecord, key)
-        current = _parse(str(getattr(row, "defaults_json", "") or "")) if row is not None else {}
+        raw = str(getattr(row, "defaults_json", "") or "") if row is not None else ""
+        current = _parse(raw)
         if clean:
             current[view] = clean
         else:
             current.pop(view, None)
+        # 22-a: the folder's check after each reply rides the same row and is
+        # kept as it is (``save_checks`` is its one writer).
+        checks = _checks_of(raw)
+        stored: dict[str, Any] = dict(current)
+        if checks:
+            stored[CHECKS_KEY] = checks
         if row is None:
-            if not current:
+            if not stored:
                 return {}
             row = BuildFolderRecord(key=key, path=str(folder), name="")
-        row.defaults_json = json.dumps(current, sort_keys=True) if current else ""
+        row.defaults_json = json.dumps(stored, sort_keys=True) if stored else ""
         row.updated_at = utcnow()
         db.add(row)
         db.commit()
     return current
+
+
+# --------------------------------------------------------------------------- #
+# 22-a (R1.9): the folder's check after each Build › Code reply
+# --------------------------------------------------------------------------- #
+#: Where it is kept in ``defaults_json`` (beside the two views, never one).
+CHECKS_KEY = "checks"
+#: The longest command kept (one line, as a ``plugins.toml`` check's).
+CHECK_COMMAND_CHARS = 500
+#: A check's time limit: the default and the most a folder may keep.
+CHECK_TIMEOUT_S = 300
+CHECK_TIMEOUT_MAX_S = 1800
+#: Who chose: the card under a reply ("card"), a sentence in chat ("chat").
+CHECK_SOURCES = ("card", "chat")
+
+
+def clean_checks(raw: Any) -> "dict[str, Any] | None":
+    """The folder's check, checked; None = nothing kept. ``{"off": True,
+    "at": …}`` = the user said not to run tests after replies here;
+    ``{"command", "confirmed_at", "timeout_s", "source"}`` = the user said
+    yes to EXACTLY this command. Never raises: a value that does not pass
+    reads as nothing kept."""
+    if not isinstance(raw, dict):
+        return None
+    at = str(raw.get("at") or raw.get("confirmed_at") or "")[:40]
+    if raw.get("off") is True:
+        return {"off": True, "at": at}
+    command = str(raw.get("command") or "")
+    if (not command.strip() or len(command) > CHECK_COMMAND_CHARS or "\n" in command or "\r" in command
+            or "\x00" in command or not at):
+        return None
+    try:
+        timeout = int(raw.get("timeout_s") or CHECK_TIMEOUT_S)
+    except (TypeError, ValueError):
+        timeout = CHECK_TIMEOUT_S
+    timeout = max(1, min(timeout, CHECK_TIMEOUT_MAX_S))
+    source = str(raw.get("source") or "card")
+    return {"command": command, "confirmed_at": at, "timeout_s": timeout,
+            "source": source if source in CHECK_SOURCES else "card"}
+
+
+def _checks_of(raw: str) -> "dict[str, Any] | None":
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return None
+    return clean_checks(data.get(CHECKS_KEY)) if isinstance(data, dict) else None
+
+
+def read_checks(engine: Any, folder: str) -> "dict[str, Any] | None":
+    """The folder's kept check (:func:`clean_checks`), or None. BLOCKING;
+    never raises."""
+    from .sessions import folder_key
+
+    key = folder_key(folder)
+    if not key or engine is None:
+        return None
+    try:
+        from ..core.db import session_scope
+        from ..core.models import BuildFolderRecord
+
+        with session_scope(engine) as db:
+            row = db.get(BuildFolderRecord, key)
+            raw = str(getattr(row, "defaults_json", "") or "") if row is not None else ""
+        return _checks_of(raw)
+    except Exception:  # noqa: BLE001 — a bad row reads as none
+        return None
+
+
+def save_checks(engine: Any, folder: str, value: Any) -> "dict[str, Any] | None":
+    """Keep (or with None, forget) the folder's check; the two views'
+    defaults, the display name and the team are kept. Returns what is now
+    kept. BLOCKING; raises :class:`DefaultsRefused` for a value that does
+    not pass."""
+    from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
+    from ..core.ids import utcnow
+    from ..core.models import BuildFolderRecord
+    from .sessions import folder_key
+
+    key = folder_key(folder)
+    if not key:
+        raise DefaultsRefused("Say which folder the check is for.")
+    clean = clean_checks(value) if value is not None else None
+    if value is not None and clean is None:
+        raise DefaultsRefused(
+            "That check is not one Iron Jarvis can keep: one command on one line, at most "
+            f"{CHECK_COMMAND_CHARS} characters."
+        )
+    with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+        row = db.get(BuildFolderRecord, key)
+        raw = str(getattr(row, "defaults_json", "") or "") if row is not None else ""
+        stored: dict[str, Any] = dict(_parse(raw))
+        if clean:
+            stored[CHECKS_KEY] = clean
+        if row is None:
+            if not stored:
+                return None
+            row = BuildFolderRecord(key=key, path=str(folder), name="")
+        row.defaults_json = json.dumps(stored, sort_keys=True) if stored else ""
+        row.updated_at = utcnow()
+        db.add(row)
+        db.commit()
+    return clean

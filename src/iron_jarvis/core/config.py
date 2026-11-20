@@ -492,6 +492,11 @@ def default_permissions() -> dict[str, str]:
         "build_defaults_clear": "ask",
         "build_team_set": "ask",
         "build_team_clear": "ask",
+        # 22-a (R1.9): Iron Jarvis's check after each Build › Code reply:
+        # turning it on or off for a folder asks (with an Undo); reading the
+        # newest check of a session is allowed.
+        "build_checks_set": "ask",
+        "coding_reply_check": "allow",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +

@@ -39,6 +39,20 @@ defaults and team. These nine tools close that gap the way
   model is reused, else one is made — said in the reply, and KEPT by an Undo
   (an Undo puts back the folder's team, never a member of the model team).
 
+22-a (R1.9): Iron Jarvis's check after each Build › Code reply, from chat
+("stop running tests after replies here", "did the tests pass on Codex's
+last reply?"):
+
+* ``build_checks_set`` — turn the check after each reply on (with the
+  command the user named, else the one the folder proposes, shown on the
+  card) or off for a folder (``harness.folder_defaults.save_checks``, the
+  first-time card's own store). The folder's own ``finish.toml`` that turns
+  the check off is refused in words. Undo puts back what the folder had,
+  only while it is still what this change left.
+* ``coding_reply_check`` — the newest check of a Build › Code session's
+  replies, in words, read from Iron Jarvis's OWN record in the session's log
+  (``hosted/proof``), never from the coding tool's words (read only).
+
 Every change asks first (ask tier, the ordinary card; ``night_task_add`` its
 own every time) and has an Undo that puts back what THAT change did and
 nothing else, refusing in one sentence over anything changed since — never
@@ -82,8 +96,10 @@ NIGHT_TOOLS: tuple[str, ...] = ("night_task_add", "night_task_list", "night_task
 FOLDER_TOOLS: tuple[str, ...] = (
     "build_folder_show", "build_defaults_set", "build_defaults_clear", "build_team_set", "build_team_clear",
 )
-#: The two that only READ: a question still arms them.
-READERS = frozenset({"night_task_list", "build_folder_show"})
+#: 22-a (R1.9): Iron Jarvis's check after each Build › Code reply.
+CHECK_TOOLS: tuple[str, ...] = ("build_checks_set", "coding_reply_check")
+#: The ones that only READ: a question still arms them.
+READERS = frozenset({"night_task_list", "build_folder_show", "coding_reply_check"})
 #: Each tool's default permission (``core/config.py`` holds the same rows).
 TIERS: dict[str, str] = {
     "night_task_add": "ask",
@@ -95,9 +111,11 @@ TIERS: dict[str, str] = {
     "build_defaults_clear": "ask",
     "build_team_set": "ask",
     "build_team_clear": "ask",
+    "build_checks_set": "ask",
+    "coding_reply_check": "allow",
 }
 #: The record kinds this module's Undo serves (``records.restore``).
-KINDS: tuple[str, ...] = ("night_task", "night_order", "build_defaults", "build_team")
+KINDS: tuple[str, ...] = ("night_task", "night_order", "build_defaults", "build_team", "build_checks")
 
 #: A tool needs the running app (the route bodies take its deps object).
 NEEDS_THE_APP = "This can only be done while the Iron Jarvis app is running."
@@ -509,17 +527,52 @@ def restore_build_team(platform: Any, folder: str, prior: Any, desc: dict[str, A
     return f"undo: put back the coding team for {folder}{kept}"
 
 
+def snap_build_checks(platform: Any, folder: str) -> "dict[str, Any] | None":
+    from ..harness import folder_defaults as FD
+
+    return FD.read_checks(_engine(platform), folder)
+
+
+def _checks_words(kept: "dict[str, Any] | None") -> str:
+    if not kept:
+        return "not set (Iron Jarvis asks once, with the command, under the first reply that changes files)"
+    if kept.get("off"):
+        return "off"
+    return f"on: `{kept.get('command')}` after each reply that changes files"
+
+
+def restore_build_checks(platform: Any, folder: str, prior: Any, desc: dict[str, Any]) -> str:
+    """``POST /undo`` for the check after each reply changed from chat: what
+    the folder had comes back only while it is still what the change left.
+    Blocking."""
+    from ..harness import folder_defaults as FD
+
+    prior = prior if isinstance(prior, dict) else None
+    after = desc.get("after") if isinstance(desc.get("after"), dict) else None
+    current = snap_build_checks(platform, folder)
+    if current == prior:
+        return f"undo: the check after each reply in {folder} was already back as it was"
+    if current != after:
+        raise R.RecordError(
+            f"The check after each reply in {folder} was changed again after this change, so Undo leaves it."
+        )
+    FD.save_checks(_engine(platform), folder, prior)
+    return f"undo: put back the check after each reply in {folder} ({_checks_words(prior)})"
+
+
 SNAP = {
     "night_task": snap_night_task,
     "night_order": snap_night_order,
     "build_defaults": snap_build_defaults,
     "build_team": snap_build_team,
+    "build_checks": snap_build_checks,
 }
 _RESTORE = {
     "night_task": restore_night_task,
     "night_order": restore_night_order,
     "build_defaults": restore_build_defaults,
     "build_team": restore_build_team,
+    "build_checks": restore_build_checks,
 }
 
 
@@ -1338,8 +1391,143 @@ class BuildTeamClearTool(_FolderTool):
         )
 
 
+class BuildChecksSetTool(_FolderTool):
+    """22-a (R1.9): Iron Jarvis's check after each Build › Code reply, on or
+    off for a folder."""
+
+    name = "build_checks_set"
+    RECORD = "build_checks"
+    description = (
+        "Turn on or off Iron Jarvis's check after each Build › Code reply in a folder: after the user's own "
+        "Claude Code, Codex, Pi, OpenCode, Grok or Antigravity changes files, Iron Jarvis runs the folder's "
+        "tests itself and writes under the reply how many ran and passed (failing tests send the tool back "
+        "up to twice, on the user's plan). `run` false = stop running tests after replies there; true = run "
+        "them, with `command` when the user named one (else the command the folder proposes). `folder` is a "
+        "full location; leave it out for the folder of the project this chat is in — if there is none, ASK "
+        "which folder, never guess. The user approves on a card that shows the command; Undo puts back what "
+        "the folder had."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "folder": {"type": "string"},
+            "run": {"type": "boolean"},
+            "command": {"type": "string", "description": "The exact test command, only when the user named one."},
+        },
+        "required": ["run"],
+    }
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from ..harness import folder_defaults as FD
+        from ..hosted import proof as PROOF
+
+        if not isinstance(args.get("run"), bool):
+            return ToolResult(ok=False, error="Say whether tests should run after replies there (on or off).")
+        folder, problem = await asyncio.to_thread(_existing_folder, self.platform, ctx, args.get("folder"))
+        if problem:
+            return ToolResult(ok=False, error=problem)
+        engine = _engine(self.platform)
+        before = await asyncio.to_thread(FD.read_checks, engine, folder)
+        if not args["run"]:
+            value: dict[str, Any] = {"off": True, "at": PROOF.now_iso()}
+        else:
+            plan = await asyncio.to_thread(PROOF.decide, engine, folder)
+            if plan.get("state") == "off" and plan.get("why") == PROOF.WHY_FOLDER_FILE:
+                return ToolResult(ok=False, error=(
+                    f"The folder's own .ironjarvis/harness/finish.toml turns the check off in {folder}; change "
+                    "that file first."))
+            command = " ".join(str(args.get("command") or "").split())
+            if not command:
+                command = str(plan.get("command") or "") if plan.get("state") in ("ask", "run") else ""
+            if not command and before and before.get("command"):
+                command = str(before["command"])
+            if not command:
+                return ToolResult(ok=False, error=(
+                    f"Iron Jarvis found no test command for {folder}. Say which command runs its tests "
+                    "(for example npm test or python -m pytest)."))
+            value = {"command": command, "confirmed_at": PROOF.now_iso(), "timeout_s": PROOF.TIMEOUT_S,
+                     "source": "chat"}
+        try:
+            saved = await asyncio.to_thread(FD.save_checks, engine, folder, value)
+        except FD.DefaultsRefused as exc:
+            return ToolResult(ok=False, error=_refusal_words(exc))
+        _note(after=saved)
+        new = _checks_words(saved)
+        out = (f"Iron Jarvis now runs `{saved['command']}` after each Build › Code reply in {folder} that changes "
+               "files." if saved and saved.get("command") else
+               f"Iron Jarvis no longer runs tests after Build › Code replies in {folder}.")
+        return ToolResult(
+            ok=True, output=out,
+            data={"record_change": self._card(
+                "Check after each reply", f"Tests after Build › Code replies in {folder}",
+                _checks_words(before), new, f"build_checks.{folder}")},
+        )
+
+
+class CodingReplyCheckTool(Tool):
+    """22-a (R1.9): the newest check of a Build › Code session's replies, in
+    words, from Iron Jarvis's own record (read only)."""
+
+    name = "coding_reply_check"
+    description = (
+        "Say whether the tests passed on a Build › Code reply (the user's own Claude Code, Codex, Pi, "
+        "OpenCode, Grok or Antigravity): Iron Jarvis runs the folder's tests itself after a reply that "
+        "changes files and keeps what happened. Reads that record only, never the tool's own words. "
+        "`session` is a session's id, a word of its title or its tool (\"Codex\"); leave it out for the "
+        "newest session."
+    )
+    input_schema = {"type": "object", "properties": {"session": {"type": "string"}}}
+    reversibility = Reversibility.READONLY
+
+    def __init__(self, platform: Any) -> None:
+        self.platform = platform
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        got = await asyncio.to_thread(newest_check, self.platform, str(args.get("session") or ""))
+        if got is None:
+            return ToolResult(ok=False, error="There is no Build › Code session that matches.")
+        row, rec = got
+        title = (getattr(row, "title", "") or "").strip() or "untitled"
+        tool = _tool_label(str(getattr(row, "harness", "") or ""))
+        head = f"Coding session ({tool}) \"{title[:80]}\" in {getattr(row, 'folder', '') or 'no folder'}:"
+        if rec is None:
+            return ToolResult(ok=True, output=f"{head} Iron Jarvis has not checked any of its replies yet.",
+                              data={"session": row.id, "check": None})
+        when = str(rec.get("at") or "")
+        return ToolResult(ok=True, output=f"{head} {rec.get('line')} (checked {when}; Iron Jarvis's own record.)",
+                          data={"session": row.id, "check": {k: rec.get(k) for k in (
+                              "tests", "why", "command", "ran", "passed", "failed", "new_files", "at", "for_turn")}})
+
+
+def newest_check(platform: Any, ref: str) -> "tuple[Any, dict[str, Any] | None] | None":
+    """BLOCKING: ``(session row, its newest finished check record or None)``
+    for the Build › Code session ``ref`` names (its id, a word of its title,
+    or its tool), else the newest session; None when there is none."""
+    from pathlib import Path
+
+    from ..hosted import store
+    from ..hosted.events import EventLog
+    from ..hosted.words import LABELS
+
+    rows = store.list_rows(_engine(platform))
+    want = " ".join(ref.split()).lower()
+    if want:
+        exact = [r for r in rows if r.id == ref.strip()]
+        tools = {k for k, v in LABELS.items() if v.lower() == want or k == want}
+        rows = exact or [r for r in rows if r.harness in tools] or [
+            r for r in rows if want in (r.title or "").lower()]
+    if not rows:
+        return None
+    row = rows[0]
+    home = Path(platform.config.home)
+    events, _total, _dropped = EventLog(home, row.id).read(2000)
+    rec = next((e for e in reversed(events) if isinstance(e, dict) and e.get("type") == "proof"
+                and e.get("state") == "done" and e.get("by") == "iron_jarvis"), None)
+    return row, rec
+
+
 def build_record_tools(platform: Any) -> list[Tool]:
-    """The nine tools, for ``records.record_tools``."""
+    """The eleven tools, for ``records.record_tools``."""
     return [
         NightTaskAddTool(platform),
         NightTaskListTool(platform),
@@ -1350,6 +1538,8 @@ def build_record_tools(platform: Any) -> list[Tool]:
         BuildDefaultsClearTool(platform),
         BuildTeamSetTool(platform),
         BuildTeamClearTool(platform),
+        BuildChecksSetTool(platform),
+        CodingReplyCheckTool(platform),
     ]
 
 
@@ -1656,6 +1846,34 @@ _FOLDER_SHOW = re.compile(
 _PEOPLE_TEAM = re.compile(r"\b(?:at\s+work|the\s+office|meeting|standup|stand-up|colleagues?|coworkers?)\b", re.IGNORECASE)
 
 
+# --- 22-a (R1.9): the check after each Build › Code reply
+#: "stop running tests after replies here", "run the tests after each reply
+#: in D:\\code\\shop", "turn off the check after replies in this repo" —
+#: tests (or the check) AND replies, with an on or off verb; bounded gaps.
+_CHECKS_VERB = re.compile(
+    r"^(?:stop|quit|don['’]?t|do\s+not|never|no\s+more|turn\s+off|switch\s+off|disable|pause|start|always"
+    r"|turn\s+on|switch\s+on|enable|resume|keep|run|check|test)\b",
+    re.IGNORECASE,
+)
+_CHECKS_TESTS = re.compile(r"\b(?:tests?|test\s+suite|the\s+check|checking|checks)\b", re.IGNORECASE)
+_CHECKS_REPLIES = re.compile(r"\bafter\s+(?:(?:each|every|a|the|its|their|my|any)\s+)?(?:coding\s+)?(?:repl(?:y|ies)|answers?)\b"
+                             r"|\bafter\s+(?:codex|claude(?:\s+code)?|the\s+(?:coding\s+)?tool)\s+(?:changes\s+files|edits\s+files"
+                             r"|replies|answers|is\s+done|finishes)\b", re.IGNORECASE)
+#: "did the tests pass on Codex's last reply?", "what did Iron Jarvis's check
+#: say", "were the tests green after that reply"
+_CHECK_ASK = re.compile(
+    r"\b(?:did|do|were|are|have|has)\b[^\n]{0,40}?\btests?\b[^\n]{0,30}?\b(?:pass(?:ed)?|fail(?:ed)?|green|red|run|ran)\b"
+    r"[^\n]{0,60}?\b(?:repl(?:y|ies)|answer|codex|claude(?:\s+code)?|coding\s+session|build\s*›?\s*code|change)\b"
+    r"|\b(?:what|how)\b[^\n]{0,30}?\b(?:check|checked)\b[^\n]{0,40}?\b(?:repl(?:y|ies)|codex|claude|coding\s+session)\b",
+    re.IGNORECASE,
+)
+
+
+def _checks_request(clauses: list[str]) -> bool:
+    return any((_CHECKS_VERB.match(c) or _CHECKS_REPLIES.match(c)) and _CHECKS_TESTS.search(c)
+               and _CHECKS_REPLIES.search(c) for c in clauses)
+
+
 #: v1.438.0 review: a sentence comparing models ("Claude reviews and Codex
 #: writes better than people think") is talk about them, never a team.
 _COMPARE = re.compile(r"\b(?:better|worse|than|faster|slower|prefer|prefers|preferred)\b", re.IGNORECASE)
@@ -1684,13 +1902,15 @@ def build_tools_for(text: str) -> list[str]:
         low = t.lower()
         out: list[str] = []
         nightish = any(w in low for w in ("tonight", "night", "overnight", "task", "queue", "sleep", "move", "bump"))
+        # 22-a (R1.9): the check after each Build › Code reply.
+        checkish = "test" in low or "check" in low
         folderish = any(
             w in low for w in ("repo", "folder", "codebase", "checkout", "workspace", ":\\", ":/", "team", "default", "session", "writes",
                 "reviews", "review")
             # A Linux or macOS path names a folder with none of the words above
             # ("use Codex for /home/sam/shop").
         ) or _POSIX_PATH.search(t) is not None
-        if not (nightish or folderish):
+        if not (nightish or folderish or checkish):
             return out
         # "Have it…" / "Have my coding sessions…" (v1.448.0) at the head of a
         # message with no "?" is an order, never the question "have my
@@ -1720,6 +1940,11 @@ def build_tools_for(text: str) -> list[str]:
                         "build_folder_show"]
             elif shows:
                 out.append("build_folder_show")
+        if checkish:
+            if _CHECK_ASK.search(t) is not None:
+                out.append("coding_reply_check")
+            elif not question and _checks_request(clauses):
+                out += ["build_checks_set", "coding_reply_check"]
         return list(dict.fromkeys(out))
     except Exception:  # noqa: BLE001 — a matcher fault arms nothing new
         log.debug("night/folder arming failed", exc_info=True)
@@ -1727,6 +1952,6 @@ def build_tools_for(text: str) -> list[str]:
 
 
 __all__ = [
-    "FOLDER_TOOLS", "KINDS", "NIGHT_TOOLS", "READERS", "SNAP", "TIERS", "build_record_tools",
+    "CHECK_TOOLS", "FOLDER_TOOLS", "KINDS", "NIGHT_TOOLS", "READERS", "SNAP", "TIERS", "build_record_tools",
     "build_tools_for", "resolve_folder", "restore_kind",
 ]

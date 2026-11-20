@@ -406,6 +406,7 @@ ASK_WORDS: dict[str, str] = {
     "build_defaults_clear": "clear a folder's defaults for new coding sessions",
     "build_team_set": "set a folder's coding team",
     "build_team_clear": "stop using a coding team in a folder",
+    "build_checks_set": "turn tests after each Build › Code reply on or off in a folder",
 }
 
 

@@ -2046,6 +2046,11 @@ class HostedService:
         # the Code view reads the session again while either holds.
         view["background_helpers"] = live.background_helpers if live and live.running else 0
         view["self_reply"] = bool(live and live.replying_alone(self.clock()))
+        # 22-a: Iron Jarvis is checking the newest reply (running the folder's
+        # tests): the Code view reads the session again while it holds.
+        from . import proof as PROOF
+
+        view["checking"] = PROOF.checking(self, view["id"])
         # v1.422.0 (B4): the programs the reaper keeps this session open for
         # (masked command + ports, never a pid) with the line that says so and
         # how to stop it; and the words of a stop that ended programs (until
@@ -4360,6 +4365,12 @@ class HostedService:
         await self._row(sid)
         live = self.live.get(sid)
         if live is None or live.turn is None or not live.turn.running:
+            # 22-a: no reply runs, but Iron Jarvis may be checking the last
+            # one (the folder's tests): the Stop ends that run, tree and all.
+            from . import proof as PROOF
+
+            if PROOF.stop(self, sid, PROOF.WHY_STOPPED):
+                return {"ok": True, "running": False, "check_stopped": True}
             return {"ok": True, "running": False}
         # v1.474.0 (Hand off): the user's Stop stops this session's running
         # helpers too (in the background; a Stop never waits on them).

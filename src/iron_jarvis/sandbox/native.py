@@ -848,7 +848,7 @@ class NativeSandbox(Sandbox):
     def run(
         self, command: str, *, cwd: Path, timeout: float | None = None,
         on_spawn: Any = None, cancelled: Any = None, build: bool = False,
-        bash: Any = None,
+        bash: Any = None, env: "dict[str, str] | None" = None, keep_windows: bool = True,
     ) -> SandboxResult:
         """``on_spawn`` / ``cancelled`` (v1.372.0): ``procs.run``'s seams,
         passed by the shell tool so a STOPPED call kills its command's tree
@@ -861,13 +861,21 @@ class NativeSandbox(Sandbox):
         command was written in bash (the IJ harness's Claude dialect) and runs
         in Git for Windows' bash instead of cmd.exe, with the same
         environment, folder, timeout, tree kill, hidden console and decoding.
-        Omitted: cmd.exe (``shell=True``), exactly as before."""
+        Omitted: cmd.exe (``shell=True``), exactly as before.
+        ``env`` (22-a): an environment the CALLER built from :func:`build_env`
+        (Iron Jarvis's own check after a coding tool's reply, with a branch's
+        main-folder environment in front), used as given. ``keep_windows``
+        (22-a): False for a run that must leave NOTHING behind (the check's
+        job is closed with the run, so whatever it started ends with it).
+        Both omitted: exactly as before."""
         limit = timeout if timeout is not None else self.policy.timeout_s
         # NOT child_env (review): a shell line pipes and redirects, and
         # PYTHONIOENCODING=utf-8 would make `type x.csv | python ...` fail on
         # an ANSI byte and `python export.py > out.csv` write UTF-8 Excel
         # misreads. A Python child keeps its own page; `_as_text` judges it.
-        if self.policy.modify_env == "deny":
+        if env is not None:
+            env = dict(env)
+        elif self.policy.modify_env == "deny":
             env = build_turn_env() if build else scrubbed_env()
         else:
             env = None
@@ -921,7 +929,7 @@ class NativeSandbox(Sandbox):
             env=env,
             timeout=limit,
             no_window=False,
-            keep_windows=True,
+            keep_windows=keep_windows,
             **({"on_spawn": on_spawn} if on_spawn is not None else {}),
             **({"cancelled": cancelled} if cancelled is not None else {}),
             **extra,

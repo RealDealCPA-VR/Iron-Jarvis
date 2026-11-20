@@ -1955,6 +1955,14 @@ class Orchestrator:
             stopped.extend(_stop_hosted(self.p))
         except Exception:  # noqa: BLE001 — the rest of the stop still happened
             log.exception("Emergency stop could not stop the Code-view carry-ons")
+        # 22-a: and Iron Jarvis's own check of a Build › Code reply (the
+        # folder's tests it runs by itself after a reply): killed, tree and all.
+        try:
+            from ..hosted.proof import stop_all as _stop_checks
+
+            stopped.extend(_stop_checks(self.p))
+        except Exception:  # noqa: BLE001 — the rest of the stop still happened
+            log.exception("Emergency stop could not stop the Code-view checks")
         # v1.406.0 part 3: a REVIEW of a pull request's check fix in flight
         # (its fix turn is stopped above, as a "ci" turn): cancelled, so the
         # fix is neither committed nor pushed.

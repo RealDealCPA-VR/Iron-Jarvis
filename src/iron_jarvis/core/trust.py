@@ -100,6 +100,8 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "build_defaults_clear",
         "build_team_set",
         "build_team_clear",
+        # 22-a: nor whether Iron Jarvis runs a folder's tests after each reply.
+        "build_checks_set",
         # v1.438.0 (Wave 4 group B): nor a model server, an account or a memory
         # base (each changes where later chats are answered or saved).
         "model_server_add",

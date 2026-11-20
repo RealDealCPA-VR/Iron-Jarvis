@@ -2042,6 +2042,58 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Iron Jarvis checks every Build › Code reply
+
+Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi,
+OpenCode, Grok or Antigravity), its reply now ends the same way. When the
+reply changed files, Iron Jarvis runs your folder's own tests itself and
+writes one line under the reply, from its own record:
+
+> Checked by Iron Jarvis: 14 tests ran, 14 passed. 2 new files: `api/limits.py`, `tests/test_limits.py`.
+
+**The first time in a folder.** Iron Jarvis asks once, under the reply, with
+the exact command: *Run `npm test` after each reply in this folder?* It says
+that failing tests send the tool back to fix them, up to twice per message,
+on your plan. **Yes, after each reply** keeps that command for the folder and
+checks the reply right away. **Not in this folder** keeps the folder off. It
+asks again only if the folder's command changes (for example a new
+`.ironjarvis/harness/plugins.toml` check, or `pnpm` taking over from `npm`).
+Nothing runs before your yes, and a command the coding tool ran itself is
+never taken as the check.
+
+**Where the command comes from.** In this order: the folder's own
+`.ironjarvis/harness/plugins.toml` `[[checks]]`, the test command its README
+(or CONTRIBUTING, AGENTS.md, CLAUDE.md, TESTING.md) names, `package.json`'s
+`test` script, a pytest section in `pyproject.toml` or `pytest.ini`,
+`Cargo.toml` and `go.mod`. A folder whose `.ironjarvis/harness/finish.toml`
+says `enabled = false` (or `tests = false`) is never checked, and the line
+says so.
+
+**When the tests fail.** The line says how many ran and passed, and the tool
+is sent back with the end of the test output (shown to it as data, never as
+instructions). After its fix the reply is checked again. If the same failure
+comes back, or after two tries, the line says *This is not finished* and
+offers **Rewind to before this message** (the rewind preview first). Output
+that reads like instructions to a model is not sent back; the line says so.
+
+**What it says when it could not check.** *Not checked:* and why: you pressed
+Stop, a new message came first, Emergency stop is on, the command is not on
+this PC's PATH, or it did not finish within 5 minutes. A runner whose summary
+Iron Jarvis cannot read gives no number: the line says only whether the
+command ended with an error. The count is read from the runner's own summary
+(pytest, unittest, jest, vitest, mocha, `go test -v`, `cargo test`,
+`dotnet test`, phpunit), never from the tool's words.
+
+**Light on the PC.** One check per folder at a time, at low priority, with a
+5-minute limit. It runs only after a reply you started that changed files,
+and never while Emergency stop is on. **Stop** beside the line ends it (and
+everything it started).
+
+**From chat.** Say *stop running tests after replies here* (or *run the tests
+after each reply in D:\code\shop with pytest -q*); the card shows the command
+and the change has an Undo. Ask *did the tests pass on Codex's last reply?*
+and Iron Jarvis answers from its own record.
+
 ## The Timeline shows the models that did the work (v1.550.0)
 
 A coding session's **Timeline** tab now opens on the models that did the

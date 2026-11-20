@@ -136,6 +136,10 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     "build_defaults_clear": "ask",
     "build_team_set": "ask",
     "build_team_clear": "ask",
+    # 22-a (R1.9): the check after each Build › Code reply (on or off for a
+    # folder, with an Undo) and the newest check of a session (read only).
+    "build_checks_set": "ask",
+    "coding_reply_check": "allow",
     # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
     # model servers, Iron-Proxy accounts and memory bases — each asks, each
     # has an Undo.
@@ -1955,7 +1959,7 @@ def _rb() -> Any:
 
 #: v1.438.0 (Wave 4 group A): a night task, tonight's order, a folder's
 #: coding defaults and its coding team (settings/records_build).
-_BUILD_KINDS = ("night_task", "night_order", "build_defaults", "build_team")
+_BUILD_KINDS = ("night_task", "night_order", "build_defaults", "build_team", "build_checks")
 _SNAP.update({k: (lambda kind: lambda p, n: _rb().SNAP[kind](p, n))(k) for k in _BUILD_KINDS})
 def _conn_snap(kind: str) -> Any:
     def _snap(platform: Any, name: str) -> Any:

@@ -39,6 +39,14 @@ open, ONE notice under the reply says so (:func:`verdict_words`).
 
 Every file name shown (to the tool, on the page) is masked and cut short; no
 tool output is quoted.
+
+22-a (R1.9): the judging task first lets Iron Jarvis run the folder's tests
+(``hosted/proof.check``), so a THIRD reason sends the reply back: its tests
+failed. The end of the TEST RUN's output (never the tool's) goes with it,
+masked, scanned and fenced as outside text; a flagged output is not sent and
+the line under the reply says so. The same two follow-ups and ``stuck``
+rule (the same failing output twice); the follow-up is checked again. A Stop
+of the check, or Emergency stop during it, sends nothing back.
 """
 
 from __future__ import annotations
@@ -123,6 +131,9 @@ class Chain:
     pending: str = ""
     ended: str = ""
     open: list[str] = field(default_factory=list)
+    #: 22-a: the last check of this message's work failed its tests, so the
+    #: follow-up is checked again even when it changed nothing.
+    tests_failing: bool = False
 
 
 def chains(svc: Any) -> dict[str, Chain]:
@@ -320,8 +331,9 @@ def _listed(names: list[str]) -> str:
     return out + (f" and {more} more" if more > 0 else "")
 
 
-def note_for(missing: list[str], gave_up: bool, round_no: int) -> str:
-    """What the TOOL is told (its hidden user message)."""
+def note_for(missing: list[str], gave_up: bool, round_no: int, tests: Any = None) -> str:
+    """What the TOOL is told (its hidden user message). ``tests`` (22-a): the
+    failing check's ``proof.Proof`` — its output only inside the fence."""
     lines = [NOTE_HEAD]
     if missing:
         one = len(missing) == 1
@@ -331,6 +343,10 @@ def note_for(missing: list[str], gave_up: bool, round_no: int) -> str:
             f"{'it' if one else 'them'} now, or say plainly that {'it was' if one else 'they were'} "
             "not made."
         )
+    if tests is not None:
+        from .proof import tests_failed_note
+
+        lines.append(tests_failed_note(tests))
     if gave_up:
         lines.append(f"- {GIVE_UP_WORDS}")
     lines.append(NOTE_TAIL)
@@ -339,7 +355,7 @@ def note_for(missing: list[str], gave_up: bool, round_no: int) -> str:
     return "\n".join(lines)
 
 
-def line_for(missing: list[str], gave_up: bool) -> str:
+def line_for(missing: list[str], gave_up: bool, tests: Any = None) -> str:
     """The plain line the page draws for the follow-up (Iron Jarvis's step)."""
     said: list[str] = []
     if missing:
@@ -348,6 +364,10 @@ def line_for(missing: list[str], gave_up: bool) -> str:
         one = len(missing) == 1
         said.append(f"the reply said {names} {'was' if one else 'were'} saved, and "
                     f"{'it is' if one else 'they are'} not in the folder")
+    if tests is not None:
+        from .proof import tests_failed_line
+
+        said.append(tests_failed_line(tests))
     if gave_up:
         said.append("the reply ended by saying it could not be done; it is asked to try another "
                     "way first")
@@ -435,14 +455,57 @@ def _after_turn(svc: Any, live: Any, turn: Any, done: dict[str, Any]) -> None:
         return
     chain.pending = str(turn.id)
     table[sid] = chain
+    _start_judge(svc, sid, chain, str(turn.id), events)
+
+
+def _start_judge(svc: Any, sid: str, chain: Chain, turn_id: str, events: list[dict[str, Any]]) -> bool:
     from ..harness.stall import keep
+    from . import proof as PROOF
 
     with contextlib.suppress(RuntimeError):
-        task = asyncio.ensure_future(_judge(svc, sid, chain, str(turn.id), events))
+        task = asyncio.ensure_future(_judge(svc, sid, chain, turn_id, events))
+        # 22-a: from now the session reads as "checking" (the page's read
+        # right after the reply then knows to look again).
+        PROOF.note_pending(svc, sid)
+        task.add_done_callback(lambda _t: PROOF.clear_pending(svc, sid))
         running = judging(svc)
         running.add(task)
         task.add_done_callback(running.discard)
         keep(task)
+        return True
+    return False
+
+
+async def recheck(svc: Any, sid: str, turn_id: str) -> bool:
+    """22-a: check the session's newest reply NOW (the card's yes under it):
+    the same judge, with the folder's tests first. Only while nothing runs,
+    nothing is asked or waiting, the reply named is the newest one, and
+    Emergency stop is off. True when it started. Never raises."""
+    try:
+        live = svc.live.get(sid)
+        if (live is None or getattr(live, "turn", None) is not None or getattr(live, "asks", None)
+                or _queue_waiting(live) or getattr(svc, "_closing", False) or _busy_alone(live, svc.clock())
+                or _emergency_stop(svc.platform) or chains(svc).get(sid) is not None):
+            return False
+        events, _total, _dropped = await asyncio.to_thread(live.log.read, 0, turn=turn_id)
+        users = [e for e in events if isinstance(e, dict) and e.get("type") == "user"]
+        done = next((e for e in reversed(events) if isinstance(e, dict) and e.get("type") == "done"), None)
+        if not users or done is None or str(done.get("stop") or "") != "completed":
+            return False
+        from . import panes as PN
+
+        everything, _t, _d = await asyncio.to_thread(live.log.read, 2000)
+        turns = PN.turns_of(everything)
+        if not turns or turns[-1]["id"] != turn_id or live.turn is not None or chains(svc).get(sid) is not None:
+            return False
+        carry = users[0].get("carry")
+        chain = Chain(origin=str(carry.get("origin") or turn_id) if isinstance(carry, dict) else turn_id)
+        chain.pending = turn_id
+        chains(svc)[sid] = chain
+        return _start_judge(svc, sid, chain, turn_id, events)
+    except Exception:  # noqa: BLE001
+        log.debug("check-again: a reply could not be checked again", exc_info=True)
+        return False
 
 
 def _still_current(svc: Any, sid: str, chain: Chain, turn_id: str) -> bool:
@@ -466,11 +529,24 @@ async def _judge(svc: Any, sid: str, chain: Chain, turn_id: str, events: list[di
 async def _judge_in(svc: Any, sid: str, chain: Chain, turn_id: str, events: list[dict[str, Any]]) -> None:
     from . import store
 
+    from . import proof as PROOF
+
     table = chains(svc)
     row = await asyncio.to_thread(store.get, svc.engine, sid)
     if row is None or row.archived_at is not None or getattr(row, "handed_from", None):
         table.pop(sid, None)
         return
+    # 22-a: Iron Jarvis runs the folder's tests FIRST; its record is in the
+    # session's log before anything below reads it.
+    proof = await PROOF.check(svc, sid, turn_id, events, row=row, force=chain.tests_failing)
+    if proof is not None and proof.record.get("why") in (PROOF.WHY_STOPPED, PROOF.WHY_EMERGENCY, PROOF.WHY_CLOSING):
+        table.pop(sid, None)  # Stop means stopped: nothing is sent back after it
+        return
+    if proof is not None and _emergency_stop(svc.platform):
+        table.pop(sid, None)
+        return
+    chain.tests_failing = bool(proof is not None and proof.failed)
+    tests = proof if proof is not None and proof.sends_back else None
     reply = final_text(events)
     if chain.sent and _BLOCKED_LINE_RX.search(reply):
         table.pop(sid, None)  # it says what stops it: the user's to answer
@@ -482,10 +558,12 @@ async def _judge_in(svc: Any, sid: str, chain: Chain, turn_id: str, events: list
         from ..harness.give_up import gives_up
 
         gave_up = gives_up(reply)
-    if not missing and not gave_up:
+    if not missing and not gave_up and tests is None:
         table.pop(sid, None)
         return
     keys = frozenset(f"missing:{n.lower()}" for n in missing)
+    if tests is not None:
+        keys |= {f"tests:{tests.signature}"}
     ended = ""
     if chain.sent and keys and keys == chain.last_keys and not gave_up:
         ended = END_STUCK
@@ -496,6 +574,9 @@ async def _judge_in(svc: Any, sid: str, chain: Chain, turn_id: str, events: list
         live = svc.live.get(sid)
         if missing and live is not None and live.turn is None:
             svc._emit(live, make("notice", text=verdict_words(chain.sent, ended)))
+        if tests is not None and live is not None:
+            # 22-a: the check's own line says it (one line, not two).
+            await _mark_unfinished(svc, sid, live, chain, tests, ended)
         return
     if not _still_current(svc, sid, chain, turn_id):
         return
@@ -508,13 +589,13 @@ async def _judge_in(svc: Any, sid: str, chain: Chain, turn_id: str, events: list
         "from": turn_id,
         "origin": chain.origin,
         "round": chain.sent,
-        "note": line_for(missing, gave_up),
+        "note": line_for(missing, gave_up, tests),
     }
     from . import carry_on as CO
     from .service import Refused
 
     try:
-        new = await CO._start(svc, sid, note_for(missing, gave_up, chain.sent), carry)
+        new = await CO._start(svc, sid, note_for(missing, gave_up, chain.sent, tests), carry)
     except Refused as r:
         log.info("not sending a Code-view reply back: %s", r.sentence)
         if table.get(sid) is chain:
@@ -525,14 +606,40 @@ async def _judge_in(svc: Any, sid: str, chain: Chain, turn_id: str, events: list
     from . import news as NEWS
 
     await note_nudge(
-        getattr(svc.platform, "event_bus", None), GAVE_UP if gave_up and not missing else CHECKED_AGAIN,
+        getattr(svc.platform, "event_bus", None),
+        GAVE_UP if gave_up and not missing and tests is None else CHECKED_AGAIN,
         session_id=NEWS.session_id_for(sid), surface="build_app", thread_id=sid,
         turn_id=str(getattr(new, "id", "") or ""),
     )
 
 
+async def _mark_unfinished(svc: Any, sid: str, live: Any, chain: Chain, tests: Any, ended: str) -> None:
+    """22-a: the message's tests still fail and the loop ended: the last
+    check's record is written again with how it ended and WHICH message it
+    was (``origin_at``), so the line under the reply says "this is not
+    finished" and offers Rewind to before that message. Never raises."""
+    try:
+        from . import proof as PROOF
+
+        origin, _total, _dropped = await asyncio.to_thread(live.log.read, 0, turn=chain.origin)
+        at = next((str(e.get("at") or "") for e in origin
+                   if isinstance(e, dict) and e.get("type") == "user" and not e.get("carry")), "")
+        record = dict(tests.record)
+        times = {1: "once", 2: "twice"}.get(chain.sent, f"{chain.sent} times")
+        record.update(
+            ended=ended, sent=chain.sent, origin_at=at, at=PROOF.now_iso(),
+            verdict=f"This is not finished. It was sent back {times} and stopped there: {END_WORDS[ended]}. "
+                    f"{VERDICT_CARRY_ON}",
+        )
+        record["line"] = PROOF.line_for(record)
+        if svc.live.get(sid) is live:
+            live.log.append(make(PROOF.EVENT, **record))
+    except Exception:  # noqa: BLE001
+        log.debug("check-again: the unfinished line could not be written", exc_info=True)
+
+
 __all__ = [
     "Chain", "END_LIMIT", "END_STUCK", "MAX_FOLLOW_UPS", "WHY", "after_turn", "claimed_names",
-    "files_by_name", "final_text", "line_for", "missing_files", "network_spelling", "note_for",
+    "files_by_name", "final_text", "line_for", "missing_files", "network_spelling", "note_for", "recheck",
     "verdict_words",
 ]

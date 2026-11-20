@@ -4448,6 +4448,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_app_panes as _build_app_panes_routes
 
     _build_app_panes_routes.register(app, d)
+    # 22-a (R1.9): the answer to the card "Run `<command>` after each reply
+    # in this folder?" (hosted/proof).
+    from .routes import build_app_proof as _build_app_proof_routes
+
+    _build_app_proof_routes.register(app, d)
     # v1.426.0 (Wave 6 lane B, E5): a folder's defaults for NEW coding
     # sessions in it (harness/folder_defaults), for both coding views.
     from .routes import build_folder_defaults as _build_folder_defaults_routes

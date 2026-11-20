@@ -596,6 +596,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'pick up work again when account resets',
         'turn on automatic resuming',
     ),
+    'build_checks_set': (
+        'stop running my tests after each change',
+        'run the tests after every coding reply',
+        'turn off automatic tests in this folder',
+        'check my code after the coding tool edits',
+        'turn the test check back on here',
+        'test the code after Codex finishes',
+        "don't test after every reply anymore",
+        'use this command to test after replies',
+    ),
     'build_defaults_clear': (
         'reset my coding session settings to normal',
         'clear the defaults for this project folder',
@@ -1055,6 +1065,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'did you already build something for this',
         'see if you have a script for that',
         'look through your old code for a match',
+    ),
+    'coding_reply_check': (
+        'did the tests pass last time',
+        "did Codex's change break any tests",
+        'how many tests passed after that reply',
+        'were the tests green on the last answer',
+        'show me the test result for that change',
+        'did my coding session pass its tests',
+        'check whether the last fix worked',
+        'what did the test run say',
     ),
     'comm_trust': (
         'Let my texts start tasks on my PC',
