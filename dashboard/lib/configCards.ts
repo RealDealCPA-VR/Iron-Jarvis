@@ -6,6 +6,7 @@
  * The daemon sends `config_cards` on every turn (possibly empty):
  *   { kind: "change", key, label, old, new, restart, change_id }
  *   { kind: "secret", name, label, help, why, request_id }
+ *   { kind: "rehearsal", rehearsal_id, subject_kind, name } (leap 06-a)
  * A secret card never carries a value — the model never had one.
  */
 
@@ -49,7 +50,17 @@ export interface SecretRequestCard {
   undone?: boolean;
 }
 
-export type ConfigCard = ConfigChangeCard | SecretRequestCard;
+/** Leap 06-a: "rehearse it" — the rehearsal's report card. The card reads
+ *  `GET /rehearsals/{id}` itself (components/RehearsalReport). */
+export interface RehearsalCard {
+  kind: "rehearsal";
+  rehearsal_id: string;
+  /** "rule" | "schedule". */
+  subject_kind: string;
+  name: string;
+}
+
+export type ConfigCard = ConfigChangeCard | SecretRequestCard | RehearsalCard;
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
@@ -86,6 +97,13 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
         ...(r.saved === "stored" || r.saved === "replaced" ? { saved: r.saved } : {}),
         ...(str(r.action_id) ? { action_id: str(r.action_id) } : {}),
         ...(r.undone === true ? { undone: true } : {}),
+      });
+    } else if (r.kind === "rehearsal" && /^[A-Za-z0-9_-]{1,64}$/.test(str(r.rehearsal_id))) {
+      out.push({
+        kind: "rehearsal",
+        rehearsal_id: str(r.rehearsal_id),
+        subject_kind: str(r.subject_kind) === "schedule" ? "schedule" : "rule",
+        name: str(r.name).slice(0, 120),
       });
     }
   }
@@ -176,6 +194,7 @@ export function looksLikeSecret(text: string): boolean {
 
 /** A card's identity: the change it records, or the credential it asks for. */
 export function cardId(c: ConfigCard): string {
+  if (c.kind === "rehearsal") return `rehearsal:${c.rehearsal_id}`;
   return c.kind === "change" ? `change:${c.change_id}` : `secret:${c.request_id}`;
 }
 

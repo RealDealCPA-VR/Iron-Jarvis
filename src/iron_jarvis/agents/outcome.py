@@ -46,7 +46,15 @@ OUTCOME_NEEDS_YOU = "needs_you"
 #: answer as it came, and "completed" with no action is the shape of a run
 #: that DESCRIBED the work instead of doing it.
 OUTCOME_DID_NOTHING = "did_nothing"
-OUTCOMES = (OUTCOME_COMPLETED, OUTCOME_WITH_FAILURES, OUTCOME_NEEDS_YOU, OUTCOME_DID_NOTHING)
+#: Leap 06-a: a REHEARSAL's run that completed. Nothing was changed, so it is
+#: never "done", "part failed" or "did nothing"; the bell and every notice
+#: stay quiet for it (``comm/notifier.bell_pings``), and its report is built
+#: from its rehearsed rows (``tools/rehearsal_runs``).
+OUTCOME_REHEARSED = "rehearsed"
+OUTCOMES = (
+    OUTCOME_COMPLETED, OUTCOME_WITH_FAILURES, OUTCOME_NEEDS_YOU, OUTCOME_DID_NOTHING,
+    OUTCOME_REHEARSED,
+)
 
 #: The doors (``Session.origin`` is ``<door>:<name>``) whose run is a JOB done
 #: with nobody watching, so an empty ledger is not "done" (v1.503.0, 3.11): a
@@ -125,10 +133,14 @@ def derive_outcome(
     """
     if not result.get("found"):
         return None
-    if int(result.get("unanswered_asks") or 0) > 0:
-        return OUTCOME_NEEDS_YOU
     status_value = status if status is not None else result.get("status")
     status_value = str(getattr(status_value, "value", status_value) or "").lower()
+    if result.get("rehearsal"):
+        # Leap 06-a: a rehearsal changed nothing and asked nobody; a failed
+        # or stopped one says so through its status.
+        return OUTCOME_REHEARSED if status_value == "completed" else None
+    if int(result.get("unanswered_asks") or 0) > 0:
+        return OUTCOME_NEEDS_YOU
     if status_value != "completed":
         return None
     if int(result.get("tools_failed_mutating") or 0) > 0:
@@ -580,6 +592,12 @@ def session_result(
             )
             out["task"] = (session.task or "")[:400]
             out["summary"] = (session.summary or "")[:2000]
+            # Leap 06-a: a rehearsal's run (its own options say so). The key
+            # is there only for one, so every other result is unchanged.
+            from ..tools.rehearsal import rehearsal_of as _rehearsal_of
+
+            if _rehearsal_of(session):
+                out["rehearsal"] = True
             workspace = session.workspace_path or ""
             stored_outcome = getattr(session, "outcome", None) or None
             out["unanswered_asks"] = _count_unanswered_asks(db, session_id)
@@ -620,10 +638,16 @@ def session_result(
             # reads this: see Orchestrator._settle_finished_run.
             last_change_ok: "bool | None" = None
 
+            rehearsed = 0
             for inv in invocations:
                 # An undo is itself a ledger row; counting it as work the agent
                 # did would double-report the action it reversed.
                 if inv.undo_of:
+                    continue
+                # Leap 06-a: a rehearsed row is what the run WOULD have done —
+                # never a tool it used, a failure, a file made or changed.
+                if getattr(inv, "rehearsed", False):
+                    rehearsed += 1
                     continue
                 name = inv.tool or "(unknown)"
                 used[name] = used.get(name, 0) + 1
@@ -712,6 +736,9 @@ def session_result(
             if team:
                 out["documents"] = _with_team_documents(db, session_id, out["documents"])
             out["errors"] = errors
+            if rehearsed:
+                # Leap 06-a: how many of its rows say what it WOULD have done.
+                out["rehearsed"] = rehearsed
             out["revertable"] = revertable
             out["reverted"] = already_reverted
             out["tools_failed_mutating"] = mutating_failed

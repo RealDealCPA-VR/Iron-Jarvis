@@ -58,6 +58,9 @@ const PART_FAILED = w("Part failed", "amber");
 // phone task) that finished without a single tool call — the ledger verdict
 // `did_nothing` (agents/outcome.OUTCOME_DID_NOTHING). Amber: check what it said.
 const DID_NOTHING = w("Did nothing", "amber");
+// Leap 06-a: a REHEARSAL's run (agents/outcome.OUTCOME_REHEARSED): it ran
+// once and changed nothing on purpose. Neutral slate, never "Done".
+const REHEARSED = w("Rehearsed", "slate");
 
 /** Every work status the daemon writes, by its raw value (lower case). */
 const STATUS: Readonly<Record<string, StatusWords>> = {
@@ -118,6 +121,8 @@ const OUTCOME: Readonly<Record<string, StatusWords>> = {
   completed_with_failures: PART_FAILED,
   // v1.503.0: an unattended run that made no tool call.
   did_nothing: DID_NOTHING,
+  // Leap 06-a: a rehearsal's run (nothing was changed).
+  rehearsed: REHEARSED,
 };
 
 function norm(v: unknown): string {

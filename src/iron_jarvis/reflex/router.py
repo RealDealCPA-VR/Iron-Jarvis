@@ -117,6 +117,25 @@ class ReflexRouter:
         self.orch = orchestrator
         self.spawn_bg = spawn_bg
         self.store = ReflexStore(platform.engine)
+        #: Leap 06-a: the LAST signal each rule matched since the daemon
+        #: started, kept in memory only — what a rehearsal of that rule runs
+        #: on (``sample_for``). Never written anywhere.
+        self._last_signal: dict[str, dict[str, str]] = {}
+
+    def sample_for(self, rule: ReflexRule) -> dict[str, str]:
+        """The signal a REHEARSAL of ``rule`` runs on (leap 06-a): the last
+        real one it matched since the daemon started, else the words
+        "(sample)"."""
+        last = self._last_signal.get(rule.id)
+        if last:
+            return dict(last)
+        return {"text": "(sample)", "body": "(sample)", "slug": rule.match}
+
+    def _remember(self, rules: list[ReflexRule], context: dict[str, str]) -> None:
+        for r in rules:
+            self._last_signal[r.id] = dict(context)
+        while len(self._last_signal) > 200:
+            self._last_signal.pop(next(iter(self._last_signal)))
 
     # -- signal entry points ----------------------------------------------
     async def on_webhook(self, slug: str, body: Any) -> list[dict[str, Any]]:
@@ -129,6 +148,7 @@ class ReflexRouter:
             "body": _json.dumps(body)[:2000] if not isinstance(body, str) else body[:2000],
             "text": _text_of(body),
         }
+        self._remember(rules, context)
         return [await self.execute(r, context) for r in rules]
 
     async def on_signal(
@@ -139,6 +159,7 @@ class ReflexRouter:
         (comm/email/calendar/slack) — the source-specific wrappers below just build
         a ``context`` and delegate here. Webhooks keep their own exact-slug path."""
         rules = self.store.matching(source, context.get("text", ""))
+        self._remember(rules, context)
         return [await self.execute(r, context) for r in rules]
 
     async def on_comm(self, text: str) -> list[dict[str, Any]]:
@@ -210,6 +231,66 @@ class ReflexRouter:
         return await self.execute(rule, {"text": task, "body": task, "slug": ""})
 
     # -- execution ---------------------------------------------------------
+    async def rehearse(
+        self, rule: ReflexRule, context: dict[str, str], *, rehearsal: str
+    ) -> dict[str, Any]:
+        """Start ``rule``'s work as a REHEARSAL (leap 06-a): through the same
+        door as a real fire, with the run carrying ``rehearsal`` so every
+        call that would change something is held. The rule's row, its fire
+        count, ``reflex.fired`` and every failure notice are left alone: a
+        rehearsal is not a fire. The work starts at the posture a real
+        signal's would (an outside source starts low), and the person who
+        pressed Rehearse started it (Emergency stop admits it).
+
+        * ``session`` — the run is created and launched; returns its id.
+        * ``remote_agent`` — nothing is sent; one rehearsed row says what
+          would have gone to whom (``tools/rehearsal.SIDE_DOORS``).
+        * ``workflow`` — not offered yet: refused in words, nothing ran.
+
+        Never raises: a failed start comes back as ``{"ok": False, "error"}``."""
+        from ..tools import rehearsal as _rehearsal
+
+        try:
+            if rule.action == "session":
+                trust = self._signal_trust(rule, attended=False)
+                task = _render(rule.task_template, context) or _default_task(rule, context)
+                session = await self.orch.create_session(
+                    task,
+                    AgentType.SUPERVISOR,
+                    project_id=rule.project_id or None,
+                    origin=f"reflex:{rule.name}",
+                    options={_rehearsal.REHEARSAL_OPTION: rehearsal},
+                    started_by_person=True,
+                    **trust,
+                )
+                self._launch(self.orch.run_session(session.id), session.id)
+                return {"ok": True, "kind": "session", "session_id": session.id}
+            if rule.action == "remote_agent":
+                agent = " ".join(str(rule.target or "").split()) or "a remote agent"
+                # The row is the rehearsal's own (no run exists to hold it).
+                await _off_loop(functools.partial(
+                    _rehearsal.record_side_door,
+                    self.p.engine,
+                    session_id=rehearsal,
+                    door="remote_agent",
+                    words=f"hand the task to the remote agent {agent}",
+                    target=agent,
+                ))
+                return {"ok": True, "kind": "remote_agent", "agent": agent}
+            if rule.action == "workflow":
+                name = " ".join(str(rule.target or "").split())
+                return {
+                    "ok": False,
+                    "error": (
+                        f"This rule starts the workflow “{name}”. A workflow cannot be "
+                        "rehearsed yet, so nothing ran."
+                    ),
+                }
+            return {"ok": False, "error": f"unknown action '{rule.action}'"}
+        except Exception as exc:  # noqa: BLE001 — a rehearsal that cannot start says why
+            log.warning("rehearsal of rule %r could not start", rule.name, exc_info=True)
+            return {"ok": False, "error": _exception_words(exc)}
+
     async def execute(
         self, rule: ReflexRule, context: dict[str, str], *, attended: bool = False
     ) -> dict[str, Any]:

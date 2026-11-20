@@ -158,6 +158,10 @@ export function isChatOrCodingSurface(file: string): boolean {
  * the program's name where the canon keeps it.
  */
 export const RETIRED_ON_SURFACES: readonly Retired[] = [
+  // Leap 06-a: what runs a rule or a schedule once and changes nothing is a
+  // "rehearsal" (VOCABULARY.md). Scoped to the surfaces that show one: the
+  // Skills page's sweep and the old settings form keep their own "dry run".
+  onSurfaces("dry run", /dry[- ]runs?/i, "rehearsal (rehearse)", isRehearsalSurface),
   onSurfaces(
     "Iron-Proxy",
     /\biron[- ]?proxy\b/i,
@@ -165,6 +169,16 @@ export const RETIRED_ON_SURFACES: readonly Retired[] = [
     isChatOrCodingSurface,
   ),
 ];
+
+/** Leap 06-a: the surfaces that show a rehearsal. */
+export function isRehearsalSurface(file: string): boolean {
+  return (
+    file === "app/reflex/page.tsx" ||
+    file === "app/schedules/page.tsx" ||
+    file === "components/RehearsalReport.tsx" ||
+    file === "components/RowMenu.tsx"
+  );
+}
 
 /** v1.455.0 (Wave E, item 1): the surfaces where the user's own model server
  *  is named — the model menu and receipts (providerDisplay in lib/onboarding),

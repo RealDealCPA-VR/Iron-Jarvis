@@ -2233,10 +2233,16 @@ def build_platform(
         except Exception:  # noqa: BLE001 - bookkeeping must not fail the fire
             _log.warning("could not record the scheduled memory review", exc_info=True)
 
-    async def _dispatch_scheduled(task, payload: dict, fired: dict) -> str:
+    async def _dispatch_scheduled(task, payload: dict, fired: dict, rehearsal_id: str = "") -> str:
         """Run one fire; returns the human detail. ``fired['session_id']`` is
         set as soon as a task-kind session exists so a mid-run failure still
-        records WHICH session to look at."""
+        records WHICH session to look at.
+
+        ``rehearsal_id`` (leap 06-a): this fire is a REHEARSAL — the same door
+        (the agent, the knobs, the account), the run carrying the rehearsal
+        so every call that would change something is held, the pre-run
+        script NOT run (one rehearsed row says it would), no memory review
+        recorded. Only a task schedule is rehearsed (``_rehearse_scheduled``)."""
         if task.kind == "task":
             prompt = str(payload.get("task") or "").strip()
             review = _memory_review_plan(task, payload)
@@ -2258,6 +2264,10 @@ def build_platform(
                 # 12A review: a sentence for the row (it read "scheduled task
                 # has no 'task' text").
                 raise _ScheduleRefused("this schedule has no task to run. Edit it to add one, or remove it")
+            if rehearsal_id and review is not None:
+                # Leap 06-a: a rehearsal of the memory review records no
+                # review and moves no cursor (the prompt above is a read).
+                review = None
             if platform.orchestrator is None:
                 raise RuntimeError(
                     "task schedules need Iron Jarvis's agent orchestrator"
@@ -2421,6 +2431,12 @@ def build_platform(
             if knob["workspace_root"]:
                 # Only a run that ASKED for a folder has its rules file read.
                 fire_options["folder_rules"] = True
+            if rehearsal_id:
+                # Leap 06-a: the run carries its rehearsal; the person who
+                # pressed Rehearse started it (passed only then).
+                from .tools.rehearsal import REHEARSAL_OPTION as _REHEARSAL_OPTION
+
+                fire_options[_REHEARSAL_OPTION] = rehearsal_id
             session = await platform.orchestrator.create_session(
                 prompt,
                 agent_type,
@@ -2439,6 +2455,7 @@ def build_platform(
                 # v1.505.0: passed ONLY for a custom agent, so a builtin's
                 # fire (and a test double's create_session) is byte-identical.
                 **({"agent_name": fire_agent_name} if fire_agent_name else {}),
+                **({"started_by_person": True} if rehearsal_id else {}),
             )
             fired["session_id"] = session.id
             # THE PROMPT EXTRAS (v1.299.0): an earlier job's result and the
@@ -2461,7 +2478,27 @@ def build_platform(
                 if note:
                     knob_notes.append(note)
             script = _knobs.decode_script(payload.get("script"))
-            if script is not None:
+            if script is not None and rehearsal_id:
+                # Leap 06-a (a side door): a rehearsal runs no command. One
+                # rehearsed row says the script would have run, and the run is
+                # told its output is missing.
+                from .tools import rehearsal as _rehearsal
+
+                _cmd = " ".join(str(getattr(script, "command", "") or "").split())
+                await asyncio.to_thread(
+                    lambda: _rehearsal.record_side_door(
+                        platform.engine,
+                        session_id=session.id,
+                        door="pre_run_script",
+                        words=f"run the schedule's pre-run script `{_cmd[:80]}`" if _cmd else "",
+                        target=_cmd[:160],
+                    )
+                )
+                extras.append(
+                    "(Rehearsal: the pre-run script was not run, so its output is "
+                    "not here. Carry on as if it had run.)"
+                )
+            elif script is not None:
                 block, note = await asyncio.to_thread(
                     _knobs.run_pre_run_script,
                     script,
@@ -2892,6 +2929,43 @@ def build_platform(
     platform.app_connections = AppConnections(config.home)
 
     platform.scheduler = Scheduler(engine, _run_scheduled)
+
+    async def _rehearse_scheduled(task, rehearsal_id: str) -> dict:
+        """Leap 06-a: run ``task``'s fire as a REHEARSAL through its own door
+        (``_dispatch_scheduled`` with the rehearsal), never through ``_fire``:
+        the schedule's row, its delivery and its next run are left alone.
+        Only a task schedule is rehearsed in this release; any other kind is
+        refused in words. Returns ``{"ok", "session_id", "detail"}``, or
+        ``{"ok": False, "error"}`` when it could not start; never raises
+        (a cancellation propagates)."""
+        kind = str(getattr(task, "kind", "") or "")
+        if kind != "task":
+            what = {"workflow": "a workflow", "goal": "a goal", "event": "an event"}.get(kind, "this kind of work")
+            return {
+                "ok": False,
+                "error": f"This schedule runs {what}, which cannot be rehearsed yet, so nothing ran.",
+            }
+        fired: dict = {"session_id": "", "outcome": ""}
+        try:
+            payload = json.loads(task.payload_json or "{}")
+            if not isinstance(payload, dict):
+                payload = {}
+            detail = await _dispatch_scheduled(task, payload, fired, rehearsal_id=rehearsal_id)
+            return {"ok": True, "session_id": fired["session_id"], "detail": str(detail or "")}
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the rehearsal says why it stopped
+            words = str(exc) if isinstance(exc, _ScheduleRefused) else ""
+            if not words:
+                try:
+                    from .providers.failure_words import run_failure_words
+
+                    words = run_failure_words(exc, started=bool(fired["session_id"]))[0]
+                except Exception:  # noqa: BLE001
+                    words = "the rehearsal could not run"
+            return {"ok": False, "session_id": fired["session_id"], "error": words}
+
+    platform.rehearse_scheduled = _rehearse_scheduled
     # v1.505.0 (north-star 5.2): a REMOVED schedule or saved workflow drops
     # the standing OKs kept on it, so one made later under the same name
     # starts with none. Set here, once both the scheduler and the grant
@@ -3016,10 +3090,14 @@ def build_platform(
     from .webhooks.tools import webhook_tools
     from .workflows.tools import workflow_tools
 
+    # Leap 06-a: "rehearse it" from chat (it changes nothing; allow).
+    from .tools.rehearsal_runs import rehearsal_tools
+
     for tool in (
         *schedule_tools(platform),
         *webhook_tools(platform),
         *workflow_tools(platform),
+        *rehearsal_tools(platform),
     ):
         platform.registry.register(tool)
     # v1.170.0: workflow_list is READ-ONLY (same tier as tool_list), but the

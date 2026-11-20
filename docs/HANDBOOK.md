@@ -2042,6 +2042,50 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Rehearse a rule or a schedule before it runs for real
+
+A rule or a schedule can now run once as a **rehearsal**. It really reads
+your files, pages and memory, and it uses the same model and the same agent
+the real run would. Everything it would write, rename, move, send or run is
+listed instead of done. Nothing is changed.
+
+**Where.** On **Rules**, every rule has **Rehearse** where **Test** used to
+be. On **Schedules**, a schedule that runs a task has **Rehearse** on its
+row. In chat, say "rehearse my morning schedule" or "what would the intake
+rule do?". The old Test, which fires the rule for real, is now **Run now** in
+the row's **…** menu, beside Run now for a schedule.
+
+**What you see.** While it runs, the card says "Rehearsing. Nothing is being
+changed." with **Stop**. When it ends, one sentence counts what it would have
+done, for example "This would rename 14 files and send 1 message. Nothing
+was changed.", and every item is listed underneath ("Would rename
+2025_W2_smith.pdf to Smith - W2 2025.pdf"). A step that would ask you first
+says so. A step the real run would be refused (a tool the agent does not
+have, a tool set to Never run) is listed under **Would be refused**. Press
+**Keep it** when you are happy with it: the row then says **Rehearsed** with
+the date. Keep it changes nothing else; the rule or schedule stays on or off
+as it was.
+
+**Good to know.**
+
+- The list is counted from Iron Jarvis's own record of each step, never from
+  what the model says it did.
+- It reads for real: files, web pages and web searches. A connected app is
+  read only through the tools the app itself marks as read only; anything
+  else an app would do is listed, not run.
+- A rule runs on the last real message or signal it matched since Iron
+  Jarvis started; when there is none, on a made-up one, and the report says
+  which.
+- A schedule's pre-run script is not run, its result is not sent anywhere
+  (the report says where it would go), and no lesson is kept from a
+  rehearsal. A helper agent the run hands work to is rehearsed too.
+- A rehearsal rings no bell and sends no notice; its card is where you read
+  it. Its run reads **Rehearsed** on the Agent runs page. It does use your
+  model once, like a real run.
+- Not yet: a rule or a schedule that starts a **workflow** or a **goal**
+  says it cannot be rehearsed yet, and nothing runs. Steps after a change
+  that was not made are worked out without it, so the real run can differ.
+
 ## Rewind works in folders without git too (v1.546.0)
 
 "Rewind to here" can put a folder's files back as they were when a message

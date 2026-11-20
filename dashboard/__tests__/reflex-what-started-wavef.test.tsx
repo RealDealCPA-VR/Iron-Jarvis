@@ -113,7 +113,9 @@ describe("Rules: what a fire started", () => {
       href: "/sessions/session_abc123",
     };
     render(<ReflexPage />);
-    fireEvent.click(await screen.findByTitle("Try this rule now with a test signal"));
+    // Leap 06-a: Run now (the real fire, once called Test) waits in the row's menu.
+    fireEvent.click(await screen.findByTestId("reflex-more-reflex_1"));
+    fireEvent.click(await screen.findByTitle("Run this rule now, for real, with a test signal"));
     const line = await screen.findByTestId("reflex-test-result-reflex_1");
     expect(line.textContent).toContain("Started an agent run.");
     expect(line.textContent).not.toContain("session_abc123");
@@ -129,7 +131,9 @@ describe("Rules: what a fire started", () => {
       ok: true, kind: "session", words: "Started an agent run.", href: "https://evil.example/x",
     };
     render(<ReflexPage />);
-    fireEvent.click(await screen.findByTitle("Try this rule now with a test signal"));
+    // Leap 06-a: Run now (the real fire, once called Test) waits in the row's menu.
+    fireEvent.click(await screen.findByTestId("reflex-more-reflex_1"));
+    fireEvent.click(await screen.findByTitle("Run this rule now, for real, with a test signal"));
     const line = await screen.findByTestId("reflex-test-result-reflex_1");
     expect(line.querySelector("a")).toBeNull();
   });

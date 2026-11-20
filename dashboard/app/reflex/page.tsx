@@ -6,7 +6,7 @@ import {
   Zap,
   Plus,
   X,
-  Play,
+  Eye,
   Webhook as WebhookIcon,
   MessageSquare,
   Mail,
@@ -38,6 +38,8 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { RehearsalReport, decodeRehearsal, type RehearsalView } from "@/components/RehearsalReport";
+import { RowMenu } from "@/components/RowMenu";
 import {
   EVERYDAY_ACTION,
   EVERYDAY_SOURCES,
@@ -77,6 +79,8 @@ interface ReflexRule {
    *  with it, `last_result` is the start in plain words ("Started an agent
    *  run."). Absent on an older daemon's row (nothing is shown then). */
   last_href?: string | null;
+  /** Leap 06-a: when Keep it was pressed on a rehearsal of this rule. */
+  rehearsed_at?: string | null;
 }
 
 /** POST /reflex/rules/{id}/test result. */
@@ -355,8 +359,10 @@ export default function ReflexPage() {
   }, []);
 
   // Per-row state
-  const [acting, setActing] = useState<string | null>(null); // "toggle:id" | "test:id"
+  const [acting, setActing] = useState<string | null>(null); // "toggle:id" | "test:id" | "rehearse:id"
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
+  // Leap 06-a: each row's latest rehearsal report (one at a time per rule).
+  const [rehearsals, setRehearsals] = useState<Record<string, RehearsalView>>({});
   const [rowError, setRowError] = useState<string | null>(null);
 
   const targetNeeded = action === "workflow" || action === "remote_agent";
@@ -512,6 +518,22 @@ export default function ReflexPage() {
     }
   }
 
+  // Leap 06-a: Rehearse runs the rule once on a sample and changes nothing;
+  // its report shows under the row. (Run now, in the row's menu, fires it
+  // for real.)
+  async function rehearse(r: ReflexRule) {
+    setActing(`rehearse:${r.id}`);
+    setRowError(null);
+    try {
+      const view = decodeRehearsal(await post<unknown>("/rehearsals", { kind: "rule", id: r.id }));
+      if (view) setRehearsals((prev) => ({ ...prev, [r.id]: view }));
+    } catch (err) {
+      setRowError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setActing(null);
+    }
+  }
+
   async function remove(r: ReflexRule) {
     setRowError(null);
     try {
@@ -573,6 +595,11 @@ export default function ReflexPage() {
               {r.last_fired_at && (
                 <span>last {new Date(r.last_fired_at).toLocaleString()}</span>
               )}
+              {r.rehearsed_at && (
+                <span data-testid={`reflex-rehearsed-${r.id}`}>
+                  Rehearsed {new Date(r.rehearsed_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+                </span>
+              )}
               {r.last_result && ownPage(r.last_href) && (
                 <span data-testid={`reflex-last-result-${r.id}`} className="text-zinc-400">
                   <Link href={ownPage(r.last_href)} className="underline-offset-2 hover:underline">
@@ -609,24 +636,29 @@ export default function ReflexPage() {
               )}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          {/* Leap 06-a: the row's presses wrap at 390 px (never pan). */}
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             <Toggle
               enabled={r.enabled}
               busy={acting === `toggle:${r.id}`}
               onChange={() => toggle(r)}
             />
+            {/* Leap 06-a: Rehearse replaces Test (one word): it runs the rule
+                once on a sample and changes nothing. Run now — a real fire —
+                waits in the row's menu. */}
             <button
               type="button"
-              onClick={() => test(r)}
-              disabled={acting === `test:${r.id}`}
-              title="Try this rule now with a test signal"
+              onClick={() => rehearse(r)}
+              disabled={acting === `rehearse:${r.id}` || rehearsals[r.id]?.status === "running"}
+              title="Run this rule once on a sample and see what it would do, changing nothing"
+              data-testid={`reflex-rehearse-${r.id}`}
               className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
             >
-              {acting === `test:${r.id}` ? (
-                <LoaderInline label="Firing…" />
+              {acting === `rehearse:${r.id}` ? (
+                <LoaderInline label="Starting…" />
               ) : (
                 <>
-                  <Play size={13} /> Test
+                  <Eye size={13} aria-hidden="true" /> Rehearse
                 </>
               )}
             </button>
@@ -645,8 +677,40 @@ export default function ReflexPage() {
               label="Delete"
               title={`Delete rule "${r.name || r.id}"`}
             />
+            <RowMenu
+              label={`More for rule ${r.name || r.id}`}
+              testId={`reflex-more-${r.id}`}
+              items={[
+                {
+                  label: acting === `test:${r.id}` ? "Running…" : "Run now",
+                  title: "Run this rule now, for real, with a test signal",
+                  onSelect: () => void test(r),
+                  disabled: acting === `test:${r.id}`,
+                  testId: `reflex-run-now-${r.id}`,
+                },
+              ]}
+            />
           </div>
         </div>
+
+        {rehearsals[r.id] && (
+          <div className="mt-3">
+            <RehearsalReport
+              key={rehearsals[r.id].id}
+              id={rehearsals[r.id].id}
+              initial={rehearsals[r.id]}
+              onClose={() =>
+                setRehearsals((prev) => {
+                  const next = { ...prev };
+                  delete next[r.id];
+                  return next;
+                })
+              }
+              onKept={() => reload()}
+              onChange={(v) => setRehearsals((prev) => (prev[r.id] ? { ...prev, [r.id]: v } : prev))}
+            />
+          </div>
+        )}
 
         {res && (
           <div className="mt-3">

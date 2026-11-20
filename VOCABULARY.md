@@ -37,6 +37,7 @@ PR that ships it.
 | Where a model runs, and what it costs (a team member's facts, the planner's list, Settings › Model team) | **this PC** / **your network** / **cloud**; **free** / **your plan** / **pay per use** | — |
 | Anything Iron Jarvis knows how to do | **skill** | — |
 | When something happens, an agent acts (the page at /reflex, v1.452.0) | **rule**; the page is **Rules** | reflex, reflexes |
+| Running a rule or a schedule once so it reads for real and changes nothing, then listing what it would have written, moved, sent or run (leap 06-a; Run now, in the row's menu, runs it for real) | **rehearse**; one such run is a **rehearsal**; the press on its report is **Keep it** | Test (on Rules), dry run |
 | A folder Iron Jarvis keeps an eye on, suggesting work when files change (/sentinels, v1.452.0) | **watcher**; the page is **Watchers** | sentinel, sentinels |
 | The scripts and files agents made and kept (/artifacts, v1.452.0) | the page is **What agents made** | artifacts |
 | The page that shows every model server you can reach (/fleet, v1.452.0) | **Model servers** | fleet, local fleet |

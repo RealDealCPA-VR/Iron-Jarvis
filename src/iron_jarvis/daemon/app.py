@@ -4324,6 +4324,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _skill_bundles_routes.register(app, d)
     _routes.agents.register(app, d)
     _routes.reflex.register(app, d)
+    # Leap 06-a: rehearse a rule or a schedule, and read its report.
+    _routes.rehearsals.register(app, d)
     _routes.triggers.register(app, d)
     _routes.ui.register(app, d)
     _routes.audit.register(app, d)

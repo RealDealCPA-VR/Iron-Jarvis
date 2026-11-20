@@ -195,6 +195,8 @@ describe("(1) a schedule's row, Run now, the notice and the bell say ONE verdict
         last_status: r.last_status,
         last_detail: r.last_detail,
       };
+      // Leap 06-a: Run now waits in the row's menu.
+      fireEvent.click(await screen.findByTestId(`schedule-more-${r.name}`));
       fireEvent.click(await screen.findByTitle("Run now"));
       const note = runNowNote(r.name, r.last_status, r.last_detail);
       await waitFor(() => expect(screen.getByText(note.text)).toBeTruthy());

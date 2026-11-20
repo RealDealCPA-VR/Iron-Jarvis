@@ -70,3 +70,6 @@ class ReflexRule(SQLModel, table=True):
     #: an agent run."). None on a row older than this, and on one that never
     #: started anything. Additive column (auto-reconciled).
     last_href: str | None = None
+    #: Leap 06-a: when the user pressed Keep it on a rehearsal of this rule
+    #: (None = never). Additive column (auto-reconciled).
+    rehearsed_at: datetime | None = None

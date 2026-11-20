@@ -4834,6 +4834,9 @@ function runOutcomeNotice(entry) {
   if (entry.type !== "session.completed") return null;
   const sid = typeof entry.session_id === "string" ? entry.session_id : "";
   if (!sid) return null;
+  // Leap 06-a: a REHEARSAL's run says nothing from the tray (the daemon's
+  // comm/notifier.is_rehearsal_run, the bell's isRehearsalRun).
+  if (p.outcome === "rehearsed" || p.rehearsal === true) return null;
   const origin = typeof p.origin === "string" ? p.origin.trim() : "";
   if (origin === "job:mission" || origin === "chat") {
     // v1.420.0 (C6.10): a MISSION's root run (the bell's mission row, word

@@ -373,6 +373,13 @@ class ToolInvocation(SQLModel, table=True):
     #: test command in the shell it was written for (``harness/finish.
     #: helper_commands``). "" = the platform's own shell. Additive.
     shell_syntax: str = ""
+    #: Leap 06-a: this row is a REHEARSAL's — the call was held (nothing ran)
+    #: or refused, and ``would`` says what the real run would have done:
+    #: ``run``, ``ask`` (it would have asked the user first) or ``refuse``.
+    #: A rehearsed row has no Undo and is never "created" or "changed" work
+    #: (``agents/outcome``). False / "" on every other row. Additive.
+    rehearsed: bool = False
+    would: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
 

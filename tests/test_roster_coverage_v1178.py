@@ -166,6 +166,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # an agent run at the runtime seam; a custom agent can list it by name.
     # No built-in roster carries it.
     "tool_script",
+    # Leap 06-a: "rehearse it" is the USER's request about one of their rules
+    # or schedules, armed by both chat lanes from their words
+    # (settings/records._REHEARSE_WORDS); an agent run has no use for it, and
+    # a rehearsal cannot start another (the tool refuses inside one).
+    "rehearse",
     # v1.473.0: many file changes after ONE approval card. Chat's stream lane
     # ask-arms it beside the script tool; a run has no card for a whole list.
     "apply_changes",

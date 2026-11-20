@@ -23,6 +23,7 @@ import Link from "next/link";
 import { ArrowRight, Check, Eye, EyeOff, KeyRound, RotateCcw, Settings2 } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
+import { RehearsalReport } from "@/components/RehearsalReport";
 import {
   settingsHrefFor,
   showValue,
@@ -369,7 +370,10 @@ export function ConfigCards({
   return (
     <div data-testid="config-cards" className="mt-2 space-y-2">
       {cards.map((c, i) =>
-        c.kind === "change" ? (
+        c.kind === "rehearsal" ? (
+          // Leap 06-a: "rehearse it" — the report reads itself until it ends.
+          <RehearsalReport key={`rehearsal-${c.rehearsal_id}`} id={c.rehearsal_id} />
+        ) : c.kind === "change" ? (
           <ChangeCard key={c.change_id} card={c} onSettle={(n) => onSettle(i, n)} />
         ) : (
           <CredentialCard

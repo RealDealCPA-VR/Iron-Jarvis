@@ -54,6 +54,9 @@ class ScheduledTaskRecord(SQLModel, table=True):
     last_status: str = ""
     last_detail: str = ""
     last_session_id: str = ""
+    #: Leap 06-a: when the user pressed Keep it on a rehearsal of this
+    #: schedule (None = never). Additive column (auto-reconciled).
+    rehearsed_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
     def decoded_payload(self) -> dict:

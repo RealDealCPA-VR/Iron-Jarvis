@@ -52,6 +52,8 @@ from ..sandbox.native import host_os_line
 from ..tools.base import SpendCheck, ToolContext, spend_checks_for, spend_words_for
 from ..tools.builtins import is_own_source
 from ..tools.permissions import SAFE_HEADLESS_TOOLS, asks_each_use
+from ..tools.rehearsal import holds as _rehearsal_holds
+from ..tools.rehearsal import rehearsal_of as _rehearsal_of
 from ..tools.reversible import call_reversible_flag
 from . import chat_delivery as _chat_delivery
 from . import decompose as _decompose
@@ -5117,7 +5119,20 @@ class AgentRuntime:
                 # commands run in Git for Windows' bash (decided once per run,
                 # when its tools were armed); "" = the platform's own shell.
                 shell_syntax=self._shell_syntax.get(session.id, ""),
+                # Leap 06-a: a REHEARSAL run's calls carry it (from the run's
+                # OWN options, never a model argument); the registry then
+                # holds every call that would change something.
+                rehearsal_id=_rehearsal_of(session),
             )
+
+            # Leap 06-a: in a rehearsal a call the registry will HOLD never
+            # pauses for an approval (nothing will run); the lane only says
+            # whether the real run WOULD have asked (``rehearsal_would``).
+            def _held_here(_name: str) -> bool:
+                if not ctx.rehearsal_id:
+                    return False
+                _t = self.p.registry.get(_name)
+                return _t is None or _rehearsal_holds(_t)
 
             # Run the turn's tool calls as a TEAM: gather them concurrently so
             # multiple delegate/blackboard calls execute at once. registry.invoke
@@ -5196,6 +5211,9 @@ class AgentRuntime:
                         # let a sibling's answer run it. MIRROR NOTE: the
                         # stream lane's `_ask_first_key` for `_held_card`.
                         continue
+                    if _held_here(_c.name):
+                        # Leap 06-a: a held call in a rehearsal shares no card.
+                        continue
                     _perm = self._pause_needed(
                         session, _c, agent_def, session_allow,
                         spend=spend_by_call.get(id(_c)),
@@ -5252,10 +5270,21 @@ class AgentRuntime:
                         _pins = pins_for(tc.name, _args, ctx) or {}
                     except Exception:  # noqa: BLE001 — cannot read: match nothing
                         _pins = {}
+                # Leap 06-a: a call a rehearsal HOLDS never pauses. Whether the
+                # real run would have asked is the pause gate's own answer
+                # (posture, grants, the tool's spend check), handed to the
+                # registry, which writes it on the rehearsed row.
+                _rehearsal_kw: dict[str, str] = {}
+                if not deny_reason and tc.name in armed_names and _held_here(tc.name):
+                    if self._pause_needed(
+                        session, tc, agent_def, session_allow,
+                        spend=spend_by_call.get(id(tc)),
+                    ):
+                        _rehearsal_kw["rehearsal_would"] = "ask"
                 # An UNARMED name never asks the user (v1.227.0): carding a
                 # tool the run may not call, then refusing it, would make the
                 # user's Allow a lie. The registry refuses it as "not armed".
-                if not deny_reason and tc.name in armed_names:
+                elif not deny_reason and tc.name in armed_names:
                     # MID-RUN APPROVAL (v1.189.0): an ask-tier call PAUSES for
                     # the user instead of dying on the headless resolver — the
                     # session half of chat's v1.187.0 ask. Per CALL, inside the
@@ -5339,6 +5368,7 @@ class AgentRuntime:
                     # recorded failed result and the run goes on; 0 = none.
                     deadline_s=_tool_deadline(self.p.config),
                     **({"kept_pins": _pins} if _pins is not None else {}),
+                    **_rehearsal_kw,
                     # STANDING GRANTS (v1.299.0): the store + this run's
                     # scopes, so the registry's own gate lifts a covered
                     # ask and records the grant id. Only when both exist.

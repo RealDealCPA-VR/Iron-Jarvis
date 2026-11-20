@@ -1802,6 +1802,15 @@ class ReflexToggleBody(BaseModel):
     task_template: str | None = None
 
 
+class RehearsalBody(BaseModel):
+    """``POST /rehearsals`` (leap 06-a): what to rehearse — ``kind`` is
+    ``rule`` or ``schedule``; ``id`` the rule's id or name, the schedule's
+    name or id."""
+
+    kind: str
+    id: str
+
+
 class McpAuthBody(BaseModel):
     """An HTTP pack's bearer-style auth (v1.343.0): the header to send, the
     format the value is wrapped in (must contain ``{value}``) and the VALUE —

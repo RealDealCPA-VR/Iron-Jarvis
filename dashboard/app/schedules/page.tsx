@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   CalendarClock,
   Plus,
-  Play,
+  Eye,
   Clock,
   Repeat,
   Timer,
@@ -59,6 +59,8 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { RehearsalReport, decodeRehearsal, type RehearsalView } from "@/components/RehearsalReport";
+import { RowMenu } from "@/components/RowMenu";
 import { ChooserTiles } from "@/components/ChooserTiles";
 import { useFocusRef } from "@/lib/useFocusRef";
 import AgentFace from "@/components/agents/AgentFace";
@@ -464,6 +466,8 @@ export default function SchedulesPage() {
   // the job, or did not run at all, is neither "Ran ✓" nor an error.
   const [warn, setWarn] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
+  // Leap 06-a: the rehearsal on screen (one at a time, above the list).
+  const [rehearsal, setRehearsal] = useState<RehearsalView | null>(null);
   // v1.446.0 (review item 23): while Emergency stop is on nothing here runs.
   const emergencyStop = useEmergencyStop().on;
 
@@ -639,6 +643,24 @@ export default function SchedulesPage() {
       else if (note.tone === "warn") setWarn(note.text);
       else setOk(note.text);
       reload();
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setActing(null);
+    }
+  }
+
+  /** Leap 06-a: Rehearse runs a task schedule once, changing nothing; its
+   *  report shows above the list. (Run now, in the row's menu, runs it for
+   *  real.) */
+  async function rehearse(schedName: string) {
+    setActing(`rehearse:${schedName}`);
+    setOk(null);
+    setWarn(null);
+    setFormError(null);
+    try {
+      const view = decodeRehearsal(await post<unknown>("/rehearsals", { kind: "schedule", id: schedName }));
+      if (view) setRehearsal(view);
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -1043,6 +1065,18 @@ export default function SchedulesPage() {
                   <WarnNote>{EMERGENCY_STOP_SCHEDULES_WORDS}</WarnNote>
                 </div>
               )}
+              {rehearsal && (
+                <div className="mb-3" data-testid="schedules-rehearsal">
+                  <RehearsalReport
+                    key={rehearsal.id}
+                    id={rehearsal.id}
+                    initial={rehearsal}
+                    onClose={() => setRehearsal(null)}
+                    onKept={() => reload()}
+                    onChange={(v) => setRehearsal((cur) => (cur && cur.id === v.id ? v : cur))}
+                  />
+                </div>
+              )}
               {loading && !data ? (
                 <SkeletonRows rows={5} />
               ) : schedules.length === 0 ? (
@@ -1171,6 +1205,16 @@ export default function SchedulesPage() {
                                 open run <ArrowUpRight size={11} />
                               </Link>
                             ) : null}
+                            {/* Leap 06-a: Keep it on a rehearsal stamps the row. */}
+                            {typeof s.rehearsed_at === "string" && s.rehearsed_at ? (
+                              <div
+                                className="text-[11px] text-zinc-500"
+                                data-testid={`schedule-rehearsed-${s.name}`}
+                              >
+                                Rehearsed{" "}
+                                {new Date(s.rehearsed_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+                              </div>
+                            ) : null}
                           </td>
                           <td className="px-2 py-2.5 text-zinc-500" data-testid={`schedule-next-${s.name}`}>
                             {/* v1.446.0 (review items 23-24): a paused row
@@ -1243,22 +1287,44 @@ export default function SchedulesPage() {
                                   <Pencil size={14} />
                                 </button>
                               )}
-                              <button
-                                onClick={() => runNow(s.name)}
-                                disabled={acting === `run:${s.name}`}
-                                title="Run now"
-                                className="rounded-lg border border-white/10 p-1.5 text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
-                              >
-                                {acting === `run:${s.name}` ? (
-                                  <LoaderInline />
-                                ) : (
-                                  <Play size={14} />
-                                )}
-                              </button>
+                              {/* Leap 06-a: Rehearse is the row's press (a
+                                  task schedule; it changes nothing); Run now
+                                  waits in the row's menu. */}
+                              {s.kind === "task" && (
+                                <button
+                                  type="button"
+                                  onClick={() => rehearse(s.name)}
+                                  disabled={
+                                    acting === `rehearse:${s.name}` ||
+                                    (rehearsal?.subject.name === s.name && rehearsal.status === "running")
+                                  }
+                                  title={`Rehearse "${s.name}": run it once and see what it would do, changing nothing`}
+                                  aria-label={`Rehearse ${s.name}`}
+                                  data-testid={`schedule-rehearse-${s.name}`}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
+                                >
+                                  {acting === `rehearse:${s.name}` ? <LoaderInline /> : <Eye size={12} aria-hidden="true" />}
+                                  {/* The word from sm up; a phone's narrow row shows the icon (its name is the aria-label). */}
+                                  <span className="hidden sm:inline">Rehearse</span>
+                                </button>
+                              )}
                               <ConfirmButton
                                 onConfirm={() => remove(s.name)}
                                 label="Delete"
                                 title={`Delete schedule "${s.name}"`}
+                              />
+                              <RowMenu
+                                label={`More for schedule ${s.name}`}
+                                testId={`schedule-more-${s.name}`}
+                                items={[
+                                  {
+                                    label: acting === `run:${s.name}` ? "Running…" : "Run now",
+                                    title: "Run now",
+                                    onSelect: () => void runNow(s.name),
+                                    disabled: acting === `run:${s.name}`,
+                                    testId: `schedule-run-now-${s.name}`,
+                                  },
+                                ]}
                               />
                             </div>
                           </td>

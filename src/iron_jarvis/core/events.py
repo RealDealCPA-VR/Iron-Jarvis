@@ -74,6 +74,10 @@ class EventType:
     # tool name. Merged onto its ToolInvocation row by invocation_id.
     TOOL_EXECUTED = "tool.executed"
     TOOL_DENIED = "tool.denied"
+    # Leap 06-a: a REHEARSAL held a call (nothing ran) — {tool, would,
+    # invocation_id, reversibility, risk_class, kind, words}. Never
+    # ``tool.executed``: nothing was executed.
+    TOOL_REHEARSED = "tool.rehearsed"
     # TX-01 audit: one event per LLM completion so every token is individually
     # replayable — {run_id, step, provider, model, input_tokens, output_tokens,
     # cost_usd, task_class}. The per-run AGGREGATE still lives on AgentRun.
