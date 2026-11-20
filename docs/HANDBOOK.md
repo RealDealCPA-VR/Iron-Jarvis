@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.544.0 (2026-11-19).*
+holds itself to. Current as of v1.545.0 (2026-11-19).*
 
 ---
 
@@ -2041,6 +2041,105 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Switch the coding tool in the same session (v1.545.0)
+
+A coding session in Build › Code used to stay on the tool it started with.
+If Claude Code ran into its limit, or you wanted Codex to take a second look,
+you had to start a new session and explain everything again. Now the same
+session can go on with another of your coding tools, and the new tool is told
+what happened so far.
+
+**How it works.**
+
+1. Open the session's model picker (the chip that names the tool and the
+   model). It now lists your other coding tools as well.
+2. Pick another tool, or a model under another tool.
+3. Iron Jarvis shows what will happen before anything changes: which
+   account the tool will use, which model and mode it starts in, that it
+   will be given a summary of this conversation, where that summary is sent,
+   and any program the current tool started that will stop with it.
+4. Press **Switch to …**. The conversation gets one line: "Switched from
+   Claude Code to Codex." The second press does exactly what the first one
+   showed. If something changed in between (another account became the
+   free one, say), nothing is switched and you are shown the new lines.
+5. Type your next message. The summary goes to the new tool together with
+   that message. A row under your message, "Summary given to Codex", opens to
+   the exact text the tool was given.
+
+Switching and typing nothing sends nothing and spends nothing.
+
+**Switching back.** A tool you switch away from keeps its own conversation.
+When you switch back to it, it opens that conversation again and is told only
+what happened since it stopped. If it can no longer open that conversation,
+it starts a new one with the whole summary, and the conversation says so.
+
+**What the summary holds.** Iron Jarvis writes it from its own record of the
+session. No AI writes it. It holds:
+
+- what you asked first and your later messages,
+- each reply's final text, the newest first,
+- the files the tools' own edit steps changed,
+- the commands they ran, by name, with whether each ended with an error,
+- plan steps that were not marked done.
+
+If Iron Jarvis put the folder's files back to an earlier state in that time
+(a rewind), the summary says so. It never holds the output of a command. It is at most 12,000 characters, and
+a copy is kept with the session.
+
+**What you can rely on.**
+
+- **One session, one conversation on screen.** Nothing is copied to a new
+  session. Each reply keeps the name of the tool that wrote it.
+- **Your words and the tools' words are kept apart.** What you typed is
+  given as what you asked. Everything a tool wrote is passed along marked as
+  data, checked for planted instructions first, so a reply cannot give the
+  next tool orders.
+- **Keys stay out.** Anything shaped like a password or a key is replaced
+  with `***` before the summary is sent or saved.
+- **An account never leaves its group.** If the session runs on an account
+  in one of your account groups, the new tool uses an account of the same
+  group, or the switch is refused. Work and personal accounts never mix.
+- **The mode is never looser.** The new tool starts in a mode at least as
+  careful as the one you were in. Full access is never carried over: you
+  choose it again yourself, with its own two presses. If the new tool has no
+  mode that careful (Pi asks before nothing), the switch is refused and says
+  which mode to change first.
+- **A parked conversation is still this session's.** No other session can
+  open it.
+- **Nothing is hidden.** Iron Jarvis says every time when the summary is
+  sent to a tool's own service. The model the new tool starts on is the one
+  you pick in the same picker; if you pick none, it is this folder's default
+  for that tool, else the one you used last, else the tool's own default.
+
+**When a switch is refused.** While a reply is running, while the tool still
+works in the background, while a helper of this session works, while the
+conversation is open in a terminal, in an archived session, in a helper
+session, or right after a rewind or a branch that Claude Code has not made
+yet (send one message first). The refusal says which, and nothing changes.
+
+**On the limit card.** When an account reaches its limit, the card now also
+offers **Continue on another tool**, which opens the same picker.
+
+**Good to know.**
+
+- A command of the tool's own (such as `/compact`) does not take the
+  summary. It waits for your next message.
+- Messages waiting behind a reply stay. A waiting message that was the old
+  tool's own command is removed, and the conversation says so.
+- "Rewind to here" on a message from before a switch puts the files back
+  only. That part of the conversation belongs to the other tool.
+- If you rewind the conversation to a point before a tool was switched in,
+  that tool's parked conversation is let go, because it remembers what you
+  rewound away. Switching to it again starts it fresh with the summary.
+- If you rewind to the very message that carried the summary, or branch
+  there, the summary goes again with the next message.
+- A message Iron Jarvis would send by itself to carry a cut-off reply on is
+  not sent to a tool that has not been given its summary yet. Send it a
+  message of your own first.
+- A summary is shorter than the conversation. The new tool can miss a
+  detail. The full conversation stays on screen, and the row shows exactly
+  what it was told.
 
 ## Comment on a changed line (v1.544.0)
 

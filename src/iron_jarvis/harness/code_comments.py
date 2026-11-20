@@ -109,6 +109,11 @@ def _plain(text: Any) -> str:
     return "".join(out)
 
 
+#: v1.545.0: the same rule for other text a tool or a file wrote that is
+#: quoted line by line (a hand-off between coding tools).
+plain = _plain
+
+
 def _odd(text: str) -> bool:
     """Does *text* hold a character a file NAME has no honest use for here
     (a control or format character, a line or paragraph separator)?"""

@@ -27,7 +27,7 @@ _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # pass over each body, linear. A certificate or a PUBLIC key is left.
     (
         re.compile(
-            r"""(-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----)(?![*]{3})[A-Za-z0-9+/=\s]*(-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----)?"""
+            r"""(-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----)(?![*]{3})[A-Za-z0-9+/=\s\\]*(-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----)?"""
         ),
         r"\1" + MASK + r"\2",
     ),
@@ -49,7 +49,7 @@ _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # 200,000 fuzzed strings; linear (tests/test_redact_linear_v1349.py).
     (
         re.compile(
-            r"""((?:api[_-]?key|access[_-]?key|client[_-]?secret|token|password|passwd|secret|pwd)["']?\s*[=:]\s*["']?)(?![*]{3})[^\s"'&,;}]+""",
+            r"""((?:api[_-]?key|access[_-]?key|private[_-]?key|secret[_-]?key|account[_-]?key|client[_-]?secret|token|password|passwd|secret|pwd)["']?\s*[=:]\s*["']?)(?![*]{3})[^\s"'&,;}]+""",
             re.IGNORECASE,
         ),
         r"\1" + MASK,

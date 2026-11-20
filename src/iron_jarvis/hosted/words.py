@@ -704,6 +704,11 @@ QUEUE_NOT_WORKING = "{label} is not working on anything right now — send it as
 QUEUE_FULL = "{n} messages are already waiting — send this one once {label} has taken them."
 #: C4.8: a queued message the daemon could not send when the reply ended.
 QUEUE_NOT_SENT = "Your waiting message was not sent: {why} It is back in your message box."
+#: v1.545.0: the summary for a tool the session switched to could not be built.
+HANDOFF_NOT_BUILT = (
+    "Iron Jarvis could not put together the summary for {label}, so your message went without it. "
+    "{label} gets it with your next message."
+)
 #: C4.6: a "Load earlier" cursor this daemon did not write.
 BAD_CURSOR = "That place in the conversation is not one Iron Jarvis knows — load the session again."
 #: C4.6: the item asked for is not in this session's record.

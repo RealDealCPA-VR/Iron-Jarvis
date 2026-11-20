@@ -414,6 +414,12 @@ def test_a_probe_is_handed_the_time_the_page_budget_has_left(tmp_path, monkeypat
     one more probe: an unbudgeted probe could add its own full 4s timeout on
     top of a nearly-spent 6s budget."""
     monkeypatch.setattr(knowledge_routes, "_LTM_PROBE_BUDGET", 1.0)
+    # v1.545.0: time is the test's own (a slow CI runner spent over half of
+    # the one-second budget before the probe, and the check of "what is
+    # left" failed on real time). Each reading of the clock is 0.1 s later:
+    # the budget is set at 100.0, and the probe is reached at 100.1.
+    ticks = iter(100.0 + 0.1 * n for n in range(1000))
+    monkeypatch.setattr(knowledge_routes, "_monotonic", lambda: next(ticks))
 
     class _Recording:
         name = "recording-brain"
@@ -450,6 +456,9 @@ def test_a_probe_is_handed_the_time_the_page_budget_has_left(tmp_path, monkeypat
         f"the probe got {rec.timeouts[0]}s of a 1.0s page budget"
     )
     assert rec.timeouts[0] > 0.5, "the budget was not what bounded it"
+    # Exactly what is left: every base before this one read the clock once.
+    left = [round(1.0 - 0.1 * n, 6) for n in range(1, 6)]
+    assert round(rec.timeouts[0], 6) in left, rec.timeouts
 
 
 def test_a_spent_probe_budget_reports_not_checked_rather_than_a_guess(

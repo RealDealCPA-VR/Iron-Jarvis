@@ -5,6 +5,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -170,6 +171,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -375,6 +377,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -534,6 +537,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -731,6 +735,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -857,6 +862,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -900,6 +906,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -949,6 +956,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "codex",
     "turn": "turn-1"
    },
    {
@@ -1267,6 +1275,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "codex",
     "turn": "turn-1"
    },
    {
@@ -1506,6 +1515,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "codex",
     "turn": "turn-1"
    },
    {
@@ -1579,6 +1589,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "codex",
     "turn": "turn-1"
    },
    {
@@ -1631,6 +1642,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -1740,6 +1752,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -1826,6 +1839,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -1871,6 +1885,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {
@@ -2282,6 +2297,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "claude-code",
     "turn": "turn-1"
    },
    {

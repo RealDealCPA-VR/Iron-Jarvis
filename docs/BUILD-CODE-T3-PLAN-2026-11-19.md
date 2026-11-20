@@ -4,10 +4,39 @@ A build plan, written 2026-11-19 against master v1.542.2.
 
 **Status.** Release A (feature 1, phases 1a to 1c) is built in v1.543.0, with
 the recommended choices D1 and D2. Release B (feature 3, phases 3a to 3c, in
-both Code views as D7 recommends) is built in v1.544.0. Releases C and D are
-not built.
+both Code views as D7 recommends) is built in v1.544.0. Release C (feature 2,
+phases 2a to 2c, with D4, D5 and D6 as recommended) is built in v1.545.0.
+Release D is not built.
 
-Two things differ from the text below, both on purpose:
+For Release C, these differ from the text of feature 2 below, on purpose:
+
+- The hand-off is saved inside the session's own folder
+  (`<home>/hosted/<sid>/handoffs/switch-<n>.md`), not in `<home>/handoffs/`.
+  A deleted session then takes its hand-offs to the trash with it.
+- The hand-off is built when your next message is sent, not at the switch.
+  It then says what the record holds at that moment.
+- "The summary leaves this PC" is said every time the new tool is a cloud
+  tool, not only when the old tool ran on your own network. Iron Jarvis
+  cannot tell where a tool's model answered, so it never claims the summary
+  stays.
+- The second press sends back a token of what the first press showed. If the
+  switch would now do something else, it is refused and the new lines are
+  shown. The plan did not have this.
+- A tool that is switched back to and cannot open its conversation: Codex
+  says so at once and starts a new conversation in the same message. Claude
+  Code does not say it (its process just ends), so the message fails, the
+  conversation says what happened, and the next message starts a new
+  conversation with the whole summary.
+- A rewind or a branch at the message that carried the hand-off makes the
+  hand-off go again with the next message. An independent review found that
+  the first version lost it there.
+- A message Iron Jarvis would send by itself (a carry-on after a restart) is
+  refused while a hand-off still waits.
+- The model for the new tool: the screen sends this folder's default for
+  that tool, else your last pick, and the daemon uses it when you picked
+  nothing in the open picker.
+
+For Release A, these differ from the text of feature 1 below, on purpose:
 
 - A new file that git already holds (staged, or committed since the message)
   does not stop a rewind. It is moved to the trash like any other new file.

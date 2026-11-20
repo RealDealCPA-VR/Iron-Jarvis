@@ -146,7 +146,8 @@ def strictness(harness: str, mode: str) -> int:
     return MODE_STRICTNESS.get(harness, {}).get(str(mode or ""), ASKS)
 
 
-def helper_mode(parent_harness: str, parent_mode: str, want: str) -> str:
+def helper_mode(parent_harness: str, parent_mode: str, want: str, *,
+                words: tuple[str, str] | None = None) -> str:
     """The mode a helper on ``want`` starts in, for a starting session in
     ``parent_mode`` — or :class:`~.service.Refused`, in one plain sentence.
 
@@ -178,8 +179,10 @@ def helper_mode(parent_harness: str, parent_mode: str, want: str) -> str:
             if table.get(m, DOES_NOT_ASK) == level:
                 return m
     why = CANNOT_BE_AS_STRICT[need].format(label=W.label(want))
-    words = HELPER_TOO_LOOSE if need == READS_ONLY else HELPER_TOO_LOOSE_ASK
-    raise Refused(words.format(why=why, mode=mode_label(parent_harness, parent_mode)), 400)
+    # (v1.545.0: ``words`` — a tool switch says the same refusal in its own.)
+    strict, asks = words or (HELPER_TOO_LOOSE, HELPER_TOO_LOOSE_ASK)
+    said = strict if need == READS_ONLY else asks
+    raise Refused(said.format(why=why, mode=mode_label(parent_harness, parent_mode)), 400)
 
 
 _ALIASES = {
@@ -532,7 +535,7 @@ def emergency_stop_on(svc: Any) -> bool:
     return getattr(cfg, "autonomy_kill_switch", False) is True
 
 
-def helper_account(svc: Any, prow: Any, want: str) -> str:
+def helper_account(svc: Any, prow: Any, want: str, *, not_read: str = "", none_free: str = "") -> str:
     """BLOCKING (cached reads only): the account a helper of ``want`` runs on.
 
     * The same tool: the starting session's own account.
@@ -559,12 +562,14 @@ def helper_account(svc: Any, prow: Any, want: str) -> str:
         return ""
     name, ids = group
     snap = BA.snapshot(getattr(svc.platform, "iron_proxy", None))
+    # (v1.545.0: ``not_read`` / ``none_free`` — a tool switch follows the
+    # same rule and says the two refusals in its own words.)
     if snap is None:
-        raise Refused(GROUP_NOT_READ, 409)
+        raise Refused(not_read or GROUP_NOT_READ, 409)
     for row in BA.vendor_rows(snap, vendor):
         if row["id"] in ids and BA.usable_now(row, BA._state_of(snap, row["id"])):
             return row["id"]
-    raise Refused(NO_GROUP_ACCOUNT.format(label=W.label(want), group=name), 409)
+    raise Refused((none_free or NO_GROUP_ACCOUNT).format(label=W.label(want), group=name), 409)
 
 
 async def _forget_helper(svc: Any, sid: str) -> None:

@@ -598,6 +598,9 @@ def stopped_words(tool: str, programs: list[Program] | tuple[Program, ...], *, w
         head = f"Iron Jarvis closed {tool} here to branch this conversation."
     elif why == "rewind":
         head = f"Iron Jarvis closed {tool} to rewind this conversation."
+    elif why == "switch":
+        # v1.545.0: the session goes on with another coding tool.
+        head = f"Iron Jarvis closed {tool} to switch this session to another coding tool."
     elif why == "bound":
         head = f"Iron Jarvis closed {tool} after {_duration(after_s)} with nothing new."
     else:

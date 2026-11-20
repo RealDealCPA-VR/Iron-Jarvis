@@ -123,9 +123,17 @@ function usePaneRead<T>(
   running: boolean,
   /** v1.420.0: the read's query (the Changes scope), "" for none. */
   query = "",
+  /** v1.545.0: whose facts these are (the session's coding tool, for the
+   *  panes that say what a TOOL reported). When it changes, what was read for
+   *  the old one is dropped at once (never drawn under the new one's name)
+   *  and the pane is read again. "" = the facts are no tool's own. */
+  owner = "",
 ): { data: T | null; error: string | null; again: () => void } {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [got, setGot] = useState<{ owner: string; data: T | null; error: string | null }>({ owner, data: null, error: null });
+  // (Read for another owner: not this one's. Decided while drawing, so not
+  // one frame shows the old tool's numbers beside the new tool's name.)
+  const data = got.owner === owner ? got.data : null;
+  const error = got.owner === owner ? got.error : null;
   const seq = useRef(0);
   // v1.414.0 review: the read still out. A TIMED read waits for it (a slow git
   // read of a big repository must not pile reads up on the daemon); a press
@@ -139,16 +147,18 @@ function usePaneRead<T>(
     get(`/build/app/sessions/${encodeURIComponent(sessionId)}/${part}${query}`)
       .then((raw) => {
         if (n !== seq.current) return;
-        setData(decodeRef.current(raw));
-        setError(null);
+        setGot({ owner, data: decodeRef.current(raw), error: null });
       })
       .catch((e) => {
-        if (n === seq.current) setError(errText(e));
+        // (What was read before stays beside the error, as it always did —
+        // unless it was another owner's.)
+        if (n === seq.current) setGot((cur) => ({ owner, data: cur.owner === owner ? cur.data : null, error: errText(e) }));
       })
       .finally(() => {
         if (inFlight.current === n) inFlight.current = 0;
       });
-  }, [sessionId, part, query]);
+    // (`owner` in the list: a new owner is a new read, at once.)
+  }, [sessionId, part, query, owner]);
   useEffect(() => {
     again();
   }, [again, refresh]);
@@ -170,6 +180,7 @@ export const CodePanes = memo(function CodePanes({
   running,
   onSend,
   comments = false,
+  severalTools = false,
 }: {
   session: CodeSession;
   tools: readonly CodingTool[];
@@ -183,6 +194,10 @@ export const CodePanes = memo(function CodePanes({
   /** v1.544.0: this Iron Jarvis takes comments on changed code with a
    *  message: the Changes view offers "Comment" on each block. */
   comments?: boolean;
+  /** v1.545.0: this session has EVER switched its coding tool (the view's
+   *  `switched_tools`). The page says so: the events handed here are not the
+   *  conversation (at most its last attachment's). */
+  severalTools?: boolean;
 }) {
   codePanesDraws.count += 1;
   const [tab, setTab] = useState<CodePaneTab>("changes");
@@ -204,6 +219,10 @@ export const CodePanes = memo(function CodePanes({
     }
   }, []);
   const toolName = toolLabel(session.tool, tools);
+  // v1.545.0: a session that switched coding tools — the files its tools'
+  // own edit steps changed are counted across ALL of them, so the count is
+  // never said as the current tool's alone.
+  const editedBy = severalTools ? SEVERAL_TOOLS : toolName;
 
   return (
     <div data-testid="code-panes" className="flex h-full min-h-0 flex-col gap-2">
@@ -263,7 +282,7 @@ export const CodePanes = memo(function CodePanes({
         {tab === "changes" ? (
           <ChangesPane
             sessionId={session.id}
-            toolName={toolName}
+            toolName={editedBy}
             refresh={refresh}
             running={running}
             comments={comments}
@@ -288,6 +307,7 @@ export const CodePanes = memo(function CodePanes({
             session={session}
             tools={tools}
             toolName={toolName}
+            editedBy={editedBy}
             events={events}
             refresh={refresh}
             running={running}
@@ -301,6 +321,15 @@ export const CodePanes = memo(function CodePanes({
 });
 
 // ── Changes ─────────────────────────────────────────────────────────────────
+
+/** v1.545.0: who the tools' own edit steps belong to once a session has
+ *  switched coding tools (the count is across every tool it used). */
+export const SEVERAL_TOOLS = "this session's coding tools";
+
+/** "Claude Code's" / "this session's coding tools'". */
+export function possessive(name: string): string {
+  return /s$/i.test(name) ? `${name}'` : `${name}'s`;
+}
 
 function ChangesPane({
   sessionId,
@@ -385,7 +414,8 @@ function ChangesPane({
         <>
           {data.source === "git" && data.byTool > 0 ? (
             <p data-testid="code-changes-by-tool" className={QUIET} title={byToolTitle(data)}>
-              {data.byTool} of these {data.byTool === 1 ? "was" : "were"} edited by {toolName}&apos;s own file tools.
+              {data.byTool} of these {data.byTool === 1 ? "was" : "were"} edited by {possessive(toolName)} own file
+              tools.
             </p>
           ) : null}
           {/* The v1.405.0 review: every diff inline, Reviewed marks, Open in
@@ -496,7 +526,10 @@ function UsagePane({
   refresh: number;
   running: boolean;
 }) {
-  const { data, error, again } = usePaneRead<CodeUsage>(session.id, "usage", decodeCodeUsage, refresh, running);
+  // (v1.545.0: the tool's own usage: read again when the session's tool changes.)
+  const { data, error, again } = usePaneRead<CodeUsage>(
+    session.id, "usage", decodeCodeUsage, refresh, running, "", session.tool,
+  );
   if (error) {
     return (
       <p role="alert" data-testid="code-usage-error" className="text-[12px] text-tone-danger">
@@ -579,6 +612,7 @@ function SessionPaneTab({
   session,
   tools,
   toolName,
+  editedBy,
   events,
   refresh,
   running,
@@ -588,17 +622,22 @@ function SessionPaneTab({
   session: CodeSession;
   tools: readonly CodingTool[];
   toolName: string;
+  /** v1.545.0: whose the tools' own edits are said to be (every tool's, once
+   *  the session has switched). */
+  editedBy: string;
   events: readonly CodeEvent[];
   refresh: number;
   running: boolean;
   onOpenChanges: () => void;
   onSend?: (text: string) => void;
 }) {
-  const over = usePaneRead<CodeOverview>(session.id, "overview", decodeCodeOverview, refresh, running);
+  // v1.545.0: what a TOOL reported (what runs under it, its extensions, its
+  // usage, its context) is the session's tool's: read again when it changes.
+  const over = usePaneRead<CodeOverview>(session.id, "overview", decodeCodeOverview, refresh, running, "", session.tool);
   const changes = usePaneRead<CodeChanges>(session.id, "changes", decodeCodeChanges, refresh, running);
-  const usage = usePaneRead<CodeUsage>(session.id, "usage", decodeCodeUsage, refresh, false);
+  const usage = usePaneRead<CodeUsage>(session.id, "usage", decodeCodeUsage, refresh, false, "", session.tool);
   // v1.415.0: the tool's own breakdown (read again when a reply ends).
-  const cctx = usePaneRead<CodeContext>(session.id, "context", decodeCodeContext, refresh, false);
+  const cctx = usePaneRead<CodeContext>(session.id, "context", decodeCodeContext, refresh, false, "", session.tool);
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const tool = tools.find((x) => x.id === session.tool) ?? null;
@@ -760,7 +799,7 @@ function SessionPaneTab({
       <Section id="changes" title="Changes">
         <div className="flex items-center gap-2">
           <p data-testid="code-session-changes-count" className="min-w-0 flex-1 text-[13px] text-zinc-300">
-            {changes.error ? "The changes could not be read." : changesCountWords(changes.data, toolName)}
+            {changes.error ? "The changes could not be read." : changesCountWords(changes.data, editedBy)}
           </p>
           <button type="button" data-testid="code-session-open-changes" onClick={onOpenChanges} className={PRESS}>
             See changes

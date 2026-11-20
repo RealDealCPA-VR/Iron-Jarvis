@@ -1044,7 +1044,9 @@ type CodeEventBody =
    *  quiet line, never as the user's bubble. */
   /** v1.544.0: `comments` = the comments on changed code that rode the
    *  message (lib/codeComments; absent = none). */
-  | { type: "user"; at: string; text: string; files: string[]; carry?: CarryMark; comments?: CommentBody[] }
+  /** v1.545.0: `tool` = the coding tool the message went to (a session can
+   *  switch tools; absent on an older record). */
+  | { type: "user"; at: string; text: string; files: string[]; carry?: CarryMark; comments?: CommentBody[]; tool?: string }
   /** v1.418.0 (C4.2): `parent` = the helper step (Claude Code's Task /
    *  Agent) this text, thinking or step ran inside (absent = the
    *  conversation itself). */
@@ -1129,7 +1131,13 @@ type CodeEventBody =
        *  whether it is list price or real spend (Pi), else "". */
       costReportedBy: string;
     }
-  | { type: "notice"; at: string; text: string }
+  /** v1.545.0: `switch` = this line is the one a tool switch wrote ("Switched
+   *  from Claude Code to Codex."): the tools it went from and to. */
+  | { type: "notice"; at: string; text: string; switch?: ToolSwitchMark }
+  /** v1.545.0: the summary a tool was given with the user's message after a
+   *  switch: `text` is EXACTLY what it was given (plain text, never Markdown),
+   *  `note` a sentence to show under it ("" = none). */
+  | { type: "handoff"; at: string; to: string; from: string; n: number; resumes: boolean; text: string; note: string }
   | { type: "error"; at: string; title: string; fix: string; technical: string; fixKind: string; account: string }
   | { type: "done"; at: string; stop: "completed" | "interrupted" | "failed" | "max_turns"; result: string }
   /** v1.412.0: a NOTE the user typed while the tool worked (a steer): one
@@ -1138,6 +1146,25 @@ type CodeEventBody =
   | { type: "steer"; at: string; id: string; state: SteerState; text: string; files: string[]; how: string };
 
 export type SteerState = "sent" | "read" | "returned";
+
+/** v1.545.0: what a switch line says about itself (tool ids). `resumes`: the
+ *  tool it went to carries on its own earlier conversation. */
+export interface ToolSwitchMark {
+  from: string;
+  to: string;
+  resumes: boolean;
+}
+
+/** v1.545.0: how much of a hand-off's text the screen keeps (the daemon
+ *  writes at most 12,000 characters). */
+export const HANDOFF_TEXT_MAX = 20_000;
+
+function decodeSwitchMark(raw: unknown): ToolSwitchMark | null {
+  const r = obj(raw);
+  const to = r ? str(r.to, 64).trim() : "";
+  if (!r || !to) return null;
+  return { from: str(r.from, 64).trim(), to, resumes: r.resumes === true };
+}
 
 export type CodeEventType = CodeEvent["type"];
 
@@ -1169,6 +1196,7 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
     case "user": {
       const carry = decodeCarryMark(r.carry);
       const comments = decodeComments(r.comments);
+      const tool = str(r.tool, 64).trim();
       return {
         type,
         at,
@@ -1176,6 +1204,7 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
         files: Array.isArray(r.files) ? r.files.filter((f): f is string => typeof f === "string").slice(0, 20) : [],
         ...(carry ? { carry } : {}),
         ...(comments.length ? { comments } : {}),
+        ...(tool ? { tool } : {}),
       };
     }
     case "text":
@@ -1290,7 +1319,27 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
       };
     case "notice": {
       const text = str(r.text, 2_000).trim();
-      return text ? { type, at, text } : null;
+      if (!text) return null;
+      const mark = decodeSwitchMark(r.switch);
+      return mark ? { type, at, text, switch: mark } : { type, at, text };
+    }
+    case "handoff": {
+      // v1.545.0: a row that could not say which tool it was for, or with
+      // nothing in it, is not drawn.
+      const to = str(r.to, 64).trim();
+      const text = str(r.text, HANDOFF_TEXT_MAX);
+      if (!to || !text.trim()) return null;
+      const n = num(r.n);
+      return {
+        type,
+        at,
+        to,
+        from: str(r.from, 64).trim(),
+        n: n !== null && n > 0 ? Math.floor(n) : 0,
+        resumes: r.resumes === true,
+        text,
+        note: str(r.note, 600).trim(),
+      };
     }
     case "error":
       return {
@@ -1419,6 +1468,13 @@ export interface CodeSessionView {
    *  message (`takes_comments`). An older one says nothing: the screen then
    *  offers no Comment and no chips (a comment is never silently dropped). */
   takesComments: boolean;
+  /** v1.545.0: this session can go on with another coding tool
+   *  (`switches_tool`). An older Iron Jarvis says nothing and a helper
+   *  session says no: the tool then stays fixed, as before. */
+  switchesTool: boolean;
+  /** v1.545.0: this session has EVER switched its coding tool
+   *  (`switched_tools`), whatever part of the conversation was read. */
+  switchedTools: boolean;
 }
 
 /** v1.474.0 (Hand off): one helper session another session's tool started. */
@@ -1539,6 +1595,8 @@ export function decodeCodeSessionView(raw: unknown): CodeSessionView | null {
       return h && id ? { id, title: str(h.title, 300).trim(), label: str(h.label, 60).trim() } : null;
     })(),
     takesComments: r.takes_comments === true,
+    switchesTool: r.switches_tool === true,
+    switchedTools: r.switched_tools === true,
   };
 }
 
@@ -1582,7 +1640,18 @@ export type OpenAsk = ApprovalEvent | QuestionEvent;
 export type ConvItem =
   /** v1.441.0: `at` names the message (Branch from here / Rewind to here). */
   /** v1.544.0: `comments` = the comments on changed code it carried. */
-  | { kind: "user"; key: string; text: string; files: string[]; carry?: CarryMark; at?: string; comments?: CommentBody[] }
+  /** v1.545.0: `tool` = the coding tool of the turn this message started
+   *  (absent = not known from the record: the session's tool). */
+  | {
+      kind: "user";
+      key: string;
+      text: string;
+      files: string[];
+      carry?: CarryMark;
+      at?: string;
+      comments?: CommentBody[];
+      tool?: string;
+    }
   | { kind: "text"; key: string; text: string; done: boolean }
   /** v1.418.0 (C4.3): `live` while the thinking is the newest thing the
    *  running turn said; `seconds` = how long it thought (null = unknown). */
@@ -1592,7 +1661,11 @@ export type ConvItem =
   | { kind: "tool"; key: string; tool: ToolEvent; children?: ConvItem[] }
   | { kind: "plan"; key: string; steps: { text: string; status: PlanStatus }[] }
   | { kind: "resolved"; key: string; requestId: string; decision: string; about: string; question: boolean }
-  | { kind: "notice"; key: string; text: string }
+  /** v1.545.0: `switch` = the line a tool switch wrote. */
+  | { kind: "notice"; key: string; text: string; switch?: ToolSwitchMark }
+  /** v1.545.0: the summary a tool was given after a switch, drawn folded
+   *  under the message it rode. */
+  | { kind: "handoff"; key: string; to: string; from: string; resumes: boolean; text: string; note: string }
   | { kind: "error"; key: string; title: string; fix: string; technical: string; fixKind: string; account: string }
   | {
       kind: "usage";
@@ -1616,7 +1689,8 @@ export type ConvItem =
     }
   /** v1.412.0: a note sent while it worked, at the place it was sent, with
    *  its newest state. */
-  | { kind: "steer"; key: string; id: string; text: string; files: string[]; state: SteerState; how: string };
+  /** v1.545.0: `tool` = the coding tool it was sent to (absent = not known). */
+  | { kind: "steer"; key: string; id: string; text: string; files: string[]; state: SteerState; how: string; tool?: string };
 
 /** v1.417.0 (C4.9): one turn's receipt, read off its own events — the model
  *  the newest `session` event named, how long it took (its `user` to its
@@ -1633,6 +1707,10 @@ export interface TurnReceipt {
   failed: number;
   files: number;
   usage: { input: number; output: number; costUsd: number | null; listPrice: boolean; costReportedBy: string } | null;
+  /** v1.545.0: the coding tool that wrote this reply, read off the turn's own
+   *  record (the rule is written at the fold's `user` case); absent = the
+   *  record does not say, so it is the session's tool. */
+  tool?: string;
 }
 
 function secondsBetween(a: string, b: string): number | null {
@@ -1685,9 +1763,18 @@ export function codeReceiptWhere(tool: string): string {
  *  reads. A part with nothing to say is left out; "" when nothing is known.
  *  v1.449.0: a failed step is said apart ("7 actions · 1 failed"), the
  *  WorkLine way. */
-export function receiptLine(r: TurnReceipt, account = ""): string {
+export function receiptLine(r: TurnReceipt, account = "", toolName = ""): string {
   const parts: string[] = [];
-  const who = r.model ? `answered by ${r.model}${account ? ` on ${account}` : ""}` : account ? `on ${account}` : "";
+  // v1.545.0: in a conversation more than one coding tool wrote, each reply
+  // names its own ("answered by Opus 5.5 in Claude Code").
+  const on = account ? ` on ${account}` : "";
+  const who = r.model
+    ? `answered by ${r.model}${toolName ? ` in ${toolName}` : ""}${on}`
+    : toolName
+      ? `answered by ${toolName}${on}`
+      : account
+        ? `on ${account}`
+        : "";
   if (who) parts.push(who);
   if (r.seconds !== null) parts.push(receiptDuration(r.seconds));
   if (r.actions > 0) parts.push(`${r.actions} action${r.actions === 1 ? "" : "s"}`);
@@ -1762,6 +1849,24 @@ export interface FoldState {
   // last step, never to the next start. The app's own words (a notice, an
   // error) are not work.
   workAt: string;
+  // v1.545.0: which coding tool wrote each turn (a session can switch tools).
+  /** The tool current at this point ("" = the record has not said yet). */
+  tool: string;
+  /** A turn is open (its `user` arrived, its `done` has not). */
+  inTurn: boolean;
+  /** The open turn's tool ("" = not known). */
+  turnTool: string;
+  /** The open turn's OWN record named its tool (its `user` event, or its
+   *  first `session` event): nothing later in the turn changes it. */
+  turnSure: boolean;
+  /** Where the open turn's rows start. */
+  turnFrom: number;
+  /** A switch line was seen (only the FIRST one names what came before). */
+  switched: boolean;
+  /** The newest `user` row and the turn it started (a hand-off is drawn
+   *  right under the message it rode). */
+  userAt: number | null;
+  userTurn: string;
 }
 
 function newFold(root: string, shared: FoldShared): FoldState {
@@ -1793,7 +1898,72 @@ function newFold(root: string, shared: FoldShared): FoldState {
     turnFiles: new Set(),
     turnFailed: new Set(),
     workAt: "",
+    tool: "",
+    inTurn: false,
+    turnTool: "",
+    turnSure: false,
+    turnFrom: 0,
+    switched: false,
+    userAt: null,
+    userTurn: "",
   };
+}
+
+/** v1.545.0: a row's coding tool ("" = the row carries none, or none is
+ *  known). Only the rows that name a tool carry one: a message, a note sent
+ *  while the tool worked, and a turn's receipt. */
+function rowTool(it: ConvItem): string {
+  if (it.kind === "user" || it.kind === "steer") return it.tool ?? "";
+  if (it.kind === "done") return it.receipt?.tool ?? "";
+  return "";
+}
+
+/** The same row, named for `tool` (null = this kind of row names no tool). */
+function withRowTool(it: ConvItem, tool: string): ConvItem | null {
+  if (it.kind === "user" || it.kind === "steer") return { ...it, tool };
+  if (it.kind === "done" && it.receipt) return { ...it, receipt: { ...it.receipt, tool } };
+  return null;
+}
+
+/** v1.545.0: name the rows from `from` on for `tool` — every one (`all`), or
+ *  only those the record had not named yet. A changed row is a new object (it
+ *  draws again); the others are left as they are. */
+function nameRows(s: FoldState, from: number, tool: string, all: boolean): void {
+  for (let i = Math.max(0, from); i < s.items.length; i += 1) {
+    const it = s.items[i];
+    const had = rowTool(it);
+    if (had === tool || (!all && had)) continue;
+    const next = withRowTool(it, tool);
+    if (next) s.items[i] = next;
+  }
+}
+
+/** v1.545.0: `id` is the coding tool from here on. The model the fold
+ *  remembers for the receipts was the tool's before it: a reply of the new
+ *  tool is never named for it. */
+function toolIsNow(s: FoldState, id: string): void {
+  if (s.tool && s.tool !== id) s.model = "";
+  s.tool = id;
+}
+
+/** v1.545.0: put `item` at row `at`, moving every remembered row after it.
+ *  (Only ever called for a row right under a message: the message's own row
+ *  and its turn's start are before `at`, and no thinking is open by then.) */
+function insertRow(s: FoldState, at: number, item: ConvItem): void {
+  if (at >= s.items.length) {
+    s.items.push(item);
+    return;
+  }
+  s.items.splice(at, 0, item);
+  const move = (m: Map<string, number>) => {
+    for (const [k, v] of m) if (v >= at) m.set(k, v + 1);
+  };
+  move(s.textAt);
+  move(s.thinkAt);
+  move(s.toolAt);
+  move(s.steerAt);
+  if (s.planAt !== null && s.planAt >= at) s.planAt += 1;
+  if (s.usageAt !== null && s.usageAt >= at) s.usageAt += 1;
 }
 
 /** The helper of this level that `parent` sits under (null = not this
@@ -1826,6 +1996,8 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
   }
   const key = (p: string) => `${p}-${s.n++}`;
   if (s.turnAt && ev.type !== "user" && ev.type !== "done" && ev.type !== "error" && ev.type !== "notice"
+    // v1.545.0: the hand-off row is the app's own too.
+    && ev.type !== "handoff"
     // v1.427.2: a step closed "did not finish" is the app's own row too.
     && !(ev.type === "tool" && ev.status === "stopped")
     && Number.isFinite(Date.parse(ev.at))) {
@@ -1869,9 +2041,38 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
   switch (ev.type) {
     case "session":
       if (ev.harnessSessionId) s.toolSessionId = ev.harnessSessionId;
+      // v1.545.0 (the rule at the `user` case, step 2): the FIRST `session`
+      // event of a turn whose message did not name its tool names it, for
+      // every row the turn has drawn so far. It is also the tool "current"
+      // from here on.
+      if (ev.harness) {
+        if (s.inTurn && !s.turnSure) {
+          s.turnTool = ev.harness;
+          s.turnSure = true;
+          nameRows(s, s.turnFrom, ev.harness, true);
+        }
+        toolIsNow(s, ev.harness);
+      }
       if (ev.model) s.model = ev.model;
       break;
-    case "user":
+    case "user": {
+      // v1.545.0: the coding tool that wrote this turn —
+      //   1. the message's own `tool`;
+      //   2. else the first `session` event of the turn (above);
+      //   3. else the tool current at this point (the last one a message, a
+      //      `session` event or a switch line named);
+      //   4. else, for turns before the FIRST switch line, that line's `from`
+      //      (the `notice` case below);
+      //   5. else nothing: the row carries no tool, and the screen uses the
+      //      session's (as it did before a session could switch).
+      const own = ev.tool ?? "";
+      if (own) toolIsNow(s, own);
+      s.inTurn = true;
+      s.turnSure = !!own;
+      s.turnTool = own || s.tool;
+      s.turnFrom = s.items.length;
+      s.userAt = s.items.length;
+      s.userTurn = ev.turn ?? "";
       s.items.push({
         kind: "user",
         key: key("u"),
@@ -1880,6 +2081,7 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
         at: ev.at,
         ...(ev.carry ? { carry: ev.carry } : {}),
         ...(ev.comments?.length ? { comments: ev.comments } : {}),
+        ...(s.turnTool ? { tool: s.turnTool } : {}),
       });
       s.planAt = null;
       s.settled = false;
@@ -1890,6 +2092,7 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
       s.turnFiles.clear();
       s.turnFailed.clear();
       break;
+    }
     case "text": {
       const i = s.textAt.get(ev.item);
       if (i === undefined) {
@@ -1984,8 +2187,44 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
       });
       break;
     case "notice":
-      s.items.push({ kind: "notice", key: key("n"), text: ev.text });
+      if (ev.switch) {
+        // v1.545.0 (the rule at the `user` case, step 4): the first switch
+        // line names the tool of everything before it that the record had
+        // not named.
+        if (!s.switched) {
+          s.switched = true;
+          if (ev.switch.from) {
+            nameRows(s, 0, ev.switch.from, false);
+            if (s.inTurn && !s.turnTool) s.turnTool = ev.switch.from;
+          }
+        }
+        // (The model remembered for the receipts was the old tool's.)
+        s.model = "";
+        s.tool = ev.switch.to;
+      }
+      s.items.push({ kind: "notice", key: key("n"), text: ev.text, ...(ev.switch ? { switch: ev.switch } : {}) });
       break;
+    case "handoff": {
+      // v1.545.0: right under the message it rode (after an earlier hand-off
+      // of the same message); with no such message on screen, where it came.
+      const item: ConvItem = {
+        kind: "handoff",
+        key: key("h"),
+        to: ev.to,
+        from: ev.from,
+        resumes: ev.resumes,
+        text: ev.text,
+        note: ev.note,
+      };
+      const mine = s.userAt !== null && (ev.turn && s.userTurn ? ev.turn === s.userTurn : s.inTurn);
+      let at = s.items.length;
+      if (mine && s.userAt !== null) {
+        at = s.userAt + 1;
+        while (at < s.items.length && s.items[at].kind === "handoff") at += 1;
+      }
+      insertRow(s, at, item);
+      break;
+    }
     case "error":
       s.items.push({
         kind: "error",
@@ -2013,7 +2252,17 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
       const i = s.steerAt.get(ev.id);
       if (i === undefined) {
         s.steerAt.set(ev.id, s.items.length);
-        s.items.push({ kind: "steer", key: key("s"), id: ev.id, text: ev.text, files: ev.files, state: ev.state, how: ev.how });
+        const tool = s.inTurn ? s.turnTool : s.tool;
+        s.items.push({
+          kind: "steer",
+          key: key("s"),
+          id: ev.id,
+          text: ev.text,
+          files: ev.files,
+          state: ev.state,
+          how: ev.how,
+          ...(tool ? { tool } : {}),
+        });
       } else {
         const it = s.items[i] as Extract<ConvItem, { kind: "steer" }>;
         s.items[i] = { ...it, state: ev.state, text: it.text || ev.text, files: it.files.length ? it.files : ev.files, how: it.how || ev.how };
@@ -2042,6 +2291,10 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
         files: s.turnFiles.size,
         usage,
       };
+      // v1.545.0: the tool that wrote this turn (a turn whose message is not
+      // in the record: the tool current now).
+      const wrote = s.inTurn ? s.turnTool : s.tool;
+      if (wrote) receipt.tool = wrote;
       const worth = !!(receipt.model || receipt.seconds !== null || receipt.actions || receipt.files || receipt.usage);
       s.items.push({ kind: "done", key: key("d"), stop: ev.stop, result: ev.result, receipt: worth ? receipt : null });
       s.usageAt = null;
@@ -2050,6 +2303,10 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
       s.turnFailed.clear();
       s.turnAt = "";
       s.workAt = "";
+      s.inTurn = false;
+      s.turnTool = "";
+      s.turnSure = false;
+      s.turnFrom = s.items.length;
       // A turn that ended asks nothing any more.
       s.asks.clear();
       s.settled = true;
@@ -2383,17 +2640,30 @@ export function conversationMarkdown(
   toolName: string,
   /** v1.441.0 (review D1): lines said under the title (what is NOT in the file). */
   notes: readonly string[] = [],
+  /** v1.545.0: a coding tool's name by its id. A session can switch tools:
+   *  with this, each reply is headed by the tool that wrote ITS turn (a turn
+   *  whose tool the record does not say keeps `toolName`, the session's). */
+  toolNameOf?: (toolId: string) => string,
 ): string {
   const { items } = foldConversation(events);
   const out: string[] = [`# ${title.trim() || "Coding session"}`];
   for (const n of notes) if (n.trim()) out.push(`_${n.trim()}_`);
   let speaker: "user" | "tool" | "" = "";
+  let wrote = toolName;
+  let headed = "";
   const head = (who: "user" | "tool") => {
-    if (speaker !== who) out.push(`## ${who === "user" ? "You" : toolName || "Assistant"}`);
+    // (A reply of ANOTHER tool gets its own heading even with no message of
+    // the user's between the two.)
+    if (speaker !== who || (who === "tool" && headed !== wrote)) {
+      out.push(`## ${who === "user" ? "You" : wrote || "Assistant"}`);
+      if (who === "tool") headed = wrote;
+    }
     speaker = who;
   };
   for (const it of items) {
     if (it.kind === "user") {
+      // (A message Iron Jarvis sent by itself starts a turn of a tool too.)
+      if (toolNameOf) wrote = (it.tool ? toolNameOf(it.tool) : "") || toolName;
       if (it.carry) continue;
       head("user");
       if (it.text.trim()) out.push(it.text.trim());

@@ -113,6 +113,7 @@ from . import open_steps as OS  # v1.427.2: a step runs only while its tool does
 from . import archive_summary as AS  # v1.453.0: the summary kept at archive time
 from . import events as EV
 from . import handoff as HO  # v1.474.0: Hand off
+from . import tool_switch as TS  # v1.545.0: switch the coding tool inside one session
 
 log = logging.getLogger(__name__)
 
@@ -1118,6 +1119,8 @@ class LiveSession:
         #: The process must restart before the next message (an effort change).
         self.restart = False
         self.limit: Any = None
+        #: v1.422.0 (B5): when that limit resets (``_emit`` reads it at the card).
+        self.limit_reset: Any = None
         #: v1.414.3: the background save of the tool's own session id; a
         #: reply's end waits for it, so the row read right after names it.
         self.id_save: asyncio.Future | None = None
@@ -1178,6 +1181,45 @@ class LiveSession:
         self.open_steps: dict[str, dict[str, Any]] = {}
         #: v1.511.0 (A12): said at the next start — Pi starts without the
         #: folder's own resources the user has since declined.
+        self.pi_folder_note = ""
+
+    #: v1.545.0: what :meth:`retool` leaves as it is (the session itself: its
+    #: log, its lock, what the user sees and typed) and what it starts afresh
+    #: (everything that belonged to the tool the session left). A new
+    #: attribute must be put in ONE of them: a test compares both lists with
+    #: what ``__init__`` sets.
+    KEPT_ON_RETOOL = frozenset({
+        "sid", "log", "lock", "turn", "asks", "phones", "notes", "last_active", "last_heard", "claim",
+        "title", "folder", "looked_at", "unread", "queue", "starting", "starting_conv", "opening",
+        "id_save", "ref_save", "proc", "driver",
+    })
+    RESET_ON_RETOOL = frozenset({
+        "harness", "restart", "limit", "limit_since", "limit_reset", "last_error", "account", "steers",
+        "caps", "stopped_why", "first_step_proc", "first_step_at", "keeping", "stopped_programs",
+        "stopped_note", "stopped_after_s", "kept", "no_host_said", "open_steps", "pi_folder_note",
+    })
+
+    def retool(self, harness: str) -> None:
+        """v1.545.0: the session goes on with ANOTHER coding tool
+        (:mod:`.tool_switch`). The caller has stopped the old tool's process
+        (``proc`` and ``driver`` are None) and holds the session's claim.
+        Nothing the old tool left is read as the new tool's: its limit, its
+        notes still unread, its open steps, what its last stop ended."""
+        assert self.proc is None and self.driver is None, "the old tool's process is stopped first"
+        self.harness = harness
+        self.restart = False
+        self.limit, self.limit_since, self.limit_reset = None, "", None
+        self.last_error = ""
+        self.account = ""
+        self.steers = {}
+        self.caps = {}
+        self.stopped_why = ""
+        self.first_step_proc, self.first_step_at = None, None
+        self.keeping = None
+        self.stopped_programs, self.stopped_note, self.stopped_after_s = [], "", 0.0
+        self.kept = {}
+        self.no_host_said = False
+        self.open_steps = {}
         self.pi_folder_note = ""
 
     @property
@@ -1382,6 +1424,15 @@ class HostedService:
             # archive, terminal or move now would race that start.
             raise Refused(W.RUNNING)
         live.claim = what
+
+    @staticmethod
+    def _same_tool(live: LiveSession, row: Any) -> None:
+        """v1.545.0: ``row`` must name the tool the session is on NOW. A row
+        read before the session switched tools (:mod:`.tool_switch`) would
+        start the OLD tool, on the conversation that was just parked: the
+        message is refused in words instead, and sent again it goes right."""
+        if live.harness != row.harness:
+            raise Refused(TS.SWITCHED_MEANWHILE)
 
     def _start_unwanted(self, live: LiveSession) -> bool:
         """v1.512.0 (H2, the open shutdown item): a start for ``live`` must not
@@ -1731,6 +1782,10 @@ class HostedService:
         for r in rows:
             if r.id != except_sid and r.harness == harness and r.harness_session_id == hid:
                 return W.HELD_BY_ROW
+        # v1.545.0: a conversation a session PARKED when it switched tools is
+        # still that session's (one conversation, one row).
+        if TS.held_by(self.home, rows, harness, hid, except_sid=except_sid):
+            return W.HELD_BY_ROW
         if terminal_holds(self.platform, hid, harness=harness, rows=rows):
             return W.HELD_BY_TERMINAL.format(label=W.label(harness), exit=W.exit_command(harness))
         return ""
@@ -1973,8 +2028,10 @@ class HostedService:
         if disk:
             if not folder:
                 raise Refused("Name the folder whose saved sessions to list.", 400)
-            used = {r.harness_session_id for r in await asyncio.to_thread(store.list_rows, self.engine)
-                    if r.harness_session_id}
+            every = await asyncio.to_thread(store.list_rows, self.engine)
+            used = {r.harness_session_id for r in every if r.harness_session_id}
+            # v1.545.0: a conversation a session parked is not offered again.
+            used |= await asyncio.to_thread(TS.held_ids, self.home, every)
             result["disk"] = await asyncio.to_thread(self._disk_rows, folder, used, account)
         return result
 
@@ -2067,6 +2124,10 @@ class HostedService:
         # v1.544.0: this daemon takes comments on changed code with a message
         # (the page offers them only when it says so: never silently dropped).
         out["takes_comments"] = True
+        # v1.545.0: this daemon can switch a session's coding tool, and a
+        # hand-off that waits for the next message is said.
+        out["switches_tool"] = not str(getattr(row, "handed_from", "") or "")
+        out.update(await asyncio.to_thread(TS.view_facts, self.home, row))
         # v1.441.0: Branch from here / Rewind to here — what this tool can do,
         # and the messages it can do it from.
         try:
@@ -2972,7 +3033,9 @@ class HostedService:
             # (it read "Stopped: the coding tool was closed", its reason lost).
             await self._stop_process(live, end_turn=False, lock_held=True)
             await self._undo_unwanted_start(live)  # closing: no words for a reply that is gone
-            raise Refused(_start_failed_words(row.harness, exc)) from None
+            # (v1.545.0: ``code`` — a tool switched back to that cannot open
+            # its parked conversation starts a new one, ``_after_failed_resume``.)
+            raise Refused(_start_failed_words(row.harness, exc), code="open_failed") from None
         await self._undo_unwanted_start(live)  # the handshake is a wait too
         if not took_before and JT.takes(row.harness) and JT.wanted(live.caps) and url:
             # v1.441.0 (review of lane fix1): this start's handshake said the
@@ -3062,9 +3125,15 @@ class HostedService:
             asyncio.ensure_future(save())
 
     def _on_session_id(self, live: LiveSession, sid: str) -> None:
+        tool = live.harness  # v1.545.0: the tool that said it
+
         async def save() -> None:
             try:
                 row = await asyncio.to_thread(store.get, self.engine, live.sid)
+                if row is not None and (row.harness != tool or live.harness != tool):
+                    # v1.545.0: the session switched tools meanwhile — an id
+                    # the OLD tool said is never written on the new tool's row.
+                    return
                 if row is not None and row.harness_session_id != sid:
                     await asyncio.to_thread(store.update, self.engine, live.sid, harness_session_id=sid)
             except Exception:  # noqa: BLE001 — the next start mints again, said nowhere
@@ -3607,6 +3676,7 @@ class HostedService:
                              carry: dict[str, Any] | None = None,
                              comments: list[dict[str, Any]] | None = None) -> HostedTurn:
         live = self._live(row)
+        self._same_tool(live, row)  # v1.545.0: a row read before the session switched tools
         live.account = row.account
         if live.claim:
             raise Refused(W.CLAIMED.format(what=live.claim))
@@ -3614,6 +3684,11 @@ class HostedService:
             raise Refused(W.BUSY)
         if live.working_alone:
             raise Refused(W.PI_STILL_WORKING)
+        if carry and await asyncio.to_thread(TS.pending_for, self.home, sid, row.harness):
+            # v1.545.0 (review): a message Iron Jarvis sends BY ITSELF to carry
+            # a reply on ("carry on from where you stopped") would be the new
+            # tool's first word of this conversation, before its summary.
+            raise Refused(TS.CARRY_AFTER_SWITCH.format(label=W.label(row.harness)))
         builtin = await self._pi_typed(row, live, text, files) if row.harness == PI and not carry else None
         if row.harness in (CLAUDE, GROK) and not carry:
             builtin = await self._typed_setting(row, live, text, files)
@@ -3647,6 +3722,9 @@ class HostedService:
                 raise Refused(holder)
             if live.claim or (live.turn is not None and live.turn.running):
                 raise Refused(W.BUSY)
+        # v1.545.0: switched while the checks above waited? From the next line
+        # the turn runs, and a running turn refuses a switch.
+        self._same_tool(live, row)
         turn = HostedTurn(turn_id, sid)
         turn.started_mono = self.clock()
         # v1.422.0 review: a turn Iron Jarvis started BY ITSELF (a carry-on) is
@@ -3844,6 +3922,9 @@ class HostedService:
                      builtin: tuple[str, str] | None = None,
                      comments: list[dict[str, Any]] | None = None) -> None:
         user = make("user", text=clip(text, TEXT_CHARS))
+        # v1.545.0: the tool this message went to — each reply keeps the name
+        # of the tool that wrote it after the session switches to another.
+        user["tool"] = row.harness
         if files:
             user["files"] = [clip(f, 500) for f in files]
         if comments:
@@ -3862,6 +3943,7 @@ class HostedService:
             user["command"] = True
         self._emit(live, user)
         started = False
+        resumed = False  # v1.545.0: on a conversation the tool was switched back to, not yet answered
         turn.unsent = True  # v1.425.0 (review, B7): not the tool's yet (``interrupt``)
         try:
             if not carry:
@@ -3903,9 +3985,22 @@ class HostedService:
                 # came while this message waited for it means no start.
                 if not turn.running or turn.ending or live.claim or self._start_unwanted(live):
                     raise _StoppedWhileWaiting()
+                self._same_tool(live, row)  # v1.545.0 (a guard: a running turn refuses a switch)
                 before = live.proc
+                if row.harness_session_id:
+                    resumed = await asyncio.to_thread(TS.unproven, self.home, live.sid, row.harness)
                 self._say_start(live, row)  # v1.417.0 (C4.7)
-                await self._ensure_running(live, row)
+                try:
+                    await self._ensure_running(live, row)
+                except Refused as refused:
+                    # v1.545.0: a tool the session switched BACK to could not
+                    # open its own earlier conversation — it starts a new one
+                    # and gets the whole summary (said), never a dead session.
+                    again = await self._after_failed_resume(live, row, refused)
+                    if again is None:
+                        raise
+                    row = again
+                    await self._ensure_running(live, row)
                 if live.claim and live.proc is not None and live.proc is not before:
                     # v1.512.0 (H2): claimed while it started (``_claim``
                     # refuses that; a guard): what started is stopped.
@@ -3941,6 +4036,14 @@ class HostedService:
                     sent_text = await asyncio.to_thread(
                         CC.with_block, text, comments,
                         event_bus=getattr(self.platform, "event_bus", None), session_id=live.sid)
+                # v1.545.0: the hand-off a tool switch left waiting rides THIS
+                # message (the same one place), after the user's own words. A
+                # command of the tool's own carries none: it waits for a
+                # message of the user's. (A message Iron Jarvis sends by itself
+                # never gets here while one waits: ``_start_turn_in`` refuses it.)
+                handed = await self._handoff_for(live, row, user, text)
+                if handed is not None and handed["text"]:
+                    sent_text = TS.with_handoff(sent_text, handed["text"])
                 try:
                     await live.driver.send_user(sent_text, files)
                 except BaseException:
@@ -3950,6 +4053,15 @@ class HostedService:
                     if not saving.done():
                         saving.set_result(None)
                     raise
+                if handed is not None:
+                    # Said only once the tool has it: the line shows the exact
+                    # text it was given, and the hand-off no longer waits.
+                    if handed["text"]:
+                        self._emit(live, TS.event_for(handed))
+                    # (``told_at``: the message it rode — a rewind or a branch
+                    # that takes this message away makes the hand-off wait again.)
+                    await asyncio.to_thread(TS.delivered, self.home, live.sid, row.harness, handed["n"],
+                                            str(user.get("at") or "") if handed["text"] else "")
                 # (The text as SENT: Pi's rewind finds a message by matching it
                 # against Pi's own list of what it received.)
                 await self._note_sent(live, row, user, before, sent_text)
@@ -3985,6 +4097,10 @@ class HostedService:
         finally:
             if turn.running and not turn.ending:  # never leave a follower hanging
                 await asyncio.shield(self._end_turn(live, "failed"))
+            if resumed:
+                # v1.545.0: ``started`` — its process did start (a start that
+                # was refused, a tool that is not installed, decides nothing).
+                await asyncio.shield(self._settle_resume(live, row, turn, went=started and not live.running))
             if live.turn is turn and not turn.running:
                 live.turn = None
             live.last_active = self.clock()
@@ -3994,6 +4110,83 @@ class HostedService:
                 # not installed, or Windows could not start it. Once the tool
                 # ran, the conversation belongs to that folder: it stays.
                 await asyncio.shield(asyncio.to_thread(self._take_back_folder, live.sid, made, forget=forget))
+
+    async def _handoff_for(self, live: LiveSession, row: Any, user: dict[str, Any],
+                           text: str) -> dict[str, Any] | None:
+        """v1.545.0: the hand-off that waits for this session's tool, built
+        NOW from the session's own record (:mod:`.tool_switch`), or None. A
+        typed command gets none (Codex and OpenCode match ``/compact`` by its
+        exact text): it stays for the next message. Never fails the message:
+        a hand-off that cannot be built is said, and the message goes."""
+        from ..harness import code_comments as CC
+
+        try:
+            if not await asyncio.to_thread(TS.pending_for, self.home, live.sid, row.harness):
+                return None
+            if CC.looks_like_command(text):
+                return None
+            await asyncio.to_thread(live.log.flush)
+            events, _total, _dropped = await asyncio.to_thread(live.log.read, EV.MAX_LINES)
+            return await asyncio.to_thread(
+                TS.prepare, self.home, row, events, str(user.get("at") or ""),
+                event_bus=getattr(self.platform, "event_bus", None))
+        except Exception:  # noqa: BLE001 — the message is the user's: it goes
+            log.warning("could not build a Code-view session's hand-off", exc_info=True)
+            self._emit(live, make("notice", text=W.HANDOFF_NOT_BUILT.format(label=W.label(row.harness))))
+            return None
+
+    async def _after_failed_resume(self, live: LiveSession, row: Any, refused: "Refused | None",
+                                   said: str = "") -> Any:
+        """v1.545.0: ``row``'s tool could not open the conversation it was
+        switched back to (``refused`` came from its start; None = it started
+        and went before it answered, :meth:`_settle_resume`). While that
+        conversation has yet to answer (``tool_switch.unproven``): it is let
+        go, the WHOLE summary waits for the tool, that is said, and the row
+        to start a NEW conversation on is returned. Otherwise None (the
+        refusal stands): any other failure of a start changes nothing."""
+        if refused is not None and getattr(refused, "code", "") != "open_failed":
+            return None
+        if not row.harness_session_id:
+            return None
+        try:
+            if not await asyncio.to_thread(TS.resume_failed, self.home, live.sid, row.harness):
+                return None
+            fresh = await asyncio.to_thread(store.update, self.engine, live.sid, harness_session_id="")
+        except Exception:  # noqa: BLE001 — the refusal stands
+            log.warning("could not start a Code-view session's tool afresh after a failed resume", exc_info=True)
+            return None
+        if fresh is None:
+            return None
+        self._emit(live, make("notice", text=(said or TS.RESUME_FAILED).format(label=W.label(row.harness))))
+        return fresh
+
+    async def _settle_resume(self, live: LiveSession, row: Any, turn: HostedTurn, *, went: bool) -> None:
+        """v1.545.0 (review): the message that just ended ran on a
+        conversation the tool was switched BACK to and that had not answered
+        yet. It answered (any text or step): the conversation is proven.
+        The tool went away with no answer at all (Claude Code's own start
+        does not say a conversation is missing: its process just ends): the
+        conversation is let go, as a refused start lets it go, and that is
+        said. ``went``: the tool's process started for this message and is
+        gone. Anything else (a Stop, a limit, a sign-in, a start that was
+        refused) decides nothing. Never raises."""
+        try:
+            events = list(turn.events)
+            if any(e.get("type") in TS.LIFE for e in events):
+                await asyncio.to_thread(TS.proved, self.home, live.sid, row.harness)
+                return
+            if not went or turn.status != "failed" or live.running or turn.account_limit:
+                return
+            if any(e.get("type") == "error" and e.get("fix_kind") for e in events):
+                return  # a sign-in or a limit: the tool's own reason, not the conversation
+            if live.harness != row.harness:
+                return
+            fresh = await asyncio.to_thread(store.get, self.engine, live.sid)
+            if fresh is None or fresh.harness != row.harness or not fresh.harness_session_id:
+                return
+            await self._after_failed_resume(live, fresh, None, TS.RESUME_FAILED_AFTER)
+        except Exception:  # noqa: BLE001 — decided again at the next message
+            log.warning("could not settle a Code-view session's resumed conversation", exc_info=True)
 
     async def _note_sent(self, live: LiveSession, row: Any, user: dict[str, Any], before: str, text: str) -> None:
         """v1.441.0: the tool's own reference for the message just sent, beside
@@ -4671,11 +4864,16 @@ class HostedService:
                 except Exception:  # noqa: BLE001 - a pane that keeps no record
                     pass
             # A repeated press reuses the row that already holds this conversation.
-            for r in await asyncio.to_thread(store.list_rows, self.engine):
+            every = await asyncio.to_thread(store.list_rows, self.engine)
+            for r in every:
                 if r.harness == harness and r.harness_session_id == hid:
                     out = store.view(r)
                     out["reused"] = True
                     return out
+            # v1.545.0: one a session parked when it switched tools is that
+            # session's still — never a second row on it.
+            if await asyncio.to_thread(TS.held_by, self.home, every, harness, hid):
+                raise Refused(W.HELD_BY_ROW)
             row = await asyncio.to_thread(
                 store.create, self.engine, harness=harness, folder=str(pane.cwd or ""),
                 title=title or "From a terminal", account=str(acc.get("id") or ""),
@@ -4717,8 +4915,9 @@ class HostedService:
             # another terminal's) is the one it ran last; several of them is
             # never a guess.
             terminals = getattr(self.platform, "terminals", None)
-            taken = {str(r.harness_session_id or "") for r in store.list_rows(self.engine)
-                     if r.harness == CLAUDE}
+            every = store.list_rows(self.engine)
+            taken = {str(r.harness_session_id or "") for r in every if r.harness == CLAUDE}
+            taken |= TS.held_ids(self.home, every, CLAUDE)  # v1.545.0: parked ones too
             if terminals is not None:
                 taken |= other_terminal_ids(terminals, str(getattr(pane, "id", "") or ""))
             later = claude_later(pane, home, hid, taken=taken)
@@ -4733,6 +4932,15 @@ class HostedService:
                 raise Refused(W.CANNOT_TELL.format(label=W.label(harness)))
             hid, title = str(found[0].get("id") or ""), str(found[0].get("title") or "")
         return harness, hid, clip(title, 120), acc
+
+    # -- switch the coding tool (v1.545.0) --------------------------------------
+    async def switch_tool(self, sid: str, tool: Any, *, model: Any = None, effort: Any = None,
+                          confirm: bool = False, prefer_model: Any = None,
+                          prefer_effort: Any = None, expect: Any = None) -> dict[str, Any]:
+        """The session goes on with another coding tool (:mod:`.tool_switch`):
+        without ``confirm`` the plan only; with it, the switch."""
+        return await TS.switch(self, sid, tool, model=model, effort=effort, confirm=confirm,
+                               prefer_model=prefer_model, prefer_effort=prefer_effort, expect=expect)
 
     # -- continue on the next account (Claude Code; v1.422.0: and Codex) -------
     async def continue_on(self, sid: str, account: str = "", *, note: str = "",

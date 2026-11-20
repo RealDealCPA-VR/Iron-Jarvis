@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, StrictBool
+from pydantic import BaseModel, Field, StrictBool
 
 from ...core.failures import plain_failure
 from ...hosted import service as S
@@ -94,6 +94,25 @@ class AppContinue(BaseModel):
     account: str | None = None
     #: v1.427.3: try ``account`` although Iron-Proxy has it parked for a limit.
     force: bool = False
+
+
+class AppSwitchTool(BaseModel):
+    """v1.545.0: switch the session's coding tool. Without ``confirm`` the
+    answer is the plan only (nothing changes): the screen shows it before the
+    second press."""
+
+    tool: str = Field(default="", max_length=40)
+    model: str | None = Field(default=None, max_length=200)
+    effort: str | None = Field(default=None, max_length=40)
+    #: What the user would start a NEW session of that tool with in this
+    #: folder (its default there, else their last pick). Used only when
+    #: nothing was picked and the tool does not open its own conversation.
+    prefer_model: str | None = Field(default=None, max_length=200)
+    prefer_effort: str | None = Field(default=None, max_length=40)
+    confirm: bool = False
+    #: The ``token`` of the plan the user was shown: the second press does
+    #: exactly that, or is refused (``code: changed``).
+    expect: str | None = Field(default=None, max_length=64)
 
 
 def _http(r: S.Refused) -> HTTPException:
@@ -347,6 +366,19 @@ def register(app: FastAPI, d: Any) -> None:
             raise HTTPException(status_code=400, detail="Name the account to try.")
         try:
             return await svc().continue_on(sid, account, force=force)
+        except S.Refused as r:
+            return _refused(r)
+
+    @app.post("/build/app/sessions/{sid}/switch-tool")
+    async def app_switch_tool(sid: str, body: AppSwitchTool) -> Any:
+        """v1.545.0: the session goes on with another coding tool. ``confirm``
+        false: ``{switched: false, plan}`` and nothing changes. True:
+        ``{switched: true, session, plan, note}``. A refusal is ``{detail}``
+        (with ``field`` when it is about the tool, the account or the model)."""
+        try:
+            return await svc().switch_tool(sid, body.tool, model=body.model, effort=body.effort,
+                                           confirm=bool(body.confirm), prefer_model=body.prefer_model,
+                                           prefer_effort=body.prefer_effort, expect=body.expect)
         except S.Refused as r:
             return _refused(r)
 

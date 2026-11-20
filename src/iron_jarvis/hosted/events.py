@@ -77,6 +77,9 @@ TYPES: tuple[str, ...] = (
     "question", "resolved", "usage", "notice", "error", "done", "steer",
     # v1.426.0 (E4): the tool's own setup (its MCP servers), for the Session tab.
     "setup",
+    # v1.545.0: what a tool the session switched to was given with the user's
+    # next message (``to``, ``from``, ``n``, ``resumes``, ``text``, ``path``).
+    "handoff",
 )
 TOOL_KINDS: tuple[str, ...] = (
     "read", "edit", "write", "command", "search", "web", "mcp", "task", "todo", "other",

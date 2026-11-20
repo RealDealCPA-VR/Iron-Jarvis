@@ -8,7 +8,16 @@
 import React, { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { ModelPicker, aliasTarget, isPickerShortcut, matchesModel, pickerWords, type PickerChoice } from "@/components/buildCode/ModelPicker";
+import {
+  ModelPicker,
+  aliasTarget,
+  isPickerShortcut,
+  matchesModel,
+  pickerWords,
+  type PickerChoice,
+  type PickerControl,
+  type PickerField,
+} from "@/components/buildCode/ModelPicker";
 import { decodeCodingTools } from "@/lib/buildApp";
 import { LAST_PICK_KEY, lastPick } from "@/components/buildCode/StartComposer";
 
@@ -190,10 +199,14 @@ describe("the panel", () => {
     expect(screen.queryByTestId("p-tool-menu")).toBeNull();
   });
 
-  it("in a running session the tool is fixed: no tool list", () => {
+  // v1.545.0: this case MOVED on purpose. A session's tool was always fixed;
+  // now it is fixed only when the page locks it (the session cannot switch,
+  // or a reply runs) — see "a session that can switch its coding tool" below.
+  it("in a session that cannot switch (or while a reply runs) the tool is fixed: no tool list", () => {
     render(<Harness start={{ tool: "claude-code", model: "claude-opus-5-5", effort: "" }} lock />);
     fireEvent.click(screen.getByTestId("p-tool"));
     expect(screen.queryByTestId("p-tools")).toBeNull();
+    expect(screen.queryByTestId("p-tool-codex")).toBeNull();
     expect(screen.getByTestId("p-model-claude-opus-5-5").getAttribute("aria-selected")).toBe("true");
   });
 
@@ -282,6 +295,32 @@ describe("a session's model change goes to the daemon first", () => {
     act(() => applied.current("claude-opus-5-5"));
     expect((screen.getByTestId("p-effort-medium") as HTMLButtonElement).disabled).toBe(false);
   });
+
+  // v1.545.0 (review): a session that can switch its tool is NOT locked (its
+  // tool list shows), and the same rule must hold there.
+  function SlowUnlocked({ applied }: { applied: { current: (m: string) => void } }) {
+    const [v, setV] = useState<PickerChoice>({ tool: "claude-code", model: "claude-sonnet-5-5", effort: "" });
+    applied.current = (m) => setV((cur) => ({ ...cur, model: m }));
+    return <ModelPicker tools={TOOLS} value={v} toolAsks testId="p" onChange={() => {}} />;
+  }
+
+  it("…also in a session whose tool list shows (it can switch its coding tool)", async () => {
+    const applied = { current: (_m: string) => {} };
+    render(<SlowUnlocked applied={applied} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    expect(screen.getByTestId("p-tools")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("p-model-claude-opus-5-5"));
+    await frame();
+    const medium = screen.getByTestId("p-effort-medium") as HTMLButtonElement;
+    expect(medium.disabled).toBe(true);
+    expect(medium.title).toBe("Changing the model…");
+    expect(screen.getByTestId("p-model-claude-opus-5-5").getAttribute("aria-selected")).toBe("true");
+    // A press on a level that waits does nothing.
+    fireEvent.click(medium);
+    expect(screen.getByTestId("p-tool-menu")).toBeInTheDocument();
+    act(() => applied.current("claude-opus-5-5"));
+    expect((screen.getByTestId("p-effort-medium") as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 
 describe("leaving the panel", () => {
@@ -297,5 +336,212 @@ describe("leaving the panel", () => {
     render(<ModelPicker tools={[]} value={{ tool: "", model: "", effort: "" }} onChange={() => {}} testId="p" shortcut />);
     fireEvent.keyDown(window, { key: "M", ctrlKey: true, shiftKey: true });
     expect(screen.queryByTestId("p-tool-menu")).toBeNull();
+  });
+});
+
+/* v1.545.0: a session can go on with another coding tool. */
+describe("a session that can switch its coding tool", () => {
+  const START: PickerChoice = { tool: "claude-code", model: "claude-opus-5-5", effort: "high" };
+
+  /** The page of a session: it never applies a tool (a press there is a
+   *  question); `draft` is what it says it is asking about. */
+  function Session({
+    asked,
+    lock = false,
+    draft = null,
+    footer,
+    onClose,
+    control,
+  }: {
+    asked: [PickerField, string][];
+    lock?: boolean;
+    draft?: PickerChoice | null;
+    footer?: React.ReactNode;
+    onClose?: () => void;
+    control?: React.MutableRefObject<PickerControl | null>;
+  }) {
+    return (
+      <ModelPicker
+        tools={TOOLS}
+        value={START}
+        lockTool={lock}
+        toolAsks
+        draft={draft}
+        footer={footer}
+        onClose={onClose}
+        control={control}
+        testId="p"
+        onChange={(field, next) => asked.push([field, next])}
+      />
+    );
+  }
+
+  it("shows the tool list, with the session's own tool chosen", () => {
+    render(<Session asked={[]} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    expect(screen.getByTestId("p-tools")).toBeInTheDocument();
+    expect(screen.getByTestId("p-tool-claude-code").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("p-tool-codex").getAttribute("aria-checked")).toBe("false");
+    // A tool that cannot start is still greyed, with its reason.
+    expect((screen.getByTestId("p-tool-grok") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("the page's lock still wins: no tool list", () => {
+    render(<Session asked={[]} lock />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    expect(screen.queryByTestId("p-tools")).toBeNull();
+  });
+
+  it("another tool is asked of the page, never set: the panel stays and shows that tool's models", async () => {
+    const asked: [PickerField, string][] = [];
+    render(<Session asked={asked} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    fireEvent.click(screen.getByTestId("p-tool-codex"));
+    await frame();
+    expect(asked).toEqual([["tool", "codex"]]);
+    expect(screen.getByTestId("p-tool-menu")).toBeInTheDocument();
+    // The chip still names the session's tool; the list is the other tool's,
+    // with its default offered first.
+    expect(screen.getByTestId("p-tool").dataset.tool).toBe("claude-code");
+    expect(screen.getByTestId("p-model-gpt-6-astra")).toBeInTheDocument();
+    expect(screen.getByTestId("p-model-default")).toBeInTheDocument();
+    expect(screen.queryByTestId("p-model-claude-opus-5-5")).toBeNull();
+    // A model there: the tool first, then the model; nothing closes.
+    fireEvent.click(screen.getByTestId("p-model-gpt-6-astra"));
+    await frame();
+    expect(asked).toEqual([
+      ["tool", "codex"],
+      ["tool", "codex"],
+      ["model", "gpt-6-astra"],
+    ]);
+    expect(screen.getByTestId("p-tool-menu")).toBeInTheDocument();
+  });
+
+  it("what the page is asking about shows as chosen, with that model's own levels to ask for", () => {
+    const asked: [PickerField, string][] = [];
+    const { rerender } = render(<Session asked={asked} draft={{ tool: "codex", model: "gpt-6-astra", effort: "" }} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    fireEvent.click(screen.getByTestId("p-tool-codex"));
+    expect(screen.getByTestId("p-model-gpt-6-astra").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("p-no-efforts").textContent).toBe("This model has no effort levels.");
+    // Back on the session's own tool the question is taken back.
+    asked.length = 0;
+    fireEvent.click(screen.getByTestId("p-tool-claude-code"));
+    expect(asked).toEqual([["tool", "claude-code"]]);
+    expect(screen.getByTestId("p-model-claude-opus-5-5").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("p-effort-high").getAttribute("aria-checked")).toBe("true");
+    // With no question open, the session's own tool asks nothing.
+    rerender(<Session asked={asked} draft={null} />);
+    asked.length = 0;
+    fireEvent.click(screen.getByTestId("p-tool-claude-code"));
+    expect(asked).toEqual([]);
+  });
+
+  it("a level of the tool asked about is asked too, and the panel stays", () => {
+    const asked: [PickerField, string][] = [];
+    const two = decodeCodingTools({
+      harnesses: [
+        { id: "claude-code", label: "Claude Code", installed: true, signed_in: true, models: [{ id: "claude-opus-5-5", label: "Opus 5.5", efforts: ["high"] }] },
+        { id: "codex", label: "Codex", installed: true, signed_in: true, models: [{ id: "gpt-6-astra", label: "GPT-6 Astra", efforts: ["low", "high"] }] },
+      ],
+    });
+    render(
+      <ModelPicker
+        tools={two}
+        value={START}
+        toolAsks
+        draft={{ tool: "codex", model: "gpt-6-astra", effort: "low" }}
+        effortHeld="Not while a reply runs"
+        testId="p"
+        onChange={(field, next) => asked.push([field, next])}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("p-tool"));
+    fireEvent.click(screen.getByTestId("p-tool-codex"));
+    asked.length = 0;
+    const high = screen.getByTestId("p-effort-high") as HTMLButtonElement;
+    // (What holds the SESSION's levels does not hold an offer.)
+    expect(high.disabled).toBe(false);
+    expect(screen.getByTestId("p-effort-low").getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(high);
+    expect(asked).toEqual([["effort", "high"]]);
+    expect(screen.getByTestId("p-tool-menu")).toBeInTheDocument();
+  });
+
+  it("the page's confirmation is drawn in the panel, and the page hears the panel close", () => {
+    const onClose = vi.fn();
+    render(<Session asked={[]} footer={<p data-testid="conf">Switch?</p>} onClose={onClose} />);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("p-tool"));
+    expect(screen.getByTestId("p-footer").contains(screen.getByTestId("conf"))).toBe(true);
+    expect(screen.getByTestId("p-tool-menu").contains(screen.getByTestId("p-footer"))).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByTestId("p-model-search"), { key: "Escape" });
+    expect(screen.queryByTestId("p-tool-menu")).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // A press outside is a closing too.
+    fireEvent.click(screen.getByTestId("p-tool"));
+    fireEvent.mouseDown(document.body);
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("with the page's question under the lists, Tab goes to it instead of closing; the hint says so", () => {
+    const onClose = vi.fn();
+    const { rerender } = render(<Session asked={[]} onClose={onClose} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    expect(screen.getByTestId("p-hint").textContent).toContain("Esc or Tab closes");
+    rerender(
+      <Session
+        asked={[]}
+        onClose={onClose}
+        footer={
+          <div>
+            <button type="button" data-testid="conf-a">Cancel</button>
+            <button type="button" data-testid="conf-b">Switch</button>
+          </div>
+        }
+      />,
+    );
+    expect(screen.getByTestId("p-hint").textContent).toContain("Tab goes to the question below");
+    expect(screen.getByTestId("p-hint").textContent).not.toContain("Tab closes");
+    fireEvent.keyDown(screen.getByTestId("p-model-search"), { key: "Tab" });
+    expect(screen.getByTestId("p-tool-menu")).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByTestId("conf-a"));
+    expect(onClose).not.toHaveBeenCalled();
+    // From the tool list too.
+    screen.getByTestId("p-tool-claude-code").focus();
+    fireEvent.keyDown(screen.getByTestId("p-tool-claude-code"), { key: "Tab" });
+    expect(document.activeElement).toBe(screen.getByTestId("conf-a"));
+    // A Tab the question itself lets through (it has none of its own here)
+    // still leaves the panel, as a Tab always did.
+    fireEvent.keyDown(screen.getByTestId("conf-a"), { key: "Tab" });
+    expect(screen.queryByTestId("p-tool-menu")).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("the page can put the cursor back in the model list", () => {
+    const control: React.MutableRefObject<PickerControl | null> = { current: null };
+    render(<Session asked={[]} control={control} footer={<button type="button" data-testid="conf-a">Cancel</button>} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    screen.getByTestId("conf-a").focus();
+    act(() => control.current!.focusList());
+    expect(document.activeElement).toBe(screen.getByTestId("p-model-search"));
+  });
+
+  it("the page can open it on the tool list, and close it", () => {
+    const control: React.MutableRefObject<PickerControl | null> = { current: null };
+    render(<Session asked={[]} control={control} />);
+    expect(control.current!.isOpen()).toBe(false);
+    act(() => control.current!.openTools());
+    expect(screen.getByTestId("p-tools")).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByTestId("p-tool-claude-code"));
+    expect(control.current!.isOpen()).toBe(true);
+    act(() => control.current!.close());
+    expect(screen.queryByTestId("p-tool-menu")).toBeNull();
+    expect(control.current!.isOpen()).toBe(false);
+    expect(document.activeElement).toBe(screen.getByTestId("p-tool"));
+    // Opened by its chip, the cursor is in the search box as always.
+    fireEvent.click(screen.getByTestId("p-tool"));
+    expect(document.activeElement).toBe(screen.getByTestId("p-model-search"));
   });
 });

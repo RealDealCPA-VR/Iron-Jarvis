@@ -58,6 +58,7 @@ import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harne
 import { ModeChip } from "@/components/buildCode/ModeChip";
 import { ModelPicker } from "@/components/buildCode/ModelPicker";
 import { useFolderDefaults } from "@/components/folders/FolderDefaultsPanel";
+import { toolStartWants } from "@/lib/buildAppSwitch";
 import {
   SAVE_DEFAULTS_LABEL,
   folderBaseName,
@@ -451,11 +452,13 @@ export function StartComposer({
     }
     // v1.475.0: the folder's own choice for this tool, else what this tool
     // last started with on this PC, else the tool's own default.
-    const last = d ? null : lastPick(tool);
-    const m2 = d ? (d.model && tool.models.some((x) => x.id === d.model) ? d.model : "") : last!.model;
+    // v1.545.0: the ONE rule (lib/buildAppSwitch `toolStartWants`), shared
+    // with a session's switch to another tool.
+    const wants = toolStartWants(tool, toolDefaults, lastPick(tool));
+    const m2 = wants.model;
     if (!touched.current.model) setModel(m2);
     if (!touched.current.effort) {
-      const want = d ? (d.effort ?? "") : last!.effort;
+      const want = wants.effort;
       setEffort(want && effortsFor(tool, touched.current.model ? model : m2).includes(want) ? want : "");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

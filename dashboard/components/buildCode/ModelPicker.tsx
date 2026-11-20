@@ -11,8 +11,14 @@
  *
  * - A tool that cannot start stays in the list, greyed, with the reason and
  *   (`toolExtra`) the app's one Sign in press under it.
- * - In a running session the tool is fixed (`lockTool`): the panel shows only
- *   that tool's models and levels.
+ * - In a session the tool is fixed (`lockTool`): the panel shows only that
+ *   tool's models and levels.
+ * - v1.545.0: a session that can go on with ANOTHER coding tool shows the
+ *   tool list too (`toolAsks`). There a press on another tool, on one of its
+ *   models or on one of its levels CHANGES NOTHING: it is a question to the
+ *   page (`onChange`), which says what it is asking about (`draft`: that
+ *   tool's rows show it as chosen) and draws its one confirmation under the
+ *   lists (`footer`). Closing the panel tells the page (`onClose`).
  * - Only the levels the MODEL takes are drawn (`effortsFor`); a "Default" row
  *   first sends nothing.
  * - A model the tool no longer lists stays named, marked "not in the list"
@@ -29,7 +35,18 @@
  * `data-effort` (what is chosen).
  */
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MutableRefObject,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Code2, Search } from "lucide-react";
 import { effortsFor, modelGroups, toolUnavailable, type CodingTool } from "@/lib/buildApp";
@@ -50,7 +67,25 @@ export interface PickerChoice {
 
 export type PickerField = "tool" | "model" | "effort";
 
+/** v1.545.0: what the page may ask of the panel. */
+export interface PickerControl {
+  /** Open the panel with the cursor in its tool list (already open: move
+   *  the cursor there). */
+  openTools: () => void;
+  /** Close it; the cursor goes back to the chip. */
+  close: () => void;
+  /** Is the panel open now? */
+  isOpen: () => boolean;
+  /** Put the cursor in the model list's search box (from the page's
+   *  confirmation, back to the lists). */
+  focusList: () => void;
+}
+
 export const PICKER_SHORTCUT_WORDS = "Ctrl+Shift+M";
+/** The panel's own line about its keys. */
+export const PICKER_HINT = `${PICKER_SHORTCUT_WORDS} opens this · arrows move · Enter picks · Esc or Tab closes`;
+/** …while the page's question is under the lists (v1.545.0): Tab goes to it. */
+export const PICKER_HINT_WITH_QUESTION = `${PICKER_SHORTCUT_WORDS} opens this · arrows move · Enter picks · Tab goes to the question below · Esc closes`;
 
 /** An effort level as a word ("high" → "High"). */
 export function effortWord(effort: string): string {
@@ -187,6 +222,11 @@ export function ModelPicker({
   title,
   invalid,
   emptyLabel,
+  toolAsks = false,
+  draft = null,
+  footer,
+  onClose,
+  control,
 }: {
   tools: readonly CodingTool[] | null;
   value: PickerChoice;
@@ -222,6 +262,18 @@ export function ModelPicker({
   invalid?: boolean;
   /** The chip's words while no tool is chosen (still looking, none ready). */
   emptyLabel?: string;
+  /** v1.545.0: a session that can switch its coding tool. Another tool's
+   *  row, model or level is asked of the page, never set here. */
+  toolAsks?: boolean;
+  /** v1.545.0: what the page is asking about (another tool, with the model
+   *  and effort that would go with it); its rows show as chosen. */
+  draft?: PickerChoice | null;
+  /** v1.545.0: the page's confirmation, drawn under the lists. */
+  footer?: ReactNode;
+  /** v1.545.0: the panel closed (Esc, Tab, a press outside, the chip). */
+  onClose?: () => void;
+  /** v1.545.0: lets the page open the panel on its tool list, or close it. */
+  control?: MutableRefObject<PickerControl | null>;
 }) {
   const [open, setOpen] = useState(false);
   const [browse, setBrowse] = useState(value.tool);
@@ -232,6 +284,7 @@ export function ModelPicker({
   const searchRef = useRef<HTMLInputElement | null>(null);
   const effortRef = useRef<HTMLDivElement | null>(null);
   const railRef = useRef<HTMLDivElement | null>(null);
+  const footerRef = useRef<HTMLDivElement | null>(null);
   const id = useId();
   const [place, setPlace] = useState<ModelMenuPlacement | null>(null);
 
@@ -239,6 +292,12 @@ export function ModelPicker({
   const shownId = lockTool ? value.tool : browse || value.tool;
   const shown = useMemo(() => tools?.find((t) => t.id === shownId) ?? null, [tools, shownId]);
   const isCurrent = !!shown && shown.id === value.tool;
+  // v1.545.0: another tool is shown in a session that can switch to it: its
+  // rows are offers (a press asks the page), drawn by that tool's own rules.
+  const asking = toolAsks && !lockTool && !!shown && !isCurrent;
+  // …and it is the one the page is asking about: its draft shows as chosen.
+  const drafting = asking && !!draft && draft.tool === shown.id;
+  const picked = isCurrent || drafting;
   // v1.475.0 review: a model picked here but not yet applied by the page (a
   // session's change goes to the daemon first). Its rows show and its levels
   // wait until it is the chosen model; then they can be picked.
@@ -248,22 +307,28 @@ export function ModelPicker({
   }, [value.model, value.tool]);
   const waitingForModel = pending !== null && pending !== value.model;
   // The model as the list knows it (Claude Code's short name → its row).
-  const current = aliasTarget(tool, waitingForModel ? pending : value.model) ?? (waitingForModel ? pending : value.model);
+  const chosenModel = drafting ? draft.model : waitingForModel ? pending : value.model;
+  const current = aliasTarget(drafting ? shown : tool, chosenModel) ?? chosenModel;
+  const chosenEffort = drafting ? draft.effort : value.effort;
 
   const allRows = useMemo(
     () =>
       modelRows(shown, {
-        defaultRow: defaultModelRow,
-        defaultLabel: shown ? (defaultModelLabel ? defaultModelLabel(shown) : modelName(shown, "")) : "",
-        kept: isCurrent ? current : undefined,
-        keptLabel: keptModelLabel,
+        // (The page's rules for the default row are about the SESSION's tool.)
+        defaultRow: asking ? true : defaultModelRow,
+        defaultLabel: shown ? (defaultModelLabel && !asking ? defaultModelLabel(shown) : modelName(shown, "")) : "",
+        kept: picked ? current : undefined,
+        keptLabel: asking ? undefined : keptModelLabel,
       }),
-    [shown, defaultModelRow, defaultModelLabel, isCurrent, current, keptModelLabel],
+    [shown, defaultModelRow, defaultModelLabel, asking, picked, current, keptModelLabel],
   );
   const rows = useMemo(() => allRows.filter((m) => matchesModel(m, query)), [allRows, query]);
   const levels = useMemo(
-    () => (isCurrent ? effortRows(shown, current, { defaultRow: defaultEffortRow, kept: value.effort || undefined }) : []),
-    [isCurrent, shown, current, value.effort, defaultEffortRow],
+    () =>
+      picked
+        ? effortRows(shown, current, { defaultRow: drafting ? true : defaultEffortRow, kept: chosenEffort || undefined })
+        : [],
+    [picked, drafting, shown, current, chosenEffort, defaultEffortRow],
   );
 
   const openPanel = useCallback(() => {
@@ -279,20 +344,72 @@ export function ModelPicker({
     if (focusChip) chipRef.current?.focus({ preventScroll: true });
   }, []);
 
+  // v1.545.0: the page hears every closing (its question goes with the panel).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !open) onCloseRef.current?.();
+    wasOpen.current = open;
+  }, [open]);
+
   // The highlighted model: the chosen one when it is in view, else the first.
   useEffect(() => {
     if (!open) return;
-    const i = rows.findIndex((r) => isCurrent && r.id === current);
+    const i = rows.findIndex((r) => picked && r.id === current);
     setActive(i >= 0 ? i : 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, shownId, query]);
+
+  /** The cursor in the tool list: the chosen tool's row, else the first that
+   *  can be pressed. */
+  const focusRail = useCallback(() => {
+    const rail = railRef.current;
+    const row =
+      rail?.querySelector<HTMLButtonElement>("button[aria-checked='true']:not([disabled])") ??
+      rail?.querySelector<HTMLButtonElement>("button:not([disabled])");
+    row?.focus({ preventScroll: true });
+    return !!row;
+  }, []);
+  /** v1.545.0: the next opening puts the cursor in the tool list. */
+  const wantRail = useRef(false);
 
   // The search box takes the cursor once the panel is placed (it is hidden
   // for its one measuring pass, and a hidden box cannot take focus).
   const placed = place !== null;
   useEffect(() => {
-    if (open && placed) searchRef.current?.focus({ preventScroll: true });
-  }, [open, placed]);
+    if (!open || !placed) return;
+    const rail = wantRail.current;
+    wantRail.current = false;
+    if (rail && focusRail()) return;
+    searchRef.current?.focus({ preventScroll: true });
+  }, [open, placed, focusRail]);
+
+  // v1.545.0: the page's handle (the limit card's "Continue on another tool"
+  // opens the tool list; a switch that went through closes the panel).
+  const openNow = useRef(open);
+  openNow.current = open;
+  useEffect(() => {
+    if (!control) return;
+    control.current = {
+      openTools: () => {
+        if (openNow.current) {
+          focusRail();
+          return;
+        }
+        wantRail.current = true;
+        openPanel();
+      },
+      close: () => {
+        if (openNow.current) close();
+      },
+      isOpen: () => openNow.current,
+      focusList: () => searchRef.current?.focus({ preventScroll: true }),
+    };
+    return () => {
+      control.current = null;
+    };
+  }, [control, openPanel, close, focusRail]);
 
   useEffect(() => {
     if (!open) return;
@@ -331,7 +448,9 @@ export function ModelPicker({
       window.removeEventListener("resize", placeIt);
       window.removeEventListener("scroll", placeIt, true);
     };
-  }, [open]);
+    // (Placed again when the page's confirmation comes or goes: it changes
+    // the panel's height.)
+  }, [open, !!footer]);
 
   useEffect(() => {
     if (!shortcut || disabled || !tools?.length) return;
@@ -346,13 +465,22 @@ export function ModelPicker({
   }, [shortcut, disabled, tools, open, openPanel, close]);
 
   function defaultHeld(r: ModelRow): boolean {
-    return r.id === "" && !!defaultModelHeld && value.model !== "";
+    return !asking && r.id === "" && !!defaultModelHeld && value.model !== "";
   }
 
   function pickModel(m: string) {
+    if (asking && shown) {
+      // v1.545.0: a model of ANOTHER tool in a session: asked of the page
+      // (the tool first, then the model), never set here. The panel stays:
+      // the page's confirmation is drawn in it.
+      onChange("tool", shown.id);
+      onChange("model", m);
+      return;
+    }
     if (shown && shown.id !== value.tool) onChange("tool", shown.id);
     if (m !== current || !isCurrent) {
-      if (lockTool && m !== value.model) setPending(m);
+      // (A session's picker, with or without its tool list: v1.545.0.)
+      if ((lockTool || toolAsks) && m !== value.model) setPending(m);
       onChange("model", m);
     }
     const next = shown ? effortRows(shown, m, { defaultRow: defaultEffortRow }) : [];
@@ -367,6 +495,18 @@ export function ModelPicker({
     if (toolUnavailable(t)) return;
     setBrowse(t.id);
     setQuery("");
+    if (toolAsks && !lockTool) {
+      // v1.545.0: another tool is a question to the page; the session's own
+      // tool takes an open question back. The cursor is left alone when a
+      // question goes out (the page's confirmation takes it).
+      if (t.id !== value.tool) {
+        onChange("tool", t.id);
+        return;
+      }
+      if (draft) onChange("tool", t.id);
+      requestAnimationFrame(() => searchRef.current?.focus({ preventScroll: true }));
+      return;
+    }
     if (t.id !== value.tool) onChange("tool", t.id);
     if (closeAfterTool?.(t)) {
       setOpen(false);
@@ -467,9 +607,16 @@ export function ModelPicker({
               e.stopPropagation();
               close();
             } else if (e.key === "Tab") {
+              e.preventDefault();
+              // v1.545.0: with the page's question under the lists, Tab goes
+              // to it (closing would drop the question unanswered).
+              const foot = footerRef.current;
+              if (foot && !foot.contains(e.target as Node)) {
+                (foot.querySelector<HTMLElement>("button:not([disabled])") ?? foot.querySelector<HTMLElement>("[tabindex]"))?.focus();
+                return;
+              }
               // The panel lives at the end of the page: Tab leaves it and
               // goes back to the chip (arrows move inside it).
-              e.preventDefault();
               close();
             }
           }}
@@ -548,7 +695,7 @@ export function ModelPicker({
                   </p>
                 ) : null}
                 {rows.map((r, i) => {
-                  const chosen = isCurrent && r.id === current;
+                  const chosen = picked && r.id === current;
                   const held = defaultHeld(r);
                   const groupHead = r.group && (i === 0 || rows[i - 1].group !== r.group);
                   return (
@@ -589,36 +736,55 @@ export function ModelPicker({
               <p className="px-2.5 pb-0.5 pt-1.5 text-[11px] text-zinc-500">Effort</p>
               {levels.length === 0 ? (
                 <p data-testid={`${testId}-no-efforts`} className="px-2.5 py-1 text-[12px] text-zinc-500">
-                  {isCurrent ? "This model has no effort levels." : "Pick a model first."}
+                  {picked ? "This model has no effort levels." : "Pick a model first."}
                 </p>
               ) : (
                 levels.map((x) => {
-                  const held = waitingForModel || !!effortHeld || (x === "" && !!defaultEffortHeld && value.effort !== "");
+                  // (What holds a level is about the SESSION's tool; another
+                  // tool's levels are offers.)
+                  const held =
+                    !drafting && (waitingForModel || !!effortHeld || (x === "" && !!defaultEffortHeld && value.effort !== ""));
                   return (
                     <button
                       key={x || "default"}
                       type="button"
                       role="radio"
-                      aria-checked={value.effort === x}
+                      aria-checked={chosenEffort === x}
                       data-testid={`${testId}-effort-${x || "default"}`}
                       disabled={held}
-                      title={waitingForModel ? "Changing the model…" : effortHeld || (held ? defaultEffortHeld : undefined)}
+                      title={
+                        drafting ? undefined : waitingForModel ? "Changing the model…" : effortHeld || (held ? defaultEffortHeld : undefined)
+                      }
                       onClick={() => {
+                        if (drafting) {
+                          // v1.545.0: asked of the page; the panel stays.
+                          if (x !== chosenEffort) onChange("effort", x);
+                          return;
+                        }
                         if (x !== value.effort) onChange("effort", x);
                         close();
                       }}
-                      className={`${ROW} ${value.effort === x ? "text-zinc-100" : "text-zinc-300"}`}
+                      className={`${ROW} ${chosenEffort === x ? "text-zinc-100" : "text-zinc-300"}`}
                     >
-                      <span className="mt-0.5 w-3.5 shrink-0">{value.effort === x ? <Check size={13} aria-hidden="true" /> : null}</span>
-                      <span>{x ? effortWord(x) : defaultEffortLabel}</span>
+                      <span className="mt-0.5 w-3.5 shrink-0">{chosenEffort === x ? <Check size={13} aria-hidden="true" /> : null}</span>
+                      <span>{x ? effortWord(x) : drafting ? "Default effort" : defaultEffortLabel}</span>
                     </button>
                   );
                 })
               )}
             </div>
           </div>
-          <p className="px-2.5 pb-1 pt-1.5 text-[11px] text-zinc-600">
-            {PICKER_SHORTCUT_WORDS} opens this · arrows move · Enter picks · Esc or Tab closes
+          {footer ? (
+            <div
+              ref={footerRef}
+              data-testid={`${testId}-footer`}
+              className="mx-1 mt-1 min-w-0 border-t border-white/[0.06] px-1.5 pb-1 pt-2"
+            >
+              {footer}
+            </div>
+          ) : null}
+          <p data-testid={`${testId}-hint`} className="px-2.5 pb-1 pt-1.5 text-[11px] text-zinc-600">
+            {footer ? PICKER_HINT_WITH_QUESTION : PICKER_HINT}
           </p>
         </div>,
           document.body,

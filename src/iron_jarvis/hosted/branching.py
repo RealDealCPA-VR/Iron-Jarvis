@@ -789,6 +789,12 @@ def _make_row(svc: Any, row: Any, new_hid: str, kept: list[dict[str, Any]], drop
         # Review: the branch's tool file may hold what the original's rewind
         # dropped (a Codex fork copies its rollout): never merged in either.
         note_rewound(svc.home, made.id, when)
+    # v1.545.0 (review): a session that switched tools — the branch stays in
+    # its account group, and a hand-off its (forked) conversation never heard
+    # waits for the branch's first message too.
+    from . import tool_switch as TS
+
+    TS.carry_to_branch(svc.home, row.id, made.id, str(row.harness), str(at or ""))
     return made
 
 
@@ -1134,6 +1140,12 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
         # v1.543.0: the dropped messages' checkpoints go with them.
         turns = {str(e.get("turn") or "") for e in kept if e.get("type") == "user"}
         await asyncio.to_thread(CK.forget_turns, svc.home, row.id, str(row.folder or ""), turns)
+        # v1.545.0: a tool that was parked AFTER this message still remembers
+        # what the rewind took away: its parked conversation is let go. And
+        # when this message carried the tool's own hand-off, that waits again.
+        from . import tool_switch as TS
+
+        await asyncio.to_thread(TS.after_rewind, svc.home, row.id, str(row.harness), str(to or ""))
     except Exception as exc:
         if restored is None:
             raise

@@ -139,7 +139,8 @@ def build_summary(row: Any, events: list[dict[str, Any]], *, dropped: int = 0, e
     out.append(f"- **Folder:** {_code(folder) if folder else 'none (no folder was ever made)'}")
     if project:
         out.append(f"- **Project:** {project}")
-    out.append(f"- **Tool:** {tool}" + (f", model {_code(str(row.model))}" if getattr(row, "model", "") else ""))
+    out.append(f"- **Tool:** {tool}" + (f", model {_code(str(row.model))}" if getattr(row, "model", "") else "")
+               + _earlier_tools(own, str(getattr(row, "harness", "") or "")))
     out.append(f"- **Account:** {_account_words(row)}")
     out.append(f"- **Session:** started {_when(_created(row))}, archived {_when(now or utcnow())}")
     out.append("")
@@ -206,6 +207,23 @@ def build_summary(row: Any, events: list[dict[str, Any]], *, dropped: int = 0, e
 # --------------------------------------------------------------------------- #
 # the pieces
 # --------------------------------------------------------------------------- #
+
+
+def _earlier_tools(events: list[dict[str, Any]], current: str) -> str:
+    """v1.545.0: " (earlier in this session: Claude Code)" for a session that
+    switched coding tools, from its own switch lines; "" otherwise."""
+    from . import words as W
+
+    names: list[str] = []
+    for ev in events:
+        sw = ev.get("switch") if ev.get("type") == "notice" else None
+        if not isinstance(sw, dict):
+            continue
+        for key in ("from", "to"):
+            tool = str(sw.get(key) or "")
+            if tool and tool != current and W.label(tool) not in names:
+                names.append(W.label(tool))
+    return f" (earlier in this session: {', '.join(names)})" if names else ""
 
 
 def _before_lines(git: dict[str, Any]) -> list[str]:

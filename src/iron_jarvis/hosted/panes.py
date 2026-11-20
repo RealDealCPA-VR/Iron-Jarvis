@@ -1364,6 +1364,18 @@ def _usage_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in events if e.get("type") == "usage"]
 
 
+def since_switch(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """v1.545.0: the events after the session's last switch to another coding
+    tool (all of them when it never switched). What a tool REPORTED about
+    itself (its usage windows, its context, its MCP servers) is read from
+    these only: Claude Code's 5-hour window is not Pi's."""
+    for i in range(len(events) - 1, -1, -1):
+        ev = events[i]
+        if ev.get("type") == "notice" and isinstance(ev.get("switch"), dict):
+            return events[i + 1:]
+    return events
+
+
 def totals(events: list[dict[str, Any]]) -> dict[str, Any]:
     """The session's totals over its ``usage`` events (each one reply)."""
     rows = _usage_events(events)
@@ -1389,7 +1401,7 @@ def totals(events: list[dict[str, Any]]) -> dict[str, Any]:
 def seen_windows(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The windows the TOOL last reported (newest ``usage`` event that had
     them), with when."""
-    for e in reversed(_usage_events(events)):
+    for e in reversed(_usage_events(since_switch(events))):
         w = e.get("windows")
         if isinstance(w, list) and w:
             clean = []
@@ -1431,7 +1443,7 @@ def _when(raw: Any) -> datetime | None:
 
 
 def seen_context(events: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for e in reversed(_usage_events(events)):
+    for e in reversed(_usage_events(since_switch(events))):
         c = e.get("context")
         if isinstance(c, dict):
             used, window = c.get("used"), c.get("window")
@@ -1717,6 +1729,6 @@ def _tool_setup_view(row: Any, events: list[dict[str, Any]], running: bool) -> d
     from . import tool_setup
 
     try:
-        return tool_setup.view(str(getattr(row, "harness", "") or ""), events, running)
+        return tool_setup.view(str(getattr(row, "harness", "") or ""), since_switch(events), running)
     except Exception:  # noqa: BLE001 — a reading never breaks the tab
         return {"known": False, "servers": [], "note": ""}

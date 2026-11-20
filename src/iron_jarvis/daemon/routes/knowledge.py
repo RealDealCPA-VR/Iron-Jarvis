@@ -27,6 +27,16 @@ from ...core.fs_policy import fs_read_ok, is_protected_path
 _LTM_PROBE_BUDGET = 6.0
 
 
+def _monotonic() -> float:
+    """The clock the probe budget reads (a seam: a test moves the time
+    itself. On a slow machine the reads before a probe took over half of a
+    one-second budget, and a test of "what is left" then failed on real
+    time)."""
+    import time
+
+    return time.monotonic()
+
+
 def _unprobed(conn: Any, reason: str) -> dict[str, Any]:
     """The row for a remote base this listing deliberately did NOT check.
 
@@ -53,8 +63,6 @@ def _base_health(conn: Any, kind: str, *, probe: bool, refresh: bool, deadline: 
     the error's name). Wave C (item 28): also what :func:`read_back` asks
     right after an add, so the Memory page and chat's ``memory_base_add``
     say the same thing about a new base."""
-    import time as _time
-
     health = getattr(conn, "health", None)
     info: dict[str, Any] = {}
     if not callable(health):
@@ -69,7 +77,7 @@ def _base_health(conn: Any, kind: str, *, probe: bool, refresh: bool, deadline: 
                 if callable(invalidate):
                     invalidate()
             verdict = cached()
-            left = deadline - _time.monotonic()
+            left = deadline - _monotonic()
             if verdict is not None:
                 info.update(verdict)
             elif not (probe or refresh):
@@ -126,8 +134,6 @@ def read_back(d: Any, name: str, *, budget: float | None = None) -> dict[str, An
     own :func:`_base_health` (a probe, with the listing's budget), so "added
     and answering" is never claimed by the add alone. A base the live set
     does not hold answers ``False``. BLOCKING, never raises."""
-    import time as _time
-
     from ...ltm.sources import CustomSourceStore
 
     try:
@@ -142,7 +148,7 @@ def read_back(d: Any, name: str, *, budget: float | None = None) -> dict[str, An
         kind = str(getattr(rec, "kind", "") or name)
     except Exception:  # noqa: BLE001
         kind = name
-    deadline = _time.monotonic() + (float(budget) if budget is not None else _LTM_PROBE_BUDGET)
+    deadline = _monotonic() + (float(budget) if budget is not None else _LTM_PROBE_BUDGET)
     info = _base_health(conn, kind, probe=True, refresh=True, deadline=deadline)
     answering = info.get("available")
     detail = str(info.get("detail") or "")
@@ -524,11 +530,9 @@ def register(app: FastAPI, d) -> None:
         This handler is ``def``, not ``async def``, so FastAPI runs it in the
         threadpool: no probe ever touches the event loop.
         """
-        import time as _time
-
         from ...ltm.sources import CustomSourceStore
 
-        deadline = _time.monotonic() + _LTM_PROBE_BUDGET
+        deadline = _monotonic() + _LTM_PROBE_BUDGET
         bases: list[dict[str, Any]] = []
         # v1.408.0: a custom base's KIND is its record's kind — the connector's
         # ``name`` is the base's own name (``conn.name = rec.name``), so the

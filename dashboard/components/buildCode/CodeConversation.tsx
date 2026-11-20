@@ -46,6 +46,13 @@ import { SentComments } from "@/components/harness/CommentChips";
 import { REPLY_ACTION_BTN } from "@/components/chat/replyActions";
 import { ConfirmButton } from "@/components/ui";
 import { MENU_BUTTON_HOVER_FADE, useMenuClose } from "@/components/buildCode/useMenuClose";
+import { HandoffRow } from "@/components/buildCode/ToolSwitch";
+import {
+  CONTINUE_ON_ANOTHER_TOOL,
+  CONTINUE_ON_ANOTHER_TOOL_TITLE,
+  rowToolOf,
+  severalToolsWrote,
+} from "@/lib/buildAppSwitch";
 import {
   BRANCH_FROM_HERE,
   BRANCH_FROM_HERE_TITLE,
@@ -532,15 +539,23 @@ interface FailurePresses {
   wait?: WaitFacts | null;
   onCancelWait?: () => void;
   limitNote?: string;
+  /** v1.545.0: open the session's list of coding tools (absent = this
+   *  session cannot switch its tool: no press). It switches nothing itself. */
+  onAnotherTool?: () => void;
 }
 
 /** v1.417.0 (C4.9): who answered, for the receipt (the session row's own
- *  model and account name when a turn's events named no model). */
+ *  model and account name when a turn's events named no model).
+ *  v1.545.0: the facts of the TOOL that wrote the turn. For a turn another
+ *  tool wrote, the session's model and account are not its own: left out. */
 interface ReceiptFacts {
   model: string;
   account: string;
   /** v1.455.0 (Wave F, item 18): where it ran ("cloud"), "" = not known. */
   where?: string;
+  /** v1.545.0: the tool's name, said on the line only in a conversation more
+   *  than one coding tool wrote ("" = not said). */
+  toolName?: string;
 }
 
 /** v1.472.0: a reply still being written. Everything before its last blank
@@ -660,10 +675,13 @@ const Item = memo(function Item({
       );
     case "notice":
       return (
-        <p data-testid="code-notice" className="text-[12px] text-zinc-500">
+        <p data-testid="code-notice" data-switch={item.switch ? "true" : undefined} className="text-[12px] text-zinc-500">
           {item.text}
         </p>
       );
+    case "handoff":
+      // v1.545.0: the summary the tool was given with this message (folded).
+      return <HandoffRow toLabel={toolLabel(item.to)} resumes={item.resumes} text={item.text} note={item.note} />;
     case "error":
       return (
         <div data-testid="code-error" data-fix-kind={item.fixKind} role="alert" className="text-[13px]" title={item.technical || undefined}>
@@ -701,6 +719,19 @@ const Item = memo(function Item({
               className="mt-1 inline-flex h-7 items-center rounded-lg px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
             >
               {CONTINUE_ON_ANOTHER}
+            </button>
+          ) : null}
+          {press && item.fixKind === "account_limit" && press.onAnotherTool ? (
+            // v1.545.0: the same conversation on another coding tool — the
+            // press opens the session's tool list; the switch is confirmed there.
+            <button
+              type="button"
+              data-testid="code-continue-other-tool"
+              onClick={press.onAnotherTool}
+              title={CONTINUE_ON_ANOTHER_TOOL_TITLE}
+              className="mt-1 inline-flex h-7 items-center rounded-lg px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+            >
+              {CONTINUE_ON_ANOTHER_TOOL}
             </button>
           ) : null}
           {press && item.fixKind === "account_limit" && press.onTryAccount && press.tryChoices?.length
@@ -787,7 +818,11 @@ const Item = memo(function Item({
       if (!r) return said;
       // v1.417.0 (C4.9): the reply line, folded like Chat › Code's receipt:
       // who answered, how long, what it did; the usage line inside.
-      const line = receiptLine({ ...r, model: friendlyModelName(r.model || facts?.model || "") }, facts?.account ?? "");
+      const line = receiptLine(
+        { ...r, model: friendlyModelName(r.model || facts?.model || "") },
+        facts?.account ?? "",
+        facts?.toolName ?? "",
+      );
       // v1.449.0 (plan 0h.5 item 10): the collapsed line LEADS with the
       // outcome's glyph in its tone — a ✓ for a reply that ran to its end
       // with no failed step, a ⚠ for one stopped, failed, cut off or with a
@@ -797,7 +832,12 @@ const Item = memo(function Item({
         <div className="grid gap-1">
           {said}
           {line || r.usage ? (
-            <details data-testid="code-receipt" data-outcome={outcome} className="text-[11px] text-zinc-600">
+            <details
+              data-testid="code-receipt"
+              data-outcome={outcome}
+              data-tool={r.tool || undefined}
+              className="text-[11px] text-zinc-600"
+            >
               <summary className="flex cursor-pointer select-none items-center gap-1.5 hover:text-zinc-400">
                 {outcome === "warn" ? (
                   <TriangleAlert size={12} aria-hidden data-testid="code-receipt-warn" className="shrink-0 text-tone-warn" />
@@ -849,6 +889,8 @@ export const CodeConversation = memo(function CodeConversation({
   account = "",
   onExpand,
   messageActions,
+  onAnotherTool,
+  severalTools = false,
 }: {
   items: readonly ConvItem[];
   /** v1.473.0: the first row drawn (earlier rows wait behind "Show
@@ -880,8 +922,38 @@ export const CodeConversation = memo(function CodeConversation({
   onExpand?: ExpandStep;
   /** v1.441.0: Branch from here / Rewind to here (absent = none offered). */
   messageActions?: MessageActions | null;
+  /** v1.545.0: the limit card's "Continue on another tool" (absent = this
+   *  session cannot switch its coding tool). */
+  onAnotherTool?: () => void;
+  /** v1.545.0: this session has EVER switched its coding tool (the view's
+   *  `switched_tools`): each reply names its tool even when the switch line
+   *  itself is behind "Load earlier". */
+  severalTools?: boolean;
 }) {
-  const facts = useMemo(() => ({ model, account, where: codeReceiptWhere(tool) }), [model, account, tool]);
+  // v1.545.0: a session can switch its coding tool, so each row is named for
+  // the tool that wrote ITS turn (the fold reads it off the record;
+  // "" = the session's). Only a conversation more than one tool wrote names
+  // the tool on each reply's line.
+  const several = useMemo(() => severalTools || severalToolsWrote(items, tool), [severalTools, items, tool]);
+  const factsFor = useMemo(() => {
+    const made = new Map<string, ReceiptFacts>();
+    return (rowTool: string): ReceiptFacts => {
+      const id = rowTool || tool;
+      let f = made.get(id);
+      if (!f) {
+        // (The session's model and account are its CURRENT tool's.)
+        const own = id === tool;
+        f = {
+          model: own ? model : "",
+          account: own ? account : "",
+          where: codeReceiptWhere(id),
+          toolName: several ? toolLabel(id) : "",
+        };
+        made.set(id, f);
+      }
+      return f;
+    };
+  }, [model, account, tool, several]);
   const ends = useMemo(() => replyEndKeys(items), [items]);
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -892,11 +964,30 @@ export const CodeConversation = memo(function CodeConversation({
     if (it.kind === "error") lastError = i;
   });
   // A failure is worth a press only while it is the newest thing said.
-  const newest = lastError >= 0 && !items.slice(lastError + 1).some((it) => it.kind === "user" || it.kind === "text");
+  // v1.545.0: a switch to another coding tool after it ends its presses too
+  // (they act on the tool that failed, and the session is no longer on it).
+  // The presses act on the session's tool NOW: they are offered only when the
+  // turn that failed was that tool's (its message's own tool; one the record
+  // does not name is the session's).
+  let failedTool = "";
+  for (let i = lastError; i >= 0; i -= 1) {
+    const it = items[i];
+    if (it.kind === "user") {
+      failedTool = rowToolOf(it);
+      break;
+    }
+  }
+  const newest =
+    lastError >= 0 &&
+    (!failedTool || failedTool === tool) &&
+    !items
+      .slice(lastError + 1)
+      .some((it) => it.kind === "user" || it.kind === "text" || (it.kind === "notice" && !!it.switch));
   return (
     <div data-testid="code-conversation" className="grid gap-3">
       {items.slice(start).map((item, j) => {
         const i = start + j;
+        const rowTool = rowToolOf(item);
         return (
         <Item
           key={item.key}
@@ -905,11 +996,11 @@ export const CodeConversation = memo(function CodeConversation({
           press={
             newest && i === lastError
               ? { tool, onContinueOn, continuing, tryChoices, onTryAccount, onRetry, cut, onContinueCut,
-                  continuingCut, wait, onCancelWait, limitNote }
+                  continuingCut, wait, onCancelWait, limitNote, onAnotherTool }
               : null
           }
-          toolName={toolLabel(tool)}
-          facts={facts}
+          toolName={toolLabel(rowTool || tool)}
+          facts={factsFor(rowTool)}
           onExpand={onExpand}
           copy={ends.has(item.key) ? copyFor : undefined}
           actions={

@@ -5,6 +5,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "pi",
     "turn": "turn-1"
    },
    {
@@ -84,6 +85,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "pi",
     "turn": "turn-1"
    },
    {
@@ -176,6 +178,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "pi",
     "turn": "turn-1"
    },
    {
@@ -275,6 +278,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "pi",
     "turn": "turn-1"
    },
    {
@@ -375,6 +379,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "pi",
     "turn": "turn-1"
    },
    {
@@ -425,6 +430,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "pi",
     "turn": "turn-1"
    },
    {
@@ -481,6 +487,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "pi",
     "turn": "turn-1"
    },
    {
@@ -514,6 +521,7 @@
    {
     "type": "user",
     "text": "do it",
+    "tool": "pi",
     "turn": "turn-1"
    },
    {

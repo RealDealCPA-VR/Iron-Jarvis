@@ -84,7 +84,7 @@ import { streamSSE } from "@/lib/useChatStream";
 import { mintTurnId } from "@/lib/turnRejoin";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { matchProjectEntries, useProjectFilesState, type ProjectEntry } from "@/lib/atMenuFiles";
-import { StartComposer } from "@/components/buildCode/StartComposer";
+import { StartComposer, lastPick } from "@/components/buildCode/StartComposer";
 import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
 import { scrollToLatest } from "@/lib/transcriptRepin";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
@@ -262,7 +262,29 @@ export const CODE_WAIT_REREAD_MS = 15_000;
 // v1.412.0: the mode chip lives in its own file (the start composer uses it
 // too); its two-press timings are re-exported here, where tests read them.
 export { FULL_ARM_GUARD_MS, FULL_DISARM_MS, ModeChip } from "@/components/buildCode/ModeChip";
-import { ModelPicker } from "@/components/buildCode/ModelPicker";
+import { ModelPicker, type PickerControl, type PickerField } from "@/components/buildCode/ModelPicker";
+import { HandoffWaiting, SwitchConfirm } from "@/components/buildCode/ToolSwitch";
+import {
+  SWITCH_ANSWER_LOST,
+  SWITCH_ANSWER_UNREAD,
+  SWITCH_CHANGED,
+  SWITCH_FAILED,
+  SWITCH_PLAN_UNREAD,
+  decodeHandoffPending,
+  decodeSwitchAnswer,
+  isChangedRefusal,
+  isSwitchRefusal,
+  pendingFromPlan,
+  sameHandoffPending,
+  sameSwitchChoice,
+  switchPreference,
+  switchTool,
+  type HandoffPending,
+  type SwitchAnswer,
+  type SwitchChoice,
+  type SwitchPlan,
+  type SwitchPreference,
+} from "@/lib/buildAppSwitch";
 import { ModeChip } from "@/components/buildCode/ModeChip";
 import { decodeCarry, type CarryFacts } from "@/lib/buildCodeCarry";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
@@ -270,7 +292,7 @@ import { JarvisToolsChip, ProfileShareOffer } from "@/components/buildCode/Jarvi
 import { HelperLines } from "@/components/buildCode/HelperLines";
 // v1.426.0 (Wave 6 lane B, E5): a folder's defaults for new sessions.
 import { FolderDefaultsButton, FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
-import { toolDefaultsWords, type ToolDefaults } from "@/lib/folderDefaults";
+import { readFolderDefaults, toolDefaultsWords, type ToolDefaults } from "@/lib/folderDefaults";
 import {
   BUILD_CODE_PANE_WIDTH_KEY,
   PANE_WIDTH_CLASS,
@@ -339,6 +361,30 @@ function errorWords(e: unknown, fallback: string): string {
 // ── one session ─────────────────────────────────────────────────────────────
 
 type MenuRow = { kind: "command"; cmd: ToolCommand } | { kind: "file"; entry: ProjectEntry };
+
+/** v1.545.0: the account chip's title in a session that has switched its
+ *  coding tool (the account may no longer be the one it was made with). */
+export const ACCOUNT_NOW_TITLE = "The account this session runs on now";
+
+/** v1.545.0: a switch to another coding tool being asked about: the session
+ *  it is for, what was picked, the daemon's plan (null while it is read) and
+ *  whether the second press is out. */
+interface SwitchAsk {
+  sid: string;
+  choice: SwitchChoice;
+  /** What the user would start a new session of that tool with here (null
+   *  while the folder's defaults are read). The SAME values ride both
+   *  presses; they are no part of the choice. */
+  prefer: SwitchPreference | null;
+  plan: SwitchPlan | null;
+  busy: boolean;
+  /** The daemon refused the first press: its own sentence, shown where the
+   *  plan would be ("" = not refused). */
+  refused: string;
+  /** The second press was refused because the switch would now do something
+   *  else: the daemon's sentence, shown above the plan read again ("" = no). */
+  changed: string;
+}
 
 /** v1.439.0: the session row's menu item that saves the conversation. */
 export const EXPORT_MARKDOWN = "Export as Markdown";
@@ -459,6 +505,30 @@ function SessionPane({
   const [takesComments, setTakesComments] = useState(false);
   const takesCommentsRef = useRef(false);
   takesCommentsRef.current = takesComments;
+  /** v1.545.0: this session can go on with another coding tool (the view's
+   *  `switches_tool`). False until it says so: an older Iron Jarvis, or a
+   *  helper session, keeps the tool fixed as before. */
+  const [switchesTool, setSwitchesTool] = useState(false);
+  /** v1.545.0: this session has EVER switched its coding tool (the view's
+   *  `switched_tools`; true at once after a switch made here). The panes and
+   *  each reply's line then say whose work it was, whatever part of the
+   *  conversation this window holds. */
+  const [switchedTools, setSwitchedTools] = useState(false);
+  /** v1.545.0: a summary waits for the tool's next message (the view's
+   *  `handoff_pending`). */
+  const [handoffPending, setHandoffPending] = useState<HandoffPending | null>(null);
+  /** v1.545.0: the switch being asked about — what was picked, the daemon's
+   *  plan once it answered, and whether the second press is out. The ref is
+   *  the truth (two picks can arrive in one tick); the state draws it. */
+  const [switchAsk, setSwitchAskState] = useState<SwitchAsk | null>(null);
+  const switchAskRef = useRef<SwitchAsk | null>(null);
+  const setSwitchAsk = useCallback((next: SwitchAsk | null) => {
+    switchAskRef.current = next;
+    setSwitchAskState(next);
+  }, []);
+  /** Bumped by every ask and every cancel: an answer to an older ask is dropped. */
+  const switchSeqRef = useRef(0);
+  const pickerControl = useRef<PickerControl | null>(null);
   /** The comments waiting above the box (the Changes view adds them under the
    *  same key: lib/codeComments). */
   const commentsKey = buildCodeCommentsKey(sessionId);
@@ -634,6 +704,10 @@ function SessionPane({
       if (gen !== genRef.current) return;
       if (ev.type === "resolved" && answeredRef.current.has(ev.requestId)) return;
       if (ev.type === "steer" && ev.state === "returned") giveNoteBack(ev.id);
+      // v1.545.0: the summary that waited for this tool was just given to it:
+      // nothing waits any more (not even if the read after the reply is slow
+      // or fails).
+      if (ev.type === "handoff" && ev.to === sessionToolRef.current) setHandoffPending(null);
       pendingRef.current.push(ev);
       if (!cancelFrameRef.current) {
         cancelFrameRef.current = nextFrame(() => {
@@ -644,6 +718,26 @@ function SessionPane({
     },
     [flushNow],
   );
+
+  /** v1.545.0: the session's coding tool CHANGED (a switch made here, or one
+   *  a read found: made in another window). Everything this pane holds that
+   *  was the old tool's own is dropped in this ONE place, before the new
+   *  tool's facts are applied: its limit card's wait and note, the reply a
+   *  restart cut off, the messages it could branch or rewind from, its
+   *  "keeps its last model" rule, its `/` commands and their hints, the
+   *  accounts to try, a Pi folder's line. (Called by the code that changes
+   *  the tool, not from an effect on it: an effect runs after a read has
+   *  already applied the NEW tool's facts, and would wipe those.) */
+  const forgetOldTool = useCallback(() => {
+    setCarryFacts({ cut: null, wait: null, limitNote: "" });
+    setBranch(null);
+    setKeepsLast(false);
+    setHints({});
+    setViewCommands(null);
+    setFetchedCommands(null);
+    setTryChoices([]);
+    setPiFolder(null);
+  }, []);
 
   /** Read the session from the daemon; follow its running turn. */
   const load = useCallback(
@@ -670,6 +764,9 @@ function SessionPane({
           return;
         }
         setLoadError(null);
+        // v1.545.0: another tool than the one on screen (switched from
+        // another window): the old tool's own facts go first.
+        if (sessionToolRef.current && view.session.tool !== sessionToolRef.current) forgetOldTool();
         setSession(view.session);
         onChanged(view.session);
         setExtra(view.pending);
@@ -681,6 +778,13 @@ function SessionPane({
         // the next draw to know.)
         takesCommentsRef.current = view.takesComments;
         setTakesComments(view.takesComments);
+        // v1.545.0: may this session switch its coding tool, and does a
+        // summary wait for the next message.
+        setSwitchesTool(view.switchesTool);
+        // (Never taken back by a read: a switch made here is known at once.)
+        if (view.switchedTools) setSwitchedTools(true);
+        const waits = decodeHandoffPending(raw);
+        setHandoffPending((prev) => (sameHandoffPending(prev, waits) ? prev : waits));
         setPiFolder(view.piFolder);
         setHelpers(view.helpers);
         setHandedFrom(view.handedFrom);
@@ -741,7 +845,7 @@ function SessionPane({
     },
     // `follow` is stable (declared below with useCallback and no deps).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionId, onChanged, lost],
+    [sessionId, onChanged, lost, forgetOldTool],
   );
 
   /** Follow one turn's events (a new turn: `body`; a rejoin: none).
@@ -849,6 +953,11 @@ function SessionPane({
     setViewCommands(null);
     setKeepsLast(false);
     setTakesComments(false);
+    setSwitchesTool(false);
+    setSwitchedTools(false);
+    setHandoffPending(null);
+    switchSeqRef.current += 1;
+    setSwitchAsk(null);
     setDropped(0);
     setInfo(null);
     setEarlierEvents([]);
@@ -1530,6 +1639,7 @@ function SessionPane({
 
   /** v1.441.0: Branch from here — a NEW session (the page opens it). */
   const sessionIdNow = session?.id ?? "";
+  const sessionFolder = session?.folder ?? "";
   const sessionSource = session?.source ?? "";
   const branchFrom = useCallback(
     async (at: string) => {
@@ -1693,6 +1803,170 @@ function SessionPane({
   }, [session, continuing, onChanged, tools]);
   const continueOn = useCallback(() => moveAccount(), [moveAccount]);
   const tryAccount = useCallback((id: string) => moveAccount(id, true), [moveAccount]);
+
+  /** v1.545.0: take an open switch question back (nothing was changed). An
+   *  answer still on its way is for a question that is gone. */
+  const cancelSwitch = useCallback(() => {
+    const ask = switchAskRef.current;
+    // (The second press is out: its answer decides, not this.)
+    if (!ask || ask.busy) return;
+    switchSeqRef.current += 1;
+    setSwitchAsk(null);
+  }, [setSwitchAsk]);
+
+  /** v1.545.0: an answer that says the session SWITCHED. Its own row is the
+   *  session now; the old tool's facts are dropped; the line the switch wrote
+   *  is in the conversation at once (the answer carries the very event); the
+   *  summary waits for the next message; and the view is read again. Reads
+   *  already out are older than the switch: they decide nothing (the send's
+   *  own sequence). False when the row could not be read (the session is read
+   *  again all the same, so the screen shows how it stands). */
+  const adoptSwitch = useCallback(
+    (answer: SwitchAnswer | null, sid: string): boolean => {
+      const next = answer?.session ?? null;
+      const ok = !!answer && !!next && next.id === sid;
+      sendSeqRef.current += 1;
+      if (answer && next && ok) {
+        forgetOldTool();
+        setSession(next);
+        onChanged(next);
+        setSwitchedTools(true);
+        // (The read that follows replaces what is drawn with the record,
+        // which holds this same event: it is never there twice.)
+        const line = answer.notice;
+        if (line) setEvents((prev) => [...prev, line]);
+        setHandoffPending(pendingFromPlan(answer.plan));
+      }
+      void load({ follow: false });
+      return ok;
+    },
+    [forgetOldTool, onChanged, load],
+  );
+
+  /** v1.545.0: read the daemon's plan for a choice (`confirm: false`: it
+   *  changes nothing) and show it under the picker's lists. `known`: the
+   *  preference already worked out for this tool (null = work it out).
+   *  `changed`: the sentence of a second press refused because the plan no
+   *  longer held, kept above the plan read again. A refusal is an ordinary
+   *  answer here (the mode must change first, the tool is signed out): it is
+   *  said in the daemon's own words in the SAME place, and the lists stay
+   *  open for another pick. */
+  const readSwitchPlan = useCallback(
+    async (sid: string, choice: SwitchChoice, known: SwitchPreference | null, changed: string) => {
+      const gen = genRef.current;
+      const seq = (switchSeqRef.current += 1);
+      let prefer = known;
+      // (A plan read for another model or effort is not this choice's plan.)
+      setSwitchAsk({ sid, choice, prefer, plan: null, busy: false, refused: "", changed });
+      try {
+        if (!prefer) {
+          // The start composer's own rule: the folder's defaults for this
+          // tool, else its last pick on this PC. (Never throws; kept once read.)
+          const defaults = await readFolderDefaults(sessionFolder);
+          if (gen !== genRef.current || seq !== switchSeqRef.current) return;
+          const asked = toolsRef.current.find((t) => t.id === choice.tool) ?? null;
+          prefer = switchPreference(asked, defaults.tool, lastPick(asked));
+          setSwitchAsk({ sid, choice, prefer, plan: null, busy: false, refused: "", changed });
+        }
+        const answer = decodeSwitchAnswer(await switchTool(sid, choice, false, prefer));
+        if (gen !== genRef.current) return;
+        if (answer?.switched) {
+          // An answer that says it SWITCHED (to a press that only asked): it
+          // is never said as "nothing was changed". The session is read again
+          // and shows how it stands.
+          setSwitchAsk(null);
+          pickerControl.current?.close();
+          if (!adoptSwitch(answer, sid)) setNote(SWITCH_ANSWER_UNREAD);
+          return;
+        }
+        if (seq !== switchSeqRef.current) return;
+        if (!answer || !answer.plan || answer.plan.tool !== choice.tool) {
+          throw new Error(SWITCH_PLAN_UNREAD);
+        }
+        setSwitchAsk({ sid, choice, prefer, plan: answer.plan, busy: false, refused: "", changed });
+      } catch (e) {
+        if (gen !== genRef.current || seq !== switchSeqRef.current) return;
+        setSwitchAsk({ sid, choice, prefer, plan: null, busy: false, refused: errorWords(e, SWITCH_FAILED), changed: "" });
+      }
+    },
+    [sessionFolder, setSwitchAsk, adoptSwitch],
+  );
+
+  /** v1.545.0: the FIRST press — ask what switching this session to another
+   *  coding tool would do. */
+  const askSwitch = useCallback(
+    async (choice: SwitchChoice) => {
+      const sid = sessionIdNow;
+      const prev = switchAskRef.current;
+      if (!sid || prev?.busy) return;
+      // (The same choice again asks nothing — unless it was refused: what
+      // refused it may be gone, so pressing the tool again asks again.)
+      if (prev && !prev.refused && sameSwitchChoice(prev.choice, choice)) return;
+      setNote(null);
+      // What the user would start this tool with here: worked out once for a
+      // tool, then the same values with every press about it.
+      await readSwitchPlan(sid, choice, prev && prev.choice.tool === choice.tool ? prev.prefer : null, "");
+    },
+    [sessionIdNow, readSwitchPlan],
+  );
+
+  /** v1.545.0: the SECOND press — the same tool, model and effort, with
+   *  `confirm: true`. On success the session IS the new tool's (the answer's
+   *  own row), the view is read again, and the conversation's own new line
+   *  is all that is said. A REFUSAL (a 4xx the daemon wrote) changes nothing:
+   *  the panel closes and its sentence is said where this view says every
+   *  refused press. Anything else that ends the press — no answer, a dropped
+   *  connection, a problem inside Iron Jarvis — says nothing about whether
+   *  the switch went through (it stops a process first, so it can finish
+   *  after the answer is lost): nothing is claimed, the session is read
+   *  again, and the screen follows what the daemon holds. An answer that
+   *  comes back after this pane moved on is dropped.
+   *  The press carries the shown plan's token (`expect`): when the switch
+   *  would now do something else the daemon refuses (`code: "changed"`) and
+   *  the plan is read again BY ITSELF, with that sentence above the new
+   *  lines; switching then takes a fresh press, with the new token. */
+  const confirmSwitch = useCallback(async () => {
+    const ask = switchAskRef.current;
+    if (!ask || !ask.plan || ask.busy) return;
+    const gen = genRef.current;
+    switchSeqRef.current += 1;
+    setSwitchAsk({ ...ask, busy: true });
+    setNote(null);
+    setInfo(null);
+    let failed: string | null = null;
+    try {
+      const answer = decodeSwitchAnswer(
+        await switchTool(ask.sid, ask.choice, true, ask.prefer ?? {}, ask.plan.token),
+      );
+      if (gen !== genRef.current) return;
+      // (The decoder gives a row only for an answer that says it switched.
+      // Not a row this screen can read: the session is read again, so what is
+      // shown is how it stands.)
+      if (!adoptSwitch(answer, ask.sid)) failed = SWITCH_ANSWER_UNREAD;
+    } catch (e) {
+      if (gen !== genRef.current) return;
+      if (isSwitchRefusal(e)) {
+        // (Only while the confirmation is still on screen to show the new
+        // lines; a panel closed meanwhile gets the sentence as any refusal.)
+        if (isChangedRefusal(e) && pickerControl.current?.isOpen()) {
+          void readSwitchPlan(ask.sid, ask.choice, ask.prefer, errorWords(e, SWITCH_CHANGED));
+          return;
+        }
+        failed = errorWords(e, SWITCH_FAILED);
+      } else {
+        // No answer the daemon wrote: the switch may have gone through.
+        failed = SWITCH_ANSWER_LOST;
+        adoptSwitch(null, ask.sid);
+      }
+    }
+    setSwitchAsk(null);
+    pickerControl.current?.close();
+    if (failed) setNote(failed);
+  }, [setSwitchAsk, adoptSwitch, readSwitchPlan]);
+
+  /** v1.545.0: the limit card's "Continue on another tool" — the session's
+   *  picker opens on its tool list. Nothing is switched by this press. */
+  const openToolList = useCallback(() => pickerControl.current?.openTools(), []);
 
   /** v1.422.0 (B3): Continue on a reply a restart cut off — the same hidden
    *  carry-on the app sends by itself, started by this press; the running
@@ -1868,6 +2142,43 @@ function SessionPane({
     }
   };
 
+  // v1.545.0: the session's tool list is offered only when the daemon says
+  // this session can switch (`switches_tool`) and while no reply runs.
+  const canSwitch = switchesTool && !running && !!session && session.id === sessionId;
+  const canSwitchRef = useRef(canSwitch);
+  canSwitchRef.current = canSwitch;
+  // A reply started (or the session can no longer switch) under an open
+  // question: the question goes.
+  useEffect(() => {
+    if (!canSwitch) cancelSwitch();
+  }, [canSwitch, cancelSwitch]);
+  /** The session's picker. Its own tool's model and effort are saved as
+   *  always (a PATCH). ANOTHER tool, or a model or effort picked under it, is
+   *  never saved: it is the first press of a switch (`askSwitch`). */
+  const onPick = useCallback(
+    (field: PickerField, next: string) => {
+      if (field === "tool") {
+        if (!canSwitchRef.current) return;
+        if (next === sessionToolRef.current) cancelSwitch();
+        else if (switchAskRef.current?.choice.tool !== next || switchAskRef.current.refused) {
+          void askSwitch({ tool: next });
+        }
+        return;
+      }
+      const ask = switchAskRef.current;
+      if (ask) {
+        // A model or effort of the tool being asked about (a new model takes
+        // the effort picked for the old one with it).
+        if (field === "model") void askSwitch({ tool: ask.choice.tool, model: next });
+        else void askSwitch({ ...ask.choice, effort: next });
+        return;
+      }
+      if (field === "model") void change({ model: next });
+      else void change({ effort: next });
+    },
+    [askSwitch, cancelSwitch, change],
+  );
+
   // The last question answered: the caret goes back to the message box (the
   // card held it, and it is gone).
   const askingNow = conv.asks.length > 0;
@@ -1928,9 +2239,13 @@ function SessionPane({
   // not be read, or the tool is no longer installed) the chip still names
   // the session's tool and model, from the session itself.
   // (A plain value: this is past the pane's early return, so no hook here.)
-  const pickerTools = tool
+  const ownTools = tool
     ? [tool]
     : decodeCodingTools({ harnesses: [{ id: session.tool, label: toolName, installed: true, signed_in: true, models: [] }] });
+  // v1.545.0: a session that can switch lists every coding tool (its own
+  // first when the list does not have it).
+  const pickerTools = !canSwitch ? ownTools : tool ? tools : [...ownTools, ...tools];
+  const askedTool = switchAsk ? (tools.find((t) => t.id === switchAsk.choice.tool) ?? null) : null;
   const effortLive = effortWhileRunning(session.tool, toolName, running, tool?.effortLive === true);
   return (
     <SessionEditorProvider folder={session.folder}>
@@ -2101,6 +2416,8 @@ function SessionPane({
                 account={session.account ? accountName : ""}
                 onExpand={expandStep}
                 messageActions={messageActions}
+                onAnotherTool={canSwitch ? openToolList : undefined}
+                severalTools={switchedTools}
               />
             )}
             {/* The "working" sign: a reply being written, helpers still at
@@ -2256,6 +2573,10 @@ function SessionPane({
               </button>
             </div>
           ) : null}
+          {/* v1.545.0: a summary of the conversation waits for the tool this
+              session switched to; it rides the next message. (Not while a
+              reply runs: the message that carries it may be that reply's.) */}
+          <HandoffWaiting pending={running ? null : handoffPending} />
           {/* v1.441.0 review: Pi runs `!words` as a shell command (its own
               terminal colours the box; here one quiet line says it). */}
           {piShellHint(session.tool, text) ? (
@@ -2392,15 +2713,46 @@ function SessionPane({
                   fixed once a session exists. v1.418.0 (C4.8) still holds: the
                   model stays open while a reply runs; only going back to the
                   default (a new start) waits. A conversation that keeps its last
-                  model offers no way back to the default. */}
+                  model offers no way back to the default.
+                  v1.545.0: a session that can switch its coding tool lists the
+                  tools too, while no reply runs. Another tool there is a
+                  QUESTION (never a PATCH): the daemon's plan and the one
+                  confirmation are drawn under the lists. */}
               <ModelPicker
                 tools={pickerTools}
                 value={{ tool: session.tool, model: session.model, effort: session.effort }}
-                onChange={(field, next) => {
-                  if (field === "model") void change({ model: next });
-                  else if (field === "effort") void change({ effort: next });
-                }}
-                lockTool
+                onChange={onPick}
+                lockTool={!canSwitch}
+                toolAsks={canSwitch}
+                draft={
+                  switchAsk
+                    ? {
+                        tool: switchAsk.choice.tool,
+                        model: switchAsk.choice.model ?? switchAsk.plan?.model ?? "",
+                        effort: switchAsk.choice.effort ?? switchAsk.plan?.effort ?? "",
+                      }
+                    : null
+                }
+                footer={
+                  switchAsk ? (
+                    <SwitchConfirm
+                      key={switchAsk.choice.tool}
+                      label={switchAsk.plan?.label || toolLabel(switchAsk.choice.tool, askedTool ? [askedTool] : null)}
+                      plan={switchAsk.plan}
+                      refused={switchAsk.refused}
+                      changed={switchAsk.changed}
+                      busy={switchAsk.busy}
+                      onConfirm={() => void confirmSwitch()}
+                      onCancel={() => {
+                        cancelSwitch();
+                        pickerControl.current?.close();
+                      }}
+                      onLeave={() => pickerControl.current?.focusList()}
+                    />
+                  ) : undefined
+                }
+                onClose={cancelSwitch}
+                control={pickerControl}
                 testId="code-pick"
                 chipTestId="code-model-chip"
                 defaultModelRow={!keepsLast || !session.model}
@@ -2425,7 +2777,11 @@ function SessionPane({
                 title={
                   signsInItself(session.tool, tools)
                     ? ownSignInTitle(session.tool, tools)
-                    : "The account this session runs on (chosen when it was made)"
+                    : switchedTools
+                      ? // v1.545.0: a session that switched tools may run on
+                        // another account of its group than it was made with.
+                        ACCOUNT_NOW_TITLE
+                      : "The account this session runs on (chosen when it was made)"
                 }
                 className="inline-flex h-7 max-w-[12rem] items-center gap-1.5 truncate px-2 text-[12px] text-zinc-500"
               >
@@ -2522,6 +2878,7 @@ function SessionPane({
           running={running}
           onSend={sendFromPanes}
           comments={takesComments}
+          severalTools={switchedTools}
         />
       </aside>
       </div>
@@ -2614,7 +2971,11 @@ export function BuildCodeView({
       const title = sessionTitle(s, tools);
       downloadText(
         exportFileName(title),
-        conversationMarkdown(title, got.events, toolLabel(s.tool, tools), exportGapWords(src.dropped(), got.unread)),
+        // v1.545.0: each reply under the tool that wrote it (a session can
+        // switch its coding tool).
+        conversationMarkdown(title, got.events, toolLabel(s.tool, tools), exportGapWords(src.dropped(), got.unread), (id) =>
+          toolLabel(id, tools),
+        ),
       );
     } finally {
       exportingRef.current = false;

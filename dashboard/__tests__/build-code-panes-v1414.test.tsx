@@ -44,7 +44,13 @@ vi.mock("@/lib/useChatStream", () => ({
 
 vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => null }));
 
-import { CODE_PANES_POLL_MS, CODE_PANE_TABS, CodePanes } from "@/components/buildCode/CodePanes";
+import {
+  CODE_PANES_POLL_MS,
+  CODE_PANE_TABS,
+  CodePanes,
+  SEVERAL_TOOLS,
+  possessive,
+} from "@/components/buildCode/CodePanes";
 import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
 import { decodeCodeSession, decodeCodingTools, type CodeEvent } from "@/lib/buildApp";
 import { changesCountWords, decodeCodeChanges, decodeCodeUsage, windowLine } from "@/lib/codePanes";
@@ -449,5 +455,123 @@ describe("in the real Build › Code view", () => {
     fireEvent.doubleClick(edge);
     expect(aside.hasAttribute("data-pane-width")).toBe(false);
     expect(aside.className).toContain("xl:w-[320px]");
+  });
+});
+
+describe("v1.545.0: a session that switched coding tools", () => {
+  // The PAGE says so (the session view's `switched_tools`): the events handed
+  // to the panes are not the conversation (at most its last attachment's).
+  const SWITCH_LINE = {
+    type: "notice",
+    at: "2026-10-30T09:10:00Z",
+    text: "Switched from Claude Code to Codex.",
+    switch: { from: "claude-code", to: "codex", resumes: false },
+  } as CodeEvent;
+  const CODEX = decodeCodeSession({ ...RAW_SESSION, harness: "codex", model: "" })!;
+  const usageCalls = () => H.calls.filter((p) => p.endsWith("/usage")).length;
+  const overviewCalls = () => H.calls.filter((p) => p.endsWith("/overview")).length;
+  const contextCalls = () => H.calls.filter((p) => p.endsWith("/context")).length;
+
+  it("never says the tools' edits are the current tool's alone (Changes)", async () => {
+    render(<CodePanes session={SESSION} tools={TOOLS} events={EVENTS} running={false} severalTools />);
+    await screen.findByTestId("changes-review");
+    expect(screen.getByTestId("code-changes-by-tool").textContent).toBe(
+      "1 of these was edited by this session's coding tools' own file tools.",
+    );
+  });
+
+  it("says the same on the Session tab's count", async () => {
+    render(<CodePanes session={SESSION} tools={TOOLS} events={EVENTS} running={false} severalTools />);
+    fireEvent.click(screen.getByRole("tab", { name: "Session" }));
+    const count = await screen.findByTestId("code-session-changes-count");
+    await waitFor(() => expect(count.textContent).toContain(`by ${SEVERAL_TOOLS}`));
+    expect(count.textContent).not.toContain("by Claude Code");
+  });
+
+  it("without the page's flag the tool is named as always, whatever events are handed over", async () => {
+    panes(false, [...EVENTS, SWITCH_LINE]);
+    await screen.findByTestId("changes-review");
+    expect(screen.getByTestId("code-changes-by-tool").textContent).toBe(
+      "1 of these was edited by Claude Code's own file tools.",
+    );
+  });
+
+  it("writes whose they are", () => {
+    expect(possessive("Claude Code")).toBe("Claude Code's");
+    expect(possessive("Codex")).toBe("Codex's");
+    expect(possessive(SEVERAL_TOOLS)).toBe("this session's coding tools'");
+  });
+
+  it("the Usage tab drops the old tool's numbers the moment the tool changes, and reads again", async () => {
+    const { rerender } = render(<CodePanes session={SESSION} tools={TOOLS} events={EVENTS} running={false} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+    await waitFor(() => expect(screen.getAllByTestId("code-usage-window")).toHaveLength(2));
+    expect(screen.getByTestId("code-usage-who").textContent).toContain("Claude Code");
+    const before = usageCalls();
+    // The new tool's usage does not answer until we let it.
+    let answer: (v: unknown) => void = () => {};
+    H.gets["/build/app/sessions/app_1/usage"] = new Promise((resolve) => (answer = resolve));
+    rerender(<CodePanes session={CODEX} tools={TOOLS} events={EVENTS} running={false} />);
+    // AT ONCE (the same draw): not one of the old tool's numbers under the new name.
+    expect(screen.queryAllByTestId("code-usage-window")).toHaveLength(0);
+    expect(screen.queryByTestId("code-pane-usage")).toBeNull();
+    expect(screen.queryByTestId("code-usage-who")).toBeNull();
+    await waitFor(() => expect(usageCalls()).toBe(before + 1));
+    await act(async () => {
+      answer({
+        ...USAGE,
+        harness: "codex",
+        seen: { windows: [{ key: "weekly", label: "Weekly window", percent: 7, resets_at: soon }], at: new Date().toISOString(), plan: "" },
+      });
+    });
+    await waitFor(() => expect(screen.getAllByTestId("code-usage-window")).toHaveLength(1));
+    expect(screen.getByTestId("code-usage-who").textContent).toContain("Codex");
+    expect(screen.getByTestId("code-usage-window").textContent).toContain("Weekly window");
+  });
+
+  it("an answer for the OLD tool that lands after the change is not drawn", async () => {
+    let answerOld: (v: unknown) => void = () => {};
+    H.gets["/build/app/sessions/app_1/usage"] = new Promise((resolve) => (answerOld = resolve));
+    const { rerender } = render(<CodePanes session={SESSION} tools={TOOLS} events={EVENTS} running={false} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+    await waitFor(() => expect(usageCalls()).toBeGreaterThanOrEqual(1));
+    H.gets["/build/app/sessions/app_1/usage"] = new Promise(() => {});
+    rerender(<CodePanes session={CODEX} tools={TOOLS} events={EVENTS} running={false} />);
+    await act(async () => {
+      answerOld(USAGE);
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(screen.queryAllByTestId("code-usage-window")).toHaveLength(0);
+  });
+
+  it("the Session tab drops what the old tool reported too (its usage line, what runs under it)", async () => {
+    const { rerender } = render(<CodePanes session={SESSION} tools={TOOLS} events={EVENTS} running={false} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Session" }));
+    await waitFor(() => expect(screen.getByTestId("code-session-account").textContent).toContain("85% of its 7-day window used"));
+    await screen.findByTestId("code-session-rules");
+    const before = [usageCalls(), overviewCalls(), contextCalls()];
+    H.gets["/build/app/sessions/app_1/usage"] = new Promise(() => {});
+    H.gets["/build/app/sessions/app_1/overview"] = new Promise(() => {});
+    rerender(<CodePanes session={CODEX} tools={TOOLS} events={EVENTS} running={false} />);
+    expect(screen.getByTestId("code-session-account").textContent).not.toContain("% of its");
+    expect(screen.queryByTestId("code-session-rules")).toBeNull();
+    expect(screen.getByTestId("code-session-model").textContent).toContain("Codex");
+    // Its usage, what runs under it and its own context breakdown are read again.
+    await waitFor(() =>
+      expect([usageCalls(), overviewCalls(), contextCalls()]).toEqual([before[0] + 1, before[1] + 1, before[2] + 1]),
+    );
+  });
+
+  it("the folder's changes are no tool's own: they stay on screen through the change", async () => {
+    const { rerender } = render(<CodePanes session={SESSION} tools={TOOLS} events={EVENTS} running={false} />);
+    await screen.findByTestId("changes-review");
+    const before = H.calls.filter((p) => p.endsWith("/changes")).length;
+    rerender(<CodePanes session={CODEX} tools={TOOLS} events={EVENTS} running={false} severalTools />);
+    expect(screen.getByTestId("changes-review")).toBeTruthy();
+    expect(screen.getByTestId("code-changes-by-tool").textContent).toContain("this session's coding tools'");
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(H.calls.filter((p) => p.endsWith("/changes")).length).toBe(before);
   });
 });
