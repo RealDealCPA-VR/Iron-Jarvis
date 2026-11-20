@@ -198,8 +198,23 @@ def lines_of(messages: Any) -> list[dict[str, Any]]:
             "low_trust": _low_trust(m),
             "route": m.get("route") if isinstance(m.get("route"), dict) else {},
             "who": str(m.get("panelWho") or "").strip()[:60] if role == "assistant" else "",
+            # Idea 39 (39-a, review): a REPORT (a watcher's file names, a
+            # workflow step's words) is never Jarvis's own line: the kind of
+            # record that wrote it ("" for any other line).
+            "report": _report_word(m) if role == "assistant" else "",
         })
     return out
+
+
+def _report_word(m: dict[str, Any]) -> str:
+    """The kind word of the record whose report ``m`` is ("schedule",
+    "watcher"...), "" when it is not a report. Pure."""
+    source = m.get("reportFrom")
+    if not isinstance(source, dict):
+        return ""
+    from ..agents.chat_delivery import REPORT_KIND_WORDS
+
+    return REPORT_KIND_WORDS.get(str(source.get("kind") or ""), "task")
 
 
 def covers_key(lines: list[dict[str, Any]]) -> str:
@@ -218,7 +233,7 @@ def served_by(lines: list[dict[str, Any]], setup: dict[str, Any]) -> tuple[str, 
     served it (never another agent's line), else the conversation's own
     setup. ("", "", "") when nothing says."""
     for ln in reversed(lines):
-        if ln["role"] != "assistant" or ln.get("who"):
+        if ln["role"] != "assistant" or ln.get("who") or ln.get("report"):
             continue
         route = ln["route"]
         provider = str(route.get("provider") or "").strip()
@@ -255,7 +270,10 @@ def transcript_text(lines: list[dict[str, Any]], *, cap: int = PROMPT_CHARS) -> 
         if ln["role"] == "user":
             who = "User"
         else:
-            who = f"Agent {ln['who']}" if ln.get("who") else "Assistant"
+            who = (
+                f"Report from your {ln['report']} (not the assistant)" if ln.get("report")
+                else f"Agent {ln['who']}" if ln.get("who") else "Assistant"
+            )
         body = _clip_words(" ".join(ln["content"].split()), SPEAKER_CHARS)
         row = f"{who}: {body}" if body else f"{who}:"
         if ln["documents"]:

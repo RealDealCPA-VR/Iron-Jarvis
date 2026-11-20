@@ -843,6 +843,50 @@
       "attention": false,
       "phone": false,
       "this_pc": false
+    },
+    {
+      "case": "schedule-failed-from-chat",
+      "event": {
+        "id": "evt_sched_chat_failed",
+        "type": "session.completed",
+        "session_id": "session_sc",
+        "ts": "2026-11-20T09:00:05",
+        "payload": {
+          "status": "failed",
+          "ok": false,
+          "summary": "The run failed: the supplier's site could not be reached.",
+          "origin": "schedule:Friday prices",
+          "project_id": null,
+          "outcome": null,
+          "chat_thread_id": "chat_prices"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "Your schedule Friday prices could not finish",
+      "body": "The run failed: the supplier's site could not be reached.",
+      "href": "/chat?thread=chat_prices"
+    },
+    {
+      "case": "workflow-failed-from-chat",
+      "event": {
+        "id": "evt_wf_chat_failed",
+        "type": "workflow.completed",
+        "session_id": null,
+        "ts": "2026-11-20T09:07:01",
+        "payload": {
+          "workflow": "Weekly tidy",
+          "status": "failed",
+          "run_id": "wfr_chat",
+          "sessions": ["session_wc1"],
+          "chat_thread_id": "chat_weekly"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "Your workflow Weekly tidy could not finish",
+      "body": "Its report in the chat says which step stopped.",
+      "href": "/chat?thread=chat_weekly"
     }
   ]
 }

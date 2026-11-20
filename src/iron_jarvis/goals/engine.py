@@ -92,6 +92,42 @@ GOAL_SATISFIED = "goal.satisfied"
 GOAL_TRIPPED = "goal.tripped"
 GOAL_STOPPED = "goal.stopped"
 
+
+def _chat_of(goal: Any) -> dict[str, str]:
+    """Idea 39 (39-a): ``{"chat_thread_id": id}`` for a goal set up from a
+    chat (its try's event then names the chat its report went to), ``{}``
+    otherwise so every other goal's event is as before. Pure."""
+    chat = " ".join(str(getattr(goal, "chat_thread_id", "") or "").split())
+    return {"chat_thread_id": chat} if chat else {}
+
+
+#: Idea 39 (39-a, review): what a goal's chat is told about a try it did not
+#: make, in plain words (the engine's reason, "budget exhausted: dollars spent
+#: 1 has reached max_dollars 1", stays on the event and the Autonomy page).
+REFUSED_BUDGET_WORDS = "It did not try: its budget is used up. The Autonomy page shows what it spent."
+REFUSED_TRIPPED_WORDS = (
+    "It did not try: it failed several times in a row, so it stopped. "
+    "Reopen it on the Autonomy page to try again."
+)
+REFUSED_TOOLS_WORDS = (
+    "It did not try: it is set to use a tool it may not run on its own. "
+    "The Autonomy page shows which."
+)
+
+
+def refused_try_words(reason: str) -> str:
+    """The plain sentence for a refused try's report (a budget used up, a
+    tripped breaker, tools it may not run). Pure."""
+    text = " ".join(str(reason or "").split())
+    if text.startswith("budget exhausted"):
+        return REFUSED_BUDGET_WORDS
+    if text.startswith("goal is tripped"):
+        return REFUSED_TRIPPED_WORDS
+    if text.startswith("allowed_grants are not runnable"):
+        return REFUSED_TOOLS_WORDS
+    return f"It did not try: {text.rstrip('.')}." if text else "It did not try."
+
+
 #: The standing instruction appended to every iteration task, after the
 #: contract and the checkpoint block.
 _CONTINUE_INSTRUCTION = (
@@ -353,6 +389,10 @@ class GoalEngine:
                     + (f": {why}" if why else "")
                     + ") — reopen it explicitly to continue"
                 )
+                # Idea 39 (39-a, review): a try the breaker refused is
+                # reported in the goal's chat (a pause or a stop is the
+                # user's own choice and says nothing).
+                return await self._refuse(goal, reason, report=True)
             return await self._refuse(goal, reason)
 
         # Deny-floor re-check at spawn time (one rule set, two call sites —
@@ -363,14 +403,16 @@ class GoalEngine:
         grants = goal.decoded_grants()
         floor_problem = grants_violation(grants)
         if floor_problem:
-            return await self._refuse(goal, f"allowed_grants are not runnable: {floor_problem}")
+            return await self._refuse(
+                goal, f"allowed_grants are not runnable: {floor_problem}", report=True
+            )
 
         # HARD budget gate, BEFORE anything spawns. The state stays active —
         # an exhausted budget is a boundary, not a failure.
         spent = goal.decoded_spent()
         exhausted = budget_exceeded(goal.decoded_budget(), spent)
         if exhausted:
-            return await self._refuse(goal, exhausted)
+            return await self._refuse(goal, exhausted, report=True)
 
         if goal.id in self._iterating:
             return await self._refuse(
@@ -400,8 +442,12 @@ class GoalEngine:
         nothing. Never raises."""
         from ..agents import chat_delivery as _cd
 
-        chat = _cd.clean_chat_thread_id(getattr(goal, "chat_thread_id", "") or "")
-        if not chat or not isinstance(result, dict) or result.get("status") == "cancelled":
+        if not isinstance(result, dict) or result.get("status") == "cancelled":
+            return
+        # Review: read where the goal reports NOW (Stop reporting pressed
+        # while the try ran holds this report), not the row loaded before it.
+        chat = await asyncio.to_thread(_cd.report_target_of, self.p.engine, "goal", goal.id)
+        if not chat:
             return
         sid = str(result.get("session_id") or "")
         try:
@@ -534,6 +580,7 @@ class GoalEngine:
                     "ok": False,
                     "status": "failed",
                     "error": reason,
+                    **_chat_of(goal),
                 },
                 session_id=session.id,
             )
@@ -646,6 +693,8 @@ class GoalEngine:
                 **({"pending": pending[:400]} if pending else {}),
                 **({"note": note} if note else {}),
                 **({"waited_s": round(waited, 3)} if waited > 0 else {}),
+                # Idea 39 (39-a): a goal set up from a chat names it.
+                **_chat_of(goal),
             },
             session_id=session.id,
         )
@@ -718,14 +767,19 @@ class GoalEngine:
         self.orch.register_running(session.id, task)
         return await task
 
-    async def _refuse(self, goal: GoalContractRecord, reason: str) -> dict[str, Any]:
-        """The honest no: an event naming why, state untouched, nothing spawned."""
+    async def _refuse(self, goal: GoalContractRecord, reason: str, *, report: bool = False) -> dict[str, Any]:
+        """The honest no: an event naming why, state untouched, nothing spawned.
+        ``report`` (idea 39, 39-a, review): a goal set up from a chat says in
+        that chat that it did not try and why (a budget reached, a tripped
+        breaker, tools it may not run), once a day per reason."""
         await self.p.event_bus.publish(
             GOAL_ITERATION_REFUSED,
             # "name" for the notifier's phone lines (payload.name preferred,
             # goal_id the honest fallback).
-            {"goal_id": goal.id, "name": goal.name, "reason": reason},
+            {"goal_id": goal.id, "name": goal.name, "reason": reason, **_chat_of(goal)},
         )
+        if report:
+            await self._report_refused(goal, reason)
         return {
             "ok": False,
             "refused": True,
@@ -733,6 +787,32 @@ class GoalEngine:
             "state": goal.state,
             "reason": reason,
         }
+
+    async def _report_refused(self, goal: GoalContractRecord, reason: str) -> None:
+        """One report of a refused try in the goal's chat: "Needs you" and
+        the reason in plain words (:func:`refused_try_words`). The key is the
+        day and those words, so an hourly schedule refused for the same reason
+        writes it once a day. Never raises."""
+        try:
+            import hashlib
+
+            from ..agents import chat_delivery as _cd
+            from ..agents.outcome import WORD_NEEDS_YOU
+
+            chat = await asyncio.to_thread(_cd.report_target_of, self.p.engine, "goal", goal.id)
+            if not chat:
+                return
+            day = _cd._now().date().isoformat()  # noqa: SLF001 — the reports' one clock
+            words = refused_try_words(reason)
+            digest = hashlib.sha1(words.encode("utf-8", "replace")).hexdigest()[:12]
+            report = {
+                "kind": "goal", "name": goal.name, "id": goal.id, "href": "/autonomy",
+                "outcome": WORD_NEEDS_YOU, "reason": words,
+                "key": f"goal:{goal.id}:refused:{day}:{digest}",
+            }
+            await asyncio.to_thread(_cd.report_to_chat, self.p, chat, report)
+        except Exception:  # noqa: BLE001 — the refusal stands
+            log.warning("goal %s could not report a refused try", goal.id, exc_info=True)
 
     # -- prompt + checkpoint composition (deterministic, bounded) ---------------
 

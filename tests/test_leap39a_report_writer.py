@@ -151,6 +151,35 @@ def test_more_than_daily_folds_into_one_line_a_day(p):
     assert len([m for m in _messages(p, tid) if m.get("reportFrom")]) == 2
 
 
+def test_a_days_line_the_user_answered_is_never_rewritten(p):
+    """Review: the 9 am report was talked about; the 2 pm one must not swap
+    the words above that exchange. It is a new line, and later reports that
+    day fold into THAT one."""
+    tid = _chat(p, [{"role": "user", "content": "check this supplier's prices every hour"}])
+    rec = _schedule(p, tid)
+    cd.report_to_chat(p, tid, _report(rec, "run:s9", run_id="s9", words="Prices up 3%."), now=FRIDAY)
+    with session_scope(p.engine) as db:
+        row = db.get(ChatThreadRecord, tid)
+        msgs = json.loads(row.messages_json)
+        msgs += [{"role": "user", "content": "why up 3%?"},
+                 {"role": "assistant", "content": "Because of the new tariff."}]
+        row.messages_json = json.dumps(msgs)
+        db.add(row)
+        db.commit()
+    cd.report_to_chat(p, tid, _report(rec, "run:s14", run_id="s14", words="Prices flat."),
+                      now=FRIDAY + timedelta(hours=5))
+    cd.report_to_chat(p, tid, _report(rec, "run:s15", run_id="s15", words="Prices down 1%."),
+                      now=FRIDAY + timedelta(hours=6))
+    msgs = _messages(p, tid)
+    reports = [m for m in msgs if m.get("reportFrom")]
+    assert len(reports) == 2, [m.get("content") for m in msgs]
+    first, second = reports
+    assert "Prices up 3%." in first["content"] and first["sessionId"] == "s9", "what was discussed stays"
+    assert first.get("reportCount", 1) == 1
+    assert msgs.index(first) == 1 and msgs.index(second) == len(msgs) - 1
+    assert "Prices down 1%." in second["content"] and second["reportCount"] == 2
+
+
 def test_a_watcher_is_never_folded_it_paces_itself(p):
     tid = _chat(p)
     line = cd.report_line({"kind": "watcher", "name": "Intake", "id": "sentinel_1",
@@ -183,6 +212,70 @@ def test_a_deleted_chat_clears_the_field_and_rings_the_bell(p):
     assert len(rung) == 1
     assert rung[0]["words"] == "The chat this schedule reported to is gone. Its results now show here."
     assert rung[0]["href"] == "/schedules" and rung[0]["name"] == "Friday prices"
+    # Review: the record's own row says why it reports nowhere now.
+    with session_scope(p.engine) as db:
+        assert cd.GONE_ROW_WORDS in db.get(ScheduledTaskRecord, rec.id).last_detail
+
+
+def test_a_workflow_run_whose_chat_is_gone_says_so_in_its_own_notes(p):
+    """Review: the Workflows run row shows its notes; the reason is there too."""
+    run = WorkflowRunRecord(workflow_name="Weekly tidy", status="completed",
+                            chat_thread_id="chat_gone_wf", notes_json=json.dumps(["an earlier note"]))
+    with session_scope(p.engine) as db:
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+    report = {"kind": "workflow", "name": "Weekly tidy", "id": run.id, "outcome": "Done",
+              "words": "Tidied.", "key": f"workflow:{run.id}"}
+    out = cd.report_to_chat(p, "chat_gone_wf", report, now=FRIDAY)
+    assert out["gone"] is True and out["cleared"] is True
+    cd.report_to_chat(p, "chat_gone_wf", report, now=FRIDAY)  # once only
+    with session_scope(p.engine) as db:
+        row = db.get(WorkflowRunRecord, run.id)
+        assert row.chat_thread_id == ""
+        assert json.loads(row.notes_json) == ["an earlier note", cd.GONE_ROW_WORDS]
+
+
+def test_a_gone_chat_clears_only_a_link_that_still_names_it(p):
+    """Review: a run fired for chat A ends after the schedule was pointed at
+    chat B and A was deleted. B's link stays, and no bell says it is gone."""
+    b = _chat(p, title="Chat B")
+    rec = _schedule(p, b)
+    out = cd.report_to_chat(p, "chat_a_deleted", _report(rec, "run:sA", run_id="sA"), now=FRIDAY)
+    assert out["gone"] is True and out["cleared"] is False
+    with session_scope(p.engine) as db:
+        assert db.get(ScheduledTaskRecord, rec.id).chat_thread_id == b
+    assert p.event_bus.of(EventType.REPORT_CHAT_GONE) == []
+
+
+def test_stop_reporting_while_a_run_is_going_holds_its_report(p):
+    """Review: the run carries its chat from fire time; Stop reporting pressed
+    meanwhile wins (the record's field is read when the run ends)."""
+    tid = _chat(p)
+    rec = _schedule(p, tid)
+    run = SimpleNamespace(
+        id="sess_s", status="completed", outcome="completed", agent_type="builder", agent_name="",
+        summary="done", options_json=json.dumps({"chat_thread_id": tid, "report_from": {
+            "kind": "schedule", "name": rec.name, "id": rec.id, "href": "/schedules"}}),
+    )
+    assert cd.set_report_target(p.engine, "schedule", rec.id, "")["ok"]
+    out = cd.deliver_session_line(p.engine, run, event_bus=p.event_bus)
+    assert out["appended"] == 0, out
+    assert _messages(p, tid) == []
+    # Pointed back, the next run reports again.
+    assert cd.set_report_target(p.engine, "schedule", rec.id, tid)["ok"]
+    assert cd.deliver_session_line(p.engine, run, event_bus=p.event_bus)["appended"] == 1
+
+
+def test_a_phone_conversation_is_never_stamped(p):
+    """Review: nothing can report to a phone thread until 39-c, so nothing made
+    there says it reports there."""
+    phone = _chat(p, owner="daemon", title="Slack DM")
+    code = _chat(p, surface="build")
+    plain = _chat(p)
+    assert cd.stampable_chat(p.engine, phone) == ""
+    assert cd.stampable_chat(p.engine, code) == ""
+    assert cd.stampable_chat(p.engine, plain) == plain
 
 
 def test_an_archived_chat_stays_archived_and_the_bell_says_a_report_arrived(p):

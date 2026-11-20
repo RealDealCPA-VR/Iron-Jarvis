@@ -406,6 +406,10 @@ def restore_goal_contract(platform: Any, goal_id: str, prior: dict[str, Any] | N
             row.updated_at = utcnow()
         db.add(row)
         db.commit()
+    if not recreated and prior.get(REPORT_CHANGE_MARK):
+        # Idea 39 (39-a): the Undo of a report_here change puts back the chat
+        # it reported to (a chat that is gone since stays unset).
+        R._restore_report_target(platform, "goal", goal_id, prior)
     try:
         # The store's schedule rule (enabled IFF active) — the same call every
         # state door ends in.
@@ -459,13 +463,24 @@ def _describe_contract(c: dict[str, Any] | None) -> str | None:
     if c is None:
         return None
     words = CONTRACT_STATE_WORDS.get(str(c.get("state") or ""), str(c.get("state") or ""))
-    return words + (f", on schedule {c['schedule']}" if c.get("schedule") else "")
+    return words + (f", on schedule {c['schedule']}" if c.get("schedule") else "") + R._reports_words(c)
 
 
-async def update_goal_contract(tool: Any, goal_id: str, args: dict[str, Any]) -> ToolResult:
+#: Idea 39 (39-a, review): the snapshot marker of a ``goal_update`` that
+#: changes where a goal from chat reports, so its Undo puts the chat back
+#: (an Undo of a pause alone never re-points reports the user stopped since).
+REPORT_CHANGE_MARK = "_report_change"
+
+
+async def update_goal_contract(
+    tool: Any, goal_id: str, args: dict[str, Any], ctx: "ToolContext | None" = None
+) -> ToolResult:
     """``goal_update`` on a goal from chat: pause (``status: paused``),
     resume (``active``), stop (``stopped``, or ``abandoned`` — the standing
-    goals' word for it). Through the engine's own doors."""
+    goals' word for it). Through the engine's own doors. Idea 39 (39-a):
+    ``report_here`` true makes each try report in THIS chat, false is Stop
+    reporting; it is checked before anything changes and applied after the
+    state change (which is put back if the report change then fails)."""
     platform = tool.platform
     eng = _goal_engine(platform)
     if eng is None:
@@ -478,17 +493,34 @@ async def update_goal_contract(tool: Any, goal_id: str, args: dict[str, Any]) ->
         if args.get(k) is not None
     ]
     status = str(args.get("status") or "").strip().lower()
+    report_here = args.get("report_here")
     if others:
         return ToolResult(ok=False, error=CONTRACT_FIELDS_REFUSAL)
-    if not status:
-        return ToolResult(ok=False, error="Say what to do with it: status paused, active (resume) or stopped.")
+    if not status and not isinstance(report_here, bool):
+        return ToolResult(
+            ok=False,
+            error="Say what to do with it: status paused, active (resume) or stopped, "
+            "or report_here (true: report each try in this chat; false: Stop reporting).",
+        )
     if status == "done":
         return ToolResult(ok=False, error=CONTRACT_DONE_REFUSAL)
+    from ..agents.chat_delivery import set_report_target, stampable_chat
+
+    report_chat = ""
+    if report_here is True:
+        report_chat = await asyncio.to_thread(
+            stampable_chat, platform.engine, getattr(ctx, "thread_id", "") if ctx is not None else ""
+        )
+        if not report_chat:
+            return ToolResult(ok=False, error="Reports go to a saved chat on the Chat page; this one cannot take them.")
     name = before.get("name") or goal_id
     state = str(before.get("state") or "")
     running = ""
+    did = ""
     try:
-        if status == "paused":
+        if not status:
+            pass
+        elif status == "paused":
             if state == "paused":
                 return ToolResult(ok=False, error=f"The goal from chat '{name}' is already paused.")
             await asyncio.to_thread(eng.store.transition, goal_id, "paused")
@@ -518,6 +550,16 @@ async def update_goal_contract(tool: Any, goal_id: str, args: dict[str, Any]) ->
     except ValueError as exc:
         # The transition guard's own sentence ("a satisfied goal cannot become paused").
         return ToolResult(ok=False, error=f"The goal from chat '{name}' could not change: {exc}.")
+    reports = ""
+    if isinstance(report_here, bool):
+        moved = await asyncio.to_thread(set_report_target, platform.engine, "goal", goal_id, report_chat)
+        if not moved.get("ok"):
+            if did:
+                # The state change is put back: the answer says it failed, so
+                # nothing may have changed.
+                await asyncio.to_thread(restore_goal_contract, platform, goal_id, before)
+            return ToolResult(ok=False, error=str(moved.get("why") or "That could not be changed."))
+        reports = " It reports each try in this chat." if report_chat else " It stopped reporting."
     after = await asyncio.to_thread(snap_goal_contract, platform, goal_id)
     note = (
         " Its run in progress was stopped too; Undo puts the goal back but does not start that run again."
@@ -525,9 +567,10 @@ async def update_goal_contract(tool: Any, goal_id: str, args: dict[str, Any]) ->
         else ""
     )
     label = f"Goal from chat “{name}”"
+    lead = f"{did} the goal from chat '{name}'." if did else f"Goal from chat '{name}':"
     return ToolResult(
         ok=True,
-        output=f"{did} the goal from chat '{name}'.{note}",
+        output=f"{lead}{reports}{note}",
         data={
             "record_change": tool._card(
                 "Goal changed", label, _describe_contract(before), _describe_contract(after), f"goal.{goal_id}"

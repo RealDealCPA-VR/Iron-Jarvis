@@ -197,11 +197,21 @@ def register(app: FastAPI, d) -> None:
                 stmt = stmt.offset(offset)
             rows = list(db.exec(stmt))
 
+        # Idea 39 (39-a): a run from a chat says where its end is reported
+        # ("Reports to <chat>" with Stop reporting while it runs). One read
+        # of the titles; the key rides only on such a run.
+        from ...agents import chat_delivery as _cd
+
+        titles = _cd.chat_titles(d.platform.engine, [getattr(r, "chat_thread_id", "") for r in rows])
+
         def _dump(r) -> dict[str, Any]:
             out = r.model_dump()
             if slim:
                 out.pop("steps_json", None)
                 out.pop("outputs_json", None)
+            to = _cd.reports_to_view(getattr(r, "chat_thread_id", ""), titles)
+            if to is not None:
+                out["reports_to"] = to
             return out
 
         return {"runs": [_dump(r) for r in rows]}

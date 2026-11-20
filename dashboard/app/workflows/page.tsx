@@ -9,6 +9,7 @@ import { post, ApiError } from "@/lib/api";
 import { couldnt, couldntLoad, couldntWhileNoAnswer, failureOf, serverSentence } from "@/lib/loadFailed";
 import { summaryLine } from "@/lib/plainText";
 import type { WorkflowRun, WorkflowStep } from "@/lib/types";
+import { ReportsTo } from "@/components/ReportsTo";
 import {
   STARTERS,
   isLiveRun,
@@ -856,6 +857,11 @@ function RunHistory() {
                       </td>
                       <td className="px-2 py-2.5 text-zinc-100">
                         {r.workflow_name || "—"}
+                        {/* Idea 39 (39-a): run from a chat, its end is
+                            reported there; while it runs, Stop reporting. */}
+                        {isLiveRun(r) && r.id != null ? (
+                          <ReportsTo kind="workflow" id={String(r.id)} to={r.reports_to} onChanged={reload} />
+                        ) : null}
                       </td>
                       <td className="px-2 py-2.5">
                         <div className="flex flex-wrap items-center gap-2">

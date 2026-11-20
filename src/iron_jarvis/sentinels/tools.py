@@ -110,19 +110,42 @@ class SentinelAddTool(Tool):
             "kind": rec.kind,
             "enabled": rec.enabled,
         }
+        reports = bool(getattr(rec, "chat_thread_id", ""))
+        # Review (idea 39, release check 8): the watcher loop is OFF until the
+        # user turns watchers on, so nothing is noticed or reported before
+        # that. The card and the answer say the one step.
+        watching = bool(getattr(getattr(self.platform, "config", None), "sentinels_enabled", False))
         card = _created_card(rec.name, rec.decoded_config().get("path") or rec.kind)
         if card:
-            if getattr(rec, "chat_thread_id", ""):
+            if reports:
                 # Idea 39 (39-a): the card says where what it notices will go.
                 from ..scheduling.tools import REPORTS_HERE_CARD
 
-                card["new"] = f"{card.get('new') or ''} \u00b7 {REPORTS_HERE_CARD}".strip(" \u00b7")
+                here = REPORTS_HERE_CARD if watching else f"{REPORTS_HERE_CARD} {REPORTS_ONCE_ON}"
+                card["new"] = f"{card.get('new') or ''} \u00b7 {here}".strip(" \u00b7")
             data["record_change"] = card
-        return ToolResult(
-            ok=True,
-            output=f"created sentinel '{rec.name}' (kind={rec.kind}); suggest-only",
-            data=data,
-        )
+        data["reports_here"] = reports
+        data["watching"] = watching
+        output = f"created sentinel '{rec.name}' (kind={rec.kind}); suggest-only"
+        if reports:
+            output += f"; {REPORTS_HERE_WATCHER}"
+        if not watching:
+            output += f". {WATCHERS_OFF_WORDS}"
+        return ToolResult(ok=True, output=output, data=data)
+
+
+#: Idea 39 (39-a): what a watcher made in a chat tells the model and the user.
+REPORTS_HERE_WATCHER = (
+    "it reports what it notices in this chat, at most once an hour "
+    "(Stop reporting is on its row and on each report)"
+)
+#: The card's words while watchers are off.
+REPORTS_ONCE_ON = "once watchers are on"
+#: The one step while watchers are off (the Watchers page's own button words).
+WATCHERS_OFF_WORDS = (
+    "Watchers are off, so it notices nothing and reports nothing until you turn watchers on: "
+    "press Turn watchers on on the Watchers page, or ask me to turn on folder watchers"
+)
 
 
 def _created_card(name: str, where: str) -> dict[str, Any] | None:

@@ -362,7 +362,9 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="goal not found")
         return record
 
-    def _payload(record, *, include_stats: bool = False) -> dict[str, Any]:
+    def _payload(
+        record, *, include_stats: bool = False, titles: "dict[str, str] | None" = None
+    ) -> dict[str, Any]:
         """``goal_view`` + ``grant_offers`` (EVERY serialized goal carries the
         offer list, so the list, the detail and every verb response agree);
         the raw ``ask_stats`` ride only the detail route — the counts back the
@@ -376,10 +378,13 @@ def register(app: FastAPI, d) -> None:
         # Idea 39 (39-a): "Reports to <chat>" with Stop reporting.
         from ...agents import chat_delivery as _cd
 
+        # ``titles``: the list route reads every goal's chat title in ONE read
+        # (review); a single goal reads its own. BLOCKING: an async caller
+        # hops the whole payload off the loop.
         _chat = view.get("chat_thread_id") or ""
-        view["reports_to"] = _cd.reports_to_view(
-            _chat, _cd.chat_titles(d.platform.engine, [_chat]) if _chat else {}
-        )
+        if titles is None:
+            titles = _cd.chat_titles(d.platform.engine, [_chat]) if _chat else {}
+        view["reports_to"] = _cd.reports_to_view(_chat, titles)
         # v1.299.0: exact offers ("always allow THIS command") and the live
         # standing grants this goal holds, so the card can show and revoke
         # them. Labels are the REDACTED display; args never ride here.
@@ -402,7 +407,11 @@ def register(app: FastAPI, d) -> None:
                 status_code=400,
                 detail=f"unknown goal state {state!r}; expected one of {GOAL_STATES}",
             )
-        return {"goals": [_payload(g) for g in _engine().store.list(state)]}
+        from ...agents import chat_delivery as _cd
+
+        rows = _engine().store.list(state)
+        titles = _cd.chat_titles(d.platform.engine, [getattr(g, "chat_thread_id", "") for g in rows])
+        return {"goals": [_payload(g, titles=titles) for g in rows]}
 
     # ----------------------------------------------------------------------- #
     # DIGEST (G2, v1.209.0) — added by the digest agent this wave; every other
@@ -560,7 +569,8 @@ def register(app: FastAPI, d) -> None:
             # The store's refusal sentence VERBATIM — it already says why and
             # what to do instead (deny floor, budget rules, verifier rules).
             raise HTTPException(status_code=400, detail=plain_failure("That goal could not be saved.", exc))
-        return {"goal": _payload(record)}
+        # Review: the payload reads SQLite (asks, the chat's title): off the loop.
+        return {"goal": await asyncio.to_thread(_payload, record)}
 
     @app.post("/goals/{goal_id}/run")
     async def run_goal_contract(goal_id: str) -> dict[str, Any]:
@@ -601,7 +611,7 @@ def register(app: FastAPI, d) -> None:
             record = await _engine().stop_goal(goal_id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=plain_failure("That goal could not be stopped.", exc))
-        return {"goal": _payload(record)}
+        return {"goal": await asyncio.to_thread(_payload, record)}
 
     @app.post("/goals/{goal_id}/reopen")
     def reopen_goal_contract(goal_id: str) -> dict[str, Any]:

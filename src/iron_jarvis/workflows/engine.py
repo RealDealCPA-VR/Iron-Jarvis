@@ -711,6 +711,7 @@ class WorkflowEngine:
                     "sessions": [],
                     "failed_session": "",
                     "reason": reason,
+                    **(await self._chat_payload(run_id)),
                 },
             )
         except Exception:  # noqa: BLE001 — the row is right; the notice is best effort
@@ -1014,6 +1015,9 @@ class WorkflowEngine:
                     if final_status == PART_FAILED_STATUS
                     else {}
                 ),
+                # Idea 39 (39-a): a run from a chat names it, so the bell and
+                # the tray open that chat (absent for every other run).
+                **(await self._chat_payload(run_id, final)),
             },
         )
         await self._report_end(
@@ -1021,6 +1025,21 @@ class WorkflowEngine:
             steps=[s.name for s in steps], outputs=outputs,
         )
         return final if final is not None else record
+
+    async def _chat_payload(self, run_id: str, rec: Any = None) -> dict[str, str]:
+        """Idea 39 (39-a): ``{"chat_thread_id": id}`` for a run set up from a
+        chat (``workflow.completed`` then opens that chat in the bell and the
+        tray), ``{}`` for any other run, so its payload is as before. Never
+        raises."""
+        try:
+            from ..agents.chat_delivery import clean_chat_thread_id
+
+            if rec is None:
+                rec = await asyncio.to_thread(self._get_record, run_id)
+            chat = clean_chat_thread_id(getattr(rec, "chat_thread_id", "") or "")
+            return {"chat_thread_id": chat} if chat else {}
+        except Exception:  # noqa: BLE001 — the notice opens the Workflows page
+            return {}
 
     async def _report_end(
         self,
@@ -1224,6 +1243,7 @@ class WorkflowEngine:
                     "failed_session": ended_by_session(
                         (s.name for s in wf.steps), outputs
                     ),
+                    **(await self._chat_payload(record.id, final)),
                 },
             )
             await self._report_end(

@@ -1772,7 +1772,7 @@ def _earlier_sends(history: Iterable[Any]) -> list[str]:
         content = getattr(m, "content", "")
         if not isinstance(content, str) or not content.strip():
             continue
-        if content.lstrip().startswith(_AGENT_LINE_PREFIX):
+        if content.lstrip().startswith(_NOT_JARVIS_PREFIXES):
             continue
         text = content[-MAX_HISTORY_CHARS:]
         if any(ln.lstrip().startswith("_Note:") and _NO_MESSAGE_SENT in ln for ln in text.split("\n")):
@@ -2105,6 +2105,13 @@ NEXT_MESSAGE = "; Local only applies from your next message"
 #: SAME words ``comm.threads.agent_line_label`` and the page's
 #: ``toRequestMessages`` put first on such a line.
 _AGENT_LINE_PREFIX = "[Reply from the agent "
+#: Idea 39 (39-a, review): a REPORT in the chat (a schedule's run summary, a
+#: watcher's file names) is never Iron Jarvis's own earlier claim either. The
+#: SAME words as ``chat_refs.REPORT_LINE_PREFIX`` and the page's
+#: ``reportRequestLabel``.
+_REPORT_LINE_PREFIX = "[Report from "
+#: Every label of a line that is not Iron Jarvis's own words.
+_NOT_JARVIS_PREFIXES = (_AGENT_LINE_PREFIX, _REPORT_LINE_PREFIX)
 
 #: The words of a claim that are not its VALUE ("Sonnet", "Daylight", "9pm").
 _NOT_A_VALUE = (
@@ -2172,8 +2179,8 @@ def _excused(history: Iterable[Any]) -> list[tuple[set[tuple[str, str]], str, se
         content = getattr(m, "content", "")
         if not isinstance(content, str) or not content.strip():
             continue
-        if content.lstrip().startswith(_AGENT_LINE_PREFIX):
-            continue  # another agent said it, never Iron Jarvis
+        if content.lstrip().startswith(_NOT_JARVIS_PREFIXES):
+            continue  # another agent said it (or a report wrote it), never Iron Jarvis
         text = content[-MAX_HISTORY_CHARS:]
         noted = " ".join(
             ln for ln in text.split("\n") if ln.lstrip().startswith("_Note:") and IN_THIS_REPLY in ln

@@ -498,13 +498,21 @@ def _clean_line(raw: Any, stamp: str) -> dict[str, Any] | None:
 def _fold_index(msgs: list, line: dict[str, Any]) -> "int | None":
     """Idea 39 (39-a): where the live window holds the day's line of the same
     record (the same ``reportFold``), newest first; None when it holds none or
-    the line is not a report that folds. Pure."""
+    the line is not a report that folds. Pure.
+
+    Review: a day's line the USER has answered since is never rewritten (the
+    chat, and the history the model reads, keep what was talked about and its
+    run link): None, so the report is appended as a new line, which later
+    reports that day fold into. An unattended hourly schedule still keeps one
+    line a day."""
     fold = str(line.get("reportFold") or "").strip()
     if not fold or not isinstance(line.get("reportFrom"), dict):
         return None
     for i in range(len(msgs) - 1, -1, -1):
         m = msgs[i]
         if isinstance(m, dict) and str(m.get("reportFold") or "").strip() == fold:
+            if any(isinstance(after, dict) and after.get("role") == "user" for after in msgs[i + 1:]):
+                return None
             return i
     return None
 

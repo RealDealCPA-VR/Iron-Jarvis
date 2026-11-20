@@ -238,6 +238,15 @@ def deliver_session_line(
         who = participant_key_for(session)
         line = line_for_session(session, result, who)
         if source is not None:
+            # Idea 39 (39-a, review): Stop reporting pressed while this run was
+            # going (or the record pointed at another chat since) holds its
+            # report back: the record's own field is read NOW, not the
+            # options the run was started with.
+            kind = str(source.get("kind") or "")
+            rid = str(source.get("id") or "")
+            if kind in REPORT_TARGET_KINDS and rid and report_target_of(engine, kind, rid) != thread_id:
+                return {"ok": True, "updated_at": None, "why": "it stopped reporting here",
+                        "appended": 0, "skipped": 1}
             return _write_report(engine, event_bus, thread_id, line, source)
         return _chat_append.append_to_chat_thread(
             engine, thread_id, [line], event_bus=event_bus, who=who
@@ -579,14 +588,23 @@ def _write_report(
     name = _one_line(source.get("name"), 120)
     rid = str(source.get("id") or "")
     if not out.get("ok") and out.get("why") == "no such chat":
-        cleared = set_report_target(engine, kind, rid, "") if kind in REPORT_TARGET_KINDS else {}
+        # Review: clear the link only while it still names THIS chat (a run
+        # fired for chat A must not clear a record pointed at chat B since).
+        cleared = (
+            set_report_target(engine, kind, rid, "", only_if=thread_id)
+            if kind in REPORT_TARGET_KINDS else {}
+        )
         out["gone"] = True
         out["cleared"] = bool(cleared.get("ok"))
-        _publish_event(event_bus, EventType.REPORT_CHAT_GONE, {
-            "kind": kind, "name": name, "id": rid,
-            "href": str(source.get("href") or REPORT_HREFS.get(kind) or ""),
-            "words": GONE_WORDS.format(kind=REPORT_KIND_WORDS.get(kind, "task")),
-        })
+        if out["cleared"]:
+            # The record's own row says why it reports nowhere now.
+            note_gone_on_row(engine, kind, rid)
+        if out["cleared"] or kind not in REPORT_TARGET_KINDS:
+            _publish_event(event_bus, EventType.REPORT_CHAT_GONE, {
+                "kind": kind, "name": name, "id": rid,
+                "href": str(source.get("href") or REPORT_HREFS.get(kind) or ""),
+                "words": GONE_WORDS.format(kind=REPORT_KIND_WORDS.get(kind, "task")),
+            })
     elif out.get("ok") and out.get("archived") and (out.get("appended") or 0) > 0:
         _publish_event(event_bus, EventType.REPORT_ARRIVED, {
             "thread_id": thread_id, "title": _one_line(out.get("title"), 120),
@@ -667,12 +685,27 @@ def report_target_of(engine: Any, kind: str, record_id: str) -> str:
         return ""
 
 
-def set_report_target(engine: Any, kind: str, record_id: str, thread_id: str) -> dict[str, Any]:
+def _takes_reports(chat: Any) -> bool:
+    """Whether a saved chat row may take reports: a chat on the Chat page,
+    never a phone conversation (``owner == "daemon"``, until 39-c) or a coding
+    session (``surface == "build"``, its own turns write it). Pure."""
+    if chat is None:
+        return False
+    if (getattr(chat, "owner", "user") or "user") == "daemon":
+        return False
+    return str(getattr(chat, "surface", "") or "") != "build"
+
+
+def set_report_target(
+    engine: Any, kind: str, record_id: str, thread_id: str, *, only_if: "str | None" = None
+) -> dict[str, Any]:
     """Point ``kind``'s record ``record_id`` at the chat ``thread_id`` ("" =
     Stop reporting). Returns ``{ok, why, previous, thread_id}``; ``previous``
     is the chat it reported to before (the Undo puts it back). A chat id must
     name a saved chat of the user's (never a phone thread or a coding
-    session). BLOCKING; never raises."""
+    session). ``only_if`` (review): change it only while the record still
+    names that chat (compare-and-clear; ``why`` says so otherwise). BLOCKING;
+    never raises."""
     out: dict[str, Any] = {"ok": False, "why": "", "previous": "", "thread_id": ""}
     cls = _record_class(kind)
     if cls is None:
@@ -689,9 +722,7 @@ def set_report_target(engine: Any, kind: str, record_id: str, thread_id: str) ->
                 if chat is None:
                     out["why"] = "That chat is not saved, so nothing can report to it."
                     return out
-                if (getattr(chat, "owner", "user") or "user") == "daemon" or str(
-                    getattr(chat, "surface", "") or ""
-                ) == "build":
+                if not _takes_reports(chat):
                     out["why"] = "Reports go to a chat on the Chat page, not to this one."
                     return out
             row = db.get(cls, str(record_id or ""))
@@ -699,6 +730,9 @@ def set_report_target(engine: Any, kind: str, record_id: str, thread_id: str) ->
                 out["why"] = f"There is no such {REPORT_KIND_WORDS.get(kind, kind)}."
                 return out
             out["previous"] = clean_chat_thread_id(getattr(row, "chat_thread_id", "") or "")
+            if only_if is not None and out["previous"] != clean_chat_thread_id(only_if):
+                out["why"] = "It reports to another chat now."
+                return out
             row.chat_thread_id = tid
             db.add(row)
             db.commit()
@@ -711,13 +745,87 @@ def set_report_target(engine: Any, kind: str, record_id: str, thread_id: str) ->
         return out
 
 
+#: Idea 39 (39-a, review): what a record's own row says once the chat it
+#: reported to is gone (the link is cleared; the bell says it too).
+GONE_ROW_WORDS = "Its reports stopped: the chat they went to is gone."
+
+
+def note_gone_on_row(engine: Any, kind: str, record_id: str) -> bool:
+    """Write :data:`GONE_ROW_WORDS` on the record's own row, where its page
+    shows words: a schedule's last result line (``last_detail``), a night
+    task's notes, a workflow run's notes (``notes_json``). Once (a second call
+    keeps one). A watcher's only words on its row are its scan error (cleared
+    by its next scan) and a goal's row has none, so for those the bell's
+    ``report.chat_gone`` says it. BLOCKING; never raises."""
+    rid = str(record_id or "").strip()
+    if not rid:
+        return False
+    try:
+        if kind == "night":
+            from ..harness.night import add_note
+
+            return bool(add_note(engine, rid, "info", GONE_ROW_WORDS))
+        if kind == "workflow":
+            import json as _json
+
+            from ..core.db import session_scope
+            from ..workflows.models import WorkflowRunRecord
+
+            with session_scope(engine) as db:
+                run = db.get(WorkflowRunRecord, rid)
+                if run is None:
+                    return False
+                try:
+                    notes = _json.loads(run.notes_json or "[]")
+                except (TypeError, ValueError):
+                    notes = []
+                notes = notes if isinstance(notes, list) else []
+                if GONE_ROW_WORDS not in notes:
+                    run.notes_json = _json.dumps([*notes, GONE_ROW_WORDS])
+                    db.add(run)
+                    db.commit()
+            return True
+        if kind == "schedule":
+            from ..core.db import session_scope
+            from ..scheduling.models import ScheduledTaskRecord
+
+            with session_scope(engine) as db:
+                row = db.get(ScheduledTaskRecord, rid)
+                if row is None:
+                    return False
+                detail = " ".join(str(row.last_detail or "").split())
+                if GONE_ROW_WORDS in detail:
+                    return True
+                keep = 300 - len(GONE_ROW_WORDS) - 1
+                row.last_detail = (f"{detail[:keep]} {GONE_ROW_WORDS}").strip()
+                db.add(row)
+                db.commit()
+            return True
+    except Exception:  # noqa: BLE001 — the bell still says it
+        log.warning("could not note on a %s's row that its chat is gone", kind, exc_info=True)
+    return False
+
+
+def note_gone_if_cleared(engine: Any, kind: str, record_id: str, thread_id: str) -> bool:
+    """After a source wrote its own row (a schedule's fire stamps its last
+    result AFTER its run's report): when the record no longer reports and the
+    chat ``thread_id`` it reported to is gone, say so on the row again.
+    BLOCKING; never raises."""
+    tid = clean_chat_thread_id(thread_id)
+    if not tid or report_target_of(engine, kind, record_id):
+        return False
+    if chat_titles(engine, [tid]):
+        return False  # the chat is there: the user stopped it, nothing is gone
+    return note_gone_on_row(engine, kind, record_id)
+
+
 def stampable_chat(engine: Any, thread_id: Any) -> str:
     """The chat a create tool may stamp on its record (idea 39, 39-a): the
     saved chat it was asked in (``ToolContext.thread_id``, set by both chat
     lanes and by a run started from a chat), "" when there is none, it is not
-    saved, or it is a coding session (its own turns write it). A phone thread
-    is kept (its reports are refused in words until 39-c). BLOCKING; never
-    raises."""
+    saved, it is a coding session (its own turns write it) or a phone
+    conversation (review: nothing can report there until 39-c, so nothing
+    says it does). BLOCKING; never raises."""
     tid = clean_chat_thread_id(thread_id)
     if not tid or engine is None:
         return ""
@@ -727,7 +835,7 @@ def stampable_chat(engine: Any, thread_id: Any) -> str:
 
         with session_scope(engine) as db:
             row = db.get(ChatThreadRecord, tid)
-            if row is None or str(getattr(row, "surface", "") or "") == "build":
+            if not _takes_reports(row):
                 return ""
         return tid
     except Exception:  # noqa: BLE001 — unreadable: nothing is stamped

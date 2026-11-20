@@ -949,16 +949,28 @@ def _reports_words(s: dict[str, Any]) -> str:
     return ", reports to a chat" if s.get("chat_thread_id") else ""
 
 
-async def _report_here(platform: Any, kind: str, record_id: str, ctx: ToolContext, on: bool) -> str:
-    """Idea 39 (39-a): "report to this chat" (``on``) or "stop reporting here"
-    from chat. "" when done, else the sentence that says why not."""
-    from ..agents.chat_delivery import set_report_target, stampable_chat
+#: Idea 39 (39-a): why "report to this chat" cannot be done from here.
+CANNOT_TAKE_REPORTS = "Reports go to a saved chat on the Chat page; this one cannot take them."
 
-    chat = ""
-    if on:
-        chat = await asyncio.to_thread(stampable_chat, platform.engine, getattr(ctx, "thread_id", ""))
-        if not chat:
-            return "Reports go to a saved chat on the Chat page; this one cannot take them."
+
+async def _report_chat_for(platform: Any, ctx: ToolContext, on: bool) -> tuple[str, str]:
+    """Idea 39 (39-a): ``(chat, why)`` for ``report_here`` = ``on``: the chat
+    it would report to ("" = Stop reporting), or the sentence that says why
+    this chat cannot take reports. Changes nothing (review: a tool checks this
+    FIRST and changes the record only after the rest of the call is valid)."""
+    if not on:
+        return "", ""
+    from ..agents.chat_delivery import stampable_chat
+
+    chat = await asyncio.to_thread(stampable_chat, platform.engine, getattr(ctx, "thread_id", ""))
+    return (chat, "") if chat else ("", CANNOT_TAKE_REPORTS)
+
+
+async def _apply_report_here(platform: Any, kind: str, record_id: str, chat: str) -> str:
+    """Point the record at ``chat`` ("" = Stop reporting). "" when done, else
+    the sentence that says why not."""
+    from ..agents.chat_delivery import set_report_target
+
     out = await asyncio.to_thread(set_report_target, platform.engine, kind, record_id, chat)
     return "" if out.get("ok") else str(out.get("why") or "That could not be changed.")
 
@@ -2189,10 +2201,14 @@ class ScheduleUpdateTool(_RecordTool):
         payload = args.get("payload")
         if isinstance(payload, dict) and payload.get("script") not in (None, {}):
             return ToolResult(ok=False, error=_knobs.SCRIPT_FROM_AGENT_REFUSAL)
-        # Idea 39 (39-a): "report here" / "stop reporting here" first, so a
-        # chat that cannot take reports changes nothing at all.
-        if isinstance(args.get("report_here"), bool):
-            why = await _report_here(self.platform, "schedule", before.get("id") or "", ctx, args["report_here"])
+        # Idea 39 (39-a): "report here" / "stop reporting here" is CHECKED
+        # first (a chat that cannot take reports changes nothing at all) and
+        # APPLIED last (review: a bad cron or payload must not have moved the
+        # reports while the answer says the call failed).
+        report_here = args.get("report_here")
+        report_chat = ""
+        if isinstance(report_here, bool):
+            report_chat, why = await _report_chat_for(self.platform, ctx, report_here)
             if why:
                 return ToolResult(ok=False, error=why)
         try:
@@ -2219,6 +2235,12 @@ class ScheduleUpdateTool(_RecordTool):
             return ToolResult(ok=False, error=exc.detail)
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
+        if isinstance(report_here, bool):
+            why = await _apply_report_here(self.platform, "schedule", before.get("id") or "", report_chat)
+            if why:
+                # The rest of the change is put back: the answer says it failed.
+                await asyncio.to_thread(restore_schedule, self.platform, name, before)
+                return ToolResult(ok=False, error=why)
         after = await asyncio.to_thread(snap_schedule, self.platform, name)
         old, new = _describe_schedule(before), _describe_schedule(after)
         return ToolResult(
@@ -3383,13 +3405,21 @@ class SentinelUpdateTool(_RecordTool):
         report_here = args.get("report_here")
         if not isinstance(args.get("enabled"), bool) and not isinstance(report_here, bool):
             return ToolResult(ok=False, error="Say `enabled`: true to resume it, false to pause it.")
-        # Idea 39 (39-a): "report here" / "stop reporting here" from chat.
+        # Idea 39 (39-a): "report here" / "stop reporting here" from chat:
+        # checked first, applied after the pause / resume (review).
+        report_chat = ""
         if isinstance(report_here, bool):
-            why = await _report_here(self.platform, "watcher", before.get("id") or "", ctx, report_here)
+            report_chat, why = await _report_chat_for(self.platform, ctx, report_here)
             if why:
                 return ToolResult(ok=False, error=why)
         if isinstance(args.get("enabled"), bool):
             await asyncio.to_thread(self.platform.sentinels.set_enabled, name, bool(args["enabled"]))
+        if isinstance(report_here, bool):
+            why = await _apply_report_here(self.platform, "watcher", before.get("id") or "", report_chat)
+            if why:
+                if isinstance(args.get("enabled"), bool):
+                    await asyncio.to_thread(self.platform.sentinels.set_enabled, name, bool(before.get("enabled")))
+                return ToolResult(ok=False, error=why)
         after = await asyncio.to_thread(snap_sentinel, self.platform, name)
         old, new = _describe_sentinel(before), _describe_sentinel(after)
         return ToolResult(
@@ -3448,8 +3478,9 @@ class GoalUpdateTool(_GoalTool):
         "done, abandoned), `text`, `category`, `priority` 1-5, its autonomy dial "
         "`autonomy_level` (suggest, act_low, act_all) or its budgets (`action_budget`, "
         "`spend_budget` tokens). A GOAL FROM CHAT (goal_list marks it) can only be paused "
-        "(`status` paused), resumed (active) or stopped (stopped). The user approves on a card; "
-        "the change has an Undo."
+        "(`status` paused), resumed (active) or stopped (stopped), and `report_here`: true "
+        "makes each try report in THIS chat, false stops its reports (Stop reporting). The "
+        "user approves on a card; the change has an Undo."
     )
     input_schema = {
         "type": "object",
@@ -3462,9 +3493,25 @@ class GoalUpdateTool(_GoalTool):
             "autonomy_level": {"type": "string", "enum": ["suggest", "act_low", "act_all"]},
             "action_budget": {"type": "integer", "minimum": 0},
             "spend_budget": {"type": "integer", "minimum": 0},
+            "report_here": {"type": "boolean"},
         },
         "required": ["goal"],
     }
+
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
+        """Idea 39 (39-a): a ``report_here`` change marks its snapshot, so its
+        Undo puts back the chat the goal reported to (and only then)."""
+        out = await super().capture_undo(args, ctx)
+        if out is None or not isinstance(args.get("report_here"), bool):
+            return out
+        try:
+            desc = json.loads(out["pre_inline"])
+            if desc.get("record") == "goal_contract" and isinstance(desc.get("prior"), dict):
+                desc["prior"][_hist().REPORT_CHANGE_MARK] = True
+                out["pre_inline"] = json.dumps(desc, default=str)
+        except Exception:  # noqa: BLE001 — the Undo still puts the state back
+            pass
+        return out
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..motivation.models import AUTONOMY_LEVELS
@@ -3473,7 +3520,12 @@ class GoalUpdateTool(_GoalTool):
         if problem:
             return ToolResult(ok=False, error=problem)
         if kind == "goal_contract":
-            return await _hist().update_goal_contract(self, gid, args)
+            return await _hist().update_goal_contract(self, gid, args, ctx)
+        if isinstance(args.get("report_here"), bool):
+            return ToolResult(
+                ok=False,
+                error="Only a goal from chat reports to a chat; a standing goal's work shows on the Autonomy page.",
+            )
         before = await asyncio.to_thread(snap_goal, self.platform, gid) if gid else None
         if before is None:
             return self._missing(args)

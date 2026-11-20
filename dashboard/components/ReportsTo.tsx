@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Reports to <chat>" on a Schedules, Watchers or Goals row (idea 39, 39-a):
+ * "Reports to <chat>" on a Schedules, Watchers, Goals or Workflows row (idea 39, 39-a):
  * the chat this was set up from, where each result is written, and **Stop
  * reporting** with Undo right after it. Nothing is drawn for a record that
  * reports nowhere (made on a page, or stopped), so a row stays as it was.
@@ -67,7 +67,11 @@ export function ReportsTo({
             type="button"
             data-testid="reports-to-stop"
             disabled={busy}
-            onClick={() => change("")}
+            onClick={(e) => {
+              // A row that opens on a click (Workflows) stays as it is.
+              e.stopPropagation();
+              void change("");
+            }}
             className="text-zinc-500 underline-offset-2 transition-colors hover:text-zinc-200 hover:underline disabled:opacity-50"
           >
             {STOP_REPORTING}
@@ -80,7 +84,10 @@ export function ReportsTo({
             type="button"
             data-testid="reports-to-undo"
             disabled={busy}
-            onClick={() => change(stopped)}
+            onClick={(e) => {
+              e.stopPropagation();
+              void change(stopped);
+            }}
             className="text-accent-soft transition-colors hover:text-accent disabled:opacity-50"
           >
             Undo

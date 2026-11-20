@@ -95,6 +95,14 @@ def _speaker(m: dict) -> str | None:
     label = _ROLE_LABELS.get(role)
     if role != "assistant":
         return label
+    source = m.get("reportFrom")
+    if isinstance(source, dict):
+        # Idea 39 (39-a, review): a REPORT (a schedule's run summary, a
+        # watcher's file names) is never "Jarvis:" either.
+        from ..agents.chat_delivery import REPORT_KIND_WORDS
+
+        word = REPORT_KIND_WORDS.get(str(source.get("kind") or ""), "task")
+        return f"Report from your {word} (not Jarvis)"
     who = m.get("panelWho")
     if not isinstance(who, str) or not who.strip():
         return label
