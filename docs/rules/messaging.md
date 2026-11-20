@@ -422,13 +422,20 @@ How to use this file: read the contents list, then read only the entries your ch
   on the sending side counts what it did not pass (`/chat/panel`'s 600 rows,
   `_panel_history_earlier`; the phone's 60, `CommThreadStore.history_window`)
   into `run_round(chat_earlier=)` by who said it (a project room's remote
-  counts only the user's and its own, `AgentThreads._earlier_for`);
-  `remote_history` returns every row and `RemoteAgentRegistry.run` alone cuts
-  to `_HISTORY_ROWS`, adding what it cut; the sum rides as
+  counts only the user's and its own, `AgentThreads._earlier_for`). A
+  reopened long chat sends only its live 200: `/chat/panel` finds the page's
+  first 8 rows in the SAVED chat (its older messages, then the live ones,
+  `_saved_chat_earlier`, off the loop, first match) and counts what comes
+  before them; rows not found count nothing (never more than were). A phone
+  chat keeps only its newest 200 (`comm/threads.py`), so its count is of
+  those. `remote_history` returns every row and `RemoteAgentRegistry.run`
+  alone cuts to `_HISTORY_ROWS`, adding what it cut; the sum rides as
   `history_held_back` to a task door ONLY, only when not 0 (any other
   remote's body is unchanged), and the door adds it (`held_back_of`, a whole
-  number, capped) to its own left-out count, saying "How the newest N of
-  them began" when it cannot quote them all. A sender from before this sends
-  no count, so the door counts what arrived. Left open: the conversation is
-  not fenced inside the task; 41-c brings its own budget for a whole
-  hand-over. Pin: `tests/test_task_door_history_budget_r01.py`.
+  number, capped) to its own left-out count. The sentence above the list is
+  worded from the lines that really follow it (`left_out_words(n, listed,
+  arrived)`, made after the list): "How the first 5 of them began", "How
+  the oldest 5 of the 55 that reached this computer began". A sender from
+  before this sends no count, so the door counts what arrived. Left open: the
+  conversation is not fenced inside the task; 41-c brings its own budget for
+  a whole hand-over. Pin: `tests/test_task_door_history_budget_r01.py`.

@@ -616,23 +616,37 @@ def _layout_tokens(rows: int, chars_per_token: float | None) -> int:
     )
 
 
-def left_out_words(n: int, shown: int | None = None) -> str:
-    """The sentence above the list of messages that did not fit. ``n`` is how
-    many were left out in all; ``shown`` how many of them this computer has
-    (the newest of them: the sender held the older ones back), None for all
-    of them. With none of them here there is no list to introduce."""
+def left_out_words(n: int, listed: int | None = None, arrived: int | None = None) -> str:
+    """The sentence above the list of messages that did not fit, worded from
+    the lines that really follow it (build-out R0.1, second review).
+
+    ``n`` is how many were left out in all; ``arrived`` how many of them
+    reached this computer (the NEWEST of them: the sender held the older ones
+    back), None for all ``n``; ``listed`` how many lines the list shows, the
+    OLDEST of those that arrived first, None for all that arrived. With no
+    line to follow, the sentence introduces none."""
     lead = (
         "1 earlier message was left out to fit."
         if n == 1
         else f"{n} earlier messages were left out to fit."
     )
-    if shown is None or shown >= n:
-        return lead + (" How it began:" if n == 1 else " How they began:")
+    here = n if arrived is None else max(0, min(arrived, n))
+    shown = here if listed is None else max(0, min(listed, here))
     if shown <= 0:
         return lead
+    if here == n:
+        if shown == n:
+            return lead + (" How it began:" if n == 1 else " How they began:")
+        if shown == 1:
+            return lead + " How the first of them began:"
+        return lead + f" How the first {shown} of them began:"
+    if shown == here:
+        if shown == 1:
+            return lead + " How the newest of them began:"
+        return lead + f" How the newest {shown} of them began:"
     if shown == 1:
-        return lead + " How the newest of them began:"
-    return lead + f" How the newest {shown} of them began:"
+        return lead + f" How the oldest of the {here} that reached this computer began:"
+    return lead + f" How the oldest {shown} of the {here} that reached this computer began:"
 
 
 def _left_out(
@@ -642,20 +656,26 @@ def _left_out(
     the whole list never more than the room the planner held back for it
     (``budget.RECAP_RESERVE``), so the task still fits. The count says how
     many there were (``held_back`` the sender kept, plus ``rows``) even when
-    the list is cut short; the list can only show the ones that arrived."""
+    the list is cut short; the list can only show the ones that arrived, and
+    the sentence above it says how many lines follow and which ones
+    (:func:`left_out_words`, worded AFTER the list is made)."""
     from ..context.budget import RECAP_RESERVE, estimate_tokens
 
-    lines = [left_out_words(held_back + len(rows), len(rows) if held_back else None)]
+    n = held_back + len(rows)
+    # The list is priced under the longest sentence it could get (cut short
+    # by one, the most digits), so whichever is said, it fits the reserve.
+    widest = left_out_words(n, max(1, len(rows) - 1), len(rows))
+    lines: list[str] = []
     for row in rows:
         words = " ".join(row["content"].split())
         if len(words) > LEFT_OUT_LINE_CHARS:
             cut = words[:LEFT_OUT_LINE_CHARS]
             words = (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip() + " …"
         line = f"- {_speaker(row)}: {words}"
-        if estimate_tokens("\n".join([*lines, line]), chars_per_token) > RECAP_RESERVE:
+        if estimate_tokens("\n".join([widest, *lines, line]), chars_per_token) > RECAP_RESERVE:
             break
         lines.append(line)
-    return "\n".join(lines)
+    return "\n".join([left_out_words(n, len(lines), len(rows)), *lines])
 
 
 def build_task_text(

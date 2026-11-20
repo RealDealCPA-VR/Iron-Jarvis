@@ -2688,6 +2688,113 @@ def register(app: FastAPI, d) -> None:
                 counts[row["who"]] = counts.get(row["who"], 0) + 1
         return counts
 
+    #: How many of the first rows the page sent are looked for in the saved
+    #: chat, to find where what it sent begins (build-out R0.1, second review).
+    _PANEL_PLACE_ROWS = 8
+    #: The saved chat's older messages are read this many at a time.
+    _PANEL_OLDER_PAGE = 200
+
+    def _saved_chat_earlier(engine: Any, thread_id: str, raw: Any) -> dict[str, int]:
+        """The SAVED chat's messages older than the first row the page sent,
+        counted by who said them, the way the page names them (build-out R0.1,
+        second review).
+
+        A chat keeps its newest ``chat_append.MAX_MESSAGES`` live and moves the
+        rest to its older messages (v1.499.3); a reopened page holds, and so
+        sends, only the live ones. The page's first rows are found in the
+        whole saved chat (its older messages, then its live ones); every
+        message with words before them was never sent, so it counts as left
+        out. A page that holds the whole chat matches at the start and counts
+        nothing twice. The FIRST match is taken, so the count is never more
+        than were. ``{}`` when the page sent nothing, the chat is not saved
+        here, or its rows are not found in it (then only what the route itself
+        cut is counted). BLOCKING (the route calls it through
+        ``asyncio.to_thread``); the older messages are read a page at a time
+        and the read stops at the match. Never raises."""
+        if not thread_id or not isinstance(raw, list):
+            return {}
+        probe: list[tuple[str, str]] = []
+        for item in raw:
+            row = _clean_panel_row(item)
+            if row is not None:
+                probe.append((row["who"], row["content"]))
+                if len(probe) >= _PANEL_PLACE_ROWS:
+                    break
+        if not probe:
+            return {}
+        try:
+            from sqlmodel import select
+
+            from ...core.db import session_scope
+            from ...core.models import ChatThreadRecord
+            from ..chat_append import ChatOlderMessage, ensure_older_table
+
+            seen: deque[tuple[str, str]] = deque(maxlen=len(probe))
+            counts: dict[str, int] = {}
+
+            def _found(message: Any) -> bool:
+                """Take one saved message (as the page's ``panelHistoryOf``
+                names it); True when the page's first rows end here."""
+                if not isinstance(message, dict):
+                    return False
+                who = (
+                    "user"
+                    if message.get("role") == "user"
+                    else str(message.get("panelWho") or "") or "jarvis"
+                )
+                row = _clean_panel_row({"who": who, "content": message.get("content")})
+                if row is None:
+                    return False
+                seen.append((row["who"], row["content"]))
+                counts[row["who"]] = counts.get(row["who"], 0) + 1
+                return list(seen) == probe
+
+            def _earlier() -> dict[str, int]:
+                # Everything read so far, less the page's own first rows.
+                out = dict(counts)
+                for who, _ in probe:
+                    out[who] -= 1
+                return {who: n for who, n in out.items() if n > 0}
+
+            def _loads(text: Any) -> Any:
+                try:
+                    return json.loads(text or "null")
+                except (TypeError, ValueError):
+                    return None
+
+            # The older messages FIRST, then the live window: a save in between
+            # moves messages from the live window to the older ones, so this
+            # order can miss one (count fewer), never read one twice.
+            if ensure_older_table(engine):
+                offset = 0
+                while True:
+                    with session_scope(engine) as db:
+                        page = list(
+                            db.exec(
+                                select(ChatOlderMessage.message_json)
+                                .where(ChatOlderMessage.thread_id == thread_id)
+                                .order_by(ChatOlderMessage.seq)
+                                .offset(offset)
+                                .limit(_PANEL_OLDER_PAGE)
+                            ).all()
+                        )
+                    for text in page:
+                        if _found(_loads(text)):
+                            return _earlier()
+                    if len(page) < _PANEL_OLDER_PAGE:
+                        break
+                    offset += len(page)
+            with session_scope(engine) as db:
+                record = db.get(ChatThreadRecord, thread_id)
+                live = _loads(record.messages_json) if record is not None else None
+            for message in live if isinstance(live, list) else []:
+                if _found(message):
+                    return _earlier()
+            return {}
+        except Exception:  # noqa: BLE001 — a count, never a reason to fail a round
+            log.warning("could not count the saved chat's older messages", exc_info=True)
+            return {}
+
     @app.post("/chat/panel")
     async def chat_panel(body: dict) -> dict[str, Any]:
         """Run one panel round for an @-mentioned chat message (v1.150.0).
@@ -2830,6 +2937,19 @@ def register(app: FastAPI, d) -> None:
         # this request being cancelled (the page went away) still cancels
         # the round, as before.
         round_id = panel_round_id(body.get("round_id"))
+        # Build-out R0.1, second review: a remote seat is told how many of the
+        # chat's messages it never got. A reopened long chat sends only its live
+        # window; its older messages are counted from the saved chat, by who
+        # said them (off the loop: it reads them). Local seats never use it.
+        if history is not None and any(p["source"] == "remote" for p in resolved):
+            saved_earlier = await asyncio.to_thread(
+                _saved_chat_earlier,
+                d.platform.engine,
+                saved_thread_id or chat_thread_id,
+                body.get("history"),
+            )
+            for who, n in saved_earlier.items():
+                history_earlier[who] = history_earlier.get(who, 0) + n
 
         async def _round() -> dict[str, Any]:
             with _egress.local_only_scope(local_only):

@@ -16,9 +16,11 @@ goes through ``context.budget.plan_history``, like every chat turn.
      room alone is cut and marked; no history is byte-identical to before.
   P5 the planning runs off the event loop (a body may be 2 MB).
   P6 (review) the count is the SENDER's: the rows it held back (its own
-     80-row tail, the chat page's 600 rows, the phone's 60) ride to a task
-     door as ``history_held_back`` and count as left out, so the task never
-     states fewer than were; every other remote's body is unchanged.
+     80-row tail, the chat page's 600 rows, the phone's 60, a reopened long
+     chat's older messages) ride to a task door as ``history_held_back`` and
+     count as left out, so the task never states fewer than were; every other
+     remote's body is unchanged. The sentence above the list names the lines
+     that really follow it (second review).
   P7 (review) the room is priced at the run's MEASURED ratio, labels
      included, and nothing but the layout is held back from it.
 
@@ -508,6 +510,107 @@ def test_the_chat_page_route_counts_the_rows_it_does_not_pass_on(tmp_path, monke
     assert sent[td.HISTORY_HELD_BACK_FIELD] == 700 - 80
 
 
+def _page_history(msgs: list[dict]) -> list[dict]:
+    """What the chat page sends as ``history`` (``panelHistoryOf``)."""
+    return [
+        {"who": "user" if m["role"] == "user" else m.get("panelWho") or "jarvis",
+         "content": m["content"].strip()}
+        for m in msgs
+        if (m.get("content") or "").strip()
+    ]
+
+
+def test_a_long_saved_chat_counts_its_older_messages_whole(tmp_path, monkeypatch):
+    # A chat keeps its newest 200 messages live and moves the rest to its
+    # older messages (v1.499.3). Reopened, the page holds only the live 200
+    # and sends those: the count must still be the whole chat's. A page that
+    # held the whole chat all along sends every message: nothing counts twice.
+    monkeypatch.delenv("IRONJARVIS_TOKEN", raising=False)
+    app = create_app(str(tmp_path / "laptop"))
+    RemoteAgentRegistry(app.state.platform.engine).upsert("desk", DOOR_URL, "http-task")
+    bodies: list[dict] = []
+
+    class _Took(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            bodies.append(json.loads(request.content or b"{}"))
+            return httpx.Response(202, json={"accepted": True})
+
+    _wire_to(monkeypatch, _Took())
+    client = TestClient(app)
+    asked = {"role": "user", "content": "@desk carry on"}
+
+    def saved_chat(n: int) -> tuple[str, list[dict]]:
+        chat = [
+            {"role": "user" if i % 2 == 0 else "assistant", "content": f"c{i:03d} words",
+             **({"panelWho": "remote:desk"} if i % 10 == 5 else {})}
+            for i in range(n)
+        ]
+        chat.insert(7, {"role": "assistant", "content": ""})  # no words: not a message
+        r = client.put("/chat/threads/new", json={"messages": chat})
+        assert r.status_code == 200, r.text
+        return r.json()["id"], chat
+
+    def ask(tid: str, holds: list[dict]) -> dict:
+        # The page saves what it holds with the new line, THEN asks.
+        assert client.put(f"/chat/threads/{tid}", json={"messages": [*holds, asked]}).status_code == 200
+        r = client.post(
+            "/chat/panel",
+            json={"message": asked["content"], "chat_thread_id": tid, "thread_id": tid,
+                  "history": _page_history(holds)},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["spoke"] == ["remote:desk"]
+        return bodies[-1]
+
+    # Reopened: the page loads only the live window.
+    tid, _ = saved_chat(500)
+    got = client.get(f"/chat/threads/{tid}").json()
+    assert got["older"] == 301 and len(got["messages"]) == 200
+    sent = ask(tid, got["messages"])
+    assert len(sent["history"]) == 80 and sent["history"][-1]["content"].endswith("c499 words")
+    assert sent[td.HISTORY_HELD_BACK_FIELD] + len(sent["history"]) == 500, (
+        f"{sent[td.HISTORY_HELD_BACK_FIELD]} said held back; 500 - 80 = 420 were"
+    )
+
+    # Held all along: the page sends all 500 (its older ones included).
+    tid, chat = saved_chat(500)
+    sent = ask(tid, chat)
+    assert sent[td.HISTORY_HELD_BACK_FIELD] + len(sent["history"]) == 500, (
+        "the messages the page sent were counted again from the saved chat"
+    )
+
+    # Counted by who said them, as the page names them: a project room's
+    # remote is told only of the user's lines and its own (``_earlier_for``).
+    told: list[dict] = []
+    real_round = AgentThreads.run_round
+
+    async def recording(self, *a, **kw):
+        told.append(dict(kw.get("chat_earlier") or {}))
+        return await real_round(self, *a, **kw)
+
+    monkeypatch.setattr(AgentThreads, "run_round", recording)
+    tid, _ = saved_chat(500)
+    live = client.get(f"/chat/threads/{tid}").json()["messages"]
+    ask(tid, live)
+    expected: dict[str, int] = {}
+    for i in range(500 - len(_page_history(live))):
+        who = "user" if i % 2 == 0 else "remote:desk" if i % 10 == 5 else "jarvis"
+        expected[who] = expected.get(who, 0) + 1
+    assert told[-1] == expected
+
+    # Rows that are not found in the saved chat, or a chat not saved here:
+    # only what the route itself cut is counted (never more than were).
+    elsewhere = [{"who": "user", "content": f"not in this chat {i}"} for i in range(5)]
+    for chat_id in (tid, "not-saved-here"):
+        r = client.post(
+            "/chat/panel",
+            json={"message": asked["content"], "chat_thread_id": chat_id, "thread_id": chat_id,
+                  "history": elsewhere},
+        )
+        assert r.status_code == 200, r.text
+        assert told[-1] == {} and td.HISTORY_HELD_BACK_FIELD not in bodies[-1], chat_id
+
+
 def _phone(app):
     platform = app.state.platform
     store = CommThreadStore(platform.engine, event_bus=platform.event_bus)
@@ -652,6 +755,86 @@ async def test_the_door_prices_the_task_at_the_runs_measured_ratio(tmp_path, mon
         f"{estimate_tokens(row.task, 2.0)} tokens; its room is {room}"
     )
     assert estimate_tokens(row.task, 2.0) >= room - RECAP_RESERVE - 600, "the room went unused"
+
+
+_LIST_HEAD = re.compile(
+    r"^(\d+) earlier messages? (?:was|were) left out to fit\.(?: (How [^\n]*:))?$", re.M
+)
+_LIST_LINE = re.compile(r"^- (?:The person|Assistant): (m\d\d) ", re.M)
+
+
+def _listed_as_said(text: str) -> tuple[int, list[str], str]:
+    """The left-out list: (the count, the markers of the lines it shows, the
+    sentence that introduces them), after checking the sentence names
+    exactly the number of lines that follow it."""
+    head = _LIST_HEAD.search(text)
+    assert head, "no left-out sentence"
+    total, how = int(head.group(1)), head.group(2) or ""
+    listed = _LIST_LINE.findall(text)
+    if not how:
+        assert not listed, "lines follow a sentence that introduces none"
+    elif how in ("How they began:", "How it began:"):
+        assert len(listed) == total, (how, total, len(listed))
+    else:
+        said = re.fullmatch(
+            r"How the (?:first|newest|oldest)(?: (\d+))? of "
+            r"(?:them|the (\d+) that reached this computer) began:",
+            how,
+        )
+        assert said, how
+        assert int(said.group(1) or 1) == len(listed), (how, len(listed))
+    return total, listed, how
+
+
+def test_the_list_says_how_many_lines_follow_and_which():
+    # Rows of ~1,000 characters: each line of the list is cut to 160, so only
+    # a few fit the planner's reserve for it. The sentence must name the lines
+    # that follow, not the rows that were left out.
+    rows = _chat(80, words=200)
+    for held in (0, 70):
+        text = td.build_task_text("go on", rows, "laptop", window=200_000, held_back=held)
+        kept = _kept_markers(text, 80)
+        out_here = 80 - len(kept)
+        total, listed, how = _listed_as_said(text)
+        assert total == held + out_here
+        assert 0 < len(listed) < out_here, "the list must be cut for this to test it"
+        # the oldest of those that arrived, in order
+        assert listed == [f"m{i:02d}" for i in range(len(listed))]
+        if held:
+            assert how == (
+                f"How the oldest {len(listed)} of the {out_here} that reached this computer began:"
+            )
+        else:
+            assert how == f"How the first {len(listed)} of them began:"
+    # One line shown of many: no number for it.
+    assert td.left_out_words(55, 1, 55) == (
+        "55 earlier messages were left out to fit. How the first of them began:"
+    )
+    assert td.left_out_words(125, 1, 55) == (
+        "125 earlier messages were left out to fit."
+        " How the oldest of the 55 that reached this computer began:"
+    )
+    assert td.left_out_words(125, 55, 55).endswith(" How the newest 55 of them began:")
+    assert td.left_out_words(5, 0) == "5 earlier messages were left out to fit."
+
+
+@pytest.mark.parametrize("ratio", [None, 2.0])
+def test_the_list_and_its_sentence_agree_whatever_the_chat_looks_like(ratio):
+    for n in (2, 12, 61, 80):
+        for size in (5, 40, 160, 400, 1_200):
+            rows = [
+                {"role": "user" if i % 2 else "assistant", "content": f"m{i:02d} " + "y " * size}
+                for i in range(n)
+            ]
+            for held in (0, 1, 70):
+                for window in (8_192, 200_000):
+                    text = td.build_task_text(
+                        "go on", rows, "laptop", window=window, chars_per_token=ratio,
+                        held_back=held,
+                    )
+                    if held or _LIST_HEAD.search(text):
+                        total, _, _ = _listed_as_said(text)
+                        assert total == held + n - len(_kept_markers(text, n)), (n, size, held)
 
 
 def test_the_speaker_labels_are_priced_at_a_low_measured_ratio():
