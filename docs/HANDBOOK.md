@@ -2075,10 +2075,13 @@ it too.
   its chat, session or run before it is told.
 - **Other apps** (Claude desktop, Codex) cannot use it; they keep their own
   lookup, which tells them no client's work.
-- **The phone.** Asked from your phone (or by work your phone started), the
-  answer holds titles, dates and how each ended only: no folders, file names,
-  links or decisions, no Local only work, and a client's work only when your
-  own message named that client.
+- **The phone.** Asked from your phone (or by work your phone started), what
+  Iron Jarvis tells from its record of earlier work holds titles, dates and
+  how each ended only: no folders, file names, links or decisions, no Local
+  only work, and a client's work only when your own message named that
+  client. The rest of an answer on your phone is not narrowed this way yet:
+  what Iron Jarvis finds in your memory (your files, notes and past chats)
+  can still reach it, a file's folder and name included.
 
 **Good to know.**
 

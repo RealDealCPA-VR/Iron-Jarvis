@@ -491,6 +491,37 @@ def test_a_run_inside_a_phone_turn_still_answers_the_phone():
     assert FW.answers_the_phone() is False
 
 
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _doc(rel: str) -> str:
+    # CI's Windows runners check out with CRLF: normalize at the reader.
+    return (_ROOT / rel).read_bytes().decode("utf-8").replace("\r\n", "\n")
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_the_phone_promise_is_scoped_to_the_record():
+    """Only the RECORD is narrowed for the phone (the tests above). The memory
+    grounding hop (``chat_turn._fabric``: a file hit's full path, past chats)
+    and ``history_search`` still reach a phone turn, so neither the Handbook
+    (which the Guide answers from) nor the rules may promise the whole phone
+    answer holds no folder, file name or decision."""
+    hb = _doc("docs/HANDBOOK.md")
+    start = hb.index("## Ask what was done before, in any chat")
+    section = hb[start:hb.index("\n## ", start + 1)]
+    bullet = section[section.index("- **The phone.**"):]
+    bullet = _flat(bullet[:bullet.index("\n\n")])
+    assert "from its record of earlier work holds titles, dates and how each ended only" in bullet
+    assert "not narrowed this way yet" in bullet and "memory" in bullet
+    rules = _flat(_doc("docs/rules/memory.md"))
+    assert "no phone turn's prompt holds a folder or file name" not in rules
+    assert "THE RECORD adds no folder or file name to a phone turn's prompt" in rules
+    assert "`history_search` (auto-armed, not in `LOW_TRUST_DENY`) still reach every phone turn" in rules
+
+
 # --------------------------------------------------------------------------- #
 # 6. the block and work_search keep their bytes through the one reader
 # --------------------------------------------------------------------------- #
