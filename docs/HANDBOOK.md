@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.547.0 (2026-11-19).*
+holds itself to. Current as of v1.548.0 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Scroll back to the start of a long chat (v1.547.0)
+## Scroll back to the start of a long chat (v1.548.0)
 
 In a long chat, scroll up and the earlier messages load in place, back to
 the first one kept. Since v1.499.4 a chat keeps every message: the newest
