@@ -407,14 +407,28 @@ How to use this file: read the contents list, then read only the entries your ch
   `task_door.build_task_text` runs every row that rode along
   (`remote._history_messages(..., tail=None)`) through
   `context.budget.plan_history`, the opening line and the task priced first
-  (`system_text`), `reserve=0`, against `task_room(window)`: a quarter of the
-  window the RUN will be planned against, at most `TASK_TOKENS_MAX`.
+  (`system_text`), against `task_room(window)`: a quarter of the
+  window the RUN will be planned against, at most `TASK_TOKENS_MAX`. The
+  only `reserve` is the layout's (`_layout_tokens`: the speaker labels past
+  the planner's 4 tokens a row, at the run's ratio, plus the breaks and the
+  cut mark) and the sentence for held-back rows; never the reply's.
   `planned_task_text` reads that window and ratio through the run's own
   resolver (`chat_turn._context_window` / `_history_ratio`, the defaults a
   door's run gets); the door calls it through `asyncio.to_thread`. What is
   left out is counted and its openings listed inside `RECAP_RESERVE` (the
   planner's own recap calls the person "You"); a newest row cut to fit ends
   " …". The door must fit first: the run's planner cuts the task from its
-  END, where the newest messages are. Left open: the conversation is not
-  fenced inside the task; 41-c brings its own budget for a whole hand-over.
-  Pin: `tests/test_task_door_history_budget_r01.py`.
+  END, where the newest messages are. THE COUNT IS THE SENDER'S: every bound
+  on the sending side counts what it did not pass (`/chat/panel`'s 600 rows,
+  `_panel_history_earlier`; the phone's 60, `CommThreadStore.history_window`)
+  into `run_round(chat_earlier=)` by who said it (a project room's remote
+  counts only the user's and its own, `AgentThreads._earlier_for`);
+  `remote_history` returns every row and `RemoteAgentRegistry.run` alone cuts
+  to `_HISTORY_ROWS`, adding what it cut; the sum rides as
+  `history_held_back` to a task door ONLY, only when not 0 (any other
+  remote's body is unchanged), and the door adds it (`held_back_of`, a whole
+  number, capped) to its own left-out count, saying "How the newest N of
+  them began" when it cannot quote them all. A sender from before this sends
+  no count, so the door counts what arrived. Left open: the conversation is
+  not fenced inside the task; 41-c brings its own budget for a whole
+  hand-over. Pin: `tests/test_task_door_history_budget_r01.py`.

@@ -92,9 +92,6 @@ _TRANSCRIPT_CHARS_PER_TOKEN = 3.5
 #: ``who`` is ``"user"`` / ``"jarvis"`` / a participant key; a key resolves to
 #: the participant's name+role like the room's own entries do.
 _CHAT_WHO_LABELS = {"user": "User", "jarvis": "Iron Jarvis"}
-#: Rows of conversation a REMOTE is sent as messages (v1.285.0) — its transport
-#: has no window ladder this daemon can read, so a fixed, generous tail.
-_REMOTE_HISTORY_ROWS = 80
 #: The header a chat-backed transcript opens with, so a speaker knows the
 #: "Iron Jarvis" lines are the assistant's earlier answers in the same chat.
 _CHAT_TRANSCRIPT_HEADER = (
@@ -1551,6 +1548,7 @@ class AgentThreads:
         *,
         directed: list[str] | None = None,
         chat_history: list[dict[str, Any]] | None = None,
+        chat_earlier: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         """One round: persist the user turn, then each speaker in panel order.
 
@@ -1561,7 +1559,11 @@ class AgentThreads:
         :meth:`chat_transcript`) followed by this round's entries, instead of
         the room's stored transcript, and the response carries
         ``context: {chat_messages, chat_dropped}``. ``None`` keeps the Agents
-        page's behaviour byte-identical.
+        page's behaviour byte-identical. ``chat_earlier`` (build-out R0.1
+        review): the rows of that chat OLDER than ``chat_history`` that the
+        caller did not pass (its own bound), counted by who said them; a
+        remote seat's transport is told how many of them it may see
+        (:meth:`_earlier_for`), so another Iron Jarvis counts them as left out.
 
         LIVE: each entry is persisted atomically as it lands (not batched at
         the end) and publishes AGENT_THREAD_UPDATED {thread_id, who, entries}
@@ -1738,6 +1740,11 @@ class AgentThreads:
                     if restricted:
                         shown = [e for e in shown if str(e.get("who") or "user") in keep]
                     rows = self.remote_history(shown, p, participants)
+                    earlier = (
+                        self._earlier_for(chat_earlier, keep if restricted else None)
+                        if chat_history is not None
+                        else 0
+                    )
                     reply, extra = await self._speak_remote(
                         p,
                         transcript,
@@ -1747,6 +1754,7 @@ class AgentThreads:
                         message=(user_message or "").strip(),
                         conversation_id=thread_id,
                         **({"project_room": True} if room_project else {}),
+                        **({"history_earlier": earlier} if earlier else {}),
                     )
                     entry.update(extra)
                 else:
@@ -1988,7 +1996,11 @@ class AgentThreads:
         content}]`` — the user's lines as ``user``; its OWN earlier lines as
         ``assistant`` unprefixed; everyone else (Iron Jarvis, other seats) as
         ``assistant`` with the speaker named, so a two-party transport still
-        carries a many-party conversation honestly. Blank rows are skipped."""
+        carries a many-party conversation honestly. Blank rows are skipped.
+
+        Every row is returned: ``RemoteAgentRegistry.run`` sends the newest of
+        them (its fixed tail) and counts the rest (build-out R0.1 review), so
+        another Iron Jarvis's door can say how many were left out."""
         names = {
             str(q.get("key") or ""): f"{q.get('name') or '?'} ({q.get('role') or 'participant'})"
             for q in participants
@@ -2014,7 +2026,24 @@ class AgentThreads:
                 rows.append(
                     {"role": "assistant", "content": f"{cls._label_for(who, names)}: {content}"}
                 )
-        return rows[-_REMOTE_HISTORY_ROWS:]
+        return rows
+
+    @staticmethod
+    def _earlier_for(earlier: dict[str, int] | None, keep: tuple[str, ...] | None) -> int:
+        """How many of the chat's older, never-passed rows (``chat_earlier``,
+        by who said them) a seat may see: all of them, or with ``keep`` (a
+        project room's remote: the user's lines and its own) only those.
+        Never raises; anything malformed counts 0."""
+        total = 0
+        try:
+            for who, n in (earlier or {}).items():
+                if keep is not None and str(who) not in keep:
+                    continue
+                if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+                    total += n
+        except Exception:  # noqa: BLE001 — a count, never a reason to fail a round
+            return 0
+        return total
 
     @staticmethod
     def _inbound_url(record: Any) -> str:
@@ -2070,6 +2099,7 @@ class AgentThreads:
         message: str = "",
         conversation_id: str = "",
         project_room: bool = False,
+        history_earlier: int = 0,
     ) -> tuple[str, dict[str, Any]]:
         """A remote participant answers over its registered transport.
 
@@ -2079,6 +2109,8 @@ class AgentThreads:
         as messages, the user's line as the task, the room id as
         ``conversation_id`` and its inbound address — instead of one blob.
         Without it (an older caller) the v1.150.0 blob is sent unchanged.
+        ``history_earlier``: older rows of that conversation never passed
+        here (``RemoteAgentRegistry.run``); passed on only when not 0.
         """
         from .remote import RemoteAgentRegistry
 
@@ -2109,6 +2141,7 @@ class AgentThreads:
                     await self._reply_token_for(record, d) if reply_to else ""
                 ),
                 local_only=self._local_only_for_door(record),
+                **({"history_earlier": history_earlier} if history_earlier else {}),
             )
         else:
             task = (

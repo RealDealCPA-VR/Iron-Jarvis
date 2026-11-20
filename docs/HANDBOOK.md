@@ -2090,7 +2090,11 @@ and at most 8,000 characters of them; the rest stayed behind without a word.
   keeps room for its own work. A long task leaves less room for the chat.
 - **What did not fit is said.** When older messages had to stay behind, the
   task says how many, and how the first of them began, so the run (and you,
-  reading the run) knows the chat did not start there.
+  reading the run) knows the chat did not start there. The count is the
+  whole chat's: the sending computer sends at most its newest 80 messages
+  (60 from a phone chat) and says how many older ones it kept back, so those
+  are counted too. Only the ones that arrived can be quoted, and the task
+  says so ("How the newest 20 of them began").
 - **Nothing to do.** It works for every paired computer and for a computer
   you connected by hand.
 

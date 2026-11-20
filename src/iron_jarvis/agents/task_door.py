@@ -139,6 +139,17 @@ TASK_TOKENS_MAX = 8_000
 #: The line the sender's conversation opens with inside the task.
 CONVERSATION_HEAD = "The conversation so far on that computer:"
 
+#: The body field a sender adds when it did not send its whole conversation
+#: (build-out R0.1 review): how many OLDER rows it held back (its own 80-row
+#: tail, the chat page's and the phone's bounds). Sent only to a task door,
+#: only when not 0; the door adds it to what it leaves out, so the count the
+#: task states is the sender's, not only the rows that arrived. An older door
+#: ignores it; an older sender does not send it (the count is then what
+#: arrived).
+HISTORY_HELD_BACK_FIELD = "history_held_back"
+#: The largest count a door believes (anything past it is read as this).
+HISTORY_HELD_BACK_MAX = 1_000_000
+
 #: The reply's bound (the WHOLE call, not a per-phase httpx timeout).
 REPLY_TIMEOUT_S = 20.0
 
@@ -561,25 +572,80 @@ def _speaker(row: dict[str, str]) -> str:
     return "The person" if row.get("role") == "user" else "Assistant"
 
 
+def held_back_of(value: object) -> int:
+    """A sender's ``history_held_back`` (:data:`HISTORY_HELD_BACK_FIELD`): a
+    whole number from 0 to :data:`HISTORY_HELD_BACK_MAX`; anything else
+    (missing, text, a fraction, true/false, below 0) is 0. Never raises."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, min(HISTORY_HELD_BACK_MAX, value))
+
+
 #: The opening words of one left-out message, at most this many characters.
 LEFT_OUT_LINE_CHARS = 160
 
+#: Characters each conversation line has that the planner does not price: the
+#: longer speaker label ("The person: ") and the line break before it. The
+#: planner charges a row ``_PLANNER_ROW_TOKENS`` past its words
+#: (``budget.plan_history``'s "role/format overhead").
+_LINE_CHARS = len("The person: ") + 1
+_PLANNER_ROW_TOKENS = 4
+#: Characters around the left-out list (the break before it, the blank line
+#: after it) and the cut mark (" …"); and the tokens the planner may go past
+#: its budget by when it cuts the newest row (the cut is sized to the budget,
+#: then charged the row's 4, plus 1 for rounding).
+_LAYOUT_CHARS = 5
+_CUT_OVER_TOKENS = _PLANNER_ROW_TOKENS + 1
 
-def left_out_words(n: int) -> str:
-    """The sentence above the list of messages that did not fit."""
-    if n == 1:
-        return "1 earlier message was left out to fit. How it began:"
-    return f"{n} earlier messages were left out to fit. How they began:"
+
+def _layout_tokens(rows: int, chars_per_token: float | None) -> int:
+    """Tokens the task's layout takes past what the planner prices, at the
+    run's ratio: held back from the room so the finished task fits it. At the
+    planner's own ratio a label costs no more than the 4 a row is charged; at
+    a low measured ratio (2 characters a token) it costs more, on every line."""
+    import math
+
+    from ..context.budget import MAX_MESSAGES, effective_chars_per_token
+
+    ratio = effective_chars_per_token(chars_per_token)
+    per_line = max(0, math.ceil(_LINE_CHARS / ratio) - _PLANNER_ROW_TOKENS)
+    return (
+        per_line * min(rows, MAX_MESSAGES)
+        + math.ceil(_LAYOUT_CHARS / ratio)
+        + _CUT_OVER_TOKENS
+    )
 
 
-def _left_out(rows: list[dict[str, str]], chars_per_token: float | None) -> str:
+def left_out_words(n: int, shown: int | None = None) -> str:
+    """The sentence above the list of messages that did not fit. ``n`` is how
+    many were left out in all; ``shown`` how many of them this computer has
+    (the newest of them: the sender held the older ones back), None for all
+    of them. With none of them here there is no list to introduce."""
+    lead = (
+        "1 earlier message was left out to fit."
+        if n == 1
+        else f"{n} earlier messages were left out to fit."
+    )
+    if shown is None or shown >= n:
+        return lead + (" How it began:" if n == 1 else " How they began:")
+    if shown <= 0:
+        return lead
+    if shown == 1:
+        return lead + " How the newest of them began:"
+    return lead + f" How the newest {shown} of them began:"
+
+
+def _left_out(
+    rows: list[dict[str, str]], chars_per_token: float | None, held_back: int = 0
+) -> str:
     """How the left-out messages began, oldest first: one short line each,
     the whole list never more than the room the planner held back for it
     (``budget.RECAP_RESERVE``), so the task still fits. The count says how
-    many there were even when the list is cut short."""
+    many there were (``held_back`` the sender kept, plus ``rows``) even when
+    the list is cut short; the list can only show the ones that arrived."""
     from ..context.budget import RECAP_RESERVE, estimate_tokens
 
-    lines = [left_out_words(len(rows))]
+    lines = [left_out_words(held_back + len(rows), len(rows) if held_back else None)]
     for row in rows:
         words = " ".join(row["content"].split())
         if len(words) > LEFT_OUT_LINE_CHARS:
@@ -599,40 +665,55 @@ def build_task_text(
     *,
     window: int | None = None,
     chars_per_token: float | None = None,
+    held_back: int = 0,
 ) -> str:
     """The session's task: where it came from, the task itself, and the
     sender's conversation when one rode along, PLANNED (build-out R0.1).
 
     ``window`` is the window the run will be planned against (None: unknown)
     and ``chars_per_token`` its measured ratio (None: the planner's default);
-    :func:`planned_task_text` reads both. The opening line and the task are
-    priced first (``system_text``), so a long task leaves less room for the
-    conversation; the reply's room is the run's own business (``reserve=0``).
-    Every row that rode along is either kept whole, kept cut (only the newest,
-    only when it alone does not fit, marked " …"), or counted as left out.
+    :func:`planned_task_text` reads both. ``held_back`` is how many OLDER rows
+    the sender did not send (:data:`HISTORY_HELD_BACK_FIELD`): they count as
+    left out. The opening line and the task are priced first
+    (``system_text``), so a long task leaves less room for the conversation;
+    the reply's room is the run's own business: the only room held back is
+    the layout's (labels, breaks, the cut mark, :func:`_layout_tokens`) and
+    the sentence for rows the sender held back. Every row of the sender's
+    conversation is either kept whole, kept cut (only the newest, only when
+    it alone does not fit, marked " …"), or counted as left out.
     Pure and never raises on a malformed history; it measures every row, so a
     door calls it off the event loop."""
-    from ..context.budget import plan_history
+    from ..context.budget import estimate_tokens, plan_history
     from .remote import _history_messages
 
     text = TASK_INTRO.format(caller=clean_caller(caller)) + "\n\n" + str(task or "").strip()
     rows = _history_messages(history, tail=None)
-    if not rows:
+    held_back = held_back_of(held_back)
+    if not rows and not held_back:
         return text
     head = text + "\n\n" + CONVERSATION_HEAD
+    if not rows:
+        return head + "\n" + left_out_words(held_back, 0)
+    reserve = _layout_tokens(len(rows), chars_per_token)
+    if held_back:
+        # Something is left out even when every row that arrived fits: the
+        # sentence that says so is priced up front (when the planner leaves
+        # rows out too, the list and that sentence share its RECAP_RESERVE).
+        reserve += estimate_tokens(left_out_words(held_back, 0), chars_per_token)
     plan = plan_history(
         rows,
         window=task_room(window),
         system_text=head,
         chars_per_token=chars_per_token,
-        reserve=0,
+        reserve=reserve,
     )
     parts = [head]
-    if plan.dropped:
+    if plan.dropped or held_back:
         # The planner keeps the NEWEST messages, so the ones it left out are
-        # the oldest ``plan.dropped`` rows. Its own recap is not used: it
-        # calls the person "You", and here the person is on the other computer.
-        parts.append(_left_out(rows[: plan.dropped], chars_per_token) + "\n")
+        # the oldest ``plan.dropped`` rows, and the ones the sender held back
+        # are older still. Its own recap is not used: it calls the person
+        # "You", and here the person is on the other computer.
+        parts.append(_left_out(rows[: plan.dropped], chars_per_token, held_back) + "\n")
     kept = [f"{_speaker(m)}: {m['content']}" for m in plan.messages]
     if kept and plan.clipped_last:
         kept[-1] = kept[-1].rstrip() + " …"
@@ -640,12 +721,15 @@ def build_task_text(
     return "\n".join(parts)
 
 
-def planned_task_text(platform: Any, task: str, history: Any, caller: str) -> str:
+def planned_task_text(
+    platform: Any, task: str, history: Any, caller: str, held_back: int = 0
+) -> str:
     """:func:`build_task_text` against the window the run will be planned
     against: the RUN's own resolver (``daemon.chat_turn._context_window`` and
     ``_history_ratio``, which ``runtime`` calls each step), with the provider
     and model a door's run gets (none named: the configured defaults, as
-    ``Orchestrator.create_session`` sets them). Blocking (it measures the
+    ``Orchestrator.create_session`` sets them). ``held_back``: the sender's
+    count of older rows it did not send. Blocking (it measures the
     whole conversation, a body may be 2 MB): the door calls it through
     ``asyncio.to_thread``. Never raises: a window that cannot be read is
     unknown, as it is for the run."""
@@ -661,7 +745,9 @@ def planned_task_text(platform: Any, task: str, history: Any, caller: str) -> st
         ratio = _history_ratio(d, "", "")
     except Exception:  # noqa: BLE001 — the planner's own default window then
         log.debug("task door: the run's window could not be read", exc_info=True)
-    return build_task_text(task, history, caller, window=window, chars_per_token=ratio)
+    return build_task_text(
+        task, history, caller, window=window, chars_per_token=ratio, held_back=held_back
+    )
 
 
 def pinned_reply_to(peer: Any, reply_to: str) -> str:

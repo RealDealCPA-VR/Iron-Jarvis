@@ -374,30 +374,45 @@ class CommThreadStore:
         an attributed line carries — so a remote addressed from the phone is
         shown the same conversation a desktop @-mention would be. ``[]`` on
         any failure."""
+        return self.history_window(thread_id, limit)[0]
+
+    def history_window(
+        self, thread_id: str, limit: int = 60
+    ) -> tuple[list[dict[str, str]], dict[str, int]]:
+        """:meth:`history_rows`, and the rows with words OLDER than that tail,
+        counted by who said them (build-out R0.1 review): a remote seat's
+        transport is told how many it did not get, so another Iron Jarvis
+        never states fewer left out than were. ``([], {})`` on any failure."""
         try:
             with session_scope(self.engine) as db:
                 r = db.get(ChatThreadRecord, thread_id)
                 if r is None:
-                    return []
+                    return [], {}
                 msgs = json.loads(r.messages_json or "[]")
             if not isinstance(msgs, list) or int(limit) <= 0:
-                return []
-            out: list[dict[str, str]] = []
-            for m in msgs[-int(limit):]:
+                return [], {}
+
+            def _row(m: Any) -> dict[str, str] | None:
                 if not isinstance(m, dict):
-                    continue
+                    return None
                 content = str(m.get("content") or "")
                 if not content.strip():
-                    continue
+                    return None
                 if m.get("role") == "user":
                     who = "user"
                 else:
                     who = str(m.get("panelWho") or "jarvis")
-                out.append({"who": who, "content": content})
-            return out
+                return {"who": who, "content": content}
+
+            out = [row for row in map(_row, msgs[-int(limit):]) if row is not None]
+            earlier: dict[str, int] = {}
+            for row in map(_row, msgs[: max(0, len(msgs) - int(limit))]):
+                if row is not None:
+                    earlier[row["who"]] = earlier.get(row["who"], 0) + 1
+            return out, earlier
         except Exception:  # noqa: BLE001 — a read helper must never take out a turn
             log.warning("history_rows failed for %s", thread_id, exc_info=True)
-            return []
+            return [], {}
 
     def get_setup_value(self, thread_id: str, key: str) -> str:
         """One string out of the thread's ``setup_json`` ("" when absent).

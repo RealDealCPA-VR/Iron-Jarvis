@@ -2656,16 +2656,37 @@ def register(app: FastAPI, d) -> None:
             return []
         out: list[dict[str, str]] = []
         for item in raw[-_PANEL_HISTORY_ROWS:]:
-            if not isinstance(item, dict):
-                continue
-            content = str(item.get("content") or "").strip()
-            if not content:
-                continue
-            who = str(item.get("who") or "user").strip()
-            if who not in ("user", "jarvis") and not _PANEL_HISTORY_KEY.match(who):
-                who = "user"
-            out.append({"who": who, "content": content})
+            row = _clean_panel_row(item)
+            if row is not None:
+                out.append(row)
         return out
+
+    def _clean_panel_row(item: Any) -> dict[str, str] | None:
+        """One ``history`` row off the wire → ``{who, content}``, or None for
+        a row with no words (or not a row)."""
+        if not isinstance(item, dict):
+            return None
+        content = str(item.get("content") or "").strip()
+        if not content:
+            return None
+        who = str(item.get("who") or "user").strip()
+        if who not in ("user", "jarvis") and not _PANEL_HISTORY_KEY.match(who):
+            who = "user"
+        return {"who": who, "content": content}
+
+    def _panel_history_earlier(raw: Any) -> dict[str, int]:
+        """The rows with words OLDER than the ``_PANEL_HISTORY_ROWS`` the route
+        passes on, counted by who said them (build-out R0.1 review): a remote
+        seat's transport is told how many it did not get, so another Iron
+        Jarvis never states fewer left out than were. ``{}`` when none."""
+        if not isinstance(raw, list) or len(raw) <= _PANEL_HISTORY_ROWS:
+            return {}
+        counts: dict[str, int] = {}
+        for item in raw[:-_PANEL_HISTORY_ROWS]:
+            row = _clean_panel_row(item)
+            if row is not None:
+                counts[row["who"]] = counts.get(row["who"], 0) + 1
+        return counts
 
     @app.post("/chat/panel")
     async def chat_panel(body: dict) -> dict[str, Any]:
@@ -2708,6 +2729,7 @@ def register(app: FastAPI, d) -> None:
         chat_thread_id = str(body.get("chat_thread_id") or "").strip()
         panel_thread_id = str(body.get("panel_thread_id") or "").strip()
         history = _clean_panel_history(body.get("history"))
+        history_earlier = _panel_history_earlier(body.get("history"))
         hands = body.get("hands")
         hands = hands if isinstance(hands, bool) else None
 
@@ -2817,6 +2839,7 @@ def register(app: FastAPI, d) -> None:
                     d,
                     directed=[p["name"] for p in resolved],
                     chat_history=history,
+                    **({"chat_earlier": history_earlier} if history_earlier else {}),
                 )
 
         round_task = asyncio.create_task(_round())
@@ -3825,7 +3848,8 @@ def register(app: FastAPI, d) -> None:
         """A task from another computer running Iron Jarvis (v1.357.0, G61).
 
         Speaks exactly the ``http-task`` body its remote-agent registry sends:
-        ``{task, conversation_id?, history?, reply_to?, reply_token?}``.
+        ``{task, conversation_id?, history?, history_held_back?, reply_to?,
+        reply_token?}``.
         Fail-closed, in order: door off → 403; wrong / missing token → 401;
         past ``TASK_RATE_MAX`` a minute → 429; a body past
         ``TASK_MAX_BODY_BYTES`` or a task past ``TASK_MAX_CHARS`` → 413;
@@ -3906,10 +3930,16 @@ def register(app: FastAPI, d) -> None:
         from ...providers import egress as _egress
 
         # Build-out R0.1: the sender's conversation is PLANNED against the
-        # window the run will be planned against, never cut to its last rows.
+        # window the run will be planned against, never cut to its last rows;
+        # the rows the sender held back count as left out.
         # Off the loop: it measures every row of a body of up to 2 MB.
         task_text = await asyncio.to_thread(
-            td.planned_task_text, d.platform, task, body.get("history"), caller
+            td.planned_task_text,
+            d.platform,
+            task,
+            body.get("history"),
+            caller,
+            td.held_back_of(body.get(td.HISTORY_HELD_BACK_FIELD)),
         )
         try:
             session = await orchestrator.create_session(

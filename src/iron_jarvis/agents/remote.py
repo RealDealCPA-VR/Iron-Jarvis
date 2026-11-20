@@ -537,8 +537,17 @@ class RemoteAgentRegistry:
         reply_to: str = "",
         reply_token: str = "",
         local_only: bool = False,
+        history_earlier: int = 0,
     ) -> dict[str, Any]:
         """Hand ``task`` to a remote agent and relay its reply.
+
+        ``history_earlier`` (build-out R0.1 review): rows of the conversation
+        OLDER than ``history`` that the caller never passed here (the chat
+        page's and the phone's bounds). With the rows this call holds back
+        itself (the newest ``_HISTORY_ROWS`` are sent), it rides to another
+        Iron Jarvis's task door ONLY, as ``history_held_back``, only when not
+        0: that door counts them as left out, so the task never states fewer
+        than were. Every other remote's body is unchanged.
 
         ``local_only`` (v1.357.0, G61): the chat this task comes from is local
         only, so the receiving Iron Jarvis must not hand it to a model off ITS
@@ -572,7 +581,13 @@ class RemoteAgentRegistry:
         # ``_history_messages`` is a MODULE function on purpose: older tests call
         # ``run`` unbound (``RemoteAgentRegistry.run(None, rec, ...)``), so this
         # method must not reach for ``self``.
-        rows = _history_messages(history)
+        every_row = _history_messages(history, tail=None)
+        rows = every_row[-_HISTORY_ROWS:]
+        try:
+            earlier = max(0, int(history_earlier or 0))
+        except (TypeError, ValueError):
+            earlier = 0
+        held_back = earlier + len(every_row) - len(rows)
         timeout = timeout_s or record.timeout_s or 120
         token = ""
         if record.secret_name:
@@ -607,7 +622,7 @@ class RemoteAgentRegistry:
             # v1.357.0 re-review: another Iron Jarvis's door is dialled at its
             # exact leaf (a trailing "/" met the install guard, never the
             # door); every other remote's address is used as typed.
-            from .task_door import door_address
+            from .task_door import HISTORY_HELD_BACK_FIELD, door_address, is_task_door_url
 
             url = door_address(record.base_url or "")
             payload = {"task": task}
@@ -615,6 +630,10 @@ class RemoteAgentRegistry:
                 payload["conversation_id"] = conversation_id
             if rows:
                 payload["history"] = rows
+            if held_back and is_task_door_url(record.base_url or ""):
+                # Build-out R0.1 review: the door says how many older messages
+                # were left out; it can only count what arrived, so it is told.
+                payload[HISTORY_HELD_BACK_FIELD] = held_back
             if reply_to:
                 payload["reply_to"] = reply_to
                 if reply_token:

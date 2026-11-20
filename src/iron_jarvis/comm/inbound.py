@@ -1602,13 +1602,24 @@ class InboundPoller:
                     [{"source": "remote", "name": remote_name, "role": "participant"}]
                 ),
             )
-            rows = self.thread_store.history_rows(tid, limit=_REMOTE_CHAT_ROWS) if tid else []
+            # Build-out R0.1 review: the rows older than the tail are counted,
+            # so another Iron Jarvis says how many were left out, truly.
+            rows, earlier = (
+                self.thread_store.history_window(tid, limit=_REMOTE_CHAT_ROWS)
+                if tid
+                else ([], {})
+            )
             # The user's line was appended above — it is the MESSAGE, not history.
             if rows and rows[-1].get("who") == "user" and rows[-1].get("content") == text:
                 rows = rows[:-1]
             shim = SimpleNamespace(platform=self.platform)
             out = await threads.run_round(
-                room.id, text, shim, directed=[remote_name], chat_history=rows
+                room.id,
+                text,
+                shim,
+                directed=[remote_name],
+                chat_history=rows,
+                **({"chat_earlier": earlier} if earlier else {}),
             )
             spoken = [e for e in out.get("entries", []) if e.get("who") != "user"]
             last = spoken[-1] if spoken else {}
