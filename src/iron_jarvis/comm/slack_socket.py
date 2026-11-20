@@ -27,7 +27,10 @@ reached Iron Jarvis. Now, for an allowlisted sender:
   only (no reply).
 
 Slack sends a mention in a subscribed channel twice (``message`` and
-``app_mention``); the second copy is dropped by its ``(channel, ts)``.
+``app_mention``, in no fixed order); the second copy is dropped by its
+``(channel, ts)``. In any channel but the destination's own, the ``message``
+copy of a mention is left to the ``app_mention`` copy before that check, so a
+mention there is always answered (R0.3 review).
 :data:`LISTENING` keeps, per destination, when the socket connected and when
 Slack last sent anything, so the Notifications row can say "connected, but
 Slack has sent nothing" instead of leaving the user to guess.
@@ -302,6 +305,13 @@ class SlackSocketMode:
     def _clean(text: str) -> str:
         return _MENTION_RX.sub("", text or "").strip()
 
+    def _mentions_bot(self, name: str, text: str) -> bool:
+        """True when ``text`` tags this destination's bot (``<@UBOT>`` or
+        ``<@UBOT|name>``). False when the bot's id is not known (auth.test
+        failed at connect): then nothing can be told apart, as before."""
+        bot = self._bot_user.get(name, "")
+        return bool(bot) and (f"<@{bot}>" in text or f"<@{bot}|" in text)
+
     @staticmethod
     def _file_count(event: dict) -> int:
         """How many files came with the message (R0.3). Slack marks a message
@@ -322,9 +332,12 @@ class SlackSocketMode:
         the DM, the destination's own channel in a thread, a mention elsewhere
         privately in a DM, and any other channel message fires the ``slack``
         reflex rules only. Plain messages/mentions with no subtype, and
-        (R0.3) a message with files (``file_share``), whose words run as
-        any message's would while the pipeline says the files were not used;
-        a bot's message (Jarvis's own replies included) is never acted on.
+        (R0.3) a message with files (``file_share``) in the DM or the own
+        channel, whose words run as any message's would while the pipeline
+        says the files were not used; a bot's message (Jarvis's own replies
+        included) is never acted on. In another channel the ``message`` copy
+        of a mention (and any ``file_share``) is left to the ``app_mention``
+        copy, so it can never use up the key that copy answers with.
         """
         if envelope.get("type") != "events_api":
             return None
@@ -366,6 +379,20 @@ class SlackSocketMode:
             return None
         channel = str(event.get("channel") or "")
         ts = str(event.get("ts") or "")
+        own = self._own.get(name)
+        if etype == "message" and not (own and channel == own):
+            # Another channel. Slack sends a mention there twice, as
+            # ``message`` and ``app_mention``, same ts, in no fixed order, and
+            # only the app_mention copy answers (in the DM). So the message
+            # copy must never reach the duplicate check first: it used to take
+            # the (channel, ts) key, and the mention was then dropped as a
+            # duplicate and never answered (R0.3 review).
+            if subtype == FILE_SHARE:
+                # As before R0.3: a file in someone else's channel is not for
+                # Jarvis, and a mention's files ride on its app_mention copy.
+                return None
+            if self._mentions_bot(name, str(event.get("text") or "")):
+                return None  # the app_mention copy answers and fires the rules
         if not self._first_copy(channel, ts):
             return {"channel": name, "status": "duplicate", "sender": user}
         if not ch.is_authorized(user):
@@ -379,7 +406,6 @@ class SlackSocketMode:
                 text=str(event.get("text") or ""), channel=channel, sender=user
             )
         text = self._clean(str(event.get("text") or ""))
-        own = self._own.get(name)
         if own and channel == own:
             # The destination's own channel: answered in a thread under the
             # message (a reply inside a thread stays in that thread).

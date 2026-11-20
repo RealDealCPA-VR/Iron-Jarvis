@@ -28,7 +28,11 @@ from __future__ import annotations
 
 import asyncio
 import smtplib
-from email.message import EmailMessage
+from email.message import EmailMessage, Message
+from email.mime.application import MIMEApplication
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any
 
 import pytest
@@ -37,7 +41,7 @@ from iron_jarvis.agents.orchestrator import Orchestrator
 from iron_jarvis.comm import Notifier
 from iron_jarvis.comm import slack_socket as S
 from iron_jarvis.comm.channels import EmailChannel, SlackChannel, _email_body, _email_file_count
-from iron_jarvis.comm.inbound import FILES_NOT_READ_EVERY_S, InboundPoller
+from iron_jarvis.comm.inbound import FILES_NOT_READ_EVERY_S, InboundPoller, files_not_read_note
 from iron_jarvis.comm.threads import CommThreadStore
 
 OWN = "C0OWN0001"
@@ -160,15 +164,111 @@ def test_a_slack_file_with_words_says_so_first_then_answers_the_words(platform):
     env = _env(type="message", subtype="file_share", channel="D0DM00001", channel_type="im",
                user="U1", text="what's the total on these?", ts="1700.2", files=_files(2))
 
-    _go(sock, poller, env)
+    res = _go(sock, poller, env)
 
     assert len(turn.calls) == 1, "the words of a message with a file were thrown away"
-    assert _last_user_words(turn.calls[0]) == "what's the total on these?"
+    assert _last_user_words(turn.calls[0]).startswith("what's the total on these?")
     assert [p["channel"] for p in sent] == ["U1", "U1"]
     assert "can't take files" in sent[0]["text"]
     assert "the 2 files you sent" in sent[0]["text"]
     assert "read your message" in sent[0]["text"]
     assert "The total is 42." in sent[1]["text"]
+    # The saved chat shows the files came, so the record is true later too.
+    saved = poller.thread_store.history_body(res["thread_id"])
+    assert saved[0]["role"] == "user"
+    assert saved[0]["content"] == "what's the total on these?\n\n" + files_not_read_note(2)
+
+
+def test_the_turn_is_told_the_files_were_not_read(platform):
+    # Review finding: the model got the bare words, "what's the total on
+    # these?", with nothing saying files came and were never seen, so it could
+    # invent a total. It is now told, in plain words, after the sender's words.
+    sent, sock, poller, turn, _clock = _slack_rig(platform)
+    env = _env(type="message", subtype="file_share", channel="D0DM00001", channel_type="im",
+               user="U1", text="what's the total on these?", ts="1700.21", files=_files(2))
+
+    _go(sock, poller, env)
+
+    said = _last_user_words(turn.calls[0])
+    assert said == "what's the total on these?\n\n" + files_not_read_note(2)
+    assert "2 files" in said and "not read" in said
+    assert "a file" in files_not_read_note(1) and "it was not read" in files_not_read_note(1)
+
+
+def test_a_message_with_no_files_reaches_the_turn_unchanged(platform):
+    sent, sock, poller, turn, _clock = _slack_rig(platform)
+    env = _env(type="message", channel="D0DM00001", channel_type="im",
+               user="U1", text="what's on today?", ts="1700.22")
+
+    _go(sock, poller, env)
+
+    assert _last_user_words(turn.calls[0]) == "what's on today?"
+
+
+class _Orch:
+    """The one-shot door's orchestrator seam: records the run's task."""
+
+    def __init__(self) -> None:
+        self.tasks: list[str] = []
+
+    async def create_session(self, task: str, agent_type: str, **kw: Any) -> None:
+        self.tasks.append(task)
+        return None
+
+
+def test_a_one_shot_run_is_told_the_files_were_not_read(platform):
+    # With two-way chat off, the words start a run; its task says the files
+    # came and were not read, the same as a chat turn.
+    sent: list = []
+    ch = _slack(sent)
+    ch.config["chat_enabled"] = False
+    notifier = Notifier()
+    notifier.add_channel("hq", ch)
+    orch = _Orch()
+    poller = InboundPoller(notifier, orch, platform.engine, event_bus=platform.event_bus,
+                           platform=platform, clock=_Clock())
+    sock = _sock(poller, ch)
+    env = _env(type="message", subtype="file_share", channel="D0DM00001", channel_type="im",
+               user="U1", text="file this for me", ts="1700.23", files=_files(1))
+
+    _go(sock, poller, env)
+
+    assert orch.tasks == ["file this for me\n\n" + files_not_read_note(1)]
+
+
+def test_an_escalated_run_is_told_the_files_were_not_read(platform):
+    # A chat turn that hands the work to a run: the run's task carries the
+    # same line. The run is refused at its start (Emergency stop) once its
+    # task is recorded, so nothing runs.
+    from iron_jarvis.agents.orchestrator import EmergencyStopOn
+
+    class _StoppedOrch(_Orch):
+        async def create_session(self, task: str, agent_type: str, **kw: Any) -> None:
+            self.tasks.append(task)
+            raise EmergencyStopOn("Emergency stop is on.")
+
+    sent: list = []
+    ch = _slack(sent)
+    notifier = Notifier()
+    notifier.add_channel("hq", ch)
+    orch = _StoppedOrch()
+
+    async def turn(platform, personas, body) -> dict[str, Any]:
+        return {"reply": "", "escalate": True, "escalate_reason": "work", "provider": "mock",
+                "model": "m", "tools_used": [], "documents": []}
+
+    poller = InboundPoller(notifier, orch, platform.engine, event_bus=platform.event_bus,
+                           thread_store=CommThreadStore(platform.engine), chat_turn=turn,
+                           personas={}, platform=platform, clock=_Clock())
+    sock = _sock(poller, ch)
+    env = _env(type="message", subtype="file_share", channel="D0DM00001", channel_type="im",
+               user="U1", text="sort these receipts", ts="1700.24", files=_files(3))
+
+    res = _go(sock, poller, env)
+
+    assert res["status"] == "chat_refused"
+    assert len(orch.tasks) == 1
+    assert orch.tasks[0].endswith("sort these receipts\n\n" + files_not_read_note(3))
 
 
 def test_a_slack_file_in_the_own_channel_is_answered_in_its_thread(platform):
@@ -197,7 +297,72 @@ def test_a_mention_elsewhere_with_a_file_is_told_in_the_dm(platform):
     assert sent[0]["text"] == S.MENTION_ELSEWHERE_NOTE
     assert "can't take files" in sent[1]["text"]
     assert "The total is 42." in sent[2]["text"]
-    assert _last_user_words(turn.calls[0]) == "read this"
+    assert _last_user_words(turn.calls[0]) == "read this\n\n" + files_not_read_note(1)
+
+
+@pytest.mark.parametrize("bot_known", [True, False], ids=["bot-id-known", "bot-id-unknown"])
+@pytest.mark.parametrize("message_first", [True, False], ids=["message-first", "mention-first"])
+def test_a_file_mention_elsewhere_is_answered_whichever_copy_comes_first(
+    platform, message_first, bot_known
+):
+    # Review finding (blocking): Slack sends a mention in a channel Jarvis is
+    # in twice, as ``message`` (here ``file_share``) and ``app_mention``, same
+    # ts, in no fixed order. The file_share copy used to reach the duplicate
+    # check first and use up the key, so the mention was dropped and never
+    # answered. Whichever comes first, it is answered once, in the DM, with
+    # the file sentence, and the channel's rules hear it once.
+    sent, sock, poller, turn, _clock = _slack_rig(platform)
+    poller.reflex_router = rules = _Rules()
+    if not bot_known:
+        sock._bot_user["hq"] = ""  # auth.test failed at connect
+    base = dict(channel="C0OTHER01", user="U1", text="<@UBOT> read this",
+                ts="1700.41", files=_files(1))
+    copy = _env(type="message", subtype="file_share", channel_type="channel", **base)
+    mention = _env(type="app_mention", **base)
+
+    for env in ([copy, mention] if message_first else [mention, copy]):
+        _go(sock, poller, env)
+
+    assert [p["channel"] for p in sent] == ["U1", "U1", "U1"], sent
+    assert sent[0]["text"] == S.MENTION_ELSEWHERE_NOTE
+    assert "can't take files" in sent[1]["text"]
+    assert "The total is 42." in sent[2]["text"]
+    assert len(turn.calls) == 1
+    assert rules.slack == ["<@UBOT> read this"]
+
+
+@pytest.mark.parametrize("text", ["<@UBOT> status?", "<@UBOT|iron jarvis> status?"])
+@pytest.mark.parametrize("message_first", [True, False], ids=["message-first", "mention-first"])
+def test_a_plain_mention_elsewhere_is_answered_whichever_copy_comes_first(
+    platform, message_first, text
+):
+    # The same race without a file: the ``message`` copy must never use up the
+    # key the ``app_mention`` copy answers with.
+    sent, sock, poller, turn, _clock = _slack_rig(platform)
+    poller.reflex_router = rules = _Rules()
+    base = dict(channel="C0OTHER01", user="U1", text=text, ts="1700.42")
+    copy = _env(type="message", channel_type="channel", **base)
+    mention = _env(type="app_mention", **base)
+
+    for env in ([copy, mention] if message_first else [mention, copy]):
+        _go(sock, poller, env)
+
+    assert [p["channel"] for p in sent] == ["U1", "U1"], sent
+    assert sent[0]["text"] == S.MENTION_ELSEWHERE_NOTE
+    assert "The total is 42." in sent[1]["text"]
+    assert len(turn.calls) == 1
+    assert rules.slack == [text]
+
+
+def test_a_message_naming_someone_else_elsewhere_still_fires_the_rules(platform):
+    sent, sock, poller, turn, _clock = _slack_rig(platform)
+    poller.reflex_router = rules = _Rules()
+    env = _env(type="message", channel="C0OTHER01", channel_type="channel", user="U1",
+               text="<@U2> lunch?", ts="1700.43")
+
+    assert _go(sock, poller, env) == {"channel": "hq", "status": "reflex", "sender": "U1"}
+    assert rules.slack == ["<@U2> lunch?"]
+    assert sent == [] and turn.calls == []
 
 
 def test_strangers_bots_and_other_channels_hear_nothing(platform):
@@ -236,17 +401,18 @@ class _Rules:
         return []
 
 
-def test_a_file_in_another_channel_fires_the_rules_on_its_words_and_says_nothing(platform):
-    # A message with a file is the person talking: the channel's "slack"
-    # rules hear its words, as for any message there; no reply is posted in
-    # a shared channel.
+def test_a_file_in_another_channel_is_left_alone_as_before(platform):
+    # A file in a shared channel that is not the destination's own is not for
+    # Jarvis: as before R0.3 it is dropped before the rules and before the
+    # duplicate check (a mention's files ride on its app_mention copy), and
+    # nothing is posted in a shared channel.
     sent, sock, poller, turn, _clock = _slack_rig(platform)
     poller.reflex_router = rules = _Rules()
     env = _env(type="message", subtype="file_share", channel="C0OTHER01", channel_type="channel",
                user="U1", text="invoice for March", ts="1701.9", files=_files(1))
 
-    assert _go(sock, poller, env) == {"channel": "hq", "status": "reflex", "sender": "U1"}
-    assert rules.slack == ["invoice for March"]
+    assert _go(sock, poller, env) is None
+    assert rules.slack == []
     assert sent == [] and turn.calls == []
 
 
@@ -275,7 +441,8 @@ def test_the_sentence_failing_never_stops_the_words(platform, monkeypatch):
     res = _go(sock, poller, env)
 
     assert res["status"] != "error"
-    assert len(turn.calls) == 1 and _last_user_words(turn.calls[0]) == "still answer me"
+    assert len(turn.calls) == 1
+    assert _last_user_words(turn.calls[0]).startswith("still answer me")
     assert len(sent) == 1 and "The total is 42." in sent[0]["text"]
 
 
@@ -425,7 +592,9 @@ def test_an_email_attachment_is_said_and_the_words_still_run(platform, monkeypat
     assert "read your message" in note
     assert "The total is 42." in answer
     assert len(turn.calls) == 1
-    assert "Please file this." in _last_user_words(turn.calls[0])
+    said = _last_user_words(turn.calls[0])
+    assert "Please file this." in said
+    assert said.endswith("\n\n" + files_not_read_note(1))
 
 
 def test_an_email_that_is_only_a_file_is_answered_in_words(platform, monkeypatch):
@@ -517,6 +686,81 @@ def test_an_email_that_is_one_file_is_not_read_as_words():
                     filename="scan.pdf")
     assert _email_file_count(msg) == 1
     assert _email_body(msg) == ""  # never the file's bytes as the sender's words
+
+
+def _signed(inner: Message, *, kind: str = "pkcs7-signature", name: str = "smime.p7s") -> Message:
+    """A signed e-mail as Outlook (S/MIME) or Thunderbird (OpenPGP) sends it:
+    ``multipart/signed`` = the message itself + the signature, attached."""
+    outer = MIMEMultipart("signed", protocol=f"application/{kind}", micalg="sha-256")
+    outer.attach(inner)
+    sig = MIMEApplication(b"0\x82 not a real signature", _subtype=kind, name=name)
+    sig.add_header("Content-Disposition", "attachment", filename=name)
+    outer.attach(sig)
+    return outer
+
+
+def _with_key(words: str) -> Message:
+    """Thunderbird's OpenPGP message with the sender's public key attached."""
+    inner = MIMEMultipart("mixed")
+    inner.attach(MIMEText(words))
+    key = MIMEApplication(b"-----BEGIN PGP PUBLIC KEY BLOCK-----", _subtype="pgp-keys",
+                          name="OpenPGP_0x0123456789ABCDEF.asc")
+    key.add_header("Content-Disposition", "attachment", filename="OpenPGP_0x0123456789ABCDEF.asc")
+    inner.attach(key)
+    return inner
+
+
+def test_a_signature_is_not_a_file():
+    # Review finding: every signed e-mail was told "I read your message but
+    # not the file you sent", because the signature is an attached part.
+    smime = _signed(MIMEText("What is on my calendar today?"))
+    pgp = _signed(_with_key("Hi"), kind="pgp-signature", name="OpenPGP_signature.asc")
+    old_smime = _signed(MIMEText("Hi"), kind="x-pkcs7-signature")
+    assert _email_file_count(smime) == 0
+    assert _email_file_count(pgp) == 0
+    assert _email_file_count(old_smime) == 0
+
+
+def test_a_file_in_a_signed_email_is_still_a_file():
+    inner = MIMEMultipart("mixed")
+    inner.attach(MIMEText("The scan is attached."))
+    pdf = MIMEApplication(b"%PDF-1.4 test", _subtype="pdf", name="scan.pdf")
+    pdf.add_header("Content-Disposition", "attachment", filename="scan.pdf")
+    inner.attach(pdf)
+    assert _email_file_count(_signed(inner)) == 1
+
+
+def test_an_encrypted_email_is_not_called_a_file():
+    # Encrypted mail is a message Iron Jarvis cannot open, not a file the
+    # person sent: "I couldn't use the file you sent" would be false.
+    smime = MIMEApplication(b"0\x82 sealed", _subtype="pkcs7-mime", name="smime.p7m")
+    smime.set_param("smime-type", "enveloped-data")
+    smime.add_header("Content-Disposition", "attachment", filename="smime.p7m")
+    pgp = MIMEMultipart("encrypted", protocol="application/pgp-encrypted")
+    version = MIMEBase("application", "pgp-encrypted")
+    version.set_payload("Version: 1")
+    pgp.attach(version)
+    sealed = MIMEApplication(b"-----BEGIN PGP MESSAGE-----", _subtype="octet-stream",
+                             name="encrypted.asc")
+    sealed.add_header("Content-Disposition", "inline", filename="encrypted.asc")
+    pgp.attach(sealed)
+    assert _email_file_count(smime) == 0
+    assert _email_file_count(pgp) == 0
+
+
+def test_a_signed_email_with_no_file_gets_no_file_sentence(platform, monkeypatch):
+    signed = _signed(MIMEText("What is on my calendar today?"))
+    _proof(signed, "Alice <alice@example.com>")  # type: ignore[arg-type]
+    signed["From"] = "Alice <alice@example.com>"
+    signed["To"] = "jarvis@example.com"
+    signed["Subject"] = "Calendar"
+
+    results, turn = _email_rig(platform, monkeypatch, [signed])  # type: ignore[list-item]
+
+    assert len(_FakeSMTP.sent) == 1, _FakeSMTP.sent
+    assert "can't take files" not in _FakeSMTP.sent[0]
+    assert "The total is 42." in _FakeSMTP.sent[0]
+    assert "file" not in _last_user_words(turn.calls[0])
 
 
 def test_the_poll_carries_the_count(monkeypatch):

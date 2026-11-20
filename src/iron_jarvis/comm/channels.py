@@ -433,6 +433,22 @@ _MAX_EMAIL_PARTS = 500
 #: The body's own text parts: never a file, whatever name they carry
 #: (``_email_body`` may read one as the sender's words).
 _BODY_TEXT_TYPES = ("text/plain", "text/html")
+#: A signed e-mail's signature (S/MIME's ``smime.p7s``, OpenPGP's
+#: ``signature.asc``) and the public key Thunderbird attaches beside it: the
+#: mail program added them, the person did not send a file (R0.3 review).
+_SIGNATURE_TYPES = frozenset({
+    "application/pkcs7-signature",
+    "application/x-pkcs7-signature",
+    "application/pgp-signature",
+    "application/pgp-keys",
+})
+#: An encrypted (or opaque-signed) e-mail: a message Iron Jarvis cannot open,
+#: not a file, so "the file you sent" would be false. Not counted.
+_SEALED_TYPES = frozenset({
+    "application/pkcs7-mime",
+    "application/x-pkcs7-mime",
+    "multipart/encrypted",
+})
 
 
 def _email_file_count(em: Any) -> int:
@@ -445,6 +461,8 @@ def _email_file_count(em: Any) -> int:
     Mail marks an attached PDF ``inline`` with a name, so the name counts. An
     attached e-mail is one file; what it carries is not counted again. A
     message that is itself one file (a single non-text part) is one file.
+    A signature or the key beside it is not a file, and an encrypted e-mail
+    is not one either (``_SIGNATURE_TYPES``, ``_SEALED_TYPES``).
     Never raises: an unreadable message counts what was read before it.
     """
     count = 0
@@ -455,6 +473,8 @@ def _email_file_count(em: Any) -> int:
             part, in_body = stack.pop()
             seen += 1
             ctype = part.get_content_type()
+            if ctype in _SIGNATURE_TYPES or ctype in _SEALED_TYPES:
+                continue  # neither it nor what it seals is a file
             if part is em and not part.is_multipart():
                 return 1 if part.get_content_maintype() != "text" else 0
             if part is not em:

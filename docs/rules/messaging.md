@@ -377,16 +377,27 @@ How to use this file: read the contents list, then read only the entries your ch
 
 - **A file the phone cannot take is said in words on Slack and email too, after the guards, never before** (v1.546.1, build-out plan R0.3).
   Until 10-a reads files, `InboundMessage.files_not_read` carries the count:
-  the Slack pump lets `file_share` through (every other subtype is still
-  dropped; in another channel its words fire the `slack` rules like any
-  message) and counts `event.files` (an `app_mention` carries files with no
-  subtype); `channels._email_file_count` counts attachments, named non-text
-  parts outside `multipart/related` (a signature logo is not a file), an
-  attached email as one, and a single-part non-text email as one, whose bytes
-  `_email_body` no longer reads as words. `InboundPoller._dispatch` says it
+  the Slack pump lets `file_share` through in the DM and the own channel
+  (every other subtype is still dropped) and counts `event.files` (an
+  `app_mention` carries files with no subtype). In ANY OTHER channel a
+  `message` copy that is a `file_share` or tags the bot (`_mentions_bot`)
+  returns BEFORE `_first_copy`: Slack sends a mention there as `message` and
+  `app_mention` in no fixed order, and a message copy that took the
+  `(channel, ts)` key left the mention unanswered. `channels._email_file_count`
+  counts attachments, named non-text parts outside `multipart/related` (a
+  signature logo is not a file), an attached email as one, and a single-part
+  non-text email as one, whose bytes `_email_body` no longer reads as words;
+  never a signature or the key beside it (`_SIGNATURE_TYPES`) or an encrypted
+  email (`_SEALED_TYPES`). `InboundPoller._dispatch` says it
   (`files_not_read_reply`) only AFTER the allowlist, the email proof and the
-  private-chat guard, then handles the words as before; no words ends as
-  `files_not_read`. Once per (channel, sender) per `FILES_NOT_READ_EVERY_S`
-  on the injected clock; no thread line, no file names in logs. Telegram
-  keeps its own `MEDIA_NOTICE`. When 10-a lands, a file it reads leaves this
-  count. Pin: `tests/test_files_not_taken_r03.py`.
+  private-chat guard; no words ends as `files_not_read`. With words, the
+  saved user line, and so the turn, the escalated run, a remote agent and the
+  one-shot run, carry `files_not_read_note` after them, so the model never
+  answers about files it did not see; who the message is for is still read
+  from the bare words. Once per (channel, sender) per `FILES_NOT_READ_EVERY_S`
+  on the injected clock; no file names in logs. Telegram keeps its own
+  `MEDIA_NOTICE`. Not covered: the Events API webhook
+  (`routes/comm.py`, `/comm/slack/events/{name}`) still drops every subtype,
+  `file_share` included; it needs a tunnel, so nobody reaches it by default.
+  When 10-a lands, a file it reads leaves this count.
+  Pin: `tests/test_files_not_taken_r03.py`.

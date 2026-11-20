@@ -2049,18 +2049,29 @@ could not be used, the way Telegram already did, instead of silence. Iron
 Jarvis cannot take files sent from your phone yet.
 
 - **A message that is only a file** (a PDF in a Slack direct message, an
-  email with an attachment and no words) is answered with one sentence: "I
-  can't take files here yet, so I couldn't use the file you sent. Send your
-  request as text, or use the desktop app for files." Nothing else runs.
+  email with an attachment, no subject and no text) is answered with one
+  sentence: "I can't take files here yet, so I couldn't use the file you
+  sent. Send your request as text, or use the desktop app for files."
+  Nothing else runs.
 - **A message with words and a file**: that sentence comes first ("… so I
   read your message but not the file you sent"), then Jarvis answers your
-  words as it always has. Before, Slack threw such a message away without a
-  word, and email answered the words but skipped the file without saying so.
-- In Slack the sentence goes where the answer goes: your direct messages, or
-  the thread under your message in the destination's own channel.
-- Only someone on the destination's allowlist hears it, in their own chat
-  (for email, only a sender your mail provider vouched for). A picture inside
-  an email's text, such as a signature logo, is not a file.
+  words as it always has (for email, the subject and the text). Before,
+  Slack threw such a message away without a word, and email answered the
+  words but skipped the file without saying so.
+- Jarvis is told the files came and were not read, so it says it has not
+  seen them instead of guessing what is in them. Your chat in the desktop
+  app shows that line under your message too.
+- In Slack the sentence goes where the answer goes: your direct messages,
+  the thread under your message in the destination's own channel, or, for an
+  @mention in another channel, your direct messages. Such a mention is now
+  always answered; before, it could go unanswered depending on the order in
+  which Slack delivered it. A file posted in another channel without an
+  @mention is left alone, as before.
+- It comes only when someone on the destination's allowlist sent the file
+  (for email, only a sender your mail provider vouched for), and like every
+  email answer it goes to the destination's email address. A picture inside
+  an email's text, such as a signature logo, is not a file, and neither is
+  the signature of a signed email. An encrypted email is not called a file.
 - Several files in a row are told once a minute, not once per file.
 
 To work with a file now, drop it into Chat in the desktop app.

@@ -116,6 +116,26 @@ def files_not_read_reply(count: int, *, with_words: bool) -> str:
         "Send your request as text, or use the desktop app for files."
     )
 
+
+def files_not_read_note(count: int) -> str:
+    """The line added after the sender's words when files came with them
+    (R0.3 review). The turn reads it, so the model says it has not seen the
+    files instead of guessing what they hold, and the saved chat shows they
+    were sent. Iron Jarvis's own words, never the files' names or contents."""
+    n = max(1, int(count or 1))
+    if n == 1:
+        return "(This message came with a file. Files sent here can't be opened yet, so it was not read.)"
+    return f"(This message came with {n} files. Files sent here can't be opened yet, so they were not read.)"
+
+
+def _with_files_note(text: str, count: int) -> str:
+    """``text`` with :func:`files_not_read_note` after it when ``count`` > 0;
+    ``text`` unchanged otherwise."""
+    if not count:
+        return text
+    return f"{text}\n\n{files_not_read_note(count)}"
+
+
 #: Escalation recap: how many thread-tail messages ride into the session task,
 #: and the per-message char cap inside the recap block.
 _RECAP_MESSAGES = 6
@@ -1205,8 +1225,11 @@ class InboundPoller:
         session = None
         if not _stop_why:
             try:
+                # R0.3 review: the run is told files came and were not read,
+                # so it never answers about files it did not see.
                 session = await self.orchestrator.create_session(
-                    text, self.agent_type, origin=f"comm:{name}",
+                    _with_files_note(text, getattr(msg, "files_not_read", 0)),
+                    self.agent_type, origin=f"comm:{name}",
                     trust=_trust, trust_reason=_trust_reason,
                 )
             except EmergencyStopOn as exc:  # the switch flipped since the read
@@ -1279,8 +1302,13 @@ class InboundPoller:
                 "sent": sent,
             }
 
+        # R0.3 review: when files came with the words, the saved line and so
+        # the turn (and a remote agent, and an escalated run) say so after
+        # them, in plain words: the model must not guess at files it never
+        # saw. Who the message is for is still read from the words alone.
+        said = _with_files_note(text, getattr(msg, "files_not_read", 0))
         tid = self._safe_append(
-            thread.id, "user", text,
+            thread.id, "user", said,
             channel=name, sender_id=msg.sender_id, display=display,
         )
         # A REMOTE AGENT, ADDRESSED FROM THE PHONE (v1.285.0). "@hermes …" (or
@@ -1306,7 +1334,7 @@ class InboundPoller:
             return {"channel": name, "status": "remote_cleared", "thread_id": tid, "sent": sent}
         if remote_name:
             return await self._handle_remote_chat(
-                name, ch, msg, thread, tid, text, display, remote_name
+                name, ch, msg, thread, tid, said, display, remote_name
             )
         # v1.506.0 (north-star 6.8): the WHOLE stored thread; the chat turn's
         # planner fits it to the model's window (never a fixed slice here).
@@ -1314,7 +1342,7 @@ class InboundPoller:
         if not history:
             # The append could not land (or the read hiccuped): the turn still
             # runs on the bare message — the phone gets its answer regardless.
-            history = [{"role": "user", "content": text}]
+            history = [{"role": "user", "content": said}]
 
         await self._publish(
             EventType.COMM_RECEIVED,
@@ -1394,7 +1422,7 @@ class InboundPoller:
         # (``escalate_agent``) overrides the hard-coded supervisor default —
         # re-validated through the roster here; None keeps the default
         # byte-for-byte (see ``_escalate_plan``).
-        task = self.recap_task(history, text)
+        task = self.recap_task(history, said)
         # THE DAY OFF / THE ALLOWANCE (v1.295.0): a paused custom agent is
         # ``healthy=False`` on the roster, so ``_escalate_plan`` would resolve
         # nobody and run the SUPERVISOR silently; an exhausted one would run.
