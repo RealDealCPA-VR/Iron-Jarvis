@@ -124,6 +124,11 @@ ACTION_TIMEOUT_S = 15.0
 HARD_BOUND_EXTRA_S = 10.0
 #: After an action, how long a page that started loading may take to load.
 SETTLE_MAX_S = 5.0
+#: FU-1: how long an open that ran out of time waits for Edge's process
+#: facts (CPU time, the processors' load) for its log line before it gives
+#: up on them (the steps the page reached are logged regardless). Within
+#: the open's hard bound (``OPEN_TIMEOUT_S + HARD_BOUND_EXTRA_S``).
+SLOW_OPEN_FACTS_S = 5.0
 #: Closing the browser politely before its job is terminated.
 CLOSE_TIMEOUT_S = 8.0
 #: v1.376.1: how much longer than the polite close a caller of
@@ -828,12 +833,19 @@ _NET_WORDS = {
 }
 
 
+def _ran_out_of_time(exc: BaseException) -> bool:
+    """Whether a Playwright failure is its own time limit."""
+    name = type(exc).__name__
+    first = str(exc).strip().splitlines()[0] if str(exc).strip() else name
+    return name == "TimeoutError" or "Timeout" in first and "exceeded" in first
+
+
 def playwright_words(exc: BaseException, *, what: str, limit_s: float) -> str:
     """A Playwright failure in words: its time limit, a known network error,
     else its first line (masked, cut)."""
     name = type(exc).__name__
     first = str(exc).strip().splitlines()[0] if str(exc).strip() else name
-    if name == "TimeoutError" or "Timeout" in first and "exceeded" in first:
+    if _ran_out_of_time(exc):
         return f"{what} did not finish within {limit_s:g} s."
     for code, words in _NET_WORDS.items():
         if code in first:
@@ -848,6 +860,129 @@ def _driver_pid(cm: Any) -> int:
         return int(cm._connection._transport._proc.pid)
     except Exception:  # noqa: BLE001
         return 0
+
+
+# --------------------------------------------------------------------------- #
+# FU-1: how far a page that ran out of time got (one log line)
+# --------------------------------------------------------------------------- #
+
+#: The steps of one page load, in order, and how the log line says each.
+#: Release run 44745306821 failed "did not finish within 45 s" four times
+#: while its runner ran every test four to eight times slower than the
+#: rerun's; nothing said WHICH step stopped (the only clue was a connection
+#: the test's server accepted that never carried a request). The line a
+#: timed-out open writes names it next time.
+_OPEN_STEPS = (
+    ("asked", "Edge asked the rules about the page"),
+    ("let go", "the rules let it go"),
+    ("stopped", "the rules stopped it"),
+    ("answered", "the server answered"),
+    ("arrived", "the page arrived"),
+    ("read", "its HTML was read"),
+    ("loaded", "it finished loading"),
+)
+#: What the line says when the chain stops before a step.
+_OPEN_NEVER = {
+    "asked": "Edge never started the page's request (the rules were never asked)",
+    "let go": "the rules never let it go",
+    "answered": "the server never answered",
+    "arrived": "the page never arrived",
+    "read": "its HTML was never read",
+    "loaded": "it never finished loading",
+}
+
+
+@dataclass
+class _OpenTrace:
+    """One page load's steps, in seconds after the open began (the first
+    time each happened). ``cpu`` is this PC's processors' (busy, all) time
+    when it began; ``error`` names a failure to let the request go."""
+
+    t0: float = field(default_factory=time.monotonic)
+    cpu: "tuple[float, float] | None" = None
+    steps: dict[str, float] = field(default_factory=dict)
+    detail: dict[str, str] = field(default_factory=dict)
+    error: str = ""
+
+    def mark(self, step: str, detail: str = "") -> None:
+        if step not in self.steps:
+            self.steps[step] = time.monotonic() - self.t0
+            if detail:
+                self.detail[step] = detail
+
+
+def _describe_open(trace: _OpenTrace) -> str:
+    """The steps a page load reached, with their times, then the one that
+    never came."""
+    said: list[str] = []
+    for step, words in _OPEN_STEPS:
+        if step in trace.steps:
+            extra = f" ({trace.detail[step]})" if step in trace.detail else ""
+            said.append(f"{words}{extra} at +{trace.steps[step]:.2f} s")
+    if trace.error:
+        said.append(f"letting it go failed ({trace.error})")
+    if "stopped" not in trace.steps:
+        for step in ("asked", "let go", "answered", "arrived", "read", "loaded"):
+            if step not in trace.steps:
+                said.append(_OPEN_NEVER[step])
+                break
+    return "; ".join(said)
+
+
+def _cpu_now() -> "tuple[float, float] | None":
+    """BLOCKING (one system call): this PC's processors' (busy, all) time."""
+    try:
+        import psutil
+
+        times = psutil.cpu_times()
+        total = float(sum(times))
+        return total - float(times.idle), total
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _busy_percent(before: "tuple[float, float] | None", after: "tuple[float, float] | None") -> "int | None":
+    """How busy the processors were between two :func:`_cpu_now` readings."""
+    if before is None or after is None:
+        return None
+    total = after[1] - before[1]
+    if total <= 0:
+        return None
+    return round(100.0 * (after[0] - before[0]) / total)
+
+
+#: Windows' priority classes (psutil's ``nice()`` there), in words.
+_PRIORITY_WORDS = {64: "idle", 16384: "below normal", 32: "normal", 32768: "above normal", 128: "high", 256: "realtime"}
+
+
+def _priority(proc: Any) -> str:
+    """A process's priority in words ("" when it cannot be read): CI starts
+    pytest BELOW NORMAL and a child inherits that class (v1.333.1), so a
+    test's Edge there runs below every Normal-priority program."""
+    try:
+        nice = int(proc.nice())
+    except Exception:  # noqa: BLE001
+        return ""
+    if sys.platform == "win32":
+        return _PRIORITY_WORDS.get(nice, str(nice))
+    return f"nice {nice}"
+
+
+def _edge_kind(proc: Any) -> str:
+    """``msedge.exe`` and Edge's own word for the process (renderer, gpu…):
+    the ``--type=`` switch only, never the rest of the command line."""
+    name = ""
+    with contextlib.suppress(Exception):
+        name = str(proc.name())
+    if name.lower() != "msedge.exe":
+        return name or "?"
+    kind = "browser"
+    with contextlib.suppress(Exception):
+        for arg in proc.cmdline():
+            if arg.startswith("--type="):
+                kind = arg[len("--type="):][:24]
+                break
+    return f"{name} {kind}"
 
 
 class EdgeBackend:
@@ -894,11 +1029,17 @@ class EdgeBackend:
         #: (measured), and a polite close takes its parent away before the
         #: kill could find it by the tree (v1.376.0 review).
         self._tree_seen: dict[int, Any] = {}
+        #: FU-1: the page load in progress (:meth:`goto`), None between.
+        self._trace: "_OpenTrace | None" = None
+        #: FU-1: how long Edge took to start, and when it was ready (monotonic).
+        self._start_s = 0.0
+        self._ready_at = 0.0
 
     # -- life ----------------------------------------------------------------
     async def start(self) -> None:
         from playwright.async_api import async_playwright  # noqa: PLC0415 — lazy
 
+        begun = time.monotonic()
         node, problem = await asyncio.to_thread(driver_node)
         if problem:
             raise BrowserProblem(problem)
@@ -950,6 +1091,8 @@ class EdgeBackend:
         if self._page is None:
             self._adopt_page(await self._ctx.new_page())
         self._remember(self._members())
+        self._ready_at = time.monotonic()
+        self._start_s = self._ready_at - begun
 
     async def _stop_driver(self) -> None:
         """The driver alone (nothing launched yet): Playwright's own stop,
@@ -1089,8 +1232,17 @@ class EdgeBackend:
         page.on("response", self._on_response)
         page.on("dialog", self._on_dialog)
         page.on("framenavigated", lambda frame, p=page: self._on_navigated(p, frame))
+        page.on("domcontentloaded", lambda _p=None: self._on_page_event("domcontentloaded"))
+        page.on("load", lambda _p=None: self._on_page_event("load"))
         page.on("close", lambda _p=None, p=page: self._on_close(p))
         self._page = page  # the newest page (a popup the page opened) is the one acted on
+
+    def _on_page_event(self, kind: str) -> None:
+        """FU-1: the page's HTML was read / it finished loading (for the
+        trace of an open in progress)."""
+        trace = self._trace
+        if trace is not None:
+            trace.mark("read" if kind == "domcontentloaded" else "loaded")
 
     def _on_close(self, page: Any) -> None:
         if self._page is page:
@@ -1158,6 +1310,12 @@ class EdgeBackend:
             pass
 
     def _on_response(self, response: Any) -> None:
+        trace = self._trace
+        if trace is not None:
+            with contextlib.suppress(Exception):
+                request = response.request
+                if request.is_navigation_request() and request.frame.parent_frame is None:
+                    trace.mark("answered", str(int(response.status)))
         try:
             if int(response.status) >= 400:
                 self._note(
@@ -1202,6 +1360,9 @@ class EdgeBackend:
             url = str(frame.url or "")
             if not url.startswith(("http://", "https://")):
                 return
+            trace = self._trace
+            if trace is not None and frame.parent_frame is None:
+                trace.mark("arrived")
             verdict = self._guard(url)
             if verdict.kind == "ok":
                 return
@@ -1273,6 +1434,10 @@ class EdgeBackend:
             top = nav and request.frame.parent_frame is None
         except Exception:  # noqa: BLE001 — a service worker's request has no frame
             nav = top = False
+        # FU-1: the page being opened, step by step (for a timed-out open).
+        trace = self._trace if top else None
+        if trace is not None:
+            trace.mark("asked")
         try:
             if nav:
                 verdict = self._guard(request.url)
@@ -1280,10 +1445,15 @@ class EdgeBackend:
                     kind = verdict.kind if top else f"frame-{verdict.kind}"
                     self._note("blocked", f"{kind}|{request.url}")
                     await route.abort("blockedbyclient")
+                    if trace is not None:
+                        trace.mark("stopped")
                     return
             await route.continue_()
-        except Exception:  # noqa: BLE001 — a page that closed meanwhile
-            pass
+            if trace is not None:
+                trace.mark("let go")
+        except Exception as exc:  # noqa: BLE001 — a page that closed meanwhile
+            if trace is not None and not trace.error:
+                trace.error = type(exc).__name__
 
     # -- the page ------------------------------------------------------------
     def _current(self) -> Any:
@@ -1303,6 +1473,11 @@ class EdgeBackend:
         return ""
 
     async def goto(self, url: str, timeout_s: float) -> None:
+        cpu = None
+        with contextlib.suppress(Exception):  # the reading is extra, never a reason to fail
+            cpu = await asyncio.to_thread(_cpu_now)
+        trace = _OpenTrace(cpu=cpu)
+        self._trace = trace
         try:
             page = self._page
             if page is None or page.is_closed():
@@ -1312,7 +1487,66 @@ class EdgeBackend:
                 self._adopt_page(page)
             await page.goto(url, wait_until="load", timeout=timeout_s * 1000)
         except Exception as exc:  # noqa: BLE001
-            raise BrowserProblem(playwright_words(exc, what=f"Opening {where(url)}", limit_s=timeout_s)) from None
+            problem = playwright_words(exc, what=f"Opening {where(url)}", limit_s=timeout_s)
+            if _ran_out_of_time(exc):
+                await self._log_slow_open(problem, trace)
+            raise BrowserProblem(problem) from None
+        finally:
+            if self._trace is trace:
+                self._trace = None
+
+    async def _log_slow_open(self, problem: str, trace: _OpenTrace) -> None:
+        """FU-1: ONE warning for an open that ran out of time — how far the
+        page got, Edge's own processes and their CPU time, and how busy this
+        PC's processors were during the open. The address is the agent's
+        words' (host and path; never the query). Bounded: the process reads
+        run off the loop and are given up after :data:`SLOW_OPEN_FACTS_S`; the
+        line is written even when the action's own bound cancels this."""
+        steps = _describe_open(trace)
+        more = "the browser's processes could not be read in time"
+        try:
+            more = await asyncio.wait_for(asyncio.to_thread(self._slow_open_facts, trace), SLOW_OPEN_FACTS_S)
+        except Exception:  # noqa: BLE001 — the facts are extra; the steps are the point
+            pass
+        finally:
+            log.warning("agent browser: %s %s. %s.", problem, steps, more)
+
+    def _slow_open_facts(self, trace: _OpenTrace) -> str:
+        """BLOCKING (psutil): Edge's start, its processes' CPU time since they
+        started (the busiest four named), and the processors' load."""
+        facts: list[str] = []
+        if self._ready_at:
+            facts.append(f"Edge started in {self._start_s:.1f} s, {trace.t0 - self._ready_at:.1f} s before this open")
+        rows: list[tuple[float, str]] = []
+        try:
+            import psutil
+
+            for pid in self.pids():
+                with contextlib.suppress(Exception):
+                    proc = psutil.Process(pid)
+                    cpu = proc.cpu_times()
+                    status = str(proc.status())
+                    rows.append((float(cpu.user + cpu.system),
+                                 _edge_kind(proc) + ("" if status == "running" else f" ({status})")))
+        except Exception:  # noqa: BLE001
+            pass
+        rows.sort(key=lambda r: r[0], reverse=True)
+        busiest = ", ".join(f"{what} {spent:.1f} s" for spent, what in rows[:4])
+        facts.append(f"the browser's processes (Edge and its driver): {len(rows)}, "
+                     f"{sum(r[0] for r in rows):.1f} s of CPU in all"
+                     + (f" ({busiest})" if busiest else ""))
+        if self._driver:
+            with contextlib.suppress(Exception):
+                import psutil
+
+                words = _priority(psutil.Process(self._driver))
+                if words:
+                    facts.append(f"the driver (and so Edge) runs at {words} priority")
+        busy = _busy_percent(trace.cpu, _cpu_now())
+        count = os.cpu_count() or 0
+        if busy is not None:
+            facts.append(f"this PC's {count} processors were {busy}% busy during the open")
+        return "; ".join(facts)
 
     async def settle(self) -> None:
         page = self._page
