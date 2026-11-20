@@ -28,6 +28,7 @@ import { type CarryMark, decodeCarryMark } from "./buildCodeCarry";
 import { SUBSCRIPTION_CLI_ROWS } from "./subscriptionClis";
 import { secondsText } from "./durationWords";
 import { commentLines, decodeComments, type CommentBody } from "./codeComments";
+import { decodeProofMark, type ProofMark } from "./buildAppProof";
 
 // ── the view and the address ────────────────────────────────────────────────
 
@@ -625,6 +626,10 @@ export interface CodeSession {
   /** v1.441.0: the row's "Branch" — the tool can branch a conversation and
    *  this session has one. Absent from an older Iron Jarvis (no Branch). */
   canBranch?: boolean;
+  /** 22-a (R1.9): Iron Jarvis is checking the newest reply (running the
+   *  folder's tests); the view reads the session again while it holds.
+   *  Absent = not checking (or an older Iron Jarvis). */
+  checking?: boolean;
 }
 
 /** v1.422.0 (B4): one program a Code-view tool started that serves. */
@@ -738,11 +743,14 @@ export const CODE_COMMANDS_REREAD_MS = 20_000;
 /** v1.417.0: how often to read the session again for work no reply owns
  *  (0 = not at all). Never while a reply of the user's runs (it is followed). */
 export function backgroundRereadMs(
-  s: Pick<CodeSession, "background" | "backgroundHelpers" | "selfReply"> & Partial<Pick<CodeSession, "programs">> | null,
+  s: Pick<CodeSession, "background" | "backgroundHelpers" | "selfReply"> & Partial<Pick<CodeSession, "programs" | "checking">> | null,
   running: boolean,
 ): number {
   if (!s || running) return 0;
-  if (s.selfReply || s.backgroundHelpers > 0) return CODE_BACKGROUND_REREAD_MS;
+  // 22-a: while Iron Jarvis checks the newest reply, its line (and a
+  // follow-up it sends back) appears without a press — only while the
+  // window is seen, and only until the check ends.
+  if (s.selfReply || s.backgroundHelpers > 0 || s.checking) return CODE_BACKGROUND_REREAD_MS;
   // v1.422.0 (B4): a session kept open for a program it runs is read again
   // like one with background commands — its line stays true (the program can
   // end), and each read tells Iron Jarvis the session is still in front.
@@ -842,6 +850,7 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
         }
       : {}),
     ...(typeof r.can_branch === "boolean" ? { canBranch: r.can_branch } : {}),
+    ...(r.checking === true ? { checking: true } : {}),
   };
 }
 
@@ -1143,7 +1152,9 @@ type CodeEventBody =
   /** v1.412.0: a NOTE the user typed while the tool worked (a steer): one
    *  event per state — sent (with `how` it arrives), read (the tool took it),
    *  returned (never read: it goes back to the message box). */
-  | { type: "steer"; at: string; id: string; state: SteerState; text: string; files: string[]; how: string };
+  | { type: "steer"; at: string; id: string; state: SteerState; text: string; files: string[]; how: string }
+  /** 22-a (R1.9): Iron Jarvis's own check of a reply (lib/buildAppProof). */
+  | { type: "proof"; at: string; proof: ProofMark };
 
 export type SteerState = "sent" | "read" | "returned";
 
@@ -1369,6 +1380,10 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
       const stop =
         r.stop === "interrupted" || r.stop === "failed" || r.stop === "max_turns" ? r.stop : "completed";
       return { type, at, stop, result: str(r.result, 20_000) };
+    }
+    case "proof": {
+      const proof = decodeProofMark(r);
+      return proof ? { type, at, proof } : null;
     }
     default:
       return null;
@@ -1690,7 +1705,10 @@ export type ConvItem =
   /** v1.412.0: a note sent while it worked, at the place it was sent, with
    *  its newest state. */
   /** v1.545.0: `tool` = the coding tool it was sent to (absent = not known). */
-  | { kind: "steer"; key: string; id: string; text: string; files: string[]; state: SteerState; how: string; tool?: string };
+  | { kind: "steer"; key: string; id: string; text: string; files: string[]; state: SteerState; how: string; tool?: string }
+  /** 22-a (R1.9): Iron Jarvis's check of one reply, at the place its first
+   *  record arrived, showing the newest record for that reply. */
+  | { kind: "proof"; key: string; proof: ProofMark };
 
 /** v1.417.0 (C4.9): one turn's receipt, read off its own events — the model
  *  the newest `session` event named, how long it took (its `user` to its
@@ -1827,6 +1845,8 @@ export interface FoldState {
   thinkAt: Map<string, number>;
   toolAt: Map<string, number>;
   steerAt: Map<string, number>;
+  /** 22-a: each reply's check row (by the turn it is about). */
+  proofAt: Map<string, number>;
   planAt: number | null;
   asks: Map<string, OpenAsk>;
   askTitle: Map<string, string>;
@@ -1883,6 +1903,7 @@ function newFold(root: string, shared: FoldShared): FoldState {
     thinkAt: new Map(),
     toolAt: new Map(),
     steerAt: new Map(),
+    proofAt: new Map(),
     planAt: null,
     asks: new Map(),
     askTitle: new Map(),
@@ -1962,6 +1983,7 @@ function insertRow(s: FoldState, at: number, item: ConvItem): void {
   move(s.thinkAt);
   move(s.toolAt);
   move(s.steerAt);
+  move(s.proofAt);
   if (s.planAt !== null && s.planAt >= at) s.planAt += 1;
   if (s.usageAt !== null && s.usageAt >= at) s.usageAt += 1;
 }
@@ -1998,6 +2020,8 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
   if (s.turnAt && ev.type !== "user" && ev.type !== "done" && ev.type !== "error" && ev.type !== "notice"
     // v1.545.0: the hand-off row is the app's own too.
     && ev.type !== "handoff"
+    // 22-a: and Iron Jarvis's check of a reply.
+    && ev.type !== "proof"
     // v1.427.2: a step closed "did not finish" is the app's own row too.
     && !(ev.type === "tool" && ev.status === "stopped")
     && Number.isFinite(Date.parse(ev.at))) {
@@ -2269,6 +2293,20 @@ function foldStep(s: FoldState, ev: CodeEvent): void {
       }
       break;
     }
+    case "proof": {
+      // 22-a (R1.9): one row per reply checked; a newer record of the same
+      // reply ("checking" → its outcome, a card → its answer) replaces it in
+      // place.
+      const k = ev.proof.forTurn;
+      const i = s.proofAt.get(k);
+      if (i === undefined) {
+        s.proofAt.set(k, s.items.length);
+        s.items.push({ kind: "proof", key: key("q"), proof: ev.proof });
+      } else {
+        s.items[i] = { kind: "proof", key: s.items[i].key, proof: ev.proof };
+      }
+      break;
+    }
     case "done": {
       // v1.417.0 (C4.9): the turn's receipt; its usage line folds into it.
       let usage: TurnReceipt["usage"] = null;
@@ -2470,10 +2508,11 @@ export function withNewerNotices(drawn: CodeEvent[], saved: CodeEvent[]): CodeEv
   for (const e of drawn) {
     const at = stampKey((e as { at?: unknown }).at);
     if (at && at > last) last = at;
-    if (e.type === "notice") shown.add(noticeKey(e));
+    if (e.type === "notice" || e.type === "proof") shown.add(noticeKey(e));
   }
   const newer = saved.filter((e) => {
-    if (e.type !== "notice") return false;
+    // 22-a: a check's record is written after the reply's end, like a notice.
+    if (e.type !== "notice" && e.type !== "proof") return false;
     const at = stampKey((e as { at?: unknown }).at);
     return !!at && at >= last && !shown.has(noticeKey(e));
   });
@@ -2503,7 +2542,9 @@ export function stampKey(at: unknown): string {
 
 function noticeKey(e: CodeEvent): string {
   const r = e as { at?: unknown; text?: unknown };
-  return `${stampKey(r.at)}\u0000${typeof r.text === "string" ? r.text : ""}`;
+  // 22-a: a check's record is told apart by the reply it names, its state and its line.
+  const text = e.type === "proof" ? `${e.proof.forTurn}\u0000${e.proof.state}\u0000${e.proof.line}` : r.text;
+  return `${stampKey(r.at)}\u0000${typeof text === "string" ? text : ""}`;
 }
 
 // ── rejoin ──────────────────────────────────────────────────────────────────

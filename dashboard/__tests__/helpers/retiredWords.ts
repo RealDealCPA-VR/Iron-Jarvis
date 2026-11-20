@@ -164,7 +164,17 @@ export const RETIRED_ON_SURFACES: readonly Retired[] = [
     "your accounts (the Several accounts card), or the account manager when the program itself is meant",
     isChatOrCodingSurface,
   ),
+  // 22-a (R1.9, VOCABULARY.md "Checked by Iron Jarvis"): a Build › Code
+  // reply whose tests Iron Jarvis ran is "Checked by Iron Jarvis", never
+  // "verified". Build › Code only: the chat's compaction card says a
+  // summary's claims were verified, which is another thing.
+  onSurfaces("verified", /\bverified\b/i, "Checked by Iron Jarvis (a coding reply whose tests Jarvis ran)", isBuildCodeSurface),
 ];
+
+/** 22-a: Build › Code's own screens (its components and its lib modules). */
+export function isBuildCodeSurface(file: string): boolean {
+  return file.startsWith("components/buildCode/") || /^lib\/buildApp[^/]*\.tsx?$/.test(file);
+}
 
 /** v1.455.0 (Wave E, item 1): the surfaces where the user's own model server
  *  is named — the model menu and receipts (providerDisplay in lib/onboarding),

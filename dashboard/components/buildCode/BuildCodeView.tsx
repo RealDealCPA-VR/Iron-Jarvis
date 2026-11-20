@@ -89,6 +89,8 @@ import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
 import { scrollToLatest } from "@/lib/transcriptRepin";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { CodeConversation, type MessageActions } from "@/components/buildCode/CodeConversation";
+import type { ProofActions } from "@/components/buildCode/ProofLine";
+import { checkAnswerPath } from "@/lib/buildAppProof";
 import { RewindDialog } from "@/components/buildCode/RewindDialog";
 import {
   BRANCH_ROW,
@@ -1758,6 +1760,35 @@ function SessionPane({
     [branch, sessionIdNow, sessionSource, running, branching, branchFrom, rewindTo, askRewind],
   );
 
+  // 22-a (R1.9): Iron Jarvis's check of a reply — the first-time card's
+  // answer (it posts the exact command the card showed), Stop while the
+  // check runs, and Rewind to before the message when its tests still fail
+  // (the rewind preview, as the message's own menu opens it).
+  const proofActions = useMemo<ProofActions | null>(
+    () =>
+      sessionIdNow && sessionSource !== "disk"
+        ? {
+            onAnswer: async (command, run, turn) => {
+              try {
+                await post(checkAnswerPath(sessionIdNow), { command, run, turn });
+                void load({ follow: true });
+                return null;
+              } catch (e) {
+                return errorWords(e, "Iron Jarvis could not keep that answer.");
+              }
+            },
+            onStop: () => {
+              void post(`${SESSIONS}/${encodeURIComponent(sessionIdNow)}/interrupt`).then(
+                () => void load({ follow: true }),
+                (e) => setNote(errorWords(e, "Stop did not reach Iron Jarvis's check.")),
+              );
+            },
+            ...(messageActions?.onRewindAsk && branch ? { onRewindAsk: messageActions.onRewindAsk, rewindAt: branch.filesAt } : {}),
+          }
+        : null,
+    [sessionIdNow, sessionSource, load, messageActions, branch],
+  );
+
   const retryFailed = useCallback(() => {
     if (runningRef.current) return;
     for (let i = conv.items.length - 1; i >= 0; i--) {
@@ -2418,6 +2449,8 @@ function SessionPane({
                 messageActions={messageActions}
                 onAnotherTool={canSwitch ? openToolList : undefined}
                 severalTools={switchedTools}
+                proofActions={proofActions}
+                checkingNow={session.checking === true}
               />
             )}
             {/* The "working" sign: a reply being written, helpers still at

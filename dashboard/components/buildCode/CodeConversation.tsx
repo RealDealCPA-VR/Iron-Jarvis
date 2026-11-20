@@ -47,6 +47,7 @@ import { REPLY_ACTION_BTN } from "@/components/chat/replyActions";
 import { ConfirmButton } from "@/components/ui";
 import { MENU_BUTTON_HOVER_FADE, useMenuClose } from "@/components/buildCode/useMenuClose";
 import { HandoffRow } from "@/components/buildCode/ToolSwitch";
+import { ProofLine, type ProofActions } from "@/components/buildCode/ProofLine";
 import {
   CONTINUE_ON_ANOTHER_TOOL,
   CONTINUE_ON_ANOTHER_TOOL_TITLE,
@@ -585,6 +586,9 @@ const Item = memo(function Item({
   onExpand,
   copy,
   actions,
+  proofActions,
+  newestAsk = false,
+  checkingNow = true,
 }: {
   item: ConvItem;
   folder: string;
@@ -597,6 +601,11 @@ const Item = memo(function Item({
   copy?: (key: string) => string;
   /** v1.441.0: only on a user message the tool can branch or rewind from. */
   actions?: MessageActions;
+  /** 22-a: on a check's row — what it may press, and whether its card is the
+   *  newest one asked. */
+  proofActions?: ProofActions | null;
+  newestAsk?: boolean;
+  checkingNow?: boolean;
 }) {
   codeRowDraws.items += 1;
   switch (item.kind) {
@@ -679,6 +688,9 @@ const Item = memo(function Item({
           {item.text}
         </p>
       );
+    case "proof":
+      // 22-a (R1.9): Iron Jarvis's own check of the reply above.
+      return <ProofLine proof={item.proof} newestAsk={newestAsk} checkingNow={checkingNow} actions={proofActions} />;
     case "handoff":
       // v1.545.0: the summary the tool was given with this message (folded).
       return <HandoffRow toLabel={toolLabel(item.to)} resumes={item.resumes} text={item.text} note={item.note} />;
@@ -891,6 +903,8 @@ export const CodeConversation = memo(function CodeConversation({
   messageActions,
   onAnotherTool,
   severalTools = false,
+  proofActions = null,
+  checkingNow = true,
 }: {
   items: readonly ConvItem[];
   /** v1.473.0: the first row drawn (earlier rows wait behind "Show
@@ -929,6 +943,12 @@ export const CodeConversation = memo(function CodeConversation({
    *  `switched_tools`): each reply names its tool even when the switch line
    *  itself is behind "Load earlier". */
   severalTools?: boolean;
+  /** 22-a (R1.9): the check card's answer, Stop and Rewind (absent = the
+   *  lines are drawn with nothing to press). */
+  proofActions?: ProofActions | null;
+  /** 22-a: the session says Iron Jarvis is checking a reply now (absent =
+   *  trust the record). */
+  checkingNow?: boolean;
 }) {
   // v1.545.0: a session can switch its coding tool, so each row is named for
   // the tool that wrote ITS turn (the fold reads it off the record;
@@ -959,6 +979,12 @@ export const CodeConversation = memo(function CodeConversation({
   itemsRef.current = items;
   const copyFor = useCallback((key: string) => replyCopyTexts(itemsRef.current).get(key) ?? "", []);
   const start = Math.max(0, Math.min(from, items.length));
+  // 22-a: only the NEWEST check row may show the first-time card (an older
+  // card is answered by the newest one, or by a check that ran since).
+  let lastProof = -1;
+  items.forEach((it, i) => {
+    if (it.kind === "proof") lastProof = i;
+  });
   let lastError = -1;
   items.forEach((it, i) => {
     if (it.kind === "error") lastError = i;
@@ -1003,6 +1029,9 @@ export const CodeConversation = memo(function CodeConversation({
           facts={factsFor(rowTool)}
           onExpand={onExpand}
           copy={ends.has(item.key) ? copyFor : undefined}
+          proofActions={item.kind === "proof" ? proofActions : undefined}
+          newestAsk={item.kind === "proof" && i === lastProof}
+          checkingNow={checkingNow}
           actions={
             messageActions && item.kind === "user" && !item.carry && item.at &&
             (messageActions.facts.at.has(item.at) || messageActions.facts.filesAt.has(item.at))
