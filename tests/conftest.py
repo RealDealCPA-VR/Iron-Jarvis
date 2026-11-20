@@ -1107,27 +1107,9 @@ def _grounding_deadline_is_not_a_bar_here(request, monkeypatch):
     yield
 
 
-@pytest.hookimpl(wrapper=True)
-def pytest_runtest_makereport(item, call):
-    """Build › Code follow-up, item 1: a real-Edge test (``test_real_edge*``)
-    that FAILS reports what the machine was doing (``tests/_runner_state.py``:
-    the busiest programs, the processors, memory, disk; names only). Release
-    run 44745306821 failed two of them four times on a runner that ran every
-    test four to eight times slower than the rerun's, and nothing named why.
-    Added before the report is built, so a rerun's final failure carries
-    both attempts' sections. A skip is not a failure."""
-    excinfo = call.excinfo
-    if (
-        call.when == "call"
-        and excinfo is not None
-        and str(getattr(item, "originalname", "") or item.name).startswith("test_real_edge")
-        and not excinfo.errisinstance((pytest.skip.Exception, pytest.xfail.Exception))
-    ):
-        try:
-            from tests._runner_state import runner_state
-
-            text = runner_state()
-        except Exception as exc:  # noqa: BLE001 — the test's own failure is the point
-            text = f"the machine's state could not be read: {type(exc).__name__}"
-        item.add_report_section("call", "machine", text)
-    return (yield)
+# Build › Code follow-up, item 1: a real-Edge test (``test_real_edge*``) that
+# fails says what the machine was doing, and one that passes only when run
+# again prints what its failed attempt saw at the end of the run. The hooks
+# live in tests/_real_edge_report.py (a run of the real plugins pins them);
+# importing them here registers them.
+from tests._real_edge_report import pytest_runtest_makereport, pytest_terminal_summary  # noqa: E402, F401

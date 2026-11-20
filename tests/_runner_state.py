@@ -5,8 +5,10 @@ Release run 44745306821 (job 136319029882) failed two real-Edge pins four
 times in a row ("Opening 127.0.0.1:<port> did not finish within 45 s.") while
 every test of that shard ran four to eight times slower than the same tests
 on the rerun's runner, and the log named nothing that would say why.
-``tests/conftest.py`` adds this text to the report of any ``test_real_edge*``
-test that fails, so the next one names the busiest programs, the processors,
+``tests/_real_edge_report.py`` (registered by ``tests/conftest.py``) adds this
+text to the report of any ``test_real_edge*`` test that fails, and prints it
+at the end of the run when the test passed on its retry, so the next one
+names the busiest programs, the processors,
 memory and disk, and how many Edge, node and python processes were running.
 
 Names only: this repository's CI logs are public, and a command line can
