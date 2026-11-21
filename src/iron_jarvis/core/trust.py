@@ -203,6 +203,9 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "client_preference_add",
         "client_preference_change",
         "client_preference_forget",
+        # Next leaps 41-a: nor a paired computer's switch turned off (it stops
+        # that computer's tasks running here). Listing them stays allowed.
+        "peer_allow_off",
     }
 )
 
@@ -263,6 +266,8 @@ REMOTE_RUN_DENY: frozenset[str] = frozenset(
         "brain_read",
         "brain_search",
         "client_list",
+        # Next leaps 41-a: this computer's other pairings and their switches.
+        "peer_allows",
         "file_search",
     }
 )
@@ -289,8 +294,11 @@ def deny_names(tainted: bool, remote: bool = False) -> frozenset[str]:
 #: confined to it by ``safe_path``; the readers that take an absolute path go
 #: through ``core.fs_policy``, which confines such a run's reads), is pure,
 #: reaches the public web, or works with the run's own helpers. Everything
-#: else is refused with :func:`remote_run_refusal` until the owner can choose
-#: per computer what a paired computer may do. Pinned by
+#: else is refused with :func:`remote_run_refusal`. Next leaps 41-a added the
+#: per-computer switches (``peers/allows``): they decide whether a paired
+#: computer's task gets in at all; a later phase whose switch lets a run do
+#: more (41-b's question back) adds its tool only through
+#: :func:`remote_run_keeps`, for a run whose computer allows it. Pinned by
 #: ``tests/test_second_review_remote_run_v1509.py`` (each reader on it is
 #: driven at a path outside the run's folder and must refuse).
 REMOTE_RUN_KEEP: frozenset[str] = frozenset(

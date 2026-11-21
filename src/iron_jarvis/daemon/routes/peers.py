@@ -33,7 +33,7 @@ import threading
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 from ...core.events import EventType
 from ...core.logging import get_logger
@@ -139,6 +139,147 @@ def removed_stop_summary(name: str) -> str:
     return f"Stopped: {name} was removed from your other computers."
 
 
+#: Next leaps 41-a: the summary a run is left with when "Send me tasks" was
+#: turned off for the computer that sent it.
+def tasks_off_stop_summary(name: str) -> str:
+    return f"Stopped: “Send me tasks” was turned off for {name}."
+
+
+#: How much of the other computer's "what I let you do" is read.
+ALLOWS_MAX_BODY_BYTES = 4 * 1024
+#: The peer door could not keep what the other computer said (it can try again).
+ALLOWS_NOT_KEPT = "This computer could not note that just now. Try again."
+NO_SUCH_PEER = "No paired computer has that name."
+
+#: Tells to the other computer that are still on their way (tests wait on
+#: these; :func:`drain_tells`).
+_TELLS: set[asyncio.Task] = set()
+
+
+async def drain_tells() -> None:
+    """Wait for every tell still on its way (tests)."""
+    while _TELLS:
+        await asyncio.gather(*list(_TELLS), return_exceptions=True)
+
+
+class AllowsRefused(Exception):
+    """A change to what a paired computer may do was refused: ``status`` and
+    the words for the screen."""
+
+    def __init__(self, status: int, words: str) -> None:
+        super().__init__(words)
+        self.status = status
+        self.words = words
+
+
+def stop_runs_of(d: Any, peer: Any, summary: str, *, limit: int = 500) -> list[str]:
+    """Stop every live run a task from ``peer`` started here
+    (``options["remote_peer"]`` is its id, written at the task door),
+    through the orchestrator's one stop path (``cancel_session``, cross-loop
+    safe, the way Emergency stop's ``stop_unattended`` reaches a run), its
+    summary saying why. BLOCKING; returns the ids stopped; never raises.
+    (v1.509.0, F5: Remove; next leaps 41-a: "Send me tasks" turned off.)"""
+    from sqlmodel import select
+
+    from ...agents.task_door import REMOTE_PEER_OPTION, REMOTE_TASK_ORIGIN
+    from ...core.db import session_scope
+    from ...core.models import Session, SessionStatus
+
+    orch = getattr(d, "orchestrator", None)
+    if orch is None or not getattr(peer, "id", ""):
+        return []
+    try:
+        with session_scope(d.platform.engine) as db:
+            rows = db.exec(
+                select(Session.id, Session.options_json)
+                .where(
+                    Session.status.in_(  # type: ignore[attr-defined]
+                        [SessionStatus.ACTIVE, SessionStatus.QUEUED]
+                    )
+                )
+                .where(Session.origin.startswith(f"{REMOTE_TASK_ORIGIN}:"))  # type: ignore[union-attr]
+                .limit(max(int(limit), 1))
+            ).all()
+    except Exception:  # noqa: BLE001
+        log.warning("pairing: the runs of a paired computer could not be read", exc_info=True)
+        return []
+    stopped: list[str] = []
+    for sid, options_json in rows:
+        try:
+            opts = json.loads(options_json) if isinstance(options_json, str) else options_json
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(opts, dict) or opts.get(REMOTE_PEER_OPTION) != peer.id:
+            continue
+        if orch.stop_with_reason(sid, summary):
+            stopped.append(sid)
+    return stopped
+
+
+def _tell_later(store: S.PeerStore, peer: Any, allows: list[str]) -> None:
+    """Tell the other computer what it may do now, without holding the
+    answer up (one bounded try; its next Check reads the same anyway)."""
+
+    async def _tell() -> None:
+        try:
+            token = await asyncio.to_thread(store.out_token, peer)
+            if token:
+                await L.tell_allows(peer.address, token, allows)
+        except Exception:  # noqa: BLE001 — a tell is a courtesy, never a failure
+            log.warning("pairing: could not tell a paired computer what it may do", exc_info=True)
+
+    try:
+        task = asyncio.ensure_future(_tell())
+    except RuntimeError:  # no loop (a thread's caller): its next Check says it
+        return
+    _TELLS.add(task)
+    task.add_done_callback(_TELLS.discard)
+
+
+async def change_allows(d: Any, name: str, changes: dict[str, Any]) -> dict[str, Any]:
+    """Change what the paired computer ``name`` may do here: THE body of
+    ``PATCH /peers/{name}/allows`` (the card) and of chat's ``peer_allow_off``
+    (which only ever sends switches set to False, D-41.2). The switch is
+    written first, so a task arriving after it is refused; then, when "Send
+    me tasks" went off, the tasks that computer sent that still run here are
+    stopped, the way Remove stops them. One ``peer.allows_changed`` event, and
+    one bounded tell to the other computer so its card's line is true.
+    Raises :class:`AllowsRefused` in words."""
+    from ...core.events import EventType
+    from ...peers import allows as A
+
+    store = await asyncio.to_thread(S.store_for, d.platform)
+    peer = await asyncio.to_thread(store.get, name)
+    if peer is None:
+        raise AllowsRefused(404, NO_SUCH_PEER)
+    try:
+        before, after = await asyncio.to_thread(store.set_allows, peer.id, changes)
+    except S.AllowsProblem as exc:
+        raise AllowsRefused(409, str(exc)) from None
+    except LookupError:
+        raise AllowsRefused(404, NO_SUCH_PEER) from None
+    stopped: list[str] = []
+    if before.get(A.SEND_TASKS) and not after.get(A.SEND_TASKS):
+        stopped = await asyncio.to_thread(stop_runs_of, d, peer, tasks_off_stop_summary(peer.name))
+    fresh = await asyncio.to_thread(store.get, name) or peer
+    if before != after:
+        try:
+            await d.platform.event_bus.publish(
+                EventType.PEER_ALLOWS_CHANGED, {"name": peer.name, "by": "here"}
+            )
+        except Exception:  # noqa: BLE001 — the change stands either way
+            log.warning("could not publish %s", EventType.PEER_ALLOWS_CHANGED, exc_info=True)
+    if A.on_keys(before) != A.on_keys(after):
+        _tell_later(store, fresh, A.on_keys(after))
+    return {
+        "peer": S.peer_view(fresh),
+        "before": before,
+        "after": after,
+        "stopped": len(stopped),
+        "said": A.may_line(peer.name, after) + stopped_words(peer.name, len(stopped)),
+    }
+
+
 class CodeBody(BaseModel):
     #: What this computer calls itself when it pairs (empty = keep it).
     this_name: str = ""
@@ -153,6 +294,25 @@ class JoinBody(BaseModel):
     name: str = ""
     #: What this computer calls itself (empty = keep it).
     this_name: str = ""
+
+
+class AllowsBody(BaseModel):
+    """``PATCH /peers/{name}/allows`` (next leaps 41-a): only what is given
+    changes. Switches are true or false (never a word); a folder list is
+    absolute folders on this PC; ``seen_note`` takes the once-note away."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    may_send_tasks: StrictBool | None = None
+    may_read_record: StrictBool | None = None
+    may_ask_back: StrictBool | None = None
+    may_hand_over: StrictBool | None = None
+    may_code: StrictBool | None = None
+    may_use_models: StrictBool | None = None
+    may_manage_models: StrictBool | None = None
+    record_folders: list[str] | None = None
+    code_folders: list[str] | None = None
+    seen_note: StrictBool | None = None
 
 
 def _ip(text: object) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -239,11 +399,16 @@ def register(app: FastAPI, d: Any) -> None:
             if active
             else None
         )
+        from ...peers.allows import table as _switch_table
+
         return {
             "this_name": store.this_name(),
             "peers": [S.peer_view(p) for p in store.list()],
             "code": code,
             "network": _network(request),
+            # Next leaps 41-a: the switches, in order, and which of them
+            # this version can turn on (the card draws from this one table).
+            "switches": _switch_table(),
         }
 
     @app.get("/peers")
@@ -493,8 +658,13 @@ def register(app: FastAPI, d: Any) -> None:
         try:
             if not token:
                 raise L.LinkFailed("This computer lost its token for that one. Remove it and pair again.")
-            await L.check(peer.address, token)
+            they = await L.check(peer.address, token)
             await asyncio.to_thread(store.note_ok, peer.id)
+            # Next leaps 41-a: what it lets THIS computer do, for the card's
+            # line (a cache only, never a permission here).
+            await asyncio.to_thread(
+                store.note_they_allow, peer.id, list(they.get("allows") or []), older=bool(they.get("older"))
+            )
             ok = True
         except L.LinkFailed as exc:
             await asyncio.to_thread(store.note_error, peer.id, exc.words)
@@ -551,44 +721,66 @@ def register(app: FastAPI, d: Any) -> None:
         }
 
     def _stop_runs_of(peer: Any, *, limit: int = 500) -> list[str]:
-        """Stop every live run a task from ``peer`` started here
-        (``options["remote_peer"]`` is its id, written at the task door),
-        through the orchestrator's one stop path (``cancel_session``, cross-
-        loop safe, the way Emergency stop's ``stop_unattended`` reaches a
-        run), its summary saying why. BLOCKING; returns the ids stopped;
-        never raises."""
-        from sqlmodel import select
+        """Remove's stop (v1.509.0, F5): :func:`stop_runs_of` with its
+        summary. BLOCKING; never raises."""
+        return stop_runs_of(d, peer, removed_stop_summary(peer.name), limit=limit)
 
-        from ...agents.task_door import REMOTE_PEER_OPTION, REMOTE_TASK_ORIGIN
-        from ...core.db import session_scope
-        from ...core.models import Session, SessionStatus
+    # --- what a paired computer may do here (next leaps 41-a) ---------------
 
-        orch = getattr(d, "orchestrator", None)
-        if orch is None or not getattr(peer, "id", ""):
-            return []
+    @app.patch("/peers/{name}/allows")
+    async def set_peer_allows(name: str, body: AllowsBody) -> dict[str, Any]:
+        """The card's switches for one paired computer (install bearer: the
+        card is the only caller; a paired computer's own token never opens
+        it). Only what is given changes. A switch whose thing is not in this
+        version cannot be turned on (409 in words); a folder that cannot be
+        used is refused in words. Turning "Send me tasks" off stops that
+        computer's tasks still running here, the way Remove does."""
+        changes = body.model_dump(exclude_none=True)
+        if not changes:
+            raise HTTPException(status_code=400, detail="Say which switch to change.")
         try:
-            with session_scope(d.platform.engine) as db:
-                rows = db.exec(
-                    select(Session.id, Session.options_json)
-                    .where(
-                        Session.status.in_(  # type: ignore[attr-defined]
-                            [SessionStatus.ACTIVE, SessionStatus.QUEUED]
-                        )
-                    )
-                    .where(Session.origin.startswith(f"{REMOTE_TASK_ORIGIN}:"))  # type: ignore[union-attr]
-                    .limit(max(int(limit), 1))
-                ).all()
-        except Exception:  # noqa: BLE001
-            log.warning("pairing: the runs of a removed computer could not be read", exc_info=True)
-            return []
-        stopped: list[str] = []
-        for sid, options_json in rows:
-            try:
-                opts = json.loads(options_json) if isinstance(options_json, str) else options_json
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(opts, dict) or opts.get(REMOTE_PEER_OPTION) != peer.id:
-                continue
-            if orch.stop_with_reason(sid, removed_stop_summary(peer.name)):
-                stopped.append(sid)
-        return stopped
+            return await change_allows(d, name, changes)
+        except AllowsRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.words) from None
+
+    from ..auth import PEER_ALLOWS_PATH
+
+    @app.post(PEER_ALLOWS_PATH)
+    async def peer_says_allows(request: Request) -> dict[str, Any]:
+        """THE PEER DOOR's first route: the OTHER computer says what it now
+        lets this one do (its card's switches changed), so this card's line
+        is true without a Check. Its own token only (``peers/door.peer_for``;
+        exempt from the install bearer for exactly this path). Kept as a
+        cache for the card, never a permission here. A small body, read no
+        further than its cap; a failure in words, never the 500 envelope."""
+        from ...core.events import EventType
+        from ...peers.door import _source, peer_for
+
+        peer = await peer_for(d.platform, request)
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > ALLOWS_MAX_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="That is too large to take.")
+        try:
+            body = json.loads(bytes(raw) or b"{}")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="body must be JSON") from None
+        if not isinstance(body, dict) or body.get("protocol") != L.PROTOCOL:
+            raise HTTPException(status_code=400, detail=OLD_VERSION)
+        allows = body.get("allows")
+        if not isinstance(allows, list):
+            raise HTTPException(status_code=400, detail=OLD_VERSION)
+
+        def _keep() -> None:
+            store = _store()
+            store.note_they_allow(peer.id, allows)
+            store.note_heard(peer.id, _source(request))
+
+        try:
+            await asyncio.to_thread(_keep)
+        except Exception:  # noqa: BLE001 — in words, never the exception's text
+            log.warning("pairing: could not note what a paired computer allows", exc_info=True)
+            raise HTTPException(status_code=503, detail=ALLOWS_NOT_KEPT) from None
+        await _publish(EventType.PEER_ALLOWS_CHANGED, {"name": peer.name, "by": "them"})
+        return {"ok": True}

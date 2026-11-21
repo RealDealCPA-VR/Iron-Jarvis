@@ -111,6 +111,20 @@ async def _pair(ca, cb) -> None:
     r = await ca.post("/peers/join", json={"address": B_HOST, "code": shown["code"]["code"],
                                             "name": "", "this_name": "laptop"})
     assert r.status_code == 200, r.text
+    await _let_tasks(ca, cb)
+
+
+async def _let_tasks(*clients) -> None:
+    """Next leaps 41-a: a new pairing takes no tasks until its card's "Send
+    me tasks" is pressed. These tests hand tasks both ways, so each side's
+    card turns it on for every computer it lists (the real PATCH route)."""
+    from iron_jarvis.daemon.routes import peers as _routes
+
+    for client in clients:
+        for row in (await client.get("/peers")).json()["peers"]:
+            r = await client.patch(f"/peers/{row['name']}/allows", json={"may_send_tasks": True})
+            assert r.status_code == 200, r.text
+    await _routes.drain_tells()
 
 
 def _remote_sessions(app) -> list[Session]:
@@ -381,3 +395,46 @@ def test_an_agents_answer_in_the_chat_reaches_the_model_fenced(tmp_path, lane):
     users = [str(m.content) for m in seen[0] if getattr(m, "role", "") == "user"]
     assert all(_FENCE_TOP not in u for u in users), "the owner's own words were fenced"
     assert history[1]["content"] == f"{LABEL}\nDesk read them. {INJECTED}"
+
+
+def _from_before_the_switches(app):
+    """Next leaps 41-a (D-41.1): the table an older version left (no switch
+    columns), then the boot's reconciler adding them empty, then the store's
+    next start (a restart) settling them."""
+    from sqlalchemy import text as _text
+
+    from iron_jarvis.core.db import _reconcile_additive_columns
+    from iron_jarvis.peers import allows as _A
+
+    engine = app.state.platform.engine
+    with engine.begin() as conn:
+        for col in (*_A.KEYS, "record_folders_json", "code_folders_json", "they_allow_json", "kept_note"):
+            conn.execute(_text(f"ALTER TABLE peerrecord DROP COLUMN {col}"))
+    _reconcile_additive_columns(engine)
+    p = app.state.platform
+    return S.PeerStore(p.engine, p.secrets, p.config.home)
+
+
+async def test_a_pairing_from_before_the_switches_runs_its_task_as_before(tmp_path, lan):
+    """Next leaps 41-a, D-41.1: a task from a pairing made before the
+    switches still gets in, and still runs as a task from another computer
+    always did: low trust, none of this computer's memory, its answer only to
+    that pairing."""
+    a, b, net = await _paired_pair(tmp_path, lan)
+    async with _client(A_HOST) as ca, _client(B_HOST) as cb:
+        await _pair(ca, cb)
+        _from_before_the_switches(b)
+        assert _peers_of(b)[0].may_send_tasks is True
+        door_token, reply_key = _keys(a)
+        r = await _task_from(b, A_IP, door_token, reply_key)
+        assert r.status_code == 202, r.text
+        rows = await _settled(b)
+    assert rows[0].status is SessionStatus.COMPLETED
+    assert rows[0].origin == "remote:laptop" and rows[0].trust == "low"
+    opts = json.loads(rows[0].options_json)
+    assert opts["skip_memory"] is True and opts[td.REPLY_OPTION]["peer_id"] == _peers_of(b)[0].id
+    assert len(_home_calls(net)) == 1
+
+
+def _peers_of(app):
+    return S.store_for(app.state.platform).list()

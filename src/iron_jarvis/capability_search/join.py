@@ -99,6 +99,9 @@ OWN_PLACE = frozenset({
     # (inbox/tools) and a backup made now (settings/records_upkeep), armed by
     # their words through records.record_tools_for.
     "suggestion_list", "suggestion_answer", "backup_now",
+    # Next leaps 41-a: what a paired computer may do (settings/records_peers),
+    # armed by its words through chat_turn.settings_ask_tools.
+    "peer_allows",
 })
 
 
@@ -517,6 +520,9 @@ READER_FOR = {
     # v1.506.0 (north-star plan 6.2): a suggestion is answered by its id,
     # which the list gives.
     "suggestion_answer": "suggestion_list",
+    # Next leaps 41-a: a switch is turned off BY the computer's name, which
+    # the list gives.
+    "peer_allow_off": "peer_allows",
 }
 
 #: v1.489.0: a tool that changes or lists a kind of record brings that

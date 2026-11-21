@@ -2042,6 +2042,42 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Choose what each of your other computers may do (v1.552.0)
+
+Each computer you paired with this one now has its own switches: what it may
+do HERE. Every switch starts off for a computer you pair from now on, so a
+newly paired computer can do nothing on this one until you say so.
+
+- **Where.** Settings › Connections › **Your other computers**. Under each
+  computer one line says what it may do here ("desk may: send tasks.");
+  press it to see its switches. The line under it says what THAT computer
+  lets this one do, as it last said (Check asks again).
+- **Send me tasks.** With it on, "@laptop read the notes" written on that
+  computer runs here, at low trust, and the answer goes back, as before.
+  With it off, the task is turned away: that computer's chat says that
+  "Send me tasks" is off here and where to turn it on, and nothing runs or
+  is kept here. Turning it off also stops the tasks that computer sent that
+  are still running here.
+- **Coming in later versions.** The card lists the switches that come with
+  later versions (Look up my work record, Ask me questions about tasks I
+  send it, Hand me a whole chat, Start coding work here, Use my models, See
+  and manage my models). They are not switches yet, and none of them can be
+  on before what it allows exists. A whole chat handed over will carry at
+  most 20 files and 100 MB in all.
+- **Computers you paired before this version** keep "Send me tasks" on, as
+  before; everything else is off. The card says so once, with an OK.
+- **From chat.** "What may my desk do?" lists the switches of each paired
+  computer. "Stop desk sending me tasks" turns that switch off, with an Undo
+  under the change. Chat never turns a switch on: that is your press on the
+  card, and chat points you there. The Undo is yours to press too: "undo
+  that" in chat does not turn a switch back on.
+- **Only this computer decides.** The other computer cannot change its own
+  switches here, whatever it sends: only this computer's card, or a chat on
+  this computer, can.
+- **Good to know.** When you change a switch, this computer tells the other
+  one, so its card's line is right; if it is off at the time, its next Check
+  reads it. An Undo pressed in chat does not tell it; its next Check does.
+
 ## Iron Jarvis checks every Build › Code reply (v1.551.0)
 
 Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi,

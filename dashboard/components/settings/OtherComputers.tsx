@@ -10,19 +10,24 @@
  *    it on or off saves through the one settings writer and asks the desktop
  *    app for a tidy restart, because the desktop app applies it when it starts
  *    Iron Jarvis (the owner's decision 1: one confirmation, restart included).
- * 2. The paired computers: when each was last heard from, Check, Remove.
+ * 2. The paired computers: when each was last heard from, Check, Remove,
+ *    and (next leaps 41-a) one line per computer — "desk may: send tasks." —
+ *    that opens into its switches, with what IT lets THIS computer do under
+ *    it. Every switch starts off; a press sends only that switch. Switches
+ *    whose thing comes in a later version are one quiet line, never a switch.
  * 3. Pairing: "Show a pairing code" here, or "Use a pairing code" shown by the
  *    other computer.
  *
  * Reads: on mount (then one Check of every paired computer), after a
  * reconnect (the restart), after an answer, on `peer.paired` / `peer.removed`
- * (the other computer typed this one's code), and when a shown code runs
- * out. Never on a clock.
+ * (the other computer typed this one's code) / `peer.allows_changed` (a
+ * switch moved here, or the other computer said what it now allows), and
+ * when a shown code runs out. Never on a clock.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Monitor } from "lucide-react";
-import { ApiError, del, get, post, put } from "@/lib/api";
+import { ChevronDown, ChevronRight, Monitor } from "lucide-react";
+import { ApiError, del, get, patch, post, put } from "@/lib/api";
 import { useDaemonEpoch } from "@/lib/daemonEpoch";
 import { requestTidyRestart } from "@/lib/desktopShell";
 import { useEvents } from "@/lib/useEvents";
@@ -44,6 +49,8 @@ import {
   CODE_PLACEHOLDER,
   CODE_TRIED_OUT,
   FIREWALL_LINE,
+  KEPT_NOTE_OK,
+  LATER_SWITCHES,
   NEEDS_NETWORK,
   NEEDS_RESTART,
   NETWORK_OFF,
@@ -61,6 +68,7 @@ import {
   RESTART_REFUSED,
   SECTION_LABEL,
   SHOW_CODE,
+  SWITCHES_HINT,
   TAILSCALE_LINE,
   TASKS_LINE,
   THIS_NAME_LABEL,
@@ -72,10 +80,13 @@ import {
   codeSteps,
   decodePeers,
   movedWords,
+  opensSwitches,
   peerStatusLine,
   removeTitle,
+  switchLabel,
   typedCode,
   type Peer,
+  type PeerSwitch,
   type PeersView,
 } from "@/lib/otherComputers";
 
@@ -87,14 +98,154 @@ function failureWords(err: unknown, fallback: string): string {
   return fallback;
 }
 
-function PeerRow({
+/** Next leaps 41-a: one switch — a press sends only that switch. */
+function SwitchRow({
   peer,
-  onChecked,
-  onRemoved,
+  sw,
+  busy,
+  onPress,
 }: {
   peer: Peer;
+  sw: PeerSwitch;
+  busy: boolean;
+  onPress: (key: string, on: boolean) => void;
+}) {
+  const on = peer.allows[sw.key] === true;
+  return (
+    <li className="flex items-center gap-2">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={switchLabel(peer.name, sw.label)}
+        data-testid={`peer-switch-${peer.name}-${sw.key}`}
+        disabled={busy}
+        onClick={() => onPress(sw.key, !on)}
+        className={`relative h-[18px] w-8 shrink-0 rounded-full border transition-colors disabled:opacity-60 ${
+          on ? "border-accent/40 bg-accent/30" : "border-white/10 bg-white/[0.05]"
+        }`}
+      >
+        <span
+          className={`absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full transition-all ${
+            on ? "left-[0.95rem] bg-accent" : "left-[3px] bg-zinc-400"
+          }`}
+        />
+      </button>
+      <span className="min-w-0 text-[12.5px] text-zinc-300">{sw.label}</span>
+    </li>
+  );
+}
+
+/** Next leaps 41-a: the one line under a computer that opens into its
+ *  switches, what IT lets THIS computer do, and the once-note (D-41.1). */
+function PeerSwitches({
+  peer,
+  switches,
+  onChanged,
+}: {
+  peer: Peer;
+  switches: PeerSwitch[];
+  onChanged: (said: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+  const name = encodeURIComponent(peer.name);
+  const ready = switches.filter((s) => s.ready);
+  const later = switches.filter((s) => !s.ready);
+
+  async function send(body: Record<string, unknown>) {
+    setBusy(true);
+    setProblem("");
+    try {
+      const out = await patch<{ said?: unknown }>(`/peers/${name}/allows`, body);
+      onChanged(typeof out?.said === "string" ? out.said : "");
+    } catch (err) {
+      setProblem(failureWords(err, "Couldn't change that. Try again."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!switches.length || !peer.mayLine) return null;
+  return (
+    <div className="mt-1 space-y-1" data-testid={`peer-allows-${peer.name}`}>
+      <button
+        type="button"
+        aria-expanded={open}
+        title={open ? undefined : opensSwitches(peer.name)}
+        data-testid={`peer-may-${peer.name}`}
+        onClick={() => setOpen((v) => !v)}
+        className="flex max-w-full items-start gap-1 rounded-md text-left text-[12px] leading-relaxed text-zinc-300 hover:text-zinc-100"
+      >
+        {open ? (
+          <ChevronDown className="mt-[3px] h-3 w-3 shrink-0" aria-hidden />
+        ) : (
+          <ChevronRight className="mt-[3px] h-3 w-3 shrink-0" aria-hidden />
+        )}
+        <span className="min-w-0 break-words">{peer.mayLine}</span>
+      </button>
+      {peer.theyLine && (
+        <p data-testid={`peer-they-${peer.name}`} className="pl-4 text-[12px] leading-relaxed text-zinc-500">
+          {peer.theyLine}
+        </p>
+      )}
+      {peer.keptNote && (
+        <p data-testid={`peer-kept-${peer.name}`} className="pl-4 text-[12px] leading-relaxed text-zinc-400">
+          {peer.keptNote}{" "}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void send({ seen_note: true })}
+            data-testid={`peer-kept-ok-${peer.name}`}
+            className="btn-ghost py-0 text-[12px]"
+          >
+            {KEPT_NOTE_OK}
+          </button>
+        </p>
+      )}
+      {open && (
+        <div className="space-y-2 pl-4" data-testid={`peer-switches-${peer.name}`}>
+          <ul className="space-y-1.5">
+            {ready.map((sw) => (
+              <SwitchRow
+                key={sw.key}
+                peer={peer}
+                sw={sw}
+                busy={busy}
+                onPress={(key, on) => void send({ [key]: on })}
+              />
+            ))}
+          </ul>
+          <p className="text-[12px] leading-relaxed text-zinc-500">{SWITCHES_HINT}</p>
+          {later.length > 0 && (
+            <p data-testid={`peer-later-${peer.name}`} className="text-[12px] leading-relaxed text-zinc-500">
+              {LATER_SWITCHES} {later.map((s) => s.label).join(", ")}.
+            </p>
+          )}
+        </div>
+      )}
+      {problem && (
+        <p role="alert" className="pl-4 text-[12px] text-tone-danger">
+          {problem}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PeerRow({
+  peer,
+  switches,
+  onChecked,
+  onRemoved,
+  onChanged,
+}: {
+  peer: Peer;
+  switches: PeerSwitch[];
   onChecked: (view: unknown) => void;
   onRemoved: (said: string) => void;
+  onChanged: (said: string) => void;
 }) {
   const [checking, setChecking] = useState(false);
   const [problem, setProblem] = useState("");
@@ -163,6 +314,7 @@ function PeerRow({
           {moved}
         </p>
       )}
+      <PeerSwitches peer={peer} switches={switches} onChanged={onChanged} />
       {problem && (
         <p role="alert" className="mt-1 text-[12px] text-tone-danger">
           {problem}
@@ -438,9 +590,14 @@ export function OtherComputers() {
                     <PeerRow
                       key={p.name}
                       peer={p}
+                      switches={view.switches}
                       onChecked={(raw) => take(raw)}
                       onRemoved={(said) => {
                         setNote(said);
+                        void load();
+                      }}
+                      onChanged={(said) => {
+                        if (said) setNote(said);
                         void load();
                       }}
                     />

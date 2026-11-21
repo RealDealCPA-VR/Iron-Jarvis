@@ -108,6 +108,9 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       // v1.448.0 (Wave A item 4): a tool server, a web service.
       "mcp_server_add",
       "web_service_add",
+      // Next leaps 41-a: a paired computer's switch turned off (it stops
+      // that computer's tasks running here).
+      "peer_allow_off",
     ],
   },
   {

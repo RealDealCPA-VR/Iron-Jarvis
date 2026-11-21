@@ -572,6 +572,14 @@
       "ok": "made 1 file",
       "failed": "tried a file save and it failed"
     },
+    "peer_allow_off": {
+      "ok": "switched off something a paired computer may do",
+      "failed": "tried a paired computer switch and it failed"
+    },
+    "peer_allows": {
+      "ok": "listed what your paired computers may do",
+      "failed": "tried a paired computers list and it failed"
+    },
     "persona_create": {
       "ok": "made a chat persona",
       "failed": "tried a persona creation and it failed"

@@ -401,7 +401,10 @@ describe("reading", () => {
 
 describe("the words and shapes", () => {
   it("decodes rubbish safely and takes a code only as six digits", () => {
-    expect(decodePeers(null)).toEqual({ thisName: "", peers: [], code: null, network: { saved: false, applied: false, addresses: [] } });
+    // Next leaps 41-a (moved on purpose): the view also carries the switches' table.
+    expect(decodePeers(null)).toEqual({
+      thisName: "", peers: [], code: null, network: { saved: false, applied: false, addresses: [] }, switches: [],
+    });
     expect(decodePeers({ code: { code: "12345" } }).code).toBeNull();
     expect(decodePeers({ code: { code: "12a456" } }).code).toBeNull();
     expect(decodePeers({ code: { code: "123456", expires_at: "x" } }).code?.shown).toBe("123 456");

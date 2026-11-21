@@ -344,6 +344,16 @@ TASK_DOOR_PATH = "/agents/task-door/task"
 PEER_PAIR_PATH = "/peers/pair"
 PEER_UNPAIR_PATH = "/peers/unpair"
 
+#: THE PEER DOOR (next leaps 41-a; ``peers/door.py``): the routes only a
+#: paired computer's own token opens, each behind that computer's switch
+#: (``peers/door.peer_for``, fail-closed: any other token is a 401 in words,
+#: so the install bearer, a pane's token or a browser's never opens one).
+#: Spelled once each, EXACT MATCH ONLY and for POST only (``_exempt_for``): a
+#: later phase adds its route HERE. ``POST /peer/v1/allows``: the other
+#: computer says what it now lets this one do (its card's switches changed).
+PEER_ALLOWS_PATH = "/peer/v1/allows"
+PEER_DOOR_PATHS = frozenset({PEER_ALLOWS_PATH})
+
 _EXEMPT_EXACT = frozenset(
     {"/health", "/docs", "/openapi.json", "/redoc", MCP_PATH}
 )
@@ -420,6 +430,9 @@ def _exempt_for(request: Request) -> bool:
     # The pairing doors are POSTs. Any other method there falls through to the
     # guarded routes (DELETE /peers/{name} for a pairing called "pair").
     if path in (PEER_PAIR_PATH, PEER_UNPAIR_PATH) and request.method != "POST":
+        return False
+    # The peer door's routes (next leaps 41-a) are POSTs too.
+    if path in PEER_DOOR_PATHS and request.method != "POST":
         return False
     # The remote inbound door is a POST too (routes/agents.py); PATCH or
     # DELETE of a remote that happens to be named "inbound" stays guarded.
@@ -660,6 +673,10 @@ def _is_exempt(path: str) -> bool:
     # Another computer pairing with this one, or ending a pairing (v1.497.0):
     # the code, or that peer's own token, verified fail-closed in the handler.
     if path in (PEER_PAIR_PATH, PEER_UNPAIR_PATH):
+        return True
+    # The peer door (next leaps 41-a): a paired computer's own token, checked
+    # with its switch in the handler (``peers/door.peer_for``). Exactly each.
+    if path in PEER_DOOR_PATHS:
         return True
     # An animated background (v1.410.0) drawn in a sandboxed <iframe>, which
     # cannot send the bearer header — and the token must never ride a URL the

@@ -25,7 +25,7 @@ log = get_logger(__name__)
 #: The pairing protocol's version, sent both ways.
 PROTOCOL = 1
 
-__all__ = ["PAIR_PATH", "UNPAIR_PATH", "PROTOCOL", "LinkFailed", "pair", "check", "unpair"]
+__all__ = ["PAIR_PATH", "UNPAIR_PATH", "PROTOCOL", "LinkFailed", "pair", "check", "they_allow", "tell_allows", "unpair"]
 
 #: What the Host guard answers for an address this computer does not answer
 #: to (``daemon/auth``: ``_reject(..., "host not allowed")``).
@@ -35,6 +35,7 @@ HOST_REFUSED = "host not allowed"
 PAIR_TIMEOUT_S = 15.0
 CHECK_TIMEOUT_S = 6.0
 UNPAIR_TIMEOUT_S = 8.0
+TELL_TIMEOUT_S = 6.0
 
 #: The most of an answer read.
 MAX_ANSWER_BYTES = 64 * 1024
@@ -180,15 +181,35 @@ async def pair(address: str, *, code: str, name: str, port: int, door_token: str
     }
 
 
-async def check(address: str, token: str) -> None:
+def they_allow(text: str) -> dict[str, Any]:
+    """What the other computer's task door said it lets this one do (next
+    leaps 41-a): ``{allows: [switch keys], older: bool}``. An Iron Jarvis from
+    before the switches answers no ``allows``: it takes this one's tasks
+    (``takes_tasks``) and says nothing else (``older``). Only shown, never a
+    permission here."""
+    from .allows import SEND_TASKS, wire_allows
+
+    try:
+        answer = json.loads(text) if text else None
+    except ValueError:
+        answer = None
+    if not isinstance(answer, dict):
+        return {"allows": [], "older": True}
+    if "allows" not in answer:
+        return {"allows": [SEND_TASKS] if answer.get("takes_tasks") is True else [], "older": True}
+    return {"allows": wire_allows(answer.get("allows")), "older": False}
+
+
+async def check(address: str, token: str) -> dict[str, Any]:
     """Does the paired computer at ``address`` still answer, and still know
-    this computer's token? Raises LinkFailed in words when not."""
+    this computer's token? Returns what it lets this computer do
+    (:func:`they_allow`); raises LinkFailed in words when it does not answer."""
     from .store import door_url
 
     status, text = await _request("GET", door_url(address), address=address, token=token,
                                   seconds=CHECK_TIMEOUT_S)
     if status == 200:
-        return
+        return they_allow(text)
     # 401 (it does not know the token) or the door's own 403 (it takes no
     # tasks from this computer): either way the pairing is gone there.
     if status == 401 or (status == 403 and _detail(text) != HOST_REFUSED):
@@ -206,6 +227,24 @@ async def check(address: str, token: str) -> None:
             "here and pair again with one of them.", status
         )
     raise _refused(status, text, address)
+
+
+async def tell_allows(address: str, token: str, allows: list[str]) -> bool:
+    """Tell the paired computer at ``address`` what this one now lets it do
+    (next leaps 41-a), so its card's line is true without a Check: the
+    switch keys only, nothing else. True when it took it; an older Iron Jarvis
+    (no such door: its install guard answers 401) or a computer that is off is
+    False, and its next Check reads the same from the task door. Never
+    raises."""
+    from ..daemon.auth import PEER_ALLOWS_PATH
+
+    try:
+        status, _text = await _request("POST", address.rstrip("/") + PEER_ALLOWS_PATH, address=address,
+                                       token=token, body={"protocol": PROTOCOL, "allows": list(allows)},
+                                       seconds=TELL_TIMEOUT_S)
+    except LinkFailed:
+        return False
+    return status // 100 == 2
 
 
 async def unpair(address: str, token: str) -> bool:

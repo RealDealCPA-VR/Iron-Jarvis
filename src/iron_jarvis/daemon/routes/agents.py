@@ -3915,7 +3915,9 @@ def register(app: FastAPI, d) -> None:
     async def _door_check(request: Request):
         """The door's locks, fail-closed and off the loop. A PAIRED computer
         (v1.497.0, ``peers/``) shows the token this computer made for it and
-        is let in whether or not the hand-made door is on. Anyone else needs
+        is known whether or not the hand-made door is on; what it may then do
+        is its switch's (next leaps 41-a: the task POST asks "Send me tasks",
+        ``peers/door.refuse_unless``; the probe only says). Anyone else needs
         the hand-made door on (else 403, in words) and its token (else 401).
         Returns ``(door, peer)``; ``peer`` is None for the hand-made door.
 
@@ -3961,7 +3963,16 @@ def register(app: FastAPI, d) -> None:
             )
         # v1.510.0 (F3): it was heard from — what is still owed to it goes.
         _owed_go_home(peer, _source_of(request))
-        return {"ok": True, "takes_tasks": True}
+        if peer is None:
+            return {"ok": True, "takes_tasks": True}
+        # Next leaps 41-a: a paired computer is told what it may do here (its
+        # card's line), and whether its tasks are taken — the probe is its
+        # Check, so a switch that is off is a 200 that says so, never a 403
+        # (which its Check reads as "the pairing is gone").
+        from ...peers import allows as _A
+
+        allowed = _A.on_keys(_A.allows_of(peer))
+        return {"ok": True, "takes_tasks": _A.SEND_TASKS in allowed, "allows": allowed}
 
     @app.post(_TASK_DOOR_PATH, status_code=202)
     async def task_door_task(request: Request) -> dict[str, Any]:
@@ -3971,7 +3982,8 @@ def register(app: FastAPI, d) -> None:
         ``{task, conversation_id?, history?, history_held_back?, reply_to?,
         reply_token?}``.
         Fail-closed, in order: door off → 403; wrong / missing token → 401;
-        past ``TASK_RATE_MAX`` a minute → 429; a body past
+        a paired computer whose "Send me tasks" is off → 403 in words (next
+        leaps 41-a); past ``TASK_RATE_MAX`` a minute → 429; a body past
         ``TASK_MAX_BODY_BYTES`` or a task past ``TASK_MAX_CHARS`` → 413;
         Emergency stop on → 409 in its own words. Then ONE session through
         ``create_session``: origin ``remote:<caller>`` (unattended — nobody
@@ -3982,6 +3994,16 @@ def register(app: FastAPI, d) -> None:
         from ...agents import task_door as td
 
         door, peer = await _door_check(request)
+        if peer is not None:
+            # Next leaps 41-a (the build-out plan's Stage 0 fix): a paired
+            # computer's token no longer gets a task in by itself — its "Send
+            # me tasks" switch must be on (off for every new pairing; only the
+            # card's press turns it on). Off: 403 in words naming this
+            # computer, before anything is read, counted or kept.
+            from ...peers.allows import SEND_TASKS
+            from ...peers.door import refuse_unless
+
+            await refuse_unless(d.platform, peer, SEND_TASKS)
         # A paired computer is called by the name this computer gave it; the
         # hand-made door by the one name its card set. The task window is
         # per caller (v1.509.0, F14): one computer cannot use up another's.
@@ -4095,6 +4117,27 @@ def register(app: FastAPI, d) -> None:
                     "code": "local_only",
                 },
             )
+        if peer is not None:
+            # Next leaps 41-a: "Send me tasks" may have been turned off while
+            # this task was being made (the card's stop pass reads only the
+            # rows already there). Read it again now that the row exists:
+            # off, the task is stopped before it starts and refused in words.
+            from ...peers.allows import SEND_TASKS, may, tasks_off_words
+            from ...peers.store import store_for
+
+            _peers = store_for(d.platform)
+            try:
+                now = await asyncio.to_thread(_peers.get_by_id, peer.id)
+            except Exception:  # noqa: BLE001 — a pairing that cannot be read takes no task
+                now = None
+            if not may(now, SEND_TASKS):
+                from .peers import tasks_off_stop_summary
+
+                await asyncio.to_thread(
+                    orchestrator.stop_with_reason, session.id, tasks_off_stop_summary(caller)
+                )
+                here = await asyncio.to_thread(_peers.this_name)
+                raise HTTPException(status_code=403, detail=tasks_off_words(here, caller))
         if reply_to and reply_token:
             try:
                 await asyncio.to_thread(

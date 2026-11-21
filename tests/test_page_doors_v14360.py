@@ -178,6 +178,10 @@ DOOR_ROWS: list[tuple[str, str]] = [
     ("forget the Smith folder, I don't want it in your work record", "forget_folder"),
     ("delete the Hartley project", "delete_project"),
     ("make a new template", "templates"),
+    # Next leaps 41-a (D-41.2): letting a paired computer do something here
+    # is a press on its switch on the card, never chat's.
+    ("let desk send me tasks", "peer_switches"),
+    ("allow my other computer to send work here", "peer_switches"),
 ]
 
 #: (sentence, the thing it asks for that Iron Jarvis does not offer)
@@ -230,6 +234,10 @@ LINE_ROWS: list[tuple[str, str]] = [
 
 #: Everyday sentences that must name NOTHING (no door, no line).
 NEAR_MISSES: list[str] = [
+    # Next leaps 41-a: turning a switch OFF is chat's own (peer_allow_off),
+    # and "let me" is no paired computer.
+    "don't let desk send me tasks anymore",
+    "let me send the tasks to the team",
     "sign the letter",
     "I installed a new printer",
     "download the PDF",

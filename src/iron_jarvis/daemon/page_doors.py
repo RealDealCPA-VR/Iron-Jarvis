@@ -857,6 +857,17 @@ STEPS: tuple[PageStep, ...] = (
         "paired, \"@\" and the other computer's name in chat hands it a task, and the answer comes back to "
         "that chat. Say so plainly and point there.",
     ),
+    # Next leaps 41-a (D-41.2): letting a paired computer DO something here is
+    # the user's press on its switch on that card; chat shows the switches
+    # (peer_allows) and turns them off (peer_allow_off), never on.
+    PageStep(
+        "peer_switches", PAIRING_HREF, "Change what your other computers may do",
+        "What a paired computer may do on this one (Send me tasks, and the switches that come with later "
+        f"versions) is turned ON only by the user, with that switch under the computer's name in {PAIRING_PLACE}; "
+        "every switch starts off for a new pairing. Iron Jarvis cannot turn one on from chat. It can list them "
+        "with peer_allows and turn one off with peer_allow_off, when they are offered in this reply. Say so "
+        "plainly and point there.",
+    ),
     # v1.506.0 (6.3): restoring REPLACES the database and settings, so it is
     # never a tool (routes/settings POST /maintenance/restore, the Maintenance
     # card's "Restore from backup…", which confirms by name).
@@ -909,6 +920,12 @@ STEPS: tuple[PageStep, ...] = (
     ),
 )
 
+def _peer_switch_on(text: str) -> bool:
+    from ..settings.records_peers import switch_on_asked
+
+    return switch_on_asked(text)
+
+
 _STEP_RULES: dict[str, Callable[[str], bool]] = {
     "accounts": _any(_ACCOUNT_RULES),
     "vendor_approval": _vendor_approval,
@@ -938,6 +955,8 @@ _STEP_RULES: dict[str, Callable[[str], bool]] = {
     # v1.506.0 (north-star plan 6.3): pairing, also when the message asks to
     # hand tasks to another of the user's computers (pairing is how).
     "pair_computer": lambda t: W.pairing_asked(t) or _ELSEWHERE_RULES[-1].search(t) is not None,
+    # Next leaps 41-a: "let desk send me tasks" (settings/records_peers).
+    "peer_switches": _peer_switch_on,
     "restore_backup": W.restore_asked,
     "updates": W.update_asked,
     # v1.506.0 (6.6).

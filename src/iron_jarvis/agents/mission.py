@@ -393,6 +393,8 @@ ASK_WORDS: dict[str, str] = {
     "client_answer": "say whether a name is one of your clients",
     # v1.506.0 (north-star 6.2): answering one waiting suggestion asks first.
     "suggestion_answer": "answer a suggestion on the Improvements page",
+    # Next leaps 41-a: a paired computer's switch, turned off from chat.
+    "peer_allow_off": "turn off something a paired computer may do here",
     "client_update": "change one of your clients",
     "client_preference_add": "keep a preference for one client",
     "client_preference_change": "change a preference kept for one client",
@@ -663,6 +665,10 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "suggestion_list": ("listed the waiting suggestions", "suggestion list"),
     "suggestion_answer": ("answered a suggestion", "suggestion answer"),
     "backup_now": ("backed up Iron Jarvis", "backup"),
+    # Next leaps 41-a: what a paired computer may do here. Twin:
+    # lib/runWords.ts AGENT_TOOLS.
+    "peer_allows": ("listed what your paired computers may do", "paired computers list"),
+    "peer_allow_off": ("switched off something a paired computer may do", "paired computer switch"),
     "client_list": ("listed your clients", "client list"),
     "client_answer": ("noted whether a name is one of your clients", "client answer"),
     "client_update": ("changed one of your clients", "client change"),

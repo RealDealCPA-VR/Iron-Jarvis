@@ -161,6 +161,10 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     "client_preference_add": "ask",
     "client_preference_change": "ask",
     "client_preference_forget": "ask",
+    # Next leaps 41-a (settings/records_peers): a switch of a paired computer
+    # turned OFF from chat. Allow: it only narrows what another computer may
+    # do here (like grant_revoke); its Undo is the user's press only (D-41.2).
+    "peer_allow_off": "allow",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -2002,6 +2006,16 @@ def _page_snap_custom_tool(platform: Any, name: str) -> Any:
 _SNAP["custom_tool"] = _page_snap_custom_tool
 
 
+def _peers_snap(platform: Any, name: str) -> Any:
+    from .records_peers import snap
+
+    return snap(platform, name)
+
+
+#: Next leaps 41-a: what a paired computer may do here (settings/records_peers).
+_SNAP["peer_allows"] = _peers_snap
+
+
 def restore(platform: Any, desc: dict[str, Any]) -> str:
     """``POST /undo/{id}`` for a ``record_restore`` row. Blocking."""
     record = str(desc.get("record") or "")
@@ -2057,6 +2071,10 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         from .page_records import restore_custom_tool
 
         return restore_custom_tool(platform, name, prior)
+    if record == "peer_allows":
+        from .records_peers import restore_kind as _peers_restore
+
+        return _peers_restore(platform, name, prior, desc)
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -3867,7 +3885,15 @@ def record_tools(platform: Any) -> list[Tool]:
         *_rc().client_tools(platform),
         # v1.506.0 (north-star plan 6.3): a backup of Iron Jarvis made now.
         *_upkeep_tools(platform),
+        # Next leaps 41-a: what a paired computer may do here (show; off).
+        *_peer_tools(platform),
     ]
+
+
+def _peer_tools(platform: Any) -> list[Tool]:
+    from .records_peers import peer_tools
+
+    return peer_tools(platform)
 
 
 def _upkeep_tools(platform: Any) -> list[Tool]:

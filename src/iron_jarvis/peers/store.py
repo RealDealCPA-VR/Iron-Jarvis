@@ -110,6 +110,42 @@ class NameTaken(RuntimeError):
     the pairing; nothing was written."""
 
 
+class AllowsProblem(ValueError):
+    """A change to what a paired computer may do that cannot be made, in
+    plain words (next leaps 41-a). Nothing was changed."""
+
+
+def _checked_folders(raw: object, *, writable: bool) -> list[str]:
+    """A folder list for a switch: absolute folders on this PC that the app
+    may read (``writable``: also work in), each once, at most
+    ``allows.FOLDERS_MAX``. A network spelling is refused by its TEXT before
+    anything is resolved. Raises :class:`AllowsProblem` in words. BLOCKING
+    (``root_problem`` probes the folder)."""
+    from ..core.fs_policy import root_problem
+    from .allows import FOLDER_CHARS, FOLDERS_MAX
+
+    if not isinstance(raw, list):
+        raise AllowsProblem("Give the folders as a list.")
+    out: list[str] = []
+    for item in raw:
+        folder = str(item or "").strip() if isinstance(item, str) else ""
+        if not folder:
+            continue
+        if len(folder) > FOLDER_CHARS:
+            raise AllowsProblem("That folder's path is too long.")
+        if folder.startswith(("\\\\", "//")):
+            raise AllowsProblem(f"{folder} is on another computer. Choose a folder on this PC.")
+        problem = root_problem(folder, for_reading=not writable)
+        if problem:
+            raise AllowsProblem(f"{folder} cannot be used: {problem}.")
+        resolved = str(Path(folder).resolve())
+        if resolved not in out:
+            out.append(resolved)
+    if len(out) > FOLDERS_MAX:
+        raise AllowsProblem(f"At most {FOLDERS_MAX} folders.")
+    return out
+
+
 def normalize_address(typed: object) -> str:
     """``http://host:port`` from what a person typed: ``192.168.1.20``,
     ``192.168.1.20:8787``, ``http://desk:8787/``. A path, a query, a user name
@@ -208,6 +244,113 @@ class PeerStore:
             PeerRecord.__table__.create(engine, checkfirst=True)
         except Exception:  # noqa: BLE001 — made concurrently / already there
             pass
+        self.settle_older()
+
+    # -- pairings made before the switches (next leaps 41-a, D-41.1) ---------
+
+    def settle_older(self) -> int:
+        """Fill the switches of every pairing made before this version (its
+        new columns are empty: the reconciler adds them as nullable): "Send me
+        tasks" ON, as before, and marked so the card says so once
+        (``allows.KEPT_TASKS``); every other switch OFF and no folders. One
+        transaction; idempotent (a settled row has no empty column). Returns
+        how many pairings were settled. Never raises."""
+        from sqlalchemy import text
+
+        from .allows import KEPT_TASKS, KEYS, SEND_TASKS
+
+        others = [k for k in KEYS if k != SEND_TASKS]
+        try:
+            with _LOCK, self.engine.begin() as conn:
+                n = conn.execute(
+                    text(
+                        f"UPDATE peerrecord SET {SEND_TASKS} = 1, kept_note = :note "
+                        f"WHERE {SEND_TASKS} IS NULL"
+                    ),
+                    {"note": KEPT_TASKS},
+                ).rowcount
+                for key in others:
+                    conn.execute(text(f"UPDATE peerrecord SET {key} = 0 WHERE {key} IS NULL"))
+                for col, empty in (
+                    ("record_folders_json", "[]"),
+                    ("code_folders_json", "[]"),
+                    ("they_allow_json", "{}"),
+                    ("kept_note", ""),
+                ):
+                    conn.execute(text(f"UPDATE peerrecord SET {col} = :v WHERE {col} IS NULL"), {"v": empty})
+        except Exception:  # noqa: BLE001 — read tolerantly meanwhile (allows._flag)
+            log.warning("paired computers: the switches of older pairings could not be settled", exc_info=True)
+            return 0
+        if n:
+            log.info("paired computers: %d pairing(s) from before the switches keep Send me tasks on", n)
+        return int(n or 0)
+
+    # -- what a paired computer may do here (next leaps 41-a) ----------------
+
+    def allows(self, peer: PeerRecord) -> dict[str, Any]:
+        """Every switch of ``peer`` and its folder lists (``allows.allows_of``)."""
+        from .allows import allows_of
+
+        return allows_of(peer)
+
+    def set_allows(self, peer_id: str, changes: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Change what the paired computer ``peer_id`` may do here: switches
+        (``may_*``: bool), folder lists (``record_folders`` / ``code_folders``:
+        absolute folders, each through ``core.fs_policy.root_problem``) and
+        ``seen_note`` (the card's once-note was read). Returns ``(before,
+        after)``. A switch whose thing is not in this version cannot be turned
+        ON (:class:`AllowsProblem`); any switch can be turned off. Any change,
+        and ``seen_note``, takes the once-note away. BLOCKING."""
+        from .allows import BY_KEY, CODE_FOLDERS, FOLDER_FIELDS, RECORD_FOLDERS, allows_of, not_ready_words
+
+        switches: dict[str, bool] = {}
+        folders: dict[str, list[str]] = {}
+        seen = False
+        for key, value in (changes or {}).items():
+            if key == "seen_note":
+                seen = value is True
+            elif key in BY_KEY:
+                if not isinstance(value, bool):
+                    raise AllowsProblem(f"{BY_KEY[key].label} is on or off.")
+                if value and not BY_KEY[key].ready:
+                    raise AllowsProblem(not_ready_words(key))
+                switches[key] = value
+            elif key in FOLDER_FIELDS:
+                folders[key] = _checked_folders(value, writable=key == CODE_FOLDERS)
+            else:
+                raise AllowsProblem("That is not something a paired computer can be allowed to do.")
+        with _LOCK:
+            with session_scope(self.engine) as db:
+                row = db.get(PeerRecord, peer_id)
+                if row is None:
+                    raise LookupError(peer_id)
+                before = allows_of(row)
+                for key, value in switches.items():
+                    setattr(row, key, value)
+                if RECORD_FOLDERS in folders:
+                    row.record_folders_json = json.dumps(folders[RECORD_FOLDERS])
+                if CODE_FOLDERS in folders:
+                    row.code_folders_json = json.dumps(folders[CODE_FOLDERS])
+                if switches or folders or seen:
+                    row.kept_note = ""
+                db.add(row)
+                db.commit()
+                db.refresh(row)
+                after = allows_of(row)
+        return before, after
+
+    def note_they_allow(self, peer_id: str, allows: list[str], *, older: bool = False) -> None:
+        """What the OTHER computer said it lets this one do (its probe's
+        ``allows``, or its push): kept for the card only, never a permission
+        here. Never raises."""
+        from .allows import wire_allows
+
+        self._touch(
+            peer_id,
+            they_allow_json=json.dumps(
+                {"allows": wire_allows(allows), "older": bool(older), "at": utcnow().isoformat()}
+            ),
+        )
 
     # -- this computer's own name -------------------------------------------
 
@@ -544,6 +687,26 @@ def peer_view(peer: PeerRecord) -> dict[str, Any]:
         # is not the address it was paired at ("" otherwise).
         "heard_from": peer.heard_from or "",
         "heard_from_at": iso(peer.heard_from_at) if peer.heard_from else None,
+        # Next leaps 41-a: what it may do HERE (each switch, its folders), the
+        # one line that says so, what IT lets THIS computer do (its last
+        # answer, a cache only), and the once-note for a pairing from before
+        # the switches (D-41.1).
+        **_allows_view(peer),
+    }
+
+
+def _allows_view(peer: PeerRecord) -> dict[str, Any]:
+    from .allows import KEPT_TASKS, KEPT_TASKS_WORDS, allows_of, may_line, they_allow_of, they_line
+
+    allows = allows_of(peer)
+    they = they_allow_of(getattr(peer, "they_allow_json", None))
+    kept = (getattr(peer, "kept_note", "") or "") == KEPT_TASKS
+    return {
+        "allows": allows,
+        "may_line": may_line(peer.name, allows),
+        "they_allow": they,
+        "they_line": they_line(peer.name, they),
+        "kept_note": KEPT_TASKS_WORDS if kept else "",
     }
 
 

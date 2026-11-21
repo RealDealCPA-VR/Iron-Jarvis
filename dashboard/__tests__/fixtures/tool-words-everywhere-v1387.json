@@ -163,6 +163,8 @@
     "pdf_form_fields",
     "pdf_form_fill",
     "pdf_split",
+    "peer_allow_off",
+    "peer_allows",
     "persona_create",
     "persona_delete",
     "persona_update",
@@ -408,6 +410,8 @@
     "pdf_form_fields": "read a file",
     "pdf_form_fill": "change a file",
     "pdf_split": "make a file",
+    "peer_allow_off": "turn off something a paired computer may do here",
+    "peer_allows": "list what your paired computers may do",
     "persona_create": "make a chat persona",
     "persona_delete": "remove or reset a chat persona",
     "persona_update": "change a chat persona",
@@ -975,6 +979,14 @@
       "Waited for a terminal",
       "Waiting for a terminal"
     ],
+    "peer_allow_off": [
+      "Switched off something a paired computer may do",
+      "Switching off something a paired computer may do"
+    ],
+    "peer_allows": [
+      "Listed what your paired computers may do",
+      "Listing what your paired computers may do"
+    ],
     "persona_create": [
       "Made a chat persona",
       "Making a chat persona"
@@ -1407,6 +1419,8 @@
     "pdf_form_fields": "read",
     "pdf_form_fill": "change",
     "pdf_split": "make",
+    "peer_allow_off": "",
+    "peer_allows": "",
     "persona_create": "",
     "persona_delete": "",
     "persona_update": "",

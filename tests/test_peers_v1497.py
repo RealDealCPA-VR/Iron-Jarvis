@@ -133,7 +133,21 @@ async def _pair(ca, cb, *, a_name="laptop", b_name="desk", call_it="") -> dict[s
         json={"address": B_HOST, "code": code, "name": call_it, "this_name": a_name},
     )
     assert r.status_code == 200, r.text
+    await _let_tasks(ca, cb)
     return r.json()
+
+
+async def _let_tasks(*clients) -> None:
+    """Next leaps 41-a: a new pairing takes no tasks until its card's "Send
+    me tasks" is pressed. These tests hand tasks both ways, so each side's
+    card turns it on for every computer it lists (the real PATCH route)."""
+    from iron_jarvis.daemon.routes import peers as _routes
+
+    for client in clients:
+        for row in (await client.get("/peers")).json()["peers"]:
+            r = await client.patch(f"/peers/{row['name']}/allows", json={"may_send_tasks": True})
+            assert r.status_code == 200, r.text
+    await _routes.drain_tells()
 
 
 def _peers(app) -> list[PeerRecord]:
@@ -905,3 +919,43 @@ async def test_the_network_says_which_addresses_another_computer_can_type(tmp_pa
     async with httpx.AsyncClient(base_url="http://127.0.0.1:8787", headers=AUTH) as local:
         net = (await local.get("/peers")).json()["network"]
         assert net == {"saved": False, "applied": False, "addresses": []}
+
+
+def _from_before_the_switches(app):
+    """Next leaps 41-a (D-41.1): the table an older version left (no switch
+    columns), then the boot's reconciler adding them empty, then the store's
+    next start (a restart) settling them."""
+    from sqlalchemy import text as _text
+
+    from iron_jarvis.core.db import _reconcile_additive_columns
+    from iron_jarvis.peers import allows as _A
+
+    engine = app.state.platform.engine
+    with engine.begin() as conn:
+        for col in (*_A.KEYS, "record_folders_json", "code_folders_json", "they_allow_json", "kept_note"):
+            conn.execute(_text(f"ALTER TABLE peerrecord DROP COLUMN {col}"))
+    _reconcile_additive_columns(engine)
+    p = app.state.platform
+    return S.PeerStore(p.engine, p.secrets, p.config.home)
+
+
+async def test_a_pairing_from_before_the_switches_still_takes_tasks_and_says_so_once(tmp_path, lan):
+    """Next leaps 41-a, D-41.1: after the update a pairing made before it
+    keeps "Send me tasks" on (as before) and nothing else; the card says so
+    once; the probe tells the other computer exactly that."""
+    from iron_jarvis.peers import allows as A
+
+    a, b = _two(tmp_path)
+    lan({A_HOST: a, B_HOST: b})
+    async with _client(A_HOST) as ca, _client(B_HOST) as cb:
+        await _pair(ca, cb)
+        for app in (a, b):
+            (peer,) = _from_before_the_switches(app).list()
+            assert peer.may_send_tasks is True and peer.kept_note == A.KEPT_TASKS
+            assert not any(getattr(peer, k) for k in A.KEYS if k != A.SEND_TASKS)
+        row = (await cb.get("/peers")).json()["peers"][0]
+        assert row["kept_note"] == A.KEPT_TASKS_WORDS and row["may_line"] == "laptop may: send tasks."
+        (pa,) = _peers(a)
+        async with httpx.AsyncClient(base_url=f"http://{B_HOST}") as raw:
+            probe = await raw.get(TASK_DOOR_PATH, headers={"Authorization": f"Bearer {_secret(a, pa.out_secret)}"})
+        assert probe.json() == {"ok": True, "takes_tasks": True, "allows": [A.SEND_TASKS]}

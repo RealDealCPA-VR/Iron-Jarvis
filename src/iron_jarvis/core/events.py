@@ -332,6 +332,11 @@ class EventType:
     # (review, v1.497.0): {why: "wrong_tries"} — typed wrong too often, so the
     # card showing it takes it down and says so. Never the code.
     PEER_CODE_ENDED = "peer.code_ended"
+    # Next leaps 41-a: what a paired computer may do changed. {name, by} —
+    # by = "here" (a switch on this computer's card, or chat turned one off)
+    # or "them" (the other computer said what it now lets this one do). The
+    # card reads its list again. Never a token, never an address.
+    PEER_ALLOWS_CHANGED = "peer.allows_changed"
     # YOUR BROWSER (v1.235.0) — the user's own Chrome/Edge over /browser/ws.
     # Ambient facts about a browser, so they carry NO session_id: nothing here
     # belongs to one conversation. No payload ever carries the pairing token;

@@ -473,6 +473,11 @@ def default_permissions() -> dict[str, str]:
         # made now only adds an archive (the newest seven are kept, as for
         # the daily one and the Back up now press).
         "backup_now": "allow",
+        # Next leaps 41-a (settings/records_peers): what a paired computer may
+        # do here. Listing reads only; turning a switch OFF only narrows (its
+        # Undo is the user's press). Turning one ON is never a tool (D-41.2).
+        "peer_allows": "allow",
+        "peer_allow_off": "allow",
         "client_answer": "ask",
         "client_update": "ask",
         "client_preference_add": "ask",

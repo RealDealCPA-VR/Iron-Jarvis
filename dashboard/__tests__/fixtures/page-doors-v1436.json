@@ -164,6 +164,13 @@
       },
       {
         "door": {
+          "href": "/settings?section=connections-computers",
+          "label": "Change what your other computers may do"
+        },
+        "id": "peer_switches"
+      },
+      {
+        "door": {
           "href": "/settings?section=system-maintenance",
           "label": "Open Maintenance in Settings"
         },

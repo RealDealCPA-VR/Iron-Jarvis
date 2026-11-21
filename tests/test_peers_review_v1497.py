@@ -427,3 +427,48 @@ async def test_a_code_typed_wrong_too_often_is_said_on_the_computer_showing_it(t
         await ca.post("/peers/join", json={"address": B_HOST, "code": wrong})
     ended = [e.payload for e in b.state.platform.event_bus.history if e.type == "peer.code_ended"]
     assert ended == [{"why": "wrong_tries"}]
+
+
+def _from_before_the_switches(app):
+    """Next leaps 41-a (D-41.1): the table an older version left (no switch
+    columns), then the boot's reconciler adding them empty, then the store's
+    next start (a restart) settling them."""
+    from sqlalchemy import text as _text
+
+    from iron_jarvis.core.db import _reconcile_additive_columns
+    from iron_jarvis.peers import allows as _A
+
+    engine = app.state.platform.engine
+    with engine.begin() as conn:
+        for col in (*_A.KEYS, "record_folders_json", "code_folders_json", "they_allow_json", "kept_note"):
+            conn.execute(_text(f"ALTER TABLE peerrecord DROP COLUMN {col}"))
+    _reconcile_additive_columns(engine)
+    p = app.state.platform
+    return S.PeerStore(p.engine, p.secrets, p.config.home)
+
+
+async def test_settling_older_pairings_is_idempotent_and_a_new_pairing_is_never_settled_on(tmp_path, lan):
+    """Next leaps 41-a, D-41.1: settling runs at every start of the store; it
+    turns "Send me tasks" on ONLY for a pairing whose columns are empty (one
+    made before the switches), once. The same computer pairing again after
+    the update is a NEW pairing: every switch off, no note."""
+    from iron_jarvis.peers import allows as A
+
+    a, b = _two(tmp_path)
+    lan({A_HOST: a, B_HOST: b})
+    async with _client(A_HOST) as ca, _client(B_HOST) as cb:
+        await _pair(ca, cb)
+        store = _from_before_the_switches(b)
+        assert store.settle_older() == 0, "already settled by the start"
+        (pb,) = _peers(b)
+        await cb.patch("/peers/laptop/allows", json={"may_send_tasks": False})
+        assert store.settle_older() == 0
+        assert _peers(b)[0].may_send_tasks is False, "a switch turned off stays off"
+        # Pair again, as after the update: a new pairing, every switch off.
+        shown = (await cb.post("/peers/code", json={"this_name": "desk"})).json()
+        r = await ca.post("/peers/join", json={"address": B_HOST, "code": shown["code"]["code"],
+                                                "this_name": "laptop"})
+        assert r.status_code == 200, r.text
+        (again,) = _peers(b)
+        assert again.id != pb.id
+        assert not any(getattr(again, k) for k in A.KEYS) and again.kept_note == ""

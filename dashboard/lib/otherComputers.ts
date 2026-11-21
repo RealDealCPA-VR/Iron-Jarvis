@@ -11,6 +11,8 @@
  *   POST   /peers/join            {address, code, name, this_name}
  *   POST   /peers/check           ask every paired computer
  *   POST   /peers/{name}/check
+ *   PATCH  /peers/{name}/allows   next leaps 41-a: one switch (or a folder
+ *                                 list, or seen_note) for what it may do here
  *   DELETE /peers/{name}
  * (/peers/pair and /peers/unpair are the doors the OTHER computer calls.)
  *
@@ -34,6 +36,25 @@ export interface Peer {
   /** v1.509.0: the address it last reached this computer from, when that is
    *  not the one it was paired at ("" otherwise). */
   heardFrom: string;
+  /** Next leaps 41-a: what it may do HERE, switch by switch (the keys of
+   *  `PeersView.switches`); every one off for a new pairing. */
+  allows: Record<string, boolean>;
+  /** The one line under it ("desk may: send tasks."), the daemon's words. */
+  mayLine: string;
+  /** What IT last said it lets THIS computer do (only shown). */
+  theyAllow: { known: boolean; allows: string[]; older: boolean };
+  theyLine: string;
+  /** D-41.1: said once for a pairing from before the switches ("" = none). */
+  keptNote: string;
+}
+
+/** One switch, as the daemon's one table says it (peers/allows.SWITCHES). */
+export interface PeerSwitch {
+  key: string;
+  label: string;
+  /** Can this version turn it on? A switch whose thing comes later is drawn
+   *  in one quiet line, never as a switch. */
+  ready: boolean;
 }
 
 export interface PeersView {
@@ -49,6 +70,8 @@ export interface PeersView {
     /** What another computer types to reach this one ("192.168.1.20:8787"). */
     addresses: string[];
   };
+  /** Next leaps 41-a: the switches, in order (empty from an older Iron Jarvis). */
+  switches: PeerSwitch[];
 }
 
 /** The setting the card turns on and off (settings/schema.py `lan_access`). */
@@ -59,7 +82,7 @@ export const OTHER_COMPUTERS_SECTION = "connections-computers";
 export const OTHER_COMPUTERS_HREF = `/settings?focus=${NETWORK_SETTING_KEY}`;
 
 /** Events after which the list is read again. */
-export const PEER_EVENT_TYPES = ["peer.paired", "peer.removed", "peer.code_ended"];
+export const PEER_EVENT_TYPES = ["peer.paired", "peer.removed", "peer.code_ended", "peer.allows_changed"];
 
 export const SECTION_LABEL = "Your other computers";
 export const SECTION_BLURB =
@@ -67,9 +90,25 @@ export const SECTION_BLURB =
 
 export const TASKS_LINE =
   "Once two computers are paired, each can hand the other tasks: in chat, write “@” and the other " +
-  "computer's name, then the task. A task from the other computer runs here on its own, at low " +
-  "trust: anything that would need your OK here is not done, and the answer goes back to the chat " +
-  "it came from.";
+  "computer's name, then the task. Each computer decides what the other may do on it: press the line " +
+  "under a paired computer and turn on “Send me tasks” to take its tasks. A task from the other " +
+  "computer runs here on its own, at low trust: anything that would need your OK here is not done, " +
+  "and the answer goes back to the chat it came from.";
+
+/** Next leaps 41-a: the switches' own words (the daemon sends the labels;
+ *  these are the card's). */
+export const SWITCHES_HINT =
+  "Every switch starts off. Turning “Send me tasks” off stops the tasks this computer is still doing for it.";
+export const LATER_SWITCHES = "Coming in later versions:";
+export const KEPT_NOTE_OK = "OK";
+/** The switch's accessible name: "Send me tasks, for desk". */
+export function switchLabel(name: string, label: string): string {
+  return `${label}, for ${name}`;
+}
+/** Said while the line is folded, so a screen reader knows it opens. */
+export function opensSwitches(name: string): string {
+  return `Show what ${name} may do on this computer`;
+}
 
 export const NETWORK_OFF =
   "Other computers cannot reach this one yet. To pair, turn this on here and on the other computer. " +
@@ -175,6 +214,34 @@ function record(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
+function decodeAllows(raw: unknown): Record<string, boolean> {
+  const r = record(raw) ?? {};
+  const out: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (k.startsWith("may_") && typeof v === "boolean") out[k] = v;
+  }
+  return out;
+}
+
+function decodeTheyAllow(raw: unknown): Peer["theyAllow"] {
+  const r = record(raw) ?? {};
+  return {
+    known: r.known === true,
+    allows: (Array.isArray(r.allows) ? r.allows : [])
+      .filter((a): a is string => typeof a === "string" && a.startsWith("may_"))
+      .slice(0, 20),
+    older: r.older === true,
+  };
+}
+
+function decodeSwitch(raw: unknown): PeerSwitch | null {
+  const r = record(raw);
+  const key = r ? text(r.key, 40) : "";
+  const label = r ? text(r.label, 80) : "";
+  if (!r || !key.startsWith("may_") || !label) return null;
+  return { key, label, ready: r.ready === true };
+}
+
 function decodePeer(raw: unknown): Peer | null {
   const r = record(raw);
   const name = r ? text(r.name, 80).trim() : "";
@@ -189,6 +256,11 @@ function decodePeer(raw: unknown): Peer | null {
     lastError: text(r.last_error, 400),
     lastErrorAt: time(r.last_error_at),
     heardFrom: text(r.heard_from, 80),
+    allows: decodeAllows(r.allows),
+    mayLine: text(r.may_line, 300),
+    theyAllow: decodeTheyAllow(r.they_allow),
+    theyLine: text(r.they_line, 300),
+    keptNote: text(r.kept_note, 300),
   };
 }
 
@@ -228,6 +300,10 @@ export function decodePeers(raw: unknown): PeersView {
         .slice(0, 8)
         .map((a) => a.slice(0, 80)),
     },
+    switches: (Array.isArray(r.switches) ? r.switches : [])
+      .map(decodeSwitch)
+      .filter((s): s is PeerSwitch => s !== null)
+      .slice(0, 20),
   };
 }
 

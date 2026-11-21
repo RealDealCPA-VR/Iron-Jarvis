@@ -163,6 +163,8 @@ const WORDS: Record<string, string> = {
   // v1.506.0 (north-star 6.2): answering one waiting suggestion from chat
   // (inbox/tools.py). agents/mission.ASK_WORDS says the same (pinned equal).
   suggestion_answer: "answer a suggestion on the Improvements page",
+  // Next leaps 41-a: a paired computer's switch, turned off from chat.
+  peer_allow_off: "turn off something a paired computer may do here",
   client_update: "change one of your clients",
   client_preference_add: "keep a preference for one client",
   client_preference_change: "change a preference kept for one client",

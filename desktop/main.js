@@ -4214,6 +4214,8 @@ const TOOL_WORDS_BUILTIN = {
   pdf_form_fields: "read a file",
   pdf_form_fill: "change a file",
   pdf_split: "make a file",
+  peer_allow_off: "turn off something a paired computer may do here",
+  peer_allows: "list what your paired computers may do",
   persona_create: "make a chat persona",
   persona_delete: "remove or reset a chat persona",
   persona_update: "change a chat persona",

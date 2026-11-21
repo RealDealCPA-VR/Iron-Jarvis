@@ -5555,6 +5555,14 @@ def settings_ask_tools(
             # other record tool (said in the log, never silently).
             log.warning("record_tools_for takes no client names; the client tools are not armed")
             names += record_tools_for(text, workflow_names=workflow_names)
+        # Next leaps 41-a: what a paired computer may do here, shown and
+        # turned OFF from chat (never on: that is the card's press, D-41.2).
+        # The pairings' names are one SQLite read: both lanes run this
+        # function off the loop. A question keeps only the reader.
+        from ..settings.records_peers import might_ask, peer_names, peers_tools_for
+
+        if might_ask(text):
+            names += peers_tools_for(text, peer_names(d.platform))
         # v1.470.0: "create a skill for …" offers `skill_create` (its own tier
         # is ask, so it shows the ordinary card). Chat used to offer only the
         # workflow exit, and a request for a skill came back as a workflow.

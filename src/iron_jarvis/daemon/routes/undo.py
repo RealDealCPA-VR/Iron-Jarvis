@@ -319,6 +319,12 @@ async def perform_undo(d, action_id: str, *, pressed: bool = False) -> dict[str,
 
         try:
             _rec = json.loads(desc.get("pre_inline") or "{}")
+            if isinstance(_rec, dict):
+                # Next leaps 41-a (D-41.2): whether a PERSON pressed Undo, said
+                # here and only here (any value the journal holds is replaced):
+                # an Undo that would turn a paired computer's switch back on
+                # needs that press (settings/records_peers.restore_kind).
+                _rec["pressed"] = bool(consent)
             result_output = await asyncio.to_thread(
                 _records.restore, platform, _rec if isinstance(_rec, dict) else {}
             )

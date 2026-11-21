@@ -88,6 +88,20 @@ async def _pair(ca, cb) -> None:
     r = await ca.post("/peers/join", json={"address": B_HOST, "code": shown["code"]["code"],
                                             "name": "", "this_name": "laptop"})
     assert r.status_code == 200, r.text
+    await _let_tasks(ca, cb)
+
+
+async def _let_tasks(*clients) -> None:
+    """Next leaps 41-a: a new pairing takes no tasks until its card's "Send
+    me tasks" is pressed. These tests hand tasks both ways, so each side's
+    card turns it on for every computer it lists (the real PATCH route)."""
+    from iron_jarvis.daemon.routes import peers as _routes
+
+    for client in clients:
+        for row in (await client.get("/peers")).json()["peers"]:
+            r = await client.patch(f"/peers/{row['name']}/allows", json={"may_send_tasks": True})
+            assert r.status_code == 200, r.text
+    await _routes.drain_tells()
 
 
 def _remote_sessions(app) -> list[Session]:

@@ -77,7 +77,7 @@ def _desk(tmp_path, monkeypatch):
     platform = app.state.platform
     if getattr(platform, "orchestrator", None) is None:
         platform.orchestrator = app.state.orchestrator
-    S.store_for(platform).add(
+    peer = S.store_for(platform).add(
         name="laptop",
         their_name="desk",
         address=f"http://{LAPTOP_IP}:8787",
@@ -85,6 +85,8 @@ def _desk(tmp_path, monkeypatch):
         out_token="the-desks-key-for-the-laptop",
         my_address=f"http://{DOOR_HOST}",
     )
+    # Next leaps 41-a: a new pairing takes no tasks until "Send me tasks" is on.
+    S.store_for(platform).set_allows(peer.id, {"may_send_tasks": True})
     return app, platform
 
 

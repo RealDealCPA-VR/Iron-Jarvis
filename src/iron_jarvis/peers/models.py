@@ -51,3 +51,27 @@ class PeerRecord(SQLModel, table=True):
     #: (``core.db._reconcile_additive_columns`` adds them to an older table).
     heard_from: str | None = None
     heard_from_at: datetime | None = None
+    #: Next leaps 41-a: what the OTHER computer may do on THIS one, one switch
+    #: each (``peers/allows.SWITCHES``), every one OFF for a new pairing. Only
+    #: the card's press turns one on. Additive: an older table gets them as
+    #: empty columns, which ``PeerStore.settle_older`` fills (D-41.1: "Send me
+    #: tasks" on for a pairing made before this version, the rest off).
+    may_send_tasks: bool = False
+    may_read_record: bool = False
+    may_ask_back: bool = False
+    may_hand_over: bool = False
+    may_use_models: bool = False
+    may_manage_models: bool = False
+    may_code: bool = False
+    #: The absolute folders "Look up my work record" and "Start coding work
+    #: here" are limited to (JSON lists; none until the user adds some).
+    record_folders_json: str = "[]"
+    code_folders_json: str = "[]"
+    #: What the OTHER computer last said it lets THIS one do (its probe's
+    #: ``allows``, or its own push): a cache for the card, NEVER a permission
+    #: here. ``{"allows": [...], "older": bool, "at": iso}``; "{}" = not yet.
+    they_allow_json: str = "{}"
+    #: A note the card shows once ("tasks": "Send me tasks" was kept on for a
+    #: pairing from before this version); "" once it has been seen or a
+    #: switch was changed.
+    kept_note: str = ""
