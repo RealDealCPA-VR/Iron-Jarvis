@@ -2049,7 +2049,8 @@ Something you set up from a chat now reports back into that same chat. Say
 **Reports here** on its card. Each Friday a new message appears in that chat,
 marked with where it came from ("Schedule · Friday prices · Done"), with what
 the run found and **Open**, which goes to the schedule. You do nothing
-differently: anything set up from a chat reports there by itself.
+differently: anything set up from a chat reports there by itself, the very
+first message of a new chat included.
 
 **What reports.**
 
@@ -2064,7 +2065,10 @@ differently: anything set up from a chat reports there by itself.
   once a day.
 - A **workflow** run from a chat: how it ended, and which step failed if one
   did. The bell's and the desktop notice of that run open the chat.
-- A **night task** queued from a chat: how it ended, its branch and its notes.
+- A **night task** queued from a chat: how it ended, whether its tests
+  passed, how many files it changed, its branch and its notes. A task that
+  ran **Local only** keeps its branch and notes in its coding session when
+  the chat is not Local only, and the bell names it only as a Local only task.
 
 **Keeping it calm.**
 
@@ -2087,7 +2091,8 @@ differently: anything set up from a chat reports there by itself.
   beside it. A run already going when you press it reports nothing more.
 - In chat: "stop reporting the Friday prices schedule here", "report the
   Intake watcher in this chat", or the same for a goal. The change shows on
-  the usual card and has Undo.
+  the usual card and has Undo. Undoing a pause or a time change never turns
+  reports back on that you stopped since.
 - Something made on its own page reports nowhere, as before.
 
 **What it keeps.**

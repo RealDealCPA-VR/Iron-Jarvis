@@ -164,8 +164,9 @@ export function GoalContractCard({
   projectId?: string | null;
   /** "Not now" — the caller hides the whole offer for this turn. */
   onDismiss?: () => void;
-  /** Idea 39 (39-a): the saved chat this card is pressed in. Each try of the
-   *  goal reports here (Stop reporting is on its row and on each report). */
+  /** Idea 39 (39-a): the saved chat this card is pressed in, sent with the
+   *  create. Each try of the goal reports here when the daemon kept it (the
+   *  answer's `reports_to`); Stop reporting is on its row and each report. */
   chatThreadId?: string | null;
 }) {
   const [name, setName] = useState(() => goalNameFrom(userText));
@@ -174,6 +175,10 @@ export function GoalContractCard({
   const [budget, setBudget] = useState(String(GOAL_DEFAULT_BUDGET_DOLLARS));
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState(false);
+  /** Idea 39 (39-a, review): the daemon's answer says whether the goal
+   *  reports here (it keeps no chat for a phone conversation or a coding
+   *  session), so the card never promises a report that will not come. */
+  const [reportsHere, setReportsHere] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const budgetNum = Number(budget);
@@ -196,7 +201,8 @@ export function GoalContractCard({
       if (schedule.trim()) body.schedule = schedule.trim();
       if (projectId) body.project_id = projectId;
       if (chatThreadId) body.chat_thread_id = chatThreadId;
-      await post<{ goal: unknown }>("/goals", body);
+      const made = await post<{ goal?: { reports_to?: { thread_id?: string } | null } }>("/goals", body);
+      setReportsHere(Boolean(made?.goal?.reports_to?.thread_id));
       setCreated(true);
     } catch (e) {
       // Errors verbatim — the daemon's sentence, not a paraphrase.
@@ -315,7 +321,7 @@ export function GoalContractCard({
               <span className="inline-flex items-center gap-1.5 text-[12px] text-tone-success">
                 <Check size={13} /> Goal created
               </span>
-              {chatThreadId ? (
+              {reportsHere ? (
                 <span data-testid="goal-reports-here" className="text-[12px] text-zinc-400">
                   {REPORTS_HERE}
                 </span>

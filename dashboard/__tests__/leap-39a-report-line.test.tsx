@@ -22,19 +22,26 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const H = vi.hoisted(() => ({ posts: [] as { path: string; body: unknown }[], previous: "chat_1" }));
+const H = vi.hoisted(() => ({
+  posts: [] as { path: string; body: unknown }[],
+  previous: "chat_1",
+  goalAnswer: {} as unknown,
+}));
 
 vi.mock("@/lib/api", () => ({
+  ApiError: class ApiError extends Error {},
   post: vi.fn(async (path: string, body: unknown) => {
     H.posts.push({ path, body });
+    if (path === "/goals") return H.goalAnswer;
     const b = body as { thread_id: string };
     return { ok: true, previous: b.thread_id ? "" : H.previous, thread_id: b.thread_id };
   }),
 }));
 
+import { GoalContractCard } from "@/components/chat/GoalContractCard";
 import { ReportLine } from "@/components/chat/ReportLine";
 import { ReportsTo } from "@/components/ReportsTo";
-import { REPORT_KIND_WORDS, reportKindLabel, reportRequestLabel } from "@/lib/reports";
+import { REPORTS_HERE, REPORT_KIND_WORDS, reportKindLabel, reportRequestLabel } from "@/lib/reports";
 
 const DASH = join(__dirname, "..");
 const read = (p: string) => readFileSync(join(DASH, p), "utf-8").replace(/\r\n/g, "\n");
@@ -111,6 +118,28 @@ describe("the chat page", () => {
     const card = read("components/chat/GoalContractCard.tsx");
     expect(card).toContain("if (chatThreadId) body.chat_thread_id = chatThreadId;");
     expect(read("app/chat/page.tsx")).toContain("chatThreadId={threadId}");
+  });
+});
+
+describe("the goal card (review)", () => {
+  const ask = "Check this supplier's prices every Friday";
+
+  it("says Reports here only when the daemon's answer kept the chat", async () => {
+    // A phone conversation or a coding session: the daemon keeps no chat.
+    H.goalAnswer = { goal: { id: "goal_1", reports_to: null } };
+    render(<GoalContractCard userText={ask} chatThreadId="chat_phone" />);
+    fireEvent.click(screen.getByRole("button", { name: "Create goal" }));
+    await waitFor(() => expect(screen.getByText("Goal created")).toBeTruthy());
+    expect(H.posts[0].path).toBe("/goals");
+    expect((H.posts[0].body as { chat_thread_id?: string }).chat_thread_id).toBe("chat_phone");
+    expect(screen.queryByTestId("goal-reports-here")).toBeNull();
+  });
+
+  it("says it when the answer names the chat it reports to", async () => {
+    H.goalAnswer = { goal: { id: "goal_2", reports_to: { thread_id: "chat_1", title: "Prices" } } };
+    render(<GoalContractCard userText={ask} chatThreadId="chat_1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Create goal" }));
+    await waitFor(() => expect(screen.getByTestId("goal-reports-here").textContent).toBe(REPORTS_HERE));
   });
 });
 

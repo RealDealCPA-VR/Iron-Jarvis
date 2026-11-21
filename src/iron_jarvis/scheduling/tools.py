@@ -105,11 +105,10 @@ class ScheduleCreateTool(Tool):
             )
         except _knobs.KnobError as exc:
             return ToolResult(ok=False, error=exc.detail)
-        from ..agents.chat_delivery import stampable_chat
+        from ..agents.chat_delivery import report_chat_for, stamp_when_linked
 
-        report_chat = await asyncio.to_thread(
-            stampable_chat, getattr(self.platform, "engine", None), getattr(ctx, "thread_id", "")
-        )
+        # Review: a NEW chat's first turn reads its chat through the turn.
+        report_chat = await asyncio.to_thread(report_chat_for, self.platform, ctx)
         try:
             # v1.505.0 (north-star 5.4): the row's write is off the loop too
             # (the scheduler is APScheduler's thread-safe BackgroundScheduler).
@@ -137,6 +136,10 @@ class ScheduleCreateTool(Tool):
         }
         card = _created_card(rec.name)
         reports = bool(getattr(rec, "chat_thread_id", ""))
+        if not reports:
+            # Review: the page names a new chat a moment after its first
+            # question; the schedule reports there once it does.
+            reports = await stamp_when_linked(self.platform, ctx, "schedule", rec.id)
         if card:
             if reports:
                 # Idea 39 (39-a): the card says where its results will go.

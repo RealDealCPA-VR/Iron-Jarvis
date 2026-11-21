@@ -3771,6 +3771,12 @@ def register(app: FastAPI, d) -> None:
         _pending_lo = take_pending_local_only(turn_id)
         if _pending_lo is not None:
             await asyncio.to_thread(set_thread_local_only, d.platform.engine, tid, _pending_lo)
+        # Idea 39 (39-a, review): a schedule, watcher, workflow run or night
+        # task a new chat's first turn set up before this link reports to the
+        # chat now named.
+        from ...agents.chat_delivery import stamp_linked_reports
+
+        reports_linked = await asyncio.to_thread(stamp_linked_reports, d.platform.engine, turn_id, tid)
         # v1.347.0: a picture/video/song this turn started comes home to the
         # chat now named — and one that FINISHED before the link (a new chat's
         # first question carried no thread id) is delivered here.
@@ -3781,7 +3787,7 @@ def register(app: FastAPI, d) -> None:
                 media_homed = await jobs.home_turn(turn_id, tid)
             except Exception:  # noqa: BLE001 — the link itself already landed
                 log.warning("media: homing turn %s failed", turn_id, exc_info=True)
-        return {"ok": True, "linked": linked, "media_homed": media_homed}
+        return {"ok": True, "linked": linked, "media_homed": media_homed, "reports_linked": reports_linked}
 
     @app.get("/chat/turns/running")
     def running_chat_turns() -> dict[str, Any]:

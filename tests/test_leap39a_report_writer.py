@@ -374,3 +374,43 @@ def test_a_low_trust_report_keeps_the_chat_out_of_the_recap(p):
                                       receipt={"found": True, "trust": "low"}), now=FRIDAY)
     lines = lines_of(_messages(p, tid))
     assert lines and lines[0]["low_trust"] is True
+
+
+# The plan's "(index)": every table that holds the field indexes it, a fresh
+# database and an older one alike (the reconciler adds a column, never its
+# index; ``core.db._HOT_INDEXES`` does that).
+_FIELD_TABLES = ("scheduledtaskrecord", "sentinelrecord", "goalcontract", "workflowrunrecord", "nighttaskrecord")
+
+
+def test_the_field_is_indexed_on_a_fresh_and_an_older_database(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    open_db(path).dispose()
+
+    def _state() -> tuple[set[str], dict[str, set[str]]]:
+        con = sqlite3.connect(str(path))
+        try:
+            idx = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+            cols = {t: {r[1] for r in con.execute(f'PRAGMA table_info("{t}")')} for t in _FIELD_TABLES}
+        finally:
+            con.close()
+        return idx, cols
+
+    idx, _cols = _state()
+    for t in _FIELD_TABLES:
+        assert f"ix_{t}_chat_thread_id" in idx, t
+    # An older install: the tables without the column (and so its index).
+    con = sqlite3.connect(str(path))
+    try:
+        for t in _FIELD_TABLES:
+            con.execute(f"DROP INDEX IF EXISTS ix_{t}_chat_thread_id")
+            con.execute(f'ALTER TABLE "{t}" DROP COLUMN chat_thread_id')
+        con.commit()
+    finally:
+        con.close()
+    open_db(path).dispose()
+    idx, cols = _state()
+    for t in _FIELD_TABLES:
+        assert "chat_thread_id" in cols[t], t
+        assert f"ix_{t}_chat_thread_id" in idx, t

@@ -86,11 +86,10 @@ class SentinelAddTool(Tool):
         import asyncio
 
         # Idea 39 (39-a): made in a chat, what it notices is reported there.
-        from ..agents.chat_delivery import stampable_chat
+        from ..agents.chat_delivery import report_chat_for, stamp_when_linked
 
-        report_chat = await asyncio.to_thread(
-            stampable_chat, getattr(self.platform, "engine", None), getattr(ctx, "thread_id", "")
-        )
+        # Review: a NEW chat's first turn reads its chat through the turn.
+        report_chat = await asyncio.to_thread(report_chat_for, self.platform, ctx)
         try:
             rec = self.platform.sentinels.add(
                 args.get("name") or "",
@@ -111,6 +110,9 @@ class SentinelAddTool(Tool):
             "enabled": rec.enabled,
         }
         reports = bool(getattr(rec, "chat_thread_id", ""))
+        if not reports:
+            # Review: a new chat is named a moment after its first question.
+            reports = await stamp_when_linked(self.platform, ctx, "watcher", rec.id)
         # Review (idea 39, release check 8): the watcher loop is OFF until the
         # user turns watchers on, so nothing is noticed or reported before
         # that. The card and the answer say the one step.

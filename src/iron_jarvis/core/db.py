@@ -139,6 +139,14 @@ _HOT_INDEXES = (
     # every create that names one (``agents.hand_off_guard``). Same name as
     # SQLModel's, so a fresh DB is a no-op.
     ("ix_session_handed_from_turn", "session", "handed_from_turn"),
+    # Idea 39 (39-a): the chat a record set up from a chat reports to. The
+    # models declare ``index=True``; an older table gets the column from the
+    # reconciler and its index here (same names as SQLModel's).
+    ("ix_scheduledtaskrecord_chat_thread_id", "scheduledtaskrecord", "chat_thread_id"),
+    ("ix_sentinelrecord_chat_thread_id", "sentinelrecord", "chat_thread_id"),
+    ("ix_goalcontract_chat_thread_id", "goalcontract", "chat_thread_id"),
+    ("ix_workflowrunrecord_chat_thread_id", "workflowrunrecord", "chat_thread_id"),
+    ("ix_nighttaskrecord_chat_thread_id", "nighttaskrecord", "chat_thread_id"),
 )
 
 
