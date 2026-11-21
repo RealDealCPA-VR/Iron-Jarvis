@@ -1737,6 +1737,56 @@ def register(app: FastAPI, d) -> None:
             return ""
         return "\n\n" + text.strip("\n")
 
+    async def _work_block_for_pane(cwd: str, tail: str = "", *, whole: bool = False,
+                                   words: str = "") -> str:
+        """v1.549.0 (next leaps 14-a): "Earlier work on record" for a pane's
+        folder (``workmap.block.work_block``, the block a chat there is told),
+        ready to append, or "". Under the client block's rule: only while the
+        folder the pane's output shows it in NOW (:func:`_live_folder`) is
+        known, and belongs to the same client as its start folder (or both to
+        none); a pane that moved into another client's folder, or whose folder
+        is not known, is told nothing (fail closed). The wall is the live
+        folder's, the words the OWNER's request in the box. A SQLite read, so
+        off the loop, bounded by ``CLIENT_HOP_MAX_S``. Never raises."""
+        folder = str(cwd or "").strip()
+        if not folder or getattr(d.platform, "engine", None) is None:
+            return ""
+        live = _live_folder(folder, tail, whole=whole)
+        if not live:
+            return ""
+
+        def _read() -> str:
+            from ...workmap.block import work_block
+            from ...workmap.clients import store as _client_store
+
+            cmap = _client_store.load_map(d.platform.engine)
+            started, now = cmap.client_of(folder), cmap.client_of(live)
+            if (started is None) != (now is None):
+                return ""
+            if started is not None and now is not None and started.client_id != now.client_id:
+                return ""
+            return work_block(d.platform, folder=live, query=str(words or ""))
+
+        try:
+            from ...workmap import clients as _clients
+
+            text = await asyncio.wait_for(
+                asyncio.to_thread(_read),
+                timeout=float(_clients.CLIENT_HOP_MAX_S),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — earlier work never breaks assist
+            import logging
+
+            logging.getLogger("iron_jarvis.terminals").warning(
+                "the earlier work of a terminal assist could not be read", exc_info=True,
+            )
+            return ""
+        if not isinstance(text, str) or not text.strip():
+            return ""
+        return "\n\n" + text.strip("\n")
+
     @app.post("/terminals/{term_id}/ai")
     async def terminal_ai(term_id: str, body: TerminalAIBody) -> dict[str, Any]:
         """Per-terminal AI assist with a PER-PANE model choice.
@@ -1807,9 +1857,18 @@ def register(app: FastAPI, d) -> None:
         # characters the model is shown), and with no prompt in it the start
         # folder counts only while nothing has scrolled out (v1.499.1).
         _is_whole = getattr(session, "output_tail_is_whole", None)
+        _whole = bool(_is_whole()) if callable(_is_whole) else False
+        _kept_tail = session.output_tail()
         system += await _client_block_for_pane(
-            getattr(session, "cwd", "") or "", session.output_tail(),
-            whole=bool(_is_whole()) if callable(_is_whole) else False,
+            getattr(session, "cwd", "") or "", _kept_tail, whole=_whole,
+        )
+        # THE STORY (v1.549.0, next leaps 14-a): what was done before in the
+        # pane's live folder, right after the client block, under its rule
+        # (the folder known, the same client as where the pane started).
+        # "" when nothing is on record (byte-identical). Off the loop, bounded.
+        system += await _work_block_for_pane(
+            getattr(session, "cwd", "") or "", _kept_tail, whole=_whole,
+            words=body.prompt or "",
         )
         # Skills: make the WHOLE discovered library (builtin + user + Claude +
         # Codex) usable by ANY provider — as prompt injection, not tool calls,

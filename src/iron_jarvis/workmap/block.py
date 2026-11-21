@@ -312,12 +312,20 @@ def _client_rows(wm: Any, roots: Any, *, exclude_ref: str, limit: int) -> list[d
 
 
 def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref: str = "",
-               list_folder: bool = True, now: datetime | None = None, outside: bool = False) -> str:
+               list_folder: bool = True, now: datetime | None = None, outside: bool = False,
+               turn: Any = None, exclude_refs: "tuple[str, ...] | list[str]" = ()) -> str:
     """The block for one turn, or "". ``folder`` is the folder the turn works
     in ("" = none); ``list_folder`` False leaves the "In this folder" part to
     another block (a project's own recent activity) while still keeping that
     folder out of "other folders". ``query`` is the OWNER's words: it points
     at earlier work and names clients for the wall. Never raises.
+
+    ``turn`` (v1.549.0, next leaps 14-a): a wall the caller already has (an
+    agent run's own, ``agents/runtime.run_client_wall``: a helper's is
+    NARROWED to the turn or run it was started in), used instead of one
+    built from ``folder`` and ``query``. ``exclude_refs``: more pieces of
+    work never listed as earlier work (the runs and the chat a helper is
+    part of). Both left out: the chat lanes' block, byte for byte.
 
     ``outside`` (v1.528.0): the asker is ANOTHER APP over the connector
     (``work_search``). Its folder and words were written by that app's
@@ -344,6 +352,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         reader = _lookup.Reader.open(
             platform, folder=folder, query=query, outside=outside,
             withhold=True if outside else _withhold_local_only(), phone=phone,
+            turn=None if outside else turn,
         )
         if reader is None:
             return ""
@@ -351,29 +360,34 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         now = now or datetime.now(timezone.utc).replace(tzinfo=None)
         allowed = reader.allowed
         told = reader.told
+        skip = {str(r) for r in (exclude_refs or ()) if str(r or "").strip()}
+
+        def kept(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [r for r in rows if str(r.get("ref") or "") not in skip] if skip else rows
 
         here_rows: list[dict[str, Any]] = []
         if folder and list_folder:
             here_rows, _total = wm.for_folder(folder, limit=HERE_MAX * 6, exclude_ref=exclude_ref)
+            here_rows = kept(here_rows)
         there_rows: list[dict[str, Any]] = []
         if query.strip():
-            there_rows = wm.matching(query, limit=ELSEWHERE_MAX * 3, skip_folder=folder,
-                                     exclude_ref=exclude_ref)
+            there_rows = kept(wm.matching(query, limit=ELSEWHERE_MAX * 3, skip_folder=folder,
+                                          exclude_ref=exclude_ref))
         # A confirmed client the OWNER names, in a turn that has no client:
         # its newest work, wherever it lives (the strict matcher finds one
         # folder per name; a client may have several).
         named_rows: list[tuple[dict[str, Any], str]] = []
         if turn.ok and turn.owner is None and turn.named:
             for cid in sorted(turn.named):
-                for r in _client_rows(wm, cmap.roots_of(cid), exclude_ref=exclude_ref,
-                                      limit=NAMED_MAX * 3)[: NAMED_MAX * 3]:
+                for r in kept(_client_rows(wm, cmap.roots_of(cid), exclude_ref=exclude_ref,
+                                           limit=NAMED_MAX * 3))[: NAMED_MAX * 3]:
                     named_rows.append((r, cid))
         # A turn in a confirmed client's folder: titles from its other folders.
         other_rows: list[dict[str, Any]] = []
         if turn.ok and turn.client is not None:
             other_rows = [
-                r for r in _client_rows(wm, cmap.roots_of(turn.client.client_id),
-                                        exclude_ref=exclude_ref, limit=CLIENT_OTHER_MAX * 3)
+                r for r in kept(_client_rows(wm, cmap.roots_of(turn.client.client_id),
+                                             exclude_ref=exclude_ref, limit=CLIENT_OTHER_MAX * 3))
                 if not keys.inside(keys.folder_key(keys.home_folder(r.get("folder") or "")),
                                    turn.folder_key)
             ][: CLIENT_OTHER_MAX * 3]
