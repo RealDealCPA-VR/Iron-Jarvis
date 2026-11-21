@@ -19,7 +19,7 @@ for every change are in the root `CLAUDE.md`.
 | `backgrounds/`, `onboarding/` | `docs/rules/dashboard.md` |
 | `creative/`, `documents/`, `excel_worker.py`, `filesearch/`, `media/`, `ocr_worker.py` | `docs/rules/documents.md` |
 | `brain/`, `capability/`, `guide/`, `inbox/`, `learning/`, `ltm/`, `memory/`, `personas/`, `profile/`, `projects/`, `skills/`, `workmap/` | `docs/rules/memory.md` |
-| `comm/`, `peers/` | `docs/rules/messaging.md` |
+| `audio_worker.py`, `comm/`, `peers/` | `docs/rules/messaging.md` |
 | `envelope/`, `eval/`, `fleet/`, `iron_proxy/`, `providers/` | `docs/rules/providers.md` |
 | `settings/` | `docs/rules/settings.md` |
 | `detections/`, `history/`, `sandbox/`, `secrets/`, `tools/` | `docs/rules/tools.md` |

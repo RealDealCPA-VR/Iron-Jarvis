@@ -91,8 +91,12 @@ dev = [
 # install stays lean; the packaged desktop build installs it (uv sync --extra
 # voice) and the frozen daemon bundles its native lib (packaging/ironjarvis.spec
 # _collect("vosk")). The daemon degrades gracefully when vosk isn't present.
+# 10-a: PyAV decodes a phone voice note (OGG/Opus, M4A, MP3, WebM) with the
+# ffmpeg libraries its own wheel carries (this PC has no ffmpeg); only the
+# audio-worker child imports it (packaging/ironjarvis.spec _collect("av")).
 voice = [
     "vosk>=0.3.45",
+    "av>=14",
 ]
 
 [project.scripts]

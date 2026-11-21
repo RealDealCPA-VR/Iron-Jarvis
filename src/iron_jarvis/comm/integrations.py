@@ -25,7 +25,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from .base import HttpGet, HttpPost, SecretResolver, httpx_get, httpx_post
+from .base import (
+    HttpGet,
+    HttpGetBytes,
+    HttpPost,
+    SecretResolver,
+    httpx_get,
+    httpx_get_bytes,
+    httpx_post,
+)
 from .channels import CHANNEL_TYPES, MockChannel
 from .notifier import DEFAULT_ALERT_EVENTS, Notifier
 
@@ -111,6 +119,7 @@ def build_notifier(
     secret_resolver: SecretResolver | None = None,
     http_post: HttpPost | None = None,
     http_get: HttpGet | None = None,
+    http_get_bytes: HttpGetBytes | None = None,
 ) -> Notifier:
     """Construct a :class:`Notifier` from a ``config.comm`` mapping.
 
@@ -123,6 +132,10 @@ def build_notifier(
     comm_config = comm_config or {}
     transport = http_post or httpx_post
     get_transport = http_get or httpx_get
+    # 10-a: the file download. Production gets the real one; a caller that
+    # injected its own GET (a test) gets none unless it injects one too, so
+    # no test can reach a network through it.
+    bytes_transport = http_get_bytes or (httpx_get_bytes if http_get is None else None)
 
     event_types = set(comm_config.get("event_types") or DEFAULT_ALERT_EVENTS)
     notifier = Notifier(
@@ -162,6 +175,7 @@ def build_notifier(
                 http_post=transport,
                 http_get=get_transport,
                 secret_resolver=secret_resolver,
+                http_get_bytes=bytes_transport,
             ),
         )
 

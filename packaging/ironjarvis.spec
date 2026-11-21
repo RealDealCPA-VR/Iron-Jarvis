@@ -125,6 +125,16 @@ hiddenimports += ["httptools"]  # optional fast HTTP parser (uvicorn standard)
 # without vosk installed degrades gracefully (the daemon still boots).
 _collect("vosk")
 
+# --- PyAV: the decoder for phone voice notes (10-a) --------------------------
+# A voice note from Telegram, Slack or email is OGG (Opus), M4A, MP3 or WebM;
+# this PC has no ffmpeg, and PyAV's wheel carries its own ffmpeg libraries.
+# Only the audio-worker child imports it (iron_jarvis/audio_worker.py), so a
+# malformed file can only crash that child. collect_all pulls the native libs
+# (av.libs / *.dll) with the package; the `doctor` check "phone_voice_notes"
+# decodes the one-second clip that ships in iron_jarvis/assets through the
+# frozen exe's own audio-worker, so a build that lost a library says so.
+_collect("av")
+
 # --- SSH/SFTP (lazily imported by the remote LTM source) --------------------
 # paramiko pulls native crypto helpers (bcrypt, pynacl -> _sodium, cffi); collect
 # all three so `import paramiko` works in the FROZEN daemon (it's imported lazily

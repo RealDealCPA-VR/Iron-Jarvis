@@ -539,6 +539,18 @@ SETTINGS: tuple[SettingDef, ...] = (
     # so — "offline model" is the demo model's retired name.
     S("voice_vosk_model_path", "Voice: offline speech model folder", "models", "string",
       "Folder of an offline Vosk speech model.", tier="ask", section="Voice", advanced=True),
+    # 10-a (decision D-10.1): the choice above was made for dictation. A voice
+    # note from the phone goes to that service only after a yes, asked once on
+    # the phone; the answer is kept here, and changing it has Undo.
+    S("phone_voice_service", "Voice notes from your phone", "models", "enum",
+      "A voice note you send Jarvis from your phone is turned into words by the offline speech "
+      "model on this PC. When that model is missing or hears nothing, Jarvis can use the speech "
+      "service chosen above instead; it asks you once on your phone first. A Local only chat "
+      "never sends a voice note off your network.",
+      tier="ask", section="Voice",
+      options=(("ask", "Ask me first (default)"), ("yes", "Use the speech service chosen above"),
+               ("no", "Only on this PC")),
+      aliases=("phone voice notes", "voice messages from my phone", "transcribe voice notes")),
     # ------------------------------------------------------------ connections
     S("iron_proxy_enabled", "Use several accounts", "connections", "bool",
       "Pick which of your signed-in Claude, Codex or Grok accounts each request uses. "
@@ -587,6 +599,14 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow", section="Browser", check=_browsing_preferences_text,
       placeholder="Look for primary sources\nAnswer concisely, only what I need to know",
       aliases=("browsing preferences", "browser preferences", "web page preferences")),
+    # 10-a (decision D-10.2): a photo, a file or a voice note sent to a
+    # two-way destination is kept on this PC up to this size.
+    S("phone_file_max_mb", "Largest file taken from your phone (MB)", "connections", "number",
+      "Photos, files and voice notes you send Jarvis in Telegram, Slack or email are kept in "
+      "Documents › Iron Jarvis, up to this size each and five a message. A larger file is named "
+      "in the answer and not taken.",
+      tier="ask", section="Phone", check=_range(1, 100),
+      aliases=("phone file size", "attachment size from phone", "file limit from telegram")),
     S("calendar_trigger_enabled", "Calendar reminders", "connections", "bool",
       "Start work when a calendar event is about to begin. Add your calendar link on the Rules page.",
       tier="ask", section="Calendar", aliases=("calendar",)),

@@ -751,6 +751,42 @@ def check_local_ocr() -> dict:
     )
 
 
+#: The audio worker's one answer for this process (``check_phone_voice_notes``).
+_VOICE_CHECK: dict = {}
+
+
+def check_phone_voice_notes() -> dict:
+    """A voice note from the phone can be decoded on this PC (10-a).
+
+    RECOMMENDED: without it a voice note from Telegram, Slack or email is
+    kept but not turned into words (photos and files still work). It runs
+    the REAL audio worker child (``comm/voice_note._ask_worker``, the frozen
+    exe's own ``audio-worker``) on the one-second clip that ships with the
+    app, decoded with PyAV only: "the module imports" is the claim a frozen
+    build can satisfy while a native library is missing (the pikepdf lesson).
+    """
+    from ..comm import voice_note
+
+    # One child per daemon: the answer cannot change until the app is
+    # reinstalled (and so restarted), and the doctor runs on page opens.
+    if "out" not in _VOICE_CHECK:
+        _VOICE_CHECK["out"] = voice_note._ask_worker({"op": "check"}, timeout=60.0) or {}
+    out = _VOICE_CHECK["out"]
+    seconds = out.get("seconds")
+    if isinstance(seconds, (int, float)) and seconds > 0.5 and out.get("decoder") == "pyav":
+        return _result("phone_voice_notes", True,
+                       "Voice notes from your phone can be decoded on this PC.", level=RECOMMENDED)
+    why = str(out.get("error") or "the audio worker did not answer")[:200]
+    return _result(
+        "phone_voice_notes", False,
+        f"Voice notes from your phone can't be decoded on this PC ({why}). They are kept, "
+        "not turned into words; photos and files still work.",
+        fix="If this is the packaged app, its audio decoder is missing from the build. From a "
+        "source checkout: uv sync --extra voice.",
+        level=RECOMMENDED,
+    )
+
+
 def check_legacy_office() -> dict:
     """Old .xls and .doc files (C-10).
 
@@ -835,6 +871,7 @@ CHECKS = [
     check_agent_browser,
     check_pdf_classifier,
     check_local_ocr,
+    check_phone_voice_notes,
     check_live_excel,
     check_legacy_office,
     check_guide_docs,

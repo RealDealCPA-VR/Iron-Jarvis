@@ -736,6 +736,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'slow down calendar checking',
         'control how frequently it polls my events',
     ),
+    'phone_file_max_mb': (
+        'largest file I can send from my phone',
+        'size limit for photos sent from telegram',
+        'let jarvis take bigger files from my phone',
+        'how big can an attachment from my phone be',
+        'change the file size limit for files from slack',
+        'my phone file was too big to take',
+        'raise the limit on files sent by email',
+        'set the most megabytes taken from the phone',
+    ),
     'calendar_trigger_enabled': (
         'start work before my calendar events',
         'have it remind me about meetings',
@@ -4244,6 +4254,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         "can you see what's in this file",
         'tell me about this photo',
         'check out this image for me',
+    ),
+    'phone_voice_service': (
+        'turn voice notes from my phone into words',
+        'may my phone voice notes go to the speech service',
+        'transcribe the voice messages I send from my phone',
+        'only use this computer for my voice notes',
+        'stop asking before sending voice notes to openai',
+        'use the speech service for voice notes from telegram',
+        'keep phone voice notes on this PC',
+        'how are my voice memos from the phone written out',
     ),
     'voice_backend': (
         'keep my voice typing on this computer',

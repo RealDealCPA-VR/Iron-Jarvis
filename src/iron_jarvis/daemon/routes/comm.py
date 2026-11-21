@@ -144,6 +144,14 @@ LISTENING_WORDS = (
 LISTENING_DM_ONLY_WORDS = (
     "Listening. Jarvis answers your direct messages (Apps → Iron Jarvis in Slack)."
 )
+#: 10-a: said after the listening words when Slack told the pump (auth.test)
+#: that the bot token has no files:read: a file sent in Slack cannot be taken.
+FILES_SCOPE_WORDS = (
+    "Files you send in Slack can't reach Jarvis yet: the Slack app is missing "
+    "the files:read permission. Update it from the manifest (api.slack.com/apps "
+    "→ App Manifest, paste the manifest from Add a destination → Slack, Save, "
+    "then reinstall the app)."
+)
 
 
 def listening_status(name: str, ctype: str, config: dict) -> dict[str, Any] | None:
@@ -174,6 +182,12 @@ def listening_status(name: str, ctype: str, config: dict) -> dict[str, Any] | No
         words, tone = LISTENING_WORDS.format(channel=channel), "quiet"
     else:
         words, tone = LISTENING_DM_ONLY_WORDS, "quiet"
+    scopes = st.get("scopes")
+    if connected and tone == "quiet" and isinstance(scopes, str) and (
+        "files:read" not in {s.strip() for s in scopes.split(",")}
+    ):
+        # 10-a: an app made from the older manifest cannot hand Jarvis a file.
+        words, tone = f"{words} {FILES_SCOPE_WORDS}", "warn"
     return {
         "connected_at": connected,
         "last_event_at": st.get("last_event_at"),
@@ -527,7 +541,7 @@ def register(app: FastAPI, d) -> None:
         channel is added LIVE (so a Send-test works at once) and persisted so it
         survives restart.
         """
-        from ...comm import CHANNEL_TYPES, httpx_get, httpx_post
+        from ...comm import CHANNEL_TYPES, httpx_get, httpx_get_bytes, httpx_post
 
         ctype = (body.type or "").strip().lower()
         if ctype not in d._CHANNEL_TYPE_FIELDS or ctype not in CHANNEL_TYPES:
@@ -700,6 +714,7 @@ def register(app: FastAPI, d) -> None:
             http_post=httpx_post,
             http_get=httpx_get,
             secret_resolver=d.platform.secrets.get,
+            http_get_bytes=httpx_get_bytes,  # 10-a: files from the phone
         )
         d.platform.notifier.add_channel(name, channel)
         # A secret the user removed (or replaced under another name) leaves
@@ -1031,10 +1046,17 @@ def register(app: FastAPI, d) -> None:
         _log = get_logger("comm.slack")
         etype = str(event.get("type") or "")
         user = str(event.get("user") or "")
+        # 10-a: a message with files (``file_share``) in a DM is the person
+        # talking too (R0.3 left this path dropping it without a word). In a
+        # channel it stays out, as before: no file is taken from there.
+        file_dm = (
+            event.get("subtype") == "file_share"
+            and str(event.get("channel_type") or "") == "im"
+        )
         if (
             body.get("type") == "event_callback"
             and etype in ("message", "app_mention")
-            and not event.get("subtype")
+            and (not event.get("subtype") or file_dm)
             and user
             and not event.get("bot_id")
             # Idempotency: a Slack redelivery of an already-processed event_id must
@@ -1043,12 +1065,17 @@ def register(app: FastAPI, d) -> None:
         ):
             channel_type = str(event.get("channel_type") or "")
             slack_channel = str(event.get("channel") or "")
+            from ...comm.slack_socket import slack_files
+
+            files, not_opened = slack_files(event) if channel_type == "im" else ([], 0)
             msg = InboundMessage(
                 sender_id=user,
                 text=str(event.get("text") or ""),
                 update_id=None,
                 reply_to=(user if channel_type == "im" else slack_channel),
                 is_bot=bool(event.get("bot_id")),
+                files=files,
+                files_not_read=not_opened,
             )
             ch = d.platform.notifier.get(name)
             if ch is not None and channel_type == "im":

@@ -34,6 +34,13 @@ mention there is always answered (R0.3 review).
 :data:`LISTENING` keeps, per destination, when the socket connected and when
 Slack last sent anything, so the Notifications row can say "connected, but
 Slack has sent nothing" instead of leaving the user to guess.
+
+FILES (10-a): a message with files (``file_share``, or an ``app_mention``
+with ``files``) carries them as :class:`InboundFile` (:func:`slack_files`);
+the pipeline downloads them only after its guards, from Slack's own file
+host (``SlackChannel.fetch_file``). The bot token's permissions, as auth.test
+reports them, are kept in :data:`LISTENING` (``scopes``), so the row can say
+when the app lacks ``files:read``.
 """
 
 from __future__ import annotations
@@ -46,7 +53,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .base import InboundMessage
+from .base import InboundFile, InboundMessage
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +85,47 @@ MENTION_ELSEWHERE_NOTE = (
 )
 
 
+#: 10-a: a Slack file that is only a link or was hidden has no download.
+_NO_DOWNLOAD_MODES = frozenset({"external", "tombstone", "hidden_by_limit", "snippet", "post"})
+
+
+def slack_files(event: dict) -> "tuple[list[InboundFile], int]":
+    """The files a Slack message carries (10-a), and how many of them have no
+    download (a link to a Google Doc, a file Slack hid): ``(files, count)``.
+
+    Read from ``event.files`` (``url_private_download``, else
+    ``url_private``). Nothing is downloaded here; ``SlackChannel.fetch_file``
+    fetches only from Slack's own file host. A ``file_share`` with no
+    ``files`` list counts one file with no download (R0.3). Shared by the
+    Socket Mode pump and the Events API webhook. Never raises."""
+    from .media import file_name, kind_of
+
+    out: list[InboundFile] = []
+    missing = 0
+    raw = event.get("files")
+    if not isinstance(raw, list):
+        return [], (1 if event.get("subtype") == FILE_SHARE else 0)
+    for item in raw:
+        try:
+            if not isinstance(item, dict):
+                missing += 1
+                continue
+            url = str(item.get("url_private_download") or item.get("url_private") or "")
+            if not url or str(item.get("mode") or "") in _NO_DOWNLOAD_MODES:
+                missing += 1
+                continue
+            mime = str(item.get("mimetype") or "")
+            name = file_name(str(item.get("name") or item.get("title") or ""), mime, "file")
+            size = item.get("size")
+            out.append(InboundFile(
+                kind=kind_of(name, mime), name=name, mime=mime,
+                size=int(size) if isinstance(size, int) else None, ref=url,
+            ))
+        except Exception:  # noqa: BLE001 — one odd entry is one file not opened
+            missing += 1
+    return out, missing
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -100,7 +148,15 @@ def _default_slack_api(method: str, token: str, params: dict[str, Any]) -> dict[
         data = resp.json()
     except Exception:  # noqa: BLE001 - a non-JSON answer is an error answer
         return {"ok": False, "error": f"HTTP {resp.status_code}"}
-    return data if isinstance(data, dict) else {"ok": False, "error": "bad answer"}
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "bad answer"}
+    # 10-a: Slack says which permissions the bot token holds in a header (not
+    # the body); the Notifications row reads it to say when files need the
+    # newer manifest.
+    scopes = resp.headers.get("x-oauth-scopes")
+    if scopes is not None:
+        data["_scopes"] = str(scopes)
+    return data
 
 
 def own_channel_words(channel: str, error: str) -> str:
@@ -234,6 +290,9 @@ class SlackSocketMode:
             who = self._slack_api("auth.test", token, {})
             if who.get("ok"):
                 self._bot_user[name] = str(who.get("user_id") or "")
+                if "_scopes" in who:
+                    # 10-a: what the token may do (files:read for a file).
+                    _note(name, scopes=str(who.get("_scopes") or ""))
         except Exception:  # noqa: BLE001 - the bot id only sharpens loop protection
             log.debug("slack auth.test failed for %r", name, exc_info=True)
         if not target:
@@ -312,18 +371,6 @@ class SlackSocketMode:
         bot = self._bot_user.get(name, "")
         return bool(bot) and (f"<@{bot}>" in text or f"<@{bot}|" in text)
 
-    @staticmethod
-    def _file_count(event: dict) -> int:
-        """How many files came with the message (R0.3). Slack marks a message
-        with files ``subtype: file_share``; an ``app_mention`` carries its
-        files with no subtype. Iron Jarvis cannot take them yet, and the
-        pipeline says so (``InboundPoller._say_files_not_read``)."""
-        files = event.get("files")
-        count = len(files) if isinstance(files, list) else 0
-        if not count and event.get("subtype") == FILE_SHARE:
-            count = 1
-        return count
-
     # -- envelope processing (pure-ish; unit-testable) -------------------------
     async def process_envelope(self, name: str, envelope: dict) -> dict[str, Any] | None:
         """Handle ONE Socket Mode envelope; returns the handler result or None.
@@ -333,9 +380,9 @@ class SlackSocketMode:
         privately in a DM, and any other channel message fires the ``slack``
         reflex rules only. Plain messages/mentions with no subtype, and
         (R0.3) a message with files (``file_share``) in the DM or the own
-        channel, whose words run as any message's would while the pipeline
-        says the files were not used; a bot's message (Jarvis's own replies
-        included) is never acted on. In another channel the ``message`` copy
+        channel, whose files ride the message (10-a: taken by the pipeline
+        after its guards) and whose words run as any message's would; a bot's
+        message (Jarvis's own replies included) is never acted on. In another channel the ``message`` copy
         of a mention (and any ``file_share``) is left to the ``app_mention``
         copy, so it can never use up the key that copy answers with.
         """
@@ -350,7 +397,9 @@ class SlackSocketMode:
         ch = self.notifier.get(name)
         if ch is None:
             return None
-        files = self._file_count(event)
+        # 10-a: the files themselves (fetched later, after the guards), and
+        # how many have no download (R0.3's count).
+        files, not_opened = slack_files(event)
         user = str(event.get("user") or "")
         is_bot = bool(event.get("bot_id")) or (
             bool(user) and user == self._bot_user.get(name, "")
@@ -368,7 +417,7 @@ class SlackSocketMode:
                 # DM, and it satisfies the poller's private-chat guard (reply_to
                 # == sender_id), mirroring Telegram's private-chat semantics.
                 reply_to=user,
-                files_not_read=files,
+                files=files, files_not_read=not_opened,
             )
             if not is_bot and ch.is_authorized(user):
                 _note(name, last_message_at=_now())
@@ -417,7 +466,7 @@ class SlackSocketMode:
                 is_bot=False,
                 reply_to=f"{channel}|{event.get('thread_ts') or ts}",
                 own_channel=True,
-                files_not_read=files,
+                files=files, files_not_read=not_opened,
             )
             return await self.poller._handle(name, ch, msg)  # noqa: SLF001 - by design
         if etype == "app_mention":
@@ -430,7 +479,7 @@ class SlackSocketMode:
                 log.debug("slack mention note failed on %r", name, exc_info=True)
             msg = InboundMessage(
                 sender_id=user, text=text, update_id=None, is_bot=False, reply_to=user,
-                files_not_read=files,
+                files=files, files_not_read=not_opened,
             )
             return await self.poller._handle(name, ch, msg)  # noqa: SLF001 - by design
         # Any other channel message: the reflex rules only; no reply.

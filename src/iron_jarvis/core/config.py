@@ -750,6 +750,15 @@ class Config(BaseModel):
     #: (v1.298.0): "low" (default — it may read and answer, not change memory,
     #: agents, skills or schedules; ``core/trust.py``) or "full".
     comm_trust: str = "low"
+    #: 10-a (decision D-10.2): the largest file taken from the phone (a photo,
+    #: a PDF, a voice note sent to a two-way destination), in MB. 20 is
+    #: Telegram's own limit for bots.
+    phone_file_max_mb: float = 20.0
+    #: 10-a (decision D-10.1): may a phone voice note go to the speech service
+    #: chosen for dictation when the offline model on this PC is missing or
+    #: hears nothing? "ask" (default: the phone asks once, and the answer is
+    #: kept here), "yes", "no". Never off the network in a Local only chat.
+    phone_voice_service: str = "ask"
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     #: THE FOLDERS JARVIS MAY READ (v1.356.0, G81) — Settings › Permissions.
     #: Empty (the default) = no limit: chat and agents read any file except
@@ -1234,6 +1243,25 @@ class Config(BaseModel):
         if v not in ("low", "full"):
             raise ValueError("comm_trust must be low | full")
         return v
+
+    @field_validator("phone_voice_service", mode="before")
+    @classmethod
+    def _clean_phone_voice_service(cls, v: Any) -> str:
+        # 10-a: TOLERANT, like code_editor: a hand-edited value that is not
+        # one of the three reads as "ask" (the safe one: nothing is sent
+        # before the user says yes); the settings schema offers only these.
+        text = str(v or "").strip().lower()
+        return text if text in ("ask", "yes", "no") else "ask"
+
+    @field_validator("phone_file_max_mb", mode="before")
+    @classmethod
+    def _clean_phone_file_max_mb(cls, v: Any) -> float:
+        # 10-a: a value that is not a positive number reads as the default.
+        try:
+            mb = float(v)
+        except (TypeError, ValueError):
+            return 20.0
+        return mb if mb > 0 else 20.0
 
     @field_validator("code_editor", mode="before")
     @classmethod

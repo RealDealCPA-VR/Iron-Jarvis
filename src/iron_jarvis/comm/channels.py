@@ -14,12 +14,47 @@ import re
 from typing import Any
 
 from ..core.logging import get_logger
-from .base import Channel, ChannelAuthError, InboundMessage, auth_refusal, interpret_json
+from .base import (
+    Channel,
+    ChannelAuthError,
+    FileNotTaken,
+    FileTooLarge,
+    InboundFile,
+    InboundMessage,
+    auth_refusal,
+    interpret_json,
+    too_large_words,
+)
 
 _log = get_logger("comm")
 
 SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 TELEGRAM_API = "https://api.telegram.org"
+#: 10-a: the only address a Slack file is downloaded from with the bot token.
+#: A download address in an event that points anywhere else is never fetched
+#: (the token would go with it).
+SLACK_FILE_HOST = "https://files.slack.com/"
+#: 10-a: what the sender hears when Slack answers a download with its sign-in
+#: page — the Slack app was made from the older manifest, without files:read.
+SLACK_FILES_SCOPE_WORDS = (
+    "your Slack app is missing the files:read permission. Update the app from "
+    "the manifest (api.slack.com/apps, App Manifest, paste the manifest from "
+    "Add a destination, Slack, Save, then reinstall the app)"
+)
+
+
+def _int_or_none(value: Any) -> "int | None":
+    try:
+        return int(value) if value is not None and str(value).strip() != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _looks_like_a_page(data: bytes) -> bool:
+    """True when a download is an HTML page (Slack's sign-in page) rather
+    than the file that was asked for."""
+    head = bytes(data[:512]).lstrip().lower()
+    return head.startswith(b"<!doctype html") or head.startswith(b"<html")
 
 
 class SlackChannel(Channel):
@@ -81,6 +116,23 @@ class SlackChannel(Channel):
 
         return self._fail("slack: config needs `webhook_url` or `token_secret`+`channel`")
 
+    def fetch_file(self, f: InboundFile, max_bytes: int) -> bytes:
+        """Download a Slack file (10-a) from Slack's own file host with the
+        bot token in the ``Authorization`` header. Any other address is
+        refused before anything is sent. A Slack app without ``files:read``
+        gets Slack's sign-in page instead of the file: that is said in words
+        (:data:`SLACK_FILES_SCOPE_WORDS`), never kept as the file."""
+        url = str(f.ref or "")
+        if not url.startswith(SLACK_FILE_HOST):
+            raise FileNotTaken("Slack did not give a download for it")
+        token = self._resolve_secret(self.config.get("token_secret"))
+        if not token:
+            raise FileNotTaken("the Slack bot token is not set on this PC")
+        data = self._get_bytes(url, {"Authorization": f"Bearer {token}"}, max_bytes)
+        if _looks_like_a_page(data) and "html" not in (f.mime or "").lower():
+            raise FileNotTaken(SLACK_FILES_SCOPE_WORDS)
+        return data
+
 
 class DiscordChannel(Channel):
     """Discord via incoming webhook. config: ``{"webhook_url": "..."}``."""
@@ -107,28 +159,30 @@ class TelegramChannel(Channel):
     #: Telegram's hard sendMessage cap — chunked replies fill the full window.
     chunk_limit = 4096
 
-    #: Transport notice for content the text-only bridge cannot carry
-    #: (v1.200.0, CONNECT-AUDIT-2026-08-22 §7). Sent at most once per sender
-    #: per poll batch, allowlisted senders only.
+    #: Transport notice for content the bridge still cannot carry (v1.200.0,
+    #: CONNECT-AUDIT-2026-08-22 §7; narrowed by 10-a: photos, files and voice
+    #: notes are taken now). Sent at most once per sender per poll batch,
+    #: allowlisted senders only.
     MEDIA_NOTICE = (
-        "I can't read photos, files, or voice messages here yet — send text, "
-        "or use the desktop app for attachments."
+        "I can't use stickers, contacts or locations. Send text, a photo, "
+        "a file or a voice note."
     )
-    #: Message keys that mean "the sender tried to hand over content" (as
-    #: opposed to service updates — joins, pins, title changes — where a
-    #: notice would be noise about nothing the sender said).
+    #: Message keys that mean "the sender tried to hand over something that is
+    #: still not taken" (as opposed to service updates — joins, pins, title
+    #: changes — where a notice would be noise about nothing the sender said).
+    #: ``animation`` first: Telegram sends a GIF with a ``document`` too.
     _MEDIA_KEYS = (
-        "photo",
-        "document",
-        "voice",
-        "audio",
-        "video",
-        "video_note",
         "sticker",
         "animation",
         "contact",
         "location",
+        "venue",
+        "poll",
+        "dice",
     )
+    #: 10-a: the message keys that carry a file that IS taken, in the order
+    #: they are read (one message carries one).
+    _FILE_KEYS = ("photo", "document", "voice", "audio", "video", "video_note")
 
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         token_secret = self.config.get("token_secret")
@@ -179,33 +233,123 @@ class TelegramChannel(Channel):
         messages: list[InboundMessage] = []
         next_offset = offset
         noticed: set[str] = set()  # senders already told about dropped media
+        #: 10-a: an album (several photos sent together) arrives as one
+        #: update per photo with the same ``media_group_id`` and the caption
+        #: on one of them: it is ONE message here, so it is ONE chat turn.
+        albums: dict[tuple[Any, Any], InboundMessage] = {}
         for upd in data.get("result", []) or []:
             update_id = upd.get("update_id")
             if isinstance(update_id, int):
                 next_offset = max(next_offset, update_id + 1)
-            msg = upd.get("message") or upd.get("edited_message") or {}
-            text = msg.get("text")
-            if not text:
-                # Non-text updates are still DROPPED (the brain is text-only;
-                # a recorded decision) — but silence was not: the offset
-                # advances past them, so a photo from the owner vanished with
-                # no reply and no thread entry (v1.200.0). A media message
-                # from an ALLOWED sender now gets one honest notice first.
-                self._media_notice(msg, noticed)
-                continue
-            frm = msg.get("from") or {}
-            chat = msg.get("chat") or {}
-            messages.append(
-                InboundMessage(
+            try:
+                msg = upd.get("message") or upd.get("edited_message") or {}
+                if not isinstance(msg, dict):
+                    continue
+                files = self._files_of(msg)
+                text = msg.get("text") or msg.get("caption") or ""
+                if not isinstance(text, str):
+                    text = ""
+                if not text and not files:
+                    # Still not taken (a sticker, a contact): one honest
+                    # notice to an ALLOWED sender (v1.200.0), never silence.
+                    self._media_notice(msg, noticed)
+                    continue
+                frm = msg.get("from") or {}
+                chat = msg.get("chat") or {}
+                group = msg.get("media_group_id")
+                key = (chat.get("id"), group)
+                if group and key in albums:
+                    held = albums[key]
+                    held.files.extend(files)
+                    if text and not held.text:
+                        held.text = text
+                    if isinstance(update_id, int):
+                        held.update_id = max(int(held.update_id or 0), update_id)
+                    continue
+                inbound = InboundMessage(
                     sender_id=str(frm.get("id", "")),
                     text=text,
                     update_id=update_id,
                     reply_to=chat.get("id"),
                     is_bot=bool(frm.get("is_bot", False)),
                     raw=upd,
+                    files=files,
                 )
-            )
+                if group:
+                    albums[key] = inbound
+                messages.append(inbound)
+            except Exception:  # noqa: BLE001 — one malformed update never breaks the batch
+                _log.debug("telegram: an update could not be read", exc_info=True)
         return messages, next_offset
+
+    @classmethod
+    def _files_of(cls, msg: dict) -> "list[InboundFile]":
+        """The file a Telegram message carries, as :class:`InboundFile` (10-a):
+        the largest size of a photo, a document, a voice note, an audio file,
+        a video or a round video. Nothing is downloaded here. A GIF
+        (``animation``, which also carries ``document``) is not a file."""
+        if any(k in msg for k in ("animation", "sticker")):
+            return []
+        from .media import file_name, kind_of
+
+        for key in cls._FILE_KEYS:
+            got = msg.get(key)
+            if key == "photo":
+                sizes = [s for s in (got or []) if isinstance(s, dict) and s.get("file_id")]
+                if not sizes:
+                    continue
+                sizes.sort(key=lambda s: (int(s.get("file_size") or 0),
+                                          int(s.get("width") or 0) * int(s.get("height") or 0)))
+                big = sizes[-1]
+                return [InboundFile(
+                    kind="photo", name="photo.jpg", mime="image/jpeg",
+                    size=_int_or_none(big.get("file_size")), ref=str(big["file_id"]),
+                    smaller=[(str(s["file_id"]), _int_or_none(s.get("file_size")))
+                             for s in reversed(sizes[:-1])],
+                )]
+            if not isinstance(got, dict) or not got.get("file_id"):
+                continue
+            mime = str(got.get("mime_type") or "")
+            if key == "voice":
+                kind, name = "voice", file_name("voice-note", mime or "audio/ogg", "voice-note")
+            elif key == "video_note":
+                kind, name = "video", file_name("video-note", mime or "video/mp4", "video-note")
+            else:
+                fallback = {"document": "file", "audio": "audio", "video": "video"}[key]
+                name = file_name(str(got.get("file_name") or ""), mime, fallback)
+                kind = kind_of(name, mime) if key == "document" else key
+                if key == "document" and kind == "photo":
+                    kind = "document"  # a picture sent as a file stays a file
+            return [InboundFile(kind=kind, name=name, mime=mime,
+                                size=_int_or_none(got.get("file_size")), ref=str(got["file_id"]))]
+        return []
+
+    def fetch_file(self, f: InboundFile, max_bytes: int) -> bytes:
+        """``getFile``, then the download from ``/file/bot<token>/<path>``
+        (10-a). That address HOLDS THE BOT TOKEN: it is built here, used once
+        and never logged, put in an event or kept in an error; every failure
+        is reworded (``Channel._get_bytes``). A photo too large at its full
+        size falls back to Telegram's largest smaller copy under the cap."""
+        token = self._resolve_secret(self.config.get("token_secret"))
+        if not token:
+            raise FileNotTaken("Telegram's bot token is not set on this PC")
+        ref, size = f.ref, f.size
+        if size is not None and size > max_bytes:
+            for alt_ref, alt_size in f.smaller:
+                if alt_size is not None and alt_size <= max_bytes:
+                    ref, size = alt_ref, alt_size
+                    break
+            else:
+                raise FileTooLarge(too_large_words(size, max_bytes))
+        info = self._get_json(f"{TELEGRAM_API}/bot{token}/getFile", {"file_id": ref})
+        result = (info or {}).get("result") if (info or {}).get("ok") else None
+        path = str((result or {}).get("file_path") or "")
+        if not path:
+            raise FileNotTaken("Telegram did not hand the file over")
+        told = _int_or_none((result or {}).get("file_size"))
+        if told is not None and told > max_bytes:
+            raise FileTooLarge(too_large_words(told, max_bytes))
+        return self._get_bytes(f"{TELEGRAM_API}/file/bot{token}/{path}", None, max_bytes)
 
     def _media_notice(self, msg: Any, noticed: set[str]) -> None:
         """ONE honest reply for a media message the poll is about to drop.
@@ -451,9 +595,9 @@ _SEALED_TYPES = frozenset({
 })
 
 
-def _email_file_count(em: Any) -> int:
-    """How many files the sender attached (R0.3). Iron Jarvis cannot take a
-    file sent by e-mail yet; this number is what the reply says it left out.
+def _email_file_parts(em: Any) -> list[Any]:
+    """The parts of an e-mail that are files the sender attached (R0.3; 10-a
+    takes them).
 
     A part is a file when it is marked as an attachment, or when it has a file
     name, is not the body's text, and is not a picture INSIDE the body (a part
@@ -463,9 +607,10 @@ def _email_file_count(em: Any) -> int:
     message that is itself one file (a single non-text part) is one file.
     A signature or the key beside it is not a file, and an encrypted e-mail
     is not one either (``_SIGNATURE_TYPES``, ``_SEALED_TYPES``).
-    Never raises: an unreadable message counts what was read before it.
+    Never raises: an unreadable message gives what was read before it.
+    Nothing is decoded here.
     """
-    count = 0
+    found: list[Any] = []
     seen = 0
     stack: list[tuple[Any, bool]] = [(em, False)]
     try:
@@ -476,14 +621,14 @@ def _email_file_count(em: Any) -> int:
             if ctype in _SIGNATURE_TYPES or ctype in _SEALED_TYPES:
                 continue  # neither it nor what it seals is a file
             if part is em and not part.is_multipart():
-                return 1 if part.get_content_maintype() != "text" else 0
+                return [part] if part.get_content_maintype() != "text" else []
             if part is not em:
                 disp = (part.get_content_disposition() or "").lower()
                 named = bool(part.get_filename())
                 if disp == "attachment" or (
                     named and not in_body and ctype not in _BODY_TEXT_TYPES
                 ):
-                    count += 1
+                    found.append(part)
                     continue
             if part.is_multipart():
                 subs = part.get_payload()
@@ -491,8 +636,47 @@ def _email_file_count(em: Any) -> int:
                     related = in_body or ctype == "multipart/related"
                     stack.extend((s, related) for s in reversed(subs))
     except Exception:  # noqa: BLE001 — a malformed message must never break a poll
-        _log.debug("email: could not count the attachments", exc_info=True)
-    return count
+        _log.debug("email: could not read the attachments", exc_info=True)
+    return found
+
+
+def _email_file_count(em: Any) -> int:
+    """How many files the sender attached (R0.3): :func:`_email_file_parts`
+    counted. Never raises."""
+    return len(_email_file_parts(em))
+
+
+#: 10-a: the most attachments listed from one e-mail (the pipeline takes the
+#: first five and names the rest by count).
+_MAX_EMAIL_FILES = 50
+
+
+def _email_attachments(em: Any, max_count: int = _MAX_EMAIL_FILES) -> "list[InboundFile]":
+    """The sender's attachments as :class:`InboundFile` (10-a), at most
+    ``max_count``. Each keeps its part as ``handle``; nothing is decoded until
+    :meth:`EmailChannel.fetch_file`. ``size`` is estimated from the encoded
+    payload (base64 is four characters for three bytes), so a file far over
+    the cap is refused before it is decoded. Never raises."""
+    from .media import file_name, kind_of
+
+    out: list[InboundFile] = []
+    for n, part in enumerate(_email_file_parts(em)[: max(0, int(max_count))], 1):
+        try:
+            ctype = part.get_content_type()
+            if ctype == "message/rfc822":
+                name = file_name("forwarded-email.eml", ctype, "forwarded-email.eml")
+            else:
+                name = file_name(_decode_mime_header(part.get_filename() or ""), ctype, f"attachment-{n}")
+            raw = part.get_payload()
+            size: int | None = None
+            if isinstance(raw, str):
+                enc = str(part.get("Content-Transfer-Encoding") or "").strip().lower()
+                size = (len(raw) * 3) // 4 if enc == "base64" else len(raw)
+            out.append(InboundFile(kind=kind_of(name, ctype), name=name, mime=ctype,
+                                   size=size, ref=str(n), handle=part))
+        except Exception:  # noqa: BLE001 — a malformed part is left out
+            _log.debug("email: an attachment could not be listed", exc_info=True)
+    return out
 
 
 #: The sender id of an inbound email whose From address the receiving provider
@@ -729,6 +913,9 @@ class EmailChannel(Channel):
                 verified, how = sender_proof(em, sender)
                 if not verified:
                     _log_unproven_once(sender, how)
+                # 10-a: the attachments are listed (never decoded here) only
+                # for a sender the provider vouched for AND on the allowlist.
+                files = self._files_for(em, sender, verified=verified)
                 messages.append(
                     InboundMessage(
                         # An unproven sender never matches the allowlist, so it
@@ -743,9 +930,10 @@ class EmailChannel(Channel):
                             "from": sender,
                             "sender_verified": verified,
                         },
-                        # R0.3: the attachments are still not read; the
-                        # pipeline tells a proven, allowed sender so.
-                        files_not_read=_email_file_count(em),
+                        files=files,
+                        # R0.3: anything that could not be listed (a stranger's
+                        # files are never listed; the pipeline refuses them).
+                        files_not_read=0 if files else _email_file_count(em),
                     )
                 )
             next_offset = (
@@ -768,6 +956,37 @@ class EmailChannel(Channel):
         channel with no password is never polled. (The base checks ``token_secret``;
         email keys its secret under ``password_secret``.)"""
         return bool(self._resolve_secret(self.config.get("password_secret")))
+
+    def _files_for(self, em: Any, sender: str, *, verified: bool) -> "list[InboundFile]":
+        """The e-mail's attachments (10-a), listed only when the receiving
+        provider vouched for ``sender`` and the sender is on the allowlist;
+        ``[]`` otherwise, so a stranger's file is never even looked at."""
+        if not verified or not self.is_authorized(sender):
+            return []
+        return _email_attachments(em)
+
+    def fetch_file(self, f: InboundFile, max_bytes: int) -> bytes:
+        """Decode one attachment (10-a): the part was read with the e-mail, so
+        nothing is downloaded; the estimate is checked against the cap before
+        the decode, the bytes after it. An attached e-mail is kept whole."""
+        part = f.handle
+        if part is None:
+            raise FileNotTaken("the attachment could not be read")
+        if f.size is not None and f.size > max_bytes:
+            raise FileTooLarge(too_large_words(f.size, max_bytes))
+        try:
+            if part.get_content_type() == "message/rfc822":
+                inner = part.get_payload()
+                data = inner[0].as_bytes() if isinstance(inner, list) and inner else part.as_bytes()
+            else:
+                data = part.get_payload(decode=True)
+        except Exception:  # noqa: BLE001 — a malformed part is a sentence
+            raise FileNotTaken("the attachment could not be read") from None
+        if not isinstance(data, (bytes, bytearray)):
+            raise FileNotTaken("the attachment could not be read")
+        if len(data) > max_bytes:
+            raise FileTooLarge(too_large_words(len(data), max_bytes))
+        return bytes(data)
 
 
 #: registry of channel-type name -> class, for config-driven construction.

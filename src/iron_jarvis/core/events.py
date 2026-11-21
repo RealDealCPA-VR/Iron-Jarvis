@@ -182,6 +182,10 @@ class EventType:
     #: daemon stopped and was dropped (at-most-once). Carries {channel,
     #: update_id, chat_id, resent_notice}; the sender is asked to resend.
     COMM_DROPPED = "comm.dropped"
+    #: 10-a: a photo, a file or a voice note from an allowed sender was kept
+    #: in the phone chat's folder. Carries {channel, kind, bytes} only: never
+    #: the file's name or path (they cross to every event listener).
+    COMM_FILE_RECEIVED = "comm.file_received"
     # Reflex Loop (the ambient operator): an inbound signal (webhook / comm)
     # matched a rule and fired a bound action (workflow / remote agent / session).
     REFLEX_FIRED = "reflex.fired"

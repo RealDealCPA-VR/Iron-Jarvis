@@ -52,7 +52,10 @@ _MAX_CONTENT = 12000
 
 #: The ONLY extra fields an append may carry (v1.285.0) — the dashboard's
 #: chat-message vocabulary for an attributed line; anything else is dropped.
-_EXTRA_KEYS = ("panelWho", "panelKind", "documents")
+#: 10-a: ``attachmentNames`` / ``attachmentPaths`` on the user's line, the
+#: desk chat's own fields, so the phone chat on the PC shows the files from
+#: the phone as chips (and carries them to a later turn).
+_EXTRA_KEYS = ("panelWho", "panelKind", "documents", "attachmentNames", "attachmentPaths")
 
 #: The ``setup_json`` key the phone lane keeps its sticky addressee under
 #: (v1.285.0): "remote:hermes" while the conversation is with hermes, "" or
@@ -413,6 +416,28 @@ class CommThreadStore:
         except Exception:  # noqa: BLE001 — a read helper must never take out a turn
             log.warning("history_rows failed for %s", thread_id, exc_info=True)
             return [], {}
+
+    def attached_paths(self, thread_id: str) -> list[str]:
+        """Every file the phone sent into this chat (10-a): the
+        ``attachmentPaths`` of its user lines, oldest first, each once. The
+        phone lane hands them to the next turn as ``thread_files`` (named,
+        not re-read), so "now turn that into a memo" finds the earlier file.
+        ``[]`` on any failure."""
+        try:
+            with session_scope(self.engine) as db:
+                r = db.get(ChatThreadRecord, thread_id)
+                msgs = json.loads(r.messages_json or "[]") if r is not None else []
+            out: list[str] = []
+            for m in msgs if isinstance(msgs, list) else []:
+                if not isinstance(m, dict) or m.get("role") != "user":
+                    continue
+                for p in m.get("attachmentPaths") or []:
+                    if isinstance(p, str) and p and p not in out:
+                        out.append(p)
+            return out
+        except Exception:  # noqa: BLE001 — a read helper must never take out a turn
+            log.warning("attached_paths failed for %s", thread_id, exc_info=True)
+            return []
 
     def get_setup_value(self, thread_id: str, key: str) -> str:
         """One string out of the thread's ``setup_json`` ("" when absent).

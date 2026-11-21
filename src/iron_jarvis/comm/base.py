@@ -35,6 +35,52 @@ HttpGet = Callable[[str, dict[str, Any]], Any]
 #: secret name -> secret value (or ``None`` when unknown / not configured).
 SecretResolver = Callable[[str], "str | None"]
 
+#: 10-a: ``(url, headers | None, max_bytes)`` -> the body as bytes. Streams and
+#: stops at ``max_bytes`` (raising :class:`FileTooLarge`), so a file from the
+#: phone is never held past the cap. Tests inject a recorder; production
+#: injects :func:`httpx_get_bytes`.
+HttpGetBytes = Callable[[str, "dict[str, str] | None", int], bytes]
+
+#: 10-a: the kinds of file a two-way destination can bring.
+FILE_KINDS = ("photo", "document", "voice", "audio", "video")
+
+
+class FileNotTaken(Exception):
+    """A file from the phone could not be taken (10-a). ``words`` is the
+    reason in plain words, said to the sender after the file's name. It is
+    written by Iron Jarvis, never copied from a transport error, so it can
+    never carry a URL with a token in it (Telegram's file URL holds the bot
+    token)."""
+
+    def __init__(self, words: str) -> None:
+        super().__init__(words)
+        self.words = words
+
+
+class FileTooLarge(FileNotTaken):
+    """The file is larger than what is taken from the phone (10-a)."""
+
+
+@dataclass
+class InboundFile:
+    """One file that came with an inbound message (10-a).
+
+    ``kind`` is one of :data:`FILE_KINDS`; ``size`` is what the service said
+    (``None`` when it did not say); ``ref`` is the channel's own handle for
+    it (Telegram's ``file_id``, Slack's download address on its file host,
+    an email part's number), never a URL with a secret in it. ``handle`` is
+    the channel's private object (an email part, read only when the file is
+    fetched); ``smaller`` lists ``(ref, size)`` of smaller copies of the same
+    picture, largest first (Telegram sends a photo in several sizes)."""
+
+    kind: str
+    name: str
+    mime: str = ""
+    size: int | None = None
+    ref: str = ""
+    handle: Any = field(default=None, repr=False, compare=False)
+    smaller: list[tuple[str, "int | None"]] = field(default_factory=list, repr=False)
+
 
 @dataclass
 class InboundMessage:
@@ -61,10 +107,15 @@ class InboundMessage:
     #: message keeps the old rule (reply_to must be the sender's own chat).
     own_channel: bool = False
     #: R0.3: how many files came with the message that Iron Jarvis cannot
-    #: take yet (Slack's ``file_share``, an e-mail's attachments). The
-    #: pipeline says so to an allowlisted sender in their own chat
-    #: (``InboundPoller._say_files_not_read``); the words still run.
+    #: open (since 10-a: a Slack file with no download, such as a link to a
+    #: Google Doc). The pipeline says so to an allowlisted sender in their own
+    #: chat (``InboundPoller._take_files``); the words still run.
     files_not_read: int = 0
+    #: 10-a: the files that came with the message, in order. Nothing is
+    #: downloaded at poll time: ``InboundPoller._take_files`` fetches them
+    #: (``Channel.fetch_file``) only after the allowlist, the sender's proof
+    #: and the private-chat guard.
+    files: list[InboundFile] = field(default_factory=list)
 
 
 def split_message(text: str, limit: int) -> list[str]:
@@ -152,6 +203,62 @@ def httpx_get(url: str, params: dict[str, Any]) -> Any:
         params=params,
         timeout=httpx.Timeout(server_timeout + 15.0, connect=2.0),
     )
+
+
+def _no_get_bytes(url: str, headers: Any, max_bytes: int) -> bytes:
+    raise FileNotTaken("this destination cannot download files")
+
+
+def _mb(n: float) -> str:
+    """``3 MB`` / ``0.5 MB``: a size in the words the phone hears."""
+    mb = float(n) / (1024 * 1024)
+    return f"{mb:.0f} MB" if mb >= 1 else f"{max(mb, 0.1):.1f} MB"
+
+
+def too_large_words(size: "int | None", max_bytes: int) -> str:
+    """Why a file over the cap was not taken, in the phone's words."""
+    if size:
+        return f"it is {_mb(size)}, and the most taken from your phone is {_mb(max_bytes)}"
+    return f"it is over the {_mb(max_bytes)} taken from your phone"
+
+
+def httpx_get_bytes(url: str, headers: "dict[str, str] | None", max_bytes: int) -> bytes:
+    """Default production transport for a file from the phone (10-a): GET
+    ``url`` STREAMING, and stop the moment the body passes ``max_bytes``.
+
+    Raises :class:`FileTooLarge` (the declared length or the bytes read
+    passed the cap) or :class:`FileNotTaken` (a refusing status, a dropped
+    connection). The words are Iron Jarvis's own: the URL may hold a token
+    (Telegram's file address holds the bot token), so neither it nor the
+    transport's own message is ever put in them, and ``from None`` keeps the
+    original exception out of any traceback that is logged. BLOCKING: run it
+    through ``asyncio.to_thread``. Imported lazily, like :func:`httpx_post`.
+    """
+    import httpx
+
+    try:
+        with httpx.stream(
+            "GET",
+            url,
+            headers=dict(headers) if headers else None,
+            timeout=httpx.Timeout(60.0, connect=5.0),
+            follow_redirects=True,
+        ) as resp:
+            if resp.status_code >= 400:
+                raise FileNotTaken(f"the service answered {resp.status_code}")
+            declared = resp.headers.get("content-length")
+            if declared and declared.isdigit() and int(declared) > max_bytes:
+                raise FileTooLarge(too_large_words(int(declared), max_bytes))
+            buf = bytearray()
+            for chunk in resp.iter_bytes():
+                buf += chunk
+                if len(buf) > max_bytes:
+                    raise FileTooLarge(too_large_words(None, max_bytes))
+            return bytes(buf)
+    except FileNotTaken:
+        raise
+    except Exception as exc:  # noqa: BLE001 — never the message: it may name the URL
+        raise FileNotTaken(f"the download failed ({type(exc).__name__})") from None
 
 
 def _accepts_headers(transport: Any) -> bool:
@@ -333,11 +440,15 @@ class Channel(ABC):
         http_post: HttpPost | None = None,
         http_get: HttpGet | None = None,
         secret_resolver: SecretResolver | None = None,
+        http_get_bytes: HttpGetBytes | None = None,
     ) -> None:
         self.config: dict[str, Any] = dict(config or {})
         self._http_post: HttpPost = http_post or _no_transport
         self._http_get: HttpGet = http_get or _no_get
         self._secret_resolver: SecretResolver = secret_resolver or (lambda _k: None)
+        #: 10-a: the file download (streams, stops at the cap). Unset, a
+        #: fetch is refused in words; nothing falls back to a network call.
+        self._http_get_bytes: HttpGetBytes = http_get_bytes or _no_get_bytes
 
     # -- helpers ---------------------------------------------------------
     def _resolve_secret(self, secret_name: str | None) -> str | None:
@@ -395,6 +506,34 @@ class Channel(ABC):
     @staticmethod
     def _fail(detail: str) -> dict[str, Any]:
         return {"ok": False, "detail": detail}
+
+    def _get_bytes(self, url: str, headers: "dict[str, str] | None", max_bytes: int) -> bytes:
+        """Download through the injected transport (10-a). Any failure is a
+        :class:`FileNotTaken` in Iron Jarvis's own words, raised ``from None``:
+        the URL may hold a token, so no transport message or traceback of
+        one ever leaves here."""
+        try:
+            data = self._http_get_bytes(url, headers, int(max_bytes))
+        except FileTooLarge as exc:
+            raise FileTooLarge(exc.words) from None
+        except FileNotTaken as exc:
+            raise FileNotTaken(exc.words) from None
+        except Exception as exc:  # noqa: BLE001 — never its message
+            raise FileNotTaken(f"the download failed ({type(exc).__name__})") from None
+        if not isinstance(data, (bytes, bytearray)):
+            raise FileNotTaken("the download did not return a file")
+        if len(data) > max_bytes:
+            raise FileTooLarge(too_large_words(len(data), max_bytes))
+        return bytes(data)
+
+    # -- files from the phone (10-a) ------------------------------------
+    def fetch_file(self, f: InboundFile, max_bytes: int) -> bytes:
+        """The bytes of ``f``, at most ``max_bytes``. BLOCKING (a download):
+        the pipeline calls it through ``asyncio.to_thread``, and only after
+        the allowlist, the sender's proof and the private-chat guard. Raises
+        :class:`FileNotTaken` with the reason in words; a destination with no
+        receive leg for files refuses."""
+        raise FileNotTaken("files can't be taken from this destination")
 
     # -- contract --------------------------------------------------------
     @abstractmethod

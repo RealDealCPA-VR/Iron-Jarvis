@@ -469,7 +469,9 @@ async def test_real_registry_end_to_end_same_write_path_as_dashboard(platform):
 
 
 # --------------------------------------------------------------------------- #
-# F7: Telegram media honesty — one notice, allowed senders only, offset moves
+# F7: Telegram media honesty — one notice, allowed senders only, offset moves.
+# 10-a: photos, files and voice notes are TAKEN now (tests/test_leap10a_*);
+# the notice is left for what is still not (stickers, contacts, locations).
 # --------------------------------------------------------------------------- #
 class FakeTelegram:
     """(url, params) transports honouring getUpdates offset semantics."""
@@ -523,7 +525,7 @@ def _media_update(
     update_id: int,
     sender: int,
     *,
-    key: str = "photo",
+    key: str = "sticker",
     chat: int | None = None,
     is_bot: bool = False,
 ) -> dict:
@@ -540,8 +542,8 @@ def _media_update(
 def test_media_from_allowed_sender_gets_one_notice_offset_advances():
     fake = FakeTelegram(
         [
-            _media_update(10, 777),                    # photo → ONE notice
-            _media_update(11, 777, key="document"),    # same sender, same batch
+            _media_update(10, 777),                    # sticker → ONE notice
+            _media_update(11, 777, key="contact"),     # same sender, same batch
             _media_update(12, 999),                    # stranger → silence
             _text_update(13, 777, "hello"),            # text still flows
         ]
@@ -554,8 +556,17 @@ def test_media_from_allowed_sender_gets_one_notice_offset_advances():
     assert next_offset == 14  # media confirmed too — never refetched
     assert len(fake.sent) == 1  # one notice per sender per batch, not per file
     assert fake.sent[0]["chat_id"] == 777
-    assert "can't read photos" in fake.sent[0]["text"]
-    assert "desktop app" in fake.sent[0]["text"]
+    assert "can't use stickers" in fake.sent[0]["text"]
+    assert "a photo, a file or a voice note" in fake.sent[0]["text"]
+
+
+def test_a_photo_is_a_message_now_not_a_notice():
+    # 10-a: the photo rides the message as a file (fetched later, only for an
+    # allowed sender in their own chat); nothing is said at poll time.
+    fake = FakeTelegram([_media_update(14, 777, key="photo")])
+    messages, next_offset = _telegram(fake, dict(TG_CFG)).poll(0)
+    assert next_offset == 15 and fake.sent == []
+    assert [f.kind for f in messages[0].files] == ["photo"]
 
 
 def test_media_from_stranger_group_or_bot_stays_silent():
@@ -642,5 +653,5 @@ async def test_poller_persists_offset_past_media_and_mints_no_thread(platform):
         rec = db.get(InboundOffsetRecord, "tg")
         assert rec is not None and rec.offset == 61
         assert db.exec(select(CommIdentityRecord)).all() == []  # no thread entry
-    assert len(fake.sent) == 1 and "can't read photos" in fake.sent[0]["text"]
+    assert len(fake.sent) == 1 and "can't use stickers" in fake.sent[0]["text"]
     assert orch.list_sessions() == []

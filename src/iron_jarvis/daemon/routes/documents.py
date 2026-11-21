@@ -164,46 +164,21 @@ def _sentence(text: str) -> str:
     return t[:1].upper() + t[1:] if t else t
 
 
-#: How many "-2", "-3" … names an upload tries before giving up.
-_MAX_UPLOAD_NAMES = 1000
-
-
 def _unique_upload(uploads: Path, name: str, data: bytes) -> Path:
-    """Store *data* under *name* in *uploads* WITHOUT replacing another file
-    (v1.499.3) and return where it landed.
+    """Store *data* under *name* in *uploads* without replacing another file
+    (v1.499.3). The rule lives in ``documents/workfolder.store_upload`` since
+    10-a, shared with a file from the phone; no free name is a 409 here."""
+    from ...documents.workfolder import store_upload
 
-    Two uploads with the same name used to share one path, so the second
-    silently replaced the first while a chat still pointed at it. Now the
-    same bytes again reuse the existing file, and different bytes get the
-    next free ``<stem>-2<ext>`` name — the original name stays readable and
-    the file stays directly in ``uploads`` (a bare name is still found there).
-    Each name is claimed with an exclusive create, so two uploads at once
-    cannot take the same one.
-    """
-    stem, ext = Path(name).stem or "upload", Path(name).suffix
-    for n in range(1, _MAX_UPLOAD_NAMES + 1):
-        candidate = uploads / (name if n == 1 else f"{stem}-{n}{ext}")
-        try:
-            f = open(candidate, "xb")
-        except FileExistsError:
-            try:
-                if candidate.is_file() and candidate.stat().st_size == len(data) \
-                        and candidate.read_bytes() == data:
-                    return candidate  # the same file uploaded again
-            except OSError:
-                pass
-            continue
-        try:
-            with f:
-                f.write(data)
-        except BaseException:
-            candidate.unlink(missing_ok=True)  # never a half-written upload
+    try:
+        return store_upload(uploads, name, data)
+    except OSError as exc:
+        if "too many uploads named" not in str(exc):
             raise
-        return candidate
-    raise HTTPException(
-        status_code=409,
-        detail=f"too many uploads named {name}; rename the file and try again",
-    )
+        raise HTTPException(
+            status_code=409,
+            detail=f"too many uploads named {name}; rename the file and try again",
+        )
 
 
 def register(app: FastAPI, d) -> None:
@@ -212,7 +187,6 @@ def register(app: FastAPI, d) -> None:
     def documents_upload(body: UploadBody) -> dict[str, Any]:
         """Accept a base64 file and store it under <home>/uploads (no multipart dep)."""
         import base64
-        import re
 
         # Cap the decoded size so a giant upload can't OOM-kill the whole daemon
         # (which would take down every session/terminal with it). 4/3 accounts for
@@ -226,7 +200,9 @@ def register(app: FastAPI, d) -> None:
                     f"limit is {_app._MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
                 ),
             )
-        name = re.sub(r"[^A-Za-z0-9._-]", "_", body.filename).strip("._") or "upload"
+        from ...documents.workfolder import upload_name
+
+        name = upload_name(body.filename)
         uploads = d.platform.config.home / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
         try:

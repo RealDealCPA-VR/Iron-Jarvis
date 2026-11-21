@@ -2042,6 +2042,54 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Photos, files and voice notes reach Jarvis from your phone (v1.552.0)
+
+Send Jarvis a photo of a page, a PDF, a spreadsheet or a voice note in
+Telegram, Slack or email, and it works on it the way it works on a file you
+drop into Chat on this PC. Nothing to switch on: every two-way destination
+takes files now.
+
+- **Where it is kept.** On this PC, in a dated folder in Documents › Iron
+  Jarvis named "From your phone". The first file of a phone chat makes the
+  folder; every later file of that chat joins it, and what Jarvis makes for
+  that chat lands there too. Your phone hears the file's name and the folder,
+  never the whole path: "Saved photo.jpg in Documents\Iron Jarvis\2026-11-20
+  From your phone." The real answer follows.
+- **The phone chat on this PC shows it.** Open the chat in Chat: your message
+  shows the file under its words, as a dropped file does. A later message
+  ("now turn that into a spreadsheet") still finds the earlier file.
+- **A file is something to read, never orders.** Jarvis reads it as it reads
+  a file you attach on this PC (a scanned page is read on this PC first), and
+  words inside a file are never taken as your request. Your request is what
+  you wrote with it. A file sent with no words is still read.
+- **Voice notes.** A voice note is turned into words by the offline speech
+  model on this PC. Jarvis answers "I heard: …" first, so a mishearing shows
+  at once, then does the work. When that model is missing or hears nothing,
+  Jarvis asks once on your phone before it uses the speech service you chose
+  for dictation: "Use OpenAI for phone voice notes too?" Reply 1 for yes or 2
+  for no. The answer is kept in Settings › Models › Voice notes from your
+  phone (change it there, with Undo), and each answer names the service ("I
+  heard (by OpenAI, which you chose for voice): …"). A Local only chat never
+  sends a voice note off your network. The recording is kept either way.
+- **What is taken.** Pictures, PDF, Word, Excel and PowerPoint files, text and
+  CSV files, audio and video, up to 20 MB each (Settings › Connections ›
+  Largest file taken from your phone) and five a message. A file that is too
+  large, of another kind, or past the fifth is named in the answer with the
+  reason, and not taken. In Telegram several photos sent together are one
+  message.
+- **Only from you.** A file is downloaded only when it comes from someone on
+  the destination's allowlist, in their own chat (in Slack also the
+  destination's own channel); for email, only from a sender your mail
+  provider vouched for. A stranger's file is never downloaded.
+- **Slack needs the newer app setup for files.** A Slack app made from the
+  older manifest is missing the files:read permission: Jarvis says so when
+  you send a file, and the Notifications row says it too. Update the app at
+  api.slack.com/apps → App Manifest, paste the manifest from Add a
+  destination → Slack, Save, then reinstall the app.
+- With "Chat with Iron Jarvis from this destination" off, the file is kept
+  and the task it starts is told where.
+- Telegram still can't use stickers, contacts or locations, and says so.
+
 ## The `/` list in Build › Code works before a session starts (v1.557.0)
 
 Type `/` in Build › Code's start box (the box you see before any session is

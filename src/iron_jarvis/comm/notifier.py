@@ -185,6 +185,7 @@ EVENT_WORDS: dict[str, str] = {
     "comm.received": "A message arrived",
     "comm.rejected": "A message from an unknown sender was refused",
     "comm.dropped": "A message was dropped during a restart",
+    "comm.file_received": "A file from your phone was kept",
     "reflex.fired": "A rule fired",
     "schedule.fired": "A schedule fired",
     "computeruse.run_finished": "A computer-use run finished",

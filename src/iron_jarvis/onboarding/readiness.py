@@ -39,6 +39,7 @@ CHECK_LABELS: dict[str, str] = {
     "connector_bridge": "The connected apps' bridge",
     "pdf scan routing": "Spotting scanned pages inside PDFs",
     "local_ocr": "Reading scanned pages on this PC",
+    "phone_voice_notes": "Voice notes from your phone",
     "old Office files": "Reading old .doc and .xls files",
     "guide_docs": "The built-in help guides",
     "browser_addon": "The browser add-on",

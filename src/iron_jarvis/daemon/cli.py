@@ -144,6 +144,20 @@ def excel_worker() -> None:
     excel_main()
 
 
+@app.command("audio-worker", hidden=True)
+def audio_worker() -> None:
+    """Decode or hear ONE phone voice note on stdin/stdout (10-a, internal).
+
+    ``comm/voice_note`` starts this as a short-lived child and kills it at its
+    deadline: the decoder and the offline speech model are native code, and a
+    malformed file from a phone must only be able to crash this child. The
+    frozen exe serves it from ``packaging/ironjarvis_entry._fast_path`` without
+    importing this CLI; keep the two identical (same module, same ``main()``)."""
+    from ..audio_worker import main as audio_main
+
+    audio_main()
+
+
 @app.command("search-worker", hidden=True)
 def search_worker() -> None:
     """Answer ONE search request on stdin/stdout (v1.516.0, internal).

@@ -1,6 +1,13 @@
 """R0.3 (build-out plan, Stage 0): Slack and e-mail say when they could not
 take a file, the way Telegram already does, until 10-a reads files.
 
+10-a (R2.3) reads them now (``tests/test_leap10a_*``). What stays here: a
+Slack file that has NO download (a link to a Google Doc, a file Slack hid;
+``_files`` below carries no download address) is still said in words, after
+the guards, at most once a minute, and the turn is told it was not read; an
+e-mail's attachments from a proven, allowed sender are now kept, and a kind
+that is not taken (``.exe``) is named instead.
+
 Before: the Slack pump dropped every message that has a subtype,
 ``file_share`` included, so a file sent to Jarvis in Slack got no word at all
 (``slack_socket.SlackSocketMode.process_envelope``). An e-mail's attachments
@@ -28,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import smtplib
+from pathlib import Path
 from email.message import EmailMessage, Message
 from email.mime.application import MIMEApplication
 from email.mime.base import MIMEBase
@@ -151,11 +159,11 @@ def test_a_slack_file_alone_in_the_dm_is_answered_in_words(platform):
     res = _go(sock, poller, env)
 
     assert res is not None, "a Slack file message was dropped without a word"
-    assert res["status"] == "files_not_read" and res["sent"] is True
+    assert res["status"] == "files_not_taken" and res["sent"] is True
     assert len(sent) == 1 and sent[0]["channel"] == "U1"
     words = sent[0]["text"]
-    assert "can't take files" in words and "the file you sent" in words
-    assert "Send your request as text" in words and "desktop app" in words
+    assert "couldn't open" in words and "a file you sent" in words
+    assert "no way to download it" in words
     assert turn.calls == []  # nothing else ran on a message with no words
 
 
@@ -169,9 +177,8 @@ def test_a_slack_file_with_words_says_so_first_then_answers_the_words(platform):
     assert len(turn.calls) == 1, "the words of a message with a file were thrown away"
     assert _last_user_words(turn.calls[0]).startswith("what's the total on these?")
     assert [p["channel"] for p in sent] == ["U1", "U1"]
-    assert "can't take files" in sent[0]["text"]
-    assert "the 2 files you sent" in sent[0]["text"]
-    assert "read your message" in sent[0]["text"]
+    assert "couldn't open" in sent[0]["text"]
+    assert "2 files you sent" in sent[0]["text"]
     assert "The total is 42." in sent[1]["text"]
     # The saved chat shows the files came, so the record is true later too.
     saved = poller.thread_store.history_body(res["thread_id"])
@@ -278,10 +285,10 @@ def test_a_slack_file_in_the_own_channel_is_answered_in_its_thread(platform):
 
     res = _go(sock, poller, env)
 
-    assert res is not None and res["status"] == "files_not_read"
+    assert res is not None and res["status"] == "files_not_taken"
     assert len(sent) == 1
     assert sent[0]["channel"] == OWN and sent[0]["thread_ts"] == "1700.3"
-    assert "can't take files" in sent[0]["text"]
+    assert "couldn't open" in sent[0]["text"]
 
 
 def test_a_mention_elsewhere_with_a_file_is_told_in_the_dm(platform):
@@ -295,7 +302,7 @@ def test_a_mention_elsewhere_with_a_file_is_told_in_the_dm(platform):
 
     assert [p["channel"] for p in sent] == ["U1", "U1", "U1"]
     assert sent[0]["text"] == S.MENTION_ELSEWHERE_NOTE
-    assert "can't take files" in sent[1]["text"]
+    assert "couldn't open" in sent[1]["text"]
     assert "The total is 42." in sent[2]["text"]
     assert _last_user_words(turn.calls[0]) == "read this\n\n" + files_not_read_note(1)
 
@@ -325,7 +332,7 @@ def test_a_file_mention_elsewhere_is_answered_whichever_copy_comes_first(
 
     assert [p["channel"] for p in sent] == ["U1", "U1", "U1"], sent
     assert sent[0]["text"] == S.MENTION_ELSEWHERE_NOTE
-    assert "can't take files" in sent[1]["text"]
+    assert "couldn't open" in sent[1]["text"]
     assert "The total is 42." in sent[2]["text"]
     assert len(turn.calls) == 1
     assert rules.slack == ["<@UBOT> read this"]
@@ -423,17 +430,21 @@ def test_a_file_share_without_a_files_list_still_counts_one(platform):
 
     res = _go(sock, poller, env)
 
-    assert res is not None and res["status"] == "files_not_read"
-    assert len(sent) == 1 and "the file you sent" in sent[0]["text"]
+    assert res is not None and res["status"] == "files_not_taken"
+    assert len(sent) == 1 and "a file you sent" in sent[0]["text"]
 
 
 def test_the_sentence_failing_never_stops_the_words(platform, monkeypatch):
     from iron_jarvis.comm import inbound
 
-    def boom(count: int, *, with_words: bool) -> str:
-        raise RuntimeError("wording broke")
+    real = inbound.InboundPoller.send_chunked
 
-    monkeypatch.setattr(inbound, "files_not_read_reply", boom)
+    async def boom(self, ch, reply, **kw):  # noqa: ANN001
+        if "couldn't open" in reply:
+            raise RuntimeError("the send broke")
+        return await real(self, ch, reply, **kw)
+
+    monkeypatch.setattr(inbound.InboundPoller, "send_chunked", boom)
     sent, sock, poller, turn, _clock = _slack_rig(platform)
     env = _env(type="message", subtype="file_share", channel="D0DM00001", channel_type="im",
                user="U1", text="still answer me", ts="1701.7", files=_files(1))
@@ -467,10 +478,10 @@ def test_a_burst_of_slack_files_is_told_once_a_minute(platform):
     clock.now += 10
     second = _go(sock, poller, file_dm("1703.2"))
     assert len(sent) == 1
-    assert second["status"] == "files_not_read" and second["sent"] is False
+    assert second["status"] == "files_not_taken" and second["sent"] is False
     clock.now += FILES_NOT_READ_EVERY_S
     _go(sock, poller, file_dm("1703.3"))
-    assert len(sent) == 2 and "can't take files" in sent[1]["text"]
+    assert len(sent) == 2 and "couldn't open" in sent[1]["text"]
 
 
 # --------------------------------------------------------------------------- #
@@ -490,6 +501,7 @@ def _mail(
     sender: str = "Alice <alice@example.com>",
     proven: bool = True,
     pdfs: int = 1,
+    ext: str = "pdf",
 ) -> EmailMessage:
     msg = EmailMessage()
     if proven:
@@ -499,8 +511,9 @@ def _mail(
     msg["Subject"] = subject
     msg.set_content(body)
     for i in range(pdfs):
-        msg.add_attachment(b"%PDF-1.4 test", maintype="application", subtype="pdf",
-                           filename=f"invoice{i}.pdf")
+        sub = "pdf" if ext == "pdf" else "x-msdownload"
+        msg.add_attachment(b"%PDF-1.4 test", maintype="application", subtype=sub,
+                           filename=f"invoice{i}.{ext}")
     return msg
 
 
@@ -584,26 +597,45 @@ def _email_rig(platform, monkeypatch, mails: list[EmailMessage]):
 
 
 def test_an_email_attachment_is_said_and_the_words_still_run(platform, monkeypatch):
+    # 10-a: the attachment is kept and read now; the receipt names it first.
     results, turn = _email_rig(platform, monkeypatch, [_mail()])
 
     assert len(_FakeSMTP.sent) == 2, _FakeSMTP.sent
     note, answer = _FakeSMTP.sent
-    assert "can't take files" in note and "the file you sent" in note
-    assert "read your message" in note
+    assert note.startswith("Iron Jarvis: Saved invoice0.pdf in ")
     assert "The total is 42." in answer
     assert len(turn.calls) == 1
     said = _last_user_words(turn.calls[0])
-    assert "Please file this." in said
+    assert "Please file this." in said and "not read" not in said
+    assert [Path(a).name for a in turn.calls[0].attachments] == ["invoice0.pdf"]
+
+
+def test_an_attachment_of_a_kind_not_taken_is_named_and_the_turn_told(platform, monkeypatch):
+    results, turn = _email_rig(platform, monkeypatch, [_mail(ext="exe")])
+
+    note, answer = _FakeSMTP.sent
+    assert "I couldn't take invoice0.exe" in note
+    said = _last_user_words(turn.calls[0])
     assert said.endswith("\n\n" + files_not_read_note(1))
 
 
 def test_an_email_that_is_only_a_file_is_answered_in_words(platform, monkeypatch):
+    # 10-a: files and no words still reach the turn (a file alone is a
+    # message, as on the desk); one of a kind not taken alone gets words only.
     results, turn = _email_rig(platform, monkeypatch, [_mail(subject="", body="", pdfs=2)])
 
-    assert [r["status"] for r in results] == ["files_not_read"]
+    assert [r["status"] for r in results] == ["chat"]
+    assert _FakeSMTP.sent[0].startswith("Iron Jarvis: Saved invoice0.pdf and invoice1.pdf in ")
+    assert len(turn.calls) == 1 and len(turn.calls[0].attachments) == 2
+
+
+def test_an_email_that_is_only_a_file_not_taken_is_answered_in_words(platform, monkeypatch):
+    results, turn = _email_rig(platform, monkeypatch,
+                               [_mail(subject="", body="", pdfs=2, ext="exe")])
+
+    assert [r["status"] for r in results] == ["files_not_taken"]
     assert len(_FakeSMTP.sent) == 1
-    assert "the 2 files you sent" in _FakeSMTP.sent[0]
-    assert "Send your request as text" in _FakeSMTP.sent[0]
+    assert "invoice0.exe" in _FakeSMTP.sent[0] and "invoice1.exe" in _FakeSMTP.sent[0]
     assert turn.calls == []
 
 
@@ -624,10 +656,10 @@ def test_a_strangers_attachment_gets_no_answer(platform, monkeypatch):
 
 def test_two_emails_with_files_in_one_poll_are_told_once(platform, monkeypatch):
     results, turn = _email_rig(
-        platform, monkeypatch, [_mail(body="First."), _mail(body="Second.")]
+        platform, monkeypatch, [_mail(body="First.", ext="exe"), _mail(body="Second.", ext="exe")]
     )
 
-    notes = [s for s in _FakeSMTP.sent if "can't take files" in s]
+    notes = [s for s in _FakeSMTP.sent if "couldn't take" in s]
     assert len(notes) == 1
     assert len(turn.calls) == 2  # both e-mails' words were answered
 
@@ -635,7 +667,7 @@ def test_two_emails_with_files_in_one_poll_are_told_once(platform, monkeypatch):
 def test_an_email_without_files_gets_no_note(platform, monkeypatch):
     results, turn = _email_rig(platform, monkeypatch, [_mail(pdfs=0)])
 
-    assert len(_FakeSMTP.sent) == 1 and "can't take files" not in _FakeSMTP.sent[0]
+    assert len(_FakeSMTP.sent) == 1 and "Saved" not in _FakeSMTP.sent[0]
     assert len(turn.calls) == 1
 
 
@@ -758,7 +790,7 @@ def test_a_signed_email_with_no_file_gets_no_file_sentence(platform, monkeypatch
     results, turn = _email_rig(platform, monkeypatch, [signed])  # type: ignore[list-item]
 
     assert len(_FakeSMTP.sent) == 1, _FakeSMTP.sent
-    assert "can't take files" not in _FakeSMTP.sent[0]
+    assert "Saved" not in _FakeSMTP.sent[0] and "couldn't" not in _FakeSMTP.sent[0]
     assert "The total is 42." in _FakeSMTP.sent[0]
     assert "file" not in _last_user_words(turn.calls[0])
 
@@ -768,4 +800,6 @@ def test_the_poll_carries_the_count(monkeypatch):
     monkeypatch.setattr("iron_jarvis.comm.channels._imap_connect", lambda host, port: fake)
     ch = EmailChannel(dict(_EMAIL_CFG), secret_resolver=lambda n: "pw-test")
     messages, _offset = ch.poll(0)
-    assert [m.files_not_read for m in messages] == [2, 0]
+    # 10-a: a proven, allowed sender's attachments are listed (not counted).
+    assert [len(m.files) for m in messages] == [2, 0]
+    assert [m.files_not_read for m in messages] == [0, 0]

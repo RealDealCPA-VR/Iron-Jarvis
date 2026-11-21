@@ -49,6 +49,7 @@ PR that ships it.
 | What a paired computer may do on THIS one, one switch each, every one off for a new pairing (next leaps 41-a; turned on only by a press on the card, off from the card or from chat) | the switches by their words: **Send me tasks**, **Look up my work record**, **Ask me questions about tasks I send it**, **Hand me a whole chat**, **Start coding work here**, **Use my models**, **See and manage my models** (those not in this version yet are listed under **Coming in later versions**); the one line under a computer reads **desk may: send tasks.**, and the line under it **desk lets this computer: send tasks.** | permission, scope, peer switch (never shown) |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
+| A photo, file or recording you send Jarvis from Telegram, Slack or email, kept on this PC (10-a) | a **file from your phone**; a recording is a **voice note**; it is kept in the dated **From your phone** folder in Documents › Iron Jarvis | — (voice message and voice memo stay search words) |
 | The one-tap connect gallery | **Directory** | marketplace |
 | The one thing you ask the team to get done (the Agents page's New task; a project's screen; the bell's "Your objective is done") | **objective** | mission |
 | Several agents answering one @-mention message in chat (each conversation is a *thread*, its seated agents the *panel*; pre-v1.308.0 rooms open read-only) | **round-table** | — |

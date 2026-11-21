@@ -4119,6 +4119,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # an @mention elsewhere) reaches Jarvis too. With message.im alone a message
     # in #iron-jarvis never left Slack (comm/slack_socket.py says where each one
     # is answered).
+    # 10-a: files:read so a file sent to Jarvis can be downloaded (without it
+    # Slack answers the download with its sign-in page, said in words), and
+    # files:write + interactivity for 10-b (files back, approval buttons), so
+    # the app is updated once.
     _CHANNEL_MANIFESTS = {
         "slack": """{
   "display_information": {
@@ -4149,7 +4153,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         "groups:history",
         "groups:read",
         "im:history",
-        "im:write"
+        "im:write",
+        "files:read",
+        "files:write"
       ]
     }
   },
@@ -4161,6 +4167,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         "message.groups",
         "message.im"
       ]
+    },
+    "interactivity": {
+      "is_enabled": true
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": true,
@@ -4268,6 +4277,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from ..settings.writer import ConfigWriter
 
     platform.config_writer = ConfigWriter(d)
+    # 10-a: phone voice notes are heard with the same offline model and the
+    # same chosen speech service as dictation (``comm/voice_note``), so the
+    # poller borrows the deps that hold them.
+    inbound_poller.voice_deps = d
 
     # THE WINDOW LADDER, handed to the agents package (v1.285.0): the panel's
     # per-speaker transcript budget reads the same pin → envelope → fleet →

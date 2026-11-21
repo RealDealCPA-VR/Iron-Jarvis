@@ -1074,13 +1074,14 @@ def apply_channel(platform: Any, name: str, cfg: dict[str, Any] | None) -> None:
     notifier = platform.notifier
     notifier.remove_channel(name)
     if cfg is not None:
-        from ..comm import CHANNEL_TYPES, httpx_get, httpx_post
+        from ..comm import CHANNEL_TYPES, httpx_get, httpx_get_bytes, httpx_post
 
         ctype = cfg.get("type")
         if ctype in CHANNEL_TYPES:
             notifier.add_channel(
                 name,
-                CHANNEL_TYPES[ctype](cfg, http_post=httpx_post, http_get=httpx_get, secret_resolver=platform.secrets.get),
+                CHANNEL_TYPES[ctype](cfg, http_post=httpx_post, http_get=httpx_get, secret_resolver=platform.secrets.get,
+                                     http_get_bytes=httpx_get_bytes),
             )
     if "slack" in ((old or {}).get("type"), (cfg or {}).get("type")):
         d = _d(platform)

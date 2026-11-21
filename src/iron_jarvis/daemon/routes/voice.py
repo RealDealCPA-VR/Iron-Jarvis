@@ -126,8 +126,8 @@ def _refuse_off_network(label: str, url: str) -> None:
 
 
 async def transcribe_clip(
-    d, *, audio_b64: str, mime: str = "audio/webm", language: str = "",
-    local_only: bool = False,
+    d, *, audio_b64: str = "", mime: str = "audio/webm", language: str = "",
+    local_only: bool = False, data: bytes | None = None,
 ) -> dict[str, Any]:
     """Transcribe one finished clip through the configured HTTP backend (v1.269.0: shared).
 
@@ -140,6 +140,9 @@ async def transcribe_clip(
     ``local_only`` (v1.502.0, north-star 2.12): the chat this dictation is for
     is Local only — a speech service off this network is refused (409, by
     name), before anything is read or sent.
+
+    ``data`` (10-a): the clip as bytes, in place of ``audio_b64`` (a voice
+    note from the phone, read from the chat's folder; ``comm/voice_note``).
     """
     backend = d._voice_backend()
     if backend is None:
@@ -160,10 +163,11 @@ async def transcribe_clip(
         _refuse_off_network(label, url)
     import base64
 
-    try:
-        data = base64.b64decode(audio_b64, validate=False)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=plain_failure("That recording could not be read.", exc))
+    if data is None:
+        try:
+            data = base64.b64decode(audio_b64, validate=False)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=plain_failure("That recording could not be read.", exc))
     if not data:
         raise HTTPException(status_code=400, detail="empty audio")
     if len(data) > d._VOICE_MAX_BYTES:

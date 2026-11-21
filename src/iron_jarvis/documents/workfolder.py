@@ -84,6 +84,55 @@ def _inside(child: Path, parent: Path) -> bool:
         return False
 
 
+#: How many "-2", "-3" … names an upload tries before giving up.
+MAX_UPLOAD_NAMES = 1000
+
+
+def upload_name(raw: str) -> str:
+    """The name an upload is stored under: the upload route's rule (letters,
+    digits, ``.``, ``_`` and ``-``; anything else becomes ``_``), ``upload``
+    when nothing is left."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(raw or "")).strip("._") or "upload"
+
+
+def store_upload(uploads: Path, name: str, data: bytes) -> Path:
+    """Store *data* under *name* in *uploads* WITHOUT replacing another file
+    (v1.499.3) and return where it landed.
+
+    Two uploads with the same name used to share one path, so the second
+    silently replaced the first while a chat still pointed at it. Now the
+    same bytes again reuse the existing file, and different bytes get the
+    next free ``<stem>-2<ext>`` name — the original name stays readable and
+    the file stays directly in ``uploads`` (a bare name is still found there).
+    Each name is claimed with an exclusive create, so two uploads at once
+    cannot take the same one. 10-a: shared by ``POST /documents/upload`` and
+    a file from the phone (``comm/media.keep_inbound``). Raises ``OSError``
+    when no name is free.
+    """
+    uploads.mkdir(parents=True, exist_ok=True)
+    stem, ext = Path(name).stem or "upload", Path(name).suffix
+    for n in range(1, MAX_UPLOAD_NAMES + 1):
+        candidate = uploads / (name if n == 1 else f"{stem}-{n}{ext}")
+        try:
+            f = open(candidate, "xb")
+        except FileExistsError:
+            try:
+                if candidate.is_file() and candidate.stat().st_size == len(data) \
+                        and candidate.read_bytes() == data:
+                    return candidate  # the same file uploaded again
+            except OSError:
+                pass
+            continue
+        try:
+            with f:
+                f.write(data)
+        except BaseException:
+            candidate.unlink(missing_ok=True)  # never a half-written upload
+            raise
+        return candidate
+    raise OSError(f"too many uploads named {name}")
+
+
 def copy_uploads_into(
     folder: Path, files: list[str], uploads_dir: Path
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:

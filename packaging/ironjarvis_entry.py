@@ -31,6 +31,9 @@ EXCEL_WORKER_SUBCOMMAND = "excel-worker"
 #: v1.516.0: the search child (iron_jarvis/harness/search.py): a pattern that
 #: can backtrack is matched there and killed at the time limit.
 SEARCH_WORKER_SUBCOMMAND = "search-worker"
+#: 10-a: the phone voice-note child (iron_jarvis/audio_worker.py): PyAV and
+#: Vosk are native code, and a malformed file from a phone can only crash it.
+AUDIO_WORKER_SUBCOMMAND = "audio-worker"
 
 #: v1.333.0: the two other self-re-exec children take the same door. Through
 #: the Typer app each one imported the whole daemon (platform, orchestrator,
@@ -71,6 +74,11 @@ def _fast_path(argv: list[str]) -> int | None:
         from iron_jarvis.excel_worker import main as excel_main
 
         return excel_main()
+    if argv == [AUDIO_WORKER_SUBCOMMAND]:
+        # 10-a: one phone voice note, decoded and heard in its own process.
+        from iron_jarvis.audio_worker import main as audio_main
+
+        return audio_main()
     if argv == [SEARCH_WORKER_SUBCOMMAND]:
         # v1.516.0: one search with a pattern that can backtrack, killed at
         # its limit (`re` holds the interpreter lock while it matches).

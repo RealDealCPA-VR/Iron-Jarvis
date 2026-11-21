@@ -33,6 +33,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import HTTPException
@@ -44,9 +46,12 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
 from ..core.models import AgentType, Session
-from .base import Channel, ChannelAuthError, InboundMessage, split_message
+from .base import Channel, ChannelAuthError, FileNotTaken, InboundMessage, split_message
 from .models import InboundOffsetRecord
 from .threads import ADDRESSEE_KEY
+#: 10-a: the pending-prompt kind of "Use <service> for phone voice notes
+#: too?" (its ``ref_id`` is the kept recording).
+from .voice_note import ASK_KIND as _VOICE_ASK_KIND
 from .prompts import (
     ALREADY_ANSWERED_REPLY,
     ANSWER_USAGE_REPLY,
@@ -96,36 +101,56 @@ RATE_WINDOW_SECONDS = 60.0
 #: R0.3: a sender is told at most this often that their files were not used,
 #: so a burst of files (an e-mail poll's batch, several Slack uploads) is told
 #: once — Telegram's notice is once per sender per poll for the same reason.
+#: Since 10-a it bounds a receipt that took NOTHING (every file refused); a
+#: receipt that kept a file or heard a voice note always goes out.
 FILES_NOT_READ_EVERY_S = 60.0
 
-
-def files_not_read_reply(count: int, *, with_words: bool) -> str:
-    """What a sender hears when Slack or e-mail brought files Iron Jarvis
-    cannot take yet (R0.3; Telegram says it in its own poll,
-    ``TelegramChannel.MEDIA_NOTICE``). ``with_words``: the message's words are
-    handled next, so the sentence says they were read."""
-    n = max(1, int(count or 1))
-    what = "the file you sent" if n == 1 else f"the {n} files you sent"
-    if with_words:
-        return (
-            f"I can't take files here yet, so I read your message but not {what}. "
-            "For files, use the desktop app."
-        )
-    return (
-        f"I can't take files here yet, so I couldn't use {what}. "
-        "Send your request as text, or use the desktop app for files."
-    )
+#: 10-a: at most this many files are taken from one sender inside
+#: RATE_WINDOW_SECONDS (four full messages): the turn cap counts turns, and a
+#: burst of photo messages must not fill the disk before it bites.
+FILES_PER_WINDOW = 20
 
 
 def files_not_read_note(count: int) -> str:
-    """The line added after the sender's words when files came with them
-    (R0.3 review). The turn reads it, so the model says it has not seen the
-    files instead of guessing what they hold, and the saved chat shows they
-    were sent. Iron Jarvis's own words, never the files' names or contents."""
+    """The line added after the sender's words when files came with them that
+    were not taken (R0.3 review; 10-a: too large, a kind not taken, past five,
+    or with no download). The turn reads it, so the model says it has not
+    seen those files instead of guessing what they hold, and the saved chat
+    shows they were sent. Iron Jarvis's own words, never the files' names or
+    contents."""
     n = max(1, int(count or 1))
     if n == 1:
-        return "(This message came with a file. Files sent here can't be opened yet, so it was not read.)"
-    return f"(This message came with {n} files. Files sent here can't be opened yet, so they were not read.)"
+        return "(This message came with a file that could not be taken, so it was not read.)"
+    return f"(This message came with {n} files that could not be taken, so they were not read.)"
+
+
+def files_only_line(names: list[str]) -> str:
+    """The user's line when the phone sent files and no words (10-a): the turn
+    needs words, and these are plainly not the sender's own."""
+    return f"(Sent with no message: {', '.join(names)})"
+
+
+@dataclass
+class Taken:
+    """What became of the files that came with one message (10-a)."""
+
+    #: The files kept in the chat's folder.
+    kept: list[Any] = field(default_factory=list)
+    #: How many were not taken (refused, past five, no download).
+    not_taken: int = 0
+    #: The words heard in a voice note ("" when none).
+    heard: str = ""
+    #: The kept recording that was (or was to be) heard: its words ride the
+    #: turn, never the recording itself.
+    voice_path: str = ""
+    #: The chat's folder (absolute), when a file was kept or it had one.
+    folder: str = ""
+    #: The saved chat the files belong to ("" with two-way chat off).
+    thread_id: str = ""
+    #: The receipt went out.
+    sent: bool = False
+    #: The message ends here (a question was asked, or nothing is left).
+    stop: dict[str, Any] | None = None
 
 
 def _with_files_note(text: str, count: int) -> str:
@@ -134,6 +159,44 @@ def _with_files_note(text: str, count: int) -> str:
     if not count:
         return text
     return f"{text}\n\n{files_not_read_note(count)}"
+
+
+#: How long that question waits for "1" or "2".
+_VOICE_ASK_TTL_S = 24 * 3600.0
+
+
+def _voice_prompt_fresh(prompt: Any) -> bool:
+    """The voice question is still answerable: under a day old and its
+    recording still on this PC. Never raises (a doubt reads as stale)."""
+    try:
+        if not Path(str(getattr(prompt, "ref_id", "") or "")).is_file():
+            return False
+        created = getattr(prompt, "created_at", None)
+        if created is None:
+            return True
+        now = utcnow()
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=now.tzinfo)
+        return (now - created).total_seconds() <= _VOICE_ASK_TTL_S
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _not_taken(taken: "Taken | None") -> int:
+    return int(taken.not_taken) if taken is not None else 0
+
+
+def _run_task(text: str, taken: "Taken | None") -> str:
+    """A run's task for a phone message (10-a): the words, the note for files
+    not taken, and the kept files' absolute paths in a fenced data block
+    (``comm/media.fenced_files``), so the run can open them and never reads
+    them as instructions."""
+    task = _with_files_note(text, _not_taken(taken))
+    if taken is not None and taken.kept:
+        from .media import fenced_files
+
+        task = f"{task}\n\n{fenced_files([k.path for k in taken.kept])}"
+    return task
 
 
 #: Escalation recap: how many thread-tail messages ride into the session task,
@@ -284,6 +347,14 @@ class InboundPoller:
         #: used. Written only for an allowlisted sender (after the guards in
         #: ``_dispatch``), so it is as small as the allowlists.
         self._files_told: dict[tuple[str, str], float] = {}
+        #: 10-a: when each (channel, sender)'s recent files were taken
+        #: (``FILES_PER_WINDOW``); allowlisted senders only, like the above.
+        self._file_times: dict[tuple[str, str], deque[float]] = {}
+        #: 10-a: the daemon's deps object, lent for phone voice notes
+        #: (``_vosk_model_path``, ``_voice_backend``, ``_VOICE_MAX_BYTES``;
+        #: ``comm/voice_note``). ``None``: a voice note is kept and the phone
+        #: hears that it could not be heard here.
+        self.voice_deps: Any = None
         #: PENDING PROMPTS (v1.137.0) — both optional so every existing
         #: construction keeps its behavior byte-for-byte. ``prompt_store`` is
         #: the :class:`~.prompts.PendingPromptStore`; ``answer_run`` the
@@ -723,36 +794,248 @@ class InboundPoller:
             ok = ok and bool(res.get("ok"))
         return ok
 
-    async def _say_files_not_read(
-        self, name: str, ch: Channel, msg: InboundMessage, *, with_words: bool
+    async def _say_receipt(
+        self, name: str, ch: Channel, msg: InboundMessage, words: str, *, limited: bool
     ) -> bool:
-        """Tell the sender their files were not used (R0.3). True when the
-        sentence went out now; False when it failed, or when this sender was
-        told less than ``FILES_NOT_READ_EVERY_S`` ago (a burst is told once).
+        """Send the files' receipt to the sender (10-a; R0.3's sentence). True
+        when it went out now; False when it failed, or when ``limited`` (it
+        took nothing) and this sender was told less than
+        ``FILES_NOT_READ_EVERY_S`` ago (a burst of refused files is told
+        once). A receipt that kept a file or heard a voice note always goes.
 
-        Called only from ``_dispatch`` after its guards. Like Telegram's
-        notice it is a reply about what the channel can carry, not a turn: no
-        chat-thread line. Best-effort: a failed send is logged and never stops
-        the message's words from being handled. File names are never logged.
-        """
-        key = (name, str(msg.sender_id))
-        now = self._clock()
-        last = self._files_told.get(key)
-        if last is not None and now - last < FILES_NOT_READ_EVERY_S:
-            return False
-        self._files_told[key] = now
-        count = int(getattr(msg, "files_not_read", 0) or 0)
-        log.info(
-            "inbound: %d file(s) on channel %r were not used (files are not taken here yet)",
-            count,
-            name,
-        )
+        Called only from ``_dispatch`` after its guards. It is a reply about
+        what the message carried, not a turn: no chat-thread line (the user's
+        line carries the files as chips). Best-effort: a failed send is
+        logged and never stops the message's words. File names are never
+        logged."""
+        if limited:
+            key = (name, str(msg.sender_id))
+            now = self._clock()
+            last = self._files_told.get(key)
+            if last is not None and now - last < FILES_NOT_READ_EVERY_S:
+                return False
+            self._files_told[key] = now
         try:
-            return await self.send_chunked(
-                ch, files_not_read_reply(count, with_words=with_words), chat_id=msg.reply_to
+            return await self.send_chunked(ch, words, chat_id=msg.reply_to)
+        except Exception:  # noqa: BLE001 — never lose the message over the receipt
+            log.warning("inbound: could not send the files' receipt on %r", name, exc_info=True)
+            return False
+
+    async def _take_files(
+        self, name: str, ch: Channel, msg: InboundMessage, *, chat_on: bool, has_words: bool
+    ) -> Taken:
+        """Take the files that came with ``msg`` (10-a).
+
+        Reached only from ``_dispatch`` AFTER the allowlist, the sender's
+        proof and the private-chat guard: a stranger's, a bot's or a group's
+        file is never downloaded. Each file is checked against the kinds
+        taken and ``phone_file_max_mb`` BEFORE its download, fetched off the
+        loop through the channel (which stops at the cap), kept in the
+        chat's folder (``comm/media.keep_inbound``, off the loop) and
+        recorded as ``comm.file_received {channel, kind, bytes}`` (never a
+        name). At most five a message. A voice note is then heard
+        (``comm/voice_note``): offline first, the chosen speech service only
+        after a yes asked once, never off the network in a Local only chat.
+        The receipt ("Saved photo.jpg in Documents\\Iron Jarvis\\... From
+        your phone.", what was not taken and why, "I heard: ...") goes out
+        before the answer. Never raises."""
+        from . import media
+        from . import voice_note as VN
+
+        out = Taken()
+        cfg = getattr(self.platform, "config", None)
+        cap = media.max_bytes(cfg)
+        files = list(getattr(msg, "files", None) or [])
+        lines: list[str] = []
+        refused: list[str] = []
+        tid = ""
+        resolved = False
+        for f in files[: media.PHONE_FILES_PER_MESSAGE]:
+            why = media.refusal(f, cap) if cfg is not None else "files can't be kept here"
+            if not why and not self._file_ok(name, msg.sender_id):
+                why = "too many files came in the last minute. Send it again in a minute"
+            if not why:
+                try:
+                    data = await asyncio.to_thread(ch.fetch_file, f, cap)
+                    if chat_on and self.thread_store is not None and not resolved:
+                        # The chat is found (or made) only once a file is in
+                        # hand: a message whose files were all refused leaves
+                        # no empty chat behind.
+                        resolved = True
+                        try:
+                            tid = self.thread_store.resolve(
+                                name, str(msg.sender_id), self._display(msg)).id
+                        except Exception:  # noqa: BLE001 — the file still goes to today's folder
+                            log.warning("comm thread resolve failed on %r", name, exc_info=True)
+                    kept = await asyncio.to_thread(
+                        media.keep_inbound, self.platform, self.thread_store if tid else None,
+                        tid, f.name, data, f.kind,
+                    )
+                except FileNotTaken as exc:
+                    why = exc.words
+                except OSError:
+                    why = "it could not be saved on this PC"
+                except Exception as exc:  # noqa: BLE001 — a file never sinks the message
+                    log.warning("inbound: a %s from %r could not be taken (%s)",
+                                f.kind, name, type(exc).__name__)
+                    why = "it could not be taken"
+                else:
+                    out.kept.append(kept)
+                    out.folder = kept.folder
+                    await self._publish(
+                        EventType.COMM_FILE_RECEIVED,
+                        {"channel": name, "kind": kept.kind, "bytes": kept.bytes},
+                    )
+                    continue
+            refused.append(media.not_taken_line(f.name, why))
+        extra = max(0, len(files) - media.PHONE_FILES_PER_MESSAGE)
+        not_opened = int(getattr(msg, "files_not_read", 0) or 0)
+        out.not_taken = len(refused) + extra + not_opened
+        if out.kept:
+            lines.append(await asyncio.to_thread(media.saved_line, out.kept, cfg))
+        lines.extend(refused)
+        if extra:
+            lines.append(media.over_count_line(extra))
+        if not_opened:
+            lines.append(media.not_opened_line(not_opened))
+        if out.not_taken:
+            log.info("inbound: %d file(s) on channel %r were not taken", out.not_taken, name)
+        # A VOICE NOTE becomes the sender's words (D-10.1); an audio file too
+        # when the message has no words of its own (a voice memo sent as a file).
+        voice = next((k for k in out.kept if k.kind in VN.VOICE_KINDS), None) or (
+            next((k for k in out.kept if k.kind == "audio"), None) if not has_words else None
+        )
+        asked = False
+        if voice is not None:
+            # The recording is heard, not read: it never rides the turn as an
+            # attachment (its words do), but it keeps its chip.
+            out.voice_path = voice.path
+            kept_in = await asyncio.to_thread(media.folder_words, voice.folder, cfg)
+            heard = await self._hear(name, msg, voice, tid=tid, kept_in=kept_in)
+            if heard.text:
+                out.heard = heard.text
+                lines.append(VN.heard_line(heard))
+            elif heard.ask:
+                asked = self._ask_voice_service(name, msg, voice.path, heard.ask, tid)
+                lines.append(
+                    VN.ask_words(heard.ask) if asked else
+                    "I could not turn your voice note into words on this PC. "
+                    f"The recording is kept in {kept_in}."
+                )
+            else:
+                lines.append(heard.problem)
+        if lines:
+            out.sent = await self._say_receipt(
+                name, ch, msg, "\n".join(lines),
+                limited=not out.kept and not out.heard and not asked,
             )
-        except Exception:  # noqa: BLE001 — never lose the message over the sentence
-            log.warning("inbound: could not say that files were not used on %r", name, exc_info=True)
+        out.thread_id = tid
+        if not has_words and not out.heard:
+            others = [k for k in out.kept if k.path != out.voice_path]
+            if voice is not None and not others:
+                # A voice note that was not heard, and nothing else: there is
+                # nothing to answer until it is (the question, or the words).
+                out.stop = {"channel": name, "sent": out.sent, "thread_id": tid,
+                            "status": "voice_asked" if asked else "voice_not_heard"}
+            elif not out.kept:
+                out.stop = {"channel": name, "status": "files_not_taken", "sent": out.sent}
+        if not out.folder and tid:
+            saved = self.thread_store.get_setup_value(tid, "workspace_dir")
+            if saved:
+                out.folder = saved
+        return out
+
+    def _file_ok(self, channel: str, sender_id: Any) -> bool:
+        """Take one more file from this sender? Records it and says True
+        under ``FILES_PER_WINDOW`` files a ``RATE_WINDOW_SECONDS``, on the
+        injected clock; False (recording nothing) past it."""
+        now = self._clock()
+        dq = self._file_times.setdefault((channel, str(sender_id)), deque())
+        while dq and now - dq[0] >= RATE_WINDOW_SECONDS:
+            dq.popleft()
+        if len(dq) >= FILES_PER_WINDOW:
+            return False
+        dq.append(now)
+        return True
+
+    def _chat_files(self, tid: str, kept: list[Any], *, skip: str = "") -> dict[str, Any]:
+        """``ChatBody`` fields for a phone chat's files (10-a), BLOCKING (a
+        row read and a folder check): ``attachments`` (this message's kept
+        files), ``workspace_dir`` (the chat's own folder once it has one,
+        only when it sits under the chat files folder and exists) and
+        ``thread_files`` (the files sent earlier in this chat). ``{}`` for a
+        chat that never got a file."""
+        from . import media
+
+        out: dict[str, Any] = {}
+        read = [k.path for k in kept if k.path != skip]
+        if read:
+            out["attachments"] = read
+        if skip:
+            # The recording itself is NAMED (its path, never extracted): its
+            # words are the message, and "file this voice note" still finds it.
+            out["thread_files"] = [skip]
+        if not tid or self.thread_store is None:
+            if kept:
+                out["workspace_dir"] = kept[0].folder
+            return out
+        try:
+            folder = self.thread_store.get_setup_value(tid, "workspace_dir")
+            root = Path(self.platform.config.chat_files_dir)
+            if folder and Path(folder).is_dir() and media._inside(Path(folder), root):
+                out["workspace_dir"] = folder
+            here = {k.path for k in kept}
+            earlier = [p for p in self.thread_store.attached_paths(tid) if p not in here]
+            if earlier:
+                out["thread_files"] = earlier + out.get("thread_files", [])
+        except Exception:  # noqa: BLE001 — the turn still runs on this message's files
+            log.warning("inbound: the chat's files could not be read for %s", tid, exc_info=True)
+        return out
+
+    async def _hear(self, name: str, msg: InboundMessage, voice: Any, *, tid: str,
+                    kept_in: str) -> Any:
+        """Turn a kept voice note into words (``comm/voice_note``). The chat's
+        Local only switch is read off the loop; an unreadable one counts as
+        on. ``kept_in`` is the folder as the phone hears it. Never raises."""
+        from . import voice_note as VN
+
+        local_only = False
+        if tid:
+            try:
+                from ..providers import egress as _egress
+
+                local_only = await asyncio.to_thread(_egress.thread_local_only, self.engine, tid)
+            except Exception:  # noqa: BLE001 — unreadable: the service is not reached
+                local_only = True
+        try:
+            return await VN.transcribe_note(self.voice_deps, voice.path, local_only=local_only,
+                                            kept_in=kept_in, mime=VN.mime_of(voice.name))
+        except Exception:  # noqa: BLE001
+            log.warning("inbound: a voice note on %r could not be heard", name, exc_info=True)
+            return VN.Heard(problem="I could not turn your voice note into words. "
+                                    f"The recording is kept in {kept_in}.")
+
+    def _ask_voice_service(self, name: str, msg: InboundMessage, path: str, who: str,
+                           tid: str) -> bool:
+        """Register the ONE question before a phone voice note goes to the
+        chosen speech service (D-10.1): a pending prompt (Yes, No) on this
+        sender's chat, answered by "1" / "2" like every phone question. An
+        older unanswered one is closed first. False when no prompt store is
+        wired (the phone then hears the note was not heard)."""
+        from . import voice_note as VN
+
+        if self.prompt_store is None:
+            return False
+        try:
+            self.prompt_store.expire_kind(VN.ASK_KIND, name, str(msg.sender_id))
+            rec = self.prompt_store.register(
+                VN.ASK_KIND, path, VN.ask_question(who), ["Yes", "No"],
+                name, str(msg.sender_id), tid,
+            )
+            return rec is not None
+        except Exception:  # noqa: BLE001
+            log.warning("inbound: the voice question could not be registered on %r", name,
+                        exc_info=True)
             return False
 
     def _providers(self) -> Any:
@@ -1001,18 +1284,6 @@ class InboundPoller:
             return {"channel": name, "status": "non_private", "sender": msg.sender_id}
 
         text = (msg.text or "").strip()
-        # R0.3: Slack and e-mail brought files Iron Jarvis cannot take yet.
-        # Said HERE — after the allowlist, the sender's proof and the
-        # private-chat guard, so a stranger, a bot or a group hears nothing —
-        # and before anything else, so the sentence comes first. A message
-        # with words goes on exactly as before; one without ends here.
-        if getattr(msg, "files_not_read", 0):
-            told = await self._say_files_not_read(name, ch, msg, with_words=bool(text))
-            if not text:
-                return {"channel": name, "status": "files_not_read", "sent": told}
-        if not text:
-            return {"channel": name, "status": "empty"}
-
         # FULL CHAT (v1.136.0): when this destination opted into chat
         # (``chat_enabled`` — implies inbound) AND the thread store + turn
         # service are wired, the conversation lives on a durable daemon-owned
@@ -1021,6 +1292,27 @@ class InboundPoller:
         # byte-equivalent to the one-shot behavior (pinned by tests).
         chat_on = self._chat_ready(ch)
         display = self._display(msg) if chat_on else ""
+
+        # 10-a: PHOTOS, FILES AND VOICE NOTES. Taken HERE — after the
+        # allowlist, the sender's proof and the private-chat guard, so a
+        # stranger's, a bot's or a group's file is never downloaded — and
+        # before anything else, so the receipt ("Saved photo.jpg in …", what
+        # was not taken, "I heard: …") comes first. The words heard in a voice
+        # note are the sender's words. A message with nothing left to answer
+        # ends here (R0.3's "files_not_read" became "files_not_taken").
+        taken: Taken | None = None
+        if getattr(msg, "files", None) or getattr(msg, "files_not_read", 0):
+            taken = await self._take_files(name, ch, msg, chat_on=chat_on, has_words=bool(text))
+            if taken.stop is not None:
+                return taken.stop
+            if taken.heard:
+                text = f"{text}\n\n{taken.heard}" if text else taken.heard
+        if not text and not (taken and taken.kept):
+            return {"channel": name, "status": "empty"}
+        if not text:
+            # Files and no words: the turn still runs on them (a file alone
+            # is a message, as on the desk), and its words say so.
+            text = files_only_line([k.name for k in taken.kept])
 
         # "/new" — the chat-only thread reset, handled BEFORE the command
         # grammar (which does not know it). Append the exchange to the OLD
@@ -1194,7 +1486,7 @@ class InboundPoller:
         # thread (memory + skills + project spine via the injected turn
         # service), replying chunked to the channel's own size cap.
         if chat_on:
-            return await self._handle_chat(name, ch, msg, text, display)
+            return await self._handle_chat(name, ch, msg, text, display, taken=taken)
 
         # Per-identity flood guard (v1.291.0): now that a job no longer holds
         # the poll, one sender could stack up overlapping sessions — the
@@ -1226,11 +1518,14 @@ class InboundPoller:
         if not _stop_why:
             try:
                 # R0.3 review: the run is told files came and were not read,
-                # so it never answers about files it did not see.
+                # so it never answers about files it did not see. 10-a: the
+                # files that WERE kept are named in a fenced data block (their
+                # absolute paths; never instructions), and the run works in
+                # their folder so what it makes lands beside them.
                 session = await self.orchestrator.create_session(
-                    _with_files_note(text, getattr(msg, "files_not_read", 0)),
-                    self.agent_type, origin=f"comm:{name}",
+                    _run_task(text, taken), self.agent_type, origin=f"comm:{name}",
                     trust=_trust, trust_reason=_trust_reason,
+                    **({"workspace_root": taken.folder} if taken and taken.kept else {}),
                 )
             except EmergencyStopOn as exc:  # the switch flipped since the read
                 _stop_why = str(exc)
@@ -1268,7 +1563,8 @@ class InboundPoller:
         }
 
     async def _handle_chat(
-        self, name: str, ch: Channel, msg: InboundMessage, text: str, display: str
+        self, name: str, ch: Channel, msg: InboundMessage, text: str, display: str,
+        *, taken: "Taken | None" = None,
     ) -> dict[str, Any]:
         """One FULL-CHAT turn for an authorized free-form message.
 
@@ -1306,10 +1602,18 @@ class InboundPoller:
         # the turn (and a remote agent, and an escalated run) say so after
         # them, in plain words: the model must not guess at files it never
         # saw. Who the message is for is still read from the words alone.
-        said = _with_files_note(text, getattr(msg, "files_not_read", 0))
+        said = _with_files_note(text, _not_taken(taken))
+        # 10-a: the files that were kept ride the user's line as the desk's
+        # own chip fields, so the phone chat on the PC shows them (absolute
+        # paths stay on this PC; the phone heard names only).
+        kept = list(taken.kept) if taken is not None else []
+        chips = (
+            {"attachmentNames": [k.name for k in kept], "attachmentPaths": [k.path for k in kept]}
+            if kept else None
+        )
         tid = self._safe_append(
             thread.id, "user", said,
-            channel=name, sender_id=msg.sender_id, display=display,
+            channel=name, sender_id=msg.sender_id, display=display, extra=chips,
         )
         # A REMOTE AGENT, ADDRESSED FROM THE PHONE (v1.285.0). "@hermes …" (or
         # a follow-up while the conversation is still with hermes) goes to the
@@ -1367,7 +1671,16 @@ class InboundPoller:
         # never under the one "chat" key every phone conversation shared.
         # The lane only READS the id: this door still saves the reply itself
         # (below), and the plain lane keeps no page-owned turn record.
-        body = ChatBody(messages=history, auto_tools=True, project_id=project_id, thread_id=tid or "")
+        # 10-a: the files from the phone enter through the ATTACHMENT SEAM (read
+        # on this PC first, scanned and fenced as data, never the user's
+        # words); the chat's folder is the turn's working folder, so what it
+        # makes lands beside them; the chat's earlier files are named
+        # (``thread_files``) so "now turn that into a memo" finds them.
+        files_here = await asyncio.to_thread(
+            self._chat_files, tid, kept, skip=(taken.voice_path if taken is not None else "")
+        )
+        body = ChatBody(messages=history, auto_tools=True, project_id=project_id, thread_id=tid or "",
+                        **files_here)
         try:
             # LOW TRUST (v1.298.0): the lane drops its auto-armed memory
             # writers for a turn the phone started (``_chat_turn_kwargs``).
@@ -1427,6 +1740,11 @@ class InboundPoller:
         # re-validated through the roster here; None keeps the default
         # byte-for-byte (see ``_escalate_plan``).
         task = self.recap_task(history, said)
+        if kept:
+            # 10-a: the escalated run is handed the kept files as data too.
+            from .media import fenced_files
+
+            task = f"{task}\n\n{fenced_files([k.path for k in kept])}"
         # THE DAY OFF / THE ALLOWANCE (v1.295.0): a paused custom agent is
         # ``healthy=False`` on the roster, so ``_escalate_plan`` would resolve
         # nobody and run the SUPERVISOR silently; an exhausted one would run.
@@ -1463,6 +1781,9 @@ class InboundPoller:
             _spawn_kwargs["provider"] = esc_provider
         if esc_model:
             _spawn_kwargs["model"] = esc_model
+        if kept and taken is not None and taken.folder:
+            # 10-a: the run works in the chat's folder, beside the files.
+            _spawn_kwargs["workspace_root"] = taken.folder
         if dyn_def is not None:
             # WHO ran (v1.193.0 / v1.295.0): the phone is a door that KNOWS the
             # roster name, so it stamps it — the allowance ledger sums Session
@@ -1845,6 +2166,14 @@ class InboundPoller:
                     self.prompt_store.expire(prompt.id, status="expired")
                     return None, "approval_gone"
                 return prompt, ""
+            if getattr(prompt, "kind", "") == _VOICE_ASK_KIND:
+                # 10-a: "use <service> for phone voice notes too?" waits for
+                # the recording it is about; a day later, or once the
+                # recording is gone, it is closed (a later "1" is chat).
+                if not _voice_prompt_fresh(prompt):
+                    self.prompt_store.expire(prompt.id, status="expired")
+                    return None, ""
+                return prompt, ""
             status = self._run_state(prompt.ref_id)
             if status != "waiting":
                 self.prompt_store.expire(prompt.id, status="expired")
@@ -1915,6 +2244,8 @@ class InboundPoller:
             return ""
         if getattr(prompt, "kind", "") == APPROVAL_KIND:
             return approval_reminder(prompt.question)
+        if getattr(prompt, "kind", "") == _VOICE_ASK_KIND:
+            return f"\n\n(Still waiting for your answer: {prompt.question} Reply 1 for yes or 2 for no.)"
         return pending_reminder(prompt.question)
 
     async def _answer_reply(
@@ -2008,6 +2339,10 @@ class InboundPoller:
             return await self._resolve_approval_prompt(
                 name, ch, msg, display, chat_on, prompt, answer, original_text
             )
+        if getattr(prompt, "kind", "") == _VOICE_ASK_KIND:
+            return await self._resolve_voice_prompt(
+                name, ch, msg, display, chat_on, prompt, answer, original_text
+            )
         if self.answer_run is None:
             # Wired prompts without an answer path is a misconfiguration —
             # be honest rather than pretending the gate opened.
@@ -2044,6 +2379,91 @@ class InboundPoller:
             outbound_suffix=self._pending_reminder(name, msg.sender_id),
             prompt_id=prompt.id, run_id=prompt.ref_id,
         )
+
+    async def _resolve_voice_prompt(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        display: str,
+        chat_on: bool,
+        prompt: Any,
+        answer: str,
+        original_text: str,
+    ) -> dict[str, Any]:
+        """The answer to "Use <service> for phone voice notes too?" (10-a,
+        D-10.1). Yes or no is kept as ``phone_voice_service`` through THE
+        settings writer (a ledger row with Undo; Settings › Voice notes from
+        your phone). On yes the waiting recording goes to the service now
+        (still never off the network in a Local only chat), what was heard is
+        echoed, and the words are handled like a message the sender typed."""
+        from . import media
+        from . import voice_note as VN
+
+        said = str(answer or "").strip().lower()
+        decision = "yes" if said in VN.YES_WORDS else "no" if said in VN.NO_WORDS else ""
+        if not decision:
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                "Reply 1 for yes or 2 for no.", "answer_usage",
+            )
+        await asyncio.to_thread(self._keep_voice_choice, decision)
+        self.prompt_store.resolve(prompt.id, decision)
+        path = str(getattr(prompt, "ref_id", "") or "")
+        cfg = getattr(self.platform, "config", None)
+        kept_in = await asyncio.to_thread(media.folder_words, Path(path).parent, cfg)
+        where = "Settings, Voice notes from your phone"
+        if decision == "no":
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                f"OK: phone voice notes stay on this PC ({where} changes it). "
+                f"The recording is kept in {kept_in}.",
+                "voice_answered",
+            )
+        local_only = False
+        tid = str(getattr(prompt, "thread_id", "") or "")
+        if tid:
+            try:
+                from ..providers import egress as _egress
+
+                local_only = await asyncio.to_thread(_egress.thread_local_only, self.engine, tid)
+            except Exception:  # noqa: BLE001 — unreadable: never off the network
+                local_only = True
+        heard = await VN.transcribe_with_service(
+            self.voice_deps, path, local_only=local_only, kept_in=kept_in, mime=VN.mime_of(path)
+        )
+        head = f"OK: phone voice notes use {heard.who or 'the speech service you chose'} from now on ({where} changes it)."
+        if not heard.text:
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                f"{head} {heard.problem}", "voice_answered",
+            )
+        await self._answer_reply(
+            name, ch, msg, display, chat_on, original_text,
+            f"{head}\n{VN.heard_line(heard)}", "voice_answered",
+        )
+        # The words heard are the sender's own: handled as if typed, with the
+        # same guards (this sender, this chat) the answer itself passed.
+        words = InboundMessage(
+            sender_id=msg.sender_id, text=heard.text, update_id=None, reply_to=msg.reply_to,
+            is_bot=False, raw=msg.raw, own_channel=msg.own_channel,
+        )
+        return await self._dispatch(name, ch, words)
+
+    def _keep_voice_choice(self, decision: str) -> None:
+        """Keep the phone's yes or no (BLOCKING): through the settings writer
+        when the daemon has one (a ledger row with Undo), else on the config
+        (a bare platform, as in tests). Never raises."""
+        try:
+            writer = getattr(self.platform, "config_writer", None)
+            if writer is not None:
+                writer.apply({"phone_voice_service": decision}, actor="phone")
+                return
+            cfg = getattr(self.platform, "config", None)
+            if cfg is not None:
+                cfg.phone_voice_service = decision
+        except Exception:  # noqa: BLE001 — the answer still stands for this recording
+            log.warning("inbound: the phone's voice-note answer could not be kept", exc_info=True)
 
     async def _resolve_approval_prompt(
         self,

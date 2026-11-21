@@ -531,6 +531,24 @@ def _isolate_launch_recipe_probes():
         _recipes.clear_probe_cache()
 
 
+@pytest.fixture(autouse=True)
+def _documents_folder_is_the_tests_own(tmp_path_factory, monkeypatch):
+    """10-a: a test never writes into the owner's REAL Documents folder.
+
+    A file from the phone is kept in ``chat_files_dir``, which defaults to
+    ``<Documents>\\Iron Jarvis``; on Windows ``userdirs.documents_dir`` asks the
+    shell for the real one. A test that drove the phone poller with a file and
+    no ``chat_files_root`` left folders in the owner's Documents (seen on
+    2026-11-20). Here Windows' answer is this run's own folder; a test that
+    patches ``documents_dir`` itself, or the off-Windows fallback, is
+    unaffected."""
+    from iron_jarvis.core import userdirs
+
+    docs = tmp_path_factory.getbasetemp() / "Documents"
+    docs.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(userdirs, "_known_documents_windows", lambda: docs)
+
+
 @pytest.fixture
 def project_root(tmp_path):
     return str(tmp_path)

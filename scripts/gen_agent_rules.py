@@ -68,7 +68,7 @@ PACKAGE_AREAS: dict[str, list[str]] = {
                   "ocr_worker.py"],
     "memory": ["brain", "capability", "guide", "inbox", "learning", "ltm", "memory",
                "personas", "profile", "projects", "skills", "workmap"],
-    "messaging": ["comm", "peers"],
+    "messaging": ["audio_worker.py", "comm", "peers"],
     "providers": ["envelope", "eval", "fleet", "iron_proxy", "providers"],
     "settings": ["settings"],
     "tools": ["detections", "history", "sandbox", "secrets", "tools"],
