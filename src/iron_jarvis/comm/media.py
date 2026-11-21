@@ -130,6 +130,8 @@ def refusal(f: InboundFile, cap: int) -> str:
     if ext not in TAKEN:
         return "that isn't a kind of file taken from your phone"
     if f.size is not None and f.size > cap:
+        if any(size is not None and size <= cap for _ref, size in f.smaller):
+            return ""  # a smaller copy of the picture fits (Channel.fetch_file takes it)
         return too_large_words(f.size, cap)
     return ""
 

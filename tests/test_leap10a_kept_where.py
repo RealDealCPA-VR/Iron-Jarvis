@@ -164,3 +164,28 @@ def test_a_burst_of_files_is_bounded_per_minute(platform, tmp_path):
     fake.updates = [photo(200, "Q0", caption="again")]
     run(poll)
     assert len(fake.get_files) == FILES_PER_WINDOW + 1
+
+
+def test_a_phone_chat_in_a_project_keeps_the_projects_folder(platform, tmp_path):
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    root = chat_root(platform, tmp_path)
+    fake = FakeTelegram([photo(300, "P1", caption="for the project")], files={"P1": b"img"})
+    turn = fake_turn()
+    poll = poller(platform, telegram(fake), turn=turn)
+    tid = poll.thread_store.resolve("tg", str(ME), "").id
+    with session_scope(platform.engine) as db:
+        row = db.get(ChatThreadRecord, tid)
+        row.project_id = "proj_1"
+        db.add(row)
+        db.commit()
+
+    run(poll)
+
+    kept = files_under(root)
+    assert len(kept) == 1
+    body = turn.calls[0]
+    assert body.attachments == [str(kept[0])]
+    assert body.workspace_dir == ""  # the project's folder, not the phone's
+    assert body.project_id == "proj_1"

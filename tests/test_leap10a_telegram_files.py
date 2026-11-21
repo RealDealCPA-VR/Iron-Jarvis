@@ -236,3 +236,15 @@ def test_a_kept_file_is_recorded_as_an_event_without_its_name(platform, tmp_path
     got = [e for e in platform.event_bus.history if e.type == "comm.file_received"]
     assert len(got) == 1
     assert got[0].payload == {"channel": "tg", "kind": "photo", "bytes": 4}
+
+
+def test_a_photo_too_large_at_full_size_is_taken_at_a_smaller_size(platform, tmp_path):
+    root = chat_root(platform, tmp_path)
+    platform.config.phone_file_max_mb = 1
+    fake = FakeTelegram([photo(90, "P9", caption="the receipt", size=3 * 1024 * 1024)],
+                        files={"P9": b"x" * (3 * 1024 * 1024), "P9-small": b"tiny"})
+    run(poller(platform, telegram(fake)))
+
+    assert fake.get_files == ["P9-small"]
+    kept = files_under(root)
+    assert len(kept) == 1 and kept[0].read_bytes() == b"tiny"

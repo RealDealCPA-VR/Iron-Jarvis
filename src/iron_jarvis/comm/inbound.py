@@ -958,13 +958,17 @@ class InboundPoller:
         dq.append(now)
         return True
 
-    def _chat_files(self, tid: str, kept: list[Any], *, skip: str = "") -> dict[str, Any]:
+    def _chat_files(
+        self, tid: str, kept: list[Any], *, skip: str = "", in_project: bool = False
+    ) -> dict[str, Any]:
         """``ChatBody`` fields for a phone chat's files (10-a), BLOCKING (a
         row read and a folder check): ``attachments`` (this message's kept
         files), ``workspace_dir`` (the chat's own folder once it has one,
         only when it sits under the chat files folder and exists) and
         ``thread_files`` (the files sent earlier in this chat). ``{}`` for a
-        chat that never got a file."""
+        chat that never got a file. A chat tagged to a project keeps working
+        in the project's folder (``in_project``): its files are still
+        attachments, by their absolute paths."""
         from . import media
 
         out: dict[str, Any] = {}
@@ -982,7 +986,8 @@ class InboundPoller:
         try:
             folder = self.thread_store.get_setup_value(tid, "workspace_dir")
             root = Path(self.platform.config.chat_files_dir)
-            if folder and Path(folder).is_dir() and media._inside(Path(folder), root):
+            if (not in_project and folder and Path(folder).is_dir()
+                    and media._inside(Path(folder), root)):
                 out["workspace_dir"] = folder
             here = {k.path for k in kept}
             earlier = [p for p in self.thread_store.attached_paths(tid) if p not in here]
@@ -1677,7 +1682,8 @@ class InboundPoller:
         # makes lands beside them; the chat's earlier files are named
         # (``thread_files``) so "now turn that into a memo" finds them.
         files_here = await asyncio.to_thread(
-            self._chat_files, tid, kept, skip=(taken.voice_path if taken is not None else "")
+            self._chat_files, tid, kept, skip=(taken.voice_path if taken is not None else ""),
+            in_project=bool(str(getattr(thread, "project_id", "") or "")),
         )
         body = ChatBody(messages=history, auto_tools=True, project_id=project_id, thread_id=tid or "",
                         **files_here)
@@ -1781,8 +1787,9 @@ class InboundPoller:
             _spawn_kwargs["provider"] = esc_provider
         if esc_model:
             _spawn_kwargs["model"] = esc_model
-        if kept and taken is not None and taken.folder:
-            # 10-a: the run works in the chat's folder, beside the files.
+        if kept and taken is not None and taken.folder and not project_id:
+            # 10-a: the run works in the chat's folder, beside the files (a
+            # chat tagged to a project keeps the project's folder).
             _spawn_kwargs["workspace_root"] = taken.folder
         if dyn_def is not None:
             # WHO ran (v1.193.0 / v1.295.0): the phone is a door that KNOWS the
