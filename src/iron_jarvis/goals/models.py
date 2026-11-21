@@ -172,8 +172,9 @@ class GoalContractRecord(SQLModel, table=True):
     #: Idea 39 (39-a): the saved chat this was set up from; each result is
     #: written there as a REPORT (``agents/chat_delivery.report_to_chat``).
     #: "" = it reports nowhere (made on a page, or Stop reporting).
-    #: Additive; NULL on an older table reads as "".
-    chat_thread_id: str = ""
+    #: Additive; NULL on an older table reads as "". Indexed (the plan;
+    #: ``core.db._HOT_INDEXES`` gives an older table the same index).
+    chat_thread_id: str = Field(default="", index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     last_run_at: datetime | None = None

@@ -335,11 +335,10 @@ class WorkflowRunTool(Tool):
         # throwaway one — same split as the scheduler's workflow dispatch.
         engine = WorkflowEngine(self.platform, self.platform.orchestrator)
         # Idea 39 (39-a): run from a chat, its end is reported in that chat.
-        from ..agents.chat_delivery import stampable_chat
+        from ..agents.chat_delivery import report_chat_for, stamp_when_linked
 
-        report_chat = await asyncio.to_thread(
-            stampable_chat, getattr(self.platform, "engine", None), getattr(ctx, "thread_id", "")
-        )
+        # Review: a NEW chat's first turn reads its chat through the turn.
+        report_chat = await asyncio.to_thread(report_chat_for, self.platform, ctx)
         try:
             # v1.505.0 (north-star 5.4): the INSERT may wait behind a long
             # writer (Compact, a backup) for SQLite's busy timeout — off the
@@ -349,6 +348,10 @@ class WorkflowRunTool(Tool):
             )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
+        if not report_chat:
+            # Review: the run's end reads its record, so a chat the page names
+            # for this turn while it runs is where it reports.
+            await stamp_when_linked(self.platform, ctx, "workflow", rec.id)
         task = self._launch(engine.run_record(rec, wf, **kwargs), rec.id)
         if task is None:
             # The managed spawner REFUSED (daemon draining — for a no-session-

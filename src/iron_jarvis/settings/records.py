@@ -863,10 +863,23 @@ def snap_schedule(platform: Any, name: str) -> dict[str, Any] | None:
     }
 
 
-def _restore_report_target(platform: Any, kind: str, record_id: str, prior: dict[str, Any]) -> None:
+#: Idea 39 (39-a, review): the snapshots a ``report_here`` change marks
+#: (the goal from chat marks its own, ``GoalUpdateTool.capture_undo``).
+_REPORT_MARKED = frozenset({"schedule", "sentinel"})
+
+
+def _restore_report_target(
+    platform: Any, kind: str, record_id: str, prior: dict[str, Any], *, always: bool = False
+) -> None:
     """Idea 39 (39-a): an Undo puts back the chat a record reported to (a chat
-    that is gone since stays unset: nothing can report to it). Never raises."""
+    that is gone since stays unset: nothing can report to it): the Undo of a
+    delete (``always``) and of a ``report_here`` change (its snapshot carries
+    ``REPORT_CHANGE_MARK``), never the Undo of a pause or a timing change
+    (review: that would re-point reports the user stopped since). Never
+    raises."""
     if "chat_thread_id" not in prior or not record_id:
+        return
+    if not always and not prior.get(_hist().REPORT_CHANGE_MARK):
         return
     try:
         from ..agents.chat_delivery import set_report_target
@@ -902,7 +915,7 @@ def restore_schedule(platform: Any, name: str, prior: dict[str, Any] | None) -> 
             enabled=bool(prior.get("enabled", True)),
         )
         made = sch.get(name)
-        _restore_report_target(platform, "schedule", getattr(made, "id", ""), prior)
+        _restore_report_target(platform, "schedule", getattr(made, "id", ""), prior, always=True)
         return f"undo: recreated the schedule '{name}'"
     rec = sch.update_task(
         name,
@@ -960,9 +973,10 @@ async def _report_chat_for(platform: Any, ctx: ToolContext, on: bool) -> tuple[s
     FIRST and changes the record only after the rest of the call is valid)."""
     if not on:
         return "", ""
-    from ..agents.chat_delivery import stampable_chat
+    from ..agents.chat_delivery import report_chat_for
 
-    chat = await asyncio.to_thread(stampable_chat, platform.engine, getattr(ctx, "thread_id", ""))
+    # Review: a NEW chat's first turn reads its chat through the turn.
+    chat = await asyncio.to_thread(report_chat_for, platform, ctx)
     return (chat, "") if chat else ("", CANNOT_TAKE_REPORTS)
 
 
@@ -1669,7 +1683,7 @@ def restore_sentinel(platform: Any, name: str, prior: dict[str, Any] | None) -> 
         db.add(row)
         db.commit()
         row_id = row.id
-    _restore_report_target(platform, "watcher", row_id, prior)
+    _restore_report_target(platform, "watcher", row_id, prior, always=recreated)
     return f"undo: {'recreated' if recreated else 'restored'} the sentinel '{name}'"
 
 
@@ -2155,6 +2169,11 @@ class _RecordTool(Tool):
             return None
         change_id = new_id("rec")
         _CHANGE_ID.set(change_id)
+        if record in _REPORT_MARKED and isinstance(prior, dict) and isinstance(args.get("report_here"), bool):
+            # Idea 39 (39-a, review): only the Undo of a report_here change
+            # puts back where the record reported (an Undo of a pause or a
+            # cron change never re-points reports the user stopped since).
+            prior[_hist().REPORT_CHANGE_MARK] = True
         desc = {"record": record, "name": name, "prior": prior, "change_id": change_id}
         now = self._now(args)
         if now:

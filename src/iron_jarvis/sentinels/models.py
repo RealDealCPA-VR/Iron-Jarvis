@@ -54,8 +54,9 @@ class SentinelRecord(SQLModel, table=True):
     #: Idea 39 (39-a): the saved chat this was set up from; each result is
     #: written there as a REPORT (``agents/chat_delivery.report_to_chat``).
     #: "" = it reports nowhere (made on a page, or Stop reporting).
-    #: Additive; NULL on an older table reads as "".
-    chat_thread_id: str = ""
+    #: Additive; NULL on an older table reads as "". Indexed (the plan;
+    #: ``core.db._HOT_INDEXES`` gives an older table the same index).
+    chat_thread_id: str = Field(default="", index=True)
     #: D-39.3: a watcher writes in its chat at most once an hour. When it
     #: last did (``report_at``), and the changes that wait to join its next
     #: report (``report_pending_json``: a JSON list of paths, bounded).

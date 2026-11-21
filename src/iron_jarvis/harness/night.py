@@ -196,8 +196,9 @@ class NightTaskRecord(SQLModel, table=True):
     #: Idea 39 (39-a): the saved chat this was set up from; each result is
     #: written there as a REPORT (``agents/chat_delivery.report_to_chat``).
     #: "" = it reports nowhere (made on a page, or Stop reporting).
-    #: Additive; NULL on an older table reads as "".
-    chat_thread_id: str = ""
+    #: Additive; NULL on an older table reads as "". Indexed (the plan;
+    #: ``core.db._HOT_INDEXES`` gives an older table the same index).
+    chat_thread_id: str = Field(default="", index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
@@ -608,11 +609,45 @@ def finish_task(engine: Any, task_id: str, state: str, *, event_bus: Any = None)
 #: Idea 39 (39-a): the verdict word on a night task's report.
 _REPORT_WORDS = {DONE: "Done", NEEDS_YOU: "Needs you", FAILED: "Failed"}
 
+#: Idea 39 (39-a, review): a Local only task's report in a chat that is not
+#: Local only leaves out its branch and notes (that chat's next message may go
+#: to a model off this PC), as the morning notice leaves them out.
+LOCAL_ONLY_REPORT_WORDS = "It ran Local only, so its branch and notes stay in its coding session on this PC."
+
+
+def report_checks(morning: Any) -> list[str]:
+    """The morning facts' checks in words (idea 39, 39-a review): the test
+    verdict as last seen (``finish_tests``; "No tests were checked." when the
+    settle saw none) and the files the branch changed, when it says.
+    ``[]`` when the settle kept no facts. Pure."""
+    m = morning if isinstance(morning, dict) else {}
+    if not m:
+        return []
+    out: list[str] = []
+    tests = str(m.get("tests") or "")
+    if tests == "passed":
+        out.append("Its tests passed." if m.get("tests_trusted") is not False
+                   else "Its tests passed, but the result is not trusted: open the session to see why.")
+    elif tests == "failed":
+        out.append("Its tests failed.")
+    else:
+        out.append("No tests were checked.")
+    try:
+        files = int(m.get("files") or 0)
+    except (TypeError, ValueError):
+        files = 0
+    if files > 0:
+        out.append(f"{files} file{'s' if files != 1 else ''} changed.")
+    return out
+
 
 def report_ended(engine: Any, task_id: str, *, event_bus: Any = None) -> dict[str, Any]:
     """Idea 39 (39-a): a night task queued from a chat writes ONE report there
-    when it ends: how it ended, its branch and commit, and its notes, read off
-    its record (never a model's words). A task the user stopped writes
+    when it ends: how it ended, its checks (the morning facts' test verdict and
+    files changed, review), its branch and commit, and its notes, read off its
+    record (never a model's words). A Local only task keeps its branch and
+    notes out of a chat that is not Local only, and its notice names it only
+    as one (the morning notice's rule). A task the user stopped writes
     nothing. BLOCKING; never raises."""
     try:
         from ..agents import chat_delivery as _cd
@@ -625,19 +660,36 @@ def report_ended(engine: Any, task_id: str, *, event_bus: Any = None) -> dict[st
             chat = _cd.clean_chat_thread_id(getattr(row, "chat_thread_id", "") or "")
         if not chat or task["state"] not in _REPORT_WORDS:
             return {"ok": False, "why": "nothing to report"}
+        morning = task.get("morning") if isinstance(task.get("morning"), dict) else {}
+        local_only = morning.get("local_only") is True
+        private = False
+        if local_only:
+            from ..providers.egress import thread_local_only
+
+            private = not thread_local_only(engine, chat)
         parts = [f"“{' '.join(task['words'].split())[:200]}” in {task['folder']}."]
-        if task["branch"]:
-            parts.append(f"Its work is on the branch {task['branch']}"
-                         + (f" (commit {task['commit_sha'][:10]})." if task["commit_sha"] else "."))
-        for note in (task.get("notes") or [])[-5:]:
-            text = " ".join(str(note.get("text") or "").split())
-            if text:
-                parts.append(text)
+        parts.extend(report_checks(morning))
+        if private:
+            parts.append(LOCAL_ONLY_REPORT_WORDS)
+        else:
+            if task["branch"]:
+                parts.append(f"Its work is on the branch {task['branch']}"
+                             + (f" (commit {task['commit_sha'][:10]})." if task["commit_sha"] else "."))
+            for note in (task.get("notes") or [])[-5:]:
+                text = " ".join(str(note.get("text") or "").split())
+                if text:
+                    parts.append(text)
         report = {
             "kind": "night", "name": " ".join(task["words"].split())[:60], "id": task["id"],
             "href": "/chat?view=code", "outcome": _REPORT_WORDS[task["state"]],
             "words": " ".join(parts), "key": f"night:{task['id']}",
         }
+        if local_only:
+            from .night_morning import LOCAL_ONLY_TITLE
+
+            # The bell's notice may reach the phone: never a Local only
+            # task's words (``night_morning.shared_row``).
+            report["notice_name"] = LOCAL_ONLY_TITLE
         platform = type("_P", (), {"engine": engine, "event_bus": event_bus})()
         return _cd.report_to_chat(platform, chat, report)
     except Exception:  # noqa: BLE001 — the task's own record stands

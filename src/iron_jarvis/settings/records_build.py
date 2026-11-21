@@ -724,13 +724,15 @@ class NightTaskAddTool(_BuildTool):
         _note(after=task)
         # Idea 39 (39-a): queued from a chat, its morning facts are reported
         # in that chat when it ends.
-        from ..agents.chat_delivery import set_report_target, stampable_chat
+        from ..agents.chat_delivery import report_chat_for, set_report_target, stamp_when_linked
 
-        report_chat = await asyncio.to_thread(
-            stampable_chat, getattr(self.platform, "engine", None), getattr(ctx, "thread_id", "")
-        )
+        # Review: a NEW chat's first turn reads its chat through the turn,
+        # and one the page names later is stamped when it does.
+        report_chat = await asyncio.to_thread(report_chat_for, self.platform, ctx)
         if report_chat:
             await asyncio.to_thread(set_report_target, self.platform.engine, "night", task["id"], report_chat)
+        else:
+            await stamp_when_linked(self.platform, ctx, "night", task["id"])
         start, end, open_now = _night_words(self.platform)
         when = f"between {start} and {end}" if start and end else "inside the night window"
         stop = " Emergency stop is on, so it will not start until it is turned off." if _emergency_on(self.platform) else ""

@@ -156,18 +156,40 @@ def test_a_refused_fire_is_reported(desk, tmp_path):
 
 
 def test_schedule_update_reports_here_and_stops_with_undo(desk, tmp_path):
-    from iron_jarvis.settings.records import ScheduleUpdateTool, restore_schedule, snap_schedule
+    from iron_jarvis.settings.records import ScheduleUpdateTool
+    from iron_jarvis.settings.records import restore as restore_record
 
     c, p = desk
     chat = _chat(p)
     _make_schedule(p, tmp_path, chat)
-    before = snap_schedule(p, "Friday prices")
     tool = ScheduleUpdateTool(p)
-    r = asyncio.run(tool.execute({"name": "Friday prices", "report_here": False}, _ctx(p, tmp_path, chat)))
+    stop = {"name": "Friday prices", "report_here": False}
+    undo = asyncio.run(tool.capture_undo(stop, _ctx(p, tmp_path, chat)))
+    r = asyncio.run(tool.execute(stop, _ctx(p, tmp_path, chat)))
     assert r.ok, r.error
     assert p.scheduler.get("Friday prices").chat_thread_id == ""
     # The Undo puts it back.
-    restore_schedule(p, "Friday prices", before)
+    restore_record(p, json.loads(undo["pre_inline"]))
+    assert p.scheduler.get("Friday prices").chat_thread_id == chat
+    # Review (round 3): the Undo of a pause alone never re-points reports the
+    # user stopped since (the goal's rule).
+    pause = {"name": "Friday prices", "enabled": False}
+    pause_undo = asyncio.run(tool.capture_undo(pause, _ctx(p, tmp_path, chat)))
+    assert asyncio.run(tool.execute(pause, _ctx(p, tmp_path, chat))).ok
+    rec = p.scheduler.get("Friday prices")
+    assert c.post("/reports/target", json={"kind": "schedule", "id": rec.id, "thread_id": ""}).status_code == 200
+    restore_record(p, json.loads(pause_undo["pre_inline"]))
+    assert p.scheduler.get("Friday prices").enabled is True, "the pause is undone"
+    assert p.scheduler.get("Friday prices").chat_thread_id == "", "the Stop reporting stands"
+    # The Undo of a delete brings it back reporting where it did.
+    assert c.post("/reports/target", json={"kind": "schedule", "id": rec.id, "thread_id": chat}).status_code == 200
+    from iron_jarvis.settings.records import ScheduleDeleteTool
+
+    gone = ScheduleDeleteTool(p)
+    del_undo = asyncio.run(gone.capture_undo({"name": "Friday prices"}, _ctx(p, tmp_path, chat)))
+    assert asyncio.run(gone.execute({"name": "Friday prices"}, _ctx(p, tmp_path, chat))).ok
+    assert p.scheduler.get("Friday prices") is None
+    restore_record(p, json.loads(del_undo["pre_inline"]))
     assert p.scheduler.get("Friday prices").chat_thread_id == chat
     # "Report to this chat" from an unsaved chat changes nothing, in words.
     r = asyncio.run(tool.execute({"name": "Friday prices", "report_here": True}, _ctx(p, tmp_path, "")))
@@ -304,7 +326,8 @@ def test_a_watchers_report_says_no_suggestion_when_none_was_made(desk, tmp_path)
 
 def test_a_watcher_made_in_chat_keeps_the_chat_and_sentinel_update_stops_it(desk, tmp_path):
     from iron_jarvis.sentinels.tools import SentinelAddTool
-    from iron_jarvis.settings.records import SentinelUpdateTool, restore_sentinel, snap_sentinel
+    from iron_jarvis.settings.records import SentinelUpdateTool
+    from iron_jarvis.settings.records import restore as restore_record
 
     c, p = desk
     chat = _chat(p, title="Intake")
@@ -313,12 +336,24 @@ def test_a_watcher_made_in_chat_keeps_the_chat_and_sentinel_update_stops_it(desk
     r = asyncio.run(SentinelAddTool(p).execute({"name": "In", "path": str(folder)}, _ctx(p, tmp_path, chat)))
     assert r.ok, r.error
     assert p.sentinels.get("In").chat_thread_id == chat
-    before = snap_sentinel(p, "In")
-    r = asyncio.run(SentinelUpdateTool(p).execute({"name": "In", "report_here": False}, _ctx(p, tmp_path, chat)))
+    tool = SentinelUpdateTool(p)
+    stop = {"name": "In", "report_here": False}
+    undo = asyncio.run(tool.capture_undo(stop, _ctx(p, tmp_path, chat)))
+    r = asyncio.run(tool.execute(stop, _ctx(p, tmp_path, chat)))
     assert r.ok, r.error
     assert p.sentinels.get("In").chat_thread_id == ""
-    restore_sentinel(p, "In", before)
+    restore_record(p, json.loads(undo["pre_inline"]))
     assert p.sentinels.get("In").chat_thread_id == chat
+    # Review (round 3): the Undo of a pause alone keeps a Stop reporting
+    # pressed since.
+    pause = {"name": "In", "enabled": False}
+    pause_undo = asyncio.run(tool.capture_undo(pause, _ctx(p, tmp_path, chat)))
+    assert asyncio.run(tool.execute(pause, _ctx(p, tmp_path, chat))).ok
+    rid = p.sentinels.get("In").id
+    assert c.post("/reports/target", json={"kind": "watcher", "id": rid, "thread_id": ""}).status_code == 200
+    restore_record(p, json.loads(pause_undo["pre_inline"]))
+    assert p.sentinels.get("In").enabled is True
+    assert p.sentinels.get("In").chat_thread_id == ""
 
 
 def test_a_night_task_queued_from_chat_reports_how_it_ended(desk, tmp_path):
@@ -343,12 +378,17 @@ def test_a_night_task_queued_from_chat_reports_how_it_ended(desk, tmp_path):
         db.exec(update(N.NightTaskRecord).where(N.NightTaskRecord.id == tid)
                 .values(state=N.RUNNING, branch="ij/fix-flaky"))
         db.commit()
+    # Review (round 3): the settle keeps the morning facts BEFORE the task
+    # ends (routes/night.py), and the report carries its checks.
+    N.set_morning(p.engine, tid, {"tests": "passed", "tests_trusted": True, "files": 3, "local_only": False})
     assert N.finish_task(p.engine, tid, N.DONE, event_bus=p.event_bus) is True
     reports = _reports(p, chat)
     assert len(reports) == 1
     assert reports[0]["reportFrom"]["kind"] == "night"
     assert reports[0]["reportFrom"]["outcome"] == "Done"
     assert "ij/fix-flaky" in reports[0]["content"]
+    assert "Its tests passed." in reports[0]["content"]
+    assert "3 files changed." in reports[0]["content"]
     # Ending it again writes nothing more (it is no longer running).
     assert N.finish_task(p.engine, tid, N.DONE) is False
     assert len(_reports(p, chat)) == 1
@@ -551,3 +591,207 @@ def test_a_workflow_run_from_chat_names_its_chat_on_its_ending(desk, tmp_path):
     asyncio.run(go(""))
     assert [e.get("chat_thread_id") for e in seen] == [chat, None]
     assert "chat_thread_id" not in seen[1]
+
+
+# --------------------------------------------------------------------------- #
+# Review (39-a, round 3): a NEW chat's first message carries no chat id
+# --------------------------------------------------------------------------- #
+#
+# The page sends ``thread_id`` only once the chat's first save has named it,
+# so the first question of a new chat reaches the tools with ``thread_id ""``
+# and its ``turn_id``; the page links the turn a moment later
+# (``POST /chat/turns/{id}/thread``). What that turn sets up still reports in
+# the chat: read through the turn when the link already landed, stamped by the
+# link route when it lands after.
+
+
+def _turn_ctx(p, tmp_path, turn_id: str) -> ToolContext:
+    return ToolContext(workspace=tmp_path, session_id="chat", agent_run_id="chat", config=p.config,
+                       event_bus=p.event_bus, engine=p.engine, thread_id="", turn_id=turn_id)
+
+
+def _with_card(tool, args, ctx):
+    """capture_undo then execute in ONE context, as the registry runs them
+    (the create card rides the captured Undo)."""
+    async def go():
+        await tool.capture_undo(args, ctx)
+        return await tool.execute(args, ctx)
+
+    return asyncio.run(go())
+
+
+def _link(c, turn_id, chat):
+    out = c.post(f"/chat/turns/{turn_id}/thread", json={"thread_id": chat})
+    assert out.status_code == 200, out.text
+    return out.json()
+
+
+def test_a_new_chats_first_message_makes_a_schedule_that_reports_there(desk, tmp_path, monkeypatch):
+    """The page's first save named the chat and linked the turn before the
+    model called the tool: the schedule is stamped, its card says Reports
+    here, its fire leaves a report, and report_here works on that turn too."""
+    from iron_jarvis.settings.records import ScheduleUpdateTool
+
+    c, p = desk
+    chat = _chat(p)
+    _link(c, "turn_new_chat_1", chat)
+    ctx = _turn_ctx(p, tmp_path, "turn_new_chat_1")
+    r = _with_card(ScheduleCreateTool(p), {"name": "Friday prices", "cron": "0 9 * * 5", "task": PRICES}, ctx)
+    assert r.ok, r.error
+    assert r.data["reports_here"] is True
+    assert "Reports here" in r.data["record_change"]["new"]
+    assert "reports each result in this chat" in r.output
+    rec = p.scheduler.get("Friday prices")
+    assert rec.chat_thread_id == chat
+    monkeypatch.setattr(cd, "_now", lambda: FRIDAY)
+    assert c.post("/schedules/Friday prices/run").status_code == 200
+    (only,) = _reports(p, chat)
+    assert only["reportFrom"]["id"] == rec.id
+    # "Stop reporting here" and "report to this chat" on the same turn.
+    upd = ScheduleUpdateTool(p)
+    assert asyncio.run(upd.execute({"name": "Friday prices", "report_here": False}, ctx)).ok
+    assert p.scheduler.get("Friday prices").chat_thread_id == ""
+    back = asyncio.run(upd.execute({"name": "Friday prices", "report_here": True}, ctx))
+    assert back.ok, back.error
+    assert p.scheduler.get("Friday prices").chat_thread_id == chat
+
+
+def test_what_a_first_turn_set_up_before_the_link_reports_once_the_page_links_it(desk, tmp_path, monkeypatch):
+    """The tool ran before the page's first save landed: nothing is promised
+    then, and the link route points the turn's schedule, watcher and night
+    task at the chat now named; one pointed elsewhere since keeps it."""
+    from iron_jarvis.harness import night as N
+    from iron_jarvis.sentinels.tools import SentinelAddTool
+    from iron_jarvis.settings.records_build import NightTaskAddTool
+    from tests.test_build_git_v1375 import make_repo
+
+    c, p = desk
+    chat = _chat(p)
+    other = _chat(p, title="Other")
+    ctx = _turn_ctx(p, tmp_path, "turn_new_chat_2")
+    r = _with_card(ScheduleCreateTool(p), {"name": "Friday prices", "cron": "0 9 * * 5", "task": PRICES}, ctx)
+    assert r.ok, r.error
+    assert r.data["reports_here"] is False, "nothing is promised before the chat is named"
+    assert "Reports here" not in (r.data.get("record_change") or {}).get("new", "")
+    assert p.scheduler.get("Friday prices").chat_thread_id == ""
+    moved = _with_card(ScheduleCreateTool(p), {"name": "Moved", "cron": "0 9 * * 5", "task": PRICES}, ctx)
+    assert moved.ok, moved.error
+    cd.set_report_target(p.engine, "schedule", p.scheduler.get("Moved").id, other)
+    folder = tmp_path / "in"
+    folder.mkdir()
+    w = asyncio.run(SentinelAddTool(p).execute({"name": "In", "path": str(folder)}, ctx))
+    assert w.ok, w.error
+    repo = make_repo(tmp_path / "app")
+    n = asyncio.run(NightTaskAddTool(p).execute({"words": "fix the flaky test", "folder": str(repo)}, ctx))
+    assert n.ok, n.error
+    linked = _link(c, "turn_new_chat_2", chat)
+    assert linked["reports_linked"] == 3
+    assert p.scheduler.get("Friday prices").chat_thread_id == chat
+    assert p.scheduler.get("Moved").chat_thread_id == other, "pointed elsewhere since: kept"
+    assert p.sentinels.get("In").chat_thread_id == chat
+    with session_scope(p.engine) as db:
+        assert db.get(N.NightTaskRecord, n.data["task_id"]).chat_thread_id == chat
+    # A second link of the same turn stamps nothing again.
+    assert _link(c, "turn_new_chat_2", chat)["reports_linked"] == 0
+    monkeypatch.setattr(cd, "_now", lambda: FRIDAY)
+    assert c.post("/schedules/Friday prices/run").status_code == 200
+    assert [m["reportFrom"]["name"] for m in _reports(p, chat)] == ["Friday prices"]
+    rows = {r["name"]: r for r in c.get("/schedules").json()["schedules"]}
+    assert rows["Friday prices"]["reports_to"] == {"thread_id": chat, "title": "Supplier prices"}
+
+
+def test_a_workflow_run_from_a_new_chats_first_turn_reports_when_it_ends(desk, tmp_path):
+    """Its end reads the run's record, so the chat the page names while the
+    run goes is where its one report lands."""
+    from iron_jarvis.workflows.store import WorkflowStore
+    from iron_jarvis.workflows.tools import WorkflowRunTool
+
+    c, p = desk
+    chat = _chat(p, title="Weekly")
+    WorkflowStore(p.engine).save("Tidy", [{"name": "Tidy", "agent": "builder", "task": "tidy up"}], "")
+    held: list = []
+
+    class _Tool(WorkflowRunTool):
+        def _launch(self, coro, run_id):
+            held.append(coro)
+            return object()
+
+    async def go():
+        r = await _Tool(p).execute({"name": "Tidy"}, _turn_ctx(p, tmp_path, "turn_new_chat_3"))
+        assert r.ok, r.error
+        linked = await asyncio.to_thread(_link, c, "turn_new_chat_3", chat)
+        assert linked["reports_linked"] == 1
+        await held[0]  # the run goes on to its end with the chat now named
+
+    asyncio.run(go())
+    (only,) = _reports(p, chat)
+    assert only["reportFrom"]["kind"] == "workflow" and only["reportFrom"]["name"] == "Tidy"
+
+
+def test_a_link_landing_while_the_tool_runs_is_not_missed(desk, tmp_path, monkeypatch):
+    """The link route ran between the tool's read of the chat and its record:
+    the record does not wait for a link that already came, it is stamped by
+    its own tool and its card says so."""
+    c, p = desk
+    chat = _chat(p)
+    monkeypatch.setattr(cd, "report_chat_for", lambda platform, ctx: "")  # read before the link
+    assert cd.link_turn_reports("turn_new_chat_4", chat) == []  # ... which lands now
+    r = _with_card(ScheduleCreateTool(p), {"name": "Friday prices", "cron": "0 9 * * 5", "task": PRICES},
+                   _turn_ctx(p, tmp_path, "turn_new_chat_4"))
+    assert r.ok, r.error
+    assert r.data["reports_here"] is True
+    assert "Reports here" in r.data["record_change"]["new"]
+    assert p.scheduler.get("Friday prices").chat_thread_id == chat
+
+
+@pytest.mark.parametrize("tests_seen, words", [
+    ("failed", "Its tests failed."),
+    ("", "No tests were checked."),
+])
+def test_a_night_tasks_report_says_how_its_tests_ended(tests_seen, words):
+    from iron_jarvis.harness import night as N
+
+    said = N.report_checks({"tests": tests_seen, "files": 0})
+    assert said == [words], "no files count when the branch says none"
+    assert N.report_checks({}) == [], "no morning facts, no words about checks"
+    assert N.report_checks({"tests": "passed", "tests_trusted": False, "files": 1}) == [
+        "Its tests passed, but the result is not trusted: open the session to see why.", "1 file changed."]
+
+
+def test_a_local_only_night_tasks_report_keeps_its_branch_and_notes_in_its_session(desk, tmp_path):
+    """The morning notice's Local only rule: in a chat that is not Local only,
+    the report gives how it ended and its checks, never its branch or notes,
+    and the bell names it only as a Local only task."""
+    from sqlalchemy import update
+
+    from iron_jarvis.core.events import EventType
+    from iron_jarvis.harness import night as N
+    from iron_jarvis.harness.night_morning import LOCAL_ONLY_TITLE
+
+    c, p = desk
+    chat = _chat(p, title="Night", archived_at=datetime(2026, 11, 1))
+    seen: list[dict] = []
+    real = p.event_bus.publish
+
+    async def publish(etype, payload=None, **kw):
+        if str(etype) == EventType.REPORT_ARRIVED:
+            seen.append(dict(payload or {}))
+        return await real(etype, payload, **kw)
+
+    p.event_bus.publish = publish
+    task = N.add_task(p.engine, folder=str(tmp_path), words="fix the secret parser")
+    tid = task["id"]
+    cd.set_report_target(p.engine, "night", tid, chat)
+    with session_scope(p.engine) as db:
+        db.exec(update(N.NightTaskRecord).where(N.NightTaskRecord.id == tid)
+                .values(state=N.RUNNING, branch="ij/secret-parser"))
+        db.commit()
+    N.add_note(p.engine, tid, "info", "the parser reads the vault file")
+    N.set_morning(p.engine, tid, {"tests": "passed", "files": 2, "local_only": True})
+    assert N.finish_task(p.engine, tid, N.DONE, event_bus=p.event_bus) is True
+    (only,) = _reports(p, chat)
+    assert "Its tests passed." in only["content"] and "2 files changed." in only["content"]
+    assert N.LOCAL_ONLY_REPORT_WORDS in only["content"]
+    assert "ij/secret-parser" not in only["content"]
+    assert "vault file" not in only["content"]
+    assert [e.get("name") for e in seen] == [LOCAL_ONLY_TITLE]

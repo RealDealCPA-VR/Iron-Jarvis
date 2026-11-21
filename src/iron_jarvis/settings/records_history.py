@@ -504,15 +504,14 @@ async def update_goal_contract(
         )
     if status == "done":
         return ToolResult(ok=False, error=CONTRACT_DONE_REFUSAL)
-    from ..agents.chat_delivery import set_report_target, stampable_chat
+    from ..agents.chat_delivery import report_chat_for, set_report_target
 
     report_chat = ""
-    if report_here is True:
-        report_chat = await asyncio.to_thread(
-            stampable_chat, platform.engine, getattr(ctx, "thread_id", "") if ctx is not None else ""
-        )
-        if not report_chat:
-            return ToolResult(ok=False, error="Reports go to a saved chat on the Chat page; this one cannot take them.")
+    if report_here is True and ctx is not None:
+        # Review: a NEW chat's first turn reads its chat through the turn.
+        report_chat = await asyncio.to_thread(report_chat_for, platform, ctx)
+    if report_here is True and not report_chat:
+        return ToolResult(ok=False, error="Reports go to a saved chat on the Chat page; this one cannot take them.")
     name = before.get("name") or goal_id
     state = str(before.get("state") or "")
     running = ""

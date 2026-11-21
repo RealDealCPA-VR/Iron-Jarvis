@@ -53,6 +53,7 @@ is the point.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from ..core.logging import get_logger
@@ -585,7 +586,10 @@ def _write_report(
         engine, thread_id, [line], event_bus=event_bus, who=REPORT_WHO, unarchive=False
     )
     kind = str(source.get("kind") or "")
-    name = _one_line(source.get("name"), 120)
+    # Review: the bell's notices may reach the phone, so a source whose words
+    # must stay on this PC (a Local only night task) names itself there only
+    # by ``notice_name``; the chat line keeps the record's own name.
+    name = _one_line(source.get("notice_name") or source.get("name"), 120)
     rid = str(source.get("id") or "")
     if not out.get("ok") and out.get("why") == "no such chat":
         # Review: clear the link only while it still names THIS chat (a run
@@ -840,6 +844,155 @@ def stampable_chat(engine: Any, thread_id: Any) -> str:
         return tid
     except Exception:  # noqa: BLE001 — unreadable: nothing is stamped
         return ""
+
+
+# --- a NEW chat's first turn: the chat is named after the call (review) -----
+#
+# A new chat's first question goes out before its first save has given the
+# chat an id (the page sends no ``thread_id`` until then), and the page links
+# the turn to the chat a moment later (``POST /chat/turns/{id}/thread``). A
+# create tool on that turn therefore reads the chat through the TURN: the
+# link the page already made (the live turn, a link waiting for the turn, the
+# turn's record), and when the link has not landed yet, the record waits here
+# (keyed by the turn, bounded, under one lock: the media jobs' and Local
+# only's rule) and the link route stamps it (``link_turn_reports``).
+
+_TURN_LOCK = threading.Lock()
+#: turn id -> the records it set up with no chat yet, ``[(kind, id)]``.
+_PENDING_REPORTS: "dict[str, list[tuple[str, str]]]" = {}
+#: turn id -> the chat the page linked it to (so a record made AFTER the
+#: link route ran is stamped by its own tool, never left waiting).
+_LINKED_TURNS: dict[str, str] = {}
+_PENDING_MAX = 200
+
+
+def _turn_key(turn_id: Any) -> str:
+    return str(turn_id or "").strip()[:80]
+
+
+def chat_of_turn(platform: Any, turn_id: Any) -> str:
+    """The saved chat the page linked chat turn ``turn_id`` to: the link the
+    link route kept, the live turn's link or a link waiting for the turn
+    (``TurnLogs.thread_for``), then the turn's record. "" when nobody said
+    yet. BLOCKING (one row read); never raises."""
+    turn = _turn_key(turn_id)
+    if not turn:
+        return ""
+    with _TURN_LOCK:
+        linked = _LINKED_TURNS.get(turn, "")
+    if linked:
+        return linked
+    logs = getattr(platform, "turn_logs", None)
+    if logs is not None:
+        try:
+            tid = clean_chat_thread_id(logs.thread_for(turn) or "")
+        except Exception:  # noqa: BLE001 — an older holder reads as unknown
+            tid = ""
+        if tid:
+            return tid
+    engine = getattr(platform, "engine", None)
+    if engine is None:
+        return ""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import ChatTurnRecord
+
+        with session_scope(engine) as db:
+            rec = db.get(ChatTurnRecord, turn)
+            return clean_chat_thread_id(getattr(rec, "thread_id", "") or "") if rec is not None else ""
+    except Exception:  # noqa: BLE001 — unreadable: not known yet
+        return ""
+
+
+def report_chat_for(platform: Any, ctx: Any) -> str:
+    """The chat a record set up by this tool call reports to (D-39.1): the
+    saved chat on the call (``ctx.thread_id``), else, for a NEW chat's first
+    turn that carried none, the chat the page linked the turn to
+    (:func:`chat_of_turn`). "" when there is none or it cannot take reports
+    (:func:`stampable_chat`). BLOCKING; never raises."""
+    engine = getattr(platform, "engine", None)
+    if engine is None:
+        engine = getattr(ctx, "engine", None)
+    tid = clean_chat_thread_id(getattr(ctx, "thread_id", "") or "")
+    if not tid:
+        tid = chat_of_turn(platform, getattr(ctx, "turn_id", ""))
+    return stampable_chat(engine, tid)
+
+
+def note_pending_report(turn_id: Any, kind: str, record_id: str) -> str:
+    """A record turn ``turn_id`` set up before the page named the turn's chat:
+    when the page has ALREADY linked the turn, answer that chat (the caller
+    stamps it now); else keep ``(kind, record_id)`` for
+    :func:`link_turn_reports` and answer "". Pure (memory only)."""
+    turn = _turn_key(turn_id)
+    rid = str(record_id or "").strip()
+    if not turn or not rid or kind not in REPORT_TARGET_KINDS:
+        return ""
+    with _TURN_LOCK:
+        linked = _LINKED_TURNS.get(turn, "")
+        if linked:
+            return linked
+        if turn not in _PENDING_REPORTS and len(_PENDING_REPORTS) >= _PENDING_MAX:
+            _PENDING_REPORTS.pop(next(iter(_PENDING_REPORTS)))
+        waiting = _PENDING_REPORTS.setdefault(turn, [])
+        if (kind, rid) not in waiting:
+            waiting.append((kind, rid))
+    return ""
+
+
+def link_turn_reports(turn_id: Any, thread_id: Any) -> "list[tuple[str, str]]":
+    """The page linked ``turn_id`` to the chat ``thread_id``: remember it (a
+    record the turn sets up later is stamped by its own tool) and answer the
+    records that waited for it, for the caller to stamp. Pure (memory)."""
+    turn = _turn_key(turn_id)
+    tid = clean_chat_thread_id(thread_id)
+    if not turn:
+        return []
+    with _TURN_LOCK:
+        if tid:
+            if turn not in _LINKED_TURNS and len(_LINKED_TURNS) >= _PENDING_MAX:
+                _LINKED_TURNS.pop(next(iter(_LINKED_TURNS)))
+            _LINKED_TURNS[turn] = tid
+        return list(_PENDING_REPORTS.pop(turn, []))
+
+
+def stamp_linked_reports(engine: Any, turn_id: Any, thread_id: Any) -> int:
+    """The link route's half: the records ``turn_id`` set up before its chat
+    was named now report to ``thread_id``, each only while it still reports
+    nowhere (compare-and-set: a record pointed elsewhere since keeps it).
+    Answers how many were stamped. BLOCKING; never raises."""
+    tid = clean_chat_thread_id(thread_id)
+    done = 0
+    for kind, rid in link_turn_reports(turn_id, tid):
+        if not tid:
+            continue
+        try:
+            if set_report_target(engine, kind, rid, tid, only_if="").get("ok"):
+                done += 1
+        except Exception:  # noqa: BLE001 — the record stays as it was made
+            log.warning("could not point a %s at its new chat", kind, exc_info=True)
+    return done
+
+
+async def stamp_when_linked(platform: Any, ctx: Any, kind: str, record_id: str) -> bool:
+    """After a create tool made a record with no chat: on a NEW chat's first
+    turn (no ``ctx.thread_id``, a ``ctx.turn_id``), the record reports to the
+    chat the page names for the turn: now when the link just landed (answers
+    True: the card may say Reports here), else when it lands. Never raises."""
+    try:
+        if clean_chat_thread_id(getattr(ctx, "thread_id", "") or ""):
+            return False  # the call named its chat, and that chat takes no reports
+        linked = note_pending_report(getattr(ctx, "turn_id", ""), kind, record_id)
+        if not linked:
+            return False
+        import asyncio
+
+        out = await asyncio.to_thread(
+            set_report_target, getattr(platform, "engine", None), kind, record_id, linked, only_if=""
+        )
+        return bool(out.get("ok"))
+    except Exception:  # noqa: BLE001 — the record stands as made
+        return False
 
 
 def chat_titles(engine: Any, thread_ids: Any) -> dict[str, str]:
