@@ -351,6 +351,24 @@ export function SettingsHome() {
   // by default; a direct link to a folded row opens its group's fold.
   const [moreOpen, setMoreOpen] = useState<Record<string, boolean>>({});
   const deviceId = useRef("");
+  // A section brought into view a moment after it opens. The waiting scroll
+  // is dropped when the page goes away: run after that, it reached a page
+  // with no document (the Linux release's dashboard gate, v1.546.0).
+  const scrolls = useRef(new Set<number>());
+  const scrollSoon = useCallback((id: string) => {
+    const t = window.setTimeout(() => {
+      scrolls.current.delete(t);
+      document.getElementById(id)?.scrollIntoView?.({ block: "start" });
+    }, 50);
+    scrolls.current.add(t);
+  }, []);
+  useEffect(() => {
+    const waiting = scrolls.current;
+    return () => {
+      waiting.forEach((t) => window.clearTimeout(t));
+      waiting.clear();
+    };
+  }, []);
 
   const load = useCallback(async () => {
     deviceId.current = getDeviceId();
@@ -402,9 +420,7 @@ export function SettingsHome() {
         setActive(t.section.split("-")[0]);
         if (t.section.includes("-")) {
           setOpenSub(t.section);
-          window.setTimeout(() => {
-            document.getElementById(t.section)?.scrollIntoView?.({ block: "start" });
-          }, 50);
+          scrollSoon(t.section);
         }
       }
     };
@@ -426,7 +442,7 @@ export function SettingsHome() {
       window.removeEventListener("popstate", fromAddress);
       nav?.removeEventListener?.("currententrychange", fromAddress);
     };
-  }, []);
+  }, [scrollSoon]);
 
   // ?focus=<key>: open that setting's group and bring the row into view.
   useEffect(() => {
@@ -464,10 +480,8 @@ export function SettingsHome() {
     setPhoneList(false);
     if (!sub) return;
     setOpenSub(sub);
-    window.setTimeout(() => {
-      document.getElementById(sub)?.scrollIntoView?.({ block: "start" });
-    }, 50);
-  }, []);
+    scrollSoon(sub);
+  }, [scrollSoon]);
 
   async function save() {
     setSaving(true);
