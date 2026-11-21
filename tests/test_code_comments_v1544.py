@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -416,13 +417,41 @@ def test_the_quote_is_masked_before_it_is_cut_and_cut_at_a_whole_line(tmp_path):
 
 
 def test_a_session_on_a_network_share_can_comment_on_its_own_files():
-    """The rule attached files follow. Text only: nothing is opened."""
+    """The rule attached files follow. Text only: nothing is opened.
+
+    Windows reaches a share by its network name (``\\\\server\\share``), a
+    spelling no other system has (on Linux a backslash is part of a name), so
+    this test is on ``tests/windows_only.py``. The same rule in every system's
+    own spelling: the mounted-share test below, which runs everywhere."""
     assert CC._rel(r"\\server\share\proj", r"\\server\share\proj\src\a.py") == "src/a.py"
     for outside in (r"\\server\share\other\a.py", r"\\elsewhere\share\proj\a.py"):
         with pytest.raises(CC.CommentRefused):
             CC._rel(r"\\server\share\proj", outside)
+
+
+def test_a_session_on_a_mounted_share_can_comment_on_its_own_files():
+    """The same rule as above, spelled the way each system mounts a share as
+    a folder: a mapped drive on Windows, a mount point on Linux and macOS
+    (v1.544.0 to v1.546.1: the Linux release's gate met only the Windows
+    spelling, and failed). A file inside the session's folder is taken; one beside it, one
+    whose folder only starts with the same name, one reached through "..",
+    and the same folder on another share are refused; a network spelling never
+    passes for a local folder. Text only: nothing is opened."""
+    win = sys.platform == "win32"
+    share, elsewhere = ("Z:\\", "Y:\\") if win else ("/mnt/share", "/mnt/elsewhere")
+    folder = os.path.join(share, "proj")
+    assert CC._rel(folder, os.path.join(folder, "src", "a.py")) == "src/a.py"
+    assert CC._rel(folder, "src/a.py") == "src/a.py"
+    for outside in (
+        os.path.join(share, "other", "a.py"),
+        os.path.join(share, "proj-old", "a.py"),
+        os.path.join(folder, "..", "other", "a.py"),
+        os.path.join(elsewhere, "proj", "a.py"),
+    ):
+        with pytest.raises(CC.CommentRefused):
+            CC._rel(folder, outside)
     with pytest.raises(CC.CommentRefused):
-        CC._rel("C:/work" if sys.platform == "win32" else "/work", "//server/share/x.py")
+        CC._rel(os.path.join("C:\\" if win else "/", "work"), "//server/share/x.py")
 
 
 def test_a_line_number_that_is_not_a_number_is_no_line(tmp_path):

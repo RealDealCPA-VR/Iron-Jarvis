@@ -110,6 +110,9 @@ WINDOWS_ONLY: dict[str, tuple[str, ...]] = {
     ),
     "test_work_recaps_review2_v1492.py": ("test_remember_a_folder_spelled_another_way",),
     "test_review_fixes_tools_v1499_3.py": ("test_a_workspace_on_a_share_keeps_its_own_paths",),
+    # The same rule in every system's spelling:
+    # test_a_session_on_a_mounted_share_can_comment_on_its_own_files.
+    "test_code_comments_v1544.py": ("test_a_session_on_a_network_share_can_comment_on_its_own_files",),
     # The registry, and a path on another computer told by its spelling.
     "test_script_power_review_v1473.py": (
         "test_a_script_cannot_even_ask_about_a_path_on_another_computer",
