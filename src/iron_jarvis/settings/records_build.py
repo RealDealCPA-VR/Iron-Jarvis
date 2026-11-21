@@ -43,12 +43,15 @@ defaults and team. These nine tools close that gap the way
 ("stop running tests after replies here", "did the tests pass on Codex's
 last reply?"):
 
-* ``build_checks_set`` — turn the check after each reply on (with the
-  command the user named, else the one the folder proposes, shown on the
-  card) or off for a folder (``harness.folder_defaults.save_checks``, the
-  first-time card's own store). The folder's own ``finish.toml`` that turns
-  the check off is refused in words. Undo puts back what the folder had,
-  only while it is still what this change left.
+* ``build_checks_set`` — turn the check after each reply on or off for a
+  folder (``harness.folder_defaults.save_checks``, the first-time card's own
+  store). On keeps ONLY a command the user named, and its card says the
+  command and what it costs (``spend_check``); with none named nothing is
+  kept from chat: a folder that was off is forgotten, so the first-time card
+  under the next reply that changes files asks with the exact command
+  (22-a review, D-22.2). The folder's own ``finish.toml`` that turns the
+  check off is refused in words. Undo puts back what the folder had, only
+  while it is still what this change left.
 * ``coding_reply_check`` — the newest check of a Build › Code session's
   replies, in words, read from Iron Jarvis's OWN record in the session's log
   (``hosted/proof``), never from the coding tool's words (read only).
@@ -539,6 +542,14 @@ def _checks_words(kept: "dict[str, Any] | None") -> str:
     if kept.get("off"):
         return "off"
     return f"on: `{kept.get('command')}` after each reply that changes files"
+
+
+def chat_checks_words(command: str, folder: str) -> str:
+    """The approval card's sentence when chat turns the check on with a
+    command the user named (22-a review): the exact command and its cost."""
+    from ..hosted.proof import COST_WORDS
+
+    return f"Run `{command}` after each Build › Code reply in {folder} that changes files. {COST_WORDS}"
 
 
 def restore_build_checks(platform: Any, folder: str, prior: Any, desc: dict[str, Any]) -> str:
@@ -1402,10 +1413,11 @@ class BuildChecksSetTool(_FolderTool):
         "Claude Code, Codex, Pi, OpenCode, Grok or Antigravity changes files, Iron Jarvis runs the folder's "
         "tests itself and writes under the reply how many ran and passed (failing tests send the tool back "
         "up to twice, on the user's plan). `run` false = stop running tests after replies there; true = run "
-        "them, with `command` when the user named one (else the command the folder proposes). `folder` is a "
-        "full location; leave it out for the folder of the project this chat is in — if there is none, ASK "
-        "which folder, never guess. The user approves on a card that shows the command; Undo puts back what "
-        "the folder had."
+        "them. Pass `command` ONLY when the user named the exact command (the card shows it with what it "
+        "costs); without one Iron Jarvis keeps no command from chat: it asks under the next reply that "
+        "changes files, on a card that shows the exact command. `folder` is a full location; leave it out "
+        "for the folder of the project this chat is in — if there is none, ASK which folder, never guess. "
+        "Undo puts back what the folder had."
     )
     input_schema = {
         "type": "object",
@@ -1416,6 +1428,26 @@ class BuildChecksSetTool(_FolderTool):
         },
         "required": ["run"],
     }
+
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
+        """22-a review: turning the check on WITH a command says on the card
+        the exact command and what it costs (D-22.2, G10): a card in every
+        posture but "Don't ask". Off, or on with no command (nothing is kept
+        from chat then: the card under the next reply asks), is the ordinary
+        card."""
+        try:
+            command = " ".join(str(args.get("command") or "").split())
+            if args.get("run") is not True or not command:
+                return None
+            folder, problem = await asyncio.to_thread(resolve_folder, self.platform, ctx, args.get("folder"))
+            if problem:
+                return None  # execute refuses in words
+        except Exception:  # noqa: BLE001 — no opinion: the ordinary card
+            return None
+        from ..hosted import proof as PROOF
+
+        return SpendCheck(ask=True, words=chat_checks_words(PROOF.shown_command(command), folder),
+                          dont_ask_skips=True)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..harness import folder_defaults as FD
@@ -1428,8 +1460,10 @@ class BuildChecksSetTool(_FolderTool):
             return ToolResult(ok=False, error=problem)
         engine = _engine(self.platform)
         before = await asyncio.to_thread(FD.read_checks, engine, folder)
+        out = ""
+        value: "dict[str, Any] | None"
         if not args["run"]:
-            value: dict[str, Any] = {"off": True, "at": PROOF.now_iso()}
+            value = {"off": True, "at": PROOF.now_iso()}
         else:
             plan = await asyncio.to_thread(PROOF.decide, engine, folder)
             if plan.get("state") == "off" and plan.get("why") == PROOF.WHY_FOLDER_FILE:
@@ -1437,25 +1471,44 @@ class BuildChecksSetTool(_FolderTool):
                     f"The folder's own finish.toml (in its .ironjarvis folder) turns the check off in {folder}; "
                     "change that file first."))
             command = " ".join(str(args.get("command") or "").split())
-            if not command:
-                command = str(plan.get("command") or "") if plan.get("state") in ("ask", "run") else ""
-            if not command and before and before.get("command"):
-                command = str(before["command"])
-            if not command:
-                return ToolResult(ok=False, error=(
-                    f"Iron Jarvis found no test command for {folder}. Say which command runs its tests "
-                    "(for example npm test or python -m pytest)."))
-            value = {"command": command, "confirmed_at": PROOF.now_iso(), "timeout_s": PROOF.TIMEOUT_S,
-                     "source": "chat"}
+            if command:
+                value = {"command": command, "confirmed_at": PROOF.now_iso(), "timeout_s": PROOF.TIMEOUT_S,
+                         "source": "chat"}
+            else:
+                # 22-a review: a command the user never named is never kept
+                # from chat (its card showed no command, D-22.2). Kept on:
+                # nothing changes. Else the folder's off is forgotten, so the
+                # first-time card under the next reply that changes files asks
+                # with the exact command and what it costs.
+                if before and before.get("command"):
+                    _note(after=before)
+                    return ToolResult(ok=True, output=(
+                        f"Iron Jarvis already runs `{PROOF.shown_command(str(before['command']))}` after each "
+                        f"Build › Code reply in {folder} that changes files. Nothing was changed. To use another "
+                        "command, say which one."))
+                proposed = await asyncio.to_thread(PROOF.proposal, folder)
+                if not proposed:
+                    return ToolResult(ok=False, error=(
+                        f"Iron Jarvis found no test command for {folder}. Say which command runs its tests "
+                        "(for example npm test or python -m pytest)."))
+                asks = (f"Iron Jarvis asks under the next Build › Code reply in {folder} that changes files, on a "
+                        f"card that shows the exact command (`{PROOF.shown_command(proposed)}` is the one the "
+                        "folder proposes now) and what it costs. Nothing runs before your yes there.")
+                if before is None:
+                    _note(after=None)
+                    return ToolResult(ok=True, output=f"Nothing was changed: {asks}")
+                value = None
+                out = f"Tests after replies are no longer off in {folder}. {asks}"
         try:
             saved = await asyncio.to_thread(FD.save_checks, engine, folder, value)
         except FD.DefaultsRefused as exc:
             return ToolResult(ok=False, error=_refusal_words(exc))
         _note(after=saved)
         new = _checks_words(saved)
-        out = (f"Iron Jarvis now runs `{saved['command']}` after each Build › Code reply in {folder} that changes "
-               "files." if saved and saved.get("command") else
-               f"Iron Jarvis no longer runs tests after Build › Code replies in {folder}.")
+        out = out or (
+            f"Iron Jarvis now runs `{saved['command']}` after each Build › Code reply in {folder} that changes "
+            f"files. {PROOF.COST_WORDS}" if saved and saved.get("command") else
+            f"Iron Jarvis no longer runs tests after Build › Code replies in {folder}.")
         return ToolResult(
             ok=True, output=out,
             data={"record_change": self._card(
@@ -1486,27 +1539,65 @@ class CodingReplyCheckTool(Tool):
         got = await asyncio.to_thread(newest_check, self.platform, str(args.get("session") or ""))
         if got is None:
             return ToolResult(ok=False, error="There is no Build › Code session that matches.")
-        row, rec = got
+        row, rec, facts = got
         title = (getattr(row, "title", "") or "").strip() or "untitled"
         tool = _tool_label(str(getattr(row, "harness", "") or ""))
         head = f"Coding session ({tool}) \"{title[:80]}\" in {getattr(row, 'folder', '') or 'no folder'}:"
-        if rec is None:
-            return ToolResult(ok=True, output=f"{head} Iron Jarvis has not checked any of its replies yet.",
-                              data={"session": row.id, "check": None})
-        when = str(rec.get("at") or "")
-        # "written", never "checked": the newest record may be the card's
-        # question or a kept answer, not a run.
-        return ToolResult(ok=True, output=f"{head} {rec.get('line')} (Iron Jarvis's own record, written {when}.)",
-                          data={"session": row.id, "check": {k: rec.get(k) for k in (
-                              "tests", "why", "command", "ran", "passed", "failed", "new_files", "at", "for_turn")}})
+        newest = str(facts.get("newest_turn") or "")
+        # 22-a review: the record is said as the NEWEST reply's only when it
+        # is that reply's own; an earlier reply's is said as an earlier one's.
+        of_newest = rec is not None and (not newest or rec.get("for_turn") == newest)
+        data = {"session": row.id, "newest_turn": newest, "of_newest": of_newest,
+                "check": None if rec is None else {k: rec.get(k) for k in (
+                    "tests", "why", "command", "ran", "passed", "failed", "new_files", "at", "for_turn")}}
+        when = str((rec or {}).get("at") or "")
+        if of_newest:
+            # "written", never "checked": the newest record may be the card's
+            # question or a kept answer, not a run.
+            return ToolResult(ok=True, data=data, output=(
+                f"{head} {rec.get('line')} (Iron Jarvis's own record of its newest reply, written {when}.)"))
+        said = [head, _unchecked_words(facts, rec is not None)]
+        if rec is not None:
+            said.append(f"Its last check was of an earlier reply (Iron Jarvis's own record, written {when}): "
+                        f"{rec.get('line')}")
+        return ToolResult(ok=True, output=" ".join(said), data=data)
 
 
-def newest_check(platform: Any, ref: str) -> "tuple[Any, dict[str, Any] | None] | None":
-    """BLOCKING: ``(session row, its newest finished check record or None)``
-    for the Build › Code session ``ref`` names (its id, a word of its title,
-    or its tool), else the newest session; None when there is none."""
+def _unchecked_words(facts: dict[str, Any], any_check: bool) -> str:
+    """Why there is no check of a session's newest reply, from facts alone
+    (never a cause the record does not hold)."""
+    from ..hosted import proof as PROOF
+
+    if facts.get("checking"):
+        return "Iron Jarvis is checking its newest reply now."
+    if facts.get("running"):
+        return "Its newest reply is still running, so Iron Jarvis has not checked it yet."
+    said = ("Iron Jarvis has no check of its newest reply." if any_check
+            else "Iron Jarvis has not checked any of its replies yet.")
+    plan = facts.get("plan") or {}
+    state, why = plan.get("state"), plan.get("why")
+    if state == "off" and why == PROOF.WHY_YOU:
+        return f"{said} Tests after replies are off in this folder."
+    if state == "off":
+        return f"{said} This folder's own finish.toml (in its .ironjarvis folder) turns the check off."
+    if state == "none":
+        return f"{said} Iron Jarvis finds no test command in this folder."
+    if state == "ask":
+        return f"{said} It asks once, with the command, under the first reply that changes files."
+    return f"{said} It checks a reply only when that reply changed files."
+
+
+def newest_check(platform: Any, ref: str) -> "tuple[Any, dict[str, Any] | None, dict[str, Any]] | None":
+    """BLOCKING: ``(session row, check record, facts)`` for the Build › Code
+    session ``ref`` names (its id, a word of its title, or its tool), else the
+    newest session; None when there is none. The record is the newest
+    finished check of the session's NEWEST reply, else its newest finished
+    check of any reply (or None); ``facts``: ``newest_turn``, ``running``
+    (that reply has not ended), ``checking`` (its check runs now) and, when
+    that reply has no check, the folder's ``plan`` now (``proof.decide``)."""
     from pathlib import Path
 
+    from ..hosted import proof as PROOF
     from ..hosted import store
     from ..hosted.events import EventLog
     from ..hosted.words import LABELS
@@ -1523,9 +1614,25 @@ def newest_check(platform: Any, ref: str) -> "tuple[Any, dict[str, Any] | None] 
     row = rows[0]
     home = Path(platform.config.home)
     events, _total, _dropped = EventLog(home, row.id).read(2000)
-    rec = next((e for e in reversed(events) if isinstance(e, dict) and e.get("type") == "proof"
-                and e.get("state") == "done" and e.get("by") == "iron_jarvis"), None)
-    return row, rec
+    events = [e for e in events if isinstance(e, dict)]
+    proofs = [e for e in events if e.get("type") == PROOF.EVENT and e.get("by") == PROOF.BY]
+    # The newest reply: the newest event a turn stamped (a check's record
+    # names its reply in ``for_turn`` and stamps none).
+    newest = next((str(e["turn"]) for e in reversed(events) if e.get("turn") and e.get("type") != PROOF.EVENT), "")
+    mine = [e for e in proofs if newest and e.get("for_turn") == newest]
+    done = [e for e in proofs if e.get("state") == PROOF.STATE_DONE]
+    rec = next((e for e in reversed(mine) if e.get("state") == PROOF.STATE_DONE), None) or (
+        done[-1] if done else None)
+    facts: dict[str, Any] = {
+        "newest_turn": newest,
+        "running": bool(newest) and not any(e.get("type") == "done" and str(e.get("turn") or "") == newest
+                                            for e in events),
+        "checking": bool(mine) and mine[-1].get("state") == PROOF.STATE_CHECKING,
+    }
+    folder = str(getattr(row, "folder", "") or "")
+    if folder and not (rec is not None and rec.get("for_turn") == newest):
+        facts["plan"] = PROOF.decide(_engine(platform), folder)
+    return row, rec, facts
 
 
 def build_record_tools(platform: Any) -> list[Tool]:

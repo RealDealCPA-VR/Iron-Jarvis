@@ -572,11 +572,12 @@ async def _judge_in(svc: Any, sid: str, chain: Chain, turn_id: str, events: list
     if ended:
         table.pop(sid, None)
         live = svc.live.get(sid)
-        if missing and live is not None and live.turn is None:
-            svc._emit(live, make("notice", text=verdict_words(chain.sent, ended)))
         if tests is not None and live is not None:
-            # 22-a: the check's own line says it (one line, not two).
+            # 22-a: the check's own line says it, also when a claimed file is
+            # missing too (one line, not two: the notice then stays out).
             await _mark_unfinished(svc, sid, live, chain, tests, ended)
+        elif missing and live is not None and live.turn is None:
+            svc._emit(live, make("notice", text=verdict_words(chain.sent, ended)))
         return
     if not _still_current(svc, sid, chain, turn_id):
         return
