@@ -169,9 +169,14 @@ ASK_DETAIL = (
     "If the tests fail, {tool} is sent back to fix them, up to twice per message, on your plan. "
     "Iron Jarvis asks again only if this command changes."
 )
+#: What a check costs, on chat's card and in its answer (22-a review, G10).
+COST_WORDS = (
+    "If the tests fail, the coding tool is sent back to fix them, up to twice per message, on your plan."
+)
 WORDS = {
     WHY_FOLDER_FILE: "this folder's own finish.toml (in its .ironjarvis folder) turns the check off.",
-    WHY_YOU: "you turned off tests after replies in this folder. Say \"run tests after replies here\" to turn them on.",
+    WHY_YOU: ("you turned off tests after replies in this folder. To turn them on, say \"run tests after replies "
+              "here\" in chat: Iron Jarvis then asks under the next reply that changes files, with the command."),
     WHY_NO_COMMAND: "Iron Jarvis found no test command for this folder.",
     WHY_STOPPED: "you stopped the check.",
     WHY_NEW_MESSAGE: "a new message came first.",
@@ -408,6 +413,19 @@ def propose(folder: str, layer: Any = None) -> tuple[str, str]:
     except Exception:  # noqa: BLE001 — a folder that cannot be read proposes nothing
         log.debug("a folder's test command could not be read", exc_info=True)
     return "", ""
+
+
+def proposal(folder: str) -> str:
+    """The command ``folder`` proposes now, whatever the user kept (chat's
+    "run tests after replies here" after a No: 22-a review), or "".
+    BLOCKING (small reads); never raises."""
+    try:
+        from ..harness.components import read_project_layer
+
+        return propose(folder, read_project_layer(folder, session_id=None))[0]
+    except Exception:  # noqa: BLE001 — cannot tell: nothing proposed
+        log.debug("a folder's test command could not be read", exc_info=True)
+        return ""
 
 
 def decide(engine: Any, folder: str) -> dict[str, Any]:
@@ -841,7 +859,8 @@ def tests_failed_line(proof: Proof) -> str:
 
 
 __all__ = [
-    "BY", "EVENT", "Proof", "RunResult", "TESTS_ASK", "TESTS_FAILED", "TESTS_NONE", "TESTS_NOT_RUN",
+    "BY", "COST_WORDS", "EVENT", "Proof", "RunResult", "TESTS_ASK", "TESTS_FAILED", "TESTS_NONE", "TESTS_NOT_RUN",
     "TESTS_OFF", "TESTS_PASSED", "TIMEOUT_S", "after_reply", "check", "checking", "clear_pending", "decide",
-    "from_run", "line_for", "note_pending", "propose", "run_checks", "stop", "stop_all", "turn_changes",
+    "from_run", "line_for", "note_pending", "propose", "proposal", "run_checks", "stop", "stop_all",
+    "turn_changes",
 ]

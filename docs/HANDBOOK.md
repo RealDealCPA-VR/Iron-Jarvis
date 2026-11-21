@@ -2094,10 +2094,14 @@ command ended with an error. The count is read from the runner's own summary
 and never while Emergency stop is on. **Stop** beside the line ends it (and
 everything it started).
 
-**From chat.** Say *stop running tests after replies here* (or *run the tests
-after each reply in D:\code\shop with pytest -q*); the card shows the command
-and the change has an Undo. Ask *did the tests pass on Codex's last reply?*
-and Iron Jarvis answers from its own record.
+**From chat.** Say *stop running tests after replies here*, or name the
+command: *run the tests after each reply in D:\code\shop with pytest -q* (the
+card shows that command and what it costs). Say *run tests after replies
+here* without a command and nothing is kept from chat: a folder you turned
+off is asked about again, with the exact command, under its next reply that
+changes files. Every change has an Undo. Ask *did the tests pass on Codex's
+last reply?* and Iron Jarvis answers from its own record, and says so when
+the newest reply has no check (it changed no files, or it is still running).
 
 ## The Timeline shows the models that did the work (v1.550.0)
 

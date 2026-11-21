@@ -173,6 +173,8 @@ _RECORD_TOOLS: dict[str, frozenset[str]] = {
     "night_task": frozenset({"night_task_add", "night_task_cancel", "night_task_move"}),
     "coding_defaults": frozenset({"build_defaults_set", "build_defaults_clear"}),
     "coding_team": frozenset({"build_team_set", "build_team_clear"}),
+    # 22-a (R1.9): Iron Jarvis's check after each Build › Code reply.
+    "coding_checks": frozenset({"build_checks_set"}),
     # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections).
     "model_server": frozenset({"model_server_add", "model_server_remove"}),
     "account": frozenset({"account_add"}),
@@ -206,6 +208,7 @@ _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
     "night_task": ("night.",),
     "coding_defaults": ("build_defaults.",),
     "coding_team": ("build_team.",),
+    "coding_checks": ("build_checks.",),
     "model_server": ("model_server.", "model_default."),
     "account": ("account.",),
     "memory_base": ("memory_base.", "memory_profile."),
@@ -255,6 +258,7 @@ _RECORD_NOUN = {
     "night_task": "night task",
     "coding_defaults": "folder default for new coding sessions",
     "coding_team": "coding team",
+    "coding_checks": "check after each Build › Code reply",
     "model_server": "model server",
     "account": "account",
     "memory_base": "memory base",
@@ -941,7 +945,39 @@ def _record_kind(np: list[str], rest: list[str], sentence_toks: list[str]) -> st
 _FOLDER_WORDS = frozenset(
     {"folder", "folder's", "repo", "repo's", "repository", "repository's", "codebase", "codebase's", "\x00folder"}
 )
-_CODING_KINDS = frozenset({"night_task", "coding_defaults", "coding_team"})
+_CODING_KINDS = frozenset({"night_task", "coding_defaults", "coding_team", "coding_checks"})
+#: 22-a (R1.9): the check after each Build › Code reply — "the tests after
+#: each reply", "running tests after replies", "the check after every Codex
+#: reply". The test word stands right before "after" (never "the test file
+#: after each reply"); between "after" and the reply only these words (never
+#: "your reply": the user's own message).
+_CHECK_WORDS = frozenset({"test", "tests", "testing", "check", "checks", "checking"})
+_REPLY_WORDS = frozenset({"reply", "replies", "answer", "answers"})
+_BEFORE_REPLY = frozenset(
+    {"each", "every", "any", "a", "the", "coding", "build", "code", "tool's", "its", "their", "new",
+     "codex", "codex's", "claude", "claude's", "code's", "pi", "pi's", "opencode", "opencode's", "grok", "grok's",
+     "antigravity", "antigravity's"}
+)
+#: "I added tests after each reply" is code work, never the check.
+_NOT_A_CHECK_VERB = frozenset({"added", "created", "made", "built", "saved", "queued", "scheduled", "moved"})
+
+
+def _checks_after_replies(phrase: list[str], verb_word: str) -> bool:
+    """Does *phrase* name the check after each Build › Code reply? Bounded:
+    each "after" reads one word back and at most 4 on."""
+    if verb_word in _NOT_A_CHECK_VERB:
+        return False
+    for i, t in enumerate(phrase[:MAX_OBJECT_TOKENS + MAX_SUBJECT_TOKENS]):
+        if t != "after" or i == 0 or phrase[i - 1] not in _CHECK_WORDS:
+            continue
+        between: list[str] = []
+        for w in phrase[i + 1:i + 5]:
+            if w in _REPLY_WORDS:
+                return bool(between != ["the"])
+            if w not in _BEFORE_REPLY:
+                break
+            between.append(w)
+    return False
 #: The user's own lists, never tonight's ("three tasks on your to-do list
 #: for tonight").
 _OTHER_LISTS = frozenset({"do", "todo", "todos", "checklist", "calendar", "reminders", "reminder", "planner", "agenda",
@@ -972,6 +1008,8 @@ def _coding_kinds(phrase: list[str], verb_word: str) -> list[str]:
         out.append("coding_defaults")
     if folder and _names_the_setting(phrase, {"team", "teams"}) and not (_EXTERNAL & toks):
         out.append("coding_team")
+    if _checks_after_replies(phrase, verb_word) and not (_EXTERNAL & toks):
+        out.append("coding_checks")
     return out
 
 
@@ -2055,6 +2093,13 @@ def _coding_sentence(claim: Claim) -> str:
         return f"Tonight's list was not changed {IN_THIS_REPLY}."
     if kind == "coding_defaults":
         return f"No folder's defaults for new coding sessions were changed {IN_THIS_REPLY}."
+    if kind == "coding_checks":
+        # 22-a (R1.9): said by its direction ("stopped" is off, "resumed" on).
+        off = claim.verb in (OFF, REMOVE) or (claim.verb == PAUSE and claim.word not in ("resumed", "restarted"))
+        if off or claim.verb == ON or claim.word in ("resumed", "restarted"):
+            return (f"Tests after Build › Code replies were not turned {'off' if off else 'on'} for any folder "
+                    f"{IN_THIS_REPLY}.")
+        return f"No folder's check after each Build › Code reply was changed {IN_THIS_REPLY}."
     return f"No folder's coding team was changed {IN_THIS_REPLY}."
 
 
