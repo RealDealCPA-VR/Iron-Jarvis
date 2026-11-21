@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.548.0 (2026-11-19).*
+holds itself to. Current as of v1.548.1 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Copy as a fix request leaves out Local only work (v1.546.3)
+## Copy as a fix request leaves out Local only work (v1.548.1)
 
 A coding session you keep **Local only** is now never in the report that
 "Copy as a fix request" makes for a coding agent: not its errors, its
@@ -9110,7 +9110,7 @@ Jarvis.
     anything a low-trust run read. A failed command shows only the shell's own
     error, never what else it printed, and a write or edit shows a file's size,
     never its text.
-  - A coding session you keep Local only is never in it (since v1.546.3; see
+  - A coding session you keep Local only is never in it (since v1.548.1; see
     "Copy as a fix request leaves out Local only work").
   - Secrets are masked, but the report still holds your commands, file paths
     and errors: read it before you paste it anywhere.
