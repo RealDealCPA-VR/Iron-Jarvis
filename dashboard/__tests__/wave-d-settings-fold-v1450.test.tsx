@@ -248,3 +248,60 @@ describe("Account groups hides behind the Several accounts card", () => {
     expect(screen.queryByTestId("setting-account_groups")).toBeNull();
   });
 });
+
+// The Linux release's dashboard gate (v1.546.0) failed on THIS file with
+// "document is not defined": the test above ends as soon as the section is
+// open, and the section's scroll, 50 ms later, ran after the test's page was
+// gone. The 50 ms timers are held here (an injected clock for them alone), so
+// neither test races the scroll.
+describe("a section opened by a link scrolls into view, and only while the page is open", () => {
+  function holdScrolls() {
+    const held = new Map<number, () => void>();
+    let next = 900_000;
+    const realSet = window.setTimeout;
+    const realClear = window.clearTimeout;
+    vi.spyOn(window, "setTimeout").mockImplementation(((fn: TimerHandler, ms?: number, ...rest: unknown[]) => {
+      if (ms !== 50 || typeof fn !== "function") return realSet(fn, ms, ...rest);
+      next += 1;
+      held.set(next, fn as () => void);
+      return next;
+    }) as typeof window.setTimeout);
+    vi.spyOn(window, "clearTimeout").mockImplementation(((id?: number) => {
+      if (id !== undefined && held.delete(id)) return;
+      realClear(id);
+    }) as typeof window.clearTimeout);
+    const run = () => {
+      const due = [...held.entries()];
+      held.clear();
+      act(() => due.forEach(([, fn]) => fn()));
+    };
+    return { held, run };
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  async function openByLink() {
+    window.history.replaceState({}, "", "/settings?focus=account_groups");
+    const page = render(<SettingsHome />);
+    const sub = await screen.findByTestId("settings-sub-connections-accounts");
+    await waitFor(() => expect(within(sub).getByRole("button").getAttribute("aria-expanded")).toBe("true"));
+    return { page, sub };
+  }
+
+  it("while the page is open, the waiting scroll brings the section into view", async () => {
+    const clock = holdScrolls();
+    const { sub } = await openByLink();
+    expect(clock.held.size).toBeGreaterThan(0);
+    clock.run();
+    const scroll = vi.mocked(Element.prototype.scrollIntoView);
+    expect(scroll).toHaveBeenCalledWith({ block: "start" });
+    expect(scroll.mock.contexts).toContain(sub);
+  });
+
+  it("a page closed before the scroll leaves nothing waiting", async () => {
+    const clock = holdScrolls();
+    const { page } = await openByLink();
+    expect(clock.held.size).toBeGreaterThan(0);
+    page.unmount();
+    expect(clock.held.size).toBe(0);
+  });
+});
