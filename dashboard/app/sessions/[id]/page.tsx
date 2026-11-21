@@ -89,6 +89,8 @@ import {
   RUN_TITLE_FALLBACK,
   shownSummary,
   detailsRemovedWords,
+  startedWith,
+  STARTED_WITH_LABEL,
   type ContinuationRow,
 } from "@/components/sessions/runPageWords";
 
@@ -175,6 +177,9 @@ export default function SessionDetailPage({
   const failureDetail = interrupted
     ? null
     : failureDetailShown(session as (SessionView & { failure_detail?: unknown }) | undefined);
+  // v1.549.0 (next leaps 14-a): what the run was given before it started
+  // ("Earlier work on record"), read off GET /sessions/{id} only.
+  const told = startedWith(session as (SessionView & { told?: unknown }) | undefined);
 
   /* ---- The receipt's words (v1.354.0, G20) -------------------------------
    * The task's first line is the title (the id sits behind a copy button);
@@ -747,6 +752,14 @@ export default function SessionDetailPage({
                     </span>
                   }
                 />
+                {/* v1.549.0 (next leaps 14-a): what the run was given before
+                    it started, quietly; nothing when it was given none. */}
+                {told.length > 0 && (
+                  <Meta
+                    label={STARTED_WITH_LABEL}
+                    value={<span data-testid="run-started-with">{told.join(", ")}</span>}
+                  />
+                )}
               </div>
               {(inTok > 0 || outTok > 0) && (
                 <div className="mt-4 flex flex-wrap items-center gap-2">

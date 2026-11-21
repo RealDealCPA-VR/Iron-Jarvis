@@ -440,3 +440,30 @@ export function detailsRemovedWords(days: number | null | undefined): string | n
     `"Keep activity history" setting says. Its final answer is kept.`
   );
 }
+
+/* ---- What the run started with (v1.549.0, next leaps 14-a) --------------- */
+
+/** The label of the run page's line that lists what the run was given. */
+export const STARTED_WITH_LABEL = "Started with";
+
+/** The words for each part a run's prompt carried that its page names
+ *  (`Session.told_json`, served as `told` by GET /sessions/{id} only).
+ *  "work" is the block a chat in that folder is told: what Iron Jarvis did
+ *  there before, from its own record (VOCABULARY.md, "earlier work"). */
+export const TOLD_WORDS: Readonly<Record<string, string>> = {
+  work: "Earlier work on record",
+};
+
+/** What the run was given, in words, in the daemon's order: [] when it was
+ *  given none of these, for an older daemon (no `told`) and for a part this
+ *  page has no words for (never shown as an id). */
+export function startedWith(session: { told?: unknown } | null | undefined): string[] {
+  const raw = session && Array.isArray(session.told) ? session.told : [];
+  const out: string[] = [];
+  for (const part of raw) {
+    if (typeof part !== "string" || !Object.prototype.hasOwnProperty.call(TOLD_WORDS, part)) continue;
+    const words = TOLD_WORDS[part];
+    if (words && !out.includes(words)) out.push(words);
+  }
+  return out;
+}

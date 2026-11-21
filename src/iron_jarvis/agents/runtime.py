@@ -801,6 +801,184 @@ async def run_client_block(platform, session) -> str:
     return text.strip("\n") if isinstance(text, str) and text.strip() else ""
 
 
+class RunStory:
+    """What one run's "Earlier work on record" is asked with (v1.549.0, next
+    leaps 14-a, "Every worker starts with the full story"): ``words`` are the
+    OWNER's (the run's task when the owner started it; "" for a helper or a
+    child, whose task the model wrote) and ``skip`` the pieces of work the
+    run is part of (its own session, every run it was started inside, the
+    chat it was started in or handed off from, a Build helper's coding
+    session), never listed to it as earlier work."""
+
+    __slots__ = ("words", "skip")
+
+    def __init__(self, words: str = "", skip: tuple[str, ...] = ()) -> None:
+        self.words = words
+        self.skip = skip
+
+
+#: THE STORY SPREADS DOWN (v1.549.0): set by ``run`` around the run body,
+#: like :data:`SKIP_MEMORY`, so a child run awaited inside it knows the runs
+#: it is part of. None outside a run.
+RUN_STORY: "contextvars.ContextVar[RunStory | None]" = contextvars.ContextVar(
+    "iron_jarvis_run_story", default=None
+)
+
+#: The part of a run's prompt its page names (``Session.told_json``):
+#: "Earlier work on record".
+TOLD_WORK = "work"
+TOLD_PARTS = (TOLD_WORK,)
+
+
+def run_story(session, parent_id: str | None = None) -> RunStory:
+    """The :class:`RunStory` of ``session``, worked out in ``run`` BEFORE
+    the run's own client wall is set (so a wall already set is a caller's).
+
+    The task counts as the owner's words only for a run the owner started:
+    not a child (``parent_id``, or started inside another run), not a Build
+    helper or an objective's teammate (their origin), not work started
+    inside a chat turn (a wall or a turn already set: the model delegated
+    it), never a task from another computer. Unsure: no words (a story told
+    from the folder alone). Never raises."""
+    sid = str(getattr(session, "id", "") or "")
+    try:
+        parent = RUN_STORY.get()
+    except Exception:  # noqa: BLE001
+        parent = None
+    skip: list[str] = [sid] if sid else []
+    if parent is not None:
+        skip += [r for r in parent.skip if r and r not in skip]
+    in_turn = False
+    try:
+        from ..core import turn_ref
+
+        keys = turn_ref.event_keys()
+        in_turn = bool(keys)
+        chat = str(keys.get("thread_id") or "")
+        if chat and chat not in skip:
+            skip.append(chat)
+    except Exception:  # noqa: BLE001 — unsure: started inside something
+        in_turn = True
+    try:  # the saved chat that handed this run off (v1.345.0), or the coding
+        # session a Build helper works for (v1.372.0), is its own story
+        from ..harness.helpers import BUILD_SESSION_OPTION
+        from ..scheduling.knobs import session_options as _story_options
+
+        opts = _story_options(session)
+        for key in ("chat_thread_id", BUILD_SESSION_OPTION):
+            asked_in = str(opts.get(key) or "")
+            if asked_in and asked_in not in skip:
+                skip.append(asked_in)
+    except Exception:  # noqa: BLE001 — a row with no options asked in no chat
+        pass
+    try:
+        from ..harness.helpers import HELPER_ORIGIN
+        from ..workmap.clients import wall as _wall
+        from .team import MISSION_MEMBER_ORIGIN
+
+        origin = str(getattr(session, "origin", "") or "")
+        owners = not (
+            parent_id or parent is not None or in_turn
+            or _wall.inherited() is not None
+            or origin in (HELPER_ORIGIN, MISSION_MEMBER_ORIGIN)
+            or run_is_remote(session)
+        )
+    except Exception:  # noqa: BLE001 — unsure: not the owner's words
+        owners = False
+    words = str(getattr(session, "task", "") or "") if owners else ""
+    return RunStory(words=words, skip=tuple(skip))
+
+
+async def run_work_block(platform, session, turn=None) -> str:
+    """THE STORY a run is told (v1.549.0, next leaps 14-a): the chat lanes'
+    "Earlier work on record" (``workmap.block.work_block``) for the run's own
+    folder (:func:`run_client_folder`; a scratch folder is nobody's, so only
+    work the owner's words point at), behind the run's OWN wall ``turn``
+    (:func:`run_client_wall`, already NARROWED for a helper or child: never
+    wider than the turn or run it was started in), with the owner's words
+    only (:data:`RUN_STORY`), the run's own session and every piece of work
+    it is part of left out, and a project run's folder part left to the
+    project's own recent activity (the chat rule). Local only and the phone
+    are the reader's own rules (the run's scope rides into the thread). ""
+    for nothing on record, no folder and no words, past
+    ``CLIENT_HOP_MAX_S`` (logged) or on any error. Off the loop; never
+    raises."""
+    from ..workmap import clients as _clients
+
+    try:
+        story = RUN_STORY.get()
+    except Exception:  # noqa: BLE001
+        story = None
+    if story is None:  # not inside ``run``: the folder alone, nobody's words
+        story = RunStory(skip=(str(getattr(session, "id", "") or ""),))
+
+    def _read() -> str:
+        from ..workmap.block import work_block
+
+        folder = run_client_folder(getattr(platform, "config", None), session)
+        words = str(story.words or "")
+        if not folder and not words.strip():
+            return ""
+        return work_block(
+            platform, folder=folder, query=words, exclude_ref=str(getattr(session, "id", "") or ""),
+            exclude_refs=story.skip, list_folder=not getattr(session, "project_id", None),
+            turn=turn,
+        )
+
+    try:
+        text = await asyncio.wait_for(
+            asyncio.to_thread(_read), timeout=float(_clients.CLIENT_HOP_MAX_S),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — the story never breaks a run
+        logging.getLogger("iron_jarvis.agents.runtime").warning(
+            "the earlier work of a run could not be read; the run goes on without it",
+            exc_info=True,
+        )
+        return ""
+    return text.strip("\n") if isinstance(text, str) and text.strip() else ""
+
+
+def told_parts(session) -> list[str]:
+    """What ``session``'s prompt carried that its page names
+    (``Session.told_json``; v1.549.0): known parts only, in order. [] for
+    none, an older row (NULL) or anything unreadable. Never raises."""
+    try:
+        raw = json.loads(str(getattr(session, "told_json", "") or "[]"))
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [p for p in TOLD_PARTS if p in raw]
+
+
+def note_told(engine, session, parts: Iterable[str]) -> None:
+    """Keep on the run's row what its prompt carried (``Session.told_json``),
+    for its page: the object in hand (every finalizer merges it) and the
+    stored row (a page read while the run works). BLOCKING; never raises."""
+    value = json.dumps([p for p in TOLD_PARTS if p in set(parts or ())])
+    try:
+        session.told_json = value
+    except Exception:  # noqa: BLE001 — a stand-in without the column
+        pass
+    sid = str(getattr(session, "id", "") or "")
+    if engine is None or not sid:
+        return
+    try:
+        with session_scope(engine) as db:
+            row = db.get(Session, sid)
+            if row is None:
+                return
+            row.told_json = value
+            db.add(row)
+            db.commit()
+    except Exception:  # noqa: BLE001 — the page's list is extra
+        logging.getLogger("iron_jarvis.agents.runtime").debug(
+            "what a run was told could not be kept", exc_info=True,
+        )
+
+
 #: Cap on tool output fed into the MODEL CONTEXT (the full output still lands in the
 #: DB transcript). Without it, a large read/shell/grep result is re-sent on every
 #: subsequent step of the loop — O(n^2) token growth at full input price.
@@ -2412,6 +2590,10 @@ class AgentRuntime:
             # closed, never raises.
             from ..workmap.clients import wall as _client_wall
 
+            # v1.549.0 (next leaps 14-a): whose words the run's task is, and
+            # the work it is part of — read BEFORE its own wall is set below
+            # (a wall already set is the caller's: the model delegated it).
+            _story = run_story(session, parent_id)
             _turn_wall = await run_client_wall(self.p, session)
             # A TASK FROM ANOTHER COMPUTER (v1.509.0, F1): set for the run body
             # so every child run awaited inside it is one too.
@@ -2443,6 +2625,9 @@ class AgentRuntime:
             # SKIP MEMORY (v1.501.0, north-star 1.4): set for the run body so
             # every child run awaited inside it skips memory too.
             _skip_token = SKIP_MEMORY.set(run_skips_memory(session))
+            # THE STORY SPREADS DOWN (v1.549.0): a child run awaited inside
+            # this one leaves this run out of its earlier work.
+            _story_token = RUN_STORY.set(_story)
             # v1.529.0 (owner decision 3): the run counts its own model calls
             # (its row is saved after each step), so a tool that started it
             # (``delegate``) does not count them again (``eval.call_ledger``).
@@ -2459,6 +2644,10 @@ class AgentRuntime:
                     SKIP_MEMORY.reset(_skip_token)
                 except (ValueError, LookupError, RuntimeError):  # another context's token
                     SKIP_MEMORY.set(False)
+                try:
+                    RUN_STORY.reset(_story_token)
+                except (ValueError, LookupError, RuntimeError):  # another context's token
+                    RUN_STORY.set(None)
                 if _confine_token is not None:
                     _fs_policy.release_reads(_confine_token)
                 try:
@@ -3113,6 +3302,24 @@ class AgentRuntime:
             _client_text = await run_client_block(self.p, session)
             if _client_text:
                 system_prompt += "\n\n" + _client_text
+            # THE STORY (v1.549.0, next leaps 14-a, "Every worker starts with
+            # the full story"): "Earlier work on record", the block a chat in
+            # this folder is told, right after the client block, behind the
+            # run's OWN wall (set around the run by ``run``; a helper's is
+            # narrowed to the turn or run it was started in) and with the
+            # owner's words only. A memory injection, so gated by skip_memory;
+            # never for a task from another computer. "" when nothing is on
+            # record (byte-identical). Here, long before the planner prices
+            # the prompt. The run's page lists it among what it was given.
+            if not remote_run:
+                from ..workmap.clients import wall as _story_wall
+
+                _work_text = await run_work_block(self.p, session, _story_wall.current())
+                if _work_text:
+                    system_prompt += "\n\n" + _work_text
+                    await asyncio.to_thread(
+                        note_told, getattr(self.p, "engine", None), session, (TOLD_WORK,)
+                    )
         # THE IDENTITY SPINE (v1.144.0) — the fix for "it communicates
         # differently depending on which model/surface answered". Until now the
         # persona + the user's preferences reached CHAT ONLY: an agent run

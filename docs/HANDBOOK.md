@@ -2042,6 +2042,37 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Agents and terminal help know what was done before (v1.549.0)
+
+An agent you give a job in a folder now starts knowing what was done there
+before, the way a chat in that folder already does: the pieces of earlier
+work on Iron Jarvis's own record (each chat, coding session or agent run
+there, how it ended and the files it wrote) and, for work in exactly that
+folder, its checked recap (Done, Decided, Open). So a decision kept from
+Monday's chat ("this project reports in euros") reaches Wednesday's agent run
+in the same folder without you saying it again.
+
+Nothing to turn on.
+
+- **Where you see it.** The agent run's page lists **Started with: Earlier
+  work on record** when the run was given it.
+- **Helpers too.** A helper that a chat or an agent hands part of the work to
+  is told the same, behind the same wall: in a client's folder never another
+  client's work, even when the helper's task names that client. A helper's
+  task is written by the model, so it never points the helper at other
+  folders; only your own words do.
+- **Terminal help.** The AI help on a terminal is told the earlier work in
+  the folder the terminal shows it is in now. When the terminal has moved
+  into another client's folder, or its folder cannot be told from what it
+  printed, it is told nothing.
+- **Night tasks** were already told (they run as coding sessions).
+
+**What stays out**, as in a chat: Local only work, unless the run itself
+stays on this PC or your own network; work deleted or archived a moment ago;
+another client's work. A run your phone started is told the titles and how
+each ended only. A task from another computer is told none of it, and a
+schedule with **Skip memory** ticked runs without it.
+
 ## Before and after pictures under a coding reply (v1.553.0)
 
 When a reply in a coding session (Chat › Code) changes how a page looks, you
