@@ -364,9 +364,14 @@ async def test_real_edge_a_slow_answer_is_named_as_the_step_that_stopped(caplog)
     answer past the open's limit is logged as asked, let go, and never
     answered — so the route, the response and the arrival hooks are wired to
     Playwright's own events (a fake proves the words, this proves the
-    wiring). A page that opens in time logs nothing."""
+    wiring). A page that opens in time logs nothing.
+
+    Each open gets 10 s and the held answers 60 s: the timeout stays certain,
+    and the steps before it (several Edge round trips) have room on a runner
+    that runs several times slower than this PC (FU-1 third review)."""
+    limit_s = 10.0
     caplog.set_level(logging.WARNING, logger=LOGGER)
-    site = _SlowSite(hold_s=20.0)
+    site = _SlowSite(hold_s=60.0)
     b = PB.AgentBrowsers()
     key = "build:slow-open"
     try:
@@ -374,8 +379,8 @@ async def test_real_edge_a_slow_answer_is_named_as_the_step_that_stopped(caplog)
         said = [r.getMessage() for r in caplog.records if r.name == LOGGER and "agent browser:" in r.getMessage()]
         assert said == [], said
         backend = b._sessions[key].backend
-        with pytest.raises(PB.BrowserProblem, match="did not finish within 3 s"):
-            await b.run(backend.goto(site.base + "slow?k=secret-ish", 3.0))
+        with pytest.raises(PB.BrowserProblem, match=f"did not finish within {limit_s:g} s"):
+            await b.run(backend.goto(site.base + "slow?k=secret-ish", limit_s))
         (line,) = _slow_open_lines(caplog)
         assert "Edge asked the rules about the page at +" in line, line
         assert "the rules let it go at +" in line, line
@@ -387,8 +392,8 @@ async def test_real_edge_a_slow_answer_is_named_as_the_step_that_stopped(caplog)
         # A page that arrives and is read but whose picture never comes:
         # the later steps are wired to Playwright's own events too.
         caplog.clear()
-        with pytest.raises(PB.BrowserProblem, match="did not finish within 3 s"):
-            await b.run(backend.goto(site.base + "held", 3.0))
+        with pytest.raises(PB.BrowserProblem, match=f"did not finish within {limit_s:g} s"):
+            await b.run(backend.goto(site.base + "held", limit_s))
         (line,) = _slow_open_lines(caplog)
         assert "the server answered (200) at +" in line, line
         assert "the page arrived at +" in line, line
