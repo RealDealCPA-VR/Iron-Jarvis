@@ -2044,7 +2044,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Sort a scanned pile into its documents (v1.557.0)
+## Sort a scanned pile into its documents (v1.559.0)
 
 One PDF that holds a whole scanned pile becomes separate, named documents in
 their folders, after you check the plan. Attach the scan (a bank statement,
@@ -2082,14 +2082,22 @@ documents), in one request, and the page text is treated as data, never as
 instructions. The text read on this PC also goes to your chat's model for its
 reply, as with any file you attach. In a Local only
 chat that model must be on this PC or your network, and so must every model
-the card's buttons use, even when you press them later. A page this PC could
-not read is never sent anywhere by itself: the card says how many there are
-and offers **Read 4 more pages with Claude?** (naming the model you have for
-reading pictures). Only that press sends those pages, to that model only: if
-it does not answer, no other model is tried. One press sends at most 20 pages
-(**Read 20 of 60 more pages with Claude?**), keeps each page as soon as it is
-read, and then the plan is made again. With no model that reads pictures,
-those pages stay in "Not sure" for you to place.
+the card's buttons use, even when you press them later. When you say "sort
+this", a page this PC could not read is not sent anywhere for the plan: the
+card says how many there are and offers **Read 4 more pages with Claude?**
+(naming the model you have for reading pictures). Only that press sends those
+pages, to that model only: if it does not answer, no other model is tried.
+One press sends at most 20 pages (**Read 20 of 60 more pages with Claude?**),
+keeps each page as soon as it is read, and then the plan is made again. With
+no model that reads pictures, those pages stay in "Not sure" for you to
+place.
+
+A page that was already read is never sent or paid for twice. If you asked
+about the scan before, or asked to sort it in other words (such as "which
+documents are in this scan"), the chat read it as it reads any file you
+attach, which can send a page this PC could not read to the model that reads
+pictures. The plan then uses that reading, and the card counts those pages
+as "read by a model".
 
 Saying "sort this" never makes Iron Jarvis read your scan less: the pages are
 still read on this PC for the reply, and only sending page pictures to a
@@ -2101,7 +2109,11 @@ is answered as before and no plan is made.
 plan is kept on this PC for 30 days, so you can confirm it later. The demo
 model never makes a plan of a real file. Confirming by typing in chat is not
 offered yet: press Confirm on the card. A messy folder of separate files is
-not sorted this way yet.
+not sorted this way yet. Sorting needs the card, so it is not done from your
+phone: send "sort this" with a scan and Jarvis answers that it is done in
+Iron Jarvis on this PC. Start a new chat there, attach the scan from the
+folder it was saved in, and say "sort this". A phone chat opened on this PC
+shows no card either, so start a new chat for it there too.
 
 ## Quick Ask: the answer appears right there (v1.563.0)
 

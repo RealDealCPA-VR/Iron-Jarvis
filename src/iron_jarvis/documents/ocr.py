@@ -451,6 +451,32 @@ def lookup_cached_text(path: "str | Path") -> "tuple[str, str] | None":
     return best[1]["text"], str(best[1].get("note") or "")
 
 
+def saved_readings(home: "str | Path", digest: str) -> "list[dict[str, Any]]":
+    """Every kept transcription of these exact bytes under ``<home>/ocr`` (any
+    page cap, either method), ranked as :func:`lookup_cached_text` ranks them:
+    the widest cap first, and at one cap a vision reading before a local one.
+    A missing or broken record is a miss, never an error. BLOCKING.
+
+    Idea 31-a: the sorting plan takes a page this PC cannot read from here
+    before it offers to send it, so a page a model already read (an earlier
+    turn, or this turn's attachment step) is never sent, or paid for, twice."""
+    if not digest or not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
+        return []
+    try:
+        candidates = list(cache_dir(home).glob(f"{digest}.p*.json"))
+    except OSError:
+        return []
+    ranked: "list[tuple[tuple[int, int], dict[str, Any]]]" = []
+    for candidate in candidates:
+        record = _read_record(candidate)
+        if record is None or str(record.get("sha256") or digest) != digest:
+            continue
+        rank = (int(record.get("max_pages") or 0), 0 if str(record.get("method") or "") == "local" else 1)
+        ranked.append((rank, record))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [record for _rank, record in ranked]
+
+
 # ------------------------------------------------------------ image harvest ---
 
 
@@ -695,7 +721,7 @@ async def ocr_pdf(
 ) -> "tuple[str, str]":
     """Transcribe up to *max_pages* scanned pages via the router's vision path.
 
-    ``vision=False`` (v1.557.0, idea 31-a, D-31.2): read on THIS PC only.
+    ``vision=False`` (v1.559.0, idea 31-a, D-31.2): read on THIS PC only.
     Windows' OCR reads every page as always (a doubtful reading is kept), and
     no page picture is sent to a model; a page this PC could not read is
     left out (``("", "")`` when it read none).
@@ -1006,7 +1032,7 @@ async def ocr_document(
     With no home in scope (a bare factory, a unit test) the cache is simply
     skipped and the transcription runs as normal.
 
-    ``vision=False`` (v1.557.0): read on this PC only (:func:`ocr_pdf`); a
+    ``vision=False`` (v1.559.0): read on this PC only (:func:`ocr_pdf`); a
     cached reading is still served (it sends nothing), and what this PC read
     is not stored, so a later turn that may use a vision model still does.
     """

@@ -5763,18 +5763,21 @@ def _asks_new_file_other_language(text: str, picked: Iterable[str], workspace: s
         return False
 
 
-#: The note a scanned attachment carries in a turn that sorts it (v1.557.0,
+#: The note a scanned attachment carries in a turn that sorts it (v1.559.0,
 #: D-31.2): it was read on this PC as in any turn, and a page this PC could
-#: not read was not sent to a model (the plan's card offers that).
+#: not read was not sent to a model IN THIS TURN (the plan's card offers
+#: that). Only this turn is spoken for: an earlier turn may have read the
+#: scan with a model, and the plan then takes that reading
+#: (``stack.take_earlier_reading``).
 STACK_HELD_NOTE = (
-    "pages this PC could not read were not sent to a model here: you were asked to sort this scan, "
-    "and stack_plan reads every page of it on this PC and offers the rest on its card. Call "
-    "stack_plan with this file's path; no page picture of it has been sent to a model"
+    "pages this PC could not read were not sent to a model in this turn: you were asked to sort this "
+    "scan, and stack_plan reads every page of it on this PC (with any earlier reading of it) and offers "
+    "the rest on its card. Call stack_plan with this file's path"
 )
 
 
 def stack_turn(d, body) -> bool:
-    """This turn asks to sort a scanned pile into its documents (v1.557.0,
+    """This turn asks to sort a scanned pile into its documents (v1.559.0,
     idea 31-a): Auto tools is on, ``stack_plan`` is registered and not set to
     Never run, and the words ask for it with a PDF attached (now or earlier in
     the chat) or named (``autoselect.wants_stack``). ONE answer for both
@@ -6174,7 +6177,7 @@ def _resolve_armed_tools(
                 and d.platform.registry.get("list_files") is not None
             ):
                 auto.append("list_files")
-    # SORTING A SCANNED PILE, IN ITS OWN PLACE (v1.557.0, idea 31-a). "Sort
+    # SORTING A SCANNED PILE, IN ITS OWN PLACE (v1.559.0, idea 31-a). "Sort
     # this" with a scan attached arms `stack_plan`: allow tier and READONLY
     # (it reads the pages on this PC and shows a plan on a card; the user's
     # Confirm on the card writes the documents through `stack_apply`, which
@@ -7428,7 +7431,7 @@ def config_cards_from_result(name: str, result: Any) -> list[dict[str, Any]]:
                 "subject_kind": str(rh.get("kind") or ""),
                 "name": " ".join(str(rh.get("name") or "").split())[:120],
             })
-        # v1.557.0 (idea 31-a): a sorting plan's card (documents, pages,
+        # v1.559.0 (idea 31-a): a sorting plan's card (documents, pages,
         # names, folders, the pages this PC could not read and the offer to
         # read them). Built by the tool from its own plan, never from the
         # model's words; Confirm on it writes through `stack_apply`.
@@ -11195,7 +11198,7 @@ async def _prepare_attachments(
         (m.content or "" for m in reversed(body.messages) if m.role == "user"),
         "",
     )
-    # v1.557.0 (idea 31-a, D-31.2): a turn that SORTS a scan arms
+    # v1.559.0 (idea 31-a, D-31.2): a turn that SORTS a scan arms
     # `stack_plan`, which reads every page on this PC; the attached PDF's
     # scanned pages are not sent to a vision model here first (the same
     # answer `_resolve_armed_tools` arms from).

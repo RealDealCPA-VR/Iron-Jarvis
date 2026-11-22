@@ -373,7 +373,11 @@ def test_unread_pages_are_offered_and_never_sent_by_the_plan(platform, tmp_path,
     assert sent == [], "no page went to a model before the press"
     assert len(planner.calls) == 1 and not getattr(planner.calls[0]["messages"][0], "images", None)
     assert "[page 5] NOT READ" in planner.calls[0]["messages"][0].content
-    assert "nothing has been sent" in r.output
+    # Only what the tool knows (review 4): it sent no page picture, and the
+    # press is what sends them. Never "nothing has been sent", which an
+    # earlier step of the chat can make untrue.
+    assert "only the user's press on it sends them" in r.output
+    assert "sent no page picture to any model" in r.output and "nothing has been sent" not in r.output
     # Unread pages the planner left out are in "Not sure", never dropped.
     assert any(d["unsure"] and d["pages"] == [5, 6] for d in card["documents"])
 
@@ -882,3 +886,172 @@ def test_a_lookup_for_sorting_a_scan_brings_the_plan_into_the_reply(tmp_path, qu
         assert "stack_apply" not in state["armed"]
     finally:
         J.FOUND.clear()
+
+
+# --------------------------------------------------------------------------- #
+# review 4: a page a model already read is never offered again, and the
+# tool says only what it knows; the phone shows no card, so no plan is made
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("turns", [
+    # The lookup path: words `wants_stack` misses, so the attachment step of
+    # the SAME turn read the scan as any attachment, page 2 by a model.
+    ("which documents are in this scan",),
+    # An earlier turn read it with a model; the later "sort this" holds the
+    # vision step, and this PC's reading is served from the kept reading.
+    ("what does this say?", "sort this"),
+])
+def test_a_page_a_model_already_read_is_taken_from_that_reading_and_not_offered_again(
+    platform, tmp_path, monkeypatch, turns,
+):
+    from iron_jarvis.daemon.chat_turn import STACK_HELD_NOTE, _prepare_attachments
+    from iron_jarvis.daemon.schemas import ChatBody
+    from iron_jarvis.documents import ocr as _ocr
+
+    p, _client = platform
+    ws = tmp_path / "work4"
+    ws.mkdir()
+    scan = make_scanned(ws / "pile.pdf", pages=2)
+    monkeypatch.setattr(local_ocr, "read_pages", _fake_local({1: "Acme Bank statement read on this PC Page 1 of 2"}))
+    sent: list = []
+
+    async def transcribe(blobs, router, *, route_kwargs, label_pages, page_numbers=None):
+        sent.append(list(page_numbers or []))
+        return [f"[page {n}]\nAcme Bank statement page {n} read by a model" for n in (page_numbers or [])], ""
+
+    monkeypatch.setattr(_ocr, "_transcribe", transcribe)
+
+    class D:
+        platform = p
+
+    block = ""
+    for text in turns:
+        body = ChatBody(messages=[{"role": "user", "content": text}], auto_tools=True,
+                        attachments=[str(scan)], workspace_dir=str(ws))
+        _images, block = asyncio.run(_prepare_attachments(D, body, inline_budget=20000, rag_budget=8000, rag_k=4))
+    assert sent == [[2]], "the chat read page 2 with a model once, before any plan"
+    assert (STACK_HELD_NOTE in block) is (turns[-1] == "sort this")
+    assert "no page picture of it has been sent" not in block, "the held note speaks for this turn only"
+
+    planner = Planner({"documents": [{"pages": [1, 2], "title": "Bank statement", "folder": "Bank"}]})
+    monkeypatch.setattr(p.router, "complete", planner.complete)
+    monkeypatch.setattr(S, "vision_choice", lambda router, config: {"provider": "anthropic", "model": None,
+                                                                     "name": "Claude"})
+    r = _invoke(p, "stack_plan", {"path": str(scan)}, _ctx(p, ws))
+    assert r.ok, r.error
+    card = r.data["stack_plan"]
+    assert sent == [[2]], "the plan sent no page"
+    assert card["unread"] == [] and card["offer"] is None, "a page a model read is not offered (or paid) again"
+    assert card["read_here"] == 1 and card["read_by_model"] == 1
+    assert card["read_by"] == "", "the model that read it earlier is not known by name"
+    assert "nothing has been sent" not in r.output
+    assert "1 page(s) this PC could not read were taken from an earlier reading of this file by a model" in r.output
+    prompt = planner.calls[0]["messages"][0].content
+    assert "[page 2] NOT READ" not in prompt and "page 2 read by a model" in prompt
+    plan = S.load_plan(p.config.home, card["plan_id"])
+    assert plan["pages"]["2"]["how"] == S.HOW_VISION and plan["pages"]["2"]["earlier"] is True
+    assert "earlier" not in plan["pages"]["1"]
+
+
+def test_an_earlier_reading_says_who_read_each_page(tmp_path):
+    from iron_jarvis.documents import ocr as _ocr
+
+    def kept(home: Path, digest: str, here: int) -> None:
+        local = f"; {here} {local_ocr.LOCAL_NOTE}" if here else ""
+        _ocr.store_cached(home, digest, 10, "[page 1]\nthe first page's words\n\n[page 2]\nthe second page's words",
+                          f"scanned PDF — {_ocr.OCR_MARK} (2 of 2 page(s) transcribed{local})")
+
+    # Every page of it read on this PC: no model saw them.
+    kept(tmp_path / "h1", "a" * 64, here=2)
+    pages = [S.Page(number=1, how=S.HOW_UNREAD), S.Page(number=2, how=S.HOW_UNREAD),
+             S.Page(number=3, how=S.HOW_UNREAD)]
+    assert S.take_earlier_reading(pages, tmp_path / "h1", "a" * 64) == 2
+    assert [pg.how for pg in pages] == [S.HOW_THIS_PC, S.HOW_THIS_PC, S.HOW_UNREAD]
+    assert pages[0].earlier and not pages[2].earlier and pages[1].text == "the second page's words"
+    # One by this PC and one by a model (or every page by a model): the page
+    # this PC cannot read now was the model's.
+    for home, here in ((tmp_path / "h2", 1), (tmp_path / "h3", 0)):
+        kept(home, "b" * 64, here=here)
+        pages = [S.Page(number=1, text="the first page's words read now", how=S.HOW_THIS_PC),
+                 S.Page(number=2, how=S.HOW_UNREAD)]
+        assert S.take_earlier_reading(pages, home, "b" * 64) == 1
+        assert pages[0].text == "the first page's words read now" and not pages[0].earlier
+        assert pages[1].how == S.HOW_VISION and pages[1].earlier
+    # No reading kept, or a digest that is not one: nothing is filled.
+    assert S.take_earlier_reading([S.Page(number=1, how=S.HOW_UNREAD)], tmp_path / "none", "c" * 64) == 0
+    assert S.take_earlier_reading([S.Page(number=1, how=S.HOW_UNREAD)], tmp_path / "h3", "../*") == 0
+    # The card never names the press's model for a page read earlier.
+    plan = S.new_plan(source=tmp_path / "x.pdf", sha256="b" * 64, pages=pages,
+                      documents=S.safe_plan([], pages), workspace=tmp_path)
+    plan["read_by"] = "Claude"
+    card = S.card_of(plan)
+    assert card["read_by"] == "" and card["read_by_model"] == 1 and card["read_here"] == 1
+    assert S.card_of({**plan, "pages": {"2": {"how": S.HOW_VISION, "text": "x"}}})["read_by"] == "Claude"
+
+
+def _text_pdf(pages: int = 2) -> bytes:
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.set_font("Helvetica", size=11)
+    for n in range(1, pages + 1):
+        pdf.add_page()
+        pdf.cell(0, 8, "Acme Bank statement", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 8, f"Page {n} of {pages}", new_x="LMARGIN", new_y="NEXT")
+    return bytes(pdf.output())
+
+
+@pytest.mark.usefixtures("no_network")
+def test_sort_this_from_the_phone_makes_no_plan_and_says_where_it_is_done(tmp_path, monkeypatch):
+    """Review 4: the phone (and a phone chat opened on this PC) draws no card
+    and keeps none with the chat, so a plan made there would point at a
+    Confirm nobody can press. "sort this" with a PDF sent from the phone
+    reaches ``stack_plan`` through the REAL phone door and chat turn; it
+    makes no plan and no paid planning call, and its words send the user to
+    a new chat in Iron Jarvis on this PC."""
+    from iron_jarvis.daemon.app import create_app
+    from tests._fakes.phone_files import FakeTelegram, document, telegram
+    from tests.test_script_power_lanes_v1473 import Model, _call
+
+    app = create_app(str(tmp_path / "home"))
+    d = app.state.d
+    platform = d.platform
+    files_root = tmp_path / "Documents" / "Iron Jarvis"
+    platform.config.chat_files_root = str(files_root)
+    planner = Planner({"documents": [{"pages": [1, 2], "title": "Bank statement", "folder": "Bank"}]})
+
+    def plan_it(_m):
+        return _call(1, "stack_plan", path=str(next(files_root.rglob("pile.pdf"))))
+
+    def answer(m):
+        # The reply is the tool's own words, so what the phone gets is what
+        # the tool said.
+        said = [t for texts in m.tool_texts for t in texts if t]
+        return said[-1] if said else "no tool result"
+
+    model = Model([plan_it, answer, answer, answer])
+
+    async def complete(**kw):
+        if kw.get("system") == S.PLAN_SYSTEM:
+            return await planner.complete(**kw)
+        return await model.complete(**kw)
+
+    monkeypatch.setattr(platform.router, "complete", complete)
+    fake = FakeTelegram([document(10, "D1", name="pile.pdf", caption="sort this")], files={"D1": _text_pdf()})
+    poll = d.inbound_poller
+    poll.notifier.add_channel("tg", telegram(fake))
+
+    async def go():
+        res = await poll.poll_once()
+        await poll.drain()
+        return res
+
+    results = asyncio.run(go())
+    row = next(r for r in results if r.get("channel") == "tg")
+    assert row["status"] == "chat", row
+    assert model.offered and "stack_plan" in model.offered[0], "the phone's sort request reaches the plan tool"
+    assert "stack_apply" not in model.offered[0]
+    assert planner.calls == [], "no paid planning call for a card nobody can see"
+    assert not list(S.plans_dir(platform.config.home).glob("stk_*.json")), "no plan is kept"
+    said = fake.texts[-1]
+    assert "Iron Jarvis on this PC" in said and "start a new chat" in said and "attach pile.pdf" in said, said
+    assert "under your reply" not in said

@@ -115,7 +115,7 @@ export function FilePickerModal({
   /** Folder mode: list directories only and pick the CURRENT folder. */
   pickFolders?: boolean;
   title?: string;
-  /** v1.557.0: the folder it opens at (the first drive when absent). */
+  /** v1.559.0: the folder it opens at (the first drive when absent). */
   start?: string;
 }) {
   const { data: drivesData, loading: drivesLoading } = useApi<{ drives: Drive[] }>(

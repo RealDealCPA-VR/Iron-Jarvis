@@ -35,6 +35,30 @@ def _turn_of(ctx: ToolContext) -> str:
     return str(getattr(turn, "turn_id", "") or getattr(ctx, "turn_id", "") or "")
 
 
+def _answers_the_phone() -> bool:
+    """The work in flight answers the PHONE (``failure_words.answers_the_phone``:
+    a message sent from a phone, a reply typed on this PC into a phone chat,
+    or a run either started). Its reply is text only: no card reaches the
+    phone, and none is saved with the phone chat."""
+    try:
+        from ..providers.failure_words import answers_the_phone
+
+        return answers_the_phone() is True
+    except Exception:  # noqa: BLE001 — unsure: a card nobody sees is never made
+        return True
+
+
+def phone_words(name: str) -> str:
+    """Why a plan is not made for the phone, and what to do instead."""
+    return (
+        f"Sorting {name} into separate documents is done on a card in Iron Jarvis on this PC, where the "
+        "user checks the plan and presses Confirm, and this conversation cannot show that card. Nothing "
+        "was planned or written, and the scan is unchanged. Tell the user: in Iron Jarvis on this PC, "
+        f"start a new chat, attach {name} from the folder it was saved in, and say \"sort this\". Do not "
+        "split or write the documents yourself."
+    )
+
+
 class StackPlanTool(Tool):
     name = "stack_plan"
     reversibility = Reversibility.READONLY  # keeps a plan in Iron Jarvis's home; no file of the user's
@@ -77,13 +101,22 @@ class StackPlanTool(Tool):
             return ToolResult(ok=False, error=f"There is no file at {path}.")
         if path.suffix.lower() != ".pdf":
             return ToolResult(ok=False, error=f"{path.name} is not a PDF. Sorting a scan works on a PDF.")
+        if _answers_the_phone():
+            # Before any reading or paid planning call: the plan's card is the
+            # only place it is checked and confirmed, and the phone shows none.
+            return ToolResult(ok=False, error=phone_words(path.name))
         router = self._router_resolver() if callable(self._router_resolver) else None
         if router is None:
             return ToolResult(ok=False, error="No model is set up to plan the documents.")
         try:
-            pages = await asyncio.to_thread(S.read_pages, path, ctx.config)
             sha = await asyncio.to_thread(S.file_sha256, path)
-            readable = [pg for pg in pages if pg.how in (S.HOW_TEXT, S.HOW_THIS_PC)]
+            # An earlier reading of these bytes (this turn's attachment step,
+            # or an earlier turn's) gives the pages this PC cannot read, so a
+            # page a model already read is never offered or paid for again.
+            pages = await asyncio.to_thread(
+                lambda: S.read_pages(path, ctx.config, home=getattr(ctx.config, "home", None), digest=sha)
+            )
+            readable = [pg for pg in pages if pg.how in (S.HOW_TEXT, S.HOW_THIS_PC, S.HOW_VISION)]
             if readable:
                 docs = await S.plan_pages_async(pages, source_name=path.name, router=router, config=ctx.config)
             else:
@@ -112,9 +145,12 @@ class StackPlanTool(Tool):
         # Off the loop too: every page's first words are secret-masked here.
         card = await asyncio.to_thread(lambda: S.card_of(plan, offer=offer))
         here = card["read_here"]
+        earlier = sum(1 for pg in pages if pg.earlier and pg.how == S.HOW_VISION)
         lines = [
             f"Plan made for {path.name}: {len(docs)} document(s) from {len(pages)} page(s)"
             + (f"; {here} page(s) read on this PC by Windows' OCR" if here else "")
+            + (f"; {earlier} page(s) this PC could not read were taken from an earlier reading of this file "
+               "by a model, kept on this PC, so they are not sent again" if earlier else "")
             + (f"; {len(unread)} page(s) could not be read on this PC" if unread else "")
             + ".",
             "The plan is shown to the user on a card under your reply. There they can move a page to "
@@ -126,8 +162,11 @@ class StackPlanTool(Tool):
         if unread and offer:
             first = min(len(unread), S.READ_MORE_MAX)
             some = f"{first} of the {len(unread)}" if first < len(unread) else f"the {len(unread)}"
-            lines.append(f"The card offers to read {some} unread page(s) with {offer['name']}; nothing has "
-                         "been sent to it.")
+            # Only what this tool knows: it sent no page picture. Whether an
+            # earlier step of the chat sent one is not known here, so it is
+            # not said either way.
+            lines.append(f"The card offers to read {some} unread page(s) with {offer['name']}: only the user's "
+                         "press on it sends them. Making this plan sent no page picture to any model.")
         elif unread:
             lines.append("No connected model can read pictures, so those pages stay in \"Not sure\" unless the "
                          "user moves them.")

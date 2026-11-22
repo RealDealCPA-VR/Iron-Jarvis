@@ -10,8 +10,10 @@ it was (D-31.1), and one Undo removes every file the plan wrote.
 THE ORDER OF THINGS, and why:
 
 1. :func:`read_pages`, ON THIS PC: each page's text layer; a page without one
-   is read by Windows' own OCR in its child process (``local_ocr``). A page
-   neither can read is left UNREAD: it is never sent to a model here
+   is read by Windows' own OCR in its child process (``local_ocr``); a page
+   an earlier reading of the same bytes already holds is taken from it
+   (:func:`take_earlier_reading`: never sent or paid for twice). A page none
+   of them can read is left UNREAD: it is never sent to a model here
    (D-31.2: pages must not leave the PC before the card says how many). The
    card offers "Read 4 more pages with <model>?" and only that press sends
    them (:func:`read_more`).
@@ -117,9 +119,16 @@ class Page:
     how: str = HOW_TEXT
     #: Windows' OCR was not sure of its reading.
     doubtful: bool = False
+    #: Taken from an EARLIER reading of this file that Iron Jarvis kept
+    #: (:func:`take_earlier_reading`), not read for this plan: the model that
+    #: read it then is not known by name, so the card says "a model".
+    earlier: bool = False
 
     def as_dict(self) -> dict[str, Any]:
-        return {"how": self.how, "text": self.text[:KEEP_PAGE_CHARS], "doubtful": bool(self.doubtful)}
+        out = {"how": self.how, "text": self.text[:KEEP_PAGE_CHARS], "doubtful": bool(self.doubtful)}
+        if self.earlier:
+            out["earlier"] = True
+        return out
 
 
 _LEFT_BLANK_RX = re.compile(r"(?i)\bintentionally\s+(?:left\s+)?blank\b|\bthis\s+page\s+(?:is\s+)?(?:left\s+)?blank\b")
@@ -186,11 +195,13 @@ def _text_layer(path: Path) -> "list[str]":
     return out
 
 
-def read_pages(path: "str | Path", config: Any = None) -> "list[Page]":
+def read_pages(path: "str | Path", config: Any = None, *, home: Any = None, digest: str = "") -> "list[Page]":
     """Every page's text, read ON THIS PC: the text layer, else Windows' own
-    OCR (in its child process, a chunk of pages at a time). A page neither
-    could read is :data:`HOW_UNREAD` (or :data:`HOW_BLANK` when its picture
-    is white). Nothing here sends a page anywhere. BLOCKING."""
+    OCR (in its child process, a chunk of pages at a time), else an earlier
+    reading of these exact bytes that Iron Jarvis kept (``home`` and
+    ``digest``: :func:`take_earlier_reading`). A page none of them could read
+    is :data:`HOW_UNREAD` (or :data:`HOW_BLANK` when its picture is white).
+    Nothing here sends a page anywhere. BLOCKING."""
     from . import local_ocr
     from .ocr import pdf_page_scan_images
 
@@ -226,7 +237,66 @@ def read_pages(path: "str | Path", config: Any = None) -> "list[Page]":
     for pg in pages:
         if pg.how == HOW_TEXT and _LEFT_BLANK_RX.search(pg.text) and len(pg.text) < 120:
             pg.how = HOW_BLANK
+    if home is not None and digest:
+        take_earlier_reading(pages, home, digest)
     return pages
+
+
+_SAVED_COUNT_RX = re.compile(r"\((\d+) of \d+ page\(s\) transcribed")
+
+
+def _all_read_here(record: "dict[str, Any]") -> bool:
+    """An earlier reading whose note says EVERY page it holds was read on
+    this PC (Windows' OCR): no model saw any of it. Unsure reads as "a model
+    read it", the side that never hides a page that left the PC."""
+    from .local_ocr import LOCAL_NOTE
+
+    if str(record.get("method") or "") != "local":
+        return False
+    note = str(record.get("note") or "")
+    total = _SAVED_COUNT_RX.search(note)
+    here = re.search(r"; (\d+) " + re.escape(LOCAL_NOTE), note)
+    return bool(total and here and int(here.group(1)) >= int(total.group(1)))
+
+
+def take_earlier_reading(pages: "list[Page]", home: Any, digest: str) -> int:
+    """Give each page this PC could not read the text of an EARLIER reading
+    of these exact bytes, when Iron Jarvis kept one (``ocr.saved_readings``):
+    a chat that was asked about the scan before, or this turn's attachment
+    step when the words to sort it were not ones ``wants_stack`` knows, may
+    already have sent that page to the model that reads pictures. The page is
+    then read, so it is never offered, sent or paid for again, and it counts
+    as read by a model (:data:`HOW_VISION`, ``earlier``) unless that reading
+    says every page of it was read on this PC. Returns how many pages it
+    filled. Never raises: a reading that cannot be used leaves the page
+    unread. BLOCKING."""
+    unread = {pg.number: pg for pg in pages if pg.how == HOW_UNREAD}
+    if not unread:
+        return 0
+    try:
+        from .ocr import saved_readings, transcript_pages
+
+        records = saved_readings(home, digest)
+    except Exception:  # noqa: BLE001 — no earlier reading is a page still unread
+        return 0
+    filled = 0
+    for record in records:
+        try:
+            texts = transcript_pages(str(record.get("text") or ""))
+            how = HOW_THIS_PC if _all_read_here(record) else HOW_VISION
+        except Exception:  # noqa: BLE001
+            continue
+        for number, text in texts.items():
+            pg = unread.get(number)
+            body = (text or "").strip()
+            if pg is None or not body:
+                continue
+            pg.text, pg.how, pg.doubtful, pg.earlier = clip_page(body), how, False, True
+            del unread[number]
+            filled += 1
+        if not unread:
+            break
+    return filled
 
 
 # --------------------------------------------------------------------------- #
@@ -733,7 +803,7 @@ def pages_of(plan: "dict[str, Any]") -> "list[Page]":
     for n in range(1, int(plan.get("page_count") or 0) + 1):
         item = raw.get(str(n)) if isinstance(raw.get(str(n)), dict) else {}
         out.append(Page(number=n, text=str(item.get("text") or ""), how=str(item.get("how") or HOW_UNREAD),
-                        doubtful=bool(item.get("doubtful"))))
+                        doubtful=bool(item.get("doubtful")), earlier=item.get("earlier") is True))
     return out
 
 
@@ -751,6 +821,9 @@ def card_of(plan: "dict[str, Any]", *, offer: "dict[str, Any] | None" = None) ->
     first words (the strip's tooltip), never anything the user did not give."""
     pages = pages_of(plan)
     unread = [pg.number for pg in pages if pg.how == HOW_UNREAD]
+    # A page an EARLIER reading gave was read by a model this plan cannot
+    # name: the card then says "read by a model", never the press's model.
+    unnamed = any(pg.earlier and pg.how == HOW_VISION for pg in pages)
     return {
         "kind": "stack",
         "plan_id": plan["id"],
@@ -765,7 +838,7 @@ def card_of(plan: "dict[str, Any]", *, offer: "dict[str, Any] | None" = None) ->
         "unread": unread,
         "read_here": sum(1 for pg in pages if pg.how == HOW_THIS_PC),
         "read_by_model": sum(1 for pg in pages if pg.how == HOW_VISION),
-        "read_by": str(plan.get("read_by") or "")[:80],
+        "read_by": "" if unnamed else str(plan.get("read_by") or "")[:80],
         # A page's first words, for the strip's pointer text: secret-masked
         # like a figure's line (the card is saved with the chat).
         "snippets": {str(pg.number): _masked(" ".join(pg.text.split())[:90]) for pg in pages if pg.text},
@@ -1227,6 +1300,7 @@ __all__ = [
     "boundary_signals", "card_of", "check_every_page", "clean_folder", "clean_name", "clip_page", "digest",
     "edited_documents", "first_date", "keep_facts", "load_plan", "name_for", "new_plan", "outline_words",
     "pages_of", "parse_plan", "plan_pages_async", "plan_prompt", "read_more", "read_pages",
-    "remove_written", "safe_plan", "save_plan", "span_words", "undo_words", "valid_plan_id",
+    "remove_written", "safe_plan", "save_plan", "span_words", "take_earlier_reading", "undo_words",
+    "valid_plan_id",
     "vision_choice", "write_plan",
 ]

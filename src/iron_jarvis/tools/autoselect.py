@@ -3734,7 +3734,7 @@ def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
     return about_figures and bool(_FIGURE_CARRIERS.intersection(picked))
 
 
-#: SORTING A SCANNED PILE (v1.557.0, idea 31-a): "sort this", "sort out
+#: SORTING A SCANNED PILE (v1.559.0, idea 31-a): "sort this", "sort out
 #: these scans", never "sort these rows by date", "sort the transactions from
 #: largest to smallest" or "sort these receipts into tax categories" (those
 #: ORDER or GROUP what is in a file; they do not separate its documents, and
@@ -3796,7 +3796,7 @@ _STACK_PDF_NAMED_RX = re.compile(r"(?i)\.pdf\b")
 
 def wants_stack(text: str, has_pdf: bool) -> bool:
     """True when the message asks to sort a scanned pile into its documents
-    (v1.557.0, idea 31-a): "sort this", "split this into documents",
+    (v1.559.0, idea 31-a): "sort this", "split this into documents",
     "separate the documents", with a PDF attached or named. It arms
     ``stack_plan``, which only reads and shows a plan; nothing is written
     until the user confirms the card. Pure, linear."""

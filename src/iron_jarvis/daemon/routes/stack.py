@@ -1,4 +1,4 @@
-"""The sorting plan's card (v1.557.0, idea 31-a, "Sort this stack").
+"""The sorting plan's card (v1.559.0, idea 31-a, "Sort this stack").
 
 * ``GET  /documents/stack/{plan_id}`` — the card as it is now.
 * ``POST /documents/stack/{plan_id}/apply`` — Confirm: writes the plan as the
