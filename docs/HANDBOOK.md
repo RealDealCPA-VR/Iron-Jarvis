@@ -3081,7 +3081,7 @@ as it was.
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.
 
-## Open items stay until they are done (v1.559.0)
+## Open items stay until they are done (v1.560.0)
 
 The card a new chat or coding session shows for a folder you have worked in
 now keeps every **open item** of that folder, however old, until it is done
