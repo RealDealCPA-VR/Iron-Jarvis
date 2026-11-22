@@ -481,6 +481,58 @@ def test_each_refusal_sends_nothing_and_says_why(desk, case):
         assert night["line"] == f"Skipped: {want[0].upper()}{want[1:]}."
 
 
+def test_a_night_that_asked_a_model_is_done_even_when_another_agent_was_refused(desk):
+    """The record's contract (``improve/models``): skipped = it made nothing
+    because EVERY request it would have sent was refused. One agent refused
+    (its runs were on a model that bills per use) and one reviewed on a plan
+    model that found nothing small enough to suggest is a night that RAN:
+    done, no "Skipped:" line, and the record still says why the first one was
+    not reviewed."""
+    alpha, bravo = _agent(desk, "alpha"), _agent(desk, "bravo")
+    _ran_out_of_steps(desk, alpha, provider="openai", model="gpt-5")
+    _ran_out_of_steps(desk, bravo)
+    desk.router.text = "no change"  # the coach refuses its own draft
+    out = _pass(desk)
+    assert [(c["provider"], c["pin"]) for c in desk.router.calls] == [("claude-cli", True)]
+    assert out["state"] == NR.DONE and out["made"] == 0 and out["requests"] == 1, out
+    row = _row(desk)
+    assert (row.state, row.skipped_why, row.needs_you) == (NR.DONE, "", False)
+    coach = {r["target"]: r for r in json.loads(row.ran_json) if r["proposer"] == "coach"}
+    assert coach[alpha]["result"] == NR.REFUSED
+    assert coach[alpha]["reason"] == "OpenAI bills per use, and the night review never spends money"
+    assert coach[bravo]["result"] == NR.NOTHING
+    assert _night_line(desk)["night"] is None
+    assert _notices(desk) == []
+
+
+PAY = "OpenAI bills per use, and the night review never spends money"
+
+
+@pytest.mark.parametrize("ran, want", [
+    # Every request it would have sent was refused: skipped, and it needs you.
+    ([{"proposer": "tool_failures", "result": NR.NOTHING, "reason": ""},
+      {"proposer": "coach", "result": NR.REFUSED, "reason": PAY}], (NR.SKIPPED, PAY, True)),
+    # A built-in agent only named sends no request: still every request refused.
+    ([{"proposer": "coach", "result": NR.NAMED, "reason": NR.WHY_BUILT_IN},
+      {"proposer": "skill", "result": NR.REFUSED, "reason": PAY}], (NR.SKIPPED, PAY, True)),
+    # A suggestion maker that is not there sends no request either.
+    ([{"proposer": "coach", "result": NR.NOTHING, "reason": NR.WHY_NO_COACH},
+      {"proposer": "skill", "result": NR.REFUSED, "reason": PAY}], (NR.SKIPPED, PAY, True)),
+    # One refused, one asked: the night ran.
+    ([{"proposer": "coach", "result": NR.REFUSED, "reason": PAY},
+      {"proposer": "skill", "result": NR.NOTHING, "reason": NR.WHY_TIMEOUT}], (NR.DONE, "", False)),
+    ([{"proposer": "skill", "result": NR.REFUSED, "reason": PAY},
+      {"proposer": "coach", "result": NR.NOTHING, "reason": "the coach had nothing small enough to say"}],
+     (NR.DONE, "", False)),
+    # Nothing would have asked a model at all: done, nothing to say.
+    ([{"proposer": "tool_failures", "result": NR.NOTHING, "reason": ""}], (NR.DONE, "", False)),
+], ids=["all refused", "named + refused", "no coach + refused", "refused + timed out", "refused + coached",
+        "scan only"])
+def test_skipped_means_every_request_it_would_have_sent_was_refused(ran, want):
+    assert NR._finish(ran, []) == want
+    assert NR._finish(ran, [{"kind": "coach", "ref": "c1", "why": "x"}]) == (NR.DONE, "", False)
+
+
 SIGNED_OUT = "Work Max is signed out"
 
 
@@ -697,6 +749,31 @@ def test_a_night_cut_off_before_the_scan_leaves_the_day_to_the_daily_scan(desk):
     assert row.state == NR.DONE and [r["result"] for r in json.loads(row.ran_json)] == [NR.CUT_OFF]
     assert _notices(desk) == []
     assert NR.reviewed_within(desk.engine, hours=24) is False
+
+
+def test_a_night_cut_off_after_a_refusal_is_done_not_skipped(desk):
+    """A night the window closed on never reached its last jobs, so it cannot
+    say EVERY request it would have sent was refused: one agent refused, then
+    a busy PC until morning, ends ``done`` with no "Skipped:" line, and its
+    record still holds the refusal and the cut-off."""
+    ran = [
+        {"proposer": "tool_failures", "target": "", "result": NR.NOTHING, "reason": "", "key": "tool_failures"},
+        {"proposer": "coach", "target": "custom:alpha", "result": NR.REFUSED, "reason": PAY,
+         "key": "coach:custom:alpha"},
+    ]
+    with session_scope(desk.engine) as db:
+        db.add(NightReviewRecord(night=NIGHT, state=NR.WAITING, ran_json=json.dumps(ran),
+                                 skipped_why=NR.SKIP_RECENT_CHAT))
+        db.commit()
+    assert _pass(desk, now=_local(IN_WINDOW, 8, 0))["skipped"] == NR.SKIP_WINDOW
+    row = _row(desk)
+    assert (row.state, row.skipped_why, row.needs_you) == (NR.DONE, "", False)
+    got = json.loads(row.ran_json)
+    assert [(r["proposer"], r["result"]) for r in got] == [
+        ("tool_failures", NR.NOTHING), ("coach", NR.REFUSED), ("night", NR.CUT_OFF)], got
+    assert got[1]["reason"] == PAY
+    assert _night_line(desk, now=_local(IN_WINDOW, 10, 0))["night"] is None
+    assert _notices(desk) == [] and desk.router.calls == []
 
 
 def test_the_notice_switch_off_rings_nothing(desk):

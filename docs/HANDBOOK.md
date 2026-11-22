@@ -2080,8 +2080,9 @@ Nothing runs until you say yes.
   change (every model it would have used bills per use, for example), the
   line says so: "Skipped: …". Nothing goes to your phone.
 - **Settings › Memory & you › Night review** turns it on or off and sets
-  the requests a night; **Settings › Connections › Notifications** turns the
-  bell row off ("Tell me in the bell what the night review found"). You can
+  the requests a night; **Settings › Connections › Notifications**, under
+  **In the bell**, turns the bell row off ("Tell me in the bell what the
+  night review found"). You can
   also ask in chat: "turn on the night review", "stop telling me about the
   night review". Each change has Undo.
 

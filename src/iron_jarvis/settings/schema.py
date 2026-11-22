@@ -996,7 +996,10 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="ask", section="Night review", check=_range(1, 20),
       aliases=("night review limit", "night review requests")),
     # Its "stop this kind" answer is a Notifications row (the build-out
-    # plan's table of notices): Settings › Connections › Notifications.
+    # plan's table of notices): Settings › Connections › Notifications, where
+    # the card's "In the bell" switch is its one control (dashboard
+    # settings/BellNotices, SettingsHome CONTROLLED_IN_SECTION). Its words
+    # are pinned equal to this row's (bell-notices-17a.test.tsx).
     S("night_review_notice", "Tell me in the bell what the night review found", "connections", "bool",
       "One row in the bell the morning after the night review made suggestions. Off: they still wait "
       "in Improvements, and nothing rings.",

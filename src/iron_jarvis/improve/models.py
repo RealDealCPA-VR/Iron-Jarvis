@@ -26,9 +26,12 @@ class NightReviewRecord(SQLModel, table=True):
       PC became busy, the window closed, Emergency stop, the setting;
       ``skipped_why`` keeps why it stopped), ``running``, ``done``, or
       ``skipped`` (it made nothing because every request it would have sent
-      was refused; ``skipped_why`` says why in one sentence, ``needs_you``
-      whether only the owner can change that). A night whose window closed
-      while it was ``waiting`` ends ``done`` or ``skipped`` with what it ran.
+      was refused, so no model was asked; ``skipped_why`` says why in one
+      sentence, ``needs_you`` whether only the owner can change that). A
+      night where one agent was refused and another was reviewed is
+      ``done``: the refusal is in ``ran_json``. A night whose window closed
+      while it was ``waiting`` ends ``done`` with what it ran (never
+      ``skipped``: the jobs it never reached might have asked a model).
     * ``ran_json``: ``[{proposer, target, result, reason, key}]``, one per
       suggestion maker it ran (``result``: made | nothing | refused | named),
       and a last ``cut off`` entry when the window closed on it.

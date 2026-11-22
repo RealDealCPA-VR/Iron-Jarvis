@@ -246,6 +246,10 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   // turned on and off by the Your other computers card, which restarts Iron
   // Jarvis to apply it (a plain switch here would save it and apply nothing).
   lan_access: "connections-computers",
+  // 17-a: the night review's bell switch is a Notifications row, drawn on the
+  // Notifications card (settings/BellNotices), never as a second
+  // "Notifications" heading beside that card.
+  night_review_notice: "connections-notifications",
 };
 
 /**

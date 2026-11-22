@@ -92,6 +92,10 @@ const SETTINGS = [
     options: [{ value: "off", label: "Off" }, { value: "read_only", label: "Read pages only" }],
   }),
   row("calendar_lead_minutes", "Calendar lead time (minutes)", "connections", "number", { section: "Calendar" }),
+  // 17-a: the night review's bell switch, a Notifications row (settings/BellNotices).
+  row("night_review_notice", "Tell me in the bell what the night review found", "connections", "bool", {
+    section: "Notifications",
+  }),
   row("backup_mirror_dir", "Backup copy folder", "system", "string", { section: "Backups" }),
   row("backup_mirror_media", "Copy media with backups", "system", "bool", { section: "Backups" }),
   row("keep_awake", "Keep this PC awake while work runs", "system", "bool", { section: "Power" }),
@@ -104,6 +108,7 @@ beforeEach(() => {
       values: {
         default_model: "", custom_base_url: "http://x/v1", custom_model: "", ollama_base_url: "",
         browser_access: "off", calendar_lead_minutes: 5, backup_mirror_dir: "", backup_mirror_media: true, keep_awake: true,
+        night_review_notice: true,
       },
     },
     "/config/ledger": { changes: [] },
@@ -156,6 +161,16 @@ describe("ONE control per setting (Wave C, item 29)", () => {
     await open("Connections", "Calendar lead time (minutes)");
     expect(document.getElementById("setting-browser_access")).toBeNull();
     expect(screen.getByTestId("settings-sub-connections-browser")).toBeInTheDocument();
+  });
+
+  it("Connections draws no second Notifications heading: the night review's bell switch is on the Notifications card", async () => {
+    // 17-a review: a schema section named "Notifications" beside the
+    // Notifications card was two headings for one thing.
+    expect(CONTROLLED_IN_SECTION.night_review_notice).toBe("connections-notifications");
+    await open("Connections", "Calendar lead time (minutes)");
+    expect(document.getElementById("setting-night_review_notice")).toBeNull();
+    expect(screen.queryByRole("heading", { level: 3, name: "Notifications" })).toBeNull();
+    expect(screen.getByTestId("settings-sub-connections-notifications")).toBeInTheDocument();
   });
 
   it("System draws no plain backup copy rows (the Maintenance card is the control)", async () => {

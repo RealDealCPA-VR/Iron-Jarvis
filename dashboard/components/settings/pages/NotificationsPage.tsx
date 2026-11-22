@@ -40,6 +40,7 @@ import { ChooserTiles } from "@/components/ChooserTiles";
 import { PageGrid } from "@/components/PageGrid";
 import { useFocusRef } from "@/lib/useFocusRef";
 import { withPhoneChat } from "@/lib/phoneChat";
+import { BellNotices } from "@/components/settings/BellNotices";
 
 /** A configured outbound channel. Shape changed from string[] → object list. */
 interface ChannelInfo {
@@ -1427,6 +1428,10 @@ export default function ChannelsPage() {
             )}
           </Card>
         </PageGrid>
+      </Reveal>
+      {/* 17-a: the bell rows a kind of notice can be stopped from. */}
+      <Reveal>
+        <BellNotices />
       </Reveal>
     </PageShell>
   );

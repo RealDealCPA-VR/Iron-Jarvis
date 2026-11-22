@@ -31,8 +31,10 @@ of the pass and again before each suggestion maker:
 A NIGHT THE WINDOW CLOSED ON (:func:`_close_cut_off`): the first look after
 a night's window closed ends a row of that night still ``waiting`` (or
 ``running`` with no pass in this process: a restart) with what it ran, plus
-one ``cut off`` entry saying why it stopped. The rest of that night's work is
-not run (17-a catches nothing up), and the night's ONE bell row rings for
+one ``cut off`` entry saying why it stopped, and ends ``done`` (never
+``skipped``: the jobs it never reached might have asked a model). The rest
+of that night's work is not run (17-a catches nothing up), and the night's
+ONE bell row rings for
 what it made, the way a finished night's does. A night first seen only after
 the next window opened (the PC was off all day) is ended without a ring, so
 two nights never ring in one. Its suggestions still wait on Improvements,
@@ -494,9 +496,11 @@ def _close_cut_off(engine: Any, config: Any, at: datetime) -> list[str]:
     still ``waiting`` (cut off: the PC stayed busy, the window closed, the
     setting went off) or ``running`` (a restart: the caller runs no pass).
     Each keeps what it ran and made, gains one ``cut off`` entry with why it
-    last stopped, and ends ``done`` (or ``skipped``, by :func:`_finish`'s own
-    rule). The rest of its work is not run. Returns the nights ended.
-    BLOCKING; RAISES when the record cannot be read."""
+    last stopped, and ends ``done``: never ``skipped``, since a night cut off
+    before its last job cannot say that EVERY request it would have sent was
+    refused (a refusal it met stays in ``ran_json``). The rest of its work is
+    not run. Returns the nights ended. BLOCKING; RAISES when the record
+    cannot be read."""
     from ..harness import night as N
 
     current = night_of(config, at)
@@ -512,12 +516,10 @@ def _close_cut_off(engine: Any, config: Any, at: datetime) -> list[str]:
         ended: list[str] = []
         for row in list(db.exec(stmt)):
             ran = _loads(row.ran_json)
-            made = _loads(row.made_json)
-            final, why, needs = _finish(ran, made)
             stopped = str(row.skipped_why or "")
             ran.append({"proposer": "night", "target": "", "result": CUT_OFF,
                         "reason": f"{WHY_CUT_OFF} ({stopped})" if stopped else WHY_CUT_OFF, "key": "cut_off"})
-            row.state, row.skipped_why, row.needs_you = final, why, needs
+            row.state, row.skipped_why, row.needs_you = DONE, "", False
             row.ran_json = json.dumps(ran)
             row.ended_at = utcnow()
             db.add(row)
@@ -905,11 +907,38 @@ async def _stop_reason(d: Any, at: datetime) -> str:
     return await asyncio.to_thread(busy_reason, d, at)
 
 
+#: The suggestion makers that send a model request, and the answers of
+#: theirs that mean no request was ever going to be sent (the maker is not
+#: there at all).
+_ASKS_A_MODEL = frozenset({"coach", "skill"})
+_UNAVAILABLE = frozenset({WHY_NO_COACH, WHY_NO_SKILLS})
+
+
+def _would_ask(entry: dict[str, Any]) -> bool:
+    """Was this entry a job that would have sent a model request? (A built-in
+    or remote agent only named, the tool-failure scan and a maker that is not
+    there send none.)"""
+    if str(entry.get("proposer") or "") not in _ASKS_A_MODEL:
+        return False
+    if entry.get("result") not in (MADE, NOTHING, REFUSED):
+        return False
+    return str(entry.get("reason") or "") not in _UNAVAILABLE
+
+
 def _finish(ran: list[dict[str, Any]], made: list[dict[str, Any]]) -> tuple[str, str, bool]:
-    """``(state, skipped_why, needs_you)`` for a pass that ran every job."""
+    """``(state, skipped_why, needs_you)`` for a pass that ran every job (a
+    night cut off before its last job ends ``done``, :func:`_close_cut_off`).
+    SKIPPED only by the record's contract (``improve/models``): it made
+    nothing because EVERY request it would have sent was refused. A night
+    where one agent was refused and another was reviewed (and the model found
+    nothing to suggest) RAN: it is ``done``, and the refusal stays in
+    ``ran_json`` with its reason."""
     if made:
         return DONE, "", False
-    refused = [str(r.get("reason") or "") for r in ran if r.get("result") == REFUSED and r.get("reason")]
+    asked = [r for r in ran if _would_ask(r)]
+    if not asked or any(r.get("result") != REFUSED for r in asked):
+        return DONE, "", False
+    refused = [str(r.get("reason") or "") for r in asked if r.get("reason")]
     if not refused:
         return DONE, "", False
     mine = [r for r in refused if B.needs_you(r)]
