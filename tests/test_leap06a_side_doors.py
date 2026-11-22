@@ -338,8 +338,11 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
         1, "re-exports the phone channels' transports (httpx_post, httpx_get) by name; sends "
            "nothing"),
     ("comm/base.py", "http_client"): (
-        2, "a phone channel's transport: reached through Notifier.notify (listed) or a reply "
-           "to the person's own message"),
+        3, "a phone channel's transport: reached through Notifier.notify (listed) or a reply "
+           "to the person's own message; and (10-a) the download of a file the person sent "
+           "from the phone (httpx_get_bytes, a GET that stops at the cap), reached only from "
+           "the phone poller's _take_files on that person's own message, after the allowlist: "
+           "it carries no run's words, and a rehearsal's run is never phone-started"),
     ("comm/base.py", "http_post"): (
         3, "a phone channel's transport (the same as above); the third is a look at the "
            "transport's signature (_accepts_headers), not a send"),
@@ -397,6 +400,12 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
     ("comm/tools.py", "notify"): (
         1, "the notify tool's own send: a tool that changes things, so registry.invoke holds it "
            "in a rehearsal (test_leap06a_gate)"),
+    ("comm/voice_note.py", "process"): (
+        2, "10-a: imports core.procs and starts the offline speech worker (audio_worker, "
+           "procs.run) for a voice note the person sent from the phone; reached only from the "
+           "phone poller (comm/inbound.py: _take_files, and the yes that hears the waiting "
+           "notes), as is its fallback to the speech service the person chose: a rehearsal's "
+           "run is never phone-started and has no voice note"),
     ("motivation/engine.py", "notify"): (
         1, "the morning briefing's push: only the person's own press on the autonomy route "
            "(POST briefing with notify); the engine's bus handler only files a suggestion"),
