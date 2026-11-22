@@ -1496,7 +1496,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         ExcelReconcileTool(),  # v1.469.0: match two lists of transactions, in whole cents
         CalculateTool(),  # v1.465.0: exact arithmetic for every stated figure
         *pdf_page_tools(),
-        # v1.559.0 (idea 31-a): a scanned pile becomes named documents — the
+        # v1.560.0 (idea 31-a): a scanned pile becomes named documents — the
         # plan (read on this PC, shown on a card) and its writing (asks).
         *stack_tools(router_resolver),
         # C-03/C-07/C-09 — docx_edit, compare_documents, pdf_form_fields,

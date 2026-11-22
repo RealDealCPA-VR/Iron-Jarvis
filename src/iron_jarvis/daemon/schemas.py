@@ -2370,7 +2370,7 @@ class PauseBody(BaseModel):
 
 
 class StackApplyBody(BaseModel):
-    """``POST /documents/stack/{plan_id}/apply`` (v1.559.0, idea 31-a): the
+    """``POST /documents/stack/{plan_id}/apply`` (v1.560.0, idea 31-a): the
     user pressed Confirm on a sorting plan's card. ``documents`` is the plan
     as the user left it (``[{pages, name, folder}]``); left out, the plan's
     own is written."""
@@ -2380,7 +2380,7 @@ class StackApplyBody(BaseModel):
 
 
 class StackReadMoreBody(BaseModel):
-    """``POST /documents/stack/{plan_id}/read-more`` (v1.559.0): the user
+    """``POST /documents/stack/{plan_id}/read-more`` (v1.560.0): the user
     pressed "Read N more pages with <model>?". ``provider`` is the model the
     card named; the pages go to that model only (none named: nothing sent)."""
 

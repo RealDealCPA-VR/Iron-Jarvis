@@ -211,7 +211,7 @@ SITES: dict[tuple[str, str], Site] = {
         (CANNOT_REACH,), why="the one tool name batch_documents, written in the call",
         cards=(NO_GRANT,),
     ),
-    # v1.559.0 (idea 31-a): a sorting plan's Confirm on its card. The press
+    # v1.560.0 (idea 31-a): a sorting plan's Confirm on its card. The press
     # answers that one call's ask (`session_allow={"stack_apply"}`); the
     # roster holds that one name (proved below).
     ("daemon/routes/stack.py", "register.stack_plan_apply"): Site(
@@ -308,7 +308,7 @@ def test_every_registry_invoke_is_in_the_table_and_no_entry_is_stale():
     # loop above vacuously).
     # 11 at v1.520.0; 12 since group 19's refusal-only call in the stream lane;
     # 13 since MS8's refusal-only call at the MCP door (fourth fix plan);
-    # 14 since the sorting plan's Confirm (v1.559.0, idea 31-a).
+    # 14 since the sorting plan's Confirm (v1.560.0, idea 31-a).
     assert sum(registry_sites.values()) == 14
 
 
@@ -415,7 +415,7 @@ def test_the_documents_batch_reaches_only_batch_documents(platform):
 
 
 def test_the_sorting_plans_confirm_reaches_only_stack_apply(platform):
-    """v1.559.0 (idea 31-a): the card's Confirm names one tool, grants that
+    """v1.560.0 (idea 31-a): the card's Confirm names one tool, grants that
     one name for that one call and hands the gate a roster of that one name.
     `stack_apply` has no check of its own and is no file edit the guard for
     Git's and Iron Jarvis's own files reads: it writes only new .pdf files,

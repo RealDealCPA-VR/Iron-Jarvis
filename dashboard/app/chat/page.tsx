@@ -3178,7 +3178,7 @@ export interface RowHandlers {
   /** Readiness 12B (G15): Continue under reply `index` after the app it
    *  offered to connect was connected somewhere else. */
   continueElsewhere: (index: number) => void;
-  /** v1.559.0 (idea 31-a): this chat's id and Local only, read at a sorting
+  /** v1.560.0 (idea 31-a): this chat's id and Local only, read at a sorting
    *  plan card's press (a new chat's first reply is named after its save). */
   chatScope: () => StackScope;
   /** v1.426.0 (Wave 6, E2): a door under reply `index` was pressed — the

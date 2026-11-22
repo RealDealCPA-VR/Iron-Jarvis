@@ -319,7 +319,7 @@ def default_permissions() -> dict[str, str]:
         # NEW workspace files only (never the source) and TX-01 undoable.
         "pdf_arrange": "allow",
         "pdf_split": "allow",
-        # v1.559.0 (idea 31-a): planning how to sort a scan reads it on this
+        # v1.560.0 (idea 31-a): planning how to sort a scan reads it on this
         # PC and writes no file of the user's; writing the plan asks (the
         # card's Confirm is the answer), and its one Undo removes the files.
         "stack_plan": "allow",

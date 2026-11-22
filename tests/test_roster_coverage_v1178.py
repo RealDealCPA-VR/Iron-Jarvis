@@ -346,7 +346,7 @@ _OFF_ROSTER_BY_DESIGN = {
     # arms them (settings.records_library.library_tools_for). Pinned by
     # tests/test_next_leaps_43a_library.py.
     "model_library", "model_download",
-    # v1.559.0 (idea 31-a): sorting a scan is a PLAN the owner looks at on a
+    # v1.560.0 (idea 31-a): sorting a scan is a PLAN the owner looks at on a
     # card and confirms there (the press answers `stack_apply`'s ask); chat
     # arms the plan (`autoselect.wants_stack`). An agent run has no card to
     # show it on. Pinned by tests/test_leap31a_boundaries.py and _apply.py.

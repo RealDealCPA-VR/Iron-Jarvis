@@ -1216,7 +1216,7 @@ def register(app: FastAPI, d) -> None:
             "bytes": out.stat().st_size,
         }
 
-    # v1.559.0 (idea 31-a): a sorting plan's card — its own module.
+    # v1.560.0 (idea 31-a): a sorting plan's card — its own module.
     from . import stack as _stack_routes
 
     _stack_routes.register(app, d)
