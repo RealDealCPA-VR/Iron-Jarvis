@@ -677,11 +677,62 @@ def test_on_linux_an_orphan_handed_to_pid_1_has_no_living_parent(monkeypatch):
     assert not RS._left_behind(handed, since=now - 1)
 
 
+#: How long the real orphan's check reads psutil's answer again. Only a red
+#: run waits this long: the answer comes at the first read psutil can make.
+_ORPHAN_ANSWER_S = 30.0
+
+
+def _a_real_orphan() -> Any:
+    """A real program whose parent started it and exited (psutil's Process)."""
+    import subprocess
+
+    import psutil
+
+    exe = getattr(sys, "_base_executable", "") or sys.executable
+    hand_off = (
+        "import subprocess, sys; d = subprocess.DEVNULL; "
+        "p = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(120)'], "
+        "stdin=d, stdout=d, stderr=d); print(p.pid)"
+    )
+    out = subprocess.run([exe, "-I", "-c", hand_off], capture_output=True, text=True, timeout=60, check=True)
+    return psutil.Process(int(out.stdout.strip()))
+
+
+def _read_as_left_behind(proc: Any, since: float) -> "tuple[bool, str]":
+    """``_left_behind``'s answer for a program whose parent has exited, read
+    again until it is yes: ``_left_behind`` says no for any read psutil could
+    not make (the right answer for the machine section, which counts only what
+    it read), so ONE no cannot tell "has a living parent" from "could not be
+    read" on a busy runner. Returns the answer and, for a no, what psutil
+    last saw."""
+    from tests import _runner_state as RS
+
+    end = time.monotonic() + _ORPHAN_ANSWER_S
+    while not RS._left_behind(proc, since):
+        if time.monotonic() >= end:
+            try:
+                return False, f"running={proc.is_running()}, ppid={proc.ppid()}, parent={proc.parent()}"
+            except Exception as exc:  # noqa: BLE001 — what psutil said instead
+                return False, f"psutil could not read it: {type(exc).__name__}: {exc}"
+        time.sleep(0.05)
+    return True, ""
+
+
+def _stop(*procs: Any) -> None:
+    for proc in procs:
+        with contextlib.suppress(Exception):
+            proc.kill()
+            proc.wait(10)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="the real-Edge tests run on Windows, where an orphan has no parent")
 def test_a_real_process_whose_parent_exited_has_no_living_parent():
     """psutil's own answer on real processes: a program whose parent exited
     has no living parent; a child of this test and this test's own process
-    have one (a live test's Edge has its driver, the driver its worker)."""
+    have one (a live test's Edge has its driver, the driver its worker).
+    Tests run 45035143879 (backend (8)) passed it only on its rerun; the log
+    holds no words from the first attempt, and of its three checks only the
+    orphan's can be turned red by a read psutil could not make."""
     import subprocess
 
     import psutil
@@ -691,24 +742,48 @@ def test_a_real_process_whose_parent_exited_has_no_living_parent():
     since = RS._run_began(psutil.Process())
     exe = getattr(sys, "_base_executable", "") or sys.executable
     quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    hand_off = (
-        "import subprocess, sys; d = subprocess.DEVNULL; "
-        "p = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(120)'], "
-        "stdin=d, stdout=d, stderr=d); print(p.pid)"
-    )
     child = subprocess.Popen([exe, "-I", "-c", "import time; time.sleep(120)"], **quiet)
     orphan = None
     try:
-        out = subprocess.run([exe, "-I", "-c", hand_off], capture_output=True, text=True, timeout=60, check=True)
-        orphan = psutil.Process(int(out.stdout.strip()))
-        assert RS._left_behind(orphan, since)
+        orphan = _a_real_orphan()
+        left, seen = _read_as_left_behind(orphan, since)
+        assert left, f"an orphan read as having a living parent: {seen}"
         assert not RS._left_behind(psutil.Process(child.pid), since)
         assert not RS._left_behind(psutil.Process(), since)
     finally:
-        for proc in (orphan, child):
-            with contextlib.suppress(Exception):
-                proc.kill()
-                proc.wait(10)
+        _stop(orphan, child)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the real-Edge tests run on Windows, where an orphan has no parent")
+def test_a_real_orphan_whose_parent_psutil_could_not_read_for_a_moment_is_read_again(monkeypatch):
+    """The first reads of the orphan's parent fail (as a process snapshot can
+    on a busy runner): the check reads again instead of taking that no as
+    psutil's answer, and still says yes."""
+    import psutil
+
+    from tests import _runner_state as RS
+
+    real_parent = psutil.Process.parent
+    failing = {"reads": 3}
+
+    def parent(self: Any) -> Any:
+        if failing["reads"]:
+            failing["reads"] -= 1
+            raise OSError("the process snapshot failed")
+        return real_parent(self)
+
+    since = RS._run_began(psutil.Process())
+    orphan = None
+    try:
+        orphan = _a_real_orphan()
+        monkeypatch.setattr(psutil.Process, "parent", parent)
+        assert not RS._left_behind(orphan, since)  # one read: the failed read is a no
+        left, seen = _read_as_left_behind(orphan, since)
+        assert left, seen
+        assert failing["reads"] == 0
+    finally:
+        monkeypatch.undo()
+        _stop(orphan)
 
 
 # --------------------------------------------------------------------------- #
