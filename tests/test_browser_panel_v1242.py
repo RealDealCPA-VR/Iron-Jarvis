@@ -441,17 +441,6 @@ def _chat_runs(platform) -> list[AgentRun]:
         return [r for r in db.exec(select(AgentRun)) if r.session_id == "chat"]
 
 
-def _ledgered_chat_runs(platform, what: str) -> list[AgentRun]:
-    """The turn's usage rows ONCE THEY ARE WRITTEN. The stream lane writes a
-    turn's usage row (one write, its final state) on a worker thread and
-    waits for it in the turn's ``finally`` (``routes/chat.py``, third plan
-    CS8: ``settle_usage_writes``), AFTER the panel's terminal frame went out,
-    so a read the instant that frame lands can find no row yet (tests.yml
-    run 45055162634 passed row 7 only on its retry)."""
-    _wait_for(lambda: _chat_runs(platform), what)
-    return _chat_runs(platform)
-
-
 # --------------------------------------------------------------------------- #
 # Row 7 — a question typed in the sidebar is answered by the daemon's engine
 # --------------------------------------------------------------------------- #
@@ -490,10 +479,7 @@ def test_a_question_from_the_sidebar_is_answered_by_the_daemons_chat_engine(
         turns = app.platform.browser.backend.panel_handler.__self__
         _wait_for(lambda: not turns.running, "the reply never ended after its done")
 
-        runs = _ledgered_chat_runs(
-            app.platform, "the panel's turn was not ledgered like every other chat turn"
-        )
-        assert runs[0].state == AgentState.COMPLETED, (
+        assert _chat_runs(app.platform)[0].state == AgentState.COMPLETED, (
             "the panel's turn was not ledgered like every other chat turn"
         )
 
@@ -559,7 +545,7 @@ def test_stop_from_the_sidebar_halts_a_running_turn_mid_flight(tmp_path, monkeyp
         texts = [p.get("text") for e, p in app.panel.events() if e == P.PANEL_EVENT_DELTA]
         assert _SECOND not in texts, f"the turn kept generating after Stop: {texts}"
 
-        runs = _ledgered_chat_runs(app.platform, "the stopped turn was never ledgered")
+        runs = _chat_runs(app.platform)
         assert len(runs) == 1, [(r.state, r.input_tokens) for r in runs]
         assert runs[0].state == AgentState.CANCELLED
         assert (runs[0].input_tokens, runs[0].output_tokens) == (_R1_IN, _R1_OUT), (
