@@ -29,7 +29,7 @@ How to use this file: read the contents list, then read only the entries your ch
 - L519: **With the network opened by the setting, a request is served only when it ARRIVED on loopback or an allowlisted address** (v1.509.0)
 - L528: **The start's passes over stored reply records run off the loop, bounded, and read only what they rewrite; a lane that breaks ends in plain words; with no token a socket from another computer is refused** (v1.527.0)
 - L545: **The app-wide 400 and a one-shot's 502 answer plain words: `_input_error` says `_input_error_words(exc)`, never `<Class>: <text>`, and a non-rate-limit provider failure is `ProviderFailedHTTP` whose `detail` names the model and whose `technical` holds the raw text** (v1.529.0)
-- L558: **`routes/peers.drain_tells` waits only for its OWN loop's unfinished tells, bounded and loud; the tells are held on the app's state, not a module global; and the spinning shape is scanned for in `src/`** (v1.556.2)
+- L558: **`routes/peers.drain_tells` waits only for its OWN loop's unfinished tells, bounded and loud; the tells are held on the app's state, not a module global; and the spinning shape is scanned for in `src/`** (v1.558.2)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -381,7 +381,7 @@ How to use this file: read the contents list, then read only the entries your ch
   turn at the end; `InboundPoller.drain`, `MediaJobs.drain` and
   `AssignmentDispatcher.drain` use it. A new drain of a tracked-task set uses
   it too, unless it must be bounded or per-loop (then `drain_tells`' shape,
-  the v1.556.2 entry). Pin: `tests/test_drain_never_spins_v13882.py` (each
+  the v1.558.2 entry). Pin: `tests/test_drain_never_spins_v13882.py` (each
   REAL drain() with a finished task whose removal has not run, on its own
   loop in a thread with a deadline — the old shape fails in seconds instead
   of hanging pytest; all three old drains and a helper without the final turn
@@ -557,7 +557,7 @@ How to use this file: read the contents list, then read only the entries your ch
 
 - **`routes/peers.drain_tells` waits only for its OWN loop's unfinished tells,
   bounded and loud; the tells are held on the app's state, not a module
-  global; and the spinning shape is scanned for in `src/`** (v1.556.2, Z-1:
+  global; and the spinning shape is scanned for in `src/`** (v1.558.2, Z-1:
   the v1.555.0 Linux release hung 300 s in `routes/peers.drain_tells`).
   `drain_tells` (new in 41-a) was `while _TELLS: await asyncio.gather(...)`,
   the shape forbidden above since v1.388.2: the dump showed the main thread
