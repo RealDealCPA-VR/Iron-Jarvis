@@ -28,6 +28,7 @@ from types import SimpleNamespace
 import pytest
 
 from iron_jarvis.daemon.app import create_app
+from iron_jarvis.hosted import acp
 from iron_jarvis.hosted import antigravity as A
 from iron_jarvis.hosted import events as E
 from iron_jarvis.hosted import service as S
@@ -145,6 +146,14 @@ def _form_answers(log: Path) -> list:
 # THE CONTRACT
 # --------------------------------------------------------------------------- #
 async def test_the_golden_file_is_what_the_real_daemon_sends_for_antigravity(tmp_path, monkeypatch):
+    # v1.556.2: a running step's row is redrawn at most once a second
+    # (acp.UPDATE_EVERY_S, on the loop's clock). The recordings play with no
+    # pauses, so the update after a card's answer falls inside that second and
+    # is dropped, unless the answer takes a second to arrive on a busy runner:
+    # then one more row is drawn and this comparison failed (it passed only on
+    # its retry in tests.yml run 45039421510). The window is pinned so the
+    # recording does not depend on the runner's speed.
+    monkeypatch.setattr(acp, "UPDATE_EVERY_S", 3600.0)
     got = {}
     for name in SCENARIOS:
         evs, _sid, work, _log, _view, _app = await run_agy(tmp_path, monkeypatch, name)

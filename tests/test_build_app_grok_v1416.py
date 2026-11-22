@@ -28,6 +28,7 @@ from types import SimpleNamespace
 import pytest
 
 from iron_jarvis.daemon.app import create_app
+from iron_jarvis.hosted import acp
 from iron_jarvis.hosted import events as E
 from iron_jarvis.hosted import grok as G
 from iron_jarvis.hosted import service as S
@@ -149,6 +150,12 @@ async def test_the_golden_file_is_what_the_real_daemon_sends_for_grok(tmp_path, 
     # viewer's merging (timed, tests/test_build_app_live_merge_v1472.py) is
     # turned off here so the recording does not depend on timing.
     monkeypatch.setattr(S, "_gather_live", _one_event_at_a_time)
+    # v1.556.2: so is the once-a-second redraw of a running step
+    # (acp.UPDATE_EVERY_S, on the loop's clock): a card's answer that took a
+    # second on a busy runner drew one more row (the Antigravity golden passed
+    # only on its retry in tests.yml run 45039421510; this one went red the
+    # same way with each answer held 1.2 s).
+    monkeypatch.setattr(acp, "UPDATE_EVERY_S", 3600.0)
     got = {}
     for name in SCENARIOS:
         evs, _sid, work, _log, _r = await run_grok(tmp_path, monkeypatch, name)
