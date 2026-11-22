@@ -8,6 +8,7 @@ network; every chat folder lands under the test's own ``tmp_path``.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,20 @@ from iron_jarvis.comm.threads import CommThreadStore
 #: A made-up bot token: the tests look for it in logs, events and replies.
 BOT_TOKEN = "123456:TEST-not-a-real-bot-token"
 ME = 777
+
+#: The time a test's files are kept at (``fixed_time``), and the names a
+#: Telegram photo and voice note are kept under then.
+KEPT_AT = datetime(2026, 11, 20, 10, 15, 30)
+PHOTO = "photo-2026-11-20-101530.jpg"
+PHOTO_2 = "photo-2026-11-20-101530-2.jpg"
+VOICE = "voice-note-2026-11-20-101530.ogg"
+
+
+def fixed_time(monkeypatch: Any, when: datetime = KEPT_AT) -> None:
+    """Keep every file of the test at ``when`` (a plain name gets it)."""
+    from iron_jarvis.comm import media
+
+    monkeypatch.setattr(media, "_now", lambda: when)
 
 
 class Clock:

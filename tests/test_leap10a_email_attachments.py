@@ -174,6 +174,76 @@ def test_the_size_before_the_decode_is_the_files_own_size():
         ch.fetch_file(files[0], len(data) - 4)
 
 
+def test_an_attachment_over_the_cap_is_never_decoded():
+    # The refusal comes from the size read off the encoded text, BEFORE the
+    # decode: the part's decoded payload is never asked for.
+    from email import message_from_bytes
+
+    from iron_jarvis.comm.base import FileTooLarge
+
+    data = bytes(range(256)) * 400
+    msg = _mail(pdfs=0)
+    msg.add_attachment(data, maintype="application", subtype="pdf", filename="big.pdf")
+    f = _email_attachments(message_from_bytes(msg.as_bytes()))[0]
+    decoded: list[bool] = []
+    real = f.handle.get_payload
+
+    def payload(*args, **kw):
+        if kw.get("decode"):
+            decoded.append(True)
+        return real(*args, **kw)
+
+    f.handle.get_payload = payload
+    ch = EmailChannel(dict(CFG))
+    with pytest.raises(FileTooLarge):
+        ch.fetch_file(f, len(data) - 100)
+    assert decoded == []
+    assert ch.fetch_file(f, len(data)) == data and decoded == [True]
+
+
+def test_a_forwarded_email_is_kept_as_a_file(platform, tmp_path, monkeypatch):
+    # An e-mail attached to an e-mail is kept whole as .eml, a kind taken
+    # (it was refused as "that isn't a kind of file taken").
+    from tests._fakes.phone_files import fixed_time
+
+    fixed_time(monkeypatch)
+    inner = EmailMessage()
+    inner["From"] = "Bob <bob@example.org>"
+    inner["Subject"] = "Quote"
+    inner.set_content("The quote is 400.")
+    outer = _mail(pdfs=0, body="see the forwarded one")
+    outer.add_attachment(inner)
+    root, results, turn = _rig(platform, tmp_path, monkeypatch, [outer])
+
+    kept = files_under(root)
+    assert [p.name for p in kept] == ["forwarded-email-2026-11-20-101530.eml"]
+    assert b"The quote is 400." in kept[0].read_bytes()
+    assert turn.calls[0].attachments == [str(kept[0])]
+
+
+def test_an_over_cap_attachment_in_the_poll_is_named_not_fetched(platform, tmp_path, monkeypatch):
+    # Through the whole pipeline: the size check before the download refuses
+    # it, so the channel's fetch is never reached.
+    platform.config.phone_file_max_mb = 1
+    big = _mail(pdfs=0, body="file the scan")
+    big.add_attachment(b"x" * (2 * 1024 * 1024), maintype="application", subtype="pdf",
+                       filename="scan.pdf")
+    fetched: list[str] = []
+    real = EmailChannel.fetch_file
+
+    def spy(self, f, cap):  # noqa: ANN001
+        fetched.append(f.name)
+        return real(self, f, cap)
+
+    monkeypatch.setattr(EmailChannel, "fetch_file", spy)
+    root, results, turn = _rig(platform, tmp_path, monkeypatch, [big])
+
+    assert fetched == []
+    assert files_under(root) == []
+    assert any("scan.pdf" in s and "1 MB" in s for s in _SMTP.sent)
+    assert len(turn.calls) == 1 and turn.calls[0].attachments == []
+
+
 def test_a_signature_and_a_body_picture_are_not_files():
     from email import message_from_bytes
     from email.mime.image import MIMEImage

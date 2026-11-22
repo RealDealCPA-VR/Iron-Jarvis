@@ -19,9 +19,9 @@ How to use this file: read the contents list, then read only the entries your ch
 - L354: **An answer to another computer says how the run really ended, and the asking side ends the member from that, never from the kind** (v1.514.0)
 - L371: **A phone turn knows its chat, and the desk door builds the phone door's body** (v1.515.0)
 - L381: **A file the phone cannot take is said in words on Slack and email too, after the guards, never before** (v1.546.1)
-- L408: **A task from another computer carries its conversation PLANNED, never its newest N rows** (v1.546.2)
-- L445: **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time** (v1.552.0)
-- L507: **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.549.0)
+- L411: **A task from another computer carries its conversation PLANNED, never its newest N rows** (v1.546.2)
+- L448: **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time** (v1.552.0)
+- L510: **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.552.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -379,9 +379,14 @@ How to use this file: read the contents list, then read only the entries your ch
   Pin: `tests/test_second_review_stays_here_v1515.py`.
 
 - **A file the phone cannot take is said in words on Slack and email too, after the guards, never before** (v1.546.1, build-out plan R0.3).
-  Until 10-a reads files, `InboundMessage.files_not_read` carries the count:
-  the Slack pump lets `file_share` through in the DM and the own channel
-  (every other subtype is still dropped) and counts `event.files` (an
+  SINCE 10-a (the next entry) files are read: `InboundMessage.files_not_read`
+  counts only the files with NO download (a Slack link to a Google Doc, a
+  file Slack hid, a `file_share` with no `files` list), every other file is an
+  `InboundFile`, and the words come from `InboundPoller._take_files`
+  (`media.not_opened_line` for this count; `files_not_read_reply` is gone).
+  The Events API webhook takes a file in a DM now. What still holds from
+  R0.3: the Slack pump lets `file_share` through in the DM and the own channel
+  (every other subtype is still dropped) and reads `event.files` (an
   `app_mention` carries files with no subtype). In ANY OTHER channel a
   `message` copy that is a `file_share` or tags the bot (`_mentions_bot`)
   returns BEFORE `_first_copy`: Slack sends a mention there as `message` and
@@ -391,18 +396,16 @@ How to use this file: read the contents list, then read only the entries your ch
   signature logo is not a file), an attached email as one, and a single-part
   non-text email as one, whose bytes `_email_body` no longer reads as words;
   never a signature or the key beside it (`_SIGNATURE_TYPES`) or an encrypted
-  email (`_SEALED_TYPES`). `InboundPoller._dispatch` says it
-  (`files_not_read_reply`) only AFTER the allowlist, the email proof and the
-  private-chat guard; no words ends as `files_not_read`. With words, the
-  saved user line, and so the turn, the escalated run, a remote agent and the
-  one-shot run, carry `files_not_read_note` after them, so the model never
-  answers about files it did not see; who the message is for is still read
-  from the bare words. Once per (channel, sender) per `FILES_NOT_READ_EVERY_S`
-  on the injected clock; no file names in logs. Telegram keeps its own
-  `MEDIA_NOTICE`. Not covered: the Events API webhook
-  (`routes/comm.py`, `/comm/slack/events/{name}`) still drops every subtype,
-  `file_share` included; it needs a tunnel, so nobody reaches it by default.
-  When 10-a lands, a file it reads leaves this count.
+  email (`_SEALED_TYPES`). `InboundPoller._dispatch` says it (through
+  `_take_files`) only AFTER the allowlist, the email proof and the
+  private-chat guard; nothing taken and no words ends as `files_not_taken`.
+  With words, the saved user line, and so the turn, the escalated run, a
+  remote agent and the one-shot run, carry `files_not_read_note` after them
+  for every file not taken, so the model never answers about files it did
+  not see; who the message is for is still read from the bare words. A
+  receipt that took nothing goes once per (channel, sender) per
+  `FILES_NOT_READ_EVERY_S` on the injected clock; no file names in logs.
+  Telegram keeps its own `MEDIA_NOTICE` for what it still cannot take.
   Pin: `tests/test_files_not_taken_r03.py`.
 
 - **A task from another computer carries its conversation PLANNED, never its newest N rows** (v1.546.2, build-out R0.1).
@@ -504,7 +507,7 @@ How to use this file: read the contents list, then read only the entries your ch
   case each in `tests/test_peers_v1497.py`, `tests/test_peers_review_v1497.py`,
   `tests/test_second_review_pairing_v1509.py`.
 
-- **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.549.0, build-out plan R2.3, phase 10-a).
+- **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.552.0, build-out plan R2.3, phase 10-a).
   `InboundMessage.files` carries `InboundFile`s (kind, name, mime, size, the
   channel's own `ref`); nothing is downloaded at poll time. Telegram turns
   photo (largest size), document, voice, audio, video and video_note into
@@ -538,4 +541,22 @@ How to use this file: read the contents list, then read only the entries your ch
   download. Tests write under the run's own Documents
   (`conftest._documents_folder_is_the_tests_own`); a phone-file test that
   builds its own app sets `chat_files_root` too.
+  NAMES NEVER RUN OUT: `<home>/uploads` is never emptied and `store_upload`
+  tries `MAX_UPLOAD_NAMES` numbered names, so a name the phone did not give
+  (`media.PLAIN_STEMS`: a Telegram photo or voice note, Slack's pasted
+  "image.png", a nameless e-mail part) is kept with the date and time
+  (`media.kept_name`, clock `media._now`; tests `fixed_time`), and any name
+  whose numbered names are all taken falls back to the same. THE YES NAMES
+  ITS SERVICE: a yes said on the phone is kept with `phone_voice_service_for`
+  (`voice_note.service_key`, written BEFORE the writer's yes); a different
+  service in Settings asks again, and a yes whose question named another
+  service than the one chosen now asks again and keeps nothing. A yes chosen
+  in Settings ("" kept) follows the service chosen there. A voice note not
+  heard yet (asked, or nothing set up) still lands on the phone chat
+  (`_note_unheard`: its chip and what the phone was told), and a second one
+  before the answer waits on the same question (`ref_id` holds every waiting
+  path, one a line, `MAX_WAITING`). THE WORKER takes numpy only through
+  `core/_numpy` and reads PyAV frames from their plane (`_frame_pcm`, never
+  `to_ndarray`, which imports numpy behind that door). A Slack snippet is a
+  text file; an attached e-mail is kept as `.eml`.
   Pins: `tests/test_leap10a_*.py`, `dashboard/__tests__/leap-10a-phone-attachments.test.tsx`.

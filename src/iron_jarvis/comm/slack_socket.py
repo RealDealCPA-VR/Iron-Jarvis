@@ -85,8 +85,9 @@ MENTION_ELSEWHERE_NOTE = (
 )
 
 
-#: 10-a: a Slack file that is only a link or was hidden has no download.
-_NO_DOWNLOAD_MODES = frozenset({"external", "tombstone", "hidden_by_limit", "snippet", "post"})
+#: 10-a: a Slack file that is only a link or was hidden has no download. A
+#: snippet has one (it is taken as a text file: ``slack_files``).
+_NO_DOWNLOAD_MODES = frozenset({"external", "tombstone", "hidden_by_limit", "post"})
 
 
 def slack_files(event: dict) -> "tuple[list[InboundFile], int]":
@@ -98,7 +99,7 @@ def slack_files(event: dict) -> "tuple[list[InboundFile], int]":
     fetches only from Slack's own file host. A ``file_share`` with no
     ``files`` list counts one file with no download (R0.3). Shared by the
     Socket Mode pump and the Events API webhook. Never raises."""
-    from .media import file_name, kind_of
+    from .media import TAKEN, extension_for, file_name, kind_of
 
     out: list[InboundFile] = []
     missing = 0
@@ -116,6 +117,9 @@ def slack_files(event: dict) -> "tuple[list[InboundFile], int]":
                 continue
             mime = str(item.get("mimetype") or "")
             name = file_name(str(item.get("name") or item.get("title") or ""), mime, "file")
+            if str(item.get("mode") or "") == "snippet" and extension_for(name) not in TAKEN:
+                # A snippet is text (code, a log) whatever its name says.
+                name, mime = f"{name}.txt", "text/plain"
             size = item.get("size")
             out.append(InboundFile(
                 kind=kind_of(name, mime), name=name, mime=mime,

@@ -29,11 +29,13 @@ from iron_jarvis.comm.channels import TelegramChannel
 from tests._fakes.phone_files import (
     BOT_TOKEN,
     ME,
+    PHOTO,
     FakeTelegram,
     chat_root,
     document,
     fake_turn,
     files_under,
+    fixed_time,
     message,
     photo,
     poller,
@@ -115,6 +117,7 @@ def test_a_photo_with_words_is_kept_and_reaches_the_chat_turn(platform, tmp_path
     from iron_jarvis.core import userdirs
 
     monkeypatch.setattr(userdirs, "documents_dir", lambda: tmp_path / "Documents")
+    fixed_time(monkeypatch)
     root = chat_root(platform, tmp_path)
     fake = FakeTelegram([photo(40, caption="add this to the March list")], files={"P1": b"\xff\xd8 jpeg"})
     turn = fake_turn()
@@ -124,13 +127,15 @@ def test_a_photo_with_words_is_kept_and_reaches_the_chat_turn(platform, tmp_path
 
     assert fake.get_files == ["P1"] and len(fake.downloads) == 1
     kept = files_under(root)
-    assert len(kept) == 1 and kept[0].name == "photo.jpg"
+    # A Telegram photo has no name of its own: it is kept with the date and
+    # time, so the thousandth one is still kept.
+    assert len(kept) == 1 and kept[0].name == PHOTO
     assert kept[0].read_bytes() == b"\xff\xd8 jpeg"
     assert kept[0].parent.name.endswith(" From your phone")
     # The saved line comes first, naming the file and the folder from the
     # chat files folder down, never the whole path.
     where = str(Path("Documents") / "Iron Jarvis" / kept[0].parent.name)
-    assert fake.texts[0] == f"Iron Jarvis: Saved photo.jpg in {where}."
+    assert fake.texts[0] == f"Iron Jarvis: Saved {PHOTO} in {where}."
     assert str(tmp_path) not in fake.texts[0]
     assert "Added to the March list." in fake.texts[1]
     # The turn got the file through the attachment seam, in the chat's folder.

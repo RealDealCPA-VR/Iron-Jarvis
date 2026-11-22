@@ -15,7 +15,10 @@ The ORDER is the decision:
    ``routes/voice.transcribe_clip`` dictation uses. That choice was made for
    dictation, not for phone audio, so the phone asks ONCE first ("Use OpenAI
    for phone voice notes too?"); the answer is the setting
-   ``phone_voice_service`` (ask, yes, no) with Undo. The reply names the
+   ``phone_voice_service`` (ask, yes, no) with Undo. A yes said on the phone
+   is kept WITH the service it was asked for (``phone_voice_service_for``,
+   :func:`service_key`): when Settings later names another service, the
+   phone asks again before a voice note goes to it. The reply names the
    service.
 3. A Local only chat never sends a voice note off the network: the real
    ``transcribe_clip`` refuses it (``SpeechKeptHere``), and the words say so.
@@ -59,6 +62,15 @@ VOICE_KINDS = ("voice",)
 ASK_KIND = "voice_service"
 YES_WORDS = frozenset({"1", "yes", "y", "ok", "use it", "sure"})
 NO_WORDS = frozenset({"2", "no", "n", "keep it on this pc", "only on this pc"})
+#: The most recordings one question waits on (a voice note sent before the
+#: answer joins the question; the oldest past this are left kept, unheard).
+MAX_WAITING = 5
+
+
+def waiting_paths(ref: str) -> list[str]:
+    """The recordings a question waits on, from its ``ref_id`` (their paths,
+    oldest first, one a line)."""
+    return [p for p in str(ref or "").split("\n") if p.strip()]
 
 
 @dataclass
@@ -73,6 +85,21 @@ class Heard:
     ask: str = ""
     #: When nothing was heard and nothing is asked: why, in words.
     problem: str = ""
+    #: The kind of service asked about (``_voice_backend``'s label: "openai",
+    #: "stt" or "custom"), for the question's words.
+    ask_label: str = ""
+
+
+@dataclass(frozen=True)
+class Service:
+    """The speech service chosen in Settings right now."""
+
+    label: str
+    url: str
+    #: As the user knows it ("OpenAI", "the speech server at <host>").
+    who: str
+    #: Which service a yes is kept for (:func:`service_key`).
+    key: str
 
 
 def _worker_argv() -> list[str]:
@@ -124,19 +151,62 @@ def hear_offline(path: str, model: str) -> str:
 
 def service_name(label: str, url: str) -> str:
     """The speech service as the user knows it: "OpenAI", or "the speech
-    server at <host>"."""
+    server at <host>" (with its port when the address names one, so two
+    servers on one PC are two names, and the question names which)."""
     if label == "openai":
         return "OpenAI"
     try:
-        host = urlsplit(url).hostname or ""
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        if host and parts.port:
+            host = f"{host}:{parts.port}"
     except Exception:  # noqa: BLE001
         host = ""
     return f"the speech server at {host}" if host else "your speech server"
 
 
-def _consent(config: Any) -> str:
+def service_key(label: str, url: str) -> str:
+    """Which speech service a yes on the phone was for: "openai", else its
+    kind and server ("stt:speech.example.com", "custom:127.0.0.1:8080")."""
+    if label == "openai":
+        return "openai"
+    try:
+        parts = urlsplit(url)
+        host, port = (parts.hostname or "").lower(), parts.port
+    except Exception:  # noqa: BLE001
+        host, port = "", None
+    return f"{label}:{host}" + (f":{port}" if port else "")
+
+
+async def current_service(deps: Any) -> "Service | None":
+    """The speech service chosen in Settings now (``_voice_backend``), or
+    ``None`` when there is none. Never raises."""
+    try:
+        backend = await asyncio.to_thread(deps._voice_backend) if deps is not None else None
+    except Exception:  # noqa: BLE001
+        backend = None
+    if not backend:
+        return None
+    label, url = str(backend[0]), str(backend[1])
+    return Service(label=label, url=url, who=service_name(label, url), key=service_key(label, url))
+
+
+def _consent(config: Any, key: str = "") -> str:
+    """``phone_voice_service`` for the service ``key``: "ask", "yes" or "no".
+
+    D-10.1: a yes said on the phone was asked for ONE named service and is
+    kept with it (``phone_voice_service_for``). When the service chosen in
+    Settings is a different one now, that yes is not consent for it: the
+    phone asks again. A yes chosen in Settings with no service kept follows
+    the service chosen there, as its row says."""
     raw = str(getattr(config, "phone_voice_service", "ask") or "ask").strip().lower()
-    return raw if raw in ("ask", "yes", "no") else "ask"
+    if raw not in ("ask", "yes", "no"):
+        return "ask"
+    if raw == "yes":
+        given = str(getattr(config, "phone_voice_service_for", "") or "").strip()
+        if given and key and given != key:
+            return "ask"
+    return raw
 
 
 async def transcribe_note(
@@ -159,11 +229,8 @@ async def transcribe_note(
         text = await asyncio.to_thread(hear_offline, path, str(model))
         if text:
             return Heard(text=text)
-    try:
-        backend = await asyncio.to_thread(deps._voice_backend)
-    except Exception:  # noqa: BLE001
-        backend = None
-    if not backend:
+    svc = await current_service(deps)
+    if svc is None:
         if offline_tried:
             return Heard(problem=(
                 "I could not turn your voice note into words on this PC, and no speech "
@@ -171,24 +238,22 @@ async def transcribe_note(
         return Heard(problem=(
             "I could not turn your voice note into words: there is no offline speech model "
             f"on this PC and no speech service is chosen in Settings. {keep}"))
-    label, url = str(backend[0]), str(backend[1])
-    who = service_name(label, url)
     from ..daemon.routes import voice as voice_routes
 
-    if local_only and _off_network(voice_routes, label, url):
+    if local_only and _off_network(voice_routes, svc.label, svc.url):
         # LOCAL ONLY: the real transcribe_clip refuses a service off this
         # network before anything is read or sent, whatever was answered
         # before; nobody is asked about a service that could not be used.
-        return await _by_service(deps, voice_routes, path, who=who, local_only=True,
+        return await _by_service(deps, voice_routes, path, who=svc.who, local_only=True,
                                  keep=keep, mime=mime)
-    consent = _consent(getattr(getattr(deps, "platform", None), "config", None))
+    consent = _consent(getattr(getattr(deps, "platform", None), "config", None), svc.key)
     if consent == "no":
         return Heard(problem=(
             "I could not turn your voice note into words on this PC, and phone voice notes "
             f"stay on this PC (Settings, Voice notes from your phone). {keep}"))
     if consent == "ask":
-        return Heard(ask=who)
-    return await _by_service(deps, voice_routes, path, who=who, local_only=local_only,
+        return Heard(ask=svc.who, ask_label=svc.label)
+    return await _by_service(deps, voice_routes, path, who=svc.who, local_only=local_only,
                              keep=keep, mime=mime)
 
 
@@ -228,20 +293,17 @@ async def _by_service(deps: Any, voice_routes: Any, path: str, *, who: str, loca
 
 
 async def transcribe_with_service(deps: Any, path: str, *, local_only: bool, kept_in: str,
-                                  mime: str = "audio/ogg") -> Heard:
-    """After the user said yes on the phone: the chosen service now, without
-    asking (Local only still refuses one off the network). Never raises."""
+                                  mime: str = "audio/ogg", service: "Service | None" = None) -> Heard:
+    """After the user said yes on the phone: ``service`` (the one the yes was
+    for; default the one chosen now), without asking. Local only still
+    refuses one off the network. Never raises."""
     keep = f"The recording is kept in {kept_in}."
-    try:
-        backend = await asyncio.to_thread(deps._voice_backend) if deps is not None else None
-    except Exception:  # noqa: BLE001
-        backend = None
-    if not backend:
+    svc = service or await current_service(deps)
+    if svc is None:
         return Heard(problem=f"No speech service is chosen in Settings any more. {keep}")
     from ..daemon.routes import voice as voice_routes
 
-    who = service_name(str(backend[0]), str(backend[1]))
-    return await _by_service(deps, voice_routes, path, who=who, local_only=local_only,
+    return await _by_service(deps, voice_routes, path, who=svc.who, local_only=local_only,
                              keep=keep, mime=mime)
 
 
@@ -260,15 +322,30 @@ def ask_question(who: str) -> str:
     return f"Use {who} for phone voice notes too?"
 
 
-def ask_words(who: str) -> str:
+def ask_words(who: str, label: str = "", *, waiting: int = 1) -> str:
     """The one question asked before the first phone voice note goes to the
-    chosen speech service (decision D-10.1)."""
+    chosen speech service (decision D-10.1). ``label`` "custom" is the model
+    server set up for chat, which dictation falls back to: it is named as
+    that, not as a speech service chosen for dictation. ``waiting`` > 1: an
+    earlier voice note waits on the same answer, and is said to."""
+    what = (
+        "It is the model server you set up for chat in Settings (dictation uses it too)"
+        if label == "custom" else
+        "It is the speech service you chose for dictation"
+    )
+    also = (f" Your {waiting} voice notes wait on this one answer." if waiting > 1 else "")
     return (
         "I can't turn voice notes into words on this PC: the offline speech model "
-        f"isn't here or heard nothing. {ask_question(who)} It is the speech service "
-        "you chose for dictation, and each voice note would be sent to it. Reply 1 "
-        "for yes or 2 for no."
+        f"isn't here or heard nothing. {ask_question(who)} {what}, and each voice note "
+        f"would be sent to it.{also} Reply 1 for yes or 2 for no."
     )
+
+
+def changed_words(who: str, label: str = "", *, waiting: int = 1) -> str:
+    """The speech service chosen in Settings changed between the question
+    and the yes: the yes was for the other one, so the phone asks again."""
+    return ("The speech service in Settings changed since I asked. "
+            f"{ask_words(who, label, waiting=waiting)}")
 
 
 def heard_line(heard: Heard) -> str:

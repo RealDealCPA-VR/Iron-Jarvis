@@ -302,11 +302,12 @@ class PendingPromptStore:
             log.warning("expire_ref failed for %s/%s", kind, ref_id, exc_info=True)
             return 0
 
-    def expire_kind(self, kind: str, channel: str, sender_id: str) -> int:
+    def expire_kind(self, kind: str, channel: str, sender_id: str) -> list[str]:
         """Close every OPEN prompt of ``kind`` for one identity (10-a: a newer
-        voice note's question replaces an unanswered older one, so "1" always
-        answers about the newest recording). Returns how many closed; 0 on
-        failure (never raises)."""
+        voice note's question replaces an unanswered older one, so there is
+        one question to answer). Returns the closed prompts' ``ref_id``s,
+        oldest first (the caller carries what they waited on into the new
+        question); ``[]`` on failure (never raises)."""
         try:
             with self._lock, session_scope(self.engine) as db:
                 rows = db.exec(
@@ -315,17 +316,18 @@ class PendingPromptStore:
                         PendingPromptRecord.channel == channel,
                         PendingPromptRecord.sender_id == str(sender_id),
                         PendingPromptRecord.status == "open",
-                    )
+                    ).order_by(PendingPromptRecord.created_at)
                 ).all()
+                refs = [str(rec.ref_id or "") for rec in rows]
                 for rec in rows:
                     rec.status = "superseded"
                     rec.decided_at = utcnow()
                     db.add(rec)
                 db.commit()
-                return len(rows)
+                return refs
         except Exception:  # noqa: BLE001 — a marker write must never break comm
             log.warning("expire_kind failed for %s", kind, exc_info=True)
-            return 0
+            return []
 
     def _decide(self, prompt_id: str, status: str) -> bool:
         try:

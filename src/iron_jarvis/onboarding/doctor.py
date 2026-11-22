@@ -751,8 +751,19 @@ def check_local_ocr() -> dict:
     )
 
 
-#: The audio worker's one answer for this process (``check_phone_voice_notes``).
+#: The audio worker's one answer for this process (``check_phone_voice_notes``),
+#: and when a check last did not finish (``missed_at``).
 _VOICE_CHECK: dict = {}
+#: How long a check that did not finish is said again without a new child:
+#: the doctor runs on every Overview open, and each try may wait a minute.
+_VOICE_MISS_KEEP_S = 300.0
+
+
+def _voice_clock() -> float:
+    """The clock the kept miss is timed on (a test moves it)."""
+    import time
+
+    return time.monotonic()
 
 
 def check_phone_voice_notes() -> dict:
@@ -771,17 +782,24 @@ def check_phone_voice_notes() -> dict:
     # reinstalled (and so restarted), and the doctor runs on page opens. Only
     # an ANSWER is kept: a child that did not answer in time (a busy PC: the
     # frozen exe took over 30 s to start while other work ran) is asked again
-    # on the next look, never kept as "can't be decoded".
+    # on a later look, never kept as "can't be decoded". The miss itself is
+    # said again for _VOICE_MISS_KEEP_S without a new child, so a busy PC
+    # does not wait up to a minute on every Overview open.
     out = _VOICE_CHECK.get("out")
     if out is None:
+        unfinished = _result(
+            "phone_voice_notes", False,
+            "The check for voice notes from your phone did not finish within a minute (the "
+            "PC may be busy). It runs again in a few minutes.",
+            level=RECOMMENDED,
+        )
+        missed = _VOICE_CHECK.get("missed_at")
+        if missed is not None and _voice_clock() - missed < _VOICE_MISS_KEEP_S:
+            return unfinished
         out = voice_note._ask_worker({"op": "check"}, timeout=60.0)
         if out is None:
-            return _result(
-                "phone_voice_notes", False,
-                "The check for voice notes from your phone did not finish within a minute (the "
-                "PC may be busy). It runs again the next time these checks run.",
-                level=RECOMMENDED,
-            )
+            _VOICE_CHECK["missed_at"] = _voice_clock()
+            return unfinished
         _VOICE_CHECK["out"] = out
     seconds = out.get("seconds")
     if isinstance(seconds, (int, float)) and seconds > 0.5 and out.get("decoder") == "pyav":

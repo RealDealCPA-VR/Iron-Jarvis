@@ -24,7 +24,10 @@ audio are read (the rest of a longer recording is left out).
 
 Imports stay stdlib at module level: this runs from the frozen exe's fast
 path. A plain 16-bit WAV is read with the stdlib ``wave`` module when PyAV is
-not installed (a source install without the ``voice`` extra).
+not installed (a source install without the ``voice`` extra). numpy comes in
+only through ``core/_numpy`` (one OpenBLAS thread), and PyAV's frames are
+read from their plane, never through ``to_ndarray`` (which would import
+numpy behind that door).
 """
 
 from __future__ import annotations
@@ -40,6 +43,16 @@ RATE = 16000
 CHECK_CLIP = Path(__file__).resolve().parent / "comm" / "assets" / "voice-check.ogg"
 
 
+def _frame_pcm(out: Any) -> bytes:
+    """The bytes of one resampled frame (packed s16 mono: two bytes a sample).
+
+    Read straight from the frame's one plane, never ``to_ndarray()``: that
+    makes PyAV import numpy outside ``core/_numpy``'s door, which sizes
+    OpenBLAS to the machine (about 760 MB and 23 idle threads on a 24-core
+    PC). A plane may be padded past its samples, so it is cut to them."""
+    return bytes(out.planes[0])[: int(out.samples) * 2]
+
+
 def _pcm_pyav(path: str, max_s: float) -> Iterator[bytes]:
     """16 kHz mono 16-bit PCM from any file PyAV can open, in chunks."""
     import av  # noqa: PLC0415 — native, only in this child
@@ -53,7 +66,7 @@ def _pcm_pyav(path: str, max_s: float) -> Iterator[bytes]:
         resampler = av.AudioResampler(format="s16", layout="mono", rate=RATE)
         for frame in container.decode(stream):
             for out in resampler.resample(frame) or []:
-                raw = out.to_ndarray().tobytes()
+                raw = _frame_pcm(out)
                 take = min(len(raw) // 2, limit - done)
                 if take <= 0:
                     return
@@ -62,7 +75,7 @@ def _pcm_pyav(path: str, max_s: float) -> Iterator[bytes]:
             if done >= limit:
                 return
         for out in resampler.resample(None) or []:
-            raw = out.to_ndarray().tobytes()
+            raw = _frame_pcm(out)
             take = min(len(raw) // 2, limit - done)
             if take <= 0:
                 return
@@ -71,10 +84,11 @@ def _pcm_pyav(path: str, max_s: float) -> Iterator[bytes]:
 
 
 def _pcm_wave(path: str, max_s: float) -> Iterator[bytes]:
-    """16 kHz mono 16-bit PCM from a plain 16-bit WAV (stdlib only)."""
+    """16 kHz mono 16-bit PCM from a plain 16-bit WAV (stdlib and numpy)."""
     import wave  # noqa: PLC0415
 
-    import numpy as np  # noqa: PLC0415
+    # numpy only through its one door (one OpenBLAS thread), and only here.
+    from iron_jarvis.core._numpy import np  # noqa: PLC0415
 
     with wave.open(path, "rb") as w:
         if w.getsampwidth() != 2:

@@ -759,6 +759,12 @@ class Config(BaseModel):
     #: hears nothing? "ask" (default: the phone asks once, and the answer is
     #: kept here), "yes", "no". Never off the network in a Local only chat.
     phone_voice_service: str = "ask"
+    #: 10-a (D-10.1): the speech service a yes said ON THE PHONE was for
+    #: (``comm/voice_note.service_key``: "openai", "stt:<host>"). Not a
+    #: setting of its own: a record of what that yes named, written beside
+    #: it. When Settings names another service, the phone asks again. ""
+    #: (a yes chosen in Settings) follows the service chosen there.
+    phone_voice_service_for: str = ""
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     #: THE FOLDERS JARVIS MAY READ (v1.356.0, G81) — Settings › Permissions.
     #: Empty (the default) = no limit: chat and agents read any file except

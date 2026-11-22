@@ -2054,8 +2054,11 @@ takes files now.
   folder; every later file of that chat joins it, and what Jarvis makes for
   that chat lands there too (a chat tagged to a project keeps working in the
   project's folder). Your phone hears the file's name and the folder,
-  never the whole path: "Saved photo.jpg in Documents\Iron Jarvis\2026-11-20
-  From your phone." The real answer follows.
+  never the whole path: "Saved photo-2026-11-20-101530.jpg in
+  Documents\Iron Jarvis\2026-11-20 From your phone." The real answer
+  follows. A photo or voice note that came with no name of its own is named
+  by the date and time it arrived, so a new one never runs out of names; a
+  file you named keeps its name.
 - **The phone chat on this PC shows it.** Open the chat in Chat: your message
   shows the file under its words, as a dropped file does. A later message
   ("now turn that into a spreadsheet") still finds the earlier file.
@@ -2070,18 +2073,26 @@ takes files now.
   for dictation: "Use OpenAI for phone voice notes too?" Reply 1 for yes or 2
   for no. The answer is kept in Settings › Models › Voice notes from your
   phone (change it there, with Undo), and each answer names the service ("I
-  heard (by OpenAI, which you chose for voice): …"). A Local only chat never
-  sends a voice note off your network. The recording is kept either way.
+  heard (by OpenAI, which you chose for voice): …"). A yes on your phone is
+  for the service it named: if you later choose another speech service,
+  your phone is asked again before a voice note goes to it. A voice note you
+  send before you answer waits for the same answer, and a yes turns each one
+  into words. The chat on this PC shows the recording and the question too.
+  A Local only chat never sends a voice note off your network. The recording
+  is kept either way.
 - **What is taken.** Pictures, PDF, Word, Excel and PowerPoint files, text and
-  CSV files, audio and video, up to 20 MB each (Settings › Connections ›
+  CSV files (a Slack snippet is kept as a text file), an email attached to an
+  email, audio and video, up to 20 MB each (Settings › Connections ›
   Largest file taken from your phone) and five a message. A file that is too
   large, of another kind, or past the fifth is named in the answer with the
   reason, and not taken. In Telegram several photos sent together are one
   message.
 - **Only from you.** A file is downloaded only when it comes from someone on
   the destination's allowlist, in their own chat (in Slack also the
-  destination's own channel); for email, only from a sender your mail
-  provider vouched for. A stranger's file is never downloaded.
+  destination's own channel, and a file sent with an @mention of Jarvis in
+  another channel, whose answer comes to your direct message); for email,
+  only from a sender your mail provider vouched for. A stranger's file is
+  never downloaded.
 - **Slack needs the newer app setup for files.** A Slack app made from the
   older manifest is missing the files:read permission: Jarvis says so when
   you send a file, and the Notifications row says it too. Update the app at
@@ -2666,7 +2677,11 @@ and at most 8,000 characters of them; the rest stayed behind without a word.
 
 A file you send Jarvis in Slack or by email now gets a plain answer that it
 could not be used, the way Telegram already did, instead of silence. Iron
-Jarvis cannot take files sent from your phone yet.
+Jarvis cannot take files sent from your phone yet. (Since v1.552.0 it takes
+them: see "Photos, files and voice notes reach Jarvis from your phone". The
+sentences quoted below are no longer said: a file that gives no way to
+download it, such as a Slack link to a Google Doc, gets "I couldn't open a
+file you sent: there was no way to download it.")
 
 - **A message that is only a file** (a PDF in a Slack direct message, an
   email with an attachment, no subject and no text) is answered with one

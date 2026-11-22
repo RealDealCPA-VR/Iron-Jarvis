@@ -27,8 +27,9 @@ PDF, Office files, text, CSV, audio, video). Everything here is BLOCKING
 from __future__ import annotations
 
 import mimetypes
+import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path, PurePath
 from typing import Any
 
@@ -46,7 +47,7 @@ PICTURES = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"
                       ".bmp", ".tif", ".tiff"})
 DOCUMENTS = frozenset({".pdf", ".docx", ".doc", ".xlsx", ".xlsm", ".xls", ".pptx", ".ppt",
                        ".odt", ".ods", ".odp", ".rtf", ".txt", ".md", ".csv", ".tsv",
-                       ".json", ".log"})
+                       ".json", ".log", ".eml"})
 AUDIO = frozenset({".ogg", ".oga", ".opus", ".m4a", ".mp3", ".wav", ".aac", ".amr",
                    ".flac", ".weba"})
 VIDEO = frozenset({".mp4", ".mov", ".m4v", ".webm", ".3gp", ".mkv"})
@@ -204,19 +205,68 @@ def chat_folder(
     return daily
 
 
+#: The names a file from the phone gets when it came with none of its own (a
+#: Telegram photo or voice note, a picture pasted into Slack, an e-mail part
+#: with no name), by their stem in lower case ("attachment-3" counts as
+#: "attachment").
+PLAIN_STEMS = frozenset({"photo", "image", "voice-note", "video-note", "voice", "audio",
+                         "video", "file", "upload", "attachment", "forwarded-email",
+                         "audio_message"})
+
+
+def _now() -> datetime:
+    """Now, on this PC's clock, for :func:`kept_name` (a test fixes it)."""
+    return datetime.now()
+
+
+def stamped(name: str, when: datetime) -> str:
+    """``name`` with the date and time put after its stem:
+    "photo-2026-11-20-101530.jpg". A plain name's own number is left out
+    ("attachment-3.pdf" -> "attachment-2026-11-20-101530.pdf")."""
+    p = PurePath(name)
+    stem = p.stem or "file"
+    if re.sub(r"-\d+$", "", stem.lower()) in PLAIN_STEMS:
+        stem = re.sub(r"-\d+$", "", stem)
+    return f"{stem}-{when:%Y-%m-%d-%H%M%S}{p.suffix}"
+
+
+def kept_name(name: str, when: datetime) -> str:
+    """The name a file from the phone is kept under: a plain name (one the
+    phone did not give, :data:`PLAIN_STEMS`) with the date and time, so the
+    thousandth photo never runs out of names; any other name as it came."""
+    stem = PurePath(name).stem.lower()
+    if re.sub(r"-\d+$", "", stem) in PLAIN_STEMS:
+        return stamped(name, when)
+    return name
+
+
 def keep_inbound(
     platform: Any, thread_store: Any, thread_id: str, name: str, data: bytes, kind: str,
     *, folder: "str | Path | None" = None, in_project: bool = False,
+    when: "datetime | None" = None,
 ) -> KeptFile:
     """Keep one file from the phone (BLOCKING): into ``<home>/uploads`` with
     the upload route's naming, then copied into the chat's folder: ``folder``
     when the message's first file already found it (every file of one
     message lands together), else :func:`chat_folder`. Raises ``OSError``
-    when it cannot be written."""
+    when it cannot be written.
+
+    A plain name gets the date and time (:func:`kept_name`, ``when``,
+    default now). ``<home>/uploads`` is never emptied and ``store_upload``
+    tries at most ``MAX_UPLOAD_NAMES`` numbered names, so a name sent that
+    many times over is kept under its name with the date and time too,
+    never refused."""
     from ..documents.workfolder import copy_uploads_into, store_upload, upload_name
 
+    when = when or _now()
+    name = kept_name(name, when)
     uploads = platform.config.home / "uploads"
-    stored = store_upload(uploads, upload_name(name), data)
+    try:
+        stored = store_upload(uploads, upload_name(name), data)
+    except OSError:
+        # Every numbered name is taken (or the write failed: then this one
+        # fails the same way and says so).
+        stored = store_upload(uploads, upload_name(stamped(name, when)), data)
     folder = Path(folder) if folder else chat_folder(
         platform, thread_store, thread_id, in_project=in_project)
     copied, skipped = copy_uploads_into(folder, [str(stored)], uploads)

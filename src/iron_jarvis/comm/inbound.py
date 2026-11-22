@@ -166,10 +166,13 @@ _VOICE_ASK_TTL_S = 24 * 3600.0
 
 
 def _voice_prompt_fresh(prompt: Any) -> bool:
-    """The voice question is still answerable: under a day old and its
-    recording still on this PC. Never raises (a doubt reads as stale)."""
+    """The voice question is still answerable: under a day old and a
+    recording it waits on (``ref_id``: their paths, one a line) still on this
+    PC. Never raises (a doubt reads as stale)."""
+    from .voice_note import waiting_paths
+
     try:
-        if not Path(str(getattr(prompt, "ref_id", "") or "")).is_file():
+        if not any(Path(p).is_file() for p in waiting_paths(str(getattr(prompt, "ref_id", "") or ""))):
             return False
         created = getattr(prompt, "created_at", None)
         if created is None:
@@ -804,8 +807,10 @@ class InboundPoller:
         once). A receipt that kept a file or heard a voice note always goes.
 
         Called only from ``_dispatch`` after its guards. It is a reply about
-        what the message carried, not a turn: no chat-thread line (the user's
-        line carries the files as chips). Best-effort: a failed send is
+        what the message carried, not a turn: no chat-thread line of its own
+        (the user's line carries the files as chips), except when the message
+        ends here on a voice note not heard yet (``_note_unheard`` puts both
+        on the chat). Best-effort: a failed send is
         logged and never stops the message's words. File names are never
         logged."""
         if limited:
@@ -923,9 +928,10 @@ class InboundPoller:
                 out.heard = heard.text
                 lines.append(VN.heard_line(heard))
             elif heard.ask:
-                asked = self._ask_voice_service(name, msg, voice.path, heard.ask, tid)
+                waiting = self._ask_voice_service(name, msg, voice.path, heard.ask, tid)
+                asked = waiting > 0
                 lines.append(
-                    VN.ask_words(heard.ask) if asked else
+                    VN.ask_words(heard.ask, heard.ask_label, waiting=waiting) if asked else
                     "I could not turn your voice note into words on this PC. "
                     f"The recording is kept in {kept_in}."
                 )
@@ -942,7 +948,13 @@ class InboundPoller:
             if voice is not None and not others:
                 # A voice note that was not heard, and nothing else: there is
                 # nothing to answer until it is (the question, or the words).
-                out.stop = {"channel": name, "sent": out.sent, "thread_id": tid,
+                # The phone chat on the PC still shows it: the recording as a
+                # chip on the user's line, and what the phone was told (the
+                # question, or why it was not heard) as the reply, so a later
+                # "1" has its question above it and the recording is the
+                # chat's file from now on.
+                landed = self._note_unheard(name, msg, tid, out.kept, "\n".join(lines))
+                out.stop = {"channel": name, "sent": out.sent, "thread_id": landed or tid,
                             "status": "voice_asked" if asked else "voice_not_heard"}
             elif not out.kept:
                 out.stop = {"channel": name, "status": "files_not_taken", "sent": out.sent}
@@ -951,6 +963,29 @@ class InboundPoller:
             if saved:
                 out.folder = saved
         return out
+
+    def _note_unheard(
+        self, name: str, msg: InboundMessage, tid: str, kept: list[Any], said: str
+    ) -> str:
+        """Put a voice note that was not heard (yet) on the phone chat (10-a):
+        the user's line with the recording as a chip (``attachmentNames`` /
+        ``attachmentPaths``, so ``attached_paths`` knows it), and ``said``,
+        what the phone was told, as the reply. Only on a saved chat
+        (``tid``: two-way chat on). Returns the chat it landed on ("" when
+        none). Never raises."""
+        if not tid or self.thread_store is None or not kept:
+            return ""
+        display = self._display(msg)
+        chips = {"attachmentNames": [k.name for k in kept],
+                 "attachmentPaths": [k.path for k in kept]}
+        landed = self._safe_append(
+            tid, "user", files_only_line([k.name for k in kept]),
+            channel=name, sender_id=msg.sender_id, display=display, extra=chips,
+        )
+        if landed and said:
+            self._safe_append(landed, "assistant", said,
+                              channel=name, sender_id=msg.sender_id, display=display)
+        return landed
 
     def _file_ok(self, channel: str, sender_id: Any) -> bool:
         """Take one more file from this sender? Records it and says True
@@ -1028,27 +1063,32 @@ class InboundPoller:
                                     f"The recording is kept in {kept_in}.")
 
     def _ask_voice_service(self, name: str, msg: InboundMessage, path: str, who: str,
-                           tid: str) -> bool:
+                           tid: str) -> int:
         """Register the ONE question before a phone voice note goes to the
         chosen speech service (D-10.1): a pending prompt (Yes, No) on this
         sender's chat, answered by "1" / "2" like every phone question. An
-        older unanswered one is closed first. False when no prompt store is
-        wired (the phone then hears the note was not heard)."""
+        older unanswered one is closed first, and the recordings it waited on
+        wait on this one (``ref_id``: their paths, oldest first, one a line,
+        at most ``VN.MAX_WAITING``), so a yes hears every one. Returns how
+        many recordings wait; 0 when no prompt store is wired or it failed
+        (the phone then hears the note was not heard)."""
         from . import voice_note as VN
 
         if self.prompt_store is None:
-            return False
+            return 0
         try:
-            self.prompt_store.expire_kind(VN.ASK_KIND, name, str(msg.sender_id))
+            older = self.prompt_store.expire_kind(VN.ASK_KIND, name, str(msg.sender_id))
+            paths = [p for ref in older for p in VN.waiting_paths(ref) if p != path]
+            paths = (paths + [path])[-VN.MAX_WAITING:]
             rec = self.prompt_store.register(
-                VN.ASK_KIND, path, VN.ask_question(who), ["Yes", "No"],
+                VN.ASK_KIND, "\n".join(paths), VN.ask_question(who), ["Yes", "No"],
                 name, str(msg.sender_id), tid,
             )
-            return rec is not None
+            return len(paths) if rec is not None else 0
         except Exception:  # noqa: BLE001
             log.warning("inbound: the voice question could not be registered on %r", name,
                         exc_info=True)
-            return False
+            return 0
 
     def _providers(self) -> Any:
         """The provider manager the failure words name a provider through
@@ -2421,21 +2461,52 @@ class InboundPoller:
                 name, ch, msg, display, chat_on, original_text,
                 "Reply 1 for yes or 2 for no.", "answer_usage",
             )
-        await asyncio.to_thread(self._keep_voice_choice, decision)
-        self.prompt_store.resolve(prompt.id, decision)
-        path = str(getattr(prompt, "ref_id", "") or "")
+        # Every recording that waits on this answer, oldest first (a second
+        # voice note sent before the answer waits too).
+        paths = VN.waiting_paths(str(getattr(prompt, "ref_id", "") or ""))
+        path = paths[-1] if paths else ""
+        tid = str(getattr(prompt, "thread_id", "") or "")
         cfg = getattr(self.platform, "config", None)
         kept_in = await asyncio.to_thread(media.folder_words, Path(path).parent, cfg)
         where = "Settings, Voice notes from your phone"
+        kept_words = ("The recording is kept in" if len(paths) <= 1
+                      else f"The {len(paths)} recordings are kept in")
         if decision == "no":
+            await asyncio.to_thread(self._keep_voice_choice, decision)
+            self.prompt_store.resolve(prompt.id, decision)
             return await self._answer_reply(
                 name, ch, msg, display, chat_on, original_text,
                 f"OK: phone voice notes stay on this PC ({where} changes it). "
-                f"The recording is kept in {kept_in}.",
+                f"{kept_words} {kept_in}.",
                 "voice_answered",
             )
+        # D-10.1: the yes is for the service the question NAMED. When Settings
+        # names another one now, it is not consent for that one: ask again
+        # (the older question is closed), and keep nothing.
+        svc = await VN.current_service(self.voice_deps)
+        if svc is None:
+            self.prompt_store.resolve(prompt.id, decision)
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                f"No speech service is chosen in Settings any more. {kept_words} {kept_in}.",
+                "voice_answered",
+            )
+        if VN.ask_question(svc.who) != str(getattr(prompt, "question", "") or ""):
+            # This open question is closed by the new one, and its
+            # recordings wait on that one.
+            waiting = self._ask_voice_service(name, msg, path, svc.who, tid)
+            if not waiting:
+                self.prompt_store.resolve(prompt.id, decision)
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                VN.changed_words(svc.who, svc.label, waiting=waiting) if waiting else
+                "The speech service in Settings changed since I asked, so nothing was sent. "
+                f"{kept_words} {kept_in}.",
+                "voice_asked",
+            )
+        await asyncio.to_thread(self._keep_voice_choice, decision, svc.key)
+        self.prompt_store.resolve(prompt.id, decision)
         local_only = False
-        tid = str(getattr(prompt, "thread_id", "") or "")
         if tid:
             try:
                 from ..providers import egress as _egress
@@ -2443,32 +2514,50 @@ class InboundPoller:
                 local_only = await asyncio.to_thread(_egress.thread_local_only, self.engine, tid)
             except Exception:  # noqa: BLE001 — unreadable: never off the network
                 local_only = True
-        heard = await VN.transcribe_with_service(
-            self.voice_deps, path, local_only=local_only, kept_in=kept_in, mime=VN.mime_of(path)
-        )
-        head = f"OK: phone voice notes use {heard.who or 'the speech service you chose'} from now on ({where} changes it)."
-        if not heard.text:
+        # Every waiting recording, oldest first, in the order it was sent.
+        heards = []
+        for p in paths:
+            heards.append(await VN.transcribe_with_service(
+                self.voice_deps, p, local_only=local_only, kept_in=kept_in, mime=VN.mime_of(p),
+                service=svc,
+            ))
+        head = f"OK: phone voice notes use {svc.who} from now on ({where} changes it)."
+        said = [h.text for h in heards if h.text]
+        if not said:
+            problems = " ".join(dict.fromkeys(h.problem for h in heards if h.problem))
             return await self._answer_reply(
                 name, ch, msg, display, chat_on, original_text,
-                f"{head} {heard.problem}", "voice_answered",
+                f"{head} {problems}".strip(), "voice_answered",
             )
+        echo = "\n".join(VN.heard_line(h) if h.text else h.problem for h in heards)
         await self._answer_reply(
             name, ch, msg, display, chat_on, original_text,
-            f"{head}\n{VN.heard_line(heard)}", "voice_answered",
+            f"{head}\n{echo}", "voice_answered",
         )
         # The words heard are the sender's own: handled as if typed, with the
         # same guards (this sender, this chat) the answer itself passed.
         words = InboundMessage(
-            sender_id=msg.sender_id, text=heard.text, update_id=None, reply_to=msg.reply_to,
+            sender_id=msg.sender_id, text="\n\n".join(said), update_id=None, reply_to=msg.reply_to,
             is_bot=False, raw=msg.raw, own_channel=msg.own_channel,
         )
         return await self._dispatch(name, ch, words)
 
-    def _keep_voice_choice(self, decision: str) -> None:
+    def _keep_voice_choice(self, decision: str, service: str = "") -> None:
         """Keep the phone's yes or no (BLOCKING): through the settings writer
         when the daemon has one (a ledger row with Undo), else on the config
-        (a bare platform, as in tests). Never raises."""
+        (a bare platform, as in tests). A yes is kept WITH the service it was
+        asked for (``service``, ``voice_note.service_key``), written first: a
+        yes is never left following whatever service comes next because that
+        record could not be written. Never raises."""
         try:
+            cfg = getattr(self.platform, "config", None)
+            if decision == "yes" and cfg is not None:
+                from ..core.config import persist_config_values
+
+                cfg.phone_voice_service_for = service
+                home = getattr(cfg, "home", None)
+                if home is not None:
+                    persist_config_values(home, {"phone_voice_service_for": service})
             writer = getattr(self.platform, "config_writer", None)
             if writer is not None:
                 writer.apply({"phone_voice_service": decision}, actor="phone")

@@ -164,6 +164,41 @@ def test_missing_files_permission_answers_in_words(platform, tmp_path):
     assert turn.calls == []
 
 
+def test_a_file_over_the_cap_is_refused_before_the_download(platform, tmp_path):
+    # Slack's own fetch has no size check of its own before it starts: the
+    # size Slack gave is checked first, so a 3 MB file under a 1 MB cap is
+    # never streamed at all.
+    root, fake, sock, poll, turn = _rig(platform, tmp_path)
+    platform.config.phone_file_max_mb = 1
+    env = _env(type="message", subtype="file_share", channel="D0DM00001", channel_type="im",
+               user="U1", text="", ts="1700.7", files=[_file(size=3 * 1024 * 1024)])
+
+    res = _go(sock, poll, env)
+
+    assert fake.downloads == []
+    assert files_under(root) == []
+    words = fake.texts[0]
+    assert "scan.pdf" in words and "3 MB" in words and "1 MB" in words
+    assert res["status"] == "files_not_taken"
+
+
+def test_a_snippet_is_taken_as_a_text_file(platform, tmp_path):
+    # A snippet has a download (it was counted as having none), and its name
+    # says code ("hello.py", not a kind taken): it is kept as text.
+    url = "https://files.slack.com/files-pri/T1-F2/download/hello.py"
+    root, fake, sock, poll, turn = _rig(platform, tmp_path, _Slack(files={url: b"print('hi')"}))
+    snippet = _file(url=url, name="hello.py", mime="text/plain", mode="snippet", filetype="python")
+    env = _env(type="message", subtype="file_share", channel="D0DM00001", channel_type="im",
+               user="U1", text="what does this do", ts="1700.8", files=[snippet])
+
+    _go(sock, poll, env)
+
+    kept = files_under(root)
+    assert len(kept) == 1 and kept[0].read_bytes() == b"print('hi')"
+    assert kept[0].name == "hello.py.txt"
+    assert turn.calls[0].attachments == [str(kept[0])]
+
+
 @pytest.mark.parametrize("subtype", ["message_changed", "channel_join", "bot_message", "thread_broadcast"])
 def test_other_subtypes_are_still_dropped(platform, tmp_path, subtype):
     root, fake, sock, poll, turn = _rig(platform, tmp_path)
