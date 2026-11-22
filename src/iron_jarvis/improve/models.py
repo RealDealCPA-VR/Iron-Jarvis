@@ -23,12 +23,15 @@ class NightReviewRecord(SQLModel, table=True):
     * ``night``: the LOCAL date the night window opened (``harness.
       night_morning.night_key``): 01:30 on the 21st is the night of the 20th.
     * ``state``: ``waiting`` (it began, and stopped before it finished: the
-      PC became busy, Emergency stop, the setting), ``running``, ``done``, or
+      PC became busy, the window closed, Emergency stop, the setting;
+      ``skipped_why`` keeps why it stopped), ``running``, ``done``, or
       ``skipped`` (it made nothing because every request it would have sent
       was refused; ``skipped_why`` says why in one sentence, ``needs_you``
-      whether only the owner can change that).
+      whether only the owner can change that). A night whose window closed
+      while it was ``waiting`` ends ``done`` or ``skipped`` with what it ran.
     * ``ran_json``: ``[{proposer, target, result, reason, key}]``, one per
-      suggestion maker it ran (``result``: made | nothing | refused | named).
+      suggestion maker it ran (``result``: made | nothing | refused | named),
+      and a last ``cut off`` entry when the window closed on it.
     * ``made_json``: ``[{kind, ref, why}]``: the suggestions it made, by the
       Improvements kind and the suggestion's own id, and why each was made.
     * ``requests``: model requests spent (the budget's tally for the night).

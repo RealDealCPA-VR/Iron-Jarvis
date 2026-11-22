@@ -20,9 +20,20 @@ of the pass and again before each suggestion maker:
   working terminal), no chat changed in the last :data:`IDLE_CHAT_S` (30
   minutes), no night task is running;
 * tonight's review has not finished (its ``nightreview`` row is not done or
-  skipped). A pass cut off midway (the PC became busy, a restart) leaves its
-  row ``waiting`` with what it already ran, and the next pass carries on
-  from there without running anything twice.
+  skipped). A pass cut off midway (the PC became busy, the window closed, a
+  restart) leaves its row ``waiting`` with what it already ran and why it
+  stopped, and the next pass carries on from there without running anything
+  twice.
+
+A NIGHT THE WINDOW CLOSED ON (:func:`_close_cut_off`): the first look after
+a night's window closed ends a row of that night still ``waiting`` (or
+``running`` with no pass in this process: a restart) with what it ran, plus
+one ``cut off`` entry saying why it stopped. The rest of that night's work is
+not run (17-a catches nothing up), and the night's ONE bell row rings for
+what it made, the way a finished night's does. A night first seen only after
+the next window opened (the PC was off all day) is ended without a ring, so
+two nights never ring in one: its suggestions still wait on Improvements,
+and the page's line still says so.
 
 ONE PASS = gather, match, run (one suggestion maker at a time):
 
@@ -95,7 +106,8 @@ CLOCK: "Callable[[], datetime] | None" = None
 
 #: The loop: the first look after start, then one look every few minutes.
 #: With the setting off a look reads no table; outside the window it reads
-#: one row (a notice still owed is rung then).
+#: the unfinished rows of nights already over (one indexed query, ended
+#: there) and one row (a notice still owed is rung then).
 FIRST_PASS_S = 120.0
 PASS_EVERY_S = 300.0
 #: No chat may have changed for this long before a pass runs.
@@ -124,8 +136,9 @@ SKIP_RUNNING = "a review pass is already running"
 SKIP_UNREADABLE = "Iron Jarvis could not tell whether the PC is idle"
 STOP_OFF = "the night review was switched off"
 
-# What one suggestion maker did (``ran_json[*].result``).
-MADE, NOTHING, REFUSED, NAMED = "made", "nothing", "refused", "named"
+# What one suggestion maker did (``ran_json[*].result``), and the one entry
+# a night the window closed on ends with (``CUT_OFF``).
+MADE, NOTHING, REFUSED, NAMED, CUT_OFF = "made", "nothing", "refused", "named", "cut off"
 
 WHY_BUILT_IN = "built-in agents are not coached: their instructions are the app's"
 WHY_REMOTE = "an agent on another computer is coached on that computer"
@@ -133,6 +146,8 @@ WHY_NO_COACH = "the coach is not available"
 WHY_NO_SKILLS = "skill drafts are not available"
 WHY_TIMEOUT = "the model did not answer in time"
 WHY_FAILED = "the model did not answer"
+WHY_KEPT = "the draft was kept without asking (Approve learned skills automatically is on)"
+WHY_CUT_OFF = "the night window closed before the review finished"
 
 #: The suggestion makers, in the order a pass runs them: ``(name, what it
 #: does)``. Ideas 19, 20 and 21 add rows (and a runner in ``_RUNNERS``).
@@ -461,20 +476,62 @@ def _save(engine: Any, night: str, *, state: str, ran: list[dict[str, Any]], mad
         db.commit()
 
 
+def _close_cut_off(engine: Any, config: Any, at: datetime) -> list[str]:
+    """End every night whose window has closed at ``at`` while its review was
+    still ``waiting`` (cut off: the PC stayed busy, the window closed, the
+    setting went off) or ``running`` (a restart: the caller runs no pass).
+    Each keeps what it ran and made, gains one ``cut off`` entry with why it
+    last stopped, and ends ``done`` (or ``skipped``, by :func:`_finish`'s own
+    rule). The rest of its work is not run. Returns the nights ended.
+    BLOCKING; RAISES when the record cannot be read."""
+    from ..harness import night as N
+
+    current = night_of(config, at)
+    with session_scope(engine) as db:
+        stmt = select(NightReviewRecord).where(
+            NightReviewRecord.state.in_([WAITING, RUNNING])  # type: ignore[attr-defined]
+        )
+        # While the window is open, tonight is still tonight's to finish.
+        if N.window_open(config, at):
+            stmt = stmt.where(NightReviewRecord.night < current)
+        else:
+            stmt = stmt.where(NightReviewRecord.night <= current)
+        ended: list[str] = []
+        for row in list(db.exec(stmt)):
+            ran = _loads(row.ran_json)
+            made = _loads(row.made_json)
+            final, why, needs = _finish(ran, made)
+            stopped = str(row.skipped_why or "")
+            ran.append({"proposer": "night", "target": "", "result": CUT_OFF,
+                        "reason": f"{WHY_CUT_OFF} ({stopped})" if stopped else WHY_CUT_OFF, "key": "cut_off"})
+            row.state, row.skipped_why, row.needs_you = final, why, needs
+            row.ran_json = json.dumps(ran)
+            row.ended_at = utcnow()
+            db.add(row)
+            ended.append(str(row.night))
+        if ended:
+            db.commit()
+    for night in ended:
+        log.info("night review %s: ended when its window closed", night)
+    return ended
+
+
 def reviewed_within(engine: Any, *, hours: float = 24.0, now: "datetime | None" = None) -> bool:
-    """Did a night review finish in the last ``hours``? (The daily tool-failure
-    scan leaves such a day alone: the review ran the scan.) BLOCKING; never
-    raises (False when it cannot tell, so the daily scan runs)."""
+    """Did a night review that RAN the tool-failure scan finish in the last
+    ``hours``? (The daily tool-failure scan leaves such a day alone. A night
+    the window closed on before the scan ran did not cover the day.)
+    BLOCKING; never raises (False when it cannot tell, so the daily scan
+    runs)."""
     try:
         moment = _naive(now) if now is not None else _naive(utcnow())
         since = moment - timedelta(hours=float(hours))
         with session_scope(engine) as db:
-            row = db.exec(
-                select(NightReviewRecord.night)
+            rows = list(db.exec(
+                select(NightReviewRecord.ran_json)
                 .where(NightReviewRecord.state.in_([DONE, SKIPPED]))  # type: ignore[attr-defined]
                 .where(NightReviewRecord.ended_at >= since)  # type: ignore[operator]
-            ).first()
-        return row is not None
+            ))
+        return any(str(r.get("key") or "") == "tool_failures" for text in rows for r in _loads(text))
     except Exception:  # noqa: BLE001
         return False
 
@@ -520,15 +577,19 @@ class _Refused(Exception):
     """The budget said no right before a request was sent."""
 
 
-def _gate(platform: Any, job: dict[str, Any], night: str) -> Callable[[], Awaitable[str]]:
+def _gate(platform: Any, job: dict[str, Any], night: str) -> Callable[..., Awaitable[str]]:
     """The check right before ONE request is sent: the budget again (the cap
-    included), then the request is counted. "" = send it."""
+    included), then the request is counted. "" = send it. ``local_only``:
+    the suggestion maker's own reading of the material it sends (the coach's
+    evidence reaches past yesterday), added to the job's, so an off-network
+    model is refused BEFORE a request is counted."""
     home = getattr(getattr(platform, "config", None), "home", None)
 
-    async def check() -> str:
+    async def check(*, local_only: bool = False) -> str:
         why = await asyncio.to_thread(
             B.may_spend, platform, provider=job["provider"], model=job["model"],
-            account=job.get("account", ""), local_only=bool(job.get("local_only")), night=night,
+            account=job.get("account", ""), local_only=bool(job.get("local_only")) or bool(local_only),
+            night=night,
         )
         if why:
             return why
@@ -547,8 +608,13 @@ async def _run_tool_failures(platform: Any, job: dict[str, Any], night: str) -> 
         return _entry(job, NOTHING), []
 
     def scan() -> list[dict[str, Any]]:
+        # Only a suggestion THIS scan made is the night's. The scan also hands
+        # back the id of one made earlier this week for the same failures
+        # (one per week, ``_mint_failure_proposal``): still waiting (the daily
+        # scan made it) or already answered. Every id from before counts as
+        # old, whatever its status.
         with session_scope(platform.engine) as db:
-            before = set(db.exec(select(ProposalRecord.id).where(ProposalRecord.status == "pending")))
+            before = set(db.exec(select(ProposalRecord.id)))
         found = list(improvement.scan_tool_failures() or [])
         return [f for f in found if f.get("proposal_id") and f["proposal_id"] not in before]
 
@@ -579,8 +645,10 @@ async def _run_coach(platform: Any, job: dict[str, Any], night: str) -> tuple[di
     check = _gate(platform, job, night)
     refused = {"why": ""}
 
-    async def before_call() -> str:
-        refused["why"] = await check()
+    async def before_call(*, local_only: bool = False) -> str:
+        # ``local_only``: the coach's evidence reading (a Local only run from
+        # before yesterday included), heard before the request is counted.
+        refused["why"] = await check(local_only=local_only)
         return refused["why"]
 
     # announce=False: the coach's own ``coach.proposal`` is a bell row that
@@ -646,8 +714,14 @@ async def _run_skill(platform: Any, job: dict[str, Any], night: str) -> tuple[di
         log.info("night review: the skill draft failed", exc_info=True)
         return _entry(job, NOTHING, WHY_FAILED), []
     ids = [str(i) for i in (out or {}).get("proposals") or [] if i]
-    made = [{"kind": "skill", "ref": i, "why": job["why"]} for i in ids]
-    return _entry(job, MADE if made else NOTHING, "" if made else str((out or {}).get("note") or "")), made
+    # Only a draft that WAITS on Improvements is a suggestion: one the
+    # owner's "Approve learned skills automatically" kept unasked is not.
+    waiting = await asyncio.to_thread(_waiting_refs, platform.engine, "skill", ids) if ids else set()
+    made = [{"kind": "skill", "ref": i, "why": job["why"]} for i in ids if i in waiting]
+    if made:
+        return _entry(job, MADE), made
+    reason = WHY_KEPT if ids else str((out or {}).get("note") or "")
+    return _entry(job, NOTHING, reason), []
 
 
 async def _arm_account(platform: Any, job: dict[str, Any]) -> Any:
@@ -803,11 +877,18 @@ async def announce_once(platform: Any, night: str) -> bool:
 # the pass and the loop
 # --------------------------------------------------------------------------- #
 async def _stop_reason(d: Any, at: datetime) -> str:
+    """Why the pass must stop before its next suggestion maker, read at
+    ``at`` (the clock read again, never the pass's start): the setting,
+    Emergency stop, the night window, idle. "" = carry on."""
+    from ..harness import night as N
+
     config = d.platform.config
     if not enabled(config):
         return STOP_OFF
     if _stopped(config):
         return SKIP_STOPPED
+    if not N.window_open(config, at):
+        return SKIP_WINDOW
     return await asyncio.to_thread(busy_reason, d, at)
 
 
@@ -836,11 +917,18 @@ async def review_pass(d: Any, *, now: "datetime | None" = None) -> "dict[str, An
         return None
     if _stopped(config):
         return {"skipped": SKIP_STOPPED}
-    at = now or now_local()
+    # The clock is read again before each suggestion maker (the window may
+    # close mid-pass); a test's fixed ``now`` stays fixed.
+    clock: Callable[[], datetime] = (lambda: now) if now is not None else now_local
+    at = clock()
     from ..harness import night as N
 
     engine = platform.engine
     night = night_of(config, at)
+    if not _IN_PASS:
+        # A night whose window closed before its review finished ends here,
+        # with what it ran (the next lines ring what it made).
+        await asyncio.to_thread(_close_cut_off, engine, config, at)
     if not N.window_open(config, at):
         # A notice still owed (the publish failed, or Iron Jarvis stopped
         # between the night's end and its notice) is rung the next morning:
@@ -876,7 +964,7 @@ async def review_pass(d: Any, *, now: "datetime | None" = None) -> "dict[str, An
         for job in jobs:
             if job["key"] in done_keys:
                 continue
-            stop = await _stop_reason(d, at)
+            stop = await _stop_reason(d, clock())
             if not stop:
                 try:
                     entry, new = await _run(platform, job, night)
@@ -884,7 +972,10 @@ async def review_pass(d: Any, *, now: "datetime | None" = None) -> "dict[str, An
                     stop = SKIP_STOPPED
             if stop:
                 spent = await asyncio.to_thread(B.requests_tonight, home, night)
-                await asyncio.to_thread(_save, engine, night, state=WAITING, ran=ran, made=made, requests=spent)
+                # Why it stopped is kept: a night the window then closes on
+                # says it in its ``cut off`` entry (:func:`_close_cut_off`).
+                await asyncio.to_thread(_save, engine, night, state=WAITING, ran=ran, made=made, requests=spent,
+                                        skipped_why=stop)
                 return {"stopped": stop, "night": night, "made": len(made), "requests": spent}
             ran.append(entry)
             made += new
@@ -938,21 +1029,25 @@ def _pending_models() -> dict[str, tuple[Any, Any]]:
     }
 
 
-def _still_waiting(engine: Any, made: list[dict[str, Any]]) -> int:
+def _waiting_refs(engine: Any, kind: str, refs: list[str]) -> set[str]:
+    """Which of ``refs`` (suggestions of the Improvements ``kind``) still
+    wait for the owner's answer. BLOCKING."""
     tables = _pending_models()
-    n = 0
+    refs = [str(r) for r in refs if r]
+    if kind not in tables or not refs:
+        return set()
+    model, pending = tables[kind]
+    with session_scope(engine) as db:
+        return {str(i) for i in db.exec(
+            select(model.id).where(model.id.in_(refs), model.status == pending)  # type: ignore[attr-defined]
+        )}
+
+
+def _still_waiting(engine: Any, made: list[dict[str, Any]]) -> int:
     by_kind: dict[str, list[str]] = {}
     for m in made:
         by_kind.setdefault(str(m.get("kind") or ""), []).append(str(m.get("ref") or ""))
-    with session_scope(engine) as db:
-        for kind, refs in by_kind.items():
-            if kind not in tables or not refs:
-                continue
-            model, pending = tables[kind]
-            n += len(list(db.exec(
-                select(model.id).where(model.id.in_(refs), model.status == pending)  # type: ignore[attr-defined]
-            )))
-    return n
+    return sum(len(_waiting_refs(engine, kind, refs)) for kind, refs in by_kind.items())
 
 
 def _capital(text: str) -> str:
@@ -1038,10 +1133,10 @@ def reasons(engine: Any) -> dict[tuple[str, str], dict[str, str]]:
 
 
 __all__ = [
-    "CALL_TIMEOUT_S", "CLOCK", "DONE", "FIRST_PASS_S", "IDLE_CHAT_S", "MADE", "NAMED", "NOTHING",
+    "CALL_TIMEOUT_S", "CLOCK", "CUT_OFF", "DONE", "FIRST_PASS_S", "IDLE_CHAT_S", "MADE", "NAMED", "NOTHING",
     "NOTICE_BODY", "PASS_EVERY_S", "PROPOSERS", "REFUSED", "RUNNING", "SKIPPED", "SKIP_BUSY", "SKIP_DONE",
     "SKIP_NIGHT_TASK", "SKIP_RECENT_CHAT", "SKIP_RUNNING", "SKIP_STOPPED", "SKIP_WINDOW", "WAITING",
-    "WHY_BUILT_IN", "announce_once", "busy_reason", "coach_why", "enabled", "match", "night_line", "night_of",
+    "WHY_BUILT_IN", "WHY_CUT_OFF", "WHY_KEPT", "announce_once", "busy_reason", "coach_why", "enabled", "match", "night_line", "night_of",
     "notice_payload", "notice_title", "now_local", "offer_of", "page_view", "period_of", "reasons", "reset",
     "review_loop", "review_pass", "reviewed_within",
 ]

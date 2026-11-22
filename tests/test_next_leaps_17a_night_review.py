@@ -104,6 +104,9 @@ class Router:
         #: When set, the answer to a skill draft's request (its system
         #: prompt names SKILL.md), so one pass can coach AND draft a skill.
         self.skill_text: str | None = None
+        #: When set, called after each request is answered (a chat is used,
+        #: the clock moves on).
+        self.after_call = None
         self.calls: list[dict] = []
 
     async def complete(self, *, system, messages, tools, provider=None, model=None, pin=False, **kw):
@@ -111,6 +114,8 @@ class Router:
             "provider": provider, "model": model, "pin": pin,
             "local_only": egress.current_scope().on, "background": background_call.what(),
         })
+        if self.after_call is not None:
+            self.after_call()
         text = self.skill_text if self.skill_text is not None and "SKILL.md" in str(system) else self.text
         return SimpleNamespace(response=SimpleNamespace(text=text), provider=provider, model=model)
 
@@ -454,6 +459,22 @@ def test_a_local_only_run_is_reviewed_only_inside_the_scope(desk):
     assert call["provider"] == "ollama" and call["local_only"] is True
 
 
+def test_older_local_only_evidence_is_refused_before_a_request_is_counted(desk):
+    """The coach's evidence reaches past yesterday (its own recent runs): a
+    Local only run from before yesterday makes the request Local only even
+    though yesterday's runs were not. The budget hears that reading BEFORE it
+    counts a request, so an off-network model is refused, nothing is sent and
+    the night's tally stays at 0."""
+    roster = _agent(desk)
+    _ran_out_of_steps(desk, roster, 1, at=YESTERDAY - timedelta(days=2), options={"local_only": True})
+    _ran_out_of_steps(desk, roster, 4)
+    _pass(desk)
+    assert desk.router.calls == []
+    assert B.requests_tonight(desk.home, NIGHT) == 0 and _row(desk).requests == 0
+    (ran,) = [r for r in json.loads(_row(desk).ran_json) if r["proposer"] == "coach"]
+    assert ran["result"] == NR.REFUSED and ran["reason"].startswith("this work was Local only"), ran
+
+
 def test_a_local_only_run_with_a_model_off_this_network_sends_nothing(desk):
     roster = _agent(desk)
     _ran_out_of_steps(desk, roster, options={"local_only": True})
@@ -549,6 +570,79 @@ def test_a_notice_still_owed_is_rung_the_next_morning(desk, monkeypatch):
     assert _pass(desk, now=_local(IN_WINDOW, 8, 0))["skipped"] == NR.SKIP_WINDOW
     assert _pass(desk, now=_local(IN_WINDOW, 8, 5))["skipped"] == NR.SKIP_WINDOW
     assert len(_notices(desk)) == 1
+
+
+def _chat_used(desk, at: datetime) -> None:
+    """A chat used five minutes before ``at`` (the PC is not idle)."""
+    with session_scope(desk.engine) as db:
+        chat = ChatThreadRecord(title="a chat")
+        chat.updated_at = at.astimezone(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
+        db.add(chat)
+        db.commit()
+
+
+def test_a_review_cut_off_by_a_busy_pc_ends_when_the_window_closes_and_rings_once(desk):
+    """A pass that made something and was cut off (a chat was used) while the
+    PC stayed busy until the window closed: the first look after the window
+    closes ends the night with what it ran (the cut-off said in its record),
+    and rings its ONE bell row. The rest of that night's work is not run."""
+    for i in range(2):
+        _ran_out_of_steps(desk, _agent(desk, f"agent{i}"), 4, at=YESTERDAY + timedelta(minutes=10 * i))
+    desk.router.after_call = lambda: _chat_used(desk, IN_WINDOW)
+    first = _pass(desk)
+    assert first["stopped"] == NR.SKIP_RECENT_CHAT and first["made"] == 1 and first["requests"] == 1, first
+    assert _row(desk).state == NR.WAITING and _notices(desk) == []
+    # 08:00, the window closed: the night ends here, and rings once.
+    assert _pass(desk, now=_local(IN_WINDOW, 8, 0))["skipped"] == NR.SKIP_WINDOW
+    row = _row(desk)
+    assert row.state == NR.DONE and row.ended_at is not None and row.requests == 1
+    ran = json.loads(row.ran_json)
+    assert [(r["proposer"], r["result"]) for r in ran] == [
+        ("tool_failures", NR.NOTHING), ("coach", NR.MADE), ("night", NR.CUT_OFF)], ran
+    assert ran[-1]["reason"] == f"{NR.WHY_CUT_OFF} ({NR.SKIP_RECENT_CHAT})"
+    (notice,) = _notices(desk)
+    assert notice["night"] == NIGHT and notice["made"] == 1
+    _pass(desk, now=_local(IN_WINDOW, 8, 5))
+    assert len(_notices(desk)) == 1 and len(desk.router.calls) == 1
+    assert _night_line(desk, now=_local(IN_WINDOW, 10, 0))["night"]["line"] == "From last night's review: 1"
+    # The next night's review runs on its own night, untouched by the last.
+    assert _pass(desk, now=IN_WINDOW + timedelta(days=1))["state"] == NR.DONE
+    assert _row(desk).state == NR.DONE and len(_notices(desk)) == 1
+
+
+def test_a_pass_stops_when_the_window_closes_and_the_next_look_ends_it(desk):
+    """The window is read again before each suggestion maker, on the clock
+    (never only once at the start): a pass begun at 06:58 that reaches 07:01
+    runs nothing more, and the next look ends the night and rings."""
+    for i in range(2):
+        _ran_out_of_steps(desk, _agent(desk, f"agent{i}"), 4, at=YESTERDAY + timedelta(minutes=10 * i))
+    clock = {"at": _local(IN_WINDOW, 6, 58)}
+    NR.CLOCK = lambda: clock["at"]
+
+    def later() -> None:
+        clock["at"] = _local(IN_WINDOW, 7, 1)
+
+    desk.router.after_call = later
+    first = asyncio.run(NR.review_pass(desk.d))
+    assert first["stopped"] == NR.SKIP_WINDOW and first["made"] == 1, first
+    assert len(desk.router.calls) == 1 and _row(desk).state == NR.WAITING
+    clock["at"] = _local(IN_WINDOW, 7, 5)
+    assert asyncio.run(NR.review_pass(desk.d))["skipped"] == NR.SKIP_WINDOW
+    assert _row(desk).state == NR.DONE and len(_notices(desk)) == 1
+    assert len(desk.router.calls) == 1
+
+
+def test_a_night_cut_off_before_the_scan_leaves_the_day_to_the_daily_scan(desk):
+    """A night that ended without running the tool-failure scan (cut off
+    before it) did not cover the day: the daily scan still runs it."""
+    with session_scope(desk.engine) as db:
+        db.add(NightReviewRecord(night=NIGHT, state=NR.WAITING, skipped_why=NR.SKIP_RECENT_CHAT))
+        db.commit()
+    assert _pass(desk, now=_local(IN_WINDOW, 8, 0))["skipped"] == NR.SKIP_WINDOW
+    row = _row(desk)
+    assert row.state == NR.DONE and [r["result"] for r in json.loads(row.ran_json)] == [NR.CUT_OFF]
+    assert _notices(desk) == []
+    assert NR.reviewed_within(desk.engine, hours=24) is False
 
 
 def test_the_notice_switch_off_rings_nothing(desk):
@@ -651,16 +745,21 @@ def test_three_suggestions_are_one_row_in_the_bell_words():
 # --------------------------------------------------------------------------- #
 
 
-def test_the_tool_failure_scan_runs_in_the_review_and_says_why(desk):
-    # The scan reads the week before the REAL clock (its own rule).
+def _web_fetch_failed(desk, n: int = 3) -> None:
+    """``n`` failed web fetches this week. The scan reads the week before the
+    REAL clock (its own rule)."""
     from iron_jarvis.core.ids import utcnow
 
     real = utcnow().replace(tzinfo=None)
     with session_scope(desk.engine) as db:
-        for i in range(3):
+        for i in range(n):
             db.add(ToolInvocation(session_id="chat", agent_run_id="r", tool="web_fetch", ok=False,
                                   output="boom", created_at=real - timedelta(hours=3, minutes=i)))
         db.commit()
+
+
+def test_the_tool_failure_scan_runs_in_the_review_and_says_why(desk):
+    _web_fetch_failed(desk)
     out = _pass(desk)
     assert out["made"] == 1 and desk.router.calls == []
     (made,) = json.loads(_row(desk).made_json)
@@ -673,6 +772,35 @@ def test_the_tool_failure_scan_runs_in_the_review_and_says_why(desk):
     ticks: list = []
     assert asyncio.run(app._tool_failure_pass(desk.platform, lambda *a: ticks.append(a))) == []
     assert ticks == [("tool_failures", True)]
+
+
+@pytest.mark.parametrize("answer", ["rejected", "approved", "pending"])
+def test_a_tool_failure_suggestion_made_earlier_this_week_is_not_counted_again(desk, answer):
+    """The scan hands back the id of a suggestion made (or answered) earlier
+    this week for the same failures (``_mint_failure_proposal``: one per week
+    of failures). Only one THIS scan made is the night's: one already
+    answered, or still waiting from the daily scan, gives made 0, rings
+    nothing and puts no line on Improvements."""
+    from iron_jarvis.motivation.models import ProposalRecord
+
+    _web_fetch_failed(desk)
+    (found,) = desk.platform.improvement.scan_tool_failures()
+    with session_scope(desk.engine) as db:
+        rec = db.get(ProposalRecord, found["proposal_id"])
+        rec.status = answer
+        db.add(rec)
+        db.commit()
+    out = _pass(desk)
+    assert out["state"] == NR.DONE and out["made"] == 0, out
+    row = _row(desk)
+    assert json.loads(row.made_json) == []
+    (scan,) = [r for r in json.loads(row.ran_json) if r["proposer"] == "tool_failures"]
+    assert scan["result"] == NR.NOTHING
+    assert _notices(desk) == [] and _night_line(desk)["night"] is None
+    _pass(desk, now=_local(IN_WINDOW, 8, 0))
+    assert _notices(desk) == []
+    with session_scope(desk.engine) as db:
+        assert len(list(db.exec(select(ProposalRecord)))) == 1
 
 
 def test_a_waiting_skill_draft_is_written_on_the_run_s_own_model(desk):
@@ -694,6 +822,27 @@ def test_a_waiting_skill_draft_is_written_on_the_run_s_own_model(desk):
     (made,) = [m for m in json.loads(_row(desk).made_json) if m["kind"] == "skill"]
     assert made["ref"] == props[0].id
     assert made["why"] == "A run did something worth keeping as a skill, and its draft was waiting: “sort the reports folder”."
+
+
+def test_a_skill_draft_kept_by_the_owner_s_own_setting_is_not_a_suggestion(desk):
+    """With "Approve learned skills automatically" on (the owner's own
+    choice), the draft the review writes is kept unasked: nothing waits on
+    Improvements, so it is not counted, nothing rings and no line shows. The
+    night's record says it was kept."""
+    from iron_jarvis.skills.learning_models import SkillProposalRecord
+
+    desk.platform.config.skill_learning_auto_approve = True
+    (sid,) = _ran_out_of_steps(desk, "builder", 1)
+    _skill_candidate(desk, sid, "sort the reports folder")
+    desk.router.text = SKILL_MD
+    out = _pass(desk)
+    assert len(desk.router.calls) == 1 and out["made"] == 0, out
+    with session_scope(desk.engine) as db:
+        (prop,) = list(db.exec(select(SkillProposalRecord)))
+    assert prop.status == "approved"
+    (ran,) = [r for r in json.loads(_row(desk).ran_json) if r["proposer"] == "skill"]
+    assert ran["result"] == NR.NOTHING and ran["reason"] == NR.WHY_KEPT, ran
+    assert _notices(desk) == [] and _night_line(desk)["night"] is None
 
 
 def test_a_draft_the_budget_refuses_never_holds_up_the_newer_ones(desk):
@@ -785,6 +934,10 @@ def test_the_line_counts_only_what_still_waits_and_only_last_night(desk):
     # The next night's window opens: until ITS review finishes, last night
     # is still the night before.
     assert _night_line(desk, now=_local(IN_WINDOW, 23, 30))["night"]["night"] == NIGHT
+    # The morning after that next night, which had no review at all (the PC
+    # was off or busy all night; 17-a catches nothing up): the page speaks of
+    # that night only, never of the one before it.
+    assert _night_line(desk, now=_local(IN_WINDOW + timedelta(days=1), 10, 0))["night"] is None
     # That next night's review runs and makes nothing: it is last night now,
     # in the window and the morning after (never two nights back).
     nxt = _pass(desk, now=IN_WINDOW + timedelta(days=1))

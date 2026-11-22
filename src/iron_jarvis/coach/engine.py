@@ -410,10 +410,11 @@ class CoachEngine:
 
         17-a (the night review): ``pin = (provider, model[, account])`` sends
         the one request to that model, pinned (:meth:`_complete`);
-        ``before_call`` is awaited right before the request is sent and
-        answers "" (send it) or the reason it must not be sent (the night
-        budget); ``local_only`` adds the caller's own Local only reading to
-        the evidence's; ``announce=False`` publishes no ``coach.proposal``
+        ``before_call(local_only=...)`` is awaited right before the request is
+        sent, with the evidence's Local only reading, and answers "" (send
+        it) or the reason it must not be sent (the night budget);
+        ``local_only`` adds the caller's own Local only reading to the
+        evidence's; ``announce=False`` publishes no ``coach.proposal``
         (the night review's ONE bell row a night says it, D-17.3). With none
         of them the press on the Agents page is unchanged."""
         roster = self.roster_name(roster_name)
@@ -481,7 +482,10 @@ class CoachEngine:
                 self.last_reason = str(why or REASON_ACCOUNT)
                 return None
         if before_call is not None:
-            refused = await before_call()
+            # The evidence's own Local only reading (a run from before the
+            # caller's window included): the budget hears it before it
+            # counts a request the router's gate would then refuse.
+            refused = await before_call(local_only=local_only)
             if refused:
                 self.last_reason = str(refused)
                 return None
