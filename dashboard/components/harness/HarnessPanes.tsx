@@ -821,7 +821,7 @@ function HarnessPanesImpl({
         className="relative min-h-0 flex-1 overflow-y-auto px-1"
       >
         {tab === "plan" ? <PlanPane view={view} livePlan={livePlan} /> : null}
-        {tab === "timeline" ? <HarnessTimeline view={view} live={timeline} models={models} account={account} /> : null}
+        {tab === "timeline" ? <HarnessTimeline view={view} live={timeline} models={models} account={account} graph /> : null}
         {tab === "changes" ? (
           <ChangesPane
             view={view}

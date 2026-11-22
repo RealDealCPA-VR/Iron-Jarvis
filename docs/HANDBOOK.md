@@ -2042,6 +2042,31 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The Timeline shows the models that did the work (v1.550.0)
+
+A coding session's **Timeline** tab now opens on the models that did the
+reply, each one a card, joined by arrows where one handed work to another.
+The step-by-step timeline is still there: press a card to see that model's
+steps on the time axis.
+
+- **Each card** says the model, its part (the lead, or the helper's job),
+  how much it thinks, whether it runs **Local** or in the **Cloud**, what it
+  is doing now and for how long. A quiet glow and the words beside it say
+  its state: green working, yellow waiting (the lead waits while its helpers
+  work), grey done, red failed. A part that has not started yet is dimmed.
+- **Arrows** show only work that really changed hands. Helpers that worked
+  at the same time sit side by side; one that started later sits below.
+  When the lead takes the helpers' reports up, the arrows meet at the lead
+  again. A reply that ended before the lead read the reports draws no
+  arrow back. While a reply runs, an arrow lights for a few seconds when
+  work is handed over or a report comes back.
+- **Rest the pointer** on a card for its numbers (time, model calls, steps,
+  tokens, cost), or on an arrow for the words that went across it: the task
+  the helper was given, or the report it sent back. The keyboard works too.
+- **Press a card** to open its steps: the lead shows every step of the
+  reply, a helper only its own. **All models** (or Esc) goes back. The
+  cards keep updating while you look at the steps.
+
 ## Press a figure to see where it came from (v1.549.0)
 
 When a reply is about a file you gave Iron Jarvis or asked it to read (a

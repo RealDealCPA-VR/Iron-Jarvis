@@ -1012,3 +1012,22 @@ table {
 :root[data-scheme="light"] .hover\:text-rose-300:hover { color: rgb(159 18 57 / 1); }
 :root[data-scheme="light"] .hover\:text-rose-400:hover { color: rgb(159 18 57 / 1); }
 /* light-tone-overrides:end */
+
+/* v1.549.0: the Timeline's graph (components/harness/HarnessGraph) lights a
+   handoff for a few seconds (lib/buildGraph FRESH_MS): a dash runs along the
+   edge four times, then stops. Nothing else on the graph moves; under
+   reduced motion the edge only changes colour. */
+.graph-edge-flow {
+  stroke-dasharray: 5 4;
+  animation: graph-edge-flow 0.8s linear 4;
+}
+@keyframes graph-edge-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .graph-edge-flow {
+    animation: none;
+  }
+}

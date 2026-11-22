@@ -26,7 +26,9 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Bot, ChevronDown, ChevronRight, Sparkles, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, Sparkles, X } from "lucide-react";
+import { HarnessGraph, effortWord, nodeStatusWords, type GraphNames } from "@/components/harness/HarnessGraph";
+import { graphNodes, helperIdOf, replyGraph } from "@/lib/buildGraph";
 import { STEP_ICON, StepDetailPanel } from "@/components/chat/WorkLine";
 import { secondsText } from "@/components/chat/TurnReceipt";
 import type { CatalogRow } from "@/lib/answeredModel";
@@ -54,11 +56,13 @@ import { helperName, workerModelName } from "@/lib/buildHelpers";
 import { carriedOnTurns, timelineResumeNote } from "@/lib/buildResume";
 import type { BuildSessionView } from "@/lib/buildSessions";
 import { accountUsageLine, type BuildAccount } from "@/lib/buildAccounts";
-import { kindWords, rowSubject, stepPhrase, stepPhraseText } from "@/lib/stepWords";
 import { summarizedWords } from "@/lib/buildLongJobs";
 import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { toolKind } from "@/lib/workTarget";
+import { CHECK_WORDS, costWords, stepLabel, tokenWords } from "@/lib/timelineWords";
+
+export { CHECK_WORDS, costWords, stepLabel, tokenWords };
 
 /** What the session lends the tab for its running reply. */
 export interface LiveTimelineHandle {
@@ -88,12 +92,6 @@ export const NO_TIMELINE_EARLY = "It ended before any work started.";
  *  keeps no times) — never "made before" either. */
 export const NO_TIMELINE_CUT = "Iron Jarvis stopped while answering, so this reply's times were not kept.";
 const NO_TIMELINE_REASON = { early: NO_TIMELINE_EARLY, cut: NO_TIMELINE_CUT, before: NO_TIMELINE_WHY } as const;
-/** v1.390.0 review: a step Iron Jarvis ran ITSELF to check the reply (the
- *  finish check's test run, a project check) — never drawn as the model's. */
-export const CHECK_WORDS: Readonly<Record<StepCheck, string>> = {
-  finish: "Finish check",
-  project: "Project check",
-};
 export const CHECK_NOTE = "Iron Jarvis ran this itself, to check the reply's work. The model did not ask for it.";
 export const NO_REPLIES = "No replies yet. While the session works, each step shows here on one time axis.";
 export const NOT_KEPT = "Not kept for this step.";
@@ -105,31 +103,6 @@ export const JUST_ENDED_CHOICE = "Just now";
 
 function plural(n: number, noun: string): string {
   return `${n.toLocaleString("en-US")} ${noun}${n === 1 ? "" : "s"}`;
-}
-
-/** "~$0.31", "<$0.01", "~$0.31 list price" (a subscription's money is a
- *  list-price equivalent, never a charge); null when there is nothing honest
- *  to say (no price known, or a free model). `short` says "list". */
-export function costWords(u: TurnUsage | undefined, short = false): string | null {
-  const c = u?.cost_usd;
-  if (typeof c !== "number" || !Number.isFinite(c) || c < 0) return null;
-  const list = u?.list_price_equivalent === true;
-  if (!list && c <= 0) return null;
-  const amount = c > 0 && c < 0.005 ? "<$0.01" : `~$${c.toFixed(2)}`;
-  return list ? `${amount} ${short ? "list" : "list price"}` : amount;
-}
-
-/** "120,400 in · 8,200 out" (+ " · 96,000 read from cache"). */
-export function tokenWords(u: TurnUsage | undefined): string | null {
-  if (!u || (u.input_tokens === undefined && u.output_tokens === undefined)) return null;
-  // Nothing counted (the demo model, a model that reports none): nothing said.
-  if (!u.input_tokens && !u.output_tokens) return null;
-  const parts = [
-    `${(u.input_tokens ?? 0).toLocaleString("en-US")} in`,
-    `${(u.output_tokens ?? 0).toLocaleString("en-US")} out`,
-  ];
-  if (u.cache_read_input_tokens) parts.push(`${u.cache_read_input_tokens.toLocaleString("en-US")} read from cache`);
-  return parts.join(" · ");
 }
 
 function durationWords(ms: number | null | undefined): string {
@@ -153,23 +126,6 @@ function modelName(provider: string, model: string, models: readonly CatalogRow[
   // workerModelName) — the demo model by the composer's name, else the
   // catalog's label, the provider's name, the id.
   return workerModelName(provider, model, models) || "The model";
-}
-
-/** A step in the run log's words: "Read app.py", "Reading app.py"; a check
- *  Iron Jarvis ran itself says so first ("Finish check · Ran python"). */
-export function stepLabel(step: Pick<TimelineStep, "name" | "target" | "state"> & { check?: StepCheck | null }): string {
-  const own = ownStepLabel(step);
-  return step.check ? `${CHECK_WORDS[step.check]} · ${own}` : own;
-}
-
-function ownStepLabel(step: Pick<TimelineStep, "name" | "target" | "state">): string {
-  if (step.state === "working") {
-    const kind = toolKind(step.name);
-    const subject = rowSubject(kind, step.name, step.target);
-    const lead = kindWords(kind, step.name, { subject: !!subject, running: true });
-    return subject ? `${lead} ${subject.text}` : lead;
-  }
-  return stepPhraseText(stepPhrase(step.name, step.target));
 }
 
 function callLabel(c: TimelineCall, n: number, models: readonly CatalogRow[]): string {
@@ -512,10 +468,15 @@ export const HarnessTimeline = memo(function HarnessTimeline({
   live,
   models = [],
   account = null,
+  graph = false,
 }: {
   view: BuildSessionView;
   live: LiveTimelineHandle | null;
   models?: readonly CatalogRow[];
+  /** v1.549.0: open on the graph of the models (components/harness/
+   *  HarnessGraph); a press on a node shows its steps here, on the axis. Off,
+   *  the steps are shown at once (the v1.390.0 tab). */
+  graph?: boolean;
   /** v1.393.0: the session's account — its current usage window is said at
    *  the top ("TSI · 63% of the 5-hour window, resets 3:40 PM"), from the
    *  cached snapshot (never a new call). */
@@ -525,6 +486,9 @@ export const HarnessTimeline = memo(function HarnessTimeline({
   const [choice, setChoice] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [picked, setPicked] = useState<string | null>(null);
+  /** v1.549.0: the node whose steps are open ("lead", "back:<n>",
+   *  "helper:<id>"), null = the graph. */
+  const [focus, setFocus] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [boxH, setBoxH] = useState(0);
@@ -562,10 +526,30 @@ export const HarnessTimeline = memo(function HarnessTimeline({
   const segments = useMemo(() => (reply ? callSegments(reply.calls, reply.durationMs) : []), [reply]);
   const totals = useMemo(() => (reply ? timelineTotals(reply) : null), [reply]);
   const ticks = useMemo(() => axisTicks(reply?.durationMs ?? 0), [reply?.durationMs]);
+  const graphData = useMemo(() => (graph && reply ? replyGraph(reply) : null), [graph, reply]);
+  const names: GraphNames = useMemo(() => ({ model: (p: string, m: string) => modelName(p, m, models) }), [models]);
+  // A node that is no longer in this reply (another reply was picked) shows
+  // the graph again.
+  const focusNode = useMemo(
+    () => (graphData && focus ? (graphNodes(graphData).find((n) => n.key === focus) ?? null) : null),
+    [graphData, focus],
+  );
+  const onGraph = !!graphData && !focusNode;
+  const focusHelper = focusNode ? helperIdOf(focusNode.key) : null;
+  const shownRows = useMemo(() => {
+    if (focusHelper === null || !reply) return rows;
+    // One helper's own rows: its bar and its steps (the reply's fold does not
+    // hide them here; the helper's own fold still does).
+    const open = new Set(collapsed);
+    open.delete("reply");
+    return timelineRows(reply, open).filter(
+      (r) => (r.kind === "helper" && r.helper.id === focusHelper) || (r.kind === "step" && r.helperId === focusHelper),
+    );
+  }, [rows, reply, collapsed, focusHelper]);
 
   // The rows' box exists only while a reply is drawn: measured again when it
   // appears (or goes).
-  const drawn = reply !== null;
+  const drawn = reply !== null && !onGraph;
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
@@ -585,8 +569,19 @@ export const HarnessTimeline = memo(function HarnessTimeline({
     });
   }, []);
   const onPick = useCallback((key: string) => setPicked(key), []);
-  const onKey = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape") setPicked(null);
+  const onKey = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "Escape") return;
+      // Esc closes the details first, then the node's steps (the graph again).
+      if (picked) setPicked(null);
+      else if (focus) setFocus(null);
+    },
+    [picked, focus],
+  );
+  const onOpen = useCallback((key: string) => {
+    setFocus(key);
+    setPicked(null);
+    setScrollTop(0);
   }, []);
 
   const pickedItem: Picked | null = useMemo(() => {
@@ -594,11 +589,11 @@ export const HarnessTimeline = memo(function HarnessTimeline({
     if (picked === "reply") return { kind: "reply" };
     const seg = segments.find((s) => s.key === picked);
     if (seg) return { kind: "segment", segment: seg };
-    const row = rows.find((r) => r.key === picked);
+    const row = shownRows.find((r) => r.key === picked);
     if (row?.kind === "step") return { kind: "step", step: row.step };
     if (row?.kind === "helper") return { kind: "helper", helper: row.helper };
     return null;
-  }, [picked, reply, rows, segments]);
+  }, [picked, reply, shownRows, segments]);
 
   // v1.393.0: the account the reply runs on, and how much of its usage
   // window is used ("usage not known yet" before the vendor sent a number).
@@ -622,6 +617,12 @@ export const HarnessTimeline = memo(function HarnessTimeline({
 
   const route = reply?.route;
   const replyName = route ? modelName(route.provider, route.model, models) : modelName(view.setup.provider, view.setup.model, models);
+  // The session's thinking level is the lead's only when the reply ran on the
+  // session's own model (a failover to another model is not said to think so).
+  const leadEffort =
+    !route || (route.provider === view.setup.provider && route.model === view.setup.model)
+      ? effortWord(view.setup.reasoning)
+      : null;
   const rowLabel = (r: TimelineRow): string => {
     if (r.kind === "reply") return replyName;
     if (r.kind === "helper") {
@@ -634,7 +635,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
 
   const visible = boxH > 0 ? Math.ceil(boxH / ROW_H) : FALLBACK_ROWS;
   const first = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
-  const last = Math.min(rows.length, first + visible + 2 * OVERSCAN);
+  const last = Math.min(shownRows.length, first + visible + 2 * OVERSCAN);
   const cost = costWords(totals?.usage);
   const tokens = tokenWords(totals?.usage);
   const helperCost = costWords(totals?.helperUsage);
@@ -653,6 +654,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
             onChange={(e) => {
               setChoice(e.target.value);
               setPicked(null);
+              setFocus(null);
               setScrollTop(0);
               if (boxRef.current) boxRef.current.scrollTop = 0;
             }}
@@ -726,6 +728,41 @@ export const HarnessTimeline = memo(function HarnessTimeline({
             ) : null}
           </div>
 
+          {onGraph && graphData ? (
+            <HarnessGraph
+              graph={graphData}
+              reply={reply}
+              names={names}
+              models={models}
+              effort={leadEffort}
+              onOpen={onOpen}
+            />
+          ) : null}
+
+          {!onGraph && focusNode ? (
+            <div data-testid="timeline-focus" className="flex shrink-0 items-center gap-2 border-b border-white/[0.06] pb-1.5">
+              <button
+                type="button"
+                data-testid="timeline-focus-back"
+                aria-label="Back to every model"
+                title="Back to every model (Esc)"
+                onClick={() => {
+                  setFocus(null);
+                  setPicked(null);
+                }}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+              >
+                <ChevronLeft size={13} aria-hidden />
+                All models
+              </button>
+              <span data-testid="timeline-focus-title" className="min-w-0 flex-1 truncate text-right text-[12px] text-zinc-300">
+                {`${focusNode.kind === "helper" && shownRows[0] ? rowLabel(shownRows[0]) : replyName} · ${nodeStatusWords(focusNode)}`}
+              </span>
+            </div>
+          ) : null}
+
+          {onGraph ? null : (
+          <>
           <div
             data-testid="timeline-axis"
             aria-hidden
@@ -756,7 +793,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
           >
             <div style={{ height: first * ROW_H }} />
-            {rows.slice(first, last).map((r) => (
+            {shownRows.slice(first, last).map((r) => (
               <div key={r.key}>
                 <Row
                   row={r}
@@ -772,10 +809,12 @@ export const HarnessTimeline = memo(function HarnessTimeline({
                 />
               </div>
             ))}
-            <div style={{ height: Math.max(0, rows.length - last) * ROW_H }} />
+            <div style={{ height: Math.max(0, shownRows.length - last) * ROW_H }} />
           </div>
 
           {pickedItem ? <Card picked={pickedItem} reply={reply} models={models} onClose={() => setPicked(null)} /> : null}
+          </>
+          )}
         </>
       )}
     </div>

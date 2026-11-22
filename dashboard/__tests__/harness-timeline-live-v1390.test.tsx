@@ -197,6 +197,17 @@ describe("the Timeline tab sits beside Plan", () => {
   });
 });
 
+/** v1.549.0: the tab opens on the graph of the models; the steps on the axis
+ *  are the lead's node, pressed. */
+async function openLeadSteps(): Promise<void> {
+  const lead = await waitFor(() => {
+    const n = screen.getAllByTestId("graph-node").find((x) => x.getAttribute("data-key") === "lead");
+    expect(n).toBeTruthy();
+    return n as HTMLElement;
+  }, TICK_WAIT);
+  fireEvent.click(lead);
+}
+
 describe("the running reply: calm and cheap", () => {
   it("reads the running reply at most about once a second, never per word", async () => {
     const s = controlledStream();
@@ -210,6 +221,7 @@ describe("the running reply: calm and cheap", () => {
     });
     // The steps the frames carried are drawn, live.
     await waitFor(() => expect(screen.getByTestId("timeline-live")).toHaveTextContent("Live"), TICK_WAIT);
+    await openLeadSteps();
     await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5), TICK_WAIT);
     // A burst of 400 word frames: the tab reads the store no more than the
     // once-a-second tick allows (it never reads per word).
@@ -248,6 +260,7 @@ describe("the running reply: calm and cheap", () => {
     expect(screen.queryByTestId("pane-timeline")).toBeNull();
     // Opened, it draws everything folded meanwhile.
     fireEvent.click(screen.getByTestId("harness-pane-tab-timeline"));
+    await openLeadSteps();
     await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5), TICK_WAIT);
     expect(reads.n).toBeGreaterThan(0);
     s.end();
@@ -294,6 +307,7 @@ describe("the running reply: calm and cheap", () => {
     await act(async () => {
       for (const [e, d] of BODY) s.push(e, d);
     });
+    await openLeadSteps();
     await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5), TICK_WAIT);
     const label = (el: Element) => el.querySelector("span[title]")?.getAttribute("title");
     // The session now holds the saved line (the daemon writes it before the
