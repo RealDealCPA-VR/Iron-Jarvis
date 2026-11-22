@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.557.0 (2026-11-19).*
+holds itself to. Current as of v1.558.0 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Photos, files and voice notes reach Jarvis from your phone (v1.556.0)
+## Photos, files and voice notes reach Jarvis from your phone (v1.558.0)
 
 Send Jarvis a photo of a page, a PDF, a spreadsheet or a voice note in
 Telegram, Slack or email, and it works on it the way it works on a file you
@@ -2693,7 +2693,7 @@ and at most 8,000 characters of them; the rest stayed behind without a word.
 
 A file you send Jarvis in Slack or by email now gets a plain answer that it
 could not be used, the way Telegram already did, instead of silence. Iron
-Jarvis cannot take files sent from your phone yet. (Since v1.556.0 it takes
+Jarvis cannot take files sent from your phone yet. (Since v1.558.0 it takes
 them: see "Photos, files and voice notes reach Jarvis from your phone". The
 sentences quoted below are no longer said: a file that gives no way to
 download it, such as a Slack link to a Google Doc, gets "I couldn't open a

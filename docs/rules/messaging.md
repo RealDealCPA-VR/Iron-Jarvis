@@ -21,7 +21,7 @@ How to use this file: read the contents list, then read only the entries your ch
 - L381: **A file the phone cannot take is said in words on Slack and email too, after the guards, never before** (v1.546.1)
 - L411: **A task from another computer carries its conversation PLANNED, never its newest N rows** (v1.546.2)
 - L448: **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time** (v1.552.0)
-- L510: **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.556.0)
+- L510: **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.558.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -507,7 +507,7 @@ How to use this file: read the contents list, then read only the entries your ch
   case each in `tests/test_peers_v1497.py`, `tests/test_peers_review_v1497.py`,
   `tests/test_second_review_pairing_v1509.py`.
 
-- **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.556.0, build-out plan R2.3, phase 10-a).
+- **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.558.0, build-out plan R2.3, phase 10-a).
   `InboundMessage.files` carries `InboundFile`s (kind, name, mime, size, the
   channel's own `ref`); nothing is downloaded at poll time. Telegram turns
   photo (largest size), document, voice, audio, video and video_note into

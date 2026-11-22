@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.558.0
+
+**Photos, files and voice notes reach Jarvis from your phone.** Send Jarvis a photo of a page, a PDF, a spreadsheet or a voice note in Telegram, Slack or email, and it works on it the way it works on a file you drop into Chat on this PC.
+
 ## v1.557.0
 
 **The `/` list in Build › Code works before a session starts.** Type `/` in Build › Code's start box (the box you see before any session is open) and the coding tool's own commands and skills are listed above the box, as they already were in an open session.
@@ -77,7 +81,3 @@
 ## v1.542.0
 
 **Linux download links that always work.** Nothing in the app changes in this release.
-
-## v1.541.0
-
-**One place for where your work goes, and plainer words.** The last of nine releases from the fourth review.
