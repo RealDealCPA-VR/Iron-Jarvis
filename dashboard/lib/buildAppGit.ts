@@ -18,7 +18,7 @@
  */
 
 import { get, post } from "@/lib/api";
-import { BUILD_CODE_GIT, decodeBranchStatus, type BranchStatus, type GhState } from "@/lib/buildGit";
+import { decodeBranchStatus, type BranchStatus, type GhState } from "@/lib/buildGit";
 
 function rec(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -141,12 +141,14 @@ export function decodeAppGit(raw: unknown): AppGit | null {
   };
 }
 
+/** Written out whole (not from a variable): the route check
+ *  (tests/test_wave6_dead_code_v14390.py) reads each caller statically. */
 function base(id: string): string {
-  return `${BUILD_CODE_GIT}/${encodeURIComponent(id)}/git`;
+  return `/build/app/sessions/${encodeURIComponent(id)}/git`;
 }
 
 export async function getAppGit(id: string): Promise<AppGit | null> {
-  return decodeAppGit(await get<unknown>(base(id)));
+  return decodeAppGit(await get<unknown>(`${base(id)}`));
 }
 
 /** The message again for the files ticked now (from the record; no model). */
@@ -176,10 +178,25 @@ export function canCommit(g: AppGit, ticked: ReadonlySet<string>, message: strin
   return g.kind === "branch" || ticked.size > 0;
 }
 
-/** Is there anything for the row under a reply to offer? */
+/** Has the session itself something to commit? A branch session: anything
+ *  not committed in its own copy of the folder. A folder session: a file
+ *  Iron Jarvis ticked (changed since the session started); the user's own
+ *  changes alone are not this session's to offer. */
+export function ownChanges(g: AppGit): boolean {
+  return g.kind === "branch" ? g.uncommitted > 0 : g.files.some((f) => f.ticked);
+}
+
+/** Is there anything for the row under a reply to offer? (G3: nothing is
+ *  drawn under a reply that changed nothing and has no pull request to open.) */
 export function hasGitWork(g: AppGit | null, prUrl: string): boolean {
   if (!g || g.kind === "none") return false;
-  return g.uncommitted > 0 || (g.canPr && g.ahead > 0) || !!prUrl || !!g.prUrl;
+  return ownChanges(g) || (g.canPr && g.ahead > 0) || !!prUrl || !!g.prUrl;
+}
+
+/** The GitHub CLI's note in Build › Code's words ("Open a pull request",
+ *  VOCABULARY.md; the note is Chat › Code's, which says "Create PR"). */
+export function ghNoteWords(note: string): string {
+  return note.replace(/\bCreate PR\b/g, OPEN_PR_LABEL);
 }
 
 /** The pull request's link words. */

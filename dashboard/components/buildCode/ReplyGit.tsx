@@ -35,8 +35,10 @@ import {
   commitAppGit,
   draftFor,
   getAppGit,
+  ghNoteWords,
   hasGitWork,
   openAppPr,
+  ownChanges,
   prLinkWords,
   type AppGit,
 } from "@/lib/buildAppGit";
@@ -173,7 +175,9 @@ export const ReplyGit = memo(function ReplyGit({
       </p>
     ) : null;
   }
-  const toCommit = git.uncommitted > 0;
+  // The commit part shows while the session has changes of its own (as read:
+  // a tick the user takes off keeps the list, with Commit waiting).
+  const toCommit = git.uncommitted > 0 && ownChanges(git);
   const gh = git.kind === "branch" ? git.status?.gh ?? null : git.gh;
   const ghReady = !!gh && gh.installed && gh.signedIn === true;
   // A pull request once there are commits the main branch lacks (files left
@@ -286,7 +290,7 @@ export const ReplyGit = memo(function ReplyGit({
           </div>
         ) : (
           <div data-testid="code-git-pr-fallback" className="space-y-1 text-[12px] text-zinc-400">
-            <p className="break-words">{gh?.note || "Pull requests are made on GitHub's own page."}</p>
+            <p className="break-words">{ghNoteWords(gh?.note || "") || "Pull requests are made on GitHub's own page."}</p>
             {(git.kind === "branch" ? git.status?.compareUrl : git.compareUrl) ? (
               <a
                 data-testid="code-git-compare"

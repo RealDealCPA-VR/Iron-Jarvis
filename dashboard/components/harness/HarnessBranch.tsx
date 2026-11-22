@@ -83,7 +83,12 @@ export function BranchView({
   comments = false,
   root = CHAT_CODE_GIT,
   watchCi = true,
+  commentsKey,
 }: {
+  /** 22-b: where a comment on a changed block waits: the key the message
+   *  box reads (Build › Code's is `code:<id>`, lib/codeComments). Chat ›
+   *  Code's is the thread id. */
+  commentsKey?: string;
   /** 22-b: whose git routes (Build › Code's sessions are on
    *  `/build/app/sessions`, with the same answers). */
   root?: GitRoot;
@@ -637,7 +642,13 @@ export function BranchView({
       ) : (
         // v1.405.0: the branch's whole diff, every file inline (no Undo:
         // committed work is not in the undo journal).
-        <ChangesReview changes={changes} sessionId={sessionId} more={more} comments={comments} commentView="branch" />
+        <ChangesReview
+          changes={changes}
+          sessionId={commentsKey || sessionId}
+          more={more}
+          comments={comments}
+          commentView="branch"
+        />
       )}
     </div>
   );

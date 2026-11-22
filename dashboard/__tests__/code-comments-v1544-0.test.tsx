@@ -1084,6 +1084,69 @@ describe("Build › Code", () => {
     expect(screen.getByTestId("code-stop")).toBeTruthy();
   });
 
+  it("22-b: a comment in the Branch view of a session on its own branch waits under the box's own key", async () => {
+    const WT = "C:\\work\\shop.ij-worktrees\\session-3f2a";
+    const branchCart = { ...cart(), path: `${WT}\\cart.py` };
+    const own = {
+      ...codeSess("a1"),
+      folder: WT,
+      checkout: "C:\\work\\shop",
+      git: {
+        branch: "ij/session-3f2a",
+        base: "main",
+        base_commit: "abc123def456",
+        worktree: WT,
+        checkout: "C:\\work\\shop",
+        repo: "C:\\work\\shop",
+        merged: false,
+        merged_into: "",
+        removed: false,
+        pr_url: "",
+      },
+    };
+    openCode("a1", { session: own });
+    H.gets["/build/app/sessions"] = { sessions: [own] };
+    H.gets["/build/app/sessions/a1/git"] = {
+      exists: true,
+      ahead: 1,
+      behind: 0,
+      uncommitted: 0,
+      remote: "origin",
+      pushed: false,
+      unpushed: 1,
+      in_base: false,
+      base_exists: true,
+      base_checked_out_at: "C:\\work\\shop",
+      commits: [{ sha: "1a2b3c4", subject: "Add the cart" }],
+      pr_draft: { title: "Add the cart", body: "" },
+      compare_url: "",
+      gh: { installed: true, signed_in: true, note: "" },
+    };
+    H.gets["/build/app/sessions/a1/git/diff"] = {
+      changes: [branchCart],
+      files: 1,
+      added: 1,
+      removed: 1,
+      truncated_files: false,
+      base: "main",
+      merge_base: "abc123def456",
+    };
+    holdStreams();
+    codeView("a1");
+    fireEvent.click(await screen.findByTestId("code-changes-scope-branch", {}, { timeout: 10_000 }));
+    await screen.findByTestId("changes-review", {}, { timeout: 10_000 });
+    await commentThroughDialog("Use a constant");
+    expect(getComments("a1")).toHaveLength(0);
+    const [c] = getComments("code:a1");
+    expect(commentsBody([c])).toEqual([{ ...SENT, path: branchCart.path }]);
+    expect(c.view).toBe("branch");
+    await waitFor(() =>
+      expect(within(screen.getByTestId("code-composer")).getByTestId("comment-chip").textContent).toBe(
+        "cart.py 1–2: Use a constant",
+      ),
+    );
+  });
+
   it("30 streamed words redraw the Changes rows zero times, with a comment waiting", async () => {
     openCodeRunning("a1");
     codeView("a1");

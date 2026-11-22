@@ -21,7 +21,12 @@ Pinned:
   branch, and its push writes no upstream into the user's config;
 * a press is refused while a reply runs, and holds the session while it runs;
 * the tool of a branch session runs in its own copy of the folder with the
-  main folder's environment.
+  main folder's environment;
+* (review) a press is refused while Iron Jarvis checks the reply's tests; a
+  reply that starts while a commit waits for its locks stops the commit; a
+  branch session whose row cannot be written leaves no branch and no copy; a
+  branch session's work record and project row name the folder the user
+  picked; chat's feature lookup finds where Commit and the pull request are.
 """
 
 from __future__ import annotations
@@ -539,3 +544,129 @@ async def test_a_branch_sessions_check_is_asked_and_kept_for_the_picked_folder(a
     assert FD.read_checks(engine, str(repo))["off"] is True
     assert FD.read_checks(engine, wt) is None
     await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# The review's guards: each one pinned through the layer that would refuse
+# --------------------------------------------------------------------------- #
+async def test_a_press_is_refused_while_iron_jarvis_checks_the_replys_tests(app, repo, monkeypatch):
+    from iron_jarvis.hosted import proof as PROOF
+
+    svc = S.service_for(app.state.platform)
+    fake_tool(svc, monkeypatch)
+    (repo / "app.py").write_bytes(b"x = 7\n")
+    async with client(app) as c:
+        sid = (await c.post("/build/app/sessions", json={"harness": "codex", "folder": str(repo)})).json()["id"]
+        head = git("rev-parse", "HEAD", cwd=repo)
+        PROOF.note_pending(svc, sid)  # the reply's end is being judged / its tests run
+        try:
+            assert PROOF.checking(svc, sid)
+            for path, body in ((f"/build/app/sessions/{sid}/git/commit", {"message": "m", "paths": ["app.py"]}),
+                               (f"/build/app/sessions/{sid}/git/pr", {"title": "t", "body": ""})):
+                r = await c.post(path, json=body)
+                assert r.status_code == 409 and r.json()["detail"] == SG.CHECKING_NOW, (path, r.text)
+            assert git("rev-parse", "HEAD", cwd=repo) == head, "nothing was committed while it checked"
+            assert svc.live[sid].claim == "", "a refused press holds nothing"
+        finally:
+            PROOF.clear_pending(svc, sid)
+        # The control: the same press once the check is over.
+        r = await c.post(f"/build/app/sessions/{sid}/git/commit", json={"message": "m", "paths": ["app.py"]})
+        assert r.status_code == 200, r.text
+        assert git("rev-parse", "HEAD", cwd=repo) != head
+    await stop_all(app)
+
+
+async def test_a_reply_that_starts_while_the_commit_waits_for_the_locks_stops_the_commit(app, repo, monkeypatch):
+    """The busy check ran before the wait for the locks; ``_still_free`` asks
+    again inside them, right before git writes."""
+    from iron_jarvis.hosted import branching as BR
+
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    (repo / "app.py").write_bytes(b"x = 8\n")
+    async with client(app) as c:
+        sid = (await c.post("/build/app/sessions", json={"harness": "codex", "folder": str(repo)})).json()["id"]
+        other = (await c.post("/build/app/sessions", json={"harness": "claude-code", "folder": str(repo)})).json()["id"]
+        real_free = BR._files_free
+
+        async def free_then_a_reply_starts(service, row, live):
+            await real_free(service, row, live)  # free when the press asked...
+            await svc.start_turn(other, "tidy the readme", "o1")  # ...then a reply began here
+            await until(lambda: other in drivers and drivers[other].sent, timeout=WAIT_S)
+
+        monkeypatch.setattr(BR, "_files_free", free_then_a_reply_starts)
+        head = git("rev-parse", "HEAD", cwd=repo)
+        r = await c.post(f"/build/app/sessions/{sid}/git/commit", json={"message": "m", "paths": ["app.py"]})
+        assert r.status_code == 409 and r.json()["detail"] == BR.OTHER_SESSION, r.text
+        assert git("rev-parse", "HEAD", cwd=repo) == head, "nothing was committed"
+        assert git("status", "--porcelain", "--", "app.py", cwd=repo) == "M app.py"
+        monkeypatch.setattr(BR, "_files_free", real_free)
+        await reply(svc, other)
+    await stop_all(app)
+
+
+async def test_a_branch_session_whose_row_cannot_be_written_leaves_no_branch_and_no_copy(app, repo, monkeypatch):
+    real_create = store.create
+
+    def broken(*_a, **_k):
+        raise RuntimeError("the database could not be written")
+
+    monkeypatch.setattr(store, "create", broken)
+    async with client(app) as c:
+        try:
+            r = await c.post("/build/app/sessions", json={"harness": "codex", "folder": str(repo), "branch": True})
+            assert r.status_code >= 500, r.text
+        except RuntimeError:
+            pass  # the app's error came through to the test client
+    assert git("branch", "--list", "ij/*", cwd=repo) == "", "the new branch was taken back"
+    copies = repo.parent / (repo.name + B.WORKTREES_SUFFIX)
+    assert not copies.exists() or not any(copies.iterdir()), "the new copy of the folder was taken back"
+    trees = [ln for ln in git("worktree", "list", "--porcelain", cwd=repo).splitlines() if ln.startswith("worktree ")]
+    assert len(trees) == 1, trees
+    # The control: with the row written, the same start makes both.
+    monkeypatch.setattr(store, "create", real_create)
+    async with client(app) as c:
+        r = await c.post("/build/app/sessions", json={"harness": "codex", "folder": str(repo), "branch": True})
+        assert r.status_code == 201, r.text
+    assert git("branch", "--list", "ij/*", cwd=repo) != "" and any(copies.iterdir())
+    await stop_all(app)
+
+
+async def test_a_branch_sessions_work_record_and_project_row_name_the_picked_folder(app, repo):
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.workmap import collect
+
+    engine = app.state.platform.engine
+    async with client(app) as c:
+        made = (await c.post("/build/app/sessions",
+                             json={"harness": "codex", "folder": str(repo), "branch": True})).json()
+        sid = made["id"]
+        assert Path(made["folder"]).parent.name == repo.name + B.WORKTREES_SUFFIX
+        store.update(engine, sid, harness_session_id="hs-1")  # the tool answered: earlier work
+        with session_scope(engine) as db:
+            found, _whole = collect.hosted_candidates(db)
+            built = {cand.ref: cand.build(db) for cand in found}
+        assert built[sid]["folder"] == str(repo), "the work record names the folder the user picked"
+        r = await c.post("/projects", json={"name": "Proj", "root": str(repo)})
+        assert r.status_code == 200, r.text
+        rows = (await c.get(f"/projects/{r.json()['id']}")).json()["coding_sessions"]
+        assert [row["id"] for row in rows] == [sid], "listed on the picked folder's project"
+    await stop_all(app)
+
+
+def test_chat_finds_where_commit_and_the_pull_request_are(tmp_path):
+    """Chat does not commit a Build › Code session's work: the feature lookup
+    finds the page that does, and its line names both presses."""
+    from iron_jarvis.capability_search import index as CI
+    from iron_jarvis.capability_search import tool as CT_TOOL
+
+    platform = create_app(str(tmp_path / "home")).state.platform
+    idx = CI.build(platform)
+    for asked in ("commit what Codex did in my folder", "commit the changes Claude Code made",
+                  "open a pull request for my coding session"):
+        top = [e.id for _s, e in idx.search(asked, 5)]
+        assert "page_build" in top, (asked, top)
+    text, data = CT_TOOL.answer(platform, "commit what Codex did / open a pull request for its changes", 8)
+    row = next(r for r in data["matches"] if r.get("id") == "page_build")
+    assert row["href"] == "/terminals"
+    assert "Commit" in text and "Open a pull request" in text

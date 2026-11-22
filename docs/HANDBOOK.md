@@ -2318,13 +2318,15 @@ box opens GitHub's own page instead. The branch is pushed first, never with a
 force.
 
 **Never while it works.** Commit and the pull request wait until the reply
-has finished, Iron Jarvis has checked it, and the tool has nothing still
-running; no message starts while a commit runs.
+has finished and Iron Jarvis has checked it. Commit also waits until the tool
+has nothing still running and the session is not open in a terminal. No
+message starts while a commit or a pull request is being made.
 
 **From chat.** Say *start new Build › Code sessions in D:\code\shop on their
 own branch* (or *start new sessions in D:\code\shop in the folder, not on a
 new branch*): the card shows the change, and Undo puts back what the folder
-had.
+had. Chat does not commit a Build › Code session's work or open its pull
+request: ask, and it says where the two presses are.
 
 ## Pick up where you left off in a folder (v1.556.0)
 

@@ -12,7 +12,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const api = vi.hoisted(() => {
   class ApiError extends Error {
@@ -27,6 +27,7 @@ const api = vi.hoisted(() => {
   return {
     ApiError,
     gets: {} as Record<string, unknown>,
+    getCalls: [] as string[],
     posts: [] as { path: string; body: unknown }[],
     puts: [] as { path: string; body: unknown }[],
     postReply: {} as Record<string, unknown>,
@@ -39,6 +40,7 @@ vi.mock("@/lib/api", () => ({
   API_BASE: "http://d",
   ijToken: () => "",
   get: (p: string) => {
+    api.getCalls.push(p);
     const hit = api.gets[p];
     return hit === undefined ? Promise.reject(new api.ApiError(`unmocked ${p}`, 404)) : Promise.resolve(hit);
   },
@@ -61,7 +63,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => nul
 import { ReplyGit } from "@/components/buildCode/ReplyGit";
 import { StartComposer } from "@/components/buildCode/StartComposer";
 import { decodeCodeSession, decodeCodingTools, groupByFolder, sessionFolderWords } from "@/lib/buildApp";
-import { BRANCH_OFFER, decodeAppGit, hasGitWork } from "@/lib/buildAppGit";
+import { BRANCH_OFFER, OPEN_PR_LABEL, decodeAppGit, ghNoteWords, hasGitWork } from "@/lib/buildAppGit";
 import { resetFolderDefaultsCache } from "@/lib/folderDefaults";
 
 const SID = "app_1";
@@ -101,6 +103,7 @@ beforeEach(() => {
   resetFolderDefaultsCache();
   window.localStorage.clear();
   api.gets = {};
+  api.getCalls = [];
   api.posts = [];
   api.puts = [];
   api.postReply = {};
@@ -181,11 +184,45 @@ describe("Commit and Open a pull request under the reply", () => {
     expect(message.value).toBe("My own words");
   });
 
-  it("nothing ticked: Commit waits", async () => {
-    api.gets[GIT] = folderGit({ files: [{ rel: "README.md", status: "modified", ticked: false }], uncommitted: 1 });
+  it("every tick taken off: the list stays and Commit waits", async () => {
+    api.gets[GIT] = folderGit({
+      files: [
+        { rel: "README.md", status: "modified", ticked: false },
+        { rel: "app.py", status: "modified", ticked: true },
+      ],
+      uncommitted: 2,
+    });
+    api.postReply[`${GIT}/draft`] = { drafted: true, message: "Changes from a coding session" };
     render(<ReplyGit sessionId={SID} readKey="r1" />);
     const commit = (await screen.findByTestId("code-git-commit")) as HTMLButtonElement;
-    expect(commit.disabled).toBe(true);
+    expect(commit.disabled).toBe(false);
+    fireEvent.click((screen.getAllByTestId("code-git-tick") as HTMLInputElement[])[1]); // untick app.py
+    await waitFor(() => expect((screen.getByTestId("code-git-commit") as HTMLButtonElement).disabled).toBe(true));
+    expect(screen.getAllByTestId("code-git-tick")).toHaveLength(2);
+  });
+
+  it("a reply that changed nothing draws nothing, whatever else the folder has (G3)", async () => {
+    // The user's own notes.txt is the folder's only change: not this session's.
+    api.gets[GIT] = folderGit({ files: [{ rel: "notes.txt", status: "created", ticked: false }], uncommitted: 1 });
+    const { container } = render(<ReplyGit sessionId={SID} readKey="r1" />);
+    await waitFor(() => expect(api.getCalls).toContain(GIT));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0)); // the answer lands
+    });
+    expect(container.querySelector("[data-testid='code-git']")).toBeNull();
+    // ...and with a pull request to open, the row offers that alone.
+    cleanup();
+    api.getCalls = [];
+    api.gets[GIT] = folderGit({ files: [{ rel: "notes.txt", status: "created", ticked: false }], uncommitted: 1, ahead: 1 });
+    render(<ReplyGit sessionId={SID} readKey="r2" />);
+    expect(await screen.findByTestId("code-git-open-pr")).toBeTruthy();
+    expect(screen.queryByTestId("code-git-commit")).toBeNull();
+  });
+
+  it("the GitHub CLI's note says Build › Code's word for the press", () => {
+    const note = "The GitHub CLI (gh) is not installed, so Create PR opens GitHub's own page instead.";
+    expect(ghNoteWords(note)).toBe(`The GitHub CLI (gh) is not installed, so ${OPEN_PR_LABEL} opens GitHub's own page instead.`);
+    expect(ghNoteWords("")).toBe("");
   });
 
   it("on the main branch there is no pull request, and it says why", async () => {
@@ -228,7 +265,12 @@ describe("Commit and Open a pull request under the reply", () => {
   it("draws nothing outside a repository or with nothing to offer", async () => {
     api.gets[GIT] = { kind: "none", note: "This folder is not in a git repository, so there is nothing to commit here." };
     const { container } = render(<ReplyGit sessionId={SID} readKey="r1" />);
-    await new Promise((r) => setTimeout(r, 20));
+    // Asserted only once the row has READ the folder (it reads after the
+    // reply settles), never before.
+    await waitFor(() => expect(api.getCalls).toContain(GIT));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0)); // the answer lands
+    });
     expect(container.querySelector("[data-testid='code-git']")).toBeNull();
     expect(hasGitWork(decodeAppGit(folderGit({ uncommitted: 0, files: [], ahead: 0 })), "")).toBe(false);
     expect(hasGitWork(decodeAppGit(folderGit({ uncommitted: 0, files: [], ahead: 2 })), "")).toBe(true);
@@ -322,6 +364,19 @@ describe("the start box offers a new branch once per folder", () => {
     await waitFor(() => expect(api.posts.some((p) => p.path === "/build/app/sessions")).toBe(true));
     expect(api.posts.find((p) => p.path === "/build/app/sessions")!.body).not.toHaveProperty("branch");
     expect(api.puts).toHaveLength(0);
+  });
+
+  it("a session started without an answer keeps the folder's no: the offer is made once", async () => {
+    api.gets[DEFAULTS] = { folder: FOLDER, defaults: {} };
+    api.gets[FOLDER_GIT] = { git: true, repo: true, branch: "main", can_branch: true, note: "", worktrees_dir: "x" };
+    api.postReply["/build/app/sessions"] = { id: "app_new", harness: "codex", folder: FOLDER };
+    render(<StartComposer tools={TOOLS} toolsError={null} startFolder={FOLDER} onStarted={() => {}} />);
+    await screen.findByTestId("code-start-branch-offer");
+    fireEvent.change(screen.getByTestId("code-start-box"), { target: { value: "fix it" } });
+    fireEvent.click(screen.getByTestId("code-start-send"));
+    await waitFor(() => expect(api.puts).toHaveLength(1));
+    expect(api.puts[0].body).toEqual({ folder: FOLDER, view: "branch", defaults: { work: "folder" } });
+    expect(api.posts.find((p) => p.path === "/build/app/sessions")!.body).not.toHaveProperty("branch");
   });
 
   it("a folder that cannot branch is never asked", async () => {

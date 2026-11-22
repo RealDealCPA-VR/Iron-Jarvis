@@ -425,6 +425,8 @@ function ChangesPane({
           root={BUILD_CODE_GIT}
           watchCi={false}
           comments={comments}
+          // The same key the message box reads, as the scopes above use.
+          commentsKey={buildCodeCommentsKey(sessionId)}
           onArchived={onArchived}
         />
       ) : null}

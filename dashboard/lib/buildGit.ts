@@ -313,19 +313,30 @@ export type GitRoot = "/build/sessions" | "/build/app/sessions";
 export const CHAT_CODE_GIT: GitRoot = "/build/sessions";
 export const BUILD_CODE_GIT: GitRoot = "/build/app/sessions";
 
-function base(id: string, root: GitRoot = CHAT_CODE_GIT): string {
-  return `${root}/${encodeURIComponent(id)}/git`;
+function base(id: string): string {
+  return `/build/sessions/${encodeURIComponent(id)}/git`;
+}
+
+/** 22-b: Build › Code's own (lib/buildAppGit reads the rest of them). */
+function appBase(id: string): string {
+  return `/build/app/sessions/${encodeURIComponent(id)}/git`;
+}
+
+/** Each address is written out whole for each root, so the route check
+ *  (tests/test_wave6_dead_code_v14390.py, a static read) sees its caller. */
+function at(root: GitRoot, chat: string, app: string): string {
+  return root === BUILD_CODE_GIT ? app : chat;
 }
 
 export async function getBranchStatus(id: string, root: GitRoot = CHAT_CODE_GIT): Promise<BranchStatus | null> {
-  return decodeBranchStatus(await get<unknown>(base(id, root)));
+  return decodeBranchStatus(await get<unknown>(at(root, `${base(id)}`, `${appBase(id)}`)));
 }
 
 /** The Branch view's answer, raw — the Changes pane's own `decodeChanges`
  *  (components/chat/ChangedFiles) reads it, so this file stays free of the
  *  component tree (lib/buildSessions imports it). */
 export async function getBranchChangesRaw(id: string, root: GitRoot = CHAT_CODE_GIT): Promise<unknown> {
-  return get<unknown>(`${base(id, root)}/diff`);
+  return get<unknown>(at(root, `${base(id)}/diff`, `${appBase(id)}/diff`));
 }
 
 export function moreFiles(raw: unknown): boolean {
@@ -338,8 +349,8 @@ export interface CommitDraft {
   note: string;
 }
 
-export async function draftCommit(id: string, root: GitRoot = CHAT_CODE_GIT, paths?: string[]): Promise<CommitDraft> {
-  const r = rec(await post<unknown>(`${base(id, root)}/draft`, paths ? { paths } : {})) ?? {};
+export async function draftCommit(id: string, root: GitRoot = CHAT_CODE_GIT): Promise<CommitDraft> {
+  const r = rec(await post<unknown>(at(root, `${base(id)}/draft`, `${appBase(id)}/draft`), {})) ?? {};
   return { drafted: r.drafted === true, message: str(r.message, 5000), note: str(r.note, 400) };
 }
 
@@ -347,14 +358,13 @@ export async function commitBranch(
   id: string,
   message: string,
   root: GitRoot = CHAT_CODE_GIT,
-  paths?: string[],
 ): Promise<{ sha: string; subject: string; note: string }> {
-  const r = rec(await post<unknown>(`${base(id, root)}/commit`, paths ? { message, paths } : { message })) ?? {};
+  const r = rec(await post<unknown>(at(root, `${base(id)}/commit`, `${appBase(id)}/commit`), { message })) ?? {};
   return { sha: str(r.sha, 40), subject: str(r.subject, 300), note: str(r.note, 400) };
 }
 
 export async function pushBranch(id: string, root: GitRoot = CHAT_CODE_GIT): Promise<{ remote: string; branch: string }> {
-  const r = rec(await post<unknown>(`${base(id, root)}/push`, {})) ?? {};
+  const r = rec(await post<unknown>(at(root, `${base(id)}/push`, `${appBase(id)}/push`), {})) ?? {};
   return { remote: str(r.remote, 200), branch: str(r.branch, 300) };
 }
 
@@ -364,17 +374,17 @@ export async function createPr(
   body: string,
   root: GitRoot = CHAT_CODE_GIT,
 ): Promise<{ url: string; number: number | null }> {
-  const r = rec(await post<unknown>(`${base(id, root)}/pr`, { title, body })) ?? {};
+  const r = rec(await post<unknown>(at(root, `${base(id)}/pr`, `${appBase(id)}/pr`), { title, body })) ?? {};
   const url = str(r.url, 1000);
   return { url: /^https:\/\//.test(url) ? url : "", number: typeof r.number === "number" ? r.number : null };
 }
 
 export async function getPr(id: string, root: GitRoot = CHAT_CODE_GIT): Promise<PrInfo | null> {
-  return decodePr(await get<unknown>(`${base(id, root)}/pr`));
+  return decodePr(await get<unknown>(at(root, `${base(id)}/pr`, `${appBase(id)}/pr`)));
 }
 
 export async function mergeBranch(id: string, root: GitRoot = CHAT_CODE_GIT): Promise<{ into: string; where: string; commit: string }> {
-  const r = rec(await post<unknown>(`${base(id, root)}/merge`, {})) ?? {};
+  const r = rec(await post<unknown>(at(root, `${base(id)}/merge`, `${appBase(id)}/merge`), {})) ?? {};
   return { into: str(r.into, 300), where: str(r.where, 1000), commit: str(r.commit, 40) };
 }
 
@@ -383,7 +393,13 @@ export async function discardBranch(
   afterMerge = false,
   root: GitRoot = CHAT_CODE_GIT,
 ): Promise<{ trash: string; note: string }> {
-  const r = rec(await post<unknown>(`${base(id, root)}/discard`, { confirm: true, after_merge: afterMerge })) ?? {};
+  const r =
+    rec(
+      await post<unknown>(at(root, `${base(id)}/discard`, `${appBase(id)}/discard`), {
+        confirm: true,
+        after_merge: afterMerge,
+      }),
+    ) ?? {};
   return { trash: str(r.trash, 1000), note: str(r.note, 400) };
 }
 

@@ -662,6 +662,12 @@ export function StartComposer({
       keep(LAST_TOOL_KEY, tool.id);
       keep(LAST_PICK_KEY + tool.id, JSON.stringify({ model, effort: effort && efforts.includes(effort) ? effort : "" }));
       if (account) keep(LAST_ACCOUNT_KEY + tool.id, account);
+      // D-22.1: the new branch is OFFERED ONCE per folder. A session started
+      // without an answer is the folder's "No, in the folder" (it worked
+      // there); chat can change it, with Undo.
+      if (canBranch && folderDefaults !== null && !branchAnswer && folder) {
+        void saveFolderDefaults(folder, "branch", { work: "folder" }).catch(() => {});
+      }
       onStarted(made, words, files);
     } catch (e) {
       const words2 = errorWords(e, "The session could not be made.");

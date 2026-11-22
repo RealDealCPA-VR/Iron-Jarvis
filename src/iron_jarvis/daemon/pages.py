@@ -68,7 +68,9 @@ PAGES: tuple[Page, ...] = (
          routes=("chat",)),
     Page("page_build", "Build", "/terminals",
          "Terminals on this PC, and Build's Code view, where the user's own Claude Code, Codex, Pi, OpenCode "
-         "or Grok does the work.",
+         "or Grok does the work. Under a coding session's newest finished reply there, Commit (its message "
+         "already written) and Open a pull request are one press each; chat does not commit that work or "
+         "open its pull request.",
          routes=("terminals",)),
     Page("page_projects", "Projects", "/projects",
          "Keep each piece of work together (a brief, its folder and its files) so every chat and task about "

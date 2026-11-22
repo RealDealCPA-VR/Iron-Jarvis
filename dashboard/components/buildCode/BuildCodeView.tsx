@@ -1425,6 +1425,10 @@ function SessionPane({
   // does not change) and a send that never changes: a streamed word no
   // longer draws the panes again.
   const sendFromPanes = useCallback((t: string) => void sendRef.current?.(t), []);
+  // 22-b: the Branch view's Discard, the same function frame after frame
+  // (a new one per render drew the panes again on every streamed word).
+  const paneSessionId = session.id;
+  const archivedFromPanes = useCallback(() => onArchived(paneSessionId), [onArchived, paneSessionId]);
   const paneEventsRef = useRef<readonly CodeEvent[]>([]);
   const paneEvents = useMemo(() => {
     let found: CodeEvent | null = null;
@@ -2926,7 +2930,7 @@ function SessionPane({
           onSend={sendFromPanes}
           comments={takesComments}
           severalTools={switchedTools}
-          onArchived={() => onArchived(session.id)}
+          onArchived={archivedFromPanes}
         />
       </aside>
       </div>
