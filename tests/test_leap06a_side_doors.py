@@ -14,6 +14,12 @@ reviewed. Review 4: a helper's piece in a rehearsal leaves no mark on the
 model team's record either. Review 6: the scan also sees a sending callable
 passed BY REFERENCE (``asyncio.to_thread(ch.send, text)``,
 ``functools.partial(hooks.http_post, url)``), the shape async code here uses.
+Review 7: and a send whatever its receiver is called (``dest.send(text)``,
+``to_thread(lambda: self._slack.send(t))``, ``client.post(url)``), and a
+request through the app's own client (``core/http``), whose import is a door.
+What a regex cannot see: a call through ``getattr`` with the name in a
+string, and a bare call of a sending function in the module that defines it
+(its body's own send is counted there).
 """
 
 from __future__ import annotations
@@ -118,6 +124,16 @@ DOOR_KINDS: dict[str, re.Pattern[str]] = {
         r"\bhttpx\.(?:post|get|put|patch|delete|request|stream|AsyncClient|Client)\b"
         r"|\brequests\.(?:post|get|put|patch|delete|request)\b"
         r"|\baiohttp\.ClientSession\b|\burlopen\b"
+        r"|\bwebsockets\.(?:connect|serve)\b|\bsocket\.(?:socket|create_connection)\b"
+        # Review 7: the app's own shared client (``core/http``: ``client()``,
+        # ``async_client()``, ``get()``) under any name: the import is the
+        # door, the way the procs import is. So is a library imported under
+        # another name, and the phone channels' transports imported by name.
+        r"|\bfrom\s+(?:\.+|iron_jarvis\.)core(?:\.http\s+import\b|\s+import\s+(?:\([^)]*|[^\n(]*)\bhttp\b)"
+        r"|\bimport\s+iron_jarvis\.core\.http\b"
+        r"|\bimport\s+(?:httpx|requests|aiohttp|websockets|socket)\s+as\b"
+        r"|\bfrom\s+(?:httpx|requests|aiohttp|websockets|socket|urllib\.request)\s+import\b"
+        r"|\bfrom\s+[\w.]+\s+import\s+(?:\([^)]*|[^\n(]*)\bhttpx_(?:post|get)\b"
     ),
     "smtp": re.compile(r"\bsmtplib\.SMTP(?:_SSL)?\b"),
     "remote_agent": re.compile(r"\bRemoteAgentRegistry\("),
@@ -145,10 +161,23 @@ DOOR_KINDS: dict[str, re.Pattern[str]] = {
         r"\(\s*(?:[\w.]+\s*,\s*)?|\btarget\s*=\s*)"
         r"(?:[\w.]|\[[^\]\n]*\])*\.(?:send\w*|post|notify\w*|_?http_post|spawn\w*|request|run\w*|deliver\w*)\b"
     ),
+    # Review 7: any send or post, whatever the receiver is called, called
+    # directly, in a lambda or passed on (``dest.send(text)``,
+    # ``to_thread(lambda: self._slack.send(t))``, ``client.post(url)``,
+    # ``smtp.send_message(msg)``, ``self.send_chunked(ch, …)``), and a sending
+    # function imported by name. A name that only starts so is not one
+    # (``msg.sender_id``), nor is setting the attribute.
+    "direct_send": re.compile(
+        r"\.\s*(?:send(?:all|mail|_\w+)?|post(?:_\w+)?)" + _USE
+        + r"|\.\s*notify_\w+\s*\("
+        r"|\bfrom\s+[\w.]+\s+import\s+(?:\([^)]*|[^\n(]*)\b_?send(?:_\w+)?\b"
+    ),
 }
 
-#: The kind that only counts what no other kind names.
-_FALLBACK_KIND = "handed_off"
+#: The kinds that count only what no kind before them names, in this order:
+#: every other kind first, then a hand-off, then any other send. A hand-off
+#: of ``ch.send`` counts once, under ``channel_send``.
+_FALLBACK_KINDS = ("handed_off", "direct_send")
 
 #: Every direct door the scan finds, REVIEWED: ``(file, kind) -> (how many,
 #: why a rehearsal never goes through it)``. A new one, or one more of a
@@ -158,6 +187,11 @@ _FALLBACK_KIND = "handed_off"
 REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
     ("agents/orchestrator.py", "chat_post"): (
         1, "the chat delivery line: held in a rehearsal (SIDE_DOORS chat_delivery)"),
+    ("agents/orchestrator.py", "direct_send"): (
+        2, "the answer to a task another computer sent (task_door.send_reply_in_thread and "
+           "send_reply_soon, the same reply as task_door.py's): started only when "
+           "task_door.reply_spec_of finds the run's reply address, which only a run of origin "
+           "remote_task has; no rehearsal's door makes one, Run again and a follow-up drop it"),
     ("agents/orchestrator.py", "process"): (
         1, "imports core.procs only to mark an unattended run as background work "
            "(procs.background_lane); it starts no program, and a start added through it is a "
@@ -172,14 +206,23 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
     ("agents/remote.py", "http_client"): (
         3, "the remote agent's request, its reply's files and its answer: reached only through "
            "the remote_agent doors listed here, each held or out of a rehearsal's reach"),
+    ("agents/remote.py", "direct_send"): (
+        1, "the remote agent's request itself (client.post on the client counted under "
+           "http_client): reached only through the remote_agent doors listed here"),
     ("agents/roster.py", "remote_agent"): (
         1, "reads the list of remote agents for the roster; sends nothing"),
     ("agents/task_door.py", "http_client"): (
         1, "the answer to a task another computer sent: only a run of origin remote_task with its "
            "reply address; no rehearsal's door makes one, Run again and a follow-up drop the address"),
+    ("agents/task_door.py", "direct_send"): (
+        1, "that answer's own post (client.post on the client counted under http_client): the "
+           "same reply, only for a run of origin remote_task with its reply address"),
     ("agents/threads.py", "remote_agent"): (
         2, "a round table's remote speaker: reached from a person's post in a room "
            "(the Agents page, the phone), never from a run"),
+    ("comm/__init__.py", "http_client"): (
+        1, "re-exports the phone channels' transports (httpx_post, httpx_get) by name; sends "
+           "nothing"),
     ("comm/base.py", "http_client"): (
         2, "a phone channel's transport: reached through Notifier.notify (listed) or a reply "
            "to the person's own message"),
@@ -188,8 +231,14 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
            "transport's signature (_accepts_headers), not a send"),
     ("comm/channels.py", "smtp"): (
         1, "the email channel's transport: reached through Notifier.notify (listed)"),
+    ("comm/channels.py", "direct_send"): (
+        2, "the email channel's send_message on that same SMTP line (reached through "
+           "Notifier.notify), and Telegram's one-line notice that it cannot read a photo, sent "
+           "only while polling, to the person who sent the photo in their own private chat"),
     ("comm/compose.py", "smtp"): (
         2, "an email the person writes on the Email page (daemon/routes/comm.py); no run reaches it"),
+    ("comm/compose.py", "direct_send"): (
+        1, "that email's send_message on the same SMTP line: only from the Email page"),
     ("comm/inbound.py", "channel_send"): (
         10, "replies to the person's own phone message (_dispatch, send_chunked, a phone-started "
             "job's result) and the notices about one a restart lost or cut off: reached only from "
@@ -198,6 +247,15 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
             "schedule:<name>, it hands nothing to a remote agent (both hand-offs are held), and "
             "a rehearsal the phone asks for answers in that reply with its report's words "
             "(rehearsal_runs._report_words)"),
+    ("comm/inbound.py", "direct_send"): (
+        13, "the same replies through the poller's own send_chunked (counted once more where it "
+            "calls ch.send): each answers a message the phone sent (a command, a new thread, "
+            "the rate limit, a refusal, an escalation, a job's start, an answer to a question, a "
+            "remote agent's answer to the person's line) or a phone-started run's result; a "
+            "rehearsal's run is never phone-started"),
+    ("comm/integrations.py", "http_client"): (
+        1, "build_notifier's default transports (httpx_post, httpx_get) handed to the phone "
+           "channels it builds; sends nothing itself"),
     ("comm/notifier.py", "channel_send"): (
         1, "Notifier.notify's own fan-out to each destination (its callers are listed)"),
     ("comm/notifier.py", "notify"): (
@@ -209,7 +267,11 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
         1, "the note to a person who mentioned Jarvis in a shared Slack channel that the answer "
            "comes in the DM: only from that person's own Slack message"),
     ("comm/slack_socket.py", "http_client"): (
-        2, "opens Slack's socket for the person's incoming messages; sends no run's words"),
+        3, "opens Slack's socket for the person's incoming messages (the two socket-URL "
+           "requests and websockets.connect); sends no run's words"),
+    ("comm/slack_socket.py", "direct_send"): (
+        1, "the socket's receipt for each incoming envelope (ws.send of its envelope_id), which "
+           "Slack asks for within 3 seconds; it carries no run's words"),
     ("comm/tools.py", "notify"): (
         1, "the notify tool's own send: a tool that changes things, so registry.invoke holds it "
            "in a rehearsal (test_leap06a_gate)"),
@@ -225,10 +287,12 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
            "_dispatch_scheduled reaches it only outside a rehearsal (SIDE_DOORS pre_run_script, "
            "the branch just above it)"),
     ("platform.py", "http_client"): (
-        4, "client wiring at start-up, called only by its owner: the Connections sign-in's token "
-           "exchange and refresh (no message, no change), the outgoing webhook's transport (skips "
-           "every event of a rehearsal's run), and the Notion and custom memory bases' clients "
-           "(read through the memory tools; a write is held)"),
+        5, "client wiring at start-up, called only by its owner: the phone channels' transports "
+           "imported for build_notifier (reached through Notifier.notify, listed), the "
+           "Connections sign-in's token exchange and refresh (no message, no change), the "
+           "outgoing webhook's transport (skips every event of a rehearsal's run), and the "
+           "Notion and custom memory bases' clients (read through the memory tools; a write is "
+           "held)"),
     ("reflex/commands.py", "remote_agent"): (
         2, "the phone's /agents and /ask commands, typed by the person; no run reaches them"),
     ("reflex/router.py", "remote_agent"): (
@@ -275,18 +339,18 @@ def scan_doors(root: Path = SRC) -> dict[tuple[str, str], list[int]]:
         for path in paths:
             rel = path.relative_to(root).as_posix()
             code = _code_only(path.read_text(encoding="utf-8").replace("\r\n", "\n"))
-            named = sorted(
-                m.start() for kind, rx in DOOR_KINDS.items() if kind != _FALLBACK_KIND
-                for m in rx.finditer(code)
-            )
-            for kind, rx in DOOR_KINDS.items():
-                lines = [
-                    code.count("\n", 0, m.start()) + 1 for m in rx.finditer(code)
-                    # A hand-off of a callable another kind names is counted there.
-                    if kind != _FALLBACK_KIND or not any(m.start() <= s < m.end() for s in named)
+            taken: list[tuple[int, int]] = []
+            order = [k for k in DOOR_KINDS if k not in _FALLBACK_KINDS] + list(_FALLBACK_KINDS)
+            for kind in order:
+                spans = [
+                    m.span() for m in DOOR_KINDS[kind].finditer(code)
+                    # A door a kind before this one names is counted there.
+                    if kind not in _FALLBACK_KINDS
+                    or not any(s < m.end() and m.start() < e for s, e in taken)
                 ]
-                if lines:
-                    found[(rel, kind)] = lines
+                taken += spans
+                if spans:
+                    found[(rel, kind)] = [code.count("\n", 0, s) + 1 for s, _e in spans]
     return found
 
 
@@ -355,6 +419,31 @@ def test_the_scan_sees_a_new_door_and_not_a_mention(tmp_path):
         ("reflex/handed_off.py", "notify"): [5],
         ("reflex/handed_off.py", "http_post"): [6],
         ("reflex/handed_off.py", "handed_off"): [8, 10],
+    }
+    # Review 7: a send whatever its receiver is called, called directly or in
+    # a lambda, and a request through the app's own client (core/http) under
+    # any name. A name that only starts so, setting the attribute, and the
+    # words in a string are not doors.
+    (pkg / "handed_off.py").unlink()
+    (pkg / "any_receiver.py").write_text(
+        "import asyncio\n"
+        "from ..core import http as _http\n"
+        "from ..core.http import client\n"
+        "async def h(self, p, url, text, msg):\n"
+        "    dest = p.notifier.get('slack')\n"
+        "    dest.send(text)\n"
+        "    await asyncio.to_thread(lambda: self._slack.send(text))\n"
+        "    async with _http.async_client() as c:\n"
+        "        await c.post(url, json={})\n"
+        "    with client() as s:\n"
+        "        s.send_message(text)\n"
+        "    self.send = dest.sender_id\n"
+        "    return 'dest.send(text)', msg.sender_id\n",
+        encoding="utf-8",
+    )
+    assert scan_doors(tmp_path) == {
+        ("reflex/any_receiver.py", "http_client"): [2, 3],
+        ("reflex/any_receiver.py", "direct_send"): [6, 7, 9, 11],
     }
     # A process start added to a schedule's own door, in platform.py.
     (tmp_path / "platform.py").write_text(
