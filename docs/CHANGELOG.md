@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.551.0
+
+**Iron Jarvis checks every Build › Code reply.** Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity), its reply now ends the same way.
+
 ## v1.550.0
 
 **The Timeline shows the models that did the work.** A coding session's **Timeline** tab now opens on the models that did the reply, each one a card, joined by arrows where one handed work to another.
@@ -77,7 +81,3 @@
 ## v1.535.0
 
 **Stop says who, and acts at once.** The fourth of nine releases from the fourth review.
-
-## v1.534.0
-
-**Done means done, for attempts and the night.** The third of nine releases from the fourth review.
