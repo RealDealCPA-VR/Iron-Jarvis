@@ -76,6 +76,9 @@ REASON_DECLINED = "you declined a proposal for the same evidence recently — su
 REASON_ACCEPTED = "you already accepted a change for the same evidence — the coach waits {days} days for new runs"
 REASON_NOTHING_SMALL = "the coach had nothing small enough to say"
 REASON_MODEL_FAILED = "the model call failed"
+#: 17-a: the account a pinned request names cannot be used now (Iron-Proxy
+#: gave no reason of its own).
+REASON_ACCOUNT = "its account cannot be used now"
 #: v1.502.0 (north-star 2.3): the evidence quotes a Local only run and the
 #: model that would read it runs off this network.
 REASON_LOCAL_ONLY = (
@@ -315,7 +318,7 @@ class CoachEngine:
         return system, "\n".join(lines)
 
     async def _complete(self, system: str, prompt: str, *, local_only: bool = False,
-                        pin: "tuple[str, ...] | None" = None) -> str | None:
+                        pin: "tuple[str, ...] | None" = None, held: Any = None) -> str | None:
         """ONE router completion, the way ``ImprovementEngine._router_reflect``
         makes it. ``None`` on any failure — never an exception to the caller,
         except a Local only refusal (``egress.LocalOnlyRefused``), which the
@@ -330,8 +333,9 @@ class CoachEngine:
         sends the call to exactly that provider and model, ``pin=True`` (no
         failover: the model that did the agent's work), on that account when
         one is named (``iron_proxy.choice.pin_for``: that account or nothing,
-        never another login). Without a pin the call goes through the
-        router's default route, as the Agents page's press always did."""
+        never another login; ``held`` is that account's pin when the caller
+        already holds it). Without a pin the call goes through the router's
+        default route, as the Agents page's press always did."""
         from ..providers import egress as _egress
         from ..providers.adapters.base import LLMMessage
 
@@ -349,9 +353,10 @@ class CoachEngine:
                 from ..iron_proxy import choice as _choice
                 from ..iron_proxy.pin import set_pin
 
-                held, _why = await asyncio.to_thread(
-                    _choice.pin_for, self.p, _choice.clean(account), provider, model, who="agent",
-                )
+                if held is None:
+                    held, _why = await asyncio.to_thread(
+                        _choice.pin_for, self.p, _choice.clean(account), provider, model, who="agent",
+                    )
                 if held is None:
                     return None
                 token = set_pin(held)
@@ -397,6 +402,7 @@ class CoachEngine:
         pin: "tuple[str, ...] | None" = None,
         before_call: "Any | None" = None,
         local_only: bool = False,
+        announce: bool = True,
     ) -> CoachProposalRecord | None:
         """Mint ONE pending proposal for a custom agent, or ``None`` with the
         reason on ``last_reason`` / ``last_reason_for(name)``. The ledger reads
@@ -406,17 +412,20 @@ class CoachEngine:
         the one request to that model, pinned (:meth:`_complete`);
         ``before_call`` is awaited right before the request is sent and
         answers "" (send it) or the reason it must not be sent (the night
-        budget: its cap counts exactly the requests sent); ``local_only``
-        adds the caller's own Local only reading to the evidence's. With none
+        budget); ``local_only`` adds the caller's own Local only reading to
+        the evidence's; ``announce=False`` publishes no ``coach.proposal``
+        (the night review's ONE bell row a night says it, D-17.3). With none
         of them the press on the Agents page is unchanged."""
         roster = self.roster_name(roster_name)
         try:
-            return await self._propose(roster, pin=pin, before_call=before_call, local_only=local_only)
+            return await self._propose(roster, pin=pin, before_call=before_call, local_only=local_only,
+                                       announce=announce)
         finally:
             self.last_reasons[roster] = self.last_reason
 
     async def _propose(self, roster: str, *, pin: "tuple[str, ...] | None" = None,
-                       before_call: "Any | None" = None, local_only: bool = False) -> CoachProposalRecord | None:
+                       before_call: "Any | None" = None, local_only: bool = False,
+                       announce: bool = True) -> CoachProposalRecord | None:
         slug = self._slug(roster)
         if slug is None:
             self.last_reason = REASON_BUILTIN if not roster.startswith("custom:") else REASON_UNKNOWN
@@ -456,13 +465,28 @@ class CoachEngine:
         local_only = bool(local_only) or any(r.get("local_only") for r in runs if r.get("session_id") in quoted)
         from ..providers import egress as _egress
 
+        # The pinned account is held BEFORE ``before_call``: an account that
+        # cannot be used now says its own reason, and the night budget never
+        # counts a request that is not sent.
+        held = None
+        account = str(pin[2] or "").strip() if pin and len(pin) > 2 else ""
+        if account:
+            from ..iron_proxy import choice as _choice
+
+            held, why = await asyncio.to_thread(
+                _choice.pin_for, self.p, _choice.clean(account), str(pin[0] or ""), str(pin[1] or ""),
+                who="agent",
+            )
+            if held is None:
+                self.last_reason = str(why or REASON_ACCOUNT)
+                return None
         if before_call is not None:
             refused = await before_call()
             if refused:
                 self.last_reason = str(refused)
                 return None
         try:
-            raw = await self._complete(system, prompt, local_only=local_only, pin=pin)
+            raw = await self._complete(system, prompt, local_only=local_only, pin=pin, held=held)
         except Exception as exc:  # noqa: BLE001 — only a Local only refusal reaches here
             refused = _egress.refusal_of(exc)
             if refused is None:
@@ -496,7 +520,8 @@ class CoachEngine:
             db.refresh(record)
             db.expunge(record)
         self.last_reason = ""
-        await self._publish(record, [c.category for c in found])
+        if announce:
+            await self._publish(record, [c.category for c in found])
         return record
 
     async def _publish(self, record: CoachProposalRecord, categories: list[str]) -> None:

@@ -441,13 +441,15 @@ class SkillLearningEngine:
     # -- distillation: model-backed, real provider only ----------------------
 
     async def distill_candidates(self, complete: Complete, *, limit: int = 3,
-                                 ids: "list[str] | None" = None) -> dict:
+                                 ids: "list[str] | None" = None, announce: bool = True) -> dict:
         """Turn pending candidates into reviewable proposals (oldest first).
 
         17-a (the night review): ``ids`` names the ONLY candidates this sweep
         may take, so a ``complete`` pinned to one run's own model is never
         handed another run's candidate. ``None`` = any pending candidate, as
-        before.
+        before. ``announce=False`` calls no ``on_proposal`` (the daemon's
+        ``skill.proposal_created``, a default phone alert): the night
+        review's ONE bell row says it (D-17.3).
 
         ``complete`` is an async ``(system, prompt) -> reply`` the DAEMON
         supplies, wired to a REAL provider — never mock (a fabricated skill
@@ -465,11 +467,12 @@ class SkillLearningEngine:
             }
         self._distilling = True
         try:
-            return await self._distill(complete, limit=limit, ids=ids)
+            return await self._distill(complete, limit=limit, ids=ids, announce=announce)
         finally:
             self._distilling = False
 
-    async def _distill(self, complete: Complete, *, limit: int, ids: "list[str] | None" = None) -> dict:
+    async def _distill(self, complete: Complete, *, limit: int, ids: "list[str] | None" = None,
+                       announce: bool = True) -> dict:
         if not self._enabled():
             return {
                 "reviewed": 0,
@@ -525,7 +528,8 @@ class SkillLearningEngine:
                     # a cloud model's included. It waits for the owner.
                     outcome = self._maybe_auto_approve(outcome)
                 proposal_ids.append(outcome.id)
-                self._notify(outcome)
+                if announce:
+                    self._notify(outcome)
             elif outcome == "dismiss":  # unfixable (e.g. the skill vanished)
                 self._set_candidate_status(cand.id, "dismissed")
                 dismissed += 1

@@ -64,13 +64,18 @@ from iron_jarvis.providers import background_call, egress
 collect = importlib.import_module("iron_jarvis.inbox.collect")
 
 PROMPT = (
-    "You are Research, a careful helper that reads the firm's files.\n"
-    "Never send client data to anyone outside the firm.\n"
+    "You are Research, a careful helper that reads the files in a project folder.\n"
+    "Never send what you read to anyone outside this PC.\n"
     "Always cite the file you read a number from.\n"
     "Keep answers short and name the file you changed, and say plainly when a "
     "page was unreadable instead of guessing what it said."
 )
 AFTER = PROMPT + "\nPlan the steps first and stop to report before the step budget runs out."
+#: A skill draft the skill learner accepts (its own SKILL.md format).
+SKILL_MD = (
+    "---\nname: sort-reports-folder\ndescription: Sort a folder of reports by date.\n---\n\n"
+    "# Sort reports\n\n1. List the folder.\n2. Read each report's date.\n"
+)
 
 
 def _local(day: datetime, h: int, mi: int = 0) -> datetime:
@@ -96,6 +101,9 @@ class Router:
 
     def __init__(self, text: str = f"```\n{AFTER}\n```") -> None:
         self.text = text
+        #: When set, the answer to a skill draft's request (its system
+        #: prompt names SKILL.md), so one pass can coach AND draft a skill.
+        self.skill_text: str | None = None
         self.calls: list[dict] = []
 
     async def complete(self, *, system, messages, tools, provider=None, model=None, pin=False, **kw):
@@ -103,7 +111,8 @@ class Router:
             "provider": provider, "model": model, "pin": pin,
             "local_only": egress.current_scope().on, "background": background_call.what(),
         })
-        return SimpleNamespace(response=SimpleNamespace(text=self.text), provider=provider, model=model)
+        text = self.skill_text if self.skill_text is not None and "SKILL.md" in str(system) else self.text
+        return SimpleNamespace(response=SimpleNamespace(text=text), provider=provider, model=model)
 
 
 @pytest.fixture
@@ -138,7 +147,7 @@ def _ran_out_of_steps(desk, roster: str, n: int = 4, *, provider: str = "claude-
     ids = []
     with session_scope(desk.engine) as db:
         for i in range(n):
-            sess = Session(task=f"sort the K-1 folder ({i})", agent_type=AgentType.BUILDER, agent_name=roster,
+            sess = Session(task=f"sort the reports folder ({i})", agent_type=AgentType.BUILDER, agent_name=roster,
                            status=SessionStatus.FAILED, max_steps=10, outcome=None, summary="out of steps",
                            provider=provider, model=model, options_json=json.dumps(options or {}))
             sess.created_at = at + timedelta(minutes=i)
@@ -149,7 +158,7 @@ def _ran_out_of_steps(desk, roster: str, n: int = 4, *, provider: str = "claude-
             db.add(run)
             # It did use its tools (so this is not "failed without using a tool").
             db.add(ToolInvocation(session_id=sess.id, agent_run_id=run.id, tool="read_file", ok=True,
-                                  output="ok", args_json=json.dumps({"path": f"k1-{i}.pdf"})))
+                                  output="ok", args_json=json.dumps({"path": f"report-{i}.pdf"})))
             ids.append(sess.id)
         db.commit()
     return ids
@@ -251,6 +260,59 @@ def test_a_pass_does_nothing_unless_every_condition_holds(desk):
     out = _pass(desk)
     assert out["state"] == NR.DONE, out
     assert len(desk.router.calls) == 1
+
+
+def test_a_chat_from_before_owners_were_kept_holds_the_pass(desk):
+    """A thread whose owner column is NULL reads as the user's
+    (``core/models.ChatThreadRecord.owner``): a database older than v1.136.0
+    got the column added as NULLABLE (``core/db`` adds a missing column that
+    way), and its rows read NULL there. In SQL ``owner != 'daemon'`` is NULL
+    for such a row, so it must be named."""
+    from sqlalchemy import update
+
+    _ran_out_of_steps(desk, _agent(desk), 4)
+    # The table as such a database has it: the same columns, none NOT NULL
+    # (CREATE TABLE ... AS SELECT keeps no constraints).
+    with desk.engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE chat_old AS SELECT * FROM chatthreadrecord")
+        conn.exec_driver_sql("DROP TABLE chatthreadrecord")
+        conn.exec_driver_sql("ALTER TABLE chat_old RENAME TO chatthreadrecord")
+    with session_scope(desk.engine) as db:
+        old = ChatThreadRecord(title="an older chat")
+        old.updated_at = IN_WINDOW.astimezone(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
+        db.add(old)
+        db.commit()
+        old_id = old.id
+        db.exec(update(ChatThreadRecord).where(ChatThreadRecord.id == old_id).values(owner=None))
+        db.commit()
+    with desk.engine.connect() as conn:
+        assert conn.exec_driver_sql("SELECT owner FROM chatthreadrecord").fetchall() == [(None,)]
+    assert _pass(desk)["skipped"] == NR.SKIP_RECENT_CHAT
+    assert desk.router.calls == []
+
+
+def test_a_pass_whose_records_cannot_be_read_reads_the_tally_off_the_loop(desk, monkeypatch):
+    """The tally file is read under a lock a worker may hold: never on the
+    event loop, the path where the records cannot be read included."""
+    import threading
+
+    _ran_out_of_steps(desk, _agent(desk), 4)
+    where: list[bool] = []
+    real = B.requests_tonight
+
+    def tally(home, night):
+        where.append(threading.current_thread() is threading.main_thread())
+        return real(home, night)
+
+    def unreadable(*a, **k):
+        raise RuntimeError("the records cannot be read")
+
+    monkeypatch.setattr(B, "requests_tonight", tally)
+    monkeypatch.setattr(NR, "match", unreadable)
+    with pytest.raises(RuntimeError):
+        _pass(desk)
+    assert where and not any(where), where
+    assert _row(desk).state == NR.WAITING
 
 
 # --------------------------------------------------------------------------- #
@@ -358,6 +420,30 @@ def test_each_refusal_sends_nothing_and_says_why(desk, case):
         assert night is None
     else:
         assert night["line"] == f"Skipped: {want[0].upper()}{want[1:]}."
+
+
+SIGNED_OUT = "Work Max is signed out"
+
+
+@pytest.mark.parametrize("maker", ["coach", "skill"])
+def test_an_account_that_cannot_be_used_counts_no_request(desk, monkeypatch, maker):
+    """The work's own account is held BEFORE the night's tally counts a
+    request: one Iron-Proxy will not hand over (after the budget passed it)
+    sends nothing, counts nothing, and says Iron-Proxy's own reason."""
+    from iron_jarvis.iron_proxy import choice
+
+    desk.platform.iron_proxy = FakeProxy(10)  # well under 70%: the budget passes it
+    monkeypatch.setattr(choice, "pin_for", lambda *a, **k: (None, SIGNED_OUT))
+    if maker == "coach":
+        _ran_out_of_steps(desk, _agent(desk), 4, options={"account": "acc_work"})
+    else:
+        (sid,) = _ran_out_of_steps(desk, "builder", 1, options={"account": "acc_work"})
+        _skill_candidate(desk, sid, "sort the reports folder")
+    _pass(desk)
+    assert desk.router.calls == []
+    assert B.requests_tonight(desk.home, NIGHT) == 0 and _row(desk).requests == 0
+    (ran,) = [r for r in json.loads(_row(desk).ran_json) if r["proposer"] == maker]
+    assert ran["reason"] == SIGNED_OUT, ran
 
 
 def test_a_local_only_run_is_reviewed_only_inside_the_scope(desk):
@@ -491,6 +577,70 @@ def test_the_claim_is_a_compare_and_set_and_a_told_night_is_not_owed(desk):
     assert NR._claim(desk.engine, NIGHT) is False
 
 
+def _bell_types() -> set[str]:
+    """The event types the dashboard's bell turns into a row
+    (``NotificationBell.BELL_ACTIVITY_TYPES``), read from its own source."""
+    from pathlib import Path
+    import re
+
+    src = (Path(__file__).resolve().parents[1] / "dashboard" / "components" / "NotificationBell.tsx").read_text(
+        encoding="utf-8").replace("\r\n", "\n")
+    block = re.search(r"export const BELL_ACTIVITY_TYPES: readonly string\[\] = \[\n(.*?)\n\];", src, re.S)
+    assert block, "BELL_ACTIVITY_TYPES moved"
+    types = set(re.findall(r'^\s*"([a-z_]+\.[a-z_.]+)",', block.group(1), re.M))
+    assert {"coach.proposal", "improvement.night_review", "session.completed"} <= types
+    return types
+
+
+def _skill_candidate(desk, sid: str, task: str, *, at: datetime | None = None) -> str:
+    from iron_jarvis.skills.learning_models import SkillCandidateRecord
+
+    with session_scope(desk.engine) as db:
+        cand = SkillCandidateRecord(session_id=sid, task=task, kind="create", signature=f"create::{task}")
+        if at is not None:
+            cand.created_at = at
+        db.add(cand)
+        db.commit()
+        return cand.id
+
+
+@pytest.mark.parametrize("notice", [True, False], ids=["notice on", "notice off"])
+def test_one_pass_rings_one_bell_row_and_nothing_reaches_a_phone(desk, monkeypatch, notice):
+    """The cap is ONE bell row a night (the master plan's table of notices),
+    and its stop answer stops it all: the suggestion makers the review runs
+    publish nothing of their own. ``coach.proposal`` is a bell row that
+    pings, ``skill.proposal_created`` a default phone alert (D-17.3: nothing
+    from the night review reaches a phone in 17-a)."""
+    from iron_jarvis.comm.notifier import DEFAULT_ALERT_EVENTS
+
+    desk.platform.config.night_review_notice = notice
+    for i in range(3):
+        _ran_out_of_steps(desk, _agent(desk, f"agent{i}"), 4, at=YESTERDAY + timedelta(minutes=10 * i))
+    (sid,) = _ran_out_of_steps(desk, "builder", 1, at=YESTERDAY + timedelta(hours=1))
+    _skill_candidate(desk, sid, "sort the reports folder")
+    desk.router.skill_text = SKILL_MD
+    bus = desk.platform.event_bus
+    real = bus.publish
+    published: list[str] = []
+
+    def record(etype, payload=None, **kw):
+        # Called when the publish is MADE (a fire-and-forget task included).
+        published.append(str(etype))
+        return real(etype, payload, **kw)
+
+    monkeypatch.setattr(bus, "publish", record)
+    out = _pass(desk)
+    assert out["made"] == 4 and len(desk.router.calls) == 4, out
+    kinds = sorted(m["kind"] for m in json.loads(_row(desk).made_json))
+    assert kinds == ["coach", "coach", "coach", "skill"]
+    rings = [t for t in published if t in _bell_types() or t in DEFAULT_ALERT_EVENTS]
+    assert rings == (["improvement.night_review"] if notice else []), published
+    assert not [t for t in published if t in DEFAULT_ALERT_EVENTS], published
+    # The next morning nothing more rings either.
+    _pass(desk, now=_local(IN_WINDOW, 8, 0))
+    assert [t for t in published if t in _bell_types() or t in DEFAULT_ALERT_EVENTS] == rings
+
+
 def test_three_suggestions_are_one_row_in_the_bell_words():
     assert NR.notice_title(3) == "3 suggestions from yesterday's review"
     assert NR.notice_title(1) == "1 suggestion from yesterday's review"
@@ -530,13 +680,10 @@ def test_a_waiting_skill_draft_is_written_on_the_run_s_own_model(desk):
 
     (sid,) = _ran_out_of_steps(desk, "builder", 1, provider="claude-cli", model="claude-haiku-4-5")
     with session_scope(desk.engine) as db:
-        db.add(SkillCandidateRecord(session_id=sid, task="sort the K-1 folder", kind="create",
-                                    signature="create::sort the k-1 folder"))
+        db.add(SkillCandidateRecord(session_id=sid, task="sort the reports folder", kind="create",
+                                    signature="create::sort the reports folder"))
         db.commit()
-    desk.router.text = (
-        "---\nname: sort-k1-folder\ndescription: Sort a folder of K-1s by partner.\n---\n\n"
-        "# Sort K-1s\n\n1. List the folder.\n2. Read each K-1.\n"
-    )
+    desk.router.text = SKILL_MD
     out = _pass(desk)
     calls = [c for c in desk.router.calls]
     assert [(c["provider"], c["model"], c["pin"], c["background"]) for c in calls] == [
@@ -546,7 +693,41 @@ def test_a_waiting_skill_draft_is_written_on_the_run_s_own_model(desk):
     assert len(props) == 1 and out["made"] == 1
     (made,) = [m for m in json.loads(_row(desk).made_json) if m["kind"] == "skill"]
     assert made["ref"] == props[0].id
-    assert made["why"] == "A run did something worth keeping as a skill, and its draft was waiting: “sort the K-1 folder”."
+    assert made["why"] == "A run did something worth keeping as a skill, and its draft was waiting: “sort the reports folder”."
+
+
+def test_a_draft_the_budget_refuses_never_holds_up_the_newer_ones(desk):
+    """The oldest waiting draft's run was on a model that bills per use: the
+    budget refuses it every night, so the skill slot takes the oldest one it
+    allows, and the refused one still waits."""
+    from iron_jarvis.skills.learning_models import SkillCandidateRecord
+
+    (paid,) = _ran_out_of_steps(desk, "builder", 1, provider="openai", model="gpt-5")
+    (plan,) = _ran_out_of_steps(desk, "builder", 1, at=YESTERDAY + timedelta(hours=1))
+    old_id = _skill_candidate(desk, paid, "an older paid task", at=YESTERDAY - timedelta(days=3))
+    new_id = _skill_candidate(desk, plan, "sort the reports folder")
+    desk.router.text = SKILL_MD
+    out = _pass(desk)
+    assert out["made"] == 1, out
+    assert [(c["provider"], c["model"]) for c in desk.router.calls] == [("claude-cli", "claude-sonnet-4-6")]
+    with session_scope(desk.engine) as db:
+        assert db.get(SkillCandidateRecord, old_id).status == "pending"
+        assert db.get(SkillCandidateRecord, new_id).status == "distilled"
+    # With every waiting draft refused, the oldest is still the job, so the
+    # night's record says why.
+    assert [j["target"] for j in NR._skill_jobs(desk.platform, NIGHT)] == [old_id]
+
+
+def test_a_skill_request_never_switches_local_only_off(desk, monkeypatch):
+    """The sweep sets the Local only scope from the candidate's run; the
+    request inside it may only keep it on, never turn it off."""
+    (sid,) = _ran_out_of_steps(desk, "builder", 1, provider="ollama", model="qwen3:8b")
+    _skill_candidate(desk, sid, "sort the reports folder")
+    monkeypatch.setattr(desk.platform.skill_learning, "_candidate_local_only", lambda cand: True)
+    desk.router.text = SKILL_MD
+    _pass(desk)
+    (call,) = desk.router.calls
+    assert call["provider"] == "ollama" and call["local_only"] is True
 
 
 def test_a_skill_sweep_named_to_one_draft_never_takes_another(desk):
@@ -601,6 +782,15 @@ def test_the_line_counts_only_what_still_waits_and_only_last_night(desk):
     # The next morning it is still last night's; two nights later it is not.
     assert _night_line(desk, now=_local(IN_WINDOW, 10, 0))["night"]["waiting"] == 1
     assert _night_line(desk, now=_local(IN_WINDOW + timedelta(days=2), 10, 0))["night"] is None
+    # The next night's window opens: until ITS review finishes, last night
+    # is still the night before.
+    assert _night_line(desk, now=_local(IN_WINDOW, 23, 30))["night"]["night"] == NIGHT
+    # That next night's review runs and makes nothing: it is last night now,
+    # in the window and the morning after (never two nights back).
+    nxt = _pass(desk, now=IN_WINDOW + timedelta(days=1))
+    assert nxt["state"] == NR.DONE and nxt["made"] == 0, nxt
+    assert _night_line(desk, now=IN_WINDOW + timedelta(days=1))["night"] is None
+    assert _night_line(desk, now=_local(IN_WINDOW + timedelta(days=1), 10, 0))["night"] is None
     # Answered: the line goes.
     desk.platform.coach.decline(made.id)
     assert _night_line(desk)["night"] is None

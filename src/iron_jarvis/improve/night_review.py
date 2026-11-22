@@ -62,7 +62,11 @@ publish fails, the ``routes/night._announce_once`` pattern). The bell and the
 desktop app's tray say it; it is not a default alert, so no phone gets it
 (D-17.3: the phone line is 17-b, and only once the owner turns it on).
 ``config.night_review_notice`` off: the night is marked told and nothing
-rings.
+rings. It is the night's ONLY notice: the suggestion makers it runs publish
+none of their own (``coach.propose(announce=False)``, whose
+``coach.proposal`` is a bell row that pings, and ``distill_candidates(
+announce=False)``, whose ``skill.proposal_created`` is a default phone
+alert).
 
 Every database read here is BLOCKING (SQLite): the async functions hop with
 ``asyncio.to_thread``. Nothing here raises into the daemon's loop.
@@ -102,6 +106,8 @@ PER_AGENT = 25
 #: Skill drafts written in one night (the plan: "skill candidates get one
 #: distill").
 SKILL_DRAFTS = 1
+#: Waiting skill drafts looked at to find the one the budget allows.
+SKILL_LOOK = 20
 #: One suggestion maker's time limit (its model request included).
 CALL_TIMEOUT_S = 180.0
 #: Night rows read for the reasons shown on Improvements.
@@ -241,7 +247,7 @@ def busy_reason(d: Any, at: datetime) -> str:
     """"" when nothing is running and nobody used a chat lately; else why the
     pass waits. BLOCKING; never raises (a reading that fails waits)."""
     try:
-        from sqlalchemy import func
+        from sqlalchemy import func, or_
 
         from ..core.models import ChatThreadRecord
         from ..daemon.routes.system import activity_snapshot
@@ -251,8 +257,13 @@ def busy_reason(d: Any, at: datetime) -> str:
             return SKIP_BUSY
         engine = d.platform.engine
         with session_scope(engine) as db:
+            # A thread from before owners were kept has NULL there and reads
+            # as the user's (core/models.ChatThreadRecord.owner): in SQL
+            # ``owner != 'daemon'`` is NULL for it, so it is named.
             newest = db.exec(
-                select(func.max(ChatThreadRecord.updated_at)).where(ChatThreadRecord.owner != "daemon")
+                select(func.max(ChatThreadRecord.updated_at)).where(
+                    or_(ChatThreadRecord.owner.is_(None), ChatThreadRecord.owner != "daemon")  # type: ignore[union-attr]
+                )
             ).one()
             night_task = db.exec(
                 select(NightTaskRecord.id).where(NightTaskRecord.state == NIGHT_RUNNING)
@@ -345,8 +356,14 @@ def _one_line(text: Any, cap: int = 80) -> str:
     return words if len(words) <= cap else words[: cap - 1].rstrip() + "…"
 
 
-def _skill_jobs(platform: Any) -> list[dict[str, Any]]:
-    """The oldest skill drafts still waiting to be written."""
+def _skill_jobs(platform: Any, night: str = "") -> list[dict[str, Any]]:
+    """The :data:`SKILL_DRAFTS` oldest skill drafts still waiting to be
+    written that the budget allows tonight (``budget.may_spend``), out of the
+    :data:`SKILL_LOOK` oldest. A draft the budget refuses (its run's model
+    bills per use, was picked by Auto, a Local only run's model off this
+    network) never holds up the newer ones behind it. When the budget
+    refuses every one, the oldest is still the job, so the night's record
+    says why (the cap reached, the same reason for all)."""
     if getattr(platform, "skill_learning", None) is None:
         return []
     from ..core.models import Session
@@ -356,7 +373,7 @@ def _skill_jobs(platform: Any) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     with session_scope(platform.engine) as db:
         cands = list(db.exec(
-            select(C).where(C.status == "pending").order_by(C.created_at.asc()).limit(SKILL_DRAFTS)  # type: ignore[attr-defined]
+            select(C).where(C.status == "pending").order_by(C.created_at.asc()).limit(SKILL_LOOK)  # type: ignore[attr-defined]
         ))
         for cand in cands:
             sess = db.get(Session, cand.session_id)
@@ -375,17 +392,22 @@ def _skill_jobs(platform: Any) -> list[dict[str, Any]]:
                 "why": (f"A run did something worth keeping as a skill, and its draft was waiting: “{task}”."
                         if task else "A run did something worth keeping as a skill, and its draft was waiting."),
             })
-    return out
+    allowed = [
+        job for job in out
+        if not B.may_spend(platform, provider=job["provider"], model=job["model"], account=job["account"],
+                           local_only=bool(job["local_only"]), night=night)
+    ]
+    return (allowed or out)[:SKILL_DRAFTS]
 
 
-def match(platform: Any, start: datetime, end: datetime) -> list[dict[str, Any]]:
+def match(platform: Any, start: datetime, end: datetime, night: str = "") -> list[dict[str, Any]]:
     """Tonight's jobs, in :data:`PROPOSERS` order. BLOCKING; RAISES when the
     records cannot be read (the pass then waits)."""
     jobs: list[dict[str, Any]] = []
     if getattr(platform, "improvement", None) is not None:
         jobs.append({"key": "tool_failures", "proposer": "tool_failures", "target": ""})
     jobs += _coach_jobs(platform, start, end)
-    jobs += _skill_jobs(platform)
+    jobs += _skill_jobs(platform, night)
     return jobs
 
 
@@ -561,9 +583,11 @@ async def _run_coach(platform: Any, job: dict[str, Any], night: str) -> tuple[di
         refused["why"] = await check()
         return refused["why"]
 
+    # announce=False: the coach's own ``coach.proposal`` is a bell row that
+    # pings; the night's ONE row (``improvement.night_review``) says it.
     record = await coach.propose(
         job["target"], pin=(job["provider"], job["model"], job.get("account", "")),
-        before_call=before_call, local_only=bool(job.get("local_only")),
+        before_call=before_call, local_only=bool(job.get("local_only")), announce=False,
     )
     if record is not None:
         return _entry(job, MADE), [{"kind": "coach", "ref": str(record.id), "why": job["why"]}]
@@ -589,12 +613,17 @@ async def _run_skill(platform: Any, job: dict[str, Any], night: str) -> tuple[di
     check = _gate(platform, job, night)
 
     async def complete(system: str, prompt: str) -> str:
-        refused = await check()
-        if refused:
-            raise _Refused(refused)
+        # The account first: one that cannot be used now refuses before the
+        # budget counts a request that would never be sent.
         token = await _arm_account(platform, job)
         try:
-            with _egress.local_only_scope(bool(job.get("local_only"))):
+            refused = await check()
+            if refused:
+                raise _Refused(refused)
+            # Never switches Local only OFF: the sweep's own scope (the
+            # candidate's run) stays on when it is on.
+            local = bool(job.get("local_only")) or _egress.current_scope().on
+            with _egress.local_only_scope(local):
                 route = await router.complete(
                     provider=job["provider"], model=job["model"] or None, system=system,
                     messages=[LLMMessage(role="user", content=prompt)], tools=[], session_id=None, pin=True,
@@ -604,7 +633,10 @@ async def _run_skill(platform: Any, job: dict[str, Any], night: str) -> tuple[di
         return str(getattr(getattr(route, "response", route), "text", "") or "")
 
     try:
-        out = await learning.distill_candidates(complete, limit=1, ids=[job["target"]])
+        # announce=False: ``skill.proposal_created`` is a default phone alert
+        # (D-17.3: nothing from the night review reaches a phone in 17-a);
+        # the night's ONE bell row says it.
+        out = await learning.distill_candidates(complete, limit=1, ids=[job["target"]], announce=False)
     except _Refused as exc:
         return _entry(job, REFUSED, str(exc)), []
     except Exception as exc:  # noqa: BLE001 — a failed draft is a reason, never a crash
@@ -835,10 +867,10 @@ async def review_pass(d: Any, *, now: "datetime | None" = None) -> "dict[str, An
         made: list[dict[str, Any]] = prior["made"]
         start, end = period_of(config, at)
         try:
-            jobs = await asyncio.to_thread(match, platform, start, end)
+            jobs = await asyncio.to_thread(match, platform, start, end, night)
         except Exception:
-            await asyncio.to_thread(_save, engine, night, state=WAITING, ran=ran, made=made,
-                                    requests=B.requests_tonight(home, night))
+            spent = await asyncio.to_thread(B.requests_tonight, home, night)
+            await asyncio.to_thread(_save, engine, night, state=WAITING, ran=ran, made=made, requests=spent)
             raise
         done_keys = {str(r.get("key") or "") for r in ran}
         for job in jobs:
@@ -927,33 +959,46 @@ def _capital(text: str) -> str:
     return text[:1].upper() + text[1:] if text else text
 
 
-def night_line(engine: Any, config: Any, at: datetime) -> "dict[str, Any] | None":
-    """Last night's line on Improvements, or None: "From last night's review:
-    3" while 3 of its suggestions still wait, or "Skipped: …" when it made
-    nothing for a reason only the owner can change. Tonight's night (the
-    window may be open) and the one before it are looked at, newest first."""
+def last_night(engine: Any, config: Any, at: datetime) -> "NightReviewRecord | None":
+    """The ONE night the page speaks of at ``at``: last night. ``night_of(at)``
+    is the night the window last opened. With the window closed that IS last
+    night (its review finished, or was cut off when the window closed).
+    While the window is open it is tonight: until tonight's review has
+    finished, last night is the one before it. Never two nights back.
+    BLOCKING."""
+    from ..harness import night as N
+
     current = night_of(config, at)
-    previous = (datetime.fromisoformat(current) - timedelta(days=1)).date().isoformat()
     with session_scope(engine) as db:
-        rows = [db.get(NightReviewRecord, k) for k in (current, previous)]
-        for r in rows:
-            if r is not None:
-                db.expunge(r)
-    for row in rows:
-        if row is None:
-            continue
-        made = _loads(row.made_json)
-        waiting = _still_waiting(engine, made) if made else 0
-        view = {
-            "night": row.night, "state": row.state, "made": len(made), "waiting": waiting,
-            "skipped_why": row.skipped_why, "needs_you": bool(row.needs_you), "line": "",
-        }
-        if waiting:
-            view["line"] = f"From last night's review: {waiting}"
-            return view
-        if row.state == SKIPPED and row.needs_you and row.skipped_why:
-            view["line"] = f"Skipped: {_capital(row.skipped_why)}."
-            return view
+        row = db.get(NightReviewRecord, current)
+        if N.window_open(config, at) and (row is None or row.state not in (DONE, SKIPPED)):
+            previous = (datetime.fromisoformat(current) - timedelta(days=1)).date().isoformat()
+            row = db.get(NightReviewRecord, previous)
+        if row is not None:
+            db.expunge(row)
+    return row
+
+
+def night_line(engine: Any, config: Any, at: datetime) -> "dict[str, Any] | None":
+    """Last night's line on Improvements (:func:`last_night`), or None: "From
+    last night's review: 3" while 3 of its suggestions still wait, or
+    "Skipped: …" when it made nothing for a reason only the owner can
+    change."""
+    row = last_night(engine, config, at)
+    if row is None:
+        return None
+    made = _loads(row.made_json)
+    waiting = _still_waiting(engine, made) if made else 0
+    view = {
+        "night": row.night, "state": row.state, "made": len(made), "waiting": waiting,
+        "skipped_why": row.skipped_why, "needs_you": bool(row.needs_you), "line": "",
+    }
+    if waiting:
+        view["line"] = f"From last night's review: {waiting}"
+        return view
+    if row.state == SKIPPED and row.needs_you and row.skipped_why:
+        view["line"] = f"Skipped: {_capital(row.skipped_why)}."
+        return view
     return None
 
 
