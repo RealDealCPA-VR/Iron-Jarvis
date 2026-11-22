@@ -2424,6 +2424,17 @@ def build_platform(
                     knob["skills"],
                 )
             fire_options: dict = {}
+            # THE SCHEDULE'S OWN WORDS (v1.551.0, next leaps 14-a, the second
+            # review): the prompt the owner saved, for the run's "Earlier work
+            # on record" (``runtime.STORY_WORDS_OPTION``). The task the run
+            # reads may grow below (a pre-run script's output, an earlier
+            # job's result), and the memory review's is the steward's list of
+            # recent conversations, so it names nobody ("").
+            from .agents.runtime import STORY_WORDS_OPTION as _STORY_WORDS
+
+            fire_options[_STORY_WORDS] = (
+                "" if _is_memory_review(task, payload) else str(payload.get("task") or "").strip()
+            )
             if knob["skip_memory"]:
                 fire_options["skip_memory"] = True
             if knob["workspace_root"]:

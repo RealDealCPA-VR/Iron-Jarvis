@@ -12,7 +12,7 @@
 
 ## v1.551.0
 
-**Iron Jarvis checks every Build › Code reply.** Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity), its reply now ends the same way.
+**Agents and terminal help know what was done before.** An agent you give a job in a folder now starts knowing what was done there before, the way a chat in that folder already does: the pieces of earlier work on Iron Jarvis's own record (each chat, coding session or agent run there, how it ended and the files it wrote) and, for work in exactly that folder, its checked recap (Done, Decided, Open). **Iron Jarvis checks every Build › Code reply.** Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity), its reply now ends the same way.
 
 ## v1.550.0
 

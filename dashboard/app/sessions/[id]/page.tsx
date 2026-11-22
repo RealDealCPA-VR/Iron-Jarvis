@@ -177,7 +177,7 @@ export default function SessionDetailPage({
   const failureDetail = interrupted
     ? null
     : failureDetailShown(session as (SessionView & { failure_detail?: unknown }) | undefined);
-  // v1.549.0 (next leaps 14-a): what the run was given before it started
+  // v1.551.0 (next leaps 14-a): what the run was given before it started
   // ("Earlier work on record"), read off GET /sessions/{id} only.
   const told = startedWith(session as (SessionView & { told?: unknown }) | undefined);
 
@@ -752,7 +752,7 @@ export default function SessionDetailPage({
                     </span>
                   }
                 />
-                {/* v1.549.0 (next leaps 14-a): what the run was given before
+                {/* v1.551.0 (next leaps 14-a): what the run was given before
                     it started, quietly; nothing when it was given none. */}
                 {told.length > 0 && (
                   <Meta

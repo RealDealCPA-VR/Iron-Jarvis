@@ -1225,7 +1225,7 @@ def register(app: FastAPI, d) -> None:
         # for the run page's folded Details under its plain summary. Only
         # here — a list row never carries up to 2,000 characters per run.
         row["failure_detail"] = str(getattr(session, "failure_detail", "") or "")
-        # v1.549.0 (next leaps 14-a): what the run's prompt carried that its
+        # v1.551.0 (next leaps 14-a): what the run's prompt carried that its
         # page lists among what it was given ("work": earlier work on record).
         from ...agents.runtime import told_parts
 

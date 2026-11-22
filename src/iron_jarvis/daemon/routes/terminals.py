@@ -1739,7 +1739,7 @@ def register(app: FastAPI, d) -> None:
 
     async def _work_block_for_pane(cwd: str, tail: str = "", *, whole: bool = False,
                                    words: str = "") -> str:
-        """v1.549.0 (next leaps 14-a): "Earlier work on record" for a pane's
+        """v1.551.0 (next leaps 14-a): "Earlier work on record" for a pane's
         folder (``workmap.block.work_block``, the block a chat there is told),
         ready to append, or "". Under the client block's rule: only while the
         folder the pane's output shows it in NOW (:func:`_live_folder`) is
@@ -1862,7 +1862,7 @@ def register(app: FastAPI, d) -> None:
         system += await _client_block_for_pane(
             getattr(session, "cwd", "") or "", _kept_tail, whole=_whole,
         )
-        # THE STORY (v1.549.0, next leaps 14-a): what was done before in the
+        # THE STORY (v1.551.0, next leaps 14-a): what was done before in the
         # pane's live folder, right after the client block, under its rule
         # (the folder known, the same client as where the pane started).
         # "" when nothing is on record (byte-identical). Off the loop, bounded.

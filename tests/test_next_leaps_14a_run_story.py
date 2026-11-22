@@ -399,6 +399,111 @@ async def test_a_run_nobody_typed_is_never_pointed_at_a_client_its_task_names(cl
     assert "Smith quarterly report" not in story and str(clients.smith) not in story
 
 
+async def _fire(world, name: str, payload: dict) -> tuple[str, Session]:
+    """A REAL schedule fire (``platform._dispatch_scheduled`` through
+    ``scheduler.run_now``): the run's first system prompt and its row."""
+    from iron_jarvis.agents.orchestrator import Orchestrator
+
+    if world.p.orchestrator is None:  # what ``create_app`` hands the platform
+        world.p.orchestrator = Orchestrator(world.p)
+    world.systems.clear()
+    world.p.scheduler.add_task(name, "0 9 * * *", kind="task", payload=payload)
+    rec = await world.p.scheduler.run_now(name)
+    sid = str(getattr(world.p.scheduler.get(name), "last_session_id", "") or "")
+    assert sid and world.systems, (getattr(rec, "last_status", None), getattr(rec, "last_detail", None))
+    with session_scope(world.engine) as db:
+        row = db.get(Session, sid)
+        db.expunge(row)
+    return world.systems[0], row
+
+
+#: What the weekly memory review's task really is at fire time: the steward's
+#: numbered list of recent conversation titles and snippets
+#: (``memory/steward.build_task``), text the owner never typed.
+STEWARD_TASK = ("Review my recent conversations and save what is worth remembering.\n"
+                "1. [chat · 2026-11-20] Smith quarterly report (ref abc, 4 messages)")
+
+
+async def test_the_weekly_memory_review_is_never_pointed_at_a_client_its_list_names(clients, monkeypatch):
+    """The second review: the memory review's task is the steward's list, so
+    it names nobody. The control: the very same text typed by the owner on a
+    page is told Smith's work."""
+    from iron_jarvis.templates import MEMORY_REVIEW_SCHEDULE
+
+    owner, _row = await _run(clients, STEWARD_TASK, clients.downloads)
+    assert "Smith quarterly report" in _story(owner), owner[-1500:]
+    steward = SimpleNamespace(
+        plan=lambda: {"task": STEWARD_TASK, "empty": False, "cursor": "", "since": "",
+                      "conversations": 1, "docs": 0, "refs": []},
+        record_run=lambda **kw: None,
+    )
+    monkeypatch.setattr(clients.p, "memory_steward", steward)
+    system, row = await _fire(clients, MEMORY_REVIEW_SCHEDULE["name"],
+                              {"task": MEMORY_REVIEW_SCHEDULE["task"],
+                               "workspace_root": str(clients.downloads)})
+    assert row.task == STEWARD_TASK and row.origin == f"schedule:{MEMORY_REVIEW_SCHEDULE['name']}"
+    assert "Smith quarterly report" not in _story(system) and str(clients.smith) not in _story(system)
+    from iron_jarvis.agents.runtime import STORY_WORDS_OPTION
+    from iron_jarvis.scheduling.knobs import session_options
+
+    # The fire says so on the row: the review's words are nobody's, whatever
+    # its saved prompt says (it is replaced by the steward's list).
+    assert session_options(row)[STORY_WORDS_OPTION] == ""
+
+
+async def test_a_schedule_is_never_pointed_at_a_client_only_its_pre_run_script_names(clients):
+    """The fire appends the script's output to the run's task: those are not
+    the owner's words, so they name no client and point at no work."""
+    import sys
+
+    _chat(clients.engine, "Downloads bank letter draft", clients.downloads, hours_ago=2)
+    script = {"command": f'"{sys.executable}" -c "print(\'Subject: Smith wants the figures\')"'}
+    system, row = await _fire(clients, "daily-inbox", {
+        "task": "Summarize my inbox", "workspace_root": str(clients.downloads), "script": script,
+    })
+    assert "Smith wants the figures" in row.task  # the script ran, and its output is in the task
+    from iron_jarvis.agents.runtime import STORY_WORDS_OPTION
+    from iron_jarvis.scheduling.knobs import session_options
+
+    assert session_options(row)[STORY_WORDS_OPTION] == "Summarize my inbox"
+    story = _story(system)
+    assert "Downloads bank letter draft" in story, system[-1500:]  # it IS told a story
+    assert "Smith quarterly report" not in story and str(clients.smith) not in story
+
+
+async def test_a_schedule_whose_saved_prompt_names_a_client_is_told_that_clients_work(clients):
+    """The control of the two above, through the same fire and with a script
+    too: the prompt the owner saved names Smith, so Smith's work is told."""
+    import sys
+
+    script = {"command": f'"{sys.executable}" -c "print(\'nothing new\')"'}
+    system, row = await _fire(clients, "smith-check", {
+        "task": "Look at Smith's quarterly report", "workspace_root": str(clients.downloads),
+        "script": script,
+    })
+    assert "nothing new" in row.task
+    assert "Smith quarterly report" in _story(system), system[-1500:]
+    # ...and with no script, the saved prompt is the whole task.
+    system, _row = await _fire(clients, "smith-plain", {
+        "task": "Look at Smith's quarterly report", "workspace_root": str(clients.downloads),
+    })
+    assert "Smith quarterly report" in _story(system), system[-1500:]
+
+
+def test_a_schedules_words_are_only_the_prompt_it_was_saved_with():
+    from iron_jarvis.agents import runtime as RT
+
+    def story(options) -> str:
+        return RT.run_story(SimpleNamespace(
+            id="s", task="Saved prompt\n\nPre-run data:\nSmith", origin="schedule:daily",
+            options_json=json.dumps(options))).words
+
+    assert story({RT.STORY_WORDS_OPTION: "Saved prompt"}) == "Saved prompt"
+    assert story({RT.STORY_WORDS_OPTION: ""}) == ""  # the memory review
+    assert story({}) == ""  # an older row, or a schedule origin from any other door
+    assert story({RT.STORY_WORDS_OPTION: ["Smith"]}) == ""
+
+
 def test_only_a_task_the_owner_typed_counts_as_the_owners_words():
     from iron_jarvis.agents import runtime as RT
     from iron_jarvis.agents.team import MISSION_MEMBER_ORIGIN
@@ -564,6 +669,16 @@ def test_terminal_help_follows_the_client_blocks_rule_for_where_the_pane_is_now(
     session._tail.clear()
     session._tail += "cd ..\r\n".encode("utf-8")
     assert B.HEAD not in _assist(panes, term["id"])
+    # Started in a folder with no client, moved into Smith's: nothing (the
+    # review's note: a client where there was none is another client too).
+    # The control: a pane STARTED in Smith's folder is told Smith's work.
+    own = panes.client.post("/terminals", json={"cwd": str(panes.smith)}).json()
+    assert "Smith quarterly report" in _assist(panes, own["id"])
+    moved = panes.client.post("/terminals", json={"cwd": str(panes.tmp / "Empty")}).json()
+    pane = panes.platform.terminals.get(moved["id"])
+    pane._tail += (_at(panes.smith, "dir") + "\r\n" + _at(panes.smith)).encode("utf-8")
+    system = _assist(panes, moved["id"])
+    assert B.HEAD not in system and "Smith quarterly report" not in system
 
 
 # --------------------------------------------------------------------------- #

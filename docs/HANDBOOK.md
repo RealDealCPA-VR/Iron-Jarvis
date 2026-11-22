@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Agents and terminal help know what was done before (v1.549.0)
+## Agents and terminal help know what was done before (v1.551.0)
 
 An agent you give a job in a folder now starts knowing what was done there
 before, the way a chat in that folder already does: the pieces of earlier
@@ -2063,7 +2063,10 @@ Nothing to turn on.
   folders; only your own words do. The same holds for an agent Iron Jarvis
   starts without you typing its task (a rule reacting to a message, its own
   planned step, a workflow step, a reviewer): it is told its own folder's
-  earlier work, never a client's that its task names.
+  earlier work, never a client's that its task names. A schedule's own words
+  are the task you saved on it: what its **pre-run script** printed, the
+  result of another schedule and the weekly memory review's list of recent
+  conversations never point it at a client's work.
 - **Terminal help.** The AI help on a terminal is told the earlier work in
   the folder the terminal shows it is in now. When the terminal has moved
   into another client's folder, or its folder cannot be told from what it
