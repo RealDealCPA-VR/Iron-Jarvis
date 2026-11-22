@@ -1287,6 +1287,14 @@ def _comment_view(row: dict[str, Any], root: str) -> dict[str, Any]:
     return view
 
 
+def _checks_never_read(rec: dict[str, Any]) -> bool:
+    """26-a: the watch's checks have not been read in this streak (no next
+    look set, no fix round): what a record made for the review comments while
+    fixing checks is off looks like. A read of the checks always sets the next
+    look or moves the state on."""
+    return rec.get("state") == CI.WATCHING and not int(rec.get("rounds") or 0) and not rec.get("next_check_at")
+
+
 class PrAnswerBody(BaseModel):
     ids: list[str] = PydField(default_factory=list, max_length=200)
 
@@ -1364,9 +1372,12 @@ def _register_comments(app: FastAPI, d: Any) -> None:
         _ANSWER_STARTING.add(turn_id)
         try:
             # All or none, compare-and-set: a second press (another window)
-            # never answers a comment that is being answered.
+            # never answers a comment that is being answered, nor one that
+            # was answered or set aside after that window's card was drawn.
             if not await asyncio.to_thread(PC.claim, engine, thread_id, ids, turn_id):
-                raise HTTPException(status_code=409, detail=PC.ALREADY_ANSWERING)
+                now_rows = await asyncio.to_thread(PC.get_rows, engine, thread_id, ids)
+                busy = any(r.get("state") == PC.ANSWERING for r in now_rows)
+                raise HTTPException(status_code=409, detail=PC.ALREADY_ANSWERING if busy else PC.NOT_NEW)
             bus = getattr(d.platform, "event_bus", None)
             try:
                 note, flagged = await asyncio.to_thread(PC.block, rows, event_bus=bus,
@@ -1479,12 +1490,16 @@ def register(app: FastAPI, d: Any) -> None:
     async def ci_view(thread_id: str) -> dict[str, Any]:
         """Where the session's pull-request watch stands (no GitHub call)."""
         rec = await asyncio.to_thread(CI.get, d.platform.engine, thread_id)
-        if rec is None:
-            return {"watch": None, "on": autofix_on(getattr(d.platform, "config", None))}
+        on = autofix_on(getattr(d.platform, "config", None))
+        if rec is None or (not on and _checks_never_read(rec)):
+            # 26-a: while fixing checks is off the record may exist only for
+            # the review comments' clock. Its checks were never read, so the
+            # watch of them says nothing: no line, as before that record.
+            return {"watch": None, "on": on}
         keep = ("state", "rounds", "side_branch", "failed", "reviewer", "words", "next_check_at", "pr_url")
         view = {k: rec.get(k) for k in keep}
         view["max_rounds"] = CI.MAX_ROUNDS
-        return {"watch": view, "on": autofix_on(getattr(d.platform, "config", None))}
+        return {"watch": view, "on": on}
 
     _register_comments(app, d)
 

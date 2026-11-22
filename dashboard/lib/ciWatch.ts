@@ -26,7 +26,8 @@ export interface CiWatch {
 
 export interface CiView {
   watch: CiWatch | null;
-  /** The `ci_autofix` setting: false = nothing is watched or fixed. */
+  /** The `ci_autofix` setting: false = the checks are not watched or fixed
+   *  (the review comments are still read, 26-a). */
   on: boolean;
 }
 
@@ -87,6 +88,10 @@ export function ciTone(w: CiWatch): "quiet" | "warn" {
   return w.state === "gave_up" || w.state === "asking" || w.state === "stopped" ? "warn" : "quiet";
 }
 
+/** The line while the `ci_autofix` setting is off and a watch of the checks exists. */
+export const CI_OFF_WORDS =
+  "Fixing failed checks is turned off in Settings, so Iron Jarvis does not watch this pull request's checks.";
+
 /**
  * The one line, or "" when there is nothing to say (no watch, a closed pull
  * request). `now` decides whether the next look is still ahead.
@@ -96,7 +101,10 @@ export function ciWatchWords(view: CiView, now: Date = new Date()): string {
   if (!w || w.state === "closed") return "";
   const active = w.state === "watching" || w.state === "fix_due" || w.state === "fixing" || w.state === "reviewing";
   if (active && !view.on) {
-    return "Fixing failed checks is turned off in Settings, so Iron Jarvis is not watching this pull request.";
+    // 26-a: about the CHECKS only. Iron Jarvis still reads this pull
+    // request's review comments while fixing is off (they are pinned in the
+    // same view), so "not watching this pull request" would be untrue.
+    return CI_OFF_WORDS;
   }
   // The daemon's own sentence for a stop it explains; the lead only when it said none.
   const own = (lead: string) => w.words || lead;

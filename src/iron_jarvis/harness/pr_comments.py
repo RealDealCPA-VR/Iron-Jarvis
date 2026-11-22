@@ -153,6 +153,10 @@ NOTHING_TO_ANSWER = "Pick at least one review comment to answer."
 TOO_MANY = "One press answers at most {n} review comments. Answer some first, then the rest."
 NOT_HERE = "That review comment is not one of this session's."
 ALREADY_ANSWERING = "Iron Jarvis is already answering that review comment."
+#: A press from a window whose card is older than the comment's state.
+NOT_NEW = (
+    "That review comment was answered or set aside in the meantime, so nothing was started. Look at the list again."
+)
 NOT_A_PR = "This session's pull request address is not one Iron Jarvis can read comments from."
 
 AUTHOR_LABELS = {
@@ -301,12 +305,14 @@ def set_state(engine: Any, thread_id: str, ids: list[str], state: str, *, turn_i
 
 def claim(engine: Any, thread_id: str, ids: list[str], turn_id: str) -> bool:
     """ALL the named comments become ANSWERING for ``turn_id``, or none does
-    (one of them is not this session's, or is being answered already): a
-    compare-and-set, so two presses never answer one comment twice.
-    BLOCKING."""
+    (one of them is not this session's, or is not NEW: being answered
+    already, answered, or set aside — a press from a window whose card is
+    older than that): a compare-and-set, so two presses never answer one
+    comment twice, and a comment set aside is answered only once it is
+    brought back. BLOCKING."""
     with _LOCK, session_scope(engine) as db:
         rows = [db.get(PrCommentRecord, str(cid)) for cid in ids]
-        if any(r is None or r.thread_id != str(thread_id) or r.state == ANSWERING for r in rows):
+        if any(r is None or r.thread_id != str(thread_id) or r.state != NEW for r in rows):
             return False
         for r in rows:
             r.state = ANSWERING

@@ -16,7 +16,9 @@ Pinned:
   file it names was written in that turn, unchanged when not; nothing is
   ever sent to GitHub;
 * Set aside has its Undo through the route the card calls: Bring back makes
-  a comment set aside, or answered with no change, new again.
+  a comment set aside, or answered with no change, new again;
+* only a NEW comment is answered: a press from a window whose card is older
+  than a Set aside (or an answer) starts nothing and says so.
 """
 
 from __future__ import annotations
@@ -200,6 +202,16 @@ async def test_the_answer_route_refuses_in_words_and_changes_nothing(app, tmp_pa
     states = {r["id"]: (r["state"], r["turn_id"]) for r in PC.get_rows(engine, sid, [f"{sid}:c51", f"{sid}:c52"])}
     assert states == {f"{sid}:c51": (PC.NEW, ""), f"{sid}:c52": (PC.ANSWERING, "bt_other")}
     assert script.calls == []
+    # A press from a window whose card is older: the comment was set aside,
+    # answered, or answered with no change since. Nothing is started and the
+    # comment stays where it is (Bring back makes it new again).
+    for state in (PC.SET_ASIDE, PC.ANSWERED, PC.UNCHANGED):
+        assert PC.set_state(engine, sid, [f"{sid}:c51"], state, turn_id="bt_old") == [f"{sid}:c51"]
+        status, got = await asgi(app, "POST", f"/build/sessions/{sid}/pr-comments/answer", {"ids": [f"{sid}:c51"]})
+        assert status == 409 and PC.NOT_NEW in str(got), (state, got)
+        row = PC.get_rows(engine, sid, [f"{sid}:c51"])[0]
+        assert (row["state"], row["turn_id"]) == (state, "bt_old"), state
+    assert script.calls == [] and messages_of(app, sid) == []
 
 
 async def test_a_stopped_answer_gives_its_comments_back_as_new(app, tmp_path, monkeypatch):

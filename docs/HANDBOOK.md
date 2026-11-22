@@ -2914,7 +2914,9 @@ into the chat.
 - **Quiet.** Iron Jarvis reads the comments with your own GitHub sign-in (the
   `gh` program): first five minutes after it sees the pull request, then less
   often when nothing changes, up to once an hour, and it stops when the pull
-  request is merged or closed. The bell says it at most once a day per pull
+  request is merged or closed. It reads them even when **Fix my pull
+  requests' failing checks** is off in Settings: that switch is about the
+  checks only. The bell says it at most once a day per pull
   request. **Stop telling me about comments here** on the comments turns off
   the bell row for that pull request (new comments still arrive in the
   session, where you answer them); **Tell me again** turns it back on.

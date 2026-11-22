@@ -5,6 +5,10 @@
  * `root=BUILD_CODE_GIT` and `watchCi={false}`) is not watched, so the view
  * never asks for its comments (the route would only answer "no such coding
  * session", on a clock).
+ *
+ * While "Fix failed checks" is off Iron Jarvis still reads the pull request's
+ * review comments and pins them in this view, so the checks' line says the
+ * CHECKS are not watched, never that the pull request is not.
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +44,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => nul
 
 import { BranchView } from "@/components/harness/HarnessBranch";
 import { BUILD_CODE_GIT, decodeSessionGit } from "@/lib/buildGit";
+import { CI_OFF_WORDS, ciWatchWords, decodeCiView } from "@/lib/ciWatch";
 
 const SID = "s_pr1";
 const PR = "https://github.com/acme/shop/pull/7";
@@ -90,5 +95,28 @@ describe("the Branch view's review comments", () => {
     await waitFor(() => expect(api.getCalls).toContain(GIT));
     expect(reads("/build/sessions")).toEqual([]);
     expect(reads("/build/app/sessions")).toEqual([]);
+  });
+
+  it("with fixing failed checks off, the checks' line never says the pull request is not watched", async () => {
+    const off = decodeCiView({
+      watch: { state: "watching", rounds: 0, next_check_at: "2026-11-22T09:00:00" },
+      on: false,
+    });
+    expect(ciWatchWords(off)).toBe(
+      "Fixing failed checks is turned off in Settings, so Iron Jarvis does not watch this pull request's checks.",
+    );
+    api.gets[`/build/sessions/${SID}/git`] = STATUS;
+    api.gets[`/build/sessions/${SID}/git/diff`] = DIFF;
+    api.gets[`/build/sessions/${SID}/ci`] = {
+      watch: { state: "watching", rounds: 0, next_check_at: "2026-11-22T09:00:00" },
+      on: false,
+    };
+    api.gets[`/build/sessions/${SID}/pr-comments`] = VIEW;
+    render(<BranchView sessionId={SID} git={sgit()} refreshKey={0} />);
+    const line = await screen.findByTestId("branch-ci-watch");
+    expect(line.textContent).toBe(CI_OFF_WORDS);
+    expect(line.textContent).not.toMatch(/not watching this pull request/);
+    // The same view reads the comments of that pull request meanwhile.
+    await waitFor(() => expect(reads("/build/sessions")).not.toHaveLength(0));
   });
 });

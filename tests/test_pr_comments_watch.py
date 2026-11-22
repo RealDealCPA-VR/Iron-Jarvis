@@ -18,7 +18,10 @@ Pinned:
   answered); a Local only session's row carries no words;
 * while fixing checks is off the checks' own streak has not begun, so a
   watch made for the comments long ago never ends the checks' watch as "still
-  running after 6 hours" once fixing is turned on.
+  running after 6 hours" once fixing is turned on; and the checks' watch
+  says nothing (``GET /build/sessions/{id}/ci`` answers no watch) about a
+  record made only for the comments, so the Branch view never says the pull
+  request is not watched while its comments are read and shown there.
 """
 
 from __future__ import annotations
@@ -267,6 +270,45 @@ async def test_reading_goes_on_while_fixing_checks_is_off(app, tmp_path, monkeyp
     clock.go(PC.READ_FIRST_S)
     await w.step()
     assert len(w.lines()) == 1 and not w.fake.calls("pr", "view")
+
+
+async def test_a_record_made_for_the_comments_says_nothing_about_the_checks(app, tmp_path, monkeypatch):
+    """Fixing checks off from the start: the watch's record exists only for
+    the comments' clock, and the checks were never read. The checks' view
+    answers NO watch (as before that record), so the Branch view shows no
+    line about the checks while it pins the comments read from that same
+    pull request. A watch whose checks WERE read still answers, so turning
+    fixing off later is said."""
+    clock = Clock(monkeypatch)
+    w = await _world(app, tmp_path, monkeypatch, state=CI.WATCHING)
+    app.state.platform.config.ci_autofix = False
+    await w.step()
+    w.fake.answer(comments=[line_comment(1)])
+    clock.go(PC.READ_FIRST_S)
+    await w.step()
+    assert len(w.lines()) == 1 and w.rec()["state"] == CI.WATCHING and not w.fake.calls("pr", "view")
+    status, body = await asgi(app, "GET", f"/build/sessions/{w.sid}/ci")
+    assert status == 200 and body == {"watch": None, "on": False}, body
+    # The checks were read once (a next look is set) before fixing was turned
+    # off: that watch is still told, with the setting that stops it.
+    CI.save(w.engine, w.sid, next_check_at=CI.later(600))
+    status, body = await asgi(app, "GET", f"/build/sessions/{w.sid}/ci")
+    assert status == 200 and body["on"] is False and body["watch"]["state"] == CI.WATCHING, body
+    # So is a fix round of this streak, next look or not.
+    CI.save(w.engine, w.sid, next_check_at=None, rounds=1)
+    status, body = await asgi(app, "GET", f"/build/sessions/{w.sid}/ci")
+    assert status == 200 and body["watch"]["rounds"] == 1, body
+    # And a failure the first read found (a fix due, no round yet, no next
+    # look): its checks were read.
+    CI.save(w.engine, w.sid, state=CI.FIX_DUE, rounds=0, failed=["tests"])
+    status, body = await asgi(app, "GET", f"/build/sessions/{w.sid}/ci")
+    assert status == 200 and body["watch"]["state"] == CI.FIX_DUE and not body["watch"]["next_check_at"], body
+    CI.save(w.engine, w.sid, state=CI.WATCHING, failed=[])
+    # Fixing on: the watch is told whatever it has read.
+    CI.save(w.engine, w.sid, rounds=0)
+    app.state.platform.config.ci_autofix = True
+    status, body = await asgi(app, "GET", f"/build/sessions/{w.sid}/ci")
+    assert status == 200 and body["on"] is True and body["watch"]["state"] == CI.WATCHING, body
 
 
 async def test_nothing_is_read_while_a_fix_turn_runs_or_after_the_checks_saw_it_closed(app, tmp_path, monkeypatch):
