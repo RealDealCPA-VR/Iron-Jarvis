@@ -147,6 +147,23 @@ def test_the_first_time_on_a_destination_asks_and_send_sends_and_is_kept(platfor
     assert not any("Send 1 spreadsheet" in t for t in fake.texts[-2:])
 
 
+def test_a_reply_while_the_question_waits_reminds_how_to_answer(platform):
+    from tests._fakes.phone_files import fake_turn
+
+    sheet = _uploads_dir(platform) / "march.xlsx"
+    fake = FakeTelegramBack([_text(1, "make the sheet")])
+    poll = poller(platform, telegram_back(fake), turn=making_turn(sheet))
+    run(poll)
+    poll.chat_turn = fake_turn("You're welcome.")
+    fake.updates = [_text(2, "thanks")]
+    run(poll)
+    assert fake.texts[-1].endswith(
+        "(Still waiting for your answer: Send 1 spreadsheet (1 KB) to Telegram? I made it for "
+        "your message. Your answer is kept for Telegram (Settings, Phone, Send finished files to "
+        "your phone changes it). Reply 1 to send or 2 to keep it on the PC.)")
+    assert fake.uploads == []
+
+
 def test_keep_it_on_the_pc_keeps_it_and_the_next_answer_is_not_asked(platform):
     sheet = _uploads_dir(platform) / "march.xlsx"
     fake = FakeTelegramBack([_text(1, "make the sheet")])

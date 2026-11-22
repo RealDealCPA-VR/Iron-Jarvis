@@ -2426,8 +2426,11 @@ class InboundPoller:
         if getattr(prompt, "kind", "") == _VOICE_ASK_KIND:
             return f"\n\n(Still waiting for your answer: {prompt.question} Reply 1 for yes or 2 for no.)"
         if getattr(prompt, "kind", "") == FILE_SEND_KIND:
+            from . import files_back
+
+            paths, _local, _left = files_back.read_ref(getattr(prompt, "ref_id", ""))
             return (f"\n\n(Still waiting for your answer: {prompt.question} "
-                    "Reply 1 to send or 2 to keep it on the PC.)")
+                    f"{files_back.answer_hint(len(paths) or 1)})")
         return pending_reminder(prompt.question)
 
     async def _answer_reply(
