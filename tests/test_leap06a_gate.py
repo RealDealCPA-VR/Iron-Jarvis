@@ -19,6 +19,7 @@ document and notify tools and the real ledger, in a temp folder:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -259,7 +260,10 @@ LETS_RUN: dict[str, str] = {
     "downloads_list": "lists what the browser downloaded; moves nothing",
     "excel_accounts_diff": _DOCS,
     "excel_formula_check": _DOCS,
-    "excel_live_look": "looks at Excel as it is open on this PC; types nothing into it",
+    "excel_live_look": (
+        "looks at Excel as it is open on this PC and types nothing; in a rehearsal it never "
+        "moves Excel to a range (SIDE_DOORS excel_show, test_excel_live_look_never_moves_excel_in_a_rehearsal)"
+    ),
     "excel_profile": _DOCS,
     "excel_query": _DOCS,
     "excel_read": _DOCS,
@@ -370,6 +374,83 @@ async def test_a_tool_that_says_it_reads_but_acts_is_held(tmp_path):
     ), res.output
     (row,) = _rows(p.engine, ToolInvocation)
     assert row.rehearsed is True and row.tool == "browser_screenshot"
+
+
+#: What Excel answers to a look at Totals!A1:B2 of an open Budget.xlsx.
+_EXCEL_LOOK = {
+    "ok": True, "excel_open": True,
+    "workbooks": [{"name": "Budget.xlsx", "path": "", "active": True, "saved": True,
+                   "sheets": [{"name": "Totals", "used": "A1:B2"}]}],
+    "active": {"workbook": "Budget.xlsx", "sheet": "Totals", "selection": "A1", "cell": "A1", "path": ""},
+    "range": {"workbook": "Budget.xlsx", "sheet": "Totals", "address": "A1:B2", "path": "",
+              "rows": [["total", 1250], ["tax", 310]], "formulas": {}},
+}
+
+
+def _fake_excel(monkeypatch) -> tuple[list, list]:
+    """Excel stood in for: ``ask`` answers the look, ``goto`` records each
+    move (the call that brings Excel to the front and selects the range)."""
+    from iron_jarvis.documents import excel_live as XL
+
+    looks: list = []
+    moves: list = []
+
+    async def fake_ask(req, timeout):
+        looks.append(dict(req))
+        return {k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
+                for k, v in _EXCEL_LOOK.items()}
+
+    async def fake_goto(workbook, sheet, cell):
+        moves.append((workbook, sheet, cell))
+        return {"ok": True, "sheet": sheet, "address": cell}
+
+    monkeypatch.setattr(XL, "ask", fake_ask)
+    monkeypatch.setattr(XL, "goto", fake_goto)
+    return looks, moves
+
+
+SHOW = {"workbook": "Budget.xlsx", "sheet": "Totals", "range": "A1:B2", "show": True}
+
+
+async def test_excel_live_look_never_moves_excel_in_a_rehearsal(tmp_path, monkeypatch):
+    """Review 5: ``excel_live_look`` declares READONLY, and with ``show`` it
+    brings Excel to the front and selects the range (``excel_worker.op_goto``).
+    In a rehearsal it still LOOKS for real (the read runs, the cells come
+    back), but Excel is never moved: one rehearsed row lists the move, so the
+    report counts it, and the model is told it was not done."""
+    looks, moves = _fake_excel(monkeypatch)
+    p, perms, ws, ctx, events = _setup(tmp_path)
+    tool = p.registry.get("excel_live_look")
+    assert tool is not None and not R.holds(tool), "control: the look itself runs in a rehearsal"
+
+    res = await p.registry.invoke("excel_live_look", dict(SHOW), ctx, perms)
+
+    assert res.ok, res.error
+    assert moves == [], "a rehearsal moved Excel"
+    assert len(looks) == 1 and "1250" in res.output, "the look did not run for real"
+    assert "Rehearsal: Excel was not moved. Would show Totals!A1:B2 of Budget.xlsx selected in Excel." in res.output
+    assert "Excel now shows" not in res.output
+    assert (res.data or {}).get("shown") is False
+    rows = sorted(_rows(p.engine, ToolInvocation), key=lambda r: r.created_at)
+    assert sorted((r.tool, r.rehearsed, r.would, r.ok) for r in rows) == [
+        ("excel_live_look", False, "", True), ("excel_show", True, "run", True),
+    ]
+    # The report counts the move from that row ("This would show 1 range …").
+    (held,) = [r for r in rows if r.rehearsed]
+    effect = R.effect_of(held.tool, json.loads(held.args_json), None)
+    assert (effect.kind, effect.words) == ("change", "show Totals!A1:B2 of Budget.xlsx selected in Excel")
+    assert R.sentence([effect]) == "This would show 1 range in Excel. Nothing was changed."
+
+
+async def test_without_a_rehearsal_excel_live_look_moves_excel_when_asked(tmp_path, monkeypatch):
+    """The control: the branch above is what kept Excel still."""
+    _looks, moves = _fake_excel(monkeypatch)
+    p, perms, ws, ctx, events = _setup(tmp_path, rehearsal="")
+    res = await p.registry.invoke("excel_live_look", dict(SHOW), ctx, perms)
+    assert res.ok, res.error
+    assert moves == [("Budget.xlsx", "Totals", "A1:B2")]
+    assert "Excel now shows Totals!A1:B2 selected." in res.output
+    assert [(r.tool, r.rehearsed) for r in _rows(p.engine, ToolInvocation)] == [("excel_live_look", False)]
 
 
 def test_reads_the_plan_allows_are_not_held_and_apps_hold_unless_read_only():

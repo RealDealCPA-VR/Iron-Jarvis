@@ -134,6 +134,53 @@ async def test_a_schedule_that_renames_files_changes_nothing_and_lists_each_rena
     assert outcome == "rehearsed"
 
 
+async def test_a_schedule_that_shows_a_range_in_excel_reads_it_and_never_moves_excel(daemon, monkeypatch):
+    """Review 5: a schedule's run that asks ``excel_live_look`` to show a range
+    reads the cells for real, never brings Excel to the front, and its report
+    lists the move: "This would show 1 range in Excel." and "It read 1"."""
+    from iron_jarvis.documents import excel_live as XL
+
+    p, events, sent, folder = daemon
+    moves: list = []
+
+    async def fake_ask(req, timeout):
+        return {"ok": True, "excel_open": True,
+                "workbooks": [{"name": "Budget.xlsx", "path": "", "active": True, "saved": True,
+                               "sheets": [{"name": "Totals", "used": "A1:B2"}]}],
+                "range": {"workbook": "Budget.xlsx", "sheet": "Totals", "address": "A1:B2", "path": "",
+                          "rows": [["total", 1250], ["tax", 310]], "formulas": {}}}
+
+    async def fake_goto(workbook, sheet, cell):
+        moves.append((workbook, sheet, cell))
+        return {"ok": True, "sheet": sheet, "address": cell}
+
+    monkeypatch.setattr(XL, "ask", fake_ask)
+    monkeypatch.setattr(XL, "goto", fake_goto)
+    # A run reaches the tool through an agent whose roster lists it (a
+    # builder's run does not arm it from its task's words).
+    p.agents_registry.register("totals_helper", "You look at the open workbook.", ["excel_live_look"])
+    p.scheduler.add_task(
+        "Show the totals", "0 8 * * *", kind="task",
+        payload={"task": "Show me Totals!A1:B2 of the workbook I have open in Excel.",
+                 "agent_type": "totals_helper", "workspace_root": str(folder), "notify": False},
+    )
+    p.router.stream = _scripted([[ToolCall(id="c0", name="excel_live_look", arguments={
+        "workbook": "Budget.xlsx", "sheet": "Totals", "range": "A1:B2", "show": True,
+    })]])
+
+    started = await RR.start(p, "schedule", "Show the totals")
+    view = await _settled(p, started["id"])
+
+    assert view["status"] == "ready", view
+    assert moves == [], "a rehearsal moved Excel"
+    assert view["refused"] == [], view["refused"]
+    # (A custom agent's run may also keep a lesson: listed as a "may", never counted.)
+    words = [w["words"] for w in view["would"]]
+    assert "show Totals!A1:B2 of Budget.xlsx selected in Excel" in words, words
+    assert view["sentence"] == "This would show 1 range in Excel. Nothing was changed."
+    assert view["reads"] == 1, "the look itself ran for real"
+
+
 async def test_a_rehearsal_rings_no_bell_and_sends_no_notice(daemon):
     p, events, sent, folder = daemon
     p.scheduler.add_task(

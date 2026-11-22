@@ -32,7 +32,8 @@ and process start in the automation packages: a new one fails until it is
 reviewed. :data:`SIDE_DOORS` lists the effects that do not pass
 ``registry.invoke`` (a schedule's pre-run script, its delivery line, the chat
 delivery, the post-run lessons, a rule's or a helper's hand-off to a remote
-agent, an outgoing webhook); each records one rehearsed row through
+agent, an outgoing webhook) and the one part of a READONLY tool that acts
+(``excel_live_look`` moving Excel); each records one rehearsed row through
 :func:`record_side_door` and does nothing. :func:`event_is_rehearsal` tells
 a reader of the bus (an outgoing webhook) that an event is a rehearsal's.
 """
@@ -62,7 +63,10 @@ REHEARSAL_HELPERS = frozenset({"delegate", "spawn_agent"})
 #: it, so a rehearsal holds them all the same. ``browser_screenshot`` brings
 #: a tab of the user's own browser to the front before it takes its picture.
 #: ``tests/test_leap06a_gate.py`` keeps the reviewed list of every tool a
-#: rehearsal lets run; a tool found to act goes HERE.
+#: rehearsal lets run; a tool found to act goes HERE. A tool that reads and
+#: acts only on one argument may instead skip that part itself in a
+#: rehearsal and record it as a side door (``excel_live_look``'s ``show``:
+#: :data:`SIDE_DOORS` ``excel_show``), so the read still runs.
 REHEARSAL_HOLDS = frozenset({"browser_screenshot"})
 
 
@@ -324,7 +328,8 @@ def held_output(effect: Effect, would: str) -> str:
     return f"Rehearsal: not done. Would {effect.words}{asks}. Carry on as if it worked."
 
 
-_PLURAL = {"app action": "app actions", "web page": "web pages", "other step": "other steps"}
+_PLURAL = {"app action": "app actions", "web page": "web pages", "other step": "other steps",
+           "range in Excel": "ranges in Excel"}
 
 
 def plural(noun: str, n: int) -> str:
@@ -401,6 +406,13 @@ SIDE_DOORS: dict[str, SideDoor] = {
     "outbound_webhook": SideDoor(
         "send", "tell another app through a webhook that the task finished", "send", "message",
         "tools/rehearsal_runs.py",
+    ),
+    # Review 5: one PART of a READONLY tool that acts on the user's screen.
+    # ``excel_live_look`` with ``show`` reads Excel for real, but in a
+    # rehearsal it never brings Excel to the front or moves its selection
+    # (``ExcelLiveLookTool.execute``); this row lists the move instead.
+    "excel_show": SideDoor(
+        "change", "show a range selected in Excel", "show", "range in Excel", "documents/excel_live.py"
     ),
 }
 

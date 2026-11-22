@@ -591,7 +591,23 @@ class ExcelLiveLookTool(Tool):
         await asyncio.to_thread(hide_unreadable, out)
         text = render_look(out)
         data = {k: out[k] for k in ("excel_open", "workbooks", "active", "range", "protected_view") if k in out}
-        if args.get("show") and rng:
+        if args.get("show") and rng and str(getattr(ctx, "rehearsal_id", "") or ""):
+            # Leap 06-a: a rehearsal LOOKS for real but never moves Excel. A
+            # move brings Excel to the front and changes the user's workbook,
+            # sheet and selection while they may be working elsewhere. One
+            # rehearsed row lists it in the report instead.
+            from ..tools import rehearsal as _rehearsal  # noqa: PLC0415
+
+            book = str(rng.get("workbook") or "")
+            where = f"{rng.get('sheet') or ''}!{rng.get('address') or 'A1'}"
+            said = f"show {where}" + (f" of {book}" if book else "") + " selected in Excel"
+            await asyncio.to_thread(
+                _rehearsal.record_side_door, ctx.engine, session_id=ctx.session_id,
+                run_id=ctx.agent_run_id, door="excel_show", words=said, target=book,
+            )
+            text += f"\nRehearsal: Excel was not moved. Would {said}. Carry on as if it worked."
+            data["shown"] = False
+        elif args.get("show") and rng:
             # v1.467.0: the user asked to be taken there. Selecting a range
             # changes nothing in the workbook; a refusal is said, not hidden.
             moved = await goto(str(rng.get("workbook") or ""), str(rng.get("sheet") or ""), str(rng.get("address") or "A1"))
