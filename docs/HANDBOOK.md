@@ -2251,9 +2251,11 @@ memory left for anything else) or **Too big**.
   Then the row shows its progress, with **Cancel**. Cancel stops it at once;
   Ollama keeps the part already downloaded, so Download again carries on from
   there. One download at a time per model server. When it is done, a model
-  on Ollama on this PC (or on a model server the model menu lists) is in the
-  model menu above the message box; for any other model server the row says
-  which server has it. Activity shows each download once, when it ends.
+  on a model server the model menu lists is in the model menu above the
+  message box; for any other model server the row says which server has it.
+  Ollama on this PC counts once it is connected: until then the row says the
+  model is on Ollama on this PC, and that connecting Ollama on Connections
+  puts it in the model menu. Activity shows each download once, when it ends.
 - **Your drive stays usable.** A download that would leave less than a tenth
   of the drive free is refused before it starts, in words that say how much
   room it needs.

@@ -199,12 +199,12 @@ describe("Model servers › Models", () => {
   it("a download that would leave less than a tenth of the drive free has no Start, only its words", async () => {
     hooks.size = {
       ...(hooks.size as object),
-      refusal: "Not downloaded: qwen3:8b needs 5.2 GB, which would leave 4.0 GB free on the drive Ollama uses, less than a tenth of it (10 GB). Make room on that drive first.",
+      refusal: "Not downloaded: qwen3:8b needs 5.2 GB and the drive Ollama uses has 9.0 GB free; a tenth of that drive (10 GB) has to stay free. Make room on that drive first.",
       can_start: true,
     };
     render(<ModelLibrary />);
     fireEvent.click(await screen.findByTestId("library-download-qwen3:8b"));
-    expect((await screen.findByTestId("library-refusal-qwen3:8b")).textContent).toMatch(/less than a tenth/);
+    expect((await screen.findByTestId("library-refusal-qwen3:8b")).textContent).toMatch(/a tenth of that drive \(10 GB\) has to stay free/);
     expect(screen.queryByTestId("library-start-qwen3:8b")).toBeNull();
   });
 
@@ -252,6 +252,27 @@ describe("Model servers › Models", () => {
     );
     expect(progressWords({ ...done, server: "Desk Ollama", in_menu: false })).toBe("Downloaded, 5.2 GB. It is on Desk Ollama now.");
     expect(progressWords({ ...done, server: "", in_menu: false })).toBe("Downloaded, 5.2 GB.");
+    // Ollama on this PC with no Ollama address saved: the menu lists none of
+    // its models, so the row says where it is and the daemon's one step.
+    const step = "Connect Ollama on Connections to have it in the model menu.";
+    const here = decodeDownload({ id: "dl1", node_id: "ollama", model: "qwen3:8b", name: "Qwen3 8B", state: "done",
+                                  bytes_total: 5_200_000_000, bytes_done: 5_200_000_000,
+                                  server: "Ollama on this PC", in_menu: false, menu_step: step })!;
+    expect(progressWords(here)).toBe(`Downloaded, 5.2 GB. It is on Ollama on this PC now. ${step}`);
+    expect(progressWords(here)).not.toMatch(/It is in the model menu/);
+    // A row in the menu never carries a step.
+    expect(decodeDownload({ id: "dl1", state: "done", in_menu: true, menu_step: step })!.menu_step).toBe("");
+    // A progress event names neither the row nor where it lands: both are kept
+    // (the row reads "Qwen3 8B" while it runs, never the model id).
+    const named = [decodeDownload({ id: "dl1", node_id: "ollama", model: "qwen3:8b", name: "Qwen3 8B",
+                                    state: "downloading", bytes_total: 10, bytes_done: 1,
+                                    server: "Ollama on this PC", in_menu: false, menu_step: step })!];
+    const ticked = foldDownload(named, { id: "dl1", node_id: "ollama", model: "qwen3:8b", bytes_done: 5,
+                                         bytes_total: 10, percent: 50 });
+    expect(ticked[0]).toMatchObject({ name: "Qwen3 8B", percent: 50, server: "Ollama on this PC", menu_step: step });
+    // One that does carry a name is taken.
+    const renamed = foldDownload(named, { id: "dl1", model: "qwen3:8b", name: "Qwen3 8B Q4", bytes_done: 6, bytes_total: 10 });
+    expect(renamed[0].name).toBe("Qwen3 8B Q4");
     // A progress event says nothing of where it lands: what the row said is kept.
     const running = [decodeDownload({ id: "dl1", node_id: "box", state: "downloading", bytes_total: 10, bytes_done: 1,
                                       server: "Ollama on this PC", in_menu: true })!];

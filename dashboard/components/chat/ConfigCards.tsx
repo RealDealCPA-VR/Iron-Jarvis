@@ -89,6 +89,7 @@ function ModelDownloadCardView({ card }: { card: ModelDownloadCard }) {
     // Not known from the card alone: a finished row claims the model menu
     // only from the daemon's own row or its ended event.
     in_menu: false,
+    menu_step: "",
   };
   return (
     <div

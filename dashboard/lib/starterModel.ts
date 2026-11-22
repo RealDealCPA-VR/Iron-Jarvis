@@ -37,6 +37,14 @@ export const STARTER_MODEL_LABEL = "Llama 3.2";
 /** Said when there is no Ollama on this PC to download into. */
 export const NO_OLLAMA_HERE = "Ollama is not on this PC yet. Install it (step 1), then press Download again.";
 
+/** The row as a door shows it: the door's own next step (step 3's "Use
+ *  Ollama for answers", or Look again then "Use Ollama on this PC") is what
+ *  puts the model in the model menu, so the daemon's general step
+ *  ("Connect Ollama on Connections ...") is not said beside it. */
+export function doorRow(d: Download): Download {
+  return d.menu_step ? { ...d, menu_step: "" } : d;
+}
+
 /** Start the download into Ollama on this PC. Resolves the download's row;
  *  rejects with the daemon's own sentence. */
 export async function downloadStarterModel(): Promise<Download> {

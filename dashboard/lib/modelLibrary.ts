@@ -89,9 +89,13 @@ export interface Download {
   error: string;
   /** The server it downloads into, by its name ("" = not known). */
   server: string;
-  /** Do this server's models reach the model menu (Ollama on this PC, or a
-   *  server the menu lists)? Only then does a finished row say so. */
+  /** Do this server's models reach the model menu (a server the menu lists,
+   *  or Ollama on this PC once its address is saved)? Only then does a
+   *  finished row say so. */
   in_menu: boolean;
+  /** When it is not in the menu, the one step that puts it there, in the
+   *  daemon's words ("" = none known). */
+  menu_step: string;
 }
 
 const str = (v: unknown, max = 300): string => (typeof v === "string" ? v.slice(0, max) : "");
@@ -193,6 +197,7 @@ export function decodeDownload(raw: unknown): Download | null {
     error: str(r.error, 400),
     server: str(r.server, 80),
     in_menu: r.in_menu === true,
+    menu_step: r.in_menu === true ? "" : str(r.menu_step, 200),
   };
 }
 
@@ -202,12 +207,17 @@ export function foldDownload(list: Download[], payload: unknown): Download[] {
   if (!next) return list;
   const at = list.findIndex((d) => d.id === next.id);
   if (at < 0) return [next, ...list].slice(0, 20);
-  // A progress event does not say where the model lands; keep what was read.
+  // An event that does not say the row's name or where the model lands keeps
+  // what was read (decodeDownload falls back to the model id for a missing
+  // name, so the name is taken only when the event carries one).
+  const sent = payload as Record<string, unknown>;
   const merged = {
     ...list[at],
     ...next,
+    name: str(sent.name, 120) ? next.name : list[at].name,
     server: next.server || list[at].server,
     in_menu: next.in_menu || list[at].in_menu,
+    menu_step: next.in_menu || list[at].in_menu ? "" : next.menu_step || list[at].menu_step,
   };
   // A late progress event never takes an ended row back to downloading.
   if (list[at].state !== "downloading" && next.state === "downloading") return list;
@@ -232,8 +242,11 @@ export function progressWords(d: Download): string {
   const total = bytesWords(d.bytes_total);
   if (d.state === "done") {
     // "In the model menu" only when it is (Trust: never claim a change it
-    // did not make); else only where the model is.
-    const where = d.in_menu ? " It is in the model menu now." : d.server ? ` It is on ${d.server} now.` : "";
+    // did not make); else only where the model is, and the step that puts it
+    // in the menu when the daemon named one.
+    const where = d.in_menu
+      ? " It is in the model menu now."
+      : `${d.server ? ` It is on ${d.server} now.` : ""}${d.menu_step ? ` ${d.menu_step}` : ""}`;
     return `${total ? `Downloaded, ${total}.` : "Downloaded."}${where}`;
   }
   if (d.state !== "downloading") return d.error || (d.state === "stopped" ? "Stopped." : "The download did not finish.");

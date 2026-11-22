@@ -15,8 +15,9 @@ leaps 43-a; idea 16 and idea 37 use the same call, ``model_download``).
   live bar only: it is stored but kept off the Activity page
   (``eval/observability._PROGRESS_EVENT_TYPES``), where a download is ONE
   row, its end.
-* **Where it lands**: a row's ``server`` and ``in_menu`` (from
-  ``library.targets``); "in the model menu" is said only when ``in_menu``.
+* **Where it lands**: a row's ``server``, ``in_menu`` and ``menu_step`` (from
+  ``library.targets``); "in the model menu" is said only when ``in_menu``,
+  else where it is, and the one step that puts it there when there is one.
 * **Cancel** shuts the connection down and closes its socket (so a read that
   is waiting wakes at once on Windows and Linux); Ollama stops the pull and
   keeps the part already downloaded (said on the card: Download again carries
@@ -100,13 +101,27 @@ class _Live:
         self.thread: threading.Thread | None = None
         self.status = ""
         self.unreachable = UNREACHABLE_WORDS
-        #: The server's name and whether its models reach the model menu
-        #: (``library.Target.in_menu``), as they were when it started.
-        self.place: tuple[str, bool] = ("", False)
+        #: The name the row shows (every progress event carries it, so a row
+        #: never reads as the bare model id while it runs).
+        self.name = ""
+        #: The server's name, whether its models reach the model menu and the
+        #: step that puts them there (``library.Target.in_menu`` /
+        #: ``menu_step``), as they were when it started.
+        self.place: "tuple[str, bool, str]" = NO_PLACE
 
 
-#: ``{node id: (the server's name, does it reach the model menu)}``.
-Places = Callable[[], "dict[str, tuple[str, bool]]"]
+#: Where a download lands: ``(the server's name, does it reach the model
+#: menu, the step that puts it there or "")``; this one = not known.
+NO_PLACE: "tuple[str, bool, str]" = ("", False, "")
+#: ``{node id: where its downloads land}``.
+Places = Callable[[], "dict[str, tuple[str, bool, str]]"]
+
+
+def place_of(target: Any) -> "tuple[str, bool, str]":
+    """Where a download into *target* lands (``library.Target``)."""
+    in_menu = getattr(target, "in_menu", False) is True
+    step = "" if in_menu else str(getattr(target, "menu_step", "") or "")[:200]
+    return (str(getattr(target, "label", "") or ""), in_menu, step)
 
 
 def _mask(text: str) -> str:
@@ -125,14 +140,15 @@ def server_words(raw: Any) -> str:
 
 
 def view(
-    row: ModelDownload, live: "_Live | None" = None, place: "tuple[str, bool] | None" = None
+    row: ModelDownload, live: "_Live | None" = None, place: "tuple[str, bool, str] | None" = None
 ) -> dict[str, Any]:
-    """One download as the page and the card read it. ``server`` and
-    ``in_menu`` say where the model is once it is done: "in the model menu"
-    only when ``in_menu`` (else "on <server>"; nothing known, neither)."""
+    """One download as the page and the card read it. ``server``,
+    ``in_menu`` and ``menu_step`` say where the model is once it is done:
+    "in the model menu" only when ``in_menu`` (else "on <server>", and the
+    step that puts it in the menu when there is one; nothing known, neither)."""
     if live is not None:
         place = live.place
-    server, in_menu = place if place is not None else ("", False)
+    server, in_menu, step = place if place is not None else NO_PLACE
     total = live.total if live is not None and live.total else row.bytes_total
     done = live.done if live is not None else row.bytes_done
     percent = None
@@ -158,6 +174,7 @@ def view(
         "done_words": L.fmt_bytes(done) if done else "0 MB",
         "server": str(server or "")[:80],
         "in_menu": in_menu is True,
+        "menu_step": "" if in_menu is True else str(step or "")[:200],
     }
 
 
@@ -211,7 +228,7 @@ class PullManager:
             db.expunge(row)
             return row
 
-    def _places(self) -> "dict[str, tuple[str, bool]]":
+    def _places(self) -> "dict[str, tuple[str, bool, str]]":
         """Where each server's downloads land (read once per answer); ``{}``
         when not known, and then no row claims the model menu."""
         if self.places is None:
@@ -309,7 +326,8 @@ class PullManager:
                 db.refresh(row)
                 db.expunge(row)
             live = _Live(row.id, target.id, row.bytes_total)
-            live.place = (str(target.label or ""), getattr(target, "in_menu", False) is True)
+            live.name = row.name or clean
+            live.place = place_of(target)
             if target.kind == "ollama" and target.this_pc:
                 live.unreachable = OLLAMA_NOT_ANSWERING
             self._live[row.id] = live
@@ -466,7 +484,7 @@ class PullManager:
                             last_pct, last_pub = pct, now
                             self._update(live.id, bytes_done=live.done, bytes_total=live.total)
                             self._publish(loop, PROGRESS_EVENT, {
-                                "id": live.id, "node_id": live.node_id, "model": model,
+                                "id": live.id, "node_id": live.node_id, "model": model, "name": live.name,
                                 "bytes_done": live.done, "bytes_total": live.total,
                                 "percent": pct if pct >= 0 else None,
                             })
@@ -512,8 +530,8 @@ class PullManager:
                     log.debug("after-download step failed", exc_info=True)
             self._publish(loop, ENDED_EVENT, {
                 "id": live.id, "node_id": live.node_id, "model": model, "state": state,
-                "error": error, "bytes_done": live.done, "bytes_total": live.total,
-                "server": live.place[0], "in_menu": live.place[1],
+                "error": error, "bytes_done": live.done, "bytes_total": live.total, "name": live.name,
+                "server": live.place[0], "in_menu": live.place[1], "menu_step": live.place[2],
             } if row is None else {**view(row, None, live.place), "id": live.id})
 
 
@@ -527,11 +545,17 @@ class _Failed(Exception):
 
 def _after_download(d: Any) -> Callable[[str, str], None]:
     """What changes once a model is in: the model menu reads the server's
-    list again, this PC's drive is read again, and the Model servers page's
-    next check sees it. The first three return at once and happen BEFORE
-    the ended event (so the page's re-read after it sees the new model); the
-    full check of every saved server (up to its 10 s per server) runs on its
-    own thread, so a finished download never waits at 100% for it."""
+    list again, this PC's drive is read again, Ollama on this PC is asked
+    again, and the Model servers page's next check sees it. These happen
+    BEFORE the ended event (so the page's re-read after it sees the new
+    model); all but the Ollama question return at once, and that one is the
+    probe's own bounded wait (at most 1.5 s, on the download's worker
+    thread). Ollama's answer is REPLACED, never dropped: a dropped answer
+    reads "not seen" until a background probe lands, and the page's one
+    re-read on the ended event would lose Ollama on this PC from its
+    servers. The full check of every saved server (up to its 10 s per
+    server) runs on its own thread, so a finished download never waits at
+    100% for it."""
 
     def _done(node_id: str, _model: str) -> None:
         from . import hardware as HW
@@ -549,7 +573,9 @@ def _after_download(d: Any) -> Callable[[str, str], None]:
             from ..providers import cli_detect, ollama_seen
 
             cli_detect.forget_detection_memos()
-            ollama_seen.forget()
+            ollama_seen.probe_now(
+                getattr(getattr(getattr(d, "platform", None), "config", None), "ollama_base_url", None)
+            )
         except Exception:  # noqa: BLE001
             pass
         sampler = getattr(d, "fleet_sampler", None)
@@ -568,10 +594,10 @@ def _after_download(d: Any) -> Callable[[str, str], None]:
 
 def _places_of(d: Any) -> Places:
     """Where each server's downloads land, from the library's own servers
-    (``library.targets``: the name, and ``in_menu``)."""
+    (``library.targets``: the name, ``in_menu`` and ``menu_step``)."""
 
     def _read() -> "dict[str, tuple[str, bool]]":
-        return {t.id: (t.label, t.in_menu) for t in L.targets(d)}
+        return {t.id: place_of(t) for t in L.targets(d)}
 
     return _read
 

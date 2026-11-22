@@ -1526,13 +1526,20 @@ How to use this file: read the contents list, then read only the entries your ch
   ask-tier with a once-only, attended-only card that "Don't ask" never skips
   (`SpendCheck(once_only, dont_ask_skips=False, attended_only, irreversible)`);
   only a name refused on its face skips the card; it is on `LOW_TRUST_DENY`.
-  A finished row says "in the model menu" ONLY when `in_menu` (Ollama on
-  this PC, or a ROUTABLE saved server: the menu lists
-  `fleet.routable_nodes()` alone), else "on <server>"; the row's `server` /
-  `in_menu` come from `library.targets` when it is listed. The after-download
-  step (`pulls._after_download`, wired only by `manager_for`) forgets the
-  menu's list of that server (`ollama` or `fleet-<id>`) and the drive BEFORE
-  the ended event, and checks the servers again on its own thread. Progress
+  A finished row says "in the model menu" ONLY when `in_menu` (a ROUTABLE
+  saved server: the menu lists `fleet.routable_nodes()` alone; Ollama on this
+  PC that is not saved only when `ollama_base_url` is on this PC,
+  `library._menu_lists_this_pc_ollama`: unset, the menu lists no Ollama
+  model), else "on <server>" plus `menu_step` (`CONNECT_OLLAMA_STEP`; a door
+  with its own next step drops it, `starterModel.doorRow`); the row's
+  `server` / `in_menu` / `menu_step` come from `library.targets` when it is
+  listed. The after-download step (`pulls._after_download`, wired only by
+  `manager_for`) forgets the menu's list of that server (`ollama` or
+  `fleet-<id>`) and the drive, and ASKS Ollama on this PC again
+  (`ollama_seen.probe_now`, never `forget`: a dropped answer reads "not
+  seen", and the page's one re-read on the ended event lost Ollama on this
+  PC), all BEFORE the ended event; it checks the servers again on its own
+  thread. Progress events carry the row's `name`. Progress
   events are stored but kept off the Activity page
   (`eval/observability._PROGRESS_EVENT_TYPES`): one row per download, its end.
   The PC's memory, graphics memory and drive room are in binary GB

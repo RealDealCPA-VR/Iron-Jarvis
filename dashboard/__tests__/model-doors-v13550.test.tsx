@@ -278,6 +278,28 @@ describe("G73: the free-and-private door downloads a starter model with one pres
     expect(screen.getByRole("button", { name: /Use Ollama for answers/ })).toBeTruthy();
   });
 
+  it("a finished starter download says where it is, and the door's own step 3, never the model menu", async () => {
+    hooks.responses["/fleet/library"] = {
+      servers: [{ id: "ollama", label: "Ollama on this PC", kind: "ollama", this_pc: true, downloads: true }],
+    };
+    // No Ollama address saved yet: the daemon's row is not in the model menu
+    // and names the general step; the door's own step 3 is that step here.
+    hooks.download = {
+      download: { id: "dl1", node_id: "ollama", model: "llama3.2", name: "Llama 3.2 3B", state: "done",
+                  bytes_total: 2_019_390_340, bytes_done: 2_019_390_340, server: "Ollama on this PC",
+                  in_menu: false, menu_step: "Connect Ollama on Connections to have it in the model menu." },
+    };
+    render(<ConnectDoors />);
+    openDoor(/Free & private on this PC/);
+    fireEvent.click(screen.getByRole("button", { name: /Download a starter model/ }));
+    const progress = await screen.findByTestId("starter-model-progress");
+    expect(within(progress).getByTestId("starter-model-row-words").textContent).toBe(
+      "Downloaded, 2.0 GB. It is on Ollama on this PC now.",
+    );
+    expect(progress.textContent).toMatch(/Step 3 is next\./);
+    expect(progress.textContent).not.toMatch(/model menu/);
+  });
+
   it("a refusal is said in the daemon's own words and the press stays", async () => {
     hooks.responses["/fleet/library"] = {
       servers: [{ id: "ollama", label: "Ollama on this PC", kind: "ollama", this_pc: true, downloads: true }],

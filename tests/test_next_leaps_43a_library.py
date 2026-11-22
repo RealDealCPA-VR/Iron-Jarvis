@@ -345,7 +345,7 @@ def test_a_download_past_the_free_space_floor_is_refused_before_any_request(tmp_
         listed = c.get("/fleet/downloads").json()["downloads"]
     assert r.status_code == 409
     words = r.json()["detail"]
-    assert words.startswith("Not downloaded: llama3.2 needs 2.0 GB") and "less than a tenth" in words
+    assert words.startswith("Not downloaded: llama3.2 needs 2.0 GB") and "a tenth of that drive" in words
     assert standin.pulls() == [], "the model server was asked before the floor was checked"
     assert listed == [] and not [s for s in seen if s[0].startswith("model.download")]
     # The line itself: a tenth of the drive is the floor (D-43.2).
@@ -387,6 +387,9 @@ def test_progress_events_from_a_recorded_ollama_stream_reach_done(tmp_path, stan
     pull = standin.pulls()
     assert len(pull) == 1 and json.loads(pull[0]["body"]) == {"model": "llama3.2", "name": "llama3.2", "stream": True}
     progress = [p for t, p in seen if t == EventType.MODEL_DOWNLOAD_PROGRESS]
+    # Every progress event names the row as the list does, so the row never
+    # reads as the bare model id while it runs.
+    assert {p["name"] for p in progress} == {"Llama 3.2 3B"}, progress[:2]
     pcts = [p["percent"] for p in progress]
     assert pcts == sorted(pcts) and len(pcts) == len(set(pcts)), pcts
     assert pcts[0] == 0 and pcts[-1] == 100 and {24, 49, 74} & set(pcts), pcts
@@ -721,9 +724,11 @@ def test_memory_and_drive_room_read_as_windows_shows_them():
     # A download's size: as Ollama's registry and "ollama list" print it.
     assert L.fmt_bytes(LLAMA_MEASURED) == "2.0 GB" and L.fmt_room(LLAMA_MEASURED) == "1.9 GB"
     low = HW.Hardware(total_ram=1, model_disk_free=12 * GIB, model_disk_total=100 * GIB)
+    # The size as the registry prints it, the drive as Windows shows it, and
+    # no figure computed from both (12 - 3.0 never reads as 9.2).
     assert L.floor_problem("x", 3 * GB, low) == (
-        "Not downloaded: x needs 3.0 GB, which would leave 9.2 GB free on the drive Ollama uses, less than a "
-        "tenth of it (10 GB). Make room on that drive first."
+        "Not downloaded: x needs 3.0 GB and the drive Ollama uses has 12 GB free; a tenth of that drive "
+        "(10 GB) has to stay free. Make room on that drive first."
     )
 
 
@@ -744,11 +749,63 @@ def test_a_finished_download_says_the_model_menu_only_where_the_menu_lists_it(tm
     d.fleet._nodes["box"] = _box(standin.url, routable=True)
     assert [t.in_menu for t in L.targets(d)] == [True]
     assert mgr.list()[0]["in_menu"] is True
-    # Ollama on this PC that is not a saved server is in the model menu.
+    # Ollama on this PC that is not a saved server is NOT in the model menu:
+    # it is listed only when no Ollama address is saved, and with none saved
+    # the menu lists no Ollama model. Its row says the step instead.
     monkeypatch.setattr(L, "_ollama_seen_here", lambda: True)
     monkeypatch.setattr(L, "_this_pc_ollama_address", lambda: standin.url)
     (t,) = L.targets(types.SimpleNamespace(fleet=_Registry([]), fleet_sampler=None))
-    assert t.id == L.THIS_PC_OLLAMA and t.in_menu is True
+    assert t.id == L.THIS_PC_OLLAMA and t.in_menu is False and t.menu_step == L.CONNECT_OLLAMA_STEP
+
+
+async def test_with_no_ollama_address_saved_a_download_into_ollama_here_never_claims_the_model_menu(
+    tmp_path, standin, monkeypatch
+):
+    """The first-run door's case: Ollama installed on this PC, its address
+    not saved yet. The model menu lists no Ollama model then
+    (``build_selectable_models`` adds one only ``if cfg.ollama_base_url``), so
+    the row, the ended event, the list and chat's line say where the model is
+    and the step that puts it in the menu, never "in the model menu"."""
+    from iron_jarvis.daemon.routes.connections import build_selectable_models
+
+    monkeypatch.setattr(L, "_ollama_seen_here", lambda: True)
+    monkeypatch.setattr(L, "_this_pc_ollama_address", lambda: standin.url)
+    d, app, seen, _done = _wire(tmp_path, [], monkeypatch=monkeypatch)
+    assert not d.platform.config.ollama_base_url
+    menu = await asyncio.to_thread(
+        build_selectable_models, d, providers=types.SimpleNamespace(available=lambda p: False)
+    )
+    # No Ollama row anyone can pick (a detected one is listed greyed).
+    assert not [m for m in menu if m.get("provider") == "ollama" and m.get("available") is not False], menu
+    (t,) = L.targets(d)
+    assert (t.id, t.in_menu, t.menu_step) == (L.THIS_PC_OLLAMA, False, L.CONNECT_OLLAMA_STEP)
+    mgr = d.platform._model_pulls
+    with TestClient(app) as c:
+        row = c.post(f"/fleet/nodes/{L.THIS_PC_OLLAMA}/models/download", json={"model": "llama3.2"}).json()["download"]
+        mgr.wait(row["id"], timeout=20)
+        listed = c.get("/fleet/downloads").json()["downloads"]
+    (ended,) = [p for t_, p in seen if t_ == EventType.MODEL_DOWNLOAD_ENDED]
+    for said in (row, ended, listed[0]):
+        assert said["server"] == "Ollama on this PC" and said["in_menu"] is False, said
+        assert said["menu_step"] == L.CONNECT_OLLAMA_STEP, said
+    assert ended["state"] == P.DONE
+    platform = types.SimpleNamespace(config_writer=types.SimpleNamespace(d=d))
+    chat = await LT.ModelDownloadTool(platform).execute({"model": "llama3.2"}, None)
+    assert chat.ok, chat.error
+    assert f"Once it is done it is on Ollama on this PC. {L.CONNECT_OLLAMA_STEP}" in chat.output, chat.output
+    assert "Once it is done it is in the model menu" not in chat.output
+    # Waited off the loop: the download publishes its events on this loop.
+    await asyncio.to_thread(mgr.wait, chat.data["model_download"]["id"], 20)
+
+    # Saved at this PC's address, the menu lists Ollama's models: then it is.
+    d.platform.config.ollama_base_url = "http://localhost:11434"
+    (t,) = L.targets(d)
+    assert (t.in_menu, t.menu_step) == (True, "")
+    assert (mgr.list()[0]["in_menu"], mgr.list()[0]["menu_step"]) == (True, "")
+    # Saved at another computer's address: the menu's Ollama is that one.
+    d.platform.config.ollama_base_url = "http://192.168.1.50:11434"
+    (t,) = L.targets(d)
+    assert (t.in_menu, t.menu_step) == (False, L.CONNECT_OLLAMA_STEP)
 
 
 async def test_model_download_from_chat_says_where_the_model_lands(tmp_path, standin, monkeypatch):
@@ -830,8 +887,38 @@ def test_the_real_after_download_step_tells_the_model_menu_and_reads_the_drive_a
     here = daemon("here", [])
     started = P.start_download(here, L.THIS_PC_OLLAMA, "llama3.2")
     end = P.manager_for(here).wait(started["download"]["id"], timeout=20)
-    assert end["state"] == P.DONE and end["server"] == "Ollama on this PC" and end["in_menu"] is True
+    # No Ollama address saved here: on Ollama on this PC, not in the model menu.
+    assert end["state"] == P.DONE and end["server"] == "Ollama on this PC" and end["in_menu"] is False
+    assert end["menu_step"] == L.CONNECT_OLLAMA_STEP
     assert "ollama" in cleared and "fleet-box" not in cleared, cleared
+
+
+def test_the_after_download_step_keeps_ollama_on_this_pc_on_the_first_read_after(monkeypatch):
+    """The page re-reads the library ONCE, on the ended event. The step asks
+    Ollama again instead of dropping its answer: a dropped answer reads "not
+    seen" until a background probe lands, and that one re-read lost Ollama on
+    this PC from the servers ("No model server yet")."""
+    from iron_jarvis.providers import cli_detect, ollama_seen
+
+    monkeypatch.setattr(cli_detect, "_OLLAMA_PROBE_FORCED_OFF", False)
+    monkeypatch.setattr(ollama_seen, "_answer", None)
+    monkeypatch.setattr(ollama_seen, "_refreshing", False)
+    monkeypatch.setattr(HW, "forget", lambda: None)
+    asked: list[Any] = []
+
+    def detect(configured_url=None):
+        asked.append(configured_url)
+        return [cli_detect.DetectedModel(provider="ollama", model="llama3.2:latest", name="llama3.2",
+                                         available=True, exec_path="C:/Ollama/ollama.exe")]
+
+    monkeypatch.setattr(cli_detect, "detect_ollama", detect)
+    ollama_seen.probe_now(None)
+    d = types.SimpleNamespace(fleet=_Registry([]), fleet_sampler=None)
+    assert [t.id for t in L.targets(d)] == [L.THIS_PC_OLLAMA]
+    P._after_download(d)(L.THIS_PC_OLLAMA, "llama3.2")
+    assert len(asked) == 2, "Ollama on this PC was not asked again"
+    assert [t.id for t in L.targets(d)] == [L.THIS_PC_OLLAMA], "the first read after lost Ollama on this PC"
+    assert L.library_view(d)["server"]["id"] == L.THIS_PC_OLLAMA
 
 
 def test_download_progress_stays_off_the_activity_page(tmp_path, standin, monkeypatch):

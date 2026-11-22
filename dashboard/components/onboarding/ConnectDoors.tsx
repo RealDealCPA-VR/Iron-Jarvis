@@ -92,7 +92,7 @@ import {
 import { EndpointModelPicker } from "@/components/connections/EndpointModelPicker";
 import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
 import type { LocalServerPreset } from "@/lib/localServerPresets";
-import { STARTER_MODEL_LABEL, useStarterModel } from "@/lib/starterModel";
+import { STARTER_MODEL_LABEL, doorRow, useStarterModel } from "@/lib/starterModel";
 import { DownloadProgress } from "@/components/fleet/DownloadProgress";
 import { useDaemon } from "@/lib/daemon";
 import {
@@ -1019,7 +1019,7 @@ export function ConnectDoors({
               {starter.download && (
                 <span data-testid="starter-model-progress" className="mt-1.5 block">
                   <DownloadProgress
-                    download={starter.download}
+                    download={doorRow(starter.download)}
                     onChange={starter.update}
                     testId="starter-model-row"
                   />

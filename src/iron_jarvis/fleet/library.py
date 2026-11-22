@@ -143,6 +143,11 @@ NO_SERVER_WORDS = (
 )
 BAD_NAME_WORDS = "That is not a model name Iron Jarvis can download. Use a name from the list, like qwen3:8b."
 PARTIAL_KEPT_WORDS = "Ollama keeps the part already downloaded; Download again carries on from there."
+#: Said after a download into Ollama on this PC while no Ollama address is
+#: saved: the model menu lists no Ollama model until one is (the first-run
+#: door's "Use Ollama for answers" and Connections' "Use Ollama on this PC"
+#: both save it).
+CONNECT_OLLAMA_STEP = "Connect Ollama on Connections to have it in the model menu."
 
 
 class LibraryProblem(Exception):
@@ -391,9 +396,12 @@ def floor_problem(name: str, size: int | None, hw: HW.Hardware, where: str = "th
             f"Not downloaded: {name} needs {fmt_bytes(size)} and {where} has {fmt_room(hw.model_disk_free)} "
             "free. Make room on that drive first."
         )
+    # The size as the registry prints it (decimal, the card's own size) and the
+    # drive as Windows shows it (binary): no figure on screen is the one
+    # subtracted from the other, so nothing reads as wrong arithmetic.
     return (
-        f"Not downloaded: {name} needs {fmt_bytes(size)}, which would leave {fmt_room(after)} free on "
-        f"{where}, less than a tenth of it ({fmt_room(floor)}). Make room on that drive first."
+        f"Not downloaded: {name} needs {fmt_bytes(size)} and {where} has {fmt_room(hw.model_disk_free)} "
+        f"free; a tenth of that drive ({fmt_room(floor)}) has to stay free. Make room on that drive first."
     )
 
 
@@ -566,11 +574,16 @@ class Target:
     #: True for Ollama on this PC that is not a saved model server yet.
     seen_only: bool = False
     listed: tuple = ()
-    #: Does what this server has reach the model menu? Ollama on this PC
-    #: does (the menu finds it); a saved model server only when it is
-    #: routable (the menu lists ``fleet.routable_nodes()`` alone). A
-    #: finished download says "in the model menu" only when this is True.
+    #: Does what this server has reach the model menu? A saved model server
+    #: only when it is routable (the menu lists ``fleet.routable_nodes()``
+    #: alone); Ollama on this PC that is not saved only when an Ollama
+    #: address on this PC is saved (:func:`_menu_lists_this_pc_ollama`; with
+    #: none, the menu lists no Ollama model). A finished download says "in
+    #: the model menu" only when this is True.
     in_menu: bool = False
+    #: When it is not in the menu and one step puts it there, that step in
+    #: words (:data:`CONNECT_OLLAMA_STEP`); else "".
+    menu_step: str = ""
 
     @property
     def downloads(self) -> bool:
@@ -630,6 +643,19 @@ def _this_pc_ollama_address() -> str:
         return "http://127.0.0.1:11434"
 
 
+def _menu_lists_this_pc_ollama(d: Any) -> bool:
+    """Does the model menu list Ollama on this PC's models? Only when the
+    saved Ollama address is on this PC: the menu adds its Ollama row and asks
+    Ollama for its models only ``if cfg.ollama_base_url``
+    (``connections.build_selectable_models``), and the router refuses Ollama
+    while it is unset (``ProviderManager.available``). Never raises."""
+    try:
+        url = getattr(getattr(getattr(d, "platform", None), "config", None), "ollama_base_url", None)
+        return bool(str(url or "").strip()) and HW.on_this_pc(str(url))
+    except Exception:  # noqa: BLE001 — not known = not claimed
+        return False
+
+
 def targets(d: Any) -> list[Target]:
     """Every server the library can show: the saved model servers (top
     level, switched on), and Ollama on this PC when it is not saved yet but
@@ -662,8 +688,12 @@ def targets(d: Any) -> list[Target]:
     if not has_here and _ollama_seen_here():
         address = _this_pc_ollama_address()
         if HW.on_this_pc(address):
+            listed = _menu_lists_this_pc_ollama(d)
             out.append(
-                Target(THIS_PC_OLLAMA, "Ollama on this PC", "ollama", address, True, seen_only=True, in_menu=True)
+                Target(
+                    THIS_PC_OLLAMA, "Ollama on this PC", "ollama", address, True, seen_only=True,
+                    in_menu=listed, menu_step="" if listed else CONNECT_OLLAMA_STEP,
+                )
             )
     out.sort(key=lambda t: (t.kind != "ollama", not t.this_pc))
     return out
@@ -768,6 +798,7 @@ def target_view(t: Target) -> dict[str, Any]:
         "this_pc": t.this_pc,
         "seen_only": t.seen_only,
         "in_menu": t.in_menu,
+        "menu_step": t.menu_step,
         "downloads": t.downloads,
         "abilities": dict(ABILITIES.get(t.kind, ABILITIES["unknown"])),
         "download_why": download_why(t),

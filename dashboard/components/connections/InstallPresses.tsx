@@ -30,7 +30,7 @@ import {
   stillNotInstalledLine,
   useCliInstall,
 } from "@/lib/cliInstall";
-import { STARTER_MODEL_LABEL, useStarterModel } from "@/lib/starterModel";
+import { STARTER_MODEL_LABEL, doorRow, useStarterModel } from "@/lib/starterModel";
 import { paneHref } from "@/lib/cliSignIn";
 import { CALM_ACTION } from "@/components/connections/endpointChip";
 import { DownloadProgress } from "@/components/fleet/DownloadProgress";
@@ -156,12 +156,12 @@ export function OllamaStarterPress() {
       Ollama is running but has no model yet.{" "}
       {d && d.state !== "stopped" && d.state !== "failed" ? (
         <span data-testid="ollama-starter-progress" className="mt-1 block text-zinc-400">
-          <DownloadProgress download={d} onChange={starter.update} testId="ollama-starter-row" />
+          <DownloadProgress download={doorRow(d)} onChange={starter.update} testId="ollama-starter-row" />
           {d.state === "done" && " Press Look again."}
         </span>
       ) : (
         <>
-          {d && <DownloadProgress download={d} testId="ollama-starter-row" />}
+          {d && <DownloadProgress download={doorRow(d)} testId="ollama-starter-row" />}
           <button
             type="button"
             data-testid="ollama-starter-download"

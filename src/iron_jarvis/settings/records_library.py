@@ -251,14 +251,16 @@ class ModelDownloadTool(Tool):
         except (L.LibraryProblem, P.PullRefused) as exc:
             return ToolResult(ok=False, error=exc.words, data={"door": HREF})
         row, pv = out["download"], out["preview"]
-        # "In the model menu" only where it will be (Ollama on this PC, or a
-        # server the model menu lists); else only where the model will be.
+        # "In the model menu" only where it will be (a server the model menu
+        # lists, or Ollama on this PC once its address is saved); else only
+        # where the model will be, and the step that puts it in the menu.
         landing = "in the model menu" if target.in_menu else f"on {target.label}"
+        step = "" if target.in_menu else str(getattr(target, "menu_step", "") or "")
         lines = [
             f"Started downloading {pv.get('name')} ({pv.get('model')}) from {pv.get('source')} into "
             f"{target.label}: {pv.get('size_words')}, {pv.get('free_after_words')}.",
             "It is downloading now, not finished: the card below shows its progress and has Cancel, and so "
-            f"does {PLACE}. Once it is done it is {landing}.",
+            f"does {PLACE}. Once it is done it is {landing}." + (f" {step}" if step else ""),
         ]
         card = {
             "id": row["id"],
