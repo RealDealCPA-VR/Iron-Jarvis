@@ -60,6 +60,18 @@ _HOOK_KEYS = frozenset(
 )
 
 
+#: 10-b review (build-out R2.4): plain config records a PERSON's change of a
+#: row (the Settings page, chat: any actor but the phone's own answer and an
+#: Undo) sets beside it. ``phone_send_files_answered`` cleared means the
+#: phone's earlier per-destination answers no longer decide: every
+#: destination is asked again (``comm/files_back.consent``). The answers
+#: themselves stay, so an Undo of the change never reads them as wider.
+_PERSON_CHANGE_RECORDS: dict[str, dict[str, Any]] = {
+    "phone_send_files": {"phone_send_files_answered": ""},
+}
+_NOT_A_PERSON = frozenset({"phone", "undo"})
+
+
 #: v1.414.0: each "Share my profile with <tool>" setting and its CLI id
 #: (``profile/share.CLIS`` — pinned equal).
 _SHARE_KEYS: dict[str, str] = {
@@ -437,6 +449,13 @@ class ConfigWriter:
                 self.devices.set_many(device_id, device)
             self._side_effects(out.updated)
             now = {k: self.current(k, device_id=device_id) for k in clean}
+            if actor not in _NOT_A_PERSON:
+                records = {f: v for k in clean if prior[k] != now[k]
+                           for f, v in _PERSON_CHANGE_RECORDS.get(k, {}).items()}
+                if records:
+                    for f, v in records.items():
+                        setattr(cfg, f, v)
+                    persist_config_values(cfg.home, records)
             changed_prior = {k: prior[k] for k in clean if prior[k] != now[k] and not is_secret_config_key(k)}
             out.changed = [
                 {"key": k, "label": _label(k), "old": prior[k], "new": now[k]} for k in clean if prior[k] != now[k]

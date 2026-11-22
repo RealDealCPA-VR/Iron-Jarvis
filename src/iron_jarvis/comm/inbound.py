@@ -1878,8 +1878,6 @@ class InboundPoller:
             # where it was read; the phone gets the words only.
             from ..documents.sources import without_figure_links
 
-            outbound = without_figure_links(reply) + await self._reminder(name, msg.sender_id)
-            sent = await self.send_chunked(ch, outbound, chat_id=msg.reply_to)
             # 10-b: the files this turn made go back after its words: its own
             # record (``documents``) inside the folder its tools worked in,
             # within the phone's caps, or the one question first. The lane
@@ -1888,6 +1886,12 @@ class InboundPoller:
                 self._turn_files, str(files_here.get("workspace_dir") or ""), project_id,
                 result.get("documents"),
             )
+            # A files question about to be asked takes in an open one: that
+            # one is not announced first (10-b review).
+            asks = await self._files_will_ask(name, ch, picked, tid=tid)
+            outbound = without_figure_links(reply) + await self._reminder(
+                name, msg.sender_id, skip_files=asks)
+            sent = await self.send_chunked(ch, outbound, chat_id=msg.reply_to)
             files = await self._files_back(name, ch, msg, picked, tid=tid, display=display)
             return {"channel": name, "status": "chat", "thread_id": tid, "sent": sent,
                     "files": files.get("files", "none")}
@@ -2307,9 +2311,9 @@ class InboundPoller:
         this PC. Every async door uses this, never the sync look."""
         return await asyncio.to_thread(self._fresh_open_prompt_ex, channel, sender_id)
 
-    async def _reminder(self, channel: str, sender_id: Any) -> str:
+    async def _reminder(self, channel: str, sender_id: Any, *, skip_files: bool = False) -> str:
         """:meth:`_pending_reminder` off the event loop (see :meth:`_open_prompt`)."""
-        return await asyncio.to_thread(self._pending_reminder, channel, sender_id)
+        return await asyncio.to_thread(self._pending_reminder, channel, sender_id, skip_files=skip_files)
 
     def _fresh_open_prompt_ex(self, channel: str, sender_id: Any) -> tuple[Any, str]:
         """The identity's newest open prompt, EXPIRING it first when its run
@@ -2426,12 +2430,17 @@ class InboundPoller:
         except Exception:  # noqa: BLE001
             return False
 
-    def _pending_reminder(self, channel: str, sender_id: Any) -> str:
+    def _pending_reminder(self, channel: str, sender_id: Any, *, skip_files: bool = False) -> str:
         """The '(… still waiting …)' suffix for the outbound phone copy of a
         normal chat reply — '' when nothing fresh is open. Kind-aware: an
-        approval gate must not be announced in a workflow's words."""
+        approval gate must not be announced in a workflow's words.
+        ``skip_files`` (10-b review): this reply's own files are about to be
+        asked about, and that question takes in the open files question's
+        files and closes it, so the open one is not announced first."""
         prompt = self._fresh_open_prompt(channel, sender_id)
         if prompt is None:
+            return ""
+        if skip_files and getattr(prompt, "kind", "") == FILE_SEND_KIND:
             return ""
         if getattr(prompt, "kind", "") == APPROVAL_KIND:
             return approval_reminder(prompt.question)
@@ -2899,6 +2908,29 @@ class InboundPoller:
             return Picked()
         return pick(docs, files_back.turn_folder(self.platform, workspace_dir, project_id), PHONE_CAPS)
 
+    async def _files_will_ask(
+        self, name: str, ch: Channel, picked: Any, *, tid: str = "", session_id: str = "",
+    ) -> bool:
+        """Will :meth:`_files_back` ask the files question for ``picked``?
+        Read the way it decides (files to send, a destination that takes
+        them, not "keep", and "ask" or a Local only chat). Never raises (a
+        doubt: False, so an open question is still announced)."""
+        from . import files_back
+
+        try:
+            if (not getattr(picked, "files", None) or not getattr(ch, "supports_files", False)
+                    or self.platform is None or self.prompt_store is None):
+                return False
+            choice = files_back.consent(getattr(self.platform, "config", None), name)
+            if choice == "keep":
+                return False
+            if choice == "ask":
+                return True
+            return bool(await asyncio.to_thread(
+                files_back.work_is_local_only, getattr(self.platform, "engine", None), tid, session_id))
+        except Exception:  # noqa: BLE001
+            return False
+
     async def _files_back(
         self, name: str, ch: Channel, msg: InboundMessage, picked: Any, *, tid: str = "",
         session_id: str = "", display: str = "",
@@ -3073,7 +3105,8 @@ class InboundPoller:
                 await asyncio.to_thread(files_back.keep_choice, self.platform, "keep", name)
             return await self._answer_reply(
                 name, ch, msg, display, chat_on, original_text,
-                files_back.kept_reply(local_only, len(paths), files_back.destination_words(ch, name)),
+                files_back.kept_reply(local_only, len(paths), files_back.destination_words(ch, name),
+                                      getattr(self.platform, "config", None)),
                 "file_kept",
             )
         if not local_only:

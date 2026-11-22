@@ -616,9 +616,10 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("phone_send_files", "Send finished files to your phone", "connections", "enum",
       "When Jarvis makes a file for a message you sent from Telegram, Slack or email, it can send "
       "it back there with the answer (up to five files of 20 MB each). Each destination is asked "
-      "the first time, with how many files and their size, and keeps its answer. Once one has "
-      "answered, the others are still asked first, even with Send them. Keep them on this PC "
-      "keeps every file here. A Local only chat asks every time and never names the file.",
+      "the first time, with how many files and their size, and keeps its answer; the others are "
+      "still asked first. After a destination has answered, a new choice here asks every "
+      "destination again, Send them included. Keep them on this PC keeps every file here. A "
+      "Local only chat asks every time and never names the file.",
       tier="ask", floor_when=("yes",), section="Phone",
       # The words fit the row's select at 390 px and at desktop width.
       options=(("ask", "Ask each destination first (default)"),

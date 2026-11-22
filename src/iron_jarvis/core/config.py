@@ -808,6 +808,12 @@ class Config(BaseModel):
     #: PC: kept for that destination only (a Keep on Slack never stops a
     #: Telegram that said Send).
     phone_send_files_kept: list[str] = Field(default_factory=list)
+    #: 10-b review: the value the phone's answers last gave the row ("yes"
+    #: or "ask"); the two records above decide only while the row still
+    #: reads it. "" = none stands: no answer yet, or a choice of the row
+    #: made in Settings or chat since (``settings/writer`` clears it), so
+    #: every destination is asked again.
+    phone_send_files_answered: str = ""
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     #: THE FOLDERS JARVIS MAY READ (v1.356.0, G81) — Settings › Permissions.
     #: Empty (the default) = no limit: chat and agents read any file except
@@ -1320,6 +1326,14 @@ class Config(BaseModel):
         if not isinstance(v, (list, tuple)):
             return []
         return [str(x).strip() for x in v if str(x or "").strip()][:50]
+
+    @field_validator("phone_send_files_answered", mode="before")
+    @classmethod
+    def _clean_phone_send_files_answered(cls, v: Any) -> str:
+        # 10-b review: anything but "yes" or "ask" reads as no answer
+        # standing (every destination is asked again).
+        text = str(v or "").strip().lower()
+        return text if text in ("ask", "yes") else ""
 
     @field_validator("phone_file_max_mb", mode="before")
     @classmethod

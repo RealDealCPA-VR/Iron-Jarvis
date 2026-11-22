@@ -2492,7 +2492,7 @@ takes files now.
   and the task it starts is told where.
 - Telegram still can't use stickers, contacts or locations, and says so.
 
-## Finished files come back to your phone, and approvals have buttons (v1.560.0)
+## Finished files come back to your phone, and approvals have buttons (v1.562.0)
 
 Ask Jarvis from Telegram, Slack or email to "turn this into a spreadsheet",
 and the answer arrives with the spreadsheet. A question that needs your OK
@@ -2505,11 +2505,15 @@ arrives with a short preview and two buttons.
   works). Your answer is kept for that destination: after a Send, files
   come with the answer there without asking; after **Keep it on the PC**,
   they stay on this PC. An answer on Telegram is not an answer for Slack:
-  each destination asks once. Settings › Connections › Phone › **Send
-  finished files to your phone** follows your answers and changes them
-  (with Undo): **Keep them on this PC** there keeps every file here, and a
-  destination that has not answered is still asked first, even with **Send
-  them** chosen there.
+  each destination asks once, and one that has not answered is still asked
+  first.
+- **Changing your answers.** Settings › Connections › Phone › **Send
+  finished files to your phone** follows your answers (your first Send has
+  an Undo). Once a destination has answered, a new choice there asks every
+  destination again, even **Send them**; **Keep them on this PC** keeps
+  every file here. An Undo of a choice there puts the row back, and the
+  destinations are asked again rather than given their old answers. The
+  reply to **Keep it on the PC** names the choice that asks again.
 - **What it says it sent.** After a Send, the reply names only the files
   that went ("→ Sent 1 spreadsheet (48 KB) to Telegram."), and names any
   that did not with the reason.

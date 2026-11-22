@@ -167,6 +167,26 @@ def test_a_reply_while_the_question_waits_reminds_how_to_answer(platform):
     assert fake.uploads == []
 
 
+def test_a_later_reply_with_its_own_file_is_asked_once_not_reminded_first(platform):
+    # 10-b review: the open question is closed and its file joins the new
+    # one, so the reply does not announce the question it replaces.
+    first, second = _uploads_dir(platform) / "march.xlsx", _uploads_dir(platform) / "april.xlsx"
+    fake = FakeTelegramBack([_text(1, "make the march sheet")])
+    poll = poller(platform, telegram_back(fake), turn=making_turn(first))
+    run(poll)
+    poll.chat_turn = making_turn(second, reply="Here is April.")
+    fake.updates = [_text(2, "and april")]
+    before = len(fake.texts)
+
+    res = run(poll)
+
+    assert res[0]["files"] == "asked"
+    said = fake.texts[before:]
+    assert said[0] == "Iron Jarvis: Here is April."
+    assert said[1].startswith("Iron Jarvis: Send 2 spreadsheets (")
+    assert len(said) == 2 and fake.uploads == []
+
+
 def test_keep_it_on_the_pc_keeps_it_and_the_next_answer_is_not_asked(platform):
     sheet = _uploads_dir(platform) / "march.xlsx"
     fake = FakeTelegramBack([_text(1, "make the sheet")])
@@ -181,11 +201,20 @@ def test_keep_it_on_the_pc_keeps_it_and_the_next_answer_is_not_asked(platform):
     assert platform.config.phone_send_files_kept == ["tg"]
     assert platform.config.phone_send_files == "ask"
     assert fake.texts[-1] == ("Iron Jarvis: OK: finished files stay on this PC from now on when you "
-                              "ask from Telegram (Settings, Phone, Send finished files to your phone "
-                              "changes it).")
+                              "ask from Telegram. To be asked again, choose Send them in Settings, "
+                              "Phone, Send finished files to your phone.")
     fake.updates = [_text(3, "make another")]
     run(poll)
     assert fake.uploads == [] and "Send 1" not in fake.texts[-1]
+
+    # What that reply says works: Send them chosen in Settings, and the next
+    # file on Telegram is asked about again (never kept without a word).
+    _writer(platform).apply({"phone_send_files": "yes"}, actor="settings_page")
+    fake.updates = [_text(4, "and one more")]
+    res = run(poll)
+    assert res[0]["files"] == "asked"
+    assert fake.texts[-1].startswith("Iron Jarvis: Send 1 spreadsheet (1 KB) to Telegram?")
+    assert fake.uploads == []
 
 
 def test_a_keep_said_on_slack_is_not_a_keep_for_telegram(platform):
@@ -216,7 +245,7 @@ def test_a_first_keep_on_slack_leaves_telegram_to_ask(platform):
 
 
 def test_a_yes_said_on_telegram_is_not_a_yes_for_slack():
-    cfg = SimpleNamespace(phone_send_files="yes", phone_send_files_to=["tg"])
+    cfg = SimpleNamespace(phone_send_files="yes", phone_send_files_to=["tg"], phone_send_files_answered="yes")
     assert files_back.consent(cfg, "tg") == "send"
     assert files_back.consent(cfg, "slack") == "ask"
     # A yes chosen in Settings (no destination kept) is every destination.
@@ -227,26 +256,32 @@ def test_a_yes_said_on_telegram_is_not_a_yes_for_slack():
 
 
 def test_no_reading_of_the_kept_answers_sends_where_nobody_said_send():
-    def consent(setting, to, kept, where):
+    def consent(setting, to, kept, where, answered=""):
         return files_back.consent(SimpleNamespace(phone_send_files=setting, phone_send_files_to=to,
-                                                  phone_send_files_kept=kept), where)
+                                                  phone_send_files_kept=kept,
+                                                  phone_send_files_answered=answered), where)
 
     # A Keep chosen in Settings (or in chat) keeps every destination's files.
-    assert consent("no", ["tg"], ["slack"], "tg") == "keep"
-    assert consent("no", [], ["slack"], "mail") == "keep"
+    assert consent("no", ["tg"], ["slack"], "tg", "yes") == "keep"
+    assert consent("no", [], ["slack"], "mail", "ask") == "keep"
     # Undo of the phone's first Send puts "ask" back: Telegram is asked again.
-    assert consent("ask", ["tg"], [], "tg") == "ask"
-    # A Keep on Slack after a Send on Telegram, then that Keep undone: the
-    # yes that comes back is never wider than the phone's own answers.
-    assert consent("yes", ["tg"], ["slack"], "tg") == "send"
-    assert consent("yes", ["tg"], ["slack"], "slack") == "keep"
-    assert consent("yes", ["tg"], ["slack"], "mail") == "ask"
-    # A Send on Telegram, then a Keep on Telegram, then that Keep undone.
-    assert consent("yes", [], ["tg"], "tg") == "keep"
-    assert consent("yes", [], ["tg"], "mail") == "ask"
-    # Only Keeps on record, Settings left at ask: the Keeps hold, the rest ask.
-    assert consent("ask", [], ["slack"], "slack") == "keep"
-    assert consent("ask", [], ["slack"], "tg") == "ask"
+    assert consent("ask", ["tg"], [], "tg", "yes") == "ask"
+    # The phone's answers, while the row reads what they gave it: each
+    # destination's own answer, and one never asked is asked.
+    assert consent("yes", ["tg"], ["slack"], "tg", "yes") == "send"
+    assert consent("yes", ["tg"], ["slack"], "slack", "yes") == "keep"
+    assert consent("yes", ["tg"], ["slack"], "mail", "yes") == "ask"
+    assert consent("ask", [], ["slack"], "slack", "ask") == "keep"
+    assert consent("ask", [], ["slack"], "tg", "ask") == "ask"
+    # An Undo that put another value back over the answers: asked again,
+    # never read as wider (a Keep undone is no Send) nor as a silent Keep.
+    assert consent("yes", [], ["tg"], "tg", "ask") == "ask"
+    assert consent("yes", [], ["tg"], "mail", "ask") == "ask"
+    # A choice of the row in Settings or chat since the answers (the mark
+    # cleared): every destination is asked again, Send them included.
+    assert consent("yes", ["tg"], ["slack"], "tg") == "ask"
+    assert consent("yes", ["tg"], ["slack"], "slack") == "ask"
+    assert consent("ask", [], ["slack"], "slack") == "ask"
 
 
 def test_undoing_the_phones_first_send_asks_again(platform):
@@ -265,6 +300,153 @@ def test_undoing_the_phones_first_send_asks_again(platform):
     assert platform.config.phone_send_files_kept == ["slack"]
     assert files_back.consent(platform.config, "tg") == "ask"
     assert files_back.consent(platform.config, "slack") == "keep"
+
+
+def _writer(platform):
+    from iron_jarvis.settings.writer import ConfigWriter
+
+    writer = ConfigWriter(SimpleNamespace(platform=platform))
+    platform.config_writer = writer
+    return writer
+
+
+@pytest.mark.parametrize("choices", [
+    ("yes",), ("no", "ask"), ("no", "yes"), ("yes", "ask"), ("yes", "ask", "yes"), ("no",),
+])
+def test_a_choice_in_settings_after_a_keep_on_the_phone_asks_again(platform, choices):
+    # 10-b review: a Keep on Telegram, then a choice of the row in Settings
+    # (as the Keep's reply says to). Telegram is asked again, never kept
+    # without a word; "Keep them on this PC" keeps every file.
+    writer = _writer(platform)
+    files_back.keep_choice(platform, "keep", "tg")
+    assert files_back.consent(platform.config, "tg") == "keep"
+    for value in choices:
+        writer.apply({"phone_send_files": value}, actor="settings_page")
+    want = "keep" if choices[-1] == "no" else "ask"
+    assert files_back.consent(platform.config, "tg") == want
+    assert files_back.consent(platform.config, "slack") == want
+
+
+def test_a_choice_made_in_chat_asks_again_too(platform):
+    writer = _writer(platform)
+    files_back.keep_choice(platform, "send", "tg")
+    files_back.keep_choice(platform, "keep", "slack")
+    writer.apply({"phone_send_files": "ask"}, actor="chat")
+    assert files_back.consent(platform.config, "tg") == "ask"
+    assert files_back.consent(platform.config, "slack") == "ask"
+
+
+def test_after_a_choice_in_settings_the_phones_next_answer_starts_the_record_again(platform):
+    writer = _writer(platform)
+    files_back.keep_choice(platform, "keep", "tg")
+    writer.apply({"phone_send_files": "yes"}, actor="settings_page")
+    files_back.keep_choice(platform, "send", "tg")
+    assert files_back.consent(platform.config, "tg") == "send"
+    assert files_back.consent(platform.config, "slack") == "ask"  # it never said Send
+    assert platform.config.phone_send_files_kept == []
+
+
+def test_undoing_a_choice_in_settings_never_sends_where_nobody_said_send(platform):
+    # A phone Send on Telegram, then "Ask" chosen in Settings, then a Keep
+    # on Telegram, then "Keep them" and "Ask" in Settings: every Undo of
+    # those choices puts the row back, and Slack, which never said Send,
+    # is never sent to.
+    from sqlmodel import select
+
+    from iron_jarvis.core.config import restore_config_values
+
+    writer = _writer(platform)
+    files_back.keep_choice(platform, "send", "tg")
+    writer.apply({"phone_send_files": "ask"}, actor="settings_page")
+    files_back.keep_choice(platform, "keep", "tg")
+    writer.apply({"phone_send_files": "no"}, actor="settings_page")
+    writer.apply({"phone_send_files": "ask"}, actor="settings_page")
+    with session_scope(platform.engine) as db:
+        priors = [json.loads(j.pre_inline)["prior"] for j in db.exec(select(UndoJournal)).all()
+                  if j.kind == "setting_restore" and "phone_send_files" in (j.pre_inline or "")]
+    assert len(priors) >= 3
+    for prior in reversed(priors):
+        writer.restore(prior, restore_fn=restore_config_values)
+        assert files_back.consent(platform.config, "slack") != "send", prior
+        assert files_back.consent(platform.config, "tg") != "send", prior
+
+
+def test_no_run_of_answers_choices_and_undos_sends_where_nobody_said_send(platform):
+    # Every order of the phone's answers (old questions answered late
+    # included), choices of the row in Settings or chat, and Undos of any
+    # of those rows: a destination is sent to only when its newest answer
+    # on the phone was Send, given after the newest choice in Settings, or
+    # under a Send them chosen before the phone ever answered. And right
+    # after a choice of Send them or Ask, no destination is kept unasked.
+    import random
+
+    from sqlmodel import select
+
+    from iron_jarvis.core.config import restore_config_values
+
+    writer = _writer(platform)
+    cfg = platform.config
+    rng = random.Random(20261122)
+    dests = ("tg", "slack", "mail")
+    said_send: set[str] = set()
+    yes_before_any_answer = False
+    answered = False
+    fresh_choice = False
+    asked: list[str] = []
+    undone: set[str] = set()
+    for step in range(400):
+        op = rng.random()
+        if op < 0.3:
+            d = rng.choice(dests)
+            if files_back.consent(cfg, d) == "ask":
+                asked.append(d)
+        elif op < 0.55 and asked:
+            d = asked.pop(rng.randrange(len(asked)))
+            decision = rng.choice(("send", "keep"))
+            before = cfg.phone_send_files
+            files_back.keep_choice(platform, decision, d)
+            if before != "no":
+                answered = True
+                fresh_choice = False
+                (said_send.add if decision == "send" else said_send.discard)(d)
+        elif op < 0.8:
+            before = cfg.phone_send_files
+            value = rng.choice(("ask", "yes", "no"))
+            writer.apply({"phone_send_files": value}, actor=rng.choice(("settings_page", "chat")))
+            if value != before:
+                said_send.clear()
+                fresh_choice = value != "no"
+                yes_before_any_answer = yes_before_any_answer or (value == "yes" and not answered)
+        else:
+            with session_scope(platform.engine) as db:
+                rows = [(j.action_id, j.pre_inline) for j in db.exec(select(UndoJournal)).all()
+                        if j.kind == "setting_restore" and j.action_id not in undone
+                        and "phone_send_files" in (j.pre_inline or "")]
+            if rows:
+                action_id, pre = rng.choice(rows)
+                undone.add(action_id)
+                writer.restore(json.loads(pre)["prior"], restore_fn=restore_config_values)
+                fresh_choice = False
+        for d in dests:
+            got = files_back.consent(cfg, d)
+            state = (step, d, cfg.phone_send_files, cfg.phone_send_files_to, cfg.phone_send_files_kept,
+                     cfg.phone_send_files_answered)
+            if got == "send":
+                assert d in said_send or (yes_before_any_answer and not answered), state
+            if fresh_choice:
+                assert got != "keep", state
+    assert answered and undone  # the run reached both
+
+
+def test_the_keep_reply_names_the_other_choice_than_the_one_shown():
+    tg = "Telegram"
+    shown_ask = SimpleNamespace(phone_send_files="ask")
+    shown_yes = SimpleNamespace(phone_send_files="yes")
+    assert files_back.kept_reply(False, 1, tg, shown_ask).endswith(
+        "To be asked again, choose Send them in Settings, Phone, Send finished files to your phone.")
+    assert files_back.kept_reply(False, 1, tg, shown_yes).endswith(
+        "To be asked again, choose Ask each destination first in Settings, Phone, Send finished "
+        "files to your phone.")
 
 
 def test_after_send_the_reply_names_only_the_files_that_went(platform):

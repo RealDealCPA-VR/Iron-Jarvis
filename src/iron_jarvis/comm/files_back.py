@@ -15,13 +15,15 @@ email, arrives with the spreadsheet. What may go, and when:
   beside the setting). Another destination is asked its own first time.
   The setting ``phone_send_files`` (ask, yes, no; Settings › Phone, with
   Undo) follows the phone's answers ("yes" once one said Send) through the
-  settings writer, so the phone's first Send has an Undo. :func:`consent`
-  reads them so that NO reading ever sends where nobody said Send: a Keep
-  chosen in Settings keeps every destination's files; "ask" put back over a
-  phone's Send (its Undo, or Ask chosen again) asks again; a yes over the
-  phone's answers is never wider than them (an Undo can put back a yes the
-  phone said for one destination). A yes chosen in Settings before any
-  phone answer is every destination.
+  settings writer, so the phone's first Send has an Undo, and the value it
+  gave is kept beside them (``phone_send_files_answered``). The answers
+  decide only while the row still reads that value: a choice of the row
+  made in Settings or chat since (the writer clears the mark), or an Undo
+  that put another value back, asks every destination again, so no Keep
+  outlives a choice there and no Send is read wider than the destination
+  that said it. "Keep them on this PC" keeps every destination's files. A
+  yes chosen in Settings before any phone answer is every destination.
+  :func:`consent` reads them; NO reading ever sends where nobody said Send.
 * A LOCAL ONLY chat (decision D-10.3): nothing is sent until the user says
   Send, every time, and the question names only how many files, their kind
   and size, never a file's name (the title-only rule of Local only alerts,
@@ -122,31 +124,40 @@ def _follows(sent: list[str], kept: list[str]) -> str | None:
     return "ask" if kept else None
 
 
-def _answers_stand(setting: str, sent: list[str], kept: list[str]) -> bool:
-    """Do the phone's answers decide? Not under a Keep chosen in Settings or
-    in chat (every destination keeps), and not under "ask" put back over a
-    phone's Send (its Undo, or Ask chosen again: asked again)."""
-    said = _follows(sent, kept)
-    if said is None or setting == "no":
-        return False
-    return not (setting == "ask" and said == "yes")
+def _setting(config: Any) -> str:
+    return str(getattr(config, "phone_send_files", "ask") or "ask").strip().lower()
+
+
+def _answers_stand(config: Any) -> bool:
+    """Do the phone's answers decide? Only while the row reads the value the
+    phone's answers last gave it (``phone_send_files_answered``). Not after
+    a choice of the row in Settings or chat (the writer clears the mark),
+    not after an Undo put another value back, and never under a Keep chosen
+    there (every destination keeps)."""
+    raw = _setting(config)
+    said = str(getattr(config, "phone_send_files_answered", "") or "").strip().lower()
+    return raw != "no" and bool(said) and raw == said
 
 
 def consent(config: Any, destination: str) -> str:
     """"send", "keep" or "ask" for files back to ``destination`` (its
     registration name). With no phone answer on record, the setting
     ``phone_send_files`` decides for every destination (ask, yes = send,
-    no = keep). Once the phone has answered (:func:`_answers_stand`), each
-    destination's own answer holds and a destination that never answered is
-    asked: "send" only where the phone said Send. Never raises (a doubt
+    no = keep). Once the phone has answered, "no" keeps every destination;
+    while the answers stand (:func:`_answers_stand`) each destination's own
+    answer holds and one that never answered is asked; otherwise every
+    destination is asked again. "send" only where the phone said Send, or
+    under a yes chosen before any phone answer. Never raises (a doubt
     asks)."""
     try:
-        raw = str(getattr(config, "phone_send_files", "ask") or "ask").strip().lower()
+        raw = _setting(config)
         sent, kept = _answers(config)
+        if raw == "no":
+            return "keep"
         if _follows(sent, kept) is None:
-            return {"yes": "send", "no": "keep"}.get(raw, "ask")
-        if not _answers_stand(raw, sent, kept):
-            return "keep" if raw == "no" else "ask"
+            return "send" if raw == "yes" else "ask"
+        if not _answers_stand(config):
+            return "ask"
         where = str(destination)
         if where in kept:
             return "keep"
@@ -248,11 +259,22 @@ def not_sent_line(left: list[tuple[str, str]], failed: list[tuple[str, str]], wh
     return "\n".join(lines)
 
 
-def kept_reply(local_only: bool, n: int, where: str = "") -> str:
+#: The row's choices as Settings shows them (``settings/schema``).
+_ASK_LABEL = "Ask each destination first"
+_SEND_LABEL = "Send them"
+
+
+def kept_reply(local_only: bool, n: int, where: str = "", config: Any = None) -> str:
+    """The reply to Keep it on the PC. On the first-time question it says
+    how to be asked again: the row's other choice than the one it shows now
+    (any new choice there, but Keep them on this PC, asks every destination
+    again, :func:`_answers_stand`)."""
     if local_only:
         return f"OK: {'it stays' if n == 1 else 'they stay'} on this PC."
     asked = f" when you ask from {where}" if where else ""
-    return f"OK: finished files stay on this PC from now on{asked} ({SETTING_WHERE} changes it)."
+    pick = _ASK_LABEL if config is not None and _setting(config) == "yes" else _SEND_LABEL
+    return (f"OK: finished files stay on this PC from now on{asked}. To be asked again, "
+            f"choose {pick} in {SETTING_WHERE}.")
 
 
 def keep_choice(platform: Any, decision: str, destination: str) -> None:
@@ -261,37 +283,41 @@ def keep_choice(platform: Any, decision: str, destination: str) -> None:
     ``phone_send_files_kept``, written first (a Keep on Slack never stops a
     Telegram that said Send; a Send never covers a destination it did not
     name). Under a Keep chosen in Settings nothing is kept (the answer was
-    to a question asked before it). Answers no longer in force ("ask" put
-    back over a Send, :func:`_answers_stand`) are not built on: this answer
-    starts the record again. Then ``phone_send_files`` follows the
-    answers (:func:`_follows`) through the settings writer (a ledger row
-    with Undo when it changes) when the daemon has one, else on the config.
-    Never raises."""
+    to a question asked before it). Answers no longer in force (a choice in
+    Settings or chat since, or an Undo: :func:`_answers_stand`) are not
+    built on: this answer starts the record again. Then
+    ``phone_send_files`` follows the answers (:func:`_follows`) through the
+    settings writer (a ledger row with Undo when it changes) when the daemon
+    has one, else on the config, and the value is kept beside the records
+    (``phone_send_files_answered``, written with them, first). Never
+    raises."""
     try:
         cfg = getattr(platform, "config", None)
         if cfg is None:
             return
-        raw = str(getattr(cfg, "phone_send_files", "ask") or "ask").strip().lower()
+        raw = _setting(cfg)
         if raw == "no":
             # A Keep chosen in Settings since this question was asked: the
             # answer covers its own files only and changes no setting.
             return
         sent, kept = _answers(cfg)
-        if not _answers_stand(raw, sent, kept):
+        if not _answers_stand(cfg):
             sent, kept = [], []
         where = str(destination or "")
         sent = [x for x in sent if x != where]
         kept = [x for x in kept if x != where]
         if where:
             (sent if decision == "send" else kept).append(where)
+        value = _follows(sent, kept) or raw
         cfg.phone_send_files_to = sent
         cfg.phone_send_files_kept = kept
+        cfg.phone_send_files_answered = value if (sent or kept) else ""
         home = getattr(cfg, "home", None)
         if home is not None:
             from ..core.config import persist_config_values
 
-            persist_config_values(home, {"phone_send_files_to": sent, "phone_send_files_kept": kept})
-        value = _follows(sent, kept) or raw
+            persist_config_values(home, {"phone_send_files_to": sent, "phone_send_files_kept": kept,
+                                         "phone_send_files_answered": cfg.phone_send_files_answered})
         writer = getattr(platform, "config_writer", None)
         if writer is not None:
             writer.apply({"phone_send_files": value}, actor="phone")

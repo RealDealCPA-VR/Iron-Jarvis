@@ -588,15 +588,19 @@ How to use this file: read the contents list, then read only the entries your ch
   `phone_send_files_to`, a Keep in `phone_send_files_kept` (records written
   BEFORE the writer; a Keep on Slack never stops a Telegram that said Send);
   `phone_send_files` (ask, yes, no; schema row with Undo, `floor_when=("yes",)`
-  from chat) follows them (`files_back._follows`: "yes" once one said Send).
-  `files_back.consent` never sends where nobody said Send: no answer on
-  record, the setting decides; "no" keeps every destination; "ask" put back
-  over a Send (its Undo) asks again; otherwise each destination's own answer,
-  an unasked one asked, even under a yes (an Undo can put back a yes the
-  phone said for one destination; pinned by
-  `test_no_reading_of_the_kept_answers_sends_where_nobody_said_send`). So
-  clearing the records on a Settings change would be WRONG: an Undo of that
-  change would then read a phone's one-destination yes as every destination.
+  from chat) follows them (`files_back._follows`: "yes" once one said Send),
+  and the value they gave is kept beside them (`phone_send_files_answered`).
+  The answers decide ONLY while the row reads that value: a PERSON's change
+  of the row (Settings page, chat: `writer._PERSON_CHANGE_RECORDS`, any actor
+  but "phone" and "undo") clears the mark, and an Undo puts back another
+  value, so either asks every destination again; no Keep outlives a choice
+  in Settings, no Send is read wider than the destination that said it.
+  `files_back.consent`: no answer on record, the setting decides; "no" keeps
+  every destination; otherwise each destination's own answer while the
+  answers stand, else asked. Never clear the Send/Keep records on a
+  Settings change: an Undo of it would then read a phone's one-destination
+  yes as every destination (pinned by
+  `test_no_run_of_answers_choices_and_undos_sends_where_nobody_said_send`).
   A never-asked destination is asked its own first
   time (prompt kind `file_send`, Send / Keep it on the PC, `ref_id` JSON of the
   paths; the typed "Reply 1 … or 2 …" rides WITH the buttons, since a Slack app
