@@ -211,6 +211,13 @@ SITES: dict[tuple[str, str], Site] = {
         (CANNOT_REACH,), why="the one tool name batch_documents, written in the call",
         cards=(NO_GRANT,),
     ),
+    # v1.557.0 (idea 31-a): a sorting plan's Confirm on its card. The press
+    # answers that one call's ask (`session_allow={"stack_apply"}`); the
+    # roster holds that one name (proved below).
+    ("daemon/routes/stack.py", "register.stack_plan_apply"): Site(
+        (CANNOT_REACH,), why="the one tool name stack_apply, written in the call and its roster",
+        cards=(NOT_HELD,),
+    ),
     # The MCP server for coding tools: the capability families only.
     ("mcpserver/server.py", "_call_tool"): Site(
         (CANNOT_REACH,),
@@ -300,8 +307,9 @@ def test_every_registry_invoke_is_in_the_table_and_no_entry_is_stale():
     # The scan really sees the calls (a parser that finds nothing passes the
     # loop above vacuously).
     # 11 at v1.520.0; 12 since group 19's refusal-only call in the stream lane;
-    # 13 since MS8's refusal-only call at the MCP door (fourth fix plan).
-    assert sum(registry_sites.values()) == 13
+    # 13 since MS8's refusal-only call at the MCP door (fourth fix plan);
+    # 14 since the sorting plan's Confirm (v1.557.0, idea 31-a).
+    assert sum(registry_sites.values()) == 14
 
 
 @pytest.mark.parametrize("key", sorted(SITES), ids=lambda k: f"{k[0]}::{k[1]}")
@@ -404,6 +412,27 @@ def test_the_documents_batch_reaches_only_batch_documents(platform):
     assert isinstance(call.args[0], ast.Constant) and call.args[0].value == "batch_documents"
     assert platform.registry.get("batch_documents") is not None
     assert _can_ask(platform.registry, "batch_documents") == ""
+
+
+def test_the_sorting_plans_confirm_reaches_only_stack_apply(platform):
+    """v1.557.0 (idea 31-a): the card's Confirm names one tool, grants that
+    one name for that one call and hands the gate a roster of that one name.
+    `stack_apply` has no check of its own and is no file edit the guard for
+    Git's and Iron Jarvis's own files reads: it writes only new .pdf files,
+    never over one, in folders whose every part loses a leading dot (so never
+    into `.git` or `.ironjarvis`)."""
+    from iron_jarvis.documents import stack as S
+
+    (call,) = [c for f, c, r in _invoke_calls(_tree("daemon/routes/stack.py")) if f == "register.stack_plan_apply"]
+    assert isinstance(call.args[0], ast.Constant) and call.args[0].value == "stack_apply"
+    kw = {k.arg: k.value for k in call.keywords if k.arg}
+    for name in ("allowed_names", "session_allow"):
+        assert isinstance(kw.get(name), ast.Set), name
+        assert [ast.literal_eval(e) for e in kw[name].elts] == ["stack_apply"], name
+    assert platform.registry.get("stack_apply") is not None
+    assert _can_ask(platform.registry, "stack_apply") == ""
+    assert S.clean_folder(".git") == "git" and S.clean_folder("a/.ironjarvis/b") == "a/ironjarvis/b"
+    assert S.clean_name(".git", "x") == "git.pdf"
 
 
 def test_the_mcp_server_reaches_only_capability_tools_and_none_has_a_check(platform):
@@ -592,12 +621,22 @@ def _batch_reach(platform) -> "set[str]":
     return {n for n in BATCH_TOOLS if platform.registry.get(n) is not None}
 
 
+def _stack_apply_reach() -> "set[str]":
+    """The sorting plan's Confirm: the roster it hands the gate, read from
+    the source (a literal set, so nothing else can be reached)."""
+    (call,) = [c for f, c, r in _invoke_calls(_tree("daemon/routes/stack.py")) if f == "register.stack_plan_apply"]
+    (roster,) = [k.value for k in call.keywords if k.arg == "allowed_names"]
+    assert isinstance(roster, ast.Set), ast.unparse(roster)
+    return {ast.literal_eval(e) for e in roster.elts}
+
+
 #: NOT_HELD, proved: the names each such call can reach.
 NOT_HELD_PROOFS: "dict[tuple[str, str], Callable[[object], set[str]]]" = {
     ("daemon/chat_turn.py", "harness_check_runner.invoke"): _check_runner_reach,
     ("daemon/chat_turn.py", "finish_invoke.invoke"): _finish_reach,
     ("mcpserver/server.py", "_call_tool"): _mcp_server_reach,
     ("tools/apply_changes.py", "ApplyChangesTool.execute"): _batch_reach,
+    ("daemon/routes/stack.py", "register.stack_plan_apply"): lambda platform: _stack_apply_reach(),
 }
 
 

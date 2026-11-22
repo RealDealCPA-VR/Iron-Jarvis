@@ -383,6 +383,11 @@ def test_unread_pages_are_offered_and_never_sent_by_the_plan(platform, tmp_path,
     res = client.post(f"/documents/stack/{card['plan_id']}/read-more", json={"provider": "anthropic"})
     assert res.status_code == 200 and res.json()["changed"] is True and sent == []
     assert res.json()["card"]["offer"]["name"] == "ChatGPT"
+    # A press that names NO model sends nothing either: the rule is the
+    # route's, not the card's (review 2).
+    for body in ({}, {"provider": ""}):
+        res = client.post(f"/documents/stack/{card['plan_id']}/read-more", json=body)
+        assert res.status_code == 200 and res.json()["changed"] is True and sent == [], res.text
 
     # The press for the model the card names sends exactly the unread pages, to it.
     monkeypatch.setattr(S, "vision_choice", lambda router, config: {"provider": "anthropic", "model": None,
@@ -445,6 +450,15 @@ def test_no_page_read_means_no_model_is_asked(platform, tmp_path, monkeypatch):
     ("sort this pdf by date", True, False),
     ("sort these transactions", True, False),
     ("can you sort this table for me", True, False),
+    # Review 2: an order said as "so the … is first", or a grouping by time.
+    ("sort this so the newest is first", True, False),
+    ("sort it so that the oldest ones come first", True, False),
+    ("sort these so the biggest are on top", True, False),
+    ("sort it into months", True, False),
+    ("sort this into years", True, False),
+    ("sort them into quarters", True, False),
+    ("sort this so I can file it", True, True),
+    ("sort this scan so each bill is its own file", True, True),
     ("don't sort this, just read it", True, False),
     ("what does this say?", True, False),
 ])
@@ -639,7 +653,7 @@ def _fake_pictures(monkeypatch, pictured: list):
     monkeypatch.setattr(_ocr, "pdf_page_scan_images", pictures)
 
 
-def test_one_press_is_bounded_and_saved_chunk_by_chunk(tmp_path, monkeypatch):
+def test_one_press_is_bounded_and_keeps_each_page_as_it_is_read(tmp_path, monkeypatch):
     from iron_jarvis.documents import ocr as _ocr
 
     src = tmp_path / "pile.pdf"
@@ -665,7 +679,7 @@ def test_one_press_is_bounded_and_saved_chunk_by_chunk(tmp_path, monkeypatch):
     assert res.left == 40 and res.stopped == ""
     assert max(len(c) for c in pictured) <= S.READ_MORE_CHUNK, "pictured a chunk at a time"
     assert sum(len(c) for c in pictured) == 20, "never more pictures than one press sends"
-    assert saved == [5, 10, 15, 20], "what was read is kept after each chunk"
+    assert saved == list(range(1, 21)), "each page is kept as soon as it is read (the Handbook's words)"
     assert all(pin is True for _n, pin in sent)
     # The next offer says how many one press sends.
     card = S.card_of(plan, offer={"provider": "anthropic", "model": None, "name": "Claude"})

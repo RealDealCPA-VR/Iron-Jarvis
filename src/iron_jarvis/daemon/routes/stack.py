@@ -1,4 +1,4 @@
-"""The sorting plan's card (v1.556.0, idea 31-a, "Sort this stack").
+"""The sorting plan's card (v1.557.0, idea 31-a, "Sort this stack").
 
 * ``GET  /documents/stack/{plan_id}`` — the card as it is now.
 * ``POST /documents/stack/{plan_id}/apply`` — Confirm: writes the plan as the
@@ -175,13 +175,15 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=409, detail=(
                 "No connected model can read pictures here, so those pages stay where they are on the plan."
             ))
-        if body.provider and choice["provider"] != body.provider:
+        if not body.provider or choice["provider"] != body.provider:
             # Never a silent swap: the user pressed for the model the card
-            # named. Nothing was sent; the card now names the new one.
+            # named, and a press that names none sends nothing either (the
+            # rule is this route's, whatever the client). Nothing was sent;
+            # the card now names the model a press would reach.
             return {"read": 0, "sent": 0, "stopped": "", "changed": True, "card": S.card_of(plan, offer=choice)}
         with _egress.local_only_scope(lo):
             try:
-                # What was read is saved after each chunk, so a model that
+                # Each page is saved as soon as it is read, so a model that
                 # fails later (or a card that stops waiting) never makes the
                 # user pay for the same pages twice.
                 res = await S.read_more(

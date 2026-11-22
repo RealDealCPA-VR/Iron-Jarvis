@@ -207,7 +207,9 @@ class StackApplyTool(Tool):
                 "This plan was already written. Undo on its card takes those documents back first."
             ))
         try:
-            docs = S.edited_documents(plan, args.get("documents"))
+            # Off the loop, like the write: the user's edits are cleaned and
+            # named here, and nothing that walks them runs on the event loop.
+            docs = await asyncio.to_thread(S.edited_documents, plan, args.get("documents"))
             written = await asyncio.to_thread(S.write_plan, plan, docs, ws)
         except S.StackError as exc:
             return ToolResult(ok=False, error=str(exc))
@@ -223,6 +225,7 @@ class StackApplyTool(Tool):
             meta["sha256"] = {r: sha256_target(ws / r, "raw") for r in rels}
             meta["dirs"] = [Path(d).resolve().relative_to(ws).as_posix() for d in written.dirs]
             meta["plan_id"] = plan_id
+            meta["source_name"] = str(plan.get("source_name") or "")
             if desc is not None:
                 desc["pre_inline"] = json.dumps(meta)
             plan["documents"] = docs
@@ -251,13 +254,35 @@ class StackApplyTool(Tool):
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         """Remove every file the plan wrote (each only while it still has the
         bytes it was written with: one changed since refuses the whole Undo),
-        then the folders it made, when they are empty. The scan stays."""
+        then the folders it made, when they are empty. The scan stays. Its
+        words are the card's (``S.undo_words``), never the journal's."""
+        meta = read_envelope(undo)
+
+        def _count() -> "tuple[int, int, int]":
+            # Which files are still there to remove, which are already gone,
+            # and which (no hash recorded) go to the trash instead.
+            made = meta.get("sha256") if isinstance(meta.get("sha256"), dict) else {}
+            there = gone = trash = 0
+            for rel in meta.get("paths") or []:
+                try:
+                    target = safe_path(Path(ctx.workspace), str(rel))
+                except Exception:  # noqa: BLE001 — the revert refuses it in words
+                    continue
+                if target.exists():
+                    there += 1
+                    trash += 0 if made.get(rel) else 1
+                else:
+                    gone += 1
+            return there, gone, trash
+
+        there, gone, trash = await asyncio.to_thread(_count)
         result = await revert_workspace_file(undo, ctx)
         if not result.ok:
             return result
-        meta = read_envelope(undo)
+        source_name = str(meta.get("source_name") or "")
 
         def _tidy() -> int:
+            nonlocal source_name
             removed = 0
             dirs = [str(d) for d in meta.get("dirs") or [] if isinstance(d, str)]
             for rel in sorted(dirs, key=len, reverse=True):
@@ -279,6 +304,7 @@ class StackApplyTool(Tool):
             if S.valid_plan_id(plan_id):
                 try:
                     plan = S.load_plan(ctx.config.home, plan_id)
+                    source_name = source_name or str(plan.get("source_name") or "")
                     plan["applied"] = None
                     S.save_plan(ctx.config.home, plan)
                 except Exception:  # noqa: BLE001 — the plan may be gone; the files are what matter
@@ -286,8 +312,10 @@ class StackApplyTool(Tool):
             return removed
 
         folders = await asyncio.to_thread(_tidy)
-        note = result.output + (f"; removed {folders} folder(s) it had made" if folders else "")
-        return ToolResult(ok=True, output=note + "; the scan was left as it was")
+        return ToolResult(ok=True, output=S.undo_words(
+            removed=there, gone=gone, trashed=trash, folders=folders, source_name=source_name,
+            trash_dir=str(Path(ctx.config.home) / "trash") if trash else "",
+        ))
 
 
 def stack_tools(router_resolver: "Any | None" = None) -> "list[Tool]":

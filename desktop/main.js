@@ -4399,7 +4399,7 @@ const TOOL_WORDS = {
   write_document: "create a document",
   excel_edit: "edit a workbook",
   excel_live_edit: "change a workbook that is open in Excel",
-  // v1.556.0 (idea 31-a): the sorting plan's Confirm (lib/toolWords twin).
+  // v1.557.0 (idea 31-a): the sorting plan's Confirm (lib/toolWords twin).
   stack_apply: "save the documents sorted from a scan",
   generate_media: "make an image, video or sound",
   process_start: "start a program that keeps running",

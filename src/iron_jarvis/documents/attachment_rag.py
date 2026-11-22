@@ -284,7 +284,7 @@ async def extract_for_rag_async(
     """:func:`extract_for_rag` OFF THE EVENT LOOP, with the scanned-document OCR
     fallback wired in.
 
-    ``held_note`` (v1.556.0, idea 31-a): the turn sorts this scan, and the
+    ``held_note`` (v1.557.0, idea 31-a): the turn sorts this scan, and the
     sorting plan reads every page itself, ON THIS PC (``stack_plan``). Only
     the VISION step is held: the scan is still read on this PC (Windows' OCR,
     ``ocr_document(vision=False)``, as any turn would), so the app never reads

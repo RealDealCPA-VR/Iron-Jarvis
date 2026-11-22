@@ -3734,7 +3734,7 @@ def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
     return about_figures and bool(_FIGURE_CARRIERS.intersection(picked))
 
 
-#: SORTING A SCANNED PILE (v1.556.0, idea 31-a): "sort this", "sort out
+#: SORTING A SCANNED PILE (v1.557.0, idea 31-a): "sort this", "sort out
 #: these scans", never "sort these rows by date", "sort the transactions from
 #: largest to smallest" or "sort these receipts into tax categories" (those
 #: ORDER or GROUP what is in a file; they do not separate its documents, and
@@ -3756,7 +3756,7 @@ _STACK_FILLER_WORDS = frozenset({
 })
 #: An ordering or grouping cue in the clause after the verb: by, from …
 #: to, largest/smallest, oldest/newest, ascending/descending, alphabetically,
-#: in order, into categories/groups/columns.
+#: in order, into categories/groups/columns/months, "so the newest is first".
 _STACK_ORDER_RX = re.compile(
     r"(?i)\b(?:by|alphabetical(?:ly)?|chronological(?:ly)?|numerical(?:ly)?|ascending|descending"
     r"|asc|desc|reverse|reversed|in(?:to)?\s+(?:[\w'-]+\s+){0,2}order"
@@ -3764,7 +3764,10 @@ _STACK_ORDER_RX = re.compile(
     r"|most|least|first|last|top|bottom|a)"
     r"|(?:largest|smallest|biggest|highest|lowest|oldest|newest|earliest|latest|cheapest|priciest)"
     r"\s+(?:to|first|on\s+top)"
-    r"|into\s+(?:[\w'-]+\s+){0,2}(?:categor(?:y|ies)|groups?|buckets?|columns?|types?|accounts?|classes))\b"
+    r"|so\s+(?:that\s+)?(?:[\w'-]+\s+){1,3}(?:is|are|comes?|goes?)\s+(?:first|last|on\s+top"
+    r"|at\s+the\s+(?:top|bottom|end))"
+    r"|into\s+(?:[\w'-]+\s+){0,2}(?:categor(?:y|ies)|groups?|buckets?|columns?|types?|accounts?|classes"
+    r"|months?|years?|quarters?|weeks?))\b"
 )
 #: Where the clause after the verb ends (the ordering cue must be in it).
 _STACK_CLAUSE_END_RX = re.compile(r"[.!?;\n]")
@@ -3793,7 +3796,7 @@ _STACK_PDF_NAMED_RX = re.compile(r"(?i)\.pdf\b")
 
 def wants_stack(text: str, has_pdf: bool) -> bool:
     """True when the message asks to sort a scanned pile into its documents
-    (v1.556.0, idea 31-a): "sort this", "split this into documents",
+    (v1.557.0, idea 31-a): "sort this", "split this into documents",
     "separate the documents", with a PDF attached or named. It arms
     ``stack_plan``, which only reads and shows a plan; nothing is written
     until the user confirms the card. Pure, linear."""

@@ -47,6 +47,7 @@ import {
   movePage,
   offerWords,
   spanWords,
+  undoNote,
   type StackCard,
 } from "@/lib/stackPlan";
 
@@ -192,6 +193,27 @@ describe("the card", () => {
     cleanup();
     render(<StackPlanCard card={settled[0]} onSettle={() => {}} />);
     expect(screen.getByTestId("stack-card-undone").textContent).toContain("scan.pdf is as it was");
+  });
+
+  it("an Undo that found a file already gone says so in the card's words, never the journal's (review 2)", async () => {
+    const plain = "7 documents were removed, 1 was already gone and 3 folders it had made were removed. scan.pdf is as it was.";
+    expect(undoNote(plain)).toBe(plain);
+    expect(undoNote("8 documents were removed and 3 folders it had made were removed. scan.pdf is as it was.")).toBe("");
+    expect(undoNote("undo: removed 8 created file(s) (1 already gone); the scan was left as it was")).toBe("");
+    expect(undoNote("undo: removed 2 created file(s) (2 moved to the trash, in C:\\H\\trash)")).toBe("");
+    expect(undoNote(undefined)).toBe("");
+
+    const settled: StackCard[] = [];
+    H.post.mockResolvedValue({ output: plain, card: { ...raw(), applied: false } });
+    const written = card({ applied: true, written: [{ path: "C:\\Work\\Bills\\a.pdf", pages: 3, name: "a.pdf", folder: "Bills" }] });
+    render(<StackPlanCard card={written} onSettle={(n) => settled.push(n)} />);
+    fireEvent.click(screen.getByText("Undo"));
+    await waitFor(() => expect(settled).toHaveLength(1));
+    cleanup();
+    render(<StackPlanCard card={settled[0]} onSettle={() => {}} />);
+    const said = screen.getByTestId("stack-card-undone").textContent ?? "";
+    expect(said).toContain("Undone — 7 documents were removed, 1 was already gone");
+    expect(said).not.toMatch(/undo:|file\(s\)/);
   });
 
   it("names the model before any unread page is sent, and only the press sends it (D-31.2)", async () => {

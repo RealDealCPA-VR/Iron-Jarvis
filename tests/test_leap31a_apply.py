@@ -137,6 +137,10 @@ def test_confirm_writes_eight_named_documents_and_one_undo_leaves_only_the_scan(
     res = client.post(f"/documents/stack/{card['plan_id']}/undo")
     assert res.status_code == 200, res.text
     assert _files(ws) == ["scan.pdf"]
+    # The card's words, never the journal's ("undo: removed 8 created file(s)").
+    said = res.json()["output"]
+    assert said.startswith("8 documents were removed") and "scan.pdf is as it was" in said, said
+    assert "undo:" not in said and "file(s)" not in said
     assert S.file_sha256(scan) == before
     assert res.json()["card"]["applied"] is False
     with session_scope(p.engine) as db:
@@ -231,6 +235,101 @@ def test_the_cards_undo_works_after_the_plan_was_swept(desk):
     assert res.status_code == 200, res.text
     assert _files(ws) == ["scan.pdf"]
     assert res.json()["card"] is None
+
+
+def test_an_undo_says_in_plain_words_that_a_file_was_already_gone(desk):
+    p, client, ws, scan = desk
+    card = _plan(p, ws, scan)
+    files = client.post(f"/documents/stack/{card['plan_id']}/apply", json={}).json()["files"]
+    Path(files[2]["path"]).unlink()  # the user removed one by hand
+    res = client.post(f"/documents/stack/{card['plan_id']}/undo")
+    assert res.status_code == 200, res.text
+    said = res.json()["output"]
+    assert said.startswith("7 documents were removed, 1 was already gone and "), said
+    assert "folders it had made were removed" in said and said.endswith("scan.pdf is as it was.")
+    assert "undo:" not in said and "file(s)" not in said
+    assert _files(ws) == ["scan.pdf"]
+
+
+def test_the_undo_words_for_each_case():
+    w = S.undo_words
+    assert w(removed=1, gone=0, trashed=0, folders=0, source_name="scan.pdf") == (
+        "1 document was removed. scan.pdf is as it was.")
+    assert w(removed=8, gone=0, trashed=2, folders=1, source_name="scan.pdf", trash_dir="C:\\H\\trash") == (
+        "8 documents were removed (2 of them to Iron Jarvis's trash, in C:\\H\\trash) and 1 folder it "
+        "had made was removed. scan.pdf is as it was.")
+    assert w(removed=1, gone=0, trashed=1, folders=0, source_name="a.pdf") == (
+        "1 document was removed (to Iron Jarvis's trash). a.pdf is as it was.")
+    assert w(removed=0, gone=3, trashed=0, folders=0, source_name="") == (
+        "3 documents were already gone. The scan is as it was.")
+    assert w(removed=0, gone=0, trashed=0, folders=0, source_name="a.pdf") == (
+        "Nothing was left to remove. a.pdf is as it was.")
+
+
+#: Names near the 100-character cap (review 2): the "(2)" must survive the cut.
+LONG = "Quarterly statement of the household account " * 3  # 138 characters
+
+
+@pytest.mark.parametrize("names", [
+    [LONG] * 2,
+    [LONG] * 3,
+    [LONG[:S.NAME_MAX]] * 2,
+    [LONG[:99]] * 2,
+    [LONG[:98]] * 3,
+    [LONG[:96] + "xx", LONG[:96] + "XX"],  # alike once case is ignored, as Windows does
+    [LONG[:100] + "a" * 50, LONG[:100] + "b" * 50],  # alike once both are cut to 100
+])
+def test_long_alike_names_in_one_folder_each_get_their_own_name_and_the_call_ends(names):
+    import threading
+
+    plan = {"page_count": len(names), "documents": []}
+    edits = [{"pages": [i + 1], "name": n, "folder": "Bank"} for i, n in enumerate(names)]
+    out: dict = {}
+
+    def run():
+        out["docs"] = S.edited_documents(plan, edits)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(10)
+    assert not worker.is_alive(), "naming the documents never finished"
+    got = [d["name"] for d in out["docs"]]
+    assert len({g.lower() for g in got}) == len(names), got
+    assert all(g.endswith(".pdf") and len(g[:-4]) <= S.NAME_MAX for g in got), got
+    assert all(not g[:-4].endswith((" ", ".")) for g in got), got
+    assert sum(1 for g in got if g.endswith(" (2).pdf")) == 1, got
+    if len(names) == 3:
+        assert sum(1 for g in got if g.endswith(" (3).pdf")) == 1, got
+
+
+def test_long_alike_names_from_the_card_are_written_side_by_side_off_the_loop(desk, monkeypatch):
+    """Through the card's Confirm: the naming runs in a worker thread, never
+    on the daemon's event loop, and both files are written."""
+    p, client, ws, scan = desk
+    card = _plan(p, ws, scan)
+    real = S.edited_documents
+    on_loop: list = []
+
+    def spy(*a, **kw):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(S, "edited_documents", spy)
+    docs = [dict(d) for d in card["documents"]]
+    for d in docs[:2]:
+        d.update(name=LONG, folder="Bank")
+    res = client.post(f"/documents/stack/{card['plan_id']}/apply", json={"documents": docs})
+    assert res.status_code == 200, res.text
+    assert on_loop == [False], "edited_documents ran on the event loop"
+    bank = sorted(Path(f["path"]).name for f in res.json()["files"] if f["folder"] == "Bank")
+    assert len(bank) == 2 and bank[0] != bank[1]
+    assert all(len(n[:-4]) <= S.NAME_MAX for n in bank)
+    assert any(n.endswith(" (2).pdf") for n in bank)
+    assert all((ws / "Bank" / n).is_file() for n in bank)
 
 
 def test_a_file_edited_since_refuses_the_whole_undo(desk):

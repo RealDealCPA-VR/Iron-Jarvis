@@ -245,6 +245,17 @@ export function readMoreBody(card: StackCard, scope?: StackScope | null): { prov
   };
 }
 
+/** The Undo's own sentence, shown on the card only when it says what the
+ *  card's default does not (a file was already gone, or went to Iron
+ *  Jarvis's trash); never the journal's raw "undo: removed 8 created
+ *  file(s)" (review 2: the daemon now says it in the card's words). */
+export function undoNote(output: unknown): string {
+  if (typeof output !== "string") return "";
+  const text = output.trim();
+  if (!text || /^undo:/i.test(text) || /file\(s\)/i.test(text)) return "";
+  return /trash|already gone/i.test(text) ? text.slice(0, 300) : "";
+}
+
 /** The user's moves and new names, when the documents differ from the
  *  plan's (a second plan after a read replaces them, and says so). */
 export function editedSince(docs: StackDoc[], plan: StackDoc[]): boolean {

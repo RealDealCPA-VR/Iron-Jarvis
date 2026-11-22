@@ -38,6 +38,7 @@ import {
   readMoreBody,
   spanWords,
   stackSummary,
+  undoNote,
   type StackCard,
   type StackDoc,
   type StackScope,
@@ -124,7 +125,9 @@ export function StackPlanCard({
     setDocs((cur) => cur.map((d, k) => (k === i ? { ...d, ...patch } : d)));
   }
 
-  async function confirm() {
+  // confirmPlan, never a bare `confirm`: a call of `confirm()` reads as the
+  // browser's own prompt, and settings-panel-words G68 pins that none exists.
+  async function confirmPlan() {
     if (!everyPageOnce(docs, card.page_count)) {
       setError("Every page goes in one document. Move the pages back first.");
       return;
@@ -159,7 +162,7 @@ export function StackPlanCard({
         {},
       );
       const fresh = decodeStackCard(res.card) ?? card;
-      const said = typeof res.output === "string" && /trash|already gone/.test(res.output) ? res.output : "";
+      const said = undoNote(res.output);
       onSettle({ ...fresh, written: card.written, undone: true, ...(said ? { undo_note: said } : {}) });
     } catch (err) {
       setError(errorWords(err, "Couldn't undo that. Try again, or use Activity."));
@@ -436,7 +439,7 @@ export function StackPlanCard({
         <span className="mr-auto min-w-0 text-[11px] text-zinc-500 [overflow-wrap:anywhere]">
           Nothing is written until you confirm. {card.source_name} stays as it is.
         </span>
-        <Button variant="primary" size="sm" onClick={() => void confirm()} disabled={busy} data-testid="stack-confirm">
+        <Button variant="primary" size="sm" onClick={() => void confirmPlan()} disabled={busy} data-testid="stack-confirm">
           Confirm
         </Button>
       </div>

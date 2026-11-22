@@ -2044,7 +2044,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Sort a scanned pile into its documents (v1.556.0)
+## Sort a scanned pile into its documents (v1.557.0)
 
 One PDF that holds a whole scanned pile becomes separate, named documents in
 their folders, after you check the plan. Attach the scan (a bank statement,
@@ -2069,7 +2069,10 @@ on a card under its reply, headed **Sort scan.pdf**:
   counted, and together they hold every page of the scan. The scan itself is
   not changed and stays where it was. The card then lists the files (press
   one to open it beside the chat) and one **Undo** removes them all, with the
-  folders it made, as long as nobody has changed them since.
+  folders it made, as long as nobody has changed them since. A file you had
+  already removed yourself is said on the card ("1 was already gone").
+- Two documents given the same name in the same folder become "name.pdf"
+  and "name (2).pdf"; a file already there is never written over.
 
 **Your pages stay on this PC.** Iron Jarvis reads each page itself: the text
 in the PDF, or, for a scanned page, Windows' own text recognition on this PC.

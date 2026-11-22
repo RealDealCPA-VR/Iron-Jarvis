@@ -530,17 +530,28 @@ def not_sure_name(pages: "list[int]") -> str:
 
 
 def _unique_names(docs: "list[dict[str, Any]]") -> None:
-    """No two documents of a plan get the same file in the same folder."""
+    """No two documents of a plan get the same file in the same folder
+    (Windows ignores case). A name taken already becomes "name (2).pdf",
+    "(3)"…: the stem is CUT to leave room for the suffix, so a name at
+    :data:`NAME_MAX` still changes, and the search is BOUNDED (a plan of
+    ``len(docs)`` documents always has a free one among ``len(docs)``
+    tries; it runs on the user's edits, never trusted to end by itself)."""
     seen: set[str] = set()
     for doc in docs:
         name = doc["name"]
         key = f"{doc['folder']}/{name}".lower()
-        n = 2
-        while key in seen:
+        if key in seen:
             stem = name[:-4]
-            doc["name"] = clean_name(f"{stem} ({n})", stem)
-            key = f"{doc['folder']}/{doc['name']}".lower()
-            n += 1
+            for n in range(2, len(docs) + 2):
+                suffix = f" ({n})"
+                cut = stem[:NAME_MAX - len(suffix)].rstrip(" .") or "Document"
+                candidate = f"{cut}{suffix}.pdf"
+                key = f"{doc['folder']}/{candidate}".lower()
+                if key not in seen:
+                    doc["name"] = candidate
+                    break
+            else:  # unreachable: fewer names are taken than were tried
+                raise StackError(f"No free name for {name} in {doc['folder'] or 'the chat folder'}.")
         seen.add(key)
 
 
@@ -918,8 +929,8 @@ async def read_more(
       router raises instead of moving a client's page picture to its default
       or a sideways failover; ``read_by`` names only a model that read.
     * BOUNDED: the pages are pictured :data:`READ_MORE_CHUNK` at a time and
-      ``save(plan)`` (blocking, run off the loop) keeps what was read after
-      each chunk; no new page is sent after :data:`READ_MORE_DEADLINE_S`
+      ``save(plan)`` (blocking, run off the loop) keeps each page as soon as
+      it is read; no new page is sent after :data:`READ_MORE_DEADLINE_S`
       (``clock``: injected in tests). A press that stops early keeps what was
       read and says why in ``stopped``.
 
@@ -950,7 +961,6 @@ async def read_more(
             pdf_page_scan_images, src, max_pages=len(chunk), pages=tuple(n - 1 for n in chunk),
         )
         pictured += len(blobs)
-        read_here = 0
         for blob, number in zip(blobs, numbers):
             if now() - started >= READ_MORE_DEADLINE_S:
                 out.stopped = f"Stopped after {int(READ_MORE_DEADLINE_S // 60)} minutes."
@@ -968,11 +978,11 @@ async def read_more(
             if number in unread and text:
                 raw[str(number)] = {"how": HOW_VISION, "text": text[:KEEP_PAGE_CHARS], "doubtful": False}
                 out.read += 1
-                read_here += 1
-        if read_here:
-            plan["read_by"] = name[:80]
-            if save is not None:
-                await asyncio.to_thread(save, plan)
+                plan["read_by"] = name[:80]
+                # Kept as soon as it is read: a page the user paid for is
+                # never lost to a crash later in the press.
+                if save is not None:
+                    await asyncio.to_thread(save, plan)
         if out.stopped:
             break
     if not pictured and not out.read:
@@ -1092,6 +1102,34 @@ def write_plan(plan: "dict[str, Any]", docs: "list[dict[str, Any]]", workspace: 
     return done
 
 
+def undo_words(*, removed: int, gone: int, trashed: int, folders: int, source_name: str,
+               trash_dir: str = "") -> str:
+    """What one Undo of a written plan did, in the card's words (never the
+    journal's "undo: removed 8 created file(s)"): "7 documents were removed,
+    1 was already gone and 3 folders it had made were removed. scan.pdf is as
+    it was." ``trashed`` counts the removed files that went to Iron Jarvis's
+    trash instead of being deleted."""
+    def _was(n: int) -> str:
+        return "was" if n == 1 else "were"
+
+    bits: list[str] = []
+    if removed:
+        bit = f"{removed} document{'' if removed == 1 else 's'} {_was(removed)} removed"
+        if trashed:
+            how = "" if trashed == removed == 1 else ("all " if trashed == removed else f"{trashed} of them ")
+            bit += f" ({how}to Iron Jarvis's trash" + (f", in {trash_dir}" if trash_dir else "") + ")"
+        bits.append(bit)
+    if gone:
+        what = "" if removed else f" document{'' if gone == 1 else 's'}"
+        bits.append(f"{gone}{what} {_was(gone)} already gone")
+    if folders:
+        bits.append(f"{folders} folder{'' if folders == 1 else 's'} it had made {_was(folders)} removed")
+    if not bits:
+        bits.append("nothing was left to remove")
+    text = bits[0] if len(bits) == 1 else ", ".join(bits[:-1]) + " and " + bits[-1]
+    return f"{text[0].upper()}{text[1:]}. {source_name or 'The scan'} is as it was."
+
+
 def _free(target: Path) -> Path:
     """``name (2).pdf``, ``(3)``… beside an existing file, never over it."""
     stem, suffix = target.stem, target.suffix
@@ -1151,6 +1189,6 @@ __all__ = [
     "boundary_signals", "card_of", "check_every_page", "clean_folder", "clean_name", "digest",
     "edited_documents", "first_date", "keep_facts", "load_plan", "name_for", "new_plan", "outline_words",
     "pages_of", "parse_plan", "plan_pages_async", "plan_prompt", "read_more", "read_pages",
-    "remove_written", "safe_plan", "save_plan", "span_words", "valid_plan_id", "vision_choice",
-    "write_plan",
+    "remove_written", "safe_plan", "save_plan", "span_words", "undo_words", "valid_plan_id",
+    "vision_choice", "write_plan",
 ]
