@@ -371,6 +371,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # file's type (`chat_turn.recording_turn`). Recordings reaching agent
     # work by themselves are 33-c. Pinned by tests/test_leap33a_*.py.
     "transcribe_recording",
+    # Next leaps 46-a: what everything cost, asked in chat, where the owner is
+    # present and the turn's client wall decides what may be named; chat arms
+    # it (settings.records_usage.usage_tools_for). Pinned by
+    # tests/test_next_leaps_46a_usage_by.py.
+    "usage_report",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

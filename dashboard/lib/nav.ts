@@ -563,7 +563,11 @@ export const NAV: NavSectionDef[] = [
         icon: BarChart3,
         // Billing anxiety is the trigger: "how much am I spending" comes long
         // before anyone thinks of the word "usage".
-        aliases: ["tokens", "cost", "spend", "how much", "billing", "credits", "quota"],
+        aliases: [
+          "tokens", "cost", "spend", "how much", "billing", "credits", "quota",
+          // Next leaps 46-a: the By switch (folder, client, automation, agent).
+          "cost by folder", "cost by client", "what a rule cost", "what an agent cost",
+        ],
         blurb: "What each AI model used and cost, and how much work ran.",
       },
       {

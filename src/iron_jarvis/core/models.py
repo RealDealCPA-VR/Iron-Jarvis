@@ -311,6 +311,13 @@ class AgentRun(SQLModel, table=True):
     #: (comparable with ``input_tokens``). An ESTIMATE
     #: (``chat_turn._tool_spec_tokens``), not a provider's count.
     tool_spec_tokens: int | None = None
+    #: WHERE ``cost_usd`` CAME FROM (next leaps 46-a): ``vendor`` (every
+    #: completion carried the vendor's own figure: measured), ``table`` (the
+    #: price table: estimated), ``plan`` (a flat subscription: never money),
+    #: ``free`` (the user's own hardware); ``eval.pricing.merge_source`` over
+    #: each completion. "" on a row older than the column, read as
+    #: estimated. Additive column (auto-reconciled; NULL on older rows).
+    cost_source: str = ""
 
 
 class OpenModelCall(SQLModel, table=True):

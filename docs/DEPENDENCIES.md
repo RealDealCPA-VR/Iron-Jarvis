@@ -163,6 +163,7 @@ function runs.
 | `memory` | memory | 19 | **7**: agents, daemon, inbox, learning, platform, projects, workmap | computeruse, core, ltm, search, tools | detections, learning, profile, providers, workmap |
 | `profile` | memory | 8 | **7**: agents, core, daemon, learning, memory, platform, settings | core | detections, iron_proxy, learning, terminals |
 | `connectors` | connections | 7 | **6**: daemon, mcp, onboarding, settings, terminals, tools | core, mcp | daemon, detections, ltm, providers, tools |
+| `goals` | automations | 5 | **6**: agents, daemon, eval, inbox, platform, settings | core | agents, eval, providers, tools, workflows |
 | `motivation` | automations | 4 | **6**: daemon, improve, improvement, inbox, platform, settings | agents, core, tools | providers, settings |
 | `personas` | memory | 5 | **6**: agents, daemon, guide, harness_bench, platform, settings | core | none |
 | `triggers` | automations | 4 | **6**: comm, daemon, guide, reflex, settings, webhooks | core | browser, reflex, tools |
@@ -364,7 +365,7 @@ path assembled from pieces, so search before you delete a route.
 | `/undo` | `daemon/routes/undo.py` | app/chat, components, components/chat, components/harness, components/settings, components/terminal |
 | `/update` | `daemon/routes/system.py` | components/settings |
 | `/updates` | `daemon/routes/helpdocs.py` | app/updates, components, components/settings, lib |
-| `/usage` | `daemon/routes/system.py` | app/usage, components, components/harness, lib |
+| `/usage` | `daemon/routes/system.py` | app/usage, components, components/harness, components/usage, lib |
 | `/vault` | `daemon/routes/comm.py` | none |
 | `/voice` | `daemon/routes/voice.py` | lib |
 | `/webhooks` | `daemon/routes/comm.py` | app/reflex, app/webhooks, lib |

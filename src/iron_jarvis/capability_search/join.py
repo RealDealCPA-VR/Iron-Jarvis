@@ -118,6 +118,9 @@ OWN_PLACE = frozenset({
     # reads on this PC and shows a card), armed by `autoselect.wants_stack`
     # through `chat_turn.stack_turn`. Never `stack_apply`: the card writes.
     "stack_plan",
+    # Next leaps 46-a: what everything cost (settings/records_usage), armed by
+    # its words through chat_turn.settings_ask_tools.
+    "usage_report",
 })
 
 

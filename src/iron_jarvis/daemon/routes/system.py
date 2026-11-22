@@ -651,6 +651,27 @@ def register(app: FastAPI, d) -> None:
 
         return merged_usage(d.platform, days)
 
+    @app.get("/usage/by")
+    def usage_by(group: str = "folder", days: int = 30) -> dict[str, Any]:
+        """Next leaps 46-a: what everything cost, by ``folder`` | ``client`` |
+        ``automation`` | ``agent``, from the same usage rows as ``GET /usage``
+        (no new counting). Each row keeps pay per use (money, measured or
+        estimated), your plan (tokens, never money) and free apart; an
+        automation row says how many times it asked. The owner's own screen:
+        every row is named. A plain ``def`` (a bounded SQLite read, run off
+        the event loop by the server)."""
+        from fastapi.responses import JSONResponse
+
+        from ...eval import usage_by as UB
+
+        g = UB.clean_group(group)
+        if not g:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Pick folder, client, automation or agent."},
+            )
+        return UB.usage_by(d.platform, g, UB.clamp_days(days))
+
     @app.post("/shutdown")
     def shutdown_daemon(body: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         """Gracefully stop the daemon — used by the desktop app on Quit.

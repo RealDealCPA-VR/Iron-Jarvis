@@ -25,6 +25,7 @@ import { IconButton } from "@/components/IconButton";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { LIST_PRICE_TITLE } from "@/lib/types";
+import { UsageBy } from "@/components/usage/UsageBy";
 import Link from "next/link";
 import {
   baselineName,
@@ -391,6 +392,8 @@ export default function UsagePage() {
   // Manual refresh: reload BOTH data sources; spin only for user-initiated
   // reloads (the 15s poll also flips `loading`, which shouldn't animate).
   const [refreshing, setRefreshing] = useState(false);
+  // Next leaps 46-a: the By card reads again only on this press (no poll).
+  const [byKey, setByKey] = useState(0);
   const anyLoading = loading || yearLoading;
   useEffect(() => {
     if (!anyLoading) setRefreshing(false);
@@ -399,6 +402,7 @@ export default function UsagePage() {
     setRefreshing(true);
     reload();
     reloadYear();
+    setByKey((k) => k + 1);
   };
 
   const offline = error && error.status === 0;
@@ -809,6 +813,12 @@ export default function UsagePage() {
             </>
           )}
         </Card>
+      </Reveal>
+
+      {/* Next leaps 46-a: what it cost, by folder, client, automation or
+          agent — pay per use, your plan and free kept apart. */}
+      <Reveal>
+        <UsageBy days={days} refreshKey={byKey} />
       </Reveal>
 
       {/* By model */}

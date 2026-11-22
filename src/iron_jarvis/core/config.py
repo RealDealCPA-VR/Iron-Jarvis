@@ -498,6 +498,9 @@ def default_permissions() -> dict[str, str]:
         # names the size and the free space after).
         "model_library": "allow",
         "model_download": "ask",
+        # Next leaps 46-a (settings/records_usage): what everything cost, by
+        # folder, client, automation or agent. Reads only, through the wall.
+        "usage_report": "allow",
         "client_answer": "ask",
         "client_update": "ask",
         "client_preference_add": "ask",

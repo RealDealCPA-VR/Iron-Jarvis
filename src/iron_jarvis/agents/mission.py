@@ -691,6 +691,8 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # Next leaps 43-a: the model library. Twin: lib/runWords.ts AGENT_TOOLS.
     "model_library": ("looked at which models fit this PC", "model library"),
     "model_download": ("started downloading a model", "model download"),
+    # Next leaps 46-a: what everything cost. Twin: lib/runWords.ts AGENT_TOOLS.
+    "usage_report": ("looked up what your work cost", "usage report"),
     "client_list": ("listed your clients", "client list"),
     "client_answer": ("noted whether a name is one of your clients", "client answer"),
     "client_update": ("changed one of your clients", "client change"),

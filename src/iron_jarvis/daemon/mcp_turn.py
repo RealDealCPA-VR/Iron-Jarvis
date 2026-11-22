@@ -637,7 +637,7 @@ def _bill(d: Any, route: Any) -> None:
         _persist_chat_usage(
             d, provider=provider, model=model, state=AgentState.COMPLETED,
             completions=1, usage_in=tally.input_tokens, usage_out=tally.output_tokens,
-            cost_usd=tally.cost_usd,
+            cost_usd=tally.cost_usd, cost_source=tally.cost_source,
         )
     except Exception:  # noqa: BLE001 — accounting never fails the answer
         log.debug("pack sampling usage not recorded", exc_info=True)

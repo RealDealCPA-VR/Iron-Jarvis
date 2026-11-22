@@ -289,6 +289,66 @@ def step_cost(provider: str, model: str, usage: Mapping | None) -> float:
     return cost_for_usage(provider, model, usage)
 
 
+#: WHERE A USAGE ROW'S FIGURE CAME FROM (next leaps 46-a): ``AgentRun.
+#: cost_source``. ``vendor``: every completion carried the vendor's own
+#: figure (:func:`native_cost`), so the money is MEASURED. ``table``: at
+#: least one was priced from :data:`PRICES` (or had no price at all), so it is
+#: ESTIMATED. ``plan``: a flat subscription served it
+#: (:func:`is_list_price_equivalent`): its figure is never money. ``free``:
+#: the user's own hardware served it. ``""``: a row older than the column
+#: (or one the start-up step folded), read as estimated.
+SOURCE_VENDOR = "vendor"
+SOURCE_TABLE = "table"
+SOURCE_PLAN = "plan"
+SOURCE_FREE = "free"
+COST_SOURCES = (SOURCE_VENDOR, SOURCE_TABLE, SOURCE_PLAN, SOURCE_FREE)
+_PAY_SOURCES = frozenset({SOURCE_VENDOR, SOURCE_TABLE})
+
+
+def step_source(provider: str, model: str, usage: Mapping | None) -> str:
+    """Where ONE completion's :func:`step_cost` came from (one of
+    :data:`COST_SOURCES`). The user's own hardware first (its tokens are
+    free), then a flat subscription (never money), then the vendor's own
+    figure, else the price table. Never raises (an unreadable call is
+    ``table``: estimated)."""
+    try:
+        from ..providers.local import is_local_provider
+
+        if is_local_provider(str(provider or "")):
+            return SOURCE_FREE
+        if is_list_price_equivalent(provider, model):
+            return SOURCE_PLAN
+        if native_cost(usage) is not None:
+            return SOURCE_VENDOR
+    except Exception:  # noqa: BLE001 — unsure: estimated
+        pass
+    return SOURCE_TABLE
+
+
+def merge_source(current: Any, step: Any) -> str:
+    """A row's :data:`COST_SOURCES` value after one more completion. Equal
+    stays; two pay-per-use sources make ``table`` (part of the money was
+    estimated, so all of it is said as estimated); a pay-per-use source
+    beside a plan or free one keeps the pay-per-use one (its money is what
+    the row's dollars hold); ``plan`` beside ``free`` is ``plan``. Unknown
+    words read as ``table``. Pure; never raises."""
+    a = str(current or "")
+    b = str(step or "")
+    a = a if (not a or a in COST_SOURCES) else SOURCE_TABLE
+    b = b if (not b or b in COST_SOURCES) else SOURCE_TABLE
+    if not a:
+        return b
+    if not b or a == b:
+        return a
+    if a in _PAY_SOURCES and b in _PAY_SOURCES:
+        return SOURCE_TABLE
+    if a in _PAY_SOURCES:
+        return a
+    if b in _PAY_SOURCES:
+        return b
+    return SOURCE_PLAN
+
+
 def recorded_cost(
     provider: str, model: str, input_tokens: int, output_tokens: int, stored: Any
 ) -> float:
@@ -403,6 +463,11 @@ class UsageTally:
         #: True once any call noted its tools: "sent none" is then a known
         #: empty list, never confused with "not recorded".
         self.tools_known = False
+        #: Next leaps 46-a: where the summed figure came from
+        #: (:func:`merge_source` over each completion's :func:`step_source`),
+        #: for the usage row's ``cost_source``. Never in :meth:`as_dict` (the
+        #: receipt's shape is unchanged).
+        self.cost_source = ""
 
     def note_tools(self, tools: Any, tokens: int = 0) -> None:
         """One model call was sent *tools* (its tool definitions, or just
@@ -424,6 +489,7 @@ class UsageTally:
     def add(self, provider: str, model: str, usage: Mapping | None) -> float:
         if not isinstance(usage, Mapping):
             usage = {}
+        self.cost_source = merge_source(self.cost_source, step_source(provider, model, usage))
         self.input_tokens += _tok(usage, "input_tokens")
         self.output_tokens += _tok(usage, "output_tokens")
         if "cache_read_input_tokens" in usage or "cache_creation_input_tokens" in usage:

@@ -4415,6 +4415,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'keep phone voice notes on this PC',
         'how are my voice memos from the phone written out',
     ),
+    'usage_report': (
+        'how much did my AI work cost',
+        'what did each client cost me',
+        'cost of my automations this month',
+        'which agent spent the most',
+        'how much did that rule cost',
+        'show spending by folder',
+        'how much went on my plan',
+        'what am I paying per use',
+    ),
     'voice_backend': (
         'keep my voice typing on this computer',
         'where does my dictation get sent',

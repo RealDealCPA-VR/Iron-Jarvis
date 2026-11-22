@@ -148,6 +148,8 @@ _CATALOG: dict[str, dict[str, str]] = {
     # one or many, are the Your day tab on Activity.
     "changes_list": {"href": "/activity?view=day", "label": "See your day on Activity"},
     "change_undo": {"href": "/activity?view=day", "label": "See your day on Activity"},
+    # Next leaps 46-a: what everything cost is the Usage page's By switch.
+    "usage_report": {"href": "/usage", "label": "Open Usage"},
 }
 
 #: v1.506.0 (north-star plan 6.4): the record tools that MAKE a record and

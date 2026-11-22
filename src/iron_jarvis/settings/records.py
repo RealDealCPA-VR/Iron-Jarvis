@@ -4413,6 +4413,8 @@ def record_tools(platform: Any) -> list[Tool]:
         *_peer_tools(platform),
         # Next leaps 43-a: the model library (what fits; download one).
         *_library_tools(platform),
+        # Next leaps 46-a: what everything cost (reads, through the wall).
+        *_usage_tools(platform),
     ]
 
 
@@ -4420,6 +4422,12 @@ def _library_tools(platform: Any) -> list[Tool]:
     from .records_library import library_tools
 
     return library_tools(platform)
+
+
+def _usage_tools(platform: Any) -> list[Tool]:
+    from .records_usage import usage_tools
+
+    return usage_tools(platform)
 
 
 def _peer_tools(platform: Any) -> list[Tool]:

@@ -6100,6 +6100,7 @@ async def chat_stream(
                 turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
                 ledger=_tally.ledger,  # v1.529.0 (lock-step)
                 tally=_tally,  # v1.572.0 (lock-step)
+                cost_source=_tally.cost_source,  # next leaps 46-a (lock-step)
             )
 
         # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office

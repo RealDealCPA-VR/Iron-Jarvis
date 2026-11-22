@@ -5690,6 +5690,12 @@ def settings_ask_tools(
         from ..settings.records_library import library_tools_for
 
         names += library_tools_for(text)
+        # Next leaps 46-a: what something cost ("what did the invoice rule
+        # cost this month?"). Pure words; the tool only reads, through the
+        # turn's client wall.
+        from ..settings.records_usage import usage_tools_for
+
+        names += usage_tools_for(text)
         # v1.470.0: "create a skill for …" offers `skill_create` (its own tier
         # is ask, so it shows the ordinary card). Chat used to offer only the
         # workflow exit, and a request for a skill came back as a workflow.
@@ -11850,7 +11856,7 @@ def _persist_chat_usage(
     started_at=None, cost_usd: float = 0.0, thread_id: str = "",
     tool_session: str = "", label: str = "",
     turn_id: str = "", pending: "list[asyncio.Future[Any]] | None" = None,
-    ledger: Any = None, tally: Any = None,
+    ledger: Any = None, tally: Any = None, cost_source: str = "",
 ) -> "asyncio.Future[Any] | None":
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
@@ -11896,7 +11902,12 @@ def _persist_chat_usage(
     saves what the reply was SENT (:func:`_sent_fields`): the provider's
     cache counts when it reported any, and the names and estimated size of
     the tool definitions. Read HERE, before the write is handed to the worker
-    thread, so the row is the tally as it stood when the reply ended."""
+    thread, so the row is the tally as it stood when the reply ended.
+
+    ``cost_source`` (next leaps 46-a; both lanes and every caller with a
+    tally): the tally's ``cost_source`` (``vendor`` measured, ``table``
+    estimated, ``plan``, ``free``), so Usage can say which. "" reads as
+    estimated."""
     # Third plan CS6 (ONE place, both lanes): a NEW chat's first turn starts
     # with no chat id — the page names the chat a moment later
     # (``POST /chat/turns/{id}/thread``). The row takes the chat the turn
@@ -11917,6 +11928,7 @@ def _persist_chat_usage(
         "input_tokens": usage_in,
         "output_tokens": usage_out,
         "cost_usd": max(0.0, float(cost_usd or 0.0)),
+        "cost_source": str(cost_source or "")[:16],
         "finished_at": _now(),
         **({"result": str(label)} if label else {}),
         **({"created_at": started_at} if started_at is not None else {}),
@@ -14624,6 +14636,7 @@ async def run_chat_turn(
             turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
             ledger=_tally.ledger,  # v1.529.0 (lock-step)
             tally=_tally,  # v1.572.0 (lock-step)
+            cost_source=_tally.cost_source,  # next leaps 46-a (lock-step)
         )
 
     async def _billed_await(aw):
@@ -15875,6 +15888,7 @@ async def run_chat_turn(
         turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
         ledger=_tally.ledger,  # v1.529.0 (lock-step)
         tally=_tally,  # v1.572.0 (lock-step)
+        cost_source=_tally.cost_source,  # next leaps 46-a (lock-step)
     )
     # Third plan CS8: written off the loop; the reply goes back once it is.
     await settle_usage_writes(_usage_pending, turn_id=_usage_turn)

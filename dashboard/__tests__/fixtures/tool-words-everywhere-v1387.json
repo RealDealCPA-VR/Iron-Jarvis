@@ -233,6 +233,7 @@
     "tool_list",
     "tool_script",
     "transcribe_recording",
+    "usage_report",
     "view_image",
     "web_action",
     "web_extract",
@@ -491,6 +492,7 @@
     "tool_list": "list the custom tools",
     "tool_script": "run a script over its tools",
     "transcribe_recording": "make a transcript and notes from a recording",
+    "usage_report": "look up what your work cost",
     "view_image": "read a file",
     "web_action": "act on a web page",
     "web_extract": "read part of a web page",
@@ -1245,6 +1247,10 @@
       "Made a transcript and notes from a recording",
       "Making a transcript and notes from a recording"
     ],
+    "usage_report": [
+      "Looked up what your work cost",
+      "Looking up what your work cost"
+    ],
     "web_action": [
       "Acted on a web page",
       "Acting on a web page"
@@ -1555,6 +1561,7 @@
     "tool_list": "",
     "tool_script": "",
     "transcribe_recording": "",
+    "usage_report": "",
     "view_image": "read",
     "web_action": "",
     "web_extract": "",

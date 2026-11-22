@@ -4735,6 +4735,7 @@ const TOOL_WORDS_BUILTIN = {
   tool_list: "list the custom tools",
   tool_script: "run a script over its tools",
   transcribe_recording: "make a transcript and notes from a recording",
+  usage_report: "look up what your work cost",
   view_image: "read a file",
   web_action: "act on a web page",
   web_extract: "read part of a web page",

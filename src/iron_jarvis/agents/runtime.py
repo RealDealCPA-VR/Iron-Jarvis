@@ -1590,7 +1590,7 @@ def add_step_cost(run, session, provider: str, model: str, usage) -> float:
 
     See :func:`step_cost_flag` for the ``llm.completed`` event's companion key.
     """
-    from ..eval.pricing import step_cost
+    from ..eval.pricing import merge_source, step_cost, step_source
 
     usd = step_cost(provider, model, usage)
     for row in (run, session):
@@ -1598,6 +1598,15 @@ def add_step_cost(run, session, provider: str, model: str, usage) -> float:
             continue
         try:
             row.cost_usd = float(getattr(row, "cost_usd", 0.0) or 0.0) + usd
+        except Exception:  # noqa: BLE001 — accounting never breaks a run
+            pass
+    # Next leaps 46-a: where the run's figure came from (measured or
+    # estimated). The run row only: a session has no such column.
+    if run is not None and hasattr(run, "cost_source"):
+        try:
+            run.cost_source = merge_source(
+                getattr(run, "cost_source", ""), step_source(provider, model, usage)
+            )
         except Exception:  # noqa: BLE001 — accounting never breaks a run
             pass
     return usd

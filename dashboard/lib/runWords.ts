@@ -276,6 +276,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // Next leaps 43-a: the model library.
   model_library: { did: "Looked at which models fit this PC", noun: "model library" },
   model_download: { did: "Started downloading a model", noun: "model download" },
+  // Next leaps 46-a: what everything cost.
+  usage_report: { did: "Looked up what your work cost", noun: "usage report" },
   client_list: { did: "Listed your clients", noun: "client list" },
   client_answer: { did: "Noted whether a name is one of your clients", noun: "client answer" },
   client_update: { did: "Changed one of your clients", noun: "client change" },

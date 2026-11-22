@@ -2044,6 +2044,44 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## What everything cost, by folder, client, automation and agent (v1.564.0)
+
+Usage has a new card, **What it cost**, with a **By** switch: **Folder**,
+**Client**, **Automation** and **Agent**. It reads the same record as the
+rest of the page (every model call is counted there once), for the window
+you picked at the top (7, 30 or 90 days), and says whose work each call was.
+
+- **Three figures, kept apart.** Each row shows **Pay per use** (money),
+  **Your plan** and **Free** side by side, never added together. Money is
+  marked **measured** when the AI company reported the figure itself, or
+  **estimated** when Iron Jarvis worked it out from its price list (older
+  work always reads estimated). A model with no known price says **price not
+  known**, never $0.00. Work on your Claude or ChatGPT plan is shown in
+  tokens only: it is never money. Free is what your own models did.
+- **Folder** is the folder a chat or an agent run worked in. **Client** is
+  the client whose folder that is (only clients you said yes to). A chat in
+  a client's folder, or any folder inside it, counts for that client.
+- **Automation** is a schedule, a rule, a workflow, a goal, your queued
+  tasks or a task from a paired computer. A helper an automation's run
+  handed work to counts for that automation. Each automation's row also says
+  how many times it asked you (**Asked you twice**). Chats and the runs you
+  started yourself read **Not an automation**.
+- **Agent** is the agent that did the work; chats read **Chat**.
+- **From chat.** Ask *what did the invoice rule cost this month?* and Jarvis
+  answers from the same record: "Rule “invoice rule”: $4.10 pay per use
+  (measured), and it asked you twice." In a chat, a client's work is named
+  only where your own words allow it, as everywhere else: in one client's
+  folder, other clients are left out; elsewhere, a client is named when your
+  message names it. Work done in a Local only chat is counted only in a
+  Local only chat. What was left out is said in one sentence that names
+  nobody, and it is in none of the figures.
+- **Good to know.** How much of a 5-hour window your plan's work took is not
+  shown yet: Iron Jarvis does not yet record your account's limits before
+  and after each piece of work, so it shows tokens instead of guessing. Work
+  done directly in OpenCode or Pi (outside Iron Jarvis) is in the page's
+  totals but not in this card, because it has no folder on Iron Jarvis's
+  record. The card reads once when you open the page or change the switch,
+  and again when you press Refresh.
 ## Review comments arrive in the coding session (v1.579.0)
 
 When people comment on a pull request a coding session (Chat › Code) opened,

@@ -274,6 +274,9 @@ REMOTE_RUN_DENY: frozenset[str] = frozenset(
         "client_list",
         # Next leaps 41-a: this computer's other pairings and their switches.
         "peer_allows",
+        # Next leaps 46-a: what this computer's folders, clients and
+        # automations cost (their names would leave with the answer).
+        "usage_report",
         "file_search",
     }
 )

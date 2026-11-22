@@ -250,6 +250,7 @@ def register(app: FastAPI, d) -> None:
                 usage_in=tally.input_tokens,
                 usage_out=tally.output_tokens,
                 cost_usd=tally.cost_usd,
+                cost_source=tally.cost_source,
                 thread_id=thread_id,
             )
         except Exception:  # noqa: BLE001 — accounting must never fail the answer

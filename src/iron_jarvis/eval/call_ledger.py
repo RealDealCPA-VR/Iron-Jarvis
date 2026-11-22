@@ -257,6 +257,8 @@ def note_model_call(provider: str, model: str, usage: Any) -> None:
                 "input_tokens": scope.tally.input_tokens,
                 "output_tokens": scope.tally.output_tokens,
                 "cost_usd": round(max(0.0, scope.tally.cost_usd), 6),
+                # Next leaps 46-a: measured or estimated (the tally's).
+                "cost_source": str(getattr(scope.tally, "cost_source", "") or ""),
                 "result": TOOL_WORDS.get(scope.tool, TOOL_WORDS_DEFAULT),
                 "started_at": scope.started_at,
                 "turn": _turn,
@@ -288,6 +290,7 @@ def _write_tool_row(engine: Any, snap: dict[str, Any]) -> None:
             row.input_tokens = int(snap["input_tokens"])
             row.output_tokens = int(snap["output_tokens"])
             row.cost_usd = float(snap["cost_usd"])
+            row.cost_source = str(snap.get("cost_source") or "")
             row.result = snap["result"]
             row.finished_at = utcnow()
             if snap["thread_id"]:
