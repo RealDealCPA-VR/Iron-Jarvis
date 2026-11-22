@@ -331,6 +331,18 @@ _ON_VERB = re.compile(
     re.IGNORECASE,
 )
 _NOT_OFF_BEFORE_ON = re.compile(r"\b(?:don['’]?t|do\s+not|no\s+longer|never)\s+$", re.IGNORECASE)
+#: The page door's test has no pairing names (``daemon/page_doors`` is pure),
+#: so a switch's everyday words ("turn on my models", "enable coding work in
+#: this folder") count only beside another computer: a peer noun, a computer
+#: word ("the desk", "my laptop") or an "@" name. The one exception is the
+#: switch's own words "send me tasks", which nothing else in the app uses.
+_COMPUTER_WORD = re.compile(
+    r"\b(?:my|the|our|your|that)\s+(?:other\s+)?(?:desk|desktop|laptop|pc|computer|machine|workstation|tower"
+    r"|mac|macbook|server|notebook)s?\b"
+    r"|(?<![\w@])@\w",
+    re.IGNORECASE,
+)
+_SEND_ME_TASKS = re.compile(r"\bsend\s+me\s+tasks\b", re.IGNORECASE)
 
 
 def _names_rx(names: Iterable[str]) -> "re.Pattern[str] | None":
@@ -382,10 +394,13 @@ def switch_on_asked(text: str) -> bool:
     t = str(text or "")[:SCAN_CHARS]
     if not _SWITCH_WORDS.search(t):
         return False
+    if not (_SEND_ME_TASKS.search(t) or _PEER_NOUN.search(t) or _COMPUTER_WORD.search(t)):
+        return False
     for m in _ON_VERB.finditer(t):
         if not _NOT_OFF_BEFORE_ON.search(t[max(0, m.start() - 12):m.start()]):
             return True
     return False
 
 
-ALL_PATTERNS = (_PEER_NOUN, _SWITCH_WORDS, _PERMIT_WORDS, _PERMIT_STRICT, _OFF_VERB, _ON_VERB, _NOT_OFF_BEFORE_ON)
+ALL_PATTERNS = (_PEER_NOUN, _SWITCH_WORDS, _PERMIT_WORDS, _PERMIT_STRICT, _OFF_VERB, _ON_VERB, _NOT_OFF_BEFORE_ON,
+                _COMPUTER_WORD, _SEND_ME_TASKS)

@@ -3934,7 +3934,10 @@ def register(app: FastAPI, d) -> None:
             )
         token = _door_bearer(request)
         try:
-            peer = await asyncio.to_thread(store_for(d.platform).verify, token)
+            # The store is made in the worker too: making it settles older
+            # pairings' switches (next leaps 41-a, ``PeerStore.settle_older``),
+            # a write that must never run on the loop.
+            peer = await asyncio.to_thread(lambda: store_for(d.platform).verify(token))
         except Exception:  # noqa: BLE001 — a store that cannot be read lets nobody in by it
             log.warning("task door: the paired computers could not be read", exc_info=True)
             peer = None
@@ -3958,9 +3961,8 @@ def register(app: FastAPI, d) -> None:
         if peer is not None:
             from ...peers.store import store_for
 
-            await asyncio.to_thread(
-                store_for(d.platform).note_heard, peer.id, _source_of(request)
-            )
+            source = _source_of(request)
+            await asyncio.to_thread(lambda: store_for(d.platform).note_heard(peer.id, source))
         # v1.510.0 (F3): it was heard from — what is still owed to it goes.
         _owed_go_home(peer, _source_of(request))
         if peer is None:
@@ -4125,9 +4127,8 @@ def register(app: FastAPI, d) -> None:
             from ...peers.allows import SEND_TASKS, may, tasks_off_words
             from ...peers.store import store_for
 
-            _peers = store_for(d.platform)
             try:
-                now = await asyncio.to_thread(_peers.get_by_id, peer.id)
+                now = await asyncio.to_thread(lambda: store_for(d.platform).get_by_id(peer.id))
             except Exception:  # noqa: BLE001 — a pairing that cannot be read takes no task
                 now = None
             if not may(now, SEND_TASKS):
@@ -4136,7 +4137,10 @@ def register(app: FastAPI, d) -> None:
                 await asyncio.to_thread(
                     orchestrator.stop_with_reason, session.id, tasks_off_stop_summary(caller)
                 )
-                here = await asyncio.to_thread(_peers.this_name)
+                try:
+                    here = await asyncio.to_thread(lambda: store_for(d.platform).this_name())
+                except Exception:  # noqa: BLE001 — the refusal stands; only the name is missing
+                    here = ""
                 raise HTTPException(status_code=403, detail=tasks_off_words(here, caller))
         if reply_to and reply_token:
             try:
@@ -4148,7 +4152,7 @@ def register(app: FastAPI, d) -> None:
         if peer is not None:
             from ...peers.store import store_for
 
-            await asyncio.to_thread(store_for(d.platform).note_heard, peer.id, source)
+            await asyncio.to_thread(lambda: store_for(d.platform).note_heard(peer.id, source))
         else:
             await asyncio.to_thread(door.note_task, session.id)
         # v1.510.0 (F3): it was heard from — what is still owed to it goes.

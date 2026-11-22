@@ -466,7 +466,10 @@ How to use this file: read the contents list, then read only the entries your ch
   card, never a permission here (an Iron Jarvis from before answers no
   `allows`: read as `older`, taking tasks). D-41.1: the reconciler adds the
   columns to an old table as NULL, and `PeerStore.settle_older` (every store
-  start, one transaction, idempotent) turns "Send me tasks" on for those rows
+  start, one transaction, idempotent; the daemon's start makes the store on a
+  worker, boot step `settle_paired_computers`, and the task door reaches it
+  only through `asyncio.to_thread`, so the write never lands on the loop)
+  turns "Send me tasks" on for those rows
   only, the rest off, and sets `kept_note` so the card says so once (OK or
   any change clears it); `allows._flag` reads an unsettled NULL the same way.
   A re-pair after the update is a new pairing: all off. D-41.2: chat's
@@ -477,7 +480,11 @@ How to use this file: read the contents list, then read only the entries your ch
   `perform_undo` says a PERSON pressed (`pressed` is written into the record
   descriptor by `perform_undo` alone; `config_undo` / `change_undo` are
   refused in words). Turning one on from chat gets the page door
-  `peer_switches`. Arming: `chat_turn.settings_ask_tools` (both lanes, off the
+  `peer_switches` (`records_peers.switch_on_asked`: page doors know no
+  pairing names, so a switch's everyday words count only beside another
+  computer, a peer noun, "the desk" / "my laptop" or an "@" name; "turn on my
+  models" is about THIS computer and gets no door; "send me tasks" alone
+  counts). Arming: `chat_turn.settings_ask_tools` (both lanes, off the
   loop) reads the pairings' names only when `might_ask` says so. D-41.3 (20
   files, 100 MB) is `allows.HAND_OVER_MAX_*`, for 41-c. Left open: an Undo
   from chat does not tell the other computer (its next Check does);

@@ -2052,12 +2052,14 @@ newly paired computer can do nothing on this one until you say so.
   computer one line says what it may do here ("desk may: send tasks.");
   press it to see its switches. The line under it says what THAT computer
   lets this one do, as it last said (Check asks again).
-- **Send me tasks.** With it on, "@laptop read the notes" written on that
-  computer runs here, at low trust, and the answer goes back, as before.
-  With it off, the task is turned away: that computer's chat says that
-  "Send me tasks" is off here and where to turn it on, and nothing runs or
-  is kept here. Turning it off also stops the tasks that computer sent that
-  are still running here.
+- **Send me tasks.** With it on, a task written on that computer ("@", this
+  computer's name, then the task) runs here, at low trust, and the answer
+  goes back, as before. With it off, the task is turned away: that
+  computer's chat says that "Send me tasks" is off here and where to turn it
+  on, and nothing runs here. Turning it off also stops the tasks that
+  computer sent that are still running here. **The one step for a computer
+  you pair from now on:** on the computer that should do the work, press
+  the line under the other computer and turn on "Send me tasks".
 - **Coming in later versions.** The card lists the switches that come with
   later versions (Look up my work record, Ask me questions about tasks I
   send it, Hand me a whole chat, Start coding work here, Use my models, See

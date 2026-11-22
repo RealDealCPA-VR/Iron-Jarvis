@@ -1319,6 +1319,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
         await _rehydrate_step(
             "mask_stored_work", lambda: _mask_stored(platform.engine), off_loop_s=_TURN_PASS_TIMEOUT_S
         )
+        # Next leaps 41-a (D-41.1): the paired computers' store is made here,
+        # once, off the loop. Making it settles the switches of pairings made
+        # before them ("Send me tasks" kept on, ``PeerStore.settle_older``), a
+        # write that must not land on the loop when a door is the first caller.
+        from ..peers.store import store_for as _peer_store_for
+
+        await _rehydrate_step(
+            "settle_paired_computers", lambda: _peer_store_for(platform), off_loop_s=_TURN_PASS_TIMEOUT_S
+        )
         # Third plan G6 / RB9: AFTER the coding sessions' replies were put
         # back (above), a chat reply that never reached its chat is written
         # into it, and only THEN are old turn records removed — never one

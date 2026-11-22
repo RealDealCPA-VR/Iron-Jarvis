@@ -209,6 +209,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Keys in titles saved by an older version weren't hidden yet",
     href: "/memory",
   },
+  // Next leaps 41-a (D-41.1): the switches of computers paired before them
+  // are settled once at start (peers/store.settle_older).
+  settle_paired_computers: {
+    label: "Your other computers",
+    problem: "What computers paired before this version may do wasn't settled yet",
+    href: "/settings?section=connections-computers",
+  },
   // v1.538.0 (fourth review group 29): the program Claude desktop, Claude
   // Code and Codex start to reach Iron Jarvis is put in place at start.
   refresh_bridge: {

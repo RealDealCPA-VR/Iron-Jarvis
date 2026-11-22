@@ -559,6 +559,66 @@ async def test_a_pairing_from_before_keeps_send_me_tasks_and_the_card_says_so_on
         assert _view_of((await cb.get("/peers")).json(), "laptop")["kept_note"] == ""
 
 
+def test_the_daemons_start_settles_an_older_pairing_off_the_loop(tmp_path, monkeypatch):
+    """D-41.1 from the first second after an update: the start makes the
+    paired computers' store on a worker thread (making it settles older
+    pairings), so no door is the first to make it on the event loop."""
+    app = create_app(str(tmp_path / "desk"))
+    p = app.state.platform
+    with session_scope(p.engine) as db:
+        db.add(PeerRecord(name="laptop", address=f"http://{A_HOST}"))
+        db.commit()
+    _as_before_the_switches(app)
+    if hasattr(p, "_peer_store"):
+        delattr(p, "_peer_store")
+    on_loop: list[bool] = []
+    real = S.PeerStore.settle_older
+
+    def spy(self):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(self)
+
+    monkeypatch.setattr(S.PeerStore, "settle_older", spy)
+
+    async def _boot() -> None:
+        async with app.router.lifespan_context(app):
+            pass
+
+    asyncio.run(_boot())
+    assert on_loop and on_loop[0] is False, f"the store was first made on the loop (or never): {on_loop}"
+    with p.engine.connect() as conn:
+        assert conn.execute(text("SELECT may_send_tasks, kept_note FROM peerrecord")).all() == [(1, A.KEPT_TASKS)]
+
+
+async def test_the_task_door_makes_the_store_off_the_loop_when_it_is_the_first_caller(tmp_path, lan, monkeypatch):
+    """Without the start (a door reached first), making the store, which
+    settles older pairings, still runs on a worker, never on the loop."""
+    a, b = _two(tmp_path)
+    lan({A_HOST: a, B_HOST: b})
+    if hasattr(b.state.platform, "_peer_store"):
+        delattr(b.state.platform, "_peer_store")
+    on_loop: list[bool] = []
+    real = S.PeerStore.settle_older
+
+    def spy(self):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(self)
+
+    monkeypatch.setattr(S.PeerStore, "settle_older", spy)
+    async with httpx.AsyncClient(base_url=f"http://{B_HOST}") as raw:
+        r = await raw.get(TASK_DOOR_PATH, headers={"Authorization": "Bearer not-a-pairing-token"})
+    assert r.status_code in (401, 403), r.text
+    assert on_loop == [False], f"the store was made on the loop (or not at all): {on_loop}"
+
+
 def test_a_row_that_could_not_be_settled_is_read_the_way_settling_writes_it():
     old = PeerRecord(name="laptop")
     for key in A.KEYS:
@@ -759,13 +819,21 @@ def test_turning_one_on_gets_the_cards_door():
     from iron_jarvis.daemon import page_doors as P
 
     for words in ("let desk send me tasks", "allow my other computer to send work here",
-                 "turn on send me tasks for my laptop"):
+                 "turn on send me tasks for my laptop", "let the desk use my models",
+                 "allow my laptop to look up my work record", "let @studio ask me questions"):
         step = P.page_step(words)
         assert step is not None and step.id == "peer_switches", words
         assert step.href == P.PAIRING_HREF
-    for words in ("don't let desk send me tasks", "stop sending tasks to the desk", "let me know when it is done"):
+    # A switch's everyday words with no other computer in the message are
+    # about THIS computer: the door (and its line in the prompt, which tells
+    # the model the message is about a paired computer) stays away.
+    for words in ("don't let desk send me tasks", "stop sending tasks to the desk", "let me know when it is done",
+                  "turn on my models", "let me use my models offline", "allow access to my models",
+                  "enable coding work in this folder", "let the agent read my work record",
+                  "allow it to ask me questions when it is unsure", "let me hand a whole chat to the council"):
         step = P.page_step(words)
         assert step is None or step.id != "peer_switches", words
+        assert not any(s.id == "peer_switches" for s in P.page_steps(words)), words
 
 
 def test_the_patterns_are_linear_on_pathological_input():
@@ -778,7 +846,8 @@ def test_the_patterns_are_linear_on_pathological_input():
         "import time\n"
         "from iron_jarvis.settings import records_peers as RP\n"
         "bad = ['send ' * 20000, 'send me ' + 'x ' * 40000, 'tasks from ' * 15000, 'dont ' * 30000,"
-        " '@' * 60000, 'other ' * 30000 + 'computer', 'let ' * 30000 + 'send me tasks']\n"
+        " '@' * 60000, 'other ' * 30000 + 'computer', 'let ' * 30000 + 'send me tasks',"
+        " 'let my ' + 'my other ' * 20000 + 'models', 'allow ' + '@x ' * 30000 + 'my models']\n"
         "t = time.perf_counter()\n"
         "for s in bad:\n"
         "    RP.peers_tools_for(s, ('desk',)); RP.switch_on_asked(s); RP.might_ask(s)\n"
