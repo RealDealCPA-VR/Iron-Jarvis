@@ -155,6 +155,36 @@ async def test_a_rehearsal_is_never_found_as_past_work(daemon, tmp_path):
     assert real.id in lexical and sid not in lexical
 
 
+async def test_the_hourly_pass_opens_no_write_for_a_rehearsals_run(daemon, tmp_path, monkeypatch):
+    """Review 6 (a note): a rehearsal's run never gets a history doc, so each
+    hourly pass found it "not indexed yet" and opened a write to replace
+    nothing. The pass passes it over; a real run with no doc is still
+    indexed (control). ``sync_session`` itself, when it is called anyway
+    (the post-run step, a forced pass), still writes no doc for it."""
+    app, p = daemon
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    (folder / "2025_W2_smith.pdf").write_bytes(b"%PDF smith")
+    _rid, sid = await _rehearse_the_renames(p, folder)
+    p.router.stream = _scripted([], closing="Renamed the files.")
+    real = await app.state.orchestrator.create_session(TASK, AgentType.BUILDER, workspace_root=str(folder))
+    await app.state.orchestrator.run_session(real.id)
+    index = search_index(p.engine)
+    index.drop_session(real.id)  # a real run the post-run step missed
+    synced: list[str] = []
+    sync = index.sync_session
+    monkeypatch.setattr(index, "sync_session", lambda row, **kw: synced.append(str(row.id)) or sync(row, **kw))
+    await _backfill(index)
+    assert real.id in synced, "control: the pass indexes a real run with no doc"
+    assert sid not in synced, "the pass opened a write for a rehearsal's run"
+    with session_scope(p.engine) as db:
+        row = db.get(SessionRow, sid)
+        db.expunge(row)
+    assert sync(row) == 0, "sync_session wrote a doc for a rehearsal's run"
+    assert sid not in [h.ref for h in index.search(QUERY, kinds=["session"], limit=20)]
+    assert real.id in [h.ref for h in index.search(QUERY, kinds=["session"], limit=20)]
+
+
 async def test_app_search_lists_a_rehearsal_as_one_never_with_its_closing_words(daemon, tmp_path):
     """Review 4: ``app_search`` (the Guide's "where is my …?", one of chat's
     safe reads) lists the newest runs with their closing words. A rehearsal's
@@ -475,9 +505,10 @@ async def test_a_secret_in_an_item_is_masked_on_the_card_and_the_phone(daemon, t
     assert token not in RR._report_words(view, "schedule", "Push")
 
 
-async def test_a_page_offers_its_open_reports_again(daemon, tmp_path):
+async def test_a_page_offers_its_open_reports_again(daemon, tmp_path, monkeypatch):
     """A reload (or a second Rehearse) never loses a report: each schedule's
-    newest rehearsal comes back while it runs, or until it is kept."""
+    newest rehearsal comes back while it runs, or until it is kept. Review 6:
+    a kept one's card is not even built when the page opens."""
     app, p = daemon
     folder = tmp_path / "inbox"
     folder.mkdir()
@@ -488,8 +519,12 @@ async def test_a_page_offers_its_open_reports_again(daemon, tmp_path):
     other = await RR.start(p, "schedule", "Other")
     await _settled(p, other["id"])
     rid, _sid, _kept = await _kept_rehearsal(p, folder)   # "Sort": ready, then kept
+    built: list[str] = []
+    real_report = RR.report
+    monkeypatch.setattr(RR, "report", lambda pl, rid: built.append(rid) or real_report(pl, rid))
     shown = await asyncio.to_thread(RR.open_reports, p, "schedule")
     assert [v["id"] for v in shown] == [other["id"]], [(v["id"], v["subject"]["name"]) for v in shown]
+    assert built == [other["id"]], "a kept report's card was built"
     assert await asyncio.to_thread(RR.open_reports, p, "rule") == []
     with pytest.raises(RR.RehearsalRefused):
         RR.open_reports(p, "workflow")

@@ -11,7 +11,9 @@ schedule's own door lives, for EVERY direct send and process start (plan
 06-a, Risk: "a side door nobody listed"): each one is in a reviewed table
 with why a rehearsal never goes through it, and a new one fails until it is
 reviewed. Review 4: a helper's piece in a rehearsal leaves no mark on the
-model team's record either.
+model team's record either. Review 6: the scan also sees a sending callable
+passed BY REFERENCE (``asyncio.to_thread(ch.send, text)``,
+``functools.partial(hooks.http_post, url)``), the shape async code here uses.
 """
 
 from __future__ import annotations
@@ -97,31 +99,56 @@ def test_every_side_door_is_guarded_where_the_table_says():
 SCANNED = ("reflex", "scheduling", "workflows", "webhooks", "comm", "agents",
            "triggers", "motivation", "platform.py")
 
+#: The end of a sending callable's name, CALLED or passed BY REFERENCE
+#: (review 6): ``ch.send(text)`` and ``asyncio.to_thread(ch.send, text)``,
+#: ``functools.partial(hooks.http_post, url)``, a callback in a dict. Only
+#: a place that SETS the attribute is not one (``self.http_post = …``,
+#: ``self._http_post: HttpPost = …``).
+_USE = r"\b(?!\s*(?::(?!=)|=(?!=)))"
+
 #: A direct effect outside ``registry.invoke``: a message or a request that
 #: leaves the PC, a post into a chat, a program started. Matched in CODE
 #: only (strings and comments are blanked first, so a docstring that names
 #: one is not one).
 DOOR_KINDS: dict[str, re.Pattern[str]] = {
-    "notify": re.compile(r"\.notify\("),
-    "channel_send": re.compile(r"\b(?:ch|chan\w*|channel\w*)\.send\("),
-    "http_post": re.compile(r"\.\s*_?http_post\("),
+    "notify": re.compile(r"\.notify" + _USE),
+    "channel_send": re.compile(r"\b(?:ch|chan\w*|channel\w*)\.send" + _USE),
+    "http_post": re.compile(r"\.\s*_?http_post" + _USE),
     "http_client": re.compile(
         r"\bhttpx\.(?:post|get|put|patch|delete|request|stream|AsyncClient|Client)\b"
-        r"|\brequests\.(?:post|get|put|patch|delete|request)\("
-        r"|\baiohttp\.ClientSession\b|\burlopen\("
+        r"|\brequests\.(?:post|get|put|patch|delete|request)\b"
+        r"|\baiohttp\.ClientSession\b|\burlopen\b"
     ),
-    "smtp": re.compile(r"\bsmtplib\.SMTP(?:_SSL)?\("),
+    "smtp": re.compile(r"\bsmtplib\.SMTP(?:_SSL)?\b"),
     "remote_agent": re.compile(r"\bRemoteAgentRegistry\("),
-    "chat_post": re.compile(r"(?<!def )\bdeliver_session_line\("),
+    "chat_post": re.compile(r"(?<!def )\bdeliver_session_line" + _USE),
     "process": re.compile(
-        r"\b_?procs\.(?:spawn|run|run_to_files|run_async|adopt)\("
-        r"|\bfrom\s+\.+core\.procs\s+import\b"
-        r"|\bsubprocess\.\w+|\bcreate_subprocess_(?:exec|shell)\("
-        r"|\bos\.(?:system|popen|startfile|spawn\w*|exec\w*)\("
+        r"\b_?procs\.(?:spawn|run|run_to_files|run_async|adopt)" + _USE
+        # Review 6: ``procs`` under any name. The import is the door: a file
+        # that imports it is reviewed, and a start through it is one more.
+        + r"|\bfrom\s+(?:\.+|iron_jarvis\.)core\s+import\s+(?:\([^)]*|[^\n(]*)\bprocs\b"
+        r"|\bfrom\s+(?:\.+|iron_jarvis\.)core\.procs\s+import\b"
+        r"|\bimport\s+iron_jarvis\.core\.procs\b"
+        r"|\bfrom\s+subprocess\s+import\b"
+        r"|\bsubprocess\.\w+|\bcreate_subprocess_(?:exec|shell)\b"
+        r"|\bos\.(?:system|popen|startfile|spawn\w*|exec\w*)\b"
     ),
-    "sandbox": re.compile(r"(?i)\b\w*sandbox\w*\.(?:run|run_async|execute|exec_command)\("),
+    "sandbox": re.compile(r"(?i)\b\w*sandbox\w*\.(?:run|run_async|execute|exec_command)" + _USE),
     "browser_open": re.compile(r"\bwebbrowser\.open"),
+    # Review 6: the shape CLAUDE.md asks async code to use, a blocking send
+    # handed to a worker, whatever the receiver is called
+    # (``to_thread(self._slack.send, …)``, ``run_in_executor(None,
+    # remote.run, …)``, ``Thread(target=x.post)``). A hand-off whose callable
+    # a kind above already names counts there, not here (``scan_doors``).
+    "handed_off": re.compile(
+        r"(?:\b(?:to_thread|run_in_executor|partial|call_soon(?:_threadsafe)?|call_later|submit)"
+        r"\(\s*(?:[\w.]+\s*,\s*)?|\btarget\s*=\s*)"
+        r"(?:[\w.]|\[[^\]\n]*\])*\.(?:send\w*|post|notify\w*|_?http_post|spawn\w*|request|run\w*|deliver\w*)\b"
+    ),
 }
+
+#: The kind that only counts what no other kind names.
+_FALLBACK_KIND = "handed_off"
 
 #: Every direct door the scan finds, REVIEWED: ``(file, kind) -> (how many,
 #: why a rehearsal never goes through it)``. A new one, or one more of a
@@ -131,6 +158,13 @@ DOOR_KINDS: dict[str, re.Pattern[str]] = {
 REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
     ("agents/orchestrator.py", "chat_post"): (
         1, "the chat delivery line: held in a rehearsal (SIDE_DOORS chat_delivery)"),
+    ("agents/orchestrator.py", "process"): (
+        1, "imports core.procs only to mark an unattended run as background work "
+           "(procs.background_lane); it starts no program, and a start added through it is a "
+           "second hit here"),
+    ("agents/runtime.py", "process"): (
+        1, "imports core.procs only to end a finished run's own programs (_procs.end_session); "
+           "it starts none, and a start added through it is a second hit here"),
     ("agents/delegate_tool.py", "remote_agent"): (
         1, "a helper's hand-off to a remote agent: held in a rehearsal (SIDE_DOORS remote_handoff)"),
     ("agents/remote.py", "remote_agent"): (
@@ -150,11 +184,20 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
         2, "a phone channel's transport: reached through Notifier.notify (listed) or a reply "
            "to the person's own message"),
     ("comm/base.py", "http_post"): (
-        2, "a phone channel's transport (the same as above)"),
+        3, "a phone channel's transport (the same as above); the third is a look at the "
+           "transport's signature (_accepts_headers), not a send"),
     ("comm/channels.py", "smtp"): (
         1, "the email channel's transport: reached through Notifier.notify (listed)"),
     ("comm/compose.py", "smtp"): (
         2, "an email the person writes on the Email page (daemon/routes/comm.py); no run reaches it"),
+    ("comm/inbound.py", "channel_send"): (
+        10, "replies to the person's own phone message (_dispatch, send_chunked, a phone-started "
+            "job's result) and the notices about one a restart lost or cut off: reached only from "
+            "a message the phone sent, a run of origin comm:<channel>, or a remote agent's line "
+            "coming home to a phone thread. A rehearsal's run is reflex:<rule> or "
+            "schedule:<name>, it hands nothing to a remote agent (both hand-offs are held), and "
+            "a rehearsal the phone asks for answers in that reply with its report's words "
+            "(rehearsal_runs._report_words)"),
     ("comm/notifier.py", "channel_send"): (
         1, "Notifier.notify's own fan-out to each destination (its callers are listed)"),
     ("comm/notifier.py", "notify"): (
@@ -162,8 +205,14 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
     ("comm/prompts.py", "channel_send"): (
         1, "a question or an approval the phone can answer: a held call never asks "
            "(it records would ask), and a workflow cannot be rehearsed yet"),
+    ("comm/slack_socket.py", "channel_send"): (
+        1, "the note to a person who mentioned Jarvis in a shared Slack channel that the answer "
+           "comes in the DM: only from that person's own Slack message"),
     ("comm/slack_socket.py", "http_client"): (
         2, "opens Slack's socket for the person's incoming messages; sends no run's words"),
+    ("comm/tools.py", "notify"): (
+        1, "the notify tool's own send: a tool that changes things, so registry.invoke holds it "
+           "in a rehearsal (test_leap06a_gate)"),
     ("motivation/engine.py", "notify"): (
         1, "the morning briefing's push: only the person's own press on the autonomy route "
            "(POST briefing with notify); the engine's bus handler only files a suggestion"),
@@ -171,6 +220,10 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
         1, "a schedule's REAL delivery line (_deliver_outcome), reached only through _fire; a "
            "rehearsal goes through _rehearse_scheduled to _dispatch_scheduled and never _fire "
            "(SIDE_DOORS schedule_delivery lists the line instead)"),
+    ("platform.py", "handed_off"): (
+        1, "the pre-run script handed to a worker (_knobs.run_pre_run_script): "
+           "_dispatch_scheduled reaches it only outside a rehearsal (SIDE_DOORS pre_run_script, "
+           "the branch just above it)"),
     ("platform.py", "http_client"): (
         4, "client wiring at start-up, called only by its owner: the Connections sign-in's token "
            "exchange and refresh (no message, no change), the outgoing webhook's transport (skips "
@@ -222,8 +275,16 @@ def scan_doors(root: Path = SRC) -> dict[tuple[str, str], list[int]]:
         for path in paths:
             rel = path.relative_to(root).as_posix()
             code = _code_only(path.read_text(encoding="utf-8").replace("\r\n", "\n"))
+            named = sorted(
+                m.start() for kind, rx in DOOR_KINDS.items() if kind != _FALLBACK_KIND
+                for m in rx.finditer(code)
+            )
             for kind, rx in DOOR_KINDS.items():
-                lines = [code.count("\n", 0, m.start()) + 1 for m in rx.finditer(code)]
+                lines = [
+                    code.count("\n", 0, m.start()) + 1 for m in rx.finditer(code)
+                    # A hand-off of a callable another kind names is counted there.
+                    if kind != _FALLBACK_KIND or not any(m.start() <= s < m.end() for s in named)
+                ]
                 if lines:
                     found[(rel, kind)] = lines
     return found
@@ -269,6 +330,32 @@ def test_the_scan_sees_a_new_door_and_not_a_mention(tmp_path):
         encoding="utf-8",
     )
     assert scan_doors(tmp_path) == {("reflex/new_door.py", "notify"): [4]}
+    # Review 6: a sending callable handed to a worker BY REFERENCE, the shape
+    # CLAUDE.md asks async code to use, is a door too; a hand-off of one a
+    # kind names counts once, under that kind.
+    (pkg / "new_door.py").unlink()
+    (pkg / "handed_off.py").write_text(
+        "import asyncio, functools\n"
+        "from ..core import procs as P\n"
+        "async def g(self, p, ch, hooks, text, loop):\n"
+        "    await asyncio.to_thread(ch.send, text, chat_id=1)\n"
+        "    await asyncio.to_thread(p.notifier.notify, text)\n"
+        "    await asyncio.to_thread(functools.partial(hooks.http_post, text))\n"
+        "    await asyncio.to_thread(procs.run, ['x'])\n"
+        "    await asyncio.to_thread(\n"
+        "        self._slack.send, text)\n"
+        "    await loop.run_in_executor(None, self.remote.run, text)\n"
+        "    self.http_post = hooks.http_post_fn\n"
+        "    return 'asyncio.to_thread(ch.send, text)'\n",
+        encoding="utf-8",
+    )
+    assert scan_doors(tmp_path) == {
+        ("reflex/handed_off.py", "process"): [2, 7],
+        ("reflex/handed_off.py", "channel_send"): [4],
+        ("reflex/handed_off.py", "notify"): [5],
+        ("reflex/handed_off.py", "http_post"): [6],
+        ("reflex/handed_off.py", "handed_off"): [8, 10],
+    }
     # A process start added to a schedule's own door, in platform.py.
     (tmp_path / "platform.py").write_text(
         "async def _dispatch_scheduled(task):\n"

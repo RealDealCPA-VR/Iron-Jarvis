@@ -355,8 +355,15 @@ def open_reports(platform: Any, kind: str) -> list[dict[str, Any]]:
         if rec.subject_id in seen:
             continue
         seen.add(rec.subject_id)
-        view = report(platform, rec.id)
         ended = rec.finished_at.replace(tzinfo=None) if rec.finished_at else None
+        if rec.status != "running" and (
+            rec.status != "ready" or rec.kept_at or (ended is not None and ended < since)
+        ):
+            # Review 6: a finished report that is kept, old or not ready is
+            # never offered, so its card (a read of the run table and the
+            # ledger) is not built. Only a running one can still settle.
+            continue
+        view = report(platform, rec.id)
         recent = view["status"] == "ready" and not view["kept_at"] and (ended is None or ended >= since)
         if view["status"] == "running" or recent:
             out.append(view)

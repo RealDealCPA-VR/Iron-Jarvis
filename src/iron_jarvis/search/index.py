@@ -1558,5 +1558,11 @@ class SearchIndex:
         todo = self._unindexed(keys, "ref", ["session"], force)
         indexed = 0
         for rec in self._load_rows(Session, todo):
+            if not force and _is_rehearsal_run(rec):
+                # Leap 06-a (review 6): a rehearsal's run never gets a doc
+                # (sync_session), so it stays "not indexed" and every pass
+                # would open a write to replace nothing. A forced pass still
+                # goes through sync_session, which drops any doc it has.
+                continue
             indexed += self.sync_session(rec)
         return indexed, len(keys), self._tail_cursor(keys[-1])
