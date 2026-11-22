@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.555.0 (2026-11-19).*
+holds itself to. Current as of v1.556.0 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Pick up where you left off in a folder (v1.551.0)
+## Pick up where you left off in a folder (v1.556.0)
 
 Start a new chat or a new coding session in a folder you have worked in
 before, and a short card under the folder chip says what happened there last
@@ -2096,7 +2096,9 @@ Build › Code your own coding tool is told only that sentence (see below).
 - In Build › Code, your own coding tool (Claude Code, Codex and the others)
   is told only the sentence. It is not told what the card lists (Done,
   Decided, Still open), and the card says so under Continue. If the tool
-  needs those lines, type them in your own first message instead.
+  needs those lines, copy them from the card before you type your own first
+  message and paste them into it: the card steps aside as soon as the box
+  holds words.
 - In a chat that works in the folder you can also ask "where did we leave
   off?".
 - If the record cannot be read, the card says "Earlier work in this folder
