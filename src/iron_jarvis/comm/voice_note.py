@@ -334,10 +334,13 @@ def ask_words(who: str, label: str = "", *, waiting: int = 1) -> str:
         "It is the speech service you chose for dictation"
     )
     also = (f" Your {waiting} voice notes wait on this one answer." if waiting > 1 else "")
+    # G10: what it costs, in plain words. OpenAI's speech service is paid per
+    # use; a speech server of your own is not billed by anyone we know of.
+    cost = " OpenAI bills your account per use." if label == "openai" else ""
     return (
         "I can't turn voice notes into words on this PC: the offline speech model "
         f"isn't here or heard nothing. {ask_question(who)} {what}, and each voice note "
-        f"would be sent to it.{also} Reply 1 for yes or 2 for no."
+        f"would be sent to it.{cost}{also} Reply 1 for yes or 2 for no."
     )
 
 

@@ -557,6 +557,10 @@ How to use this file: read the contents list, then read only the entries your ch
   before the answer waits on the same question (`ref_id` holds every waiting
   path, one a line, `MAX_WAITING`). THE WORKER takes numpy only through
   `core/_numpy` and reads PyAV frames from their plane (`_frame_pcm`, never
-  `to_ndarray`, which imports numpy behind that door). A Slack snippet is a
-  text file; an attached e-mail is kept as `.eml`.
+  `to_ndarray`, which imports numpy behind that door). THE QUESTION CLOSES a
+  day on, or once none of its recordings is on this PC (`_voice_prompt_fresh`,
+  `_VOICE_ASK_TTL_S`): a later "1" is a chat message. AN E-MAIL'S OWN WORDS
+  are its body (`InboundMessage.own_words`; `text` is subject + body): an
+  audio file with an empty body is heard, whatever the subject says. A Slack
+  snippet is a text file; an attached e-mail is kept as `.eml`.
   Pins: `tests/test_leap10a_*.py`, `dashboard/__tests__/leap-10a-phone-attachments.test.tsx`.

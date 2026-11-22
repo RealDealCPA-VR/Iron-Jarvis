@@ -913,7 +913,8 @@ class InboundPoller:
         if out.not_taken:
             log.info("inbound: %d file(s) on channel %r were not taken", out.not_taken, name)
         # A VOICE NOTE becomes the sender's words (D-10.1); an audio file too
-        # when the message has no words of its own (a voice memo sent as a file).
+        # when the message has no words of its own (a voice memo sent as a
+        # file; ``has_words`` reads an e-mail's body, not its subject).
         voice = next((k for k in out.kept if k.kind in VN.VOICE_KINDS), None) or (
             next((k for k in out.kept if k.kind == "audio"), None) if not has_words else None
         )
@@ -1354,7 +1355,12 @@ class InboundPoller:
         # ends here (R0.3's "files_not_read" became "files_not_taken").
         taken: Taken | None = None
         if getattr(msg, "files", None) or getattr(msg, "files_not_read", 0):
-            taken = await self._take_files(name, ch, msg, chat_on=chat_on, has_words=bool(text))
+            # The sender's OWN words decide whether a recording is heard: an
+            # e-mail's body, never its subject (a shared voice memo's subject
+            # is the recording's name, and almost every e-mail has one).
+            own = getattr(msg, "own_words", None)
+            has_words = bool(str(own).strip()) if own is not None else bool(text)
+            taken = await self._take_files(name, ch, msg, chat_on=chat_on, has_words=has_words)
             if taken.stop is not None:
                 return taken.stop
             if taken.heard:

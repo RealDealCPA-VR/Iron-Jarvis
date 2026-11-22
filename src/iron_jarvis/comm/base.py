@@ -116,6 +116,12 @@ class InboundMessage:
     #: (``Channel.fetch_file``) only after the allowlist, the sender's proof
     #: and the private-chat guard.
     files: list[InboundFile] = field(default_factory=list)
+    #: 10-a: the words the sender wrote, when ``text`` carries more (an
+    #: e-mail: its body, where ``text`` is the subject and then the body).
+    #: ``None``: all of ``text`` is theirs. A voice memo sent as a file is
+    #: heard when the message has no words of its own, and the subject of a
+    #: shared recording is usually only its name ("New Recording 3").
+    own_words: str | None = None
 
 
 def split_message(text: str, limit: int) -> list[str]:

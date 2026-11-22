@@ -938,6 +938,9 @@ class EmailChannel(Channel):
                         # gets no commands, approvals, rules or sessions.
                         sender_id=sender if verified else UNVERIFIED_PREFIX + sender,
                         text=subject + "\n" + body,
+                        # 10-a: the body alone is the sender's own words (a
+                        # shared voice memo's subject is the recording's name).
+                        own_words=body,
                         update_id=int(uid),
                         reply_to=sender,
                         is_bot=False,

@@ -90,7 +90,7 @@ CFG = {"host": "smtp.example.com", "imap_host": "imap.example.com", "username": 
        "chat_enabled": True, "allowed_senders": ["alice@example.com"]}
 
 
-def _rig(platform, tmp_path, monkeypatch, mails: list[EmailMessage]):
+def _rig(platform, tmp_path, monkeypatch, mails: list[EmailMessage], *, voice_deps: Any = None):
     root = chat_root(platform, tmp_path)
     fake = _IMAP([(10 + i, m.as_bytes()) for i, m in enumerate(mails)])
     monkeypatch.setattr("iron_jarvis.comm.channels._imap_connect", lambda host, port: fake)
@@ -99,6 +99,7 @@ def _rig(platform, tmp_path, monkeypatch, mails: list[EmailMessage]):
     ch = EmailChannel(dict(CFG), secret_resolver=lambda n: "pw-test" if n == "imap_pw" else None)
     turn = fake_turn("Filed under March.")
     poll = poller(platform, ch, name="mail", turn=turn)
+    poll.voice_deps = voice_deps
 
     async def go():
         res = await poll.poll_once()
@@ -242,6 +243,80 @@ def test_an_over_cap_attachment_in_the_poll_is_named_not_fetched(platform, tmp_p
     assert files_under(root) == []
     assert any("scan.pdf" in s and "1 MB" in s for s in _SMTP.sent)
     assert len(turn.calls) == 1 and turn.calls[0].attachments == []
+
+
+class _OfflineModel:
+    """The daemon's voice deps: an offline speech model on this PC, no speech
+    service chosen."""
+
+    _VOICE_MAX_BYTES = 25 * 1024 * 1024
+
+    def __init__(self, platform) -> None:  # noqa: ANN001
+        self.platform = platform
+
+    def _vosk_model_path(self) -> str:
+        return "vosk-model"
+
+    def _voice_backend(self) -> None:
+        return None
+
+
+def _memo(*, subject: str, body: str) -> EmailMessage:
+    memo = _mail(subject=subject, body=body, pdfs=0)
+    memo.add_attachment(b"\x00\x00\x00\x18ftypM4A memo", maintype="audio", subtype="mp4",
+                        filename="New Recording 3.m4a")
+    return memo
+
+
+def _offline_worker(monkeypatch) -> list[dict]:  # noqa: ANN001
+    from iron_jarvis.comm import voice_note as VN
+
+    asked: list[dict] = []
+
+    def worker(request: dict, timeout: float) -> dict:
+        asked.append(request)
+        return {"text": "call the bank at nine", "seconds": 2.0}
+
+    monkeypatch.setattr(VN, "_ask_worker", worker)
+    return asked
+
+
+@pytest.mark.parametrize("subject", ["New Recording 3", ""])
+def test_a_voice_memo_by_email_is_heard_whatever_its_subject(subject, platform, tmp_path, monkeypatch):
+    # Almost every e-mail has a subject, and a shared voice memo's subject is
+    # the recording's name. The e-mail's own words are its body: with nothing
+    # in it the recording is heard, as a voice note on Telegram is ("I heard:
+    # ..." first, then the work). With the subject counted as words it was
+    # kept as a file and never heard.
+    asked = _offline_worker(monkeypatch)
+    root, results, turn = _rig(platform, tmp_path, monkeypatch, [_memo(subject=subject, body="")],
+                               voice_deps=_OfflineModel(platform))
+
+    kept = files_under(root)
+    assert len(kept) == 1 and kept[0].suffix == ".m4a"
+    assert [a["path"] for a in asked] == [str(kept[0])]
+    assert "I heard: call the bank at nine" in _SMTP.sent[0]
+    assert len(turn.calls) == 1
+    assert "call the bank at nine" in turn.calls[0].messages[-1].content
+    # Its words are the message; the recording itself is named, not read.
+    assert turn.calls[0].attachments == []
+    assert turn.calls[0].thread_files == [str(kept[0])]
+
+
+def test_an_audio_file_with_words_in_the_body_is_a_file(platform, tmp_path, monkeypatch):
+    # Words in the body are the sender's own: the recording is a file to work
+    # on, as an audio file with a caption is on Telegram.
+    asked = _offline_worker(monkeypatch)
+    root, results, turn = _rig(
+        platform, tmp_path, monkeypatch,
+        [_memo(subject="New Recording 3", body="File this with the March notes.")],
+        voice_deps=_OfflineModel(platform))
+
+    kept = files_under(root)
+    assert asked == []
+    assert not any("I heard" in s for s in _SMTP.sent)
+    assert turn.calls[0].attachments == [str(kept[0])]
+    assert "File this with the March notes." in turn.calls[0].messages[-1].content
 
 
 def test_a_signature_and_a_body_picture_are_not_files():

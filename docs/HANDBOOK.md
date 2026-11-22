@@ -2070,16 +2070,21 @@ takes files now.
   model on this PC. Jarvis answers "I heard: …" first, so a mishearing shows
   at once, then does the work. When that model is missing or hears nothing,
   Jarvis asks once on your phone before it uses the speech service you chose
-  for dictation: "Use OpenAI for phone voice notes too?" Reply 1 for yes or 2
-  for no. The answer is kept in Settings › Models › Voice notes from your
+  for dictation: "Use OpenAI for phone voice notes too?" (the question says
+  that OpenAI bills your account per use). Reply 1 for yes or 2 for no. The
+  answer is kept in Settings › Models › Voice notes from your
   phone (change it there, with Undo), and each answer names the service ("I
   heard (by OpenAI, which you chose for voice): …"). A yes on your phone is
   for the service it named: if you later choose another speech service,
   your phone is asked again before a voice note goes to it. A voice note you
   send before you answer waits for the same answer, and a yes turns each one
   into words. The chat on this PC shows the recording and the question too.
-  A Local only chat never sends a voice note off your network. The recording
-  is kept either way.
+  The question waits a day; after that, or once the recording is no longer
+  on this PC, a 1 or 2 is an ordinary message. A recording sent as a file
+  with no words of yours (by email: nothing written in the email, whatever
+  its subject says) is turned into words the same way. A Local only chat
+  never sends a voice note off your network. The recording is kept either
+  way.
 - **What is taken.** Pictures, PDF, Word, Excel and PowerPoint files, text and
   CSV files (a Slack snippet is kept as a text file), an email attached to an
   email, audio and video, up to 20 MB each (Settings › Connections ›

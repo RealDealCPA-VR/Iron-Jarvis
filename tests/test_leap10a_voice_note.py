@@ -23,13 +23,16 @@ from __future__ import annotations
 import json
 import sys
 import wave
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlmodel import select
 
 from iron_jarvis.comm import voice_note as VN
+from iron_jarvis.comm.models import PendingPromptRecord
 from iron_jarvis.core import http as core_http
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.models import ChatThreadRecord, UndoJournal
@@ -287,6 +290,60 @@ def test_a_voice_note_not_heard_yet_is_on_the_phone_chat(platform, tmp_path, mon
     assert turn.calls and str(kept[0]) in turn.calls[-1].thread_files
 
 
+def _voice_questions(platform) -> list[PendingPromptRecord]:
+    with session_scope(platform.engine) as db:
+        return [r for r in db.exec(select(PendingPromptRecord)).all() if r.kind == VN.ASK_KIND]
+
+
+@pytest.mark.parametrize("how", ["25 hours later", "the recording is gone"])
+def test_the_question_closes_a_day_on_or_once_its_recording_is_gone(how, platform, tmp_path,
+                                                                     monkeypatch, speech):
+    # D-10.1: the yes is consent for the recording it was asked about. A day
+    # later, or once that recording is no longer on this PC, the question is
+    # closed: a "1" is a chat message, nothing is sent to the service and the
+    # setting is not changed.
+    root, fake, poll, turn = _rig(platform, tmp_path, model=None, backend=OPENAI)
+    run(poll)
+    [asked] = _voice_questions(platform)
+    assert asked.status == "open"
+    if how == "25 hours later":
+        with session_scope(platform.engine) as db:
+            row = db.get(PendingPromptRecord, asked.id)
+            row.created_at = row.created_at - timedelta(hours=25)
+            db.add(row)
+            db.commit()
+    else:
+        for p in files_under(root):
+            p.unlink()
+
+    fake.updates = [message(11, text="1")]
+    run(poll)
+
+    assert speech.calls == []
+    assert platform.config.phone_voice_service == "ask"
+    assert [q.status for q in _voice_questions(platform)] == ["expired"]
+    assert len(turn.calls) == 1 and turn.calls[0].messages[-1].content == "1"
+
+
+def test_the_question_still_waits_23_hours_on(platform, tmp_path, monkeypatch, speech):
+    # The other side of the day: under it, the "1" is the answer.
+    root, fake, poll, turn = _rig(platform, tmp_path, model=None, backend=OPENAI)
+    run(poll)
+    [asked] = _voice_questions(platform)
+    with session_scope(platform.engine) as db:
+        row = db.get(PendingPromptRecord, asked.id)
+        row.created_at = row.created_at - timedelta(hours=23)
+        db.add(row)
+        db.commit()
+
+    fake.updates = [message(11, text="1")]
+    run(poll)
+
+    assert len(speech.calls) == 1
+    assert platform.config.phone_voice_service == "yes"
+    assert turn.calls[-1].messages[-1].content == "buy milk on the way home"
+
+
 def test_nothing_set_up_is_on_the_phone_chat_too(platform, tmp_path, monkeypatch, speech):
     root, fake, poll, turn = _rig(platform, tmp_path, model=None, backend=None)
     res = run(poll)
@@ -353,6 +410,13 @@ def test_the_chat_server_fallback_is_not_called_a_dictation_choice():
     assert "model server you set up for chat" in words
     assert "you chose for dictation" not in words
     assert "you chose for dictation" in VN.ask_words("OpenAI", "openai")
+
+
+def test_the_question_says_what_it_costs():
+    # G10: offered once, with its cost in plain words. OpenAI is paid per
+    # use; a speech server of your own is not said to bill anyone.
+    assert "OpenAI bills your account per use." in VN.ask_words("OpenAI", "openai")
+    assert "bills" not in VN.ask_words("the speech server at 127.0.0.1:9000", "stt")
 
 
 def test_nothing_set_up_says_so_and_keeps_the_recording(platform, tmp_path, monkeypatch, speech):
