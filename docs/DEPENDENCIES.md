@@ -257,7 +257,7 @@ its `packaging/ironjarvis.spec` entry checked on the frozen build.
 | pywinpty | `pywinpty>=3.0.5` | terminals |
 | pyyaml | `pyyaml>=6.0.3` | detections, documents, harness, skills |
 | rich | `rich>=13` | daemon |
-| sqlalchemy | `sqlalchemy>=2.0` | agents, artifacts, assignments, blackboard, browser, codelab, comm, computeruse, connections, core, daemon, detections, documents, eval, harness, hosted, inbox, integrations, learning, ltm, media, memory, onboarding, personas, platform, profile, projects, reflex, scheduling, search, secrets, sentinels, settings, templates, tools, triggers, webhooks, workflows, worklist, workmap |
+| sqlalchemy | `sqlalchemy>=2.0` | agents, artifacts, assignments, blackboard, browser, codelab, comm, computeruse, connections, core, daemon, detections, documents, eval, harness, hosted, inbox, integrations, learning, ltm, media, memory, onboarding, peers, personas, platform, profile, projects, reflex, scheduling, search, secrets, sentinels, settings, templates, tools, triggers, webhooks, workflows, worklist, workmap |
 | sqlmodel | `sqlmodel>=0.0.21` | agents, artifacts, assignments, blackboard, brain, browser, capability, coach, codelab, comm, computeruse, connections, connectors, context, core, creative, daemon, detections, documents, eval, filesearch, goals, guide, harness, hosted, improvement, inbox, integrations, learning, ltm, media, memory, motivation, onboarding, peers, personas, platform, profile, projects, providers, reflex, scheduling, search, secrets, sentinels, settings, skills, templates, tools, triggers, webhooks, workflows, worklist, workmap |
 | starlette | `starlette>=0.40` | daemon |
 | tomli-w | `tomli-w>=1.0` | core, mcpserver |

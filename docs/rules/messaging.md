@@ -20,7 +20,7 @@ How to use this file: read the contents list, then read only the entries your ch
 - L370: **A phone turn knows its chat, and the desk door builds the phone door's body** (v1.515.0)
 - L380: **A file the phone cannot take is said in words on Slack and email too, after the guards, never before** (v1.546.1)
 - L407: **A task from another computer carries its conversation PLANNED, never its newest N rows** (v1.546.2)
-- L444: **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time**
+- L444: **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time** (v1.552.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -441,7 +441,7 @@ How to use this file: read the contents list, then read only the entries your ch
   conversation is not fenced inside the task; 41-c brings its own budget for
   a whole hand-over. Pin: `tests/test_task_door_history_budget_r01.py`.
 
-- **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time** (next leaps 41-a, build-out R1.5).
+- **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time** (v1.552.0, next leaps 41-a, build-out R1.5).
   The switches are one table, `peers/allows.SWITCHES` (column on
   `PeerRecord`, words, `ready`); the card draws from it (`GET /peers`
   `switches`), `PATCH /peers/{name}/allows` (install bearer only) changes it

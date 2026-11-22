@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.552.0
+
+**Choose what each of your other computers may do.** Each computer you paired with this one now has its own switches: what it may do HERE.
+
 ## v1.551.0
 
 **Iron Jarvis checks every Build › Code reply.** Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity), its reply now ends the same way.
@@ -77,7 +81,3 @@
 ## v1.536.0
 
 **A hand-off is never lost.** The fifth of nine releases from the fourth review.
-
-## v1.535.0
-
-**Stop says who, and acts at once.** The fourth of nine releases from the fourth review.
