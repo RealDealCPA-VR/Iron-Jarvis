@@ -29,6 +29,7 @@ Driven through the REAL app, the REAL pairing socket and the REAL chat lane
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -172,6 +173,15 @@ def test_open_replays_the_conversation_and_reset_forgets_it(tmp_path, monkeypatc
             {"role": "assistant", "text": "Noted."},
         ], replay
 
+        # The Reset below is about forgetting, not about the moment after
+        # `done`: that leaves BEFORE the reply's own task ends (the stream lane
+        # settles the turn's usage row after it), and a loaded runner's Reset
+        # landed in that gap (Release runs 45004669025 and 45004019420). So it
+        # waits for the reply itself to end, a daemon-side fact polled within
+        # the harness's budget, never a sleep. A Reset in that gap is its own
+        # case below (test_a_reset_right_after_the_end_is_shown_is_not_refused).
+        _wait_for(lambda: not _panel_turns(app).running, "the first reply never ended after its done")
+
         # Count BEFORE sending: a reset is answered in microseconds now that
         # `open` no longer waits on the model probe, and a count taken after
         # the send could already include the answer (then wait for one more).
@@ -239,6 +249,168 @@ def test_reset_while_a_turn_runs_is_refused_and_the_conversation_is_kept(tmp_pat
             {"role": "user", "text": "Take your time."},
             {"role": "assistant", "text": "Half an answer"},
         ]
+
+
+def _hold_the_tidy_up(monkeypatch) -> tuple[Gate, threading.Event]:
+    """Y-1: park the stream lane's tidy-up, which runs AFTER its `done` (or its
+    error): the lane's REAL usage write runs, then the reply's task waits on a
+    gate the test trips. ``held`` says it is parked there. Every later turn
+    passes straight through once the gate is released."""
+    from iron_jarvis.daemon import chat_turn
+
+    tidy, held = Gate(), threading.Event()
+    real_settle = chat_turn.settle_usage_writes
+
+    async def settle_then_hold(pending, *, turn_id=""):
+        await real_settle(pending, turn_id=turn_id)
+        held.set()
+        await tidy.wait()
+
+    monkeypatch.setattr(chat_turn, "settle_usage_writes", settle_then_hold)
+    return tidy, held
+
+
+def _first_fails_then_answers(app: RealApp, answer: str) -> list[list[dict[str, str]]]:
+    """The first reply fails at the provider (the lane ends it on its own
+    `error` frame); every later one answers ``answer``. Keeps the messages."""
+    seen: list[list[dict[str, str]]] = []
+
+    async def fake_stream(*args: Any, **kw: Any):
+        seen.append(_flatten(kw.get("messages") or []))
+        if len(seen) == 1:
+            raise RuntimeError("the provider fell over")
+        yield {"type": "text", "text": answer}
+        yield {"type": "final", "response": LLMResponse(text=answer, usage={}),
+               "provider": "mock", "model": "mock"}
+
+    app.platform.router.stream = fake_stream
+    return seen
+
+
+@pytest.mark.parametrize("end", ["done", "error"])
+def test_a_reset_right_after_the_end_is_shown_is_not_refused(tmp_path, monkeypatch, end):
+    """Y-1, THE PRODUCT. The panel draws its new-conversation button the moment
+    the reply's end arrives (`done`, or its own error), and clears its
+    transcript on the press. The reply's task runs on for its tidy-up (the
+    stream lane writes the turn's usage row after `done`), and ``_reset``
+    refused while that task ran: the person saw "still working on the last
+    message" over an empty sidebar while the daemon kept the old conversation
+    and handed it to the model with the next question. Measured: 0.3 ms on a
+    quiet database, 0.5 s to 4.3 s in 7 of 30 turns while another writer held
+    SQLite's lock in half-second spells (the same gap failed Release runs
+    45004669025 and 45004019420). Here the tidy-up is HELD, so the Reset
+    certainly lands inside it, and goes through the real refusing layer."""
+    tidy, held = _hold_the_tidy_up(monkeypatch)
+    with RealApp(tmp_path, monkeypatch, access="read_only") as app:
+        app.pair()
+        if end == "done":
+            seen = _recording_answers(app, ["Noted.", "Fresh."])
+        else:
+            seen = _first_fails_then_answers(app, "Fresh.")
+        turns = _panel_turns(app)
+        try:
+            app.panel.send(P.PANEL_ACTION_SEND, text="Remember 41.")
+            ended = P.PANEL_EVENT_DONE if end == "done" else P.PANEL_EVENT_ERROR
+            app.panel.wait_for(ended, f"the first reply never showed its end ({end})")
+            _wait_for(held.is_set, "the lane never reached its tidy-up after the end")
+            assert turns.running, "premise: the reply's task outlives the end it showed"
+            assert len(turns._history) == 2, turns._history
+
+            # A tab switch in that instant: the header must not say "working" again.
+            # (`_open` waits for its `history`, which follows its `state`, so the
+            # count below cannot catch the open's own history frame.)
+            states = len(_states(app))
+            assert len(_open(app)["turns"]) == 2
+            state = _latest_state(app, "the open during the tidy-up never answered", after=states)
+            assert state["running"] is False, state
+
+            seen_histories = len(_histories(app))
+            app.panel.send(P.PANEL_ACTION_RESET)
+            cleared = app.panel.wait_for(
+                P.PANEL_EVENT_HISTORY,
+                "a Reset right after the reply's end was not answered with the empty conversation",
+                nth=seen_histories + 1,
+            )
+            assert cleared["turns"] == []
+            refusals = [p for e, p in app.panel.events()
+                        if e == P.PANEL_EVENT_ERROR and p.get("reason") == "still_running"]
+            assert refusals == [], refusals
+            assert turns._history == []
+            assert turns.running, "the Reset did not land inside the tidy-up (the case proves nothing)"
+        finally:
+            tidy.release()
+        _wait_for(lambda: not turns.running, "the first reply never ended after its tidy-up")
+
+        # (A reply that ended on its error still sends a trailing `done`,
+        # reason "failed", once its task ends: two either way.)
+        app.panel.send(P.PANEL_ACTION_SEND, text="What number?")
+        app.panel.wait_for(P.PANEL_EVENT_DONE, "the message after the reset never finished", nth=2)
+        rows = [r for r in seen[1] if r["role"] in ("user", "assistant")]
+        assert [r["role"] for r in rows] == ["user"], f"the reset did not reach the model: {rows}"
+        assert "41" not in " ".join(r["content"] for r in rows)
+
+
+class _SaveWatch:
+    """A socket stand-in that records ``_end_sent`` with every frame, and a
+    chat writer that records it when the exchange is saved."""
+
+    def __init__(self, turns) -> None:
+        self.turns = turns
+        self.frames: list[tuple[str, bool]] = []
+        self.at_save: list[bool] = []
+
+    async def send(self, frame: dict) -> None:
+        self.frames.append((str(frame.get("event") or ""), self.turns._end_sent))
+
+    def save_exchange(self, chat_id, question, answer):
+        self.at_save.append(self.turns._end_sent)
+        return chat_id or "chat_y1"
+
+
+@pytest.mark.parametrize("end", ["done", "error"])
+def test_the_end_is_shown_only_after_the_exchange_is_saved(end: str, monkeypatch):
+    """Y-1: a Reset no longer waits for the reply's task once its end is shown,
+    so "shown" must come AFTER the exchange is written AND saved as the
+    sidebar's chat: a Reset between the two would clear the chat's id while the
+    save in flight wrote it back (the next exchange then lands in the chat the
+    Reset closed). And it must come before the terminal frame leaves, so a
+    Reset the person presses on that frame is never refused. Driven through
+    ``_run`` (the lane stood in for at its seam), so where the lane's frames are
+    read counts too."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import iron_jarvis.daemon.chat_stream as chat_stream
+    from iron_jarvis.browser.panel import PanelTurns
+
+    last = (
+        'event: done\ndata: {"reply": "an answer"}\n\n' if end == "done"
+        else 'event: error\ndata: {"detail": "the provider fell over"}\n\n'
+    )
+
+    async def lane(*a, **kw):
+        async def gen():
+            yield 'event: token\ndata: {"text": "an answer"}\n\n'
+            yield last
+
+        return gen()
+
+    monkeypatch.setattr(chat_stream, "stream_chat_turn", lane)
+    turns = PanelTurns(SimpleNamespace(browser=None))
+    watch = _SaveWatch(turns)
+    turns._chat_built, turns._chat = True, watch
+    terminal = P.PANEL_EVENT_DONE if end == "done" else P.PANEL_EVENT_ERROR
+
+    async def drive():
+        turns._conn = watch
+        turns._turn_text, turns._remembered, turns._answer = "q?", False, []
+        turns._end_sent = False
+        await turns._run(watch, "q?", "panel_test")
+
+    asyncio.run(drive())
+    assert watch.at_save == [False], "the end was shown before the exchange was saved"
+    assert [shown for event, shown in watch.frames if event == P.PANEL_EVENT_DELTA] == [False]
+    assert [shown for event, shown in watch.frames if event == terminal][:1] == [True], watch.frames
 
 
 def test_a_stopped_turn_keeps_the_half_answer_the_user_read(tmp_path, monkeypatch):

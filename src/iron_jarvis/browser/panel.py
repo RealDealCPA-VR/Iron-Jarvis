@@ -848,7 +848,15 @@ class PanelTurns:
         #: parallel suite caught the opposite order: ``open`` racing the turn's
         #: own ``finally`` and replaying a question with no answer.
         self._turn_text: str = ""
-        #: The running reply's `done` frame has left (see ``_send``).
+        #: The running reply's END IS BEING SHOWN: its exchange is written and
+        #: its terminal frame (`done`, or its own `error`) is going out
+        #: (:meth:`_translate`). The reply's task still runs its tidy-up after
+        #: that (the stream lane writes the turn's usage row after `done`, off
+        #: the loop: milliseconds, seconds behind a busy database), while the
+        #: panel already offers Send and Reset. From here a Send waits for that
+        #: tidy-up (bounded, ``_send``), a Reset need not (nothing left in it
+        #: touches the conversation, ``_reset``), and the state frame says the
+        #: reply has ended (``_state``).
         self._end_sent: bool = False
         self._remembered: bool = True
         #: SB3 (third review): the conversation is ALSO a chat the daemon
@@ -1841,7 +1849,8 @@ class PanelTurns:
             )
             return
         if self.running and self._end_sent:
-            # The reply's END HAS BEEN SHOWN (its `done` left); only its
+            # The reply's END HAS BEEN SHOWN (its `done`, or since Y-1 its
+            # own error, left); only its
             # tidy-up is still running (since the third fix plan the lane
             # waits for its usage row's write after `done`). A Send in that
             # instant waits for it, bounded, instead of being refused as
@@ -1924,7 +1933,11 @@ class PanelTurns:
         asks again on every tab switch.
         """
         return {
-            "running": self.running if running is None else bool(running),
+            # Y-1: a reply whose end has been shown is not running for the
+            # panel, though its task may still be tidying up: an `open` in that
+            # instant (every tab switch sends one) must not paint "working"
+            # again, with no `done` left to come and end it.
+            "running": (self.running and not self._end_sent) if running is None else bool(running),
             "tab_allowed": self._tab_allowed(),
             # v1.270.0: the one switch, as the daemon holds it.
             "auto_allow": self._auto_allowed(),
@@ -2128,8 +2141,15 @@ class PanelTurns:
 
         SB3: its chat stays in the chat list, whole; it is no longer the
         sidebar's conversation, so the next exchange starts a new chat and a
-        restart restores nothing from before the Reset."""
-        if self.running:
+        restart restores nothing from before the Reset.
+
+        Y-1: a reply whose END HAS BEEN SHOWN (``_end_sent``) no longer
+        counts: the panel draws its Reset the moment `done` arrives, while the
+        reply's task still writes its usage row, and a Reset pressed then was
+        refused as "still working" on a busy PC (the screen already empty, the
+        conversation kept). Nothing in that tidy-up touches the conversation:
+        the exchange was written and saved before the end was shown."""
+        if self.running and not self._end_sent:
             await self.emit(
                 conn,
                 P.PANEL_EVENT_ERROR,
@@ -2579,7 +2599,6 @@ class PanelTurns:
                 for event, data in parse_sse(chunk):
                     if event == "done":
                         emitted_done = True
-                        self._end_sent = True
                     elif event == "error":
                         ended_on_error = True
                     await self._translate(conn, event, data)
@@ -2841,6 +2860,10 @@ class PanelTurns:
             # v1.270.0: the exchange is written BEFORE `done` leaves, so an
             # `open` that arrives on that frame replays a complete conversation.
             await self._remember_exchange()
+            # Y-1: the end is shown from here (after the exchange is written
+            # and saved, so a Reset that no longer waits on the tidy-up can
+            # never race that save).
+            self._end_sent = True
             await self.emit(conn, P.PANEL_EVENT_DONE, {"text": final})
             return
         if event == "error":
@@ -2859,7 +2882,9 @@ class PanelTurns:
                 payload["technical"] = technical[:TECHNICAL_CHARS]
             # What was read is remembered BEFORE the terminal frame leaves.
             await self._remember_exchange()
-            # SB8: the reply's own failure is its end on the panel.
+            # SB8: the reply's own failure is its end on the panel. Y-1: shown
+            # from here, exactly as a `done` is.
+            self._end_sent = True
             await self.emit(conn, P.PANEL_EVENT_ERROR, payload, ends_turn=True)
             return
 
