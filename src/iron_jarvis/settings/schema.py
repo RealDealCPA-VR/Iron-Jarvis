@@ -977,6 +977,31 @@ SETTINGS: tuple[SettingDef, ...] = (
       options=(("all", "Claude and Codex (default)"), ("claude-code", "Claude only (its Code and Chat tabs)"),
                ("codex", "Codex only"), ("none", "Neither")),
       ),
+    # 17-a (build-out plan R1.8, idea 17): the night review. It spends plan
+    # usage every night, so it starts NOT SET and is offered once on
+    # Improvements (D-17.1); turning it on from chat asks every time.
+    S("night_review", "Night review", "memory", "bool",
+      "Each night, while your PC has nothing else to do, Iron Jarvis looks at what went wrong during "
+      "the day and leaves suggestions in Improvements for you to accept or decline. It sends up to "
+      "the number of requests below each night, only to a model on your plan, on this PC or on your "
+      "own network, never to one that bills per use, and only while each account is under 70% of its "
+      "limits. Work you kept Local only is reviewed only by a model on this PC or your network. "
+      "Nothing changes until you accept a suggestion. Not set: Iron Jarvis asks you once on "
+      "Improvements.",
+      tier="allow", floor_when=(True,), section="Night review", unset_ok=True,
+      aliases=("night review", "nightly review", "review at night", "review what went wrong")),
+    S("night_review_requests", "Night review: requests a night", "memory", "number",
+      "The most model requests the night review may send in one night (1 to 20). Each counts toward "
+      "your plan's limits.",
+      tier="ask", section="Night review", check=_range(1, 20),
+      aliases=("night review limit", "night review requests")),
+    # Its "stop this kind" answer is a Notifications row (the build-out
+    # plan's table of notices): Settings › Connections › Notifications.
+    S("night_review_notice", "Tell me in the bell what the night review found", "connections", "bool",
+      "One row in the bell the morning after the night review made suggestions. Off: they still wait "
+      "in Improvements, and nothing rings.",
+      tier="allow", section="Notifications",
+      aliases=("night review notice", "night review bell", "stop telling me about the night review")),
     # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.
     # Its own control in Settings › Memory & you (CONTROLLED_IN_SECTION); a
     # project may choose its own (Project.brain_profile). Choosing where

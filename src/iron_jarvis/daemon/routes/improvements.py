@@ -18,6 +18,16 @@
 Reads only (SQLite), so the handler is a plain ``def`` (FastAPI runs it off
 the loop). No model is called and nothing is written.
 
+17-a (the night review, ``improve/night_review``): a suggestion the review
+made carries ``extra.night = {night, why}``, and
+
+* ``GET /improvements/night`` → ``{offer: {requests, words} | null, night:
+  {night, state, made, waiting, skipped_why, needs_you, line} | null}``: the
+  one-time offer (D-17.1, while ``night_review`` is not set; the page answers
+  it through ``PUT /settings``, so it has Undo) and the page's top line, only
+  when last night's review made something that still waits, or was skipped
+  for a reason only the owner can change. A read (plain ``def``).
+
 v1.506.0 (north-star plan 6.2): chat answers ONE suggestion through that
 suggestion's OWN route (``inbox/tools.SuggestionAnswerTool``): the app is kept
 on the deps object (``d.suggestion_app``) and :func:`answer_through_route`
@@ -47,6 +57,12 @@ def register(app: FastAPI, d) -> None:
     @app.get("/improvements")
     def improvements_inbox() -> dict[str, Any]:
         return collect(d)
+
+    @app.get("/improvements/night")
+    def improvements_night() -> dict[str, Any]:
+        from ...improve.night_review import page_view
+
+        return page_view(d)
 
 
 async def answer_through_route(d: Any, method: str, path: str, body: Any) -> tuple[int, str]:

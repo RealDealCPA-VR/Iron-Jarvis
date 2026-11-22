@@ -125,6 +125,8 @@ export const IMPROVEMENT_EVENT_TYPES = [
   "client.suggested",
   "client.confirmed",
   "client.declined",
+  // 17-a: last night's review made suggestions.
+  "improvement.night_review",
 ];
 
 /**
@@ -303,4 +305,86 @@ export function groupsToShow(
 export function waitingWords(n: number): string {
   if (n <= 0) return "";
   return n === 1 ? "1 suggestion is waiting for you." : `${n} suggestions are waiting for you.`;
+}
+
+// --------------------------------------------------------------------------- //
+// 17-a: THE NIGHT REVIEW (improve/night_review). `GET /improvements/night`
+// says two things, each only when it is true: the ONE-TIME OFFER (D-17.1:
+// nothing runs until the owner says yes; the answer is the setting itself,
+// saved through PUT /settings, so it has Undo), and LAST NIGHT'S LINE
+// ("From last night's review: 3" while 3 of its suggestions still wait, or
+// "Skipped: ..." when only the owner can change why it made nothing). A
+// suggestion the review made carries its reason on `extra.night`.
+// --------------------------------------------------------------------------- //
+
+export const NIGHT_REVIEW_PATH = "/improvements/night";
+/** The setting the offer answers (Settings › Memory & you › Night review). */
+export const NIGHT_REVIEW_SETTING = "night_review";
+export const NIGHT_OFFER_TITLE = "Let Iron Jarvis review each day at night?";
+export const NIGHT_OFFER_YES = "Turn on the night review";
+export const NIGHT_OFFER_NO = "No thanks";
+export const NIGHT_OFFER_ON = "The night review is on. Its suggestions will wait here in the morning.";
+export const NIGHT_OFFER_OFF = "The night review stays off. You can turn it on in Settings › Memory & you.";
+/** The reason line on a suggestion the review made. */
+export const NIGHT_WHY_PREFIX = "From the night review: ";
+
+export interface NightOffer {
+  requests: number;
+  /** "up to 6 requests a night on your plan" (the daemon's words). */
+  words: string;
+}
+
+export interface NightLine {
+  night: string;
+  state: string;
+  made: number;
+  waiting: number;
+  skippedWhy: string;
+  needsYou: boolean;
+  /** The one line the page shows ("" = show none). */
+  line: string;
+}
+
+export interface NightReview {
+  offer: NightOffer | null;
+  night: NightLine | null;
+}
+
+/** The offer's words, with the daemon's own cost words in them. */
+export function nightOfferWords(offer: NightOffer): string {
+  return (
+    "While your PC has nothing else to do at night, Iron Jarvis looks at what went wrong during the day " +
+    `and leaves suggestions here for you to accept or decline. It uses ${offer.words}, only on a plan, ` +
+    "this PC or your network, never a model that bills per use, and only while each account is under " +
+    "70% of its limits. Nothing changes until you accept a suggestion."
+  );
+}
+
+export function decodeNightReview(raw: unknown): NightReview {
+  const r = record(raw) ?? {};
+  const o = record(r.offer);
+  const offerWords = o ? text(o.words, 120).trim() : "";
+  const offer = o && offerWords ? { requests: count(o.requests), words: offerWords } : null;
+  const n = record(r.night);
+  const line = n ? text(n.line, 400).trim() : "";
+  const night =
+    n && line
+      ? {
+          night: text(n.night, 20),
+          state: text(n.state, 20),
+          made: count(n.made),
+          waiting: count(n.waiting),
+          skippedWhy: text(n.skipped_why, 400),
+          needsYou: n.needs_you === true,
+          line,
+        }
+      : null;
+  return { offer, night };
+}
+
+/** Why the night review made this suggestion ("" = it did not). */
+export function nightWhy(item: ImprovementItem): string {
+  const n = record(item.extra.night);
+  const why = n ? text(n.why, 600).trim() : "";
+  return why ? `${NIGHT_WHY_PREFIX}${why}` : "";
 }

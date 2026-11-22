@@ -216,6 +216,12 @@ class EventType:
     # CUSTOM agent was minted from its recent runs. {id, agent, categories,
     # rationale} — nothing is written until POST /coach/proposals/{id}/accept.
     COACH_PROPOSAL = "coach.proposal"
+    # The night review (17-a, ``improve/night_review``): last night's review
+    # made suggestions — ONE per night, only when it made something.
+    # {night, made, by_kind, title, body}: counts and the app's own words,
+    # never a suggestion's words. The bell and the tray say it; not a default
+    # alert (the phone line is 17-b, off until the owner turns it on).
+    IMPROVEMENT_NIGHT_REVIEW = "improvement.night_review"
     # Preferences you approve (v1.305.0, idea from agent-personalizer, MIT):
     # a repeated correction became ONE suggestion (proposed row) — {id, text,
     # count, via: "chat" | "scan"}; the user kept it ({id, text}) or said

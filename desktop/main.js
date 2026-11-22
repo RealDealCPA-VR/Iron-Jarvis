@@ -4570,8 +4570,11 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // step it was told to skip (`workflow.completed` `completed_with_failures`).
 // Readiness 0j.5 item 10: and a remote agent's report-back (`remote.message`,
 // never its progress lines), opening the chat it came home to.
+// 17-a: and last night's review's suggestions (`improvement.night_review`, ONE
+// a night, only when it made something), in the daemon's words; the click
+// opens Improvements.
 const RUN_OUTCOME_AUDIT_TYPES =
-  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done,chat.turn_finished,reflex.failed,remote.message";
+  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done,chat.turn_finished,reflex.failed,remote.message,improvement.night_review";
 //: Entries one read asks for (the bell's own replay reads 50).
 const RUN_OUTCOME_LIMIT = 50;
 //: How many seen ids the watcher remembers (newest kept).
@@ -4682,6 +4685,22 @@ function runOutcomeNotice(entry) {
       title,
       body: runOutcomeClip(p.body) || RUN_OUTCOME_NO_DETAIL,
       href: `/chat?view=code&night=${encodeURIComponent(night)}`,
+    };
+  }
+  if (entry.type === "improvement.night_review") {
+    // 17-a: the bell's row, word for word (the daemon wrote it:
+    // improve/night_review.notice_title); the click opens Improvements.
+    const night = typeof p.night === "string" ? p.night.trim() : "";
+    const made = typeof p.made === "number" && Number.isFinite(p.made) ? Math.floor(p.made) : 0;
+    if (!night || made <= 0) return null;
+    const fallback = `${made} suggestion${made === 1 ? "" : "s"} from yesterday's review`;
+    const title = typeof p.title === "string" && p.title.trim() ? p.title.trim() : fallback;
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title,
+      body: runOutcomeClip(p.body) || RUN_OUTCOME_NO_DETAIL,
+      href: "/improvements",
     };
   }
   if (entry.type === "build.ci_done") {

@@ -887,6 +887,49 @@
       "title": "Your workflow Weekly tidy could not finish",
       "body": "Its report in the chat says which step stopped.",
       "href": "/chat?thread=chat_weekly"
+    },
+    {
+      "case": "night-review-made",
+      "event": {
+        "id": "evt_night_review",
+        "type": "improvement.night_review",
+        "session_id": null,
+        "ts": "2026-11-21T06:10:00",
+        "payload": {
+          "night": "2026-11-20",
+          "made": 3,
+          "by_kind": {"coach": 2, "wants": 1},
+          "title": "3 suggestions from yesterday's review",
+          "body": "Accept or decline each one on Improvements."
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "this_pc": false,
+      "title": "3 suggestions from yesterday's review",
+      "body": "Accept or decline each one on Improvements.",
+      "href": "/improvements"
+    },
+    {
+      "case": "night-review-made-nothing",
+      "event": {
+        "id": "evt_night_review_0",
+        "type": "improvement.night_review",
+        "session_id": null,
+        "ts": "2026-11-21T06:10:00",
+        "payload": {
+          "night": "2026-11-20",
+          "made": 0,
+          "by_kind": {},
+          "title": "0 suggestions from yesterday's review",
+          "body": "Accept or decline each one on Improvements."
+        }
+      },
+      "pings": false,
+      "attention": false,
+      "phone": false,
+      "this_pc": false
     }
   ]
 }

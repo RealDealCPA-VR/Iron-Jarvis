@@ -578,6 +578,7 @@ def test_the_watcher_reads_the_bells_events_and_the_notice_opens_the_run():
         # not start its action.
         # Readiness 0j.5 item 10 (moved on purpose): and a remote agent's
         # report-back.
-        'build.ci_done,chat.turn_finished,reflex.failed,remote.message";'
+        # 17-a (moved on purpose): and last night's review's suggestions.
+        'build.ci_done,chat.turn_finished,reflex.failed,remote.message,improvement.night_review";'
         in src
     )

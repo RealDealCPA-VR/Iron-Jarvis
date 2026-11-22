@@ -293,6 +293,9 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // v1.399.0 (night shift N2): ONE night's Last night summary — one row per
   // night, counted, opening Coding sessions › Last night.
   "build.night_summary",
+  // 17-a: last night's review made suggestions — ONE row a night, counted,
+  // opening Improvements (a night that made nothing never publishes).
+  "improvement.night_review",
   // v1.406.0 part 3: a coding session's pull request — each step of fixing
   // its failing checks (quiet), and its news (stopped fixing / passing now).
   "build.ci_step",
@@ -1281,6 +1284,27 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       ts: e.ts,
       href: lastNightHref(night),
       icon: shortfall ? AlertTriangle : CheckCircle2,
+      title,
+      body: clip(p.body),
+      attention: true,
+    };
+  }
+  if (e.type === "improvement.night_review") {
+    // 17-a: last night's review made suggestions. Payload {night, made,
+    // by_kind, title, body}: counts and the daemon's own words
+    // (improve/night_review.notice_title: the tray says exactly these),
+    // never a suggestion's words. ONE row a night, counted on the badge
+    // (nobody was watching the night's work); it opens Improvements.
+    const night = typeof p.night === "string" ? p.night.trim() : "";
+    const made = typeof p.made === "number" && Number.isFinite(p.made) ? Math.floor(p.made) : 0;
+    if (!night || made <= 0) return null;
+    const fallback = `${made} suggestion${made === 1 ? "" : "s"} from yesterday's review`;
+    const title = typeof p.title === "string" && p.title.trim() ? p.title.trim() : fallback;
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/improvements",
+      icon: Lightbulb,
       title,
       body: clip(p.body),
       attention: true,

@@ -2042,6 +2042,44 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The night review leaves suggestions for the morning (v1.556.0)
+
+Iron Jarvis can now look at what went wrong during the day while your PC is
+idle at night, and leave suggestions in **Improvements** for you to accept
+or decline in the morning. It spends usage on your plan, so it asks you
+once first: the card at the top of Improvements says "up to 6 requests a
+night on your plan", with **Turn on the night review** and **No thanks**.
+Nothing runs until you say yes.
+
+- **When it runs.** Inside the night window (23:00 to 07:00 unless you
+  changed it under Night shift), only while nothing else is running, no
+  chat was used in the last 30 minutes and no night task is running, and
+  never under Emergency stop. Once a night.
+- **What it looks at.** Your own records only: an agent of yours that kept
+  running out of steps or hitting the same trouble yesterday gets one
+  suggested change to its instructions (built-in agents are not coached:
+  their instructions are the app's); a tool that kept failing this week
+  gets a "Find out why it keeps failing" suggestion; one skill draft that
+  was waiting gets written. Each suggestion says why it was made ("From the
+  night review: Your agent research ran out of steps 4 times yesterday.").
+- **What it may spend.** At most the number of requests you set (6 by
+  default, 1 to 20), each on the model that did the work, on your plan, on
+  this PC or on your own network. Never a model that bills per use, never
+  the demo model, and never while an account is at 70% or more of its
+  limits. Work you kept **Local only** is reviewed only by a model on this
+  PC or your network; otherwise nothing is sent.
+- **What you see in the morning.** One row in the bell, "3 suggestions from
+  yesterday's review", that opens Improvements, where a line at the top
+  reads "From last night's review: 3" until you have answered them. If it
+  found nothing, nothing rings. If it was skipped for a reason only you can
+  change (every model it would have used bills per use, for example), the
+  line says so: "Skipped: …". Nothing goes to your phone.
+- **Settings › Memory & you › Night review** turns it on or off and sets
+  the requests a night; **Settings › Connections › Notifications** turns the
+  bell row off ("Tell me in the bell what the night review found"). You can
+  also ask in chat: "turn on the night review", "stop telling me about the
+  night review". Each change has Undo.
+
 ## New conversation works the moment a sidebar reply ends (v1.558.1)
 
 In the browser sidebar, New conversation now works as soon as a reply's end

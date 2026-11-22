@@ -110,6 +110,7 @@ export const EVENT_WORDS: Record<string, string> = {
   "skill.proposal_created": "A new skill was proposed",
   "skill.recorded": "A task you recorded in the browser was saved as a skill",
   "coach.proposal": "A coaching suggestion for an agent",
+  "improvement.night_review": "The night review made suggestions",
   "preference.suggested": "Suggested remembering a preference",
   "preference.kept": "A preference was kept",
   "preference.declined": "A preference was declined",
@@ -381,6 +382,10 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
       break;
     case "runs.busy":
       add(count(p.running, "run", "runs"));
+      break;
+    case "improvement.night_review":
+      // 17-a: the count only, never a suggestion's words.
+      add(count(p.made, "suggestion", "suggestions"));
       break;
     case "agent.paused":
     case "agent.allowance_warning":

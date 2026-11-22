@@ -137,6 +137,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Recaps of your finished work aren't being written",
     href: "/memory",
   },
+  // 17-a: the night review — inside the night window, while Iron Jarvis is
+  // idle, it looks at yesterday's work and leaves suggestions in Improvements.
+  night_review: {
+    label: "Night review",
+    problem: "Last night's review of what went wrong isn't running",
+    href: "/improvements",
+  },
   // v1.499.0: the pass that notices names in your folder names that may be clients.
   work_clients: {
     label: "Clients in your folders",

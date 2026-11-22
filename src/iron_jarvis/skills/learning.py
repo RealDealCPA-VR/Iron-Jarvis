@@ -440,8 +440,14 @@ class SkillLearningEngine:
 
     # -- distillation: model-backed, real provider only ----------------------
 
-    async def distill_candidates(self, complete: Complete, *, limit: int = 3) -> dict:
+    async def distill_candidates(self, complete: Complete, *, limit: int = 3,
+                                 ids: "list[str] | None" = None) -> dict:
         """Turn pending candidates into reviewable proposals (oldest first).
+
+        17-a (the night review): ``ids`` names the ONLY candidates this sweep
+        may take, so a ``complete`` pinned to one run's own model is never
+        handed another run's candidate. ``None`` = any pending candidate, as
+        before.
 
         ``complete`` is an async ``(system, prompt) -> reply`` the DAEMON
         supplies, wired to a REAL provider — never mock (a fabricated skill
@@ -459,11 +465,11 @@ class SkillLearningEngine:
             }
         self._distilling = True
         try:
-            return await self._distill(complete, limit=limit)
+            return await self._distill(complete, limit=limit, ids=ids)
         finally:
             self._distilling = False
 
-    async def _distill(self, complete: Complete, *, limit: int) -> dict:
+    async def _distill(self, complete: Complete, *, limit: int, ids: "list[str] | None" = None) -> dict:
         if not self._enabled():
             return {
                 "reviewed": 0,
@@ -475,11 +481,12 @@ class SkillLearningEngine:
         with session_scope(self.engine) as db:
             # v1.502.0: a window past ``limit`` — a Local only run's candidate
             # held back (below) must not starve the ones after it.
+            stmt = select(SkillCandidateRecord).where(SkillCandidateRecord.status == "pending")
+            if ids is not None:
+                stmt = stmt.where(SkillCandidateRecord.id.in_([str(i) for i in ids]))  # type: ignore[attr-defined]
             candidates = list(
                 db.exec(
-                    select(SkillCandidateRecord)
-                    .where(SkillCandidateRecord.status == "pending")
-                    .order_by(SkillCandidateRecord.created_at.asc())
+                    stmt.order_by(SkillCandidateRecord.created_at.asc())
                     .limit(want + _HELD_WINDOW)
                 )
             )

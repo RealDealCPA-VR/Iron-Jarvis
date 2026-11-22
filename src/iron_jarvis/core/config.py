@@ -714,6 +714,22 @@ class Config(BaseModel):
     #: "codex" | "none". The sidebar's own list of those chats does not
     #: depend on it. An unknown value means none.
     other_tools_in_memory: str = "all"
+    #: 17-a (build-out plan R1.8, idea 17): THE NIGHT REVIEW
+    #: (``improve/night_review``). Each night, inside the night window and
+    #: while Iron Jarvis is idle, it looks at what went wrong during the day
+    #: and leaves suggestions in Improvements, spending at most
+    #: ``night_review_requests`` model requests on a plan, this PC or the
+    #: owner's network (never pay per use, never an account at 70% of a
+    #: window). ``None`` = NOT ANSWERED YET: it is offered once on
+    #: Improvements (D-17.1) and nothing runs until the owner says yes; True =
+    #: on; False = off (the offer is not shown again).
+    night_review: bool | None = None
+    #: The night's cap on model requests (1 to 20; D-17.1: 6).
+    night_review_requests: int = 6
+    #: One bell row the morning after the review made suggestions (its
+    #: "stop this kind" answer). Off: the suggestions still wait in
+    #: Improvements; nothing rings.
+    night_review_notice: bool = True
     #: v1.405.0: the code editor a coding session's "Open in …" presses open
     #: (harness/code_editor): "auto" = VS Code when installed, else Cursor;
     #: "vscode" / "cursor" = that one. Read live by GET /editor/options.
@@ -1369,6 +1385,24 @@ class Config(BaseModel):
         # R2.15: tolerant — a hand edit never stops a boot; only a real
         # true/false is a choice, anything else is "never chosen" (off).
         return v if isinstance(v, bool) else None
+
+    @field_validator("night_review", mode="before")
+    @classmethod
+    def _clean_night_review(cls, v: Any) -> "bool | None":
+        # 17-a: a hand edit never stops a boot. Only a real true/false is an
+        # answer; anything else is "not answered yet" (the offer shows, and
+        # nothing is spent).
+        return v if isinstance(v, bool) else None
+
+    @field_validator("night_review_requests", mode="before")
+    @classmethod
+    def _clean_night_review_requests(cls, v: Any) -> int:
+        # 17-a: bounded 1 to 20; anything that is not a whole number is the
+        # default (6). The settings writer refuses a value out of range in
+        # words first (the schema row's check).
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return 6
+        return max(1, min(20, int(v)))
 
     @field_validator("browsing_preferences")
     @classmethod

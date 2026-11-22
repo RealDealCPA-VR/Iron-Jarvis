@@ -759,6 +759,16 @@ async def _tool_failure_pass(platform, tick=None) -> list[dict]:
     if improvement is None:
         return []
     try:
+        # 17-a: the night review runs this scan; a day it covered is left
+        # alone here (the scan would only find the same week again).
+        engine = getattr(platform, "engine", None)
+        if engine is not None:
+            from ..improve.night_review import reviewed_within
+
+            if await asyncio.to_thread(reviewed_within, engine, hours=24):
+                if tick is not None:
+                    tick("tool_failures", True)
+                return []
         out = await asyncio.to_thread(improvement.sweep)
         found = list((out or {}).get("tool_failure_proposals") or [])
         if found:
@@ -2235,6 +2245,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 platform,
                 lambda ok, exc: _tick("work_recaps", ok, exc),
                 on_off=lambda: loop_health.pop("work_recaps", None),
+            )
+        )
+
+        # THE NIGHT REVIEW (17-a, build-out plan R1.8): inside the night
+        # window, while Iron Jarvis is idle, ONE pass a night looks at
+        # yesterday's records and runs the right suggestion maker for each
+        # problem, through the night budget (improve/budget: never pay per
+        # use, under 70% of each account, at most night_review_requests a
+        # night). A look every 5 minutes; off, not answered yet or outside the
+        # window, a look reads no table. Each look reports ITS OWN outcome on
+        # loop_health["night_review"]; off pops the row.
+        from ..improve.night_review import review_loop as _review_loop
+
+        bg_tasks["night_review"] = asyncio.create_task(
+            _review_loop(
+                _app.state.d,
+                lambda ok, exc: _tick("night_review", ok, exc),
+                on_off=lambda: loop_health.pop("night_review", None),
             )
         )
 

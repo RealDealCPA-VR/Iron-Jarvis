@@ -18,7 +18,7 @@ for every change are in the root `CLAUDE.md`.
 | `__init__.py`, `maintenance.py`, `platform.py` | `docs/rules/daemon.md` |
 | `backgrounds/`, `onboarding/` | `docs/rules/dashboard.md` |
 | `creative/`, `documents/`, `excel_worker.py`, `filesearch/`, `media/`, `ocr_worker.py` | `docs/rules/documents.md` |
-| `brain/`, `capability/`, `guide/`, `inbox/`, `learning/`, `ltm/`, `memory/`, `personas/`, `profile/`, `projects/`, `skills/`, `workmap/` | `docs/rules/memory.md` |
+| `brain/`, `capability/`, `guide/`, `improve/`, `inbox/`, `learning/`, `ltm/`, `memory/`, `personas/`, `profile/`, `projects/`, `skills/`, `workmap/` | `docs/rules/memory.md` |
 | `audio_worker.py`, `comm/`, `peers/` | `docs/rules/messaging.md` |
 | `envelope/`, `eval/`, `fleet/`, `iron_proxy/`, `providers/` | `docs/rules/providers.md` |
 | `settings/` | `docs/rules/settings.md` |

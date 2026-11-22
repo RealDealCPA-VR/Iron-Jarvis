@@ -192,6 +192,7 @@ EVENT_WORDS: dict[str, str] = {
     "skill.proposal_created": "A new skill was proposed",
     "skill.recorded": "A task you recorded in the browser was saved as a skill",
     "coach.proposal": "A coaching suggestion for an agent",
+    "improvement.night_review": "The night review made suggestions",
     "preference.suggested": "Suggested remembering a preference",
     "preference.kept": "A preference was kept",
     "preference.declined": "A preference was declined",
@@ -811,6 +812,10 @@ def format_event(event: Any) -> str:
         from ..harness.night_morning import phone_message
 
         return phone_message(payload)
+    if etype == EventType.IMPROVEMENT_NIGHT_REVIEW:
+        # 17-a: the COUNT only, never what a suggestion says (D-17.3). Not a
+        # default alert: only a destination that subscribed it hears it.
+        return night_review_line(payload)
     words = EVENT_WORDS.get(str(etype or ""))
     if words:
         return _with_summary(f"Iron Jarvis: {words}", payload.get("summary"))
@@ -865,6 +870,21 @@ def is_workflow_step(payload: dict) -> bool:
     return _origin_kind(payload) == "workflow"
 
 
+def _made(payload: dict) -> int:
+    raw = payload.get("made")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 0
+    return max(0, int(raw))
+
+
+def night_review_line(payload: dict) -> str:
+    """17-a: the night review's one line for a destination that subscribed
+    it — "Iron Jarvis has 3 suggestions from yesterday's review." The count
+    only (D-17.3): never a suggestion's words, an agent's name or a file."""
+    n = _made(payload if isinstance(payload, dict) else {})
+    return f"Iron Jarvis has {n} suggestion{'' if n == 1 else 's'} from yesterday's review."
+
+
 def bell_pings(event: Any) -> bool:
     """Does the dashboard bell raise a desktop ping for this event while a
     window is open? The Python twin of ``NotificationBell.toActivity`` for the
@@ -894,6 +914,11 @@ def bell_pings(event: Any) -> bool:
       night summary — ONE row per night, counted on the badge (nobody was
       watching the night's work), the tray says it with no window open.
 
+    * ``improvement.night_review`` (17-a): last night's review made
+      suggestions — ONE row a night, counted, said from the tray. Not a
+      default alert (the phone is 17-b's, off until turned on), so "This PC"
+      never repeats it.
+
     * ``build.ci_done`` (v1.406.0 part 3): Iron Jarvis stopped fixing a
       pull request's failing checks, or they pass after the fix it pushed —
       counted, said from the tray, one phone line.
@@ -917,6 +942,11 @@ def bell_pings(event: Any) -> bool:
             return False
         if etype == EventType.BUILD_NIGHT_SUMMARY:
             return bool(_text(payload.get("night")))
+        if etype == EventType.IMPROVEMENT_NIGHT_REVIEW:
+            # 17-a: last night's review made suggestions — ONE row a night,
+            # counted, said from the tray; a night that made nothing never
+            # publishes, and a payload that says 0 rings nothing.
+            return bool(_text(payload.get("night"))) and _made(payload) > 0
         if etype == EventType.BUILD_CI_DONE:
             # v1.406.0 part 3: a pull request's check-fix NEWS (gave up, or
             # passing after the reviewed push) rings; its quiet steps

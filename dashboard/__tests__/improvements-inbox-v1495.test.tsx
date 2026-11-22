@@ -11,6 +11,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 const H = vi.hoisted(() => ({
   inbox: {} as unknown,
   gets: [] as string[],
+  // 17-a: the night review's own read (GET /improvements/night) is counted
+  // apart, so `gets` is still the LIST's reads.
+  night: { offer: null, night: null } as unknown,
+  nightGets: [] as string[],
   posts: [] as { path: string; body: unknown }[],
   getError: null as Error | null,
   postError: null as Error | null,
@@ -32,6 +36,12 @@ vi.mock("@/lib/api", () => {
   return {
     ApiError,
     get: vi.fn(async (path: string) => {
+      if (path === "/improvements/night") {
+        H.nightGets.push(path);
+        if (H.holdGet) await H.holdGet;
+        if (H.getError) throw H.getError;
+        return JSON.parse(JSON.stringify(H.night));
+      }
       H.gets.push(path);
       if (H.holdGet) await H.holdGet;
       if (H.getError) throw H.getError;
@@ -179,6 +189,8 @@ async function shown(items: ReturnType<typeof wire>[], more: Record<string, unkn
 beforeEach(() => {
   H.inbox = inboxOf([]);
   H.gets = [];
+  H.night = { offer: null, night: null };
+  H.nightGets = [];
   H.posts = [];
   H.getError = null;
   H.postError = null;

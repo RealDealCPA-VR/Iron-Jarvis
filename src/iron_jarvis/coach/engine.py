@@ -314,7 +314,8 @@ class CoachEngine:
         lines.append("Reply with ONLY the full new instructions inside a ``` fence.")
         return system, "\n".join(lines)
 
-    async def _complete(self, system: str, prompt: str, *, local_only: bool = False) -> str | None:
+    async def _complete(self, system: str, prompt: str, *, local_only: bool = False,
+                        pin: "tuple[str, ...] | None" = None) -> str | None:
         """ONE router completion, the way ``ImprovementEngine._router_reflect``
         makes it. ``None`` on any failure — never an exception to the caller,
         except a Local only refusal (``egress.LocalOnlyRefused``), which the
@@ -323,25 +324,55 @@ class CoachEngine:
         LOCAL ONLY (v1.502.0, north-star 2.3): ``local_only`` — the evidence
         quotes a Local only run — makes the call inside
         ``local_only_scope(True)``, so the router's gate refuses a model that
-        leaves this network (nothing is sent)."""
+        leaves this network (nothing is sent).
+
+        PINNED (17-a, the night review): ``pin = (provider, model[, account])``
+        sends the call to exactly that provider and model, ``pin=True`` (no
+        failover: the model that did the agent's work), on that account when
+        one is named (``iron_proxy.choice.pin_for``: that account or nothing,
+        never another login). Without a pin the call goes through the
+        router's default route, as the Agents page's press always did."""
         from ..providers import egress as _egress
         from ..providers.adapters.base import LLMMessage
 
         router = getattr(self.p, "router", None)
         if router is None:
             return None
+        kwargs: dict[str, Any] = {}
+        token = None
+        if pin:
+            provider = str(pin[0] or "")
+            model = str(pin[1] or "") if len(pin) > 1 else ""
+            account = str(pin[2] or "").strip() if len(pin) > 2 else ""
+            kwargs = {"provider": provider, "model": model or None, "session_id": None, "pin": True}
+            if account:
+                from ..iron_proxy import choice as _choice
+                from ..iron_proxy.pin import set_pin
+
+                held, _why = await asyncio.to_thread(
+                    _choice.pin_for, self.p, _choice.clean(account), provider, model, who="agent",
+                )
+                if held is None:
+                    return None
+                token = set_pin(held)
         try:
             with _egress.local_only_scope(bool(local_only)):
                 route = await router.complete(
                     system=system,
                     messages=[LLMMessage(role="user", content=prompt)],
                     tools=[],
+                    **kwargs,
                 )
         except Exception as exc:  # noqa: BLE001 — a model error is a reason, not a crash
             if _egress.refusal_of(exc) is not None:
                 raise
             log.exception("coach model call failed")
             return None
+        finally:
+            if token is not None:
+                from ..iron_proxy.pin import reset_pin
+
+                reset_pin(token)
         response = getattr(route, "response", route)
         return str(getattr(response, "text", "") or "")
 
@@ -359,17 +390,33 @@ class CoachEngine:
         it minted, or never ran)."""
         return self.last_reasons.get(self.roster_name(roster_name), "")
 
-    async def propose(self, roster_name: str) -> CoachProposalRecord | None:
+    async def propose(
+        self,
+        roster_name: str,
+        *,
+        pin: "tuple[str, ...] | None" = None,
+        before_call: "Any | None" = None,
+        local_only: bool = False,
+    ) -> CoachProposalRecord | None:
         """Mint ONE pending proposal for a custom agent, or ``None`` with the
         reason on ``last_reason`` / ``last_reason_for(name)``. The ledger reads
-        run off-loop."""
+        run off-loop.
+
+        17-a (the night review): ``pin = (provider, model[, account])`` sends
+        the one request to that model, pinned (:meth:`_complete`);
+        ``before_call`` is awaited right before the request is sent and
+        answers "" (send it) or the reason it must not be sent (the night
+        budget: its cap counts exactly the requests sent); ``local_only``
+        adds the caller's own Local only reading to the evidence's. With none
+        of them the press on the Agents page is unchanged."""
         roster = self.roster_name(roster_name)
         try:
-            return await self._propose(roster)
+            return await self._propose(roster, pin=pin, before_call=before_call, local_only=local_only)
         finally:
             self.last_reasons[roster] = self.last_reason
 
-    async def _propose(self, roster: str) -> CoachProposalRecord | None:
+    async def _propose(self, roster: str, *, pin: "tuple[str, ...] | None" = None,
+                       before_call: "Any | None" = None, local_only: bool = False) -> CoachProposalRecord | None:
         slug = self._slug(roster)
         if slug is None:
             self.last_reason = REASON_BUILTIN if not roster.startswith("custom:") else REASON_UNKNOWN
@@ -383,7 +430,13 @@ class CoachEngine:
         if not found:
             self.last_reason = REASON_NO_CLUSTERS
             return None
-        if not self._real_provider_available():
+        if pin:
+            # The pinned model is the one asked (never the default route): the
+            # demo model writes no instructions, pinned or not.
+            if str(pin[0] or "").strip().lower().startswith("mock") or not str(pin[0] or "").strip():
+                self.last_reason = REASON_NO_MODEL
+                return None
+        elif not self._real_provider_available():
             self.last_reason = REASON_NO_MODEL
             return None
         session_ids = [e["session_id"] for c in found for e in c.evidence]
@@ -400,11 +453,16 @@ class CoachEngine:
         # LOCAL ONLY (v1.502.0, north-star 2.3): a run quoted in the evidence
         # was Local only — the call is made on this network or not at all.
         quoted = set(session_ids)
-        local_only = any(r.get("local_only") for r in runs if r.get("session_id") in quoted)
+        local_only = bool(local_only) or any(r.get("local_only") for r in runs if r.get("session_id") in quoted)
         from ..providers import egress as _egress
 
+        if before_call is not None:
+            refused = await before_call()
+            if refused:
+                self.last_reason = str(refused)
+                return None
         try:
-            raw = await self._complete(system, prompt, local_only=local_only)
+            raw = await self._complete(system, prompt, local_only=local_only, pin=pin)
         except Exception as exc:  # noqa: BLE001 — only a Local only refusal reaches here
             refused = _egress.refusal_of(exc)
             if refused is None:

@@ -15,12 +15,18 @@
  * Reads: once when shown, when the window is looked at again, after an
  * answer or a refusal that means the suggestion changed, and when Iron
  * Jarvis says a new suggestion was made. Never on a clock.
+ *
+ * 17-a (the night review): at the top, the ONE-TIME OFFER while the owner has
+ * not answered it (nothing runs until yes; the answer is the setting itself,
+ * through PUT /settings), and last night's line only when it made something
+ * that still waits or was skipped for a reason only the owner can change. A
+ * suggestion the review made says why, under its title.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Lightbulb } from "lucide-react";
-import { get, post } from "@/lib/api";
+import { get, post, put } from "@/lib/api";
 import { diffLines } from "@/lib/diff";
 import { failureOf, type FailureLike } from "@/lib/loadFailed";
 import { useEvents } from "@/lib/useEvents";
@@ -30,6 +36,13 @@ import {
   CUT_NOTE,
   IMPROVEMENTS_PATH,
   IMPROVEMENT_EVENT_TYPES,
+  NIGHT_OFFER_NO,
+  NIGHT_OFFER_OFF,
+  NIGHT_OFFER_ON,
+  NIGHT_OFFER_TITLE,
+  NIGHT_OFFER_YES,
+  NIGHT_REVIEW_PATH,
+  NIGHT_REVIEW_SETTING,
   NOTHING_WAITING,
   NOTHING_WAITING_TITLE,
   OFFER_ONLY_NOTE,
@@ -37,12 +50,17 @@ import {
   acceptedWords,
   answerNote,
   decodeInbox,
+  decodeNightReview,
   groupsToShow,
+  nightOfferWords,
+  nightWhy,
   waitingWords,
   type ImprovementAction,
   type ImprovementDetail,
   type ImprovementItem,
   type ImprovementsInbox as Inbox,
+  type NightOffer,
+  type NightReview,
 } from "@/lib/improvements";
 
 /** A focus read is skipped when the list was read this recently. */
@@ -192,6 +210,7 @@ function ImprovementCard({
     }
   }
 
+  const night = nightWhy(item);
   return (
     <li
       data-testid={`improvement-${item.id}`}
@@ -199,6 +218,11 @@ function ImprovementCard({
       className="space-y-2 rounded-2xl bg-white/[0.04] px-4 py-3"
     >
       <p className="text-[14px] leading-snug text-zinc-100">{item.title}</p>
+      {night ? (
+        <p data-testid="improvement-night-why" className="text-[12px] text-zinc-400">
+          {night}
+        </p>
+      ) : null}
       {item.why ? <p className="text-[13px] leading-relaxed text-zinc-300">{item.why}</p> : null}
       {item.evidence.length ? (
         <ul data-testid="improvement-evidence" className="space-y-0.5 text-[12px] text-zinc-400">
@@ -260,8 +284,66 @@ function ImprovementCard({
   );
 }
 
+/** 17-a: the night review's one-time offer. One main button; "No thanks" is
+ *  an answer too (the offer is not shown again). Either answer is the
+ *  setting itself, so Settings shows it and can change it back. */
+function NightOfferCard({ offer, onAnswered }: { offer: NightOffer; onAnswered: (on: boolean) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function answer(on: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      await put("/settings", { values: { [NIGHT_REVIEW_SETTING]: on } });
+      onAnswered(on);
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : DID_NOT_WORK);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section
+      data-testid="improvements-night-offer"
+      aria-label={NIGHT_OFFER_TITLE}
+      className="space-y-2 rounded-2xl bg-white/[0.04] px-4 py-3"
+    >
+      <p className="text-[14px] leading-snug text-zinc-100">{NIGHT_OFFER_TITLE}</p>
+      <p className="text-[13px] leading-relaxed text-zinc-300">{nightOfferWords(offer)}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          data-testid="improvements-night-yes"
+          disabled={busy}
+          onClick={() => void answer(true)}
+          className={ACCEPT_CLASS}
+        >
+          {NIGHT_OFFER_YES}
+        </button>
+        <button
+          type="button"
+          data-testid="improvements-night-no"
+          disabled={busy}
+          onClick={() => void answer(false)}
+          className={DECLINE_CLASS}
+        >
+          {NIGHT_OFFER_NO}
+        </button>
+      </div>
+      {error ? (
+        <p role="alert" data-testid="improvements-night-refused" className="text-[12px] text-tone-danger">
+          {error}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export function ImprovementsInbox() {
   const [inbox, setInbox] = useState<Inbox | null>(null);
+  const [night, setNight] = useState<NightReview | null>(null);
   const [failure, setFailure] = useState<FailureLike | null>(null);
   const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
   const [note, setNote] = useState("");
@@ -279,10 +361,16 @@ export function ImprovementsInbox() {
   const load = useCallback(async () => {
     const mine = ++seq.current;
     readAt.current = Date.now();
+    // 17-a: the night review's offer and line, read beside the list. A
+    // daemon without it (or a read that fails) shows neither: the list is
+    // what this page is for.
+    const nightRead = get<unknown>(NIGHT_REVIEW_PATH).then(decodeNightReview, () => null);
     try {
       const raw = await get<unknown>(IMPROVEMENTS_PATH);
+      const nightNow = await nightRead;
       if (!here.current || mine !== seq.current) return; // a newer read is out: its answer wins
       setInbox(decodeInbox(raw));
+      setNight(nightNow);
       setFailure(null);
       // What the list says now is the truth: an answer that did not take
       // (the suggestion is still there) shows again.
@@ -339,6 +427,15 @@ export function ImprovementsInbox() {
     [load],
   );
 
+  const nightAnswered = useCallback(
+    (on: boolean) => {
+      setNote(on ? NIGHT_OFFER_ON : NIGHT_OFFER_OFF);
+      setNight((prev) => (prev ? { ...prev, offer: null } : prev));
+      void load();
+    },
+    [load],
+  );
+
   const groups = useMemo(() => (inbox ? groupsToShow(inbox, gone) : []), [inbox, gone]);
   const waiting = groups.reduce((n, g) => n + g.items.length + g.more, 0);
 
@@ -359,6 +456,13 @@ export function ImprovementsInbox() {
           onRetry={() => void load()}
           testId="improvements-stale"
         />
+      ) : null}
+
+      {night?.offer ? <NightOfferCard offer={night.offer} onAnswered={nightAnswered} /> : null}
+      {night?.night ? (
+        <p data-testid="improvements-night-line" className="text-[13px] text-zinc-300">
+          {night.night.line}
+        </p>
       ) : null}
 
       {inbox?.unreadable.length ? (

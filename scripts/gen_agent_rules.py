@@ -66,7 +66,7 @@ PACKAGE_AREAS: dict[str, list[str]] = {
     "dashboard": ["backgrounds", "onboarding"],
     "documents": ["creative", "documents", "excel_worker.py", "filesearch", "media",
                   "ocr_worker.py"],
-    "memory": ["brain", "capability", "guide", "inbox", "learning", "ltm", "memory",
+    "memory": ["brain", "capability", "guide", "improve", "inbox", "learning", "ltm", "memory",
                "personas", "profile", "projects", "skills", "workmap"],
     "messaging": ["audio_worker.py", "comm", "peers"],
     "providers": ["envelope", "eval", "fleet", "iron_proxy", "providers"],

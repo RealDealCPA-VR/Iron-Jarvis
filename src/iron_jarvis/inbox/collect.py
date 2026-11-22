@@ -822,6 +822,24 @@ SOURCES: tuple[tuple[tuple[str, ...], Source], ...] = (
 )
 
 
+def night_reasons(d: Any, items: list[dict[str, Any]]) -> None:
+    """17-a: a suggestion the NIGHT REVIEW made says why it was made, on its
+    own item: ``extra.night = {night, why}``, read from the night's record
+    (``improve/night_review.reasons``). A read only: the inbox still decides
+    nothing, and a record that cannot be read leaves the items as they are."""
+    try:
+        from ..improve.night_review import reasons
+
+        index = reasons(d.platform.engine)
+    except Exception:  # noqa: BLE001 — the reasons are a nicety, never a lost list
+        log.debug("improvements inbox: the night review's reasons could not be read", exc_info=True)
+        return
+    for it in items:
+        got = index.get((str(it.get("kind") or ""), str(it.get("ref") or "")))
+        if got:
+            it["extra"] = {**(it.get("extra") or {}), "night": dict(got)}
+
+
 def collect(d: Any) -> dict[str, Any]:
     """Everything that is waiting, in one answer. BLOCKING; never raises.
 
@@ -847,6 +865,7 @@ def collect(d: Any) -> dict[str, Any]:
             continue
         items += rows
         groups.append({"kind": kind, "label": label, "count": int(count), "shown": len(rows)})
+    night_reasons(d, items)
     return {
         "items": items,
         "groups": groups,
@@ -858,6 +877,6 @@ def collect(d: Any) -> dict[str, Any]:
 __all__ = [
     "DETAIL_CHARS", "GOALS_MAX", "KINDS", "LABELS", "OPEN_LABEL", "PER_KIND", "SOURCES", "Read", "action",
     "client_item", "client_view", "coach_item", "collect", "detail_diff", "detail_text", "folder_label", "item",
-    "library_item", "memory_effect",
+    "library_item", "memory_effect", "night_reasons",
     "memory_item", "preference_item", "skill_item", "tool_item", "unasked_item", "wants_item",
 ]
