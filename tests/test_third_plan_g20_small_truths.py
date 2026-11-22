@@ -500,7 +500,7 @@ async def test_a_send_right_after_done_waits_for_the_tidy_up_and_is_not_refused(
     Y-1 ([error]): the same holds after a reply that ended on its OWN error.
     Before Y-1 only `done` marked the end as shown, so a Send there was
     refused ("Stop it first") over a sidebar that already offered Send; the
-    Handbook's v1.556.2 section says it now waits."""
+    Handbook's v1.558.1 section says it now waits."""
     import iron_jarvis.daemon.chat_stream as chat_stream
 
     tidy = asyncio.Event()

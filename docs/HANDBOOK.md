@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.558.0 (2026-11-19).*
+holds itself to. Current as of v1.558.1 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## New conversation works the moment a sidebar reply ends (v1.556.2)
+## New conversation works the moment a sidebar reply ends (v1.558.1)
 
 In the browser sidebar, New conversation now works as soon as a reply's end
 is on screen.

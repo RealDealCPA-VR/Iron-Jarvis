@@ -146,7 +146,7 @@ def _form_answers(log: Path) -> list:
 # THE CONTRACT
 # --------------------------------------------------------------------------- #
 async def test_the_golden_file_is_what_the_real_daemon_sends_for_antigravity(tmp_path, monkeypatch):
-    # v1.556.2: a running step's row is redrawn at most once a second
+    # v1.558.1: a running step's row is redrawn at most once a second
     # (acp.UPDATE_EVERY_S, on the loop's clock). The recordings play with no
     # pauses, so the update after a card's answer falls inside that second and
     # is dropped, unless the answer takes a second to arrive on a busy runner:

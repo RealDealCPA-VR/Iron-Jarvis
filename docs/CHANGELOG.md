@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.558.1
+
+**New conversation works the moment a sidebar reply ends.** In the browser sidebar, New conversation now works as soon as a reply's end is on screen.
+
 ## v1.558.0
 
 **Photos, files and voice notes reach Jarvis from your phone.** Send Jarvis a photo of a page, a PDF, a spreadsheet or a voice note in Telegram, Slack or email, and it works on it the way it works on a file you drop into Chat on this PC.
@@ -77,7 +81,3 @@
 ## v1.543.0
 
 **Rewind puts your files back too.** Build › Code could already rewind a conversation.
-
-## v1.542.0
-
-**Linux download links that always work.** Nothing in the app changes in this release.

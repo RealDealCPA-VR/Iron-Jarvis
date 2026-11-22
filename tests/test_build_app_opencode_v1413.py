@@ -149,7 +149,7 @@ async def test_the_golden_file_is_what_the_real_daemon_sends_for_opencode(tmp_pa
     # viewer's merging (timed, tests/test_build_app_live_merge_v1472.py) is
     # turned off here so the recording does not depend on timing.
     monkeypatch.setattr(S, "_gather_live", _one_event_at_a_time)
-    # v1.556.2: so is the once-a-second redraw of a running step
+    # v1.558.1: so is the once-a-second redraw of a running step
     # (acp.UPDATE_EVERY_S, on the loop's clock): a card's answer that took a
     # second on a busy runner drew one more row (the Antigravity golden passed
     # only on its retry in tests.yml run 45039421510; this one went red the
