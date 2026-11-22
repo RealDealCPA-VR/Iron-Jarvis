@@ -561,8 +561,10 @@ How to use this file: read the contents list, then read only the entries your ch
   day on, or once none of its recordings is on this PC (`_voice_prompt_fresh`,
   `_VOICE_ASK_TTL_S`): a later "1" is a chat message. AN E-MAIL'S OWN WORDS
   are its body without the mail app's own line (`InboundMessage.own_words` =
-  `base.without_signoff(body)`: a `-- ` signature and the fixed `_SIGNOFFS`
-  list, never a guess at typed words; `text` is subject + body): an audio
+  `base.without_signoff(body, quoted_reply=True)`: a `-- ` signature, the
+  fixed `_SIGNOFFS` list and a reply's quoted tail (`>` lines and the English
+  `_ATTRIBUTION` line right above them), never a guess at typed words; `text`
+  is subject + body): an audio
   file with no such words is heard, whatever the subject says. TWO QUESTIONS
   STAY APART in `_take_files`: `hear_audio` (own words) picks a recording to
   hear; `words` (ALL of `text`, the subject too) decides whether anything is

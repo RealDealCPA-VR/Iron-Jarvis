@@ -160,21 +160,42 @@ def _is_signoff(line: str) -> bool:
     return bool(s) and _SIGNOFFS.fullmatch(s) is not None
 
 
-def without_signoff(text: str) -> str:
+#: 10-a: the English line a mail app puts above the earlier e-mail a reply
+#: quotes ("On 22 Nov 2026, at 09:00, Iron Jarvis <...> wrote:"). Only ever
+#: read directly above a quoted ``>`` block; another language's line is not
+#: guessed at, so it stays the sender's words.
+_ATTRIBUTION = re.compile(r"on\s.+\swrote:", re.IGNORECASE | re.DOTALL)
+
+
+def without_signoff(text: str, *, quoted_reply: bool = False) -> str:
     """``text`` without what a mail app adds under it by itself (10-a): a
     signature under a ``-- `` line (``--`` once trailing spaces are trimmed),
     and a last line that is one of the known automatic sign-offs
-    (:data:`_SIGNOFFS`). Everything the person typed stays. It decides only
-    whether a message carries words of its own; the words a turn gets are
-    never changed by it."""
+    (:data:`_SIGNOFFS`). With ``quoted_reply`` (an e-mail's body) also the
+    earlier e-mail a reply quotes at its end: the ``>`` lines and, directly
+    above them, the English line that introduces them (:data:`_ATTRIBUTION`,
+    once wrapped onto two lines). Everything the person typed stays, a line
+    between two quotes too. It decides only whether a message carries words of
+    its own; the words a turn gets are never changed by it."""
     lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     for i, line in enumerate(lines):
         if line.rstrip() == "--":
             lines = lines[:i]
             break
+    quote = False
     while lines:
-        if not lines[-1].strip() or _is_signoff(lines[-1]):
+        last = lines[-1].strip()
+        if not last or _is_signoff(last):
             lines.pop()
+        elif quoted_reply and last.startswith(">"):
+            lines.pop()
+            quote = True
+        elif quote and _ATTRIBUTION.fullmatch(last):
+            lines.pop()
+            quote = False
+        elif quote and len(lines) > 1 and _ATTRIBUTION.fullmatch(f"{lines[-2].strip()} {last}"):
+            del lines[-2:]
+            quote = False
         else:
             break
     return "\n".join(lines).strip()

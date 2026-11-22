@@ -2078,17 +2078,21 @@ takes files now.
   for the service it named: if you later choose another speech service,
   your phone is asked again before a voice note goes to it. A voice note you
   send before you answer waits for the same answer, and a yes turns each one
-  into words. The chat on this PC shows the recording and the question too.
-  The question waits a day; after that, or once the recording is no longer
+  into words. When the recording is the whole message, the chat on this PC
+  shows it and the question too; when your words with it are answered at
+  once, the question is on your phone only. The question waits a day; after that, or once the recording is no longer
   on this PC, a 1 or 2 is an ordinary message. A recording sent as a file
   with no words of yours is turned into words the same way. By email that
   means nothing written in the email, whatever its subject says: the line
   your mail app adds by itself ("Sent from my iPhone", "Get Outlook for iOS"
-  and the like) and a signature under a "-- " line don't count. A name or a
-  note you typed yourself does count, and so does a line your mail app adds
-  that Jarvis doesn't know (some phone companies add their own): the
-  recording is then a file to work on, not heard, so delete that line before
-  you send. When a recording can't be heard, a subject that is only its name
+  and the like), a signature under a "-- " line and, in a reply, the earlier
+  email quoted under "On … wrote:" don't count. A name or a note you typed
+  yourself does count, and so does what your mail app adds that Jarvis
+  doesn't know (some phone companies add their own line, and a reply can
+  introduce the earlier email in another language or with Outlook's "From: …
+  Sent: …" lines): the recording is then a file to work on, not heard, so
+  delete that before you send, or send the voice memo as a new email. When a
+  recording can't be heard, a subject that is only its name
   waits with it; any other subject is answered at once. A Local only chat
   never sends a voice note off your network. The recording is kept either
   way.

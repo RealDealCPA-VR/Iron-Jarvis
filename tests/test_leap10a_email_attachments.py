@@ -291,6 +291,9 @@ APP_ONLY_BODIES = [
     "Sent from my Samsung Galaxy smartphone.",
     "Von meinem iPhone gesendet",
     "-- \nAlice Example\nExample Ltd",
+    # A reply: the earlier e-mail it quotes is not the sender's words either.
+    "\n\nSent from my iPhone\n\nOn Nov 22, 2026, at 09:00, Iron Jarvis <jarvis@example.com>"
+    " wrote:\n\n> Iron Jarvis: Filed under March.\n",
 ]
 
 
@@ -326,6 +329,8 @@ def test_a_voice_memo_by_email_is_heard_whatever_its_subject(subject, body, plat
     "File this with the March notes.\n\nSent from my iPhone",
     "Sent from my iPhone\nFile this with the March notes.",
     "Alice",  # a name the sender typed is their words: never guessed at
+    "File this with the March notes.\n\nOn Nov 22, 2026, at 09:00, Iron Jarvis"
+    " <jarvis@example.com> wrote:\n\n> Iron Jarvis: Filed under March.",
 ])
 def test_an_audio_file_with_words_in_the_body_is_a_file(body, platform, tmp_path, monkeypatch):
     # Words in the body are the sender's own: the recording is a file to work
@@ -363,6 +368,32 @@ def test_only_the_mail_apps_own_line_is_left_out(body, mine):
     from iron_jarvis.comm.base import without_signoff
 
     assert without_signoff(body) == mine
+
+
+_ON_WROTE = "On Nov 22, 2026, at 09:00, Iron Jarvis <jarvis@example.com> wrote:"
+
+
+@pytest.mark.parametrize("body, mine", [
+    # Apple Mail: the phone's line, then the earlier e-mail it quotes.
+    (f"\n\nSent from my iPhone\n\n{_ON_WROTE}\n\n> Iron Jarvis: Filed under March.\n", ""),
+    # Gmail wraps a long line above the quote onto two lines.
+    ("On Sun, Nov 22, 2026 at 9:00 AM Iron Jarvis <\njarvis@example.com> wrote:\n"
+     ">\n> Filed under March.\n", ""),
+    (f"Please file it.\n\n{_ON_WROTE}\n> Filed under March.", "Please file it."),
+    # A line typed between two quotes is the sender's.
+    ("> Which month?\nMarch.\n> Thanks", "> Which month?\nMarch."),
+    # "On ... wrote:" with no quote under it is something the sender typed.
+    ("On Monday the bank wrote:", "On Monday the bank wrote:"),
+    # Another language's line above the quote is not guessed at: it counts.
+    ("Am 22.11.2026 um 09:00 schrieb Iron Jarvis <jarvis@example.com>:\n> Erledigt.",
+     "Am 22.11.2026 um 09:00 schrieb Iron Jarvis <jarvis@example.com>:"),
+])
+def test_an_email_reply_leaves_out_the_email_it_quotes(body, mine):
+    from iron_jarvis.comm.base import without_signoff
+
+    assert without_signoff(body, quoted_reply=True) == mine
+    # Only an e-mail's body is read this way: a "> " line elsewhere is words.
+    assert without_signoff("> Filed under March.") == "> Filed under March."
 
 
 class _NothingSetUp:

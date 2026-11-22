@@ -942,9 +942,10 @@ class EmailChannel(Channel):
                         # 10-a: the body alone is the sender's own words (a
                         # shared voice memo's subject is the recording's name),
                         # without the line the mail app adds ("Sent from my
-                        # iPhone"). It only decides whether a recording is
-                        # heard; ``text`` above is what the turn reads.
-                        own_words=without_signoff(body),
+                        # iPhone") and the earlier e-mail a reply quotes. It
+                        # only decides whether a recording is heard; ``text``
+                        # above is what the turn reads.
+                        own_words=without_signoff(body, quoted_reply=True),
                         update_id=int(uid),
                         reply_to=sender,
                         is_bot=False,
