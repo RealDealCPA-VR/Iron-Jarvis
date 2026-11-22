@@ -2070,8 +2070,11 @@ Nothing runs until you say yes.
   PC or your network; otherwise nothing is sent.
 - **What you see in the morning.** One row in the bell, "3 suggestions from
   yesterday's review", that opens Improvements, where a line at the top
-  reads "From last night's review: 3" until you have answered them. If it
-  found nothing, nothing rings. If it was skipped for a reason only you can
+  reads "From last night's review: 3", counting the ones you have not
+  answered yet. The line speaks of last night only: once the next night's
+  review has finished, or the next night is over, it moves on to that
+  night, and a suggestion you have not answered stays in the list. If the
+  review found nothing, nothing rings. If it was skipped for a reason only you can
   change (every model it would have used bills per use, for example), the
   line says so: "Skipped: …". Nothing goes to your phone.
 - **Settings › Memory & you › Night review** turns it on or off and sets

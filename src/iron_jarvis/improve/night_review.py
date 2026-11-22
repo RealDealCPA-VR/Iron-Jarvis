@@ -32,8 +32,12 @@ one ``cut off`` entry saying why it stopped. The rest of that night's work is
 not run (17-a catches nothing up), and the night's ONE bell row rings for
 what it made, the way a finished night's does. A night first seen only after
 the next window opened (the PC was off all day) is ended without a ring, so
-two nights never ring in one: its suggestions still wait on Improvements,
-and the page's line still says so.
+two nights never ring in one. Its suggestions still wait on Improvements,
+and the page's line counts them only while that night is still last night
+(:func:`last_night`): until the next night's review has finished, or the
+next night is over. After that the line speaks of the newer night (or is
+gone when that night made nothing), and the earlier suggestions stay in
+the list.
 
 ONE PASS = gather, match, run (one suggestion maker at a time):
 
