@@ -48,8 +48,10 @@ import {
   moreFiles,
   pushBranch,
   statusLine,
+  CHAT_CODE_GIT,
   type BranchStatus,
   type GitRefusal,
+  type GitRoot,
   type PrInfo,
   type SessionGit,
 } from "@/lib/buildGit";
@@ -79,7 +81,14 @@ export function BranchView({
   press = null,
   onPressed,
   comments = false,
+  root = CHAT_CODE_GIT,
+  watchCi = true,
 }: {
+  /** 22-b: whose git routes (Build › Code's sessions are on
+   *  `/build/app/sessions`, with the same answers). */
+  root?: GitRoot;
+  /** Read Iron Jarvis's pull-request watch (Chat › Code's sessions only). */
+  watchCi?: boolean;
   /** The session's thread id. */
   sessionId: string;
   /** v1.544.0: offer "Comment" on each changed block (this Iron Jarvis
@@ -125,7 +134,7 @@ export function BranchView({
     if (removed) return;
     const seq = ++readSeq.current;
     try {
-      const [st, raw] = await Promise.all([getBranchStatus(sessionId), getBranchChangesRaw(sessionId)]);
+      const [st, raw] = await Promise.all([getBranchStatus(sessionId, root), getBranchChangesRaw(sessionId, root)]);
       if (seq !== readSeq.current) return;
       setStatus(st);
       setChanges(decodeChanges(raw));
@@ -135,7 +144,7 @@ export function BranchView({
       if (seq !== readSeq.current) return;
       setReadError(gitRefusal(e, "The branch could not be read.").detail);
     }
-  }, [sessionId, removed]);
+  }, [sessionId, removed, root]);
 
   useEffect(() => {
     void load();
@@ -143,7 +152,7 @@ export function BranchView({
 
   const readPr = useCallback(async () => {
     try {
-      const info = await getPr(sessionId);
+      const info = await getPr(sessionId, root);
       if (info) {
         setPr(info);
         if (info.url) setPrUrl(info.url);
@@ -151,7 +160,7 @@ export function BranchView({
     } catch (e) {
       setRefusal(gitRefusal(e, "The pull request could not be read."));
     }
-  }, [sessionId]);
+  }, [sessionId, root]);
 
   useEffect(() => {
     if (prUrl && !removed) void readPr();
@@ -180,7 +189,7 @@ export function BranchView({
   // skips any session whose facts carry `merged_at` (`_tend`), so its record
   // stays frozen at whatever it last said ("watching", "starts a fix…"),
   // which would read as a promise nobody keeps. No read, no line.
-  const ciLive = !!prUrl && !removed && !git.merged && !merged;
+  const ciLive = watchCi && !!prUrl && !removed && !git.merged && !merged;
   useEffect(() => {
     if (ciLive) void readCi();
   }, [ciLive, readCi, refreshKey]);
@@ -213,7 +222,7 @@ export function BranchView({
     setMessage("");
     setDraftNote("");
     await act("draft", async () => {
-      const d = await draftCommit(sessionId);
+      const d = await draftCommit(sessionId, root);
       setMessage(d.message);
       setDraftNote(d.drafted ? "" : d.note);
       return null;
@@ -222,7 +231,7 @@ export function BranchView({
 
   async function doCommit() {
     await act("commit", async () => {
-      const done = await commitBranch(sessionId, message);
+      const done = await commitBranch(sessionId, message, root);
       setMode("idle");
       onChanged?.();
       return `Committed ${done.sha}: ${done.subject}${done.note ? ` ${done.note}` : ""}`;
@@ -246,7 +255,7 @@ export function BranchView({
 
   async function doPr() {
     await act("pr", async () => {
-      const made = await createPr(sessionId, title, body);
+      const made = await createPr(sessionId, title, body, root);
       setMode("idle");
       setPrUrl(made.url);
       onChanged?.();
@@ -264,11 +273,11 @@ export function BranchView({
     await act("keep", async () => {
       let committed = "";
       if ((status?.uncommitted ?? 0) > 0) {
-        const c = await commitBranch(sessionId, keepCommitMessage(status?.prDraft.title ?? ""));
+        const c = await commitBranch(sessionId, keepCommitMessage(status?.prDraft.title ?? ""), root);
         committed = `Committed ${c.sha}.`;
       }
       try {
-        const done = await mergeBranch(sessionId);
+        const done = await mergeBranch(sessionId, root);
         setMerged({ into: done.into, where: done.where });
         onChanged?.();
         const kept = done.where
@@ -397,7 +406,7 @@ export function BranchView({
           }
           onClick={() =>
             void act("push", async () => {
-              const done = await pushBranch(sessionId);
+              const done = await pushBranch(sessionId, root);
               onChanged?.();
               return `Pushed ${done.branch || git.branch} to ${done.remote}.`;
             })
@@ -420,7 +429,7 @@ export function BranchView({
           <ConfirmButton
             onConfirm={() =>
               act("merge", async () => {
-                const done = await mergeBranch(sessionId);
+                const done = await mergeBranch(sessionId, root);
                 setMerged({ into: done.into, where: done.where });
                 onChanged?.();
                 return done.where
@@ -436,7 +445,7 @@ export function BranchView({
         <ConfirmButton
           onConfirm={() =>
             act("discard", async () => {
-              const done = await discardBranch(sessionId);
+              const done = await discardBranch(sessionId, false, root);
               onArchived?.();
               return done.note || "Its copy of the folder is in the trash.";
             })
@@ -609,7 +618,7 @@ export function BranchView({
           <ConfirmButton
             onConfirm={() =>
               act("remove", async () => {
-                const done = await discardBranch(sessionId, true);
+                const done = await discardBranch(sessionId, true, root);
                 onArchived?.();
                 return done.note || "Its copy of the folder is in the trash.";
               })

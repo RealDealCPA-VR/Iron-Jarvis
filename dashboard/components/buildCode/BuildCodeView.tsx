@@ -90,7 +90,8 @@ import { scrollToLatest } from "@/lib/transcriptRepin";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { CodeConversation, type MessageActions } from "@/components/buildCode/CodeConversation";
 import type { ProofActions } from "@/components/buildCode/ProofLine";
-import { checkAnswerPath } from "@/lib/buildAppProof";
+import { checkAnswerPath, proofShape } from "@/lib/buildAppProof";
+import { ReplyGit } from "@/components/buildCode/ReplyGit";
 import { RewindDialog } from "@/components/buildCode/RewindDialog";
 import {
   BRANCH_ROW,
@@ -2278,6 +2279,20 @@ function SessionPane({
   const pickerTools = !canSwitch ? ownTools : tool ? tools : [...ownTools, ...tools];
   const askedTool = switchAsk ? (tools.find((t) => t.id === switchAsk.choice.tool) ?? null) : null;
   const effortLive = effortWhileRunning(session.tool, toolName, running, tool?.effortLive === true);
+  // 22-b (R3.4): Commit and Open a pull request under the newest SETTLED
+  // reply: not while it runs, a card waits, Iron Jarvis checks it, or the
+  // check's first-time card asks (one main action at a time). Read once per
+  // settled reply (its newest row's key).
+  let newestProof: (typeof conv.items)[number] | null = null;
+  for (const it of conv.items) if (it.kind === "proof") newestProof = it;
+  const checkAsks =
+    !!newestProof && newestProof.kind === "proof" && proofShape(newestProof.proof, true, session.checking === true) === "card";
+  // (A message whose reply has not begun yet is not a settled reply.)
+  const lastItem = conv.items.length ? conv.items[conv.items.length - 1] : null;
+  const gitKey =
+    !running && !asking && session.checking !== true && !checkAsks && session.folder && lastItem && lastItem.kind !== "user"
+      ? lastItem.key
+      : "";
   return (
     <SessionEditorProvider folder={session.folder}>
       {/* v1.414.0: the conversation and, to its right, the panes (Changes,
@@ -2453,6 +2468,14 @@ function SessionPane({
                 checkingNow={session.checking === true}
               />
             )}
+            {gitKey ? (
+              <ReplyGit
+                sessionId={session.id}
+                readKey={gitKey}
+                prUrl={session.git?.prUrl || session.pullRequestUrl || ""}
+                onChanged={() => void load({ follow: false })}
+              />
+            ) : null}
             {/* The "working" sign: a reply being written, helpers still at
                 work after it (v1.417.0), or the tool's own reply. Its slot is
                 always here, so nothing moves when the sign comes or goes; it
@@ -2903,6 +2926,7 @@ function SessionPane({
           onSend={sendFromPanes}
           comments={takesComments}
           severalTools={switchedTools}
+          onArchived={() => onArchived(session.id)}
         />
       </aside>
       </div>

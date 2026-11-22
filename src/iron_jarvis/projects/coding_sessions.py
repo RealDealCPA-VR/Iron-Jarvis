@@ -194,7 +194,7 @@ def _build_code_rows(db: Any, scan: int) -> list[dict[str, Any]]:
     except Exception:  # noqa: BLE001 — no Build › Code view in this build
         return []
     stmt = (
-        select(H.id, H.harness, H.folder, H.title, H.updated_at, H.harness_session_id, H.last_error)
+        select(H.id, H.harness, H.folder, H.title, H.updated_at, H.harness_session_id, H.last_error, H.git_json)
         .where(H.archived_at.is_(None))  # type: ignore[union-attr]
         .order_by(H.updated_at.desc(), literal_column("rowid").desc())  # type: ignore[attr-defined]
         .limit(scan)
@@ -207,8 +207,13 @@ def _build_code_rows(db: Any, scan: int) -> list[dict[str, Any]]:
         except Exception:  # noqa: BLE001
             pass
         return []
+    from ..hosted.session_git import checkout_from
+
     out: list[dict[str, Any]] = []
-    for sid, harness, folder, title, updated, hsid, last_error in rows:
+    for sid, harness, folder, title, updated, hsid, last_error, git_json in rows:
+        # 22-b: a session on its own branch belongs to the folder the user
+        # PICKED (its own copy of it sits beside the repository).
+        folder = checkout_from(folder, git_json)
         tool = LABELS.get(str(harness or ""), str(harness or ""))
         out.append({
             "view": VIEW_BUILD_CODE,

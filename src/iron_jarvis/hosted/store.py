@@ -68,8 +68,11 @@ def list_rows(engine: Any, *, archived: bool = False, folder: str = "") -> list[
             db.expunge(r)
     if folder:
         from .service import same_folder
+        from .session_git import checkout_of
 
-        rows = [r for r in rows if same_folder(r.folder, folder)]
+        # 22-b: a session on its own branch works in its own copy of the
+        # folder and is listed under the folder the user PICKED.
+        rows = [r for r in rows if same_folder(r.folder, folder) or same_folder(checkout_of(r), folder)]
     return rows
 
 
@@ -197,7 +200,50 @@ def _view(row: HostedSessionRecord, acc: Any) -> dict[str, Any]:
         # (``hosted/handoff``); "" for a session the user started.
         "handed_from": str(getattr(row, "handed_from", "") or ""),
         "source": "app",
+        **_git_view(row),
     }
+
+
+def _git_view(row: HostedSessionRecord) -> dict[str, Any]:
+    """22-b: ``git`` (a session on its own branch: the Branch view's facts),
+    ``checkout`` (the folder the user picked; the session's folder otherwise)
+    and ``pull_request`` (one a session in the folder directly opened).
+    Read from the row alone: no git call."""
+    from . import session_git as SG
+
+    out: dict[str, Any] = {"checkout": SG.checkout_of(row)}
+    git = SG.view(row)
+    if git is not None:
+        out["git"] = git
+    pr = SG.direct_pr(row)
+    if pr:
+        out["pull_request"] = pr
+    return out
+
+
+def merge_git(engine: Any, sid: str, changes: dict[str, Any]) -> HostedSessionRecord | None:
+    """22-b: write ``changes`` onto the session's git facts AS STORED NOW (one
+    transaction; a value of None is left as it was). Only the git routes call
+    this. None when the row is gone."""
+    ensure_table(engine)
+    with session_scope(engine) as db:
+        row = db.get(HostedSessionRecord, str(sid or ""))
+        if row is None:
+            return None
+        try:
+            data = json.loads(getattr(row, "git_json", "") or "{}")
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data.update({k: v for k, v in changes.items() if v is not None})
+        row.git_json = json.dumps(data, sort_keys=True)
+        row.updated_at = utcnow()
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        db.expunge(row)
+        return row
 
 
 def _capabilities(row: HostedSessionRecord) -> dict[str, bool]:

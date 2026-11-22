@@ -442,10 +442,13 @@ def proposal(folder: str) -> str:
         return ""
 
 
-def decide(engine: Any, folder: str) -> dict[str, Any]:
+def decide(engine: Any, folder: str, *, key: str = "") -> dict[str, Any]:
     """What to do after a reply in ``folder``: ``{"state": "run", "command",
     "timeout_s"}`` | ``{"state": "ask", "command"}`` | ``{"state": "off",
-    "why"}`` | ``{"state": "none"}``. BLOCKING; never raises."""
+    "why"}`` | ``{"state": "none"}``. ``key`` (22-b): the folder the user's
+    answer is kept for — a session on its own branch works in its own copy
+    of the folder, and the answer is the PICKED folder's ("" = ``folder``).
+    BLOCKING; never raises."""
     from ..harness import folder_defaults as FD
 
     try:
@@ -455,7 +458,7 @@ def decide(engine: Any, folder: str) -> dict[str, Any]:
         fin = getattr(layer, "finish", None) if layer.used else None
         if fin is not None and (not getattr(fin, "enabled", True) or not getattr(fin, "tests", True)):
             return {"state": "off", "why": WHY_FOLDER_FILE}
-        kept = FD.read_checks(engine, folder)
+        kept = FD.read_checks(engine, key or folder)
         if kept and kept.get("off"):
             return {"state": "off", "why": WHY_YOU}
         proposed, _where = propose(folder, layer)
@@ -784,7 +787,13 @@ async def _check(svc: Any, sid: str, turn_id: str, turn_events: list[dict[str, A
     # What to do is decided FIRST (small reads only): a folder with no test
     # command, or one the user turned off, costs a reply's end nothing more
     # (no git read) and says nothing (the user knows; chat can still ask).
-    plan = await asyncio.to_thread(decide, svc.engine, folder)
+    from . import session_git as SG
+
+    # 22-b: a session on its own branch is checked in its own copy of the
+    # folder; the user's answer is the picked folder's, and the check runs
+    # with the main folder's .venv / node_modules.
+    picked = SG.checkout_of(row)
+    plan = await asyncio.to_thread(decide, svc.engine, folder, key=picked)
     state = plan.get("state")
     if state == "none" or (state == "off" and plan.get("why") == WHY_YOU):
         return None
@@ -803,7 +812,8 @@ async def _check(svc: Any, sid: str, turn_id: str, turn_events: list[dict[str, A
         # yes is checked against THIS, unmasked, at the route.
     else:
         proof = await _run(svc, sid, live, turn_id, str(plan.get("command") or ""),
-                           float(plan.get("timeout_s") or TIMEOUT_S), folder, files)
+                           float(plan.get("timeout_s") or TIMEOUT_S), folder, files,
+                           checkout=picked if SG.facts_of(row) else "")
     if svc.live.get(sid) is live:
         _write(svc, sid, proof.record)
     if proof.record.get("state") == STATE_DONE:
@@ -812,7 +822,7 @@ async def _check(svc: Any, sid: str, turn_id: str, turn_events: list[dict[str, A
 
 
 async def _run(svc: Any, sid: str, live: Any, turn_id: str, command: str, timeout_s: float, folder: str,
-               files: dict[str, Any]) -> Proof:
+               files: dict[str, Any], *, checkout: str = "") -> Proof:
     runs = _runs(svc)
     run = _Running(sid=sid, folder=folder)
     runs[sid] = run
@@ -829,7 +839,7 @@ async def _run(svc: Any, sid: str, live: Any, turn_id: str, command: str, timeou
         # lock, and a check that waits for it is ended by the same stops
         # (``run.stop``, set below or by Stop / Emergency stop).
         task = asyncio.ensure_future(asyncio.to_thread(
-            run_checks, folder, command, sid, timeout_s, stop=run.stop, on_proc=hold))
+            run_checks, folder, command, sid, timeout_s, checkout=checkout, stop=run.stop, on_proc=hold))
         try:
             while not task.done():
                 await asyncio.wait({task}, timeout=LOOK_S)

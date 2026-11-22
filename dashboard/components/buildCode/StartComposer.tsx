@@ -74,6 +74,14 @@ import {
   type ToolDefaults,
 } from "@/lib/folderDefaults";
 import { DisabledNote } from "@/components/DisabledNote";
+import { branchSwitchWords, fetchFolderGit, type FolderGit } from "@/lib/buildGit";
+import {
+  BRANCH_OFFER,
+  BRANCH_OFFER_NO,
+  BRANCH_OFFER_YES,
+  BRANCH_SWITCH,
+  branchOfferWords,
+} from "@/lib/buildAppGit";
 import { TRY_AGAIN_WORDS, modelsReadingWords, modelsUnreadWords } from "@/lib/buildStuck";
 import { START_NEEDS_ACCOUNT, START_NEEDS_WORDS, whyDisabled } from "@/lib/whyDisabled";
 import {
@@ -421,6 +429,45 @@ export function StartComposer({
   useEffect(() => {
     setDefaultsNote(null);
   }, [folder]);
+  // 22-b (R3.4, D-22.1): Build › Code keeps working in the folder; its own
+  // branch is OFFERED once per folder ("Work on a new branch in this
+  // folder?"), only for a repository that can start one. The answer is the
+  // folder's (Settings-free: chat can change it, with Undo); after it, a
+  // quiet switch changes this session only.
+  const [folderGit, setFolderGit] = useState<{ folder: string; info: FolderGit | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    setFolderGit(null);
+    if (!folder) return;
+    void fetchFolderGit(folder).then((info) => {
+      if (live) setFolderGit({ folder, info });
+    });
+    return () => {
+      live = false;
+    };
+  }, [folder]);
+  const canBranch = !!folder && folderGit?.folder === folder && folderGit.info?.canBranch === true;
+  const branchAnswer = folderDefaults?.branch?.work ?? null;
+  const [onBranch, setOnBranch] = useState(false);
+  const branchTouched = useRef(false);
+  useEffect(() => {
+    branchTouched.current = false;
+  }, [folder]);
+  useEffect(() => {
+    if (!branchTouched.current) setOnBranch(branchAnswer === "branch");
+  }, [branchAnswer, folder]);
+  const [branchNote, setBranchNote] = useState<string | null>(null);
+  async function answerBranch(work: "branch" | "folder") {
+    if (!folder) return;
+    setBranchNote(null);
+    try {
+      await saveFolderDefaults(folder, "branch", { work });
+      branchTouched.current = false;
+      setOnBranch(work === "branch");
+    } catch (e) {
+      setBranchNote(errorWords(e, "The answer was not saved."));
+    }
+  }
   // The folder's tool, when the user has not picked one and it can start.
   useEffect(() => {
     const want = toolDefaults?.harness;
@@ -608,6 +655,7 @@ export function StartComposer({
         ...(model ? { model } : {}),
         ...(effort && efforts.includes(effort) ? { effort } : {}),
         ...(title ? { title } : {}),
+        ...(canBranch && onBranch ? { branch: true } : {}),
       });
       const made = decodeCodeSession(raw);
       if (!made) throw new Error("The session could not be made.");
@@ -1020,6 +1068,64 @@ export function StartComposer({
           />
         </div>
 
+        {canBranch && folderDefaults !== null && !branchAnswer ? (
+          <div
+            data-testid="code-start-branch-offer"
+            role="group"
+            aria-label={BRANCH_OFFER}
+            className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-2 text-[12px] text-zinc-400"
+          >
+            <span className="min-w-0 break-words text-zinc-300">{BRANCH_OFFER}</span>
+            <button
+              type="button"
+              data-testid="code-start-branch-yes"
+              disabled={busy}
+              onClick={() => void answerBranch("branch")}
+              title={branchOfferWords(folderGit?.info?.branch ?? "")}
+              className="rounded-md px-1.5 py-0.5 text-zinc-200 hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+            >
+              {BRANCH_OFFER_YES}
+            </button>
+            <button
+              type="button"
+              data-testid="code-start-branch-no"
+              disabled={busy}
+              onClick={() => void answerBranch("folder")}
+              className="rounded-md px-1.5 py-0.5 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+            >
+              {BRANCH_OFFER_NO}
+            </button>
+            <span className="basis-full text-[11px] text-zinc-500">{branchOfferWords(folderGit?.info?.branch ?? "")}</span>
+          </div>
+        ) : canBranch && branchAnswer ? (
+          <label
+            data-testid="code-start-branch"
+            className="flex min-w-0 items-start gap-2 px-2 text-[12px] text-zinc-300"
+          >
+            <input
+              type="checkbox"
+              data-testid="code-start-branch-switch"
+              checked={onBranch}
+              disabled={busy}
+              onChange={(e) => {
+                branchTouched.current = true;
+                setOnBranch(e.target.checked);
+              }}
+              className="mt-0.5 shrink-0 accent-accent"
+            />
+            <span className="min-w-0">
+              {BRANCH_SWITCH}
+              <span className="block text-[11px] text-zinc-500">
+                {branchSwitchWords(onBranch, folderGit?.info?.branch ?? "")}
+              </span>
+            </span>
+          </label>
+        ) : null}
+        {branchNote ? (
+          <p role="alert" data-testid="code-start-branch-problem" className="px-2 text-[12px] text-tone-danger">
+            {branchNote}
+          </p>
+        ) : null}
         {folder && (defaultsWords || offerSave || defaultsNote) ? (
           <p data-testid="code-start-folder-defaults" className="flex flex-wrap items-center gap-x-2 px-2 text-[12px] text-zinc-500">
             {defaultsWords ? (

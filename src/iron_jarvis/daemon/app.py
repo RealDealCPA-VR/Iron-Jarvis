@@ -4529,6 +4529,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_app_proof as _build_app_proof_routes
 
     _build_app_proof_routes.register(app, d)
+    # 22-b (R3.4): Build › Code's Commit and Open a pull request, and a
+    # session's own branch (hosted/session_git).
+    from .routes import build_app_git as _build_app_git_routes
+
+    _build_app_git_routes.register(app, d)
     # v1.426.0 (Wave 6 lane B, E5): a folder's defaults for NEW coding
     # sessions in it (harness/folder_defaults), for both coding views.
     from .routes import build_folder_defaults as _build_folder_defaults_routes

@@ -41,6 +41,10 @@ class AppSessionCreate(BaseModel):
     #: minutes is refused (``hosted.service.LIVE_ELSEWHERE_S``). Strict: only
     #: a real true says so.
     elsewhere_closed: StrictBool = False
+    #: 22-b (R3.4): start on its OWN branch, in its own copy of the folder
+    #: beside the repository (the start box's "Work on a new branch in this
+    #: folder?"). Strict: only a real true does; absent = in the folder.
+    branch: StrictBool = False
 
 
 class AppSessionPatch(BaseModel):

@@ -77,14 +77,19 @@ def register(app: FastAPI, d: Any) -> None:
         folder = str(getattr(row, "folder", "") or "")
         if not folder:
             raise HTTPException(status_code=409, detail=NO_FOLDER)
+        # 22-b: a session on its own branch keeps the answer for the folder
+        # the user PICKED (its own copy of the folder is one of many).
+        from ...hosted.session_git import checkout_of
+
+        picked = checkout_of(row) or folder
         engine = service.engine
         turn = str(body.turn or "").strip()
         if not body.run:
-            kept = await asyncio.to_thread(FD.save_checks, engine, folder, {"off": True, "at": PROOF.now_iso()})
+            kept = await asyncio.to_thread(FD.save_checks, engine, picked, {"off": True, "at": PROOF.now_iso()})
             if turn:
                 await asyncio.to_thread(_note_off, service, sid, turn)
             return {"ok": True, "checks": kept, "words": PROOF.line_for(_off_record(turn))}
-        plan = await asyncio.to_thread(PROOF.decide, engine, folder)
+        plan = await asyncio.to_thread(PROOF.decide, engine, folder, key=picked)
         state = plan.get("state")
         command = str(plan.get("command") or "")
         if state == "off" and plan.get("why") == PROOF.WHY_FOLDER_FILE:
@@ -94,7 +99,7 @@ def register(app: FastAPI, d: Any) -> None:
             # card under that reply goes, unless a check of it already began.
             if turn:
                 await asyncio.to_thread(_note_kept, service, sid, turn, command)
-            return {"ok": True, "checks": await asyncio.to_thread(FD.read_checks, engine, folder),
+            return {"ok": True, "checks": await asyncio.to_thread(FD.read_checks, engine, picked),
                     "checking": False}
         if state != "ask" or not command:
             raise HTTPException(status_code=409, detail=NOT_ASKED)
@@ -103,7 +108,7 @@ def register(app: FastAPI, d: Any) -> None:
         if body.command != command:
             raise HTTPException(status_code=409, detail=COMMAND_CHANGED)
         try:
-            kept = await asyncio.to_thread(FD.save_checks, engine, folder, {
+            kept = await asyncio.to_thread(FD.save_checks, engine, picked, {
                 "command": command, "confirmed_at": PROOF.now_iso(), "timeout_s": PROOF.TIMEOUT_S,
                 "source": "card",
             })

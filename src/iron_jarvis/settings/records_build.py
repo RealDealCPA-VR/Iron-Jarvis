@@ -417,7 +417,9 @@ def restore_night_order(platform: Any, _name: str, prior: Any, desc: dict[str, A
 
 #: The tools' words for the two coding views (``harness.folder_defaults``).
 VIEW_OF = {"chat_code": "code", "build_code": "tool"}
-VIEW_WORDS = {"code": "Chat › Code", "tool": "Build › Code"}
+#: 22-b (R3.4): Build › Code's answer about a new branch (``folder_defaults.VIEW_BRANCH``).
+FD_BRANCH = "branch"
+VIEW_WORDS = {"code": "Chat › Code", "tool": "Build › Code", "branch": "Build › Code's own branch"}
 _POSTURE_WORDS = {
     "always_ask": "Ask before every action",
     "approve_for_me": "Ask before commands",
@@ -451,6 +453,10 @@ def _tool_label(harness: str) -> str:
 def _view_words(view: str, value: "dict[str, Any] | None") -> str:
     if not value:
         return "none"
+    if view == "branch":
+        # 22-b (R3.4): the start box's "Work on a new branch in this folder?"
+        return ("on a new branch, in their own copy of the folder" if value.get("work") == "branch"
+                else "in the folder directly")
     if view == "code":
         bits = []
         if value.get("model") or value.get("provider"):
@@ -1060,6 +1066,10 @@ class BuildFolderShowTool(Tool):
             f"- Build › Code defaults: {_view_words('tool', defaults.get('tool'))}",
             f"- Coding team: {_team_words(team)}",
         ]
+        if defaults.get(FD_BRANCH):
+            # 22-b: only once the folder answered "Work on a new branch here?"
+            # (said exactly as kept; nothing is said for a folder not asked).
+            lines.insert(3, f"- Build › Code sessions work: {_view_words(FD_BRANCH, defaults.get(FD_BRANCH))}")
         return ToolResult(ok=True, output="\n".join(lines), data={"folder": folder, "defaults": defaults, "team": team})
 
 
@@ -1113,7 +1123,10 @@ class BuildDefaultsSetTool(_FolderTool):
         "program in Build › Code: `tool` claude-code|codex|pi|opencode|grok, its `model`, `effort` and "
         "`mode` ask|edits|plan|auto|own). If the user did not say which view, ask. Only the fields given "
         "change (\"\" clears one). \"Don't ask\" and Full access are never a folder default. An account is "
-        "not kept as a folder default. The user approves on a card; the change has an Undo."
+        "not kept as a folder default. `new_branch` (build_code only, alone or with the rest): true = new "
+        "Build › Code sessions here start on a NEW BRANCH in their own copy of the folder (pull requests need "
+        "it); false = they work in the folder directly, the default. The user approves on a card; the change "
+        "has an Undo."
     )
     input_schema = {
         "type": "object",
@@ -1128,16 +1141,30 @@ class BuildDefaultsSetTool(_FolderTool):
             "effort": {"type": "string"},
             "mode": {"type": "string"},
             "account": {"type": "string", "description": "Not kept: an account is picked when a session starts."},
+            "new_branch": {"type": "boolean"},
         },
         "required": ["view"],
     }
 
+    _TOOL_FIELDS = ("tool", "model", "effort", "mode")
+
+    def _views(self, args: dict[str, Any]) -> list[str]:
+        """The folder's views this change writes (22-b: the branch answer is
+        its own, so Undo puts back exactly what changed)."""
+        view = VIEW_OF.get(str(args.get("view") or "").strip())
+        if view != "tool":
+            return [view] if view else []
+        out = ["tool"] if any(args.get(f) is not None for f in self._TOOL_FIELDS) else []
+        if isinstance(args.get("new_branch"), bool):
+            out.append(FD_BRANCH)
+        return out
+
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         desc = await super().capture_undo(args, ctx)
-        view = VIEW_OF.get(str(args.get("view") or ""))
-        if desc is not None and view:
+        views = self._views(args)
+        if desc is not None and views:
             meta = json.loads(desc["pre_inline"])
-            meta["views"] = [view]
+            meta["views"] = views
             desc["pre_inline"] = json.dumps(meta, default=str)
         return desc
 
@@ -1158,9 +1185,25 @@ class BuildDefaultsSetTool(_FolderTool):
             other = [f for f in ("provider", "reasoning", "approval_mode") if args.get(f)]
         if other:
             return ToolResult(ok=False, error=_VIEW_REFUSAL)
-        if not given:
+        nb = args.get("new_branch")
+        if nb is not None and (view != "tool" or not isinstance(nb, bool)):
+            return ToolResult(ok=False, error=_VIEW_REFUSAL)
+        if not given and nb is None:
             return ToolResult(ok=False, error="Say what new coding sessions here should start with.")
         before = await asyncio.to_thread(snap_build_defaults, self.platform, folder)
+        if not given:
+            # 22-b (R3.4): only the folder's answer to "Work on a new branch
+            # in this folder?" changes.
+            saved = await asyncio.to_thread(FD.save, _engine(self.platform), folder, FD_BRANCH,
+                                            {"work": "branch" if nb else "folder"})
+            _note(after=saved, views=[FD_BRANCH])
+            old, new = _view_words(FD_BRANCH, before.get(FD_BRANCH)), _view_words(FD_BRANCH, saved.get(FD_BRANCH))
+            return ToolResult(
+                ok=True,
+                output=f"New Build › Code sessions in {folder} now work {new}.",
+                data={"record_change": self._card("Folder defaults set", f"New Build › Code sessions in {folder}",
+                                                  old, new, f"build_defaults.{folder}.{FD_BRANCH}")},
+            )
         if view == "code":
             value = dict(before.get("code") or {})
         else:
@@ -1183,10 +1226,16 @@ class BuildDefaultsSetTool(_FolderTool):
                 return ToolResult(ok=False, error=f"That model is not in your model menu: {shown}.")
         try:
             saved = await asyncio.to_thread(FD.save, _engine(self.platform), folder, view, value or None)
+            if nb is not None:
+                saved = await asyncio.to_thread(FD.save, _engine(self.platform), folder, FD_BRANCH,
+                                                {"work": "branch" if nb else "folder"})
         except FD.DefaultsRefused as exc:
             return ToolResult(ok=False, error=_refusal_words(exc))
-        _note(after=saved, views=[view])
+        _note(after=saved, views=[view] + ([FD_BRANCH] if nb is not None else []))
         old, new = _view_words(view, before.get(view)), _view_words(view, saved.get(view))
+        if nb is not None:
+            old += f"; {_view_words(FD_BRANCH, before.get(FD_BRANCH))}"
+            new += f"; {_view_words(FD_BRANCH, saved.get(FD_BRANCH))}"
         account = ACCOUNT_NOT_KEPT if str(args.get("account") or "").strip() else ""
         return ToolResult(
             ok=True,
@@ -2024,11 +2073,24 @@ def _checks_request(clauses: list[str]) -> bool:
 _COMPARE = re.compile(r"\b(?:better|worse|than|faster|slower|prefer|prefers|preferred)\b", re.IGNORECASE)
 
 
+#: 22-b (R3.4): the folder's answer to "Work on a new branch in this
+#: folder?" said in chat — "start new sessions in C:\shop on their own
+#: branch", "stop working on a new branch in this folder". (A folder's full
+#: location sits between the two words, hence the room; bounded, linear.)
+_BRANCH_DEFAULT = re.compile(
+    r"\b(?:new|own|separate)\s+branch(?:es)?\b[^\n]{0,300}?(?:\b(?:folder|repo|here|sessions?)\b|\b[a-z]:[\\/])"
+    r"|\b(?:sessions?|folder|repo)\b[^\n]{0,300}?\b(?:new|own|separate)\s+branch(?:es)?\b",
+    re.IGNORECASE,
+)
+
+
 def _folder_request(text: str, clauses: list[str]) -> bool:
     if _TEAM_PAIR.search(text) is not None and _PEOPLE_TEAM.search(text) is None and _COMPARE.search(text) is None:
         return True
     for c in clauses:
         if _DEFAULTS_SET.match(c) or _DEFAULTS_CLEAR.match(c) or _TEAM_CLEAR.match(c):
+            return True
+        if _BRANCH_DEFAULT.search(c):
             return True
         if _TEAM_SET.match(c) and _PEOPLE_TEAM.search(c) is None:
             return True
@@ -2054,7 +2116,7 @@ def build_tools_for(text: str) -> list[str]:
                 "reviews", "review")
             # A Linux or macOS path names a folder with none of the words above
             # ("use Codex for /home/sam/shop").
-        ) or _POSIX_PATH.search(t) is not None
+        ) or _POSIX_PATH.search(t) is not None or _BRANCH_DEFAULT.search(t) is not None
         if not (nightish or folderish or checkish):
             return out
         # "Have it…" / "Have my coding sessions…" (v1.448.0) at the head of a

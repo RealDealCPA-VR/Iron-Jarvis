@@ -29,6 +29,7 @@ import { SUBSCRIPTION_CLI_ROWS } from "./subscriptionClis";
 import { secondsText } from "./durationWords";
 import { commentLines, decodeComments, type CommentBody } from "./codeComments";
 import { decodeProofMark, type ProofMark } from "./buildAppProof";
+import { branchLine, decodeSessionGit, type SessionGit } from "./buildGit";
 
 // ── the view and the address ────────────────────────────────────────────────
 
@@ -630,6 +631,14 @@ export interface CodeSession {
    *  folder's tests); the view reads the session again while it holds.
    *  Absent = not checking (or an older Iron Jarvis). */
   checking?: boolean;
+  /** 22-b (R3.4): the folder the user PICKED (a session on its own branch
+   *  works in its own copy of it; grouped under this). Absent from an older
+   *  Iron Jarvis (= `folder`). */
+  checkout?: string;
+  /** 22-b: a session on its own branch (the Branch view's facts). */
+  git?: SessionGit;
+  /** 22-b: the pull request a session in the folder directly opened. */
+  pullRequestUrl?: string;
 }
 
 /** v1.422.0 (B4): one program a Code-view tool started that serves. */
@@ -851,7 +860,20 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
       : {}),
     ...(typeof r.can_branch === "boolean" ? { canBranch: r.can_branch } : {}),
     ...(r.checking === true ? { checking: true } : {}),
+    ...(str(r.checkout, 1_000) ? { checkout: str(r.checkout, 1_000) } : {}),
+    ...gitOf(r),
   };
+}
+
+/** 22-b: a session's own branch and the pull request it opened, whitelisted. */
+function gitOf(r: Record<string, unknown>): Pick<CodeSession, "git" | "pullRequestUrl"> {
+  const out: Pick<CodeSession, "git" | "pullRequestUrl"> = {};
+  const g = decodeSessionGit(r.git);
+  if (g) out.git = g;
+  const pr = obj(r.pull_request);
+  const url = pr ? str(pr.url, 1_000) : "";
+  if (/^https:\/\//.test(url)) out.pullRequestUrl = url;
+  return out;
 }
 
 export function decodeCodeSessions(raw: unknown): CodeSession[] {
@@ -885,8 +907,11 @@ export interface FolderGroup {
 export const NO_FOLDER_GROUP = "No folder";
 
 /** The folder a session works in, in words, for its header. */
-export function sessionFolderWords(s: Pick<CodeSession, "folder" | "noFolder">): string {
+export function sessionFolderWords(s: Pick<CodeSession, "folder" | "noFolder" | "git" | "checkout">): string {
   if (s.noFolder) return s.folder ? `its own folder, ${s.folder}` : "no folder yet: one is made with your first message";
+  // 22-b: a session on its own branch names the folder the user picked and
+  // its branch (it works in its own copy of that folder).
+  if (s.git && !s.git.removed) return `${s.checkout || s.git.checkout || s.folder}, on ${branchLine(s.git)} in its own copy of the folder`;
   return s.folder;
 }
 
@@ -910,12 +935,15 @@ export function groupByFolder(sessions: readonly CodeSession[], opts: { archived
   for (const s of sorted) {
     // v1.412.0: every session started with no folder shares ONE group (the
     // native harness's v1.379.0 rule), its own folder made or not.
-    const k = s.noFolder ? "\u0000no-folder" : key(s.folder);
+    // 22-b: a session on its own branch is grouped under the folder the
+    // user PICKED, never under its own copy of it.
+    const where = s.checkout || s.folder;
+    const k = s.noFolder ? "\u0000no-folder" : key(where);
     let g = groups.get(k);
     if (!g) {
       g = s.noFolder
         ? { folder: "", name: NO_FOLDER_GROUP, sessions: [], noFolder: true }
-        : { folder: s.folder, name: folderName(s.folder), sessions: [] };
+        : { folder: where, name: folderName(where), sessions: [] };
       groups.set(k, g);
     }
     g.sessions.push(s);

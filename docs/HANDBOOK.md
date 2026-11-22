@@ -2282,6 +2282,50 @@ skills. It now asks each time you type `/`.
 line, in both boxes. A `/` inside a sentence is ordinary text. A tool that
 lists no commands says so, and what you type is still sent to it as typed.
 
+## Commit and Open a pull request in Build › Code
+
+When a Build › Code reply is done (and Iron Jarvis has checked it), a small
+box under it offers **Commit** with the message already written, then
+**Open a pull request**: one press each. Iron Jarvis writes the message from
+its own record of the session, your first message and the files, never with
+a model; edit it before you press Commit if you like.
+
+**Working in your folder (as always).** Build › Code keeps working straight
+in the folder you chose. The box lists every changed file of the repository
+with a tick. The files that changed since this session started are ticked;
+anything you (or another program) changed before is listed unticked. Only
+the ticked files are committed, and whatever you had staged yourself stays
+staged. A pull request is offered only when your folder is on a branch of its
+own. On the repository's main branch the box says *Start the next session on
+its own branch to open a pull request.*
+
+**Its own branch, offered once per folder.** The first time you start a
+session in a git folder, the start box asks once: *Work on a new branch in
+this folder?* **Yes, a new branch** makes new sessions there work in their
+own copy of the folder, on a new branch, so your folder stays as it was
+until you merge (pull requests need it). **No, in the folder** keeps working
+in the folder directly and is not asked again. After the answer, a quiet
+switch **Work on a new branch** changes it for one session. On a session with
+its own branch, the Changes tab has a **Branch** view: its commits, its pull
+request and its checks, Push, Merge into the branch it started from, and
+Discard (its copy goes to Iron Jarvis's trash, the branch stays). Only Merge
+changes your own folder. The coding tool works in that copy with your main
+folder's `.venv` and `node_modules`, and Iron Jarvis's test check after each
+reply uses your folder's answer.
+
+**Pull requests** go through the GitHub CLI (`gh`, signed in). Without it the
+box opens GitHub's own page instead. The branch is pushed first, never with a
+force.
+
+**Never while it works.** Commit and the pull request wait until the reply
+has finished, Iron Jarvis has checked it, and the tool has nothing still
+running; no message starts while a commit runs.
+
+**From chat.** Say *start new Build › Code sessions in D:\code\shop on their
+own branch* (or *start new sessions in D:\code\shop in the folder, not on a
+new branch*): the card shows the change, and Undo puts back what the folder
+had.
+
 ## Pick up where you left off in a folder (v1.556.0)
 
 Start a new chat or a new coding session in a folder you have worked in

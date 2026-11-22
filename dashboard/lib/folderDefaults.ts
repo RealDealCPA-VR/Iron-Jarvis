@@ -35,9 +35,16 @@ export interface ToolDefaults {
   mode?: string;
 }
 
+/** 22-b (R3.4): Build › Code's answer to "Work on a new branch in this
+ *  folder?" (asked once per folder). Absent = not asked yet. */
+export interface BranchDefault {
+  work: "branch" | "folder";
+}
+
 export interface FolderDefaults {
   code: CodeDefaults | null;
   tool: ToolDefaults | null;
+  branch?: BranchDefault;
 }
 
 export const NO_DEFAULTS: FolderDefaults = { code: null, tool: null };
@@ -77,7 +84,9 @@ export function decodeFolderDefaults(raw: unknown): FolderDefaults {
           ...(word(t.mode, 40) ? { mode: word(t.mode, 40) } : {}),
         }
       : null;
-  return { code, tool };
+  const b = obj(d.branch);
+  const work = b ? word(b.work, 20) : "";
+  return { code, tool, ...(work === "branch" || work === "folder" ? { branch: { work } } : {}) };
 }
 
 // ── the one cache ───────────────────────────────────────────────────────────
@@ -141,8 +150,8 @@ export function readFolderDefaults(folder: string): Promise<FolderDefaults> {
  *  folder's defaults after it. Rejects with the daemon's sentence. */
 export async function saveFolderDefaults(
   folder: string,
-  view: "code" | "tool",
-  value: CodeDefaults | ToolDefaults | null,
+  view: "code" | "tool" | "branch",
+  value: CodeDefaults | ToolDefaults | BranchDefault | null,
 ): Promise<FolderDefaults> {
   const raw = await put<unknown>("/build/folders/defaults", { folder, view, defaults: value });
   const got = decodeFolderDefaults(raw);

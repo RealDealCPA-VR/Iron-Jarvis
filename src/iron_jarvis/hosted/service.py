@@ -113,6 +113,8 @@ from . import open_steps as OS  # v1.427.2: a step runs only while its tool does
 from . import archive_summary as AS  # v1.453.0: the summary kept at archive time
 from . import events as EV
 from . import handoff as HO  # v1.474.0: Hand off
+from . import session_git as SG  # 22-b: a session's own branch, Commit and pull request
+from ..harness import branches as B  # 22-b: the branch Chat › Code's sessions use
 from . import tool_switch as TS  # v1.545.0: switch the coding tool inside one session
 
 log = logging.getLogger(__name__)
@@ -1871,6 +1873,14 @@ class HostedService:
         no_folder = not folder
         if no_folder and resume_id:
             raise Refused(W.NO_FOLDER_RESUME, 400, field="folder")
+        # 22-b (R3.4, D-22.1): its OWN branch only when asked for (the start
+        # box offers it once per folder); never for a saved conversation (it
+        # goes on in its own folder) or a session with no folder.
+        on_branch = body.get("branch") is True
+        if on_branch and no_folder:
+            raise Refused(SG.BRANCH_NEEDS_FOLDER, 400, field="folder")
+        if on_branch and resume_id:
+            raise Refused(SG.BRANCH_NO_RESUME, 400, field="folder")
         if not no_folder:
             from ..core.fs_policy import root_problem
 
@@ -1932,12 +1942,31 @@ class HostedService:
                 if quiet is not None and body.get("elsewhere_closed") is not True:
                     raise Refused(W.LIVE_ELSEWHERE.format(label=W.label(harness), ago=ago_words(quiet)), 409)
                 title = title or clip(found.get("title") or "", 120)
-            row = await asyncio.to_thread(
-                store.create, self.engine, harness=harness, folder=folder, title=title,
-                account=str(acc.get("id") or ""), account_json=json.dumps(acc) if acc else "",
-                model=model, effort=effort, mode=mode, harness_session_id=resume_id,
-                no_folder=no_folder,
-            )
+            git_json, work = "", folder
+            if on_branch:
+                # The branch and its own copy of the folder, beside the
+                # repository (``branches.start``: refused in words, nothing
+                # made, when the folder cannot branch). The tool works THERE.
+                try:
+                    made = await asyncio.to_thread(B.start, folder, title=title)
+                except B.GitRefused as exc:
+                    raise Refused(str(exc), 400, field="folder") from None
+                work = made.pop("folder", "") or made.get("worktree", "")
+                git_json = json.dumps(made, sort_keys=True)
+            try:
+                row = await asyncio.to_thread(
+                    store.create, self.engine, harness=harness, folder=work, title=title,
+                    account=str(acc.get("id") or ""), account_json=json.dumps(acc) if acc else "",
+                    model=model, effort=effort, mode=mode, harness_session_id=resume_id,
+                    no_folder=no_folder, git_json=git_json,
+                )
+            except BaseException:
+                if git_json:
+                    # No row names it: the fresh branch copy is taken back.
+                    facts = json.loads(git_json)
+                    await asyncio.to_thread(B._undo_start, facts.get("repo", ""), Path(facts.get("worktree", "")),
+                                            facts.get("branch", ""), facts.get("base_commit", ""))
+                raise
         if resume_id:  # v1.418.0 (C4.6): its history is the tool's own transcript
             await asyncio.to_thread(HIST.mark_outside, self.home, row.id, "disk")
         return self._with_root(store.view(row))
@@ -3014,6 +3043,12 @@ class HostedService:
         # which reads and writes small files — off the loop. No account = the
         # same synchronous build as before.
         env = await asyncio.to_thread(build_env, accounts) if accounts else build_env(accounts)
+        if SG.facts_of(row):
+            # 22-b: a session on its own branch works in its own copy of the
+            # folder, which has no .venv / node_modules: the tool runs with
+            # the main folder's, as a Chat › Code branch does (stats: off the
+            # loop; nothing is copied or installed).
+            env = await asyncio.to_thread(SG.tool_env, row, env)
         if row.harness == PI:
             env = P.child_env(env)  # a parent Pi session's markers never cross
         if row.harness == ANTIGRAVITY:

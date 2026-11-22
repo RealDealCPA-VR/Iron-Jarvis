@@ -317,14 +317,18 @@ def hosted_candidates(db: Any) -> tuple[list[Candidate], bool]:
         return [], True
     stmt = (
         select(H.id, H.harness, H.folder, H.title, H.updated_at, H.created_at, H.handed_from,
-               H.archived_at, H.harness_session_id)
+               H.archived_at, H.harness_session_id, H.git_json)
         .order_by(H.updated_at.desc(), literal_column("rowid").desc())  # type: ignore[attr-defined]
         .limit(SCAN_MAX)
     )
     rows = list(db.exec(stmt))  # a read that fails RAISES: never "no rows"
+    from ..hosted.session_git import checkout_from
+
     out: list[Candidate] = []
-    for sid, harness, folder, title, updated, created, handed_from, archived, tool_sid in rows:
-        folder = str(folder or "").strip()
+    for sid, harness, folder, title, updated, created, handed_from, archived, tool_sid, git_json in rows:
+        # 22-b: a session on its own branch is work in the folder the user
+        # PICKED, never in its own copy of it.
+        folder = checkout_from(folder, git_json).strip()
         if not folder or str(handed_from or "").strip():
             continue  # no folder yet, or a helper another session started
         if not str(tool_sid or "").strip():

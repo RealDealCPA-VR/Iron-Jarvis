@@ -140,7 +140,31 @@ def _opencode_agent(harness: str, mode: str) -> bool:
     return bool(agent_of(mode))
 
 
-CLEANERS = {VIEW_CODE: clean_code, VIEW_TOOL: clean_tool}
+#: 22-b (R3.4, D-22.1): Build › Code's answer to "Work on a new branch in
+#: this folder?", asked once per folder in the start box. ``{"work":
+#: "branch"}`` = new sessions here start on their own branch (in their own
+#: copy of the folder); ``{"work": "folder"}`` = in the folder directly, as
+#: always. No answer kept = not asked yet (the start box offers it once).
+VIEW_BRANCH = "branch"
+BRANCH_WORK = ("branch", "folder")
+
+
+def clean_branch(raw: Any) -> dict[str, str] | None:
+    """The folder's answer, checked; None = nothing kept (= asked again)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise DefaultsRefused("Say whether new Build › Code sessions here start on a new branch.")
+    work = str(raw.get("work") or "").strip()
+    if not work and isinstance(raw.get("on"), bool):
+        work = "branch" if raw["on"] else "folder"
+    if work not in BRANCH_WORK:
+        raise DefaultsRefused("Say whether new Build › Code sessions here start on a new branch.")
+    return {"work": work}
+
+
+CLEANERS = {VIEW_CODE: clean_code, VIEW_TOOL: clean_tool, VIEW_BRANCH: clean_branch}
+VIEWS = tuple(CLEANERS)
 
 
 def _parse(raw: str) -> dict[str, dict[str, str]]:
@@ -192,6 +216,8 @@ def save(engine: Any, folder: str, view: str, value: Any) -> dict[str, dict[str,
 
     if view not in CLEANERS:
         raise DefaultsRefused("Say which coding view the defaults are for.")
+    # (22-b: ``branch`` is Build › Code's answer about a new branch; it is
+    # saved and cleared like a view, and the other two keep it.)
     key = folder_key(folder)
     if not key:
         raise DefaultsRefused("Say which folder the defaults are for.")

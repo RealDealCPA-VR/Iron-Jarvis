@@ -36,6 +36,8 @@ import {
 import { get, post } from "@/lib/api";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { ChangesReview } from "@/components/harness/ChangesReview";
+import { BranchView } from "@/components/harness/HarnessBranch";
+import { BUILD_CODE_GIT, type SessionGit } from "@/lib/buildGit";
 import { buildCodeCommentsKey } from "@/lib/codeComments";
 import { ConfirmButton } from "@/components/ui";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
@@ -181,7 +183,10 @@ export const CodePanes = memo(function CodePanes({
   onSend,
   comments = false,
   severalTools = false,
+  onArchived,
 }: {
+  /** 22-b: the Branch view's Discard archived the session. */
+  onArchived?: () => void;
   session: CodeSession;
   tools: readonly CodingTool[];
   /** The conversation's events (the last attachment is read from them). */
@@ -286,6 +291,8 @@ export const CodePanes = memo(function CodePanes({
             refresh={refresh}
             running={running}
             comments={comments}
+            git={session.git ?? null}
+            onArchived={onArchived}
           />
         ) : null}
         {tab === "usage" ? (
@@ -337,16 +344,26 @@ function ChangesPane({
   refresh,
   running,
   comments,
+  git = null,
+  onArchived,
 }: {
   sessionId: string;
   toolName: string;
   refresh: number;
   running: boolean;
   comments: boolean;
+  /** 22-b: the session works on its own branch (Chat › Code's Branch view,
+   *  on Build › Code's routes). */
+  git?: SessionGit | null;
+  onArchived?: () => void;
 }) {
   // v1.420.0 (C4.12): "This message" beside "Whole session" (the whole
   // session stays the default — what the pane always listed).
   const [scope, setScope] = useState<ChangesScope>("session");
+  // 22-b: a session on its own branch also has the BRANCH: its commits, its
+  // pull request, Push, Merge and Discard (the view Chat › Code has).
+  const [branchView, setBranchView] = useState(false);
+  const hasBranch = !!git && !git.removed;
   const { data, error, again } = usePaneRead<CodeChanges>(
     sessionId, "changes", decodeCodeChanges, refresh, running, changesQuery(scope),
   );
@@ -368,22 +385,51 @@ function ChangesPane({
   }
   return (
     <div data-testid="code-pane-changes" className="space-y-2 pb-4">
-      <div role="group" aria-label="Which changes" className="flex items-center gap-1" data-testid="code-changes-scope">
+      <div role="group" aria-label="Which changes" className="flex flex-wrap items-center gap-1" data-testid="code-changes-scope">
         {(["session", "turn"] as const).map((s) => (
           <button
             key={s}
             type="button"
             data-testid={`code-changes-scope-${s}`}
-            aria-pressed={scope === s}
-            onClick={() => setScope(s)}
+            aria-pressed={!branchView && scope === s}
+            onClick={() => {
+              setBranchView(false);
+              setScope(s);
+            }}
             className={`h-7 rounded-md px-2 text-[12px] transition-colors ${
-              scope === s ? "bg-white/[0.08] text-zinc-100" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
+              !branchView && scope === s ? "bg-white/[0.08] text-zinc-100" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
             }`}
           >
             {SCOPE_WORDS[s]}
           </button>
         ))}
+        {hasBranch ? (
+          <button
+            type="button"
+            data-testid="code-changes-scope-branch"
+            aria-pressed={branchView}
+            onClick={() => setBranchView(true)}
+            className={`h-7 rounded-md px-2 text-[12px] transition-colors ${
+              branchView ? "bg-white/[0.08] text-zinc-100" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
+            }`}
+          >
+            {BRANCH_SCOPE_WORDS}
+          </button>
+        ) : null}
       </div>
+      {branchView && git ? (
+        <BranchView
+          sessionId={sessionId}
+          git={git}
+          refreshKey={refresh}
+          root={BUILD_CODE_GIT}
+          watchCi={false}
+          comments={comments}
+          onArchived={onArchived}
+        />
+      ) : null}
+      {branchView && git ? null : (
+      <>
       <div className="flex items-start gap-2">
         <p data-testid="code-changes-source" className="min-w-0 flex-1 text-[12px] text-zinc-500">
           {data ? data.words : "What this session changed on disk."}
@@ -477,9 +523,14 @@ function ChangesPane({
           {revertNote.text}
         </p>
       ) : null}
+      </>
+      )}
     </div>
   );
 }
+
+/** 22-b: the Changes tab's third choice on a session with its own branch. */
+export const BRANCH_SCOPE_WORDS = "Branch";
 
 function byToolTitle(c: CodeChanges): string {
   return c.changes

@@ -69,3 +69,10 @@ class HostedSessionRecord(SQLModel, table=True):
     #: one as a helper (``hosted/handoff``). "" = a session the user started.
     #: A helper can never hand off again. NULL on older rows = "".
     handed_from: str | None = Field(default="")
+    #: 22-b (R3.4): the session's git facts, JSON — written ONLY by the
+    #: create and the git routes (``hosted/session_git``), never by a PATCH.
+    #: A session on its OWN branch keeps the facts ``harness/branches.start``
+    #: returns (``folder`` is then its own copy of the folder); a session in
+    #: the folder directly keeps only the pull request it opened
+    #: (``{"direct": "1", "branch", "pr_url", "pr_number"}``). NULL / "" = none.
+    git_json: str | None = Field(default="")
