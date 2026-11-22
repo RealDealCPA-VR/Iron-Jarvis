@@ -15,12 +15,14 @@ how busy the PC's processors were. Never the address's query string.
 
 from __future__ import annotations
 
+import contextlib
 import http.server
 import logging
 import os
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -447,6 +449,7 @@ def test_a_failing_real_edge_test_reports_what_the_runner_was_doing(monkeypatch)
     assert "(pid 0)" not in text, text  # Windows' idle time is no program
     assert "busiest programs" in text, text
     assert "running: msedge.exe " in text and "python.exe " in text, text
+    assert "with no living parent, started since this run began: msedge.exe " in text, text
     # Priorities: CI starts pytest below normal, so the section says which.
     assert "this test's process: " in text and " priority" in text, text
     # This test's own worker is counted (the count reads the processes).
@@ -515,6 +518,197 @@ def test_no_argument_of_a_command_line_reaches_the_runner_state(monkeypatch, nam
     if names == "posix":
         # Linux's path was really taken: some name was finished from a command line.
         assert asked, "no program here has a name of 15 characters or more"
+
+
+# --------------------------------------------------------------------------- #
+# The machine section: what an Edge an earlier test left looks like
+# (FU-1 fourth review)
+# --------------------------------------------------------------------------- #
+
+
+def test_edge_and_node_are_counted_by_their_exact_names():
+    """``msedgewebview2.exe`` (Windows' web view, inside many programs) and
+    ``msedge_proxy.exe`` are not Edge: a match by the first letters counted
+    them as msedge.exe (12 of 137 on the PC this was measured on)."""
+    from tests._runner_state import _counted
+
+    for name in ("msedge.exe", "MSEDGE.EXE", "msedge"):
+        assert _counted(name) == "msedge.exe", name
+    for name in ("node.exe", "Node.exe", "node"):
+        assert _counted(name) == "node.exe", name
+    for name in ("python.exe", "python3", "python3.12", "pythonw.exe"):
+        assert _counted(name) == "python.exe", name
+    for name in ("msedgewebview2.exe", "msedgewebview2", "msedge_proxy.exe", "identity_helper.exe",
+                 "node_repl.exe", "nodemon.exe", "?"):
+        assert _counted(name) == "", name
+
+
+class _Stand:
+    """A stand-in process for :func:`tests._runner_state.runner_state`: its
+    name, parent and start, and its CPU seconds at each read (``None``: gone
+    by that read)."""
+
+    def __init__(self, pid: int, name: str, *, parent: Any, born: float,
+                 cpu: "tuple[float | None, ...]" = (0.0, 0.0)) -> None:
+        self.pid = pid
+        self.info = {"name": name}
+        self._parent = parent
+        self._born = born
+        self._cpu = list(cpu)
+
+    def cpu_times(self) -> Any:
+        import psutil
+
+        user = self._cpu.pop(0) if len(self._cpu) > 1 else self._cpu[0]
+        if user is None:
+            raise psutil.NoSuchProcess(self.pid)
+        return SimpleNamespace(user=user, system=0.0)
+
+    def memory_info(self) -> Any:
+        return SimpleNamespace(rss=64 * 2**20)
+
+    def nice(self) -> int:
+        return 32 if sys.platform == "win32" else 0
+
+    def parent(self) -> Any:
+        return self._parent
+
+    def create_time(self) -> float:
+        return self._born
+
+
+def test_an_edge_or_driver_with_no_living_parent_is_named_and_a_live_one_is_not(monkeypatch):
+    """CI runs a shard with ``-n auto``, so the counts hold the Edge of every
+    real-Edge test running on another worker (about 11 processes each), and
+    one of them can be among the busiest programs: a count is no leftover.
+    What is one: an msedge.exe or node.exe with no living parent, started
+    since this run began and still there after the sample. The busiest
+    programs say which of them it is. One that started before the failing
+    test was left by an earlier test; one that started during it outlived
+    the failing test's own close."""
+    import psutil
+
+    from tests import _runner_state
+
+    now = time.time()
+    run_began, test_began = now - 100.0, now - 10.0
+    living = SimpleNamespace(pid=4_000_000)
+
+    def stands() -> "list[_Stand]":
+        return [
+            _Stand(4_000_001, "msedge.exe", parent=living, born=now),  # a live test's Edge
+            _Stand(4_000_002, "msedge.exe", parent=None, born=now, cpu=(0.0, 0.9)),  # this test's, left running, busy
+            _Stand(4_000_008, "msedge.exe", parent=None, born=now - 50.0),  # an earlier test's, left running
+            _Stand(4_000_003, "msedgewebview2.exe", parent=None, born=now),  # not Edge
+            _Stand(4_000_004, "msedge_proxy.exe", parent=None, born=now),  # not Edge
+            _Stand(4_000_005, "node.exe", parent=None, born=now - 200.0),  # started before this run
+            _Stand(4_000_006, "node.exe", parent=None, born=now, cpu=(0.0, None)),  # being closed: gone a moment later
+            _Stand(4_000_007, "node.exe", parent=living, born=now - 50.0),  # a live test's driver
+        ]
+
+    monkeypatch.setattr(_runner_state, "SAMPLE_S", 0.05)
+    monkeypatch.setattr(_runner_state, "_run_began", lambda proc: run_began)
+    monkeypatch.setattr(psutil, "process_iter", lambda *a, **k: iter(stands()))
+    text = _runner_state.runner_state()
+    assert "running: msedge.exe 3, node.exe 3, python.exe 0" in text, text
+    assert "with no living parent, started since this run began: msedge.exe 2, node.exe 0\n" in text, text
+    rows = [line for line in text.splitlines() if "(pid " in line]
+    assert [line for line in rows if line.endswith(", no living parent")] == [
+        line for line in rows if "(pid 4000002)" in line or "(pid 4000008)" in line
+    ], text
+    # Told the failing attempt's start, it says which of them an earlier test left.
+    text = _runner_state.runner_state(test_began=test_began)
+    assert (
+        "with no living parent, started since this run began: msedge.exe 2, node.exe 0; "
+        "of them, started before this test: msedge.exe 1, node.exe 0\n"
+    ) in text, text
+
+
+def test_the_machine_section_is_told_when_the_failing_attempt_began(monkeypatch):
+    """The hook keeps each real-Edge attempt's setup start and hands it to the
+    machine section, so an Edge an earlier test left is told from one the
+    failing test left itself. A rerun's setup starts the clock again."""
+    import tests.conftest as conftest
+    from tests import _runner_state
+
+    told: "list[float | None]" = []
+    monkeypatch.setattr(_runner_state, "runner_state", lambda test_began=None: told.append(test_began) or "state")
+    try:
+        raise AssertionError("red")
+    except AssertionError as exc:
+        red = pytest.ExceptionInfo.from_exception(exc)
+    item = SimpleNamespace(originalname="test_real_edge_x", name="test_real_edge_x", stash={},
+                           add_report_section=lambda *a: None)
+    for when, start, excinfo in (("setup", 100.0, None), ("call", 101.0, red),
+                                 ("setup", 200.0, None), ("call", 201.0, red)):
+        gen = conftest.pytest_runtest_makereport(item, SimpleNamespace(when=when, start=start, excinfo=excinfo))
+        next(gen)
+        with pytest.raises(StopIteration):
+            gen.send("the report")
+    assert told == [100.0, 200.0]
+
+
+def test_the_run_began_when_the_oldest_python_above_this_process_started():
+    """An xdist worker's own start is not the run's: its controller (and on
+    Windows the venv's launcher above it) started first, and a worker started
+    again after a crash would otherwise miss an Edge the crashed one left."""
+    from tests import _runner_state as RS
+
+    def proc(name: str, born: float, parents: "tuple[Any, ...]" = ()) -> Any:
+        return SimpleNamespace(name=lambda: name, create_time=lambda: born, parents=lambda: list(parents))
+
+    above = (proc("python.exe", 50.0), proc("python3.12", 20.0), proc("pytest.exe", 10.0), proc("python.exe", 5.0))
+    assert RS._run_began(proc("python.exe", 90.0, above)) == 20.0
+    assert RS._run_began(proc("python.exe", 90.0)) == 90.0
+
+
+def test_on_linux_an_orphan_handed_to_pid_1_has_no_living_parent(monkeypatch):
+    """Linux and macOS give an orphan to pid 1; Windows gives it to no one."""
+    from tests import _runner_state as RS
+
+    now = time.time()
+    handed = _Stand(4_000_010, "msedge", parent=SimpleNamespace(pid=1), born=now)
+    kept = _Stand(4_000_011, "msedge", parent=SimpleNamespace(pid=4_000_000), born=now)
+    monkeypatch.setattr(RS, "_WINDOWS", False)
+    assert RS._left_behind(handed, since=now - 1)
+    assert not RS._left_behind(kept, since=now - 1)
+    assert not RS._left_behind(handed, since=now + 1)  # started before the run: not this run's
+    monkeypatch.setattr(RS, "_WINDOWS", True)
+    assert not RS._left_behind(handed, since=now - 1)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the real-Edge tests run on Windows, where an orphan has no parent")
+def test_a_real_process_whose_parent_exited_has_no_living_parent():
+    """psutil's own answer on real processes: a program whose parent exited
+    has no living parent; a child of this test and this test's own process
+    have one (a live test's Edge has its driver, the driver its worker)."""
+    import subprocess
+
+    import psutil
+
+    from tests import _runner_state as RS
+
+    since = RS._run_began(psutil.Process())
+    exe = getattr(sys, "_base_executable", "") or sys.executable
+    quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    hand_off = (
+        "import subprocess, sys; d = subprocess.DEVNULL; "
+        "p = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(120)'], "
+        "stdin=d, stdout=d, stderr=d); print(p.pid)"
+    )
+    child = subprocess.Popen([exe, "-I", "-c", "import time; time.sleep(120)"], **quiet)
+    orphan = None
+    try:
+        out = subprocess.run([exe, "-I", "-c", hand_off], capture_output=True, text=True, timeout=60, check=True)
+        orphan = psutil.Process(int(out.stdout.strip()))
+        assert RS._left_behind(orphan, since)
+        assert not RS._left_behind(psutil.Process(child.pid), since)
+        assert not RS._left_behind(psutil.Process(), since)
+    finally:
+        for proc in (orphan, child):
+            with contextlib.suppress(Exception):
+                proc.kill()
+                proc.wait(10)
 
 
 # --------------------------------------------------------------------------- #
@@ -646,6 +840,8 @@ def test_a_real_edge_test_that_passes_on_its_retry_prints_what_its_failed_attemp
     # The failed attempt's own words, its machine section, the product's line.
     assert "BrowserProblem: Opening 127.0.0.1:5173/shop did not finish within 45 s." in block, block
     assert "Captured machine call" in block and "busiest programs" in block, block
+    # pytest's own item and call: the hook kept the attempt's setup start.
+    assert "; of them, started before this test: msedge.exe " in block, block
     assert "agent browser: Opening 127.0.0.1:5173/shop did not finish within 45 s. " \
            "Edge never started the page's request" in block, block
     assert block.count("busiest programs") == 1, block

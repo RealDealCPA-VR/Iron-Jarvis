@@ -36,6 +36,10 @@ PREFIX = "test_real_edge"
 MOST_LINES = 200
 #: The heading of the end-of-run block.
 HEADING = "real-Edge tests that passed only when run again: what the failed attempt saw"
+#: When a real-Edge attempt began (its setup's start, seconds since the
+#: epoch): the machine section tells an Edge an earlier test left running
+#: from one the failing test left itself (FU-1 fourth review).
+BEGAN = pytest.StashKey[float]()
 
 
 def is_real_edge(name: str) -> bool:
@@ -56,18 +60,25 @@ def pytest_runtest_makereport(item, call):
     two of them four times on a runner that ran every test four to eight
     times slower than the rerun's, and nothing named why. Added before the
     report is built, so the attempt's own report carries it (and a later
-    attempt's report too). A skip is not a failure."""
+    attempt's report too). A skip is not a failure. Each attempt's setup
+    start is kept (:data:`BEGAN`) so the section can say which leftovers
+    are older than the failing attempt."""
     excinfo = call.excinfo
+    real = is_real_edge(getattr(item, "originalname", "") or item.name)
+    stash = getattr(item, "stash", None)
+    began = getattr(call, "start", None)
+    if real and call.when == "setup" and stash is not None and began is not None:
+        stash[BEGAN] = float(began)
     if (
         call.when == "call"
         and excinfo is not None
-        and is_real_edge(getattr(item, "originalname", "") or item.name)
+        and real
         and not excinfo.errisinstance((pytest.skip.Exception, pytest.xfail.Exception))
     ):
         try:
             from tests._runner_state import runner_state
 
-            text = runner_state()
+            text = runner_state(test_began=stash.get(BEGAN, None) if stash is not None else None)
         except Exception as exc:  # noqa: BLE001 — the test's own failure is the point
             text = f"the machine's state could not be read: {type(exc).__name__}"
         item.add_report_section("call", "machine", text)
