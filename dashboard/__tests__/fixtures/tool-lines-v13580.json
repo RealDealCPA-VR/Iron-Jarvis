@@ -636,6 +636,14 @@
       "ok": "updated its plan",
       "failed": "tried a plan update and it failed"
     },
+    "pr_comments_list": {
+      "ok": "read the review comments on a pull request",
+      "failed": "tried a review comments lookup and it failed"
+    },
+    "pr_comments_quiet": {
+      "ok": "switched telling you about a pull request's review comments",
+      "failed": "tried a review comments switch and it failed"
+    },
     "preference_edit": {
       "ok": "changed a kept preference",
       "failed": "tried a preference change and it failed"

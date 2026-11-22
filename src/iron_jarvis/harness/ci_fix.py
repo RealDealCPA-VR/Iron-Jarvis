@@ -198,6 +198,25 @@ class CiWatchRecord(SQLModel, table=True):
     next_check_at: datetime | None = None
     watch_since: datetime | None = None
     read_fails: int = 0
+    #: 26-a (R2.16): the pull request's REVIEW COMMENTS are read on a clock
+    #: of their own (``harness/pr_comments``), in every state but a fix turn:
+    #: first ``pr_comments.READ_FIRST_S`` after the watch first sees the pull
+    #: request, then each wait × 1.5 up to an hour, back to the first wait
+    #: when a new comment arrives. All additive: ``core.db``'s reconciler adds
+    #: them to an existing table as NULL, so every reader treats a missing
+    #: value as the default.
+    comments_next_at: datetime | None = None
+    comments_interval_s: float | None = None
+    comments_read_fails: int | None = None
+    #: When reading began, or the newest comment arrived: reading ends
+    #: ``pr_comments.READ_FOR_DAYS`` after it.
+    comments_since: datetime | None = None
+    #: Why reading ended ("" = it goes on): merged | closed | quiet | failed.
+    comments_done: str | None = None
+    #: The newest bell row about this pull request's comments (at most one a
+    #: day), and "Stop telling me about comments here" (no bell row, no line).
+    comments_told_at: datetime | None = None
+    comments_quiet: bool | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -225,7 +244,8 @@ def _view(row: "CiWatchRecord | None") -> "dict[str, Any] | None":
         out["own_commits"] = [str(x) for x in json.loads(row.own_commits_json or "[]") if str(x)]
     except (TypeError, ValueError):
         out["own_commits"] = []
-    for k in ("next_check_at", "watch_since", "created_at", "updated_at"):
+    for k in ("next_check_at", "watch_since", "created_at", "updated_at", "comments_next_at", "comments_since",
+              "comments_told_at"):
         v = out.get(k)
         out[k] = v.isoformat() if isinstance(v, datetime) else None
     return out
@@ -257,6 +277,10 @@ def ensure(engine: Any, thread_id: str, facts: dict[str, str]) -> dict[str, Any]
             "pushed_sha": "", "seen_pushed_at": str(facts.get("pushed_at") or ""), "reviewer": "",
             "words": "", "interval_s": POLL_FIRST_S, "next_check_at": None, "watch_since": _naive(now),
             "read_fails": 0, "updated_at": now,
+            # 26-a: a new pull request's comments are read afresh (its own
+            # "Stop telling me" too: it is another pull request).
+            "comments_next_at": None, "comments_interval_s": None, "comments_read_fails": 0,
+            "comments_since": None, "comments_done": "", "comments_told_at": None, "comments_quiet": False,
         }.items():
             setattr(row, k, v)
         db.add(row)

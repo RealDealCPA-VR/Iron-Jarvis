@@ -525,6 +525,11 @@ def default_permissions() -> dict[str, str]:
         # Next leaps 12-a: coding work started from the phone — the tool only
         # asks the sender on ONE card (Start, Not now); their Start queues it.
         "code_start": "allow",
+        # 26-a (R2.16): the review comments on a coding session's pull
+        # request: reading them is allowed; "Stop telling me about comments
+        # here" asks (with an Undo).
+        "pr_comments_list": "allow",
+        "pr_comments_quiet": "ask",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +

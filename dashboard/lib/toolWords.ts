@@ -189,6 +189,8 @@ const WORDS: Record<string, string> = {
   build_checks_set: "turn tests after each Build › Code reply on or off in a folder",
   // Next leaps 12-a: the phone's card before coding work starts.
   code_start: "ask on your phone before starting coding work in a folder",
+  // 26-a (R2.16): "Stop telling me about comments here" from chat.
+  pr_comments_quiet: "stop or start telling you about new review comments on a pull request",
 };
 
 // The 15 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

@@ -274,6 +274,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # (records_build.build_tools_for, phone_code.door_open); an agent run has
     # nobody's phone to ask. Pinned by tests/test_leap12a_tool_starts_nothing.py.
     "code_start",
+    # 26-a (R2.16): the review comments on a coding session's pull request
+    # (read only) and "Stop telling me about comments here" (a card + Undo
+    # where the user is present); chat arms them (records_build.build_tools_for);
+    # pinned by tests/test_records_pr_comments.py.
+    "pr_comments_list", "pr_comments_quiet",
     # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
     # a model server, its default model, an Iron-Proxy account and a memory
     # base from chat — a card + Undo where the user is present; pinned by

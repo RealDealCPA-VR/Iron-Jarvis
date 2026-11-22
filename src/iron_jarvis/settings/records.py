@@ -145,6 +145,10 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     # queues the work (``harness/phone_code``). Armed only in the phone's
     # own chat turn.
     "code_start": "allow",
+    # 26-a (R2.16): a pull request's review comments (read only) and "Stop
+    # telling me about comments here" (with an Undo).
+    "pr_comments_list": "allow",
+    "pr_comments_quiet": "ask",
     # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
     # model servers, Iron-Proxy accounts and memory bases — each asks, each
     # has an Undo.
@@ -2178,7 +2182,7 @@ def _rb() -> Any:
 
 #: v1.438.0 (Wave 4 group A): a night task, tonight's order, a folder's
 #: coding defaults and its coding team (settings/records_build).
-_BUILD_KINDS = ("night_task", "night_order", "build_defaults", "build_team", "build_checks")
+_BUILD_KINDS = ("night_task", "night_order", "build_defaults", "build_team", "build_checks", "pr_comments_quiet")
 _SNAP.update({k: (lambda kind: lambda p, n: _rb().SNAP[kind](p, n))(k) for k in _BUILD_KINDS})
 def _conn_snap(kind: str) -> Any:
     def _snap(platform: Any, name: str) -> Any:

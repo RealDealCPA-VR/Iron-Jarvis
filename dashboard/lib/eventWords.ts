@@ -138,6 +138,7 @@ export const EVENT_WORDS: Record<string, string> = {
   "build.phone_code": "Coding work from your phone started or ended",
   "build.ci_step": "A pull-request check step",
   "build.ci_done": "A pull-request check ended",
+  "build.pr_comments": "Review comments arrived on a pull request",
   "library.proposal": "A lesson or rule was proposed for a folder",
   "agent_thread.updated": "A team conversation was updated",
   "remote.message": "A remote agent messaged back",
@@ -455,6 +456,7 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
     case "build.turn_stalled":
     case "build.ci_step":
     case "build.ci_done":
+    case "build.pr_comments":
     case "chat.turn_finished":
       add(pick(p, "title"));
       if (type === "build.account_limit") add(pick(p, "account_name"));

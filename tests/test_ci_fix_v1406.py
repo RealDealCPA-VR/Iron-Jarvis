@@ -611,7 +611,12 @@ async def test_turning_it_off_watches_nothing(app, tmp_path, fake, model, monkey
     app.state.platform.config.ci_autofix = False
     for _ in range(2):
         await w.step()
-    assert CI.get(w.engine, w.sid) is None and not fake.calls("pr", "view")
+    # 26-a: the watch's record may now exist for the pull request's REVIEW
+    # COMMENTS (their own clock, read while fixing checks is off); the checks
+    # are never read and nothing is fixed or said.
+    rec = CI.get(w.engine, w.sid)
+    assert rec is None or (rec["state"] == CI.WATCHING and not rec["next_check_at"] and not rec["rounds"])
+    assert not fake.calls("pr", "view") and w.ci_lines() == [] and model.fix_prompts == []
 
 
 async def test_a_pending_check_is_read_again_later_and_a_user_push_starts_a_new_streak(app, tmp_path, fake, model, monkeypatch):

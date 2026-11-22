@@ -53,6 +53,7 @@ import type { RewindExtras } from "@/lib/buildRewind";
 import { decodeComments } from "@/lib/codeComments";
 import { SentComments } from "@/components/harness/CommentChips";
 import { ReplyPictures } from "@/components/harness/ReplyPictures";
+import { PrCommentsLine } from "@/components/harness/PrCommentsLine";
 import { accountMoveLine, decodeAccountLimit, decodeAccountMove, limitCardWords } from "@/lib/buildAccounts";
 import {
   decodeFinish,
@@ -222,6 +223,8 @@ export interface HarnessRowHandlers {
   /** v1.449.0: a Local only refusal's "Send to <model> once" — the reply at
    *  this index asked again, with `provider` allowed for that one message. */
   onSendOnce?: (index: number, provider: string) => void;
+  /** 26-a (R2.16): Answer these started this turn — follow it. */
+  onAnswerComments?: (turnId: string) => void;
 }
 
 type Health = ComponentProps<typeof HarnessFailureLine>["health"];
@@ -305,6 +308,22 @@ function HarnessMessageRowImpl({
     const w = paneTurnWindow([...before, m], before.length);
     return w ? { ...w, sessionId } : null;
   }, [m, prevUserAt, sessionId]);
+  if (m.role === "assistant" && m.prComments) {
+    // 26-a (R2.16): review comments arrived on the session's pull request —
+    // the line, and the comments still to answer with Answer these.
+    return (
+      <div data-testid="harness-reply" className="group/msg min-w-0">
+        <PrCommentsLine
+          threadId={threadId}
+          raw={m.prComments}
+          content={m.content ?? ""}
+          archived={archived}
+          busy={busy}
+          onAnswered={h.onAnswerComments}
+        />
+      </div>
+    );
+  }
   return (
     m.role === "user" ? (
       m.steer ? (

@@ -417,6 +417,7 @@ ASK_WORDS: dict[str, str] = {
     "build_checks_set": "turn tests after each Build › Code reply on or off in a folder",
     # Next leaps 12-a: the phone's card before coding work starts.
     "code_start": "ask on your phone before starting coding work in a folder",
+    "pr_comments_quiet": "stop or start telling you about new review comments on a pull request",
 }
 
 
@@ -714,6 +715,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # Next leaps 12-a: the phone's card before coding work starts.
     # Twin: lib/runWords.ts AGENT_TOOLS.
     "code_start": ("asked on your phone before starting coding work in a folder", "coding work card"),
+    # 26-a (R2.16): a pull request's review comments. Twin: lib/runWords.ts.
+    "pr_comments_list": ("read the review comments on a pull request", "review comments lookup"),
+    "pr_comments_quiet": ("switched telling you about a pull request's review comments", "review comments switch"),
 }
 
 #: browser/tools.py's 15 built-in browser tools, by EXACT name (the

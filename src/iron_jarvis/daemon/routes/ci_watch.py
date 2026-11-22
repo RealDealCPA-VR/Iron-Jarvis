@@ -53,9 +53,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from pydantic import Field as PydField
 
 from ...harness import branches as B
 from ...harness import ci_fix as CI
+from ...harness import pr_comments as PC
 from ...harness import sessions as S
 
 log = logging.getLogger(__name__)
@@ -438,11 +441,16 @@ def _pass_lock(platform: Any) -> asyncio.Lock:
 
 
 async def ci_pass(d: Any) -> dict[str, list[str]]:
-    """ONE pass (serialized per platform). Returns what it did, by session."""
+    """ONE pass (serialized per platform). Returns what it did, by session.
+
+    26-a: a pull request's REVIEW COMMENTS are read in the same pass on their
+    own clock (:func:`_read_comments`) — also while ``ci_autofix`` is off:
+    that setting is about fixing failed checks, and reading the comments
+    changes nothing anywhere."""
     async with _pass_lock(d.platform):
-        out: dict[str, list[str]] = {"read": [], "fixing": [], "reviewing": [], "pushed": [], "ended": []}
-        if not autofix_on(getattr(d.platform, "config", None)):
-            return out
+        out: dict[str, list[str]] = {"read": [], "fixing": [], "reviewing": [], "pushed": [], "ended": [],
+                                     "comments": []}
+        fixing = autofix_on(getattr(d.platform, "config", None))
         rows = await asyncio.to_thread(_candidates, d.platform.engine)
         for thread_id, title, setup in rows:
             if thread_id in _REVIEWS and not _REVIEWS[thread_id].done():
@@ -452,7 +460,7 @@ async def ci_pass(d: Any) -> dict[str, list[str]]:
                 continue
             async with lock:
                 try:
-                    await _tend(d, thread_id, title, setup, out)
+                    await _tend(d, thread_id, title, setup, out, fixing=fixing)
                 except asyncio.CancelledError:
                     raise
                 except Exception:  # noqa: BLE001 — one session never stops the watch
@@ -460,12 +468,28 @@ async def ci_pass(d: Any) -> dict[str, list[str]]:
         return out
 
 
-async def _tend(d: Any, thread_id: str, title: str, setup: dict[str, Any], out: dict[str, list[str]]) -> None:
+async def _tend(d: Any, thread_id: str, title: str, setup: dict[str, Any], out: dict[str, list[str]],
+                *, fixing: bool = True) -> None:
     engine = d.platform.engine
     facts = B.facts_of(setup)
     if not facts or not facts.get("pr_url") or facts.get("merged_at") or facts.get("removed_at"):
         return
     rec = await asyncio.to_thread(CI.ensure, engine, thread_id, facts)
+    # 26-a: an Answer these turn that ended with no one left to settle it (a
+    # restart) is settled from the record here; then the comments are read.
+    # Nothing is read while a fix turn runs (or its review), nor of a pull
+    # request the checks watch already saw merged or closed. A fault here
+    # never stops the checks' own watch below.
+    try:
+        await _settle_answers(d, thread_id, facts)
+        if rec["state"] not in (CI.FIXING, CI.REVIEWING, CI.CLOSED):
+            await _read_comments(d, thread_id, title, facts, rec, out, local_only=setup.get("local_only") is True)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — the checks are watched all the same
+        log.warning("reading the review comments of %s failed", thread_id, exc_info=True)
+    if not fixing:
+        return
     pushed_at = str(facts.get("pushed_at") or "")
     if pushed_at != str(rec.get("seen_pushed_at") or "") and rec["state"] not in (CI.FIXING, CI.REVIEWING):
         # A push of the branch the USER made: a new head, a new streak.
@@ -1067,6 +1091,315 @@ async def _keep_on_side(d: Any, thread_id: str, title: str, facts: dict[str, str
     await _say(d, thread_id, title, CI.KIND_SIDE, words, round_=rounds)
 
 
+# --------------------------------------------------------------------------- #
+# 26-a: review comments arrive in the session
+# --------------------------------------------------------------------------- #
+
+#: The bell row's headline.
+COMMENTS_HEADLINE = "Review comments arrived"
+#: The settling tasks in flight (a task the loop holds only weakly).
+_SETTLING: "set[asyncio.Task[Any]]" = set()
+#: Said once when reading stopped because GitHub kept refusing.
+COMMENTS_FAILED_WORDS = (
+    "The review comments on this session's pull request could not be read {n} times in a row, so Iron Jarvis "
+    "stopped reading them: {why}"
+)
+
+
+def _arrived_line(new: "list[dict[str, Any]]") -> dict[str, Any]:
+    """The session's line: Iron Jarvis's own words only (a count — the
+    authors' names ride the structured field, so nothing a person wrote on
+    GitHub reaches a later turn's history as words)."""
+    n = len(new)
+    authors = list(dict.fromkeys(str(r.get("author") or "someone") for r in new))[:10]
+    return {
+        "role": "assistant",
+        "content": f"{n} review comment{'s' if n != 1 else ''} arrived on this session's pull request.",
+        "prComments": {"ids": [str(r["id"]) for r in new][: PC.MAX_KEPT], "n": n, "authors": authors},
+    }
+
+
+async def _say_comments(d: Any, thread_id: str, title: str, new: "list[dict[str, Any]]", *, bell: bool,
+                        local_only: bool) -> None:
+    """New comments said: a line on the session, and — at most once a day per
+    pull request, never after "Stop telling me about comments here" — a QUIET
+    bell row (``build.pr_comments``). Never raises."""
+    from ...core.events import EventType
+
+    engine = d.platform.engine
+    try:
+        await asyncio.to_thread(S.append_lines, engine, thread_id, [_arrived_line(new)], title_from_first=False)
+    except Exception:  # noqa: BLE001 — a line never stops the watch
+        log.warning("writing a review-comments line on %s failed", thread_id, exc_info=True)
+    if not bell:
+        return
+    session_title = " ".join(str(title or "").split())[:120]
+    words = PC.arrived_words(new)
+    payload = {
+        "thread_id": thread_id, "count": len(new), "title": COMMENTS_HEADLINE,
+        # A Local only session's news carries no words of its own.
+        "body": LOCAL_ONLY_NOTICE if local_only else " · ".join(b for b in (session_title, words) if b),
+        "session_title": "" if local_only else session_title,
+    }
+    try:
+        bus = getattr(d.platform, "event_bus", None)
+        if bus is not None:
+            await bus.publish(EventType.BUILD_PR_COMMENTS, payload, session_id=S.session_id_for(thread_id))
+    except Exception:  # noqa: BLE001 — the record stands without its row
+        log.warning("announcing review comments on %s failed", thread_id, exc_info=True)
+
+
+async def _read_comments(d: Any, thread_id: str, title: str, facts: dict[str, str], rec: dict[str, Any],
+                         out: dict[str, list[str]], *, local_only: bool) -> None:
+    """26-a: read the pull request's review comments when their clock says so
+    (first :data:`~iron_jarvis.harness.pr_comments.READ_FIRST_S` after the
+    watch first sees the pull request, then less often up to an hour, back to
+    the first wait after a new comment; ended by merged or closed, by
+    ``READ_FOR_DAYS`` with nothing new, or by ``READ_FAILS_MAX`` failed reads
+    in a row). NOTHING is read under Emergency stop or while the session is
+    busy (a reply of the user's, a fix turn): the comments wait for it."""
+    engine = d.platform.engine
+    if _emergency(d) or _busy(d, thread_id):
+        return
+    at = PC.now()
+    if PC.first_wait(rec):
+        await asyncio.to_thread(CI.save, engine, thread_id, comments_next_at=PC.later(PC.READ_FIRST_S, at),
+                                comments_interval_s=PC.READ_FIRST_S, comments_since=at, comments_read_fails=0,
+                                comments_done="")
+        return
+    if not PC.due(rec, at):
+        return
+    if PC.read_too_long(rec, at):
+        await asyncio.to_thread(CI.save, engine, thread_id, comments_done=PC.DONE_QUIET, comments_next_at=None)
+        return
+    try:
+        got = await asyncio.to_thread(_git_locked, thread_id, lambda: PC.read(facts))
+    except B.GitRefused as exc:
+        fails = int(rec.get("comments_read_fails") or 0) + 1
+        if fails >= PC.READ_FAILS_MAX:
+            await asyncio.to_thread(CI.save, engine, thread_id, comments_done=PC.DONE_FAILED,
+                                    comments_read_fails=fails, comments_next_at=None)
+            line = {"role": "assistant", "content": COMMENTS_FAILED_WORDS.format(n=fails, why=exc),
+                    "prComments": {"ids": [], "n": 0, "authors": [], "stopped": True}}
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(S.append_lines, engine, thread_id, [line], title_from_first=False)
+            return
+        wait = PC.interval_after(rec.get("comments_interval_s"), fresh=False)
+        await asyncio.to_thread(CI.save, engine, thread_id, comments_read_fails=fails, comments_interval_s=wait,
+                                comments_next_at=PC.later(wait, at))
+        return
+    out.setdefault("comments", []).append(thread_id)
+    if got.state in (PC.DONE_MERGED, PC.DONE_CLOSED):
+        await asyncio.to_thread(CI.save, engine, thread_id, comments_done=got.state, comments_next_at=None,
+                                comments_read_fails=0)
+        return
+    pr_url = str(facts.get("pr_url") or "")
+    rows, cut = PC.rows_from(thread_id, pr_url, got.comments)
+    new = await asyncio.to_thread(PC.store, engine, thread_id, pr_url, rows, cut=cut, at=at)
+    wait = PC.interval_after(rec.get("comments_interval_s"), fresh=bool(new))
+    changes: dict[str, Any] = {"comments_read_fails": 0, "comments_interval_s": wait,
+                               "comments_next_at": PC.later(wait, at)}
+    quiet = bool(rec.get("comments_quiet"))
+    bell = bool(new) and PC.may_tell(rec, at)
+    if new:
+        changes["comments_since"] = at
+    if bell:
+        changes["comments_told_at"] = at
+    await asyncio.to_thread(CI.save, engine, thread_id, **changes)
+    if new and not quiet:
+        await _say_comments(d, thread_id, title, new, bell=bell, local_only=local_only)
+
+
+async def _settle_answer(d: Any, thread_id: str, turn_id: str, facts: "dict[str, str] | None" = None) -> None:
+    """An Answer these turn ended: each of its comments is settled FROM THE
+    RECORD (``pr_comments.judge``). A turn still running waits. Never
+    raises."""
+    from ...harness import night as N
+    from .build import _running_turn, _setup_of
+
+    engine = d.platform.engine
+    try:
+        if _running_turn(d, thread_id) == turn_id:
+            return
+        row = await asyncio.to_thread(S.get_row, engine, thread_id)
+        if row is None:
+            return
+        if facts is None:
+            facts = B.facts_of(_setup_of(row)) or {}
+        root = str(facts.get("worktree") or getattr(row, "folder", "") or "")
+        messages = await asyncio.to_thread(S._messages, row)
+        line = N.last_reply_line(messages, {turn_id})
+        ended = line is not None and not line.get("interrupted") and not line.get("error")
+        await asyncio.to_thread(PC.judge, engine, thread_id, turn_id, root, ended=ended)
+    except Exception:  # noqa: BLE001 — the next pass settles it
+        log.warning("settling the answered review comments of %s failed", thread_id, exc_info=True)
+
+
+async def _settle_answers(d: Any, thread_id: str, facts: dict[str, str]) -> None:
+    turns = await asyncio.to_thread(PC.answering_turns, d.platform.engine, thread_id)
+    for turn_id in turns:
+        await _settle_answer(d, thread_id, turn_id, facts)
+
+
+def _comment_view(row: dict[str, Any], root: str) -> dict[str, Any]:
+    """One comment as the screen reads it (its words are the record's: plain,
+    masked, cut)."""
+    import os
+
+    keep = ("id", "kind", "author", "author_kind", "ticked", "path", "line", "start_line", "side", "outdated",
+            "in_reply_to", "body", "quote", "url", "state", "answer_files", "github_created_at")
+    view = {k: row.get(k) for k in keep}
+    view["place"] = PC.place_words(row)
+    # Where the Changes tab pins it: the file's full path in the session's
+    # worktree (the review's own spelling of a path).
+    view["abs"] = os.path.normpath(os.path.join(root, row["path"])) if root and row.get("path") else ""
+    return view
+
+
+class PrAnswerBody(BaseModel):
+    ids: list[str] = PydField(default_factory=list, max_length=200)
+
+
+class PrAsideBody(BaseModel):
+    aside: bool = True
+
+
+class PrQuietBody(BaseModel):
+    quiet: bool = True
+
+
+def _register_comments(app: FastAPI, d: Any) -> None:
+    """The routes of 26-a. Nothing here calls GitHub: the comments are the
+    record the watcher keeps, and an Answer these turn changes only the
+    session's own folder."""
+    from fastapi.responses import JSONResponse
+
+    async def _session(thread_id: str) -> tuple[Any, dict[str, str]]:
+        from ...core.models import is_build_thread
+        from .build import _setup_of
+
+        row = await asyncio.to_thread(S.get_row, d.platform.engine, thread_id)
+        if row is None or not is_build_thread(row):
+            raise HTTPException(status_code=404, detail="no such coding session")
+        return row, B.facts_of(_setup_of(row)) or {}
+
+    @app.get("/build/sessions/{thread_id}/pr-comments")
+    async def pr_comments_view(thread_id: str) -> dict[str, Any]:
+        """The review comments Iron Jarvis read from the session's pull
+        request, oldest first, and how the reading stands. No GitHub call."""
+        row, facts = await _session(thread_id)
+        engine = d.platform.engine
+        pr_url = str(facts.get("pr_url") or "")
+        rows = await asyncio.to_thread(PC.listing, engine, thread_id, pr_url) if pr_url else []
+        rec = await asyncio.to_thread(CI.get, engine, thread_id) if pr_url else None
+        root = str(facts.get("worktree") or getattr(row, "folder", "") or "")
+        return {
+            "pr_url": pr_url,
+            "comments": [_comment_view(r, root) for r in rows],
+            "quiet": bool((rec or {}).get("comments_quiet")),
+            "done": str((rec or {}).get("comments_done") or ""),
+            "next_read_at": (rec or {}).get("comments_next_at"),
+            "max_answer": PC.MAX_ANSWER,
+        }
+
+    @app.post("/build/sessions/{thread_id}/pr-comments/answer")
+    async def pr_comments_answer(thread_id: str, body: PrAnswerBody):
+        """ANSWER THESE: one coding turn in this session, started by the
+        person's press (their posture, model, account and Local only), whose
+        question is Iron Jarvis's own sentence and whose model input holds
+        the comments only inside the fence (``pr_comments.block``). A comment
+        the scan flagged starts it at LOW trust. Answers ``{turn_id}``; the
+        screen follows the turn as it follows any."""
+        from .build import RUNNING_SENTENCE, SessionBusy, _running_turn, start_build_turn
+
+        ids = list(dict.fromkeys(str(i).strip() for i in body.ids if str(i or "").strip()))
+        if not ids:
+            raise HTTPException(status_code=400, detail=PC.NOTHING_TO_ANSWER)
+        if len(ids) > PC.MAX_ANSWER:
+            raise HTTPException(status_code=400, detail=PC.TOO_MANY.format(n=PC.MAX_ANSWER))
+        row, facts = await _session(thread_id)
+        engine = d.platform.engine
+        rows = await asyncio.to_thread(PC.get_rows, engine, thread_id, ids)
+        if len(rows) != len(ids) or any(r.get("pr_url") != facts.get("pr_url") for r in rows):
+            raise HTTPException(status_code=404, detail=PC.NOT_HERE)
+        turn_id = "bt_" + secrets.token_hex(8)
+        # All or none, compare-and-set: a second press (another window) never
+        # answers a comment that is being answered.
+        if not await asyncio.to_thread(PC.claim, engine, thread_id, ids, turn_id):
+            raise HTTPException(status_code=409, detail=PC.ALREADY_ANSWERING)
+        bus = getattr(d.platform, "event_bus", None)
+        try:
+            note, flagged = await asyncio.to_thread(PC.block, rows, event_bus=bus,
+                                                    session_id=S.session_id_for(thread_id))
+        except Exception:
+            await asyncio.to_thread(PC.set_state, engine, thread_id, ids, PC.NEW, turn_id="", expect=(PC.ANSWERING,))
+            raise
+
+        async def give_back() -> None:
+            await asyncio.to_thread(PC.set_state, engine, thread_id, ids, PC.NEW, turn_id="", expect=(PC.ANSWERING,))
+
+        try:
+            lg = await start_build_turn(d, thread_id, PC.answer_text(len(ids)), turn_id, model_note=note,
+                                        low_trust=PC.FLAGGED_TRUST if flagged else "")
+        except SessionBusy:
+            await give_back()
+            return JSONResponse(status_code=409,
+                                content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)})
+        except Exception:
+            await give_back()
+            raise
+        loop = asyncio.get_running_loop()
+
+        def _settle_soon() -> None:
+            task = asyncio.ensure_future(_settle_answer(d, thread_id, turn_id, facts))
+            _SETTLING.add(task)
+            task.add_done_callback(_SETTLING.discard)
+
+        def _ended(_t: Any) -> None:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(_settle_soon)
+
+        with contextlib.suppress(Exception):
+            lg.task.add_done_callback(_ended)
+        return {"turn_id": turn_id, "answering": ids, "low_trust": bool(flagged)}
+
+    @app.post("/build/sessions/{thread_id}/pr-comments/{comment_id}/set-aside")
+    async def pr_comment_set_aside(thread_id: str, comment_id: str, body: PrAsideBody | None = None):
+        """Set a comment aside (``aside: false`` brings it back as new). Only
+        the record changes; GitHub is not told."""
+        await _session(thread_id)
+        aside = True if body is None else body.aside
+        moved = await asyncio.to_thread(
+            PC.set_state, d.platform.engine, thread_id, [comment_id], PC.SET_ASIDE if aside else PC.NEW,
+            expect=(PC.NEW, PC.UNCHANGED, PC.ANSWERED) if aside else (PC.SET_ASIDE,),
+        )
+        if not moved:
+            rows = await asyncio.to_thread(PC.get_rows, d.platform.engine, thread_id, [comment_id])
+            if not rows:
+                raise HTTPException(status_code=404, detail=PC.NOT_HERE)
+        return {"id": comment_id, "state": PC.SET_ASIDE if aside else PC.NEW, "changed": bool(moved)}
+
+    @app.post("/build/sessions/{thread_id}/pr-comments/quiet")
+    async def pr_comments_quiet(thread_id: str, body: PrQuietBody):
+        """"Stop telling me about comments here" (``quiet: true``) and its
+        Undo (``quiet: false``): no bell row and no line for this pull
+        request's new comments; they are still read and kept."""
+        _row, facts = await _session(thread_id)
+        if not facts.get("pr_url"):
+            raise HTTPException(status_code=409, detail="This session has no pull request.")
+        was = await asyncio.to_thread(set_quiet, d.platform.engine, thread_id, facts, body.quiet)
+        return {"quiet": bool(body.quiet), "was": was}
+
+
+def set_quiet(engine: Any, thread_id: str, facts: dict[str, str], quiet: bool) -> bool:
+    """Turn "Stop telling me about comments here" on or off for the session's
+    pull request; returns what it was. BLOCKING."""
+    rec = CI.ensure(engine, thread_id, facts)
+    was = bool(rec.get("comments_quiet"))
+    CI.save(engine, thread_id, comments_quiet=bool(quiet))
+    return was
+
+
 async def ci_loop(d: Any, on_tick: Any) -> None:
     """The lifespan loop: a pass every :data:`TICK_S` (and at once when a
     fix turn or a review ends), each reporting ITS OWN outcome."""
@@ -1110,6 +1443,8 @@ def register(app: FastAPI, d: Any) -> None:
         view = {k: rec.get(k) for k in keep}
         view["max_rounds"] = CI.MAX_ROUNDS
         return {"watch": view, "on": autofix_on(getattr(d.platform, "config", None))}
+
+    _register_comments(app, d)
 
 
 __all__ = [

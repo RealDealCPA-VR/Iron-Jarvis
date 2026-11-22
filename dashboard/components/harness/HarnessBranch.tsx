@@ -58,6 +58,7 @@ import {
 } from "@/lib/buildGit";
 import { ciTone, ciWatchWords, getCiView, type CiView } from "@/lib/ciWatch";
 import { OPEN_PR_LABEL, ghNoteWords } from "@/lib/buildAppGit";
+import { getPrComments, type PrComment } from "@/lib/prComments";
 
 const ACTION =
   "inline-flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
@@ -208,6 +209,25 @@ export function BranchView({
   const prPress = buildCode ? OPEN_PR_LABEL : "Create PR";
   const prGo = buildCode ? OPEN_PR_LABEL : "Create pull request";
   const ghNote = buildCode ? ghNoteWords(status?.gh.note || "") : status?.gh.note || "";
+  // 26-a (R2.16): the review comments Iron Jarvis read from the pull request
+  // (no GitHub call), pinned on their lines below. Read with the watch: when
+  // this view opens, after a turn, and on the same slow visible-only clock.
+  const [github, setGithub] = useState<PrComment[]>([]);
+  const ghSeq = useRef(0);
+  const readGithub = useCallback(async () => {
+    const seq = ++ghSeq.current;
+    try {
+      const view = await getPrComments(sessionId);
+      if (seq === ghSeq.current) setGithub(view.comments);
+    } catch {
+      /* keep what was shown */
+    }
+  }, [sessionId]);
+  const ghLive = !!prUrl && !removed;
+  useEffect(() => {
+    if (ghLive) void readGithub();
+  }, [ghLive, readGithub, refreshKey]);
+  useVisibleInterval(() => void readGithub(), PR_POLL_MS, ghLive);
 
   async function act(name: string, fn: () => Promise<string | null>) {
     setBusy(name);
@@ -656,6 +676,7 @@ export function BranchView({
           more={more}
           comments={comments}
           commentView="branch"
+          github={ghLive ? github : undefined}
         />
       )}
     </div>

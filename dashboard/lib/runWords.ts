@@ -298,6 +298,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   coding_reply_check: { did: "Looked up whether a coding reply's tests passed", noun: "test result lookup" },
   // Next leaps 12-a: the phone's card before coding work starts.
   code_start: { did: "Asked on your phone before starting coding work in a folder", noun: "coding work card" },
+  // 26-a (R2.16): a pull request's review comments.
+  pr_comments_list: { did: "Read the review comments on a pull request", noun: "review comments lookup" },
+  pr_comments_quiet: { did: "Switched telling you about a pull request's review comments", noun: "review comments switch" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

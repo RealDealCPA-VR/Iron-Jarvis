@@ -203,6 +203,11 @@ LINE_KEYS: tuple[str, ...] = (
     # a fix started, the review's verdict, pushed, kept on a side branch,
     # waiting for the user, stopped, gave up, passing) — its words in content.
     "ci",
+    # 26-a (R2.16, ``harness/pr_comments``): a line Iron Jarvis wrote when
+    # review comments arrived on the session's pull request ({ids, n}: the
+    # comments it is about; its words in content). The screen draws the
+    # comments still new beside it, with Answer these.
+    "prComments",
     # R0.2 (build-out plan): on the question and the reply of a turn that ran
     # under Local only (``routes/build``), whatever its end — a reply that
     # failed or was stopped keeps no route — so "Copy as a fix request"

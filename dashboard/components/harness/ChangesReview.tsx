@@ -85,10 +85,19 @@ import {
   parseUnified,
   statusWord,
   type DiffRow,
+  type LineNote,
   type LinePress,
 } from "@/components/chat/DiffView";
 import type { ChangeUndoState, FileChange } from "@/components/chat/ChangedFiles";
 import { OpenInEditorButton } from "@/components/harness/OpenInEditor";
+import {
+  PR_COMMENTS_FROM_GITHUB,
+  PR_COMMENTS_NOT_PINNED,
+  pinLine,
+  pinsForFile,
+  stateWords,
+  type PrComment,
+} from "@/lib/prComments";
 import {
   LAZY_FROM_FILES,
   REVIEW_HINT,
@@ -124,6 +133,68 @@ import {
   type CommentSide,
   type LineRef,
 } from "@/lib/codeComments";
+
+/** 26-a: no review comments from GitHub (one constant, so a memoised file
+ *  sees the same value). */
+const NO_PINS: readonly PrComment[] = [];
+
+/** "2 comments from GitHub", in a file's header. */
+export function githubCountWords(n: number): string {
+  return `${n} ${n === 1 ? "comment" : "comments"} ${PR_COMMENTS_FROM_GITHUB}`;
+}
+
+/** 26-a: which of a file's review comments sit under a DRAWN row — the first
+ *  row with the comment's line number ON ITS OWN SIDE (a removed row has
+ *  only an old number and an added row only a new one, so a new-side comment
+ *  never sits on a removed line; a hunk row has neither) — and which are
+ *  left for the list after the rows (outdated, or on a line not drawn here).
+ *  Pure. */
+export function placePins(
+  pins: readonly PrComment[],
+  rows: readonly DiffRow[],
+): { onRow: Map<DiffRow, PrComment[]>; rest: PrComment[] } {
+  const onRow = new Map<DiffRow, PrComment[]>();
+  const rest: PrComment[] = [];
+  for (const c of pins) {
+    const line = pinLine(c);
+    const row = line ? rows.find((r) => (c.side === "old" ? r.oldNo : r.newNo) === line) : undefined;
+    if (!row) {
+      rest.push(c);
+      continue;
+    }
+    const list = onRow.get(row);
+    if (list) list.push(c);
+    else onRow.set(row, [c]);
+  }
+  return { onRow, rest };
+}
+
+/** 26-a: review comments from GitHub under a line (or, with `rest`, after a
+ *  file's rows). Plain text: a person wrote these on GitHub. */
+function GithubPins({ comments, rest = false }: { comments: readonly PrComment[]; rest?: boolean }) {
+  return (
+    <div
+      data-testid={rest ? "review-github-rest" : "review-github-pins"}
+      className="my-0.5 space-y-1 border-l-2 border-accent/40 bg-white/[0.02] px-3 py-1.5 font-sans text-[12px]"
+    >
+      {rest ? <p className="text-zinc-500">{PR_COMMENTS_NOT_PINNED}</p> : null}
+      {comments.map((c) => {
+        const state = stateWords(c);
+        return (
+          <div key={c.id} data-testid="review-github-pin" data-id={c.id} className="min-w-0 break-words">
+            <p className="flex flex-wrap gap-x-2 text-zinc-500">
+              <span className="text-zinc-300">{c.author}</span>
+              <span>{PR_COMMENTS_FROM_GITHUB}</span>
+              {rest && c.place ? <span className="break-all font-mono">{c.place}</span> : null}
+              {state ? <span>{state}</span> : null}
+            </p>
+            <p className="line-clamp-6 whitespace-pre-wrap text-zinc-300">{c.body}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 const ACTION =
   "inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none";
@@ -221,6 +292,7 @@ function FileRows({
   comments,
   onComment,
   onLines,
+  pins = NO_PINS,
 }: {
   change: FileChange;
   wide: boolean;
@@ -228,6 +300,8 @@ function FileRows({
   comments: boolean;
   onComment: OnComment;
   onLines: OnLines;
+  /** 26-a: this file's review comments from GitHub. */
+  pins?: readonly PrComment[];
 }) {
   const [all, setAll] = useState(false);
   const rows = useMemo(() => parseUnified(change.diff), [change.diff]);
@@ -260,6 +334,20 @@ function FileRows({
   const limit = all ? MAX_DIFF_ROWS : REVIEW_ROWS_PER_FILE;
   const shown = useMemo(() => rows.slice(0, limit), [rows, limit]);
   const split = useMemo(() => (wide ? pairRows(shown) : []), [wide, shown]);
+  // 26-a: each review comment from GitHub sits under its line when that line
+  // is drawn here; the rest (outdated, or on a line not shown) are listed
+  // after the rows. Never on a line of the other side.
+  const placed = useMemo(() => placePins(pins, shown), [pins, shown]);
+  const lineNote = useMemo<LineNote | undefined>(
+    () =>
+      placed.onRow.size
+        ? (row) => {
+            const list = placed.onRow.get(row);
+            return list ? <GithubPins comments={list} /> : null;
+          }
+        : undefined,
+    [placed],
+  );
   const hidden = rows.length - shown.length;
   const deleted = change.status === "deleted";
   const hunkAction = (text: string, hunk: number) => {
@@ -298,22 +386,29 @@ function FileRows({
 
   if (change.binary) {
     return (
-      <p data-testid={`review-binary-${index}`} className="py-2 pl-[18px] text-[12px] text-zinc-500">
-        This is a binary file, so there are no lines to compare.
-      </p>
+      <>
+        <p data-testid={`review-binary-${index}`} className="py-2 pl-[18px] text-[12px] text-zinc-500">
+          This is a binary file, so there are no lines to compare.
+        </p>
+        {pins.length ? <GithubPins comments={pins} rest /> : null}
+      </>
     );
   }
   if (rows.length === 0) {
     return (
-      <p data-testid={`review-empty-${index}`} className="py-2 pl-[18px] text-[12px] text-zinc-500">
-        {change.note || (change.undone ? "This change was undone." : "No line changes to show.")}
-      </p>
+      <>
+        <p data-testid={`review-empty-${index}`} className="py-2 pl-[18px] text-[12px] text-zinc-500">
+          {change.note || (change.undone ? "This change was undone." : "No line changes to show.")}
+        </p>
+        {pins.length ? <GithubPins comments={pins} rest /> : null}
+      </>
     );
   }
   return (
     <div data-testid={`review-rows-${index}`} className="min-w-0 font-mono text-[12px] leading-relaxed">
-      <UnifiedRows rows={shown} always={!wide} hunkAction={hunkAction} linePress={linePress} />
-      {wide ? <SplitRows rows={split} hunkAction={hunkAction} linePress={linePress} /> : null}
+      <UnifiedRows rows={shown} always={!wide} hunkAction={hunkAction} linePress={linePress} lineNote={lineNote} />
+      {wide ? <SplitRows rows={split} hunkAction={hunkAction} linePress={linePress} lineNote={lineNote} /> : null}
+      {placed.rest.length ? <GithubPins comments={placed.rest} rest /> : null}
       {hidden > 0 ? (
         all ? (
           <p className="border-t border-white/[0.06] px-3 py-2 font-sans text-[12px] text-zinc-500">
@@ -347,6 +442,7 @@ function LazyRows({
   comments,
   onComment,
   onLines,
+  pins,
 }: {
   change: FileChange;
   wide: boolean;
@@ -355,6 +451,7 @@ function LazyRows({
   comments: boolean;
   onComment: OnComment;
   onLines: OnLines;
+  pins?: readonly PrComment[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useNearScreen(ref, lazy);
@@ -367,6 +464,7 @@ function LazyRows({
         comments={comments}
         onComment={onComment}
         onLines={onLines}
+        pins={pins}
       />
     );
   }
@@ -404,6 +502,9 @@ interface FileProps {
   onComment: OnComment;
   /** v1.544.0 (3b): a line's number was pressed (made once, like the rest). */
   onLines: OnLines;
+  /** 26-a: this file's review comments from GitHub (one array per file,
+   *  made again only when the comments or the files change). */
+  pins?: readonly PrComment[];
   onFold: (mark: string, folded: boolean) => void;
   onReviewed: (mark: string, on: boolean) => void;
   onUndo: (actionId: string, path: string) => void;
@@ -426,6 +527,7 @@ const ReviewFile = memo(function ReviewFile({
   comments,
   onComment,
   onLines,
+  pins = NO_PINS,
   onFold,
   onReviewed,
   onUndo,
@@ -477,6 +579,11 @@ const ReviewFile = memo(function ReviewFile({
             undone
           </span>
         ) : null}
+        {pins.length ? (
+          <span data-testid={`review-github-count-${index}`} className="shrink-0 text-zinc-500">
+            {githubCountWords(pins.length)}
+          </span>
+        ) : null}
         <span className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
           {change.status !== "deleted" ? (
             <OpenInEditorButton path={change.path} line={first} testId={`review-open-${index}`} />
@@ -522,6 +629,7 @@ const ReviewFile = memo(function ReviewFile({
             comments={comments}
             onComment={onComment}
             onLines={onLines}
+            pins={pins}
           />
         </div>
       )}
@@ -667,6 +775,7 @@ export function ChangesReview({
   onUndone,
   comments = false,
   commentView = "",
+  github,
 }: {
   changes: FileChange[];
   /** Whose review marks (the session's thread id). */
@@ -691,8 +800,22 @@ export function ChangesReview({
    *  same file has another diff in another view, so "changed since" is
    *  judged within one view. */
   commentView?: string;
+  /** 26-a (R2.16): the review comments Iron Jarvis read from the session's
+   *  pull request (lib/prComments) — each pinned on its line, "from GitHub". */
+  github?: readonly PrComment[];
 }) {
   const [marks, setMarks] = useState<string[]>(() => readMarks(sessionId));
+  // 26-a: each file's review comments from GitHub, made again only when the
+  // comments or the files change (so a memoised file is not redrawn).
+  const pinsOf = useMemo(() => {
+    const out = new Map<string, readonly PrComment[]>();
+    if (!github || github.length === 0) return out;
+    for (const ch of changes) {
+      const mine = pinsForFile(github, ch.path);
+      if (mine.length) out.set(ch.path, mine);
+    }
+    return out;
+  }, [github, changes]);
   useEffect(() => setMarks(readMarks(sessionId)), [sessionId]);
   const markSet = useMemo(() => new Set(marks), [marks]);
   // Fold state by the file's CURRENT mark (path + diff hash): a file that
@@ -855,6 +978,7 @@ export function ChangesReview({
             comments={comments}
             onComment={openComment}
             onLines={openLines}
+            pins={pinsOf.get(c.path) ?? NO_PINS}
             onFold={toggleFold}
             onReviewed={setReviewed}
             onUndo={runUndo}

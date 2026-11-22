@@ -247,6 +247,9 @@ export type BuildMessage = PaneMessage & {
   /** v1.544.0: on a question, the comments on changed code that rode it
    *  (raw; lib/codeComments decodeComments). */
   comments?: unknown;
+  /** 26-a (R2.16): Iron Jarvis's line about review comments that arrived on
+   *  the session's pull request (raw; lib/prComments decodePrCommentsLine). */
+  prComments?: unknown;
   /** v1.379.0: the question was one of Claude Code's own commands. */
   command?: string;
   /** v1.374.0: on a reply, how full the conversation was for the model that
@@ -532,6 +535,9 @@ const LINE_KEYS = [
   "suggestion",
   // v1.499.0: the client question under a reply (with its current answer).
   "clientQuestion",
+  // 26-a (R2.16): review comments arrived on the session's pull request
+  // ({ids, n, authors, stopped}; raw, lib/prComments decodePrCommentsLine).
+  "prComments",
   // v1.406.0 part 3: a line Iron Jarvis wrote about the session's pull
   // request's checks ({kind, round}; its words are the content).
   "ci",

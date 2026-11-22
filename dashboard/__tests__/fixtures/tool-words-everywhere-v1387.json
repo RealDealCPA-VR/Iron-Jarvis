@@ -179,6 +179,8 @@
     "pixio_status",
     "pixio_upload",
     "plan_update",
+    "pr_comments_list",
+    "pr_comments_quiet",
     "preference_edit",
     "preference_forget",
     "preference_list",
@@ -435,6 +437,8 @@
     "pixio_status": "check on a media generation",
     "pixio_upload": "publish a file for a media generation",
     "plan_update": "update its plan",
+    "pr_comments_list": "read the review comments on a pull request",
+    "pr_comments_quiet": "stop or start telling you about new review comments on a pull request",
     "preference_edit": "change one of your kept preferences",
     "preference_forget": "forget one of your kept preferences",
     "preference_list": "list your kept preferences",
@@ -1061,6 +1065,14 @@
       "Updated its plan",
       "Updating its plan"
     ],
+    "pr_comments_list": [
+      "Read the review comments on a pull request",
+      "Reading the review comments on a pull request"
+    ],
+    "pr_comments_quiet": [
+      "Switched telling you about a pull request's review comments",
+      "Switching telling you about a pull request's review comments"
+    ],
     "preference_edit": [
       "Changed a kept preference",
       "Changing a kept preference"
@@ -1489,6 +1501,8 @@
     "pixio_status": "",
     "pixio_upload": "",
     "plan_update": "",
+    "pr_comments_list": "",
+    "pr_comments_quiet": "",
     "preference_edit": "",
     "preference_forget": "",
     "preference_list": "",

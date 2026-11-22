@@ -686,6 +686,12 @@
       "desktop": "ask on your phone before starting coding work in a folder"
     },
     {
+      "tool": "pr_comments_quiet",
+      "kind": "table",
+      "card": "stop or start telling you about new review comments on a pull request",
+      "desktop": "stop or start telling you about new review comments on a pull request"
+    },
+    {
       "tool": "model_server_add",
       "kind": "table",
       "card": "add a model server",

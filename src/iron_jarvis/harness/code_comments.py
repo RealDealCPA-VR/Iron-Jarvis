@@ -245,6 +245,38 @@ def _masked(text: str) -> str:
     return str(mask(text) or "")
 
 
+def fence(lines: list[str], *, source: str, event_bus: Any = None,
+          session_id: str | None = None) -> "tuple[str | None, bool]":
+    """THE ONE FENCE for text from a file or from outside, quoted line by
+    line (26-a lifted it out of :func:`block`, so a review comment from
+    GitHub is fenced by the same code as a comment on changed code — never a
+    second fence builder). ``lines`` are made plain (:func:`_plain`: a
+    line-break look-alike becomes a space, so nothing inside can start a line
+    of its own), MASKED, scanned (``scan_context(strict=True)``), and only
+    then is EVERY line given the bar :data:`QUOTE_PREFIX` and the whole put
+    inside ``wrap_untrusted``. Returns ``(fenced text, flagged)``;
+    ``(None, False)`` when the scan could not run (fail closed: the caller
+    leaves the part out and says so, never sends it unscanned). BLOCKING."""
+    from ..computeruse.safety import wrap_untrusted
+    from ..core.promptguard import publish_blocked, scan_context
+
+    inner = "\n".join(_plain(ln) for ln in lines)
+    try:
+        scan = scan_context(_masked(inner), source=source, cap=None, strict=True)
+    except Exception:  # noqa: BLE001 — fail closed: the part is dropped, and said
+        log.warning("a quoted part from %s could not be scanned; it was left out", source, exc_info=True)
+        return None, False
+    if event_bus is not None and scan.blocked:
+        try:
+            publish_blocked(event_bus, session_id, scan)
+        except Exception:  # noqa: BLE001 — the message still goes
+            log.debug("could not publish a blocked quoted part", exc_info=True)
+    # The bar goes on AFTER the scan, on every line of what it returned (a
+    # blocked piece can swallow a line break and start a new line).
+    fenced = "\n".join(QUOTE_PREFIX + ln for ln in scan.text.split("\n"))
+    return wrap_untrusted(fenced), bool(scan.blocked)
+
+
 def block(comments: list[dict[str, Any]], *, event_bus: Any = None, session_id: str | None = None) -> str:
     """The text the coding tool reads for these (already :func:`clean`)
     comments, or "" for none. The user's words are outside the fence; the
@@ -253,9 +285,6 @@ def block(comments: list[dict[str, Any]], *, event_bus: Any = None, session_id: 
     so, never sent unscanned."""
     if not comments:
         return ""
-    from ..computeruse.safety import wrap_untrusted
-    from ..core.promptguard import publish_blocked, scan_context
-
     out = [INTRO.format(heading=HEADING, n=len(comments))]
     for i, c in enumerate(comments, start=1):
         out.append("")
@@ -267,22 +296,11 @@ def block(comments: list[dict[str, Any]], *, event_bus: Any = None, session_id: 
             lines.extend(quote.split("\n"))
         if c.get("cut"):
             lines.append(CUT_LINE)
-        inner = "\n".join(lines)
-        try:
-            scan = scan_context(_masked(inner), source=SOURCE, cap=None, strict=True)
-        except Exception:  # noqa: BLE001 — fail closed: the part is dropped, and said
-            log.warning("a comment's quoted code could not be scanned; it was left out", exc_info=True)
+        fenced, _flagged = fence(lines, source=SOURCE, event_bus=event_bus, session_id=session_id)
+        if fenced is None:
             out.append("(The code I pointed at could not be checked, so it is not included.)")
             continue
-        if event_bus is not None and scan.blocked:
-            try:
-                publish_blocked(event_bus, session_id, scan)
-            except Exception:  # noqa: BLE001 — the message still goes
-                log.debug("could not publish a blocked comment quote", exc_info=True)
-        # The bar goes on AFTER the scan, on every line of what it returned (a
-        # blocked piece can swallow a line break and start a new line).
-        fenced = "\n".join(QUOTE_PREFIX + ln for ln in scan.text.split("\n"))
-        out.append(wrap_untrusted(fenced))
+        out.append(fenced)
     return "\n".join(out)
 
 

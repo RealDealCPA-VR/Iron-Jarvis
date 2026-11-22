@@ -221,6 +221,7 @@ EVENT_WORDS: dict[str, str] = {
     "build.phone_code": "Coding work from your phone started or ended",
     "build.ci_step": "A pull-request check step",
     "build.ci_done": "A pull-request check ended",
+    "build.pr_comments": "Review comments arrived on a pull request",
     "library.proposal": "A lesson or rule was proposed for a folder",
     "agent_thread.updated": "A team conversation was updated",
     "remote.message": "A remote agent messaged back",

@@ -44,6 +44,9 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       // 22-a (R1.9): whether Iron Jarvis runs a folder's tests after each
       // Build › Code reply.
       "build_checks_set",
+      // 26-a (R2.16): whether you are told about a pull request's new
+      // review comments (a flagged comment must not silence the others).
+      "pr_comments_quiet",
       // v1.506.0 (north-star plan 6.2): answering a suggestion on the
       // Improvements page (an accept can change how every chat answers).
       "suggestion_answer",

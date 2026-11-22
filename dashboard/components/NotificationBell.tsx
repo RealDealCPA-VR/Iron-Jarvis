@@ -300,6 +300,9 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // its failing checks (quiet), and its news (stopped fixing / passing now).
   "build.ci_step",
   "build.ci_done",
+  // 26-a (R2.16): review comments arrived on a coding session's pull
+  // request — a quiet row, at most one per pull request a day.
+  "build.pr_comments",
   // v1.446.0 (ease-of-use review item 20): a rule that could not start its
   // action rings (once per failure episode; a successful fire stays quiet).
   "reflex.failed",
@@ -1297,6 +1300,29 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     if (news) item.attention = true;
     else item.quiet = true;
     return item;
+  }
+  if (e.type === "build.pr_comments") {
+    // 26-a (R2.16): review comments arrived on a coding session's pull
+    // request. Payload: {thread_id, count, title, body, session_title}; the
+    // daemon wrote the words (a count and GitHub names, never a comment's own
+    // words; a Local only session's carry none) and sends at most one per
+    // pull request a day, none after "Stop telling me about comments here"
+    // (the session's card says it). A QUIET row: no ping, no badge.
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      "";
+    if (!thread) return null;
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: buildSessionHref(thread),
+      icon: GitBranch,
+      title: typeof p.title === "string" && p.title.trim() ? p.title.trim() : "Review comments arrived",
+      body: clip(p.body),
+      build: thread,
+      quiet: true,
+    };
   }
   if (e.type === "build.night_summary") {
     // v1.399.0 (night shift N2): a night's Last night summary is ready (its

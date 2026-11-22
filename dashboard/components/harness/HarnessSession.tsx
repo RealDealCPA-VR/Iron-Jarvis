@@ -3092,8 +3092,11 @@ export function HarnessSession({
     branchFrom,
     load,
     onChanged,
+    runTurn,
   });
-  liveHandlers.current = { retryReply, continueReply, sendOnceReply, send, compact, onRewound, branchFrom, load, onChanged };
+  liveHandlers.current = {
+    retryReply, continueReply, sendOnceReply, send, compact, onRewound, branchFrom, load, onChanged, runTurn,
+  };
   const rowHandlers = useMemo<HarnessRowHandlers>(
     () => ({
       onRewound: (q, extras) => void liveHandlers.current.onRewound(q, extras),
@@ -3112,6 +3115,11 @@ export function HarnessSession({
       // v1.449.0: a Local only refusal's two ways out.
       onOpenModelMenu: () => setModelMenuOpen(true),
       onSendOnce: (index, provider) => liveHandlers.current.sendOnceReply(index, provider),
+      // 26-a (R2.16): Answer these started a turn in the daemon — follow it
+      // (its question line is the daemon's; it replays from the start).
+      onAnswerComments: (turnId) => {
+        if (turnRef.current !== turnId) void liveHandlers.current.runTurn(null, turnId);
+      },
     }),
     [],
   );

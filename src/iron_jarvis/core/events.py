@@ -339,6 +339,13 @@ class EventType:
     # rings it and counts it, the desktop app says it from the tray, the
     # phone gets one line; "This PC" stays quiet (comm/notifier.bell_pings).
     BUILD_CI_DONE = "build.ci_done"
+    # 26-a (R2.16, harness/pr_comments): review comments arrived on a coding
+    # session's pull request: {thread_id, count, title, body, session_title}
+    # (the daemon wrote the words: a count and GitHub names only, never a
+    # comment's own words; a Local only session's carry none). A QUIET bell
+    # row, at most one per pull request a day, none after "Stop telling me
+    # about comments here". session_id = "build:<thread id>".
+    BUILD_PR_COMMENTS = "build.pr_comments"
     # The experience library proposed something for a project folder — a
     # lesson to keep, or an edit to the folder's harness files — that waits
     # for the user's Accept: {id, kind, folder_name, thread_id, summary}

@@ -22,7 +22,7 @@
  * no longer keeps is SAID, never drawn as an empty diff.
  */
 
-import { useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import { diffLines, textLines, type DiffLine } from "@/lib/diff";
@@ -62,6 +62,9 @@ export type HunkAction = (hunkText: string, index: number) => ReactNode;
  *  as before. A row's pressable number is its NEW one when it has one (an
  *  added or unchanged line), else its old one (a removed line): one press a
  *  row, in either layout. */
+/** 26-a: what to draw under one line of the diff (null = nothing). */
+export type LineNote = (row: DiffRow) => ReactNode;
+
 export interface LinePress {
   /** The number was pressed (`shift`: with Shift held). */
   onPress: (row: DiffRow, shift: boolean) => void;
@@ -310,12 +313,16 @@ export function UnifiedRows({
   always = false,
   hunkAction,
   linePress,
+  lineNote,
 }: {
   rows: DiffRow[];
   always?: boolean;
   hunkAction?: HunkAction;
   /** v1.544.0: a press on a line's number; absent = plain numbers. */
   linePress?: LinePress;
+  /** 26-a: what sits under a line (a review comment from GitHub); absent or
+   *  null = the line alone, exactly as before. */
+  lineNote?: LineNote;
 }) {
   // The ONE Tab stop among the line numbers: the one focused last, else the
   // first line (only with `linePress`; nothing is drawn for it otherwise).
@@ -335,16 +342,19 @@ export function UnifiedRows({
         r.kind === "hunk" ? (
           <HunkRow key={i} text={r.text} action={hunkAction} index={(hunks += 1)} />
         ) : (
-          <div key={i} data-kind={r.kind} className={`flex ${lineTone(r.kind)}`}>
-            <Num n={r.oldNo} press={numPress(linePress, r, "old", stop)} />
-            <Num n={r.newNo} press={numPress(linePress, r, "new", stop)} />
-            <span className="w-4 shrink-0 select-none">
-              <Marker kind={r.kind} />
-            </span>
-            <span className="min-w-0 whitespace-pre-wrap break-all pr-3 text-zinc-300">
-              {r.text}
-            </span>
-          </div>
+          <Fragment key={i}>
+            <div data-kind={r.kind} className={`flex ${lineTone(r.kind)}`}>
+              <Num n={r.oldNo} press={numPress(linePress, r, "old", stop)} />
+              <Num n={r.newNo} press={numPress(linePress, r, "new", stop)} />
+              <span className="w-4 shrink-0 select-none">
+                <Marker kind={r.kind} />
+              </span>
+              <span className="min-w-0 whitespace-pre-wrap break-all pr-3 text-zinc-300">
+                {r.text}
+              </span>
+            </div>
+            {lineNote ? lineNote(r) : null}
+          </Fragment>
         ),
       )}
     </div>
@@ -383,10 +393,13 @@ export function SplitRows({
   rows,
   hunkAction,
   linePress,
+  lineNote,
 }: {
   rows: SplitRow[];
   hunkAction?: HunkAction;
   linePress?: LinePress;
+  /** 26-a: as in `UnifiedRows` — drawn under the pair, across both sides. */
+  lineNote?: LineNote;
 }) {
   // One Tab stop here too (see `UnifiedRows`). A row's own number is its new
   // one when it has one (the right cell), else its old one (the left cell).
@@ -407,14 +420,14 @@ export function SplitRows({
         r.hunk !== undefined ? (
           <HunkRow key={i} text={r.hunk} action={hunkAction} index={(hunks += 1)} />
         ) : (
-          <div
-            key={i}
-            data-testid="diff-split-row"
-            className="grid grid-cols-2 divide-x divide-white/[0.06]"
-          >
-            <SplitCell row={r.left} side="left" linePress={linePress} stop={stop} />
-            <SplitCell row={r.right} side="right" linePress={linePress} stop={stop} />
-          </div>
+          <Fragment key={i}>
+            <div data-testid="diff-split-row" className="grid grid-cols-2 divide-x divide-white/[0.06]">
+              <SplitCell row={r.left} side="left" linePress={linePress} stop={stop} />
+              <SplitCell row={r.right} side="right" linePress={linePress} stop={stop} />
+            </div>
+            {lineNote && r.left ? lineNote(r.left) : null}
+            {lineNote && r.right && r.right !== r.left ? lineNote(r.right) : null}
+          </Fragment>
         ),
       )}
     </div>

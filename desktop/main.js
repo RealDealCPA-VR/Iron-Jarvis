@@ -4459,6 +4459,8 @@ const TOOL_WORDS = {
   build_checks_set: "turn tests after each Build › Code reply on or off in a folder",
   // Next leaps 12-a: the phone's card before coding work starts (pinned equal).
   code_start: "ask on your phone before starting coding work in a folder",
+  // 26-a (R2.16): "Stop telling me about comments here" from chat (pinned equal).
+  pr_comments_quiet: "stop or start telling you about new review comments on a pull request",
 };
 
 //: The batch forms ("rename or move 4 files") for the asks that come in
@@ -4679,6 +4681,8 @@ const TOOL_WORDS_BUILTIN = {
   pixio_status: "check on a media generation",
   pixio_upload: "publish a file for a media generation",
   plan_update: "update its plan",
+  pr_comments_list: "read the review comments on a pull request",
+  pr_comments_quiet: "stop or start telling you about new review comments on a pull request",
   preference_edit: "change one of your kept preferences",
   preference_forget: "forget one of your kept preferences",
   preference_list: "list your kept preferences",
