@@ -2056,9 +2056,11 @@ You do nothing for it: a change gets its row within a day of your accept.
   help. Before, it was 6 of 10." A task is done without help when it ended
   well and you did not have to answer a question, nudge it on or start it
   again. A new skill reads "Used in 7 tasks since you accepted it on 12
-  March; 6 ended well."; an improved skill compares the tasks that used it
-  before and after. A working habit for a team member shows the same
-  numbers as Settings › Model team.
+  March; 6 ended well." It counts every task that used it in its first two
+  weeks, and once they are over it says "in the two weeks after you
+  accepted it". An improved skill compares the tasks that used it before
+  and after. A working habit for a team member shows the same numbers as
+  Settings › Model team.
 - **When it shows numbers.** Only with at least 5 tasks on each side. The
   after side is the first 10 tasks, or the two weeks after your accept,
   whichever comes first; the before side is as many tasks just before it,
@@ -2074,7 +2076,8 @@ You do nothing for it: a change gets its row within a day of your accept.
 - **When it is counted.** At the end of the night review, if you turned it
   on, and otherwise once a day. No model is asked and nothing leaves your
   PC. If Iron Jarvis cannot read a record, it says so instead of showing
-  zeros.
+  zeros: the page and chat name what could not be read, a result waiting
+  on it says why, and it counts again the next day.
 
 ## Two changes at once in Build › Code wait for each other (v1.565.1)
 

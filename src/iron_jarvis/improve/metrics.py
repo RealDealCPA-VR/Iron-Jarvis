@@ -27,7 +27,10 @@ never moved after reading which changes they flag):
   the accept counts BEFORE, however late it finished.
 * AFTER: from the accept to :data:`AFTER_MAX` tasks or :data:`AFTER_DAYS`
   days, whichever comes first, and never past the next accepted change of
-  the same thing (``until``: from then on the work ran under that one).
+  the same thing (``until``: from then on the work ran under that one). A
+  NEW skill has no before side to match, so it counts EVERY task in those
+  days (no :data:`AFTER_MAX`), and its words say which days they were:
+  "since" only while the two weeks are still running.
 * BEFORE: the SAME number of tasks just before the accept, at most
   :data:`BEFORE_DAYS` days back.
 * Under :data:`MIN_TASKS` on either side there are NO verdict and no "before
@@ -188,16 +191,19 @@ def after_end(accepted_at: datetime, until: "datetime | None" = None) -> tuple[d
     return end, ENDED_DAYS
 
 
-def split(tasks: Iterable[Outcome], accepted_at: Any, *,
-          until: Any = None) -> tuple[list[Outcome], list[Outcome], datetime, str]:
+def split(tasks: Iterable[Outcome], accepted_at: Any, *, until: Any = None,
+          cap: "int | None" = AFTER_MAX) -> tuple[list[Outcome], list[Outcome], datetime, str]:
     """``(before, after, end, ended)`` by the rules in the module docstring.
-    A task whose start is unreadable is on neither side."""
+    A task whose start is unreadable is on neither side. ``cap``: the after
+    side's most tasks (None: every task until ``end``, a new skill's)."""
     accepted = naive(accepted_at)
     if accepted is None:
         raise ValueError("a change with no time it was accepted cannot be split")
     end, ended = after_end(accepted, naive(until))
     known = sorted((t for t in tasks if isinstance(t.start, datetime)), key=lambda t: t.start)
-    after = [t for t in known if accepted <= t.start < end][:AFTER_MAX]
+    after = [t for t in known if accepted <= t.start < end]
+    if cap is not None:
+        after = after[:cap]
     floor = accepted - timedelta(days=BEFORE_DAYS)
     earlier = [t for t in known if floor <= t.start < accepted]
     before = earlier[-len(after):] if after else []
@@ -217,8 +223,9 @@ def count_coach(tasks: Iterable[Outcome], accepted_at: Any, *, until: Any = None
 
 
 def count_skill(tasks: Iterable[Outcome], accepted_at: Any, *, until: Any = None) -> Counted:
-    """A NEW skill: the tasks that loaded it since. It had no before."""
-    _before, after, end, ended = split(tasks, accepted_at, until=until)
+    """A NEW skill: EVERY task that loaded it in its after side's days (it
+    had no before, so there is no number of tasks to match)."""
+    _before, after, end, ended = split(tasks, accepted_at, until=until, cap=None)
     return Counted(Side(), _side(after, "used in {n} tasks; {good} ended well"), end, ended)
 
 
@@ -351,8 +358,15 @@ def judge(kind: str, counted: Counted, *, accepted_at: Any, now: Any, name: str 
                      f"this on {day}.")
         return Judged(NOT_ENOUGH, "", words, over, final)
     if kind == KIND_SKILL:
-        return Judged(READY, "", f"Used in {a.n} tasks since you accepted it on {day}; {a.good} ended well.",
-                      over, final)
+        # Every use in the after side's days, and the words say which days:
+        # "since" only while they are still running.
+        if not over:
+            span = f"since you accepted it on {day}"
+        elif counted.ended == ENDED_NEXT:
+            span = f"between your accept on {day} and the next change to it"
+        else:
+            span = f"in the two weeks after you accepted it on {day}"
+        return Judged(READY, "", f"Used in {a.n} tasks {span}; {a.good} ended well.", over, final)
     if not b.enough:
         return Judged(NOT_ENOUGH, "", f"Not enough earlier work to compare: {b.n} of {MIN_TASKS} tasks in the "
                       f"{BEFORE_DAYS} days before you accepted this on {day}.", over, final)

@@ -790,8 +790,11 @@ async def _change_results_pass(platform, _tick=None) -> "dict | None":
     (18-a, ``improve/results.refresh``: no model, the records only, its own
     table), off the event loop, its health reported as ``change_results``
     through ``_tick`` (the lifespan's, so the background-names scan sees
-    the name; ``lib/loopWords.ts`` words it). A day a refresh already covered
-    (the night review's pass) is left alone (None). Never raises."""
+    the name; ``lib/loopWords.ts`` words it). A day a count that read every
+    record already covered (the night review's pass) is left alone (None);
+    one whose count could NOT read a record is counted again here, and the
+    health row names what is still unreadable (never green over it). Never
+    raises."""
     engine = getattr(platform, "engine", None)
     if engine is None:
         return None

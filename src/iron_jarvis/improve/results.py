@@ -24,15 +24,24 @@ THE RULES, each pinned in ``tests/test_next_leaps_18a_results.py``:
   none: never a result of zeros.
 * WHEN: :func:`refresh` runs at the end of each night review pass
   (``improve/night_review``) and once a day in the daemon's daily tidy loop
-  (``daemon/app._change_results_pass``) unless a refresh ran in the last 24
-  hours (the review is off, or it did not reach the end of a pass). No
-  model, nothing sent anywhere; bounded (:data:`MEASURED_MAX` changes,
-  :data:`RUNS_MAX` runs, :data:`EVENTS_MAX` answers per read).
+  (``daemon/app._change_results_pass``) unless a count that READ EVERY
+  RECORD ran in the last 24 hours (:func:`refreshed_within`). No model,
+  nothing sent anywhere; bounded (:data:`MEASURED_MAX` changes, and per
+  change :data:`RUNS_MAX` runs, :data:`EVENTS_MAX` answers,
+  :data:`USES_MAX` skill uses: each change is read over its OWN days, so
+  one busy agent's change never fills another's read).
 * THE NUMBERS come from the records only (``improve/metrics``: the split,
   the counts, the fixed thresholds and the words). A change whose record
   cannot be read keeps what it had; a new one is ``waiting`` with no
   numbers. A result that settled (a day after its after side's last day) is
   not measured again.
+* A RECORD THAT COULD NOT BE READ IS NAMED, after the count that met it:
+  every count writes :class:`ChangeResultCheck` (:func:`last_check`), so
+  ``GET /improvements`` names the kind (:func:`unreadable_labels`), a
+  result waiting on it says so (:data:`NOT_READ_YET`, never "counts the
+  work once a day" as if nothing were wrong), one with older numbers says
+  when they were counted, and the daily pass counts again and reports it on
+  its health row.
 * SHOWN, NEVER ACTED ON. Nothing here undoes, removes or changes anything;
   a worse verdict changes nothing but its row (18-b offers the undo, and
   only the owner's press does it).
@@ -59,7 +68,7 @@ from sqlmodel import select
 from ..core.db import session_scope
 from ..core.ids import utcnow
 from . import metrics as M
-from .models import ChangeResultRecord
+from .models import ChangeResultCheck, ChangeResultRecord
 
 log = logging.getLogger(__name__)
 
@@ -368,17 +377,43 @@ def skill_outcomes(engine: Any, names: list[str], since: datetime, until: dateti
     return out
 
 
+def _each(changes: list[Change], read: Callable[[Change], M.Counted], what: str) -> dict[str, M.Counted]:
+    """``{change id: Counted}``, each change read over its OWN days (30
+    before its accept to the end of its after side): one agent scheduled
+    every few minutes, or two changes weeks apart, never make one read too
+    big for every change at once. A change whose read fails or hits its
+    bound is left out (``refresh`` names it), and the others are still
+    counted."""
+    out: dict[str, M.Counted] = {}
+    failed = 0
+    for c in changes:
+        try:
+            out[c.id] = read(c)
+        except Exception:  # noqa: BLE001 — one change never hides the others; no zeros
+            failed += 1
+            log.warning("change results: the record of %s could not be read", what,
+                        exc_info=failed == 1)
+    return out
+
+
 def _measure_coach(engine: Any, changes: list[Change], now: datetime) -> dict[str, M.Counted]:
-    lo, hi = _window(changes)
-    tasks = coach_outcomes(engine, sorted({c.target for c in changes}), lo, hi)
-    return {c.id: M.count_coach(tasks.get(c.target, []), c.accepted_at, until=c.until) for c in changes}
+    def read(c: Change) -> M.Counted:
+        lo, hi = _window([c])
+        tasks = coach_outcomes(engine, [c.target], lo, hi)
+        return M.count_coach(tasks.get(c.target, []), c.accepted_at, until=c.until)
+
+    return _each(changes, read, "an agent's work")
 
 
 def _measure_skills(engine: Any, changes: list[Change], now: datetime) -> dict[str, M.Counted]:
-    lo, hi = _window(changes)
-    tasks = skill_outcomes(engine, sorted({c.target for c in changes}), lo, hi)
     count = {KIND_SKILL: M.count_skill, KIND_REFINE: M.count_refine}
-    return {c.id: count[c.kind](tasks.get(c.target, []), c.accepted_at, until=c.until) for c in changes}
+
+    def read(c: Change) -> M.Counted:
+        lo, hi = _window([c])
+        tasks = skill_outcomes(engine, [c.target], lo, hi)
+        return count[c.kind](tasks.get(c.target, []), c.accepted_at, until=c.until)
+
+    return _each(changes, read, "a skill's uses")
 
 
 class _Note:
@@ -478,23 +513,33 @@ def _write(engine: Any, changes: list[Change], measured: dict[str, M.Counted], e
 
 def refresh(engine: Any, *, now: Any = None) -> dict[str, Any]:
     """Make and measure the results (the module docstring): ``{made,
-    measured, unreadable: [kinds]}``. ``unreadable`` names every kind whose
-    store or record could not be read (``results`` when this table itself
-    could not be). BLOCKING; never raises."""
+    measured, unreadable: [kinds], not_read: [result ids]}``. ``unreadable``
+    names every kind whose store or record could not be read (``results``
+    when this table itself could not be); ``not_read`` the results whose
+    record could not be read. The outcome is kept as the LAST count
+    (:func:`last_check`). BLOCKING; never raises."""
     with _LOCK:  # the night pass and the daily pass never write the same row at once
-        return _refresh(engine, now)
+        moment = M.naive(now) or M.naive(utcnow())
+        assert moment is not None
+        out = _refresh(engine, moment)
+        try:
+            _save_check(engine, moment, out)
+        except Exception:  # noqa: BLE001 — named, never a count that looks clean
+            log.warning("change results: the last count could not be saved", exc_info=True)
+            out["unreadable"] = list(dict.fromkeys([*out["unreadable"], "results"]))
+        out.pop("stores", None)
+        return out
 
 
 #: One refresh at a time in this process.
 _LOCK = threading.Lock()
 
 
-def _refresh(engine: Any, now: Any) -> dict[str, Any]:
-    moment = M.naive(now) or M.naive(utcnow())
-    assert moment is not None
-    out: dict[str, Any] = {"made": 0, "measured": 0, "unreadable": []}
+def _refresh(engine: Any, moment: datetime) -> dict[str, Any]:
+    out: dict[str, Any] = {"made": 0, "measured": 0, "unreadable": [], "not_read": [], "stores": []}
     found = accepted_since(engine, moment - timedelta(days=LOOK_DAYS))
     unreadable: list[str] = list(found.unreadable)
+    out["stores"] = list(found.unreadable)
     changes = list(found)[:MEASURED_MAX]
     try:
         existing = _rows(engine, [c.id for c in changes])
@@ -504,6 +549,7 @@ def _refresh(engine: Any, now: Any) -> dict[str, Any]:
         return out
     todo = [c for c in changes if not _settled(existing.get(c.id))]
     measured: dict[str, M.Counted] = {}
+    not_read: list[str] = []
     for kinds, measurer in MEASURERS:
         mine = [c for c in todo if c.kind in kinds]
         if not mine:
@@ -512,12 +558,15 @@ def _refresh(engine: Any, now: Any) -> dict[str, Any]:
             got = measurer(engine, mine, moment)
         except Exception:  # noqa: BLE001 — one kind never hides the others; no zeros
             log.warning("change results: the record of %s could not be read", "/".join(kinds), exc_info=True)
-            unreadable += [k for k in kinds if any(c.kind == k for c in mine)]
-            continue
+            got = {}
         measured.update(got)
-        # A habit team_measure could not read is named too.
-        if any(c.id not in got for c in mine):
-            unreadable += [k for k in kinds if any(c.kind == k and c.id not in got for c in mine)]
+        # A change whose record could not be read (a measurer that raised,
+        # a read past its bound, a habit team_measure could not read) is
+        # named: its kind, and the result itself.
+        missing = [c for c in mine if c.id not in got]
+        unreadable += [k for k in kinds if any(c.kind == k for c in missing)]
+        not_read += [c.id for c in missing]
+    out["not_read"] = not_read
     try:
         out["made"] = _write(engine, changes, measured, existing, moment)
     except Exception:  # noqa: BLE001
@@ -531,22 +580,73 @@ def _refresh(engine: Any, now: Any) -> dict[str, Any]:
     return out
 
 
-def refreshed_within(engine: Any, *, hours: float = 24.0, now: Any = None) -> bool:
-    """Was a result measured in the last ``hours``? (The daily pass leaves
-    such a day alone.) BLOCKING; never raises (False when it cannot tell,
-    so the daily pass runs)."""
-    try:
-        from sqlalchemy import func
+#: The one row of :class:`ChangeResultCheck`.
+CHECK_ID = "last"
 
+
+def _save_check(engine: Any, moment: datetime, out: dict[str, Any]) -> None:
+    outcome = {"unreadable": list(out.get("unreadable") or []), "not_read": list(out.get("not_read") or []),
+               "stores": list(out.get("stores") or [])}
+    with session_scope(engine) as db:
+        row = db.get(ChangeResultCheck, CHECK_ID) or ChangeResultCheck(id=CHECK_ID)
+        row.at = moment
+        row.outcome_json = json.dumps(outcome)
+        db.add(row)
+        db.commit()
+
+
+def _strs(raw: Any) -> list[str]:
+    return [str(x) for x in raw if isinstance(x, str) and x] if isinstance(raw, list) else []
+
+
+def last_check(engine: Any) -> "dict[str, Any] | None":
+    """The LAST count: ``{at, unreadable: [kinds], not_read: [result ids],
+    stores: [kinds]}``, or None before the first. BLOCKING; RAISES when it
+    cannot be read (a caller names it, never "nothing went wrong")."""
+    with session_scope(engine) as db:
+        row = db.get(ChangeResultCheck, CHECK_ID)
+        if row is None:
+            return None
+        got = _loads(row.outcome_json)
+        return {"at": M.naive(row.at), "unreadable": _strs(got.get("unreadable")),
+                "not_read": _strs(got.get("not_read")), "stores": _strs(got.get("stores"))}
+
+
+def refreshed_within(engine: Any, *, hours: float = 24.0, now: Any = None) -> bool:
+    """Did a count that READ EVERY RECORD run in the last ``hours``? (The
+    daily pass leaves such a day alone; a count that could not read one
+    does not cover the day, so the daily pass counts again and reports it.)
+    BLOCKING; never raises (False when it cannot tell, so the daily pass
+    runs)."""
+    try:
         moment = M.naive(now) or M.naive(utcnow())
         assert moment is not None
-        with session_scope(engine) as db:
-            newest = db.exec(select(func.max(ChangeResultRecord.checked_at))).one()
-        newest = newest[0] if isinstance(newest, tuple) else newest
-        at = M.naive(newest)
-        return at is not None and at >= moment - timedelta(hours=float(hours))
+        check = last_check(engine)
+        if check is None or check["at"] is None or check["unreadable"]:
+            return False
+        return check["at"] >= moment - timedelta(hours=float(hours))
     except Exception:  # noqa: BLE001
         return False
+
+
+#: What each kind is called where its record could not be read.
+_KIND_WORDS = {KIND_COACH: "agent instructions", KIND_SKILL: "skills", KIND_REFINE: "skills",
+               KIND_HABIT: "working habits"}
+
+
+def unreadable_labels(check: "dict[str, Any] | None") -> list[str]:
+    """The names, on Improvements and in chat, of what the last count could
+    not read: "Results of changes you accepted (agent instructions)"; the
+    part's own name when the results themselves could not be read."""
+    if not check:
+        return []
+    out: list[str] = []
+    for kind in check.get("unreadable") or []:
+        words = _KIND_WORDS.get(kind)
+        label = f"{LABEL} ({words})" if words else LABEL
+        if label not in out:
+            out.append(label)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -581,16 +681,36 @@ def _home(row: ChangeResultRecord) -> dict[str, str]:
 
 #: What a result that was never measured says (no numbers, never zeros).
 NOT_MEASURED_YET = "Not measured yet. Iron Jarvis counts the work before and after once a day."
+#: …and one whose record the last count could not read (never the words
+#: above, as if nothing were wrong).
+NOT_READ_YET = ("Not measured yet: Iron Jarvis could not read the record of this work when it last counted, on "
+                "{day}. It tries again once a day.")
+#: Added to the words of a result whose older numbers the last count could
+#: not bring up to date.
+NOT_READ_SINCE = " (Counted on {day}; its record could not be read after that.)"
 
 
-def result_view(row: ChangeResultRecord, now: Any = None) -> dict[str, Any]:
+def _not_read(row: ChangeResultRecord, check: "dict[str, Any] | None") -> bool:
+    """The last count could not read this result's record: its own read
+    failed, or its kind's store could not be read (a settled result's
+    numbers no longer move, so nothing is missing from it)."""
+    if not check:
+        return False
+    if row.id in (check.get("not_read") or []):
+        return True
+    return row.kind in (check.get("stores") or []) and not _settled(row)
+
+
+def result_view(row: ChangeResultRecord, now: Any = None, check: "dict[str, Any] | None" = None) -> dict[str, Any]:
     """One result as ``GET /improvements`` carries it. Its words are built
     from its stored numbers (``metrics.judge``); a result never measured
-    says so and has NO numbers."""
+    says so and has NO numbers. ``check`` (:func:`last_check`): a result
+    whose record the last count could not read says so."""
     moment = M.naive(now) or M.naive(utcnow())
     before = M.Side.from_view(_loads(row.before_json))
     after_raw = _loads(row.after_json)
     after = M.Side.from_view(after_raw)
+    unread = _not_read(row, check)
     base = {
         "id": row.id, "kind": row.kind, "ref": row.ref, "target": row.target, "title": _title(row),
         "accepted_at": row.accepted_at.isoformat() if row.accepted_at else "",
@@ -598,16 +718,21 @@ def result_view(row: ChangeResultRecord, now: Any = None) -> dict[str, Any]:
         "state": row.state, "verdict": row.verdict, "home": _home(row),
     }
     if row.state == M.WAITING or before is None or after is None:
-        return {**base, "state": M.WAITING, "verdict": "", "before": None, "after": None, "words": NOT_MEASURED_YET}
+        words = (NOT_READ_YET.format(day=M.day_words((check or {}).get("at"), moment)) if unread
+                 else NOT_MEASURED_YET)
+        return {**base, "state": M.WAITING, "verdict": "", "before": None, "after": None, "words": words}
     end = M.naive(after_raw.get("end")) or M.after_end(M.naive(row.accepted_at) or moment)[0]
     counted = M.Counted(before, after, end, str(after_raw.get("ended") or ""), worse=row.verdict == M.WORSE)
     judged = M.judge(row.kind, counted, accepted_at=row.accepted_at, now=moment, name=_name(row.kind, row.target))
+    words = judged.words
+    if unread and row.checked_at is not None:
+        words += NOT_READ_SINCE.format(day=M.day_words(row.checked_at, moment))
     two_sided = row.kind != KIND_SKILL
     return {
         **base,
         "before": before.view() if two_sided else None,
         "after": after.view(),
-        "words": judged.words,
+        "words": words,
     }
 
 
@@ -615,7 +740,9 @@ def page(engine: Any, *, now: Any = None) -> list[dict[str, Any]]:
     """``GET /improvements``'s ``results``: at most :data:`SHOWN`, newest
     first, of the changes accepted in the last :data:`LOOK_DAYS` days. A row
     that cannot be shown is left out (and logged); the table that cannot be
-    read RAISES (the inbox names it, never "no results")."""
+    read RAISES (the inbox names it, never "no results"). The last count
+    whose record could not be read is NAMED by :func:`unreadable_labels`
+    (the inbox's ``unreadable``) and in each result it held back."""
     moment = M.naive(now) or M.naive(utcnow())
     assert moment is not None
     with session_scope(engine) as db:
@@ -627,17 +754,23 @@ def page(engine: Any, *, now: Any = None) -> list[dict[str, Any]]:
         ))
         for row in rows:
             db.expunge(row)
+    try:
+        check = last_check(engine)
+    except Exception:  # noqa: BLE001 — the inbox names it (its own read of the check)
+        log.warning("change results: the last count could not be read", exc_info=True)
+        check = None
     out: list[dict[str, Any]] = []
     for row in rows:
         try:
-            out.append(result_view(row, moment))
+            out.append(result_view(row, moment, check))
         except Exception:  # noqa: BLE001 — one odd row never hides the rest
             log.warning("change results: one result could not be shown", exc_info=True)
     return out
 
 
 __all__ = [
-    "Accepted", "Change", "KINDS", "KIND_COACH", "KIND_HABIT", "KIND_REFINE", "KIND_SKILL", "LABEL", "LOOK_DAYS",
-    "MEASURED_MAX", "MEASURERS", "NOT_MEASURED_YET", "SHOWN", "STORES", "Truncated", "accepted_since",
-    "coach_outcomes", "page", "refresh", "refreshed_within", "result_view", "skill_outcomes",
+    "Accepted", "CHECK_ID", "Change", "KINDS", "KIND_COACH", "KIND_HABIT", "KIND_REFINE", "KIND_SKILL", "LABEL",
+    "LOOK_DAYS", "MEASURED_MAX", "MEASURERS", "NOT_MEASURED_YET", "NOT_READ_SINCE", "NOT_READ_YET", "SHOWN",
+    "STORES", "Truncated", "accepted_since", "coach_outcomes", "last_check", "page", "refresh", "refreshed_within",
+    "result_view", "skill_outcomes", "unreadable_labels",
 ]

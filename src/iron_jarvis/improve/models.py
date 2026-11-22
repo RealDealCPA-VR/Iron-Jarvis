@@ -108,4 +108,21 @@ class ChangeResultRecord(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
-__all__ = ["ChangeResultRecord", "DONE", "NightReviewRecord", "RUNNING", "SKIPPED", "WAITING"]
+class ChangeResultCheck(SQLModel, table=True):
+    """The LAST count of the results (18-a, ``improve/results.refresh``):
+    ONE row (id ``last``), written by every count, the night review's and
+    the daily one's alike. ``outcome_json``: ``{unreadable: [kinds whose
+    store or record could not be read], not_read: [result ids whose record
+    could not be read], stores: [kinds whose STORE could not be read]}``.
+    So a record that keeps failing is NAMED on Improvements and in chat
+    after the count that met it, and the daily pass counts again instead of
+    calling the day covered."""
+
+    __tablename__ = "changeresultcheck"
+
+    id: str = Field(default="last", primary_key=True)
+    at: datetime = Field(default_factory=utcnow)
+    outcome_json: str = "{}"
+
+
+__all__ = ["ChangeResultCheck", "ChangeResultRecord", "DONE", "NightReviewRecord", "RUNNING", "SKIPPED", "WAITING"]

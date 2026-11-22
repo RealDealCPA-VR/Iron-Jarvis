@@ -957,7 +957,10 @@ def _finish(ran: list[dict[str, Any]], made: list[dict[str, Any]]) -> tuple[str,
 async def _refresh_results(engine: Any, at: datetime) -> None:
     """18-a (``improve/results.refresh``): make and measure the results of
     the changes the owner accepted, off the loop. Reads the records and
-    writes its own table only; never raises into the pass."""
+    writes its own tables only; never raises into the pass. What it could
+    not read is kept as the last count (``results.last_check``): Improvements
+    and chat name it, and the daily pass counts again and reports it on its
+    health row (it covers the day only when every record was read)."""
     try:
         from . import results as RS
 

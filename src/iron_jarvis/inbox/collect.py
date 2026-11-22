@@ -887,15 +887,28 @@ def change_results(d: Any, unreadable: list[dict[str, str]]) -> list[dict[str, A
     results.page``: newest first, at most 30, each with its words built from
     its numbers). A READ of that module's own table: the inbox still
     decides nothing. When the table cannot be read it is named in
-    ``unreadable`` and the list is empty."""
+    ``unreadable`` and the list is empty; a record the LAST count could not
+    read (an agent's work, a skill's uses, a working habit's record) is
+    named there too, by its kind (``results.unreadable_labels``), so a
+    result held back by it is never passed off as merely "not measured
+    yet"."""
     from ..improve import results as R
 
+    engine = d.platform.engine
     try:
-        return R.page(d.platform.engine)
+        rows = R.page(engine)
     except Exception:  # noqa: BLE001 — named, never shown as "no results"
         log.warning("improvements inbox: the results of accepted changes could not be read", exc_info=True)
         unreadable.append({"kind": RESULTS_KIND, "label": R.LABEL})
         return []
+    try:
+        labels = R.unreadable_labels(R.last_check(engine))
+    except Exception:  # noqa: BLE001 — the last count's own record: named the same way
+        log.warning("improvements inbox: the last count of the results could not be read", exc_info=True)
+        labels = [R.LABEL]
+    for label in labels:
+        unreadable.append({"kind": RESULTS_KIND, "label": label})
+    return rows
 
 
 __all__ = [

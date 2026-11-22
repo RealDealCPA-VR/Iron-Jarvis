@@ -91,11 +91,14 @@ def _accept_coach(desk, at: datetime = ACCEPTED_AT, roster: str = ROSTER, pid: s
 
 
 def _run(desk, at: datetime, *, ok: bool = True, roster: str = ROSTER, task: str = "",
-         outcome: "str | None" = None, status: SessionStatus = SessionStatus.COMPLETED) -> str:
+         outcome: "str | None" = None, status: SessionStatus = SessionStatus.COMPLETED,
+         origin: str = "job:agents", options: "dict | None" = None) -> str:
     with session_scope(desk.engine) as db:
         sess = Session(task=task or f"sort the reports ({at.isoformat()})", agent_type=AgentType.BUILDER,
-                       agent_name=roster, status=status, origin="job:agents",
+                       agent_name=roster, status=status, origin=origin,
                        outcome=outcome if outcome is not None else ("completed" if ok else None))
+        if options is not None:
+            sess.options_json = json.dumps(options)
         sess.created_at = at
         sess.finished_at = at + timedelta(minutes=20)
         db.add(sess)
@@ -366,6 +369,9 @@ def test_an_unreadable_store_names_its_kind_and_makes_no_zeros(desk, monkeypatch
         kinds = [r.kind for r in db.exec(select(ChangeResultRecord))]
     assert kinds == ["coach"], kinds  # no skill row at all, never one of zeros
     assert f"coach:{pid}" in {r["id"] for r in R.page(desk.engine, now=LATER)}
+    # Named on Improvements after the count that met it (once for both skill kinds).
+    named = [u["label"] for u in desk.client.get("/improvements").json()["unreadable"] if u["kind"] == "results"]
+    assert named == ["Results of changes you accepted (skills)"], named
 
 
 def test_a_record_that_cannot_be_read_leaves_no_numbers(desk, monkeypatch):
@@ -373,14 +379,19 @@ def test_a_record_that_cannot_be_read_leaves_no_numbers(desk, monkeypatch):
     _ten(desk, ACCEPTED_AT - timedelta(days=6), good=6)
     _ten(desk, ACCEPTED_AT + timedelta(hours=1), good=9)
     monkeypatch.setattr(R, "coach_outcomes", _boom)
-    out = R.refresh(desk.engine, now=ACCEPTED_AT + timedelta(days=5))
-    assert out["unreadable"] == ["coach"]
-    got = _result(desk, f"coach:{pid}", ACCEPTED_AT + timedelta(days=5))
+    early = ACCEPTED_AT + timedelta(days=5)
+    out = R.refresh(desk.engine, now=early)
+    assert out["unreadable"] == ["coach"] and out["not_read"] == [f"coach:{pid}"]
+    got = _result(desk, f"coach:{pid}", early)
     assert got["state"] == M.WAITING and got["before"] is None and got["after"] is None
-    assert got["words"] == R.NOT_MEASURED_YET
+    # Held back by a record that could not be read: it says so, never the
+    # words of a result that is merely new.
+    assert got["words"] == R.NOT_READ_YET.format(day="17 March")
+    assert got["words"] != R.NOT_MEASURED_YET
     assert "0 of" not in got["words"]
 
-    # Measured once, then unreadable again: it keeps what it had.
+    # Measured once, then unreadable again: it keeps what it had, and says
+    # when it was counted.
     monkeypatch.undo()
     R.refresh(desk.engine, now=LATER)
     assert _result(desk, f"coach:{pid}")["words"] == IDEA_SENTENCE
@@ -391,7 +402,9 @@ def test_a_record_that_cannot_be_read_leaves_no_numbers(desk, monkeypatch):
         db.commit()
     monkeypatch.setattr(R, "coach_outcomes", _boom)
     R.refresh(desk.engine, now=LATER)
-    assert _result(desk, f"coach:{pid}")["words"] == IDEA_SENTENCE
+    got = _result(desk, f"coach:{pid}")
+    assert got["words"] == IDEA_SENTENCE + R.NOT_READ_SINCE.format(day="30 March")
+    assert (got["before"]["n"], got["before"]["good"], got["after"]["n"], got["after"]["good"]) == (10, 6, 10, 9)
 
 
 def test_answered_questions_that_cannot_be_read_are_never_read_as_none(desk, monkeypatch):
@@ -456,11 +469,43 @@ def test_a_new_skill_reads_how_many_tasks_used_it(desk):
     for i in range(7):
         _use(desk, "weekly-report", ACCEPTED_AT + timedelta(hours=3 * (i + 1)), ok=i != 3)
     _use(desk, "weekly-report", ACCEPTED_AT - timedelta(days=1), ok=False)  # before it existed: not counted
-    R.refresh(desk.engine, now=LATER)
-    got = _result(desk, f"skill:{pid}")
+    # While its two weeks run: "since".
+    soon = ACCEPTED_AT + timedelta(days=3)
+    R.refresh(desk.engine, now=soon)
+    got = _result(desk, f"skill:{pid}", soon)
     assert got["words"] == "Used in 7 tasks since you accepted it on 12 March; 6 ended well."
     assert got["state"] == M.READY and got["verdict"] == "" and got["before"] is None
     assert got["title"] == "New skill: weekly-report" and got["home"]["href"] == "/skills"
+    # After them: which two weeks, never "since" (the count stopped then).
+    R.refresh(desk.engine, now=LATER)
+    got = _result(desk, f"skill:{pid}")
+    assert got["words"] == "Used in 7 tasks in the two weeks after you accepted it on 12 March; 6 ended well."
+    # A use after the two weeks is on no side.
+    assert M.count_skill([M.Outcome(ACCEPTED_AT + timedelta(days=15), True)], ACCEPTED_AT).after.n == 0
+
+
+def test_a_new_skill_counts_every_use_in_its_two_weeks(desk):
+    """A new skill has no before side to match, so its count is never cut at
+    10: used 25 times, it says 25 (the record), and the next change to it
+    ends its days."""
+    pid = _approve_skill(desk, "monthly-close")
+    for i in range(25):
+        _use(desk, "monthly-close", ACCEPTED_AT + timedelta(hours=6 * (i + 1)), ok=i % 5 != 0)
+    R.refresh(desk.engine, now=ACCEPTED_AT + timedelta(days=50))
+    got = _result(desk, f"skill:{pid}", ACCEPTED_AT + timedelta(days=50))
+    assert got["after"]["n"] == 25 and got["after"]["good"] == 20
+    assert got["words"] == "Used in 25 tasks in the two weeks after you accepted it on 12 March; 20 ended well."
+
+    # An improved copy accepted on day 3 ends the new skill's days there.
+    other = _approve_skill(desk, "weekly-plan")
+    later = _approve_skill(desk, "weekly-plan", kind="refine", at=ACCEPTED_AT + timedelta(days=3))
+    for i in range(12):
+        _use(desk, "weekly-plan", ACCEPTED_AT + timedelta(hours=5 * (i + 1)), ok=True)
+    R.refresh(desk.engine, now=ACCEPTED_AT + timedelta(days=50))
+    got = _result(desk, f"skill:{other}", ACCEPTED_AT + timedelta(days=50))
+    assert got["words"] == ("Used in 12 tasks between your accept on 12 March and the next change to it; "
+                            "12 ended well.")
+    assert f"skill_refine:{later}" in {r["id"] for r in R.page(desk.engine, now=ACCEPTED_AT + timedelta(days=50))}
 
 
 def test_an_improved_skill_compares_its_tasks_before_and_after(desk):
@@ -627,6 +672,173 @@ def test_the_daily_pass_makes_the_rows_unless_a_refresh_just_ran(desk):
     assert R.refreshed_within(desk.engine, hours=24)
     assert asyncio.run(A._change_results_pass(desk.platform, lambda *a: ticks.append(a))) is None
     assert ticks[-1][:2] == ("change_results", True)
+
+
+def test_a_record_the_last_count_could_not_read_is_named_until_it_is_read(desk, monkeypatch):
+    """The night review's count meets an agent's record it cannot read (a
+    read past its bound). Afterwards Improvements and chat name it, the
+    result says why it waits, the daily pass does not call the day covered:
+    it counts again and its health row is not green. Once the record reads,
+    all of that clears."""
+    from iron_jarvis.daemon import app as A
+    from iron_jarvis.inbox import tools as IT
+
+    base = _recent(18)
+    pid = _accept_coach(desk, at=base)
+    _ten(desk, base - timedelta(days=6), good=6)
+    _ten(desk, base + timedelta(hours=1), good=9)
+    monkeypatch.setattr(R, "RUNS_MAX", 5)
+    out = R.refresh(desk.engine)  # as the night review's pass does
+    assert out["unreadable"] == ["coach"] and out["not_read"] == [f"coach:{pid}"], out
+
+    label = {"kind": "results", "label": "Results of changes you accepted (agent instructions)"}
+    body = desk.client.get("/improvements").json()
+    assert label in body["unreadable"], body["unreadable"]
+    row = next(r for r in body["results"] if r["id"] == f"coach:{pid}")
+    assert row["words"] == R.NOT_READ_YET.format(day=M.day_words(R.last_check(desk.engine)["at"]))
+    said = asyncio.run(desk.platform.registry.get(IT.RESULTS).execute({}, SimpleNamespace()))
+    assert said.ok and "Results of changes you accepted (agent instructions)" in said.output, said.output
+    assert said.data["unreadable"] == [label["label"]]
+
+    # The daily pass counts again (the night's count did not cover the day)
+    # and says what is still unreadable.
+    assert not R.refreshed_within(desk.engine, hours=24)
+    ticks: list[tuple] = []
+    got = asyncio.run(A._change_results_pass(desk.platform, lambda *a: ticks.append(a)))
+    assert got is not None and got["unreadable"] == ["coach"], got
+    assert ticks[-1][:2] == ("change_results", False) and "coach" in str(ticks[-1][2])
+
+    # The record reads again: counted, named nowhere, and the day is covered.
+    monkeypatch.setattr(R, "RUNS_MAX", 5000)
+    got = asyncio.run(A._change_results_pass(desk.platform, lambda *a: ticks.append(a)))
+    assert got is not None and got["unreadable"] == [] and ticks[-1][:2] == ("change_results", True), got
+    body = desk.client.get("/improvements").json()
+    assert not [u for u in body["unreadable"] if u["kind"] == "results"], body["unreadable"]
+    row = next(r for r in body["results"] if r["id"] == f"coach:{pid}")
+    assert row["words"].endswith("finished 9 of 10 tasks without help. Before, it was 6 of 10."), row["words"]
+    assert asyncio.run(A._change_results_pass(desk.platform, lambda *a: ticks.append(a))) is None
+
+
+def test_each_change_is_read_over_its_own_days(desk, monkeypatch):
+    """Two changes to one agent 15 days apart: read together, their days (30
+    before the first to two weeks after the second) hold more runs than one
+    read may; each read over its own days, both are counted. Only a change
+    whose OWN read is too big is held back, and only it is named."""
+    first = _accept_coach(desk)
+    second = _accept_coach(desk, at=ACCEPTED_AT + timedelta(days=15))
+    busy = _accept_coach(desk, roster="custom:busy")
+    for i in range(10):  # before the first (outside the second's 30 days)
+        _run(desk, ACCEPTED_AT - timedelta(days=20) + timedelta(hours=i))
+    for i in range(10):  # under the first
+        _run(desk, ACCEPTED_AT + timedelta(days=1, hours=i))
+    for i in range(10):  # under the second
+        _run(desk, ACCEPTED_AT + timedelta(days=16, hours=i), ok=False, status=SessionStatus.FAILED)
+    for i in range(30):  # one busy agent: its own read is past the bound
+        _run(desk, ACCEPTED_AT + timedelta(hours=i + 1), roster="custom:busy")
+    monkeypatch.setattr(R, "RUNS_MAX", 25)
+    now = ACCEPTED_AT + timedelta(days=31)
+    out = R.refresh(desk.engine, now=now)
+    assert out["unreadable"] == ["coach"] and out["not_read"] == [f"coach:{busy}"], out
+    a, b = _result(desk, f"coach:{first}", now), _result(desk, f"coach:{second}", now)
+    assert (a["before"]["n"], a["before"]["good"], a["after"]["n"], a["after"]["good"]) == (10, 10, 10, 10)
+    assert (b["before"]["n"], b["before"]["good"], b["after"]["n"], b["after"]["good"]) == (10, 10, 10, 0)
+    assert b["verdict"] == M.WORSE
+    assert _result(desk, f"coach:{busy}", now)["state"] == M.WAITING
+
+
+# --------------------------------------------------------------------------- #
+# 7. the guards a revert would otherwise pass
+# --------------------------------------------------------------------------- #
+
+
+def test_only_an_accepted_change_gets_a_result(desk):
+    """A declined or pending coach suggestion, an accepted HABIT through the
+    coach (its result is the habit's, from TeamNote), a rejected or pending
+    skill draft: none is "a change you accepted"."""
+    from iron_jarvis.coach.models import DECLINED, KIND_TEAM_NOTE, PENDING
+
+    accepted = _accept_coach(desk)
+    with session_scope(desk.engine) as db:
+        for status, kind in ((DECLINED, "instructions"), (PENDING, "instructions"), (ACCEPTED, KIND_TEAM_NOTE)):
+            db.add(CoachProposalRecord(agent=ROSTER, target="Research", kind=kind, before="old", after="new",
+                                       status=status, decided_at=ACCEPTED_AT))
+        for status in ("rejected", "pending"):
+            db.add(SkillProposalRecord(kind="create", skill_name=f"draft-{status}", status=status,
+                                       decided_at=ACCEPTED_AT))
+        db.commit()
+    approved = _approve_skill(desk, "kept-one")
+    out = R.refresh(desk.engine, now=LATER)
+    assert out["unreadable"] == [], out
+    with session_scope(desk.engine) as db:
+        ids = sorted(r.id for r in db.exec(select(ChangeResultRecord)))
+    assert ids == sorted([f"coach:{accepted}", f"skill:{approved}"]), ids
+
+
+def test_a_run_still_going_is_not_counted(desk):
+    pid = _accept_coach(desk)
+    for i in range(10):
+        _run(desk, ACCEPTED_AT - timedelta(days=2, hours=i))
+    # The first runs after the accept are still going or waiting to start.
+    for i, status in enumerate((SessionStatus.ACTIVE,) * 3 + (SessionStatus.QUEUED,) * 2):
+        _run(desk, ACCEPTED_AT + timedelta(minutes=10 * (i + 1)), ok=False, status=status)
+    for i in range(5):
+        _run(desk, ACCEPTED_AT + timedelta(hours=2 + i))
+    R.refresh(desk.engine, now=LATER)
+    got = _result(desk, f"coach:{pid}")
+    assert (got["after"]["n"], got["after"]["good"]) == (5, 5), got["after"]
+    assert (got["before"]["n"], got["before"]["good"]) == (5, 5), got["before"]
+
+
+def test_a_run_a_chat_started_counts_too(desk):
+    """Every run of the agent is its work, whatever started it: a run a chat
+    started, or one tied to a chat, counts like a scheduled one."""
+    pid = _accept_coach(desk)
+    _ten(desk, ACCEPTED_AT - timedelta(days=6), good=6)
+    for i in range(3):
+        _run(desk, ACCEPTED_AT + timedelta(hours=i + 1))
+    for i in range(2):
+        _run(desk, ACCEPTED_AT + timedelta(hours=10 + i), origin="chat")
+    _run(desk, ACCEPTED_AT + timedelta(hours=20), options={"chat_thread_id": "thread-1"})
+    R.refresh(desk.engine, now=LATER)
+    got = _result(desk, f"coach:{pid}")
+    assert (got["after"]["n"], got["after"]["good"]) == (6, 6), got["after"]
+    assert got["state"] == M.READY
+
+
+def test_a_removed_habit_reads_until_you_removed_it(desk):
+    from iron_jarvis.agents import team_measure as TM
+    from iron_jarvis.agents.team_notes import TeamNote
+    from iron_jarvis.agents.team_record import REVIEW_BAD, REVIEW_GOOD, TeamRoleRun
+
+    accepted = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=10)
+    removed = accepted + timedelta(days=6)
+    now = accepted + timedelta(days=10)
+
+    def piece(at, turn, review):
+        with session_scope(desk.engine) as db:
+            db.add(TeamRoleRun(member="builder-two", role="code", session_id=f"s-{turn}", scope="build:t",
+                               turn=turn, finished=True, review=review, created_at=at))
+            db.commit()
+
+    for i in range(6):
+        piece(accepted - timedelta(days=5, minutes=-i), f"b{i}", REVIEW_GOOD if i < 2 else REVIEW_BAD)
+    for i in range(7):
+        piece(accepted + timedelta(days=3, minutes=i), f"a{i}", REVIEW_GOOD if i < 5 else REVIEW_BAD)
+    for i in range(4):  # after the removal: never this habit's work
+        piece(removed + timedelta(days=1, minutes=i), f"z{i}", REVIEW_BAD)
+    with session_scope(desk.engine) as db:
+        db.add(TeamNote(member="builder-two", text="Ask before a big rewrite", proposal_id="coach_habit2",
+                        accepted_at=accepted, removed_at=removed))
+        db.commit()
+
+    R.refresh(desk.engine, now=now)
+    got = _result(desk, "habit:coach_habit2", now)
+    m = TM.measure(desk.engine, "builder-two", accepted, removed, now=now)
+    assert m is not None and m.after.pieces == 7
+    want = M.habit_numbers(M._team_side(m.view()["before"]), M._team_side(m.view()["after"]))
+    assert got["words"] == (f"From {M.day_words(accepted, now)} until you removed it on "
+                            f"{M.day_words(removed, now)}: {want}."), got["words"]
+    assert got["after"]["n"] == 7
 
 
 def test_a_settled_result_is_not_measured_again(desk):

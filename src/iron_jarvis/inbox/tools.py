@@ -160,12 +160,21 @@ def result_line(n: int, r: dict[str, Any]) -> str:
     return f"{n}. {r.get('title') or ''}: {r.get('words') or ''}"
 
 
-def _results(platform: Any) -> list[dict[str, Any]]:
-    """The results, as the page reads them. BLOCKING; RAISES when they
-    cannot be read."""
+def _results(platform: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    """``(results, what the last count could not read)``, as the page reads
+    them. BLOCKING; RAISES when the results cannot be read."""
     from ..improve import results as R
 
-    return R.page(platform.engine)
+    rows = R.page(platform.engine)
+    try:
+        labels = R.unreadable_labels(R.last_check(platform.engine))
+    except Exception:  # noqa: BLE001 — named, never "nothing went wrong"
+        labels = [R.LABEL]
+    return rows, labels
+
+
+#: 18-a: the line that names what the last count could not read.
+RESULTS_NOT_READ = "Could not be read when Iron Jarvis last counted, so some results are missing or older: {}."
 
 
 def _about(r: dict[str, Any], about: str) -> bool:
@@ -206,21 +215,24 @@ class ChangeResultsTool(Tool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         about = str((args or {}).get("about") or "").strip()[:120]
         try:
-            results = await asyncio.to_thread(_results, self.platform)
+            results, not_read = await asyncio.to_thread(_results, self.platform)
         except Exception:  # noqa: BLE001 — never "no results" when they could not be read
             return ToolResult(ok=False, error=RESULTS_UNREADABLE, data={"door": HREF})
         if about:
             results = [r for r in results if _about(r, about)]
+        tail = [RESULTS_NOT_READ.format(", ".join(not_read))] if not_read else []
         if not results:
             head = f"No change you accepted about {about!r} has a result yet." if about else NO_RESULTS
-            return ToolResult(ok=True, output=head, data={"results": [], "total": 0})
-        lines = [RESULTS_HEAD] + [result_line(n, r) for n, r in enumerate(results, 1)]
+            return ToolResult(ok=True, output="\n".join([head, *tail]),
+                              data={"results": [], "total": 0, "unreadable": not_read})
+        lines = [RESULTS_HEAD] + [result_line(n, r) for n, r in enumerate(results, 1)] + tail
         rows = [
             {"id": r.get("id"), "kind": r.get("kind"), "title": r.get("title"), "state": r.get("state"),
              "verdict": r.get("verdict"), "before": r.get("before"), "after": r.get("after")}
             for r in results
         ]
-        return ToolResult(ok=True, output="\n".join(lines), data={"results": rows, "total": len(rows)})
+        return ToolResult(ok=True, output="\n".join(lines),
+                          data={"results": rows, "total": len(rows), "unreadable": not_read})
 
 
 class SuggestionAnswerTool(Tool):
