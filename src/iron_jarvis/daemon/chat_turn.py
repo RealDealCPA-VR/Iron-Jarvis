@@ -12052,6 +12052,22 @@ def memory_used_receipt(grounding: Any, reply: Any, body: Any) -> list[dict[str,
         return []
 
 
+def memory_used_more(grounding: Any) -> int:
+    """Next leaps 15-a: the reply's ``used_more`` — how many things the turn
+    was given from memory that the capped ``used`` list does not name
+    (``memory.used.left_out``), so the page says "and N more not listed"
+    instead of letting them disappear. ALWAYS an int (0 when none). MIRROR
+    NOTE (lock-step): both lanes call this one helper beside
+    :func:`memory_used_receipt`. Never raises."""
+    try:
+        from ..memory import used as _used
+
+        return _used.left_out(getattr(grounding, "used", None) or [])
+    except Exception:  # noqa: BLE001 — the count is extra; the reply is not
+        log.debug("the memory-used count could not be made", exc_info=True)
+        return 0
+
+
 def turn_work_folder(body: Any, resolved_proj: Any) -> str:
     """The ONE folder a chat turn is bound to (v1.491.0's work-record rule,
     lifted in v1.499.0 so the client block, the client wall and the question
@@ -15948,6 +15964,10 @@ async def run_chat_turn(
         # when nothing). MIRROR NOTE (lock-step): the stream done-frame
         # carries the identical key from the same helper — edit both or neither.
         "used": memory_used_receipt(_grounding, reply, body),
+        # ... and how many more it was given than `used` names (0 when none,
+        # ALWAYS present). MIRROR NOTE (lock-step): the stream done-frame
+        # carries the identical key from the same helper.
+        "used_more": memory_used_more(_grounding),
         # DOORS (v1.199.0): server-derived links into the surfaces this turn's
         # SUCCESSFUL creating tools changed — deduped by href, capped at 4,
         # ALWAYS present (possibly empty) so clients never branch on absence.

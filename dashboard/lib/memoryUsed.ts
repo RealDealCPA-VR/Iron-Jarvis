@@ -26,7 +26,8 @@ import { clientPrefPath, isClientPrefId } from "@/lib/clients";
 export const SHOW_MS = 8000;
 /** How many items the pop-up lists; the rest are in the reply's details. */
 export const SHOWN_MAX = 5;
-/** The most items one reply carries (the daemon's cap). */
+/** The most items one reply carries (the daemon's cap; what it was given
+ *  past it is COUNTED as `used_more`, never dropped without a word). */
 export const USED_MAX = 24;
 
 export type MemoryKind =
@@ -105,9 +106,23 @@ export function lineWords(n: number): string {
   return `${HEADING}: ${n}`;
 }
 
-/** "and 2 more in the reply's details". */
-export function moreWords(n: number): string {
-  return n === 1 ? "and 1 more in the reply's details" : `and ${n} more in the reply's details`;
+/** "and 2 more in the reply's details" (the pop-up lists five); with
+ *  `notListed`, ", 4 more not listed" (past the cap of {@link USED_MAX}). */
+export function moreWords(n: number, notListed = 0): string {
+  const head = `and ${n} more in the reply's details`;
+  return notListed > 0 ? `${head}, ${notListed} more not listed` : head;
+}
+
+/** "and 4 more not listed here": what the reply was given past the cap of
+ *  {@link USED_MAX} (the daemon's `used_more`), in the reply's details. */
+export function notListedWords(n: number): string {
+  return `and ${n} more not listed here`;
+}
+
+/** The reply's `used_more` (how many more it was given than `used` names):
+ *  a whole number above 0, else 0. Never throws. */
+export function decodeUsedMore(raw: unknown): number {
+  return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? Math.min(raw, 100000) : 0;
 }
 
 function str(v: unknown, max: number): string {
@@ -190,6 +205,7 @@ export interface UsedCarrier {
   role?: string;
   used?: unknown;
   usedShown?: boolean;
+  usedMore?: unknown;
 }
 
 /** Every item this chat has already shown in a pop-up (by itself or by a

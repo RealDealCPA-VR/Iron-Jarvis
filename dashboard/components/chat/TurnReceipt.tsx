@@ -78,6 +78,7 @@ import {
   HEADING as MEMORY_HEADING,
   itemKey as memoryItemKey,
   itemWords as memoryItemWords,
+  notListedWords as memoryNotListedWords,
   type MemoryUsedItem,
 } from "@/lib/memoryUsed";
 import { providerDisplay } from "@/lib/onboarding";
@@ -484,6 +485,9 @@ export interface TurnReceiptProps {
    *  "From memory: N" line and its pop-up are the caller's (MemoryUsed).
    *  Never a reason to render on its own. */
   memoryUsed?: MemoryUsedItem[] | null;
+  /** ... and how many more it was given than `memoryUsed` names (past the
+   *  daemon's cap of 24): "and 4 more not listed here". */
+  memoryMore?: number;
   /** v1.355.0 (G55): the model refused the chat as too long and older
    *  messages were left out to retry — said on the collapsed line in the
    *  quiet class ("Left out 12 older messages to fit this model"), like an
@@ -781,6 +785,7 @@ function TurnReceiptImpl({
   approved,
   brain,
   memoryUsed,
+  memoryMore = 0,
 }: TurnReceiptProps) {
   const [open, setOpen] = useState(false);
   const [undoingPath, setUndoingPath] = useState<string | null>(null);
@@ -1279,6 +1284,12 @@ function TurnReceiptImpl({
                     {memoryItemWords(it)}
                   </div>
                 ))}
+                {/* What it was given past the cap: counted, never dropped silently. */}
+                {memoryMore > 0 && (
+                  <div data-testid="turn-memory-used-more" className="text-zinc-500">
+                    {memoryNotListedWords(memoryMore)}
+                  </div>
+                )}
               </div>
             </div>
           )}

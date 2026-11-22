@@ -63,7 +63,7 @@ import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "./tu
 import { decodeApproved, decodeRefit, type ApprovedCall, type TurnRefit } from "./turnRecovery";
 import { decodeBrainReceipt, type BrainReceipt } from "./brainProfiles";
 import { decodeClientQuestion, type ChatClientQuestion } from "./clients";
-import { decodeMemoryUsed, type MemoryUsedItem } from "./memoryUsed";
+import { decodeMemoryUsed, decodeUsedMore, type MemoryUsedItem } from "./memoryUsed";
 import { stepTarget } from "./workTarget";
 import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
 import { onceReasonOf, type OnceReason } from "./onceReason";
@@ -213,6 +213,9 @@ export type SSEEvent =
        *  sends the key on every turn ([] when nothing); the decode keeps only
        *  valid items (lib/memoryUsed). */
       used?: MemoryUsedItem[];
+      /** ... and how many more it was given than `used` names (the cap of
+       *  24; kept only when above 0 beside a non-empty `used`). */
+      used_more?: number;
       /** Calm UI redesign S3/S4: "Setting changed" and secure credential
        *  cards. The daemon sends the key on every turn (possibly []). */
       config_cards?: ConfigCard[];
@@ -458,6 +461,8 @@ export interface ChatStreamResult {
   clientQuestion?: ChatClientQuestion;
   /** Next leaps 15-a: what the reply was given from memory (absent when none). */
   used?: MemoryUsedItem[];
+  /** ... and how many more than `used` names (absent when none). */
+  usedMore?: number;
   /** Calm UI redesign S3/S4: the turn's settings cards (absent when none). */
   configCards?: ConfigCard[];
   /** v1.298.0: trust posture of the turn — see the done-frame fields. */
@@ -822,6 +827,8 @@ export function sseEventFrom(
       {
         const used = decodeMemoryUsed(data.used);
         if (used.length) ev.used = used;
+        const more = decodeUsedMore(data.used_more);
+        if (used.length && more) ev.used_more = more;
       }
       // Settings cards (redesign S3/S4): whitelisted — a card with no
       // change_id / request_id dies here, and a secret card never has a value.
@@ -2220,6 +2227,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(ev.suggestion ? { suggestion: ev.suggestion } : {}),
                 ...(ev.client_question ? { clientQuestion: ev.client_question } : {}),
                 ...(ev.used?.length ? { used: ev.used } : {}),
+                ...(ev.used?.length && ev.used_more ? { usedMore: ev.used_more } : {}),
                 ...(ev.config_cards?.length ? { configCards: ev.config_cards } : {}),
                 trust: ev.trust,
                 trustReason: ev.trust_reason,

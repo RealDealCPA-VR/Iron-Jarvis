@@ -9170,6 +9170,9 @@ async def chat_stream(
             # (lock-step): chat_turn.py's response carries the identical key
             # from the same helper — edit both or neither.
             "used": _chat_turn.memory_used_receipt(_grounding, reply, body),
+            # ... and how many more it was given than `used` names (0 when
+            # none, ALWAYS present). MIRROR NOTE (lock-step): chat_turn.py.
+            "used_more": _chat_turn.memory_used_more(_grounding),
             # DOORS (v1.199.0): server-derived links into the surfaces
             # this turn's SUCCESSFUL creating tools changed — deduped by
             # href, capped at 4, ALWAYS present (possibly empty). Files

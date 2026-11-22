@@ -49,6 +49,8 @@ const H = vi.hoisted(() => {
       bodies: [] as Record<string, unknown>[],
       /** What the NEXT replies carry as `used` (one entry per reply, in order). */
       used: [] as unknown[],
+      /** ... and as `usedMore` (the hook's name for the done frame's `used_more`). */
+      more: [] as unknown[],
       absent: false,
     },
   };
@@ -107,11 +109,13 @@ vi.mock("@/lib/useChatStream", () => ({
       const reply = `Reply ${n}.`;
       onDelta(reply, reply);
       const used = H.stream.used.shift();
+      const more = H.stream.more.shift();
       return {
         reply,
         route: { requested: "", provider: "mock", model: "mock", reason: "default" },
         tools_used: [],
         ...(used ? { used } : {}),
+        ...(more !== undefined ? { usedMore: more } : {}),
       };
     },
     abort: () => {},
@@ -155,14 +159,17 @@ vi.mock("next/link", () => ({
 }));
 
 import ChatPage from "@/app/chat/page";
-import { FADE_MS, MemoryUsed, MemoryUsedHidden, placeBeside } from "@/components/chat/MemoryUsed";
+import { FADE_MS, MemoryUsed, MemoryUsedHidden, ownedElsewhere, placeBeside } from "@/components/chat/MemoryUsed";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 import {
   SHOW_MS,
   decodeMemoryUsed,
   decodePopupMode,
+  decodeUsedMore,
   fixPath,
   lineWords,
+  moreWords,
+  notListedWords,
   opensByItself,
   popupItems,
   type MemoryUsedItem,
@@ -212,6 +219,7 @@ beforeEach(() => {
   H.api.gets.length = 0;
   H.stream.bodies.length = 0;
   H.stream.used = [];
+  H.stream.more = [];
   H.stream.absent = false;
   for (const k of Object.keys(H.api.postResponses)) delete H.api.postResponses[k];
   H.api.getResponses = CHAT_GETS();
@@ -261,6 +269,14 @@ describe("the rules (lib/memoryUsed)", () => {
     expect(opensByItself([shownBefore, { role: "user" }, { role: "assistant", used: [PREF, fresh] }], "auto")).toBe(true);
     // Shown this visit but not yet on any message.
     expect(opensByItself([{ role: "user" }, shapedReply], "auto", new Set(["preference:lesson_ab12"]))).toBe(false);
+  });
+
+  it("what a reply was given past the cap is counted, and said in plain words", () => {
+    expect(decodeUsedMore(4)).toBe(4);
+    for (const bad of [0, -2, 1.5, "4", null, undefined, true]) expect(decodeUsedMore(bad)).toBe(0);
+    expect(notListedWords(4)).toBe("and 4 more not listed here");
+    expect(moreWords(19)).toBe("and 19 more in the reply's details");
+    expect(moreWords(19, 4)).toBe("and 19 more in the reply's details, 4 more not listed");
   });
 
   it("the setting reads 'press' or the default", () => {
@@ -418,6 +434,50 @@ describe("the pop-up (components/chat/MemoryUsed)", () => {
     window.removeEventListener("keydown", other);
   });
 
+  it("leaves Escape to another dialog or menu that has the keyboard", () => {
+    vi.useFakeTimers();
+    render(
+      <div>
+        <div role="dialog" aria-label="Palette">
+          <input data-testid="palette-box" />
+        </div>
+        <textarea data-testid="composer" />
+      </div>,
+    );
+    render(<MemoryUsed items={items(PREF)} autoOpen />);
+    expect(screen.getByTestId("memory-used-popup")).toBeTruthy();
+    const palette = vi.fn();
+    window.addEventListener("keydown", palette);
+    fireEvent.keyDown(screen.getByTestId("palette-box"), { key: "Escape" });
+    expect(palette).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("memory-used-popup")).toBeTruthy();
+    // The composer's own Escape (no menu open) still closes the box only.
+    fireEvent.keyDown(screen.getByTestId("composer"), { key: "Escape" });
+    expect(screen.queryByTestId("memory-used-popup")).toBeNull();
+    expect(palette).toHaveBeenCalledTimes(1);
+    window.removeEventListener("keydown", palette);
+    // The box's own line (aria-expanded while open) is never "elsewhere".
+    const line = screen.getByTestId("memory-used-line");
+    expect(ownedElsewhere(line, null, line)).toBe(false);
+    expect(ownedElsewhere(screen.getByTestId("palette-box"), null, line)).toBe(true);
+  });
+
+  it("counts what the reply was given past the cap, on the line and in the box", () => {
+    vi.useFakeTimers();
+    const { unmount } = render(<MemoryUsed items={items(PREF, WORK)} more={4} />);
+    const line = screen.getByTestId("memory-used-line");
+    expect(line.textContent).toBe("From memory: 6");
+    fireEvent.click(line);
+    expect(screen.getByTestId("memory-used-more").textContent).toBe("and 4 more not listed here");
+    unmount();
+    const seven = Array.from({ length: 7 }, (_, i) => ({ ...WORK, id: `w${i}` }));
+    render(<MemoryUsed items={items(...seven)} more={3} />);
+    fireEvent.click(screen.getByTestId("memory-used-line"));
+    expect(screen.getByTestId("memory-used-more").textContent).toBe(
+      "and 2 more in the reply's details, 3 more not listed",
+    );
+  });
+
   it("closes when a turn starts, and leaves Escape to the composer's Stop while it runs", () => {
     vi.useFakeTimers();
     const { rerender } = render(<MemoryUsed items={items(PREF)} autoOpen />);
@@ -509,15 +569,51 @@ describe("the pop-up (components/chat/MemoryUsed)", () => {
       Object.defineProperty(window, "innerHeight", { configurable: true, value: h });
     };
     size(390, 844);
-    expect(placeBeside(at(300, 400))).toEqual({ left: 34, width: 340, top: 430 });
+    expect(placeBeside(at(300, 400))).toEqual({ left: 34, width: 340, top: 430, maxHeight: 392 });
     // Near the bottom of the screen it opens above its line.
-    expect(placeBeside(at(40, 780))).toEqual({ left: 34, width: 340, bottom: 70 });
+    expect(placeBeside(at(40, 780))).toEqual({ left: 34, width: 340, bottom: 70, maxHeight: 758 });
     // A narrower phone: the window's width less 16 px each side.
     size(320, 640);
-    expect(placeBeside(at(200, 100))).toEqual({ left: 16, width: 288, top: 130 });
+    expect(placeBeside(at(200, 100))).toEqual({ left: 16, width: 288, top: 130, maxHeight: 488 });
     size(1280, 900);
-    expect(placeBeside(at(900, 300))).toEqual({ left: 900, width: 340, top: 330 });
-    expect(placeBeside(at(1200, 300))).toEqual({ left: 924, width: 340, top: 330 });
+    expect(placeBeside(at(900, 300))).toEqual({ left: 900, width: 340, top: 330, maxHeight: 548 });
+    expect(placeBeside(at(1200, 300))).toEqual({ left: 924, width: 340, top: 330, maxHeight: 548 });
+  });
+
+  it("never covers the message box: above its line when a short list does not fit over the box", () => {
+    // What a real browser showed at 390 px: the line at y 580, the message
+    // box's card from y 700. Below the line there were 86 px before the box,
+    // and the old placement opened there and covered the box.
+    const at = (left: number, top: number) =>
+      ({ getBoundingClientRect: () => ({ left, top, bottom: top + 24, right: left + 115, width: 115, height: 24 }) }) as unknown as HTMLElement;
+    const composer = document.createElement("div");
+    composer.setAttribute("data-testid", "chat-composer");
+    let card = { top: 700, height: 140 };
+    composer.getBoundingClientRect = () =>
+      ({ left: 24, top: card.top, right: 366, bottom: card.top + card.height, width: 342, height: card.height }) as DOMRect;
+    document.body.appendChild(composer);
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 844 });
+      const phone = placeBeside(at(22, 580))!;
+      expect(phone).toEqual({ left: 22, width: 340, bottom: 270, maxHeight: 558 });
+      expect(844 - phone.bottom!).toBeLessThan(card.top); // its lower edge is above the box
+      // On a desk: below the line, but never reaching the box (it scrolls).
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      card = { top: 730, height: 44 };
+      const desk = placeBeside(at(619, 404))!;
+      expect(desk).toEqual({ left: 619, width: 340, top: 434, maxHeight: 290 });
+      expect(desk.top! + desk.maxHeight!).toBeLessThan(card.top);
+      // A hidden message box (the dock has it) is not in the way.
+      card = { top: 730, height: 0 };
+      expect(placeBeside(at(619, 404))).toEqual({ left: 619, width: 340, top: 434, maxHeight: 444 });
+      // The box itself is held to that room (it scrolls inside it).
+      render(<MemoryUsed items={items(PREF)} autoOpen />);
+      expect(screen.getByTestId("memory-used-popup").style.maxHeight).toMatch(/^min\(60vh, \d+px\)$/);
+    } finally {
+      composer.remove();
+    }
   });
 
   it("the reply's details list every item under 'From memory'", () => {
@@ -535,6 +631,20 @@ describe("the pop-up (components/chat/MemoryUsed)", () => {
       "Your preference: Always give prices in euros",
       "Earlier work: March reconciliation",
     ]);
+    expect(screen.queryByTestId("turn-memory-used-more")).toBeNull();
+  });
+
+  it("the reply's details say how many more were given than listed", () => {
+    render(
+      <TurnReceipt
+        inline
+        route={{ requested: "", provider: "mock", model: "mock", reason: "default" }}
+        memoryUsed={items(PREF, WORK)}
+        memoryMore={4}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("turn-receipt"));
+    expect(screen.getByTestId("turn-memory-used-more").textContent).toBe("and 4 more not listed here");
   });
 });
 
@@ -550,7 +660,32 @@ async function send(text: string, reply: string) {
 
 const threadSaves = () => H.api.puts.filter((p) => p.path.startsWith("/chat/threads/"));
 const lastSaved = () =>
-  threadSaves().at(-1)!.body.messages as { role: string; content: string; used?: unknown; usedShown?: boolean }[];
+  threadSaves().at(-1)!.body.messages as {
+    role: string;
+    content: string;
+    used?: unknown;
+    usedShown?: boolean;
+    usedMore?: unknown;
+  }[];
+const settingsReads = () => H.api.gets.filter((g) => g === "/settings").length;
+/** The reply's end is SAVED: the page queues the save and, in the same
+ *  synchronous step, decides about the pop-up (maybePopMemory). Once a save
+ *  holds `reply`, that decision has been made. */
+const savedReply = (reply: string) =>
+  threadSaves().some((p) => (p.body.messages as { content?: string }[]).some((m) => m.content === reply));
+/** Every promise already queued has settled, inside act so React draws what
+ *  it decided. Not a wait on the clock: a 0 ms task runs only after every
+ *  queued promise (the mocked GET has no timers), however loaded the PC is. */
+async function drainPromises() {
+  await act(async () => {
+    await new Promise<void>((r) => setTimeout(r, 0));
+  });
+}
+/** The chat page's own settings read on mount has been made. */
+async function mounted() {
+  await waitFor(() => expect(settingsReads()).toBeGreaterThan(0));
+  return settingsReads();
+}
 
 describe("the chat page (both lanes)", () => {
   it("stream lane: the newest reply's pop-up appears by itself, its items are saved, the composer keeps focus", async () => {
@@ -572,12 +707,13 @@ describe("the chat page (both lanes)", () => {
     await screen.findByTestId("memory-used-popup");
     fireEvent.click(screen.getByTestId("memory-used-close"));
     expect(screen.queryByTestId("memory-used-popup")).toBeNull();
+    const before = settingsReads();
     await send("and the team plan?", "Reply 2.");
-    // Give the page every chance to decide (its settings read) before asserting.
-    await waitFor(() => expect(H.api.gets.filter((g) => g === "/settings").length).toBeGreaterThan(0));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-    });
+    // The decision is made where the reply's end is saved: the same items
+    // were shown, so the page does not even read the setting.
+    await waitFor(() => expect(savedReply("Reply 2.")).toBe(true));
+    expect(settingsReads()).toBe(before);
+    await drainPromises();
     expect(screen.queryByTestId("memory-used-popup")).toBeNull();
     // The line is still there under the newest reply, and brings it back.
     const lines = screen.getAllByTestId("memory-used-line");
@@ -588,11 +724,13 @@ describe("the chat page (both lanes)", () => {
   it("only when memory shaped the reply: a list nothing shaped is a quiet line only", async () => {
     H.stream.used = [[WORK]];
     render(<ChatPage />);
+    const before = await mounted();
     await send("hello", "Reply 1.");
     await screen.findByTestId("memory-used-line");
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-    });
+    // Nothing shaped it: decided at the reply's end, without reading the setting.
+    await waitFor(() => expect(savedReply("Reply 1.")).toBe(true));
+    expect(settingsReads()).toBe(before);
+    await drainPromises();
     expect(screen.queryByTestId("memory-used-popup")).toBeNull();
   });
 
@@ -600,11 +738,11 @@ describe("the chat page (both lanes)", () => {
     H.api.getResponses = CHAT_GETS("press");
     H.stream.used = [[PREF]];
     render(<ChatPage />);
+    const before = await mounted();
     await send("how much is the pro plan?", "Reply 1.");
-    await waitFor(() => expect(H.api.gets.filter((g) => g === "/settings").length).toBeGreaterThan(1));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-    });
+    // The setting is read at the reply's end; its answer decides.
+    await waitFor(() => expect(settingsReads()).toBe(before + 1));
+    await drainPromises();
     expect(screen.queryByTestId("memory-used-popup")).toBeNull();
     fireEvent.click(screen.getByTestId("memory-used-line"));
     expect(screen.getByTestId("memory-used-popup")).toBeTruthy();
@@ -622,6 +760,31 @@ describe("the chat page (both lanes)", () => {
     await send("how much is the pro plan?", "Posted reply.");
     await screen.findByTestId("memory-used-popup");
     await waitFor(() => expect(lastSaved().at(-1)!.used).toEqual([PREF]));
+    expect(lastSaved().at(-1)!.usedMore).toBeUndefined();
+  });
+
+  it("stream lane: keeps how many more the reply was given than listed", async () => {
+    H.stream.used = [[PREF, WORK]];
+    H.stream.more = [5];
+    render(<ChatPage />);
+    await send("how much is the pro plan?", "Reply 1.");
+    expect((await screen.findByTestId("memory-used-line")).textContent).toBe("From memory: 7");
+    await waitFor(() => expect(lastSaved().at(-1)!.usedMore).toBe(5));
+  });
+
+  it("POST lane: keeps how many more the reply was given than listed", async () => {
+    H.stream.absent = true;
+    H.api.postResponses["/chat"] = {
+      reply: "Posted reply.",
+      route: { requested: "", provider: "mock", model: "mock", reason: "default" },
+      remembered: [],
+      used: [PREF],
+      used_more: 3,
+    };
+    render(<ChatPage />);
+    await send("and the team plan?", "Posted reply.");
+    expect((await screen.findByTestId("memory-used-line")).textContent).toBe("From memory: 4");
+    await waitFor(() => expect(lastSaved().at(-1)!.usedMore).toBe(3));
   });
 
   it("only while the chat is on screen: a reply that ends in a hidden window stays quiet", async () => {
@@ -629,11 +792,13 @@ describe("the chat page (both lanes)", () => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     try {
       render(<ChatPage />);
+      const before = await mounted();
       await send("how much is the pro plan?", "Reply 1.");
       await screen.findByTestId("memory-used-line");
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 20));
-      });
+      // Off screen: decided at the reply's end, without reading the setting.
+      await waitFor(() => expect(savedReply("Reply 1.")).toBe(true));
+      expect(settingsReads()).toBe(before);
+      await drainPromises();
       expect(screen.queryByTestId("memory-used-popup")).toBeNull();
     } finally {
       delete (document as unknown as { visibilityState?: unknown }).visibilityState;
@@ -644,8 +809,13 @@ describe("the chat page (both lanes)", () => {
     const real = await vi.importActual<typeof import("@/lib/useChatStream")>("@/lib/useChatStream");
     const ev = real.decodeSSE("done", JSON.stringify({ reply: "x", used: [PREF, { kind: "secret", id: "s", label: "no" }] }));
     expect(ev && ev.type === "done" ? ev.used : null).toEqual([PREF]);
-    const none = real.decodeSSE("done", JSON.stringify({ reply: "x", used: [] }));
+    const none = real.decodeSSE("done", JSON.stringify({ reply: "x", used: [], used_more: 3 }));
     expect(none && none.type === "done" ? none.used : "absent").toBeUndefined();
+    expect(none && none.type === "done" ? none.used_more : "absent").toBeUndefined();
+    const more = real.decodeSSE("done", JSON.stringify({ reply: "x", used: [PREF], used_more: 3 }));
+    expect(more && more.type === "done" ? more.used_more : null).toBe(3);
+    const zero = real.decodeSSE("done", JSON.stringify({ reply: "x", used: [PREF], used_more: 0 }));
+    expect(zero && zero.type === "done" ? zero.used_more : "absent").toBeUndefined();
   });
 
   it("a reply with nothing from memory has no line", async () => {

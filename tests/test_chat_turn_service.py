@@ -481,10 +481,13 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # Next leaps 15-a: one more — "used" ([{kind, id, label, when, href,
         # fix, shaped}], always present, [] when nothing): what the turn was
         # given from memory. Same key on the SSE done frame; pinned by
-        # tests/test_next_leaps_15a_used_receipt.py.
+        # tests/test_next_leaps_15a_used_receipt.py. And "used_more" (int,
+        # always present, 0 when none): how many more it was given than
+        # "used" names (the cap of 24).
         "used",
+        "used_more",
     }
-    assert body["used"] == []
+    assert body["used"] == [] and body["used_more"] == 0
     assert body["client_question"] is None
     assert body["refit"] is None and body["approved"] == []
     assert body["thread_refs"] == []

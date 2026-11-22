@@ -11,7 +11,9 @@
  * - is drawn in a portal, FIXED beside the line and always inside the
  *   window (at 390 px it is the window's width less 16 px each side);
  * - is `role="status"` and NEVER takes focus: the composer stays the
- *   owner's; Escape closes it (and only it);
+ *   owner's; Escape closes it (and only it), except while another dialog,
+ *   menu or open list has the keyboard: that Escape is left to it
+ *   ({@link ownedElsewhere});
  * - fades after {@link SHOW_MS} untouched, and stays while the pointer or
  *   the keyboard focus is on it, or while a correction is being typed;
  * - opens by itself only when the page says so (`autoOpen`: the newest
@@ -58,6 +60,7 @@ import {
   itemWords,
   lineWords,
   moreWords,
+  notListedWords,
   popupItems,
   whenWords,
   type MemoryUsedItem,
@@ -78,7 +81,7 @@ type Done = { state: "fixed" | "forgotten" | "undone"; actionId: string };
 /** True while the chat this line sits in is mounted but hidden (the chat
  *  page's Code view is in front). The chat page provides it. */
 export const MemoryUsedHidden = createContext(false);
-export type Place = { left: number; width: number; top?: number; bottom?: number };
+export type Place = { left: number; width: number; top?: number; bottom?: number; maxHeight?: number };
 
 function messageOf(e: unknown): string {
   if (e instanceof ApiError) return e.message;
@@ -87,8 +90,46 @@ function messageOf(e: unknown): string {
   return "That did not go through.";
 }
 
+/** A dialog, menu or open list (the Ctrl K palette, a composer menu) that
+ *  has the keyboard owns its Escape: the pop-up leaves it alone. */
+const OWNS_ESCAPE =
+  '[role="dialog"],[role="alertdialog"],[aria-modal="true"],[role="menu"],[role="listbox"],[aria-expanded="true"]';
+
+export function ownedElsewhere(target: EventTarget | null, ...mine: (HTMLElement | null)[]): boolean {
+  if (!target || typeof (target as Element).closest !== "function") return false;
+  const el = target as Element;
+  if (mine.some((m) => m && m.contains(el))) return false; // the pop-up or its own line
+  if (el.matches?.(OWNS_ESCAPE)) return true;
+  return !!el.closest(OWNS_ESCAPE);
+}
+
+/** The message box the pop-up must never cover (the chat page's composer
+ *  card). Looked at in a browser at 390 px: below its line, the box reached
+ *  over the message box. */
+const KEEP_CLEAR = '[data-testid="chat-composer"]';
+/** Room for a short list (about two items) below the line. */
+const ROOM = 220;
+const GAP = 6;
+
+/** The top of the message box when it is on screen BELOW the line, else the
+ *  window's bottom edge: the lowest the pop-up may reach. */
+function floorFor(r: DOMRect | { bottom: number }, vh: number): number {
+  let floor = vh - EDGE;
+  try {
+    const box = document.querySelector(KEEP_CLEAR);
+    const b = box?.getBoundingClientRect();
+    if (b && b.height > 0 && b.width > 0 && b.top > r.bottom && b.top < floor + EDGE) floor = Math.min(floor, b.top);
+  } catch {
+    /* no document: the window's edge */
+  }
+  return floor - GAP;
+}
+
 /** Where the pop-up sits for its line: beside it, never past the window's
- *  edge (at 390 px: the window's width less 16 px each side). */
+ *  edge (at 390 px: the window's width less 16 px each side), and never over
+ *  the message box: below the line only when a short list fits above the
+ *  message box, else above the line; `maxHeight` keeps a long list inside
+ *  that room (it scrolls). */
 export function placeBeside(anchor: HTMLElement | null): Place | null {
   if (!anchor || typeof window === "undefined") return null;
   const r = anchor.getBoundingClientRect();
@@ -96,13 +137,19 @@ export function placeBeside(anchor: HTMLElement | null): Place | null {
   const vh = window.innerHeight || 0;
   const width = Math.max(0, Math.min(POP_W, vw - EDGE * 2));
   const left = Math.min(Math.max(EDGE, r.left), Math.max(EDGE, vw - width - EDGE));
-  // Below the line when there is room for a short list, else above it.
-  if (vh - r.bottom >= 220 || r.top < 220) return { left, width, top: Math.min(r.bottom + 6, Math.max(EDGE, vh - EDGE)) };
-  return { left, width, bottom: Math.max(EDGE, vh - r.top + 6) };
+  const floor = floorFor(r, vh);
+  const top = r.bottom + GAP;
+  const above = r.top - GAP - EDGE;
+  if (floor - top >= ROOM || above < ROOM) {
+    const t = Math.min(top, Math.max(EDGE, floor));
+    return { left, width, top: t, maxHeight: Math.max(0, Math.round(floor - t)) };
+  }
+  return { left, width, bottom: Math.max(EDGE, vh - r.top + GAP), maxHeight: Math.max(0, Math.round(above)) };
 }
 
 export function MemoryUsed({
   items,
+  more: notListed = 0,
   autoOpen = false,
   busy = false,
   readOnly = false,
@@ -110,6 +157,10 @@ export function MemoryUsed({
   onClosed,
 }: {
   items: MemoryUsedItem[];
+  /** How many more the reply was given than `items` names (the daemon's
+   *  `used_more`, past its cap of 24): counted on the line and said in the
+   *  pop-up, never dropped without a word. */
+  more?: number;
   /** The page decided this reply's pop-up appears by itself (once). */
   autoOpen?: boolean;
   /** A turn is running: a pop-up open when it started closes, and while it
@@ -204,6 +255,7 @@ export function MemoryUsed({
     if (!open || busy) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.isComposing) return;
+      if (ownedElsewhere(e.target, popRef.current, lineRef.current)) return;
       e.stopPropagation();
       if (fixing && popRef.current?.contains(e.target as Node)) {
         setFixing(null);
@@ -273,6 +325,7 @@ export function MemoryUsed({
   if (!items.length) return null;
   const listed = popupItems(items);
   const more = items.length - listed.length;
+  const extra = Math.max(0, notListed);
 
   const popup =
     open && typeof document !== "undefined"
@@ -298,6 +351,8 @@ export function MemoryUsed({
               width: place?.width ?? POP_W,
               maxWidth: `calc(100vw - ${EDGE * 2}px)`,
               ...(place?.bottom !== undefined ? { bottom: place.bottom } : { top: place?.top ?? EDGE }),
+              // Never over the message box: the room placeBeside measured.
+              ...(place?.maxHeight !== undefined ? { maxHeight: `min(60vh, ${place.maxHeight}px)` } : {}),
               zIndex: 60,
             }}
             data-leaving={leaving ? "true" : "false"}
@@ -427,7 +482,11 @@ export function MemoryUsed({
                 );
               })}
             </ul>
-            {more > 0 && <p className="mt-1.5 text-[11px] text-zinc-500">{moreWords(more)}</p>}
+            {(more > 0 || extra > 0) && (
+              <p data-testid="memory-used-more" className="mt-1.5 text-[11px] text-zinc-500">
+                {more > 0 ? moreWords(more, extra) : notListedWords(extra)}
+              </p>
+            )}
           </div>,
           document.body,
         )
@@ -446,7 +505,7 @@ export function MemoryUsed({
         className={QUIET_BTN}
       >
         <BookOpen size={11} aria-hidden="true" className="shrink-0" />
-        {lineWords(items.length)}
+        {lineWords(items.length + extra)}
       </button>
       {popup}
     </>

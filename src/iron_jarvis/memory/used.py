@@ -47,6 +47,15 @@ a page in the app or ""; ``fix`` the actions the item supports
 (``correct`` / ``forget``: a kept preference and a client's preference in
 15-a; 15-b widens it). At most :data:`MAX_ITEMS` items, in hop order.
 
+THE CAP NEVER HIDES WHAT SHAPED THE REPLY. Every kept preference is told on
+every turn, so one hop can tell more than :data:`MAX_ITEMS` things. The cap
+is applied LAST (:func:`finish_with_more`): ``shaped`` is worked out for
+every item first, the items that shaped the reply are kept first, and each
+tier is taken one kind at a time in turn, so one kind cannot fill the list.
+What the cap left out is COUNTED (``used_more`` beside ``used`` on both
+lanes, :func:`left_out`), so the page can say "and N more not listed"
+instead of letting them disappear without a word.
+
 Text only, no I/O. Never raises out of :func:`note`, :func:`merge` or
 :func:`finish`.
 """
@@ -81,7 +90,18 @@ _TEXT_CHARS = 600
 #: How much of a reply (or the owner's message) is read for its words.
 _READ_CHARS = 20000
 
-_SINK: "ContextVar[list[dict[str, Any]] | None]" = ContextVar("ij_memory_used_sink", default=None)
+#: The most items one hop keeps (what it tells past this is only counted).
+HOP_ITEMS = MAX_ITEMS * 4
+
+
+class Told(list):
+    """A list of items that also counts the items past a cap (``dropped``):
+    a hop's collector, and :func:`merge`'s answer. A plain list counts 0."""
+
+    dropped: int = 0
+
+
+_SINK: "ContextVar[Told | None]" = ContextVar("ij_memory_used_sink", default=None)
 
 _CLIENT_ID = re.compile(r"^client_[0-9a-f]{12}$")
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
@@ -194,8 +214,14 @@ def note(kind: str, ref: object, label: object, **kw: Any) -> None:
     except Exception:  # noqa: BLE001 — an item that cannot be said is left out
         log.debug("memory used: an item could not be recorded", exc_info=True)
         return
-    if item is not None and len(sink) < MAX_ITEMS * 4:
+    if item is None:
+        return
+    if len(sink) < HOP_ITEMS:
         sink.append(item)
+        return
+    key = (item["kind"], item["id"])
+    if not any((s.get("kind"), s.get("id")) == key for s in sink):
+        sink.dropped += 1  # told, but past the hop's cap: counted, never lost silently
 
 
 def collecting() -> bool:
@@ -203,11 +229,11 @@ def collecting() -> bool:
     return _SINK.get() is not None
 
 
-def run_collecting(fn: Callable[[], Any]) -> "tuple[Any, list[dict[str, Any]]]":
+def run_collecting(fn: Callable[[], Any]) -> "tuple[Any, Told]":
     """``(fn(), the items fn noted)``. The collector is this call's own, so
     two hops on two threads never share one, and a hop that is dropped takes
     its items with it. Exceptions from ``fn`` propagate unchanged."""
-    sink: list[dict[str, Any]] = []
+    sink = Told()
     token = _SINK.set(sink)
     try:
         return fn(), sink
@@ -215,14 +241,17 @@ def run_collecting(fn: Callable[[], Any]) -> "tuple[Any, list[dict[str, Any]]]":
         _SINK.reset(token)
 
 
-def merge(parts: Iterable[Iterable[dict[str, Any]]]) -> list[dict[str, Any]]:
+def merge(parts: Iterable[Iterable[dict[str, Any]]]) -> Told:
     """The hops' items in hop order, one per ``(kind, id)`` (the first one
     wins: a preference told by the lessons hop keeps its fixes when the
-    memory fabric told it too), at most :data:`MAX_ITEMS`. Never raises."""
-    out: list[dict[str, Any]] = []
+    memory fabric told it too). NOT capped here: :func:`finish_with_more`
+    caps last, once it knows what shaped the reply. ``dropped`` sums what
+    each hop told past its own cap. Never raises."""
+    out = Told()
     seen: set[tuple[str, str]] = set()
     try:
         for part in parts or ():
+            out.dropped += max(0, int(getattr(part, "dropped", 0) or 0))
             for item in part or ():
                 if not isinstance(item, dict):
                     continue
@@ -231,38 +260,91 @@ def merge(parts: Iterable[Iterable[dict[str, Any]]]) -> list[dict[str, Any]]:
                     continue
                 seen.add(key)
                 out.append(item)
-                if len(out) >= MAX_ITEMS:
-                    return out
     except Exception:  # noqa: BLE001
         log.debug("memory used: the items could not be merged", exc_info=True)
     return out
 
 
-def finish(items: Iterable[dict[str, Any]], *, reply: object = "", question: object = "") -> list[dict[str, Any]]:
-    """The ``used`` list a reply carries: each item without its private
-    words, plus ``shaped`` — True when the reply carries a word stem that
-    came from the item and is not in the owner's own message (the page opens
-    the pop-up by itself only for such an item). [] when nothing was given.
-    Never raises (a fault answers [])."""
+def _pick(items: "list[dict[str, Any]]", shaped: "list[bool]") -> "list[int]":
+    """Which items the capped list keeps, as indexes in their own order:
+    every one when they fit; else the items that shaped the reply first,
+    then the rest, each tier taken one KIND at a time in turn (in the order
+    the kinds were first told), so one kind (every kept preference, say)
+    never fills the list. Pure."""
+    if len(items) <= MAX_ITEMS:
+        return list(range(len(items)))
+    chosen: list[int] = []
+    for tier in (True, False):
+        groups: dict[str, list[int]] = {}
+        for i, item in enumerate(items):
+            if shaped[i] is tier:
+                groups.setdefault(str(item.get("kind") or ""), []).append(i)
+        queues = list(groups.values())
+        while queues and len(chosen) < MAX_ITEMS:
+            for q in queues:
+                if q and len(chosen) < MAX_ITEMS:
+                    chosen.append(q.pop(0))
+            queues = [q for q in queues if q]
+        if len(chosen) >= MAX_ITEMS:
+            break
+    return sorted(chosen)
+
+
+def finish_with_more(
+    items: Iterable[dict[str, Any]], *, reply: object = "", question: object = "",
+) -> "tuple[list[dict[str, Any]], int]":
+    """``(the used list, how many were given and not listed)``. Each item
+    goes without its private words, plus ``shaped`` — True when the reply
+    carries a word stem that came from the item and is not in the owner's
+    own message (the page opens the pop-up by itself only for such an item).
+    ``shaped`` is worked out for EVERY item before the cap, and the cap keeps
+    the shaped items first (:func:`_pick`). ([], 0) when nothing was given.
+    Never raises (a fault answers ([], 0))."""
     try:
         said = stems(reply)
         asked = stems(question)
-        out: list[dict[str, Any]] = []
-        for item in list(items or ())[:MAX_ITEMS]:
+        dropped = max(0, int(getattr(items, "dropped", 0) or 0))
+        valid: list[dict[str, Any]] = []
+        shaped: list[bool] = []
+        for item in list(items or ()):
             if not isinstance(item, dict) or item.get("kind") not in KINDS:
                 continue
             words = item.get("_words") or frozenset()
-            public = {k: v for k, v in item.items() if not str(k).startswith("_")}
+            valid.append(item)
+            shaped.append(bool((frozenset(words) & said) - asked))
+        out: list[dict[str, Any]] = []
+        keep = _pick(valid, shaped)
+        for i in keep:
+            public = {k: v for k, v in valid[i].items() if not str(k).startswith("_")}
             public["fix"] = list(public.get("fix") or [])
-            public["shaped"] = bool((frozenset(words) & said) - asked)
+            public["shaped"] = shaped[i]
             out.append(public)
-        return out
+        return out, len(valid) - len(keep) + dropped
     except Exception:  # noqa: BLE001
         log.debug("memory used: the list could not be finished", exc_info=True)
-        return []
+        return [], 0
+
+
+def finish(items: Iterable[dict[str, Any]], *, reply: object = "", question: object = "") -> list[dict[str, Any]]:
+    """The ``used`` list of :func:`finish_with_more`. Never raises."""
+    return finish_with_more(items, reply=reply, question=question)[0]
+
+
+def left_out(items: Iterable[dict[str, Any]]) -> int:
+    """How many items were given and are NOT in the capped list (the cap
+    keeps :data:`MAX_ITEMS`, whichever they are, plus what a hop told past
+    its own cap): the reply's ``used_more``. Never raises (a fault answers 0)."""
+    try:
+        dropped = max(0, int(getattr(items, "dropped", 0) or 0))
+        valid = sum(1 for i in list(items or ()) if isinstance(i, dict) and i.get("kind") in KINDS)
+        return max(0, valid - MAX_ITEMS) + dropped
+    except Exception:  # noqa: BLE001
+        log.debug("memory used: the left-out count could not be made", exc_info=True)
+        return 0
 
 
 __all__ = [
-    "FIXES", "FIX_CORRECT", "FIX_FORGET", "KINDS", "LABEL_CHARS", "MAX_ITEMS", "PREFERENCES_HREF",
-    "collecting", "finish", "make", "merge", "note", "run_collecting", "stems",
+    "FIXES", "FIX_CORRECT", "FIX_FORGET", "HOP_ITEMS", "KINDS", "LABEL_CHARS", "MAX_ITEMS",
+    "PREFERENCES_HREF", "Told", "collecting", "finish", "finish_with_more", "left_out", "make",
+    "merge", "note", "run_collecting", "stems",
 ]

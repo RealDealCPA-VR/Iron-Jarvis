@@ -469,6 +469,10 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
             used = (done or {}).get("used")
             if isinstance(used, list) and used:
                 line["used"] = [u for u in used if isinstance(u, dict)][:24]
+                # ... and how many more it was given than the list names.
+                more = (done or {}).get("used_more")
+                if isinstance(more, int) and not isinstance(more, bool) and more > 0:
+                    line["usedMore"] = more
             return line
         if status == "error":
             if partial:

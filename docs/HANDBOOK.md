@@ -2048,11 +2048,15 @@ reads; it never writes, runs commands, or starts work on its own.
 
 When a chat reply was given things Iron Jarvis remembers (your preferences,
 a client's preferences, earlier work in the folder and its recap, notes,
-past chats and agent runs, files, project knowledge), the reply says so. A
+earlier chats and agent runs, files, project knowledge), the reply says so. A
 quiet **From memory: 3** sits under it, beside the reply's details. Press it
 and a small box opens beside the reply: **From memory**, and up to five of
 those things in plain words ("Your preference: Always give prices in
-euros"). The rest are in the reply's details, under **From memory** too.
+euros"). The reply's details list up to 24 of them, under **From memory**
+too. A reply given more than 24 lists the ones its answer used words from
+first, then takes the others one kind at a time, so a long list of
+preferences never crowds out the rest, and it says how many it left out:
+**and 4 more not listed here**.
 
 The box is what Iron Jarvis was **given** for that reply, not a claim about
 what the answer relied on. It lists only what was really put in front of
@@ -2071,7 +2075,8 @@ Secrets are masked in it.
 
 It stays while your pointer is on it, while you are using it from the
 keyboard, and while you are typing a correction. **Escape** closes it. It
-never takes the cursor from the message box.
+never takes the cursor from the message box, and never covers it: on a
+phone it opens above its line when there is no room below.
 
 **That's wrong.** On a preference of yours or one kept for a client, press
 **That's wrong**: type the right one and press **Save**, or press **Forget
@@ -2079,7 +2084,7 @@ it**. The change is made where the preference is kept (the Memory page's
 kept preferences, or the client's page), and the box says **Fixed.** with
 **Undo**. Undo puts it back as it was, unless it was changed again since.
 Other kinds of memory cannot be fixed from the box yet: **Open** goes to
-where each one lives (a past chat, an agent run, the Memory page).
+where each one lives (an earlier chat, an agent run, the Memory page).
 
 **Only when I press.** Settings › Memory & you › **Show what memory gave a
 reply**: "Show briefly after a reply" (the default) or "Only when I press".

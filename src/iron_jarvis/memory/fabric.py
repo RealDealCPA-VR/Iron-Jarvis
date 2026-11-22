@@ -1169,6 +1169,10 @@ class MemoryFabric:
         return out
 
 
+#: Next leaps 15-a: a part of a snippet the scanner replaced
+#: (``core.promptguard``'s placeholder), left out of an item's label.
+_BLOCKED_PART = re.compile(r"\[BLOCKED:[^\]]*(?:\]|$)")
+
 #: Next leaps 15-a: the ``memory.used`` kind of each store's hit.
 _USED_KIND = {
     "files": "file",
@@ -1195,10 +1199,14 @@ def _note_hits(told: "list[tuple[FabricHit, str]]") -> None:
             kind = _USED_KIND.get(h.source)
             if not kind or str(snippet or "").startswith("[BLOCKED"):
                 continue
+            # The label says what the PROMPT carried: the scanned snippet,
+            # with any part the scanner removed left out (never the owner's
+            # original words where the model saw the placeholder).
+            told_words = " ".join(_BLOCKED_PART.sub(" … ", str(snippet or "")).split()).strip(" …")
             extra = h.extra or {}
             href = ""
             fix: tuple[str, ...] = ()
-            label = h.title or h.snippet
+            label = h.title or told_words
             when: Any = None
             if kind == "file":
                 path = str(extra.get("path") or h.ref or "")
@@ -1212,12 +1220,12 @@ def _note_hits(told: "list[tuple[FabricHit, str]]") -> None:
                     href = f"/chat?thread={quote(str(h.ref), safe='')}"
                 when = extra.get("at") or None
             elif kind == "preference":
-                label = h.snippet
+                label = told_words
                 href = _used.PREFERENCES_HREF
                 if str(extra.get("scope") or "user") == "user":
                     fix = _used.FIXES
             elif kind == "memory":
-                label = h.snippet
+                label = told_words
             _used.note(kind, h.ref, label, when=when, href=href, fix=fix,
                        text=f"{h.title} {snippet}")
     except Exception:  # noqa: BLE001 — the list is extra; the prompt is not
