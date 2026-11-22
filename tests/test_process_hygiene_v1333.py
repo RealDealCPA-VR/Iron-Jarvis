@@ -603,12 +603,20 @@ def test_a_timed_out_conversion_stops_only_the_word_it_started(
 ):
     from iron_jarvis.documents import legacy
 
+    # The conversion's own clock is fixed (CLAUDE.md: time through an injected
+    # clock). With the wall clock, the Word "this conversion started" was
+    # stamped BEFORE the conversion read its start time, so a loaded CI runner
+    # that paused over a second in between (or a clock step) made it look like
+    # a Word the user had open already, and it was spared (passed only on its
+    # retry, tests.yml run 45045846633).
+    now = 1_800_000_000.0
+    monkeypatch.setattr(legacy, "time", types.SimpleNamespace(time=lambda: now))
     monkeypatch.setattr(legacy, "word_available", lambda: True)
     monkeypatch.setattr(procs, "kill_tree", lambda proc: None)
     monkeypatch.setattr(
         legacy.subprocess, "Popen", lambda *a, **k: _WordHangs(b"IJ-WORD-PID: 5555\r\n")
     )
-    killed = _fake_word(monkeypatch, name=name, created_at=time.time() - age_s)
+    killed = _fake_word(monkeypatch, name=name, created_at=now - age_s)
     src = tmp_path / "letter.doc"
     src.write_bytes(b"\xd0\xcf\x11\xe0")
 
