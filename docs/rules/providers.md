@@ -40,7 +40,7 @@ How to use this file: read the contents list, then read only the entries your ch
 - L1438: **The account manager's token never rests in Iron Jarvis's log, its address must be this PC, no child gets the daemon's own credentials, every account turned off is said, and Claude Code on an API key is never "list price"** (v1.515.0)
 - L1465: **A Model servers failure is one plain sentence in `error`; the program's own words ride `error_detail` (masked), under Details; Refresh forces a re-check; a probe has a total time limit** (v1.516.0)
 - L1482: **A model call is counted exactly once: by its lane's tally, by the agent run's step, or, when made inside a tool, by its own usage row from the router's one seam (`eval.call_ledger.note_model_call`)** (v1.529.0)
-- L1507: **A model is downloaded through ONE call, `fleet.pulls.start_download` (chat's `model_download`, the Models tab's Start download, the starter door): the size is read and the drive checked BEFORE the model server is asked, one download per server, progress and Cancel from the row**
+- L1507: **A model is downloaded through ONE call, `fleet.pulls.start_download` (chat's `model_download`, the Models tab's Start download, the starter door): the size is read and the drive checked BEFORE the model server is asked, one download per server, progress and Cancel from the row** (v1.560.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -1504,7 +1504,7 @@ How to use this file: read the contents list, then read only the entries your ch
   agent's tool rows are not linked to its run. Pin:
   `tests/test_model_calls_on_usage_v1529.py`.
 
-- **A model is downloaded through ONE call, `fleet.pulls.start_download` (chat's `model_download`, the Models tab's Start download, the starter door): the size is read and the drive checked BEFORE the model server is asked, one download per server, progress and Cancel from the row** (next leaps 43-a, R1.7; D-43.1, D-43.2).
+- **A model is downloaded through ONE call, `fleet.pulls.start_download` (chat's `model_download`, the Models tab's Start download, the starter door): the size is read and the drive checked BEFORE the model server is asked, one download per server, progress and Cancel from the row** (v1.560.0; next leaps 43-a, R1.7; D-43.1, D-43.2).
   Ideas 16 (the search model) and 37 (voice) download their models through
   `start_download(d, node_id, model, loop=, started_by=)` or the
   `model_download` tool, never a terminal or their own request.

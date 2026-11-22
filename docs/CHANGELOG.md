@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.560.0
+
+**Browse and download models, with what fits this PC.** Model servers now has a second tab, **Models**: a model library in the style of LM Studio.
+
 ## v1.559.2
 
 **A deleted session's copies of your files always go.** When you delete a Build › Code session in a folder without git, Iron Jarvis now removes its copies of your files even when one of them was in use at that moment.
@@ -77,7 +81,3 @@
 ## v1.546.0
 
 **Rewind works in folders without git too.** "Rewind to here" can put a folder's files back as they were when a message started (v1.543.0).
-
-## v1.545.0
-
-**Switch the coding tool in the same session.** A coding session in Build › Code used to stay on the tool it started with.
