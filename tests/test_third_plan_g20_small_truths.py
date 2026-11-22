@@ -487,30 +487,47 @@ async def test_a_reply_that_ended_with_no_end_frame_is_still_stopped(monkeypatch
     assert conn.of(P.PANEL_EVENT_DONE)[-1].get("reason") == "stopped"
 
 
-async def test_a_send_right_after_done_waits_for_the_tidy_up_and_is_not_refused(monkeypatch, clean_turns):
+@pytest.mark.parametrize("end", ["done", "error"])
+async def test_a_send_right_after_done_waits_for_the_tidy_up_and_is_not_refused(monkeypatch, clean_turns, end):
     """Found by the lead in group 20's local run: since the lane waits for its
     usage row's write AFTER its `done` frame, the reply's runner is still
     tidying up for an instant after the panel was told it ended, and a Send
     in that instant was refused as "still working on the last message"
     (``test_browser_panel_v1242``'s flood test met it under load). A Send
     after `done` now waits for the tidy-up. Pins ``_send``'s ``_end_sent``
-    wait: without it the second Send below is an error frame."""
+    wait: without it the second Send below is an error frame.
+
+    Y-1 ([error]): the same holds after a reply that ended on its OWN error.
+    Before Y-1 only `done` marked the end as shown, so a Send there was
+    refused ("Stop it first") over a sidebar that already offered Send; the
+    Handbook's v1.556.2 section says it now waits."""
     import iron_jarvis.daemon.chat_stream as chat_stream
 
     tidy = asyncio.Event()
     starts: list[str] = []
+    last = (
+        _sse("done", {"reply": "Done."}) if end == "done"
+        else _sse("error", {"detail": "Iron Jarvis could not reach that page."})
+    )
 
     async def lane(platform, personas, body, **kw):
         asked = body.messages[-1].content if getattr(body, "messages", None) else ""
         starts.append(str(asked))
+        first_reply = len(starts) == 1
 
         async def gen():
             yield _sse("token", {"text": "Done."})
-            yield _sse("done", {"reply": "Done."})
-            if len(starts) == 1:
-                await tidy.wait()  # the first reply's tidy-up, after its `done`
+            yield last if first_reply else _sse("done", {"reply": "Done."})
+            if first_reply:
+                await tidy.wait()  # the first reply's tidy-up, after its end
 
         return gen()
+
+    def refused() -> list[dict[str, Any]]:
+        # After `done` no error frame may come at all; after the reply's own
+        # error, only that one (the refusal carries ``send_refused``).
+        errors = conn.of(P.PANEL_EVENT_ERROR)
+        return errors if end == "done" else [p for p in errors if p.get("send_refused")]
 
     monkeypatch.setattr(chat_stream, "stream_chat_turn", lane)
     turns = PanelTurns(SimpleNamespace(browser=None))
@@ -518,17 +535,19 @@ async def test_a_send_right_after_done_waits_for_the_tidy_up_and_is_not_refused(
     await turns.handle(conn, P.PANEL_ACTION_SEND, {"text": "first"})
     first = turns._task
     assert first is not None
-    await until(lambda: conn.of(P.PANEL_EVENT_DONE), 10)
+    shown = P.PANEL_EVENT_DONE if end == "done" else P.PANEL_EVENT_ERROR
+    await until(lambda: conn.of(shown), 10)
     assert not first.done(), "the stand-in tidy-up should still be running"
     # The next Send arrives while the first reply is still tidying up.
     second = asyncio.ensure_future(turns.handle(conn, P.PANEL_ACTION_SEND, {"text": "second"}))
     for _ in range(50):
         await asyncio.sleep(0)
-    assert conn.of(P.PANEL_EVENT_ERROR) == [], "a Send right after `done` was refused"
+    assert refused() == [], f"a Send right after the reply's end ({end}) was refused"
+    assert not second.done(), "the Send did not wait for the tidy-up (the case proves nothing)"
     tidy.set()
     await asyncio.wait_for(second, 10)
     await asyncio.wait_for(first, 10)
-    assert conn.of(P.PANEL_EVENT_ERROR) == []
+    assert refused() == []
     assert len(starts) == 2, "the second message never started its reply"
     if turns._task is not None:
         await asyncio.wait_for(turns._task, 10)

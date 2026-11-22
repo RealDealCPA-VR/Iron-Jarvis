@@ -2048,13 +2048,16 @@ In the browser sidebar, New conversation now works as soon as a reply's end
 is on screen.
 
 - **New conversation right after a reply.** In the browser sidebar, pressing
-  New conversation the moment a reply finished could answer "Iron Jarvis is
-  still working on the last message" on a busy PC: the sidebar was already
-  empty, but Iron Jarvis kept the old conversation and carried it into your
-  next question. Iron Jarvis was only writing down the reply's usage, which
-  it does after the reply ends. Now New conversation works as soon as the
-  reply's end is on screen, whether it finished or failed. A message sent in
-  that moment already waited; it still does.
+  New conversation the moment a reply finished or failed could answer "Iron
+  Jarvis is still working on the last message" on a busy PC: the sidebar was
+  already empty, but Iron Jarvis kept the old conversation and carried it
+  into your next question. Iron Jarvis was only writing down the reply's
+  usage, which it does after the reply ends. Now New conversation works as
+  soon as the reply's end is on screen.
+- **A message sent right after a reply that failed.** A message sent the
+  moment a reply finished already waited for that writing, up to five
+  seconds. One sent the moment a reply failed was refused with "Stop it
+  first". It now waits too.
 - **The sidebar does not go back to "working".** Switching tabs in that same
   moment could show the reply as still running, with Stop instead of Send,
   until you switched tabs again. It now shows the reply as finished.
