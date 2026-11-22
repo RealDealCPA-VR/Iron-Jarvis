@@ -289,6 +289,9 @@ import { ChatUsageLine } from "@/components/chat/ChatUsageLine";
 import { ProjectDrawer } from "@/components/chat/ProjectDrawer";
 import { ChatFolderChip } from "@/components/chat/ChatFolderChip";
 import { FolderChip, useFolderPicker } from "@/components/folders/FolderChip";
+// Next leaps 04-a (build-out plan R2.1): the card when a new chat's folder is picked.
+import { ChatPickUpCard } from "@/components/work/PickUpCard";
+import { CONTINUE_SENTENCE } from "@/lib/pickUp";
 import {
   CHAT_NO_FOLDER_TITLE,
   CLEAR_CHAT_FOLDER_TITLE,
@@ -14287,6 +14290,29 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       />
                     </div>
                   )}
+                  {/* Next leaps 04-a (build-out plan R2.1): PICK UP WHERE YOU LEFT
+                      OFF. Only on a NEW chat (no thread yet: an opened chat never
+                      reads it) with a folder and no project (inside a project the
+                      folder's earlier work is the project's own recent activity,
+                      which tells no recap, so Continue would not be told what the
+                      card shows). Continue sends ONE fixed sentence through the
+                      page's own send; the card's lines reach the model through
+                      the work block, as a record. It steps aside while the box
+                      holds words or files. `projectId`, not `activeProject`:
+                      the id is what the turn is sent, even before the
+                      projects list has loaded. */}
+                  {emptyHero && !threadId && workspaceDir && !projectId ? (
+                    <div data-testid="chat-hero-pick-up" className="mb-1.5 px-2 empty:hidden">
+                      <ChatPickUpCard
+                        store={composer}
+                        hasFiles={attachments.length > 0}
+                        folder={workspaceDir}
+                        local={localOnly}
+                        disabled={busy}
+                        onContinue={() => send(CONTINUE_SENTENCE)}
+                      />
+                    </div>
+                  ) : null}
                   {/* THE NOTICES TRAY: what is about the next message (a failed save,
                       an error and its Retry, the preflight warning, the compaction
                       offer, queued messages, the edit Undo, a held key, who the chat

@@ -41,6 +41,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUp, House, Loader2 } from "lucide-react";
 import { FolderChip } from "@/components/folders/FolderChip";
+import { PickUpCard } from "@/components/work/PickUpCard";
+import { CONTINUE_SENTENCE } from "@/lib/pickUp";
 import { PermissionChip } from "@/components/chat/PermissionChip";
 import {
   ModelMenu,
@@ -599,13 +601,15 @@ export function HarnessStartComposer({
     }
   }
 
-  async function send() {
+  /** `override`: the words to send instead of the box's (the pick-up card's
+   *  Continue sends its one fixed sentence, next leaps 04-a). */
+  async function send(override?: string) {
     if (busyRef.current) return;
     if (att.busyRef.current) {
-      att.whenSettled(() => void send());
+      att.whenSettled(() => void send(override));
       return;
     }
-    const words = (boxRef.current?.value ?? text).trim();
+    const words = (override ?? boxRef.current?.value ?? text).trim();
     const files = att.filesRef.current;
     if (!words && !files.length) return;
     // v1.437.0: the picks ride the first message unless Try on definitely
@@ -890,6 +894,22 @@ export function HarnessStartComposer({
             ) : null}
           </span>
         ) : null}
+      </div>
+      {/* Next leaps 04-a (build-out plan R2.1): what was done in this folder
+          last time, with Continue (the session starts with one fixed
+          sentence; its turn is told the folder's earlier work through the
+          work block; a folder inside a project gets no card, `chatCode`,
+          because the session's turns are told the project's own recent
+          activity instead). Steps aside while the box holds words or files. */}
+      <div data-testid="harness-new-pick-up" className="px-2 pt-1.5 empty:hidden">
+        <PickUpCard
+          folder={folder}
+          local={localOnly}
+          chatCode
+          hidden={!!text.trim() || att.files.length > 0}
+          disabled={busy}
+          onContinue={() => send(CONTINUE_SENTENCE)}
+        />
       </div>
       {/* v1.445.0 (ease-of-use review, item 11): the two Code views point at
           each other — here Jarvis writes the code; Build › Code runs the

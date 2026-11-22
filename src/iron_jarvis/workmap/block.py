@@ -259,10 +259,21 @@ def recap_lines(recap: "dict[str, Any] | None") -> list[str]:
     return out
 
 
+def _attach_recaps(rows: list[dict[str, Any]], kept: dict[str, dict[str, Any]]) -> None:
+    """Give each row its recap lines (``row["recap"]``) from ``kept`` (the
+    kept recaps by work id), only for a recap written for the conversation
+    AS IT IS NOW (the source's own ``updated_at``, asked a moment ago)."""
+    from . import recap as _recap
+
+    for r in rows:
+        got = kept.get(r["id"])
+        if got and _recap.current_for(got, r.get("live_updated") or ""):
+            r["recap"] = recap_lines(got)
+
+
 def _with_recaps(engine: Any, rows: list[dict[str, Any]]) -> None:
-    """Give each row its recap lines (``row["recap"]``), only for a recap
-    written for the conversation AS IT IS NOW (the source's own
-    ``updated_at``, asked a moment ago). Never raises: a recap is extra."""
+    """:func:`_attach_recaps` with the recaps read here. Never raises: a
+    recap is extra."""
     from . import recap as _recap
 
     try:
@@ -271,10 +282,74 @@ def _with_recaps(engine: Any, rows: list[dict[str, Any]]) -> None:
     except Exception:  # noqa: BLE001
         log.debug("work record: recaps could not be read", exc_info=True)
         return
-    for r in rows:
-        got = kept.get(r["id"])
-        if got and _recap.current_for(got, r.get("live_updated") or ""):
-            r["recap"] = recap_lines(got)
+    _attach_recaps(rows, kept)
+
+
+def _fold(rows: list[dict[str, Any]]) -> list[tuple[dict[str, Any], int]]:
+    """``lookup.collapse`` for the "In this folder" part, except that a piece
+    carrying its OWN recap lines is never folded into another of the same
+    kind and title (next leaps 04-a: every chat the pick-up card's Continue
+    starts has the same first message, so the same title, and folding them
+    would hide each earlier one's Done, Decided and Open lines). Pieces with
+    no recap fold exactly as before (a schedule's nightly run)."""
+    seen: dict[tuple[str, str], int] = {}
+    out: list[tuple[dict[str, Any], int]] = []
+    for r in rows:  # newest first
+        if r.get("recap"):
+            out.append((r, 1))
+            continue
+        key = (r["kind"], str(r.get("title") or "").lower())
+        if key in seen:
+            row, n = out[seen[key]]
+            out[seen[key]] = (row, n + 1)
+            continue
+        seen[key] = len(out)
+        out.append((r, 1))
+    return out
+
+
+def here_part(engine: Any, folder: str, here_rows: list[dict[str, Any]], now: datetime, *,
+              phone: bool = False,
+              kept: "dict[str, dict[str, Any]] | None" = None) -> tuple[list[dict[str, Any]], int]:
+    """THE "In this folder" PART, exactly as a turn in ``folder`` is told it
+    (next leaps 04-a: the pick-up card is built from it, so the card never
+    shows a line the turn that Continue starts is not told). ``here_rows``:
+    the rows of ``folder`` and the folders under it AS THEY ARE NOW, already
+    allowed and walled, newest first. A recap is attached only to work in
+    EXACTLY the folder (a coding session's own copy counts as its folder),
+    never on the phone; ``kept`` (the kept recaps by work id) is used instead
+    of reading them here (the card reads them itself, so a read that fails is
+    said). ``(told, groups)``: each told piece ``{"row", "times", "line",
+    "recap"}`` in order (``line`` carries its recap lines under it when they
+    fit :data:`BLOCK_CHARS`; ``recap`` the lines told, [] for none), at most
+    :data:`HERE_MAX`, and how many groups (repeats folded by :func:`_fold`,
+    never a piece with its own recap) there were."""
+    own = keys.folder_key(keys.home_folder(folder))
+    if not phone:
+        exact = [r for r in here_rows
+                 if own and keys.folder_key(keys.home_folder(r.get("folder") or "")) == own]
+        if kept is None:
+            _with_recaps(engine, exact)
+        else:
+            _attach_recaps(exact, kept)
+    told: list[dict[str, Any]] = []
+    used = 0
+    groups = _fold(here_rows)
+    for row, times in groups:
+        if len(told) >= HERE_MAX:
+            break
+        line = _safe(entry_line(row, now, times=times, titles_only=phone))
+        if not line or used + len(line) + 1 > BLOCK_CHARS:
+            continue
+        shown: list[str] = []
+        extra = row.get("recap") or []
+        if extra:
+            whole = "\n".join([line, *extra])
+            if used + len(whole) + 1 <= BLOCK_CHARS:
+                line, shown = whole, list(extra)
+        told.append({"row": row, "times": times, "line": line, "recap": shown})
+        used += len(line) + 1
+    return told, len(groups)
 
 
 #: Rows a turn's own refresh may rebuild (``lookup.TURN_REBUILD``).
@@ -435,44 +510,18 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         # a coding session's own copy of it). Work in another folder, a
         # folder under this one included, may be another client's: its
         # title and file names say where to look, its details stay there.
-        # The phone is never told a recap (D-13.2).
-        own = keys.folder_key(keys.home_folder(folder))
-        if not phone:
-            _with_recaps(engine, [
-                r for r in here_rows
-                if own and keys.folder_key(keys.home_folder(r.get("folder") or "")) == own
-            ])
+        # The phone is never told a recap (D-13.2). ``here_part`` is the ONE
+        # place this part is worked out (the pick-up card reads it too).
+        told_here, n_groups = here_part(engine, folder, here_rows, now, phone=phone)
+        here = [t["line"] for t in told_here]
+        used = sum(len(line) + 1 for line in here)
+        recapped = any(t["recap"] for t in told_here)
 
         lines: list[str] = []
-        used = 0
-        recapped = False
-
-        def with_recap(line: str, row: dict[str, Any]) -> str:
-            """``line`` with the row's recap under it, when it still fits."""
-            nonlocal recapped
-            extra = row.get("recap") or []
-            if not extra:
-                return line
-            whole = "\n".join([line, *extra])
-            if used + len(whole) + 1 > BLOCK_CHARS:
-                return line
-            recapped = True
-            return whole
-
-        groups = _collapse(here_rows)
-        here: list[str] = []
-        for row, times in groups:
-            if len(here) >= HERE_MAX:
-                break
-            line = _safe(entry_line(row, now, times=times, titles_only=phone))
-            if line and used + len(line) + 1 <= BLOCK_CHARS:
-                line = with_recap(line, row)
-                here.append(line)
-                used += len(line) + 1
         if here:
             lines.append(HERE_LEAD)
             lines += here
-            older = len(groups) - len(here)
+            older = n_groups - len(here)
             if older > 0:
                 lines.append(f"(and {older} older in this folder)")
         others: list[str] = []
@@ -521,5 +570,5 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
 __all__ = [
     "BLOCK_CHARS", "CLIENT_OTHER_MAX", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD", "HERE_LEAD",
     "HERE_MAX", "NAMED_MAX", "PHONE_NOTE", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE", "date_words",
-    "entry_line", "recap_lines", "work_block",
+    "entry_line", "here_part", "recap_lines", "work_block",
 ]

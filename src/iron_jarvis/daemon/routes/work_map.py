@@ -24,6 +24,11 @@
   or the top of a drive.
 * ``POST /work-record/remember {folder}`` → ``{ok}``: stop forgetting it;
   its work is read into the record again. 404 when it was not forgotten.
+* Next leaps 04-a: ``GET /work-record/pick-up?folder=&local=&chat_code=`` →
+  the card a new chat or coding session shows for its folder
+  (``workmap/pickup.py``): ``{folder, name, client, last, done, decided,
+  open, pieces, recap_pending, full, in_project, words}``. 503 when the
+  record cannot be read.
 * v1.499.0: each ``/work-record/folders`` row also carries ``client:
   {id, name} | null``, the confirmed client whose folder it is (computed
   here from ``workmap/clients/store.load_map``; the dashboard never works
@@ -252,6 +257,26 @@ def register(app: FastAPI, d) -> None:
             "entries": entries,
             "total": total,
         }
+
+    @app.get("/work-record/pick-up")
+    def work_pick_up(folder: str = "", local: bool = False, chat_code: bool = False) -> dict[str, Any]:
+        """Next leaps 04-a (build-out plan R2.1): the card a NEW chat or coding
+        session shows when its folder is picked, ``workmap/pickup.pick_up``
+        (its docstring is the contract): the last piece of work in exactly
+        that folder, its checked Done lines, the Decided and Open lines of the
+        newest six pieces, and ``full`` (D-04.4). ``local``: the new chat or
+        session is Local only; ``chat_code``: it is a new Chat › Code session
+        (grounded in the project that holds its folder: no card there). 503
+        in words when the record cannot be read, never "nothing here"."""
+        from ...workmap import pickup
+
+        place = str(folder or "").strip()
+        if not place:
+            raise HTTPException(status_code=400, detail="Say which folder to show.")
+        try:
+            return pickup.pick_up(d.platform, place, local=bool(local), chat_code=bool(chat_code))
+        except Exception as exc:  # noqa: BLE001 — said, never an empty card
+            raise HTTPException(status_code=503, detail=UNREADABLE) from exc
 
     @app.post("/work-record/forget")
     def work_forget(body: FolderBody) -> dict[str, Any]:

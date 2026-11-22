@@ -54,6 +54,8 @@ import { CODE_VIEW_LINK } from "@/lib/buildLinks";
 import { announceChatViewLink } from "@/lib/chatSurface";
 import { CODING_SESSIONS_PLACE } from "@/lib/buildWords";
 import { FolderChip } from "@/components/folders/FolderChip";
+import { PickUpCard } from "@/components/work/PickUpCard";
+import { CONTINUE_SENTENCE } from "@/lib/pickUp";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { ModeChip } from "@/components/buildCode/ModeChip";
 import { ModelPicker } from "@/components/buildCode/ModelPicker";
@@ -393,7 +395,7 @@ export function StartComposer({
   /** v1.412.0: pictures and files for the first message (uploaded). */
   const att = useHarnessAttachments();
   // A start held for an upload runs this render's `start` when it settles.
-  const startRef = useRef<() => Promise<void>>(async () => undefined);
+  const startRef = useRef<(override?: string) => Promise<void>>(async () => undefined);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const accountShift = useInsideWindow(accountMenuRef, accountOpen);
   // v1.426.0 (E5): the folder's defaults for new sessions — a chip the user
@@ -510,13 +512,15 @@ export function StartComposer({
     setAccountOpen(asksForAccount(next));
   }
 
-  async function start() {
+  /** `override`: the words to start with instead of the box's (the pick-up
+   *  card's Continue sends its one fixed sentence, next leaps 04-a). */
+  async function start(override?: string) {
     // v1.412.0: a picture still going up holds the start (it goes WITH it).
     if (att.busyRef.current) {
-      att.whenSettled(() => void startRef.current());
+      att.whenSettled(() => void startRef.current(override));
       return;
     }
-    const words = (boxRef.current?.value ?? text).trim();
+    const words = (override ?? boxRef.current?.value ?? text).trim();
     const files = att.filesRef.current.map((f) => f.path);
     if (!tool || unavailable || (!words && !files.length) || busy) return;
     if (accountMissing) {
@@ -872,6 +876,21 @@ export function StartComposer({
               )}
             </span>
           ) : null}
+        </div>
+
+        {/* Next leaps 04-a (build-out plan R2.1): what was done in this
+            folder last time, with Continue (the session starts with one
+            fixed sentence). The user's own coding tool is not shown Iron
+            Jarvis's record, and the press says so. Steps aside while the box
+            holds words or files. */}
+        <div data-testid="code-start-pick-up" className="px-1 empty:hidden">
+          <PickUpCard
+            folder={folder}
+            tool
+            hidden={!!text.trim() || att.files.length > 0}
+            disabled={busy || !tool || !!unavailable}
+            onContinue={() => start(CONTINUE_SENTENCE)}
+          />
         </div>
 
         {folder && (defaultsWords || offerSave || defaultsNote) ? (

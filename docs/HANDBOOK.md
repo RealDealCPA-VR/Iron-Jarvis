@@ -2042,6 +2042,57 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Pick up where you left off in a folder (v1.551.0)
+
+Start a new chat or a new coding session in a folder you have worked in
+before, and a short card under the folder chip says what happened there last
+time. It reads **Last time (18 Nov)** with the name of the last piece of work
+(press it to open that work), then what was **Done**, what was **Decided**
+and what is **Still open**, taken from the checked recaps of the newest six
+pieces of work in that folder. **Continue** starts at once: it sends
+"Continue where we left off in this folder." and the reply is told the same
+record, so nothing has to be typed again.
+
+**When it shows.**
+
+- Only in a new chat or a new coding session (Chat › Code or Build › Code),
+  never in a chat you opened.
+- Only for exactly that folder. Work in a folder inside it, or in any other
+  folder, is not on the card.
+- The full card when something is still open or the last work there was in
+  the past 30 days. Otherwise it is one quiet line, **Last here: 12 Mar**,
+  and pressing it opens the card.
+- The cross hides the card for that folder until there is new work there.
+  This browser remembers it; nothing else is changed.
+- While you type in the box or attach a file, the card steps aside.
+- A folder with no earlier work shows nothing.
+
+**Good to know.**
+
+- The card shows what a chat there is told: of the newest six pieces of work
+  in the folder and the folders inside it, the ones in exactly this folder.
+  Local only work shows only when the new chat or session is Local only.
+  Another client's work is never on it. Work deleted or archived a moment
+  ago is left out.
+- A recap written before a conversation's latest messages is left out until
+  it is written again, and the card says so. Recaps are written for chats
+  and for Chat › Code sessions once they have been quiet for 10 minutes
+  (Settings › Memory & you, under Work recaps).
+- Inside a project the card does not show (a chat in a project, or a
+  Chat › Code session in a project's folder): those are told the project's
+  own recent activity instead.
+- A chat that Continue starts is named after its first message, "Continue
+  where we left off in this folder.", until you rename it. Its own recap
+  says what it did, and the Decided and Still open lines of the chats
+  before it stay on the card.
+- In Build › Code, your own coding tool (Claude Code, Codex and the others)
+  is not shown this record. There Continue starts the session with the same
+  sentence, and the tool works from the folder's own files.
+- In a chat that works in the folder you can also ask "where did we leave
+  off?".
+- If the record cannot be read, the card says "Earlier work in this folder
+  couldn't load." with **Try again**.
+
 ## Results come home to the chat that asked (v1.555.0)
 
 Something you set up from a chat now reports back into that same chat. Say
