@@ -44,7 +44,7 @@ from iron_jarvis.core.db import init_db, make_engine, session_scope
 from iron_jarvis.core.models import ChatThreadRecord
 from iron_jarvis.core.turns import TURNS
 from iron_jarvis.providers.adapters.base import LLMResponse
-from tests._fakes.panel_harness import RealApp, _headers
+from tests._fakes.panel_harness import RealApp, _headers, _wait_for
 
 _ADDON = Path(__file__).resolve().parents[1] / "extensions" / "chrome" / "src"
 PANEL_TS = _ADDON / "sidepanel" / "sidepanel.ts"
@@ -139,6 +139,14 @@ def _open(app: RealApp, **params: Any) -> dict:
 def _ask(app: RealApp, text: str, n: int) -> None:
     app.panel.send(P.PANEL_ACTION_SEND, text=text)
     app.panel.wait_for(P.PANEL_EVENT_DONE, f"message {n} never finished", nth=n)
+    # `done` leaves BEFORE the reply's own task ends: the stream lane settles
+    # the turn's usage row after it (chat_turn.settle_usage_writes, off the
+    # loop). A Reset sent in that gap is refused as "still working" (an
+    # `error`, no `history`), which a loaded CI runner hit twice in a row
+    # (tests.yml run 44996788927). So the next step waits for the reply
+    # itself to end: a daemon-side fact, polled within a budget, never a sleep.
+    turns = app.platform.browser.backend.panel_handler.__self__
+    _wait_for(lambda: not turns.running, f"message {n}'s reply never ended after its done")
 
 
 # --------------------------------------------------------------------------- #
