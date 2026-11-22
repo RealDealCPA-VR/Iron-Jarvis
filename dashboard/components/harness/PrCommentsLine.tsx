@@ -9,7 +9,10 @@
  * owner's, a member's or a collaborator's are ticked; someone from outside
  * the repository and a bot are not, and say so), its place, its words and
  * Set aside. ONE main button for the view, Answer these: one coding turn in
- * the session, which the page follows like any turn. A quiet text button,
+ * the session, which the page follows like any turn. One press answers at
+ * most the view's `maxAnswer` (the daemon refuses more): the first ticks stop
+ * there, a full card takes no further tick, and it says how many wait for
+ * the next press. A quiet text button,
  * Stop telling me about comments here (the bell row; its Undo, Tell me
  * again). An older line is its sentence alone.
  *
@@ -33,6 +36,7 @@ import {
   answerPrComments,
   arrivedWords,
   authorLabel,
+  capWords,
   decodePrCommentsLine,
   firstTicks,
   getPrComments,
@@ -114,11 +118,18 @@ export function PrCommentsLine({
     );
   }
   const open = openComments(view);
-  const picked = ticks ?? firstTicks(open);
+  // One press answers at most `max` (the daemon refuses more): the first
+  // ticks stop there, and a full card takes no further tick.
+  const max = view?.maxAnswer ?? 20;
+  const picked = ticks ?? firstTicks(open, max);
   const chosen = open.filter((c) => picked.has(c.id) && c.state === "new").map((c) => c.id);
+  const full = chosen.length >= max;
+  const fresh = open.filter((c) => c.state === "new").length;
   const locked = archived || busy || working !== "";
 
   function toggle(id: string, on: boolean) {
+    // A full card takes no further tick (the box is disabled too).
+    if (on && full) return;
     const next = new Set(picked);
     if (on) next.add(id);
     else next.delete(id);
@@ -157,7 +168,7 @@ export function PrCommentsLine({
                   data-testid="pr-comment-tick"
                   className="mt-1 h-3.5 w-3.5 shrink-0 accent-accent"
                   checked={picked.has(c.id) && c.state === "new"}
-                  disabled={locked || c.state !== "new"}
+                  disabled={locked || c.state !== "new" || (full && !picked.has(c.id))}
                   onChange={(e) => toggle(c.id, e.target.checked)}
                   aria-label={`Answer the comment from ${c.author}`}
                 />
@@ -199,6 +210,11 @@ export function PrCommentsLine({
             );
           })}
         </ul>
+      ) : null}
+      {full && fresh > chosen.length ? (
+        <p data-testid="pr-comments-cap" className="text-[12px] text-zinc-500">
+          {capWords(max, fresh - chosen.length)}
+        </p>
       ) : null}
       {view?.quiet ? (
         <p data-testid="pr-comments-quiet-note" className="text-[12px] text-zinc-500">

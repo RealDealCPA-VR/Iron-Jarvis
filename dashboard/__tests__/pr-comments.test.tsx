@@ -181,6 +181,42 @@ describe("the session's line and its card", () => {
     expect(H.sent).toEqual([{ path: `/build/sessions/${SID}/pr-comments/answer`, body: { ids: [`${SID}:c1`] } }]);
   });
 
+  it("ticks at most one press's worth first, so the first Answer these always works", async () => {
+    // The first read after this ships brings every comment in as new: 21
+    // from writers. The daemon refuses more than max_answer (20) in a press.
+    const ids = Array.from({ length: 21 }, (_, i) => `c${i + 1}`);
+    H.view = {
+      ...H.view,
+      comments: ids.map((id, i) => raw(id, { github_created_at: `2026-11-20T10:${String(i).padStart(2, "0")}:00Z` })),
+    };
+    H.reply = { "/answer": { turn_id: "bt_cap1" } };
+    render(<PrCommentsLine card threadId={SID} raw={line(ids)} content="" archived={false} busy={false} />);
+    const rows = await screen.findAllByTestId("pr-comment");
+    expect(rows).toHaveLength(21);
+    const tick = (r: HTMLElement) => within(r).getByTestId("pr-comment-tick") as HTMLInputElement;
+    // The OLDEST 20 are ticked; the 21st waits, and takes no tick while 20 are.
+    expect(rows.map((r) => tick(r).checked)).toEqual([...Array(20).fill(true), false]);
+    expect(tick(rows[20]).disabled).toBe(true);
+    fireEvent.click(tick(rows[20]));
+    expect(tick(rows[20]).checked).toBe(false);
+    expect(screen.getByTestId("pr-comments-cap").textContent).toBe("One press answers at most 20: 1 more waits for the next one.");
+    const answer = screen.getByTestId("pr-comments-answer") as HTMLButtonElement;
+    expect(answer.textContent).toBe("Answer these (20)");
+    // Untick one: the 21st may be ticked instead, and the card is not full.
+    fireEvent.click(tick(rows[0]));
+    expect(tick(rows[20]).disabled).toBe(false);
+    expect(screen.queryByTestId("pr-comments-cap")).toBeNull();
+    fireEvent.click(tick(rows[20]));
+    expect(tick(rows[20]).checked).toBe(true);
+    fireEvent.click(answer);
+    await waitFor(() => expect(H.sent).toHaveLength(1));
+    const sent = (H.sent[0].body as { ids: string[] }).ids;
+    expect(sent).toHaveLength(20);
+    expect(sent).not.toContain(`${SID}:c1`);
+    expect(sent).toContain(`${SID}:c21`);
+    expect([...firstTicks(openComments(decodePrCommentsView(H.view)), 20)]).toHaveLength(20);
+  });
+
   it("a comment from outside the repository is answered only when the user ticks it", async () => {
     H.view = { ...H.view, comments: [raw("c2", { author_kind: "outside", ticked: false })] };
     render(<PrCommentsLine card threadId={SID} raw={line(["c2"])} content="" archived={false} busy={false} />);

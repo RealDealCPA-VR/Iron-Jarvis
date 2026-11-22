@@ -342,3 +342,122 @@ async def test_five_failed_reads_stop_the_reading_said_once_and_thirty_quiet_day
     clock.go(5 * 24 * 3600)
     await w.step()
     assert w.rec()["comments_done"] == PC.DONE_QUIET
+
+
+async def test_failed_reads_rest_a_day_then_read_again_until_one_works(app, tmp_path, monkeypatch):
+    """Five failed reads in a row (an hour-long Wi-Fi drop, a GitHub outage)
+    REST the reading, never end it: it is tried again a day later, a day
+    apart, said once; the first read that works goes on as before and the
+    comments that came meanwhile arrive."""
+    clock = Clock(monkeypatch)
+    w = await _world(app, tmp_path, monkeypatch)
+    await w.step()
+    w.fake.set(fail=True)
+    for _ in range(PC.READ_FAILS_MAX):
+        clock.go(PC.READ_MAX_S)
+        await w.step()
+    assert w.rec()["comments_done"] == PC.DONE_FAILED
+    tries = len(w.fake.calls("api"))
+    clock.go(PC.READ_AGAIN_S - 1)
+    await w.step()
+    assert len(w.fake.calls("api")) == tries, "read again before the day was over"
+    clock.go(1)
+    await w.step()
+    assert len(w.fake.calls("api")) == tries + 1, "never read again after the failed reads"
+    assert w.rec()["comments_done"] == PC.DONE_FAILED
+    assert len([m for m in w.lines() if m["prComments"].get("stopped")]) == 1, "said again"
+    # GitHub answers again: the next day's read works, reading goes on.
+    w.fake.set(fail=False)
+    w.fake.answer(comments=[line_comment(1, login="sam")])
+    clock.go(PC.READ_AGAIN_S)
+    await w.step()
+    rec = w.rec()
+    assert rec["comments_done"] == "" and rec["comments_read_fails"] == 0
+    assert w.lines()[-1]["prComments"]["ids"] == [f"{w.sid}:c1"]
+    assert (datetime.fromisoformat(rec["comments_next_at"]) - clock.at).total_seconds() == PC.READ_FIRST_S
+
+
+async def test_a_reply_started_while_github_is_read_is_never_split_by_the_line(app, tmp_path, monkeypatch):
+    """The session was free when the read began; the user started a reply
+    while gh ran. Nothing is kept and no line is written (it would land
+    between the question and its reply); the next free pass reads again."""
+    from iron_jarvis.daemon.routes.build import _STARTING
+
+    clock = Clock(monkeypatch)
+    w = await _world(app, tmp_path, monkeypatch)
+    await w.step()
+    w.fake.answer(comments=[line_comment(1)])
+    clock.go(PC.READ_FIRST_S)
+    real = PC.read
+
+    def read_then_busy(facts):
+        got = real(facts)
+        _STARTING.add(w.sid)
+        return got
+
+    monkeypatch.setattr(PC, "read", read_then_busy)
+    try:
+        await w.step()
+        assert w.reads() == 1
+        assert w.lines() == [] and PC.listing(w.engine, w.sid) == [], "a line while a reply was starting"
+    finally:
+        _STARTING.discard(w.sid)
+    monkeypatch.setattr(PC, "read", real)
+    await w.step()
+    assert w.reads() == 2 and len(w.lines()) == 1
+
+
+async def test_the_comments_are_made_into_rows_off_the_event_loop(app, tmp_path, monkeypatch):
+    """Making GitHub's items into rows masks every kept comment's words with
+    every rule (seconds on a busy pull request): never on the event loop."""
+    import asyncio
+
+    clock = Clock(monkeypatch)
+    w = await _world(app, tmp_path, monkeypatch)
+    real = PC.rows_from
+    on_loop: list[bool] = []
+
+    def spy(*a, **k):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(*a, **k)
+
+    monkeypatch.setattr(PC, "rows_from", spy)
+    await w.step()
+    w.fake.answer(comments=[line_comment(1)])
+    clock.go(PC.READ_FIRST_S)
+    await w.step()
+    assert on_loop == [False], "made into rows on the event loop"
+    assert len(w.lines()) == 1
+
+
+async def test_deleting_the_session_takes_its_comments_and_its_watch(app, tmp_path, monkeypatch):
+    """"Delete" means all of it: a deleted session's review comments (what
+    people wrote and the code they quote) and its pull request's watch go
+    with it, through either door."""
+    clock = Clock(monkeypatch)
+    w = await _world(app, tmp_path, monkeypatch)
+    await w.step()
+    w.fake.answer(comments=[line_comment(1, body="private words"), line_comment(2, created="2026-11-20T10:01:00Z")])
+    clock.go(PC.READ_FIRST_S)
+    await w.step()
+    assert len(PC.listing(w.engine, w.sid)) == 2 and CI.get(w.engine, w.sid) is not None
+    status, _ = await asgi(app, "DELETE", f"/build/sessions/{w.sid}")
+    assert status == 200
+    assert PC.listing(w.engine, w.sid) == [], "a deleted session's comments were kept"
+    assert CI.get(w.engine, w.sid) is None, "a deleted session's watch was kept"
+    # The chat's own delete door goes through the same delete.
+    from iron_jarvis.daemon.routes.chat import delete_thread
+
+    row = S.create(w.engine, str(tmp_path / "proj"), "Another", {"provider": "anthropic", "model": "claude-sonnet-4-5"})
+    S.update(w.engine, row.id, setup={"git": {"worktree": str(tmp_path / "proj"), "pr_url": PR_URL}})
+    rows, _ = PC.rows_from(row.id, PR_URL, [{**line_comment(3), "_kind": "line"}])
+    PC.store(w.engine, row.id, PR_URL, rows)
+    CI.ensure(w.engine, row.id, {"pr_url": PR_URL})
+    status, _ = await asgi(app, "DELETE", f"/chat/threads/{row.id}")
+    assert status == 200
+    assert PC.listing(w.engine, row.id) == [] and CI.get(w.engine, row.id) is None
+    assert delete_thread(w.engine, row.id) is False

@@ -82,8 +82,11 @@ READ_GROWTH = 1.5
 READ_MAX_S = 3600.0
 #: Reading ends this long after it began or the newest comment arrived.
 READ_FOR_DAYS = 30
-#: Failed reads in a row before reading stops (said on the session).
+#: Failed reads in a row before reading rests (said once on the session)…
 READ_FAILS_MAX = 5
+#: …for this long; then it is tried again, a day apart, until a read works
+#: (a long Wi-Fi drop or a GitHub outage never ends the reading for good).
+READ_AGAIN_S = 24 * 3600.0
 #: At most one bell row per pull request in this long.
 TOLD_EVERY_S = 24 * 3600.0
 
@@ -114,7 +117,8 @@ UNCHANGED = "unchanged"
 SET_ASIDE = "set_aside"
 STATES = (NEW, ANSWERING, ANSWERED, UNCHANGED, SET_ASIDE)
 
-#: Why reading ended (``CiWatchRecord.comments_done``).
+#: Why reading ended (``CiWatchRecord.comments_done``). ``failed`` is the
+#: one that is not for good: it rests for :data:`READ_AGAIN_S`, then reads.
 DONE_MERGED = "merged"
 DONE_CLOSED = "closed"
 DONE_QUIET = "quiet"
@@ -322,6 +326,25 @@ def forget(engine: Any, thread_id: str) -> int:
         return len(rows)
 
 
+def forget_session(engine: Any, thread_id: str) -> int:
+    """A DELETED session's review comments (their words and the code they
+    quote) and its pull request's watch go with it: "delete" means all of
+    it. Called by ``chat.delete_thread``, the one delete of a coding session
+    (both doors). Never raises: the session is already gone. BLOCKING."""
+    from . import ci_fix as CI
+
+    n = 0
+    try:
+        n = forget(engine, thread_id)
+    except Exception:  # noqa: BLE001 — the delete has happened
+        log.warning("dropping the review comments of %s failed", thread_id, exc_info=True)
+    try:
+        CI.forget(engine, thread_id)
+    except Exception:  # noqa: BLE001 — the delete has happened
+        log.warning("dropping the pull-request watch of %s failed", thread_id, exc_info=True)
+    return n
+
+
 # --------------------------------------------------------------------------- #
 # the pull request's address
 # --------------------------------------------------------------------------- #
@@ -510,21 +533,49 @@ def _url(value: Any, ref: "PrRef | None") -> str:
     return text[:500]
 
 
-def rows_from(thread_id: str, pr_url: str, items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
-    """GitHub's items as rows (newest :data:`MAX_KEPT`), and whether some
-    were left out. A review with no words of its own (its comments are on
-    lines) and a review still pending are not comments. Pure."""
-    ref = pr_ref(pr_url)
-    rows: list[dict[str, Any]] = []
+def _newest_first(thread_id: str, items: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str, int]]:
+    """GitHub's items that can be comments, newest first by the key the rows
+    are kept by (``github_created_at``, then the row's id), each once. Reads
+    no words: cheap for any number of items."""
+    keyed: dict[str, tuple[tuple[str, str], dict[str, Any], str, int]] = {}
     for item in items:
         kind = item.get("_kind")
         gid = _int(item.get("id"))
         if kind not in KINDS or not gid:
             continue
+        if kind == KIND_REVIEW:
+            # A review with no words of its own (its comments are on lines)
+            # and one still pending are never comments.
+            if not str(item.get("body") or "").strip() or str(item.get("state") or "").upper() == "PENDING":
+                continue
+            rid, when = f"{thread_id}:r{gid}", str(item.get("submitted_at") or item.get("created_at") or "")[:40]
+        else:
+            rid, when = f"{thread_id}:c{gid}", str(item.get("created_at") or "")[:40]
+        keyed.setdefault(rid, ((when, rid), item, kind, gid))
+    return [(item, kind, gid) for _k, item, kind, gid in sorted(keyed.values(), key=lambda k: k[0], reverse=True)]
+
+
+def rows_from(thread_id: str, pr_url: str, items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """GitHub's items as rows (newest :data:`MAX_KEPT`), and whether some
+    were left out. A review with no words of its own (its comments are on
+    lines) and a review still pending are not comments. BOUNDED: only the
+    newest :data:`MAX_KEPT` are made plain and masked, however many GitHub
+    sent (each row's words cost a mask of every rule). Pure, but CPU work:
+    the watcher runs it off the event loop."""
+    ref = pr_ref(pr_url)
+    rows: list[dict[str, Any]] = []
+    cut = False
+    for item, kind, gid in _newest_first(thread_id, items):
+        if len(rows) >= MAX_KEPT:
+            # One more that can be a comment: some were left out (a review
+            # whose words turn out empty when made plain counts too, which
+            # only ever keeps a NEW row GitHub deleted a little longer).
+            cut = True
+            break
         author, author_kind = _author(item)
         body = _cut(item.get("body"), BODY_CHARS)
         if kind == KIND_REVIEW:
-            if not body or str(item.get("state") or "").upper() == "PENDING":
+            if not body:
                 continue
             rows.append({
                 "id": f"{thread_id}:r{gid}", "thread_id": thread_id, "pr_url": pr_url, "github_id": str(gid),
@@ -550,8 +601,7 @@ def rows_from(thread_id: str, pr_url: str, items: list[dict[str, Any]]) -> tuple
             "github_created_at": str(item.get("created_at") or "")[:40],
         })
     rows.sort(key=lambda r: (r["github_created_at"], r["id"]), reverse=True)
-    cut = len(rows) > MAX_KEPT
-    return rows[:MAX_KEPT], cut
+    return rows, cut
 
 
 def store(engine: Any, thread_id: str, pr_url: str, rows: list[dict[str, Any]], *, cut: bool = False,
@@ -612,9 +662,12 @@ def interval_after(current: Any, *, fresh: bool) -> float:
 
 
 def due(rec: dict[str, Any], at: "datetime | None" = None) -> bool:
-    """Is it time to read the comments? Never once reading ended, and never
-    before the first wait was set (:func:`first_wait`)."""
-    if str(rec.get("comments_done") or ""):
+    """Is it time to read the comments? Never once reading ended (merged,
+    closed, quiet days), and never before the first wait was set
+    (:func:`first_wait`). Reading that rests after failed reads is due again
+    at its ``comments_next_at`` (:data:`READ_AGAIN_S` later)."""
+    done = str(rec.get("comments_done") or "")
+    if done and done != DONE_FAILED:
         return False
     when = _when(rec.get("comments_next_at"))
     if when is None:

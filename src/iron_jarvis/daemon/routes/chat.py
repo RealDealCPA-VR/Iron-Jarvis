@@ -386,6 +386,10 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         TURNS.stop(turn_id, by=STOP_BY_YOU)
     if build:
         _end_build_programs(thread_id)
+        # 26-a: its review comments and its pull request's watch go too.
+        from ...harness.pr_comments import forget_session
+
+        forget_session(engine, thread_id)
     return True
 
 

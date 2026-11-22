@@ -129,6 +129,35 @@ def test_the_newest_two_hundred_are_kept(fake, facts, engine):
     assert len(new) == PC.MAX_KEPT and len(PC.listing(engine, "t1", PR_URL)) == PC.MAX_KEPT
 
 
+def test_only_the_kept_ones_are_made_plain_and_masked(monkeypatch):
+    """However many items GitHub sends, only the newest MAX_KEPT are made
+    plain and masked (a mask runs every rule): the work is bounded. The rows
+    are the same newest ones, and a duplicate item is one row."""
+    n = 1500
+    items = [{**line_comment(5000 + i, created=f"2026-11-{1 + i // 1000:02d}T{(i // 60) % 24:02d}:{i % 60:02d}:"
+                                                 f"{(i // 1440) % 60:02d}Z"), "_kind": "line"} for i in range(n)]
+    items += [{**review(9000 + i, body="", state="APPROVED"), "_kind": "review"} for i in range(50)]
+    items.append(dict(items[-60]))  # GitHub sent one twice (a page boundary)
+    real = PC._cut
+    calls = {"n": 0}
+
+    def counting(text, cap):
+        calls["n"] += 1
+        return real(text, cap)
+
+    monkeypatch.setattr(PC, "_cut", counting)
+    rows, cut = PC.rows_from("t1", PR_URL, items)
+    assert cut is True and len(rows) == PC.MAX_KEPT
+    assert len({r["id"] for r in rows}) == PC.MAX_KEPT
+    # Two per kept row (its words and its quote), never one per item sent.
+    assert calls["n"] == 2 * PC.MAX_KEPT, calls
+    newest = sorted(((x["created_at"], f"t1:c{x['id']}") for x in items if x["_kind"] == "line"), reverse=True)
+    assert [r["id"] for r in rows] == [rid for _c, rid in dict.fromkeys(newest)][: PC.MAX_KEPT]
+    # Exactly MAX_KEPT that can be comments: nothing was left out.
+    rows, cut = PC.rows_from("t1", PR_URL, items[: PC.MAX_KEPT] + items[n:n + 50] + [dict(items[0])])
+    assert cut is False and len(rows) == PC.MAX_KEPT
+
+
 def test_a_merged_or_closed_pull_request_costs_one_read_and_reads_no_comments(fake, facts):
     fake.answer(pr={"state": "closed", "merged_at": "2026-11-21T09:00:00Z"}, comments=[line_comment(1)])
     assert PC.read(facts).state == "merged"

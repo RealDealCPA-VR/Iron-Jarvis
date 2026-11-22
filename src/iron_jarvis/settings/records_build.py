@@ -1880,7 +1880,8 @@ def _pr_reading_words(rec: "dict[str, Any] | None") -> str:
         PC.DONE_MERGED: "The pull request was merged, so Iron Jarvis no longer reads its comments.",
         PC.DONE_CLOSED: "The pull request was closed, so Iron Jarvis no longer reads its comments.",
         PC.DONE_QUIET: f"No new comment came for {PC.READ_FOR_DAYS} days, so Iron Jarvis stopped reading them.",
-        PC.DONE_FAILED: "GitHub refused the reads several times in a row, so Iron Jarvis stopped reading them.",
+        PC.DONE_FAILED: "GitHub refused the reads several times in a row, so Iron Jarvis tries again once a day "
+                        "until a read works.",
     }.get(done, "Iron Jarvis reads them now and then with your own GitHub sign-in (gh), every few minutes to "
                 "once an hour.")
     if rec.get("comments_quiet"):
@@ -2030,15 +2031,21 @@ class PrCommentsQuietTool(_BuildTool):
         quiet = bool(args["quiet"])
         was = await asyncio.to_thread(set_quiet, _engine(self.platform), row.id, facts, quiet)
         _note(after=quiet)
-        title = (row.title or "").strip()[:80] or "untitled"
-        out = (f"Iron Jarvis no longer tells you about new review comments on the pull request of \"{title}\": no "
+        # The reader's rule (``_pr_comments_said``): a Local only session's
+        # title reaches only a turn that itself stays on this network.
+        if _local_only_session(row) and _withhold_local_only():
+            which, target = "a Local only coding session", "New review comments on a Local only coding session"
+        else:
+            title = (row.title or "").strip()[:80] or "untitled"
+            which, target = f"\"{title}\"", f"New review comments on \"{title}\""
+        out = (f"Iron Jarvis no longer tells you about new review comments on the pull request of {which}: no "
                "bell row. They still arrive in the session, where you answer them." if quiet else
-               f"Iron Jarvis tells you again about new review comments on the pull request of \"{title}\": at most "
+               f"Iron Jarvis tells you again about new review comments on the pull request of {which}: at most "
                "one bell row a day.")
         return ToolResult(
             ok=True, output=out,
             data={"record_change": self._card(
-                "Stop telling me about comments here", f"New review comments on \"{title}\"",
+                "Stop telling me about comments here", target,
                 _quiet_words(was), _quiet_words(quiet), f"pr_comments_quiet.{row.id}")},
         )
 

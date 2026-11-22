@@ -2893,7 +2893,9 @@ into the chat.
   which ones it changed nothing for. Comments from the repository's owner,
   members and collaborators are ticked for you. A comment from someone outside
   the repository, or from a bot, is shown unticked and says so: tick it if you
-  want it answered. **Set aside** puts one away.
+  want it answered. **Set aside** puts one away. One press answers up to 20
+  comments; when more are waiting, the oldest 20 are ticked and the card says
+  how many wait for the next press.
 - **Nothing is sent to GitHub.** Iron Jarvis does not commit, push or reply
   there. Pushing and replying stay yours.
 - **What "answered" means.** A comment reads **Answered** only when the reply
@@ -2914,7 +2916,10 @@ into the chat.
   the bell row for that pull request (new comments still arrive in the
   session, where you answer them); **Tell me again** turns it back on.
   Nothing is read while Emergency stop is on, or while a reply is being
-  written in the session.
+  written in the session. If GitHub cannot be reached five times in a row
+  (no internet for a while, or GitHub is down), the session says so once and
+  Iron Jarvis tries again a day later, then once a day until it works.
+  Deleting the session deletes the comments Iron Jarvis kept for it.
 - **From chat.** "What did the reviewers say on my pull request?" answers
   from what Iron Jarvis keeps (for a Local only session, what they wrote is
   told only in that session or in a chat that is Local only). "Stop telling

@@ -1111,10 +1111,11 @@ _SETTLING: "set[asyncio.Task[Any]]" = set()
 #: The Answer these turns being started: claimed, not yet listed as running
 #: (the transcript has no reply of theirs yet). Never settled meanwhile.
 _ANSWER_STARTING: "set[str]" = set()
-#: Said once when reading stopped because GitHub kept refusing.
+#: Said once when reading rests because GitHub kept refusing (it is tried
+#: again a day later, and a day apart after that, until a read works).
 COMMENTS_FAILED_WORDS = (
     "The review comments on this session's pull request could not be read {n} times in a row, so Iron Jarvis "
-    "stopped reading them: {why}"
+    "will try again in a day: {why}"
 )
 
 
@@ -1166,10 +1167,11 @@ async def _read_comments(d: Any, thread_id: str, title: str, facts: dict[str, st
     """26-a: read the pull request's review comments when their clock says so
     (first :data:`~iron_jarvis.harness.pr_comments.READ_FIRST_S` after the
     watch first sees the pull request, then less often up to an hour, back to
-    the first wait after a new comment; ended by merged or closed, by
-    ``READ_FOR_DAYS`` with nothing new, or by ``READ_FAILS_MAX`` failed reads
-    in a row). NOTHING is read under Emergency stop or while the session is
-    busy (a reply of the user's, a fix turn): the comments wait for it."""
+    the first wait after a new comment; ended by merged or closed, or by
+    ``READ_FOR_DAYS`` with nothing new; ``READ_FAILS_MAX`` failed reads in a
+    row rest it for ``READ_AGAIN_S``, then it reads again). NOTHING is read
+    under Emergency stop or while the session is busy (a reply of the
+    user's, a fix turn): the comments wait for it."""
     engine = d.platform.engine
     if _emergency(d) or _busy(d, thread_id):
         return
@@ -1189,8 +1191,13 @@ async def _read_comments(d: Any, thread_id: str, title: str, facts: dict[str, st
     except B.GitRefused as exc:
         fails = int(rec.get("comments_read_fails") or 0) + 1
         if fails >= PC.READ_FAILS_MAX:
+            # Rests, never ends: tried again a day later (and a day apart
+            # after that) until a read works. Said ONCE, when it first rests.
+            resting = str(rec.get("comments_done") or "") == PC.DONE_FAILED
             await asyncio.to_thread(CI.save, engine, thread_id, comments_done=PC.DONE_FAILED,
-                                    comments_read_fails=fails, comments_next_at=None)
+                                    comments_read_fails=fails, comments_next_at=PC.later(PC.READ_AGAIN_S, at))
+            if resting:
+                return
             line = {"role": "assistant", "content": COMMENTS_FAILED_WORDS.format(n=fails, why=exc),
                     "prComments": {"ids": [], "n": 0, "authors": [], "stopped": True}}
             with contextlib.suppress(Exception):
@@ -1205,12 +1212,21 @@ async def _read_comments(d: Any, thread_id: str, title: str, facts: dict[str, st
         await asyncio.to_thread(CI.save, engine, thread_id, comments_done=got.state, comments_next_at=None,
                                 comments_read_fails=0)
         return
+    if _busy(d, thread_id):
+        # A reply the user started while GitHub was being read (up to three
+        # gh calls): the line must never land between its question and its
+        # reply. Nothing is kept and the clock is not moved, so the next pass
+        # the session is free reads again.
+        return
     pr_url = str(facts.get("pr_url") or "")
-    rows, cut = PC.rows_from(thread_id, pr_url, got.comments)
+    # Off the loop: every kept comment's words are made plain and masked
+    # (every rule), which takes seconds on a busy pull request.
+    rows, cut = await asyncio.to_thread(PC.rows_from, thread_id, pr_url, got.comments)
     new = await asyncio.to_thread(PC.store, engine, thread_id, pr_url, rows, cut=cut, at=at)
     wait = PC.interval_after(rec.get("comments_interval_s"), fresh=bool(new))
+    # A read that works ends a rest after failed reads ("" = it goes on).
     changes: dict[str, Any] = {"comments_read_fails": 0, "comments_interval_s": wait,
-                               "comments_next_at": PC.later(wait, at)}
+                               "comments_next_at": PC.later(wait, at), "comments_done": ""}
     # "Stop telling me about comments here" stops the BELL ROW (``may_tell``).
     # The line still comes: it is where the comments are, and answered.
     bell = bool(new) and PC.may_tell(rec, at)

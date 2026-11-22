@@ -186,6 +186,19 @@ async def test_a_local_only_sessions_words_reach_only_a_turn_that_stays_on_this_
     with egress.local_only_scope(True):
         res = await tool.execute({"session": "parser"}, SimpleNamespace(thread_id=""))
     assert res.ok and FENCE_TOP in res.output and "Rename the private thing." in res.output
+    # "Stop telling me about comments here" keeps the title home the same way
+    # (with no session named it picks the newest one, which can be this one).
+    quiet = next(t for t in RB.build_record_tools(app.state.platform) if t.name == "pr_comments_quiet")
+    for scope in ({}, {"allowed_once": "anthropic"}):
+        with egress.local_only_scope(bool(scope), **scope):
+            res = await quiet.execute({"quiet": True}, SimpleNamespace(thread_id=""))
+        assert res.ok, res.error
+        assert "a Local only coding session" in res.output, res.output
+        assert "Fix the parser" not in res.output and "Fix the parser" not in repr(res.data), scope
+    assert CI.get(engine, sid)["comments_quiet"] is True
+    with egress.local_only_scope(True):
+        res = await quiet.execute({"quiet": False}, SimpleNamespace(thread_id=""))
+    assert res.ok and "\"Fix the parser\"" in res.output and "Fix the parser" in repr(res.data)
 
 
 @pytest.mark.asyncio

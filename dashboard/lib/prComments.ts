@@ -234,9 +234,21 @@ export function cardLineIndex(messages: readonly { role?: string; prComments?: u
 }
 
 /** Which are ticked when the card opens: an owner's, a member's or a
- *  collaborator's new comment. */
-export function firstTicks(comments: readonly PrComment[]): Set<string> {
-  return new Set(comments.filter((c) => c.ticked && c.state === "new").map((c) => c.id));
+ *  collaborator's new comment, the OLDEST `max` of them (one press answers
+ *  at most `max`; the daemon refuses more, so the first press always works). */
+export function firstTicks(comments: readonly PrComment[], max = Number.POSITIVE_INFINITY): Set<string> {
+  return new Set(
+    comments
+      .filter((c) => c.ticked && c.state === "new")
+      .slice(0, Math.max(0, max))
+      .map((c) => c.id),
+  );
+}
+
+/** Said under the card when more comments are new than one press answers:
+ *  "One press answers at most 20: 3 more wait for the next one." */
+export function capWords(max: number, waiting: number): string {
+  return `One press answers at most ${max}: ${waiting} more wait${waiting === 1 ? "s" : ""} for the next one.`;
 }
 
 // ------------------------------------------------------------------ the Changes tab
