@@ -578,6 +578,12 @@
       "desktop": "answer a suggestion on the Improvements page"
     },
     {
+      "tool": "peer_allow_off",
+      "kind": "table",
+      "card": "turn off something a paired computer may do here",
+      "desktop": "turn off something a paired computer may do here"
+    },
+    {
       "tool": "client_answer",
       "kind": "table",
       "card": "say whether a name is one of your clients",

@@ -3995,6 +3995,9 @@ const TOOL_WORDS = {
   persona_delete: "remove or reset a chat persona",
   // v1.506.0: answering a waiting suggestion from chat (pinned equal).
   suggestion_answer: "answer a suggestion on the Improvements page",
+  // Next leaps 41-a: a paired computer's switch, turned off from chat
+  // (lib/toolWords.ts, pinned equal).
+  peer_allow_off: "turn off something a paired computer may do here",
   // v1.499.0: your clients from chat (the card's own words, pinned equal).
   client_answer: "say whether a name is one of your clients",
   client_update: "change one of your clients",
