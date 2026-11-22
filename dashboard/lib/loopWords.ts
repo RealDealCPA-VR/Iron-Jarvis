@@ -144,6 +144,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Last night's review of what went wrong isn't running",
     href: "/improvements",
   },
+  // 18-a: once a day, the results of the changes you accepted are counted
+  // from the records (no model) and shown on Improvements.
+  change_results: {
+    label: "Results of changes you accepted",
+    problem: "The results of changes you accepted aren't being counted",
+    href: "/improvements",
+  },
   // v1.499.0: the pass that notices names in your folder names that may be clients.
   work_clients: {
     label: "Clients in your folders",

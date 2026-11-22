@@ -810,7 +810,8 @@ describe("what comes off the wire is checked", () => {
     expect(out.groups).toEqual([{ kind: "skill", label: "Skill drafts", count: 0, shown: 0 }]);
     expect(out.total).toBe(0);
     expect(out.unreadable).toEqual([{ kind: "tool", label: "tool" }]);
-    expect(decodeInbox(null)).toEqual({ items: [], groups: [], total: 0, unreadable: [] });
+    // 18-a: the answer also carries the results of accepted changes.
+    expect(decodeInbox(null)).toEqual({ items: [], groups: [], total: 0, unreadable: [], results: [] });
   });
 
   it("the groups keep the order they came in and count what is still waiting", () => {

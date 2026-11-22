@@ -1676,7 +1676,8 @@ def build_platform(
     # v1.506.0 (north-star plan 6.2): the Improvements page's suggestions from
     # chat — suggestion_list (reads) and suggestion_answer (asks; answers one
     # item through its own route). They read the daemon's deps through
-    # `platform.config_writer.d` once the daemon attaches it.
+    # `platform.config_writer.d` once the daemon attaches it. 18-a:
+    # change_results (reads the results of accepted changes, improve/results).
     from .inbox.tools import suggestion_tools
 
     for tool in suggestion_tools(_LazyPlatform(_config_tools_platform)):

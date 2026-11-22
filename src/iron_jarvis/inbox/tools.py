@@ -22,6 +22,12 @@ lookup line. Two tools close that:
   the reply's door opens the page.
 
 Both tools' success opens the Improvements page (``daemon/doors``).
+
+18-a (``improve/results``): the RESULTS of changes the owner already
+accepted. ``suggestion_list`` lists them under their own heading after the
+waiting ones, and ``change_results`` (allow, reads only) answers "did that
+change help?": each result's words are built by code from the numbers, and a
+table that cannot be read is said, never answered as "no results".
 """
 
 from __future__ import annotations
@@ -34,15 +40,26 @@ from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 
 LIST = "suggestion_list"
 ANSWER = "suggestion_answer"
+#: 18-a: the results of the changes the owner accepted.
+RESULTS = "change_results"
 #: The page every suggestion is answered on.
 HREF = "/improvements"
 
 #: Lines one list shows at most (the page has the rest).
 LIST_MAX = 30
+#: Results ``suggestion_list`` adds under their own heading at most.
+LIST_RESULTS_MAX = 10
 ANSWERS = ("accept", "decline")
 
 NOTHING_WAITING = "No suggestion is waiting for an answer."
 NO_ROUTE = "Iron Jarvis can only answer a suggestion while its window is running."
+RESULTS_HEAD = "Results of changes you accepted (counted from Iron Jarvis's own records):"
+NO_RESULTS = (
+    "No change you accepted in the last 60 days has a result yet. A change to an agent's instructions, a "
+    "skill or a working habit gets one within a day of your accept, and its numbers once there is enough "
+    "work on both sides."
+)
+RESULTS_UNREADABLE = "The results of changes you accepted could not be read just now."
 
 
 def _d(platform: Any) -> Any:
@@ -119,11 +136,91 @@ class SuggestionListTool(Tool):
         if unreadable:
             # A store that could not be read is never "nothing waiting".
             lines.append("Could not be read just now, so there may be more: " + ", ".join(unreadable) + ".")
+        # 18-a: the results of changes already accepted, under their own
+        # heading (they wait for nothing, so they are in no count above).
+        results = [r for r in got.get("results") or [] if isinstance(r, dict)]
+        if results:
+            lines.append("")
+            lines.append(RESULTS_HEAD)
+            lines += [result_line(n, r) for n, r in enumerate(results[:LIST_RESULTS_MAX], 1)]
+            if len(results) > LIST_RESULTS_MAX:
+                lines.append(f"(The other {len(results) - LIST_RESULTS_MAX} are on the Improvements page; "
+                             f"{RESULTS} lists them all.)")
         rows = [
             {"id": it.get("id"), "kind": it.get("kind"), "title": it.get("title")}
             for it in items[:LIST_MAX]
         ]
         return ToolResult(ok=True, output="\n".join(lines), data={"suggestions": rows, "total": got.get("total", 0)})
+
+
+def result_line(n: int, r: dict[str, Any]) -> str:
+    """"1. New instructions for research: Since you accepted this on 12
+    March, research finished 9 of 10 tasks without help. Before, it was 6 of
+    10." (the words are the result's own, built from its numbers)."""
+    return f"{n}. {r.get('title') or ''}: {r.get('words') or ''}"
+
+
+def _results(platform: Any) -> list[dict[str, Any]]:
+    """The results, as the page reads them. BLOCKING; RAISES when they
+    cannot be read."""
+    from ..improve import results as R
+
+    return R.page(platform.engine)
+
+
+def _about(r: dict[str, Any], about: str) -> bool:
+    words = about.casefold().strip()
+    target = str(r.get("target") or "").casefold()
+    return words in target or words in str(r.get("title") or "").casefold()
+
+
+class ChangeResultsTool(Tool):
+    """18-a: "did that change help?" — the result of each change the owner
+    accepted, from Iron Jarvis's own records. Reads only; works without the
+    window (it reads the results table, not the inbox)."""
+
+    name = RESULTS
+    description = (
+        "Say whether a change the user ACCEPTED from the Improvements page helped: for each accepted change to "
+        "an agent's instructions, each new or improved skill and each working habit of a team member (the last "
+        "60 days), its result counted from Iron Jarvis's own records, the tasks before and after the accept. "
+        "`about` (optional) is an agent's, skill's or team member's name, to show only its changes. Repeat "
+        "each result's words as they are: they say \"since\" and \"before\", never \"because\" (the work "
+        "itself may have changed), and \"Not enough work yet\" means there is no answer yet. Reads only."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "about": {"type": "string", "description": "Only the changes to this agent, skill or team member."},
+        },
+    }
+    reversibility = Reversibility.READONLY
+    risk_class = RiskClass.READ
+    # A habit's words and a skill's name were written by a model: data.
+    returns_untrusted_content = True
+    replay = True
+
+    def __init__(self, platform: Any) -> None:
+        self.platform = platform
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        about = str((args or {}).get("about") or "").strip()[:120]
+        try:
+            results = await asyncio.to_thread(_results, self.platform)
+        except Exception:  # noqa: BLE001 — never "no results" when they could not be read
+            return ToolResult(ok=False, error=RESULTS_UNREADABLE, data={"door": HREF})
+        if about:
+            results = [r for r in results if _about(r, about)]
+        if not results:
+            head = f"No change you accepted about {about!r} has a result yet." if about else NO_RESULTS
+            return ToolResult(ok=True, output=head, data={"results": [], "total": 0})
+        lines = [RESULTS_HEAD] + [result_line(n, r) for n, r in enumerate(results, 1)]
+        rows = [
+            {"id": r.get("id"), "kind": r.get("kind"), "title": r.get("title"), "state": r.get("state"),
+             "verdict": r.get("verdict"), "before": r.get("before"), "after": r.get("after")}
+            for r in results
+        ]
+        return ToolResult(ok=True, output="\n".join(lines), data={"results": rows, "total": len(rows)})
 
 
 class SuggestionAnswerTool(Tool):
@@ -201,7 +298,7 @@ _OWN_ROUTE = re.compile(r"/[A-Za-z0-9_\-/%.:]{1,300}")
 
 
 def suggestion_tools(platform: Any) -> list[Tool]:
-    return [SuggestionListTool(platform), SuggestionAnswerTool(platform)]
+    return [SuggestionListTool(platform), SuggestionAnswerTool(platform), ChangeResultsTool(platform)]
 
 
 # --------------------------------------------------------------------------- #
@@ -229,16 +326,38 @@ _ANSWER_WORDS = re.compile(
 )
 
 
+#: 18-a: "did that change help?", "has the new skill made a difference?",
+#: "the results of the changes I accepted", "is it better since I accepted
+#: it": a change Iron Jarvis suggested and the owner accepted. A question
+#: about a change TO a thing (an agent's instructions, a skill, a habit), or
+#: the results of changes; never "did that help you understand?".
+_RESULT_WORDS = re.compile(
+    r"\b(?:did|has|have|is|are|was|were)\s+(?:that|the|this|my|those|these|your)\s+(?:[\w'’-]+\s+){0,3}?"
+    r"(?:change|changes|edit|edits|skill|skills|habit|habits|instructions?|suggestion|suggestions)\b"
+    r"[^.!?\n]{0,48}?\b(?:help(?:ed|ing|s)?|work(?:ed|ing|s)?|(?:make|made)\s+(?:a\s+|any\s+)?difference"
+    r"|pa(?:y|id)\s+off|improve[ds]?|better|worse)\b"
+    r"|\bresults?\s+of\s+(?:the\s+|my\s+|those\s+|these\s+)?(?:changes?|suggestions?)\b"
+    r"|\b(?:since|after)\s+I\s+(?:accepted|approved|kept)\s+(?:it|that|this|the|them|those)\b"
+    r"|\bchange\s+results?\b",
+    re.IGNORECASE,
+)
+
+
 def suggestion_tools_for(text: str) -> list[str]:
     """The suggestion tools a chat message asks for (linear: each pattern's
-    gaps are bounded). A question keeps the reader only."""
+    gaps are bounded). A question keeps the readers only."""
     t = str(text or "")[:4000]
     out: list[str] = []
     if _SUGGESTION_WORDS.search(t):
         out += [LIST, ANSWER]
     if _ANSWER_WORDS.search(t):
         out += [n for n in (LIST, ANSWER) if n not in out]
+    if _RESULT_WORDS.search(t):
+        out.append(RESULTS)
     return out
 
 
-ALL_PATTERNS = (_SUGGESTION_WORDS, _ANSWER_WORDS)
+#: The tools a QUESTION keeps (they only read).
+READERS = (LIST, RESULTS)
+
+ALL_PATTERNS = (_SUGGESTION_WORDS, _ANSWER_WORDS, _RESULT_WORDS)

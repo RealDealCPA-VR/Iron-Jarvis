@@ -844,9 +844,11 @@ def collect(d: Any) -> dict[str, Any]:
     """Everything that is waiting, in one answer. BLOCKING; never raises.
 
     ``{items, groups: [{kind, label, count, shown}], total, unreadable:
-    [{kind, label}]}``. ``count`` is how many are really waiting for that
-    kind; ``shown`` how many of them are in ``items``. ``unreadable`` names
-    every kind that could not be read, or only in part."""
+    [{kind, label}], results: [...]}``. ``count`` is how many are really
+    waiting for that kind; ``shown`` how many of them are in ``items``.
+    ``unreadable`` names every kind that could not be read, or only in part.
+    ``results`` (18-a, :func:`change_results`): the results of changes the
+    owner already accepted; they wait for nothing, so no count holds them."""
     got: dict[str, tuple[list[dict[str, Any]], int]] = {}
     unreadable: list[dict[str, str]] = []
     for kinds, source in SOURCES:
@@ -871,11 +873,34 @@ def collect(d: Any) -> dict[str, Any]:
         "groups": groups,
         "total": sum(g["count"] for g in groups),
         "unreadable": unreadable,
+        "results": change_results(d, unreadable),
     }
 
 
+#: 18-a: the kind under which the results of accepted changes are named
+#: when they cannot be read (never "no results").
+RESULTS_KIND = "results"
+
+
+def change_results(d: Any, unreadable: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """18-a: the results of the changes the owner accepted (``improve/
+    results.page``: newest first, at most 30, each with its words built from
+    its numbers). A READ of that module's own table: the inbox still
+    decides nothing. When the table cannot be read it is named in
+    ``unreadable`` and the list is empty."""
+    from ..improve import results as R
+
+    try:
+        return R.page(d.platform.engine)
+    except Exception:  # noqa: BLE001 — named, never shown as "no results"
+        log.warning("improvements inbox: the results of accepted changes could not be read", exc_info=True)
+        unreadable.append({"kind": RESULTS_KIND, "label": R.LABEL})
+        return []
+
+
 __all__ = [
-    "DETAIL_CHARS", "GOALS_MAX", "KINDS", "LABELS", "OPEN_LABEL", "PER_KIND", "SOURCES", "Read", "action",
+    "DETAIL_CHARS", "GOALS_MAX", "KINDS", "LABELS", "OPEN_LABEL", "PER_KIND", "RESULTS_KIND", "SOURCES", "Read",
+    "action", "change_results",
     "client_item", "client_view", "coach_item", "collect", "detail_diff", "detail_text", "folder_label", "item",
     "library_item", "memory_effect", "night_reasons",
     "memory_item", "preference_item", "skill_item", "tool_item", "unasked_item", "wants_item",

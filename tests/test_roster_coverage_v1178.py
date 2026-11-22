@@ -335,6 +335,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # (settings.records.record_tools_for). Pinned by
     # tests/test_north_star_suggestions_v1506.py and _reach_v1506.py.
     "suggestion_list", "suggestion_answer", "backup_now",
+    # 18-a: the results of the changes the OWNER accepted, from chat, where
+    # the owner asks "did that change help?"; chat arms it
+    # (settings.records.record_tools_for). Pinned by
+    # tests/test_next_leaps_18a_results.py.
+    "change_results",
     # Next leaps 41-a: what a paired computer may do here, shown and turned
     # OFF from chat, where the owner is present (its Undo is the owner's own
     # press); chat arms them (settings.records_peers.peers_tools_for). An

@@ -28,6 +28,16 @@ made carries ``extra.night = {night, why}``, and
   when last night's review made something that still waits, or was skipped
   for a reason only the owner can change. A read (plain ``def``).
 
+18-a (``improve/results``): ``GET /improvements`` also carries ``results``:
+``[{id, kind, ref, target, title, words, state, verdict, accepted_at,
+checked_at, before: {n, good, words} | null, after: {...} | null, home}]``,
+the results of changes the owner ACCEPTED (newest first, at most 30, the
+last 60 days), each one's words built by code from its numbers. They wait
+for nothing, so they are in no group or count. A table that cannot be read
+is named in ``unreadable`` (kind ``results``), never answered as "no
+results". Still a read: the rows are made by the night review's pass and
+the daily pass, never here.
+
 v1.506.0 (north-star plan 6.2): chat answers ONE suggestion through that
 suggestion's OWN route (``inbox/tools.SuggestionAnswerTool``): the app is kept
 on the deps object (``d.suggestion_app``) and :func:`answer_through_route`

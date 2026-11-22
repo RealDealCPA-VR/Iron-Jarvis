@@ -61,12 +61,34 @@ export interface ImprovementGroup {
   shown: number;
 }
 
+/**
+ * 18-a: the result of ONE change the owner accepted (improve/results). Its
+ * words are the daemon's, built from the numbers ("Since you accepted this
+ * on 12 March, research finished 9 of 10 tasks without help. Before, it was
+ * 6 of 10." / "Not enough work yet: 3 of 5 tasks since …"). Shown, never
+ * acted on: no button here changes anything.
+ */
+export interface ChangeResult {
+  id: string;
+  kind: string;
+  title: string;
+  words: string;
+  /** waiting | not_enough | ready | not_measured */
+  state: string;
+  /** better | same | worse | "" (18-b words a worse one). */
+  verdict: string;
+  acceptedAt: string;
+  home: { href: string; label: string } | null;
+}
+
 export interface ImprovementsInbox {
   items: ImprovementItem[];
   groups: ImprovementGroup[];
   total: number;
   /** Kinds whose store could not be read: never shown as "nothing waiting". */
   unreadable: { kind: string; label: string }[];
+  /** 18-a: the results of changes already accepted (they wait for nothing). */
+  results: ChangeResult[];
 }
 
 export const IMPROVEMENTS_PATH = "/improvements";
@@ -206,7 +228,7 @@ function hasControl(s: string): boolean {
  *  and no backslash or control character anywhere (a browser reads a
  *  backslash as a slash and drops a tab or a newline, so such an address
  *  could leave the app). */
-function decodeHome(raw: unknown): ImprovementItem["home"] {
+function decodeHome(raw: unknown): { href: string; label: string } | null {
   const r = record(raw);
   if (!r) return null;
   const href = text(r.href, 400);
@@ -264,7 +286,48 @@ export function decodeInbox(raw: unknown): ImprovementsInbox {
       return o && kind ? { kind, label: text(o.label, 80) || kind } : null;
     })
     .filter((u): u is { kind: string; label: string } => u !== null);
-  return { items, groups, total: count(r.total), unreadable };
+  return { items, groups, total: count(r.total), unreadable, results: decodeResults(r.results) };
+}
+
+// --------------------------------------------------------------------------- //
+// 18-a: THE RESULTS OF CHANGES YOU ACCEPTED (improve/results). A second part
+// of the page, under the waiting suggestions: each change the owner accepted
+// (an agent's instructions, a new or improved skill, a working habit) with
+// its before and after in the daemon's own words. Read with the list (no
+// read of its own, no clock); no button, nothing here changes anything.
+// --------------------------------------------------------------------------- //
+
+export const RESULTS_TITLE = "Results of changes you accepted";
+export const RESULTS_NOTE = "Counted from Iron Jarvis's own records: the work before and after each change.";
+/** Results drawn at most (the daemon sends 30 at most). */
+export const RESULTS_MAX = 30;
+
+function decodeResult(raw: unknown): ChangeResult | null {
+  const r = record(raw);
+  if (!r) return null;
+  const id = text(r.id, 200);
+  const title = text(r.title, 400).trim();
+  const words = text(r.words, 600).trim();
+  if (!id || !title || !words) return null;
+  return {
+    id,
+    kind: text(r.kind, 40),
+    title,
+    words,
+    state: text(r.state, 20),
+    verdict: text(r.verdict, 20),
+    acceptedAt: text(r.accepted_at, 40),
+    home: decodeHome(r.home),
+  };
+}
+
+/** The results on the wire, defensively: a row without its words is dropped
+ *  (never a number made up here), at most {@link RESULTS_MAX}. */
+export function decodeResults(raw: unknown): ChangeResult[] {
+  return (Array.isArray(raw) ? raw : [])
+    .map(decodeResult)
+    .filter((x): x is ChangeResult => x !== null)
+    .slice(0, RESULTS_MAX);
 }
 
 /**

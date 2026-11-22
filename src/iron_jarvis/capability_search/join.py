@@ -99,6 +99,9 @@ OWN_PLACE = frozenset({
     # (inbox/tools) and a backup made now (settings/records_upkeep), armed by
     # their words through records.record_tools_for.
     "suggestion_list", "suggestion_answer", "backup_now",
+    # 18-a: the results of the changes the owner accepted (inbox/tools),
+    # armed by their words through records.record_tools_for.
+    "change_results",
     # Next leaps 41-a: what a paired computer may do (settings/records_peers),
     # armed by its words through chat_turn.settings_ask_tools.
     "peer_allows",

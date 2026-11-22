@@ -2044,6 +2044,38 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Changes you accepted show their result (v1.566.0)
+
+When you accept a change from **Improvements**, Iron Jarvis now counts how
+the work went before and after it, from its own records, and shows the
+result under the waiting suggestions, in **Results of changes you accepted**.
+You do nothing for it: a change gets its row within a day of your accept.
+
+- **What it reads.** A change to an agent's instructions reads like "Since
+  you accepted this on 12 March, research finished 9 of 10 tasks without
+  help. Before, it was 6 of 10." A task is done without help when it ended
+  well and you did not have to answer a question, nudge it on or start it
+  again. A new skill reads "Used in 7 tasks since you accepted it on 12
+  March; 6 ended well."; an improved skill compares the tasks that used it
+  before and after. A working habit for a team member shows the same
+  numbers as Settings › Model team.
+- **When it shows numbers.** Only with at least 5 tasks on each side. The
+  after side is the first 10 tasks, or the two weeks after your accept,
+  whichever comes first; the before side is as many tasks just before it,
+  at most 30 days back. Until then it says "Not enough work yet: 3 of 5
+  tasks since you accepted this on …". A task that started before your
+  accept counts before, however late it finished.
+- **Since is not because.** The words say "since" and "before", never
+  "because": the work itself may have got easier or harder. Nothing is
+  changed or undone because of a result; it is only shown.
+- **From chat.** Ask "did that change help?" or "what happened since I
+  accepted the new skill?". "What suggestions are waiting?" lists the
+  results too, under their own heading.
+- **When it is counted.** At the end of the night review, if you turned it
+  on, and otherwise once a day. No model is asked and nothing leaves your
+  PC. If Iron Jarvis cannot read a record, it says so instead of showing
+  zeros.
+
 ## Two changes at once in Build › Code wait for each other (v1.565.1)
 
 Two small fixes for moments when two things change the same session or the

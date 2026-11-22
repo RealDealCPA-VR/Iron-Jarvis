@@ -696,13 +696,14 @@ def record_tools_for(
         n for n in _rc().clients_tools_for(t, client_names=client_names, in_client=in_client) if n not in out
     ]
     # v1.506.0 (north-star plan 6.2): the Improvements page's suggestions
-    # (inbox/tools) — a question keeps only the list.
-    from ..inbox.tools import LIST as _SUGGESTION_LIST
+    # (inbox/tools) — a question keeps only the readers (the list, and 18-a's
+    # results of accepted changes: "did that change help?").
+    from ..inbox.tools import READERS as _SUGGESTION_READERS
     from ..inbox.tools import suggestion_tools_for
 
     asked = suggestion_tools_for(t)
     if asked and is_question(t):
-        asked = [n for n in asked if n == _SUGGESTION_LIST]
+        asked = [n for n in asked if n in _SUGGESTION_READERS]
     out += [n for n in asked if n not in out]
     # v1.506.0 (north-star plan 6.3): "back up Iron Jarvis now" — never a
     # question about the daily backup, never the user's own files.

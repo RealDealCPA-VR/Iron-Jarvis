@@ -605,11 +605,17 @@ def _options(raw: Any) -> dict:
     return opts if isinstance(opts, dict) else {}
 
 
-def agent_tasks(rows: list[dict]) -> tuple[list[Task], dict[str, Task]]:
+def agent_tasks(rows: list[dict], *, every_run: bool = False) -> tuple[list[Task], dict[str, Task]]:
     """``(tasks, by_session)`` from Session rows (dicts: id, origin, task,
     outcome, created_at, options_json), oldest first. A follow-up (the
     Continue door's marker in its task) is a nudge on the task it continues,
     and its outcome becomes that task's.
+
+    ``every_run`` (18-a, ``improve/metrics``): one agent's OWN runs, whatever
+    started them. The origin and chat filters below decide what the metrics
+    count as a task of their own; an accepted change to one agent is
+    measured over every run of that agent (a run a chat started too), with
+    the same folding of follow-ups and the same success rule.
 
     WHICH task it continues (review): the Continue door writes the earlier
     run's own task into the follow-up (``Original task: <repr>. Prior
@@ -641,11 +647,12 @@ def agent_tasks(rows: list[dict]) -> tuple[list[Task], dict[str, Task]]:
         return None
 
     for r in sorted(rows, key=lambda r: _epoch(r.get("created_at")) or 0.0):
-        if not agent_task_origin(r.get("origin")):
-            continue
-        opts = _options(r.get("options_json"))
-        if opts.get("chat_thread_id") or opts.get("build_session"):
-            continue
+        if not every_run:
+            if not agent_task_origin(r.get("origin")):
+                continue
+            opts = _options(r.get("options_json"))
+            if opts.get("chat_thread_id") or opts.get("build_session"):
+                continue
         origin = str(r.get("origin") or "")
         ok = str(r.get("outcome") or "") == "completed"
         text = str(r.get("task") or "")
@@ -703,6 +710,26 @@ def avoidable(answer: dict, task: Task, *, conversation_grants: set, approved_be
     if h and (tool, h) in approved_before:
         return True
     return tool in conversation_grants
+
+
+#: The actors whose answer is the PERSON's (the app or the phone): the only
+#: answers :func:`helped` counts as help (18-a reads them by this list).
+PERSON_ACTORS: tuple[str, ...] = _PERSON
+
+
+def helped(t: Task) -> bool:
+    """Did the PERSON have to help this task along: a nudge, a retry, a
+    Continue press, a steer note, or a card or question they answered (one
+    that timed out or was stopped is not their help)? A task that ended well
+    with none of these is HANDS-OFF. The one rule :func:`compute` counts by,
+    and the one an accepted change's result counts by (18-a,
+    ``improve/metrics``)."""
+    if t.human_nudges or t.steers:
+        return True
+    return any(
+        str(a.get("actor") or "") in _PERSON and str(a.get("decision") or "") not in ("stopped", "timeout")
+        for a in t.answered
+    )
 
 
 def _rate(n: float, d: float) -> float:
@@ -964,14 +991,7 @@ def compute(
             avoid_by_task[id(t)] = n
 
     tasks = [t for t in all_tasks if t.start >= cutoff]
-
-    def _helped(t: Task) -> bool:
-        if t.human_nudges or t.steers:
-            return True
-        return any(
-            str(a.get("actor") or "") in _PERSON and str(a.get("decision") or "") not in ("stopped", "timeout")
-            for a in t.answered
-        )
+    _helped = helped
 
     def _block(ts: list[Task]) -> dict:
         # (review) the tasks the metric sees WHOLE make every count and rate;
@@ -1149,9 +1169,9 @@ def read_metrics(engine: Any, days: int = 30, *, now: "float | None" = None) -> 
 
 
 __all__ = [
-    "ACK", "AGENT_TASK_ORIGINS", "NUDGE", "REQUEST", "RETRY", "Task",
+    "ACK", "AGENT_TASK_ORIGINS", "NUDGE", "PERSON_ACTORS", "REQUEST", "RETRY", "Task",
     "agent_tasks", "avoidable", "bare_affirmation", "build_app_tasks", "classify_line", "compute", "empty",
-    "ends_on_offer",
+    "ends_on_offer", "helped",
     "normalize_request", "question_deferred", "read_metrics", "reply_succeeded", "split_conversation",
     "stored_versions", "would_card",
 ]

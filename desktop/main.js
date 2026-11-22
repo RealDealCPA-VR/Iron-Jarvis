@@ -4545,6 +4545,7 @@ const TOOL_WORDS_BUILTIN = {
   build_team_set: "set a folder's coding team",
   calculate: "work out the figures",
   capability_propose: "suggest a new ability for Iron Jarvis",
+  change_results: "check the results of changes you accepted",
   change_undo: "undo one of its changes",
   changes_list: "list its recent changes",
   channel_alerts: "choose which alerts a destination gets",

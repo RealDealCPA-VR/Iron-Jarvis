@@ -180,6 +180,10 @@
       "ok": "suggested a new ability for Iron Jarvis",
       "failed": "tried an ability suggestion and it failed"
     },
+    "change_results": {
+      "ok": "checked the results of changes you accepted",
+      "failed": "tried a results check and it failed"
+    },
     "change_undo": {
       "ok": "undid a change",
       "failed": "tried an undo and it failed"

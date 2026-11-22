@@ -785,6 +785,45 @@ async def _tool_failure_pass(platform, tick=None) -> list[dict]:
         return []
 
 
+async def _change_results_pass(platform, _tick=None) -> "dict | None":
+    """ONE daily measure of the results of the changes the owner accepted
+    (18-a, ``improve/results.refresh``: no model, the records only, its own
+    table), off the event loop, its health reported as ``change_results``
+    through ``_tick`` (the lifespan's, so the background-names scan sees
+    the name; ``lib/loopWords.ts`` words it). A day a refresh already covered
+    (the night review's pass) is left alone (None). Never raises."""
+    engine = getattr(platform, "engine", None)
+    if engine is None:
+        return None
+
+    def _say(ok: bool, exc: "BaseException | None" = None) -> None:
+        if _tick is not None:
+            if ok:
+                _tick("change_results", True)
+            else:
+                _tick("change_results", False, exc)
+
+    try:
+        from ..improve import results as _results
+
+        if await asyncio.to_thread(_results.refreshed_within, engine, hours=24):
+            _say(True)
+            return None
+        got = await asyncio.to_thread(_results.refresh, engine)
+        if got.get("unreadable"):
+            # Named, never shown as "no results": the health row says which.
+            _say(False, RuntimeError("could not be read: " + ", ".join(str(k) for k in got["unreadable"])))
+        else:
+            _say(True)
+        return got
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — a pass must never kill the daemon
+        log.warning("change-results pass failed", exc_info=True)
+        _say(False, exc)
+        return None
+
+
 #: How often the daemon reclaims idle REPL namespaces (v1.333.0, D3).
 _REPL_SWEEP_S = 60.0
 
@@ -1768,6 +1807,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     # v1.507.0 (north-star plan 7.2): the day's read of tool
                     # failures (its own health entry; never raises).
                     await _tool_failure_pass(platform, _tick)
+                    # 18-a: the day's measure of the results of the changes
+                    # the owner accepted, unless the night review's pass
+                    # measured them in the last 24 hours (its own health
+                    # entry; never raises).
+                    await _change_results_pass(platform, _tick)
                     await asyncio.sleep(24 * 3600)
 
             compact_task = asyncio.create_task(_lesson_compact_loop())

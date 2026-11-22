@@ -49,6 +49,7 @@
     "build_team_set",
     "calculate",
     "capability_propose",
+    "change_results",
     "change_undo",
     "changes_list",
     "channel_alerts",
@@ -301,6 +302,7 @@
     "build_team_set": "set a folder's coding team",
     "calculate": "work out the figures",
     "capability_propose": "suggest a new ability for Iron Jarvis",
+    "change_results": "check the results of changes you accepted",
     "change_undo": "undo one of its changes",
     "changes_list": "list its recent changes",
     "channel_alerts": "choose which alerts a destination gets",
@@ -636,6 +638,10 @@
     "capability_propose": [
       "Suggested a new ability for Iron Jarvis",
       "Suggesting a new ability for Iron Jarvis"
+    ],
+    "change_results": [
+      "Checked the results of changes you accepted",
+      "Checking the results of changes you accepted"
     ],
     "change_undo": [
       "Undid a change",
@@ -1335,6 +1341,7 @@
     "build_team_set": "",
     "calculate": "",
     "capability_propose": "",
+    "change_results": "",
     "change_undo": "",
     "changes_list": "",
     "channel_alerts": "",

@@ -19,7 +19,16 @@ Three pieces live here and are built once for ideas 17 to 21:
   ``nightreview``) and rings ONE bell row when it made something. It is
   OFFERED ONCE on Improvements (D-17.1): until the owner says yes
   (``config.night_review`` is ``None``) nothing is spent.
-* the result of an accepted change (``results``) comes with 18-a.
+* :mod:`.results` and :mod:`.metrics` (18-a, build-out plan R2.8, idea 18
+  "Proof that a change helped"): THE RESULT OF A CHANGE THE OWNER ACCEPTED.
+  The rows (:class:`.models.ChangeResultRecord`, table ``changeresult``) are
+  made by READING the stores (accepted coach changes, approved skill drafts,
+  accepted working habits), measured from the records by rules fixed in
+  code (``metrics``: the split at the accept, at least 5 tasks a side, a
+  move of 20 points for a verdict, exactly), at the end of each night review
+  pass and once a day otherwise. Shown under the waiting suggestions on
+  Improvements and to chat (``change_results``); never acted on. Ideas 19,
+  20 and 21 (and 18-c) register their kinds there.
 
 SUGGEST, NEVER ACT: every suggestion the review makes waits in Improvements
 for the owner's Accept, through the suggestion's own route. Nothing here

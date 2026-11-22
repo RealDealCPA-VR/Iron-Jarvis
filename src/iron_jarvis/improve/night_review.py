@@ -65,6 +65,9 @@ ONE PASS = gather, match, run (one suggestion maker at a time):
    work was Local only (the router's own gate refuses a model off this
    network), counted against the night's cap right before it is sent, and
    bounded (:data:`CALL_TIMEOUT_S`; cancelled at once by Emergency stop).
+4. RESULTS (18-a), once the pass has run every job: ``improve/results.
+   refresh`` makes and measures the result of each change the owner
+   accepted (no model, its own table only, never raises into the pass).
 
 THE RECORD (``improve/models.NightReviewRecord``): what each suggestion maker
 did and why, the suggestions made (``[{kind, ref, why}]``, by the
@@ -951,6 +954,20 @@ def _finish(ran: list[dict[str, Any]], made: list[dict[str, Any]]) -> tuple[str,
     return SKIPPED, (mine or refused)[0], bool(mine)
 
 
+async def _refresh_results(engine: Any, at: datetime) -> None:
+    """18-a (``improve/results.refresh``): make and measure the results of
+    the changes the owner accepted, off the loop. Reads the records and
+    writes its own table only; never raises into the pass."""
+    try:
+        from . import results as RS
+
+        got = await asyncio.to_thread(RS.refresh, engine, now=_utc(at))
+        if got.get("unreadable"):
+            log.warning("night review: results of %s could not be read", ", ".join(got["unreadable"]))
+    except Exception:  # noqa: BLE001 — a result is never worth a failed night
+        log.warning("night review: the results of accepted changes were not measured", exc_info=True)
+
+
 async def review_pass(d: Any, *, now: "datetime | None" = None) -> "dict[str, Any] | None":
     """ONE look. None = the review is off or not answered yet (the loop then
     clears its health row). Otherwise what happened:
@@ -1035,6 +1052,10 @@ async def review_pass(d: Any, *, now: "datetime | None" = None) -> "dict[str, An
         await asyncio.to_thread(_save, engine, night, state=final, ran=ran, made=made, requests=spent,
                                 skipped_why=why, needs_you=needs, ended=True)
         log.info("night review %s: %s, %d suggestion(s), %d request(s)", night, final, len(made), spent)
+        # 18-a: the results of the changes the owner accepted are measured at
+        # the end of each pass (no model; never raises; the daily pass then
+        # leaves the day alone).
+        await _refresh_results(engine, clock())
         await announce_once(platform, night)
         return {"state": final, "night": night, "made": len(made), "requests": spent}
     finally:

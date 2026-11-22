@@ -21,6 +21,10 @@
  * through PUT /settings), and last night's line only when it made something
  * that still waits or was skipped for a reason only the owner can change. A
  * suggestion the review made says why, under its title.
+ *
+ * 18-a (results): a second part under the waiting ones, "Results of changes
+ * you accepted", from the same read (`results` on GET /improvements): each
+ * accepted change's before and after in the daemon's own words. No button.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -46,6 +50,8 @@ import {
   NOTHING_WAITING,
   NOTHING_WAITING_TITLE,
   OFFER_ONLY_NOTE,
+  RESULTS_NOTE,
+  RESULTS_TITLE,
   TAKEN_OFF,
   acceptedWords,
   answerNote,
@@ -55,6 +61,7 @@ import {
   nightOfferWords,
   nightWhy,
   waitingWords,
+  type ChangeResult,
   type ImprovementAction,
   type ImprovementDetail,
   type ImprovementItem,
@@ -502,6 +509,46 @@ export function ImprovementsInbox() {
           ) : null}
         </section>
       ))}
+
+      {inbox?.results.length ? <ResultsPart results={inbox.results} /> : null}
     </div>
+  );
+}
+
+/** 18-a: the second part, under the waiting suggestions: what happened since
+ *  each change the owner accepted, in the daemon's own words. No button:
+ *  nothing here changes anything. */
+function ResultsPart({ results }: { results: ChangeResult[] }) {
+  return (
+    <section data-testid="improvements-results" aria-label={RESULTS_TITLE} className="space-y-2">
+      <h2 className="text-[13px] font-medium text-zinc-300">
+        {RESULTS_TITLE} <span className="text-zinc-500">· {results.length}</span>
+      </h2>
+      <p className="text-[12px] text-zinc-500">{RESULTS_NOTE}</p>
+      <ul className="space-y-2">
+        {results.map((r) => (
+          <li
+            key={r.id}
+            data-testid={`improvement-result-${r.id}`}
+            data-state={r.state}
+            className="space-y-1 rounded-2xl bg-white/[0.04] px-4 py-3"
+          >
+            <p className="break-words text-[14px] leading-snug text-zinc-100">{r.title}</p>
+            <p data-testid="improvement-result-words" className="break-words text-[13px] leading-relaxed text-zinc-300">
+              {r.words}
+            </p>
+            {r.home ? (
+              <Link
+                href={r.home.href}
+                data-testid="improvement-result-home"
+                className="inline-block rounded-md py-1 text-[12px] text-accent-soft underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+              >
+                {r.home.label}
+              </Link>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

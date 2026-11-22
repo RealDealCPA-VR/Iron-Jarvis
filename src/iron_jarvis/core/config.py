@@ -474,6 +474,9 @@ def default_permissions() -> dict[str, str]:
         # accept may start a task, make a tool or rewrite notes).
         "suggestion_list": "allow",
         "suggestion_answer": "ask",
+        # 18-a (improve/results): "did that change help?" — the results of the
+        # changes the owner accepted, counted from the records. Reads only.
+        "change_results": "allow",
         # v1.506.0 (north-star plan 6.3, settings/records_upkeep): a backup
         # made now only adds an archive (the newest seven are kept, as for
         # the daily one and the Back up now press).

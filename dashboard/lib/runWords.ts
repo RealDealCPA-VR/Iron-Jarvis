@@ -264,6 +264,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // from chat (agents/mission.py _RUN_TOOL_WORDS is the twin).
   suggestion_list: { did: "Listed the waiting suggestions", noun: "suggestion list" },
   suggestion_answer: { did: "Answered a suggestion", noun: "suggestion answer" },
+  // 18-a: the results of the changes you accepted (mission.py is the twin).
+  change_results: { did: "Checked the results of changes you accepted", noun: "results check" },
   backup_now: { did: "Backed up Iron Jarvis", noun: "backup" },
   // Next leaps 41-a: what a paired computer may do here.
   peer_allows: { did: "Listed what your paired computers may do", noun: "paired computers list" },

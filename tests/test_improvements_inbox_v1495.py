@@ -43,7 +43,9 @@ from iron_jarvis.workmap.models import WorkClient, WorkClientFolder
 C = importlib.import_module("iron_jarvis.inbox.collect")
 G = importlib.import_module("iron_jarvis.daemon.routes.goals")
 
-NOTHING = {"items": [], "groups": [], "total": 0, "unreadable": []}
+#: 18-a: the answer also carries the results of accepted changes (they wait
+#: for nothing, so they are in no count; rows are made by a refresh only).
+NOTHING = {"items": [], "groups": [], "total": 0, "unreadable": [], "results": []}
 
 
 @pytest.fixture()

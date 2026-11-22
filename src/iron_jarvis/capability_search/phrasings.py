@@ -786,6 +786,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         "can you look up what you're able to do",
         'what features do you have for this',
     ),
+    'change_results': (
+        'did that change help',
+        'is my agent doing better since',
+        'did the new skill make a difference',
+        'show results of changes I accepted',
+        'has the habit I approved helped',
+        'is the agent better after the change',
+        'did accepting that suggestion pay off',
+        'how is the updated skill working',
+    ),
     'change_undo': (
         'undo that last change you made',
         'take back that change please',

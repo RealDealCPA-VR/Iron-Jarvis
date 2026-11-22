@@ -1,7 +1,8 @@
-"""The night review's record: ONE row per night (17-a).
+"""The night review's record: ONE row per night (17-a); the result of each
+change the owner accepted: ONE row per change (18-a).
 
 A LATE model (``core.db._LATE_MODEL_MODULES``), so a fresh install and an
-upgraded one both get the table on boot.
+upgraded one both get the tables on boot.
 """
 
 from __future__ import annotations
@@ -57,4 +58,54 @@ class NightReviewRecord(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
-__all__ = ["DONE", "NightReviewRecord", "RUNNING", "SKIPPED", "WAITING"]
+class ChangeResultRecord(SQLModel, table=True):
+    """The result of ONE change the owner accepted (18-a, ``improve/
+    results``): its before and after, counted from the records by
+    ``improve/metrics`` (never a model's words about itself).
+
+    * ``id``: ``<kind>:<ref>``, so measuring again updates the same row.
+    * ``kind``: ``coach`` (an agent's instructions), ``skill`` (a new skill),
+      ``skill_refine`` (an improved skill), ``habit`` (a working habit for a
+      team member); 18-c adds ``lesson``, ``preference``, ``tool``,
+      ``extension``, ``self_fix``.
+    * ``ref``: the accepted suggestion's own id; ``target``: what it changed
+      (the roster name, the skill's name, the member's name); ``about``: one
+      line of what it was (a habit's own words), "" when the title says it.
+    * ``accepted_at``: the split point (naive UTC). A task belongs to the
+      side its own START is on.
+    * ``metric``: ``hands_off`` | ``ended_well`` | ``team_record``.
+    * ``before_json`` / ``after_json``: the two sides (``{n, good, ...}``;
+      a habit's: the Model team's own side view). ``{}`` = never measured:
+      NO numbers, never zeros.
+    * ``state``: ``waiting`` (not measured yet: a new row, or every read of
+      its record so far failed) | ``not_enough`` (under 5 tasks on a side) |
+      ``ready`` | ``not_measured`` (18-c: a kind with nothing honest to
+      count).
+    * ``verdict``: ``better`` | ``same`` | ``worse`` | "" (no comparison: a
+      new skill has no before; a habit says only ``worse``). SHOWN, never
+      acted on (18-b offers the undo; nothing here undoes anything).
+    * ``undo_json``: the way back for that kind (18-b writes it).
+    * ``seen_at``: when the owner was told of a worse result (18-b).
+    * ``checked_at``: when it was last measured.
+    """
+
+    __tablename__ = "changeresult"
+
+    id: str = Field(primary_key=True)
+    kind: str = Field(default="", index=True)
+    ref: str = ""
+    target: str = ""
+    about: str = ""
+    accepted_at: datetime = Field(default_factory=utcnow, index=True)
+    metric: str = ""
+    before_json: str = "{}"
+    after_json: str = "{}"
+    state: str = Field(default=WAITING, index=True)
+    verdict: str = ""
+    undo_json: str = "{}"
+    seen_at: datetime | None = None
+    checked_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+__all__ = ["ChangeResultRecord", "DONE", "NightReviewRecord", "RUNNING", "SKIPPED", "WAITING"]

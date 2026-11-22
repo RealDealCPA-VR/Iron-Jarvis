@@ -673,6 +673,8 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # from chat. Twin: lib/runWords.ts AGENT_TOOLS.
     "suggestion_list": ("listed the waiting suggestions", "suggestion list"),
     "suggestion_answer": ("answered a suggestion", "suggestion answer"),
+    # 18-a: the results of the changes you accepted. Twin: lib/runWords.ts.
+    "change_results": ("checked the results of changes you accepted", "results check"),
     "backup_now": ("backed up Iron Jarvis", "backup"),
     # Next leaps 41-a: what a paired computer may do here. Twin:
     # lib/runWords.ts AGENT_TOOLS.
