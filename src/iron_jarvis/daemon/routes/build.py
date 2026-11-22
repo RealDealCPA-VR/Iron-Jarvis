@@ -4100,6 +4100,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         _no_before = _evidence.no_before_words(
             getattr(platform.config, "reply_pictures", None), _asked, _shown_page,
             by_person=_by_person,
+            # Resume when ready, a move within the group, a restart: a reply
+            # carried on (usually the person's), never "not a message of yours".
+            carried=started_by in (_night.BY_WAIT, _night.BY_RESTART),
         )
         evidence_token = _evidence.arm(
             platform.config.home, thread_id, turn_id, _shown_page,

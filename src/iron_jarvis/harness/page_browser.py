@@ -1879,6 +1879,9 @@ class ActResult:
     dialogs: list[str] = field(default_factory=list)
     dropped: dict[str, int] = field(default_factory=dict)
     picture: bytes = b""
+    #: When a one-shot's picture was taken (``time.time()``; 0 = none). The
+    #: browser's close comes after it, so the caller's own clock is later.
+    taken_at: float = 0.0
 
 
 class AgentBrowsers:
@@ -2273,6 +2276,7 @@ class AgentBrowsers:
                         kind, far = moved[0] if moved else (judge(here, set(), "").kind, here)
                         raise BrowserProblem(one_shot_moved_words(kind, far))
                     out.picture = await backend.screenshot(jpeg=False)
+                    out.taken_at = time.time()
                     out.url = backend.url()
             except TimeoutError:
                 raise BrowserProblem(f"the browser did not finish within {limit_s:g} s") from None

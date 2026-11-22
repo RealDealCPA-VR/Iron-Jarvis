@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,11 @@ class _PageBackend:
     fail = ""
     hang: "threading.Event | None" = None
     same = False
+    #: The close goes on until the wall clock is 50 ms past the picture
+    #: (``shot_at``), then notes when it ended (``closed_at``).
+    slow_close = False
+    shot_at: "list[float]" = []
+    closed_at: "list[float]" = []
 
     def __init__(self, *, edge, work, guard, note, background=False, extra_args=(), **kw):
         self.work = Path(work)
@@ -56,6 +62,13 @@ class _PageBackend:
         self.started = True
 
     async def close(self):
+        cls = type(self)
+        if cls.slow_close and cls.shot_at:
+            # Wait for what is asserted: the clock itself moved on (never a
+            # fixed sleep, which can measure short on Windows).
+            while time.time() < cls.shot_at[-1] + 0.05:
+                await asyncio.sleep(0.005)
+            cls.closed_at.append(time.time())
         self.closed = True
 
     def kill(self):
@@ -94,6 +107,8 @@ class _PageBackend:
         if cls.same:
             return b"PIC:same"
         body = cls.watch.read_bytes() if (cls.watch is not None and cls.watch.exists()) else b"<none>"
+        if cls.slow_close:
+            cls.shot_at.append(time.time())
         return b"PIC:" + body
 
 
@@ -106,7 +121,8 @@ def browsers(monkeypatch):
         made.append(b)
         return b
 
-    for attr, value in (("watch", None), ("fail", ""), ("hang", None), ("same", False)):
+    for attr, value in (("watch", None), ("fail", ""), ("hang", None), ("same", False), ("slow_close", False),
+                        ("shot_at", []), ("closed_at", [])):
         monkeypatch.setattr(_PageBackend, attr, value)
     inst = PB.AgentBrowsers(backend_factory=factory)
     inst.made = made  # type: ignore[attr-defined]
@@ -163,6 +179,10 @@ def test_the_true_reason_a_turn_takes_no_before_picture():
     assert E.no_before_words(None, "make it blue and show me it works", "", by_person=True) == E.NO_PAGE_WORDS
     assert E.no_before_words(True, "make it blue", "", by_person=True) == E.NO_PAGE_WORDS
     assert E.no_before_words(True, "show me it works", DEV, by_person=False) == E.STARTED_WORDS
+    # Review note: a reply Iron Jarvis CARRIED ON (after a limit, a restart)
+    # carries out a message, so it is never called "not a message of yours".
+    carried = E.no_before_words(True, "show me it works", DEV, by_person=False, carried=True)
+    assert carried == E.CARRIED_WORDS and "not a message of yours" not in carried
     assert E.no_before_words(None, "make it blue and show me it works", DEV, by_person=True) == ""
 
 
@@ -460,6 +480,57 @@ async def test_the_before_starts_as_the_reply_begins_so_a_slow_page_still_gets_o
     assert browsers.made[0].kw.get("local_only") is None  # the scope it was started under
 
 
+async def test_the_before_says_when_it_was_taken_not_when_the_first_write_kept_it(reg, browsers, monkeypatch):
+    """Review (should): the before started as the reply began is kept only at
+    the first screen write, which can come minutes later in a long reply.
+    Its time on the reply, and in ``evidence.json``, is when the picture was
+    TAKEN; only ``saved_at`` is the save's."""
+    from datetime import datetime, timedelta
+
+    p, perms, ws, ctx = reg
+    target = ws / "src" / "App.tsx"
+    target.write_text("<button>old</button>", encoding="utf-8")
+    _PageBackend.watch = target
+    token = _arm(p)
+    try:
+        st = E.TURN.get()
+        began = E.utcnow()
+        assert E.start_before(local_only=False) is True
+        await _early_done(st)
+        taken_by = E.utcnow()
+        # The model reads and runs things for four minutes before its first
+        # screen write: the app's clock reads that late from now on.
+        later = taken_by + timedelta(minutes=4)
+        monkeypatch.setattr(E, "utcnow", lambda: later)
+        await _write(p, perms, ctx, "src/App.tsx", "<button>new</button>")
+        rec = await E.at_end([])
+    finally:
+        E.reset(token)
+    folder = Path(rec["folder"])
+    assert (folder / "before.png").read_bytes() == b"PIC:<button>old</button>"  # the early one
+    before = next(i for i in rec["items"] if i["id"] == "before")
+    at = datetime.fromisoformat(before["at"])
+    assert began <= at <= taken_by, (began.isoformat(), before["at"], taken_by.isoformat())
+    data = json.loads((folder / "evidence.json").read_text(encoding="utf-8"))
+    assert next(i for i in data["items"] if i["id"] == "before")["at"] == before["at"]
+    assert data["saved_at"] == later.isoformat()  # the save's own moment, apart
+
+
+async def test_a_pictures_time_is_the_browsers_own_moment_never_after_its_close(browsers):
+    """The time is read where the picture is taken (``ActResult.taken_at`` in
+    the one-shot), not when the one-shot returns: its browser's close comes
+    after the picture and can take seconds."""
+    from datetime import datetime
+
+    _PageBackend.slow_close = True
+    png, _blocked, at = await E._take(DEV, limit_s=10)
+    assert png == b"PIC:<none>"
+    assert len(_PageBackend.shot_at) == 1 and len(_PageBackend.closed_at) == 1
+    taken = datetime.fromisoformat(at).timestamp()  # whole microseconds: 1 ms of slack below
+    assert _PageBackend.shot_at[0] - 0.001 <= taken < _PageBackend.closed_at[0], (
+        _PageBackend.shot_at, taken, _PageBackend.closed_at)
+
+
 async def test_a_before_still_being_taken_at_the_first_write_is_never_kept_late(reg, browsers, monkeypatch):
     """Held at most BEFORE_WAIT_S; then the write goes ahead and the picture,
     which could now show the change, is ended — never kept as the before."""
@@ -622,7 +693,7 @@ async def test_show_me_keeps_a_before_only_while_it_is_on_disk(reg, browsers):
     target.write_text("old", encoding="utf-8")
     _PageBackend.watch = target
     home = p.config.home
-    before = E._save(home, "build:t1", "turn-9", "before", b"PIC:old", DEV)
+    before = E._save(home, "build:t1", "turn-9", "before", b"PIC:old", DEV, at=E._now())
     current = {"kind": "pictures", "screen": True, "items": [before], "note": "No after picture: x."}
     (E.reply_folder(home, "build:t1", "turn-9") / "before.png").unlink()
     assert E.picture_file(home, "build:t1", "turn-9", "before") is None
@@ -634,7 +705,7 @@ async def test_show_me_keeps_a_before_only_while_it_is_on_disk(reg, browsers):
 async def test_show_me_never_replaces_an_after_picture(reg, browsers):
     p, perms, ws, ctx = reg
     home = p.config.home
-    after = E._save(home, "build:t1", "turn-8", "after", b"PIC:as-the-reply-left-it", DEV)
+    after = E._save(home, "build:t1", "turn-8", "after", b"PIC:as-the-reply-left-it", DEV, at=E._now())
     current = {"kind": "pictures", "screen": True, "items": [after], "note": ""}
     with pytest.raises(E.Refused) as err:
         await E.take_after_now(home, "build:t1", "turn-8", DEV, current)
@@ -882,7 +953,7 @@ async def test_show_me_never_overwrites_an_after_filed_while_it_was_taken(tmp_pa
 
     async def take_while_another_after_lands(address, *, limit_s):
         out = await real_take(address, limit_s=limit_s)
-        other = E._save(home, sid, "t-race", "after", b"PIC:the-other-one", DEV)
+        other = E._save(home, sid, "t-race", "after", b"PIC:the-other-one", DEV, at=E._now())
         assert S.amend_reply(app.state.platform.engine, sid, "t-race", {
             "evidence": {"kind": "pictures", "screen": True, "items": [other], "note": ""}})
         return out
@@ -912,8 +983,8 @@ async def test_show_me_never_writes_over_an_after_that_reaches_the_line_as_it_is
     other = {"id": "after", "label": "After", "where": "localhost:5173/cart", "at": "then", "sha": "f" * 16}
     real_save = E._save
 
-    def save_while_another_after_lands(home, thread_id, turn_id, item_id, png, address, blocked=None):
-        out = real_save(home, thread_id, turn_id, item_id, png, address, blocked)
+    def save_while_another_after_lands(home, thread_id, turn_id, item_id, png, address, blocked=None, *, at):
+        out = real_save(home, thread_id, turn_id, item_id, png, address, blocked, at=at)
         assert S.amend_reply(engine, sid, "t-late", {
             "evidence": {"kind": "pictures", "screen": True, "items": [other], "note": ""}})
         return out
@@ -956,13 +1027,17 @@ async def test_asking_with_no_page_open_says_so_not_that_you_did_not_ask(tmp_pat
     assert body["evidence"]["note"] == E.NO_PAGE_WORDS
 
 
-@pytest.mark.parametrize(("started_by", "continuation"), [("wait", True), ("restart", True), ("night", False)])
+@pytest.mark.parametrize(("started_by", "continuation", "why"), [
+    ("wait", True, E.CARRIED_WORDS), ("restart", True, E.CARRIED_WORDS), ("night", False, E.STARTED_WORDS),
+], ids=["wait", "restart", "night"])
 async def test_a_turn_iron_jarvis_started_takes_no_pictures_by_itself(tmp_path, monkeypatch, browsers,
-                                                                     started_by, continuation):
+                                                                     started_by, continuation, why):
     """Review A/B: the wiring (``by_person``) that keeps a night task or a
     carry-on Iron Jarvis started itself (Resume when ready, a restart) from
     starting the invisible browser, with the setting ON, a page open and the
-    words in the message. (A carry-on a PERSON pressed is theirs: below.)"""
+    words in the message. (A carry-on a PERSON pressed is theirs: below.)
+    Review note: a carry-on says it was CARRIED ON, never "not a message of
+    yours"; the night's own task says Iron Jarvis started it."""
     from iron_jarvis.daemon.routes import build as build_routes
 
     from tests.test_build_sessions_v1367 import Script, messages_of, until, wire
@@ -982,7 +1057,7 @@ async def test_a_turn_iron_jarvis_started_takes_no_pictures_by_itself(tmp_path, 
     assert browsers.made == []  # no invisible browser, before or after
     line = [m for m in messages_of(app, sid) if m.get("role") == "assistant" and m.get("turnId") == turn][-1]
     assert line["evidence"] == {"kind": "pictures", "screen": True, "items": [], "note": "",
-                                "beforeNote": E.STARTED_WORDS}
+                                "beforeNote": why}
 
 
 @pytest.mark.parametrize(("setting", "words", "pictures"), [
@@ -1058,7 +1133,7 @@ async def test_the_act_turn_of_a_plan_you_allowed_is_your_reply(tmp_path, monkey
     assert target.read_text(encoding="utf-8") == "<button>blue</button>"
     line = [m for m in messages_of(app, sid) if m.get("role") == "assistant" and m.get("turnId") == act][-1]
     ev = line["evidence"]
-    assert E.STARTED_WORDS not in json.dumps(ev)
+    assert E.STARTED_WORDS not in json.dumps(ev) and E.CARRIED_WORDS not in json.dumps(ev)
     # The plan turn (plan mode: it changes no file) starts no browser; the act
     # turn starts its before as it begins.
     assert armed == [(pictures, False), (pictures, pictures)]

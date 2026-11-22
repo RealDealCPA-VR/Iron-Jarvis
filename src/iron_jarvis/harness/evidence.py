@@ -43,7 +43,9 @@ address, after the page settles.
 
 KEPT. ``<home>/reply-evidence/<session>/<turn>/`` holds ``before.png``,
 ``after.png`` and ``evidence.json`` (the address as host and path only, never
-its query; the times; each picture's hash). A session keeps the pictures of
+its query; each picture's time — when the browser TOOK it, never when it was
+saved: a before started as the reply began is saved only at the first screen
+write; each picture's hash). A session keeps the pictures of
 its newest :data:`KEEP_REPLIES` replies (decision D-27.2); the folder goes to
 the app's trash with the session (:func:`trash_session_evidence`). The
 pictures are never pruned by the page screenshots' own count.
@@ -68,6 +70,7 @@ import shutil
 import uuid
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path, PurePath
 from typing import Any
 
@@ -124,8 +127,12 @@ NOT_ASKED_WORDS = (
 )
 #: A turn that asked (or the setting is on) with no page open when it began.
 NO_PAGE_WORDS = "No before picture: no page was open in the Browser when the reply began."
-#: A turn Iron Jarvis started itself (the night, a "carry on" turn).
+#: A turn Iron Jarvis started itself (the night, a fix of failing checks).
 STARTED_WORDS = "No before picture: Iron Jarvis started this reply itself, not a message of yours."
+#: A reply Iron Jarvis carried on by itself (Resume when ready after an
+#: account limit, a move to another account of the group, a restart): it
+#: usually carries out your own message, so it is never called "not yours".
+CARRIED_WORDS = "No before picture: Iron Jarvis carried this reply on by itself, after an account limit or a restart."
 #: A Show me press on a line that names no reason of its own (a copied line).
 PRESS_ONLY_WORDS = "No before picture: Show me takes only the after picture."
 #: A before picture the record names that is no longer on this PC.
@@ -186,13 +193,15 @@ def asks(text: Any) -> bool:
     return bool(_ASK_RX.search(str(text or "")[:ASK_SCAN_CHARS]))
 
 
-def no_before_words(setting: Any, text: Any, address: str, *, by_person: bool) -> str:
+def no_before_words(setting: Any, text: Any, address: str, *, by_person: bool,
+                    carried: bool = False) -> str:
     """Why this turn takes no before picture by itself, as the reply says it
     ("" when it does take one: :func:`takes`). The true reason, in order: a
-    turn Iron Jarvis started; a message that did not ask with the setting not
-    on; no page open in the Browser when the reply began."""
+    turn Iron Jarvis started, or (``carried``) a reply it carried on by
+    itself; a message that did not ask with the setting not on; no page open
+    in the Browser when the reply began."""
     if not by_person:
-        return STARTED_WORDS
+        return CARRIED_WORDS if carried else STARTED_WORDS
     if not (setting is True or asks(text)):
         return NOT_ASKED_WORDS
     if not address:
@@ -264,9 +273,9 @@ class TurnEvidence:
     tried_before: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     #: The before picture started as the reply began (:func:`start_before`):
-    #: a task giving ``(png, frames left empty)``, held in memory only until
-    #: the first screen write takes it.
-    early: "asyncio.Task[tuple[bytes, list[str]]] | None" = None
+    #: a task giving ``(png, frames left empty, when it was taken)``, held in
+    #: memory only until the first screen write takes it.
+    early: "asyncio.Task[tuple[bytes, list[str], str]] | None" = None
 
 
 TURN: "ContextVar[TurnEvidence | None]" = ContextVar("ij_reply_evidence", default=None)
@@ -357,9 +366,15 @@ def _edge() -> str:
     return browser_executable()
 
 
-async def _take(address: str, *, limit_s: float) -> tuple[bytes, list[str]]:
+def _now() -> str:
+    return utcnow().isoformat()
+
+
+async def _take(address: str, *, limit_s: float) -> tuple[bytes, list[str], str]:
     """ONE picture of ``address`` through the agent browser's one-shot:
-    ``(png, frames left empty)``. Raises :class:`PictureProblem` in words."""
+    ``(png, frames left empty, when it was taken)`` — the time is the
+    browser's own moment of the picture (``ActResult.taken_at``), the
+    picture's time on the reply. Raises :class:`PictureProblem` in words."""
     from . import page_browser as PB
 
     edge = await asyncio.to_thread(_edge)
@@ -374,7 +389,9 @@ async def _take(address: str, *, limit_s: float) -> tuple[bytes, list[str]]:
         raise PictureProblem(str(exc).rstrip(".")) from None
     if not shot.picture:
         raise PictureProblem("the browser gave no picture")
-    return shot.picture, list(shot.blocked)
+    taken = getattr(shot, "taken_at", 0.0)
+    at = datetime.fromtimestamp(taken, timezone.utc).isoformat() if taken else _now()
+    return shot.picture, list(shot.blocked), at
 
 
 def _plain(words: str) -> str:
@@ -435,10 +452,13 @@ def _read_json(folder: Path) -> dict[str, Any]:
 
 
 def _save(home: Any, thread_id: str, turn_id: str, item_id: str, png: bytes, address: str,
-          blocked: "list[str] | None" = None) -> dict[str, Any]:
+          blocked: "list[str] | None" = None, *, at: str) -> dict[str, Any]:
     """BLOCKING: keep one picture (replacing that item's older one), update
-    ``evidence.json``, prune the session to its newest replies. Returns the
-    item as the reply line keeps it."""
+    ``evidence.json``, prune the session to its newest replies. ``at``: when
+    the picture was TAKEN (:func:`_take`), its time on the reply — never the
+    save's (review: a before started as the reply began is saved only at the
+    first screen write, minutes later in a long reply). Returns the item as
+    the reply line keeps it."""
     folder = reply_folder(home, thread_id, turn_id)
     if folder is None:
         raise PictureProblem("the reply could not be named")
@@ -448,15 +468,14 @@ def _save(home: Any, thread_id: str, turn_id: str, item_id: str, png: bytes, add
     tmp.write_bytes(png)
     os.replace(tmp, dest)
     digest = hashlib.sha256(png).hexdigest()
-    at = utcnow().isoformat()
-    item = {"id": item_id, "label": LABELS[item_id], "where": where_of(address), "at": at,
+    item = {"id": item_id, "label": LABELS[item_id], "where": where_of(address), "at": str(at)[:40],
             "sha": digest[:16]}
     data = _read_json(folder)
     items = [i for i in (data.get("items") or []) if isinstance(i, dict) and i.get("id") != item_id]
     items.append({**item, "sha256": digest, "file": str(dest),
                   **({"blocked": [str(b)[:300] for b in blocked[:5]]} if blocked else {})})
     items.sort(key=lambda i: ITEM_IDS.index(i["id"]) if i.get("id") in ITEM_IDS else 9)
-    data.update({"turn": turn_id, "where": where_of(address), "items": items, "saved_at": at,
+    data.update({"turn": turn_id, "where": where_of(address), "items": items, "saved_at": _now(),
                  "folder": str(folder)})
     (folder / "evidence.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
     prune(home, thread_id)
@@ -603,7 +622,7 @@ def _retrieved(task: "asyncio.Task[Any]") -> None:
         task.exception()
 
 
-async def _early_take(address: str) -> tuple[bytes, list[str]]:
+async def _early_take(address: str) -> tuple[bytes, list[str], str]:
     return await asyncio.wait_for(_take(address, limit_s=EARLY_LIMIT_S), EARLY_LIMIT_S + 5)
 
 
@@ -638,7 +657,7 @@ def stop_before(st: "TurnEvidence | None" = None) -> None:
         early.cancel()
 
 
-async def _before_picture(st: TurnEvidence) -> tuple[bytes, list[str]]:
+async def _before_picture(st: TurnEvidence) -> tuple[bytes, list[str], str]:
     """The before picture for the turn's first screen write: the one started
     as the reply began, waited for at most :data:`BEFORE_WAIT_S` (then it is
     ended, never kept: it could show the change); else — none started, or it
@@ -696,9 +715,11 @@ async def before_write(name: str, args: Any, workspace: Any = None) -> None:
             return
         st.tried_before = True
         try:
-            png, blocked = await _before_picture(st)
+            png, blocked, at = await _before_picture(st)
+            # Its time is when it was taken (as the reply began, for the early
+            # one), never this write's.
             st.before = await asyncio.to_thread(
-                _save, st.home, st.thread_id, st.turn_id, "before", png, st.address, blocked,
+                _save, st.home, st.thread_id, st.turn_id, "before", png, st.address, blocked, at=at,
             )
         except (TimeoutError, asyncio.TimeoutError):
             st.before_note = BEFORE_SLOW_WORDS
@@ -746,9 +767,9 @@ async def at_end(documents: Any = None) -> "dict[str, Any] | None":
         items = [st.before] if st.before else []
         after_note = ""
         try:
-            png, blocked = await asyncio.wait_for(_take(st.address, limit_s=AFTER_WAIT_S), AFTER_WAIT_S)
+            png, blocked, at = await asyncio.wait_for(_take(st.address, limit_s=AFTER_WAIT_S), AFTER_WAIT_S)
             items.append(await asyncio.to_thread(
-                _save, st.home, st.thread_id, st.turn_id, "after", png, st.address, blocked,
+                _save, st.home, st.thread_id, st.turn_id, "after", png, st.address, blocked, at=at,
             ))
         except (TimeoutError, asyncio.TimeoutError):
             after_note = "No after picture: the page did not answer in time."
@@ -790,14 +811,14 @@ async def take_after_now(home: Any, thread_id: str, turn_id: str, address: str,
     if has_after(current):
         raise Refused(HAS_AFTER_WORDS)
     try:
-        png, blocked = await asyncio.wait_for(_take(address, limit_s=PRESS_WAIT_S), PRESS_WAIT_S + 5)
+        png, blocked, at = await asyncio.wait_for(_take(address, limit_s=PRESS_WAIT_S), PRESS_WAIT_S + 5)
     except (TimeoutError, asyncio.TimeoutError):
         raise PictureProblem("the page did not answer in time") from None
     if still is not None:
         words = await still()
         if words:
             raise Refused(str(words))
-    after = await asyncio.to_thread(_save, home, thread_id, turn_id, "after", png, address, blocked)
+    after = await asyncio.to_thread(_save, home, thread_id, turn_id, "after", png, address, blocked, at=at)
     old = saved_record(current) or {}
     before = next((i for i in old.get("items") or [] if i.get("id") == "before"), None)
     before_note = ""

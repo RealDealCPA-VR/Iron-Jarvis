@@ -21,7 +21,7 @@ DEV = "http://localhost:5173/settings/billing?token=s3cr3t-value&next=%2Fhome#fr
 
 
 def _keep(home, thread, turn, item="after", png=b"PIC", address=DEV):
-    return E._save(home, thread, turn, item, png, address)
+    return E._save(home, thread, turn, item, png, address, at=E._now())
 
 
 def test_pictures_outlive_fifty_newer_page_screenshots(tmp_path):
