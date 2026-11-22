@@ -18,18 +18,18 @@ How to use this file: read the contents list, then read only the entries your ch
 - L237: **Iron Jarvis must not eat the PC** (v1.333.0)
 - L334: **The UPDATE REHEARSAL runs a real daemon through a restart, every release** (v1.338.0)
 - L370: **NEVER `while tasks: await asyncio.gather(*tasks)` — it SPINS** (v1.388.2)
-- L388: **Python's `platform` module never asks WMI in this app** (v1.414.3)
-- L408: `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build, lifespan boot-rehydration + backg…
-- L420: **A settings save never merges onto an unreadable config, and a locked database is never "corrupt"** (v1.499.3)
-- L422: **A clear moves to the trash, a set-aside database is shown and holds the backups, and a page delete is recorded like chat's** (v1.504.0)
-- L459: **A database write on a path that starts work runs off the event loop, and every child process is on a list** (v1.505.0)
-- L483: **Nothing kept at module level may hold a platform alive** (v1.505.1)
-- L498: **A route never puts a caught exception's text on screen** (v1.506.0)
-- L512: **The Home map names a page by its row in the page table** (v1.507.0)
-- L517: **With the network opened by the setting, a request is served only when it ARRIVED on loopback or an allowlisted address** (v1.509.0)
-- L526: **The start's passes over stored reply records run off the loop, bounded, and read only what they rewrite; a lane that breaks ends in plain words; with no token a socket from another computer is refused** (v1.527.0)
-- L543: **The app-wide 400 and a one-shot's 502 answer plain words: `_input_error` says `_input_error_words(exc)`, never `<Class>: <text>`, and a non-rate-limit provider failure is `ProviderFailedHTTP` whose `detail` names the model and whose `technical` holds the raw text** (v1.529.0)
-- L556: **A drain of tracked tasks waits only for its OWN loop's unfinished tasks, bounded and loud; the tasks are held on the app's own state, never in a module-level set; and the spinning shape is scanned for** (v1.556.2)
+- L390: **Python's `platform` module never asks WMI in this app** (v1.414.3)
+- L410: `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build, lifespan boot-rehydration + backg…
+- L422: **A settings save never merges onto an unreadable config, and a locked database is never "corrupt"** (v1.499.3)
+- L424: **A clear moves to the trash, a set-aside database is shown and holds the backups, and a page delete is recorded like chat's** (v1.504.0)
+- L461: **A database write on a path that starts work runs off the event loop, and every child process is on a list** (v1.505.0)
+- L485: **Nothing kept at module level may hold a platform alive** (v1.505.1)
+- L500: **A route never puts a caught exception's text on screen** (v1.506.0)
+- L514: **The Home map names a page by its row in the page table** (v1.507.0)
+- L519: **With the network opened by the setting, a request is served only when it ARRIVED on loopback or an allowlisted address** (v1.509.0)
+- L528: **The start's passes over stored reply records run off the loop, bounded, and read only what they rewrite; a lane that breaks ends in plain words; with no token a socket from another computer is refused** (v1.527.0)
+- L545: **The app-wide 400 and a one-shot's 502 answer plain words: `_input_error` says `_input_error_words(exc)`, never `<Class>: <text>`, and a non-rate-limit provider failure is `ProviderFailedHTTP` whose `detail` names the model and whose `technical` holds the raw text** (v1.529.0)
+- L558: **`routes/peers.drain_tells` waits only for its OWN loop's unfinished tells, bounded and loud; the tells are held on the app's state, not a module global; and the spinning shape is scanned for in `src/`** (v1.556.2)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -380,10 +380,12 @@ How to use this file: read the contents list, then read only the entries your ch
   drain_tasks(tasks)` waits only for tasks not `done()` and gives the loop one
   turn at the end; `InboundPoller.drain`, `MediaJobs.drain` and
   `AssignmentDispatcher.drain` use it. A new drain of a tracked-task set uses
-  it too. Pin: `tests/test_drain_never_spins_v13882.py` (each REAL drain()
-  with a finished task whose removal has not run, on its own loop in a thread
-  with a deadline — the old shape fails in seconds instead of hanging pytest;
-  all three old drains and a helper without the final turn go red).
+  it too, unless it must be bounded or per-loop (then `drain_tells`' shape,
+  the v1.556.2 entry). Pin: `tests/test_drain_never_spins_v13882.py` (each
+  REAL drain() with a finished task whose removal has not run, on its own
+  loop in a thread with a deadline — the old shape fails in seconds instead
+  of hanging pytest; all three old drains and a helper without the final turn
+  go red).
 
 - **Python's `platform` module never asks WMI in this app** (v1.414.3, found
   measuring the user's installed daemon: ~200% CPU for as long as it ran).
@@ -553,9 +555,9 @@ How to use this file: read the contents list, then read only the entries your ch
   `_one_shot_complete` carries no `technical`. Pin:
   `tests/test_plain_input_and_provider_answers_v1529.py`.
 
-- **A drain of tracked tasks waits only for its OWN loop's unfinished tasks,
-  bounded and loud; the tasks are held on the app's own state, never in a
-  module-level set; and the spinning shape is scanned for** (v1.556.2, Z-1:
+- **`routes/peers.drain_tells` waits only for its OWN loop's unfinished tells,
+  bounded and loud; the tells are held on the app's state, not a module
+  global; and the spinning shape is scanned for in `src/`** (v1.556.2, Z-1:
   the v1.555.0 Linux release hung 300 s in `routes/peers.drain_tells`).
   `drain_tells` (new in 41-a) was `while _TELLS: await asyncio.gather(...)`,
   the shape forbidden above since v1.388.2: the dump showed the main thread
@@ -568,6 +570,15 @@ How to use this file: read the contents list, then read only the entries your ch
   6 s try). Nothing waits on a tell: a switch answers at once, and when the
   daemon stops, uvicorn's runner cancels one still on its way. Pin:
   `tests/test_z1_peer_tells_never_hang.py` (the CI state made on purpose, two
-  apps on two loops, the bound, and a scan of `src/` for the shape). Left
-  open: `_LATE_KEEPS` in the same file is still a module-level set (one test
-  gathers it once, never in a `while`).
+  apps on two loops, the bound, and a scan of `src/` for the shape; nothing
+  pins where OTHER task sets live). Choosing a drain: `core/tasks.drain_tasks`
+  (the v1.388.2 entry) never spins but has no bound and no loop filter; a
+  drain whose set can hold another loop's tasks, or that must not wait
+  forever, does what `drain_tells` does. Known hazard, left open: these task
+  sets are still module-level, shared by every app and loop in one process:
+  `routes/peers._LATE_KEEPS` (one test gathers it once, never in a `while`),
+  `agents/task_door._PENDING_TASKS` (`drain_replies`: up to 8 rounds of 30 s,
+  no loop filter), `agents/team_notes._PENDING`, `harness/library._PENDING`,
+  `computeruse/tools._DETACHED_DENIALS`, `workflows/engine._SETTLE_JOBS` and
+  `agents/runtime._REPL_DISPOSALS`. A hang whose dump shows one of their
+  drains gets `drain_tells`' shape.

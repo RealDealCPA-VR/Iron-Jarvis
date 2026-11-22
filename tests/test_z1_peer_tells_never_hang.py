@@ -15,8 +15,11 @@ forever. And the list was ONE module-level set for every app in the process,
 so a drain on one event loop gathered another loop's tells.
 
 Each case runs on its own event loop in a thread with a deadline, so the old
-shape fails here in seconds instead of hanging pytest (a thread still spinning
-is a daemon thread; it ends with the test process). Through the real route
+shape goes red at the deadline instead of hanging pytest until its 300 s
+timeout (a thread still spinning is a daemon thread; it ends with the test
+process). It is red, not quick: the spinning thread keeps taking the GIL, so
+pytest can take minutes to write the failure and the worker's later tests run
+slowly, the same as ``test_drain_never_spins_v13882``. Through the real route
 (``PATCH /peers/{name}/allows`` -> ``change_allows`` -> the tell); the one
 stand-in is the other computer (``link.tell_allows``).
 
