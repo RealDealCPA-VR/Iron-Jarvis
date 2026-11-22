@@ -1403,13 +1403,16 @@ def _register_comments(app: FastAPI, d: Any) -> None:
 
     @app.post("/build/sessions/{thread_id}/pr-comments/{comment_id}/set-aside")
     async def pr_comment_set_aside(thread_id: str, comment_id: str, body: PrAsideBody | None = None):
-        """Set a comment aside (``aside: false`` brings it back as new). Only
-        the record changes; GitHub is not told."""
+        """Set a comment aside. ``aside: false`` is the card's Bring back: a
+        comment set aside, or one answered with no change to its file, is new
+        again (offered to Answer these and pinned on its line); an answered
+        one stays answered. Only the record changes; GitHub is not told."""
         await _session(thread_id)
         aside = True if body is None else body.aside
         moved = await asyncio.to_thread(
             PC.set_state, d.platform.engine, thread_id, [comment_id], PC.SET_ASIDE if aside else PC.NEW,
-            expect=(PC.NEW, PC.UNCHANGED, PC.ANSWERED) if aside else (PC.SET_ASIDE,),
+            turn_id=None if aside else "",
+            expect=(PC.NEW, PC.UNCHANGED, PC.ANSWERED) if aside else (PC.SET_ASIDE, PC.UNCHANGED),
         )
         if not moved:
             rows = await asyncio.to_thread(PC.get_rows, d.platform.engine, thread_id, [comment_id])

@@ -11,7 +11,9 @@
  *   - the card: an owner's, a member's or a collaborator's comment is
  *     ticked; one from outside the repository and a bot's are not and say so;
  *     Answer these sends ONLY the ticked ids and hands the turn to the page;
- *     Set aside; Stop telling me about comments here and Tell me again; a
+ *     Set aside and its Undo, Bring back (also for a comment answered with
+ *     no change to its file; never for an answered one); Stop telling me
+ *     about comments here and Tell me again; a
  *     comment's words are plain text (no Markdown, no link it made up);
  *   - the Changes tab: a comment sits under ITS line (the right side), an
  *     outdated one and one on a line not drawn are listed after the rows,
@@ -58,6 +60,7 @@ import type { FileChange } from "@/components/chat/ChangedFiles";
 import { parseUnified } from "@/components/chat/DiffView";
 import { decodeMessage } from "@/lib/buildSessions";
 import {
+  PR_COMMENTS_BRING_BACK,
   PR_COMMENTS_FROM_GITHUB,
   PR_COMMENTS_STOP,
   PR_COMMENTS_TELL_AGAIN,
@@ -67,6 +70,8 @@ import {
   cardLineIndex,
   firstTicks,
   openComments,
+  pinsForFile,
+  putAwayWords,
   stateWords,
   type PrComment,
 } from "@/lib/prComments";
@@ -262,6 +267,69 @@ describe("the session's line and its card", () => {
     fireEvent.click(screen.getByTestId("pr-comments-stop"));
     await waitFor(() => expect(screen.getByTestId("pr-comments-stop").textContent).toBe(PR_COMMENTS_STOP));
     expect(H.sent[2]).toEqual({ path: `/build/sessions/${SID}/pr-comments/quiet`, body: { quiet: false } });
+  });
+
+  it("Set aside has its Undo: Bring back puts the comment on the card and on its line again", async () => {
+    H.view = { ...H.view, comments: [raw("c1")] };
+    render(<PrCommentsLine card threadId={SID} raw={line(["c1"])} content="" archived={false} busy={false} />);
+    expect(await screen.findByTestId("pr-comment")).toBeTruthy();
+    expect(screen.queryByTestId("pr-comments-away")).toBeNull();
+    const path = `/build/sessions/${SID}/pr-comments/${encodeURIComponent(`${SID}:c1`)}/set-aside`;
+    // Set aside: off the card and off its line, and held in one folded line.
+    H.view = { ...H.view, comments: [raw("c1", { state: "set_aside" })] };
+    fireEvent.click(screen.getByTestId("pr-comment-aside"));
+    const toggle = await screen.findByTestId("pr-comments-away-toggle");
+    expect(toggle.textContent).toBe("Set aside (1)");
+    expect(screen.queryByTestId("pr-comment")).toBeNull();
+    expect(pinsForFile(decodePrCommentsView(H.view).comments, ABS)).toEqual([]);
+    expect(screen.queryByTestId("pr-comment-away")).toBeNull();
+    fireEvent.click(toggle);
+    const away = screen.getByTestId("pr-comment-away");
+    expect(away.textContent).toContain("Rename y.");
+    // Bring back: the daemon makes it new again, and the card offers it.
+    const back = within(away).getByTestId("pr-comment-back");
+    expect(back.textContent).toBe(PR_COMMENTS_BRING_BACK);
+    H.view = { ...H.view, comments: [raw("c1")] };
+    fireEvent.click(back);
+    await waitFor(() => expect(screen.queryByTestId("pr-comment")).toBeTruthy());
+    expect(H.sent).toEqual([{ path, body: { aside: true } }, { path, body: { aside: false } }]);
+    expect((screen.getByTestId("pr-comment-tick") as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByTestId("pr-comments-away")).toBeNull();
+    expect(pinsForFile(decodePrCommentsView(H.view).comments, ABS).map((c) => c.id)).toEqual([`${SID}:c1`]);
+  });
+
+  it("a comment answered with no change to its file can be brought back to answer again", async () => {
+    H.view = { ...H.view, comments: [raw("c1", { state: "unchanged" }), raw("c2", { state: "set_aside" }),
+      raw("c3", { state: "answered", answer_files: ["app.py"], body: "Done one." })] };
+    render(<PrCommentsLine card threadId={SID} raw={line(["c1", "c2", "c3"])} content="" archived={false} busy={false} />);
+    const toggle = await screen.findByTestId("pr-comments-away-toggle");
+    expect(toggle.textContent).toBe("Set aside (1) · Answered with no change (1)");
+    fireEvent.click(toggle);
+    const rows = screen.getAllByTestId("pr-comment-away");
+    // An answered comment stays answered: it is not offered back.
+    expect(rows.map((r) => r.getAttribute("data-id"))).toEqual([`${SID}:c1`, `${SID}:c2`]);
+    expect(rows[0].textContent).toContain("Answered with no change to this file");
+    H.view = { ...H.view, comments: [raw("c1"), raw("c2", { state: "set_aside" }),
+      raw("c3", { state: "answered", answer_files: ["app.py"] })] };
+    fireEvent.click(within(rows[0]).getByTestId("pr-comment-back"));
+    await waitFor(() => expect(screen.getAllByTestId("pr-comment").map((r) => r.getAttribute("data-id")))
+      .toEqual([`${SID}:c1`]));
+    expect(H.sent).toEqual([{ path: `/build/sessions/${SID}/pr-comments/${encodeURIComponent(`${SID}:c1`)}/set-aside`,
+      body: { aside: false } }]);
+    expect(screen.getByTestId("pr-comments-away-toggle").textContent).toBe("Set aside (1)");
+    expect(putAwayWords([])).toBe("");
+  });
+
+  it("nothing is brought back while a reply runs or in an archived session", async () => {
+    H.view = { ...H.view, comments: [raw("c1", { state: "set_aside" })] };
+    const props = { threadId: SID, raw: line(["c1"]), content: "" };
+    const { rerender } = render(<PrCommentsLine card {...props} archived={false} busy={false} />);
+    fireEvent.click(await screen.findByTestId("pr-comments-away-toggle"));
+    expect((screen.getByTestId("pr-comment-back") as HTMLButtonElement).disabled).toBe(false);
+    rerender(<PrCommentsLine card {...props} archived={false} busy />);
+    expect((screen.getByTestId("pr-comment-back") as HTMLButtonElement).disabled).toBe(true);
+    rerender(<PrCommentsLine card {...props} archived busy={false} />);
+    expect((screen.getByTestId("pr-comment-back") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("a line whose comments were all answered is its sentence alone", async () => {

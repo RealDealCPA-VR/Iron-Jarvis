@@ -12,9 +12,11 @@
  * the session, which the page follows like any turn. One press answers at
  * most the view's `maxAnswer` (the daemon refuses more): the first ticks stop
  * there, a full card takes no further tick, and it says how many wait for
- * the next press. A quiet text button,
- * Stop telling me about comments here (the bell row; its Undo, Tell me
- * again). An older line is its sentence alone.
+ * the next press. Set aside's Undo is a folded quiet line under the list
+ * ("Set aside (1)"): its rows offer Bring back, and so do a comment's that
+ * was answered with no change to its file (to be answered again). A quiet
+ * text button, Stop telling me about comments here (the bell row; its Undo,
+ * Tell me again). An older line is its sentence alone.
  *
  * The comments are read when the card is drawn, when a reply in the session
  * ends, and after a press (lib/prComments: no GitHub call; nothing is ever
@@ -26,6 +28,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui";
 import {
+  PR_COMMENTS_BRING_BACK,
   PR_COMMENTS_NOTHING_SENT,
   PR_COMMENTS_OPEN,
   PR_COMMENTS_QUIET_NOTE,
@@ -41,6 +44,8 @@ import {
   firstTicks,
   getPrComments,
   openComments,
+  putAwayComments,
+  putAwayWords,
   setAsidePrComment,
   setPrCommentsQuiet,
   stateWords,
@@ -81,6 +86,7 @@ export function PrCommentsLine({
   const [ticks, setTicks] = useState<Set<string> | null>(null);
   const [working, setWorking] = useState("");
   const [error, setError] = useState("");
+  const [showAway, setShowAway] = useState(false);
   const seq = useRef(0);
   const stopped = !line || line.stopped || line.ids.length === 0;
   const drawn = card && !stopped;
@@ -118,6 +124,7 @@ export function PrCommentsLine({
     );
   }
   const open = openComments(view);
+  const away = putAwayComments(view);
   // One press answers at most `max` (the daemon refuses more): the first
   // ticks stop there, and a full card takes no further tick.
   const max = view?.maxAnswer ?? 20;
@@ -215,6 +222,47 @@ export function PrCommentsLine({
         <p data-testid="pr-comments-cap" className="text-[12px] text-zinc-500">
           {capWords(max, fresh - chosen.length)}
         </p>
+      ) : null}
+      {away.length > 0 ? (
+        <div data-testid="pr-comments-away" className="min-w-0 space-y-1.5">
+          <button
+            type="button"
+            data-testid="pr-comments-away-toggle"
+            className={QUIET}
+            aria-expanded={showAway}
+            onClick={() => setShowAway((v) => !v)}
+          >
+            {putAwayWords(away)}
+          </button>
+          {showAway ? (
+            <ul className="min-w-0 space-y-1.5">
+              {away.map((c) => (
+                <li
+                  key={c.id}
+                  data-testid="pr-comment-away"
+                  data-id={c.id}
+                  className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border border-white/[0.06] px-2 py-1.5 text-[12px] text-zinc-500"
+                >
+                  <span className="text-zinc-300">{c.author}</span>
+                  <span className="min-w-0 break-all font-mono">{c.place}</span>
+                  <span>{stateWords(c)}</span>
+                  <p className="line-clamp-2 w-full whitespace-pre-wrap break-words text-zinc-400">{c.body}</p>
+                  <button
+                    type="button"
+                    data-testid="pr-comment-back"
+                    className={QUIET}
+                    disabled={locked}
+                    onClick={() =>
+                      void act("back", () => setAsidePrComment(threadId, c.id, false), "It could not be brought back.")
+                    }
+                  >
+                    {PR_COMMENTS_BRING_BACK}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
       {view?.quiet ? (
         <p data-testid="pr-comments-quiet-note" className="text-[12px] text-zinc-500">

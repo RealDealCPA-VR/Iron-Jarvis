@@ -223,7 +223,9 @@ export function BranchView({
       /* keep what was shown */
     }
   }, [sessionId]);
-  const ghLive = !!prUrl && !removed;
+  // The comments are the watch's (Chat › Code's sessions only): a Build ›
+  // Code session's pull request (22-b) is not watched, so it reads nothing.
+  const ghLive = watchCi && !buildCode && !!prUrl && !removed;
   useEffect(() => {
     if (ghLive) void readGithub();
   }, [ghLive, readGithub, refreshKey]);

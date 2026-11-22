@@ -14,7 +14,9 @@ Pinned:
 * a comment the scan flags starts the turn at LOW trust;
 * after the turn each comment's state comes from the RECORD: answered when a
   file it names was written in that turn, unchanged when not; nothing is
-  ever sent to GitHub.
+  ever sent to GitHub;
+* Set aside has its Undo through the route the card calls: Bring back makes
+  a comment set aside, or answered with no change, new again.
 """
 
 from __future__ import annotations
@@ -250,3 +252,49 @@ async def test_an_answer_still_starting_is_never_settled(app, tmp_path, monkeypa
     assert W._ANSWER_STARTING == set(), "a started answer stays listed as starting"
     rows = await _settled(app, sid, [cid])
     assert rows[cid]["state"] == PC.UNCHANGED and rows[cid]["turn_id"] == got["turn_id"]
+
+
+async def test_set_aside_and_bring_back_through_the_route(app, tmp_path, monkeypatch):
+    """Set aside has an Undo the card reaches: ``aside: false`` (Bring back)
+    makes a comment set aside, or one answered with no change to its file,
+    new again, so it is offered to Answer these once more and pinned on its
+    line. An answered comment stays answered; one being answered is never
+    set aside. Nothing is sent to GitHub."""
+    fake = install(tmp_path, monkeypatch)
+    sid, _wt = await _session(app, tmp_path, [
+        {**line_comment(81), "_kind": "line"},
+        {**line_comment(82, created="2026-11-20T10:01:00Z"), "_kind": "line"},
+        {**line_comment(83, created="2026-11-20T10:02:00Z"), "_kind": "line"},
+        {**line_comment(84, created="2026-11-20T10:03:00Z"), "_kind": "line"},
+    ])
+    engine = app.state.platform.engine
+    a, b, c, e = (f"{sid}:c{n}" for n in (81, 82, 83, 84))
+    route = f"/build/sessions/{sid}/pr-comments"
+
+    def state(cid: str) -> tuple[str, str]:
+        row = PC.get_rows(engine, sid, [cid])[0]
+        return row["state"], row["turn_id"]
+
+    status, got = await asgi(app, "POST", f"{route}/{a}/set-aside", {"aside": True})
+    assert status == 200 and got["changed"] is True and state(a)[0] == PC.SET_ASIDE
+    status, got = await asgi(app, "POST", f"{route}/{a}/set-aside", {"aside": False})
+    assert status == 200 and got["changed"] is True and state(a) == (PC.NEW, "")
+    # Answered with no change to its file: brought back to be answered again.
+    assert PC.set_state(engine, sid, [b], PC.UNCHANGED, turn_id="bt_old") == [b]
+    status, got = await asgi(app, "POST", f"{route}/{b}/set-aside", {"aside": False})
+    assert status == 200 and got["changed"] is True and state(b) == (PC.NEW, "")
+    # Answered stays answered; being answered is never set aside.
+    assert PC.set_state(engine, sid, [c], PC.ANSWERED, turn_id="bt_done") == [c]
+    status, got = await asgi(app, "POST", f"{route}/{c}/set-aside", {"aside": False})
+    assert status == 200 and got["changed"] is False and state(c) == (PC.ANSWERED, "bt_done")
+    assert PC.claim(engine, sid, [e], "bt_now") is True
+    status, got = await asgi(app, "POST", f"{route}/{e}/set-aside", {"aside": True})
+    assert status == 200 and got["changed"] is False and state(e) == (PC.ANSWERING, "bt_now")
+    status, got = await asgi(app, "POST", f"{route}/{sid}:c999/set-aside", {"aside": False})
+    assert status == 404
+    # The view the card reads shows each comment where it now is.
+    status, view = await asgi(app, "GET", route)
+    assert status == 200
+    assert {x["id"]: x["state"] for x in view["comments"]} == {
+        a: PC.NEW, b: PC.NEW, c: PC.ANSWERED, e: PC.ANSWERING}
+    assert fake.calls() == []

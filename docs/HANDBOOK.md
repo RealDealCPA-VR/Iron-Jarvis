@@ -2876,7 +2876,7 @@ as it was.
 - Not yet: a rule or a schedule that starts a **workflow** or a **goal**
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.
-## Review comments arrive in the coding session (v1.559.0)
+## Review comments arrive in the coding session (v1.562.0)
 
 When people comment on a pull request a coding session (Chat › Code) opened,
 their comments now come to that session. You no longer copy them from GitHub
@@ -2893,7 +2893,10 @@ into the chat.
   which ones it changed nothing for. Comments from the repository's owner,
   members and collaborators are ticked for you. A comment from someone outside
   the repository, or from a bot, is shown unticked and says so: tick it if you
-  want it answered. **Set aside** puts one away. One press answers up to 20
+  want it answered. **Set aside** puts one away; it then waits in a folded
+  line under the card ("Set aside (1)"), where **Bring back** puts it back.
+  A comment answered with no change to its file waits there too, and Bring
+  back offers it to Answer these again. One press answers up to 20
   comments; when more are waiting, the oldest 20 are ticked and the card says
   how many wait for the next press.
 - **Nothing is sent to GitHub.** Iron Jarvis does not commit, push or reply
@@ -2925,9 +2928,9 @@ into the chat.
   told only in that session or in a chat that is Local only). "Stop telling
   me about comments here" asks first and can be undone.
 
-This works for coding sessions in Chat › Code. A Build › Code session (your
-own Claude Code or Codex) has no pull request of its own yet, so it gets no
-comments.
+This works for coding sessions in Chat › Code. The pull request a Build ›
+Code session opens (your own Claude Code or Codex) does not bring its
+comments here yet.
 
 ## Commit and Open a pull request in Build › Code (v1.561.0)
 

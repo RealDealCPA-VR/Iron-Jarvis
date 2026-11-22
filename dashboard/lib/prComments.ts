@@ -1,7 +1,7 @@
 /**
  * Review comments on a coding session's pull request (26-a, R2.16; idea 26,
- * "GitHub comes to Jarvis"). Chat › Code sessions only: a Build › Code session
- * has no pull request yet.
+ * "GitHub comes to Jarvis"). Chat › Code sessions only: the watcher does not
+ * read a Build › Code session's pull request (22-b) yet.
  *
  * Iron Jarvis reads them from GitHub with the user's OWN `gh` sign-in (the
  * daemon's pull-request watcher, daemon/routes/ci_watch.py) and keeps them
@@ -11,9 +11,11 @@
  *    call), decoded by a WHITELIST: a field the daemon did not promise dies;
  *  - `POST …/pr-comments/answer {ids}` — ANSWER THESE: one coding turn in the
  *    session, which the page then follows like any turn (its turn id);
- *  - `POST …/pr-comments/{id}/set-aside {aside}` and `POST …/pr-comments/quiet
- *    {quiet}` — Set aside, and "Stop telling me about comments here" with its
- *    Undo.
+ *  - `POST …/pr-comments/{id}/set-aside {aside}` — Set aside, and its Undo
+ *    Bring back (`aside: false`; it also brings back a comment answered with
+ *    no change to its file, to be answered again);
+ *  - `POST …/pr-comments/quiet {quiet}` — "Stop telling me about comments
+ *    here" with its Undo.
  *
  * Nothing here sends anything to GitHub. A comment's words are what a person
  * wrote on GitHub: the screen draws them as plain text, never as Markdown or
@@ -66,6 +68,8 @@ export interface PrCommentsView {
 
 export const PR_COMMENTS_ANSWER = "Answer these";
 export const PR_COMMENTS_SET_ASIDE = "Set aside";
+/** Set aside's Undo (the app's one word for it, lib/buildArchive BRING_BACK). */
+export const PR_COMMENTS_BRING_BACK = "Bring back";
 export const PR_COMMENTS_STOP = "Stop telling me about comments here";
 export const PR_COMMENTS_TELL_AGAIN = "Tell me again";
 export const PR_COMMENTS_FROM_GITHUB = "from GitHub";
@@ -219,6 +223,25 @@ export function decodePrCommentsLine(raw: unknown): PrCommentsLine | null {
 export function openComments(view: PrCommentsView | null): PrComment[] {
   if (!view) return [];
   return view.comments.filter((c) => c.state === "new" || c.state === "answering");
+}
+
+/** The comments off the card that can come back to it with Bring back:
+ *  set aside, or answered with no change to their file (oldest first). An
+ *  answered one stays answered. */
+export function putAwayComments(view: PrCommentsView | null): PrComment[] {
+  if (!view) return [];
+  return view.comments.filter((c) => c.state === "set_aside" || c.state === "unchanged");
+}
+
+/** The folded line that holds them: "Set aside (2)", "Answered with no
+ *  change (1)", or both ("" = none). */
+export function putAwayWords(comments: readonly PrComment[]): string {
+  const aside = comments.filter((c) => c.state === "set_aside").length;
+  const same = comments.filter((c) => c.state === "unchanged").length;
+  const parts: string[] = [];
+  if (aside) parts.push(`${PR_COMMENTS_SET_ASIDE} (${aside})`);
+  if (same) parts.push(`Answered with no change (${same})`);
+  return parts.join(" · ");
 }
 
 /** Which line of a session draws the card: the newest line that said review
