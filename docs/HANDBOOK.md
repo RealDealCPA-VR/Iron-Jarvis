@@ -2054,7 +2054,9 @@ Nothing runs until you say yes.
 - **When it runs.** Inside the night window (23:00 to 07:00 unless you
   changed it under Night shift), only while nothing else is running, no
   chat was used in the last 30 minutes and no night task is running, and
-  never under Emergency stop. Once a night.
+  never under Emergency stop. Work that is only waiting for your answer (a
+  question you left open, a workflow waiting on you) does not hold it.
+  Once a night.
 - **What it looks at.** Your own records only: an agent of yours that kept
   running out of steps or hitting the same trouble yesterday gets one
   suggested change to its instructions (built-in agents are not coached:

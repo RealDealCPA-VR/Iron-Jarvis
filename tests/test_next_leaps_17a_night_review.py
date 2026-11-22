@@ -14,7 +14,9 @@ What is pinned, each with the way it would fail:
 * a pass does nothing outside the night window, under Emergency stop, while
   a run, a chat reply, a recent chat or a night task is live, and while the
   setting is off or not yet answered (D-17.1: offered once, nothing runs
-  until yes);
+  until yes); work parked on the owner with no clock (a workflow run waiting
+  for an answer, an attended run on its card, a terminal showing its
+  question) does not hold it;
 * a custom agent that ran out of steps four times yesterday gets exactly ONE
   coach request, pinned to its own model, marked as background work, and the
   suggestion says why it was made;
@@ -265,6 +267,58 @@ def test_a_pass_does_nothing_unless_every_condition_holds(desk):
     out = _pass(desk)
     assert out["state"] == NR.DONE, out
     assert len(desk.router.calls) == 1
+
+
+def test_work_parked_on_the_owner_does_not_hold_the_night_review(desk, monkeypatch):
+    """The pass waits on work that RUNS BY ITSELF (``activity_snapshot``'s
+    ``working``), never on work parked on the owner with no clock: a workflow
+    run waiting for an answer, an attended run on its card, a Build terminal
+    showing its question. ``busy`` counts those too (an update would cut them
+    off), so one card left open overnight held every pass of the night, and
+    nothing said why (no row, no line, an OK health row). A workflow run that
+    is running and a terminal at work still hold it."""
+    from iron_jarvis.workflows.models import WorkflowRunRecord
+
+    _ran_out_of_steps(desk, _agent(desk), 4)
+    panes = {"state": "working"}
+    monkeypatch.setattr(desk.platform.terminals, "list",
+                        lambda: [{"id": "p1", "alive": True, "state": panes["state"], "agent_cli": "claude"}])
+
+    async def scenario():
+        with session_scope(desk.engine) as db:
+            flow = WorkflowRunRecord(workflow_name="month end", status="running")
+            db.add(flow)
+            db.add(Session(id="s-card", task="sort the folder", agent_type=AgentType.BUILDER,
+                           origin="job:mission", status=SessionStatus.ACTIVE))
+            db.commit()
+            flow_id = flow.id
+        ask, _fut = desk.platform.approvals.request("write_file", {"path": "a.txt"}, session_id="s-card")
+        try:
+            # A terminal at work holds the pass.
+            assert (await NR.review_pass(desk.d, now=IN_WINDOW))["skipped"] == NR.SKIP_BUSY
+            panes["state"] = "blocked"
+            # A workflow run that is running holds it.
+            assert (await NR.review_pass(desk.d, now=IN_WINDOW))["skipped"] == NR.SKIP_BUSY
+            assert desk.router.calls == [] and _row(desk) is None
+            with session_scope(desk.engine) as db:
+                row = db.get(WorkflowRunRecord, flow_id)
+                row.status = "waiting"
+                db.add(row)
+                db.commit()
+            # Left: a workflow run waiting for an answer, an attended run on
+            # its card and a terminal showing its question. Busy, not working.
+            from iron_jarvis.daemon.routes.system import activity_snapshot
+
+            act = await asyncio.to_thread(activity_snapshot, desk.d)
+            assert act["busy"] is True and act["working"] is False, act
+            return await NR.review_pass(desk.d, now=IN_WINDOW)
+        finally:
+            desk.platform.approvals.resolve(ask, "deny")
+
+    out = asyncio.run(scenario())
+    assert out.get("state") == NR.DONE and out["made"] == 1, out
+    assert len(desk.router.calls) == 1
+    assert _row(desk).state == NR.DONE
 
 
 def test_a_chat_from_before_owners_were_kept_holds_the_pass(desk):

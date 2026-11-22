@@ -16,9 +16,12 @@ of the pass and again before each suggestion maker:
 * the night window is open (``harness.night.window_open``, 23:00 to 07:00
   by default), read through :data:`CLOCK` (tests set it; never a sleep);
 * Iron Jarvis is idle: ``routes/system.activity_snapshot`` says nothing is
-  busy (no live run, no running workflow, no chat or coding reply, no
-  working terminal), no chat changed in the last :data:`IDLE_CHAT_S` (30
-  minutes), no night task is running;
+  ``working`` (no live run, no running workflow, no chat or coding reply,
+  no working terminal), no chat changed in the last :data:`IDLE_CHAT_S` (30
+  minutes), no night task is running. Work parked on the owner with no
+  clock does not hold it (a workflow run waiting for an answer, an attended
+  run on its card, a terminal showing its question, a dev server left
+  running: ``busy`` counts those, ``working`` does not);
 * tonight's review has not finished (its ``nightreview`` row is not done or
   skipped). A pass cut off midway (the PC became busy, the window closed, a
   restart) leaves its row ``waiting`` with what it already ran and why it
@@ -272,7 +275,13 @@ def busy_reason(d: Any, at: datetime) -> str:
         from ..daemon.routes.system import activity_snapshot
         from ..harness.night import RUNNING as NIGHT_RUNNING, NightTaskRecord
 
-        if activity_snapshot(d).get("busy"):
+        # ``working``, never ``busy``: ``busy`` also counts work parked on
+        # the owner with no clock (a workflow run waiting for an answer, an
+        # attended run on its card, a terminal showing its question, a dev
+        # server left running), so one card open overnight held every pass
+        # and nothing said why. ``working`` is the part that runs by itself
+        # (``routes/system._working``, the sleep blocker's own reading).
+        if activity_snapshot(d).get("working"):
             return SKIP_BUSY
         engine = d.platform.engine
         with session_scope(engine) as db:
