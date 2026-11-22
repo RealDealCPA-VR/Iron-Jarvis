@@ -42,11 +42,13 @@ export interface ProofActions {
   rewindAt?: ReadonlySet<string>;
 }
 
-/** The daemon's words with `code` drawn as code (a command, a file name). */
+/** The daemon's words with `code` drawn as code (a command, a file name).
+ *  Wrapped where it must be, never mid-name: opened at 390 px, `break-all`
+ *  split `limits.py` at a line's end; a long command still wraps. */
 export function withCode(text: string): ReactNode[] {
   return text.split("`").map((part, i) =>
     i % 2 === 1 ? (
-      <code key={i} className="break-all rounded bg-white/[0.06] px-1 font-mono text-[11.5px] text-zinc-300">
+      <code key={i} className="rounded bg-white/[0.06] px-1 font-mono text-[11.5px] text-zinc-300 [overflow-wrap:anywhere]">
         {part}
       </code>
     ) : (
