@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.564.0
+
+**Sort a scanned pile into its documents.** One PDF that holds a whole scanned pile becomes separate, named documents in their folders, after you check the plan.
+
 ## v1.563.0
 
 **Quick Ask: the answer appears right there.** Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows the key that is live, if another app holds that one), type your question, and press Enter.
@@ -77,7 +81,3 @@
 ## v1.548.0
 
 **Scroll back to the start of a long chat.** In a long chat, scroll up and the earlier messages load in place, back to the first one kept.
-
-## v1.547.0
-
-**Ask what was done before, in any chat.** You can now ask Iron Jarvis about earlier work in plain words, in any chat and from an agent: "what did we do in this folder?", "what have we done on the price list?", "have I worked on this before?".
