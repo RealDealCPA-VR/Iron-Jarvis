@@ -13,7 +13,9 @@ pass; concurrent code passes however starved the machine is. The v1.257.0 cut
 asserted a wall-clock RATIO (four packs under twice one pack) and went red on
 the release runner at 3.21x with nothing wrong -- a ratio between two sleeps is
 still a measurement of the scheduler, and a loaded scheduler starts four threads
-late enough to look serial.
+late enough to look serial. The hung-packs test followed in v1.558.3: it is
+proven by ORDER (every build started before the first pack is given up), never
+by a ratio of two wall times.
 
 Fully offline: FakeTransport, and a barrier.
 """
@@ -139,17 +141,54 @@ def test_a_slow_pack_does_not_eat_another_packs_timeout_budget(monkeypatch):
     Three packs that all hang must cost about ONE timeout, not three. Serially
     the same three cost 3x the ceiling, which is how a single wedged pack used
     to turn into a boot that looked broken.
+
+    Proven by ORDER, not by a stopwatch (v1.558.3): every hung pack's build
+    must have STARTED before the FIRST pack is given up. A serial loop gives
+    the first pack up before the second one starts, so it cannot pass. The
+    v1.257.0 cut compared three packs' wall time with one pack's (under 2x)
+    and passed only on its retry on a loaded runner with nothing wrong: the
+    work after a give-up (the load record, the log line) was on the clock too.
+    The concurrent load fails this only if a pool worker waits longer than the
+    whole timeout (2 s) just to start.
     """
-    monkeypatch.setenv("IRONJARVIS_MCP_CONNECT_TIMEOUT", "0.4")
-    _slow_transport(monkeypatch, lambda _name: 5.0)  # never answers in time
+    monkeypatch.setenv("IRONJARVIS_MCP_CONNECT_TIMEOUT", "2")
+    lock = threading.Lock()
+    events: list[str] = []
+    let_go = threading.Event()
 
-    one, tools_one = _elapsed([_pack("hang-solo")])
-    three, tools_three = _elapsed([_pack(f"hang{i}") for i in range(3)])
+    def _build(cfg, _resolver):
+        with lock:
+            events.append(f"start:{cfg.get('name')}")
+        let_go.wait(30)  # never answers within the timeout; let go at the end
+        raise RuntimeError("let go after the test")
 
-    assert tools_one == [] and tools_three == [], "a hung pack is skipped, not waited on forever"
-    assert three < one * 2.0, (
-        f"three hung packs took {three:.3f}s against one's {one:.3f}s "
-        f"(ratio {three / one:.2f}x) - the timeouts are being paid one after another"
+    real_connect = mcp_tools_mod._connect_with_timeout
+
+    def _connect(cfg, name, resolver, timeout):
+        try:
+            return real_connect(cfg, name, resolver, timeout)
+        except Exception:
+            with lock:
+                events.append(f"gave_up:{name}")
+            raise
+
+    monkeypatch.setattr(mcp_tools_mod, "_build_transport", _build)
+    monkeypatch.setattr(mcp_tools_mod, "_connect_with_timeout", _connect)
+    try:
+        tools = mcp_tools([_pack(f"hang{i}") for i in range(3)])
+    finally:
+        let_go.set()
+
+    assert tools == [], "a hung pack is skipped, not waited on forever"
+    assert sorted(e for e in events if e.startswith("gave_up:")) == [
+        "gave_up:hang0",
+        "gave_up:hang1",
+        "gave_up:hang2",
+    ], f"every hung pack was given up on its own: {events}"
+    first_give_up = next(i for i, e in enumerate(events) if e.startswith("gave_up:"))
+    assert sorted(events[:first_give_up]) == ["start:hang0", "start:hang1", "start:hang2"], (
+        f"events {events}: a pack was given up before every hung pack had started "
+        "- the timeouts are being paid one after another"
     )
 
 
