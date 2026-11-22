@@ -12549,7 +12549,9 @@ async def _gather_grounding(
         if isinstance(r, BaseException):
             raise r
     got = {name: r for (name, _fn), r in zip(hops, results) if name not in out.late}
-    out.used = _used.merge(told)
+    # The chat the turn is IN is the conversation itself, never an "Earlier
+    # chat" from memory (both lanes come through here; ``memory.used.merge``).
+    out.used = _used.merge(told, own_chat=str(getattr(body, "thread_id", "") or ""))
 
     if resolved_proj is not None:
         instructions, brief, recent = got["project"]

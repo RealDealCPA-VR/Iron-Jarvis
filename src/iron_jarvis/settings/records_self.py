@@ -116,7 +116,11 @@ def _note(**fields: Any) -> None:
 
 
 def _q(text: Any, n: int = 80) -> str:
-    t = " ".join(str(text or "").split())
+    # Masked before it is cut: an Undo's words are a ledger line, and a row
+    # kept by an older path may still hold a secret-looking value.
+    from ..learning.engine import without_secrets
+
+    t = " ".join(without_secrets(str(text or "")).split())
     return "“" + (t if len(t) <= n else t[: n - 1].rstrip() + "…") + "”"
 
 

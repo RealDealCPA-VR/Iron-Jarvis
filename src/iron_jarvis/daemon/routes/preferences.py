@@ -50,6 +50,16 @@ def _run(fn, *args):
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
+def _said(text: Any) -> str:
+    """A preference's sentence as the ledger's summary says it: masked
+    (``learning.engine.without_secrets``) BEFORE it is cut at 120. A row kept
+    by an older path (``POST /lessons``) may still hold a secret-looking
+    value, and the summary is a ledger line, which never carries one."""
+    from ...learning.engine import without_secrets
+
+    return without_secrets(str(text or ""))[:120]
+
+
 def register(app: FastAPI, d) -> None:
     """Attach the preference routes to *app*; ``d`` is the create_app deps object."""
 
@@ -127,8 +137,8 @@ def register(app: FastAPI, d) -> None:
             out["action_id"] = await asyncio.to_thread(
                 lambda: _pr.journal_removal(
                     d.platform, tool="preference_edit", record="preference", name=pref_id, prior=prior,
-                    summary=(f"Changed the preference “{str(prior.get('text') or '')[:120]}” to "
-                             f"“{str(row.text or '')[:120]}”."),
+                    summary=(f"Changed the preference “{_said(prior.get('text'))}” to "
+                             f"“{_said(row.text)}”."),
                     extra={"after": after},
                 )
             )
@@ -149,7 +159,7 @@ def register(app: FastAPI, d) -> None:
             out["action_id"] = await asyncio.to_thread(
                 lambda: _pr.journal_removal(
                     d.platform, tool="preference_forget", record="preference", name=pref_id, prior=prior,
-                    summary=f"Forgot the preference “{str(prior.get('text') or '')[:120]}”.",
+                    summary=f"Forgot the preference “{_said(prior.get('text'))}”.",
                     extra={"after": None},
                 )
             )

@@ -27,7 +27,9 @@ an agent run, terminal help or another app that calls the same functions
 records nothing. Because the list is built where the text is built, it never
 says more than the turn was told: what the client wall, the Local only rule
 or the injection scanner kept out was never noted. A hop that missed the
-soft deadline was not in the prompt, so its items are dropped with it.
+soft deadline was not in the prompt, so its items are dropped with it. The
+chat the turn is IN is the conversation itself, never memory: its own
+earlier messages, recalled by the fabric, are left out (:func:`merge`).
 
 THE WORDS ARE HONEST. The list is what Iron Jarvis was GIVEN for the reply,
 not a claim about what the model relied on. ``shaped`` (:func:`finish`) says
@@ -42,7 +44,8 @@ An item, as it goes on the reply::
 
 ``kind`` is one of :data:`KINDS`; ``label`` is at most :data:`LABEL_CHARS`
 characters and passes ``workmap.keys.clean_line`` (THE mask of the work
-record: a secret never reaches a label); ``when`` an ISO time or ""; ``href``
+record: a secret never reaches a label), and ``id`` passes the same mask
+(``keys.mask_line``); ``when`` an ISO time or ""; ``href``
 a page in the app or ""; ``fix`` the actions the item supports
 (``correct`` / ``forget``: a kept preference and a client's preference in
 15-a; 15-b widens it). At most :data:`MAX_ITEMS` items, in hop order.
@@ -176,11 +179,14 @@ def make(kind: str, ref: object, label: object, *, when: Any = None, href: objec
     :func:`finish` and never leave this module."""
     if kind not in KINDS:
         return None
-    rid = " ".join(str(ref or "").split())[:200]
+    from ..workmap.keys import clean_line, mask_line
+
+    # The id rides the reply and the saved chat line beside the label, so it
+    # passes the same mask (a note with no ref of its own is named by its
+    # title). RAISES when it cannot mask: dropped, like the label.
+    rid = " ".join(mask_line(str(ref or "")[:2000]).split())[:200]
     if not rid:
         return None
-    from ..workmap.keys import clean_line
-
     shown = clean_line(str(label or ""), LABEL_CHARS)  # RAISES when it cannot mask: dropped
     if not shown.strip():
         return None
@@ -241,14 +247,24 @@ def run_collecting(fn: Callable[[], Any]) -> "tuple[Any, Told]":
         _SINK.reset(token)
 
 
-def merge(parts: Iterable[Iterable[dict[str, Any]]]) -> Told:
+def merge(parts: Iterable[Iterable[dict[str, Any]]], *, own_chat: str = "") -> Told:
     """The hops' items in hop order, one per ``(kind, id)`` (the first one
     wins: a preference told by the lessons hop keeps its fixes when the
     memory fabric told it too). NOT capped here: :func:`finish_with_more`
     caps last, once it knows what shaped the reply. ``dropped`` sums what
-    each hop told past its own cap. Never raises."""
+    each hop told past its own cap. Never raises.
+
+    ``own_chat`` is the saved chat the turn is IN (the body's
+    ``thread_id``). The page saves and indexes a chat after every turn, so
+    the memory fabric recalls that chat's own earlier messages like any
+    other conversation. They are the conversation itself, not something
+    remembered from elsewhere: a ``chat`` item for it is left out (and not
+    counted), or the box would open by itself under almost every follow-up
+    and call the chat on screen an "Earlier chat" (D-15.1). The work block
+    already leaves the same chat out (``work_block(exclude_ref=…)``)."""
     out = Told()
     seen: set[tuple[str, str]] = set()
+    own = str(own_chat or "").strip()
     try:
         for part in parts or ():
             out.dropped += max(0, int(getattr(part, "dropped", 0) or 0))
@@ -256,6 +272,8 @@ def merge(parts: Iterable[Iterable[dict[str, Any]]]) -> Told:
                 if not isinstance(item, dict):
                     continue
                 key = (str(item.get("kind") or ""), str(item.get("id") or ""))
+                if own and key == ("chat", own):
+                    continue
                 if key in seen:
                     continue
                 seen.add(key)

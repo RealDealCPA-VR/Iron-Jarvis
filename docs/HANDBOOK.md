@@ -2044,7 +2044,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## See what memory gave a reply, and fix a preference (v1.562.0)
+## See what memory gave a reply, and fix a preference (v1.563.0)
 
 When a chat reply was given things Iron Jarvis remembers (your preferences,
 a client's preferences, earlier work in the folder and its recap, notes,
@@ -2062,7 +2062,8 @@ The box is what Iron Jarvis was **given** for that reply, not a claim about
 what the answer relied on. It lists only what was really put in front of
 the model: what Local only, a client's wall or the safety check kept out is
 never listed, and neither is anything that arrived too late for the reply.
-Secrets are masked in it.
+The chat you are in is never listed as an earlier chat: its own messages
+are the conversation, not memory. Secrets are masked in it.
 
 **It appears by itself**, and fades after about eight seconds, but only:
 

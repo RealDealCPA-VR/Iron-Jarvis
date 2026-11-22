@@ -437,8 +437,14 @@ def add_lesson(engine, text: Any, scope: str = "user") -> LessonRecord:
     """A lesson the USER wrote ("remember that I prefer…") — THE body of
     ``POST /lessons`` (v1.438.0: lifted so chat's ``lesson_add`` takes the
     same path): weighted as an explicit preference, confirmed and "said".
-    Raises :class:`PreferenceInvalid` for an empty text. Blocking."""
-    clean = str(text or "").strip()
+    Raises :class:`PreferenceInvalid` for an empty text. Blocking.
+
+    Every secret-looking value is masked before it is kept
+    (``engine.without_secrets``, the v1.499.3 rule: a lesson is told to every
+    later turn, and its words reach the ledger when it is changed later)."""
+    from .engine import without_secrets
+
+    clean = without_secrets(str(text or "")).strip()
     if not clean:
         raise PreferenceInvalid("text is required")
     with session_scope(engine) as db:
