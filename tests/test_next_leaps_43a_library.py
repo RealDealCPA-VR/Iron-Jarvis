@@ -35,7 +35,10 @@ from iron_jarvis.settings import records_library as LT
 from iron_jarvis.fleet import pulls as P
 from iron_jarvis.fleet.models import FleetNode
 
+#: A download size, as the registries print it (decimal).
 GB = 1_000_000_000
+#: Memory and drive room, as Windows shows them (binary, labelled GB).
+GIB = 1024**3
 #: The manifest the stand-in registry has for llama3.2 (config + two layers).
 LLAMA_LAYERS = (2_019_377_376, 12_403)
 LLAMA_CONFIG = 561
@@ -202,13 +205,19 @@ class _Tick:
         return self.t
 
 
-HW64 = HW.Hardware(total_ram=64 * GB, free_ram=40 * GB, gpus=None, model_dir="C:/models",
-                   model_disk_free=412 * GB, model_disk_total=1000 * GB)
+#: A PC sold as 64 GB, as psutil reads it (a little under 64 GiB), with
+#: 412 GB free as Explorer shows it.
+HW64 = HW.Hardware(total_ram=int(64 * GIB * 0.995), free_ram=40 * GIB, gpus=None, model_dir="C:/models",
+                   model_disk_free=412 * GIB, model_disk_total=1000 * GIB)
 
 
-def _wire(tmp_path, nodes, *, hw: HW.Hardware = HW64, monkeypatch=None):
+def _wire(tmp_path, nodes, *, hw: HW.Hardware = HW64, monkeypatch=None, persist=False):
     engine = make_engine(tmp_path / "ij.db")
     bus = EventBus()
+    if persist:
+        from iron_jarvis.core.db import persist_event
+
+        bus.add_handler(lambda ev: persist_event(engine, ev))
     seen: list[tuple[str, dict[str, Any]]] = []
     real = bus.publish
 
@@ -223,7 +232,9 @@ def _wire(tmp_path, nodes, *, hw: HW.Hardware = HW64, monkeypatch=None):
     d = types.SimpleNamespace(platform=platform, fleet=_Registry(list(nodes)), fleet_sampler=None,
                               _persist_config=lambda keys: None)
     done: list[tuple[str, str]] = []
-    platform._model_pulls = P.PullManager(engine, bus, clock=_Tick(), on_done=lambda n, m: done.append((n, m)))
+    platform._model_pulls = P.PullManager(
+        engine, bus, clock=_Tick(), on_done=lambda n, m: done.append((n, m)), places=P._places_of(d)
+    )
     if monkeypatch is not None:
         monkeypatch.setattr(L, "hardware_for", lambda target, force=False: hw if target.this_pc else HW.NOT_KNOWN)
     app = FastAPI()
@@ -231,8 +242,8 @@ def _wire(tmp_path, nodes, *, hw: HW.Hardware = HW64, monkeypatch=None):
     return d, app, seen, done
 
 
-def _box(url: str, kind: str = "ollama", node_id: str = "box") -> FleetNode:
-    return FleetNode(id=node_id, label="Ollama box", base_url=url, kind=kind)
+def _box(url: str, kind: str = "ollama", node_id: str = "box", routable: bool = False) -> FleetNode:
+    return FleetNode(id=node_id, label="Ollama box", base_url=url, kind=kind, routable=routable)
 
 
 # --------------------------------------------------------------------------- #
@@ -311,7 +322,9 @@ def test_the_size_is_measured_from_the_registry_and_a_server_with_no_answer_read
         # The registry has no manifest for qwen3:8b: the list's own size, marked "about".
         about = c.post("/fleet/nodes/box/models/size", json={"model": "Qwen3 8B"}).json()
     assert measured["size_bytes"] == LLAMA_MEASURED and measured["size_from"] == "measured"
-    assert measured["size_words"] == "2.0 GB" and measured["free_after"] == 412 * GB - LLAMA_MEASURED
+    assert measured["size_words"] == "2.0 GB" and measured["free_after"] == 412 * GIB - LLAMA_MEASURED
+    # The download's size as the registry prints it; the drive's room as Explorer shows it.
+    assert measured["free_after_words"] == "410 GB free after"
     assert measured["source"] == "Ollama's library" and measured["can_start"] is True
     assert "free after" in measured["card_words"] and "Llama 3.2 3B" in measured["card_words"]
     assert about["model"] == "qwen3:8b" and about["size_from"] == "about"
@@ -536,7 +549,8 @@ async def test_model_download_from_chat_starts_and_returns_a_download_card(tmp_p
     assert result.ok, result.error
     assert "not finished" in result.output and "Model servers › Models" in result.output
     card = result.data["model_download"]
-    d.platform._model_pulls.wait(card["id"], timeout=20)
+    # Waited off the loop: the download publishes its events on this loop.
+    await asyncio.to_thread(d.platform._model_pulls.wait, card["id"], 20)
     cards = config_cards_from_result("model_download", result)
     assert cards == [{"kind": "download", **{k: card[k] for k in (
         "id", "node_id", "model", "name", "server", "source", "size_words", "free_after_words", "bytes_total")}}]
@@ -630,7 +644,8 @@ def test_the_doctor_reads_graphics_memory_as_the_library_does(monkeypatch):
     monkeypatch.setattr(HW, "gpus", lambda **k: None)
     broken = doctor.check_graphics_memory()
     assert broken["ok"] is False and broken["fix"]
-    monkeypatch.setattr(HW, "gpus", lambda **k: (HW.Gpu("RTX", 24 * GB, 1),))
+    # nvidia-smi's answer for a 24 GB card (MiB): read as the card's box says it.
+    monkeypatch.setattr(HW, "gpus", lambda **k: (HW.Gpu("RTX", 24564 * 1024 * 1024, 1),))
     assert doctor.check_graphics_memory()["detail"] == "Graphics memory is read for the model library: RTX (24 GB)."
 
 
@@ -679,3 +694,177 @@ def test_ollama_on_this_pc_is_never_a_target_while_the_suite_keeps_the_real_one_
     monkeypatch.setattr(cli_detect, "_OLLAMA_PROBE_FORCED_OFF", False)
     (here,) = L.targets(d)
     assert here.id == L.THIS_PC_OLLAMA and here.this_pc and here.seen_only and here.downloads
+
+
+# --------------------------------------------------------------------------- #
+# 9. the words are true on the owner's own PC
+# --------------------------------------------------------------------------- #
+def test_memory_and_drive_room_read_as_windows_shows_them():
+    """A PC sold as 64 GB reads "64 GB" (psutil gives a little under 64 GiB),
+    never "68 GB"; a download's size stays as its registry prints it."""
+    assert L.fit_words(L.FITS, HW.Hardware(total_ram=int(64 * GIB * 0.995))) == "Fits this PC (64 GB)"
+    for sold in (16, 32, 64, 128):
+        # What psutil reads: the memory less what the hardware keeps back.
+        pc = HW.Hardware(total_ram=sold * GIB - 300 * 1024 * 1024)
+        assert L.fit_words(L.FITS, pc) == f"Fits this PC ({sold} GB)", sold
+    # This PC's own reading (31.1 GB usable, as Windows Settings says it).
+    assert L.fmt_room(33_410_154_496) == "31 GB"
+    here = L.Target("box", "Ollama box", "ollama", "http://127.0.0.1:1", True)
+    card = HW.Hardware(total_ram=int(64 * GIB * 0.995), gpus=(HW.Gpu("RTX", 24564 * 1024 * 1024, 1),),
+                       model_disk_free=412 * GIB, model_disk_total=1000 * GIB)
+    assert L.summary_words(here, card, []).startswith(
+        "This PC has 64 GB of memory, a graphics card with 24 GB and 412 GB free on the drive Ollama uses."
+    )
+    # The memory a model needs is in the PC's own units, so the two compare.
+    row = L.entry_view(L.entry_for("qwen3:8b"), card, [], downloads=True)
+    assert row["memory_words"] == f"about {L.fmt_room(row['memory_bytes'])}"
+    # A download's size: as Ollama's registry and "ollama list" print it.
+    assert L.fmt_bytes(LLAMA_MEASURED) == "2.0 GB" and L.fmt_room(LLAMA_MEASURED) == "1.9 GB"
+    low = HW.Hardware(total_ram=1, model_disk_free=12 * GIB, model_disk_total=100 * GIB)
+    assert L.floor_problem("x", 3 * GB, low) == (
+        "Not downloaded: x needs 3.0 GB, which would leave 9.2 GB free on the drive Ollama uses, less than a "
+        "tenth of it (10 GB). Make room on that drive first."
+    )
+
+
+def test_a_finished_download_says_the_model_menu_only_where_the_menu_lists_it(tmp_path, standin, monkeypatch):
+    d, app, seen, _done = _wire(tmp_path, [_box(standin.url)], monkeypatch=monkeypatch)
+    mgr = d.platform._model_pulls
+    # A saved model server that is not routable never reaches the model menu.
+    assert [t.in_menu for t in L.targets(d)] == [False]
+    with TestClient(app) as c:
+        row = c.post("/fleet/nodes/box/models/download", json={"model": "llama3.2"}).json()["download"]
+        mgr.wait(row["id"], timeout=20)
+        listed = c.get("/fleet/downloads").json()["downloads"]
+    assert row["server"] == "Ollama box" and row["in_menu"] is False
+    (ended,) = [p for t, p in seen if t == EventType.MODEL_DOWNLOAD_ENDED]
+    assert ended["state"] == P.DONE and ended["server"] == "Ollama box" and ended["in_menu"] is False
+    assert listed[0]["state"] == P.DONE and listed[0]["in_menu"] is False
+    # Once that server is routable, its row says so (read at the time it is listed).
+    d.fleet._nodes["box"] = _box(standin.url, routable=True)
+    assert [t.in_menu for t in L.targets(d)] == [True]
+    assert mgr.list()[0]["in_menu"] is True
+    # Ollama on this PC that is not a saved server is in the model menu.
+    monkeypatch.setattr(L, "_ollama_seen_here", lambda: True)
+    monkeypatch.setattr(L, "_this_pc_ollama_address", lambda: standin.url)
+    (t,) = L.targets(types.SimpleNamespace(fleet=_Registry([]), fleet_sampler=None))
+    assert t.id == L.THIS_PC_OLLAMA and t.in_menu is True
+
+
+async def test_model_download_from_chat_says_where_the_model_lands(tmp_path, standin, monkeypatch):
+    d, *_ = _wire(tmp_path, [_box(standin.url)], monkeypatch=monkeypatch)
+    platform = types.SimpleNamespace(config_writer=types.SimpleNamespace(d=d))
+    first = await LT.ModelDownloadTool(platform).execute({"model": "llama3.2"}, None)
+    assert first.ok, first.error
+    assert "Once it is done it is on Ollama box." in first.output and "model menu" not in first.output
+    # Waited off the loop: the download publishes its events on this loop.
+    end = await asyncio.to_thread(d.platform._model_pulls.wait, first.data["model_download"]["id"], 20)
+    assert end["state"] == P.DONE
+    d.fleet._nodes["box"] = _box(standin.url, routable=True)
+    again = await LT.ModelDownloadTool(platform).execute({"model": "llama3.2"}, None)
+    assert again.ok, again.error
+    assert "Once it is done it is in the model menu." in again.output
+    await asyncio.to_thread(d.platform._model_pulls.wait, again.data["model_download"]["id"], 20)
+
+
+async def test_model_library_from_chat_says_how_far_a_running_download_has_got(tmp_path, standin, monkeypatch):
+    standin.mode = "hang"
+    d, app, *_ = _wire(tmp_path, [_box(standin.url)], monkeypatch=monkeypatch)
+    platform = types.SimpleNamespace(config_writer=types.SimpleNamespace(d=d))
+    with TestClient(app) as c:
+        row = c.post("/fleet/nodes/box/models/download", json={"model": "llama3.2"}).json()["download"]
+        assert standin.started.wait(10)
+        result = await LT.ModelLibraryTool(platform).execute({}, None)
+        c.post(f"/fleet/downloads/{row['id']}/cancel")
+    assert result.ok, result.error
+    line = next(x for x in result.output.splitlines() if x.startswith("Downloading now"))
+    assert "Llama 3.2 3B (llama3.2) into Ollama box" in line and "% so far" in line, line
+    assert "Cancel is on its card and on Model servers › Models" in line
+
+
+def test_the_real_after_download_step_tells_the_model_menu_and_reads_the_drive_again(tmp_path, standin, monkeypatch):
+    """Through ``pulls.manager_for`` (no step injected): what makes "the model
+    appears in the model menu" true. The menu's list of that server is
+    forgotten (``fleet-<id>``, or ``ollama`` for Ollama on this PC), the drive
+    is read again, and the servers are checked again on their own thread."""
+    from iron_jarvis.providers import discovery
+
+    cleared: list[str] = []
+    monkeypatch.setattr(discovery, "clear", lambda provider="": cleared.append(provider))
+    forgot: list[bool] = []
+    real_forget = HW.forget
+    monkeypatch.setattr(HW, "forget", lambda: (forgot.append(True), real_forget())[-1])
+    monkeypatch.setattr(L, "hardware_for", lambda target, force=False: HW64 if target.this_pc else HW.NOT_KNOWN)
+
+    class Sampler:
+        def __init__(self) -> None:
+            self.checked = threading.Event()
+            self.force: Any = None
+
+        def sample_once(self, force: bool = False) -> None:
+            self.force = force
+            self.checked.set()
+
+        def snapshots(self) -> list:
+            return []
+
+    def daemon(name: str, nodes: list[FleetNode]) -> Any:
+        engine = make_engine(tmp_path / f"{name}.db")
+        platform = types.SimpleNamespace(engine=engine, event_bus=None,
+                                         config=Config(home=tmp_path, project_root=tmp_path))
+        return types.SimpleNamespace(platform=platform, fleet=_Registry(nodes), fleet_sampler=Sampler())
+
+    saved = daemon("saved", [_box(standin.url, routable=True)])
+    started = P.start_download(saved, "box", "llama3.2")
+    mgr = P.manager_for(saved)
+    assert mgr is saved.platform._model_pulls and mgr.on_done is not None
+    end = mgr.wait(started["download"]["id"], timeout=20)
+    assert end["state"] == P.DONE and end["in_menu"] is True and end["server"] == "Ollama box"
+    assert "fleet-box" in cleared, cleared
+    assert forgot, "this PC's drive was not read again"
+    assert saved.fleet_sampler.checked.wait(10) and saved.fleet_sampler.force is True
+
+    cleared.clear()
+    monkeypatch.setattr(L, "_ollama_seen_here", lambda: True)
+    monkeypatch.setattr(L, "_this_pc_ollama_address", lambda: standin.url)
+    here = daemon("here", [])
+    started = P.start_download(here, L.THIS_PC_OLLAMA, "llama3.2")
+    end = P.manager_for(here).wait(started["download"]["id"], timeout=20)
+    assert end["state"] == P.DONE and end["server"] == "Ollama on this PC" and end["in_menu"] is True
+    assert "ollama" in cleared and "fleet-box" not in cleared, cleared
+
+
+def test_download_progress_stays_off_the_activity_page(tmp_path, standin, monkeypatch):
+    """Every event is stored; the Activity page (the audit timeline) shows a
+    download ONCE, as its end, never its up to 100 progress steps."""
+    from sqlmodel import select
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import EventRecord
+    from iron_jarvis.eval.observability import AuditTimeline
+
+    from iron_jarvis.core.db import init_db
+
+    d, app, *_ = _wire(tmp_path, [_box(standin.url)], monkeypatch=monkeypatch, persist=True)
+    init_db(d.platform.engine)
+    with TestClient(app) as c:
+        row = c.post("/fleet/nodes/box/models/download", json={"model": "llama3.2"}).json()["download"]
+        d.platform._model_pulls.wait(row["id"], timeout=20)
+    with session_scope(d.platform.engine) as db:
+        stored = [r.type for r in db.exec(select(EventRecord))]
+    assert stored.count("model.download.progress") >= 3 and stored.count("model.download.ended") == 1, stored
+    timeline = AuditTimeline(d.platform.engine)
+    for kind in (None, "action"):
+        shown = [e["type"] for e in timeline.query(kind=kind)["entries"]]
+        assert shown == ["model.download.ended"], (kind, shown)
+    assert timeline.query(type="model.download.progress")["entries"] == []
+
+
+def test_with_no_model_server_the_list_still_shows_what_fits_this_pc(tmp_path, monkeypatch):
+    d = types.SimpleNamespace(fleet=_Registry([]), fleet_sampler=None)
+    monkeypatch.setattr(L, "hardware_for", lambda target, force=False: HW64 if target.this_pc else HW.NOT_KNOWN)
+    view = L.library_view(d)
+    assert view["servers"] == [] and view["server"] is None
+    assert view["summary"].startswith(L.NO_SERVER_WORDS + " This PC has 64 GB of memory.")
+    assert len(view["models"]) == len(L.catalog()) and not any(r["can_download"] for r in view["models"])
+    assert {r["fit"] for r in view["models"]} >= {L.FITS, L.TOO_BIG}

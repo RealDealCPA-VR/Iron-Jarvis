@@ -137,6 +137,10 @@ CLOUD_WORDS = (
     "{name} is one of Ollama's cloud models: it runs on Ollama's servers, not on your computer, so the "
     "library does not download it."
 )
+NO_SERVER_WORDS = (
+    "No model server yet. Install Ollama on this PC (ollama.com/download) or add a model server on "
+    "Connections to download one of these."
+)
 BAD_NAME_WORDS = "That is not a model name Iron Jarvis can download. Use a name from the list, like qwen3:8b."
 PARTIAL_KEPT_WORDS = "Ollama keeps the part already downloaded; Download again carries on from there."
 
@@ -303,7 +307,10 @@ def source_words(name: str) -> str:
 # sizes and fit
 # --------------------------------------------------------------------------- #
 def fmt_bytes(n: Any) -> str:
-    """``5.2 GB`` / ``412 GB`` / ``274 MB``; ``""`` for nothing known."""
+    """A DOWNLOAD size as the registries and ``ollama list`` print it
+    (decimal): ``5.2 GB`` / ``274 MB``; ``""`` for nothing known. The PC's
+    memory and the drive's room are :func:`fmt_room` (binary, as Windows
+    shows them)."""
     if not isinstance(n, (int, float)) or isinstance(n, bool) or n < 0:
         return ""
     if n >= 1e9:
@@ -312,6 +319,10 @@ def fmt_bytes(n: Any) -> str:
     if n >= 1e6:
         return f"{n / 1e6:.0f} MB"
     return f"{max(1, round(n / 1e3))} KB"
+
+
+#: Memory and drive room in words (binary GB, as Windows shows them).
+fmt_room = HW.fmt_room
 
 
 def memory_needed(params_b: float | None = None, size_bytes: int | None = None) -> int | None:
@@ -345,7 +356,7 @@ def fit(need: int | None, hw: HW.Hardware) -> tuple[str, str]:
 
 def fit_words(mark: str, hw: HW.Hardware) -> str:
     if mark == FITS:
-        return f"Fits this PC ({fmt_bytes(hw.total_ram)})" if hw.total_ram else "Fits this PC"
+        return f"Fits this PC ({fmt_room(hw.total_ram)})" if hw.total_ram else "Fits this PC"
     if mark == TIGHT:
         return "Tight"
     if mark == TOO_BIG:
@@ -377,12 +388,12 @@ def floor_problem(name: str, size: int | None, hw: HW.Hardware, where: str = "th
         return ""
     if after < 0:
         return (
-            f"Not downloaded: {name} needs {fmt_bytes(size)} and {where} has {fmt_bytes(hw.model_disk_free)} "
+            f"Not downloaded: {name} needs {fmt_bytes(size)} and {where} has {fmt_room(hw.model_disk_free)} "
             "free. Make room on that drive first."
         )
     return (
-        f"Not downloaded: {name} needs {fmt_bytes(size)}, which would leave {fmt_bytes(after)} free on "
-        f"{where}, less than a tenth of it ({fmt_bytes(floor)}). Make room on that drive first."
+        f"Not downloaded: {name} needs {fmt_bytes(size)}, which would leave {fmt_room(after)} free on "
+        f"{where}, less than a tenth of it ({fmt_room(floor)}). Make room on that drive first."
     )
 
 
@@ -555,6 +566,11 @@ class Target:
     #: True for Ollama on this PC that is not a saved model server yet.
     seen_only: bool = False
     listed: tuple = ()
+    #: Does what this server has reach the model menu? Ollama on this PC
+    #: does (the menu finds it); a saved model server only when it is
+    #: routable (the menu lists ``fleet.routable_nodes()`` alone). A
+    #: finished download says "in the model menu" only when this is True.
+    in_menu: bool = False
 
     @property
     def downloads(self) -> bool:
@@ -639,13 +655,16 @@ def targets(d: Any) -> list[Target]:
                 this_pc=HW.on_this_pc(base),
                 node=node,
                 listed=_listed_of(sampler, str(node.id)),
+                in_menu=getattr(node, "routable", False) is True,
             )
         )
     has_here = any(t.kind == "ollama" and t.this_pc for t in out) or any(t.id == THIS_PC_OLLAMA for t in out)
     if not has_here and _ollama_seen_here():
         address = _this_pc_ollama_address()
         if HW.on_this_pc(address):
-            out.append(Target(THIS_PC_OLLAMA, "Ollama on this PC", "ollama", address, True, seen_only=True))
+            out.append(
+                Target(THIS_PC_OLLAMA, "Ollama on this PC", "ollama", address, True, seen_only=True, in_menu=True)
+            )
     out.sort(key=lambda t: (t.kind != "ollama", not t.this_pc))
     return out
 
@@ -700,7 +719,8 @@ def entry_view(e: Entry, hw: HW.Hardware, installed: list[dict[str, Any]], *, do
         "size_from": "about" if e.about_bytes else "",
         "size_words": (f"about {fmt_bytes(e.about_bytes)}" if e.about_bytes else "size shown before it starts"),
         "memory_bytes": need,
-        "memory_words": (f"about {fmt_bytes(need)}" if need else "not known"),
+        # Memory, in the units the PC's own memory is shown in (fit_words).
+        "memory_words": (f"about {fmt_room(need)}" if need else "not known"),
         "fit": mark,
         "fit_basis": basis,
         "fit_words": fit_words(mark, hw),
@@ -718,12 +738,12 @@ def summary_words(target: Target, hw: HW.Hardware, rows: list[dict[str, Any]]) -
         return NOT_KNOWN_WORDS
     parts: list[str] = []
     if hw.total_ram:
-        mem = f"{fmt_bytes(hw.total_ram)} of memory"
+        mem = f"{fmt_room(hw.total_ram)} of memory"
         if hw.gpu_total:
-            mem += f", a graphics card with {fmt_bytes(hw.gpu_total)}"
+            mem += f", a graphics card with {fmt_room(hw.gpu_total)}"
         parts.append(mem)
     if hw.model_disk_free is not None and target.kind == "ollama":
-        parts.append(f"{fmt_bytes(hw.model_disk_free)} free on {target.where_words()}")
+        parts.append(f"{fmt_room(hw.model_disk_free)} free on {target.where_words()}")
     lead = f"This PC has {' and '.join(parts)}." if parts else "This PC's memory could not be read."
     fits = sum(1 for r in rows if r.get("fit") == FITS)
     known = [r for r in rows if r.get("fit") != UNKNOWN]
@@ -747,6 +767,7 @@ def target_view(t: Target) -> dict[str, Any]:
         "kind": t.kind,
         "this_pc": t.this_pc,
         "seen_only": t.seen_only,
+        "in_menu": t.in_menu,
         "downloads": t.downloads,
         "abilities": dict(ABILITIES.get(t.kind, ABILITIES["unknown"])),
         "download_why": download_why(t),
@@ -771,9 +792,15 @@ def library_view(d: Any, node_id: str = "", q: str = "") -> dict[str, Any]:
         "free_floor": FREE_FLOOR,
     }
     if not all_targets:
-        view["summary"] = (
-            "No model server yet. Install Ollama on this PC (ollama.com/download) or add a model server on "
-            "Connections, and its models show here."
+        # Browse before installing anything: the list marked against this
+        # PC's memory, with no Download (there is nowhere to download to).
+        here = Target("", "this PC", "unknown", "", True)
+        hw = hardware_for(here)
+        rows = [entry_view(e, hw, [], downloads=False) for e in catalog()]
+        view.update(
+            hardware=hw.view(),
+            models=rows,
+            summary=f"{NO_SERVER_WORDS} {summary_words(here, hw, rows)}",
         )
         return view
     want = str(node_id or "").strip()
@@ -831,7 +858,7 @@ def preview(d: Any, node_id: str, model: str) -> dict[str, Any]:
     else:
         size_words = fmt_bytes(size) if size_from == "measured" else f"about {fmt_bytes(size)}"
     if after is not None:
-        after_words = f"{fmt_bytes(max(after, 0))} free after"
+        after_words = f"{fmt_room(max(after, 0))} free after"
     elif not target.this_pc:
         after_words = "free space after: not known (this server does not report it)"
     else:

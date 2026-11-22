@@ -11,7 +11,12 @@ leaps 43-a; idea 16 and idea 37 use the same call, ``model_download``).
   :data:`MAX_LINE` is dropped), never on the event loop. Progress is published
   as ``model.download.progress`` at most once per whole percent and once per
   :data:`PROGRESS_EVERY_S` (so at most about 100 events and 100 row writes a
-  download), and the end as ``model.download.ended``.
+  download), and the end as ``model.download.ended``. Progress is for the
+  live bar only: it is stored but kept off the Activity page
+  (``eval/observability._PROGRESS_EVENT_TYPES``), where a download is ONE
+  row, its end.
+* **Where it lands**: a row's ``server`` and ``in_menu`` (from
+  ``library.targets``); "in the model menu" is said only when ``in_menu``.
 * **Cancel** shuts the connection down and closes its socket (so a read that
   is waiting wakes at once on Windows and Linux); Ollama stops the pull and
   keeps the part already downloaded (said on the card: Download again carries
@@ -95,6 +100,13 @@ class _Live:
         self.thread: threading.Thread | None = None
         self.status = ""
         self.unreachable = UNREACHABLE_WORDS
+        #: The server's name and whether its models reach the model menu
+        #: (``library.Target.in_menu``), as they were when it started.
+        self.place: tuple[str, bool] = ("", False)
+
+
+#: ``{node id: (the server's name, does it reach the model menu)}``.
+Places = Callable[[], "dict[str, tuple[str, bool]]"]
 
 
 def _mask(text: str) -> str:
@@ -112,7 +124,15 @@ def server_words(raw: Any) -> str:
     return _mask(text)
 
 
-def view(row: ModelDownload, live: "_Live | None" = None) -> dict[str, Any]:
+def view(
+    row: ModelDownload, live: "_Live | None" = None, place: "tuple[str, bool] | None" = None
+) -> dict[str, Any]:
+    """One download as the page and the card read it. ``server`` and
+    ``in_menu`` say where the model is once it is done: "in the model menu"
+    only when ``in_menu`` (else "on <server>"; nothing known, neither)."""
+    if live is not None:
+        place = live.place
+    server, in_menu = place if place is not None else ("", False)
     total = live.total if live is not None and live.total else row.bytes_total
     done = live.done if live is not None else row.bytes_done
     percent = None
@@ -136,6 +156,8 @@ def view(row: ModelDownload, live: "_Live | None" = None) -> dict[str, Any]:
         "error": row.error,
         "size_words": L.fmt_bytes(total) if total else "",
         "done_words": L.fmt_bytes(done) if done else "0 MB",
+        "server": str(server or "")[:80],
+        "in_menu": in_menu is True,
     }
 
 
@@ -151,11 +173,13 @@ class PullManager:
         *,
         clock: Callable[[], float] = time.monotonic,
         on_done: "Callable[[str, str], None] | None" = None,
+        places: "Places | None" = None,
     ) -> None:
         self.engine = engine
         self.bus = bus
         self.clock = clock
         self.on_done = on_done
+        self.places = places
         self._lock = threading.Lock()
         self._live: dict[str, _Live] = {}
         self._by_node: dict[str, str] = {}
@@ -187,11 +211,22 @@ class PullManager:
             db.expunge(row)
             return row
 
+    def _places(self) -> "dict[str, tuple[str, bool]]":
+        """Where each server's downloads land (read once per answer); ``{}``
+        when not known, and then no row claims the model menu."""
+        if self.places is None:
+            return {}
+        try:
+            return dict(self.places())
+        except Exception:  # noqa: BLE001 — not known
+            return {}
+
     def get(self, row_id: str) -> dict[str, Any] | None:
         row = self._get_row(row_id)
         if row is None:
             return None
-        return view(row, self._live.get(row_id))
+        live = self._live.get(row_id)
+        return view(row, live, None if live is not None else self._places().get(row.node_id))
 
     def list(self, limit: int = LIST_LIMIT) -> list[dict[str, Any]]:
         from sqlmodel import select
@@ -202,7 +237,8 @@ class PullManager:
             )
             for r in rows:
                 db.expunge(r)
-        return [view(r, self._live.get(r.id)) for r in rows]
+        where = self._places() if rows else {}
+        return [view(r, self._live.get(r.id), where.get(r.node_id)) for r in rows]
 
     def running_on(self, node_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -273,6 +309,7 @@ class PullManager:
                 db.refresh(row)
                 db.expunge(row)
             live = _Live(row.id, target.id, row.bytes_total)
+            live.place = (str(target.label or ""), getattr(target, "in_menu", False) is True)
             if target.kind == "ollama" and target.this_pc:
                 live.unreachable = OLLAMA_NOT_ANSWERING
             self._live[row.id] = live
@@ -316,7 +353,7 @@ class PullManager:
             raise PullRefused("There is no such download.", status=404)
         if row.state == DOWNLOADING:
             row = self._update(row_id, state=STOPPED, error=CANCELLED_WORDS, finished_at=utcnow()) or row
-        return view(row)
+        return view(row, None, self._places().get(row.node_id))
 
     def wait(self, row_id: str, timeout: float = 30.0) -> dict[str, Any] | None:
         """Wait for a download's worker to end (tests and the chat card)."""
@@ -476,7 +513,8 @@ class PullManager:
             self._publish(loop, ENDED_EVENT, {
                 "id": live.id, "node_id": live.node_id, "model": model, "state": state,
                 "error": error, "bytes_done": live.done, "bytes_total": live.total,
-            } if row is None else {**view(row), "id": live.id})
+                "server": live.place[0], "in_menu": live.place[1],
+            } if row is None else {**view(row, None, live.place), "id": live.id})
 
 
 class _Cancelled(Exception):
@@ -490,7 +528,10 @@ class _Failed(Exception):
 def _after_download(d: Any) -> Callable[[str, str], None]:
     """What changes once a model is in: the model menu reads the server's
     list again, this PC's drive is read again, and the Model servers page's
-    next check sees it."""
+    next check sees it. The first three return at once and happen BEFORE
+    the ended event (so the page's re-read after it sees the new model); the
+    full check of every saved server (up to its 10 s per server) runs on its
+    own thread, so a finished download never waits at 100% for it."""
 
     def _done(node_id: str, _model: str) -> None:
         from . import hardware as HW
@@ -513,12 +554,26 @@ def _after_download(d: Any) -> Callable[[str, str], None]:
             pass
         sampler = getattr(d, "fleet_sampler", None)
         if sampler is not None:
-            try:
-                sampler.sample_once(force=True)
-            except Exception:  # noqa: BLE001
-                pass
+
+            def _check_again() -> None:
+                try:
+                    sampler.sample_once(force=True)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            threading.Thread(target=_check_again, name="ij-model-download-check", daemon=True).start()
 
     return _done
+
+
+def _places_of(d: Any) -> Places:
+    """Where each server's downloads land, from the library's own servers
+    (``library.targets``: the name, and ``in_menu``)."""
+
+    def _read() -> "dict[str, tuple[str, bool]]":
+        return {t.id: (t.label, t.in_menu) for t in L.targets(d)}
+
+    return _read
 
 
 def manager_for(d: Any) -> PullManager:
@@ -533,7 +588,9 @@ def manager_for(d: Any) -> PullManager:
         mgr = getattr(platform, "_model_pulls", None)
         if isinstance(mgr, PullManager) and mgr.engine is getattr(platform, "engine", None):
             return mgr
-        mgr = PullManager(platform.engine, getattr(platform, "event_bus", None), on_done=_after_download(d))
+        mgr = PullManager(
+            platform.engine, getattr(platform, "event_bus", None), on_done=_after_download(d), places=_places_of(d)
+        )
         try:
             mgr.settle()
         except Exception:  # noqa: BLE001

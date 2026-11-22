@@ -86,6 +86,31 @@ def _rows_text(view: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _running_lines(d: Any) -> list[str]:
+    """The downloads running now, with how far each has got (the same rows
+    the card and Models tab show). ``[]`` when none, or when they could not
+    be read. BLOCKING."""
+    from ..fleet import pulls as P
+
+    try:
+        rows = P.manager_for(d).list()
+    except Exception:  # noqa: BLE001 — the rest of the answer still stands
+        return []
+    said: list[str] = []
+    for r in rows:
+        if r.get("state") != P.DOWNLOADING:
+            continue
+        how_far = f"{r['percent']}%" if isinstance(r.get("percent"), int) else str(r.get("done_words") or "")
+        where = f" into {r['server']}" if r.get("server") else ""
+        said.append(f"{r.get('name') or r.get('model')} ({r.get('model')}){where}, {how_far} so far")
+    if not said:
+        return []
+    return [
+        "Downloading now (not finished; Cancel is on its card and on "
+        f"{PLACE}): " + "; ".join(said[:5]) + "."
+    ]
+
+
 class ModelLibraryTool(Tool):
     name = READER
     description = (
@@ -93,7 +118,8 @@ class ModelLibraryTool(Tool):
         "user's own computer, each with what it is good at, its download size, the memory it needs and "
         "whether it fits this PC (Fits this PC / Tight / Too big / Fit not known), and which ones a model "
         "server already has installed. `model_server` picks a model server by its NAME on Model servers "
-        "(default: Ollama on this PC). Reads only; to download one, call model_download with its name."
+        "(default: Ollama on this PC). It also says which downloads are running now and how far each has got. "
+        "Reads only; to download one, call model_download with its name."
     )
     input_schema = {
         "type": "object",
@@ -118,8 +144,10 @@ class ModelLibraryTool(Tool):
             return ToolResult(ok=False, error=exc.words, data={"door": HREF})
         except Exception:  # noqa: BLE001 — said in words, never a traceback
             return ToolResult(ok=False, error="The model library could not be read just now.", data={"door": HREF})
+        running = await asyncio.to_thread(_running_lines, d)
         server = view.get("server") or {}
         lines = [f"Model library for {server.get('label') or target.label} ({PLACE}):", str(view.get("summary") or "")]
+        lines += running
         if server.get("download_why"):
             lines.append(str(server["download_why"]))
         lines += _rows_text(view)
@@ -223,11 +251,14 @@ class ModelDownloadTool(Tool):
         except (L.LibraryProblem, P.PullRefused) as exc:
             return ToolResult(ok=False, error=exc.words, data={"door": HREF})
         row, pv = out["download"], out["preview"]
+        # "In the model menu" only where it will be (Ollama on this PC, or a
+        # server the model menu lists); else only where the model will be.
+        landing = "in the model menu" if target.in_menu else f"on {target.label}"
         lines = [
             f"Started downloading {pv.get('name')} ({pv.get('model')}) from {pv.get('source')} into "
             f"{target.label}: {pv.get('size_words')}, {pv.get('free_after_words')}.",
             "It is downloading now, not finished: the card below shows its progress and has Cancel, and so "
-            f"does {PLACE}. Once it is done it is in the model menu.",
+            f"does {PLACE}. Once it is done it is {landing}.",
         ]
         card = {
             "id": row["id"],

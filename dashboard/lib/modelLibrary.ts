@@ -87,6 +87,11 @@ export interface Download {
   percent: number | null;
   state: DownloadState;
   error: string;
+  /** The server it downloads into, by its name ("" = not known). */
+  server: string;
+  /** Do this server's models reach the model menu (Ollama on this PC, or a
+   *  server the menu lists)? Only then does a finished row say so. */
+  in_menu: boolean;
 }
 
 const str = (v: unknown, max = 300): string => (typeof v === "string" ? v.slice(0, max) : "");
@@ -186,6 +191,8 @@ export function decodeDownload(raw: unknown): Download | null {
     percent: percent === null ? null : Math.max(0, Math.min(100, Math.round(percent))),
     state,
     error: str(r.error, 400),
+    server: str(r.server, 80),
+    in_menu: r.in_menu === true,
   };
 }
 
@@ -195,7 +202,13 @@ export function foldDownload(list: Download[], payload: unknown): Download[] {
   if (!next) return list;
   const at = list.findIndex((d) => d.id === next.id);
   if (at < 0) return [next, ...list].slice(0, 20);
-  const merged = { ...list[at], ...next };
+  // A progress event does not say where the model lands; keep what was read.
+  const merged = {
+    ...list[at],
+    ...next,
+    server: next.server || list[at].server,
+    in_menu: next.in_menu || list[at].in_menu,
+  };
   // A late progress event never takes an ended row back to downloading.
   if (list[at].state !== "downloading" && next.state === "downloading") return list;
   const out = list.slice();
@@ -217,7 +230,12 @@ export function bytesWords(n: number | null | undefined): string {
 export function progressWords(d: Download): string {
   const done = bytesWords(d.bytes_done) || "0 MB";
   const total = bytesWords(d.bytes_total);
-  if (d.state === "done") return total ? `Downloaded, ${total}. It is in the model menu now.` : "Downloaded. It is in the model menu now.";
+  if (d.state === "done") {
+    // "In the model menu" only when it is (Trust: never claim a change it
+    // did not make); else only where the model is.
+    const where = d.in_menu ? " It is in the model menu now." : d.server ? ` It is on ${d.server} now.` : "";
+    return `${total ? `Downloaded, ${total}.` : "Downloaded."}${where}`;
+  }
   if (d.state !== "downloading") return d.error || (d.state === "stopped" ? "Stopped." : "The download did not finish.");
   if (!total) return `${done} so far`;
   return `${done} of ${total}${d.percent !== null ? ` · ${d.percent}%` : ""}`;

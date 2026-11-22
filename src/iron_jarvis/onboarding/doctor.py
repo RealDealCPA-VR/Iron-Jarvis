@@ -916,7 +916,8 @@ def check_graphics_memory() -> dict:
             "keeps failing, its child process is being stopped.",
             level=RECOMMENDED,
         )
-    words = ", ".join(f"{c.name} ({c.total / 1e9:.0f} GB)" if c.total else c.name for c in cards)
+    # In GB as Windows and the card's box say them (a 24 GB card is 24, not 26).
+    words = ", ".join(f"{c.name} ({HW.fmt_room(c.total)})" if c.total else c.name for c in cards)
     return _result("graphics_memory", True, f"Graphics memory is read for the model library: {words}.",
                    level=RECOMMENDED)
 

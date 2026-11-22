@@ -49,6 +49,7 @@ NVIDIA_SMI_ARGS: tuple[str, ...] = (
     "--format=csv,noheader,nounits",
 )
 _MIB = 1024 * 1024
+_GIB = 1024 * _MIB
 #: The suite turns the ``nvidia-smi`` read off (graphics memory then reads
 #: "not known", exactly what a PC without an NVIDIA card sees).
 GPU_READ_FORCED_OFF = os.environ.get("IRONJARVIS_GPU_READ", "").strip().lower() in ("0", "off", "false", "no")
@@ -106,6 +107,21 @@ class Hardware:
 
 #: What a server on another computer reads as: nothing known.
 NOT_KNOWN = Hardware(this_pc=False)
+
+
+def fmt_room(n: Any) -> str:
+    """Memory, graphics memory and drive room in words, as Windows, Task
+    Manager and Explorer show them: binary units labelled GB, so a PC sold
+    as 64 GB reads "64 GB", never "68 GB". (A model's download size stays as
+    its registry prints it: ``library.fmt_bytes``.) ``""`` for nothing known."""
+    if not isinstance(n, (int, float)) or isinstance(n, bool) or n < 0:
+        return ""
+    if n >= _GIB:
+        gb = n / _GIB
+        return f"{gb:.1f} GB" if gb < 9.95 else f"{gb:.0f} GB"
+    if n >= _MIB:
+        return f"{n / _MIB:.0f} MB"
+    return f"{max(1, round(n / 1024))} KB"
 
 
 def on_this_pc(url: str) -> bool:

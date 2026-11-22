@@ -337,6 +337,10 @@ _TOOL_EVENT_TYPES = ("tool.executed", "tool.denied")
 #: already has its ``approval.requested`` row here — so the timeline leaves
 #: them out (``GET /autonomy/metrics`` reads them).
 _METRIC_EVENT_TYPES = ("interrupt.asked", "interrupt.answered", "autonomy.nudged")
+#: Next leaps 43-a: a model download's progress (up to about 100 a
+#: download) is for the live bar only; its one Activity row is
+#: ``model.download.ended``.
+_PROGRESS_EVENT_TYPES = ("model.download.progress",)
 _TOKEN_EVENT_TYPES = ("llm.completed",)
 _LIFECYCLE_EVENT_TYPES = (
     "session.created",
@@ -496,7 +500,7 @@ class AuditTimeline:
         include_events = True
         tool_verdict: str | None = None  # None=both | "allow" | "deny"
         event_types_in: tuple | None = None
-        event_types_ex: tuple = _TOOL_EVENT_TYPES + _METRIC_EVENT_TYPES
+        event_types_ex: tuple = _TOOL_EVENT_TYPES + _METRIC_EVENT_TYPES + _PROGRESS_EVENT_TYPES
 
         if kind == _KIND_TOOL:
             include_events = False
@@ -516,6 +520,7 @@ class AuditTimeline:
             event_types_ex = (
                 _TOOL_EVENT_TYPES
                 + _METRIC_EVENT_TYPES
+                + _PROGRESS_EVENT_TYPES
                 + _TOKEN_EVENT_TYPES
                 + _LIFECYCLE_EVENT_TYPES
                 + _DECISION_EVENT_TYPES

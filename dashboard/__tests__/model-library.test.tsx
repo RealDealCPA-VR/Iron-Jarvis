@@ -110,6 +110,7 @@ vi.mock("@/components/motion", () => ({
 import { ModelLibrary, SEARCH_WAIT_MS } from "@/components/fleet/ModelLibrary";
 import { ConfigCards } from "@/components/chat/ConfigCards";
 import { decodeConfigCards } from "@/lib/configCards";
+import { decodeDownload, foldDownload, progressWords } from "@/lib/modelLibrary";
 import FleetPage from "@/app/fleet/page";
 
 const SERVER = { id: "box", label: "Ollama on this PC", kind: "ollama", this_pc: true, downloads: true, download_why: "" };
@@ -241,6 +242,56 @@ describe("Model servers › Models", () => {
       vi.advanceTimersByTime(SEARCH_WAIT_MS + 10);
     });
     await waitFor(() => expect(hooks.gets.filter((g) => g.includes("q="))).toEqual(["/fleet/library?node=box&q=qwen+coder"]));
+  });
+
+  it("a finished download says it is in the model menu only when its server is in the model menu", async () => {
+    const done = decodeDownload({ id: "dl1", node_id: "box", model: "qwen3:8b", name: "Qwen3 8B", state: "done",
+                                  bytes_total: 5_200_000_000, bytes_done: 5_200_000_000 })!;
+    expect(progressWords({ ...done, server: "Ollama on this PC", in_menu: true })).toBe(
+      "Downloaded, 5.2 GB. It is in the model menu now.",
+    );
+    expect(progressWords({ ...done, server: "Desk Ollama", in_menu: false })).toBe("Downloaded, 5.2 GB. It is on Desk Ollama now.");
+    expect(progressWords({ ...done, server: "", in_menu: false })).toBe("Downloaded, 5.2 GB.");
+    // A progress event says nothing of where it lands: what the row said is kept.
+    const running = [decodeDownload({ id: "dl1", node_id: "box", state: "downloading", bytes_total: 10, bytes_done: 1,
+                                      server: "Ollama on this PC", in_menu: true })!];
+    const moved = foldDownload(running, { id: "dl1", node_id: "box", bytes_done: 5, bytes_total: 10, percent: 50 });
+    expect(moved[0]).toMatchObject({ percent: 50, server: "Ollama on this PC", in_menu: true });
+
+    // On the page: a saved server the model menu does not list.
+    hooks.downloads = [
+      { id: "dl1", node_id: "box", model: "qwen3:8b", name: "Qwen3 8B", state: "downloading",
+        bytes_total: 5_200_000_000, bytes_done: 0, percent: 0, server: "Desk Ollama", in_menu: false },
+    ];
+    const { rerender } = render(<ModelLibrary />);
+    expect((await screen.findByTestId("library-download-row-dl1")).getAttribute("data-state")).toBe("downloading");
+    hooks.events = [{
+      id: "e2", type: "model.download.ended", session_id: null, ts: "",
+      payload: { id: "dl1", node_id: "box", model: "qwen3:8b", name: "Qwen3 8B", state: "done",
+                 bytes_total: 5_200_000_000, bytes_done: 5_200_000_000, percent: 100, error: "",
+                 server: "Desk Ollama", in_menu: false },
+    }];
+    rerender(<ModelLibrary />);
+    await waitFor(() => expect(screen.getByTestId("library-download-row-dl1").getAttribute("data-state")).toBe("done"));
+    const words = screen.getByTestId("library-download-row-dl1-words").textContent;
+    expect(words).toBe("Downloaded, 5.2 GB. It is on Desk Ollama now.");
+    expect(words).not.toMatch(/model menu/);
+  });
+
+  it("with no model server yet the list still shows what fits this PC, with nothing to download into", async () => {
+    hooks.library = {
+      ...hooks.library,
+      servers: [],
+      server: null,
+      summary: "No model server yet. Install Ollama on this PC (ollama.com/download) or add a model server on Connections to download one of these. This PC has 31 GB of memory.",
+      models: [row("qwen3:8b", { name: "Qwen3 8B", can_download: false }), row("qwen3.5:122b", { fit: "too_big", fit_words: "Too big", can_download: false })],
+    };
+    render(<ModelLibrary />);
+    expect((await screen.findByTestId("library-summary")).textContent).toMatch(/^No model server yet\. Install Ollama/);
+    expect(screen.getByTestId("library-fit-qwen3:8b").textContent).toBe("Fits this PC (64 GB)");
+    expect(screen.getByTestId("library-fit-qwen3.5:122b").textContent).toBe("Too big");
+    expect(screen.queryByTestId("library-download-qwen3:8b")).toBeNull();
+    expect(screen.queryByTestId("library-search")).toBeNull();
   });
 
   it("is a tab on Model servers: Models reads the library and stops polling the servers", async () => {

@@ -1526,7 +1526,20 @@ How to use this file: read the contents list, then read only the entries your ch
   ask-tier with a once-only, attended-only card that "Don't ask" never skips
   (`SpendCheck(once_only, dont_ask_skips=False, attended_only, irreversible)`);
   only a name refused on its face skips the card; it is on `LOW_TRUST_DENY`.
-  `model_library` (allow) never searches Hugging Face: only the page's search
+  A finished row says "in the model menu" ONLY when `in_menu` (Ollama on
+  this PC, or a ROUTABLE saved server: the menu lists
+  `fleet.routable_nodes()` alone), else "on <server>"; the row's `server` /
+  `in_menu` come from `library.targets` when it is listed. The after-download
+  step (`pulls._after_download`, wired only by `manager_for`) forgets the
+  menu's list of that server (`ollama` or `fleet-<id>`) and the drive BEFORE
+  the ended event, and checks the servers again on its own thread. Progress
+  events are stored but kept off the Activity page
+  (`eval/observability._PROGRESS_EVENT_TYPES`): one row per download, its end.
+  The PC's memory, graphics memory and drive room are in binary GB
+  (`hardware.fmt_room`, as Windows shows them: 64 GB reads 64, not 68); a
+  download's size stays decimal (`library.fmt_bytes`, as the registry prints
+  it). `model_library` (allow) also says what is downloading now and how far;
+  never searches Hugging Face: only the page's search
   box does (`library.hf_search`, the typed words plus `HF_FIXED_PARAMS`, no
   key). Graphics memory is `nvidia-smi` through `core/procs`, 3 s, kept 60 s
   (`hardware.gpus`), with a `doctor` row (`graphics_memory`). The suite keeps

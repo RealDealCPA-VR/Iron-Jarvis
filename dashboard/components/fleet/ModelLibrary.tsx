@@ -330,7 +330,7 @@ export function ModelLibrary() {
         </div>
       </Card>
 
-      {view.servers.length === 0 ? (
+      {view.servers.length === 0 && view.models.length === 0 ? (
         <Card title="The list" icon={<DownloadIcon size={15} />}>
           <Empty icon={<HardDrive size={26} />} title="No model server yet">
             {view.summary}
@@ -338,40 +338,46 @@ export function ModelLibrary() {
         </Card>
       ) : (
         <>
-          <Card title="Search Hugging Face" icon={<Search size={15} />}>
-            <div className="space-y-2">
-              <input
-                data-testid="library-search"
-                type="search"
-                value={words}
-                onChange={(e) => setWords(e.target.value)}
-                placeholder="Find more models, for example qwen coder"
-                maxLength={80}
-                className="w-full min-w-0 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600"
-              />
-              <p className="text-[11px] leading-relaxed text-zinc-500">
-                Only the words you type here are sent to Hugging Face, and only after you type them.
-              </p>
-              {searching && (
-                <p className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                  <Loader2 size={11} className="animate-spin" aria-hidden /> Searching…
+          {/* With no model server yet the list is still shown, marked
+              against this PC, so you can see what fits before installing
+              one; there is nowhere to download to, so no search and no
+              Download. */}
+          {view.servers.length > 0 && (
+            <Card title="Search Hugging Face" icon={<Search size={15} />}>
+              <div className="space-y-2">
+                <input
+                  data-testid="library-search"
+                  type="search"
+                  value={words}
+                  onChange={(e) => setWords(e.target.value)}
+                  placeholder="Find more models, for example qwen coder"
+                  maxLength={80}
+                  className="w-full min-w-0 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600"
+                />
+                <p className="text-[11px] leading-relaxed text-zinc-500">
+                  Only the words you type here are sent to Hugging Face, and only after you type them.
                 </p>
-              )}
-              {found && !searching && (
-                found.models.length ? (
-                  <ul data-testid="library-found" className="divide-y divide-white/[0.05]">
-                    {found.models.map((m) => (
-                      <ModelRow key={m.id} m={m} node={server?.id ?? ""} busyElsewhere={busyHere} onStarted={started} />
-                    ))}
-                  </ul>
-                ) : (
-                  <p data-testid="library-found-none" className="break-words text-xs text-zinc-500">
-                    {found.why || `Hugging Face lists nothing for “${found.words}” that a model server here can run.`}
+                {searching && (
+                  <p className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+                    <Loader2 size={11} className="animate-spin" aria-hidden /> Searching…
                   </p>
-                )
-              )}
-            </div>
-          </Card>
+                )}
+                {found && !searching && (
+                  found.models.length ? (
+                    <ul data-testid="library-found" className="divide-y divide-white/[0.05]">
+                      {found.models.map((m) => (
+                        <ModelRow key={m.id} m={m} node={server?.id ?? ""} busyElsewhere={busyHere} onStarted={started} />
+                      ))}
+                    </ul>
+                  ) : (
+                    <p data-testid="library-found-none" className="break-words text-xs text-zinc-500">
+                      {found.why || `Hugging Face lists nothing for “${found.words}” that a model server here can run.`}
+                    </p>
+                  )
+                )}
+              </div>
+            </Card>
+          )}
 
           <Card title="The list" icon={<DownloadIcon size={15} />}>
             <ul data-testid="library-list" className="divide-y divide-white/[0.05]">

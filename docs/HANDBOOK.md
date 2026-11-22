@@ -2241,22 +2241,27 @@ memory left for anything else) or **Too big**.
   it read: "This PC has 64 GB of memory and 412 GB free on the drive Ollama
   uses. 7 of the 13 models below fit." Graphics memory is read from an NVIDIA
   card when there is one; without one the marks are judged by the PC's
-  memory, and the line says so.
+  memory, and the line says so. Memory and free space are in GB as Windows
+  shows them. With no model server yet, the list still shows what fits this
+  PC, with how to install Ollama on top.
 - **Download.** Press **Download** on a model and Iron Jarvis first reads its
   exact size from where it downloads (marked "measured just now"; when that
   cannot be read, the list's own size, marked as the list's) and the free
   space it would leave. Nothing starts until you press **Start download**.
   Then the row shows its progress, with **Cancel**. Cancel stops it at once;
   Ollama keeps the part already downloaded, so Download again carries on from
-  there. One download at a time per model server. When it is done it is in
-  the model menu above the message box.
+  there. One download at a time per model server. When it is done, a model
+  on Ollama on this PC (or on a model server the model menu lists) is in the
+  model menu above the message box; for any other model server the row says
+  which server has it. Activity shows each download once, when it ends.
 - **Your drive stays usable.** A download that would leave less than a tenth
   of the drive free is refused before it starts, in words that say how much
   room it needs.
 - **More models.** The **Search Hugging Face** box finds more models there.
   Only the words you type in that box are sent, and only after you type
   them; nothing is looked up online while you just browse the list.
-- **From chat.** "Which models fit my PC?" answers from the same list.
+- **From chat.** "Which models fit my PC?" answers from the same list, and
+  says how far any download running now has got.
   "Download the newest coding model that fits" asks you on a card that names
   the model, where it comes from, its size and the free space after, every
   time, whatever your approval setting. Once you allow it, the card under the
