@@ -2076,12 +2076,21 @@ in the PDF, or, for a scanned page, Windows' own text recognition on this PC.
 Only the first words of each page go to the model that makes the plan (your
 default model, or the one you picked for reading documents), in one request,
 and the page text is treated as data, never as instructions. In a Local only
-chat that model must be on this PC or your network. A page this PC could not read is never sent anywhere by
-itself: the card says how many there are and offers **Read 4 more pages with
-Claude?** (naming the model you have for reading pictures). Only that press
-sends those pages, to that model only, and then the plan is made again.
-With no model that reads pictures, those pages stay in "Not sure" for you to
-place.
+chat that model must be on this PC or your network, and so must every model
+the card's buttons use, even when you press them later. A page this PC could
+not read is never sent anywhere by itself: the card says how many there are
+and offers **Read 4 more pages with Claude?** (naming the model you have for
+reading pictures). Only that press sends those pages, to that model only: if
+it does not answer, no other model is tried. One press sends at most 20 pages
+(**Read 20 of 60 more pages with Claude?**), keeps each page as soon as it is
+read, and then the plan is made again. With no model that reads pictures,
+those pages stay in "Not sure" for you to place.
+
+Saying "sort this" never makes Iron Jarvis read your scan less: the pages are
+still read on this PC for the reply, and only sending page pictures to a
+model waits for the card. "Sort the transactions from largest to smallest"
+or "sort these receipts into categories" is about what is in the file, so it
+is answered as before and no plan is made.
 
 **Good to know.** Sorting works on one PDF of up to 300 pages at a time. A
 plan is kept on this PC for 30 days, so you can confirm it later. The demo

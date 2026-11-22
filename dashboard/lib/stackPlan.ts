@@ -25,6 +25,9 @@ export interface StackOffer {
   model: string | null;
   /** The model the offer names: "Read 4 more pages with Claude?" */
   name: string;
+  /** How many pages one press sends (the daemon's READ_MORE_MAX bound):
+   *  "Read 20 of 60 more pages with Claude?" when more wait. */
+  pages: number;
 }
 
 export interface StackCard {
@@ -99,8 +102,12 @@ export function decodeStackCard(raw: unknown): StackCard | null {
     }
   }
   const o = r.offer && typeof r.offer === "object" ? (r.offer as Record<string, unknown>) : null;
+  const unread = pageList(r.unread, total);
+  const perPress = o && typeof o.pages === "number" && Number.isInteger(o.pages) && o.pages >= 1
+    ? Math.min(o.pages, unread.length)
+    : unread.length;
   const offer = o && str(o.provider) && str(o.name)
-    ? { provider: str(o.provider, 80), model: str(o.model, 120) || null, name: str(o.name, 80) }
+    ? { provider: str(o.provider, 80), model: str(o.model, 120) || null, name: str(o.name, 80), pages: perPress }
     : null;
   const written = Array.isArray(r.written)
     ? r.written.slice(0, MAX_PAGES).flatMap((w) => {
@@ -119,7 +126,7 @@ export function decodeStackCard(raw: unknown): StackCard | null {
     root: str(r.root, 1000),
     page_count: total,
     documents: docs,
-    unread: pageList(r.unread, total),
+    unread,
     read_here: typeof r.read_here === "number" ? r.read_here : 0,
     read_by_model: typeof r.read_by_model === "number" ? r.read_by_model : 0,
     read_by: str(r.read_by, 80),
@@ -208,8 +215,42 @@ export function stackSummary(card: StackCard): string {
   return bits.join(" · ");
 }
 
-/** "Read 4 more pages with Claude?" (D-31.2's words). */
+/** "Read 4 more pages with Claude?" (D-31.2's words); "Read 20 of 60 more
+ *  pages with Claude?" when one press sends only some of them. */
 export function offerWords(card: StackCard): string {
   const n = card.unread.length;
-  return card.offer && n ? `Read ${n} more page${n === 1 ? "" : "s"} with ${card.offer.name}?` : "";
+  if (!card.offer || !n) return "";
+  const per = Math.max(1, Math.min(card.offer.pages || n, n));
+  return per < n
+    ? `Read ${per} of ${n} more pages with ${card.offer.name}?`
+    : `Read ${n} more page${n === 1 ? "" : "s"} with ${card.offer.name}?`;
+}
+
+/** The chat a card's press belongs to, read AT the press: a new chat's
+ *  first reply is named only after its first save, and Local only can be
+ *  switched on after the plan was made. */
+export interface StackScope {
+  threadId: string;
+  localOnly: boolean;
+}
+
+/** What "Read N more pages" sends: the model the card named, and the chat's
+ *  Local only setting (the daemon ORs it with the plan's and the saved
+ *  chat's, so leaving it out never switches it off). */
+export function readMoreBody(card: StackCard, scope?: StackScope | null): { provider: string; thread_id: string; local_only: boolean } {
+  return {
+    provider: card.offer?.provider ?? "",
+    thread_id: scope?.threadId ?? "",
+    local_only: scope?.localOnly === true,
+  };
+}
+
+/** The user's moves and new names, when the documents differ from the
+ *  plan's (a second plan after a read replaces them, and says so). */
+export function editedSince(docs: StackDoc[], plan: StackDoc[]): boolean {
+  if (docs.length !== plan.length) return true;
+  return docs.some((d, i) => {
+    const p = plan[i];
+    return d.name !== p.name || d.folder !== p.folder || d.pages.join(",") !== p.pages.join(",");
+  });
 }

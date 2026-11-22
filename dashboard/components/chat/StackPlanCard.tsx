@@ -22,22 +22,25 @@
 
 import { useState, type DragEvent } from "react";
 import { Check, FolderOpen, Layers, RotateCcw, TriangleAlert } from "lucide-react";
-import { post } from "@/lib/api";
+import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
 import { FilePickerModal } from "@/components/FilePickerModal";
 import { openPlace } from "@/lib/sourceLink";
 import {
   applyBody,
   decodeStackCard,
+  editedSince,
   everyPageOnce,
   fileName,
   folderInside,
   movePage,
   offerWords,
+  readMoreBody,
   spanWords,
   stackSummary,
   type StackCard,
   type StackDoc,
+  type StackScope,
 } from "@/lib/stackPlan";
 
 const DRAG_TYPE = "application/x-ij-stack-page";
@@ -86,7 +89,16 @@ function PageChip({
   );
 }
 
-export function StackPlanCard({ card, onSettle }: { card: StackCard; onSettle: (next: StackCard) => void }) {
+export function StackPlanCard({
+  card,
+  onSettle,
+  scope,
+}: {
+  card: StackCard;
+  onSettle: (next: StackCard) => void;
+  /** The chat this card is in, read at the press (its id and Local only). */
+  scope?: () => StackScope;
+}) {
   const [docs, setDocs] = useState<StackDoc[]>(card.documents);
   const [picked, setPicked] = useState<number | null>(null);
   const [pickerFor, setPickerFor] = useState<number | null>(null);
@@ -156,27 +168,61 @@ export function StackPlanCard({ card, onSettle }: { card: StackCard; onSettle: (
     }
   }
 
+  /** A second plan replaces the documents on the card: said, when the user
+   *  had moved pages or renamed since the plan was shown. */
+  function takePlan(fresh: StackCard, said: string[]) {
+    if (editedSince(fresh.documents, card.documents)) {
+      if (editedSince(docs, card.documents)) {
+        said.push("The plan was made again with those pages, so your moves and new names were replaced.");
+      }
+      setDocs(fresh.documents);
+    }
+    onSettle(fresh);
+  }
+
   async function readMore() {
     if (!card.offer) return;
+    const wereUnread = card.unread.length;
+    const sc = scope?.() ?? null;
     setBusy(true);
     setError("");
     setNote("");
     try {
-      const res = await post<{ read?: number; changed?: boolean; card?: unknown }>(
+      const res = await post<{ read?: number; changed?: boolean; stopped?: string; card?: unknown }>(
         `/documents/stack/${encodeURIComponent(card.plan_id)}/read-more`,
-        { provider: card.offer.provider },
+        readMoreBody(card, sc),
         { timeoutMs: 600_000 },
       );
       const fresh = decodeStackCard(res.card);
+      const said: string[] = [];
       if (res.changed && fresh?.offer) {
-        setNote(`Nothing was sent. The model that reads pictures is now ${fresh.offer.name}.`);
+        said.push(`Nothing was sent. The model that reads pictures is now ${fresh.offer.name}.`);
       }
-      if (fresh) {
-        setDocs(fresh.documents);
-        onSettle(fresh);
-      }
+      if (typeof res.stopped === "string" && res.stopped.trim()) said.push(res.stopped.trim());
+      if (fresh) takePlan(fresh, said);
+      setNote(said.join(" "));
     } catch (err) {
-      setError(errorWords(err, "Those pages were not read. Nothing was changed on the plan."));
+      // The daemon may have read (and kept) some pages before this failed or
+      // the wait ran out: the card as it is now says what really happened.
+      let fresh: StackCard | null = null;
+      try {
+        const q = sc ? `?thread_id=${encodeURIComponent(sc.threadId)}&local_only=${sc.localOnly ? "true" : "false"}` : "";
+        const now = await get<{ card?: unknown }>(`/documents/stack/${encodeURIComponent(card.plan_id)}${q}`);
+        fresh = decodeStackCard(now.card);
+      } catch {
+        fresh = null;
+      }
+      const read = fresh ? wereUnread - fresh.unread.length : 0;
+      if (fresh && read > 0) {
+        const said = [`${read === 1 ? "1 page was" : `${read} pages were`} read and kept before this stopped.`];
+        takePlan(fresh, said);
+        setNote(said.join(" "));
+        setError(errorWords(err, "The rest were not read."));
+      } else if (fresh) {
+        setError(errorWords(err, "Those pages were not read. Nothing was changed on the plan."));
+      } else {
+        setError(errorWords(err, "Those pages may not have been read. Open this chat again to see the plan as it is now."));
+      }
     } finally {
       setBusy(false);
     }
@@ -186,7 +232,7 @@ export function StackPlanCard({ card, onSettle }: { card: StackCard; onSettle: (
     const files = card.written ?? [];
     if (card.undone) {
       return (
-        <div data-testid="stack-card-undone" className="text-[12px] text-zinc-500">
+        <div data-testid="stack-card-undone" className="min-w-0 text-[12px] text-zinc-500 [overflow-wrap:anywhere]">
           <RotateCcw size={11} className="mr-1 inline align-[-1px]" aria-hidden />
           {card.undo_note
             ? `Undone — ${card.undo_note}`
@@ -200,8 +246,8 @@ export function StackPlanCard({ card, onSettle }: { card: StackCard; onSettle: (
         className="w-full max-w-2xl space-y-2 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-[13px]"
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="inline-flex items-center gap-1.5 font-medium text-tone-success">
-            <Check size={13} aria-hidden />{" "}
+          <span className="inline-flex min-w-0 items-center gap-1.5 font-medium text-tone-success [overflow-wrap:anywhere]">
+            <Check size={13} className="shrink-0" aria-hidden />{" "}
             {files.length === 1 ? "Wrote 1 document" : files.length ? `Wrote ${files.length} documents` : "Wrote the documents"}{" "}
             from {card.source_name}
           </span>
@@ -234,7 +280,7 @@ export function StackPlanCard({ card, onSettle }: { card: StackCard; onSettle: (
             ))}
           </ul>
         )}
-        <p className="text-[11px] text-zinc-500">{card.source_name} is unchanged, where it was.</p>
+        <p className="text-[11px] text-zinc-500 [overflow-wrap:anywhere]">{card.source_name} is unchanged, where it was.</p>
         {error && (
           <p role="alert" className="text-[12px] text-tone-danger">
             {error}
@@ -251,10 +297,11 @@ export function StackPlanCard({ card, onSettle }: { card: StackCard; onSettle: (
       data-testid="stack-card"
       className="w-full max-w-2xl space-y-2.5 rounded-xl border border-white/[0.1] bg-white/[0.02] p-3 text-[13px]"
     >
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span className="inline-flex items-center gap-1.5 font-semibold text-zinc-100">
-          <Layers size={14} className="text-accent-soft" aria-hidden />
-          Sort {card.source_name}
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        {/* A scanner's long name with no spaces wraps; it never widens the card. */}
+        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 font-semibold text-zinc-100">
+          <Layers size={14} className="shrink-0 text-accent-soft" aria-hidden />
+          <span className="min-w-0 [overflow-wrap:anywhere]">Sort {card.source_name}</span>
         </span>
         <span className="text-[12px] text-zinc-500">{stackSummary({ ...card, documents: docs })}</span>
       </div>
@@ -386,7 +433,7 @@ export function StackPlanCard({ card, onSettle }: { card: StackCard; onSettle: (
         </p>
       )}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
-        <span className="mr-auto text-[11px] text-zinc-500">
+        <span className="mr-auto min-w-0 text-[11px] text-zinc-500 [overflow-wrap:anywhere]">
           Nothing is written until you confirm. {card.source_name} stays as it is.
         </span>
         <Button variant="primary" size="sm" onClick={() => void confirm()} disabled={busy} data-testid="stack-confirm">

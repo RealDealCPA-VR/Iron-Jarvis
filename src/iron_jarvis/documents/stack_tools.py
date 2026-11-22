@@ -95,14 +95,20 @@ class StackPlanTool(Tool):
             return ToolResult(ok=False, error=str(exc))
         except Exception as exc:  # noqa: BLE001 — a scan that breaks the reader is said, never a crash
             return ToolResult(ok=False, error=f"{path.name} could not be read: {type(exc).__name__}: {exc}")
+        from ..providers.egress import current_scope
+
         plan = S.new_plan(
             source=path.resolve(), sha256=sha, pages=pages, documents=docs,
             workspace=Path(ctx.workspace).resolve(), thread_id=getattr(ctx, "thread_id", ""),
             turn_id=_turn_of(ctx),
+            # The turn's Local only verdict, kept with the plan: a new chat's
+            # first turn has no thread id for the card's presses to read it by.
+            local_only=current_scope().on,
         )
         await asyncio.to_thread(S.save_plan, ctx.config.home, plan)
         unread = [pg.number for pg in pages if pg.how == S.HOW_UNREAD]
-        offer = S.vision_choice(router, ctx.config) if unread else None
+        # Off the loop (availability probes); the Local only scope crosses with it.
+        offer = await asyncio.to_thread(S.vision_choice, router, ctx.config) if unread else None
         card = S.card_of(plan, offer=offer)
         here = card["read_here"]
         lines = [
@@ -116,13 +122,14 @@ class StackPlanTool(Tool):
             "yourself; tell the user the plan is on the card.",
             S.outline_words(plan),
         ]
-        if unread:
-            lines.append(
-                (f"The card offers to read the {len(unread)} unread page(s) with {offer['name']}; nothing has "
-                 "been sent to it.") if offer else
-                "No connected model can read pictures, so those pages stay in \"Not sure\" unless the user "
-                "moves them."
-            )
+        if unread and offer:
+            first = min(len(unread), S.READ_MORE_MAX)
+            some = f"{first} of the {len(unread)}" if first < len(unread) else f"the {len(unread)}"
+            lines.append(f"The card offers to read {some} unread page(s) with {offer['name']}; nothing has "
+                         "been sent to it.")
+        elif unread:
+            lines.append("No connected model can read pictures, so those pages stay in \"Not sure\" unless the "
+                         "user moves them.")
         return ToolResult(ok=True, output="\n".join(lines), data={"stack_plan": card, "plan_id": plan["id"]})
 
 

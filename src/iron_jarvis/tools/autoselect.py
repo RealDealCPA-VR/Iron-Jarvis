@@ -3735,12 +3735,40 @@ def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
 
 
 #: SORTING A SCANNED PILE (v1.556.0, idea 31-a): "sort this", "sort out
-#: these scans", never "sort these rows by date" (that orders, it does not
-#: separate documents).
+#: these scans", never "sort these rows by date", "sort the transactions from
+#: largest to smallest" or "sort these receipts into tax categories" (those
+#: ORDER or GROUP what is in a file; they do not separate its documents, and
+#: a sort turn holds the attachment's vision step). The verb and what it
+#: takes; :func:`wants_stack` checks the word after it and the clause.
 _STACK_SORT_RX = re.compile(
-    r"(?i)\bsort(?:\s+out|\s+through)?\s+(?:this|these|that|those|it|them|the|my|our)\b"
-    r"(?!(?:\s+[\w'-]+){0,3}\s+(?:by|alphabetically|in\s+order)\b)"
+    r"(?i)\bsort(?:\s+out|\s+through)?\s+(this|these|that|those|it|them|the|my|our)\b(?:\s+([\w'-]+))?"
 )
+#: What a sorted scan IS: "sort this scan", "sort my pile", "sort these pages".
+_STACK_PILE_WORDS = frozenset({
+    "scan", "scans", "scanned", "pile", "piles", "stack", "stacks", "pdf", "pdfs", "file", "document",
+    "documents", "docs", "pages", "papers", "paperwork", "bundle", "batch", "lot", "mess", "mail",
+})
+#: Words that may follow "sort this" without naming another object: "sort
+#: this for me", "sort this out please", "sort these into documents".
+_STACK_FILLER_WORDS = frozenset({
+    "for", "please", "pls", "out", "up", "apart", "into", "now", "and", "then", "so", "quickly",
+    "thanks", "thank", "ok", "okay", "too", "as", "properly",
+})
+#: An ordering or grouping cue in the clause after the verb: by, from …
+#: to, largest/smallest, oldest/newest, ascending/descending, alphabetically,
+#: in order, into categories/groups/columns.
+_STACK_ORDER_RX = re.compile(
+    r"(?i)\b(?:by|alphabetical(?:ly)?|chronological(?:ly)?|numerical(?:ly)?|ascending|descending"
+    r"|asc|desc|reverse|reversed|in(?:to)?\s+(?:[\w'-]+\s+){0,2}order"
+    r"|from\s+(?:the\s+)?(?:largest|smallest|biggest|highest|lowest|oldest|newest|earliest|latest"
+    r"|most|least|first|last|top|bottom|a)"
+    r"|(?:largest|smallest|biggest|highest|lowest|oldest|newest|earliest|latest|cheapest|priciest)"
+    r"\s+(?:to|first|on\s+top)"
+    r"|into\s+(?:[\w'-]+\s+){0,2}(?:categor(?:y|ies)|groups?|buckets?|columns?|types?|accounts?|classes))\b"
+)
+#: Where the clause after the verb ends (the ordering cue must be in it).
+_STACK_CLAUSE_END_RX = re.compile(r"[.!?;\n]")
+_STACK_CLAUSE_CHARS = 160
 _STACK_OBJECT = (
     r"(?:it|them|this|these|that|those|up|out|apart"
     r"|(?:this|these|that|the|my|our)\s+(?:scan|scans|pile|stack|pdf|file|document|bundle|batch|lot))"
@@ -3774,7 +3802,28 @@ def wants_stack(text: str, has_pdf: bool) -> bool:
         return False
     if _STACK_NOT_RX.search(msg):
         return False
-    return bool(_STACK_SORT_RX.search(msg) or _STACK_SPLIT_RX.search(msg) or _STACK_SEPARATE_RX.search(msg))
+    if _STACK_SPLIT_RX.search(msg) or _STACK_SEPARATE_RX.search(msg):
+        return True
+    return any(_sorts_a_pile(msg, m) for m in _STACK_SORT_RX.finditer(msg))
+
+
+def _sorts_a_pile(msg: str, m: "re.Match[str]") -> bool:
+    """One "sort …" in ``msg`` asks to separate a pile, not to order what is
+    in it: "the/my/our" takes a pile word ("sort my scans"); "this/these/it…"
+    takes a pile word, a filler ("for me", "out") or nothing; and no ordering
+    or grouping cue follows in the same clause. Bounded: one clause window
+    per match."""
+    det = m.group(1).lower()
+    nxt = (m.group(2) or "").lower()
+    if det in ("the", "my", "our"):
+        if nxt not in _STACK_PILE_WORDS:
+            return False
+    elif nxt and nxt not in _STACK_PILE_WORDS and nxt not in _STACK_FILLER_WORDS:
+        return False
+    rest = msg[m.end(1):m.end(1) + _STACK_CLAUSE_CHARS]
+    end = _STACK_CLAUSE_END_RX.search(rest)
+    clause = rest[:end.start()] if end else rest
+    return not _STACK_ORDER_RX.search(clause)
 
 
 _SCRIPT_WORD = re.compile(r"[a-z0-9']+")

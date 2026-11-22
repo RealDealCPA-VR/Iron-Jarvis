@@ -220,6 +220,19 @@ def test_a_plan_is_written_once(desk):
     assert len([x for x in ws.rglob("*.pdf")]) == 9
 
 
+def test_the_cards_undo_works_after_the_plan_was_swept(desk):
+    """The Undo is of the recorded call, not of the kept plan: a plan removed
+    after PLAN_DAYS days (or by hand) still undoes from its card."""
+    p, client, ws, scan = desk
+    card = _plan(p, ws, scan)
+    assert client.post(f"/documents/stack/{card['plan_id']}/apply", json={}).status_code == 200
+    (S.plans_dir(p.config.home) / f"{card['plan_id']}.json").unlink()
+    res = client.post(f"/documents/stack/{card['plan_id']}/undo")
+    assert res.status_code == 200, res.text
+    assert _files(ws) == ["scan.pdf"]
+    assert res.json()["card"] is None
+
+
 def test_a_file_edited_since_refuses_the_whole_undo(desk):
     p, client, ws, scan = desk
     card = _plan(p, ws, scan)

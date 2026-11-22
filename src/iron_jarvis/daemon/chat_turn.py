@@ -5764,12 +5764,12 @@ def _asks_new_file_other_language(text: str, picked: Iterable[str], workspace: s
 
 
 #: The note a scanned attachment carries in a turn that sorts it (v1.556.0,
-#: D-31.2): its scanned pages are read by the sorting plan on this PC, not
-#: here, and nothing of them has been sent to a model.
+#: D-31.2): it was read on this PC as in any turn, and a page this PC could
+#: not read was not sent to a model (the plan's card offers that).
 STACK_HELD_NOTE = (
-    "scanned pages not transcribed here: you were asked to sort this scan, and stack_plan reads "
-    "every page of it on this PC. Call stack_plan with this file's path; nothing of these pages "
-    "has been sent to a model"
+    "pages this PC could not read were not sent to a model here: you were asked to sort this scan, "
+    "and stack_plan reads every page of it on this PC and offers the rest on its card. Call "
+    "stack_plan with this file's path; no page picture of it has been sent to a model"
 )
 
 

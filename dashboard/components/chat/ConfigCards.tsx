@@ -25,6 +25,7 @@ import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
 import { RehearsalReport } from "@/components/RehearsalReport";
 import { StackPlanCard } from "@/components/chat/StackPlanCard";
+import type { StackScope } from "@/lib/stackPlan";
 import {
   settingsHrefFor,
   showValue,
@@ -433,6 +434,7 @@ export function ConfigCards({
   cards,
   onSettle,
   onContinue,
+  stackScope,
 }: {
   cards: ConfigCard[];
   /** Store a card's new state on the message (Undo pressed, secret saved). */
@@ -440,6 +442,9 @@ export function ConfigCards({
   /** v1.351.0 (G15): Continue on a connected app's card (card index). Given
    *  only while the reply is the newest and no turn runs. */
   onContinue?: (index: number) => void;
+  /** v1.556.0 (idea 31-a): the chat a sorting plan's press belongs to (its
+   *  id and Local only), read at the press. */
+  stackScope?: () => StackScope;
 }) {
   if (!cards.length) return null;
   return (
@@ -452,7 +457,7 @@ export function ConfigCards({
           <RehearsalReport key={`rehearsal-${c.rehearsal_id}`} id={c.rehearsal_id} />
         ) : c.kind === "stack" ? (
           // v1.556.0 (idea 31-a): a sorting plan, confirmed here.
-          <StackPlanCard key={`stack:${c.plan_id}`} card={c} onSettle={(n) => onSettle(i, n)} />
+          <StackPlanCard key={`stack:${c.plan_id}`} card={c} onSettle={(n) => onSettle(i, n)} scope={stackScope} />
         ) : c.kind === "change" ? (
           <ChangeCard key={c.change_id} card={c} onSettle={(n) => onSettle(i, n)} />
         ) : (

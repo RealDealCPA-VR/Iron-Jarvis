@@ -32,7 +32,7 @@ from fastapi.testclient import TestClient
 
 from iron_jarvis.documents import local_ocr
 from iron_jarvis.documents import stack as S
-from iron_jarvis.providers.adapters.base import LLMResponse
+from iron_jarvis.providers.adapters.base import LLMAdapter, LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.autoselect import wants_stack
 from iron_jarvis.tools.base import ToolContext
@@ -369,7 +369,7 @@ def test_unread_pages_are_offered_and_never_sent_by_the_plan(platform, tmp_path,
     assert r.ok, r.error
     card = r.data["stack_plan"]
     assert card["unread"] == [5, 6] and card["read_here"] == 4
-    assert card["offer"] == {"provider": "anthropic", "model": None, "name": "Claude"}
+    assert card["offer"] == {"provider": "anthropic", "model": None, "name": "Claude", "pages": 2}
     assert sent == [], "no page went to a model before the press"
     assert len(planner.calls) == 1 and not getattr(planner.calls[0]["messages"][0], "images", None)
     assert "[page 5] NOT READ" in planner.calls[0]["messages"][0].content
@@ -391,7 +391,9 @@ def test_unread_pages_are_offered_and_never_sent_by_the_plan(platform, tmp_path,
                                     {"pages": [3, 4], "title": "Power bill", "folder": "Bills"}]}
     res = client.post(f"/documents/stack/{card['plan_id']}/read-more", json={"provider": "anthropic"})
     assert res.status_code == 200, res.text
-    assert sent == [([5, 6], {"provider": "anthropic", "model": None})]
+    # One call per page, each PINNED to the model the card named.
+    assert sent == [([5], {"provider": "anthropic", "model": None, "pin": True}),
+                    ([6], {"provider": "anthropic", "model": None, "pin": True})]
     after = res.json()["card"]
     assert after["unread"] == [] and after["read_by_model"] == 2 and after["offer"] is None
     assert not any(d["unsure"] for d in after["documents"])
@@ -427,6 +429,22 @@ def test_no_page_read_means_no_model_is_asked(platform, tmp_path, monkeypatch):
     ("sort this", False, False),
     ("sort these rows by date", True, False),
     ("sort the invoices by amount", True, False),
+    ("sort this scan for me please", True, True),
+    ("sort these pages into documents", True, True),
+    ("sort it out", True, True),
+    # Ordering or grouping what is IN a file is not sorting a pile (review 1).
+    ("sort the transactions in it from largest to smallest", True, False),
+    ("sort the expenses into categories", True, False),
+    ("sort this list from oldest to newest", True, False),
+    ("sort out the deductions for me", True, False),
+    ("sort these receipts into tax categories", True, False),
+    ("sort the table descending", True, False),
+    ("sort my invoices", True, False),
+    ("sort this alphabetically", True, False),
+    ("sort this into 3 groups", True, False),
+    ("sort this pdf by date", True, False),
+    ("sort these transactions", True, False),
+    ("can you sort this table for me", True, False),
     ("don't sort this, just read it", True, False),
     ("what does this say?", True, False),
 ])
@@ -441,7 +459,10 @@ def test_the_sorting_patterns_are_linear():
     t0 = time.perf_counter()
     wants_stack(big, True)
     wants_stack("split " + "it " * 1500 + "into", True)
-    assert time.perf_counter() - t0 < 1.0
+    wants_stack("sort this " * 400, True)
+    # A pattern that backtracks takes minutes on these; a loaded runner's
+    # milliseconds are far below this bar.
+    assert time.perf_counter() - t0 < 5.0
 
 
 @pytest.mark.asyncio
@@ -485,9 +506,12 @@ async def test_sort_this_arms_the_plan_and_its_card_rides_the_reply_in_both_lane
 
 
 @pytest.mark.asyncio
-async def test_a_scanned_attachment_in_a_sort_turn_goes_to_no_vision_model(tmp_path, monkeypatch):
-    """D-31.2 at the attachment step: the scan's pages are not transcribed by
-    a model before the plan's card has said how many this PC could not read."""
+async def test_a_scanned_attachment_in_a_sort_turn_is_read_on_this_pc_and_sent_to_no_model(tmp_path, monkeypatch):
+    """D-31.2 at the attachment step, and the rule that a classifier may make
+    the app read MORE, never less: in a sort turn the scan is still read ON
+    THIS PC (Windows' OCR, here its seam), and only the VISION step waits for
+    the plan's card. A turn that orders what is in the file ("from largest to
+    smallest") is not a sort turn, and reads the scan exactly as before."""
     from iron_jarvis.daemon.app import create_app
     from iron_jarvis.daemon.chat_turn import STACK_HELD_NOTE, _prepare_attachments
     from iron_jarvis.daemon.schemas import ChatBody
@@ -497,13 +521,14 @@ async def test_a_scanned_attachment_in_a_sort_turn_goes_to_no_vision_model(tmp_p
     ws = tmp_path / "work"
     ws.mkdir()
     scan = make_scanned(ws / "pile.pdf", pages=2)
+    monkeypatch.setattr(local_ocr, "read_pages", _fake_local({1: "Acme Bank statement read on this PC"}))
     sent: list = []
 
-    async def ocr_document(*a, **kw):
-        sent.append(a)
-        return "[page 1]\nread by a model", "scanned PDF — text recovered via OCR (1 of 2 page(s) transcribed)"
+    async def transcribe(blobs, router, *, route_kwargs, label_pages, page_numbers=None):
+        sent.append(list(page_numbers or []))
+        return [f"[page {n}]\nread by a model" for n in (page_numbers or [])], ""
 
-    monkeypatch.setattr(_ocr, "ocr_document", ocr_document)
+    monkeypatch.setattr(_ocr, "_transcribe", transcribe)
 
     class D:
         platform = app.state.platform
@@ -513,8 +538,232 @@ async def test_a_scanned_attachment_in_a_sort_turn_goes_to_no_vision_model(tmp_p
                         attachments=[str(scan)], workspace_dir=str(ws))
 
     _images, block = await _prepare_attachments(D, body("sort this"), inline_budget=20000, rag_budget=8000, rag_k=4)
-    assert sent == [] and STACK_HELD_NOTE in block
-    # Any other turn reads the scan exactly as before.
-    _images, block = await _prepare_attachments(D, body("what does this say?"), inline_budget=20000,
-                                                rag_budget=8000, rag_k=4)
-    assert len(sent) == 1 and STACK_HELD_NOTE not in block
+    assert sent == [], "no page picture went to a model before the card"
+    assert STACK_HELD_NOTE in block
+    assert "Acme Bank statement read on this PC" in block, "this PC's reading is never held"
+    # Ordering what is in the scan is not sorting it: read exactly as before.
+    _images, block = await _prepare_attachments(
+        D, body("sort the transactions in it from largest to smallest"), inline_budget=20000,
+        rag_budget=8000, rag_k=4,
+    )
+    assert sent == [[2]] and STACK_HELD_NOTE not in block
+    assert "read by a model" in block and "Acme Bank statement read on this PC" in block
+
+
+# --------------------------------------------------------------------------- #
+# review 1: the press reaches the named model only, bounded, under Local only
+# --------------------------------------------------------------------------- #
+class _Seer(LLMAdapter):
+    """An adapter double for the REAL ModelRouter: counts the pictures it was
+    sent; ``fail`` raises on every call."""
+
+    def __init__(self, provider: str, fail: "Exception | None" = None) -> None:
+        self.provider, self.model, self.fail, self.pictures = provider, "m", fail, 0
+
+    def capabilities(self):
+        return {"tool_use": True, "vision": True}
+
+    async def complete(self, *, system, messages, tools, **kw):
+        self.pictures += sum(len(getattr(m, "images", None) or []) for m in messages)
+        if self.fail is not None:
+            raise self.fail
+        return LLMResponse(text=f"Read by {self.provider}: Acme Bank statement continued", tool_calls=[], usage={})
+
+
+class _Mgr:
+    def __init__(self, adapters):
+        self.adapters = adapters
+
+    def available(self, p):
+        return p in self.adapters
+
+    def get(self, p, model=None):
+        return self.adapters[p]
+
+    def inherited_from(self, p):
+        return None
+
+    def has_available_api_provider(self):
+        return True
+
+    def has_available_real_endpoint(self):
+        return False
+
+    def runtime_provider_names(self):
+        return []
+
+
+def _unread_plan(tmp_path: Path, src: Path, count: int) -> dict:
+    pages = [S.Page(number=n, how=S.HOW_UNREAD) for n in range(1, count + 1)]
+    return S.new_plan(source=src, sha256=S.file_sha256(src), pages=pages, documents=S.safe_plan([], pages),
+                      workspace=tmp_path)
+
+
+def test_the_pages_go_to_the_named_model_and_no_other_through_the_real_router(tmp_path, monkeypatch):
+    """The card named Gemini; Gemini fails. The real router must not hand the
+    client's page picture to its default (or sideways): the press is pinned,
+    nothing is kept, and the plan never records a reader."""
+    from iron_jarvis.core.events import EventBus
+    from iron_jarvis.providers import router as router_mod
+    from iron_jarvis.providers.adapters.base import ProviderError
+    from iron_jarvis.providers.router import ModelRouter
+
+    monkeypatch.setattr(router_mod.random, "uniform", lambda a, b: 0.0)
+    named = _Seer("google", fail=ProviderError("google: API error: bad request", status_code=400))
+    default = _Seer("anthropic")
+    router = ModelRouter(_Mgr({"google": named, "anthropic": default}), "anthropic", EventBus())
+    scan = make_scanned(tmp_path / "pile.pdf", pages=2)
+    plan = _unread_plan(tmp_path, scan, 2)
+    with pytest.raises(S.StackError) as err:
+        asyncio.run(S.read_more(plan, router=router, config=None,
+                                choice={"provider": "google", "model": None, "name": "Gemini"}))
+    assert "Gemini could not read them" in str(err.value)
+    assert named.pictures == 1
+    assert default.pictures == 0, "the default model received a page picture the card never named"
+    assert not plan.get("read_by")
+    assert all(item["how"] == S.HOW_UNREAD for item in plan["pages"].values())
+    # The named model, once it answers, reads them, and only it is named.
+    named.fail = None
+    res = asyncio.run(S.read_more(plan, router=router, config=None,
+                                  choice={"provider": "google", "model": None, "name": "Gemini"}))
+    assert res.read == 2 and default.pictures == 0 and plan["read_by"] == "Gemini"
+
+
+def _fake_pictures(monkeypatch, pictured: list):
+    from iron_jarvis.documents import ocr as _ocr
+
+    def pictures(path, *, max_pages, pages):
+        pictured.append(list(pages))
+        return [b"jpeg"] * len(pages), 300, [n + 1 for n in pages]
+
+    monkeypatch.setattr(_ocr, "pdf_page_scan_images", pictures)
+
+
+def test_one_press_is_bounded_and_saved_chunk_by_chunk(tmp_path, monkeypatch):
+    from iron_jarvis.documents import ocr as _ocr
+
+    src = tmp_path / "pile.pdf"
+    src.write_bytes(b"%PDF-1.4 a scan of sixty pages")
+    plan = _unread_plan(tmp_path, src, 60)
+    pictured: list = []
+    _fake_pictures(monkeypatch, pictured)
+    sent: list = []
+
+    async def transcribe(blobs, router, *, route_kwargs, label_pages, page_numbers=None):
+        sent.append((list(page_numbers), route_kwargs.get("pin")))
+        return [f"[page {page_numbers[0]}]\nAcme page {page_numbers[0]}"], ""
+
+    monkeypatch.setattr(_ocr, "_transcribe", transcribe)
+    saved: list = []
+
+    def save(p):
+        saved.append(sum(1 for v in p["pages"].values() if v["how"] == S.HOW_VISION))
+
+    res = asyncio.run(S.read_more(plan, router=object(), config=None,
+                                  choice={"provider": "anthropic", "model": None, "name": "Claude"}, save=save))
+    assert res.sent == res.read == S.READ_MORE_MAX == 20
+    assert res.left == 40 and res.stopped == ""
+    assert max(len(c) for c in pictured) <= S.READ_MORE_CHUNK, "pictured a chunk at a time"
+    assert sum(len(c) for c in pictured) == 20, "never more pictures than one press sends"
+    assert saved == [5, 10, 15, 20], "what was read is kept after each chunk"
+    assert all(pin is True for _n, pin in sent)
+    # The next offer says how many one press sends.
+    card = S.card_of(plan, offer={"provider": "anthropic", "model": None, "name": "Claude"})
+    assert card["offer"]["pages"] == 20 and len(card["unread"]) == 40
+
+
+def test_a_press_stops_at_its_deadline_and_keeps_what_was_read(tmp_path, monkeypatch):
+    """Time through an injected clock: each page takes 50 s here, and no new
+    page is sent once READ_MORE_DEADLINE_S has passed."""
+    from iron_jarvis.documents import ocr as _ocr
+
+    src = tmp_path / "pile.pdf"
+    src.write_bytes(b"%PDF-1.4 a slow scan")
+    plan = _unread_plan(tmp_path, src, 30)
+    _fake_pictures(monkeypatch, [])
+    now = {"t": 0.0}
+
+    async def slow(blobs, router, *, route_kwargs, label_pages, page_numbers=None):
+        now["t"] += 50.0
+        return [f"[page {page_numbers[0]}]\nAcme page {page_numbers[0]}"], ""
+
+    monkeypatch.setattr(_ocr, "_transcribe", slow)
+    saved: list = []
+    res = asyncio.run(S.read_more(plan, router=object(), config=None,
+                                  choice={"provider": "anthropic", "model": None, "name": "Claude"},
+                                  save=lambda p: saved.append(1), clock=lambda: now["t"]))
+    want = int(S.READ_MORE_DEADLINE_S // 50)
+    assert res.read == res.sent == want and res.left == 30 - want
+    assert res.stopped.startswith("Stopped after")
+    assert saved, "what was read before the deadline is kept"
+
+    # A model that stops answering mid-press: the pages it read are kept.
+    plan = _unread_plan(tmp_path, src, 6)
+    calls = {"n": 0}
+
+    async def flaky(blobs, router, *, route_kwargs, label_pages, page_numbers=None):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            return [], "scanned document — OCR needs a vision-capable model and the current one failed"
+        return [f"[page {page_numbers[0]}]\nAcme page {page_numbers[0]}"], ""
+
+    monkeypatch.setattr(_ocr, "_transcribe", flaky)
+    res = asyncio.run(S.read_more(plan, router=object(), config=None,
+                                  choice={"provider": "anthropic", "model": None, "name": "Claude"}))
+    assert res.read == 2 and res.left == 4 and res.stopped.startswith("Claude stopped answering")
+    assert plan["read_by"] == "Claude"
+
+
+def test_local_only_of_the_turn_rides_the_plan_to_every_press(platform, tmp_path, monkeypatch):
+    """A new chat's first turn has no thread id: the plan keeps the turn's
+    Local only verdict, and the card's GET and press (which send only the
+    model's name) stay Local only for the offer, the pages and the second
+    planning call."""
+    from iron_jarvis.documents import ocr as _ocr
+    from iron_jarvis.documents.sources import SourceTurn
+    from iron_jarvis.providers import egress
+
+    p, client = platform
+    ws = tmp_path / "work4"
+    ws.mkdir()
+    scan = make_scanned(ws / "pile.pdf", pages=3)
+    monkeypatch.setattr(local_ocr, "read_pages", _fake_local({
+        1: "Acme Bank statement Page 1 of 2", 2: "Acme Bank statement Page 2 of 2",
+    }))
+    seen: dict = {"plan": [], "offer": [], "sent": []}
+    planner = Planner({"documents": [{"pages": [1, 2, 3], "title": "Bank statement", "folder": "Bank"}]})
+
+    async def complete(**kw):
+        seen["plan"].append(egress.current_scope().on)
+        return await planner.complete(**kw)
+
+    monkeypatch.setattr(p.router, "complete", complete)
+
+    def choice(router, config):
+        seen["offer"].append(egress.current_scope().on)
+        return {"provider": "ollama", "model": None, "name": "Ollama"}
+
+    monkeypatch.setattr(S, "vision_choice", choice)
+
+    async def transcribe(blobs, router, *, route_kwargs, label_pages, page_numbers=None):
+        seen["sent"].append(egress.current_scope().on)
+        return [f"[page {n}]\nAcme Bank statement continued" for n in (page_numbers or [])], ""
+
+    monkeypatch.setattr(_ocr, "_transcribe", transcribe)
+    ctx = ToolContext(
+        workspace=ws, session_id="chat", agent_run_id="chat", config=p.config, event_bus=p.event_bus,
+        engine=p.engine, thread_id="",
+        source_turn=SourceTurn(thread_id="", turn_id="turn-first", engine=p.engine),
+    )
+    with egress.local_only_scope(True):
+        r = _invoke(p, "stack_plan", {"path": str(scan)}, ctx)
+    assert r.ok, r.error
+    plan = S.load_plan(p.config.home, r.data["plan_id"])
+    assert plan["thread_id"] == "" and plan["local_only"] is True
+    assert client.get(f"/documents/stack/{plan['id']}").status_code == 200
+    res = client.post(f"/documents/stack/{plan['id']}/read-more", json={"provider": "ollama"})
+    assert res.status_code == 200, res.text
+    assert res.json()["read"] == 1
+    assert len(seen["offer"]) >= 3 and all(seen["offer"]), seen
+    assert seen["sent"] == [True]
+    assert seen["plan"] == [True, True], "the second planning call stays Local only"

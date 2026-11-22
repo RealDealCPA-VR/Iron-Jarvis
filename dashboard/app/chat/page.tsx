@@ -234,6 +234,7 @@ import {
   looksLikeSecret,
   type ConfigCard,
 } from "@/lib/configCards";
+import type { StackScope } from "@/lib/stackPlan";
 import {
   appConnectIds,
   connectedOf,
@@ -3177,6 +3178,9 @@ export interface RowHandlers {
   /** Readiness 12B (G15): Continue under reply `index` after the app it
    *  offered to connect was connected somewhere else. */
   continueElsewhere: (index: number) => void;
+  /** v1.556.0 (idea 31-a): this chat's id and Local only, read at a sorting
+   *  plan card's press (a new chat's first reply is named after its save). */
+  chatScope: () => StackScope;
   /** v1.426.0 (Wave 6, E2): a door under reply `index` was pressed — the
    *  coding offer carries the user's request (and the chat's project folder)
    *  into Chat › Code's start composer (lib/codingStart). True = handled. */
@@ -3842,6 +3846,7 @@ const MessageRow = memo(function MessageRow({
           // v1.351.0 (G15): Continue only on the newest reply and between
           // turns — an older card's task has already moved on.
           onContinue={isLast && !busy ? (ci) => h.continueConnected(i, ci) : undefined}
+          stackScope={h.chatScope}
         />
       )}
       {/* DOORS (v1.199.0): links into the surfaces this turn actually touched —
@@ -12738,6 +12743,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // app is named so "add a task in Todoist" stays the task, not a request.
       send(continueText(connected.name, taskBefore(updated, index, { id: connected.app, name: connected.name })));
     },
+    chatScope: () => ({ threadId: saveTargetRef.current.id ?? "", localOnly: localOnlyRef.current }),
     continueElsewhere: (index) => {
       // Readiness 12B (G15): the same Continue as the key card's, for an app
       // connected somewhere else. A send that would not go out now (a file
@@ -12912,6 +12918,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       continueConnected: (index, cardIndex) =>
         rowImplRef.current.continueConnected(index, cardIndex),
       continueElsewhere: (index) => rowImplRef.current.continueElsewhere(index),
+      chatScope: () => rowImplRef.current.chatScope(),
       openDoor: (index, door) => rowImplRef.current.openDoor(index, door),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
@@ -12944,6 +12951,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       settleConfigCard: none,
       continueConnected: none,
       continueElsewhere: none,
+      chatScope: () => rowImplRef.current.chatScope(),
       openDoor: () => false,
       promote: async () => {},
       openDocument: (path) => rowImplRef.current.openDocument(path),

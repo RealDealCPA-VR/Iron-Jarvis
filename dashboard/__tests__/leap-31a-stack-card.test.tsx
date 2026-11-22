@@ -205,11 +205,63 @@ describe("the card", () => {
     fireEvent.click(screen.getByTestId("stack-read-more"));
     await waitFor(() => expect(settled).toHaveLength(1));
     expect(H.post.mock.calls[0][0]).toBe(`/documents/stack/${PLAN}/read-more`);
-    expect(H.post.mock.calls[0][1]).toEqual({ provider: "anthropic" });
+    expect(H.post.mock.calls[0][1]).toEqual({ provider: "anthropic", thread_id: "", local_only: false });
     cleanup();
     render(<StackPlanCard card={card({ unread: [8] })} onSettle={() => {}} />);
     expect(screen.queryByTestId("stack-read-more")).toBeNull();
     expect(screen.getByText("No connected model can read pictures.")).toBeTruthy();
+  });
+
+  it("one press sends at most what the offer says, and the chat's Local only rides it", async () => {
+    const many = Array.from({ length: 60 }, (_, k) => k + 1);
+    const big = decodeStackCard(raw({
+      page_count: 60,
+      documents: [{ pages: many, name: "Not sure (pages 1-60).pdf", folder: "", blank: [], unsure: true }],
+      unread: many,
+      offer: { provider: "anthropic", model: null, name: "Claude", pages: 20 },
+    }))!;
+    expect(offerWords(big)).toBe("Read 20 of 60 more pages with Claude?");
+    // An offer from an older daemon (no count) is the whole number.
+    expect(offerWords(decodeStackCard(raw({ unread: [8, 9], offer: { provider: "a", name: "Claude" } }))!)).toBe(
+      "Read 2 more pages with Claude?",
+    );
+    H.post.mockResolvedValue({ read: 20, changed: false, stopped: "", card: raw() });
+    render(<StackPlanCard card={big} onSettle={() => {}} scope={() => ({ threadId: "thr_9", localOnly: true })} />);
+    fireEvent.click(screen.getByTestId("stack-read-more"));
+    await waitFor(() => expect(H.post).toHaveBeenCalledTimes(1));
+    expect(H.post.mock.calls[0][1]).toEqual({ provider: "anthropic", thread_id: "thr_9", local_only: true });
+  });
+
+  it("a press that fails after some pages were read says what was kept, never 'nothing changed'", async () => {
+    const offered = card({ unread: [8, 9], offer: { provider: "anthropic", model: null, name: "Claude" } });
+    H.post.mockRejectedValue(new Error("The request took too long."));
+    H.get.mockResolvedValue({ card: { ...raw(), unread: [9], read_by_model: 1, read_by: "Claude" } });
+    const settled: StackCard[] = [];
+    render(<StackPlanCard card={offered} onSettle={(n) => settled.push(n)} />);
+    fireEvent.click(screen.getByTestId("stack-read-more"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("1 page was read and kept before this stopped."));
+    expect(H.get.mock.calls[0][0]).toBe(`/documents/stack/${PLAN}`);
+    expect(screen.getByRole("alert").textContent).toContain("The request took too long.");
+    expect(screen.queryByText(/Nothing was changed on the plan/)).toBeNull();
+    expect(settled[0].unread).toEqual([9]);
+  });
+
+  it("a new plan after a read says it replaced the user's moves", async () => {
+    const offered = card({ unread: [8], offer: { provider: "anthropic", model: null, name: "Claude" } });
+    const replanned = {
+      ...raw(),
+      documents: [
+        { pages: [1, 2, 3, 4, 8], name: "2026-03 Bank statement.pdf", folder: "Bank statements", blank: [], unsure: false },
+        { pages: [5, 6, 7], name: "2026-03 Electricity bill.pdf", folder: "Bills", blank: [7], unsure: false },
+        { pages: [9, 10], name: "2026-04 Water bill.pdf", folder: "Bills", blank: [], unsure: false },
+      ],
+    };
+    H.post.mockResolvedValue({ read: 1, changed: false, stopped: "", card: replanned });
+    render(<StackPlanCard card={offered} onSettle={() => {}} />);
+    fireEvent.change(screen.getByDisplayValue("2026-04 Water bill.pdf"), { target: { value: "Water" } });
+    fireEvent.click(screen.getByTestId("stack-read-more"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("your moves and new names were replaced"));
+    expect(screen.queryByDisplayValue("Not sure (page 8).pdf")).toBeNull();
   });
 
   it("Confirm refuses a plan that lost a page and posts nothing", async () => {
@@ -231,7 +283,7 @@ describe("calm and plain", () => {
   const DASH = join(__dirname, "..");
   it("the new words are in VOCABULARY.md", () => {
     const vocab = readFileSync(join(DASH, "..", "VOCABULARY.md"), "utf-8");
-    for (const w of ["Not sure (pages 41-42).pdf", "Read 4 more pages with", "Sort this stack"]) {
+    for (const w of ["Not sure (pages 41-42).pdf", "Read 4 more pages with", "Read 20 of 60 more pages with", "Sort this stack"]) {
       expect(vocab).toContain(w);
     }
   });
@@ -240,5 +292,14 @@ describe("calm and plain", () => {
     expect(src.match(/variant="primary"/g)).toHaveLength(1);
     expect(src).not.toMatch(/\bw-\[\d{3,}px\]|\bmin-w-\[(?:[4-9]\d\d|\d{4,})px\]/);
     expect(src).toContain("flex-wrap");
+  });
+  it("a scanner's long file name with no spaces wraps instead of widening the card", () => {
+    const long = "Client_Family_Trust_2025_Scanned_Documents_From_The_Office_Scanner.pdf";
+    render(<StackPlanCard card={card({ source_name: long })} onSettle={() => {}} />);
+    const heading = screen.getByText(`Sort ${long}`);
+    expect(heading.className).toContain("[overflow-wrap:anywhere]");
+    expect(heading.className).toContain("min-w-0");
+    const footer = screen.getByText(/Nothing is written until you confirm/);
+    expect(footer.className).toContain("[overflow-wrap:anywhere]");
   });
 });

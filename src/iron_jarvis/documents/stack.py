@@ -77,6 +77,16 @@ KEEP_PAGE_CHARS = 6_000
 PLAN_CALL_TIMEOUT_S = 180.0
 #: A kept plan is removed this many days after it was made.
 PLAN_DAYS = 30
+#: The most pages one "Read N more pages with <model>?" press sends. More
+#: waiting: the card says "Read 20 of 60 more pages with Claude?", and the
+#: next press reads the next ones.
+READ_MORE_MAX = 20
+#: Pages pictured at once during a press: each picture (up to 8 MB) is held
+#: in memory only until it is sent, and the plan is saved after each chunk.
+READ_MORE_CHUNK = 5
+#: A press sends no new page after this long (the card waits 600 s, and the
+#: plan is made again after it); what was read is kept and said.
+READ_MORE_DEADLINE_S = 300.0
 #: Dark pixels below this share of a page picture: the page is blank.
 BLANK_INK = 0.004
 #: The words of a document the plan could not place.
@@ -721,7 +731,8 @@ def card_of(plan: "dict[str, Any]", *, offer: "dict[str, Any] | None" = None) ->
         # A page's first words, for the strip's pointer text: secret-masked
         # like a figure's line (the card is saved with the chat).
         "snippets": {str(pg.number): _masked(" ".join(pg.text.split())[:90]) for pg in pages if pg.text},
-        "offer": (offer if unread and offer else None),
+        # ``pages``: how many the press sends ("Read 20 of 60 more pages").
+        "offer": ({**offer, "pages": min(len(unread), READ_MORE_MAX)} if unread and offer else None),
         "applied": bool(plan.get("applied")),
     }
 
@@ -805,8 +816,13 @@ async def plan_pages_async(
 
 def new_plan(
     *, source: Path, sha256: str, pages: "list[Page]", documents: "list[dict[str, Any]]",
-    workspace: Path, thread_id: str = "", turn_id: str = "",
+    workspace: Path, thread_id: str = "", turn_id: str = "", local_only: bool = False,
 ) -> "dict[str, Any]":
+    """``local_only``: the turn that made the plan was Local only. A new
+    chat's first turn has no thread id yet, so the card's presses read the
+    chat's setting from HERE as well (OR the request's and the saved chat's):
+    a press never sends a page, or the pages' text, where the chat that asked
+    would not."""
     return {
         "id": new_plan_id(),
         "version": 1,
@@ -818,6 +834,7 @@ def new_plan(
         "workspace": str(workspace),
         "thread_id": str(thread_id or ""),
         "turn_id": str(turn_id or ""),
+        "local_only": local_only is True,
         "documents": documents,
         "pages": {str(pg.number): pg.as_dict() for pg in pages},
         "applied": None,
@@ -874,13 +891,42 @@ def vision_choice(router: Any, config: Any) -> "dict[str, Any] | None":
     return None
 
 
-async def read_more(plan: "dict[str, Any]", *, router: Any, config: Any,
-                    choice: "dict[str, Any]") -> int:
-    """Send the pages this PC could not read to ``choice`` (the model the
-    card named and the user pressed) and keep what it read in ``plan``.
-    Returns how many pages it read. Raises :class:`StackError` in words."""
+@dataclass
+class ReadMore:
+    """What one "Read N more pages" press did."""
+
+    #: Pages the model read (kept in the plan, saved after each chunk).
+    read: int = 0
+    #: Pages sent to the model (one call each).
+    sent: int = 0
+    #: Pages still unread after the press.
+    left: int = 0
+    #: Why the press stopped before it sent every page it took, in words
+    #: ("" when it did not stop early).
+    stopped: str = ""
+
+
+async def read_more(
+    plan: "dict[str, Any]", *, router: Any, config: Any, choice: "dict[str, Any]",
+    save: "Any | None" = None, clock: "Any | None" = None,
+) -> ReadMore:
+    """Send up to :data:`READ_MORE_MAX` of the pages this PC could not read
+    to ``choice`` (the model the card named and the user pressed), and keep
+    what it read in ``plan``.
+
+    * THAT MODEL AND NO OTHER: each call is pinned (``pin=True``), so the
+      router raises instead of moving a client's page picture to its default
+      or a sideways failover; ``read_by`` names only a model that read.
+    * BOUNDED: the pages are pictured :data:`READ_MORE_CHUNK` at a time and
+      ``save(plan)`` (blocking, run off the loop) keeps what was read after
+      each chunk; no new page is sent after :data:`READ_MORE_DEADLINE_S`
+      (``clock``: injected in tests). A press that stops early keeps what was
+      read and says why in ``stopped``.
+
+    Raises :class:`StackError` in words when nothing could be read at all."""
     from .ocr import _transcribe, pdf_page_scan_images, transcript_pages
 
+    now = clock or time.monotonic
     pages = pages_of(plan)
     unread = [pg.number for pg in pages if pg.how == HOW_UNREAD]
     if not unread:
@@ -888,25 +934,53 @@ async def read_more(plan: "dict[str, Any]", *, router: Any, config: Any,
     src = Path(str(plan.get("source") or ""))
     if not src.is_file() or await asyncio.to_thread(file_sha256, src) != plan.get("sha256"):
         raise StackError("The scan changed or moved since the plan was made. Ask for a new plan.")
-    blobs, _total, numbers = await asyncio.to_thread(
-        pdf_page_scan_images, src, max_pages=len(unread), pages=tuple(n - 1 for n in unread),
-    )
-    if not blobs:
-        raise StackError("Those pages hold no picture a model could read.")
-    texts, fatal = await _transcribe(
-        blobs, router,
-        route_kwargs={"provider": choice["provider"], "model": choice.get("model")},
-        label_pages=True, page_numbers=numbers,
-    )
-    if fatal:
-        raise StackError(f"{choice.get('name') or 'The model'} could not read them: {fatal}")
-    got = transcript_pages("\n\n".join(texts))
-    plan["read_by"] = str(choice.get("name") or "")[:80]
+    name = str(choice.get("name") or "") or "The model"
+    route_kwargs = {"provider": choice["provider"], "model": choice.get("model"), "pin": True}
+    batch = unread[:READ_MORE_MAX]
     raw = plan.setdefault("pages", {})
-    for n, text in got.items():
-        if n in unread and (text or "").strip():
-            raw[str(n)] = {"how": HOW_VISION, "text": text.strip()[:KEEP_PAGE_CHARS], "doubtful": False}
-    return sum(1 for n in got if n in unread)
+    out = ReadMore()
+    pictured = 0
+    started = now()
+    for start in range(0, len(batch), READ_MORE_CHUNK):
+        if now() - started >= READ_MORE_DEADLINE_S:
+            out.stopped = f"Stopped after {int(READ_MORE_DEADLINE_S // 60)} minutes."
+            break
+        chunk = batch[start:start + READ_MORE_CHUNK]
+        blobs, _total, numbers = await asyncio.to_thread(
+            pdf_page_scan_images, src, max_pages=len(chunk), pages=tuple(n - 1 for n in chunk),
+        )
+        pictured += len(blobs)
+        read_here = 0
+        for blob, number in zip(blobs, numbers):
+            if now() - started >= READ_MORE_DEADLINE_S:
+                out.stopped = f"Stopped after {int(READ_MORE_DEADLINE_S // 60)} minutes."
+                break
+            texts, fatal = await _transcribe(
+                [blob], router, route_kwargs=route_kwargs, label_pages=True, page_numbers=[number],
+            )
+            if fatal:
+                if not out.read:
+                    raise StackError(f"{name} could not read them: {fatal}")
+                out.stopped = f"{name} stopped answering: {fatal}"
+                break
+            out.sent += 1
+            text = (transcript_pages("\n\n".join(texts)).get(number) or "").strip()
+            if number in unread and text:
+                raw[str(number)] = {"how": HOW_VISION, "text": text[:KEEP_PAGE_CHARS], "doubtful": False}
+                out.read += 1
+                read_here += 1
+        if read_here:
+            plan["read_by"] = name[:80]
+            if save is not None:
+                await asyncio.to_thread(save, plan)
+        if out.stopped:
+            break
+    if not pictured and not out.read:
+        raise StackError("Those pages hold no picture a model could read.")
+    if out.sent and not out.read and not out.stopped:
+        out.stopped = f"{name} found no text on those pages."
+    out.left = sum(1 for pg in pages_of(plan) if pg.how == HOW_UNREAD)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1072,7 +1146,8 @@ def keep_facts(engine: Any, written: Written, plan: "dict[str, Any]", *, thread_
 
 __all__ = [
     "BLANK_INK", "DIGEST_PAGE_CHARS", "DIGEST_TOTAL_CHARS", "HOW_BLANK", "HOW_TEXT", "HOW_THIS_PC",
-    "HOW_UNREAD", "HOW_VISION", "MAX_PAGES", "NOT_SURE", "PLAN_DAYS", "Page", "StackError", "Written",
+    "HOW_UNREAD", "HOW_VISION", "MAX_PAGES", "NOT_SURE", "PLAN_DAYS", "Page", "READ_MORE_CHUNK",
+    "READ_MORE_DEADLINE_S", "READ_MORE_MAX", "ReadMore", "StackError", "Written",
     "boundary_signals", "card_of", "check_every_page", "clean_folder", "clean_name", "digest",
     "edited_documents", "first_date", "keep_facts", "load_plan", "name_for", "new_plan", "outline_words",
     "pages_of", "parse_plan", "plan_pages_async", "plan_prompt", "read_more", "read_pages",

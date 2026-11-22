@@ -691,8 +691,14 @@ async def ocr_pdf(
     max_pages: int = MAX_OCR_PAGES,
     config: Any = None,
     pages_needing_ocr: "tuple[int, ...] | None" = None,
+    vision: bool = True,
 ) -> "tuple[str, str]":
     """Transcribe up to *max_pages* scanned pages via the router's vision path.
+
+    ``vision=False`` (v1.556.0, idea 31-a, D-31.2): read on THIS PC only.
+    Windows' OCR reads every page as always (a doubtful reading is kept), and
+    no page picture is sent to a model; a page this PC could not read is
+    left out (``("", "")`` when it read none).
 
     ``pages_needing_ocr`` (0-indexed, from :func:`ocr_page_plan`) targets the
     pages that are actually scans; without it the first *max_pages* are taken,
@@ -734,7 +740,7 @@ async def ocr_pdf(
     by_page: dict[int, str] = {n: r.text for n, r in confident.items()}
     local_used = set(confident)
     fatal = ""
-    if todo:
+    if todo and vision:
         vision_pages, fatal = await _transcribe(
             [b for b, _n in todo],
             router,
@@ -754,6 +760,8 @@ async def ocr_pdf(
             by_page[number] = fallback.text
             local_used.add(number)
     if not by_page:
+        if not vision:
+            return "", ""
         if fatal:
             return "", fatal
         return "", (
@@ -988,6 +996,7 @@ async def ocr_document(
     config: Any = None,
     max_pages: "int | None" = None,
     home: "str | Path | None" = None,
+    vision: bool = True,
 ) -> "tuple[str, str]":
     """Transcribe a scanned PDF or image, THROUGH THE CACHE (contract 5).
 
@@ -996,6 +1005,10 @@ async def ocr_document(
     a second tool, costs nothing. Only successful transcriptions are stored.
     With no home in scope (a bare factory, a unit test) the cache is simply
     skipped and the transcription runs as normal.
+
+    ``vision=False`` (v1.556.0): read on this PC only (:func:`ocr_pdf`); a
+    cached reading is still served (it sends nothing), and what this PC read
+    is not stored, so a later turn that may use a vision model still does.
     """
     p = Path(path)
     enabled, cap = ocr_settings(config)
@@ -1019,15 +1032,17 @@ async def ocr_document(
             note = str(cached.get("note") or f"scanned document — {OCR_MARK}")
             return cached["text"], f"{note}{CACHED_NOTE_SUFFIX}"
     if is_image(p):
+        if not vision:
+            return "", ""
         text, note = await ocr_image(p, router, config=config)
     elif is_pdf_file(p):  # by content, so a mislabeled scan is reachable
-        text, note = await ocr_pdf(p, router, max_pages=cap, config=config)
+        text, note = await ocr_pdf(p, router, max_pages=cap, config=config, vision=vision)
     else:
         return "", (
             f"OCR applies to PDFs and images only — {p.suffix or p.name!r} is "
             "neither, so nothing was transcribed"
         )
-    if text and digest is not None and root_home is not None:
+    if text and vision and digest is not None and root_home is not None:
         try:
             await asyncio.to_thread(store_cached, root_home, digest, cap, text, note)
         except Exception:  # noqa: BLE001 — see below

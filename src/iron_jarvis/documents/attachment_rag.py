@@ -285,10 +285,12 @@ async def extract_for_rag_async(
     fallback wired in.
 
     ``held_note`` (v1.556.0, idea 31-a): the turn sorts this scan, and the
-    sorting plan reads every page itself, ON THIS PC (``stack_plan``). The
-    scanned pages are then NOT transcribed here, so none reaches a vision
-    model before the plan's card has said how many pages this PC could not
-    read (D-31.2); the text layer is kept and the note says why.
+    sorting plan reads every page itself, ON THIS PC (``stack_plan``). Only
+    the VISION step is held: the scan is still read on this PC (Windows' OCR,
+    ``ocr_document(vision=False)``, as any turn would), so the app never reads
+    less of it here, and no page picture reaches a model before the plan's
+    card has said how many pages this PC could not read (D-31.2). The note
+    says what was read and why the rest waits.
 
     The parse is CPU-bound and the PDF walk is filesystem-bound, so both go
     through ``asyncio.to_thread`` (the daemon is one loop — see CLAUDE.md).
@@ -330,10 +332,21 @@ async def extract_for_rag_async(
     def _note(base: str) -> str:
         return honest_scan_note(base, image=image, text=text)
 
-    if held_note and not image:
-        return Extraction(text=text, note=held_note)
     if not ocr_enabled:
         return Extraction(text=text, note=_note(OCR_DISABLED_NOTE))
+    if held_note and not image:
+        try:
+            cap = MAX_OCR_PAGES if max_ocr_pages is None else int(max_ocr_pages)
+        except (TypeError, ValueError):
+            cap = MAX_OCR_PAGES
+        try:
+            here_text, here_note = await ocr_document(p, router, config=config, max_pages=max(1, cap), vision=False)
+        except Exception:  # noqa: BLE001 — this PC's reading failing leaves the plan to read it
+            here_text, here_note = "", ""
+        if here_text:
+            # No vision call was made: nothing is charged to the turn's budget.
+            return Extraction(text=here_text, note=f"{here_note}; {held_note}", ocr_used=True, ocr_pages=0)
+        return Extraction(text=text, note=held_note)
     if router is None:
         return Extraction(text=text, note=_note(OCR_NO_ROUTER_NOTE))
     try:
