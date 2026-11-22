@@ -1127,8 +1127,9 @@ class Config(BaseModel):
     #: R2.15 (27-a, decision D-27.1, ``harness/evidence``): "Take before and
     #: after pictures by themselves". True: a Chat › Code reply that changes a
     #: screen file, with a page open in the Browser, gets a picture of the
-    #: page before the change and after it (an invisible browser started
-    #: twice). None = never chosen (off, and Show me offers it ONCE); False =
+    #: page before the change and after it (an invisible browser started as
+    #: each reply with the page open begins, and again when it changed a
+    #: screen file). None = never chosen (off, and Show me offers it ONCE); False =
     #: off. Asking ("show me it works") or Show me always works. Read live.
     reply_pictures: bool | None = None
     #: v1.406.0 part 3 (``daemon/routes/ci_watch``): a coding session that

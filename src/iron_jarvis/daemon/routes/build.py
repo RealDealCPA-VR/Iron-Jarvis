@@ -3264,6 +3264,17 @@ def _newer_message(messages: "list[dict[str, Any]]", idx: int) -> bool:
     )
 
 
+def _person_question(row: Any) -> str:
+    """BLOCKING (the transcript's JSON): the newest question the PERSON wrote
+    in the session — never a steer note, never Iron Jarvis's own hidden
+    carry-on — i.e. what a carry-on they pressed carries out (R2.15: read for
+    "show me it works"). "" when there is none."""
+    for m in reversed(S._messages(row)):
+        if m.get("role") == "user" and not m.get("steer") and not m.get("continuation"):
+            return str(m.get("content") or "")
+    return ""
+
+
 def _resume_root(messages: "list[dict[str, Any]]", idx: int) -> int:
     """The ORIGINAL question of a chain of restart carry-ons (v1.391.0
     review): from the question line at ``idx``, follow ``resumedFrom`` back
@@ -4073,17 +4084,39 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...harness.preview import current_preview as _current_preview
 
         _shown_page = _current_preview()
+        # R2.15 review: a carry-on a PERSON pressed (Allow on the plan,
+        # Continue from where it stopped, Continue with another account) is
+        # their reply — its own words are Iron Jarvis's hidden ones, so the
+        # words read for "show me it works" are the person's newest question.
+        # Only a turn Iron Jarvis started (the night, CI, Resume when ready,
+        # a restart) is its own.
+        _by_person = started_by == _night.BY_PERSON
+        _asked = text
+        if _by_person and continuation:
+            _asked = await asyncio.to_thread(_person_question, row)
         # The reason a reply takes none, said under Show me as it really is
-        # ("" = it takes them): a turn Iron Jarvis started (the night, a
-        # "carry on"), a message that did not ask, or no page open.
+        # ("" = it takes them): a turn Iron Jarvis started, a message that did
+        # not ask, or no page open.
         _no_before = _evidence.no_before_words(
-            getattr(platform.config, "reply_pictures", None), text, _shown_page,
-            by_person=started_by == _night.BY_PERSON and not continuation,
+            getattr(platform.config, "reply_pictures", None), _asked, _shown_page,
+            by_person=_by_person,
         )
         evidence_token = _evidence.arm(
             platform.config.home, thread_id, turn_id, _shown_page,
             take=not _no_before, why=_no_before,
         )
+        # R2.15 review: a reply that takes pictures starts its before picture
+        # as it begins (below, once the turn has started), under the turn's
+        # Local only scope (the lane sets the turn's own only later). Not in
+        # plan mode: a plan turn changes no file.
+        _early_before = not _no_before and S.mode_of(row) != S.MODE_PLAN
+        _early_local = True
+        if _early_before:
+            from ...providers import egress as _egress_lo
+
+            _early_local = await _egress_lo.effective_local_only(
+                platform.engine, chat_body.local_only, thread_id,
+            )
         # v1.372.0: the session's MODEL is held for the turn and every helper
         # it starts, pinned account or not (``providers.hold``): nothing moves
         # the turn to another provider on its own.
@@ -4284,6 +4317,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
                 no_limit=no_limit, record=record, account_move=move_line, local_only=ran_local_only,
             ))
+            # R2.15 review: the before picture starts NOW, as the reply begins
+            # (a real Edge picture can take longer than the 8 s the first
+            # screen write is held); the turn's end ends one no write took.
+            if _early_before and _evidence.start_before(local_only=_early_local):
+                _pictures = _evidence.TURN.get()
+                with contextlib.suppress(Exception):
+                    lg.task.add_done_callback(lambda _t, _st=_pictures: _evidence.stop_before(_st))
             # v1.393.0: the wait loop looks again the moment a turn ENDS — a
             # limit it ended on armed its wait by itself, and a move within
             # the account's group should not wait for the loop's next minute.

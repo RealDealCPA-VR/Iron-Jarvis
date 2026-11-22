@@ -2055,8 +2055,11 @@ not what the reply says happened.
 starts an invisible browser on this PC. There are three ways:
 
 - **Say it in your message**: "make the button blue and show me it works".
-  Iron Jarvis then takes the before picture just before the reply first
-  changes a screen file, and the after picture when the reply ends.
+  Iron Jarvis then starts the before picture as the reply begins (the reply's
+  first change to a screen file waits for it), and takes the after picture
+  when the reply ends. A reply that then changes no screen file keeps no
+  picture. Saying it in a message you send in plan mode counts for the
+  reply that carries the plan out.
 - **Press Show me** under the newest reply, when it changed a screen file. It
   takes the after picture now (there is no before picture then, and the reply
   says why). Typing just "show me it works" in the box does the same. It
@@ -2065,8 +2068,9 @@ starts an invisible browser on this PC. There are three ways:
   that already has its after picture keeps the one taken then.
 - **Turn on Take before and after pictures by themselves** (Settings ›
   Agents & automation, or ask in chat). Then every reply that changes a
-  screen file gets both pictures, which starts an invisible browser twice per
-  such reply. The first time you press Show me, Iron Jarvis offers this once.
+  screen file gets both pictures. Each reply with the page open starts an
+  invisible browser once as it begins, and twice when it changes a screen
+  file. The first time you press Show me, Iron Jarvis offers this once.
 
 You need the page open in the session's **Browser** (your dev server, for
 example `http://localhost:5173`). A screen file is a file that draws a page,
@@ -2077,7 +2081,8 @@ the same before and after". When a picture could not be taken (the page did
 not answer in time, the page moved to another address, there is no Edge or
 Chrome), it says why; it never shows a made-up or older picture. A slow page
 never holds your reply up for long: after 8 seconds the change goes ahead
-without a before picture.
+without a before picture, and the end of the reply waits at most 30 seconds
+for the after picture.
 
 **Good to know.**
 
@@ -2095,8 +2100,11 @@ without a before picture.
   not by Iron Jarvis's own file edits, is not noticed: such a reply has no
   pictures and no Show me. A change that did not land (the edit failed)
   is no change either.
-- A reply Iron Jarvis started itself (a night task, a "carry on") takes no
-  pictures by itself; Show me under it still works.
+- A reply Iron Jarvis started itself (a night task, Resume when ready, a
+  reply carried on after a restart) takes no pictures by itself; Show me
+  under it still works. A carry-on you pressed (Allow on a plan, Continue
+  from where it stopped, Continue with another account) is your reply: it
+  takes pictures as your message asked, or as the setting says.
 
 ## Choose what each of your other computers may do (v1.552.0)
 

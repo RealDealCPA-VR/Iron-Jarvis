@@ -713,7 +713,8 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("reply_pictures", "Take before and after pictures by themselves", "automation", "bool",
       "In a coding session (Chat › Code) with a page open in the Browser, a reply that changes a "
       "screen file gets two pictures of that page under it: before the change and after it. Each "
-      "such reply starts an invisible browser on this PC twice. Off: pictures are taken only when "
+      "reply with the page open then starts an invisible browser on this PC once as it begins, "
+      "and twice when it changes a screen file. Off: pictures are taken only when "
       "you ask, by pressing Show me under the reply or by saying \"show me it works\" in your "
       "message. Not set: Show me offers this once. The pictures stay with the session (its newest "
       "40 replies) and go to the trash when you delete it; they are never sent to a model.",

@@ -417,6 +417,158 @@ async def test_a_page_that_does_not_answer_in_time_lets_the_write_go_ahead(reg, 
     assert not (Path(rec["folder"]) / "before.png").exists()
 
 
+async def _early_done(st) -> None:
+    """Wait for what is asserted: the picture started as the reply began has
+    finished (never a fixed sleep)."""
+    for _ in range(1000):
+        if st.early is not None and st.early.done():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the before picture started as the reply began did not finish")
+
+
+async def test_the_before_starts_as_the_reply_begins_so_a_slow_page_still_gets_one(reg, browsers, monkeypatch):
+    """Review (should 2): with the real Edge, one picture can take longer than
+    the 8 s a screen write is held. The before starts as the reply begins, so
+    by the model's first write it is there; the write does not need one."""
+    p, perms, ws, ctx = reg
+    target = ws / "src" / "App.tsx"
+    target.write_text("<button>old</button>", encoding="utf-8")
+    _PageBackend.watch = target
+    monkeypatch.setattr(E, "BEFORE_WAIT_S", 0.05)  # far less than a picture takes here
+    token = _arm(p)
+    try:
+        st = E.TURN.get()
+        assert E.start_before(local_only=False) is True
+        assert E.start_before(local_only=False) is False  # once per reply
+        await _early_done(st)  # the model is still thinking meanwhile
+        # From now on any NEW picture never comes: the write must not need one.
+        later = threading.Event()
+        _PageBackend.hang = later
+        await _write(p, perms, ctx, "src/App.tsx", "<button>new</button>")
+        assert target.read_text(encoding="utf-8") == "<button>new</button>"
+        assert len(browsers.made) == 1
+        _PageBackend.hang = None
+        later.set()
+        rec = await E.at_end([])
+    finally:
+        E.reset(token)
+    assert [i["id"] for i in rec["items"]] == ["before", "after"] and rec["note"] == ""
+    folder = Path(rec["folder"])
+    assert (folder / "before.png").read_bytes() == b"PIC:<button>old</button>"
+    assert (folder / "after.png").read_bytes() == b"PIC:<button>new</button>"
+    assert browsers.made[0].kw.get("local_only") is None  # the scope it was started under
+
+
+async def test_a_before_still_being_taken_at_the_first_write_is_never_kept_late(reg, browsers, monkeypatch):
+    """Held at most BEFORE_WAIT_S; then the write goes ahead and the picture,
+    which could now show the change, is ended — never kept as the before."""
+    p, perms, ws, ctx = reg
+    target = ws / "src" / "App.tsx"
+    target.write_text("old", encoding="utf-8")
+    _PageBackend.watch = target
+    never = threading.Event()
+    _PageBackend.hang = never
+    monkeypatch.setattr(E, "BEFORE_WAIT_S", 0.05)
+    token = _arm(p)
+    try:
+        st = E.TURN.get()
+        assert E.start_before(local_only=True) is True
+        await _write(p, perms, ctx, "src/App.tsx", "new")
+        assert target.read_text(encoding="utf-8") == "new"
+        assert st.early.cancelled()
+        _PageBackend.hang = None
+        rec = await E.at_end([])
+    finally:
+        E.reset(token)
+        never.set()
+    assert [i["id"] for i in rec["items"]] == ["after"]
+    assert E.BEFORE_SLOW_WORDS in rec["note"]
+    assert not (Path(rec["folder"]) / "before.png").exists()
+    assert browsers.made[0].kw.get("local_only") is True  # a Local only turn's scope
+
+
+async def test_a_before_that_failed_as_the_reply_began_is_taken_again_at_the_write(reg, browsers):
+    """A page not up yet as the reply began (the agent starts the dev server
+    itself): the first screen write tries once more within its own hold."""
+    p, perms, ws, ctx = reg
+    target = ws / "src" / "App.tsx"
+    target.write_text("old", encoding="utf-8")
+    _PageBackend.watch = target
+    _PageBackend.fail = "the page is not up yet"
+    token = _arm(p)
+    try:
+        st = E.TURN.get()
+        assert E.start_before(local_only=False) is True
+        await _early_done(st)
+        assert st.early.exception() is not None
+        _PageBackend.fail = ""
+        await _write(p, perms, ctx, "src/App.tsx", "new")
+        rec = await E.at_end([])
+    finally:
+        E.reset(token)
+    assert [i["id"] for i in rec["items"]] == ["before", "after"] and rec["note"] == ""
+    assert (Path(rec["folder"]) / "before.png").read_bytes() == b"PIC:old"
+    assert len(browsers.made) == 3  # the failed early one, the write's, the after
+
+
+async def test_a_reply_that_writes_no_screen_file_keeps_no_early_picture(reg, browsers):
+    p, perms, ws, ctx = reg
+    never = threading.Event()
+    _PageBackend.hang = never
+    token = _arm(p)
+    try:
+        st = E.TURN.get()
+        assert E.start_before(local_only=False) is True
+        await _write(p, perms, ctx, "app.py", "x = 2\n")
+        assert await E.at_end([str(ws / "app.py")]) is None
+        for _ in range(500):  # ended, not left running (wait for what is asserted)
+            if st.early.done():
+                break
+            await asyncio.sleep(0.01)
+        assert st.early.cancelled()
+    finally:
+        E.reset(token)
+        never.set()
+    assert not (Path(p.config.home) / E.DIRNAME).exists()
+
+
+async def test_the_turns_end_ends_a_before_still_being_taken(reg, browsers):
+    """A Stop or a failure ends the turn with no done frame: its end (the
+    turn task's callback in ``start_build_turn``) ends the picture."""
+    p, perms, ws, ctx = reg
+    never = threading.Event()
+    _PageBackend.hang = never
+    token = _arm(p)
+    try:
+        st = E.TURN.get()
+        assert E.start_before(local_only=False) is True
+    finally:
+        E.reset(token)
+    try:
+        E.stop_before(st)
+        for _ in range(500):
+            if st.early.done():
+                break
+            await asyncio.sleep(0.01)
+        assert st.early.cancelled()
+    finally:
+        never.set()
+    assert not (Path(p.config.home) / E.DIRNAME).exists()
+
+
+async def test_a_turn_that_takes_no_pictures_starts_none(reg, browsers):
+    p, perms, ws, ctx = reg
+    for take, address in ((False, DEV), (True, "")):
+        token = _arm(p, take=take, address=address)
+        try:
+            assert E.start_before(local_only=False) is False
+            assert E.TURN.get().early is None
+        finally:
+            E.reset(token)
+    assert browsers.made == []
+
+
 async def test_identical_pictures_say_the_page_looks_the_same(reg, browsers):
     p, perms, ws, ctx = reg
     _PageBackend.same = True
@@ -552,8 +704,18 @@ async def test_asking_in_the_message_puts_both_pictures_on_the_reply_line(tmp_pa
 
     app, sid, work = _scene(tmp_path, monkeypatch)
     _PageBackend.watch = work / "src" / "App.tsx"
+    started: list[bool] = []
+
+    async def first_move(_script):
+        # Review: the before picture started as the reply began — before
+        # the model's first answer, so long before its first screen write.
+        st = E.TURN.get()
+        started.append(st is not None and st.early is not None)
+        return _write_call("c1", "<button>blue</button>")
+
     done, line = await _reply(app, sid, "Make the button blue and show me it works.", "t-ask",
-                              moves=[_write_call("c1", "<button>blue</button>")])
+                              moves=[first_move])
+    assert started == [True]
     ev = line["evidence"]
     assert done["evidence"] == ev
     assert [i["id"] for i in ev["items"]] == ["before", "after"]
@@ -734,6 +896,35 @@ async def test_show_me_never_overwrites_an_after_filed_while_it_was_taken(tmp_pa
     assert [i["id"] for i in kept["evidence"]["items"]] == ["after"]
 
 
+async def test_show_me_never_writes_over_an_after_that_reaches_the_line_as_it_is_kept(tmp_path, monkeypatch,
+                                                                                         browsers):
+    """Review note (the last guard, ``amend_reply(expect=...)``): an after
+    that reaches the line AFTER the question is asked again, while the press's
+    picture is being kept, stays on the line; the press is refused."""
+    from iron_jarvis.harness import sessions as S
+
+    from tests.test_build_sessions_v1367 import asgi, messages_of
+
+    app, sid, work = _scene(tmp_path, monkeypatch)
+    _PageBackend.watch = work / "src" / "App.tsx"
+    await _reply(app, sid, "Make the button blue.", "t-late", moves=[_write_call("c1", "<button>blue</button>")])
+    engine = app.state.platform.engine
+    other = {"id": "after", "label": "After", "where": "localhost:5173/cart", "at": "then", "sha": "f" * 16}
+    real_save = E._save
+
+    def save_while_another_after_lands(home, thread_id, turn_id, item_id, png, address, blocked=None):
+        out = real_save(home, thread_id, turn_id, item_id, png, address, blocked)
+        assert S.amend_reply(engine, sid, "t-late", {
+            "evidence": {"kind": "pictures", "screen": True, "items": [other], "note": ""}})
+        return out
+
+    monkeypatch.setattr(E, "_save", save_while_another_after_lands)
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/evidence", {"turn_id": "t-late", "preview_url": DEV})
+    assert status == 409 and body["detail"] == "The picture was taken but could not be kept on the reply. Try again."
+    kept = [m for m in messages_of(app, sid) if m.get("turnId") == "t-late" and m["role"] == "assistant"][-1]
+    assert kept["evidence"]["items"] == [other]
+
+
 async def test_show_me_is_refused_in_an_archived_session(tmp_path, monkeypatch, browsers):
     from tests.test_build_sessions_v1367 import asgi, messages_of
 
@@ -765,12 +956,13 @@ async def test_asking_with_no_page_open_says_so_not_that_you_did_not_ask(tmp_pat
     assert body["evidence"]["note"] == E.NO_PAGE_WORDS
 
 
-@pytest.mark.parametrize(("started_by", "continuation"), [("person", True), ("night", False)])
+@pytest.mark.parametrize(("started_by", "continuation"), [("wait", True), ("restart", True), ("night", False)])
 async def test_a_turn_iron_jarvis_started_takes_no_pictures_by_itself(tmp_path, monkeypatch, browsers,
                                                                      started_by, continuation):
     """Review A/B: the wiring (``by_person``) that keeps a night task or a
-    "carry on" turn from starting the invisible browser, with the setting ON,
-    a page open and the words in the message."""
+    carry-on Iron Jarvis started itself (Resume when ready, a restart) from
+    starting the invisible browser, with the setting ON, a page open and the
+    words in the message. (A carry-on a PERSON pressed is theirs: below.)"""
     from iron_jarvis.daemon.routes import build as build_routes
 
     from tests.test_build_sessions_v1367 import Script, messages_of, until, wire
@@ -793,6 +985,170 @@ async def test_a_turn_iron_jarvis_started_takes_no_pictures_by_itself(tmp_path, 
                                 "beforeNote": E.STARTED_WORDS}
 
 
+@pytest.mark.parametrize(("setting", "words", "pictures"), [
+    (True, "Plan how to make the button blue.", True),
+    (None, "Plan how to make the button blue, then show me it works.", True),
+    (None, "Plan how to make the button blue.", False),
+])
+async def test_the_act_turn_of_a_plan_you_allowed_is_your_reply(tmp_path, monkeypatch, browsers,
+                                                               setting, words, pictures):
+    """Review (should 1): Allow on the plan door is the PERSON's press. The
+    act turn (a hidden carry-on, its words Iron Jarvis's own) is their reply:
+    it takes pictures as their plan message asked, or as the setting says,
+    on the page address kept with the session — and never says Iron Jarvis
+    started it."""
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.daemon.routes import build as build_routes
+    from iron_jarvis.providers.adapters.base import ToolCall
+
+    from tests.test_build_sessions_v1367 import (
+        Script,
+        asgi,
+        messages_of,
+        new_session,
+        open_turn,
+        turn_frames,
+        turn_log,
+        until,
+        wire,
+    )
+    from tests.test_chat_turn_stop_v1241 import _asgi_post
+
+    work = tmp_path / "work"
+    (work / "src").mkdir(parents=True)
+    target = work / "src" / "App.tsx"
+    target.write_text("<button>old</button>", encoding="utf-8")
+    app = create_app(str(tmp_path / "home"))
+    app.state.platform.config.reply_pictures = setting
+    sid = new_session(app, work, mode="plan", approval_mode="yolo")["id"]
+    _PageBackend.watch = target
+    armed: list[tuple[bool, bool]] = []
+
+    def look() -> None:
+        st = E.TURN.get()
+        armed.append((bool(st and st.take), bool(st and st.early is not None)))
+
+    async def plan_move(_script):
+        look()
+        return ("My plan: make the button blue.", [ToolCall(id="x1", name="ExitPlanMode", arguments={})])
+
+    async def act_move(_script):
+        look()
+        return _write_call("c1", "<button>blue</button>")
+
+    wire(app, Script([plan_move, "Here is the plan.", act_move, "Made it blue."]))
+    drop = asyncio.Event()
+    plan = asyncio.create_task(open_turn(app, sid, {"text": words, "turn_id": "bp-1", "preview_url": DEV},
+                                         drop=drop, timeout=120.0))
+    try:
+        card = (await until(lambda: [d for e, d in turn_frames(app, "bp-1") if e == "approval"], 60))[0]
+        assert card["tool"] == "exit_plan_mode"
+        assert (await _asgi_post(app, f"/chat/approvals/{card['id']}", {"decision": "once"}))[0] == 200
+        cont = await until(lambda: [m for m in messages_of(app, sid)
+                                    if m["role"] == "user" and m.get("continuation")], 60)
+        assert cont and cont[0]["content"] == build_routes.PLAN_RUN_TEXT
+        act = cont[0]["turnId"]
+        lg = await until(lambda: turn_log(app, act), 60)
+        await until(lambda: lg.status != "running", 60)
+        assert lg.status == "done"
+    finally:
+        drop.set()
+        await plan
+        build_routes._PLAN_RUNS.clear()
+    assert target.read_text(encoding="utf-8") == "<button>blue</button>"
+    line = [m for m in messages_of(app, sid) if m.get("role") == "assistant" and m.get("turnId") == act][-1]
+    ev = line["evidence"]
+    assert E.STARTED_WORDS not in json.dumps(ev)
+    # The plan turn (plan mode: it changes no file) starts no browser; the act
+    # turn starts its before as it begins.
+    assert armed == [(pictures, False), (pictures, pictures)]
+    if pictures:
+        assert [i["id"] for i in ev["items"]] == ["before", "after"], ev
+        assert ev["note"] == ""
+        status, pic = await asgi(app, "GET", f"/build/sessions/{sid}/evidence/{act}/before")
+        assert status == 200 and pic == "PIC:<button>old</button>"
+        status, pic = await asgi(app, "GET", f"/build/sessions/{sid}/evidence/{act}/after")
+        assert status == 200 and pic == "PIC:<button>blue</button>"
+    else:
+        assert ev == {"kind": "pictures", "screen": True, "items": [], "note": "",
+                      "beforeNote": E.NOT_ASKED_WORDS}
+        assert browsers.made == []
+
+
+async def test_a_local_only_replys_before_starts_behind_the_refusing_proxy(tmp_path, monkeypatch, browsers):
+    """The before starts in ``start_build_turn``, before the lane sets the
+    turn's own Local only scope: it is started under the session's."""
+    from iron_jarvis.daemon.app import create_app
+
+    from tests.test_build_sessions_v1367 import new_session
+
+    work = tmp_path / "work"
+    (work / "src").mkdir(parents=True)
+    (work / "src" / "App.tsx").write_text("<button>old</button>", encoding="utf-8")
+    app = create_app(str(tmp_path / "home"))
+    sid = new_session(app, work, local_only=True)["id"]
+    _PageBackend.watch = work / "src" / "App.tsx"
+    done, line = await _reply(app, sid, "Make the button blue and show me it works.", "t-lo-ask",
+                              moves=[_write_call("c1", "<button>blue</button>")])
+    assert [i["id"] for i in line["evidence"]["items"]] == ["before", "after"], line
+    assert len(browsers.made) == 2
+    assert all(b.kw.get("local_only") is True for b in browsers.made)
+
+
+async def test_a_stopped_reply_ends_its_before_picture(tmp_path, monkeypatch, browsers):
+    """A Stop ends the turn: the before picture still being taken is ended,
+    never left running, and nothing is kept."""
+    from tests.test_build_sessions_v1367 import Script, asgi, open_turn, turn_log, until, wire
+
+    app, sid, work = _scene(tmp_path, monkeypatch)
+    never = threading.Event()
+    _PageBackend.hang = never
+    seen: dict = {}
+    hold = asyncio.Event()
+
+    async def think_on(_script):
+        seen["st"] = E.TURN.get()
+        await hold.wait()
+        return "Done."
+
+    wire(app, Script([think_on]))
+    drop = asyncio.Event()
+    turn = asyncio.create_task(open_turn(app, sid, {"text": "Make it blue and show me it works.",
+                                                    "turn_id": "t-stop", "preview_url": DEV},
+                                         drop=drop, timeout=120.0))
+    try:
+        st = await until(lambda: seen.get("st"), 60)
+        assert st is not None and st.early is not None and not st.early.done()
+        await asgi(app, "POST", "/chat/turns/t-stop/stop", {})
+        lg = await until(lambda: turn_log(app, "t-stop"), 30)
+        await until(lambda: lg.status != "running", 60)
+        await until(lambda: st.early.done(), 30)
+        assert st.early.cancelled()
+    finally:
+        drop.set()
+        hold.set()
+        never.set()
+        await turn
+    assert not list((Path(app.state.platform.config.home) / E.DIRNAME).rglob("*.png"))
+
+
+def test_the_question_a_pressed_carry_on_carries_out_is_the_persons_newest():
+    from types import SimpleNamespace
+
+    from iron_jarvis.daemon.routes import build as build_routes
+
+    def row(*lines):
+        return SimpleNamespace(messages_json=json.dumps(list(lines)))
+
+    asked = {"role": "user", "content": "Make it blue and show me it works.", "turnId": "t1"}
+    older = {"role": "user", "content": "Older words.", "turnId": "t0"}
+    steer = {"role": "user", "content": "steer words", "turnId": "t1", "steer": True}
+    carry = {"role": "user", "content": build_routes.PLAN_RUN_TEXT, "turnId": "t2", "continuation": True}
+    reply = {"role": "assistant", "content": "ok", "turnId": "t1"}
+    assert build_routes._person_question(row(older, asked, steer, reply, carry, reply)) == asked["content"]
+    assert build_routes._person_question(row(carry)) == ""
+
+
 async def test_a_reply_that_changed_no_screen_file_has_no_pictures_key(tmp_path, monkeypatch, browsers):
     from iron_jarvis.providers.adapters.base import ToolCall
 
@@ -800,7 +1156,9 @@ async def test_a_reply_that_changed_no_screen_file_has_no_pictures_key(tmp_path,
     call = [ToolCall(id="c1", name="write_file", arguments={"path": "notes.py", "content": "x = 1\n"})]
     done, line = await _reply(app, sid, "Write notes and show me it works.", "t-py", moves=[call])
     assert "evidence" not in done and "evidence" not in line
-    assert browsers.made == []
+    # It asked, so its before picture started as it began; no screen write
+    # took it, so nothing is kept, and the turn's end ended it.
+    assert not list((Path(app.state.platform.config.home) / E.DIRNAME).rglob("*.png"))
 
 
 async def test_show_me_says_why_in_words(tmp_path, monkeypatch, browsers):

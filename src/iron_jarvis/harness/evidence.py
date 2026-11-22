@@ -20,16 +20,23 @@ and the screen offers Show me under it, which takes the after picture then
 offered only under the session's NEWEST reply, and never replaces an after
 picture a reply already has (the route ``routes/build_evidence`` refuses
 anything else in words). The setting starts not set (off) and Show me offers
-it once (:func:`offer_due`), naming its cost: an invisible browser twice per
-such reply.
+it once (:func:`offer_due`), naming its cost: an invisible browser as each
+reply with the page open begins, and again when it changed a screen file.
 
-BEFORE. The first write of a screen file in an armed turn waits for the
-picture of the page as it is (:func:`before_write`, called by the tool
-registry in the one place a file write is journaled, BEFORE the write lands,
-so both chat lanes and every helper get it), at most :data:`BEFORE_WAIT_S`.
-Too slow or failed: the write goes ahead and the record says why. Calls in
-parallel wait on the turn's lock, so no screen write lands before the
-picture.
+BEFORE. The picture of the page as it is starts as the reply begins
+(:func:`start_before`, called by ``start_build_turn`` once the turn has
+started: a real Edge picture can take longer than a write may be held, and
+the first one after the app starts is the slowest). It is held in memory
+only. The first write of a screen file in the turn waits for it
+(:func:`before_write`, called by the tool registry in the one place a file
+write is journaled, BEFORE the write lands, so both chat lanes and every
+helper get it), at most :data:`BEFORE_WAIT_S`, and keeps it. Still not
+there: it is ended (never kept: it could show the change), the write goes
+ahead and the record says why. One that failed before the write (a page not
+up yet as the reply began) is taken again then, within the same hold. Calls
+in parallel wait on the turn's lock, so no screen write lands before the
+picture. A reply that writes no screen file keeps nothing, and the turn's
+end ends a picture still being taken (:func:`stop_before`).
 
 AFTER. When the reply ends (both lanes' done frame, :func:`at_end`), the same
 address, after the page settles.
@@ -75,8 +82,14 @@ DIRNAME = "reply-evidence"
 KEEP_REPLIES = 40
 #: The before picture holds the first screen write at most this long.
 BEFORE_WAIT_S = 8.0
-#: The after picture at the reply's end, at most.
-AFTER_WAIT_S = 20.0
+#: The before picture started as the reply begins (:func:`start_before`),
+#: at most this long (then it is given up; the first screen write tries once
+#: more within its own hold).
+EARLY_LIMIT_S = 30.0
+#: The after picture at the reply's end, at most (it holds the done frame).
+#: Review: a real Edge one-shot measured 4-15 s on this PC under load, most
+#: of it starting the browser, and 2 of 4 afters missed 20 s; the press's 30.
+AFTER_WAIT_S = 30.0
 #: A Show me press, at most.
 PRESS_WAIT_S = 30.0
 #: How long the page may draw before its picture is taken.
@@ -250,6 +263,10 @@ class TurnEvidence:
     before_note: str = ""
     tried_before: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: The before picture started as the reply began (:func:`start_before`):
+    #: a task giving ``(png, frames left empty)``, held in memory only until
+    #: the first screen write takes it.
+    early: "asyncio.Task[tuple[bytes, list[str]]] | None" = None
 
 
 TURN: "ContextVar[TurnEvidence | None]" = ContextVar("ij_reply_evidence", default=None)
@@ -579,9 +596,70 @@ def saved_record(raw: Any) -> "dict[str, Any] | None":
 # --------------------------------------------------------------------------- #
 
 
+def _retrieved(task: "asyncio.Task[Any]") -> None:
+    """A done callback: an early picture's failure is read (the write that
+    takes it says it), so the loop never logs it as never retrieved."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _early_take(address: str) -> tuple[bytes, list[str]]:
+    return await asyncio.wait_for(_take(address, limit_s=EARLY_LIMIT_S), EARLY_LIMIT_S + 5)
+
+
+def start_before(*, local_only: bool = True) -> bool:
+    """Start this turn's before picture NOW, as the reply begins (review: a
+    real Edge one-shot can take longer than :data:`BEFORE_WAIT_S`, the most a
+    screen write is held). Held in memory only: the first screen write takes
+    and keeps it (:func:`before_write`); a reply that writes no screen file
+    keeps nothing. ``local_only``: the turn's Local only scope (the lane sets
+    the turn's own only later, inside the turn). Call on the loop, in the
+    armed turn's context, once the turn has started. Returns whether a
+    picture was started."""
+    st = TURN.get()
+    if st is None or not (st.take and st.address) or st.early is not None or st.tried_before:
+        return False
+    from ..providers import egress as _egress
+
+    with _egress.local_only_scope(local_only is True):
+        st.early = asyncio.get_running_loop().create_task(
+            _early_take(st.address), name=f"reply-before-picture-{st.turn_id}",
+        )
+    st.early.add_done_callback(_retrieved)
+    return True
+
+
+def stop_before(st: "TurnEvidence | None" = None) -> None:
+    """The turn ended (its end, a Stop, a failure): a before picture still
+    being taken that no screen write took is ended. Never raises."""
+    st = st if st is not None else TURN.get()
+    early = st.early if st is not None else None
+    if early is not None and not early.done():
+        early.cancel()
+
+
+async def _before_picture(st: TurnEvidence) -> tuple[bytes, list[str]]:
+    """The before picture for the turn's first screen write: the one started
+    as the reply began, waited for at most :data:`BEFORE_WAIT_S` (then it is
+    ended, never kept: it could show the change); else — none started, or it
+    failed before this write (a page not up yet as the reply began) — taken
+    now, within the same hold."""
+    early = st.early
+    if early is not None and not (early.done() and (early.cancelled() or early.exception() is not None)):
+        try:
+            return await asyncio.wait_for(early, BEFORE_WAIT_S)
+        except asyncio.CancelledError:
+            me = asyncio.current_task()
+            if me is not None and me.cancelling():
+                raise  # the write itself is stopped
+            raise PictureProblem("it was stopped") from None  # only the picture was
+    return await asyncio.wait_for(_take(st.address, limit_s=BEFORE_WAIT_S), BEFORE_WAIT_S)
+
+
 async def before_write(name: str, args: Any, workspace: Any = None) -> None:
     """The tool registry's hook, BEFORE a file write lands: the first write
-    of a screen file in an armed turn waits for the before picture (at most
+    of a screen file in an armed turn waits for the before picture (the one
+    started as the reply began, :func:`_before_picture`; at most
     :data:`BEFORE_WAIT_S`; then the write goes ahead and the record says
     why). Each screen file's state before its first write is kept, so a
     write that then fails is no change (:func:`_changed_screens`).
@@ -618,7 +696,7 @@ async def before_write(name: str, args: Any, workspace: Any = None) -> None:
             return
         st.tried_before = True
         try:
-            png, blocked = await asyncio.wait_for(_take(st.address, limit_s=BEFORE_WAIT_S), BEFORE_WAIT_S)
+            png, blocked = await _before_picture(st)
             st.before = await asyncio.to_thread(
                 _save, st.home, st.thread_id, st.turn_id, "before", png, st.address, blocked,
             )
@@ -645,6 +723,11 @@ async def at_end(documents: Any = None) -> "dict[str, Any] | None":
         docs = [d for d in (documents or []) if isinstance(d, str)]
         async with st.lock:  # a before still being taken finishes first
             pass
+        if not st.tried_before:
+            # No screen write took the picture started as the reply began: it
+            # is not kept (with no write seen, it could show a change made by
+            # a command), and one still being taken is ended.
+            stop_before(st)
         if not await asyncio.to_thread(_changed_screens, st, docs):
             # No screen file really changed (a write that failed leaves it as
             # it was): no mark, no after. A before taken for that write shows

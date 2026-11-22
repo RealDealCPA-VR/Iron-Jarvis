@@ -44,7 +44,7 @@ export const SHOW_ME = "Show me";
 export const SHOW_ME_TITLE = "Take a picture of the page open in the Browser now, to see how this change looks";
 export const SHOW_ME_WORKING = "Taking the picture…";
 export const OFFER_WORDS =
-  "Take these pictures by themselves after every reply that changes a screen? Each such reply starts an invisible browser on this PC twice.";
+  "Take these pictures by themselves after every reply that changes a screen? Each reply with the page open then starts an invisible browser on this PC once, and twice when it changes a screen.";
 export const OFFER_YES = "Turn on";
 export const OFFER_NO = "Not now";
 export const OFFER_ON_WORDS = "Turned on. Settings can turn it off.";
