@@ -22,6 +22,10 @@ from pathlib import Path
 
 _LINE = re.compile(r"^(RERUN|PASSED|FAILED|ERROR) (\S+)")
 
+#: The heading of the block ``tests/_retry_report.py`` ends a run with: what
+#: each failed attempt said, in the job's log (build-out X-3; pinned equal).
+RETRY_HEADING = "tests that failed an attempt and were run again: what that attempt said"
+
 
 def retried(text: str) -> tuple[list[str], list[str]]:
     """(passed only on retry, failed both times), each in first-seen order."""
@@ -49,6 +53,7 @@ def report(text: str, where: str) -> str:
         return ""
     lines = [f"**{where}: {len(flaky)} test(s) passed only on retry.** Fix them; the retry hides them:", ""]
     lines += [f"- `{t}`" for t in flaky]
+    lines += ["", f'What each failed attempt said is in the log of {where}, at the end of its test run: "{RETRY_HEADING}".']
     return "\n".join(lines) + "\n"
 
 

@@ -1131,3 +1131,9 @@ def _grounding_deadline_is_not_a_bar_here(request, monkeypatch):
 # live in tests/_real_edge_report.py (a run of the real plugins pins them);
 # importing them here registers them.
 from tests._real_edge_report import pytest_runtest_makereport, pytest_terminal_summary  # noqa: E402, F401
+
+# Build-out X-3: EVERY test that fails an attempt and is run again prints
+# that attempt's words (bounded, masked) at the end of the run, and the run
+# lists the tests that passed only on a retry (tests/_retry_report.py; its
+# hook is a second pytest_terminal_summary, so it carries its own name).
+from tests._retry_report import pytest_terminal_summary_retries  # noqa: E402, F401
