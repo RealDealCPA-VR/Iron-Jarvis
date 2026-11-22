@@ -2089,8 +2089,9 @@ first message of a new chat included.
   Schedules, Watchers and Autonomy pages ("Reports to <chat>"), and a
   workflow run's row on the Workflows page while it runs. **Undo** is right
   beside it. A run already going when you press it reports nothing more.
-  On an old report in a chat the record no longer reports to, the press
-  changes nothing and says "It reports to another chat now."
+  On an old report whose record now reports to another chat, the press
+  changes nothing and says "It reports to another chat now." If its reports
+  were stopped already, it says "Reports stopped."
 - In chat: "stop reporting the Friday prices schedule here", "report the
   Intake watcher in this chat", or the same for a goal. The change shows on
   the usual card and has Undo. Undoing a pause or a time change never turns

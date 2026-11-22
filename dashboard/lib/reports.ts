@@ -80,7 +80,8 @@ export function reportRequestLabel(from: ReportFrom): string {
 /** Point a record at a chat, or stop its reports (`threadId` ""). Answers
  *  the chat it reported to before, so an Undo puts it back. `onlyIf`: change
  *  it only while the record still reports to that chat (a report's own Stop
- *  reporting; the daemon says "It reports to another chat now." otherwise). */
+ *  reporting; the daemon says "It reports to another chat now." otherwise,
+ *  and answers ok with `previous` "" when its reports were stopped already). */
 export async function setReportTarget(
   kind: string,
   id: string,

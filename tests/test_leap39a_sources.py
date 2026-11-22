@@ -663,6 +663,24 @@ def test_a_reports_own_stop_never_stops_its_reports_to_another_chat(desk, tmp_pa
     assert p.scheduler.get("Friday prices").chat_thread_id == ""
 
 
+def test_a_reports_own_stop_on_a_record_that_reports_nowhere_says_stopped(desk, tmp_path):
+    """Review (39-a, round 4): the user stops a schedule's reports on its row
+    (or in chat), then presses Stop reporting on an older report in chat A.
+    The schedule reports to no chat, so the press answers "Reports stopped."
+    (``previous`` "", so the page offers no Undo), never the false "It
+    reports to another chat now."."""
+    c, p = desk
+    a = _chat(p, title="A")
+    _make_schedule(p, tmp_path, a)
+    rec = p.scheduler.get("Friday prices")
+    row = c.post("/reports/target", json={"kind": "schedule", "id": rec.id, "thread_id": ""})
+    assert row.status_code == 200 and row.json()["previous"] == a
+    old = c.post("/reports/target", json={"kind": "schedule", "id": rec.id, "thread_id": "", "only_if": a})
+    assert old.status_code == 200, old.json()
+    assert old.json()["previous"] == "" and old.json()["thread_id"] == ""
+    assert p.scheduler.get("Friday prices").chat_thread_id == ""
+
+
 def test_a_goal_try_the_user_stopped_reports_nothing(desk, monkeypatch):
     from iron_jarvis.goals import engine as GE
 

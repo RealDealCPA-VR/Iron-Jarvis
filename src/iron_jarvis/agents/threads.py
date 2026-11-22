@@ -1233,16 +1233,18 @@ class AgentThreads:
 
         Idea 39 (39-a, third review): a REPORT (a schedule's run summary, a
         watcher's file names) reaches the page's history as an Iron Jarvis row
-        that opens with its label (``chat_refs.REPORT_LINE_PREFIX``, the
+        that opens with its label (``chat_delivery.REPORT_LINE_PREFIX``, the
         page's ``panelHistoryOf``). It is said by :data:`_REPORT_SPEAKER`,
         never "Iron Jarvis", and what follows its label is fenced as outside
         data, the fence the two Iron Jarvis lanes give it
-        (``chat_refs.fence_agent_lines``)."""
+        (``chat_refs.fence_agent_lines``, through the same
+        ``chat_delivery.fenced_line_text``: this module may not import from
+        the daemon)."""
         if who == "jarvis":
-            from ..daemon.chat_refs import REPORT_LINE_PREFIX, _fenced_agent_text
+            from .chat_delivery import REPORT_LINE_PREFIX, fenced_line_text
 
             if content.startswith(REPORT_LINE_PREFIX):
-                return f"{_REPORT_SPEAKER}: {_fenced_agent_text(content) or content}"
+                return f"{_REPORT_SPEAKER}: {fenced_line_text(content) or content}"
         return f"{cls._label_for(who, names)}: {content}"
 
     @classmethod

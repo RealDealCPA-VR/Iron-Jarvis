@@ -45,6 +45,9 @@ import json
 import logging
 from typing import Any
 
+from ..agents.chat_delivery import AGENT_LINE_PREFIX, REPORT_LINE_PREFIX  # noqa: F401 (re-exported)
+from ..agents.chat_delivery import fenced_line_text as _fenced_agent_text
+
 log = logging.getLogger(__name__)
 
 #: Most saved chats one message may point to.
@@ -111,35 +114,10 @@ def _speaker(m: dict) -> str | None:
     name = " ".join(name.split())[:_AGENT_NAME_CHARS]
     return f"Agent {name} (not Jarvis)" if name else "Another agent (not Jarvis)"
 
-#: The words another agent's line in a chat's history opens with — the SAME
-#: words ``comm.threads.agent_line_label`` and the page's
-#: ``toRequestMessages`` put first (``change_claims._AGENT_LINE_PREFIX``).
-AGENT_LINE_PREFIX = "[Reply from the agent "
-
-#: Idea 39 (39-a): the words a REPORT in a chat's history opens with (the
-#: page's ``toRequestMessages`` puts ``[Report from your schedule "Friday
-#: prices", written when it ran. Not your words.]`` first): a run's summary,
-#: a watcher's file names, a workflow's last step. Fenced like an agent's line.
-REPORT_LINE_PREFIX = "[Report from "
-
-#: Every label a fenced line may open with.
-_FENCED_PREFIXES = (AGENT_LINE_PREFIX, REPORT_LINE_PREFIX)
-
-
-def _fenced_agent_text(content: str) -> str | None:
-    """``content`` with everything after its agent (or report) label fenced as
-    outside data (``computeruse.safety.wrap_untrusted``), or None when it is
-    not such a line or is fenced already. The label stays the first line."""
-    if not isinstance(content, str) or not content.startswith(_FENCED_PREFIXES):
-        return None
-    label, sep, rest = content.partition("\n")
-    if not sep or not label.endswith("]"):
-        return None
-    from ..computeruse.safety import _FENCE_TOP, wrap_untrusted
-
-    if rest.lstrip().startswith(_FENCE_TOP):
-        return None
-    return f"{label}\n{wrap_untrusted(rest)}"
+#: ``AGENT_LINE_PREFIX``, ``REPORT_LINE_PREFIX`` and ``_fenced_agent_text``
+#: (imported at the top) live in ``agents/chat_delivery`` (39-a, round 4), so
+#: ``agents/threads.py`` fences a report row with the SAME words without
+#: importing from the daemon; re-exported here for the two chat lanes.
 
 
 def fence_agent_lines(messages: Any) -> list[Any]:

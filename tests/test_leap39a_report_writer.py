@@ -248,6 +248,35 @@ def test_a_gone_chat_clears_only_a_link_that_still_names_it(p):
     assert p.event_bus.of(EventType.REPORT_CHAT_GONE) == []
 
 
+def test_a_stop_on_a_record_that_reports_nowhere_is_ok_and_changes_nothing(p):
+    """Review (39-a, round 4): a report's own Stop reporting (``only_if`` the
+    chat it is in) on a record that already reports nowhere answers ok — it
+    IS stopped — with ``changed`` False. So a run whose chat is gone after the
+    user stopped its reports clears nothing: no gone bell, no gone words on
+    the row (the user stopped it; nothing went missing)."""
+    rec = _schedule(p, "")
+    out = cd.set_report_target(p.engine, "schedule", rec.id, "", only_if="chat_a")
+    assert out["ok"] is True and out["previous"] == "" and out["thread_id"] == ""
+    assert out["changed"] is False
+    # A record that reports to ANOTHER chat still refuses in words.
+    b = _chat(p, title="Chat B")
+    other = ScheduledTaskRecord(name="Monday stock", cron="0 9 * * 1", kind="task",
+                                payload_json=json.dumps({"task": "count the stock"}), chat_thread_id=b)
+    with session_scope(p.engine) as db:
+        db.add(other)
+        db.commit()
+        db.refresh(other)
+    refused = cd.set_report_target(p.engine, "schedule", other.id, "", only_if="chat_a")
+    assert refused["ok"] is False and refused["why"] == "It reports to another chat now."
+    moved = cd.set_report_target(p.engine, "schedule", other.id, "", only_if=b)
+    assert moved["ok"] is True and moved["previous"] == b and moved["changed"] is True
+    gone = cd.report_to_chat(p, "chat_a_deleted", _report(rec, "run:sA", run_id="sA"), now=FRIDAY)
+    assert gone["gone"] is True and gone["cleared"] is False
+    assert p.event_bus.of(EventType.REPORT_CHAT_GONE) == []
+    with session_scope(p.engine) as db:
+        assert cd.GONE_ROW_WORDS not in (db.get(ScheduledTaskRecord, rec.id).last_detail or "")
+
+
 def test_stop_reporting_while_a_run_is_going_holds_its_report(p):
     """Review: the run carries its chat from fire time; Stop reporting pressed
     meanwhile wins (the record's field is read when the run ends)."""
@@ -355,7 +384,7 @@ def test_stop_reporting_and_its_undo(p):
     tid = _chat(p)
     rec = _schedule(p, tid)
     out = cd.set_report_target(p.engine, "schedule", rec.id, "")
-    assert out == {"ok": True, "why": "", "previous": tid, "thread_id": ""}
+    assert out == {"ok": True, "why": "", "previous": tid, "thread_id": "", "changed": True}
     back = cd.set_report_target(p.engine, "schedule", rec.id, out["previous"])
     assert back["ok"] and back["thread_id"] == tid
     # Never a coding session or a chat that is not saved.

@@ -433,6 +433,41 @@ WATCHER_REPORT_GAP_S = 3600
 #: The ``who`` on ``chat.thread_updated`` for a report.
 REPORT_WHO = "report"
 
+#: The words another agent's line in a chat's history opens with — the SAME
+#: words ``comm.threads.agent_line_label`` and the page's
+#: ``toRequestMessages`` put first (``change_claims._AGENT_LINE_PREFIX``).
+#: Kept HERE, below the daemon (39-a, round 4): ``agents/threads.py`` fences
+#: a report row with them and may not import from the daemon
+#: (``test_agents_threads_does_not_import_from_daemon_routes``);
+#: ``daemon/chat_refs`` re-exports them for the two chat lanes.
+AGENT_LINE_PREFIX = "[Reply from the agent "
+
+#: Idea 39 (39-a): the words a REPORT in a chat's history opens with (the
+#: page's ``toRequestMessages`` puts ``[Report from your schedule "Friday
+#: prices", written when it ran. Not your words.]`` first): a run's summary,
+#: a watcher's file names, a workflow's last step. Fenced like an agent's line.
+REPORT_LINE_PREFIX = "[Report from "
+
+#: Every label a fenced line may open with.
+FENCED_LINE_PREFIXES = (AGENT_LINE_PREFIX, REPORT_LINE_PREFIX)
+
+
+def fenced_line_text(content: Any) -> "str | None":
+    """``content`` with everything after its agent (or report) label fenced as
+    outside data (``computeruse.safety.wrap_untrusted``), or None when it is
+    not such a line or is fenced already. The label stays the first line.
+    Pure."""
+    if not isinstance(content, str) or not content.startswith(FENCED_LINE_PREFIXES):
+        return None
+    label, sep, rest = content.partition("\n")
+    if not sep or not label.endswith("]"):
+        return None
+    from ..computeruse.safety import _FENCE_TOP, wrap_untrusted
+
+    if rest.lstrip().startswith(_FENCE_TOP):
+        return None
+    return f"{label}\n{wrap_untrusted(rest)}"
+
 #: The bell's words when the chat a record reported to is gone.
 GONE_WORDS = "The chat this {kind} reported to is gone. Its results now show here."
 
@@ -627,7 +662,8 @@ def _write_report(
             if kind in REPORT_TARGET_KINDS else {}
         )
         out["gone"] = True
-        out["cleared"] = bool(cleared.get("ok"))
+        # ``changed``: a record the user had stopped already clears nothing.
+        out["cleared"] = bool(cleared.get("ok") and cleared.get("changed"))
         if out["cleared"]:
             # The record's own row says why it reports nowhere now.
             note_gone_on_row(engine, kind, rid)
@@ -732,13 +768,16 @@ def set_report_target(
     engine: Any, kind: str, record_id: str, thread_id: str, *, only_if: "str | None" = None
 ) -> dict[str, Any]:
     """Point ``kind``'s record ``record_id`` at the chat ``thread_id`` ("" =
-    Stop reporting). Returns ``{ok, why, previous, thread_id}``; ``previous``
-    is the chat it reported to before (the Undo puts it back). A chat id must
-    name a saved chat of the user's (never a phone thread or a coding
-    session). ``only_if`` (review): change it only while the record still
-    names that chat (compare-and-clear; ``why`` says so otherwise). BLOCKING;
-    never raises."""
-    out: dict[str, Any] = {"ok": False, "why": "", "previous": "", "thread_id": ""}
+    Stop reporting). Returns ``{ok, why, previous, thread_id, changed}``;
+    ``previous`` is the chat it reported to before (the Undo puts it back).
+    A chat id must name a saved chat of the user's (never a phone thread or a
+    coding session). ``only_if`` (review): change it only while the record
+    still names that chat (compare-and-clear; ``why`` says so otherwise).
+    A STOP with ``only_if`` on a record that already reports nowhere (39-a,
+    round 4: the user stopped it on its row first) is ok with ``changed``
+    False: it IS stopped, so the report's press says "Reports stopped.", never
+    "It reports to another chat now.". BLOCKING; never raises."""
+    out: dict[str, Any] = {"ok": False, "why": "", "previous": "", "thread_id": "", "changed": False}
     cls = _record_class(kind)
     if cls is None:
         out["why"] = f"A {REPORT_KIND_WORDS.get(kind, 'record')} does not report to a chat."
@@ -763,6 +802,9 @@ def set_report_target(
                 return out
             out["previous"] = clean_chat_thread_id(getattr(row, "chat_thread_id", "") or "")
             if only_if is not None and out["previous"] != clean_chat_thread_id(only_if):
+                if not tid and not out["previous"]:
+                    out["ok"] = True  # stopped already: true, and nothing to undo
+                    return out
                 out["why"] = "It reports to another chat now."
                 return out
             row.chat_thread_id = tid
@@ -770,6 +812,7 @@ def set_report_target(
             db.commit()
         out["ok"] = True
         out["thread_id"] = tid
+        out["changed"] = True
         return out
     except Exception as exc:  # noqa: BLE001
         log.exception("could not change where a %s reports", kind)

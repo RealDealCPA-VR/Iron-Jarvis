@@ -10,7 +10,9 @@ that asked).
   that is not there, or a chat that cannot take reports (not saved, a coding
   session, a phone conversation). ``only_if`` (optional): change it only while
   the record still reports to that chat ("It reports to another chat now."
-  otherwise), what a report's own Stop reporting sends.
+  otherwise), what a report's own Stop reporting sends. A stop on a record
+  that reports nowhere already answers ok with ``previous`` "" (it IS
+  stopped; the page shows "Reports stopped." and no Undo).
 
 Chat reaches the same field through ``schedule_update`` / ``sentinel_update``
 (``report_here``), with the usual card and Undo. The write is one SQLite row
