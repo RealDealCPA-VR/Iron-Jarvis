@@ -2050,8 +2050,9 @@ time. It reads **Last time (18 Nov)** with the name of the last piece of work
 (press it to open that work), then what was **Done**, what was **Decided**
 and what is **Still open**, taken from the checked recaps of the newest six
 pieces of work in that folder. **Continue** starts at once: it sends
-"Continue where we left off in this folder." and the reply is told the same
-record, so nothing has to be typed again.
+"Continue where we left off in this folder." In a chat and in Chat › Code the
+reply is told the same record, so nothing has to be typed again. In
+Build › Code your own coding tool is told only that sentence (see below).
 
 **When it shows.**
 
@@ -2063,8 +2064,11 @@ record, so nothing has to be typed again.
   the past 30 days. Otherwise it is one quiet line, **Last here: 12 Mar**,
   and pressing it opens the card.
 - The cross hides the card for that folder until there is new work there.
-  This browser remembers it; nothing else is changed.
-- While you type in the box or attach a file, the card steps aside.
+  This browser remembers it without keeping the folder's name or path, and
+  nothing else is changed. Forget this folder on the Memory page clears it
+  too.
+- While you type in the box or attach a file (one still going up too), the
+  card steps aside.
 - A folder with no earlier work shows nothing.
 
 **Good to know.**
@@ -2090,9 +2094,9 @@ record, so nothing has to be typed again.
   told about work or conversations elsewhere just because they used the
   same words.
 - In Build › Code, your own coding tool (Claude Code, Codex and the others)
-  is not shown this record, and the card says so under Continue. There
-  Continue starts the session with the same sentence, and the tool works
-  from the folder's own files.
+  is told only the sentence. It is not told what the card lists (Done,
+  Decided, Still open), and the card says so under Continue. If the tool
+  needs those lines, type them in your own first message instead.
 - In a chat that works in the folder you can also ask "where did we leave
   off?".
 - If the record cannot be read, the card says "Earlier work in this folder

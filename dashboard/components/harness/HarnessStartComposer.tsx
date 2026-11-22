@@ -908,13 +908,15 @@ export function HarnessStartComposer({
           sentence; its turn is told the folder's earlier work through the
           work block; a folder inside a project gets no card, `chatCode`,
           because the session's turns are told the project's own recent
-          activity instead). Steps aside while the box holds words or files. */}
+          activity instead). Steps aside while the box holds words or files,
+          a file still going up included (a Continue held for an upload
+          would go WITH that file). */}
       <div data-testid="harness-new-pick-up" className="px-2 pt-1.5 empty:hidden">
         <PickUpCard
           folder={folder}
           local={localOnly}
           chatCode
-          hidden={!!text.trim() || att.files.length > 0}
+          hidden={!!text.trim() || att.files.length > 0 || att.uploading}
           disabled={busy}
           onContinue={(card) => send(CONTINUE_SENTENCE, continuedTitle(card))}
         />

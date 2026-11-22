@@ -17,11 +17,12 @@
  *   first is still being sent does nothing. The rest are quiet: the last
  *   work's title opens it, the cross hides the card for this folder until
  *   new work is on record.
- * - `tool` (Build › Code): the user's own coding tool is not told the
- *   record, and the card SAYS so under Continue (`PICK_UP_TOOL_NOTE`), not
- *   only in a hover.
- * - `hidden` (the host's box holds words or files): the card steps aside, as
- *   the next-step box does, so a draft is never replaced by Continue.
+ * - `tool` (Build › Code): the user's own coding tool is told only the
+ *   sentence, never what the card lists, and the card SAYS so under
+ *   Continue (`PICK_UP_TOOL_NOTE`), not only in a hover.
+ * - `hidden` (the host's box holds words or files, or a file is still going
+ *   up): the card steps aside, as the next-step box does, so a draft is
+ *   never replaced by Continue, nor sent with it.
  * - A failed read says so in words, with Try again (never "nothing here");
  *   an Iron Jarvis without this read (a 404) draws nothing.
  */
@@ -106,7 +107,8 @@ export function PickUpCard({
   chatCode?: boolean;
   /** Build › Code: the user's own coding tool is not shown this card. */
   tool?: boolean;
-  /** The host's box holds words or files: the card steps aside. */
+  /** The host's box holds words or files (one still going up included):
+   *  the card steps aside. */
   hidden?: boolean;
   /** The host is starting something already. */
   disabled?: boolean;
@@ -268,7 +270,7 @@ export function PickUpCard({
 
 /** The new chat's card: it steps aside while the chat's box holds words (a
  *  small subscriber, so the chat page never subscribes to the composer,
- *  v1.250.0) or files. */
+ *  v1.250.0) or files (`hasFiles`: attached or still going up). */
 export function ChatPickUpCard({
   store,
   hasFiles,

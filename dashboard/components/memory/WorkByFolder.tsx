@@ -39,6 +39,7 @@ import {
   mayMakeClient,
   pressFailed,
 } from "@/lib/clients";
+import { forgetPickUpNote } from "@/lib/pickUp";
 import { plainText } from "@/lib/plainText";
 import { outcomeWords, statusWords, toneTextClass } from "@/lib/statusWords";
 import {
@@ -167,6 +168,9 @@ export function WorkByFolder() {
     async (f: WorkFolder) => {
       try {
         const res = await post<{ removed?: number }>(WORK_FORGET_PATH, { folder: f.folder });
+        // The pick-up card's cross note for this folder goes too (next
+        // leaps 04-a): nothing of a forgotten folder stays in this browser.
+        forgetPickUpNote(f.folder);
         if (!alive.current) return;
         setNote({ words: forgotWords(f.name, typeof res?.removed === "number" ? res.removed : 0), failed: false });
         setOpen(null);

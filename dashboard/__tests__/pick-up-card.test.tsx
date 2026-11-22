@@ -4,19 +4,22 @@
  *
  * Pinned here:
  *  - lib/pickUp: the answer decoded (nothing on record = no card), the day
- *    words, the cross kept in this browser until new work is on record;
+ *    words, the cross kept in this browser until new work is on record,
+ *    under a digest that holds no folder's path, and cleared for a folder
+ *    the Memory page forgets;
  *  - the card: the full card (Last time, Done, Decided, Still open, one main
  *    press, Continue) only when the daemon says `full` (D-04.4), else one
  *    quiet "Last here: 12 Mar" line that opens it; read ONCE per folder;
  *    Continue sent once however often it is pressed; a failed read says so
- *    in words with Try again; it steps aside while the box holds words;
+ *    in words with Try again; on all three surfaces it steps aside while the
+ *    box holds words or a file (one still going up included);
  *  - mounted on all three surfaces: a NEW chat (the real chat page: a folder
  *    pick shows it, Continue sends the fixed sentence as the chat's one
  *    message, a chat being opened neither reads nor shows it, even while its
  *    read is still out), a new Chat › Code session (HarnessStartComposer) and
  *    a new Build › Code session (StartComposer: Continue starts the session
- *    with the fixed sentence, and the card says on screen that the coding
- *    tool is not shown it);
+ *    with the fixed sentence alone, and the card says on screen that the
+ *    coding tool is told only that, not what the card lists);
  *  - what Continue starts is named after the work it continues
  *    ("<title> (continued)"), never after the fixed sentence.
  */
@@ -149,11 +152,14 @@ import {
   continuedTitle,
   dayWords,
   decodePickUp,
+  forgetPickUpNote,
   hideFor,
   isHidden,
   pickUpPath,
   type PickUp,
 } from "@/lib/pickUp";
+import { WorkByFolder } from "@/components/memory/WorkByFolder";
+import { FORGET_CONFIRM, WORK_FOLDERS_PATH, WORK_FORGET_PATH, workEntriesPath } from "@/lib/workRecord";
 
 const BOOKS = "C:\\Work\\Books";
 const LEDGERS = "C:\\Work\\Ledgers";
@@ -264,6 +270,19 @@ describe("the answer, the day and the cross", () => {
     expect(isHidden(LEDGERS, p)).toBe(false);
     const later = decodePickUp(answer({ last: { ...(answer().last as object), at: "2026-11-19T10:00:00+00:00" } })) as PickUp;
     expect(isHidden(BOOKS, later)).toBe(false);
+  });
+
+  it("the cross's note keeps no folder's path or name, and forgetting the folder clears its note only", () => {
+    const p = decodePickUp(answer()) as PickUp;
+    hideFor(BOOKS, p);
+    hideFor(LEDGERS, p);
+    const raw = window.localStorage.getItem("ij_pick_up_hidden") ?? "";
+    expect(Object.keys(JSON.parse(raw))).toHaveLength(2);
+    for (const bit of ["work", "books", "ledgers", "\\", "/"]) expect(raw.toLowerCase()).not.toContain(bit);
+    forgetPickUpNote("c:/work/books/"); // the same folder, spelled another way
+    expect(isHidden(BOOKS, p)).toBe(false);
+    expect(isHidden(LEDGERS, p)).toBe(true);
+    expect(Object.keys(JSON.parse(window.localStorage.getItem("ij_pick_up_hidden") ?? "{}"))).toHaveLength(1);
   });
 
   it("names what Continue starts after the work it continues, never after the fixed sentence", () => {
@@ -458,6 +477,26 @@ describe("a new chat", () => {
     expect(await screen.findByTestId("pick-up-card")).toBeTruthy();
   });
 
+  it("steps aside while a file goes up (a send pressed then is queued, and would lose Continue's sentence)", async () => {
+    desktop({ path: BOOKS });
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    let uploaded: (v: unknown) => void = () => {};
+    H.api.postResponses["/documents/upload"] = () => new Promise((r) => (uploaded = r));
+    H.api.postResponses["/documents/workfolder"] = { path: BOOKS, created: false, files: [], note: "" };
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByTestId("chat-hero-folder-choose"));
+    await screen.findByTestId("pick-up-continue");
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["abc"], "notes.txt", { type: "text/plain" })] } });
+    await waitFor(() => expect(H.api.posts.some((x) => x.path === "/documents/upload")).toBe(true));
+    expect(screen.queryByTestId("pick-up-card")).toBeNull();
+    await act(async () => uploaded({ name: "notes.txt", path: "C:\\Work\\Books\\notes.txt" }));
+    // The file is in the box (its chip shows), and the card is still aside.
+    expect(await screen.findByText("notes.txt")).toBeTruthy();
+    expect(screen.queryByTestId("pick-up-card")).toBeNull();
+    expect(H.stream.bodies).toHaveLength(0);
+  });
+
   it("a new chat in a project neither reads nor shows it (its turn is told the project's activity)", async () => {
     H.api.getResponses["/projects"] = {
       projects: [{ id: "p1", name: "Books project", root: BOOKS, root_exists: true }],
@@ -579,6 +618,24 @@ describe("a new Chat › Code session", () => {
     await waitFor(() => expect(screen.queryByTestId("pick-up-card")).toBeNull());
   });
 
+  it("steps aside while a file goes up and once it is in the box", async () => {
+    H.api.getResponses[pickUpPath(BOOKS, false, true)] = answer();
+    let uploaded: (v: unknown) => void = () => {};
+    H.api.postResponses["/documents/upload"] = () => new Promise((r) => (uploaded = r));
+    const onStart = vi.fn(async (_req: StartRequest) => null);
+    render(<HarnessStartComposer initialFolder={BOOKS} onStart={onStart} />);
+    await screen.findByTestId("pick-up-continue");
+    fireEvent.change(screen.getByTestId("harness-attach-input"), {
+      target: { files: [new File(["abc"], "notes.txt", { type: "text/plain" })] },
+    });
+    await waitFor(() => expect(H.api.posts.some((x) => x.path === "/documents/upload")).toBe(true));
+    expect(screen.queryByTestId("pick-up-card")).toBeNull();
+    await act(async () => uploaded({ name: "notes.txt", path: "C:\\Work\\Books\\notes.txt" }));
+    expect(await screen.findByTestId("harness-attachment")).toBeTruthy();
+    expect(screen.queryByTestId("pick-up-card")).toBeNull();
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it("no folder: no card and no read", async () => {
     render(<HarnessStartComposer onStart={async () => null} />);
     await screen.findByTestId("harness-new-box");
@@ -629,19 +686,22 @@ describe("a new Build › Code session", () => {
     render(<StartComposer tools={TOOLS} toolsError={null} startFolder={BOOKS} onStarted={onStarted} />);
     await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Codex"));
     const press = await screen.findByTestId("pick-up-continue");
-    // The user's own coding tool is not shown Iron Jarvis's record: the card
-    // SAYS so, on screen beside Continue (a hover is never seen on a phone),
-    // and the press's hover says it too.
+    // The user's own coding tool is told only the sentence, never what the
+    // card lists: the card SAYS so in those words, on screen beside Continue
+    // (a hover is never seen on a phone), and the press's hover says it too.
     const card = screen.getByTestId("pick-up-card");
     expect(within(card).getByTestId("pick-up-tool-note").textContent).toBe(PICK_UP_TOOL_NOTE);
     expect(PICK_UP_TOOL_NOTE).toBe(
-      `Your coding tool does not see this card. Continue sends it only "${CONTINUE_SENTENCE}" and it works from the folder's own files.`,
+      `Your coding tool is not told what this card lists. Continue sends it only "${CONTINUE_SENTENCE}" and nothing else.`,
     );
     expect(press.getAttribute("title")).toBe(PICK_UP_TOOL_NOTE);
     fireEvent.click(press);
     fireEvent.click(press);
     await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+    // What the note says is what happens: the session starts with the
+    // sentence alone (no card line, no file).
     expect(onStarted.mock.calls[0][1]).toBe(CONTINUE_SENTENCE);
+    expect(onStarted.mock.calls[0][2]).toEqual([]);
     const creates = H.api.posts.filter((p) => p.path === "/build/app/sessions");
     expect(creates).toHaveLength(1);
     expect(creates[0].body.folder).toBe(BOOKS);
@@ -649,10 +709,75 @@ describe("a new Build › Code session", () => {
     expect(creates[0].body.title).toBe(CONTINUED);
   });
 
+  it("steps aside while the box holds words or a file, one still going up included", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    let uploaded: (v: unknown) => void = () => {};
+    H.api.postResponses["/documents/upload"] = () => new Promise((r) => (uploaded = r));
+    render(<StartComposer tools={TOOLS} toolsError={null} startFolder={BOOKS} onStarted={() => {}} />);
+    await screen.findByTestId("pick-up-continue");
+    const box = screen.getByTestId("code-start-box");
+    fireEvent.change(box, { target: { value: "fix the cart" } });
+    await waitFor(() => expect(screen.queryByTestId("pick-up-card")).toBeNull());
+    fireEvent.change(box, { target: { value: "" } });
+    expect(await screen.findByTestId("pick-up-continue")).toBeTruthy();
+    // A file going up: aside at once (a Continue held for the upload would
+    // start the session WITH that file)...
+    fireEvent.change(screen.getByTestId("harness-attach-input"), {
+      target: { files: [new File(["abc"], "notes.txt", { type: "text/plain" })] },
+    });
+    await waitFor(() => expect(H.api.posts.some((x) => x.path === "/documents/upload")).toBe(true));
+    expect(screen.queryByTestId("pick-up-card")).toBeNull();
+    // ...and still aside once it is in the box.
+    await act(async () => uploaded({ name: "notes.txt", path: "C:\\Work\\Books\\notes.txt" }));
+    expect(await screen.findByTestId("harness-attachment")).toBeTruthy();
+    expect(screen.queryByTestId("pick-up-card")).toBeNull();
+    expect(H.api.posts.filter((x) => x.path === "/build/app/sessions")).toEqual([]);
+  });
+
   it("a new chat and a Chat › Code session say nothing about a coding tool", async () => {
     H.api.getResponses[pickUpPath(BOOKS)] = answer();
     render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
     await screen.findByTestId("pick-up-continue");
     expect(screen.queryByTestId("pick-up-tool-note")).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------ Forget this folder */
+
+describe("Forget this folder on the Memory page", () => {
+  it("clears that folder's cross note in this browser, and keeps every other folder's", async () => {
+    const p = decodePickUp(answer()) as PickUp;
+    hideFor(BOOKS, p);
+    hideFor(LEDGERS, p);
+    H.api.getResponses[WORK_FOLDERS_PATH] = {
+      folders: [{ folder: BOOKS, name: "Books", count: 1, last_at: null, kinds: { chat: 1 } }],
+      total: 1,
+      building: false,
+      forgotten: [],
+    };
+    H.api.getResponses[workEntriesPath(BOOKS)] = {
+      folder: BOOKS,
+      name: "Books",
+      total: 1,
+      entries: [
+        {
+          id: "chat:t1", kind: "chat", ref: "t1", title: "Reconcile March bank statement", tool: "", outcome: "",
+          local_only: false, files: [], files_total: 0, note: "", updated_at: null, link: "/chat?thread=t1", recap: null,
+        },
+      ],
+    };
+    H.api.postResponses[WORK_FORGET_PATH] = { ok: true, removed: 1, folder: BOOKS };
+    render(<WorkByFolder />);
+    fireEvent.click(await screen.findByRole("button", { name: /Books/ }));
+    await screen.findByText("Reconcile March bank statement");
+    fireEvent.click(screen.getByTestId("work-forget"));
+    expect(screen.getByTestId("work-forget").textContent).toContain(FORGET_CONFIRM);
+    expect(isHidden(BOOKS, p)).toBe(true);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("work-forget"));
+    });
+    await waitFor(() => expect(H.api.posts.filter((x) => x.path === WORK_FORGET_PATH)).toHaveLength(1));
+    await waitFor(() => expect(isHidden(BOOKS, p)).toBe(false));
+    expect(isHidden(LEDGERS, p)).toBe(true);
   });
 });

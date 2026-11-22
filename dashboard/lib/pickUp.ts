@@ -13,7 +13,12 @@
  *   the card's lines reach the model the way they already do (the work
  *   block), as a record, never as the owner's words.
  * - A cross hides the card for that folder until new work is on record
- *   (kept in this browser only: `ij_pick_up_hidden`).
+ *   (kept in this browser only: `ij_pick_up_hidden`, keyed by a one-way
+ *   digest of the folder, so no folder's path can be read back from it; the
+ *   Memory page's "Forget this folder" clears that folder's note).
+ * - Build › Code: the user's own coding tool is told ONLY the sentence, not
+ *   what the card lists, and the card says so in those words under Continue
+ *   (`PICK_UP_TOOL_NOTE`).
  *
  * Decoders keep only what the card shows, typed. No imports from lib/api
  * (many tests mock that module whole).
@@ -165,10 +170,13 @@ export const PICK_UP_PENDING =
 export const PICK_UP_LINES_SHOWN = 3;
 
 /** Build › Code: said ON the card, under Continue (a hover is never seen on
- *  a phone, and most never hover): the user's own coding tool is not told
- *  Iron Jarvis's record (that is next leaps 14-c), so Continue does not hand
- *  it what the card lists. */
-export const PICK_UP_TOOL_NOTE = `Your coding tool does not see this card. Continue sends it only "${CONTINUE_SENTENCE}" and it works from the folder's own files.`;
+ *  a phone, and most never hover). The user's own coding tool is told only
+ *  the sentence: the card's Done, Decided and Still open lines are never
+ *  sent to it (the record reaching that tool, with its own rules for what
+ *  may leave this PC, is next leaps 14-c), and nothing is promised about
+ *  what it does with the sentence. A test pins that the session starts with
+ *  the sentence alone, beside these words. */
+export const PICK_UP_TOOL_NOTE = `Your coding tool is not told what this card lists. Continue sends it only "${CONTINUE_SENTENCE}" and nothing else.`;
 
 /** Continue's hover words: what is sent, and who is told the card. In
  *  Build › Code the coding tool is not shown Iron Jarvis's record. */
@@ -221,10 +229,25 @@ const HIDDEN_KEY = "ij_pick_up_hidden";
 /** Folders remembered, at most (the oldest go first). */
 const HIDDEN_MAX = 200;
 
-/** A folder as the daemon compares it (forward slashes, no trailing slash,
- *  any case): close enough to key a browser-side note. */
+/** 64 bits of two FNV-1a passes, as base 36: one way, so the note never
+ *  holds a readable folder path. */
+function digest(s: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x0100019d) >>> 0;
+  }
+  return `${a.toString(36).padStart(7, "0")}${b.toString(36).padStart(7, "0")}`;
+}
+
+/** The note's key for a folder: a one-way digest of the folder as the
+ *  daemon compares it (forward slashes, no trailing slash, any case). This
+ *  browser's storage never holds a folder's path or name, so a folder
+ *  forgotten anywhere leaves nothing readable here. */
 export function folderNoteKey(folder: string): string {
-  return folder.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return `f${digest(folder.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase())}`;
 }
 
 /** What "new work" means: the last piece of work, and when it last moved. */
@@ -262,5 +285,19 @@ export function hideFor(folder: string, p: PickUp): void {
     window.localStorage.setItem(HIDDEN_KEY, JSON.stringify(all));
   } catch {
     /* a browser that keeps nothing: the card is hidden for this visit only */
+  }
+}
+
+/** "Forget this folder" (the Memory page): this browser's note for that
+ *  folder goes too. */
+export function forgetPickUpNote(folder: string): void {
+  try {
+    const all = readHidden();
+    const key = folderNoteKey(folder);
+    if (!(key in all)) return;
+    delete all[key];
+    window.localStorage.setItem(HIDDEN_KEY, JSON.stringify(all));
+  } catch {
+    /* a browser that keeps nothing has nothing to forget */
   }
 }

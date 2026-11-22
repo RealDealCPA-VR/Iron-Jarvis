@@ -884,14 +884,15 @@ export function StartComposer({
         {/* Next leaps 04-a (build-out plan R2.1): what was done in this
             folder last time, with Continue (the session starts with one
             fixed sentence, named after the work it continues). The user's
-            own coding tool is not shown Iron Jarvis's record, and the card
-            says so under Continue. Steps aside while the box holds words or
-            files. */}
+            own coding tool is told only that sentence, never what the card
+            lists, and the card says so under Continue. Steps aside while the
+            box holds words or files, a file still going up included (a
+            Continue held for an upload would go WITH that file). */}
         <div data-testid="code-start-pick-up" className="px-1 empty:hidden">
           <PickUpCard
             folder={folder}
             tool
-            hidden={!!text.trim() || att.files.length > 0}
+            hidden={!!text.trim() || att.files.length > 0 || att.uploading}
             disabled={busy || !tool || !!unavailable}
             onContinue={(card) => start(CONTINUE_SENTENCE, continuedTitle(card))}
           />

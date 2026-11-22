@@ -14335,7 +14335,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       card shows). Continue sends ONE fixed sentence through the
                       page's own send; the card's lines reach the model through
                       the work block, as a record. It steps aside while the box
-                      holds words or files. `projectId`, not `activeProject`:
+                      holds words or files, a file still going up included (a
+                      send pressed mid-upload is queued and later sends the
+                      box's own words, so Continue there would be lost).
+                      `projectId`, not `activeProject`:
                       the id is what the turn is sent, even before the
                       projects list has loaded. `openingChat`: a chat being
                       opened (the restore at start, a ?thread= link, a row)
@@ -14346,7 +14349,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     <div data-testid="chat-hero-pick-up" className="mb-1.5 px-2 empty:hidden">
                       <ChatPickUpCard
                         store={composer}
-                        hasFiles={attachments.length > 0}
+                        hasFiles={attachments.length > 0 || uploading}
                         folder={workspaceDir}
                         local={localOnly}
                         disabled={busy}
