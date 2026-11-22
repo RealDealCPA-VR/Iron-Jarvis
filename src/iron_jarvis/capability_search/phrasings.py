@@ -2276,6 +2276,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'Keep my saved memories neat and tidy',
         'Stop it storing the same thing twice',
     ),
+    'memory_used_popup': (
+        'show me what you remembered for answers',
+        'stop the memory box popping up',
+        'only show memories when I click',
+        'which memories did that answer use',
+        'turn off the from memory popup',
+        'let the memory list appear by itself',
+        'see what you knew about me there',
+        'hide the box after each reply',
+    ),
     'memory_write': (
         'remember this for next time',
         'save this to your memory',

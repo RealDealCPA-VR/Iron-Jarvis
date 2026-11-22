@@ -63,6 +63,7 @@ import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "./tu
 import { decodeApproved, decodeRefit, type ApprovedCall, type TurnRefit } from "./turnRecovery";
 import { decodeBrainReceipt, type BrainReceipt } from "./brainProfiles";
 import { decodeClientQuestion, type ChatClientQuestion } from "./clients";
+import { decodeMemoryUsed, type MemoryUsedItem } from "./memoryUsed";
 import { stepTarget } from "./workTarget";
 import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
 import { onceReasonOf, type OnceReason } from "./onceReason";
@@ -208,6 +209,10 @@ export type SSEEvent =
        *  the key on every turn (null when it asks nothing); the decode keeps
        *  only a valid shape with a client id. */
       client_question?: ChatClientQuestion;
+      /** Next leaps 15-a: what the reply was given from memory. The daemon
+       *  sends the key on every turn ([] when nothing); the decode keeps only
+       *  valid items (lib/memoryUsed). */
+      used?: MemoryUsedItem[];
       /** Calm UI redesign S3/S4: "Setting changed" and secure credential
        *  cards. The daemon sends the key on every turn (possibly []). */
       config_cards?: ConfigCard[];
@@ -451,6 +456,8 @@ export interface ChatStreamResult {
   suggestion?: ChatSuggestion;
   /** v1.499.0: the one client question this turn carries (absent when none). */
   clientQuestion?: ChatClientQuestion;
+  /** Next leaps 15-a: what the reply was given from memory (absent when none). */
+  used?: MemoryUsedItem[];
   /** Calm UI redesign S3/S4: the turn's settings cards (absent when none). */
   configCards?: ConfigCard[];
   /** v1.298.0: trust posture of the turn — see the done-frame fields. */
@@ -810,6 +817,11 @@ export function sseEventFrom(
       {
         const cq = decodeClientQuestion(data.client_question);
         if (cq) ev.client_question = cq;
+      }
+      // From memory (next leaps 15-a): whitelisted — only valid items survive.
+      {
+        const used = decodeMemoryUsed(data.used);
+        if (used.length) ev.used = used;
       }
       // Settings cards (redesign S3/S4): whitelisted — a card with no
       // change_id / request_id dies here, and a secret card never has a value.
@@ -2207,6 +2219,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 remembered: ev.remembered,
                 ...(ev.suggestion ? { suggestion: ev.suggestion } : {}),
                 ...(ev.client_question ? { clientQuestion: ev.client_question } : {}),
+                ...(ev.used?.length ? { used: ev.used } : {}),
                 ...(ev.config_cards?.length ? { configCards: ev.config_cards } : {}),
                 trust: ev.trust,
                 trustReason: ev.trust_reason,

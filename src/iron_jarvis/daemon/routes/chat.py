@@ -9165,6 +9165,11 @@ async def chat_stream(
             # ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
             # response carries the identical key — edit both or neither.
             "client_question": client_question,
+            # FROM MEMORY (next leaps 15-a): what this turn was given from
+            # memory — ALWAYS present ([] when nothing). MIRROR NOTE
+            # (lock-step): chat_turn.py's response carries the identical key
+            # from the same helper — edit both or neither.
+            "used": _chat_turn.memory_used_receipt(_grounding, reply, body),
             # DOORS (v1.199.0): server-derived links into the surfaces
             # this turn's SUCCESSFUL creating tools changed — deduped by
             # href, capped at 4, ALWAYS present (possibly empty). Files

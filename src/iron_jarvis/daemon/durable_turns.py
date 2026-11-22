@@ -462,7 +462,14 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
                     return _hand_off.hand_off_line(turn_id, esc, handed_to)
                 return _hand_off.closed_line(turn_id, esc)
             text = (str((done or {}).get("reply") or "") or acc).strip()
-            return {**base, "content": text or NO_RESPONSE}
+            line = {**base, "content": text or NO_RESPONSE}
+            # Next leaps 15-a: what the reply was given from memory, so a
+            # reopened chat shows its "From memory" line (only when there is
+            # something: every other line is as before).
+            used = (done or {}).get("used")
+            if isinstance(used, list) and used:
+                line["used"] = [u for u in used if isinstance(u, dict)][:24]
+            return line
         if status == "error":
             if partial:
                 return {**base, "content": partial, "interrupted": True}

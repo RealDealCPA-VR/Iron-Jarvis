@@ -478,7 +478,13 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # null, always present): "Is Hartleys a client?" under the reply. Same
         # key on the SSE done frame; pinned by tests/test_clients_lanes_v1499.py.
         "client_question",
+        # Next leaps 15-a: one more — "used" ([{kind, id, label, when, href,
+        # fix, shaped}], always present, [] when nothing): what the turn was
+        # given from memory. Same key on the SSE done frame; pinned by
+        # tests/test_next_leaps_15a_used_receipt.py.
+        "used",
     }
+    assert body["used"] == []
     assert body["client_question"] is None
     assert body["refit"] is None and body["approved"] == []
     assert body["thread_refs"] == []

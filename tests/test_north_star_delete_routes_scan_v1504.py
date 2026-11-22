@@ -61,7 +61,6 @@ ALLOWED: dict[str, str] = {
     "POST /build/app/sessions/{sid}/queue/{qid}/remove": "one queued message; no record kind yet",
     "DELETE /build/library/{item_id}": "no record kind yet",
     "POST /clients/{client_id}/folders/remove": "the 'client' record kind exists in chat; route it next",
-    "DELETE /clients/{client_id}/preferences/{pref_id}": "the 'client' record kind exists in chat; route it next",
     "DELETE /code-artifacts/{artifact_id}": "no record kind yet; its working folder is left alone",
     "DELETE /creative/items/{name:path}": "no record kind yet",
     "DELETE /documents/live/{doc_id}": "no record kind yet; the document file itself stays",
@@ -129,5 +128,8 @@ def test_the_routes_this_change_routed_journal():
         "DELETE /lessons/{lesson_id}",
         "DELETE /memory/preferences/{pref_id}",
         "DELETE /secrets/{name}",
+        # Next leaps 15-a: a client's preference forgotten on a page (or from
+        # the chat's "From memory" box) is recorded with its Undo.
+        "DELETE /clients/{client_id}/preferences/{pref_id}",
     ):
         assert any(j in found[key][1] for j in _JOURNALS), key

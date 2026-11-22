@@ -5457,6 +5457,12 @@ def _connector_memory_block(d, sources: list[str], query: str) -> str:
                 break
             lines.append(line)
             used += len(line)
+            # Next leaps 15-a: listed on the reply's ``used`` (only while the
+            # chat hop collects; ``memory.used``). A note kept outside Iron
+            # Jarvis is never edited from here (D-15.2): it has no fix.
+            from ..memory import used as _used
+
+            _used.note("note", f"{name}:{h.get('ref') or head}", head, text=f"{head} {snippet}")
     if not lines:
         return ""
     return (
@@ -11871,10 +11877,15 @@ class _Grounding:
         "project", "project_query", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
         "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
-        "harness", "apps_phone", "late", "work", "client",
+        "harness", "apps_phone", "late", "work", "client", "used",
     )
 
     def __init__(self) -> None:
+        #: Next leaps 15-a: the items the hops told the model (``memory.used``:
+        #: each hop's own collector, merged in hop order), the source of the
+        #: reply's ``used`` list (:func:`memory_used_receipt`). A late hop's
+        #: items are dropped with its text. Never part of the prompt.
+        self.used: list[dict[str, Any]] = []
         self.project = self.lessons = self.index = self.fabric = ""
         self.connector = self.roster = self.workflows = ""
         #: v1.499.0 (vision plan leap 3, Phase 3): the CLIENT BLOCK — the
@@ -12019,6 +12030,26 @@ _BOUNDED_REQUIRED_HOPS = frozenset({"client"})
 #: The clock the bounded required hops are measured with — INJECTED by a test
 #: (never a sleep: on Windows ``asyncio.sleep(d)`` can measure less than d).
 _grounding_clock = _time.monotonic
+
+
+def memory_used_receipt(grounding: Any, reply: Any, body: Any) -> list[dict[str, Any]]:
+    """Next leaps 15-a (master plan R2.7): the reply's ``used`` list — what
+    the turn was GIVEN from memory (``_Grounding.used``, recorded where each
+    hop built its text), each item with ``shaped`` measured against the
+    final reply and the owner's own last message (``memory.used.finish``).
+    ALWAYS a list ([] when nothing was given). MIRROR NOTE (lock-step): both
+    lanes call this one helper for their answer / done frame. Never raises."""
+    try:
+        from ..memory import used as _used
+
+        return _used.finish(
+            list(getattr(grounding, "used", None) or []),
+            reply=str(reply or ""),
+            question=_last_user_text(getattr(body, "messages", None) or []),
+        )
+    except Exception:  # noqa: BLE001 — the list is extra; the reply is not
+        log.debug("the memory-used list could not be made", exc_info=True)
+        return []
 
 
 def turn_work_folder(body: Any, resolved_proj: Any) -> str:
@@ -12447,7 +12478,14 @@ async def _gather_grounding(
     # soft deadline too, but only up to its bound from the gather's start
     # (the injected clock), then it is late like any other.
     _started = _grounding_clock()
-    tasks = [asyncio.ensure_future(asyncio.to_thread(fn)) for _name, fn in hops]
+    # Next leaps 15-a: each hop runs inside its OWN collector
+    # (``memory.used.run_collecting``), so the items it told ride back beside
+    # its text and a hop left out at the deadline takes its items with it.
+    from ..memory import used as _used
+
+    tasks = [
+        asyncio.ensure_future(asyncio.to_thread(_used.run_collecting, fn)) for _name, fn in hops
+    ]
     try:
         await asyncio.wait(tasks, timeout=GROUNDING_SOFT_S)
         required = [
@@ -12472,9 +12510,16 @@ async def _gather_grounding(
             t.cancel()
         raise
     results: list[Any] = []
+    told: list[list[dict[str, Any]]] = []
     for (name, _fn), t in zip(hops, tasks):
         if t.done():
-            results.append(t.exception() or t.result())
+            exc = t.exception()
+            if exc is not None:
+                results.append(exc)
+            else:
+                value, items = t.result()
+                results.append(value)
+                told.append(items)
         else:
             out.late.append(name)
             t.add_done_callback(_drop_late_hop)
@@ -12488,6 +12533,7 @@ async def _gather_grounding(
         if isinstance(r, BaseException):
             raise r
     got = {name: r for (name, _fn), r in zip(hops, results) if name not in out.late}
+    out.used = _used.merge(told)
 
     if resolved_proj is not None:
         instructions, brief, recent = got["project"]
@@ -15897,6 +15943,11 @@ async def run_chat_turn(
         # ALWAYS present, like `suggestion`. MIRROR NOTE (lock-step): the
         # stream done-frame carries the identical key — edit both or neither.
         "client_question": client_question,
+        # FROM MEMORY (next leaps 15-a): [{kind, id, label, when, href, fix,
+        # shaped}] — what this turn was given from memory, ALWAYS present ([]
+        # when nothing). MIRROR NOTE (lock-step): the stream done-frame
+        # carries the identical key from the same helper — edit both or neither.
+        "used": memory_used_receipt(_grounding, reply, body),
         # DOORS (v1.199.0): server-derived links into the surfaces this turn's
         # SUCCESSFUL creating tools changed — deduped by href, capped at 4,
         # ALWAYS present (possibly empty) so clients never branch on absence.

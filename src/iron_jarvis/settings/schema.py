@@ -1023,6 +1023,20 @@ SETTINGS: tuple[SettingDef, ...] = (
       "in Improvements, and nothing rings.",
       tier="allow", section="Notifications",
       aliases=("night review notice", "night review bell", "stop telling me about the night review")),
+    # Next leaps 15-a (master plan R2.7, decision D-15.1): the "From memory"
+    # pop-up under a chat reply — by itself and fading (the owner's note), or
+    # press-only. Read by the chat page when a reply ends.
+    S("memory_used_popup", "Show what memory gave a reply", "memory", "enum",
+      "After a chat reply that used what Iron Jarvis remembers (your preferences, earlier work, "
+      "notes, earlier chats), a small \"From memory\" box beside the reply lists what it was given, "
+      "and fades after about eight seconds. It shows by itself only on the newest reply, only when "
+      "the reply uses words from those memories, and never twice for the same ones in a chat. "
+      "\"From memory: 3\" under the reply opens it again, and That's wrong on a preference lets "
+      "you fix it. Only when I press: the box never shows by itself.",
+      tier="allow",
+      aliases=("from memory", "what did you remember", "memory pop-up", "what memory was used"),
+      options=(("auto", "Show briefly after a reply (default)"), ("press", "Only when I press")),
+      ),
     # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.
     # Its own control in Settings › Memory & you (CONTROLLED_IN_SECTION); a
     # project may choose its own (Project.brain_profile). Choosing where

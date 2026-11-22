@@ -2044,6 +2044,48 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## See what memory gave a reply, and fix a preference (v1.560.0)
+
+When a chat reply was given things Iron Jarvis remembers (your preferences,
+a client's preferences, earlier work in the folder and its recap, notes,
+past chats and agent runs, files, project knowledge), the reply says so. A
+quiet **From memory: 3** sits under it, beside the reply's details. Press it
+and a small box opens beside the reply: **From memory**, and up to five of
+those things in plain words ("Your preference: Always give prices in
+euros"). The rest are in the reply's details, under **From memory** too.
+
+The box is what Iron Jarvis was **given** for that reply, not a claim about
+what the answer relied on. It lists only what was really put in front of
+the model: what Local only, a client's wall or the safety check kept out is
+never listed, and neither is anything that arrived too late for the reply.
+Secrets are masked in it.
+
+**It appears by itself**, and fades after about eight seconds, but only:
+
+- on the **newest** reply, while that chat is on your screen;
+- when the reply uses words that came from those memories and not from your
+  own message (so a preference about spelling does not pop up under every
+  answer);
+- once for the same things in a chat: after it has shown them, by itself or
+  because you pressed it, the same things never bring it back in that chat.
+
+It stays while your pointer is on it, while you are using it from the
+keyboard, and while you are typing a correction. **Escape** closes it. It
+never takes the cursor from the message box.
+
+**That's wrong.** On a preference of yours or one kept for a client, press
+**That's wrong**: type the right one and press **Save**, or press **Forget
+it**. The change is made where the preference is kept (the Memory page's
+kept preferences, or the client's page), and the box says **Fixed.** with
+**Undo**. Undo puts it back as it was, unless it was changed again since.
+Other kinds of memory cannot be fixed from the box yet: **Open** goes to
+where each one lives (a past chat, an agent run, the Memory page).
+
+**Only when I press.** Settings › Memory & you › **Show what memory gave a
+reply**: "Show briefly after a reply" (the default) or "Only when I press".
+In chat: "only show what memory gave a reply when I press". The change has
+Undo.
+
 ## Changes you accepted show their result (v1.566.0)
 
 When you accept a change from **Improvements**, Iron Jarvis now counts how

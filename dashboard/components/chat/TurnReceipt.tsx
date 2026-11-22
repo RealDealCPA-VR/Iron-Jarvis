@@ -55,6 +55,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   Ban,
+  BookOpen,
   ChevronDown,
   ChevronRight,
   FileText,
@@ -73,6 +74,12 @@ import {
   Wrench,
 } from "lucide-react";
 import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
+import {
+  HEADING as MEMORY_HEADING,
+  itemKey as memoryItemKey,
+  itemWords as memoryItemWords,
+  type MemoryUsedItem,
+} from "@/lib/memoryUsed";
 import { providerDisplay } from "@/lib/onboarding";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { answeredModelName } from "@/lib/answeredModel";
@@ -472,6 +479,11 @@ export interface TurnReceiptProps {
    *  left out — quiet lines in the expanded receipt; a left-out one that
    *  warns is amber, and a small amber count rides the collapsed line. */
   threadRefs?: ThreadRefReceipt[] | null;
+  /** Next leaps 15-a: what the reply was given from memory (lib/memoryUsed)
+   *  — "From memory" lines in the expanded details, every item. The quiet
+   *  "From memory: N" line and its pop-up are the caller's (MemoryUsed).
+   *  Never a reason to render on its own. */
+  memoryUsed?: MemoryUsedItem[] | null;
   /** v1.355.0 (G55): the model refused the chat as too long and older
    *  messages were left out to retry — said on the collapsed line in the
    *  quiet class ("Left out 12 older messages to fit this model"), like an
@@ -768,6 +780,7 @@ function TurnReceiptImpl({
   refit,
   approved,
   brain,
+  memoryUsed,
 }: TurnReceiptProps) {
   const [open, setOpen] = useState(false);
   const [undoingPath, setUndoingPath] = useState<string | null>(null);
@@ -1251,6 +1264,21 @@ function TurnReceiptImpl({
               <ScrollText size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div data-testid="turn-folder-rules" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
                 {rulesText}
+              </div>
+            </div>
+          )}
+          {/* Next leaps 15-a: what the reply was given from memory, every
+              item, in the pop-up's own words ("From memory", never "I used"). */}
+          {(memoryUsed ?? []).length > 0 && (
+            <div className="flex items-start gap-2">
+              <BookOpen size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div data-testid="turn-memory-used" className="min-w-0 space-y-0.5 text-[12px] leading-relaxed text-zinc-400">
+                <div className="text-zinc-300">{MEMORY_HEADING}</div>
+                {(memoryUsed ?? []).map((it) => (
+                  <div key={memoryItemKey(it)} data-testid="turn-memory-used-item" className="break-words">
+                    {memoryItemWords(it)}
+                  </div>
+                ))}
               </div>
             </div>
           )}

@@ -325,6 +325,7 @@
    "trust_note",
    "trust_reason",
    "usage",
+   "used",
    "workflow_draft"
   ],
   "reply": "Done.",
@@ -500,6 +501,7 @@
    "trust_note",
    "trust_reason",
    "usage",
+   "used",
    "workflow_draft"
   ],
   "reply": "Done.",
@@ -864,6 +866,7 @@
    "trust_note",
    "trust_reason",
    "usage",
+   "used",
    "workflow_draft"
   ],
   "reply": "Done.",
@@ -1041,6 +1044,7 @@
    "trust_note",
    "trust_reason",
    "usage",
+   "used",
    "workflow_draft"
   ],
   "reply": "Done.",

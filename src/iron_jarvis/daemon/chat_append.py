@@ -120,6 +120,11 @@ LINE_KEYS: tuple[str, ...] = (
     "reportFold",
     "reportCount",
     "reportSeen",
+    # Next leaps 15-a: what a reply was given from memory (the done frame's
+    # ``used``, ``memory.used``) and whether its pop-up was already shown in
+    # this chat (``usedShown``: the page's own "never twice" mark).
+    "used",
+    "usedShown",
 )
 
 #: Idea 39 (39-a): how many replaced report keys a folded line keeps.

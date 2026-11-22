@@ -215,6 +215,16 @@ import { LocalOnlyOffer } from "@/components/chat/LocalOnlyOffer";
 import { ExcelNowStrip } from "@/components/chat/ExcelNowStrip";
 import { excelNowForSend } from "@/lib/excelNow";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
+// Next leaps 15-a: "From memory" — what the reply was given from memory.
+import { MemoryUsed, MemoryUsedHidden } from "@/components/chat/MemoryUsed";
+import {
+  decodeMemoryUsed,
+  decodePopupMode,
+  itemKey,
+  opensByItself,
+  type MemoryUsedItem,
+  type PopupMode,
+} from "@/lib/memoryUsed";
 // v1.499.0 (leap 3, Phase 3): "Is Hartleys a client?" under one reply.
 import { ClientQuestion } from "@/components/chat/ClientQuestion";
 import {
@@ -772,6 +782,12 @@ interface ChatMessage {
    *  daemon's `client_question`). `state` records the owner's answer, so a
    *  reopened chat shows the answer, never the question again. */
   clientQuestion?: ChatClientQuestion;
+  /** Next leaps 15-a: what the reply was given from memory (the daemon's
+   *  `used`, lib/memoryUsed) — the "From memory: N" line and its pop-up. */
+  used?: MemoryUsedItem[];
+  /** Next leaps 15-a: this reply's pop-up was shown (by itself or by a
+   *  press), so its items never bring the pop-up back by itself in this chat. */
+  usedShown?: boolean;
   /** Calm UI redesign S3/S4: "Setting changed … [Undo]" and secure credential
    *  cards from this turn. A card's state (undone, saved) is stored here, so a
    *  reopened chat shows what happened, never the ask again. */
@@ -3169,6 +3185,11 @@ export interface RowHandlers {
   /** v1.499.0: the owner answered "Is Hartleys a client?" under reply
    *  `index` — store the answer on that message and save it. */
   settleClientQuestion: (index: number, next: ChatClientQuestion) => void;
+  /** Next leaps 15-a: reply `index`'s "From memory" pop-up was shown — mark
+   *  it on the message (saved) so its items never bring it back by itself. */
+  memoryShown: (index: number) => void;
+  /** Next leaps 15-a: the pop-up that opened by itself went away. */
+  memoryPopDone: () => void;
   /** Redesign S3/S4: a settings card under reply `index` changed (Undo
    *  pressed, credential saved) — store it on the message and save. */
   settleConfigCard: (index: number, cardIndex: number, next: ConfigCard) => void;
@@ -3246,11 +3267,15 @@ const MessageRow = memo(function MessageRow({
   rowActivity,
   connectedNow = null,
   readOnly = false,
+  memoryPop = false,
   h,
 }: {
   m: ChatMessage;
   i: number;
   isLast: boolean;
+  /** Next leaps 15-a: this (newest) reply's "From memory" pop-up appears by
+   *  itself now — the page decided (lib/memoryUsed `opensByItself`). */
+  memoryPop?: boolean;
   prevUser: string;
   /** v1.328.0 (W3-2): when the question before this reply was sent (ISO) —
    *  the start of the turn's window when the reply carries no `timing`. */
@@ -3579,6 +3604,9 @@ const MessageRow = memo(function MessageRow({
     );
   }
   const suggestion = decodeSuggestion(m.suggestion);
+  // Next leaps 15-a: what the reply was given from memory — decoded again
+  // (a reopened thread hands back whatever the disk held).
+  const memoryUsed = decodeMemoryUsed(m.used);
   // v1.499.0: decoded again, like the suggestion (a reopened thread hands
   // back whatever the disk held). One question line at most: a preference
   // suggestion goes first, so a reply carrying one shows no client line.
@@ -3787,9 +3815,23 @@ const MessageRow = memo(function MessageRow({
             (v1.326.0): it is the END of this row, "answered by <model> ·
             2 files", and opens onto the full receipt on its own line; every
             warning keeps its amber (or accent) tone on the row. */}
+        {/* FROM MEMORY (next leaps 15-a): "From memory: 3", quiet, beside the
+            receipt; it opens the small pop-up of what the reply was given
+            from memory (by itself only when the page says so). */}
+        {memoryUsed.length > 0 && (
+          <MemoryUsed
+            items={memoryUsed}
+            autoOpen={memoryPop && isLast && !readOnly}
+            busy={busy}
+            readOnly={readOnly}
+            onShown={readOnly ? undefined : () => h.memoryShown(i)}
+            onClosed={memoryPop ? h.memoryPopDone : undefined}
+          />
+        )}
         {m.route && (
           <TurnReceipt
             inline
+            memoryUsed={memoryUsed}
             modelName={answeredName}
             route={m.route}
             adapted={m.adapted}
@@ -4310,6 +4352,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // v1.323.0: FOLLOW-UP QUESTIONS (setting chat_followups, off by default) —
   // fetched after a finished reply, shown only while that reply is the newest.
   const followupsOnRef = useRef(false);
+  // Next leaps 15-a: the turn whose "From memory" pop-up appears by itself
+  // (the newest reply only; null = none), and the items each chat has shown
+  // in a pop-up this visit (by chat; the saved `usedShown` marks keep it
+  // across a reload), so the same items never bring it back by itself.
+  const [memoryPopTurn, setMemoryPopTurn] = useState<string | null>(null);
+  const memoryShownRef = useRef<Map<string, Set<string>>>(new Map());
   // v1.435.0 (D3): "Start new chats local only" (setting chat_new_local_only),
   // read with the follow-ups setting; `localOnlyTouchedRef` = the user pressed
   // the switch in this chat, so a late read never overrides their choice.
@@ -9650,6 +9698,30 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     });
   }
 
+  /** Next leaps 15-a (decision D-15.1): open the newest reply's "From
+   *  memory" pop-up by itself — only when memory shaped that reply with an
+   *  item this chat has not shown yet, only while this chat is on screen,
+   *  and only when Settings does not say "Only when I press" (read when it
+   *  might pop; a setting that cannot be read keeps it quiet). */
+  function maybePopMemory(list: ChatMessage[], gen: number, turnId: string) {
+    const chat = saveTargetRef.current.id ?? "";
+    if (!opensByItself(list, "auto", memoryShownRef.current.get(chat))) return;
+    // On screen: the window is shown (a chat behind the Code view is kept
+    // quiet by the line itself: MemoryUsedHidden).
+    const onScreen = () => typeof document === "undefined" || document.visibilityState !== "hidden";
+    if (!onScreen()) return;
+    void get<{ settings?: { memory_used_popup?: unknown } }>("/settings")
+      .then((d): PopupMode => decodePopupMode(d?.settings?.memory_used_popup))
+      .catch((): PopupMode => "press")
+      .then((mode) => {
+        // The row draws it only while this turn's reply is the NEWEST
+        // message (a turn started since resets it and names another turn).
+        if (chatGenRef.current !== gen || !onScreen()) return;
+        if (!opensByItself(list, mode, memoryShownRef.current.get(saveTargetRef.current.id ?? ""))) return;
+        setMemoryPopTurn(turnId);
+      });
+  }
+
   /** Put a failed turn's typed message back in the composer — but only when
    *  it's empty (never clobber text typed while the turn was in flight). The
    *  restore is programmatic, so it must never count as voice input: Voice
@@ -9706,6 +9778,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     turnChoiceRef.current = opts.choice ?? null;
     stoppedRef.current = false;
     setFollowups(null); // they answered the reply this turn replaces or follows
+    setMemoryPopTurn(null); // 15-a: a pop-up belongs to the newest reply only
     setMessages(history);
     // Third plan CS6: a NEW chat's first question goes out before its first
     // save has named the chat; the save that names it (the one below, or any
@@ -9864,6 +9937,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const clientQuestion = decodeClientQuestion(
           (streamRes as unknown as { clientQuestion?: unknown }).clientQuestion,
         );
+        // Next leaps 15-a: what the reply was given from memory (the done
+        // frame's `used`, whitelisted). MIRROR NOTE: the POST lane's
+        // receiptPost below decodes the same key.
+        const memoryUsed = decodeMemoryUsed((streamRes as unknown as { used?: unknown }).used);
         // Adapted (v1.202.0) — the envelope's disclosure rides the message
         // like route/doors. MIRROR NOTE: keep in step with the POST lane's
         // receiptPost below — this exact merge line is where done-frame
@@ -9912,6 +9989,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           ...(doors ? { doors } : {}),
           // v1.499.0: the client question (decoded above). MIRROR NOTE.
           ...(clientQuestion ? { clientQuestion } : {}),
+          // Next leaps 15-a: what the reply was given from memory. MIRROR NOTE.
+          ...(memoryUsed.length ? { used: memoryUsed } : {}),
           // v1.323.0: the reply's own details (kept last: the trust pin reads
           // the head of this object).
           ...(thinkingText ? { thinking: thinkingText } : {}),
@@ -10009,6 +10088,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         if (!opts.quietly) {
           askFollowups(settled, route);
           showDocPreview(madeDocs); // a generated doc appears beside the chat
+          maybePopMemory(settled, gen, turnId); // 15-a: MIRROR NOTE — the POST lane below
         }
         return; // streamed successfully
       } catch (e) {
@@ -10211,6 +10291,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // (`client_question`, always present, null when nothing is asked).
       // MIRROR NOTE: keep in step with the stream path above.
       const clientQuestionPost = decodeClientQuestion(res.client_question);
+      // Next leaps 15-a: the POST lane's copy of the stream lane's `used`
+      // (always present, [] when nothing). MIRROR NOTE: keep in step.
+      const usedPost = decodeMemoryUsed((res as { used?: unknown }).used);
       const receiptPost = {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
@@ -10241,6 +10324,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         ...(doorsPost ? { doors: doorsPost } : {}),
         // v1.499.0: the client question. MIRROR NOTE: the stream lane's.
         ...(clientQuestionPost ? { clientQuestion: clientQuestionPost } : {}),
+        // Next leaps 15-a: what the reply was given from memory. MIRROR NOTE.
+        ...(usedPost.length ? { used: usedPost } : {}),
         // v1.324.0: the apps' resources this turn read (whitelisted).
         ...(decodeResourceReceipts((res as { resources?: unknown }).resources).length
           ? { appResources: decodeResourceReceipts((res as { resources?: unknown }).resources) }
@@ -10316,6 +10401,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       if (!ttsStreamStartedRef.current) tts.speak(reply);
       queueSave(mergeContinuation(full)); // the turn is complete — persist it
       showDocPreview(res.documents); // a generated doc appears beside the chat
+      if (!opts.quietly) maybePopMemory(mergeContinuation(full), gen, turnId); // 15-a: MIRROR NOTE — the stream lane
     } catch (e) {
       if (chatGenRef.current !== gen) return;
       // Keep the typed thread intact — only surface the failure (a 502 carries
@@ -12681,6 +12767,25 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       setMessages(updated);
       if (!busy) queueSave(updated);
     },
+    memoryShown: (index) => {
+      // Next leaps 15-a: "never twice for the same items in one chat". The
+      // items are remembered for this chat at once (a turn that began before
+      // the press saves its own history, without the mark), and the mark is
+      // stored on the message so a reopened chat keeps it.
+      const cur = messagesRef.current;
+      const target = cur[index];
+      if (!target || target.role !== "assistant") return;
+      const chat = saveTargetRef.current.id ?? "";
+      const seen = memoryShownRef.current.get(chat) ?? new Set<string>();
+      for (const it of decodeMemoryUsed(target.used)) seen.add(itemKey(it));
+      memoryShownRef.current.set(chat, seen);
+      if (target.usedShown) return;
+      const updated = cur.map((m, j) => (j === index ? { ...m, usedShown: true } : m));
+      messagesRef.current = updated;
+      setMessages(updated);
+      if (!busy) queueSave(updated);
+    },
+    memoryPopDone: () => setMemoryPopTurn(null),
     settleConfigCard: (index, cardIndex, next) => {
       // Like settleSuggestion: remembered for every later save, so a turn
       // that began before the press cannot write the unsettled card back.
@@ -12911,6 +13016,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         rowImplRef.current.settleSuggestion(index, next),
       settleClientQuestion: (index, next) =>
         rowImplRef.current.settleClientQuestion(index, next),
+      memoryShown: (index) => rowImplRef.current.memoryShown(index),
+      memoryPopDone: () => rowImplRef.current.memoryPopDone(),
       rateReply: (index, rating) => rowImplRef.current.rateReply(index, rating),
       retryMedia: (jobId) => rowImplRef.current.retryMedia(jobId),
       settleConfigCard: (index, cardIndex, next) =>
@@ -12946,6 +13053,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       startHandOff: none,
       settleSuggestion: none,
       settleClientQuestion: none,
+      memoryShown: none,
+      memoryPopDone: none,
       rateReply: none,
       retryMedia: none,
       settleConfigCard: none,
@@ -13532,6 +13641,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   );
 
   return (
+    // Next leaps 15-a: behind the Code view the chat is hidden, so a "From
+    // memory" pop-up (drawn over the page) closes and never opens by itself.
+    <MemoryUsedHidden.Provider value={surfaceHidden}>
     <PageShell className="space-y-0">
       {/* NOTHING STANDS ABOVE THE WORK (v1.215.0). The page header and the
           standing blurb that followed it are both gone: the title moved into
@@ -14210,6 +14322,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           underRow={runPairs.underRow[i] === true}
                           rowActivity={m.escalated ? runPairs.activityFor[i] : undefined}
                           connectedNow={connectedNow?.index === i ? connectedNow : null}
+                          memoryPop={
+                            memoryPopTurn !== null &&
+                            i === messages.length - 1 &&
+                            m.turnId === memoryPopTurn
+                          }
                           h={rowHandlers}
                         />
                         </div>
@@ -16639,6 +16756,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         />
       )}
     </PageShell>
+    </MemoryUsedHidden.Provider>
   );
 }
 

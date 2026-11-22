@@ -110,9 +110,29 @@ def register(app: FastAPI, d) -> None:
 
     @app.patch("/memory/preferences/{pref_id}")
     async def memory_preference_edit(pref_id: str, body: EditBody) -> dict[str, Any]:
-        """Change the sentence of a kept preference."""
+        """Change the sentence of a kept preference.
+
+        Next leaps 15-a: recorded with its Undo, the way the DELETE below and
+        chat's ``preference_edit`` are (snapshot before and after, one ledger
+        row, ``POST /undo/{action_id}`` puts the old sentence back unless it
+        was changed again since). The answer carries ``action_id`` ("" when
+        it could not be recorded: the change stands)."""
+        from ...settings import page_records as _pr
+
+        prior = await asyncio.to_thread(_pr.snapshot, d.platform, "preference", pref_id)
         row = await asyncio.to_thread(_run, prefs.edit, _engine(), pref_id, body.text)
-        return {"preference": prefs.pref_view(row)}
+        out: dict[str, Any] = {"preference": prefs.pref_view(row)}
+        if prior is not None:
+            after = await asyncio.to_thread(_pr.snapshot, d.platform, "preference", pref_id)
+            out["action_id"] = await asyncio.to_thread(
+                lambda: _pr.journal_removal(
+                    d.platform, tool="preference_edit", record="preference", name=pref_id, prior=prior,
+                    summary=(f"Changed the preference “{str(prior.get('text') or '')[:120]}” to "
+                             f"“{str(row.text or '')[:120]}”."),
+                    extra={"after": after},
+                )
+            )
+        return out
 
     @app.delete("/memory/preferences/{pref_id}")
     async def memory_preference_forget(pref_id: str) -> dict[str, Any]:

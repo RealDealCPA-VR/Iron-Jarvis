@@ -20,6 +20,7 @@ happened — the grounding block never claims to be relevance-ranked when it isn
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from typing import Any
@@ -29,6 +30,8 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.models import ProjectKnowledge
+
+log = logging.getLogger(__name__)
 
 #: Chars of an item we embed for retrieval (one representative vector/item).
 _EMBED_CHARS = 4000
@@ -255,13 +258,32 @@ def ground(
             if used >= char_budget:
                 break
 
-    blocks = [
-        f"## {_guard_name(platform, r, session_id)}\n{_guard_text(platform, r, session_id)}"
-        for r in chosen
-    ]
+    named = [(_guard_name(platform, r, session_id), r) for r in chosen]
+    blocks = [f"## {head}\n{_guard_text(platform, r, session_id)}" for head, r in named]
     body = "\n\n".join(blocks)
     if len(body) > char_budget + 500:  # hard clamp (a single huge item)
         body = body[:char_budget].rstrip() + "\n…(truncated)"
+    _note_told(body, named, project_id)
     if note:  # appended AFTER the clamp — a degradation notice must not be cut
         body = f"{body}\n\n{note}" if body else note
     return body
+
+
+def _note_told(body: str, named: "list[tuple[str, Any]]", project_id: str) -> None:
+    """Next leaps 15-a: each knowledge item whose heading the final text
+    still carries (the clamp may cut the rest), as an item of the reply's
+    ``used`` list (``memory.used``; nothing without a collector). Never
+    raises."""
+    try:
+        from ..memory import used as _used
+
+        if not _used.collecting() or not body:
+            return
+        for head, r in named:
+            if head.startswith("[BLOCKED") or not (body.startswith(f"## {head}\n")
+                                                   or f"\n## {head}\n" in body):
+                continue
+            _used.note("project", r.id, head, when=getattr(r, "created_at", None),
+                       href=f"/projects/{project_id}", text=f"{head} {str(r.text or '')[:600]}")
+    except Exception:  # noqa: BLE001 — the list is extra; the knowledge is not
+        log.debug("project knowledge: the items told could not be listed", exc_info=True)

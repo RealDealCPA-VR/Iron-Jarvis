@@ -347,6 +347,7 @@ class LearningEngine:
             return system_prompt
         kept: list[str] = []
         told: list[str] = []
+        told_rows: list[tuple[Any, str]] = []
         spent = 0
         dropped = None
         for lesson in [*stated, *others]:
@@ -364,14 +365,38 @@ class LearningEngine:
             spent += cost
             kept.append(line)
             told.append(lesson.id)
+            told_rows.append((lesson, result.text))
         if dropped is not None:
             publish_blocked(event_bus, session_id, dropped)
         if session_id:
             self._remember_injected(str(session_id), told)
         if not kept:
             return system_prompt
+        self._note_told(told_rows, scope)
         bullets = "\n".join(kept)
         return f"{system_prompt}{_LESSONS_HEADING}{bullets}"
+
+    @staticmethod
+    def _note_told(rows: "list[tuple[Any, str]]", scope: str | None) -> None:
+        """Next leaps 15-a: each lesson just told, as an item of the reply's
+        ``used`` list (``memory.used.note``; nothing without a collector). A
+        kept preference of the owner's own list (scope ``user``: the Memory
+        page's kept preferences, every source but task notes) can be
+        corrected or forgotten from the pop-up. Never raises."""
+        try:
+            from ..memory import used as _used
+
+            if not _used.collecting():
+                return
+            fix = _used.FIXES if scope == "user" else ()
+            for lesson, text in rows:
+                _used.note(
+                    "preference", getattr(lesson, "id", ""), text,
+                    when=getattr(lesson, "created_at", None), href=_used.PREFERENCES_HREF,
+                    fix=fix, text=text,
+                )
+        except Exception:  # noqa: BLE001 — the list is extra; the prompt is not
+            log.debug("the lessons told could not be listed", exc_info=True)
 
     def _remember_injected(self, session_id: str, ids: list[str]) -> None:
         with self._injected_lock:

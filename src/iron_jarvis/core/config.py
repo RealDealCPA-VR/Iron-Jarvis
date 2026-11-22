@@ -745,6 +745,13 @@ class Config(BaseModel):
     #: "stop this kind" answer). Off: the suggestions still wait in
     #: Improvements; nothing rings.
     night_review_notice: bool = True
+    #: Next leaps 15-a (master plan R2.7, decision D-15.1): the "From memory"
+    #: pop-up under a chat reply. "auto" = it appears by itself for about
+    #: eight seconds after the newest reply, only when memory shaped that
+    #: reply and only for items this chat has not shown yet; "press" = only
+    #: when the "From memory: N" line is pressed. Read by the chat page
+    #: (``GET /settings``) when a reply ends. Anything else reads as "auto".
+    memory_used_popup: str = "auto"
     #: v1.405.0: the code editor a coding session's "Open in …" presses open
     #: (harness/code_editor): "auto" = VS Code when installed, else Cursor;
     #: "vscode" / "cursor" = that one. Read live by GET /editor/options.
@@ -1466,6 +1473,12 @@ class Config(BaseModel):
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             return 6
         return max(1, min(20, int(v)))
+    @field_validator("memory_used_popup", mode="before")
+    @classmethod
+    def _clean_memory_used_popup(cls, v: Any) -> str:
+        # Next leaps 15-a: tolerant — a hand edit never stops a boot; only
+        # "press" turns the pop-up off by itself, anything else is the default.
+        return "press" if str(v or "").strip().lower() == "press" else "auto"
 
     @field_validator("browsing_preferences")
     @classmethod

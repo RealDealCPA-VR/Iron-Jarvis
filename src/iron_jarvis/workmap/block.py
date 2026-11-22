@@ -548,6 +548,13 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         recapped = any(t["recap"] for t in told_here)
 
         lines: list[str] = []
+        # Next leaps 15-a: the rows told, for the reply's ``used`` list
+        # (``memory.used``; recorded only while a chat hop collects): a piece
+        # of work in this folder is a ``recap`` when its recap lines were told
+        # under it.
+        told_rows: list[tuple[dict[str, Any], bool]] = [
+            (t["row"], bool(t["recap"])) for t in told_here
+        ]
         if here:
             lines.append(HERE_LEAD)
             lines += here
@@ -562,6 +569,8 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             if line and used + len(line) + 1 <= BLOCK_CHARS:
                 others.append(line)
                 used += len(line) + 1
+                if turn.client is not None:
+                    told_rows.append((row, False))
         if others and turn.client is not None:
             lines.append(f"In {_possessive(turn.client.name)} other folders, newest first:")
             lines += others
@@ -572,6 +581,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             line = _safe(entry_line(row, now, with_folder=not phone, titles_only=phone))
             if line and used + len(line) + 1 <= BLOCK_CHARS:
                 there.append(line)
+                told_rows.append((row, False))
                 used += len(line) + 1
         for row, cid in named_kept:
             name = str((cmap.names.get(cid) or ("",))[0] or "")
@@ -579,6 +589,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
                                     titles_only=phone))
             if line and used + len(line) + 1 <= BLOCK_CHARS:
                 there.append(line)
+                told_rows.append((row, False))
                 used += len(line) + 1
         if there:
             lines.append(ELSEWHERE_LEAD)
@@ -591,14 +602,55 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             lines.append(RECAP_NOTE)
         if phone:
             lines.append(PHONE_NOTE)
+        _note_rows(told_rows)
         return HEAD + "\n" + "\n".join(lines)
     except Exception:  # noqa: BLE001 — the record is extra; a turn never fails on it
         log.debug("work record: the block could not be built", exc_info=True)
         return ""
 
 
+def _note_rows(rows: "list[tuple[dict[str, Any], bool]]") -> None:
+    """Next leaps 15-a: each piece of work the block told, as an item of
+    the reply's ``used`` list (``memory.used``; nothing without a
+    collector): a ``recap`` when its recap lines were told under it, else
+    ``work``. Never raises."""
+    try:
+        from ..memory import used as _used
+
+        if not _used.collecting():
+            return
+        from .index import link_for
+
+        for row, with_recap in rows:
+            title = str(row.get("title") or "")
+            extra = " ".join(str(x) for x in (row.get("recap") or [])) if with_recap else ""
+            files = " ".join(keys.file_name(f.get("path") or "") for f in row.get("files") or []
+                             if isinstance(f, dict))
+            _used.note(
+                "recap" if with_recap else "work", row.get("id") or "", title,
+                when=row.get("updated"), href=link_for(str(row.get("kind") or ""), str(row.get("ref") or "")),
+                text=f"{title} {files} {extra}",
+            )
+    except Exception:  # noqa: BLE001 — the list is extra; the block is not
+        log.debug("work record: the rows told could not be listed", exc_info=True)
+
+
+def work_block_with_rows(platform: Any, **kw: Any) -> "tuple[str, list[dict[str, Any]]]":
+    """:func:`work_block` and the items it told (next leaps 15-a), for a
+    reader outside a chat hop's collector. Never raises."""
+    from ..memory import used as _used
+
+    try:
+        text, items = _used.run_collecting(lambda: work_block(platform, **kw))
+        return text, _used.finish(items)
+    except Exception:  # noqa: BLE001
+        log.debug("work record: the block could not be built", exc_info=True)
+        return "", []
+
+
 __all__ = [
     "BLOCK_CHARS", "CLIENT_OTHER_MAX", "CONTINUE_SENTENCE", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD",
     "HERE_LEAD", "HERE_MAX", "NAMED_MAX", "PHONE_NOTE", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE",
     "date_words", "entry_line", "here_part", "recap_lines", "without_continue", "work_block",
+    "work_block_with_rows",
 ]

@@ -76,7 +76,10 @@ def _shared_work(engine: Any, key: str) -> bool:
     return int(n or 0) > 0
 
 
-def _preference_lines(engine: Any, client_id: str, may_local: bool) -> list[str]:
+def _preference_lines(engine: Any, client_id: str, may_local: bool,
+                      told: "list[tuple[str, dict[str, Any]]] | None" = None) -> list[str]:
+    """The preference lines the block may tell; ``told`` (next leaps 15-a)
+    is given each line with the preference it says."""
     prefs = store.preferences(engine, client_id)
     lo_ids: "frozenset[str] | None" = frozenset()
     if not may_local and any(p.get("thread_id") for p in prefs):
@@ -97,9 +100,35 @@ def _preference_lines(engine: Any, client_id: str, may_local: bool) -> list[str]
         line = _safe(f"- {p.get('text') or ''}")
         if line:
             lines.append(line)
+            if told is not None:
+                told.append((line, p))
         if len(lines) >= MAX_PREFERENCE_LINES:
             break
     return lines
+
+
+def _note_told(text: str, told: "list[tuple[str, dict[str, Any]]]", client_id: str) -> None:
+    """Next leaps 15-a: each client preference the FINAL block says (the
+    size cap may have dropped some), as an item of the reply's ``used``
+    list (``memory.used``; nothing without a collector). It can be corrected
+    or forgotten from the pop-up, through the client's own routes. Never
+    raises."""
+    try:
+        from ...memory import used as _used
+
+        if not _used.collecting() or not text:
+            return
+        said = set(text.splitlines())
+        for line, p in told:
+            if line not in said:
+                continue
+            words = line[2:] if line.startswith("- ") else line
+            _used.note(
+                "client_preference", p.get("id") or "", words, when=p.get("created_at") or None,
+                href=f"/clients/{client_id}", fix=_used.FIXES, text=words, client=client_id,
+            )
+    except Exception:  # noqa: BLE001 — the list is extra; the block is not
+        log.debug("clients: the preferences told could not be listed", exc_info=True)
 
 
 def _folder_lines(platform: Any, cmap: Any, root: Any, folder: object, may_local: bool) -> list[str]:
@@ -214,13 +243,16 @@ def client_block_or_raise(platform: Any, *, folder: str, local: bool | None = No
     if not name or _safe(f"# Client: {name}") != f"# Client: {name}":
         return ""  # a name that cannot be said safely: say nothing
     may_local = _may_recall_local(local)
-    prefs = _preference_lines(engine, root.client_id, may_local)
+    told: list[tuple[str, dict[str, Any]]] = []
+    prefs = _preference_lines(engine, root.client_id, may_local, told)
     try:
         folders = _folder_lines(platform, cmap, root, folder, may_local)
     except Exception:  # noqa: BLE001 — the paths are extra; the preferences are not
         log.debug("clients: the other folders could not be read", exc_info=True)
         folders = []
-    return _assemble(name, prefs, folders)
+    text = _assemble(name, prefs, folders)
+    _note_told(text, told, root.client_id)
+    return text
 
 
 __all__ = ["MAX_OTHER_FOLDERS", "MAX_PREFERENCE_LINES", "client_block", "client_block_or_raise",
