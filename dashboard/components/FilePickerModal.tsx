@@ -106,6 +106,7 @@ export function FilePickerModal({
   onPick,
   pickFolders = false,
   title,
+  start,
 }: {
   open: boolean;
   onClose: () => void;
@@ -114,6 +115,8 @@ export function FilePickerModal({
   /** Folder mode: list directories only and pick the CURRENT folder. */
   pickFolders?: boolean;
   title?: string;
+  /** v1.556.0: the folder it opens at (the first drive when absent). */
+  start?: string;
 }) {
   const { data: drivesData, loading: drivesLoading } = useApi<{ drives: Drive[] }>(
     open ? "/fs/drives" : null,
@@ -143,8 +146,9 @@ export function FilePickerModal({
   // Default to the first drive once drives load (remember the last folder
   // browsed across re-opens within the same page).
   useEffect(() => {
-    if (open && cur === null && drives.length > 0) setCur(drives[0].path);
-  }, [open, cur, drives]);
+    if (open && cur === null && start) setCur(start);
+    else if (open && cur === null && drives.length > 0) setCur(drives[0].path);
+  }, [open, cur, drives, start]);
 
   // Load the current directory whenever it changes while the modal is open.
   useEffect(() => {

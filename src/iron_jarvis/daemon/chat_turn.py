@@ -5763,6 +5763,44 @@ def _asks_new_file_other_language(text: str, picked: Iterable[str], workspace: s
         return False
 
 
+#: The note a scanned attachment carries in a turn that sorts it (v1.556.0,
+#: D-31.2): its scanned pages are read by the sorting plan on this PC, not
+#: here, and nothing of them has been sent to a model.
+STACK_HELD_NOTE = (
+    "scanned pages not transcribed here: you were asked to sort this scan, and stack_plan reads "
+    "every page of it on this PC. Call stack_plan with this file's path; nothing of these pages "
+    "has been sent to a model"
+)
+
+
+def stack_turn(d, body) -> bool:
+    """This turn asks to sort a scanned pile into its documents (v1.556.0,
+    idea 31-a): Auto tools is on, ``stack_plan`` is registered and not set to
+    Never run, and the words ask for it with a PDF attached (now or earlier in
+    the chat) or named (``autoselect.wants_stack``). ONE answer for both
+    lanes: ``_resolve_armed_tools`` arms the plan from it, and
+    ``_prepare_attachments`` keeps the scan's pages off any model until the
+    plan's card has said how many this PC could not read (D-31.2). Pure
+    apart from the registry and permission reads; never raises."""
+    try:
+        if not getattr(body, "auto_tools", False):
+            return False
+        platform = getattr(d, "platform", None)
+        tool = platform.registry.get("stack_plan") if platform is not None else None
+        if tool is None:
+            return False
+        perms = getattr(platform, "permissions", None)
+        if perms is not None and getattr(perms.mode_for(tool.perm_key()), "value", "deny") == "deny":
+            return False
+        from ..tools.autoselect import wants_stack
+
+        last_user = next((m.content or "" for m in reversed(body.messages) if m.role == "user"), "")
+        files = [str(a) for a in (body.attachments or [])] + [str(a) for a in _thread_file_paths(body)]
+        return wants_stack(str(last_user), any(f.lower().endswith(".pdf") for f in files))
+    except Exception:  # noqa: BLE001 — a matcher fault arms nothing and changes nothing
+        return False
+
+
 def _resolve_armed_tools(
     d, body, max_tools: "int | None" = None, *, apps_on: "list[str] | tuple[str, ...] | None" = None
 ) -> "ArmedSelection":
@@ -6136,6 +6174,21 @@ def _resolve_armed_tools(
                 and d.platform.registry.get("list_files") is not None
             ):
                 auto.append("list_files")
+    # SORTING A SCANNED PILE, IN ITS OWN PLACE (v1.556.0, idea 31-a). "Sort
+    # this" with a scan attached arms `stack_plan`: allow tier and READONLY
+    # (it reads the pages on this PC and shows a plan on a card; the user's
+    # Confirm on the card writes the documents through `stack_apply`, which
+    # no lane arms for the model). Its own matcher (`autoselect.wants_stack`,
+    # read through `stack_turn`). OUTSIDE the cap and the envelope ceiling,
+    # like the settings tools: it is the one tool such a request needs, and
+    # `_prepare_attachments` holds the scan's pages back for it on the same
+    # answer, so a full menu must never leave the scan held and unread.
+    if (
+        "stack_plan" not in explicit
+        and "stack_plan" not in auto
+        and stack_turn(d, body)
+    ):
+        auto.append("stack_plan")
     # LIVE EXCEL (v1.466.0): the READ tool for a workbook the user has open in
     # Excel, in its own place like the calculator and under the same ceiling.
     # `excel_seen()` never waits (a remembered answer, refreshed in the
@@ -7375,6 +7428,13 @@ def config_cards_from_result(name: str, result: Any) -> list[dict[str, Any]]:
                 "subject_kind": str(rh.get("kind") or ""),
                 "name": " ".join(str(rh.get("name") or "").split())[:120],
             })
+        # v1.556.0 (idea 31-a): a sorting plan's card (documents, pages,
+        # names, folders, the pages this PC could not read and the offer to
+        # read them). Built by the tool from its own plan, never from the
+        # model's words; Confirm on it writes through `stack_apply`.
+        sc = data.get("stack_plan") if name == "stack_plan" else None
+        if isinstance(sc, dict) and sc.get("kind") == "stack" and sc.get("plan_id"):
+            out.append(dict(sc))
     except Exception:  # noqa: BLE001 — a card never breaks a turn
         return out
     return out
@@ -11135,6 +11195,11 @@ async def _prepare_attachments(
         (m.content or "" for m in reversed(body.messages) if m.role == "user"),
         "",
     )
+    # v1.556.0 (idea 31-a, D-31.2): a turn that SORTS a scan arms
+    # `stack_plan`, which reads every page on this PC; the attached PDF's
+    # scanned pages are not sent to a vision model here first (the same
+    # answer `_resolve_armed_tools` arms from).
+    _sorting = stack_turn(d, body)
 
     # WHICH CHANGE VERBS THIS TURN MAY NAME — the same question, asked of the
     # same function with the same arguments, that `_resolve_armed_tools` asks
@@ -11320,6 +11385,7 @@ async def _prepare_attachments(
                 max_ocr_pages=per_doc_pages,
                 ocr_budget=ocr_budget,
                 config=cfg,
+                held_note=(STACK_HELD_NOTE if _sorting and suffix == ".pdf" else ""),
             )
             ocr_budget = max(0, ocr_budget - got.ocr_pages)
             text, note = got.text, got.note

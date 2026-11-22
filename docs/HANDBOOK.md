@@ -2044,6 +2044,51 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Sort a scanned pile into its documents (v1.556.0)
+
+One PDF that holds a whole scanned pile becomes separate, named documents in
+their folders, after you check the plan. Attach the scan (a bank statement,
+two bills, a letter and a notice, all in one file) in a chat and say **"sort
+this"** (or "split this into separate documents"). Iron Jarvis shows a plan
+on a card under its reply, headed **Sort scan.pdf**:
+
+- **One row per document**: its name (such as "2026-03 Bank statement.pdf",
+  the month it is dated and what it is), its **Folder** inside the chat's
+  folder (such as "Bank statements"), and its pages. Rest the pointer on a
+  page number to see its first words; a blank page is drawn dashed and stays
+  with the document before it.
+- **Change anything first.** Drag a page onto another document, or press it
+  and then **Move page 7 here** (that works with a finger too). Type a new
+  name, type a folder, or press **Choose…** to pick a folder inside the
+  chat's folder. Press a page and **See page 7** to open the scan at that
+  page beside the chat.
+- **Not sure (pages 41-42).pdf** holds the pages the plan could not place
+  with certainty. Move them, or keep them as their own file: a page is never
+  dropped.
+- **Confirm** writes the documents. Each one is opened again and its pages
+  counted, and together they hold every page of the scan. The scan itself is
+  not changed and stays where it was. The card then lists the files (press
+  one to open it beside the chat) and one **Undo** removes them all, with the
+  folders it made, as long as nobody has changed them since.
+
+**Your pages stay on this PC.** Iron Jarvis reads each page itself: the text
+in the PDF, or, for a scanned page, Windows' own text recognition on this PC.
+Only the first words of each page go to the model that makes the plan (your
+default model, or the one you picked for reading documents), in one request,
+and the page text is treated as data, never as instructions. In a Local only
+chat that model must be on this PC or your network. A page this PC could not read is never sent anywhere by
+itself: the card says how many there are and offers **Read 4 more pages with
+Claude?** (naming the model you have for reading pictures). Only that press
+sends those pages, to that model only, and then the plan is made again.
+With no model that reads pictures, those pages stay in "Not sure" for you to
+place.
+
+**Good to know.** Sorting works on one PDF of up to 300 pages at a time. A
+plan is kept on this PC for 30 days, so you can confirm it later. The demo
+model never makes a plan of a real file. Confirming by typing in chat is not
+offered yet: press Confirm on the card. A messy folder of separate files is
+not sorted this way yet.
+
 ## Quick Ask: the answer appears right there (v1.563.0)
 
 Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows

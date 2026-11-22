@@ -2367,3 +2367,23 @@ class PauseBody(BaseModel):
     """
 
     reason: str = ""
+
+
+class StackApplyBody(BaseModel):
+    """``POST /documents/stack/{plan_id}/apply`` (v1.556.0, idea 31-a): the
+    user pressed Confirm on a sorting plan's card. ``documents`` is the plan
+    as the user left it (``[{pages, name, folder}]``); left out, the plan's
+    own is written."""
+
+    documents: list[dict[str, Any]] | None = None
+    thread_id: str = ""
+
+
+class StackReadMoreBody(BaseModel):
+    """``POST /documents/stack/{plan_id}/read-more`` (v1.556.0): the user
+    pressed "Read N more pages with <model>?". ``provider`` is the model the
+    card named; the pages go to that model only."""
+
+    provider: str = ""
+    thread_id: str = ""
+    local_only: bool | None = None

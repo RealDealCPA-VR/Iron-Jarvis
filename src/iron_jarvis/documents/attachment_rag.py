@@ -279,9 +279,16 @@ async def extract_for_rag_async(
     max_ocr_pages: "int | None" = None,
     ocr_budget: "int | None" = None,
     config: object | None = None,
+    held_note: str = "",
 ) -> Extraction:
     """:func:`extract_for_rag` OFF THE EVENT LOOP, with the scanned-document OCR
     fallback wired in.
+
+    ``held_note`` (v1.556.0, idea 31-a): the turn sorts this scan, and the
+    sorting plan reads every page itself, ON THIS PC (``stack_plan``). The
+    scanned pages are then NOT transcribed here, so none reaches a vision
+    model before the plan's card has said how many pages this PC could not
+    read (D-31.2); the text layer is kept and the note says why.
 
     The parse is CPU-bound and the PDF walk is filesystem-bound, so both go
     through ``asyncio.to_thread`` (the daemon is one loop — see CLAUDE.md).
@@ -323,6 +330,8 @@ async def extract_for_rag_async(
     def _note(base: str) -> str:
         return honest_scan_note(base, image=image, text=text)
 
+    if held_note and not image:
+        return Extraction(text=text, note=held_note)
     if not ocr_enabled:
         return Extraction(text=text, note=_note(OCR_DISABLED_NOTE))
     if router is None:

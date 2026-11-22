@@ -776,6 +776,14 @@
       "ok": "started a helper agent",
       "failed": "tried a helper agent start and it failed"
     },
+    "stack_apply": {
+      "ok": "saved the documents sorted from a scan",
+      "failed": "tried a sorted documents and it failed"
+    },
+    "stack_plan": {
+      "ok": "made a plan to sort a scan",
+      "failed": "tried a sorting plan and it failed"
+    },
     "suggestion_answer": {
       "ok": "answered a suggestion",
       "failed": "tried a suggestion answer and it failed"

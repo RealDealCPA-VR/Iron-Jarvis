@@ -106,10 +106,14 @@ def write_marks(
     turn_id: str = "",
     invocation_id: str = "",
     file_sha256: str = "",
+    kept: bool = False,
 ) -> "list[dict[str, Any]]":
     """Write ``marks`` (``sources.Mark``) as rows; return what the reply
     linker needs of each (``id``, ``key``, ``path``, ``kind``, ``locator``).
-    One transaction. Rows that never got a chat are swept here too."""
+    One transaction. Rows that never got a chat are swept here too.
+
+    ``kept`` (v1.556.0, idea 31-a): the facts of a document Iron Jarvis
+    wrote from a sorted scan stay when their chat is deleted."""
     rows: list[dict[str, Any]] = []
     out: list[dict[str, Any]] = []
     for m in marks:
@@ -120,7 +124,7 @@ def write_marks(
             invocation_id=str(invocation_id or ""), path=str(path),
             file_sha256=str(file_sha256 or ""), kind=str(kind),
             locator_json=json.dumps(m.locator, sort_keys=True),
-            shown=m.shown, key=m.key, context=m.context, kept=False,
+            shown=m.shown, key=m.key, context=m.context, kept=bool(kept),
         ))
         out.append({"id": mid, "key": m.key, "path": str(path), "kind": str(kind),
                     "locator": dict(m.locator)})
@@ -173,6 +177,23 @@ def drop_thread(db: Any, thread_id: str) -> None:
     ))
 
 
+def drop_kept_paths(engine: Any, paths: "Iterable[str]") -> int:
+    """Remove the kept rows of files that were taken away again (the Undo of
+    a sorted scan, v1.556.0): a fact must not point at a file that is gone."""
+    wanted = [str(p) for p in dict.fromkeys(paths) if p]
+    if not wanted or not ensure_table(engine):
+        return 0
+    removed = 0
+    with engine.begin() as conn:
+        for start in range(0, len(wanted), 200):
+            res = conn.execute(sa_delete(SourceMark).where(
+                SourceMark.path.in_(wanted[start:start + 200]),
+                SourceMark.kept == True,  # noqa: E712
+            ))
+            removed += int(res.rowcount or 0)
+    return removed
+
+
 def home_turn(engine: Any, turn_id: str, thread_id: str) -> int:
     """Give a turn's rows written before its chat existed their chat."""
     if not turn_id or not thread_id or not ensure_table(engine):
@@ -187,6 +208,6 @@ def home_turn(engine: Any, turn_id: str, thread_id: str) -> int:
 
 
 __all__ = [
-    "MAX_LOOKUP", "ORPHAN_DAYS", "SourceMark", "as_dict", "drop_thread", "ensure_table",
+    "MAX_LOOKUP", "ORPHAN_DAYS", "SourceMark", "as_dict", "drop_kept_paths", "drop_thread", "ensure_table",
     "get_marks", "home_turn", "new_mark_id", "write_marks",
 ]

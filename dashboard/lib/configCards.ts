@@ -7,8 +7,11 @@
  *   { kind: "change", key, label, old, new, restart, change_id }
  *   { kind: "secret", name, label, help, why, request_id }
  *   { kind: "rehearsal", rehearsal_id, subject_kind, name } (leap 06-a)
+ *   { kind: "stack", plan_id, documents, … }  (v1.556.0: lib/stackPlan)
  * A secret card never carries a value — the model never had one.
  */
+
+import { decodeStackCard, type StackCard } from "./stackPlan";
 
 export interface ConfigChangeCard {
   kind: "change";
@@ -80,7 +83,8 @@ export type ConfigCard =
   | ConfigChangeCard
   | SecretRequestCard
   | ModelDownloadCard
-  | RehearsalCard;
+  | RehearsalCard
+  | StackCard;
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
@@ -138,6 +142,10 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
         subject_kind: str(r.subject_kind) === "schedule" ? "schedule" : "rule",
         name: str(r.name).slice(0, 120),
       });
+    } else if (r.kind === "stack") {
+      // v1.556.0 (idea 31-a): a sorting plan's card, whitelisted by its own decoder.
+      const stack = decodeStackCard(r);
+      if (stack) out.push(stack);
     }
   }
   return out;
@@ -229,6 +237,7 @@ export function looksLikeSecret(text: string): boolean {
 export function cardId(c: ConfigCard): string {
   if (c.kind === "download") return `download:${c.id}`;
   if (c.kind === "rehearsal") return `rehearsal:${c.rehearsal_id}`;
+  if (c.kind === "stack") return `stack:${c.plan_id}`;
   return c.kind === "change" ? `change:${c.change_id}` : `secret:${c.request_id}`;
 }
 

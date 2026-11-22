@@ -24,6 +24,7 @@ import { ArrowRight, Check, Download as DownloadIcon, Eye, EyeOff, KeyRound, Rot
 import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
 import { RehearsalReport } from "@/components/RehearsalReport";
+import { StackPlanCard } from "@/components/chat/StackPlanCard";
 import {
   settingsHrefFor,
   showValue,
@@ -449,6 +450,9 @@ export function ConfigCards({
         ) : c.kind === "rehearsal" ? (
           // Leap 06-a: "rehearse it" — the report reads itself until it ends.
           <RehearsalReport key={`rehearsal-${c.rehearsal_id}`} id={c.rehearsal_id} />
+        ) : c.kind === "stack" ? (
+          // v1.556.0 (idea 31-a): a sorting plan, confirmed here.
+          <StackPlanCard key={`stack:${c.plan_id}`} card={c} onSettle={(n) => onSettle(i, n)} />
         ) : c.kind === "change" ? (
           <ChangeCard key={c.change_id} card={c} onSettle={(n) => onSettle(i, n)} />
         ) : (

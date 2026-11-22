@@ -4399,6 +4399,8 @@ const TOOL_WORDS = {
   write_document: "create a document",
   excel_edit: "edit a workbook",
   excel_live_edit: "change a workbook that is open in Excel",
+  // v1.556.0 (idea 31-a): the sorting plan's Confirm (lib/toolWords twin).
+  stack_apply: "save the documents sorted from a scan",
   generate_media: "make an image, video or sound",
   process_start: "start a program that keeps running",
   process_write: "type into a running program",
@@ -4713,6 +4715,8 @@ const TOOL_WORDS_BUILTIN = {
   skill_search: "look for a skill",
   skill_update: "change a skill",
   spawn_agent: "start a helper agent",
+  stack_apply: "save the documents sorted from a scan",
+  stack_plan: "make a plan to sort a scan",
   suggestion_answer: "answer a suggestion on the Improvements page",
   suggestion_list: "list the waiting suggestions",
   tool_create: "make a new tool",

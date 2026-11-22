@@ -3734,6 +3734,49 @@ def wants_calculator(text: str, picked: "list[str] | tuple[str, ...]") -> bool:
     return about_figures and bool(_FIGURE_CARRIERS.intersection(picked))
 
 
+#: SORTING A SCANNED PILE (v1.556.0, idea 31-a): "sort this", "sort out
+#: these scans", never "sort these rows by date" (that orders, it does not
+#: separate documents).
+_STACK_SORT_RX = re.compile(
+    r"(?i)\bsort(?:\s+out|\s+through)?\s+(?:this|these|that|those|it|them|the|my|our)\b"
+    r"(?!(?:\s+[\w'-]+){0,3}\s+(?:by|alphabetically|in\s+order)\b)"
+)
+_STACK_OBJECT = (
+    r"(?:it|them|this|these|that|those|up|out|apart"
+    r"|(?:this|these|that|the|my|our)\s+(?:scan|scans|pile|stack|pdf|file|document|bundle|batch|lot))"
+)
+#: "split this into documents", "break it up into separate files".
+_STACK_SPLIT_RX = re.compile(
+    r"(?i)\b(?:split|separate|break|divide)(?:\s+" + _STACK_OBJECT + r"){0,3}\s+into\s+"
+    r"(?:its\s+|their\s+|the\s+)?(?:separate\s+|individual\s+|single\s+|different\s+|own\s+)?"
+    r"(?:documents|docs|files|pdfs|statements|letters|bills)\b"
+)
+#: "separate the documents", "separate out these statements".
+_STACK_SEPARATE_RX = re.compile(
+    r"(?i)\bseparate\s+(?:out\s+)?(?:the|these|its|each|all\s+the)\s+"
+    r"(?:documents|docs|statements|letters|bills|forms)\b"
+)
+_STACK_NOT_RX = re.compile(
+    r"(?i)\b(?:don'?t|do\s+not|never|no\s+need\s+to|without)\s+(?:[\w']+\s+){0,2}(?:sort|split|separate|break)\b"
+)
+#: A PDF named in the message itself.
+_STACK_PDF_NAMED_RX = re.compile(r"(?i)\.pdf\b")
+
+
+def wants_stack(text: str, has_pdf: bool) -> bool:
+    """True when the message asks to sort a scanned pile into its documents
+    (v1.556.0, idea 31-a): "sort this", "split this into documents",
+    "separate the documents", with a PDF attached or named. It arms
+    ``stack_plan``, which only reads and shows a plan; nothing is written
+    until the user confirms the card. Pure, linear."""
+    msg = (text or "")[:4000]
+    if not (has_pdf or _STACK_PDF_NAMED_RX.search(msg)):
+        return False
+    if _STACK_NOT_RX.search(msg):
+        return False
+    return bool(_STACK_SORT_RX.search(msg) or _STACK_SPLIT_RX.search(msg) or _STACK_SEPARATE_RX.search(msg))
+
+
 _SCRIPT_WORD = re.compile(r"[a-z0-9']+")
 #: "each client", "every workbook", "all of the invoices", "across the files".
 _SCRIPT_MANY = frozenset({"each", "every", "all", "across", "batch", "bulk"})

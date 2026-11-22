@@ -219,6 +219,8 @@
     "skill_search",
     "skill_update",
     "spawn_agent",
+    "stack_apply",
+    "stack_plan",
     "suggestion_answer",
     "suggestion_list",
     "tool_create",
@@ -469,6 +471,8 @@
     "skill_search": "look for a skill",
     "skill_update": "change a skill",
     "spawn_agent": "start a helper agent",
+    "stack_apply": "save the documents sorted from a scan",
+    "stack_plan": "make a plan to sort a scan",
     "suggestion_answer": "answer a suggestion on the Improvements page",
     "suggestion_list": "list the waiting suggestions",
     "tool_create": "make a new tool",
@@ -1173,6 +1177,14 @@
       "Started a helper agent",
       "Starting a helper agent"
     ],
+    "stack_apply": [
+      "Saved the documents sorted from a scan",
+      "Saving the documents sorted from a scan"
+    ],
+    "stack_plan": [
+      "Made a plan to sort a scan",
+      "Making a plan to sort a scan"
+    ],
     "suggestion_answer": [
       "Answered a suggestion",
       "Answering a suggestion"
@@ -1493,6 +1505,8 @@
     "skill_search": "",
     "skill_update": "",
     "spawn_agent": "",
+    "stack_apply": "",
+    "stack_plan": "",
     "suggestion_answer": "",
     "suggestion_list": "",
     "tool_create": "",

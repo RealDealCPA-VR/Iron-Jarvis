@@ -398,6 +398,12 @@
       "desktop": "change a workbook that is open in Excel"
     },
     {
+      "tool": "stack_apply",
+      "kind": "table",
+      "card": "save the documents sorted from a scan",
+      "desktop": "save the documents sorted from a scan"
+    },
+    {
       "tool": "generate_media",
       "kind": "table",
       "card": "make an image, video or sound",

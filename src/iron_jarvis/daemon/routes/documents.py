@@ -1215,3 +1215,8 @@ def register(app: FastAPI, d) -> None:
             "path": str(out.relative_to(base)).replace("\\", "/"),
             "bytes": out.stat().st_size,
         }
+
+    # v1.556.0 (idea 31-a): a sorting plan's card — its own module.
+    from . import stack as _stack_routes
+
+    _stack_routes.register(app, d)
