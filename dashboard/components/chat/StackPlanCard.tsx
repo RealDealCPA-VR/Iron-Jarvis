@@ -147,7 +147,24 @@ export function StackPlanCard({
       const fresh = decodeStackCard(res.card) ?? card;
       onSettle({ ...fresh, written: res.files ?? [], undone: false });
     } catch (err) {
-      setError(errorWords(err, "The documents were not written. Nothing was changed."));
+      // The wait may have run out (or the answer been lost) while the daemon
+      // wrote the documents: the card as it is now says what really happened,
+      // never "Nothing was changed" over files that are there.
+      let fresh: StackCard | null = null;
+      try {
+        const now = await get<{ card?: unknown }>(`/documents/stack/${encodeURIComponent(card.plan_id)}`);
+        fresh = decodeStackCard(now.card);
+      } catch {
+        fresh = null;
+      }
+      const refused = typeof (err as { status?: unknown })?.status === "number" && (err as { status: number }).status >= 400;
+      if (fresh?.applied) {
+        onSettle({ ...fresh, written: [], undone: false });
+      } else if (fresh && refused) {
+        setError(errorWords(err, "The documents were not written. Nothing was changed."));
+      } else {
+        setError("No answer came back, so the documents may still be being written. Open this chat again to see the plan as it is now.");
+      }
     } finally {
       setBusy(false);
     }

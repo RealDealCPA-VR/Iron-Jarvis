@@ -90,7 +90,7 @@ class StackPlanTool(Tool):
                 # Nothing this PC could read: no model is asked about pages it
                 # was never shown. Every page waits in "Not sure", and the card
                 # offers to read them.
-                docs = S.safe_plan([], pages)
+                docs = await asyncio.to_thread(S.safe_plan, [], pages)
         except S.StackError as exc:
             return ToolResult(ok=False, error=str(exc))
         except Exception as exc:  # noqa: BLE001 — a scan that breaks the reader is said, never a crash
@@ -109,7 +109,8 @@ class StackPlanTool(Tool):
         unread = [pg.number for pg in pages if pg.how == S.HOW_UNREAD]
         # Off the loop (availability probes); the Local only scope crosses with it.
         offer = await asyncio.to_thread(S.vision_choice, router, ctx.config) if unread else None
-        card = S.card_of(plan, offer=offer)
+        # Off the loop too: every page's first words are secret-masked here.
+        card = await asyncio.to_thread(lambda: S.card_of(plan, offer=offer))
         here = card["read_here"]
         lines = [
             f"Plan made for {path.name}: {len(docs)} document(s) from {len(pages)} page(s)"
@@ -231,10 +232,25 @@ class StackApplyTool(Tool):
             plan["documents"] = docs
             plan["applied"] = {"files": [f["path"] for f in written.files]}
             S.save_plan(ctx.config.home, plan)
-            S.keep_facts(ctx.engine, written, plan, thread_id=getattr(ctx, "thread_id", "") or plan.get("thread_id", ""),
-                         turn_id=_turn_of(ctx))
+            try:
+                S.keep_facts(ctx.engine, written, plan,
+                             thread_id=getattr(ctx, "thread_id", "") or plan.get("thread_id", ""),
+                             turn_id=_turn_of(ctx))
+            except Exception:  # noqa: BLE001 — the plan is kept as written; a figure never undoes it
+                pass
 
-        await asyncio.to_thread(_record)
+        try:
+            await asyncio.to_thread(_record)
+        except Exception as exc:  # noqa: BLE001 — all or nothing, after the write too
+            # The files are on disk but the plan could not be marked written
+            # (its file in Iron Jarvis's home failed): a failed step is
+            # journaled with no Undo, so the files go now, as a failed write's
+            # do, and the words say so (review 3).
+            await asyncio.to_thread(S.remove_written, written)
+            return ToolResult(ok=False, error=(
+                f"The documents were written, but the plan could not be kept ({type(exc).__name__}: {exc}), "
+                "so they were removed again. Nothing was kept, and the scan is unchanged."
+            ))
         total = int(plan.get("page_count") or 0)
         lines = [
             f"Wrote {len(written.files)} document(s) from {plan.get('source_name')} ({total} page(s); each "

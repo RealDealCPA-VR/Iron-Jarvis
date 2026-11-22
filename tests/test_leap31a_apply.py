@@ -384,3 +384,31 @@ def test_all_or_nothing_and_never_over_an_existing_file(desk, monkeypatch):
     assert mine.read_bytes() == b"my own file" and (ws / "Bank statements").is_dir()
     assert sorted(x.name for x in ws.rglob("*.pdf")) == ["2026-03 Bank statement.pdf", "scan.pdf"]
     assert BLANK_PAGE == 23
+
+
+def test_a_failure_after_the_write_removes_the_files_and_says_so(desk, monkeypatch):
+    """Review 3: the files are written, then keeping the plan as written fails
+    (its file in Iron Jarvis's home). A failed step is journaled with no Undo,
+    so the files must not stay behind with nothing to take them back: they
+    are removed, and the words say what happened."""
+    p, client, ws, scan = desk
+    card = _plan(p, ws, scan)
+    real = S.save_plan
+
+    def no_room(home, plan):
+        if plan.get("applied"):
+            raise OSError("no room left in Iron Jarvis's home")
+        return real(home, plan)
+
+    monkeypatch.setattr(S, "save_plan", no_room)
+    res = client.post(f"/documents/stack/{card['plan_id']}/apply", json={})
+    assert res.status_code == 409, res.text
+    detail = res.json()["detail"]
+    assert "removed again" in detail and "Nothing was kept" in detail
+    assert _files(ws) == ["scan.pdf"], "no file and no folder left behind with no Undo"
+    monkeypatch.setattr(S, "save_plan", real)
+    assert not S.load_plan(p.config.home, card["plan_id"]).get("applied")
+    # The same plan can still be confirmed once there is room.
+    res = client.post(f"/documents/stack/{card['plan_id']}/apply", json={})
+    assert res.status_code == 200, res.text
+    assert len(res.json()["files"]) == 8

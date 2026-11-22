@@ -71,8 +71,13 @@ OCR_CHUNK = 20
 DIGEST_PAGE_CHARS = 600
 DIGEST_TOTAL_CHARS = 48_000
 #: How much of each page's text the plan keeps (for a second plan after more
-#: pages were read, and for the figures kept with the written files).
+#: pages were read, and for the figures kept with the written files). A page
+#: is clipped to it AS IT IS READ (:func:`clip_page`), so every signal and
+#: every plan reads the same bounded text, whatever the file holds.
 KEEP_PAGE_CHARS = 6_000
+#: Of a longer page, how much of its END is kept beside its start: a
+#: statement's "Page 1 of 3" footer is at the bottom.
+KEEP_TAIL_CHARS = 1_000
 #: The planning call is bounded (it runs inside one tool call).
 PLAN_CALL_TIMEOUT_S = 180.0
 #: A kept plan is removed this many days after it was made.
@@ -118,6 +123,19 @@ class Page:
 
 
 _LEFT_BLANK_RX = re.compile(r"(?i)\bintentionally\s+(?:left\s+)?blank\b|\bthis\s+page\s+(?:is\s+)?(?:left\s+)?blank\b")
+_CLIP_GAP = "\n…\n"
+
+
+def clip_page(text: str) -> str:
+    """A page's text bounded to :data:`KEEP_PAGE_CHARS`: its start and its
+    last :data:`KEEP_TAIL_CHARS` characters. A page's size is set by the file
+    (an untrusted one can hold megabytes of text or of blank lines), so
+    nothing after the reading walks more than this."""
+    text = text or ""
+    if len(text) <= KEEP_PAGE_CHARS:
+        return text
+    head = KEEP_PAGE_CHARS - KEEP_TAIL_CHARS - len(_CLIP_GAP)
+    return text[:head] + _CLIP_GAP + text[-KEEP_TAIL_CHARS:]
 
 
 def _ink(blob: bytes) -> float:
@@ -178,7 +196,8 @@ def read_pages(path: "str | Path", config: Any = None) -> "list[Page]":
 
     p = Path(path)
     layer = _text_layer(p)
-    pages = [Page(number=i + 1, text=(t or "").strip()) for i, t in enumerate(layer)]
+    pages = [Page(number=i + 1, text=clip_page((t or "").strip())) for i, t in enumerate(layer)]
+    del layer  # the full text layer is not kept past the clip
     need = [pg.number - 1 for pg in pages if len(pg.text) < MIN_TEXT_CHARS]
     for start in range(0, len(need), OCR_CHUNK):
         chunk = tuple(need[start:start + OCR_CHUNK])
@@ -192,7 +211,7 @@ def read_pages(path: "str | Path", config: Any = None) -> "list[Page]":
             pg = pages[index]
             got = read.get(pg.number)
             if got is not None and (got.text or "").strip():
-                pg.text = "\n".join(t for t in (pg.text, got.text.strip()) if t)
+                pg.text = clip_page("\n".join(t for t in (pg.text, got.text.strip()) if t))
                 pg.how = HOW_THIS_PC
                 pg.doubtful = not got.confident
                 continue
@@ -213,7 +232,13 @@ def read_pages(path: "str | Path", config: Any = None) -> "list[Page]":
 # --------------------------------------------------------------------------- #
 # where a document starts, by code
 # --------------------------------------------------------------------------- #
-_PAGE_OF_RX = re.compile(r"(?im)\bpage\s+(\d{1,3})\s*(?:of|/)\s*(\d{1,3})\b|^\s*(\d{1,3})\s+of\s+(\d{1,3})\s*$")
+#: LINEAR on any page (review 3): a pattern that starts at a line's start
+#: takes only that line's own spaces (``[^\S\n]``, never ``\s``, which runs on
+#: across the next newlines: a run of k blank lines then cost k*k steps).
+_PAGE_OF_RX = re.compile(
+    r"(?im)\bpage\s+(\d{1,3})\s*(?:of|/)\s*(\d{1,3})\b"
+    r"|^[^\S\n]*(\d{1,3})[^\S\n]+of[^\S\n]+(\d{1,3})[^\S\n]*$"
+)
 _MONTHS = ("january february march april may june july august september october november december").split()
 _MONTH_RX = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
 _DATE_RXS = (
@@ -222,7 +247,9 @@ _DATE_RXS = (
     re.compile(r"(?i)\b(" + _MONTH_RX + r")\.?\s+(\d{1,2}),?\s+(20\d{2}|19\d{2})\b"),
     re.compile(r"(?i)\b(\d{1,2})\s+(" + _MONTH_RX + r")\.?,?\s+(20\d{2}|19\d{2})\b"),
 )
-_FROM_RX = re.compile(r"(?im)^\s*from:\s*(.{2,80})$")
+#: "From:" at a line's start (its own spaces only, as above); the sender may
+#: stand on the next line.
+_FROM_RX = re.compile(r"(?im)^[^\S\n]*from:\s*(.{2,80})$")
 
 
 def _month(word: str) -> int:
@@ -818,10 +845,20 @@ async def plan_pages_async(
     pages: "list[Page]", *, source_name: str, router: Any, config: Any,
 ) -> "list[dict[str, Any]]":
     """The plan's documents for ``pages``: the code's signals, ONE model call
-    over the digest, then the safety step."""
-    signals = boundary_signals(pages)
-    text = digest(pages, signals)
+    over the digest, then the safety step. Only the model call is awaited on
+    the event loop: the code steps walk up to :data:`MAX_PAGES` pages of the
+    file's own text (and the model's answer), so they run in a worker thread
+    (the Local only scope crosses with them)."""
+    text = await asyncio.to_thread(_digest_of, pages)
     answer = await _ask_model(router, config, plan_prompt(source_name, len(pages), text))
+    return await asyncio.to_thread(_plan_from, answer, pages)
+
+
+def _digest_of(pages: "list[Page]") -> str:
+    return digest(pages, boundary_signals(pages))
+
+
+def _plan_from(answer: str, pages: "list[Page]") -> "list[dict[str, Any]]":
     return safe_plan(parse_plan(answer), pages)
 
 
@@ -976,7 +1013,7 @@ async def read_more(
             out.sent += 1
             text = (transcript_pages("\n\n".join(texts)).get(number) or "").strip()
             if number in unread and text:
-                raw[str(number)] = {"how": HOW_VISION, "text": text[:KEEP_PAGE_CHARS], "doubtful": False}
+                raw[str(number)] = {"how": HOW_VISION, "text": clip_page(text), "doubtful": False}
                 out.read += 1
                 plan["read_by"] = name[:80]
                 # Kept as soon as it is read: a page the user paid for is
@@ -1184,9 +1221,10 @@ def keep_facts(engine: Any, written: Written, plan: "dict[str, Any]", *, thread_
 
 __all__ = [
     "BLANK_INK", "DIGEST_PAGE_CHARS", "DIGEST_TOTAL_CHARS", "HOW_BLANK", "HOW_TEXT", "HOW_THIS_PC",
-    "HOW_UNREAD", "HOW_VISION", "MAX_PAGES", "NOT_SURE", "PLAN_DAYS", "Page", "READ_MORE_CHUNK",
+    "HOW_UNREAD", "HOW_VISION", "KEEP_PAGE_CHARS", "KEEP_TAIL_CHARS", "MAX_PAGES", "NOT_SURE",
+    "PLAN_DAYS", "Page", "READ_MORE_CHUNK",
     "READ_MORE_DEADLINE_S", "READ_MORE_MAX", "ReadMore", "StackError", "Written",
-    "boundary_signals", "card_of", "check_every_page", "clean_folder", "clean_name", "digest",
+    "boundary_signals", "card_of", "check_every_page", "clean_folder", "clean_name", "clip_page", "digest",
     "edited_documents", "first_date", "keep_facts", "load_plan", "name_for", "new_plan", "outline_words",
     "pages_of", "parse_plan", "plan_pages_async", "plan_prompt", "read_more", "read_pages",
     "remove_written", "safe_plan", "save_plan", "span_words", "undo_words", "valid_plan_id",

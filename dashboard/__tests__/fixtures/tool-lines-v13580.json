@@ -778,7 +778,7 @@
     },
     "stack_apply": {
       "ok": "saved the documents sorted from a scan",
-      "failed": "tried a sorted documents and it failed"
+      "failed": "tried a save of sorted documents and it failed"
     },
     "stack_plan": {
       "ok": "made a plan to sort a scan",

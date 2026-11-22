@@ -781,3 +781,104 @@ def test_local_only_of_the_turn_rides_the_plan_to_every_press(platform, tmp_path
     assert len(seen["offer"]) >= 3 and all(seen["offer"]), seen
     assert seen["sent"] == [True]
     assert seen["plan"] == [True, True], "the second planning call stays Local only"
+
+
+# --------------------------------------------------------------------------- #
+# review 3: a page's own text never stalls the daemon
+# --------------------------------------------------------------------------- #
+def test_blank_lines_in_a_page_cost_no_more_than_their_length():
+    r"""Two patterns started ``^\s*`` at every line start, and ``\s`` runs on
+    across newlines: a page of k blank lines cost k*k steps (seconds for one
+    page, on the event loop). Each now takes only its own line's spaces."""
+    import time
+
+    pages = [
+        S.Page(number=1, text="Acme Bank" + "\n" * 30_000 + "statement"),
+        S.Page(number=2, text="Beacon Power" + "\n \t" * 10_000 + "From: Beacon Power"),
+        S.Page(number=3, text="Coastal Water" + "\r\n" * 15_000 + "  1 of 3  "),
+    ]
+    t0 = time.perf_counter()
+    sig = S.boundary_signals(pages)
+    took = time.perf_counter() - t0
+    # The old patterns take seconds on these pages; a loaded runner's
+    # milliseconds are far below this bar.
+    assert took < 1.0, f"{took:.2f}s"
+    # What the patterns are for still holds, on their own lines.
+    assert sig[2]["page_of"] == [1, 3]
+    assert S._sender("Bill\n   From:  Beacon Power\n") == "beacon power"
+    assert S._sender("From:\n  Coastal Water District") == "coastal water district", "the sender may stand on the next line"
+
+
+def test_a_page_is_bounded_as_it_is_read_and_keeps_its_footer(tmp_path, monkeypatch):
+    """A page's size is set by the file: it is clipped to KEEP_PAGE_CHARS as
+    it is read (its start and its end, where "Page 1 of 2" stands), so the
+    first plan and one made again after a press read the same text."""
+    big = "First Harbor Bank statement\n" + ("12.50 deposit\n" * 20_000) + "Page 1 of 2"
+    monkeypatch.setattr(S, "_text_layer", lambda p: [big, "First Harbor Bank statement\nPage 2 of 2"])
+    pages = S.read_pages(tmp_path / "scan.pdf")
+    assert len(pages[0].text) <= S.KEEP_PAGE_CHARS
+    assert pages[0].text.startswith("First Harbor Bank") and pages[0].text.endswith("Page 1 of 2")
+    sig = S.boundary_signals(pages)
+    assert sig[0]["page_of"] == [1, 2] and sig[1]["page_of"] == [2, 2]
+    kept = S.pages_of(S.new_plan(source=tmp_path / "scan.pdf", sha256="x", pages=pages, documents=[],
+                                 workspace=tmp_path))
+    assert kept[0].text == pages[0].text, "the kept text is the text the first plan read"
+
+
+def test_the_plans_code_steps_run_off_the_event_loop(monkeypatch):
+    """Only the model call is awaited on the loop: the signals, the digest,
+    the parse and the safety step run in a worker thread."""
+    import threading
+
+    ran: dict[str, list[int]] = {}
+    for name in ("boundary_signals", "digest", "parse_plan", "safe_plan"):
+        real = getattr(S, name)
+
+        def spy(*a, _real=real, _name=name, **kw):
+            ran.setdefault(_name, []).append(threading.get_ident())
+            return _real(*a, **kw)
+
+        monkeypatch.setattr(S, name, spy)
+    pages = [S.Page(number=1, text="Acme Bank statement\nPage 1 of 2"),
+             S.Page(number=2, text="Acme Bank statement\nPage 2 of 2")]
+    planner = Planner({"documents": [{"pages": [1, 2], "title": "Bank statement", "folder": "Bank"}]})
+    loop_thread: list[int] = []
+
+    async def run():
+        loop_thread.append(threading.get_ident())
+        return await S.plan_pages_async(pages, source_name="scan.pdf", router=planner, config=None)
+
+    docs = asyncio.run(run())
+    assert [d["pages"] for d in docs] == [[1, 2]] and len(planner.calls) == 1
+    assert set(ran) == {"boundary_signals", "digest", "parse_plan", "safe_plan"}
+    on_loop = sorted(n for n, idents in ran.items() if loop_thread[0] in idents)
+    assert on_loop == [], f"ran on the event loop: {on_loop}"
+
+
+@pytest.mark.parametrize("query", [
+    "break up this scanned stack",
+    "which documents are in this scan",
+    "pull apart the statements in this PDF",
+])
+def test_a_lookup_for_sorting_a_scan_brings_the_plan_into_the_reply(tmp_path, query):
+    """Review 3: words ``wants_stack`` does not catch still reach the plan:
+    the model looks the request up and ``stack_plan`` (a reader on this PC)
+    joins and runs. ``stack_apply`` never joins: the card's Confirm writes."""
+    from iron_jarvis.capability_search import join as J
+    from iron_jarvis.daemon.app import create_app
+    from tests.test_capability_join_v1479 import _join
+
+    assert wants_stack(query, True) is False, "a phrasing the matcher misses"
+    app = create_app(str(tmp_path / "home"))
+    app.state.platform.config.capability_search = True
+    J.FOUND.clear()
+    try:
+        assert "stack_plan" in J.joinable() and "stack_apply" not in J.joinable()
+        joined, state, _data = _join(app, query)
+        assert "stack_plan" in joined, (joined, state["msgs"][-1].content)
+        assert "stack_plan" in state["armed"] and "stack_plan" in state["armed_grant"]
+        assert state["overrides"]["stack_plan"] == "allow" and "stack_plan" not in state["ask_armed"]
+        assert "stack_apply" not in joined and "stack_apply" not in state["ask_armed"]
+        assert "stack_apply" not in state["armed"]
+    finally:
+        J.FOUND.clear()

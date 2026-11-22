@@ -286,6 +286,38 @@ describe("the card", () => {
     expect(screen.queryByDisplayValue("Not sure (page 8).pdf")).toBeNull();
   });
 
+  it("a Confirm whose answer never came reads the card before it says what happened (review 3)", async () => {
+    const lost = Object.assign(new Error("Iron Jarvis is not responding."), { status: 0 });
+    // The daemon wrote the documents; only the answer was lost.
+    H.post.mockRejectedValueOnce(lost);
+    H.get.mockResolvedValueOnce({ card: { ...raw(), applied: true } });
+    const settled: StackCard[] = [];
+    render(<StackPlanCard card={card()} onSettle={(n) => settled.push(n)} />);
+    fireEvent.click(screen.getByTestId("stack-confirm"));
+    await waitFor(() => expect(settled).toHaveLength(1));
+    expect(H.get.mock.calls[0][0]).toBe(`/documents/stack/${PLAN}`);
+    expect(settled[0].applied).toBe(true);
+    expect(screen.queryByText(/Nothing was changed/)).toBeNull();
+    cleanup();
+    render(<StackPlanCard card={settled[0]} onSettle={() => {}} />);
+    expect(screen.getByTestId("stack-card-written").textContent).toContain("Wrote the documents from scan.pdf");
+    cleanup();
+    // Not written yet, and no answer: it may still be writing, never "nothing changed".
+    H.post.mockRejectedValueOnce(lost);
+    H.get.mockResolvedValueOnce({ card: raw() });
+    render(<StackPlanCard card={card()} onSettle={() => {}} />);
+    fireEvent.click(screen.getByTestId("stack-confirm"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("may still be being written"));
+    expect(screen.queryByText(/Nothing was changed/)).toBeNull();
+    cleanup();
+    // A refusal in words is said as it came.
+    H.post.mockRejectedValueOnce(Object.assign(new Error("The scan changed since the plan was made."), { status: 409 }));
+    H.get.mockResolvedValueOnce({ card: raw() });
+    render(<StackPlanCard card={card()} onSettle={() => {}} />);
+    fireEvent.click(screen.getByTestId("stack-confirm"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("The scan changed since the plan was made."));
+  });
+
   it("Confirm refuses a plan that lost a page and posts nothing", async () => {
     const lost = card({ documents: [{ pages: [1, 2, 3], name: "A.pdf", folder: "", blank: [], unsure: false }] });
     render(<StackPlanCard card={lost} onSettle={() => {}} />);

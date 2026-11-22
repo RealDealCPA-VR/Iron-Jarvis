@@ -2074,11 +2074,13 @@ on a card under its reply, headed **Sort scan.pdf**:
 - Two documents given the same name in the same folder become "name.pdf"
   and "name (2).pdf"; a file already there is never written over.
 
-**Your pages stay on this PC.** Iron Jarvis reads each page itself: the text
-in the PDF, or, for a scanned page, Windows' own text recognition on this PC.
-Only the first words of each page go to the model that makes the plan (your
-default model, or the one you picked for reading documents), in one request,
-and the page text is treated as data, never as instructions. In a Local only
+**Your page pictures stay on this PC.** Iron Jarvis reads each page itself:
+the text in the PDF, or, for a scanned page, Windows' own text recognition on
+this PC. To make the plan, only the first words of each page go to the model
+that makes it (your default model, or the one you picked for reading
+documents), in one request, and the page text is treated as data, never as
+instructions. The text read on this PC also goes to your chat's model for its
+reply, as with any file you attach. In a Local only
 chat that model must be on this PC or your network, and so must every model
 the card's buttons use, even when you press them later. A page this PC could
 not read is never sent anywhere by itself: the card says how many there are
