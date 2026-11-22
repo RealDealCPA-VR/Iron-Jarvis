@@ -170,7 +170,7 @@ import { ReplyChanges } from "@/components/chat/ReplyChanges";
 import { turnWindow } from "@/lib/turnChanges";
 import { FollowupChips } from "@/components/chat/FollowupChips";
 import { DockAsk } from "@/components/chat/DockAsk";
-import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
+import { collectDockAsks, dockAskKeyHint, escAnswersCard } from "@/lib/dockAsk";
 import { askWhyOf } from "@/lib/askWhy";
 import { PackPromptForm } from "@/components/chat/PackPromptForm";
 import {
@@ -16243,12 +16243,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     )}
                     {/* 36-a: in Quick Ask's answer window Esc hides the
                         window: it never stops the reply (so no composer
-                        line) and never answers a card (so the card's line
-                        names Enter only). */}
+                        line) and never answers a card but the Local only
+                        question (lib/dockAsk.escAnswersCard; the others'
+                        line names Enter only). */}
                     {(!compact || askInDock) && (
                     <span data-testid="composer-key-hint" className="hidden sm:inline">
                       {askInDock
-                        ? dockAskKeyHint(dockAsks[0].kind, dockAsks[0], { escAnswers: !compact })
+                        ? dockAskKeyHint(dockAsks[0].kind, dockAsks[0], {
+                            escAnswers: escAnswersCard(dockAsks[0], compact),
+                          })
                         : composerKeyHint(busy, !commMeta, atFilesRoot !== null)}
                     </span>
                     )}

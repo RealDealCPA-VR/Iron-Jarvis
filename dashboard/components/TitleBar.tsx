@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { Menu, PanelLeftOpen, Search, AppWindow } from "lucide-react";
 import { labelForPath } from "@/lib/nav";
 import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
+import { QUICK_ASK_WINDOW_TITLE, isAnswerWindow } from "@/lib/quickAnswer";
 import { toggleSidebarFromButton, useSidebarHidden } from "@/lib/sidebarState";
 
 /** The desktop bridge surface this component uses (preload.js exposes it). */
@@ -104,7 +105,9 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
   // prefixes its count onto whatever base title this leaves behind.
   useEffect(() => {
     if (!isPopout) return;
-    const title = `${pageLabel ?? "Iron Jarvis"} — Iron Jarvis`;
+    // 36-a review: Quick Ask's answer window shows the chat page but is Quick
+    // Ask (desktop/main.js titles it so), never "Chat" in Alt+Tab.
+    const title = isAnswerWindow() ? QUICK_ASK_WINDOW_TITLE : `${pageLabel ?? "Iron Jarvis"} — Iron Jarvis`;
     document.documentElement.dataset.ijTitle = title;
     document.title = title;
   }, [isPopout, pageLabel]);

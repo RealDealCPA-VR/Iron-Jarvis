@@ -18,6 +18,8 @@
  *    while a menu or dialog is open, which Esc closes first;
  *  - (review) Esc never answers a question card there: the window hides, the
  *    card stays, its buttons answer it, and its keys line names Enter only;
+ *  - (second review) except the Local only question, which nothing has sent
+ *    or saved yet: Esc is still "Keep it local" there and the window stays;
  *  - (review) the Code view, a coding session and Last night open in the
  *    MAIN window: this one never shows Code;
  *  - a link to another page opens in the main window; a chat link stays;
@@ -65,6 +67,19 @@ const H = vi.hoisted(() => {
       getResponses: {} as Record<string, unknown>,
     },
     stream,
+    // The app's default model (/health); null = the page's own fallback.
+    health: null as null | Record<string, unknown>,
+  };
+});
+
+vi.mock("@/lib/daemon", async (orig) => {
+  const actual = await orig<typeof import("@/lib/daemon")>();
+  return {
+    ...actual,
+    useDaemon: () => {
+      const d = actual.useDaemon();
+      return H.health ? { ...d, health: H.health as unknown as typeof d.health } : d;
+    },
   };
 });
 
@@ -149,8 +164,9 @@ import ChatPage from "@/app/chat/page";
 import { ChatCodeSurface } from "@/components/chat/ChatCodeSurface";
 import { CHAT_VIEW_EVENT, keepView, rememberedView, resetViewMemory } from "@/lib/chatSurface";
 import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT } from "@/lib/buildLinks";
-import { dockAskKeyHint } from "@/lib/dockAsk";
-import { QUICK_COMPACT_PARAM, isCompactChat, mainWindowPath } from "@/lib/quickAnswer";
+import { dockAskKeyHint, escAnswersCard, type DockAskItem } from "@/lib/dockAsk";
+import { LOCAL_ONLY_KEY } from "@/lib/localOnly";
+import { QUICK_ASK_WINDOW_TITLE, QUICK_COMPACT_PARAM, isCompactChat, mainWindowPath } from "@/lib/quickAnswer";
 import { headingSlug, sectionMatches } from "@/lib/helpLinks";
 import { hotkeyLines } from "@/components/help/GlobalHotkeys";
 
@@ -179,6 +195,7 @@ beforeEach(() => {
   H.stream.aborts = 0;
   H.stream.approval = null;
   H.stream.mcpAsks = [];
+  H.health = null;
   H.api.getResponses = {
     "/models": { models: [] },
     "/chat/personas": { personas: [] },
@@ -473,6 +490,61 @@ describe("a question card in the answer window (36-a review)", () => {
     expect(screen.getByTestId("composer-key-hint").textContent).toBe("Enter to send");
   });
 
+  // Second review: the Local only question is the exception. It is the page's
+  // own, asked BEFORE anything is sent or saved, so neither the chat list nor
+  // the bell has it: hiding the window over it lost the words. Esc keeps its
+  // meaning there ("Keep it local": nothing sent, nothing recorded, the words
+  // back in the box) and the window stays in that press.
+  const LOCAL_ROW = { provider: "ollama", model: "qwen3:14b", kind: "local", available: true };
+  const CLOUD_ROW = { provider: "claude-cli", model: "claude-opus-4-8", label: "Opus 4.8", kind: "cli", available: true };
+  const threadSaves = () => H.api.puts.filter((p) => /^\/chat\/threads\//.test(p.path));
+
+  /** Local only was the user's last choice and the default model would leave
+   *  this PC: the quick words meet the Local only question first. */
+  async function quickWordsMeetLocalOnly(): Promise<HTMLElement> {
+    window.localStorage.setItem(LOCAL_ONLY_KEY, "1");
+    H.api.getResponses["/models"] = { models: [LOCAL_ROW, CLOUD_ROW] };
+    H.health = { status: "ok", version: "0.0.0", default_provider: "claude-cli", default_model: "claude-opus-4-8", providers: [] };
+    window.history.replaceState({}, "", COMPACT_URL);
+    render(<ChatPage />);
+    await screen.findByTestId("cloud-ask-card");
+    expect(take).toHaveBeenCalledTimes(1);
+    // Nothing has been sent or saved while it is up.
+    expect(H.stream.bodies).toHaveLength(0);
+    expect(threadSaves()).toEqual([]);
+    pastTheArmDelay();
+    return screen.getByTestId("dock-ask");
+  }
+
+  it("the Local only question: Esc on the card keeps it local, the words come back, the window stays", async () => {
+    const dock = await quickWordsMeetLocalOnly();
+    // Its keys line still names Esc, because Esc still answers it.
+    expect(screen.getByTestId("composer-key-hint").textContent).toBe("Enter to send once · Esc to keep it local");
+    dock.focus();
+    expect(document.activeElement).toBe(dock);
+    fireEvent.keyDown(dock, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("cloud-ask-card")).toBeNull());
+    expect(hide).not.toHaveBeenCalled();
+    expect(box().value).toBe("plain English?");
+    expect(H.stream.bodies).toHaveLength(0);
+    expect(threadSaves()).toEqual([]);
+    // With the question answered, Esc puts the window away as always.
+    box().focus();
+    fireEvent.keyDown(box(), { key: "Escape" });
+    expect(hide).toHaveBeenCalledTimes(1);
+  });
+
+  it("the Local only question: Esc with nothing focused keeps it local too, and the window stays", async () => {
+    await quickWordsMeetLocalOnly();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("cloud-ask-card")).toBeNull());
+    expect(hide).not.toHaveBeenCalled();
+    expect(box().value).toBe("plain English?");
+    expect(H.stream.bodies).toHaveLength(0);
+  });
+
   it("the full chat page keeps Esc for the card: it declines there", async () => {
     W.ironjarvis!.quickAsk!.isAnswerWindow = false;
     W.ironjarvis!.popout = undefined;
@@ -602,6 +674,22 @@ describe("lib/quickAnswer (pure)", () => {
     expect(dockAskKeyHint("approval")).toBe("Enter to allow · Esc to decline");
     expect(dockAskKeyHint("question")).toBe("Enter to send · Esc to skip");
     expect(dockAskKeyHint("cloud")).toBe("Enter to send once · Esc to keep it local");
+  });
+
+  it("escAnswersCard: in the answer window Esc answers the Local only question alone", () => {
+    const cloud = { kind: "cloud", id: "c1", ask: { provider: "claude-cli", model: "m", name: "Opus 4.8" } } as DockAskItem;
+    const approval = { kind: "approval", id: "a1", approval: SHELL_ASK } as unknown as DockAskItem;
+    expect(escAnswersCard(cloud, true)).toBe(true);
+    expect(escAnswersCard(approval, true)).toBe(false);
+    expect(escAnswersCard(null, true)).toBe(false);
+    // Everywhere else Esc answers every card, as before.
+    expect(escAnswersCard(cloud, false)).toBe(true);
+    expect(escAnswersCard(approval, false)).toBe(true);
+  });
+
+  it("the answer window's title is the desktop's own: Quick Ask, not Chat", () => {
+    const main = readFileSync(join(__dirname, "..", "..", "desktop", "main.js"), "utf-8").replace(/\r\n/g, "\n");
+    expect(main).toContain(`title: ${JSON.stringify(QUICK_ASK_WINDOW_TITLE)},`);
   });
 
   it("a ?compact=1 typed into the main window draws the full chat page", async () => {

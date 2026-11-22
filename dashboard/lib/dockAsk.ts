@@ -118,12 +118,24 @@ export const CLICK_TO_ALLOW_HINT = "Click Allow once to run it · Esc to decline
  *  and a user who has not met the dock reads that as the box gone. */
 export const BOX_COMES_BACK_NOTE = "The message box comes back when you answer.";
 
+/** 36-a review: does Esc answer this question? Everywhere but Quick Ask's
+ *  answer window (`compact`), yes. There Esc hides the window and an
+ *  approval or an app's question waits in the chat for one of its buttons,
+ *  with ONE exception: the Local only question (`cloud`). It is the page's
+ *  own, asked before anything is sent or saved, so neither the chat list nor
+ *  the bell has it, and hiding the window over it lost the words (second
+ *  review). Its "Keep it local" sends and records nothing and puts the words
+ *  back in the box, so Esc keeps that meaning there. */
+export function escAnswersCard(item: DockAskItem | null | undefined, compact: boolean): boolean {
+  return !compact || item?.kind === "cloud";
+}
+
 /** The keys line under the card while a question is in the composer's place.
  *  `item` (v1.381.0 review): the question itself, so a card Enter does not
  *  allow says so instead of promising "Enter to allow".
- *  `escAnswers` (36-a review): false in Quick Ask's answer window, where Esc
- *  hides the window and never answers a card, so the line names Enter only
- *  ("" when Enter does nothing there either). */
+ *  `escAnswers` (36-a review): `escAnswersCard`; false in Quick Ask's answer
+ *  window for every card but the Local only question, so the line names
+ *  Enter only ("" when Enter does nothing there either). */
 export function dockAskKeyHint(
   kind: DockAskItem["kind"],
   item?: DockAskItem | null,

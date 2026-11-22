@@ -127,6 +127,15 @@ describe("the title bar door and badge", () => {
     expect(document.documentElement.dataset.ijTitle).toBe("Chat — Iron Jarvis");
   });
 
+  it("Quick Ask's answer window is titled Quick Ask, not by the chat page it shows (36-a review)", async () => {
+    installBridge({ isPopout: true, path: "/chat" });
+    (window as unknown as { ironjarvis: Record<string, unknown> }).ironjarvis.quickAsk = { isAnswerWindow: true };
+    render(<TitleBar />);
+    await screen.findByTestId("popout-badge");
+    expect(document.title).toBe("Quick Ask — Iron Jarvis");
+    expect(document.documentElement.dataset.ijTitle).toBe("Quick Ask — Iron Jarvis");
+  });
+
   it("a nested route titles the window by its parent module", async () => {
     installBridge({ isPopout: true, path: "/sessions/abc" });
     routerState.pathname = "/sessions/abc";

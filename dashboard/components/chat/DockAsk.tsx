@@ -44,6 +44,11 @@
 // CompactChatContext) Esc HIDES THE WINDOW and never answers a card: the key
 // the user presses to put the window away must not record a "no" they never
 // gave. The card stays, its buttons answer it, and Enter keeps its meaning.
+// Except the Local only question (lib/dockAsk.escAnswersCard, second review):
+// nothing is sent or saved while it is up, so hiding the window over it lost
+// the words. There Esc is still "Keep it local" and the window stays in that
+// press: the card marks itself `data-esc-answers`, which
+// lib/quickAnswer.escapeHidesWindow treats as something in front.
 
 import { useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { House } from "lucide-react";
@@ -58,6 +63,7 @@ import {
   ENTER_BLOCKED_MS,
   ENTER_BLOCKED_NOTE,
   enterAllows,
+  escAnswersCard,
   withHeadFirst,
   type DockAskItem,
 } from "@/lib/dockAsk";
@@ -208,9 +214,11 @@ export function DockAsk({
   // v1.381.0 review: read by `press` (a callback the key listeners keep).
   const enterAllowsRef = useRef(true);
   enterAllowsRef.current = enterAllows(head);
-  // 36-a review: Quick Ask's answer window keeps Esc for hiding itself.
+  // 36-a review: Quick Ask's answer window keeps Esc for hiding itself, except
+  // on the Local only question (lib/dockAsk.escAnswersCard).
   const escDeclinesRef = useRef(true);
-  escDeclinesRef.current = !useContext(CompactChatContext);
+  const escAnswers = escAnswersCard(head, useContext(CompactChatContext));
+  escDeclinesRef.current = escAnswers;
   // v1.417.0 (C1.7): the question an Enter was just refused on (the note
   // under the card); a new question, or the timer, clears it.
   const [enterBlockedOn, setEnterBlockedOn] = useState<string | null>(null);
@@ -257,8 +265,9 @@ export function DockAsk({
   const press = useCallback(
     (which: "primary" | "decline"): boolean => {
       if (Date.now() - shownAtRef.current < armDelayMs) return false;
-      // 36-a review: in the answer window Esc is the window's, never a "no".
-      // False = nothing happened, so the key goes on to hide the window.
+      // 36-a review: in the answer window Esc is the window's, never a "no"
+      // (the Local only question aside: escAnswersCard). False = nothing
+      // happened, so the key goes on to hide the window.
       if (which === "decline" && !escDeclinesRef.current) return false;
       // v1.381.0 review: a once-only safety card is allowed by a click only.
       // v1.417.0 (C1.7): and the key says so, briefly, instead of nothing.
@@ -365,6 +374,7 @@ export function DockAsk({
       ref={wrapRef}
       data-testid="dock-ask"
       data-kind={head.kind}
+      data-esc-answers={escAnswers ? "" : undefined}
       role="region"
       aria-label={total > 1 ? `A question for you, 1 of ${total}` : "A question for you"}
       tabIndex={-1}

@@ -62,6 +62,16 @@ export function isCompactChat(search: string): boolean {
   }
 }
 
+/** The answer window's own title (desktop/main.js gives it the same one):
+ *  the taskbar and Alt+Tab name it Quick Ask, not the chat page it shows. */
+export const QUICK_ASK_WINDOW_TITLE = "Quick Ask — Iron Jarvis";
+
+/** Is THIS window Quick Ask's answer window? The desktop's word only; false
+ *  in a browser and in every other window. */
+export function isAnswerWindow(): boolean {
+  return bridge()?.isAnswerWindow === true;
+}
+
 /** Can this window hand a chat or a page to the main window? */
 export function canReachMainWindow(): boolean {
   return typeof bridge()?.toMain === "function";
@@ -122,11 +132,14 @@ export function mainWindowPath(href: string, here: { origin: string; pathname: s
  *  handler already took (a menu's own Escape calls preventDefault), a word
  *  being composed, or an open dialog or menu, which Esc closes first. A
  *  question card in the composer's place is NOT in front: Esc hides the
- *  window and never answers it (components/chat/DockAsk, 36-a review). */
+ *  window and never answers it (components/chat/DockAsk, 36-a review), unless
+ *  Esc answers that card (`data-esc-answers`, lib/dockAsk.escAnswersCard: the
+ *  Local only question, whose words nothing has saved yet), which is then in
+ *  front like a dialog. */
 export function escapeHidesWindow(e: KeyboardEvent, doc: Document): boolean {
   if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return false;
   try {
-    if (doc.querySelector('[aria-modal="true"], [role="menu"], [role="listbox"]')) return false;
+    if (doc.querySelector('[aria-modal="true"], [role="menu"], [role="listbox"], [data-esc-answers]')) return false;
   } catch {
     /* an unreadable page: leave the key alone */
     return false;

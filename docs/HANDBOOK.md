@@ -2410,10 +2410,14 @@ nothing differently: the same key, the same box, the same Enter.
 - **Esc** or the window's close button hides it. A reply still being written
   carries on, and the chat is saved. While a menu is open in the window, Esc
   closes the menu first.
-- Esc never answers a question in the window (an approval, say): the window
-  hides and the question waits in the chat, listed by the bell in your main
-  window, until you press one of its buttons. Enter still gives its main
-  answer there.
+- Esc never answers an approval or an app's question in the window: the
+  window hides and the question waits in the chat, listed by the bell in
+  your main window, until you press one of its buttons. Enter still gives
+  its main answer there.
+- The one exception is the question a Local only chat asks before a message
+  would leave this PC. Nothing has been sent or saved yet, so Esc answers it
+  with **Keep it local**, as it does everywhere: nothing is sent, your words
+  go back into the box, and the window stays until you press Esc again.
 - Press the key again while the window is open and the cursor goes back into
   its box, so a follow-up question is one press away. Once it is hidden, the
   key opens the box for a new question.
