@@ -615,6 +615,14 @@ def _is_rehearsal(session: Session) -> bool:
     return bool(rehearsal_of(session))
 
 
+def _renew_rehearsal(engine: Any, options: dict) -> str:
+    """Leap 06-a: Run again or a follow-up of a REHEARSAL's run gets a NEW
+    rehearsal id in ``options`` (``tools/rehearsal_runs.renew_in``). BLOCKING."""
+    from ..tools.rehearsal_runs import renew_in
+
+    return renew_in(engine, options)
+
+
 def _stored_options(session: Session) -> dict:
     """The run options a session was created with (v1.299.0), as a dict —
     ``{}`` for a legacy row or junk in the column. Shared by ``rerun_session``
@@ -2903,6 +2911,9 @@ class Orchestrator:
         _src = options.get(_chat_delivery.REPORT_OPTION)
         if isinstance(_src, dict) and _src.get("by") == _chat_delivery.REPORT_BY_SOURCE:
             options.pop(_chat_delivery.REPORT_OPTION, None)
+        # Leap 06-a: Run again on a REHEARSAL's run is a new rehearsal with
+        # its own report; the old report (read, maybe kept) never changes.
+        await asyncio.to_thread(_renew_rehearsal, self.p.engine, options)
         return await self.create_session(
             prev.task,
             prev.agent_type,
@@ -3010,6 +3021,13 @@ class Orchestrator:
             f"The earlier workspace files are available in your workspace.]"
         )
         options = _stored_options(prev)
+        # Leap 06-a: a follow-up of a REHEARSAL's run is a new rehearsal with
+        # its own report (the old one never changes), and the model is told
+        # the earlier run changed nothing (its closing words say it did).
+        if await asyncio.to_thread(_renew_rehearsal, self.p.engine, options):
+            recap = recap.replace(
+                "Prior result:", "Prior result (a rehearsal: nothing was changed):", 1
+            )
         # v1.337.0: a resume carries the conversation of the run it resumes;
         # any other continuation never does (an inherited one is dropped).
         options.pop("resume_run", None)

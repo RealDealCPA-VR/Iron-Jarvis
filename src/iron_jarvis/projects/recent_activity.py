@@ -63,8 +63,30 @@ KIND_CHAT = "chat"
 KIND_CODING = "coding session"
 
 
+#: Leap 06-a: a REHEARSAL's run line says so instead of its closing words.
+REHEARSED_LINE = "(a rehearsal: nothing was changed)"
+
+
+def _is_rehearsal_run(s: Any) -> bool:
+    """Is ``s`` a REHEARSAL's run (its OWN options carry the rehearsal)?
+    Never raises."""
+    try:
+        from ..tools.rehearsal import rehearsal_of  # local import: avoids cycles
+
+        return bool(rehearsal_of(s))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run_line(s: Any) -> str:
-    """One run's line — THE format both callers used (v1.141.0 parity)."""
+    """One run's line — THE format both callers used (v1.141.0 parity).
+
+    Leap 06-a: a REHEARSAL's run changed nothing, and its closing words were
+    told to "carry on as if it worked" ("Renamed the files."): its line says
+    it was a rehearsal and never repeats them, so no chat or run in the
+    project takes it as past work."""
+    if _is_rehearsal_run(s):
+        return f"- [rehearsed] {str(s.task)[:80]}: {REHEARSED_LINE}"
     status = getattr(getattr(s, "status", None), "value", getattr(s, "status", ""))
     return f"- [{status}] {str(s.task)[:80]}: {(s.summary or '(no summary)')[:160]}"
 

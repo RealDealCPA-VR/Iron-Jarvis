@@ -394,6 +394,21 @@ function editBody(
   return body;
 }
 
+/** Leap 06-a: the most rehearsal reports shown above the list at once. */
+const REHEARSALS_SHOWN = 3;
+
+/** `first` then `rest`, one report per schedule (the first one met wins),
+ *  at most REHEARSALS_SHOWN. */
+function withRehearsals(first: RehearsalView[], rest: RehearsalView[]): RehearsalView[] {
+  const out: RehearsalView[] = [];
+  for (const v of [...first, ...rest]) {
+    if (out.some((o) => o.id === v.id || (o.subject.name && o.subject.name === v.subject.name))) continue;
+    out.push(v);
+    if (out.length >= REHEARSALS_SHOWN) break;
+  }
+  return out;
+}
+
 export default function SchedulesPage() {
   // v1.316.0 (form-labels-not-associated): one useId per form, so each
   // <label htmlFor> names exactly ONE control even when two copies of a
@@ -467,8 +482,25 @@ export default function SchedulesPage() {
   // the job, or did not run at all, is neither "Ran ✓" nor an error.
   const [warn, setWarn] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
-  // Leap 06-a: the rehearsal on screen (one at a time, above the list).
-  const [rehearsal, setRehearsal] = useState<RehearsalView | null>(null);
+  // Leap 06-a: the rehearsals on screen, above the list (newest first, one
+  // per schedule, at most REHEARSALS_SHOWN). A report still running, or
+  // finished and not kept, comes back after a reload (GET /rehearsals).
+  const [rehearsals, setRehearsals] = useState<RehearsalView[]>([]);
+  useEffect(() => {
+    let alive = true;
+    get<{ rehearsals?: unknown[] }>("/rehearsals?kind=schedule")
+      .then((r) => {
+        if (!alive) return;
+        const back = (r.rehearsals ?? [])
+          .map(decodeRehearsal)
+          .filter((v): v is RehearsalView => !!v);
+        setRehearsals((cur) => withRehearsals(cur, back));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
   // v1.446.0 (review item 23): while Emergency stop is on nothing here runs.
   const emergencyStop = useEmergencyStop().on;
 
@@ -661,7 +693,8 @@ export default function SchedulesPage() {
     setFormError(null);
     try {
       const view = decodeRehearsal(await post<unknown>("/rehearsals", { kind: "schedule", id: schedName }));
-      if (view) setRehearsal(view);
+      // The new one goes first; another schedule's report stays on screen.
+      if (view) setRehearsals((cur) => withRehearsals([view], cur));
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -1066,16 +1099,18 @@ export default function SchedulesPage() {
                   <WarnNote>{EMERGENCY_STOP_SCHEDULES_WORDS}</WarnNote>
                 </div>
               )}
-              {rehearsal && (
-                <div className="mb-3" data-testid="schedules-rehearsal">
-                  <RehearsalReport
-                    key={rehearsal.id}
-                    id={rehearsal.id}
-                    initial={rehearsal}
-                    onClose={() => setRehearsal(null)}
-                    onKept={() => reload()}
-                    onChange={(v) => setRehearsal((cur) => (cur && cur.id === v.id ? v : cur))}
-                  />
+              {rehearsals.length > 0 && (
+                <div className="mb-3 space-y-2" data-testid="schedules-rehearsal">
+                  {rehearsals.map((one) => (
+                    <RehearsalReport
+                      key={one.id}
+                      id={one.id}
+                      initial={one}
+                      onClose={() => setRehearsals((cur) => cur.filter((v) => v.id !== one.id))}
+                      onKept={() => reload()}
+                      onChange={(v) => setRehearsals((cur) => cur.map((x) => (x.id === v.id ? v : x)))}
+                    />
+                  ))}
                 </div>
               )}
               {loading && !data ? (
@@ -1301,7 +1336,7 @@ export default function SchedulesPage() {
                                   onClick={() => rehearse(s.name)}
                                   disabled={
                                     acting === `rehearse:${s.name}` ||
-                                    (rehearsal?.subject.name === s.name && rehearsal.status === "running")
+                                    rehearsals.some((v) => v.subject.name === s.name && v.status === "running")
                                   }
                                   title={`Rehearse "${s.name}": run it once and see what it would do, changing nothing`}
                                   aria-label={`Rehearse ${s.name}`}

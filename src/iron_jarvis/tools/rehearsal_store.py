@@ -39,10 +39,9 @@ class RehearsalRecord(SQLModel, table=True):
     #: options, ``rehearsal_runs.sessions_of``).
     session_ids_json: str = "[]"
     run_id: str = ""
-    #: What it ran on, for the report only: ``{"made_up": bool, "text": the
-    #: signal's first words}`` for a rule (made up when no real signal was
-    #: seen since the daemon started), ``{}`` for a schedule. Always whole
-    #: JSON (each value is capped BEFORE it is written, :func:`_small`).
+    #: What it ran on, for the report only: ``{"made_up": bool}`` for a rule
+    #: (made up when no real signal was seen since the daemon started), ``{}``
+    #: for a schedule. Never the signal's words (:func:`sample_record`).
     sample_json: str = "{}"
     #: ``{"error": …}`` when it could not run, ``{"detail": …}`` otherwise.
     summary_json: str = "{}"
@@ -53,11 +52,8 @@ class RehearsalRecord(SQLModel, table=True):
 
 #: The words a rule's rehearsal runs on when no real signal was seen.
 MADE_UP_SAMPLE = "(sample)"
-#: How much of the signal (and of a summary's words) is kept. Each value is
-#: cut BEFORE the JSON is written, so the stored text is always whole JSON
-#: (cutting the written string made a long signal unreadable, and the report
-#: then said the rule ran on a made-up signal).
-SAMPLE_CHARS = 200
+#: How much of a summary's words is kept. Each value is cut BEFORE the JSON
+#: is written, so the stored text is always whole JSON.
 SUMMARY_CHARS = 1000
 
 
@@ -81,14 +77,15 @@ def _small(values: Any, limit: int) -> dict[str, str]:
 
 
 def sample_record(sample: Any) -> dict[str, Any]:
-    """What a rehearsal keeps of the signal it ran on: whether it was made
-    up, and its first words. Never more."""
+    """What a rehearsal keeps of the signal it ran on: ONLY whether it was
+    made up. The signal itself (an email's or a webhook's words) is kept in
+    memory only (``ReflexRouter.sample_for``), never written here."""
     if not isinstance(sample, dict) or not sample:
         return {}
     text = " ".join(str(sample.get("text") or "").split())
     body = " ".join(str(sample.get("body") or "").split())
     made_up = text == MADE_UP_SAMPLE or (not text and body in ("", MADE_UP_SAMPLE))
-    return {"made_up": made_up, "text": text[:SAMPLE_CHARS]}
+    return {"made_up": made_up}
 
 
 class RehearsalStore:
@@ -108,6 +105,40 @@ class RehearsalStore:
             db.refresh(rec)
             db.expunge(rec)
         return rec
+
+    def renew(self, rehearsal_id: str) -> RehearsalRecord:
+        """A NEW record for the same subject and signal as ``rehearsal_id``
+        (Run again or a follow-up of a rehearsal's run): its own id, so its
+        own report, and the old report never changes. A record that is gone
+        gives a new one with no subject."""
+        old = self.get(rehearsal_id)
+        rec = RehearsalRecord(
+            subject_kind=old.subject_kind if old is not None else "rule",
+            subject_id=old.subject_id if old is not None else "",
+            subject_name=old.subject_name if old is not None else "",
+            sample_json=old.sample_json if old is not None else "{}",
+        )
+        with session_scope(self.engine) as db:
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+            db.expunge(rec)
+        return rec
+
+    def newest(self, kind: str, limit: int = 30) -> list[RehearsalRecord]:
+        """The newest records of one subject kind, newest first."""
+        from sqlmodel import select
+
+        with session_scope(self.engine) as db:
+            rows = list(db.exec(
+                select(RehearsalRecord)
+                .where(RehearsalRecord.subject_kind == kind)
+                .order_by(RehearsalRecord.created_at.desc())  # type: ignore[attr-defined]
+                .limit(max(1, int(limit)))
+            ).all())
+            for r in rows:
+                db.expunge(r)
+        return rows
 
     def get(self, rehearsal_id: str) -> RehearsalRecord | None:
         with session_scope(self.engine) as db:

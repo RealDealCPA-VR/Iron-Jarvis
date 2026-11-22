@@ -38,6 +38,8 @@ export interface RehearsalView {
   reads?: number;
   guessed_after?: boolean;
   error?: string;
+  /** Why no run started (a schedule with nothing to do), in the row's words. */
+  detail?: string;
   sample?: string;
   kept_at?: string | null;
 }
@@ -80,6 +82,7 @@ export function decodeRehearsal(raw: unknown): RehearsalView | null {
     reads: typeof r.reads === "number" ? r.reads : 0,
     guessed_after: r.guessed_after === true,
     error: typeof r.error === "string" ? r.error : "",
+    detail: typeof r.detail === "string" ? r.detail : "",
     sample: typeof r.sample === "string" ? r.sample : "",
     kept_at: typeof r.kept_at === "string" ? r.kept_at : null,
   };
@@ -220,6 +223,11 @@ export function RehearsalReport({
           {view.sentence}
         </p>
       )}
+      {view?.status === "ready" && view.detail ? (
+        <p data-testid={`rehearsal-detail-${id}`} className="break-words text-[13px] text-zinc-400">
+          {view.detail}
+        </p>
+      ) : null}
 
       {view?.status === "failed" && (
         <ErrorNote>

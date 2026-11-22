@@ -24,7 +24,12 @@ What is NOT held (it runs for real):
   :func:`current`), so ITS writes are held in turn.
 
 Everything else is held, an undeclared tool included: the fail-safe
-direction. :data:`SIDE_DOORS` lists the effects that do not pass
+direction, and so is :data:`REHEARSAL_HOLDS` (READONLY by declaration, yet
+acting on the user's screen). ``tests/test_leap06a_gate.py`` keeps the
+reviewed list of every tool a rehearsal lets run, and
+``tests/test_leap06a_side_doors.py`` the reviewed list of every direct send
+and process start in the automation packages: a new one fails until it is
+reviewed. :data:`SIDE_DOORS` lists the effects that do not pass
 ``registry.invoke`` (a schedule's pre-run script, its delivery line, the chat
 delivery, the post-run lessons, a rule's or a helper's hand-off to a remote
 agent, an outgoing webhook); each records one rehearsed row through
@@ -52,6 +57,13 @@ REHEARSAL_OWN_STATE = frozenset({
 
 #: A helper agent's hand-off runs; the helper inherits the rehearsal.
 REHEARSAL_HELPERS = frozenset({"delegate", "spawn_agent"})
+
+#: Tools that declare themselves READONLY yet act where the user can see
+#: it, so a rehearsal holds them all the same. ``browser_screenshot`` brings
+#: a tab of the user's own browser to the front before it takes its picture.
+#: ``tests/test_leap06a_gate.py`` keeps the reviewed list of every tool a
+#: rehearsal lets run; a tool found to act goes HERE.
+REHEARSAL_HOLDS = frozenset({"browser_screenshot"})
 
 
 def _reads_only() -> frozenset[str]:
@@ -141,8 +153,12 @@ def holds(tool: Any) -> bool:
     """Is a call to ``tool`` HELD in a rehearsal? True unless it only reads
     (READONLY, or named in :data:`REHEARSAL_READS`), is the run's own list
     (:data:`REHEARSAL_OWN_STATE`) or a helper's hand-off
-    (:data:`REHEARSAL_HELPERS`). An undeclared tool is held."""
+    (:data:`REHEARSAL_HELPERS`). An undeclared tool is held, and so is one
+    that says it only reads yet acts on the user's screen
+    (:data:`REHEARSAL_HOLDS`)."""
     name = str(getattr(tool, "name", "") or "")
+    if name in REHEARSAL_HOLDS:
+        return True
     if name in REHEARSAL_READS or name in REHEARSAL_OWN_STATE or name in REHEARSAL_HELPERS:
         return False
     rev = getattr(tool, "reversibility", Reversibility.IRREVERSIBLE)
@@ -267,6 +283,11 @@ def effect_of(name: str, args: Any, tool: Any = None) -> Effect:
         return Effect("run", cmd, words, "run", "command")
     if name.startswith("mcp__"):
         return Effect("app", _app_of(name), _ask_words(name) or "use an app", "use", "app action")
+    if name == "browser_screenshot":
+        return Effect(
+            "page", "", "bring a tab of your browser to the front and take a picture of it",
+            "act on", "web page",
+        )
     if name in _PAGES or name.startswith(_PAGES_PREFIX):
         url = _one_line(a.get("url") or "", 120)
         verb = name.split("_", 1)[-1].replace("_", " ")

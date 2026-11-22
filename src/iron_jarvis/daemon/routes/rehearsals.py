@@ -1,7 +1,9 @@
 """Leap 06-a: rehearsals — run a rule or a schedule once, changing nothing.
 
 ``POST /rehearsals {kind, id}`` starts one through the subject's own door
-(``tools/rehearsal_runs.start``); ``GET /rehearsals/{id}`` is its report,
+(``tools/rehearsal_runs.start``); ``GET /rehearsals?kind=`` the reports its
+page shows again (still running, or finished and not kept);
+``GET /rehearsals/{id}`` is its report,
 built from the ledger every time it is read; ``POST /rehearsals/{id}/keep``
 stamps ``rehearsed_at`` on the rule or schedule; ``POST /rehearsals/{id}/stop``
 stops its runs. Chat reaches the same door through the ``rehearse`` tool.
@@ -27,6 +29,15 @@ def register(app: FastAPI, d) -> None:
     async def start_rehearsal(body: RehearsalBody) -> dict[str, Any]:
         try:
             return await _runs.start(d.platform, body.kind, body.id)
+        except _runs.RehearsalRefused as exc:
+            raise _http(exc) from None
+
+    @app.get("/rehearsals")
+    async def open_rehearsals(kind: str = "") -> dict[str, Any]:
+        """The reports a page shows again (a reload, a second Rehearse):
+        each subject's newest, still running or finished and not kept."""
+        try:
+            return {"rehearsals": await asyncio.to_thread(_runs.open_reports, d.platform, kind)}
         except _runs.RehearsalRefused as exc:
             raise _http(exc) from None
 

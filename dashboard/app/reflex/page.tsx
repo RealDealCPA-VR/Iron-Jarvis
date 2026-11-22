@@ -20,7 +20,7 @@ import {
   Pencil,
   type LucideIcon,
 } from "lucide-react";
-import { post, patch, del, ApiError } from "@/lib/api";
+import { get, post, patch, del, ApiError } from "@/lib/api";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Webhook } from "@/lib/types";
 import {
@@ -363,6 +363,25 @@ export default function ReflexPage() {
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   // Leap 06-a: each row's latest rehearsal report (one at a time per rule).
   const [rehearsals, setRehearsals] = useState<Record<string, RehearsalView>>({});
+  // …and a report still running, or finished and not kept, comes back after
+  // a reload (GET /rehearsals?kind=rule). One read when the page opens.
+  useEffect(() => {
+    let alive = true;
+    get<{ rehearsals?: unknown[] }>("/rehearsals?kind=rule")
+      .then((r) => {
+        if (!alive) return;
+        const back: Record<string, RehearsalView> = {};
+        for (const raw of r.rehearsals ?? []) {
+          const view = decodeRehearsal(raw);
+          if (view && view.subject.id && !back[view.subject.id]) back[view.subject.id] = view;
+        }
+        setRehearsals((prev) => ({ ...back, ...prev }));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [rowError, setRowError] = useState<string | null>(null);
 
   const targetNeeded = action === "workflow" || action === "remote_agent";

@@ -348,6 +348,17 @@ def _damp_widened(hits: list[SearchHit], words: Sequence[str]) -> list[SearchHit
     return kept
 
 
+def _is_rehearsal_run(session_row: Any) -> bool:
+    """Leap 06-a: is ``session_row`` a REHEARSAL's run (its OWN options carry
+    the rehearsal)? Never raises."""
+    try:
+        from ..tools.rehearsal import rehearsal_of  # local import: avoids cycles
+
+        return bool(rehearsal_of(session_row))
+    except Exception:  # noqa: BLE001 — cannot tell: index it as before
+        return False
+
+
 def _coerce_dt(value: Any) -> datetime | None:
     """Anything a caller or a stored row might carry → an aware UTC datetime.
 
@@ -683,6 +694,14 @@ class SearchIndex:
                 title=_clip(str(getattr(session_row, "task", "") or "session"), 80),
             )
             rows = [doc] if doc.text.strip() else []
+            if _is_rehearsal_run(session_row):
+                # Leap 06-a: a REHEARSAL's run changed nothing, and its closing
+                # words were told to "carry on as if it worked": it is never
+                # past work to find (history_search, the search palette, the
+                # memory's recall). Its report lives on its own card. Any doc
+                # it has is dropped, and the hourly backfill (which comes here)
+                # writes none.
+                rows = []
             with self._scope(db) as (sess, owns):
                 self._replace(
                     sess,

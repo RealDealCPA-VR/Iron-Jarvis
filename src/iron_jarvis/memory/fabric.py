@@ -197,6 +197,17 @@ def _clip(text: str, n: int = _SNIPPET_CHARS) -> str:
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
+def _is_rehearsal_run(session_row: Any) -> bool:
+    """Leap 06-a: is ``session_row`` a REHEARSAL's run (its OWN options carry
+    the rehearsal)? Never raises."""
+    try:
+        from ..tools.rehearsal import rehearsal_of  # local import: avoids cycles
+
+        return bool(rehearsal_of(session_row))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 #: The two evidence links a lesson's source is read from (v1.501.0): a run's
 #: page (``/sessions/<id>``, the learning engine's run evidence) and a chat
 #: (``/chat?thread=<id>``, a noticed correction's).
@@ -930,6 +941,10 @@ class MemoryFabric:
             r.id: (getattr(getattr(r, "status", None), "value", None)
                    or str(getattr(r, "status", "")))
             for r in rows
+            # Leap 06-a: a REHEARSAL's run is no past work (it changed
+            # nothing and was told to carry on as if it had): its hit is
+            # dropped like a run that is gone.
+            if not _is_rehearsal_run(r)
         }
 
     def _sessions_lexical(self, k: int, qtokens: set[str]) -> list[FabricHit]:
@@ -956,6 +971,8 @@ class MemoryFabric:
             return []
         out: list[FabricHit] = []
         for s in rows:
+            if _is_rehearsal_run(s):
+                continue  # leap 06-a: a rehearsal is no past work (above)
             blob = f"{getattr(s, 'task', '')} {getattr(s, 'summary', '')} {getattr(s, 'result', '')}"
             rel = _lexical(qtokens, blob)
             if rel <= 0.0:

@@ -317,7 +317,8 @@ async def test_a_long_real_signal_is_still_the_last_signal_it_matched(daemon):
     assert view["sample"] == "the last signal it matched"
     rec = RR.RehearsalStore(p.engine).get(started["id"])
     kept = json.loads(rec.sample_json)
-    assert kept["made_up"] is False and len(kept["text"]) <= 200
+    # Only whether it was made up is kept: the signal's words stay in memory.
+    assert kept == {"made_up": False}, kept
 
 
 def test_a_made_up_signal_says_so():

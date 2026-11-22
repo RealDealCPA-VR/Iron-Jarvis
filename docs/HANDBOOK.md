@@ -2084,8 +2084,15 @@ as it was.
 - A rehearsal rings no bell and sends no notice, and a webhook that tells
   another app when a task finishes is not told (the report lists it); its
   card is where you read it. Its run reads **Rehearsed** on the Agent runs
-  page, and it is never added to the work record, so no chat remembers it
-  as work done. It does use your model once, like a real run.
+  page, and it is never added to the work record or the history search, so
+  no chat remembers it as work done; a project's recent activity names it
+  as a rehearsal that changed nothing. It does use your model once, like a
+  real run.
+- A report that is still running, or finished and not kept yet, comes back
+  when you open Rules or Schedules again. **Run again** on a rehearsal's run
+  is a new rehearsal with its own report; a report you kept never changes.
+- A schedule with nothing to do this time (a memory review with nothing new)
+  says so under the sentence.
 - Not yet: a rule or a schedule that starts a **workflow** or a **goal**
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.

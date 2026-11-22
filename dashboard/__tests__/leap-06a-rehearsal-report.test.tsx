@@ -284,6 +284,66 @@ describe("Schedules: Rehearse on a task schedule, Run now in the row's menu", ()
     await screen.findByTestId("schedule-more-nightly");
     expect(screen.queryByTestId("schedule-rehearse-nightly")).toBeNull();
   });
+
+  it("a rehearsal still running comes back when the page opens again", async () => {
+    // Review 3: a reload lost the card of a running rehearsal for good.
+    api.responses["/rehearsals?kind=schedule"] = {
+      rehearsals: [{ ...READY, id: "reh_back", status: "running", would: [] }],
+    };
+    mount();
+    expect(await screen.findByTestId("rehearsal-report-reh_back")).toBeInTheDocument();
+    expect(api.gets).toContain("/rehearsals?kind=schedule");
+  });
+
+  it("Rehearse on a second schedule keeps the first one's report on screen", async () => {
+    // Review 3: the second press replaced the first card, and its report was gone.
+    api.responses["/rehearsals?kind=schedule"] = {
+      rehearsals: [{ ...READY, id: "reh_first", subject: { kind: "schedule", id: "s0", name: "weekly" } }],
+    };
+    api.postResponses["/rehearsals"] = READY;
+    mount();
+    await screen.findByTestId("rehearsal-report-reh_first");
+    fireEvent.click(await screen.findByTestId("schedule-rehearse-nightly"));
+    await screen.findByTestId("rehearsal-report-reh_1");
+    expect(screen.getByTestId("rehearsal-report-reh_first")).toBeInTheDocument();
+  });
+});
+
+describe("a report that started no run says why", () => {
+  it("shows the schedule's own words for it", () => {
+    render(
+      <RehearsalReport
+        id="reh_3"
+        initial={{ ...READY, id: "reh_3", would: [], refused: [], reads: 0,
+                   sentence: "This would change nothing. Nothing was changed.",
+                   detail: "Nothing new to review." }}
+      />,
+    );
+    expect(screen.getByTestId("rehearsal-detail-reh_3").textContent).toBe("Nothing new to review.");
+  });
+});
+
+describe("Rules: a report comes back after a reload", () => {
+  it("each rule's open report shows under its row again", async () => {
+    api.responses["/reflex/rules"] = {
+      rules: [{
+        id: "reflex_1", name: "on-mail", source: "webhook", match: "gh", action: "session",
+        target: "", task_template: "", project_id: null, enabled: true,
+        created_at: "2026-11-05T10:00:00Z", last_fired_at: null, fire_count: 0,
+        last_error: null, last_result: null,
+      }],
+    };
+    api.responses["/workflows"] = { workflows: [] };
+    api.responses["/agents/remote"] = { agents: [] };
+    api.responses["/webhooks"] = { webhooks: [] };
+    api.responses["/projects"] = { projects: [] };
+    api.responses["/triggers"] = {};
+    api.responses["/rehearsals?kind=rule"] = {
+      rehearsals: [{ ...READY, id: "reh_rule", subject: { kind: "rule", id: "reflex_1", name: "on-mail" } }],
+    };
+    render(<ReflexPage />);
+    expect(await screen.findByTestId("rehearsal-report-reh_rule")).toBeInTheDocument();
+  });
 });
 
 describe("chat, the bell and the words", () => {

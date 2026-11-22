@@ -157,10 +157,13 @@ async def start(platform: Any, kind: str, ident: str) -> dict[str, Any]:
         rec = await asyncio.to_thread(
             lambda: store.create(kind="rule", subject_id=subject.id, name=subject.name or subject.id, sample=sample)
         )
-        res = await router.rehearse(subject, sample, rehearsal=rec.id)
-        if res.get("ok") and res.get("session_id"):
+        if str(getattr(subject, "action", "") or "") == "session":
             # A side door: an outgoing webhook would hear the task finish.
+            # Written BEFORE the run starts, so a report never grows after
+            # it says ready (a rule that starts no run of its own, a remote
+            # agent's, finishes no task here: no webhook hears it).
             await asyncio.to_thread(_record_webhooks, platform, rec.id)
+        res = await router.rehearse(subject, sample, rehearsal=rec.id)
         await asyncio.to_thread(_settle_start, store, rec.id, res)
     else:
         rec = await asyncio.to_thread(
@@ -218,6 +221,27 @@ def _record_webhooks(platform: Any, rid: str) -> None:
             words=f"tell another app through the webhook “{slug}” that the task finished",
             target=slug,
         )
+
+
+def renew_in(engine: Any, options: dict[str, Any]) -> str:
+    """Run again, or a follow-up, of a REHEARSAL's run (``options`` are the
+    new run's, copied from the old one's): the new run is a NEW rehearsal of
+    the same subject, with its own record and so its own report. It never
+    joins the old one: a report the user read or kept never changes under
+    them. The new run stays a rehearsal (the safe direction): even when no
+    record can be written it gets a fresh id. Returns the new id ("" when
+    the old run was no rehearsal). BLOCKING."""
+    old = str(options.get(R.REHEARSAL_OPTION) or "").strip() if isinstance(options, dict) else ""
+    if not old:
+        return ""
+    try:
+        fresh = RehearsalStore(engine).renew(old).id
+    except Exception:  # noqa: BLE001 — still a rehearsal, never the old report
+        from ..core.ids import new_id
+
+        fresh = new_id("reh")
+    options[R.REHEARSAL_OPTION] = fresh
+    return fresh
 
 
 def _settle_start(store: RehearsalStore, rid: str, res: dict[str, Any]) -> None:
@@ -307,6 +331,40 @@ async def keep(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     return await asyncio.to_thread(report, platform, rec.id)
 
 
+#: A finished report not kept yet is offered again on its page for this
+#: long (a running one always is), so a reload or a second Rehearse never
+#: loses it.
+REOPEN_FOR = timedelta(hours=1)
+#: The most reports a page is offered again.
+REOPEN_MAX = 5
+
+
+def open_reports(platform: Any, kind: str) -> list[dict[str, Any]]:
+    """The reports of ``kind`` (rule or schedule) still worth showing on its
+    page: for each subject its NEWEST rehearsal, when it is still running, or
+    finished within :data:`REOPEN_FOR` and not kept. Newest first, at most
+    :data:`REOPEN_MAX`. BLOCKING. Raises :class:`RehearsalRefused` for an
+    unknown kind."""
+    k = _KIND_ALIASES.get(str(kind or "").strip().lower(), "")
+    if not k:
+        raise RehearsalRefused("Only a rule or a schedule can be rehearsed for now.")
+    since = utcnow().replace(tzinfo=None) - REOPEN_FOR
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for rec in _store(platform).newest(k):
+        if rec.subject_id in seen:
+            continue
+        seen.add(rec.subject_id)
+        view = report(platform, rec.id)
+        ended = rec.finished_at.replace(tzinfo=None) if rec.finished_at else None
+        recent = view["status"] == "ready" and not view["kept_at"] and (ended is None or ended >= since)
+        if view["status"] == "running" or recent:
+            out.append(view)
+        if len(out) >= REOPEN_MAX:
+            break
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # The report, from the ledger
 # --------------------------------------------------------------------------- #
@@ -375,6 +433,26 @@ def _iso(value: Any) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _mask(text: str) -> str:
+    """``text`` with every secret-looking value masked (``detections.redact``,
+    the one mask the record readers use). Never raises."""
+    try:
+        from ..detections.redact import mask
+
+        return str(mask(text) if text else text)
+    except Exception:  # noqa: BLE001 — cannot mask: say nothing of it
+        return "" if text else text
+
+
+def _sentence_case(text: str) -> str:
+    """``nothing new to review`` → ``Nothing new to review.``"""
+    text = " ".join(text.split())
+    if not text:
+        return ""
+    text = text[:1].upper() + text[1:]
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
 def _is_read(platform: Any, name: str | None) -> bool:
     """Did a call to ``name`` that RAN in a rehearsal only read? A tool the
     rehearsal would not hold because it only reads — never a helper's
@@ -415,7 +493,12 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     counted: list[R.Effect] = []
     counts: dict[str, int] = {}
     reads = 0
+    # No run of its own started (a schedule whose fire had nothing to run, a
+    # rule that could not start): no task finished, so no webhook heard one.
+    ran = bool(sessions)
     for row in rows:
+        if not ran and row.session_id == rec.id and row.tool == "outbound_webhook":
+            continue
         if not row.rehearsed:
             if row.ok and not row.undo_of and _is_read(platform, row.tool):
                 reads += 1
@@ -425,10 +508,13 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         except (TypeError, ValueError):
             args = {}
         effect = R.effect_of(row.tool, args, platform.registry.get(row.tool) if row.tool else None)
-        item = {"kind": effect.kind, "words": effect.words, "target": effect.target, "would": row.would or "run"}
+        # An item quotes a command or a message: every secret-looking value
+        # in it is masked (the shared mask), on the card and on the phone.
+        item = {"kind": effect.kind, "words": _mask(effect.words), "target": _mask(effect.target),
+                "would": row.would or "run"}
         if (row.would or "run") == "refuse":
             if len(refused) < REPORT_ITEMS_MAX:
-                refused.append({**item, "why": " ".join(str(row.output or "").split())[:200]})
+                refused.append({**item, "why": _mask(" ".join(str(row.output or "").split())[:200])})
             continue
         counted.append(effect)
         if effect.noun:
@@ -458,7 +544,10 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         "reads": reads,
         # 06-b says when steps after a held change were worked out without it.
         "guessed_after": False,
-        "error": str(summary.get("error") or ""),
+        "error": _mask(str(summary.get("error") or "")),
+        # Why no run started, in the schedule row's own words ("nothing new
+        # to review"): only for a finished rehearsal that started none.
+        "detail": _mask(_sentence_case(str(summary.get("detail") or ""))) if status == "ready" and not ran else "",
         "sample": "" if rec.subject_kind != "rule" else (
             "a made-up signal" if made_up else "the last signal it matched"
         ),
@@ -585,6 +674,8 @@ def _report_words(view: dict[str, Any], what: str, subject: str, gave_up: bool =
     if status == "stopped":
         return f"The rehearsal of the {what} “{subject}” was stopped. Nothing was changed."
     lines = [f"Rehearsed the {what} “{subject}”. {view['sentence']}"]
+    if view.get("detail"):
+        lines.append(str(view["detail"]))
     items = list(view.get("would") or [])
     for item in items[:PHONE_ITEMS]:
         asks = " (it would ask you first)" if item.get("would") == "ask" else ""
