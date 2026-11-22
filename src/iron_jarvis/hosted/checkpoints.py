@@ -454,6 +454,32 @@ def _drop_mark(mark: Path) -> None:
         log.debug("could not remove a deleted Code-view store's mark", exc_info=True)
 
 
+def mark_own_store_deleted(home: Any, sid: Any) -> bool:
+    """BLOCKING, never raises (FU-3a): session *sid*'s own store marked as a
+    deleted session's (:data:`OWN_DELETED`). Its delete writes it BEFORE the
+    row goes (a daemon that dies in between still leaves a store the sweep
+    knows was deleted) and again before the removal. False when the session
+    has no store of its own, or the mark could not be written (the sweep then
+    still knows it by the session's folder, moved to the trash)."""
+    path = own_store(home, sid)
+    try:
+        if path is None or not path.is_dir():
+            return False
+        _mark_of(path).write_text(f"{sid}\n", encoding="utf-8")
+        return True
+    except OSError:
+        log.debug("could not mark a deleted Code-view session's own checkpoint store", exc_info=True)
+        return False
+
+
+def unmark_own_store(home: Any, sid: Any) -> None:
+    """BLOCKING, never raises (FU-3a): the mark of :func:`mark_own_store_deleted`
+    taken back (a delete that could not remove the session's row)."""
+    path = own_store(home, sid)
+    if path is not None:
+        _drop_mark(_mark_of(path))
+
+
 def forget_own_store(home: Any, sid: Any) -> bool:
     """BLOCKING, never raises: a deleted session's own store goes with it (a
     copy of files that are still in the user's folder: never moved to the
@@ -469,10 +495,7 @@ def forget_own_store(home: Any, sid: Any) -> bool:
     except OSError:
         return False
     mark = _mark_of(path)
-    try:
-        mark.write_text(f"{sid}\n", encoding="utf-8")
-    except OSError:  # the sweep still knows it by the session's folder, moved to the trash
-        log.debug("could not mark a deleted Code-view session's own checkpoint store", exc_info=True)
+    mark_own_store_deleted(home, sid)
     if _remove_store(path):
         _drop_mark(mark)
         return True
@@ -561,7 +584,8 @@ def sweep_own_stores(home: Any, row_ids: Callable[[], Iterable[str]]) -> Swept:
     their folders: a restore removes nothing), and undoing it brings them
     back. A store whose row exists, archived or not, is never touched, nor
     anything under the folder that is not a store (or is a link). A mark whose
-    store is gone is removed.
+    store is gone is removed, and so is one beside a store whose row AND
+    folder are both there (that session is whole).
 
     *row_ids()* gives the id of every session row and RAISES when the rows
     cannot be read: then nothing is removed. It is called AFTER the folder is
@@ -602,11 +626,18 @@ def sweep_own_stores(home: Any, row_ids: Callable[[], Iterable[str]]) -> Swept:
         log.debug("why the Code-view session rows could not be read", exc_info=True)
         return Swept(0, 0, unread=True)
     removed = left = 0
-    standing: set[str] = set()
+    standing: set[str] = set()  # (the stores whose mark is kept)
     for name, own in found:
-        if own in kept or (own in folders and own not in marked):
-            standing.add(own)
+        if own in kept:
+            # A row and its session's folder both there: the session is
+            # whole (a restore brought it back, or its delete stopped before
+            # the row went), and its mark is a leftover that a later restore
+            # leaving the row out would mistake for a delete.
+            if own not in folders:
+                standing.add(own)
             continue
+        if own in folders and own not in marked:
+            continue  # (a row only missing for now: a backup restored)
         if _remove_store(base / name):
             removed += 1
         else:

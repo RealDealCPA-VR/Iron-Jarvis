@@ -2054,8 +2054,8 @@ pressed Delete (an antivirus scan, for example), the copy stayed in Iron
 Jarvis's data folder on this PC, with no session to use it, and nothing
 tried again or said so.
 
-**Now.** Iron Jarvis tries again a minute later, ten minutes later and an
-hour later, and each time it starts, until the copy is gone. The copies of
+**Now.** Iron Jarvis tries again a minute later, again ten minutes after
+that and an hour after that, and each time it starts, until the copy is gone. The copies of
 every session you still have, archived or not, are never touched. Neither
 are those of a session you did not delete that a backup you restored does
 not include: undo the restore and "Rewind to here" still finds them. Nothing

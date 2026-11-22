@@ -2770,11 +2770,21 @@ class HostedService:
                 await self._stop_process(live, why="deleted", lock_held=True)
                 self.live.pop(sid, None)
             await asyncio.to_thread(live.log.close)
-            await asyncio.to_thread(store.delete, self.engine, sid)
-            # v1.543.0: its checkpoints' hidden refs leave the folder's
-            # repository with it (before a folder of its own is removed).
             from . import checkpoints as CK
 
+            # FU-3a: a store of its own is marked as a deleted session's
+            # BEFORE the row goes, so a daemon that dies in between still
+            # leaves a store the sweep knows was deleted (taken back when
+            # the row could not be removed).
+            marked = await asyncio.to_thread(CK.mark_own_store_deleted, self.home, sid)
+            try:
+                await asyncio.to_thread(store.delete, self.engine, sid)
+            except Exception:
+                if marked:
+                    await asyncio.to_thread(CK.unmark_own_store, self.home, sid)
+                raise
+            # v1.543.0: its checkpoints' hidden refs leave the folder's
+            # repository with it (before a folder of its own is removed).
             await asyncio.to_thread(CK.forget_session, self.home, sid, str(getattr(row, "folder", "") or ""))
             # FU-3a (privacy): a store of its own that a file held open kept
             # from going (an antivirus scan, a ``git gc`` still packing) is a

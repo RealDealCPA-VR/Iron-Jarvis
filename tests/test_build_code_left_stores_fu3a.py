@@ -135,8 +135,16 @@ def _with_store(home: Path, sid: str, folder: Path) -> Path:
     return CK.own_store(home, sid)
 
 
+def _folder_trashed(home: Path, sid: str) -> None:
+    """The session's own folder gone, as its delete leaves it (moved to the trash)."""
+    shutil.rmtree(session_dir(home, sid))
+
+
 def _rows(app, folder: Path) -> dict[str, HostedSessionRecord]:
-    """A live session, an archived one and a helper, each with a store."""
+    """A live session, an archived one and a helper, each with a store and
+    with NO session folder of its own: only its row keeps its store (the
+    second review: with the folders there, the folder rule kept them whatever
+    the rows said, and a sweep that read no row, or no archived one, passed)."""
     engine = app.state.platform.engine
     live = store.create(engine, harness="grok", folder=str(folder), harness_session_id="x-1")
     archived = store.create(engine, harness="grok", folder=str(folder), harness_session_id="x-2")
@@ -146,12 +154,8 @@ def _rows(app, folder: Path) -> dict[str, HostedSessionRecord]:
     out = {"live": live, "archived": archived, "helper": helper}
     for row in out.values():
         _with_store(_home(app), row.id, folder)
+        _folder_trashed(_home(app), row.id)
     return out
-
-
-def _folder_trashed(home: Path, sid: str) -> None:
-    """The session's own folder gone, as its delete leaves it (moved to the trash)."""
-    shutil.rmtree(session_dir(home, sid))
 
 
 def _orphan(app, folder: Path) -> Path:
@@ -417,7 +421,7 @@ def test_a_missing_session_table_is_not_no_sessions(app, plain):
     kept = _rows(app, plain)
     HostedSessionRecord.__table__.drop(bind=engine)  # type: ignore[attr-defined]
     got = S.sweep_left_stores(home, engine)
-    assert got.removed == 0
+    assert got == CK.Swept(removed=0, left=0, unread=True)
     assert all(CK.has_own_store(home, r.id) for r in kept.values())
 
 
@@ -572,19 +576,73 @@ async def test_a_store_its_delete_marked_goes_even_when_the_session_folder_staye
     await stop_all(app)
 
 
+async def test_a_delete_cut_short_right_after_its_row_went_still_leaves_a_marked_store(app, plain, monkeypatch):
+    """The second review: the delete marks the store BEFORE the row goes, so
+    a daemon that dies between the two (the row gone, no mark written by the
+    removal yet, the session's folder still there) still leaves a store the
+    sweep knows was deleted. A delete that could not remove the row takes
+    its mark back (the session is still there)."""
+    svc = S.service_for(app.state.platform)
+    home, engine = _home(app), app.state.platform.engine
+
+    class Died(Exception):
+        pass
+
+    async with client(app) as c:
+        kept = (await new_session(c, plain, harness="grok"))["id"]
+        kept_dir = _with_store(home, kept, plain)
+        real_delete = store.delete
+
+        def locked(*_a, **_k):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(store, "delete", locked)
+        with pytest.raises(RuntimeError):
+            await svc.delete(kept)
+        monkeypatch.setattr(store, "delete", real_delete)
+        assert store.get(engine, kept) is not None and kept_dir.is_dir()
+        assert _marks(home) == []  # (taken back: the row is still there)
+
+        sid = (await new_session(c, plain, harness="grok"))["id"]
+        store_dir = _with_store(home, sid, plain)
+
+        def died(*_a, **_k):  # the daemon stops right after the row went
+            raise Died("the daemon stopped here")
+
+        monkeypatch.setattr(CK, "forget_session", died)
+        with pytest.raises(Died):
+            await svc.delete(sid)
+        assert store.get(engine, sid) is None
+        assert store_dir.is_dir() and session_dir(home, sid).is_dir()
+        assert _marks(home) == [store_dir.name + CK.OWN_DELETED]
+        assert S.sweep_left_stores(home, engine) == CK.Swept(removed=1, left=0)
+        assert not store_dir.exists() and kept_dir.is_dir() and _marks(home) == []
+    await stop_all(app)
+
+
 def test_a_mark_with_no_store_is_tidied_and_a_restored_rows_store_is_kept(tmp_path, plain):
     home = tmp_path / "home"
     base = Path(home).joinpath(*CK.OWN_DIR)
-    # A delete that failed, then a backup restored that has the row: kept.
+    # A delete that failed, then a backup restored that has the row (not the
+    # session's folder, which went to the trash): kept, and its mark too.
     back = _with_store(home, "app_back", plain)
+    _folder_trashed(home, "app_back")
     (base / (back.name + CK.OWN_DELETED)).write_text("app_back\n", encoding="utf-8")
+    # A row and its session's folder both there (a restore brought both back,
+    # or a delete stopped before the row went): kept, its mark a leftover...
+    whole = _with_store(home, "app_whole", plain)
+    (base / (whole.name + CK.OWN_DELETED)).write_text("app_whole\n", encoding="utf-8")
     # A mark whose store is gone.
     (base / ("app_old.git" + CK.OWN_DELETED)).write_text("app_old\n", encoding="utf-8")
-    assert CK.sweep_own_stores(home, lambda: {"app_back"}) == CK.Swept(removed=0, left=0)
-    assert CK.has_own_store(home, "app_back")
+    assert CK.sweep_own_stores(home, lambda: {"app_back", "app_whole"}) == CK.Swept(removed=0, left=0)
+    assert CK.has_own_store(home, "app_back") and CK.has_own_store(home, "app_whole")
     assert _marks(home) == [back.name + CK.OWN_DELETED]
+    # ...so a later restore that leaves its row out keeps its store (the
+    # session was not deleted on that timeline).
+    assert CK.sweep_own_stores(home, lambda: {"app_back"}) == CK.Swept(removed=0, left=0)
+    assert CK.has_own_store(home, "app_whole")
     # No store left at all: no mark either (and the rows are not read for it).
-    assert CK._remove_store(back)
+    assert CK._remove_store(back) and CK._remove_store(whole)
 
     def unread():
         raise AssertionError("the rows were read")
