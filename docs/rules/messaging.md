@@ -560,7 +560,14 @@ How to use this file: read the contents list, then read only the entries your ch
   `to_ndarray`, which imports numpy behind that door). THE QUESTION CLOSES a
   day on, or once none of its recordings is on this PC (`_voice_prompt_fresh`,
   `_VOICE_ASK_TTL_S`): a later "1" is a chat message. AN E-MAIL'S OWN WORDS
-  are its body (`InboundMessage.own_words`; `text` is subject + body): an
-  audio file with an empty body is heard, whatever the subject says. A Slack
-  snippet is a text file; an attached e-mail is kept as `.eml`.
+  are its body without the mail app's own line (`InboundMessage.own_words` =
+  `base.without_signoff(body)`: a `-- ` signature and the fixed `_SIGNOFFS`
+  list, never a guess at typed words; `text` is subject + body): an audio
+  file with no such words is heard, whatever the subject says. TWO QUESTIONS
+  STAY APART in `_take_files`: `hear_audio` (own words) picks a recording to
+  hear; `words` (ALL of `text`, the subject too) decides whether anything is
+  left to answer, so a subject with a file not taken still runs (R0.3). A
+  recording not heard stops the message only when the words are nothing but
+  its name and a sign-off (`_beyond_the_recording`). A Slack snippet is a
+  text file; an attached e-mail is kept as `.eml`.
   Pins: `tests/test_leap10a_*.py`, `dashboard/__tests__/leap-10a-phone-attachments.test.tsx`.

@@ -16,6 +16,7 @@ the platform stays testable **offline**:
 from __future__ import annotations
 
 import inspect
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -120,8 +121,63 @@ class InboundMessage:
     #: e-mail: its body, where ``text`` is the subject and then the body).
     #: ``None``: all of ``text`` is theirs. A voice memo sent as a file is
     #: heard when the message has no words of its own, and the subject of a
-    #: shared recording is usually only its name ("New Recording 3").
+    #: shared recording is usually only its name ("New Recording 3"). An
+    #: e-mail's is its body without what the mail app adds by itself
+    #: (:func:`without_signoff`).
     own_words: str | None = None
+
+
+#: 10-a: the line a mail app puts under an e-mail by itself, in the app's own
+#: words ("Sent from my iPhone", "Get Outlook for iOS"), compared in lower
+#: case with spaces collapsed and a final full stop dropped. A small, fixed
+#: list: a line the person typed (their name, a phone number) is never guessed
+#: at, so it stays their words.
+_SIGNOFFS = re.compile(
+    r"sent from my (iphone|ipad|ipod( touch)?|apple watch|mac"
+    r"|android( phone| device)?|(samsung )?galaxy( [a-z0-9+-]+){0,3}"
+    r"|(google )?pixel( [a-z0-9+-]+){0,2}|blackberry( [a-z0-9+-]+){0,3}"
+    r"|huawei( [a-z0-9+-]+){0,3}|mobile( device| phone)?|phone|smartphone|tablet)"
+    r"|sent from (mail|outlook) for (windows( \d+)?|ios|android|mac)"
+    r"|sent from outlook"
+    r"|sent from yahoo mail (for|on) (iphone|ipad|android)"
+    r"|sent from gmail mobile"
+    r"|sent from proton ?mail( mobile| for (ios|android))?"
+    r"|sent with proton ?mail secure email"
+    r"|get outlook for (ios|android)"
+    r"|von meinem (iphone|ipad) gesendet"
+    r"|envoyé de mon (iphone|ipad)"
+    r"|enviado desde mi (iphone|ipad)"
+    r"|enviado do meu (iphone|ipad)"
+    r"|inviato da (il mio )?(iphone|ipad)"
+    r"|verstuurd vanaf mijn (iphone|ipad)"
+)
+
+
+def _is_signoff(line: str) -> bool:
+    # Outlook's plain text carries its link: "Get Outlook for iOS<https://...>".
+    s = re.sub(r"<https?://[^>\s]*>", "", str(line or ""))
+    s = " ".join(s.split()).rstrip(".!").strip().lower()
+    return bool(s) and _SIGNOFFS.fullmatch(s) is not None
+
+
+def without_signoff(text: str) -> str:
+    """``text`` without what a mail app adds under it by itself (10-a): a
+    signature under a ``-- `` line (``--`` once trailing spaces are trimmed),
+    and a last line that is one of the known automatic sign-offs
+    (:data:`_SIGNOFFS`). Everything the person typed stays. It decides only
+    whether a message carries words of its own; the words a turn gets are
+    never changed by it."""
+    lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for i, line in enumerate(lines):
+        if line.rstrip() == "--":
+            lines = lines[:i]
+            break
+    while lines:
+        if not lines[-1].strip() or _is_signoff(lines[-1]):
+            lines.pop()
+        else:
+            break
+    return "\n".join(lines).strip()
 
 
 def split_message(text: str, limit: int) -> list[str]:

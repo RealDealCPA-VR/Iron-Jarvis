@@ -31,6 +31,7 @@ blocks boot, and is cancelled on shutdown.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -46,7 +47,14 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
 from ..core.models import AgentType, Session
-from .base import Channel, ChannelAuthError, FileNotTaken, InboundMessage, split_message
+from .base import (
+    Channel,
+    ChannelAuthError,
+    FileNotTaken,
+    InboundMessage,
+    split_message,
+    without_signoff,
+)
 from .models import InboundOffsetRecord
 from .threads import ADDRESSEE_KEY
 #: 10-a: the pending-prompt kind of "Use <service> for phone voice notes
@@ -128,6 +136,20 @@ def files_only_line(names: list[str]) -> str:
     """The user's line when the phone sent files and no words (10-a): the turn
     needs words, and these are plainly not the sender's own."""
     return f"(Sent with no message: {', '.join(names)})"
+
+
+def _bare(words: str) -> str:
+    return re.sub(r"[\W_]+", "", str(words or "")).lower()
+
+
+def _beyond_the_recording(words: str, recording: str) -> bool:
+    """Has ``words`` anything to answer besides the recording's own name and
+    what a mail app adds by itself (10-a)? A voice memo shared by e-mail
+    carries its name as the subject ("New Recording 3" for New Recording
+    3.m4a): that is no request. Any other words are, and they run."""
+    name = {_bare(Path(recording).stem), _bare(recording)}
+    return any(_bare(line) and _bare(line) not in name
+               for line in without_signoff(words).splitlines())
 
 
 @dataclass
@@ -827,7 +849,8 @@ class InboundPoller:
             return False
 
     async def _take_files(
-        self, name: str, ch: Channel, msg: InboundMessage, *, chat_on: bool, has_words: bool
+        self, name: str, ch: Channel, msg: InboundMessage, *, chat_on: bool, words: str,
+        hear_audio: bool,
     ) -> Taken:
         """Take the files that came with ``msg`` (10-a).
 
@@ -843,7 +866,14 @@ class InboundPoller:
         after a yes asked once, never off the network in a Local only chat.
         The receipt ("Saved photo.jpg in Documents\\Iron Jarvis\\... From
         your phone.", what was not taken and why, "I heard: ...") goes out
-        before the answer. Never raises."""
+        before the answer. Never raises.
+
+        Two questions, kept apart: ``words`` (all of the message's words, an
+        e-mail's subject too) decides whether anything is left to answer, so
+        words with a file that was not taken still run (R0.3);
+        ``hear_audio`` (the sender wrote nothing of their own: an e-mail's
+        body, without its automatic sign-off) decides whether an audio file
+        is heard as a voice note."""
         from . import media
         from . import voice_note as VN
 
@@ -853,6 +883,7 @@ class InboundPoller:
         files = list(getattr(msg, "files", None) or [])
         lines: list[str] = []
         refused: list[str] = []
+        sent_as: dict[str, str] = {}  # kept path -> the name the phone gave
         tid = ""
         resolved = False
         in_project = False
@@ -893,6 +924,7 @@ class InboundPoller:
                     why = "it could not be taken"
                 else:
                     out.kept.append(kept)
+                    sent_as[kept.path] = str(f.name or "")
                     out.folder = kept.folder
                     await self._publish(
                         EventType.COMM_FILE_RECEIVED,
@@ -913,10 +945,10 @@ class InboundPoller:
         if out.not_taken:
             log.info("inbound: %d file(s) on channel %r were not taken", out.not_taken, name)
         # A VOICE NOTE becomes the sender's words (D-10.1); an audio file too
-        # when the message has no words of its own (a voice memo sent as a
-        # file; ``has_words`` reads an e-mail's body, not its subject).
+        # when the sender wrote nothing of their own (a voice memo sent as a
+        # file; ``hear_audio`` reads an e-mail's body, not its subject).
         voice = next((k for k in out.kept if k.kind in VN.VOICE_KINDS), None) or (
-            next((k for k in out.kept if k.kind == "audio"), None) if not has_words else None
+            next((k for k in out.kept if k.kind == "audio"), None) if hear_audio else None
         )
         asked = False
         if voice is not None:
@@ -944,11 +976,14 @@ class InboundPoller:
                 limited=not out.kept and not out.heard and not asked,
             )
         out.thread_id = tid
-        if not has_words and not out.heard:
+        if not out.heard:
             others = [k for k in out.kept if k.path != out.voice_path]
-            if voice is not None and not others:
+            if voice is not None and not others and not _beyond_the_recording(
+                    words, sent_as.get(voice.path) or voice.name):
                 # A voice note that was not heard, and nothing else: there is
                 # nothing to answer until it is (the question, or the words).
+                # A shared memo's e-mail subject that is only its name is no
+                # request; any other words still run.
                 # The phone chat on the PC still shows it: the recording as a
                 # chip on the user's line, and what the phone was told (the
                 # question, or why it was not heard) as the reply, so a later
@@ -957,7 +992,9 @@ class InboundPoller:
                 landed = self._note_unheard(name, msg, tid, out.kept, "\n".join(lines))
                 out.stop = {"channel": name, "sent": out.sent, "thread_id": landed or tid,
                             "status": "voice_asked" if asked else "voice_not_heard"}
-            elif not out.kept:
+            elif not words and not out.kept:
+                # No words and no file taken: the receipt was the answer.
+                # Words (an e-mail's subject too) still run (R0.3).
                 out.stop = {"channel": name, "status": "files_not_taken", "sent": out.sent}
         if not out.folder and tid:
             saved = self.thread_store.get_setup_value(tid, "workspace_dir")
@@ -1356,11 +1393,14 @@ class InboundPoller:
         taken: Taken | None = None
         if getattr(msg, "files", None) or getattr(msg, "files_not_read", 0):
             # The sender's OWN words decide whether a recording is heard: an
-            # e-mail's body, never its subject (a shared voice memo's subject
-            # is the recording's name, and almost every e-mail has one).
+            # e-mail's body without its automatic sign-off, never its subject
+            # (a shared voice memo's subject is the recording's name, and
+            # almost every e-mail has one). Whether anything is left to answer
+            # is read from ALL the words, the subject too (R0.3).
             own = getattr(msg, "own_words", None)
-            has_words = bool(str(own).strip()) if own is not None else bool(text)
-            taken = await self._take_files(name, ch, msg, chat_on=chat_on, has_words=has_words)
+            mine = str(own).strip() if own is not None else text
+            taken = await self._take_files(name, ch, msg, chat_on=chat_on, words=text,
+                                           hear_audio=not mine)
             if taken.stop is not None:
                 return taken.stop
             if taken.heard:

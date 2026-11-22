@@ -2081,8 +2081,15 @@ takes files now.
   into words. The chat on this PC shows the recording and the question too.
   The question waits a day; after that, or once the recording is no longer
   on this PC, a 1 or 2 is an ordinary message. A recording sent as a file
-  with no words of yours (by email: nothing written in the email, whatever
-  its subject says) is turned into words the same way. A Local only chat
+  with no words of yours is turned into words the same way. By email that
+  means nothing written in the email, whatever its subject says: the line
+  your mail app adds by itself ("Sent from my iPhone", "Get Outlook for iOS"
+  and the like) and a signature under a "-- " line don't count. A name or a
+  note you typed yourself does count, and so does a line your mail app adds
+  that Jarvis doesn't know (some phone companies add their own): the
+  recording is then a file to work on, not heard, so delete that line before
+  you send. When a recording can't be heard, a subject that is only its name
+  waits with it; any other subject is answered at once. A Local only chat
   never sends a voice note off your network. The recording is kept either
   way.
 - **What is taken.** Pictures, PDF, Word, Excel and PowerPoint files, text and

@@ -281,15 +281,33 @@ def _offline_worker(monkeypatch) -> list[dict]:  # noqa: ANN001
     return asked
 
 
+#: What a mail app puts in the body of a shared voice memo by itself: no words
+#: of the sender's own.
+APP_ONLY_BODIES = [
+    "",
+    "Sent from my iPhone",
+    "\n\nSent from my iPhone\n",
+    "Get Outlook for iOS<https://aka.ms/o0ukef>",
+    "Sent from my Samsung Galaxy smartphone.",
+    "Von meinem iPhone gesendet",
+    "-- \nAlice Example\nExample Ltd",
+]
+
+
+@pytest.mark.parametrize("body", APP_ONLY_BODIES)
 @pytest.mark.parametrize("subject", ["New Recording 3", ""])
-def test_a_voice_memo_by_email_is_heard_whatever_its_subject(subject, platform, tmp_path, monkeypatch):
+def test_a_voice_memo_by_email_is_heard_whatever_its_subject(subject, body, platform, tmp_path,
+                                                             monkeypatch):
     # Almost every e-mail has a subject, and a shared voice memo's subject is
     # the recording's name. The e-mail's own words are its body: with nothing
     # in it the recording is heard, as a voice note on Telegram is ("I heard:
     # ..." first, then the work). With the subject counted as words it was
-    # kept as a file and never heard.
+    # kept as a file and never heard. The line the mail app adds ("Sent from
+    # my iPhone", the usual body of a memo shared from the phone) and a
+    # signature under "-- " are not the sender's words either: with them
+    # counted, the memo was kept as a file and never heard.
     asked = _offline_worker(monkeypatch)
-    root, results, turn = _rig(platform, tmp_path, monkeypatch, [_memo(subject=subject, body="")],
+    root, results, turn = _rig(platform, tmp_path, monkeypatch, [_memo(subject=subject, body=body)],
                                voice_deps=_OfflineModel(platform))
 
     kept = files_under(root)
@@ -303,20 +321,133 @@ def test_a_voice_memo_by_email_is_heard_whatever_its_subject(subject, platform, 
     assert turn.calls[0].thread_files == [str(kept[0])]
 
 
-def test_an_audio_file_with_words_in_the_body_is_a_file(platform, tmp_path, monkeypatch):
+@pytest.mark.parametrize("body", [
+    "File this with the March notes.",
+    "File this with the March notes.\n\nSent from my iPhone",
+    "Sent from my iPhone\nFile this with the March notes.",
+    "Alice",  # a name the sender typed is their words: never guessed at
+])
+def test_an_audio_file_with_words_in_the_body_is_a_file(body, platform, tmp_path, monkeypatch):
     # Words in the body are the sender's own: the recording is a file to work
-    # on, as an audio file with a caption is on Telegram.
+    # on, as an audio file with a caption is on Telegram. Only the mail app's
+    # own last line is left out, never a line the sender wrote.
     asked = _offline_worker(monkeypatch)
     root, results, turn = _rig(
         platform, tmp_path, monkeypatch,
-        [_memo(subject="New Recording 3", body="File this with the March notes.")],
+        [_memo(subject="New Recording 3", body=body)],
         voice_deps=_OfflineModel(platform))
 
     kept = files_under(root)
     assert asked == []
     assert not any("I heard" in s for s in _SMTP.sent)
     assert turn.calls[0].attachments == [str(kept[0])]
-    assert "File this with the March notes." in turn.calls[0].messages[-1].content
+    # The turn reads the whole e-mail as it came, sign-off and all.
+    assert body.strip() in turn.calls[0].messages[-1].content
+
+
+@pytest.mark.parametrize("body, mine", [
+    ("Sent from my iPhone", ""),
+    ("  sent from my ipad.  ", ""),
+    ("Sent from Mail for Windows", ""),
+    ("Sent from my Pixel 9 Pro", ""),
+    ("Envoyé de mon iPhone", ""),
+    ("Please file it.\n\nSent from my iPhone\n", "Please file it."),
+    ("Please file it.\n-- \nAlice\nExample Ltd", "Please file it."),
+    ("Please file it.\n--\nAlice", "Please file it."),
+    ("Sent from my iPhone\nPlease file it.", "Sent from my iPhone\nPlease file it."),
+    ("Sent from my office, please file it", "Sent from my office, please file it"),
+    ("Sent from home", "Sent from home"),
+    ("Alice", "Alice"),
+])
+def test_only_the_mail_apps_own_line_is_left_out(body, mine):
+    from iron_jarvis.comm.base import without_signoff
+
+    assert without_signoff(body) == mine
+
+
+class _NothingSetUp:
+    """No offline speech model and no speech service: a recording is not heard."""
+
+    _VOICE_MAX_BYTES = 25 * 1024 * 1024
+
+    def __init__(self, platform) -> None:  # noqa: ANN001
+        self.platform = platform
+
+    def _vosk_model_path(self) -> None:
+        return None
+
+    def _voice_backend(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize("subject", ["New Recording 3", "New Recording 3.m4a", ""])
+def test_a_memo_not_heard_whose_subject_is_its_name_waits(subject, platform, tmp_path, monkeypatch):
+    # The subject of a shared memo is its name: no request. When it cannot be
+    # heard the message ends with the receipt, as a voice note on Telegram
+    # does, instead of a turn answering "New Recording 3". The second memo of
+    # the same name is kept as "New_Recording_3-2.m4a": its subject is still
+    # read against the name the phone sent.
+    memo = _memo(subject=subject, body="Sent from my iPhone")
+    root, results, turn = _rig(platform, tmp_path, monkeypatch, [memo, memo],
+                               voice_deps=_NothingSetUp(platform))
+
+    assert [r["status"] for r in results] == ["voice_not_heard", "voice_not_heard"]
+    assert len(files_under(root)) == 2
+    assert len(_SMTP.sent) == 2 and all("Saved New" in s for s in _SMTP.sent)
+    assert turn.calls == []
+
+
+def test_a_memo_not_heard_with_a_request_in_the_subject_still_runs_it(platform, tmp_path,
+                                                                      monkeypatch):
+    # Words in the subject that are not the recording's name are a request:
+    # the recording could not be heard, and the words still run.
+    root, results, turn = _rig(
+        platform, tmp_path, monkeypatch,
+        [_memo(subject="Call the bank at nine tomorrow", body="")],
+        voice_deps=_NothingSetUp(platform))
+
+    kept = files_under(root)
+    assert [r["status"] for r in results] == ["chat"]
+    assert len(turn.calls) == 1
+    assert turn.calls[0].messages[-1].content.startswith("Call the bank at nine tomorrow")
+    assert turn.calls[0].attachments == []
+    assert turn.calls[0].thread_files == [str(kept[0])]
+
+
+def _vcard(subject: str) -> EmailMessage:
+    mail = _mail(subject=subject, body="", pdfs=0)
+    mail.add_attachment(b"BEGIN:VCARD\nFN:Bank\nEND:VCARD\n", maintype="text", subtype="vcard",
+                        filename="bank.vcf")
+    return mail
+
+
+def _big_scan(subject: str) -> EmailMessage:
+    mail = _mail(subject=subject, body="", pdfs=0)
+    mail.add_attachment(b"x" * (2 * 1024 * 1024), maintype="application", subtype="pdf",
+                        filename="scan.pdf")
+    return mail
+
+
+@pytest.mark.parametrize("build, name", [(_vcard, "bank.vcf"), (_big_scan, "scan.pdf")])
+def test_a_subject_only_email_with_a_file_not_taken_still_runs_its_words(build, name, platform,
+                                                                         tmp_path, monkeypatch):
+    # R0.3: "the words still run". All of this e-mail's words are in its
+    # subject; its file is not taken. The receipt names the file, then the
+    # subject is answered, told one file was not read. It ended after the
+    # receipt, the subject never answered, while the body alone was read as
+    # its words.
+    from iron_jarvis.comm.inbound import files_not_read_note
+
+    platform.config.phone_file_max_mb = 1
+    root, results, turn = _rig(platform, tmp_path, monkeypatch,
+                               [build("Call the bank at nine tomorrow")])
+
+    assert files_under(root) == []
+    assert [r["status"] for r in results] == ["chat"]
+    assert len(_SMTP.sent) == 2 and f"I couldn't take {name}" in _SMTP.sent[0]
+    assert len(turn.calls) == 1 and turn.calls[0].attachments == []
+    assert turn.calls[0].messages[-1].content == (
+        "Call the bank at nine tomorrow\n\n" + files_not_read_note(1))
 
 
 def test_a_signature_and_a_body_picture_are_not_files():

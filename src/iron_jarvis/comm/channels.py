@@ -24,6 +24,7 @@ from .base import (
     auth_refusal,
     interpret_json,
     too_large_words,
+    without_signoff,
 )
 
 _log = get_logger("comm")
@@ -939,8 +940,11 @@ class EmailChannel(Channel):
                         sender_id=sender if verified else UNVERIFIED_PREFIX + sender,
                         text=subject + "\n" + body,
                         # 10-a: the body alone is the sender's own words (a
-                        # shared voice memo's subject is the recording's name).
-                        own_words=body,
+                        # shared voice memo's subject is the recording's name),
+                        # without the line the mail app adds ("Sent from my
+                        # iPhone"). It only decides whether a recording is
+                        # heard; ``text`` above is what the turn reads.
+                        own_words=without_signoff(body),
                         update_id=int(uid),
                         reply_to=sender,
                         is_bot=False,
