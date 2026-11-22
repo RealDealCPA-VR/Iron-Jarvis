@@ -70,7 +70,15 @@ def test_the_receipt_component_is_mounted_with_server_truth():
     # binds that to the preview opener, so pin BOTH halves: a row that names a
     # handler nobody fills would render a dead "open" on every receipt.
     assert "onOpenDocument={h.openDocument}" in body, "receipt lost its file opener"
-    assert re.search(r"openDocument:\s*\(path\)\s*=>\s*openDocPreview\(path\)", _PAGE), (
+    # v1.562.0 (36-a, moved on purpose): Quick Ask's small window draws no file
+    # panel, so THERE a file continues the chat in the main window with that
+    # file open (openFileInMainWindow); everywhere else the row still reaches
+    # the preview opener. Both arms are pinned.
+    assert re.search(
+        r"openDocument:\s*\(path\)\s*=>\s*(?:openDocPreview\(path\)|"
+        r"\(compact\s*\?\s*openFileInMainWindow\(path\)\s*:\s*openDocPreview\(path\)\))",
+        _PAGE,
+    ), (
         "the row's openDocument no longer reaches openDocPreview — the receipt's "
         "file links would do nothing"
     )
