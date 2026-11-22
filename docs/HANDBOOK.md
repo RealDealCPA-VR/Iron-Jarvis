@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.554.0 (2026-11-19).*
+holds itself to. Current as of v1.555.0 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Results come home to the chat that asked (v1.549.0)
+## Results come home to the chat that asked (v1.555.0)
 
 Something you set up from a chat now reports back into that same chat. Say
 "check this supplier's prices every Friday" and the schedule it makes says
