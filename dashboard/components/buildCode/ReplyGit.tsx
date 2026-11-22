@@ -17,6 +17,11 @@
  *    offered only when one can be opened; otherwise its one quiet line says
  *    why ("Start the next session on its own branch to open a pull
  *    request.").
+ *  - (review) The pull request's link is the folder's own read for a folder
+ *    session (sent only while the folder is on that pull request's branch,
+ *    `buildAppGit.prLinkFor`), so a folder now on another branch is offered
+ *    a pull request of its own. Once one is open, commits it lacks are said
+ *    in one quiet line with one quiet Push (never a force).
  *
  * Read once per settled reply (`readKey`), never polled. Nothing is drawn
  * when the folder is not a repository or there is nothing to offer.
@@ -29,6 +34,7 @@ import {
   COMMIT_LABEL,
   MESSAGE_FROM_RECORD,
   OPEN_PR_LABEL,
+  PUSH_LABEL,
   TICKS_LINE,
   branchFilesLine,
   canCommit,
@@ -37,12 +43,16 @@ import {
   getAppGit,
   ghNoteWords,
   hasGitWork,
+  needsPush,
   openAppPr,
   ownChanges,
+  prLinkFor,
   prLinkWords,
+  pushedWords,
+  unpushedLine,
   type AppGit,
 } from "@/lib/buildAppGit";
-import { gitRefusal, type GitRefusal } from "@/lib/buildGit";
+import { BUILD_CODE_GIT, gitRefusal, pushBranch, type GitRefusal } from "@/lib/buildGit";
 
 const FIELD =
   "w-full min-w-0 rounded-lg border hairline bg-transparent px-2 py-1.5 text-[13px] text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-accent/50";
@@ -68,7 +78,8 @@ export const ReplyGit = memo(function ReplyGit({
   sessionId: string;
   /** Changes when a reply settles: the row reads the folder again. */
   readKey: string;
-  /** The pull request the session's view already names ("" = none). */
+  /** The pull request a BRANCH session's view names ("" = none). A folder
+   *  session's is the folder's own read (`prLinkFor`): this is not used. */
   prUrl?: string;
   /** Something changed on the row (a commit, a pull request). */
   onChanged?: () => void;
@@ -77,7 +88,7 @@ export const ReplyGit = memo(function ReplyGit({
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState("");
   const [title, setTitle] = useState("");
-  const [busy, setBusy] = useState<"" | "commit" | "pr">("");
+  const [busy, setBusy] = useState<"" | "commit" | "pr" | "push">("");
   const [note, setNote] = useState("");
   const [refusal, setRefusal] = useState<GitRefusal | null>(null);
   const [openedUrl, setOpenedUrl] = useState("");
@@ -108,6 +119,9 @@ export const ReplyGit = memo(function ReplyGit({
     titleEdited.current = false;
     setNote("");
     setRefusal(null);
+    // The link of a pull request opened here comes back with the read (the
+    // folder's branch may have changed since).
+    setOpenedUrl("");
     // Read once the reply's end has settled (its last rows land in a burst;
     // opened on a scratch daemon, each one asked again, one after another).
     const t = window.setTimeout(() => void read(), READ_AFTER_MS);
@@ -167,7 +181,25 @@ export const ReplyGit = memo(function ReplyGit({
     }
   }
 
-  const link = openedUrl || git?.prUrl || prUrl;
+  async function push() {
+    if (!git || busy) return;
+    const n = git.unpushed;
+    setBusy("push");
+    setRefusal(null);
+    setNote("");
+    try {
+      const done = await pushBranch(sessionId, BUILD_CODE_GIT);
+      setNote(pushedWords(done.branch || git.branch, done.remote || git.remote, n));
+      onChanged?.();
+      await read();
+    } catch (e) {
+      setRefusal(gitRefusal(e, "The push did not go through."));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const link = openedUrl || prLinkFor(git, prUrl);
   if (!git || !hasGitWork(git, link)) {
     return note ? (
       <p role="status" data-testid="code-git-note" className="mt-3 break-words text-[12px] text-zinc-400">
@@ -311,15 +343,34 @@ export const ReplyGit = memo(function ReplyGit({
       ) : null}
 
       {link ? (
-        <a
-          data-testid="code-git-pr-link"
-          href={link}
-          target="_blank"
-          rel="noreferrer"
-          className="w-fit text-[12px] text-accent underline-offset-2 hover:underline"
-        >
-          {prLinkWords(Number(link.match(/\/pull\/(\d+)/)?.[1]) || null)}
-        </a>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <a
+            data-testid="code-git-pr-link"
+            href={link}
+            target="_blank"
+            rel="noreferrer"
+            className="w-fit text-[12px] text-accent underline-offset-2 hover:underline"
+          >
+            {prLinkWords(Number(link.match(/\/pull\/(\d+)/)?.[1]) || null)}
+          </a>
+          {needsPush(git, link) ? (
+            <>
+              <span data-testid="code-git-unpushed" className="min-w-0 break-words text-[12px] text-zinc-500">
+                {unpushedLine(git.unpushed, git.branch)}
+              </span>
+              <button
+                type="button"
+                data-testid="code-git-push"
+                disabled={!!busy}
+                onClick={() => void push()}
+                className={QUIET_BTN}
+              >
+                {busy === "push" ? <Loader2 size={13} className="mr-1 animate-spin" aria-label="Working" /> : null}
+                {PUSH_LABEL}
+              </button>
+            </>
+          ) : null}
+        </div>
       ) : null}
 
       {note ? (

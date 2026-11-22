@@ -5,7 +5,9 @@
 * ``GET  /build/app/sessions/{sid}/git`` — ``kind``: ``branch`` (the session
   works on its own branch: ``branches.status`` plus the files not committed),
   ``folder`` (in the folder directly: every changed file with its tick, the
-  branch, whether a pull request can be opened and why not), or ``none``
+  branch, whether a pull request can be opened and why not, ``pr_url`` only
+  while the folder is on that pull request's branch, and ``unpushed``: the
+  commits the remote's copy of the branch lacks), or ``none``
   (no repository, no folder yet). Each carries ``draft``, the commit message
   written from the session's record (the user's first message and the files).
 * ``GET  …/git/diff`` — a branch session's Branch view (``branch_changes``).
@@ -14,7 +16,8 @@
 * ``POST …/git/commit {message, paths?}`` — a branch session commits
   everything in its own copy of the folder (``branches.commit``); a folder
   session commits ONLY ``paths`` (``session_git.folder_commit``).
-* ``POST …/git/push`` — never a force.
+* ``POST …/git/push`` — never a force (the row's Push once a pull request is
+  open and the branch has commits it lacks; a branch session's Branch view).
 * ``POST …/git/pr {title, body}`` / ``GET …/git/pr`` — through the GitHub CLI;
   the link is kept on the row (``git_json``).
 * ``POST …/git/merge`` and ``POST …/git/discard {confirm}`` — a branch

@@ -397,6 +397,14 @@ def folder_status(home: Any, sid: str, row: Any, events: list[dict[str, Any]]) -
     base = _base_ref(top, remote, main)
     ahead = B._g(["rev-list", "--count", f"{base}..HEAD"], top, reads=True) if base and head else None
     out["ahead"] = int(ahead.out.strip() or 0) if ahead is not None and ahead.ok else 0
+    # 22-b review: the commits the remote's copy of this branch lacks (an open
+    # pull request does not have them until they are pushed), as
+    # ``branches.status`` counts them.
+    if tracking and head:
+        unp = B._g(["rev-list", "--count", f"refs/remotes/{remote}/{branch}..HEAD"], top, reads=True)
+        out["unpushed"] = int(unp.out.strip() or 0) if unp.ok else 0
+    else:
+        out["unpushed"] = out["ahead"]
     pr = direct_pr(row)
     out["pr_url"] = pr["url"] if pr and pr.get("branch") == branch else ""
     out["can_pr"], out["pr_note"] = _can_pr(branch, main, remote)

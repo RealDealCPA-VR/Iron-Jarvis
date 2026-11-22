@@ -173,6 +173,23 @@ describe("Commit and Open a pull request under the reply, in the real view", () 
     expect(H.placed.length).toBeGreaterThan(0);
   });
 
+  it("a folder now on another branch than the pull request the view names is offered one of its own (review)", async () => {
+    open({}, { pull_request: { url: "https://github.com/acme/shop/pull/7", number: 7, branch: "feature-a" } });
+    H.gets[GIT] = {
+      ...FOLDER_GIT,
+      branch: "feature-b",
+      files: [],
+      uncommitted: 0,
+      ahead: 1,
+      pr_url: "",
+      pr_draft: { title: "Make x seven", body: "" },
+    };
+    view();
+    await screen.findByText(REPLY, {}, { timeout: 10_000 });
+    expect(await screen.findByTestId("code-git-open-pr", {}, { timeout: 10_000 })).toBeTruthy();
+    expect(screen.queryByTestId("code-git-pr-link")).toBeNull();
+  });
+
   it("a reply that passed its check: the row is there too", async () => {
     open({ events: [...TURN, proof({})] });
     view();

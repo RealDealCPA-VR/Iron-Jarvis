@@ -2477,7 +2477,7 @@ function SessionPane({
               <ReplyGit
                 sessionId={session.id}
                 readKey={gitKey}
-                prUrl={session.git?.prUrl || session.pullRequestUrl || ""}
+                prUrl={session.git?.prUrl || ""}
                 onChanged={() => void load({ follow: false })}
               />
             ) : null}

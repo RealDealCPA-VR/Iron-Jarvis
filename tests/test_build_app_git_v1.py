@@ -18,7 +18,9 @@ Pinned:
   the user had staged stays staged; a file the session did not change is
   listed unticked;
 * a pull request from the folder directly is offered only off the main
-  branch, and its push writes no upstream into the user's config;
+  branch, and its push writes no upstream into the user's config; a later
+  commit is counted as not pushed and Push puts it into the open pull
+  request; the link is sent only while the folder is on its branch;
 * a press is refused while a reply runs, and holds the session while it runs;
 * the tool of a branch session runs in its own copy of the folder with the
   main folder's environment;
@@ -339,6 +341,67 @@ async def test_a_folder_on_the_main_branch_is_not_offered_a_pull_request_and_one
         assert "git" not in view
         pr = (await c.get(f"/build/app/sessions/{sid}/git/pr")).json()
         assert pr["url"] == "https://github.com/acme/proj/pull/7"
+    await stop_all(app)
+
+
+async def test_a_later_commit_is_pushed_into_the_open_pull_request_and_the_link_follows_the_branch(
+        app, repo, tmp_path, monkeypatch):
+    """Review (should): once a folder session's pull request is open, a later
+    Commit on its branch is not in it until it is pushed. The read counts it
+    (``unpushed``) and ``POST …/git/push`` pushes it: never a force, and no
+    upstream written. The link is sent only while the folder is on that pull
+    request's branch. The thin reads answer too: the draft again for the files
+    asked (no model) and no Branch view for a folder session."""
+    bare = github_remote(tmp_path, repo)
+    install_fake_gh(tmp_path, monkeypatch)
+    no_model(app)
+    svc = S.service_for(app.state.platform)
+    fake_tool(svc, monkeypatch)
+    async with client(app) as c:
+        sid = (await c.post("/build/app/sessions", json={"harness": "claude-code", "folder": str(repo)})).json()["id"]
+        base = f"/build/app/sessions/{sid}/git"
+        git("switch", "-q", "-c", "feature", cwd=repo)
+        (repo / "app.py").write_bytes(b"x = 5\n")
+        r = await c.post(f"{base}/commit", json={"message": "Make x five", "paths": ["app.py"]})
+        assert r.status_code == 200, r.text
+        r = await c.post(f"{base}/pr", json={"title": "Make x five", "body": ""})
+        assert r.status_code == 200, r.text
+        st = (await c.get(base)).json()
+        assert st["pr_url"] == "https://github.com/acme/proj/pull/7"
+        assert (st["pushed"], st["unpushed"]) == (True, 0)
+
+        (repo / "app.py").write_bytes(b"x = 6\n")
+        r = await c.post(f"{base}/commit", json={"message": "Make x six", "paths": ["app.py"]})
+        assert r.status_code == 200, r.text
+        st = (await c.get(base)).json()
+        assert (st["pushed"], st["unpushed"], st["ahead"]) == (False, 1, 2)
+        assert st["pr_url"] == "https://github.com/acme/proj/pull/7"
+        before = git("rev-parse", "refs/heads/feature", cwd=bare)
+        r = await c.post(f"{base}/push")
+        assert r.status_code == 200, r.text
+        assert (r.json()["pushed"], r.json()["branch"], r.json()["remote"]) == (True, "feature", "origin")
+        assert git("rev-parse", "refs/heads/feature", cwd=bare) == git("rev-parse", "HEAD", cwd=repo) != before
+        assert not git_ok("config", "--get", "branch.feature.remote", cwd=repo), "no upstream was written"
+        st = (await c.get(base)).json()
+        assert (st["pushed"], st["unpushed"]) == (True, 0)
+
+        # On another branch the pull request of feature is not this branch's:
+        # no link, and a pull request of its own is offered.
+        git("switch", "-q", "-c", "feature-b", cwd=repo)
+        (repo / "app.py").write_bytes(b"x = 7\n")
+        r = await c.post(f"{base}/commit", json={"message": "Make x seven", "paths": ["app.py"]})
+        assert r.status_code == 200, r.text
+        st = (await c.get(base)).json()
+        assert (st["branch"], st["pr_url"], st["can_pr"], st["ahead"]) == ("feature-b", "", True, 3)
+        assert (st["pushed"], st["unpushed"]) == (False, 3), "the remote has no feature-b"
+        view = (await c.get(f"/build/app/sessions/{sid}")).json()["session"]
+        assert view["pull_request"]["branch"] == "feature", "the view names the pull request with its branch"
+
+        r = await c.post(f"{base}/draft", json={"paths": ["app.py"]})
+        assert r.status_code == 200, r.text
+        assert r.json()["message"] == "Change app.py\n\nFiles:\n- app.py"
+        r = await c.get(f"{base}/diff")
+        assert r.status_code == 409 and r.json()["detail"] == SG.NO_DIFF_HERE
     await stop_all(app)
 
 

@@ -2320,7 +2320,10 @@ the other.
 
 **Pull requests** go through the GitHub CLI (`gh`, signed in). Without it the
 box opens GitHub's own page instead. The branch is pushed first, never with a
-force.
+force. Once the pull request is open, a later commit on that branch is not in
+it until it is pushed: the box says so and offers **Push** (never a force).
+The box shows the pull request only while your folder is on its branch; on
+another branch it offers a pull request of that branch.
 
 **Never while it works.** Commit and the pull request wait until the reply
 has finished and Iron Jarvis has checked it. Commit also waits until the tool

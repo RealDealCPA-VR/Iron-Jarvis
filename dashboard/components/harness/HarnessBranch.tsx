@@ -48,6 +48,7 @@ import {
   moreFiles,
   pushBranch,
   statusLine,
+  BUILD_CODE_GIT,
   CHAT_CODE_GIT,
   type BranchStatus,
   type GitRefusal,
@@ -56,6 +57,7 @@ import {
   type SessionGit,
 } from "@/lib/buildGit";
 import { ciTone, ciWatchWords, getCiView, type CiView } from "@/lib/ciWatch";
+import { OPEN_PR_LABEL, ghNoteWords } from "@/lib/buildAppGit";
 
 const ACTION =
   "inline-flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
@@ -200,6 +202,12 @@ export function BranchView({
   }, [ciLive, readCi, refreshKey]);
   useVisibleInterval(() => void readCi(), PR_POLL_MS, ciLive);
   const ciWords = ci && ciLive ? ciWatchWords(ci) : "";
+  // 22-b review (G8): inside Build › Code the press has that page's one word,
+  // the one the row under the reply uses ("Open a pull request").
+  const buildCode = root === BUILD_CODE_GIT;
+  const prPress = buildCode ? OPEN_PR_LABEL : "Create PR";
+  const prGo = buildCode ? OPEN_PR_LABEL : "Create pull request";
+  const ghNote = buildCode ? ghNoteWords(status?.gh.note || "") : status?.gh.note || "";
 
   async function act(name: string, fn: () => Promise<string | null>) {
     setBusy(name);
@@ -428,7 +436,7 @@ export function BranchView({
           onClick={startPr}
           className={ACTION}
         >
-          Create PR
+          {prPress}
         </button>
         {canMerge ? (
           <ConfirmButton
@@ -525,7 +533,7 @@ export function BranchView({
               onClick={() => void doPr()}
               className="btn-accent text-xs"
             >
-              Create pull request
+              {prGo}
             </button>
             <button type="button" onClick={() => setMode("idle")} className={ACTION}>
               Cancel
@@ -536,7 +544,7 @@ export function BranchView({
 
       {prFallback ? (
         <div data-testid="branch-pr-fallback" className="space-y-1 text-[12px] text-zinc-400">
-          <p>{status?.gh.note || "Pull requests are made on GitHub's own page."}</p>
+          <p>{ghNote || "Pull requests are made on GitHub's own page."}</p>
           {status?.compareUrl ? (
             <a
               data-testid="branch-compare-link"

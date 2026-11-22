@@ -637,7 +637,10 @@ export interface CodeSession {
   checkout?: string;
   /** 22-b: a session on its own branch (the Branch view's facts). */
   git?: SessionGit;
-  /** 22-b: the pull request a session in the folder directly opened. */
+  /** 22-b: the pull request a session in the folder directly opened. Never
+   *  the row under the reply's link (review): the folder may be on another
+   *  branch now, and the row's own read names one only for the branch the
+   *  folder is on (`buildAppGit.prLinkFor`). */
   pullRequestUrl?: string;
 }
 

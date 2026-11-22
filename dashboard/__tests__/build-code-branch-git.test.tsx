@@ -62,8 +62,10 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => nul
 
 import { ReplyGit } from "@/components/buildCode/ReplyGit";
 import { StartComposer } from "@/components/buildCode/StartComposer";
+import { BranchView } from "@/components/harness/HarnessBranch";
 import { decodeCodeSession, decodeCodingTools, groupByFolder, sessionFolderWords } from "@/lib/buildApp";
-import { BRANCH_OFFER, OPEN_PR_LABEL, decodeAppGit, ghNoteWords, hasGitWork } from "@/lib/buildAppGit";
+import { BRANCH_OFFER, OPEN_PR_LABEL, decodeAppGit, ghNoteWords, hasGitWork, prLinkFor } from "@/lib/buildAppGit";
+import { BUILD_CODE_GIT, decodeSessionGit } from "@/lib/buildGit";
 import { resetFolderDefaultsCache } from "@/lib/folderDefaults";
 
 const SID = "app_1";
@@ -233,6 +235,91 @@ describe("Commit and Open a pull request under the reply", () => {
     render(<ReplyGit sessionId={SID} readKey="r1" />);
     expect((await screen.findByTestId("code-git-pr-note")).textContent).toBe(note);
     expect(screen.queryByTestId("code-git-open-pr")).toBeNull();
+  });
+
+  it("a folder now on another branch is offered a pull request of its own, whatever the view names (review)", async () => {
+    // The view still names the pull request of feature-a; the folder is on
+    // feature-b with a commit main lacks, and its read names none for it.
+    const OLD = "https://github.com/acme/shop/pull/7";
+    api.gets[GIT] = folderGit({
+      branch: "feature-b",
+      files: [],
+      uncommitted: 0,
+      ahead: 1,
+      pr_url: "",
+      pr_draft: { title: "Make x seven", body: "" },
+    });
+    render(<ReplyGit sessionId={SID} readKey="r1" prUrl={OLD} />);
+    expect(await screen.findByTestId("code-git-open-pr")).toBeTruthy();
+    expect((screen.getByTestId("code-git-pr-title") as HTMLInputElement).value).toBe("Make x seven");
+    expect(screen.queryByTestId("code-git-pr-link")).toBeNull();
+    // A branch session's branch never changes: its view's link is its own.
+    const branchy = decodeAppGit({ kind: "branch", branch: "ij/rate-3f2a", base: "main", ahead: 1, pr_url: "" });
+    expect(prLinkFor(branchy, OLD)).toBe(OLD);
+    expect(prLinkFor(decodeAppGit(folderGit({ pr_url: "" })), OLD)).toBe("");
+  });
+
+  it("an open pull request that lacks a later commit says so, and Push puts it in: one quiet press (review)", async () => {
+    const PR = "https://github.com/acme/shop/pull/7";
+    api.gets[GIT] = folderGit({ files: [], uncommitted: 0, ahead: 2, pushed: false, unpushed: 1, pr_url: PR });
+    api.postReply[`${GIT}/push`] = { pushed: true, remote: "origin", branch: "feature" };
+    api.afterPost[`${GIT}/push`] = () => {
+      api.gets[GIT] = folderGit({ files: [], uncommitted: 0, ahead: 2, pushed: true, unpushed: 0, pr_url: PR });
+    };
+    render(<ReplyGit sessionId={SID} readKey="r1" />);
+    expect((await screen.findByTestId("code-git-unpushed")).textContent).toBe(
+      "1 commit on feature is not in the pull request yet.",
+    );
+    expect(screen.getByTestId("code-git-pr-link").getAttribute("href")).toBe(PR);
+    expect(screen.queryByTestId("code-git-open-pr")).toBeNull();
+    const push = screen.getByTestId("code-git-push");
+    expect(push.textContent).toBe("Push");
+    expect(push.className).not.toContain("btn-accent"); // quiet: Commit stays the one main button
+    fireEvent.click(push);
+    await waitFor(() => expect(api.posts.some((p) => p.path === `${GIT}/push`)).toBe(true));
+    expect(api.posts.filter((p) => p.path.startsWith(GIT)).map((p) => p.path)).toEqual([`${GIT}/push`]);
+    expect((await screen.findByTestId("code-git-note")).textContent).toBe(
+      "Pushed feature to origin: the pull request has that commit now.",
+    );
+    await waitFor(() => expect(screen.queryByTestId("code-git-push")).toBeNull());
+    expect(screen.queryByTestId("code-git-unpushed")).toBeNull();
+  });
+
+  it("the Branch view in Build › Code says the row's word for the pull request (G8, review)", async () => {
+    const sgit = decodeSessionGit({ branch: "ij/rate-3f2a", base: "main", worktree: "C:\\w", pr_url: "" })!;
+    const status = {
+      exists: true,
+      ahead: 1,
+      behind: 0,
+      uncommitted: 0,
+      remote: "origin",
+      pushed: false,
+      unpushed: 1,
+      in_base: false,
+      base_exists: true,
+      base_checked_out_at: "",
+      commits: [{ sha: "1a2b3c4", subject: "Add a limiter" }],
+      pr_draft: { title: "Add a limiter", body: "" },
+      compare_url: "",
+      gh: { installed: true, signed_in: true, note: "" },
+    };
+    const diff = { changes: [], files: 0, added: 0, removed: 0, truncated_files: false, base: "main", merge_base: "abc" };
+    api.gets[GIT] = status;
+    api.gets[`${GIT}/diff`] = diff;
+    render(<BranchView sessionId={SID} git={sgit} refreshKey={0} root={BUILD_CODE_GIT} watchCi={false} />);
+    const press = (await screen.findByTestId("branch-pr")) as HTMLButtonElement;
+    await waitFor(() => expect(press.disabled).toBe(false));
+    expect(press.textContent).toBe(OPEN_PR_LABEL);
+    fireEvent.click(press);
+    expect((await screen.findByTestId("branch-pr-go")).textContent).toBe(OPEN_PR_LABEL);
+    // Chat › Code keeps its own words.
+    cleanup();
+    api.gets[`/build/sessions/${SID}/git`] = status;
+    api.gets[`/build/sessions/${SID}/git/diff`] = diff;
+    render(<BranchView sessionId={SID} git={sgit} refreshKey={0} watchCi={false} />);
+    const chat = (await screen.findByTestId("branch-pr")) as HTMLButtonElement;
+    await waitFor(() => expect(chat.disabled).toBe(false));
+    expect(chat.textContent).toBe("Create PR");
   });
 
   it("a branch session commits everything in its own copy (no ticks)", async () => {

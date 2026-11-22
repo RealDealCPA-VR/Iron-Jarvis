@@ -54,6 +54,17 @@ export function branchFilesLine(n: number, branch: string): string {
   return `${n} file${n === 1 ? "" : "s"} not committed on ${branch}, in this session's own copy of the folder.`;
 }
 export const MESSAGE_FROM_RECORD = "Written by Iron Jarvis from your first message and the files. Edit it before you commit.";
+/** Chat › Code's word for the same press (HarnessBranch). */
+export const PUSH_LABEL = "Push";
+/** 22-b review: an open pull request lacks the commits not pushed yet. */
+export function unpushedLine(n: number, branch: string): string {
+  return n === 1
+    ? `1 commit on ${branch} is not in the pull request yet.`
+    : `${n} commits on ${branch} are not in the pull request yet.`;
+}
+export function pushedWords(branch: string, remote: string, n: number): string {
+  return `Pushed ${branch} to ${remote}: the pull request has ${n === 1 ? "that commit" : "those commits"} now.`;
+}
 
 // ------------------------------------------------------------------ the reading
 
@@ -79,6 +90,9 @@ export interface AppGit {
   draft: string;
   ahead: number;
   pushed: boolean;
+  /** Commits the remote's copy of the branch lacks (an open pull request
+   *  does not have them yet). */
+  unpushed: number;
   remote: string;
   canPr: boolean;
   prNote: string;
@@ -123,6 +137,7 @@ export function decodeAppGit(raw: unknown): AppGit | null {
     draft: str(r.draft, 5000),
     ahead: num(r.ahead),
     pushed: r.pushed === true,
+    unpushed: num(r.unpushed),
     remote: str(r.remote, 200),
     // A branch session can open one once it has commits its base lacks.
     canPr: kind === "branch" ? num(r.ahead) > 0 && !!base : r.can_pr === true,
@@ -191,6 +206,22 @@ export function ownChanges(g: AppGit): boolean {
 export function hasGitWork(g: AppGit | null, prUrl: string): boolean {
   if (!g || g.kind === "none") return false;
   return ownChanges(g) || (g.canPr && g.ahead > 0) || !!prUrl || !!g.prUrl;
+}
+
+/** 22-b review: the pull request the row names. A folder session's comes
+ *  from the folder's read ALONE: the daemon sends it only while the folder is
+ *  on that pull request's branch (`session_git.folder_status`), so a folder
+ *  now on another branch is offered a pull request of its own. The session
+ *  view's link (`viewUrl`) is a branch session's only: its branch never
+ *  changes. */
+export function prLinkFor(g: AppGit | null, viewUrl: string): string {
+  if (!g) return "";
+  return g.prUrl || (g.kind === "branch" ? viewUrl : "");
+}
+
+/** 22-b review: an open pull request lacks commits: one quiet Push. */
+export function needsPush(g: AppGit, link: string): boolean {
+  return !!link && g.kind !== "none" && g.unpushed > 0 && !!g.branch;
 }
 
 /** The GitHub CLI's note in Build › Code's words ("Open a pull request",
