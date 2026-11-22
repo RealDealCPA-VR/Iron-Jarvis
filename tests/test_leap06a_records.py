@@ -553,3 +553,45 @@ async def test_run_again_on_a_real_run_is_no_rehearsal(daemon, tmp_path):
     with session_scope(p.engine) as db:
         assert rehearsal_of(db.get(SessionRow, again.id)) == ""
     assert RR.renew_in(p.engine, {}) == ""
+
+
+def _two_runs(p, **fields) -> None:
+    """One real run and one REHEARSAL's run, the same in every other way."""
+    import json
+
+    with session_scope(p.engine) as db:
+        for sid, options in (("s_real", {}), ("s_rehearsed", {"rehearsal_id": "reh_records"})):
+            db.add(SessionRow(id=sid, task=TASK, agent_type=AgentType.BUILDER,
+                              options_json=json.dumps(options), summary="Renamed the files.", **fields))
+        db.commit()
+
+
+def test_a_rehearsals_run_never_teaches_the_agents_coach(daemon):
+    """The coach reads an agent's recent runs (``coach/signals.recent_runs``)
+    to suggest how it could work better. A rehearsal's run did nothing and
+    was told to carry on as if it had, so it is never one of them. (The
+    rebase review: this filter was pinned by nothing.)"""
+    from iron_jarvis.coach.signals import recent_runs
+
+    app, p = daemon
+    _two_runs(p, agent_name="Bookkeeper")
+    assert [r.id for r in recent_runs(p, "Bookkeeper")] == ["s_real"]
+
+
+def test_the_memory_review_card_never_records_a_rehearsal_as_a_review(tmp_path):
+    """Opening the memory review card records each finished review run the
+    schedule did not record itself (``_reconcile_unrecorded_reviews``). A
+    rehearsal of the review schedule is no review: it is never recorded, so
+    the review point never moves for it. (The rebase review: this filter was
+    pinned by nothing.)"""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.core.models import SessionStatus
+    from iron_jarvis.memory.steward import MemorySteward
+    from iron_jarvis.templates import MEMORY_REVIEW_SCHEDULE
+
+    client = TestClient(create_app(str(tmp_path / "home")))
+    p = client.app.state.platform
+    _two_runs(p, origin=f"schedule:{MEMORY_REVIEW_SCHEDULE['name']}", status=SessionStatus.COMPLETED)
+    assert client.get("/memory/review").status_code == 200
+    assert [r["session_id"] for r in MemorySteward(p).runs()] == ["s_real"]

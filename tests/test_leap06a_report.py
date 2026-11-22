@@ -203,6 +203,79 @@ async def test_a_rehearsal_rings_no_bell_and_sends_no_notice(daemon):
     assert (row.last_status, row.last_session_id) == ("", "")
 
 
+async def test_a_failed_rehearsal_rings_no_bell_either(daemon):
+    """A rehearsal's run that FAILS has no ``rehearsed`` outcome: the mark its
+    completion carries (``rehearsal``) keeps the bell and every notice quiet.
+    (The rebase review: this mark was pinned by nothing.)"""
+    p, events, sent, folder = daemon
+    p.scheduler.add_task(
+        "Broken tidy", "0 2 * * *", kind="task",
+        payload={"task": "Tidy the inbox folder.", "workspace_root": str(folder)},
+    )
+
+    async def broken(**kw):
+        raise RuntimeError("the model stopped answering")
+        yield  # pragma: no cover - makes this an async generator
+
+    p.router.stream = broken
+    started = await RR.start(p, "schedule", "Broken tidy")
+    await _settled(p, started["id"])
+    done = [e for e in events if e["type"] == "session.completed"]
+    assert done, "control: the rehearsal's run ended"
+    assert all(e["payload"].get("rehearsal") is True for e in done), done
+    assert not any(bell_pings(e) for e in done), "a failed rehearsal rang the bell"
+    await asyncio.sleep(0)
+    assert sent == [], "a failed rehearsal sent a notice"
+
+
+async def test_a_step_the_real_run_would_ask_about_is_listed_as_an_ask(daemon, monkeypatch):
+    """The runtime's own pause gate says an unattended schedule's run would
+    stop and ask before this step (the user set it to Ask first): the
+    rehearsal lists it as an ask, runs nothing and never parks the run."""
+    p, events, sent, folder = daemon
+    monkeypatch.setitem(p.permissions._base, "write_file", "ask")
+    p.scheduler.add_task(
+        "Ask first", "0 2 * * *", kind="task",
+        payload={"task": "Write the summary.", "workspace_root": str(folder), "notify": False},
+    )
+    p.router.stream = _scripted([[ToolCall(id="w", name="write_file",
+                                           arguments={"path": "summary.txt", "content": "x"})]])
+    started = await RR.start(p, "schedule", "Ask first")
+    view = await _settled(p, started["id"], seconds=30.0)
+    assert view["status"] == "ready", view
+    assert [(w["words"], w["would"]) for w in view["would"] if "summary.txt" in w["words"]] == [
+        ("write summary.txt", "ask")
+    ], view
+    assert not (folder / "summary.txt").exists()
+
+
+async def test_a_rehearsal_of_the_memory_review_records_no_review(daemon, monkeypatch):
+    """The memory review schedule's real fire records a review and moves the
+    steward's cursor (``_record_memory_review``); its rehearsal records none."""
+    from iron_jarvis.templates import MEMORY_REVIEW_SCHEDULE
+
+    p, events, sent, folder = daemon
+    recorded: list[dict] = []
+
+    class _Steward:
+        def plan(self) -> dict:
+            return {"task": "Review this week's conversations.", "cursor": "c1", "since": "",
+                    "conversations": 2, "docs": 0, "refs": []}
+
+        def record_run(self, **kw) -> None:
+            recorded.append(kw)
+
+    monkeypatch.setattr(p, "memory_steward", _Steward())
+    name = MEMORY_REVIEW_SCHEDULE["name"]
+    p.scheduler.add_task(name, "0 9 * * 1", kind="task",
+                         payload={"task": "Review memory.", "workspace_root": str(folder), "notify": False})
+    p.router.stream = _scripted([])
+    started = await RR.start(p, "schedule", name)
+    view = await _settled(p, started["id"])
+    assert view["status"] == "ready", view
+    assert recorded == [], "a rehearsal recorded a memory review and moved its cursor"
+
+
 async def test_keep_it_stamps_the_schedule(daemon):
     p, events, sent, folder = daemon
     p.scheduler.add_task("Keepme", "0 9 * * *", kind="task",

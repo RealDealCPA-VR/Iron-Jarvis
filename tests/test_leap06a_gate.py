@@ -248,6 +248,10 @@ LETS_RUN: dict[str, str] = {
     "code_handoff_list": "lists the coding tools and this session's helpers; starts none",
     "code_load": "reads a saved script's source; runs nothing",
     "code_search": "searches saved scripts; runs nothing",
+    "coding_reply_check": (
+        "reads Iron Jarvis's own record of a Build › Code reply's test check and the folder's "
+        "check setting (22-a); runs no test and writes nothing"
+    ),
     "compare_documents": _DOCS,
     "computer_use_status": _SELF,
     "config_list": _RECORDS,
@@ -302,6 +306,10 @@ LETS_RUN: dict[str, str] = {
     "pane_read": _PANES,
     "pane_wait": _PANES,
     "pdf_form_fields": _DOCS,
+    "peer_allows": (
+        "lists the paired computers and what each may do here (41-a); turns no switch on or "
+        "off (peer_allow_off is a write, so it is held)"
+    ),
     "pixio_models": "lists media models; generates nothing and spends nothing",
     "pixio_params": "lists one media model's settings; generates nothing and spends nothing",
     "plan_update": "a coding session's own step list; changes nothing outside it",

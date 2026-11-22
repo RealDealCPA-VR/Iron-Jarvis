@@ -23,10 +23,40 @@ the file (``to_thread(httpx_post, url)``, ``_send_once(…)``), a name from the
 sandbox, whose import is now a door too (``NativeSandbox(policy).run(cmd)``),
 and a tool executed outside the registry, which skips the rehearsal's hold
 (``registry.get("notify").execute(args, ctx)``).
-What the scan cannot see: a call through ``getattr`` with the name in a
-string, a second call through a local name bound to a sender (``f = ch.send``
-counts once, at the binding), and a call of a helper whose name does not say
-it sends (``_deliver(…)``: its body's own send is counted where it is).
+Review 9: and a private sender with a suffix (``self._post_json(url)``, never
+``self._post_run_learning``, which is "after the run"), a sending function
+called through a module attribute (``cb.httpx_post(url)``), a start through
+the loop itself (``loop.subprocess_exec``), and a post into a chat through
+any of the app's chat writers (``report_to_chat``, ``say_in_chat``,
+``append_to_chat_thread``). Each count is EXACT: a door added fails until it
+is reviewed, and a door removed, or a scan narrowed, fails until the count
+comes down, so no reviewed count leaves room for a new door. And each
+alternative of each pattern is pinned by one line only it sees, each
+exclusion by one line it keeps out (:data:`_SHAPES`), so no pattern here is
+pinned by nothing.
+
+THE SCAN IS A TRIPWIRE FOR THE COMMON SHAPES, NOT A PROOF. It reads text
+with patterns, and a pattern can always be dodged. Shapes it is known NOT to
+see (reviews 8 and 9 found none of them reaching a real send or process
+start in the scanned code):
+
+- a call through ``getattr`` with the name in a string;
+- a second call through a local name bound to a sender (``f = ch.send``
+  counts once, at the binding);
+- a call of a helper whose name does not say it sends (``_deliver(…)``:
+  its body's own send is counted where it is, if that file is scanned);
+- a sending function with another name called through a module attribute
+  (``cb.deliver(url)``; ``cb.httpx_post`` and ``x.send_*`` ARE seen);
+- an HTTP verb other than post on a client this file did not make
+  (``self._client.request("POST", url)``, ``self._client.put(url)``): seeing
+  them would also count every ``queue.put`` and ``db.delete``;
+- anything in a package that is not in :data:`SCANNED`.
+
+The real guarantee is the registry gate: ``registry.invoke`` holds every
+call of a tool that is not READONLY in a rehearsal, proven through the layer
+that refuses (``tests/test_leap06a_gate.py``), and each listed side door is
+driven through the real daemon below. This scan only makes a NEW effect
+outside the registry, in a common shape, fail until somebody reviews it.
 """
 
 from __future__ import annotations
@@ -126,7 +156,7 @@ _USE = r"\b(?!\s*(?::(?!=)|=(?!=)))"
 #: one is not one).
 DOOR_KINDS: dict[str, re.Pattern[str]] = {
     "notify": re.compile(r"\.notify" + _USE),
-    "channel_send": re.compile(r"\b(?:ch|chan\w*|channel\w*)\.send" + _USE),
+    "channel_send": re.compile(r"\b(?:ch|chan\w*)\.send" + _USE),
     "http_post": re.compile(r"\.\s*_?http_post" + _USE),
     "http_client": re.compile(
         r"\bhttpx\.(?:post|get|put|patch|delete|request|stream|AsyncClient|Client)\b"
@@ -142,10 +172,18 @@ DOOR_KINDS: dict[str, re.Pattern[str]] = {
         r"|\bimport\s+(?:httpx|requests|aiohttp|websockets|socket)\s+as\b"
         r"|\bfrom\s+(?:httpx|requests|aiohttp|websockets|socket|urllib\.request)\s+import\b"
         r"|\bfrom\s+[\w.]+\s+import\s+(?:\([^)]*|[^\n(]*)\bhttpx_(?:post|get)\b"
+        # Review 9: those transports called through a module attribute
+        # (``cb.httpx_post(url)``, ``comm.httpx_get(url)``).
+        r"|\.\s*httpx_(?:post|get)\b"
     ),
     "smtp": re.compile(r"\bsmtplib\.SMTP(?:_SSL)?\b"),
     "remote_agent": re.compile(r"\bRemoteAgentRegistry\("),
-    "chat_post": re.compile(r"(?<!def )\bdeliver_session_line" + _USE),
+    # A post into a chat. Review 9: through any of the app's chat writers,
+    # the report writer (idea 39) and the one writer under them too, each
+    # mention in code (its import is one, the way the procs import is).
+    "chat_post": re.compile(
+        r"(?<!def )\b(?:deliver_session_line|report_to_chat|say_in_chat|append_to_chat_thread)" + _USE
+    ),
     "process": re.compile(
         r"\b_?procs\.(?:spawn|run|run_to_files|run_async|adopt)" + _USE
         # Review 6: ``procs`` under any name. The import is the door: a file
@@ -154,7 +192,8 @@ DOOR_KINDS: dict[str, re.Pattern[str]] = {
         r"|\bfrom\s+(?:\.+|iron_jarvis\.)core\.procs\s+import\b"
         r"|\bimport\s+iron_jarvis\.core\.procs\b"
         r"|\bfrom\s+subprocess\s+import\b"
-        r"|\bsubprocess\.\w+|\bcreate_subprocess_(?:exec|shell)\b"
+        # Review 9: and the loop's own start (``loop.subprocess_exec``).
+        r"|\bsubprocess\.\w+|\b(?:create_)?subprocess_(?:exec|shell)\b"
         r"|\bos\.(?:system|popen|startfile|spawn\w*|exec\w*)\b"
     ),
     "sandbox": re.compile(
@@ -162,7 +201,8 @@ DOOR_KINDS: dict[str, re.Pattern[str]] = {
         # Review 8: the sandbox under any name. The import is the door, the
         # way the procs import is, and each use of a name it brings is one
         # more (``_name_doors``): ``NativeSandbox(policy).run(cmd)``.
-        + r"|\bfrom\s+(?:\.+|iron_jarvis\.)sandbox\b[\w.]*\s+import\b"
+        # (``from iron_jarvis.sandbox… import`` is counted by the last one.)
+        + r"|\bfrom\s+\.+sandbox\b[\w.]*\s+import\b"
         r"|\bfrom\s+(?:\.+|iron_jarvis)\s+import\s+(?:\([^)]*|[^\n(]*)\bsandbox\b"
         r"|\biron_jarvis\.sandbox\b"
     ),
@@ -172,21 +212,24 @@ DOOR_KINDS: dict[str, re.Pattern[str]] = {
     # (``to_thread(self._slack.send, …)``, ``run_in_executor(None,
     # remote.run, …)``, ``Thread(target=x.post)``). A hand-off whose callable
     # a kind above already names counts there, not here (``scan_doors``).
+    # (A hand-off of ``x.http_post`` is not named here: ``http_post`` above
+    # always counts it first.)
     "handed_off": re.compile(
         r"(?:\b(?:to_thread|run_in_executor|partial|call_soon(?:_threadsafe)?|call_later|submit)"
         r"\(\s*(?:[\w.]+\s*,\s*)?|\btarget\s*=\s*)"
-        r"(?:[\w.]|\[[^\]\n]*\])*\.(?:send\w*|post|notify\w*|_?http_post|spawn\w*|request|run\w*|deliver\w*)\b"
+        r"(?:[\w.]|\[[^\]\n]*\])*\.(?:send\w*|post|notify\w*|spawn\w*|request|run\w*|deliver\w*)\b"
     ),
     # Review 7: any send or post, whatever the receiver is called, called
     # directly, in a lambda or passed on (``dest.send(text)``,
     # ``to_thread(lambda: self._slack.send(t))``, ``client.post(url)``,
     # ``smtp.send_message(msg)``, ``self.send_chunked(ch, …)``), and a sending
     # function imported by name. A name that only starts so is not one
-    # (``msg.sender_id``), nor is setting the attribute. Review 8: nor a
-    # private one (``self._send_reply(t)``, a channel's ``self._post(url)``;
-    # ``self._post_run_learning`` is "after the run", not a post).
+    # (``msg.sender_id``), nor is setting the attribute. Review 8: a private
+    # one IS one (``self._send_reply(t)``, a channel's ``self._post(url)``),
+    # and review 9: with a suffix too (``self._post_json(url)``);
+    # ``self._post_run_learning`` is "after the run", not a post.
     "direct_send": re.compile(
-        r"\.\s*(?:_?send(?:all|mail|_\w+)?|post(?:_\w+)?|_post)" + _USE
+        r"\.\s*(?:_?send(?:all|mail|_\w+)?|post(?:_\w+)?|_post(?!_run_)(?:_\w+)?)" + _USE
         + r"|\.\s*notify_\w+\s*\("
         r"|\bfrom\s+[\w.]+\s+import\s+(?:\([^)]*|[^\n(]*)\b_?send(?:_\w+)?\b"
     ),
@@ -234,8 +277,16 @@ _NAME_DOORS: tuple[tuple[re.Pattern[str], re.Pattern[str] | None, str], ...] = (
 #: ``SIDE_DOORS`` entry (one rehearsed row, nothing done), or shown to be out
 #: of a rehearsal's reach.
 REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
+    ("agents/chat_delivery.py", "chat_post"): (
+        3, "the one chat writer under each line (append_to_chat_thread): deliver_session_line's, "
+           "reached only through Orchestrator._deliver_to_chat_sync, held in a rehearsal "
+           "(SIDE_DOORS chat_delivery); say_in_chat's, a round table's own line (agents/threads.py); "
+           "and _write_report's, under report_to_chat, whose callers are a schedule's _fire, a "
+           "workflow, a goal, a watcher and a night task, none of them a rehearsal's path"),
     ("agents/orchestrator.py", "chat_post"): (
-        1, "the chat delivery line: held in a rehearsal (SIDE_DOORS chat_delivery)"),
+        1, "the chat delivery line: held in a rehearsal (SIDE_DOORS chat_delivery); since idea 39 "
+           "it is also the report of a schedule set up from a chat, which a rehearsal lists instead "
+           "(test_a_chat_made_schedules_rehearsal_reports_nothing_into_the_chat)"),
     ("agents/orchestrator.py", "direct_send"): (
         2, "the answer to a task another computer sent (task_door.send_reply_in_thread and "
            "send_reply_soon, the same reply as task_door.py's): started only when "
@@ -275,6 +326,10 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
     ("agents/threads.py", "remote_agent"): (
         2, "a round table's remote speaker: reached from a person's post in a room "
            "(the Agents page, the phone), never from a run"),
+    ("agents/threads.py", "chat_post"): (
+        2, "a round table's line in its chat that a remote agent's answer did not come "
+           "(end_overdue_waits: say_in_chat imported, then handed to a worker): reached from a "
+           "person's post in a room, never from a run"),
     ("agents/threads.py", "tool_execute"): (
         1, "the Guide seat's lookup of the person's own things (AppSearchTool, read-only: "
            "app_search finds a schedule or a rule by name) for its reply in a round table: "
@@ -310,11 +365,12 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
             "a rehearsal the phone asks for answers in that reply with its report's words "
             "(rehearsal_runs._report_words)"),
     ("comm/inbound.py", "direct_send"): (
-        13, "the same replies through the poller's own send_chunked (counted once more where it "
+        14, "the same replies through the poller's own send_chunked (counted once more where it "
             "calls ch.send): each answers a message the phone sent (a command, a new thread, "
             "the rate limit, a refusal, an escalation, a job's start, an answer to a question, a "
-            "remote agent's answer to the person's line) or a phone-started run's result; a "
-            "rehearsal's run is never phone-started"),
+            "remote agent's answer to the person's line, the sentence that the files a message "
+            "brought were not used: _say_files_not_read, R0.3) or a phone-started run's result; "
+            "a rehearsal's run is never phone-started"),
     ("comm/integrations.py", "http_client"): (
         3, "build_notifier's default transports (httpx_post, httpx_get): imported, then handed "
            "to the phone channels it builds when the caller passed none; sends nothing itself"),
@@ -344,6 +400,11 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
     ("motivation/engine.py", "notify"): (
         1, "the morning briefing's push: only the person's own press on the autonomy route "
            "(POST briefing with notify); the engine's bus handler only files a suggestion"),
+    ("platform.py", "chat_post"): (
+        1, "a schedule's report into the chat it was set up from when no run of its own wrote it "
+           "(_schedule_report, report_to_chat, idea 39): called only from _fire; a rehearsal goes "
+           "through _rehearse_scheduled to _dispatch_scheduled and never _fire, and its run's own "
+           "report is the held chat delivery (SIDE_DOORS chat_delivery)"),
     ("platform.py", "notify"): (
         1, "a schedule's REAL delivery line (_deliver_outcome), reached only through _fire; a "
            "rehearsal goes through _rehearse_scheduled to _dispatch_scheduled and never _fire "
@@ -382,6 +443,10 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
            "runs it only outside a rehearsal (SIDE_DOORS pre_run_script)"),
     ("webhooks/outbound.py", "http_post"): (
         1, "an outgoing webhook: skips every event of a rehearsal's run (SIDE_DOORS outbound_webhook)"),
+    ("workflows/engine.py", "chat_post"): (
+        1, "a workflow run's report into the chat it was run from (report_to_chat, idea 39): a rule "
+           "or a schedule that starts a workflow cannot be rehearsed yet (06-b), so no rehearsal "
+           "reaches it"),
     ("workflows/engine.py", "notify"): (
         1, "a workflow's notify step: a rule or a schedule that starts a workflow cannot be "
            "rehearsed yet (06-b), so no rehearsal reaches it"),
@@ -496,15 +561,26 @@ def test_every_direct_send_and_process_start_was_reviewed():
     guarded (a ``SIDE_DOORS`` entry) or shown to be out of a rehearsal's
     reach, and written into :data:`REVIEWED_DOORS`."""
     found = scan_doors()
-    unreviewed = []
-    for key, lines in sorted(found.items()):
+    unreviewed, gone = [], []
+    for key in sorted(set(found) | set(REVIEWED_DOORS)):
+        lines = found.get(key, [])
         known, _why = REVIEWED_DOORS.get(key, (0, ""))
         if len(lines) > known:
             unreviewed.append(f"{key[0]} ({key[1]}): {len(lines)} found, {known} reviewed, lines {lines}")
+        elif len(lines) < known:
+            gone.append(f"{key[0]} ({key[1]}): {len(lines)} found, {known} reviewed, lines {lines}")
     assert not unreviewed, (
         "A direct send or process start nobody reviewed for rehearsals (leap 06-a). Guard it "
         "(tools/rehearsal.SIDE_DOORS: one rehearsed row, nothing done) or show a rehearsal "
         "cannot reach it, then add it to REVIEWED_DOORS:\n" + "\n".join(unreviewed)
+    )
+    # Review 9: the count is EXACT. Fewer found than reviewed means a door was
+    # removed or the scan was narrowed; the extra count would let a NEW door
+    # of that kind in that file pass unread, and its reason no longer holds.
+    assert not gone, (
+        "Fewer direct sends or process starts found than REVIEWED_DOORS says (leap 06-a): a "
+        "door was removed or the scan stopped seeing one. If the code changed, lower the count "
+        "and make its reason true again; if the scan lost a shape, put it back:\n" + "\n".join(gone)
     )
     for key, (count, why) in REVIEWED_DOORS.items():
         assert count >= 1 and len(why.split()) >= 5, f"{key}: a reviewed door needs its reason"
@@ -617,6 +693,74 @@ def test_the_scan_sees_a_new_door_and_not_a_mention(tmp_path):
         ("reflex/by_name.py", "direct_send"): [5, 12, 13],
         ("reflex/by_name.py", "tool_execute"): [14, 15],
     }
+    # Review 9: a private send or post, with a suffix too, but not "after the
+    # run"; a transport called through a module attribute; the loop's own
+    # program start; a post into a chat through each of the chat writers,
+    # its import included. Setting a private attribute is not one.
+    (pkg / "by_name.py").unlink()
+    (pkg / "private_send.py").write_text(
+        "import asyncio\n"
+        "from ..comm import base as cb\n"
+        "from ..agents.chat_delivery import say_in_chat\n"
+        "async def q(self, p, loop, url, text, s, chat, report, _cd, _ca):\n"
+        "    self._send_reply(text)\n"
+        "    self._post(url, {})\n"
+        "    self._post_json(url)\n"
+        "    self._post_run_learning(s)\n"
+        "    await asyncio.to_thread(self._post_run_allowance, s)\n"
+        "    cb.httpx_post(url, {}, {})\n"
+        "    await loop.subprocess_exec('x')\n"
+        "    await asyncio.to_thread(_cd.report_to_chat, p, chat, report)\n"
+        "    _cd.deliver_session_line(p.engine, s)\n"
+        "    _ca.append_to_chat_thread(p.engine, chat, [])\n"
+        "    say_in_chat(p.engine, chat, text)\n"
+        "    self._post_hook = url\n"
+        "    return 'self._post(url)', s._sender\n",
+        encoding="utf-8",
+    )
+    assert scan_doors(tmp_path) == {
+        ("reflex/private_send.py", "direct_send"): [5, 6, 7],
+        ("reflex/private_send.py", "http_client"): [10],
+        ("reflex/private_send.py", "process"): [11],
+        ("reflex/private_send.py", "chat_post"): [3, 12, 13, 14, 15],
+    }
+    # Review 9: every other shape a pattern above names, so no pattern of the
+    # scan is pinned by nothing (the real tree pins the rest through its exact
+    # counts): the other libraries' calls and imports, the procs and the
+    # sandbox imported whole, a name from subprocess and from the sandbox
+    # package used, a program opened by the system, a page opened in the
+    # browser, a notify_ helper. An unused import binds a name, not a door.
+    (pkg / "private_send.py").unlink()
+    (pkg / "every_shape.py").write_text(
+        "import os, webbrowser\n"
+        "import requests, aiohttp, socket\n"
+        "import iron_jarvis.core.http\n"
+        "import httpx as hx\n"
+        "from websockets import serve as ws_serve\n"
+        "from ..core.procs import adopt\n"
+        "import iron_jarvis.core.procs\n"
+        "from subprocess import Popen\n"
+        "from .. import sandbox as sb\n"
+        "import iron_jarvis.sandbox.native\n"
+        "def r(p, url, host, path, text):\n"
+        "    requests.post(url)\n"
+        "    aiohttp.ClientSession()\n"
+        "    socket.create_connection((host, 80))\n"
+        "    Popen(['x'])\n"
+        "    os.startfile(path)\n"
+        "    sb.native.NativeSandbox(p)\n"
+        "    webbrowser.open(url)\n"
+        "    p.notifier.notify_owner(text)\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    assert scan_doors(tmp_path) == {
+        ("reflex/every_shape.py", "http_client"): [3, 4, 5, 12, 13, 14],
+        ("reflex/every_shape.py", "process"): [6, 7, 8, 15, 16],
+        ("reflex/every_shape.py", "sandbox"): [9, 10, 17],
+        ("reflex/every_shape.py", "browser_open"): [18],
+        ("reflex/every_shape.py", "direct_send"): [19],
+    }
     # A process start added to a schedule's own door, in platform.py.
     (tmp_path / "platform.py").write_text(
         "async def _dispatch_scheduled(task):\n"
@@ -625,6 +769,138 @@ def test_the_scan_sees_a_new_door_and_not_a_mention(tmp_path):
         encoding="utf-8",
     )
     assert scan_doors(tmp_path)[("platform.py", "process")] == [3]
+
+
+#: Review 9 (c): "a pattern the scan has is pinned by nothing" is a finding,
+#: so EACH alternative of each pattern above has one line here that only it
+#: sees (taking it out makes the line uncounted, or counted as another kind),
+#: and each exclusion one line it keeps out. ``(code, kind or None, line)``.
+_SHAPES: tuple[tuple[str, str | None, int], ...] = (
+    # a channel's own send, by the receiver's name
+    ("chan.send(t)", "channel_send", 1),
+    ("channel_slack.send(t)", "channel_send", 1),
+    # the network libraries, called
+    *((f"httpx.{verb}(u)", "http_client", 1)
+      for verb in ("post", "get", "put", "patch", "delete", "request", "stream", "AsyncClient", "Client")),
+    *((f"requests.{verb}(u)", "http_client", 1) for verb in ("post", "get", "put", "patch", "delete", "request")),
+    ("aiohttp.ClientSession()", "http_client", 1),
+    ("urlopen(u)", "http_client", 1),
+    ("websockets.connect(u)", "http_client", 1),
+    ("websockets.serve(h)", "http_client", 1),
+    ("socket.socket()", "http_client", 1),
+    ("socket.create_connection(a)", "http_client", 1),
+    ("cb.httpx_post(u, {}, {})", "http_client", 1),
+    ("cb.httpx_get(u)", "http_client", 1),
+    # ... and imported (a whole import of the app's client, or under a name)
+    ("from iron_jarvis.core.http import client", "http_client", 1),
+    ("from ..core.http import client", "http_client", 1),
+    ("from iron_jarvis.core import http", "http_client", 1),
+    ("from ..core import (\n    http,\n)", "http_client", 1),
+    ("import iron_jarvis.core.http", "http_client", 1),
+    *((f"import {lib} as x", "http_client", 1) for lib in ("httpx", "requests", "aiohttp", "websockets", "socket")),
+    *((f"from {lib} import x", "http_client", 1)
+      for lib in ("httpx", "requests", "aiohttp", "websockets", "socket", "urllib.request")),
+    ("from ..comm import httpx_post", "http_client", 1),
+    ("from ..comm.base import httpx_get", "http_client", 1),
+    ("from ..comm import (\n    httpx_post,\n)", "http_client", 1),
+    # a program started, through the app's procs or the system
+    *((f"procs.{fn}(x)", "process", 1) for fn in ("spawn", "run", "run_to_files", "run_async", "adopt")),
+    ("_procs.run(x)", "process", 1),
+    ("from iron_jarvis.core import procs", "process", 1),
+    ("from ..core import (\n    procs,\n)", "process", 1),
+    ("from iron_jarvis.core.procs import run", "process", 1),
+    ("from ..core.procs import run", "process", 1),
+    ("import iron_jarvis.core.procs", "process", 1),
+    ("from subprocess import run", "process", 1),
+    ("subprocess.run(x)", "process", 1),
+    ("asyncio.create_subprocess_exec(x)", "process", 1),
+    ("asyncio.create_subprocess_shell(x)", "process", 1),
+    ("loop.subprocess_exec(x)", "process", 1),
+    ("loop.subprocess_shell(x)", "process", 1),
+    *((f"os.{fn}(x)", "process", 1) for fn in ("system", "popen", "startfile", "spawnl", "execv")),
+    # the sandbox, called or imported
+    *((f"self.sandbox.{fn}(c)", "sandbox", 1) for fn in ("run", "run_async", "execute", "exec_command")),
+    ("NativeSandbox.run(c)", "sandbox", 1),
+    ("from iron_jarvis.sandbox.native import x", "sandbox", 1),
+    ("from ..sandbox import x", "sandbox", 1),
+    ("from iron_jarvis import sandbox", "sandbox", 1),
+    ("from .. import (\n    sandbox,\n)", "sandbox", 1),
+    ("import iron_jarvis.sandbox", "sandbox", 1),
+    # a callable handed to a worker, by every hand-off and every verb
+    *((f"{hand}(self.remote.run, t)", "handed_off", 1)
+      for hand in ("asyncio.to_thread", "functools.partial", "loop.call_soon", "loop.call_soon_threadsafe",
+                   "pool.submit")),
+    ("loop.call_later(1, self.remote.run)", "handed_off", 1),
+    ("loop.run_in_executor(None, self.remote.run, t)", "handed_off", 1),
+    ("threading.Thread(target=self.remote.run)", "handed_off", 1),
+    ("asyncio.to_thread(self.pool['a'].run, t)", "handed_off", 1),
+    *((f"asyncio.to_thread(x.{verb}, t)", "handed_off", 1)
+      for verb in ("send_all", "post", "notify_owner", "spawn_child", "request", "deliver_line")),
+    # any other send or post, whatever the receiver
+    ("sock.sendall(b)", "direct_send", 1),
+    ("smtp.sendmail(a, b, m)", "direct_send", 1),
+    ("self.slack.post_message(t)", "direct_send", 1),
+    ("self._post_json(u)", "direct_send", 1),
+    ("p.notifier.notify_owner(t)", "direct_send", 1),
+    ("from ..agents.task_door import (\n    send_reply,\n)", "direct_send", 1),
+    ("same = dest.send == other", "direct_send", 1),
+    ("self.send = dest.send", "direct_send", 1),
+    # a post into a chat, through each writer, and a walrus is a use too
+    *((f"{w}(e, c, x)", "chat_post", 1)
+      for w in ("deliver_session_line", "report_to_chat", "say_in_chat", "append_to_chat_thread")),
+    ("if (report_to_chat := pick()):\n    pass", "chat_post", 1),
+    ("p.notifier.notify(t)", "notify", 1),
+    ("hooks.http_post(u)", "http_post", 1),
+    ("self._http_post(u)", "http_post", 1),
+    ("smtplib.SMTP_SSL(h)", "smtp", 1),
+    ("RemoteAgentRegistry(p)", "remote_agent", 1),
+    ("webbrowser.open(u)", "browser_open", 1),
+    ("registry.get(n).execute(a, ctx)", "tool_execute", 1),
+    # NOT doors: setting or annotating the attribute, a SQL statement, a name
+    # that only starts so, "after the run"
+    ("p.notifier.notify = fake", None, 0),
+    ("self.notify: Notifier = n", None, 0),
+    ("self.send = s", None, 0),
+    ("self._send: Sender = s", None, 0),
+    ("self._post_hook = u", None, 0),
+    ("self._post_run_learning(s)", None, 0),
+    ("ok = msg.sender_id", None, 0),
+    ("self.sandbox.run = f", None, 0),
+    ("procs.run = f", None, 0),
+    ("self._http_post: Post = f", None, 0),
+    *((f"{who}.execute(stmt)", None, 0) for who in ("db", "conn", "connection", "cur", "cursor", "session")),
+    ("self.execute = tool", None, 0),
+    # ... for each kind that reads a use (``_USE``): setting or annotating is
+    # not one, and comparing is one
+    *((f"{name} = f", None, 0) for name in ("ch.send", "report_to_chat")),
+    *((f"{name}: T = f", None, 0)
+      for name in ("ch.send", "report_to_chat", "procs.run", "self.sandbox.run", "self.execute")),
+    *((f"same = {name} == f", kind, 1)
+      for name, kind in (("p.notifier.notify", "notify"), ("ch.send", "channel_send"),
+                         ("hooks.http_post", "http_post"), ("report_to_chat", "chat_post"),
+                         ("procs.run", "process"), ("self.sandbox.run", "sandbox"),
+                         ("tool.execute", "tool_execute"))),
+)
+
+
+def test_each_shape_a_pattern_names_is_seen(tmp_path):
+    """Review 9: every alternative of every pattern is pinned by a line only
+    it sees, and every exclusion by a line it keeps out (``_SHAPES``)."""
+    pkg = tmp_path / "reflex"
+    pkg.mkdir()
+    for other in SCANNED[1:]:
+        if other.endswith(".py"):
+            (tmp_path / other).write_text("", encoding="utf-8")
+        else:
+            (tmp_path / other).mkdir()
+    wrong = []
+    for code, kind, line in _SHAPES:
+        (pkg / "shape.py").write_text(code + "\n", encoding="utf-8")
+        want = {("reflex/shape.py", kind): [line]} if kind else {}
+        got = scan_doors(tmp_path)
+        if got != want:
+            wrong.append(f"{code!r}: want {want}, got {got}")
+    assert not wrong, "The scan sees a shape wrongly:\n" + "\n".join(wrong)
 
 
 async def test_the_pre_run_script_and_the_delivery_line_do_nothing(daemon, tmp_path):
@@ -647,6 +923,75 @@ async def test_the_pre_run_script_and_the_delivery_line_do_nothing(daemon, tmp_p
     assert view["sentence"] == "This would send 1 message and run 1 command. Nothing was changed."
     await asyncio.sleep(0)
     assert sent == [], "a rehearsal delivered the schedule's line"
+
+
+async def test_a_chat_made_schedules_rehearsal_reports_nothing_into_the_chat(daemon, tmp_path):
+    """Idea 39 (master v1.555.0): a schedule set up from a chat reports each
+    result into that chat, through the run's own ending (its options carry
+    the chat and ``report_from``). A REHEARSAL of it goes through the same
+    door, so its run carries them too; the chat gets nothing, and the report
+    lists the line instead."""
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    app, p, sent = daemon
+    first = [{"role": "user", "content": "Check this supplier's prices every Friday"}]
+    with session_scope(p.engine) as db:
+        chat = ChatThreadRecord(title="Supplier prices", messages_json=json.dumps(first))
+        db.add(chat)
+        db.commit()
+        db.refresh(chat)
+        chat_id = chat.id
+    p.scheduler.add_task("Friday prices", "0 9 * * 5", kind="task",
+                         payload={"task": "Check the supplier's prices."}, chat_thread_id=chat_id)
+    started = await RR.start(p, "schedule", "Friday prices")
+    view = await _settled(p, started["id"])
+    assert view["status"] == "ready", view
+    with session_scope(p.engine) as db:
+        messages = json.loads(db.get(ChatThreadRecord, chat_id).messages_json or "[]")
+    assert messages == first, "a rehearsal wrote into the chat its schedule reports to"
+    assert "post the result in the chat that asked" in [w["words"] for w in view["would"]]
+    await asyncio.sleep(0)
+    assert sent == []
+
+
+async def test_a_rehearsals_worktree_is_discarded_and_offers_no_review(daemon, monkeypatch):
+    """A run on a git worktree ends with a review to merge (``build_review``).
+    A rehearsal's run changed nothing, so its worktree is discarded and no
+    review is offered. (The rebase review: this guard was pinned by nothing.)"""
+    from iron_jarvis.agents import orchestrator as _orch
+
+    app, p, sent = daemon
+    orch = app.state.orchestrator
+    built: list = []
+
+    def no_review(*a, **k):
+        built.append(a)
+        raise RuntimeError("no review in this test")
+
+    monkeypatch.setattr(_orch, "build_review", no_review)
+
+    class _Worktree:
+        branch = "ij/test"
+
+        def __init__(self) -> None:
+            self.workspace = str(p.config.home)
+            self.discarded = 0
+
+        def discard(self) -> None:
+            self.discarded += 1
+
+    for rehearsal, reviews in (("reh_worktree", 0), ("", 1)):
+        session = await orch.create_session(
+            "write the report", AgentType.BUILDER,
+            options={"rehearsal_id": rehearsal} if rehearsal else {},
+        )
+        tree = _Worktree()
+        orch._git_sessions[session.id] = tree
+        before = len(built)
+        await orch.run_session(session.id)
+        assert len(built) - before == reviews, f"rehearsal={rehearsal!r}: reviews built"
+        if rehearsal:
+            assert tree.discarded == 1 and session.id not in orch._git_sessions
 
 
 async def test_the_chat_delivery_and_the_lessons_do_nothing(daemon, monkeypatch):
