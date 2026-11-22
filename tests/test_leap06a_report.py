@@ -303,10 +303,25 @@ async def test_a_rule_rehearses_on_a_sample_and_its_row_is_not_a_fire(daemon):
     assert view["status"] == "ready", view
     assert view["sample"] == "a made-up signal"
     assert [(w["words"], w["would"]) for w in view["refused"]] == [("write client-note.txt", "refuse")]
+    # The 390 px look: why, in the Handbook's words, never the tool's id.
+    assert [w["why"] for w in view["refused"]] == ["the agent that runs it does not have this tool"]
     assert view["sentence"] == "This would change nothing. Nothing was changed."
     again = p.reflex.get(rule.id)
     assert again.fire_count == 0 and again.last_result in (None, "")
     assert not [e for e in events if e["type"] == "reflex.fired"]
+
+
+def test_a_refused_steps_reason_is_in_plain_words():
+    """The gate's own refusals read as the Handbook says them; any other keeps
+    its sentence, masked, without a code mark."""
+    from iron_jarvis.tools.permissions import nobody_to_ask_refusal
+
+    why = RR._refused_why
+    assert why("`write_file` is not one of this agent's tools — it was not run") == RR.NOT_ITS_TOOL
+    assert why("denied by policy") == RR.SET_TO_NEVER
+    other = why(nobody_to_ask_refusal("shell"))
+    assert other.startswith("shell needs approval and nothing here could ask you") and "`" not in other
+    assert "`" not in why("`x` was refused by the step itself")
 
 
 async def test_a_rule_that_starts_a_workflow_is_refused_in_words(daemon):

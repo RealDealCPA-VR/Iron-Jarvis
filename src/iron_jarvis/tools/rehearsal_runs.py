@@ -451,6 +451,27 @@ def _mask(text: str) -> str:
         return "" if text else text
 
 
+#: Why a step would be refused, in the Handbook's words ("a tool the agent
+#: does not have, a tool set to Never run"), for the two refusals the gate
+#: writes in its own words (``registry.invoke``'s roster line, the permission
+#: engine's deny). Leap 06-a, the 390 px look: the card showed the ledger's
+#: "`write_file` is not one of this agent's tools", backticks and all.
+NOT_ITS_TOOL = "the agent that runs it does not have this tool"
+SET_TO_NEVER = "it is set to Never run"
+
+
+def _refused_why(output: Any) -> str:
+    """The reason a refused step shows on the card: the two gate refusals in
+    plain words, any other its own sentence masked (a lane's refusal is
+    already written for the person), never with a code mark."""
+    text = " ".join(str(output or "").split())
+    if "is not one of this agent's tools" in text:
+        return NOT_ITS_TOOL
+    if text == "denied by policy":
+        return SET_TO_NEVER
+    return _mask(text.replace("`", "")[:200])
+
+
 def _sentence_case(text: str) -> str:
     """``nothing new to review`` → ``Nothing new to review.``"""
     text = " ".join(text.split())
@@ -521,7 +542,7 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
                 "would": row.would or "run"}
         if (row.would or "run") == "refuse":
             if len(refused) < REPORT_ITEMS_MAX:
-                refused.append({**item, "why": _mask(" ".join(str(row.output or "").split())[:200])})
+                refused.append({**item, "why": _refused_why(row.output)})
             continue
         counted.append(effect)
         if effect.noun:
