@@ -432,11 +432,11 @@ def test_a_session_on_a_network_share_can_comment_on_its_own_files():
 def test_a_session_on_a_mounted_share_can_comment_on_its_own_files():
     """The same rule as above, spelled the way each system mounts a share as
     a folder: a mapped drive on Windows, a mount point on Linux and macOS
-    (v1.544.0 to v1.546.1: the Linux release's gate met only the Windows
-    spelling, and failed). A file inside the session's folder is taken; one beside it, one
-    whose folder only starts with the same name, one reached through "..",
-    and the same folder on another share are refused; a network spelling never
-    passes for a local folder. Text only: nothing is opened."""
+    (v1.544.0 to v1.548.1: the Linux release's gate met only the Windows
+    spelling, and failed). A file inside the session's folder is taken; one
+    beside it, one whose folder only starts with the same name, one reached
+    through "..", and the same folder on another share are refused; a network
+    spelling never passes for a local folder. Text only: nothing is opened."""
     win = sys.platform == "win32"
     share, elsewhere = ("Z:\\", "Y:\\") if win else ("/mnt/share", "/mnt/elsewhere")
     folder = os.path.join(share, "proj")
