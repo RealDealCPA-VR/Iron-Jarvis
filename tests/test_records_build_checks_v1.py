@@ -18,6 +18,8 @@ import pytest
 
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.harness import folder_defaults as FD
+from iron_jarvis.hosted import proof as PROOF
+from iron_jarvis.hosted import service as S
 from iron_jarvis.hosted import store
 from iron_jarvis.hosted.events import EventLog, make
 from iron_jarvis.settings import records as R
@@ -200,8 +202,6 @@ async def test_on_with_no_command_after_a_no_forgets_the_off_so_the_card_asks_wi
     it never keeps a command the chat card did not show: the folder's off is
     forgotten, so the first-time card under the next changed reply asks with
     the exact command and its cost."""
-    from iron_jarvis.hosted import proof as PROOF
-
     folder = _npm_folder(tmp_path)
     app = _app(tmp_path / "home", [("build_checks_set", {"folder": str(folder), "run": True})])
     p = app.state.platform
@@ -230,8 +230,6 @@ async def test_on_with_no_command_never_keeps_a_proposal_from_chat(tmp_path):
     nothing kept is left to the first-time card, and a command the user
     approved on that card stays the card's (asked again when the folder's
     command changes)."""
-    from iron_jarvis.hosted import proof as PROOF
-
     folder = _npm_folder(tmp_path)
     app = _app(tmp_path / "home", [])
     p = app.state.platform
@@ -343,18 +341,42 @@ async def test_the_reader_never_says_an_earlier_reply_s_check_is_the_newest_s(tm
     FD.save_checks(p.engine, str(work), {"off": True, "at": "2026-11-20T10:00:00Z"})
     got = await tool.execute({"session": "codex"}, None)
     assert "Tests after replies are off in this folder." in got.output
-    # A reply that runs, then one being checked.
+    # 22-a review: what runs NOW is asked of the running app, never read
+    # from the log alone. A reply with no end in a log nothing runs now
+    # (Iron Jarvis closed in the middle of it) did not finish.
     _turn(log, "t3", "working on it", ended=False)
     log.flush()
     got = await tool.execute({"session": "codex"}, None)
+    assert "Its newest reply did not finish, so Iron Jarvis did not check it." in got.output
+    assert "still running" not in got.output
+    # The same reply while it runs in this app: said as running.
+    svc = S.service_for(p)
+    svc.live[row.id] = SimpleNamespace(turn=SimpleNamespace(id="t3", running=True), log=log)
+    try:
+        got = await tool.execute({"session": "codex"}, None)
+    finally:
+        svc.live.pop(row.id, None)
     assert "Its newest reply is still running, so Iron Jarvis has not checked it yet." in got.output
+    # A "checking" record with no check running anywhere: its check did not
+    # finish (never "checking now"); the earlier reply's check is said as an
+    # earlier one's.
     log.append(make("done", stop="completed", turn="t3"))
     log.append(make("proof", for_turn="t3", state="checking", tests="not_run", why="ran", command="npm test",
                     by="iron_jarvis", line="Iron Jarvis is checking this reply: running `npm test`."))
     log.flush()
     got = await tool.execute({"session": "codex"}, None)
+    assert "Iron Jarvis's check of its newest reply did not finish, so that reply is not checked." in got.output
+    assert "checking its newest reply now" not in got.output and got.data["of_newest"] is False
+    assert "Its last check was of an earlier reply" in got.output and got.data["check"]["for_turn"] == "t1"
+    # While the app really checks that reply: said as checking now.
+    PROOF.note_pending(svc, row.id)
+    try:
+        got = await tool.execute({"session": "codex"}, None)
+    finally:
+        PROOF.clear_pending(svc, row.id)
     assert "Iron Jarvis is checking its newest reply now." in got.output and got.data["of_newest"] is False
     log.close()
+    await svc.shutdown()
 
 
 @pytest.mark.asyncio

@@ -229,6 +229,7 @@ class _Running:
     stop: threading.Event = field(default_factory=threading.Event)
     why: str = ""
     proc: Any = None
+    killing: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -280,13 +281,26 @@ def _stop_run(run: _Running, why: str) -> None:
         run.why = why
     run.stop.set()
     proc = run.proc
-    if proc is not None:
-        try:
-            from ..core import procs
+    if proc is not None and not run.killing:
+        # The tree is killed on a thread of its own (22-a review): Stop and the
+        # new-message watch call this ON the loop, and a command with no job
+        # falls back to a ``taskkill`` that may take seconds. Once per run.
+        # When Iron Jarvis closes it is killed here and now (nothing it started
+        # may outlive the app; the loop is ending anyway).
+        run.killing = True
+        if why == WHY_CLOSING:
+            _kill(proc)
+        else:
+            threading.Thread(target=_kill, args=(proc,), name="ij-check-stop", daemon=True).start()
 
-            procs.kill_tree(proc)
-        except Exception:  # noqa: BLE001 — the run's own bound still ends it
-            log.debug("could not stop a check's command", exc_info=True)
+
+def _kill(proc: Any) -> None:
+    try:
+        from ..core import procs
+
+        procs.kill_tree(proc)
+    except Exception:  # noqa: BLE001 — the run's own bound still ends it
+        log.debug("could not stop a check's command", exc_info=True)
 
 
 def stop_all(platform: Any) -> list[str]:
@@ -723,11 +737,20 @@ def _write(svc: Any, sid: str, record: dict[str, Any]) -> None:
 
 
 def _unwanted(svc: Any, sid: str, live: Any) -> str:
-    """Why a running check is no longer wanted ("" = it is)."""
+    """Why a check is no longer wanted ("" = it is). Read right before the
+    command starts and on every :data:`LOOK_S` while it runs."""
     if getattr(svc, "_closing", False):
         return WHY_CLOSING
     if svc.live.get(sid) is not live:
         return WHY_GONE
+    # 22-a review: Emergency stop turned on AFTER the reply's end was judged
+    # (while the folder's plan, the log or git were read) is read here too, so
+    # the command never starts under it, and a run whose stop_all came before
+    # it was registered still ends.
+    from .check_again import _emergency_stop
+
+    if _emergency_stop(getattr(svc, "platform", None)):
+        return WHY_EMERGENCY
     turn = getattr(live, "turn", None)
     if turn is not None and getattr(turn, "running", False):
         return WHY_NEW_MESSAGE
@@ -818,7 +841,10 @@ async def _run(svc: Any, sid: str, live: Any, turn_id: str, command: str, timeou
             _stop_run(run, WHY_CLOSING)
             raise
         res = task.result()
-        return from_run(turn_id, command, res, why_stopped=run.why, timeout_s=timeout_s, **files)
+        # Off the loop: the count reader looks over the whole output when it
+        # is longer than its tail (``test_counts.read_counts``).
+        return await asyncio.to_thread(from_run, turn_id, command, res, why_stopped=run.why,
+                                       timeout_s=timeout_s, **files)
     finally:
         if runs.get(sid) is run:
             runs.pop(sid, None)

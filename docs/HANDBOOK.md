@@ -2084,7 +2084,8 @@ that reads like instructions to a model is not sent back; the line says so.
 **What it says when it could not check.** *Not checked:* and why: you pressed
 Stop, a new message came first, Emergency stop is on, the command is not on
 this PC's PATH, or it did not finish within 5 minutes. A runner whose summary
-Iron Jarvis cannot read gives no number: the line says only whether the
+Iron Jarvis cannot read gives no number, and so does a command that runs the
+same runner twice (two `vitest run` in a row): the line says only whether the
 command ended with an error. The count is read from the runner's own summary
 (pytest, unittest, jest, vitest, mocha, `go test -v`, `cargo test`,
 `dotnet test`, phpunit), never from the tool's words.
@@ -2101,7 +2102,8 @@ here* without a command and nothing is kept from chat: a folder you turned
 off is asked about again, with the exact command, under its next reply that
 changes files. Every change has an Undo. Ask *did the tests pass on Codex's
 last reply?* and Iron Jarvis answers from its own record, and says so when
-the newest reply has no check (it changed no files, or it is still running).
+the newest reply has no check (it changed no files, it is still running, or
+Iron Jarvis closed before it or its check finished).
 
 ## The Timeline shows the models that did the work (v1.550.0)
 

@@ -436,6 +436,37 @@ async def test_emergency_stop_ends_the_run(app, work, tools, monkeypatch):
     await stop_all(app)
 
 
+async def test_emergency_stop_turned_on_before_the_command_starts_runs_nothing(app, work, tools, monkeypatch):
+    """22-a review: Emergency stop turned on AFTER the reply's end was judged
+    and BEFORE the command started (here: while the message's changes are
+    read) is read right before the start. Nothing runs, and the record says
+    why; nothing is sent back."""
+    (work / "test_limits.py").write_text(PASSING, encoding="utf-8")
+    keep(app, work, command(tools))
+    config = app.state.platform.config
+    real = PROOF.turn_changes
+    switched: list[bool] = []
+
+    def reading(*a, **k):
+        config.autonomy_kill_switch = True  # the switch flips mid-read
+        switched.append(True)
+        return real(*a, **k)
+
+    monkeypatch.setattr(PROOF, "turn_changes", reading)
+    svc, row, drivers = await started(app, monkeypatch, work)
+    wrote(svc, row.id, work, "limits.py", "LIMIT = 4\n")
+    reply(svc, row.id)
+    await settle(svc, row.id)
+    assert switched, "the switch flipped while the changes were read"
+    assert runs(tools) == 0
+    [rec] = proofs(svc, row.id)
+    assert rec["tests"] == "not_run" and rec["why"] == "emergency"
+    assert rec["line"] == "Not checked: Emergency stop is on. The tool reports 1 new file: `limits.py`."
+    assert sent_back(svc, row.id) == [] and len(drivers[row.id].sent) == 1
+    config.autonomy_kill_switch = False
+    await stop_all(app)
+
+
 async def test_a_new_message_ends_the_run(app, work, tools, monkeypatch):
     svc, row, drivers = await _long_check(app, work, tools, monkeypatch)
     await svc.start_turn(row.id, "actually, make it five", "t2")
@@ -641,6 +672,64 @@ def test_a_check_runs_below_normal_priority_owned_by_its_session(tmp_path, monke
     assert seen == {"background": True, "owner": "app:s9", "command": "npm test", "cwd": str(folder), "timeout": 42.0}
     assert res.started and res.exit == 0 and "Ran 2 tests" in res.output
     assert procs.in_background_lane() is False and procs._OWNER.get() == ""
+
+
+def test_a_stop_kills_the_tree_off_the_callers_thread_once(monkeypatch):
+    """22-a review: Stop and the new-message watch stop a check ON the loop;
+    the tree is killed on a thread of its own (a command with no job falls
+    back to a ``taskkill`` that may take seconds), once per run. When Iron
+    Jarvis closes it is killed at once, before the app goes."""
+    import threading
+
+    from iron_jarvis.core import procs
+
+    killed: list[tuple[object, int]] = []
+    done = threading.Event()
+
+    def kill(proc):
+        killed.append((proc, threading.get_ident()))
+        done.set()
+
+    monkeypatch.setattr(procs, "kill_tree", kill)
+    here = threading.get_ident()
+    run = PROOF._Running(sid="s1", folder="x", proc="tree-1")
+    PROOF._stop_run(run, PROOF.WHY_STOPPED)
+    assert run.stop.is_set() and run.why == "stopped"
+    assert done.wait(10)
+    PROOF._stop_run(run, PROOF.WHY_NEW_MESSAGE)
+    assert run.why == "stopped", "the first reason stays"
+    assert [p for p, _ in killed] == ["tree-1"] and killed[0][1] != here
+    closing = PROOF._Running(sid="s2", folder="x", proc="tree-2")
+    PROOF._stop_run(closing, PROOF.WHY_CLOSING)
+    assert killed[-1] == ("tree-2", here)
+
+
+def test_the_check_runs_with_no_secret_in_its_environment(tmp_path, monkeypatch):
+    """22-a review (``docs/rules/build.md``: a Build session's commands see
+    the user's PATH and home, never a secret): the check runs on its own
+    after every changed reply, and the folder's test scripts are written by
+    the coding tool, so a secret-NAMED variable of the daemon never reaches
+    them, while the user's own settings do. The value is built here at run
+    time and is shaped like nothing real."""
+    folder = tmp_path / "shop"
+    folder.mkdir()
+    value = "zz" + "top" + "-value-" + str(4 * 1000 + 321)
+    monkeypatch.setenv("SHOP_API_KEY", value)
+    monkeypatch.setenv("SHOP_DEPLOY_TOKEN", value)
+    monkeypatch.setenv("SHOP_COLOR", "teal")
+    probe = folder / "probe.py"
+    probe.write_text(
+        "import os\n"
+        "for name in ('SHOP_API_KEY', 'SHOP_DEPLOY_TOKEN', 'SHOP_COLOR'):\n"
+        "    print(name, 'present' if name in os.environ else 'absent')\n"
+        f"print('value seen' if any(v == {value!r} for v in os.environ.values()) else 'value unseen')\n",
+        encoding="utf-8")
+    res = PROOF.run_checks(str(folder), f'"{sys.executable}" "{probe}"', "s1", timeout_s=60)
+    assert res.started and res.exit == 0, res
+    lines = res.output.split()
+    assert "SHOP_COLOR present" in res.output, res.output
+    assert "SHOP_API_KEY absent" in res.output and "SHOP_DEPLOY_TOKEN absent" in res.output, res.output
+    assert "value unseen" in res.output and value not in lines
 
 
 def test_the_folder_proposes_and_the_kept_answer_wins(tmp_path):

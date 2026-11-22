@@ -1572,7 +1572,13 @@ def _unchecked_words(facts: dict[str, Any], any_check: bool) -> str:
         return "Iron Jarvis is checking its newest reply now."
     if facts.get("running"):
         return "Its newest reply is still running, so Iron Jarvis has not checked it yet."
-    said = ("Iron Jarvis has no check of its newest reply." if any_check
+    if facts.get("unfinished"):
+        # The page's "Not checked: the check did not finish." (no cause the
+        # record does not hold).
+        return "Iron Jarvis's check of its newest reply did not finish, so that reply is not checked."
+    if facts.get("cut"):
+        return "Its newest reply did not finish, so Iron Jarvis did not check it."
+    said =("Iron Jarvis has no check of its newest reply." if any_check
             else "Iron Jarvis has not checked any of its replies yet.")
     plan = facts.get("plan") or {}
     state, why = plan.get("state"), plan.get("why")
@@ -1590,11 +1596,13 @@ def _unchecked_words(facts: dict[str, Any], any_check: bool) -> str:
 def newest_check(platform: Any, ref: str) -> "tuple[Any, dict[str, Any] | None, dict[str, Any]] | None":
     """BLOCKING: ``(session row, check record, facts)`` for the Build › Code
     session ``ref`` names (its id, a word of its title, or its tool), else the
-    newest session; None when there is none. The record is the newest
-    finished check of the session's NEWEST reply, else its newest finished
-    check of any reply (or None); ``facts``: ``newest_turn``, ``running``
-    (that reply has not ended), ``checking`` (its check runs now) and, when
-    that reply has no check, the folder's ``plan`` now (``proof.decide``)."""
+    newest session; None when there is none. The record is the session's
+    NEWEST reply's newest record when that is a finished one, else the newest
+    finished check of an earlier reply (or None); ``facts``: ``newest_turn``,
+    ``running`` and ``checking`` (asked of the running app: that reply runs,
+    its check runs), ``unfinished`` (its check began and is not running),
+    ``cut`` (it has no "completed" end and is not running) and, when that
+    reply has no record, the folder's ``plan`` now (``proof.decide``)."""
     from pathlib import Path
 
     from ..hosted import proof as PROOF
@@ -1612,22 +1620,39 @@ def newest_check(platform: Any, ref: str) -> "tuple[Any, dict[str, Any] | None, 
     if not rows:
         return None
     row = rows[0]
-    home = Path(platform.config.home)
-    events, _total, _dropped = EventLog(home, row.id).read(2000)
+    # 22-a review: what runs NOW comes from the running app, never from the
+    # log alone (a "checking" record, or a reply with no end, is all a log
+    # holds after Iron Jarvis closed in the middle of one). A session open in
+    # this app is read through its own log (its newest events included).
+    svc = getattr(platform, "hosted", None)
+    live = svc.live.get(row.id) if svc is not None else None
+    log = getattr(live, "log", None) if live is not None else None
+    if log is None:
+        log = EventLog(Path(platform.config.home), row.id)
+    events, _total, _dropped = log.read(2000)
     events = [e for e in events if isinstance(e, dict)]
     proofs = [e for e in events if e.get("type") == PROOF.EVENT and e.get("by") == PROOF.BY]
     # The newest reply: the newest event a turn stamped (a check's record
     # names its reply in ``for_turn`` and stamps none).
     newest = next((str(e["turn"]) for e in reversed(events) if e.get("turn") and e.get("type") != PROOF.EVENT), "")
     mine = [e for e in proofs if newest and e.get("for_turn") == newest]
-    done = [e for e in proofs if e.get("state") == PROOF.STATE_DONE]
-    rec = next((e for e in reversed(mine) if e.get("state") == PROOF.STATE_DONE), None) or (
-        done[-1] if done else None)
+    # The newest reply's record is its NEWEST one (a card's question that a
+    # check then answered is not the answer); else an earlier reply's newest.
+    rec = mine[-1] if mine and mine[-1].get("state") == PROOF.STATE_DONE else next(
+        (e for e in reversed(proofs) if e.get("state") == PROOF.STATE_DONE and e.get("for_turn") != newest), None)
+    # Only a reply that ended "completed" is ever checked (``check_again``).
+    ended = bool(newest) and any(e.get("type") == "done" and str(e.get("turn") or "") == newest
+                                 and str(e.get("stop") or "") == "completed" for e in events)
+    checking = svc is not None and PROOF.checking(svc, row.id)
+    running = live is not None and getattr(live, "turn", None) is not None
     facts: dict[str, Any] = {
         "newest_turn": newest,
-        "running": bool(newest) and not any(e.get("type") == "done" and str(e.get("turn") or "") == newest
-                                            for e in events),
-        "checking": bool(mine) and mine[-1].get("state") == PROOF.STATE_CHECKING,
+        "running": running,
+        "checking": checking,
+        # Its check began and is not running now: it did not finish.
+        "unfinished": not checking and bool(mine) and mine[-1].get("state") == PROOF.STATE_CHECKING,
+        # It has no end and is not running now: it did not finish.
+        "cut": bool(newest) and not ended and not running,
     }
     folder = str(getattr(row, "folder", "") or "")
     if folder and not (rec is not None and rec.get("for_turn") == newest):

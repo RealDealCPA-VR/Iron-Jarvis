@@ -206,10 +206,93 @@ def test_the_words_are_the_counts_and_nothing_more():
     assert TC.counts_words(TC.Counts("pytest", 0, 0, 0)) == "no tests ran"
 
 
-def test_only_the_end_of_a_long_output_is_read():
-    noise = ("x" * 200 + "\n") * 2_000
-    got = TC.read_counts("Tests: 9, Assertions: 9.\n" + noise + PYTEST_QUIET)
-    assert got is not None and got.runner == "pytest"
+VITEST_PASSED = "      Tests  10 passed (10)\n"
+VITEST_FAILED = "      Tests  2 failed | 3 passed (5)\n"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        # 22-a review: the SAME runner twice in one command (``vitest run &&
+        # vitest run -c e2e``, ``pytest a; pytest b``, ``npm test
+        # --workspaces``): the last run's count is never said as the whole
+        # command's, and a failed first run is never hidden behind a pass.
+        VITEST_FAILED + VITEST_PASSED,
+        VITEST_PASSED + VITEST_FAILED,
+        "1 failed, 9 passed in 0.10s\n4 passed in 0.01s\n",
+        PYTEST_FAILED + PYTEST_QUIET,
+        PYTEST_NONE + PYTEST_QUIET,
+        JEST + "Tests:       2 passed, 2 total\n",
+        UNITTEST_FAILED + UNITTEST_OK,
+        MOCHA + "  4 passing (3ms)\n",
+        PHPUNIT_FAILED + PHPUNIT_OK,
+        DOTNET9 + "Test summary: total: 2, failed: 0, succeeded: 2, skipped: 0, duration: 0.4s\n",
+    ],
+)
+def test_one_runner_run_twice_gives_no_number(output):
+    assert TC.read_counts(output) is None
+
+
+def test_the_runners_that_print_one_summary_per_part_are_added_up():
+    """cargo (unit tests, doc tests), dotnet (one line per test project) and
+    go test -v (each test's own line) print one summary per PART of one run:
+    those are added up, inside the output read."""
+    assert TC.read_counts(CARGO + CARGO) == TC.Counts("cargo test", 8, 6, 2)
+    assert TC.read_counts(DOTNET + DOTNET) == TC.Counts("dotnet test", 20, 18, 2)
+
+
+NOISE = ("x" * 200 + "\n") * 2_000  # longer than the tail
+
+
+def test_only_the_end_of_a_long_output_is_parsed():
+    assert len(NOISE) > TC.TAIL_CHARS
+    got = TC.read_counts(NOISE + PYTEST_QUIET)
+    assert got == TC.Counts("pytest", 5, 5, 0)
+    # A long single run whose earlier part holds no summary keeps its count
+    # (pytest -v names every test; none of those lines is a summary).
+    verbose = "".join(f"tests/test_x.py::test_{i} PASSED [ 1%]\n" for i in range(3_000))
+    assert TC.read_counts(verbose + "3000 passed in 4.20s\n") == TC.Counts("pytest", 3000, 3000, 0)
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        # 22-a review: a summary cut off before the tail (an earlier run, or
+        # an earlier part of a sum) gives no number, never a partial one.
+        "Tests: 9, Assertions: 9.\n",
+        "1 failed, 9 passed in 0.10s\n",
+        "\x1b[31m1 failed\x1b[0m, \x1b[32m9 passed\x1b[0m\x1b[32m in 0.10s\x1b[0m\n",
+        "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        "Failed!  - Failed:     1, Passed:     6, Skipped:     1, Total:     8, Duration: 41 ms - A.dll\n",
+        "=== RUN   TestBurst\n--- FAIL: TestBurst (0.00s)\n",
+        "      Tests  2 failed | 3 passed (5)\n",
+        "Tests:       1 failed, 3 passed, 4 total\n",
+        "Ran 4 tests in 0.002s\n\nFAILED (failures=1)\n",
+        "  1 passing (12ms)\n  1 failing\n",
+    ],
+)
+def test_a_summary_cut_off_before_the_tail_gives_no_number(before):
+    assert TC.read_counts(before + NOISE + PYTEST_QUIET) is None
+    assert TC.read_counts(before + NOISE + CARGO) is None
+
+
+def test_a_cut_inside_a_summary_line_is_never_read_as_a_summary():
+    """The tail starts inside "1 failed, 9 passed in 0.10s": the part after
+    the cut alone would read as "9 passed"."""
+    rest = "9 passed in 0.10s\n" + ("z" * 99 + "\n") * 600
+    rest += "w" * (TC.TAIL_CHARS - len(rest))
+    assert len(rest) == TC.TAIL_CHARS
+    # The same tail after a WHOLE line: its first line is read.
+    assert TC.read_counts("start\n" + rest) == TC.Counts("pytest", 9, 9, 0)
+    assert TC.read_counts("1 failed, " + rest) is None
+
+
+def test_an_output_too_long_to_search_gives_no_number(monkeypatch):
+    before_tail = len(NOISE) + 1 + len(PYTEST_QUIET) - TC.TAIL_CHARS
+    monkeypatch.setattr(TC, "HEAD_CHARS", before_tail - 1_000)
+    assert TC.read_counts(NOISE + "\n" + PYTEST_QUIET) is None
+    monkeypatch.setattr(TC, "HEAD_CHARS", 16_000_000)
+    assert TC.read_counts(NOISE + "\n" + PYTEST_QUIET) == TC.Counts("pytest", 5, 5, 0)
 
 
 def test_hostile_lines_are_read_in_linear_time():
@@ -222,6 +305,12 @@ def test_hostile_lines_are_read_in_linear_time():
         "TC.read_counts('Tests:' + ' ' * 60000 + '1 failed,' * 9000)\n"
         "TC.read_counts('test result: ok. ' + '1 passed; ' * 20000)\n"
         "TC.read_counts('Test summary: total: ' + '9' * 100000)\n"
+        # The search of the part before the tail (22-a review), on look-alikes.
+        "noise = ('x' * 200 + '\\n') * 400\n"
+        "TC.read_counts('9' * 3_000_000 + ' passing (' + noise + '4 passed in 0.01s\\n')\n"
+        "TC.read_counts('passed in ' + '9' * 3_000_000 + noise + '4 passed in 0.01s\\n')\n"
+        "TC.read_counts('Tests: ' + ' ' * 3_000_000 + noise + '4 passed in 0.01s\\n')\n"
+        "TC.read_counts('\\x1b[' + ';' * 3_000_000 + noise + '4 passed in 0.01s\\n')\n"
         "print('ok')\n"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20)
