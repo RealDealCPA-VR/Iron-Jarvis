@@ -12,9 +12,14 @@
  *   open, or the last work in the past 30 days); otherwise one quiet line,
  *   "Last here: 12 Mar", that opens it.
  * - ONE main action, Continue (G4): the host sends `CONTINUE_SENTENCE` and
- *   nothing else. A second press while the first is still being sent does
- *   nothing. The rest are quiet: the last work's title opens it, the cross
- *   hides the card for this folder until new work is on record.
+ *   nothing else, and names the new chat or session `continuedTitle(card)`
+ *   (the work it continues, never the sentence). A second press while the
+ *   first is still being sent does nothing. The rest are quiet: the last
+ *   work's title opens it, the cross hides the card for this folder until
+ *   new work is on record.
+ * - `tool` (Build › Code): the user's own coding tool is not told the
+ *   record, and the card SAYS so under Continue (`PICK_UP_TOOL_NOTE`), not
+ *   only in a hover.
  * - `hidden` (the host's box holds words or files): the card steps aside, as
  *   the next-step box does, so a draft is never replaced by Continue.
  * - A failed read says so in words, with Try again (never "nothing here");
@@ -39,6 +44,7 @@ import {
   PICK_UP_LINES_SHOWN,
   PICK_UP_PENDING,
   PICK_UP_STILL_OPEN,
+  PICK_UP_TOOL_NOTE,
   continueTitle,
   decodePickUp,
   hideFor,
@@ -104,8 +110,9 @@ export function PickUpCard({
   hidden?: boolean;
   /** The host is starting something already. */
   disabled?: boolean;
-  /** Send CONTINUE_SENTENCE (and nothing else). A promise holds the press. */
-  onContinue: () => void | Promise<unknown>;
+  /** Send CONTINUE_SENTENCE (and nothing else), naming the new chat or
+   *  session `continuedTitle(card)`. A promise holds the press. */
+  onContinue: (card: PickUp) => void | Promise<unknown>;
 }) {
   const place = (folder ?? "").trim();
   const [read, setRead] = useState<Read>({ state: "idle" });
@@ -173,7 +180,7 @@ export function PickUpCard({
     sendingRef.current = true;
     setSending(true);
     try {
-      await onContinue();
+      await onContinue(card);
     } finally {
       sendingRef.current = false;
       if (alive.current) setSending(false);
@@ -249,6 +256,11 @@ export function PickUpCard({
           {PICK_UP_CONTINUE}
           <ArrowRight size={12} aria-hidden="true" className="shrink-0" />
         </button>
+        {tool ? (
+          <p data-testid="pick-up-tool-note" className="pt-1 text-zinc-500 [overflow-wrap:anywhere]">
+            {PICK_UP_TOOL_NOTE}
+          </p>
+        ) : null}
       </div>
     </section>
   );

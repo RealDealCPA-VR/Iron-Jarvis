@@ -291,7 +291,7 @@ import { ChatFolderChip } from "@/components/chat/ChatFolderChip";
 import { FolderChip, useFolderPicker } from "@/components/folders/FolderChip";
 // Next leaps 04-a (build-out plan R2.1): the card when a new chat's folder is picked.
 import { ChatPickUpCard } from "@/components/work/PickUpCard";
-import { CONTINUE_SENTENCE } from "@/lib/pickUp";
+import { CONTINUE_SENTENCE, continuedTitle } from "@/lib/pickUp";
 import {
   CHAT_NO_FOLDER_TITLE,
   CLEAR_CHAT_FOLDER_TITLE,
@@ -1589,6 +1589,11 @@ interface SaveTarget {
    *  linked to the chat (`POST /chat/turns/{id}/thread`) by the first save
    *  that names it, however late (the reply may have finished first). */
   unlinked?: string[];
+  /** Next leaps 04-a: the name a NEW chat's FIRST save gives it (the pick-up
+   *  card's Continue names its chat after the work it continues, never after
+   *  the fixed sentence). Sent only while the box has no id: a later save
+   *  never undoes a rename. */
+  title?: string;
 }
 
 /** One /connectors gallery entry, as the "+" Connectors flyout consumes it. */
@@ -4602,6 +4607,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // Threads sidebar: the saved-conversation list + which one is loaded.
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  // Next leaps 04-a: a chat is being OPENED (openThread's read has not
+  // answered yet). Until it does the pane has no thread id and, with no copy
+  // in this window, no messages, yet it is no new chat: the pick-up card
+  // waits. `openingGenRef` is the open it belongs to (a newer open, or New
+  // chat, owns the pane after it).
+  const [openingChat, setOpeningChat] = useState(false);
+  const openingGenRef = useRef<number | null>(null);
   // Readiness 12B review: the chat this page has open, for this window's bell
   // (lib/chatAway.shownHere) — a waiting chat whose card is here is not pinged.
   useEffect(() => {
@@ -6727,6 +6739,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           project_id: projectIdRef.current,
           ...(personaValue ? { persona: personaValue } : {}),
           ...(setup ? { setup } : {}),
+          // 04-a: the first save names a chat Continue started (read here,
+          // inside the chain: an earlier save in it has given the box an id).
+          ...(target.id === null && target.title ? { title: target.title } : {}),
         };
         const res = await putThread(target, body, msgs);
         if (saveTargetRef.current === target) {
@@ -7099,6 +7114,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // Orphan anything in flight from the previous conversation.
     chatGenRef.current += 1;
     const openGen = chatGenRef.current;
+    // 04-a: held until this open's read answers (the `finally` below).
+    openingGenRef.current = openGen;
+    setOpeningChat(true);
     stream.abort(); // tear down a live streaming turn (its throw won't fall back)
     tts.cancel(); // stop reading the previous thread's reply
     awaitingIdRef.current = null;
@@ -7374,6 +7392,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       }
       if (offlineNow) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      // 04-a: this open is over (opened, gone, or failed in words); a newer
+      // open or New chat already holds or cleared it.
+      if (openingGenRef.current === openGen) {
+        openingGenRef.current = null;
+        setOpeningChat(false);
+      }
     }
   }
 
@@ -9281,6 +9306,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           project_id: projectIdRef.current,
           ...(personaValue ? { persona: personaValue } : {}),
           setup,
+          ...(target.id === null && target.title ? { title: target.title } : {}),
         };
         const res = await putThread(target, body, msgs);
         if (saveTargetRef.current === target) {
@@ -11148,7 +11174,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     }
   }
 
-  function send(text: string, opts: { cloudOnce?: string } = {}) {
+  /** `opts.title` (next leaps 04-a): the name a NEW chat this send starts is
+   *  saved under (the pick-up card's Continue); ignored once the chat has
+   *  messages or an id. */
+  function send(text: string, opts: { cloudOnce?: string; title?: string } = {}) {
     const message = text.trim();
     // v1.275.0: a message can be a file alone ("here" + a PDF), and a send
     // pressed mid-upload is QUEUED — it fires with the box's text the moment
@@ -11185,7 +11214,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         null,
         (p) => {
           secretSendOkRef.current = true;
-          send(text, { cloudOnce: p });
+          send(text, { ...opts, cloudOnce: p });
         },
         () => {
           // A send that did not come from the box (a suggestion) keeps its
@@ -11215,6 +11244,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       return;
     }
     sendingRef.current = true;
+    // 04-a: a chat Continue starts is named after the work it continues —
+    // set only now (every guard above has let the turn go) and only on a box
+    // that is still a new, empty chat.
+    if (opts.title && saveTargetRef.current.id === null && messagesRef.current.length === 0)
+      saveTargetRef.current.title = opts.title;
     // A new turn always follows: re-pin so the user's own message + the reply
     // scroll into view even if they'd scrolled up to re-read earlier context.
     pinnedRef.current = true;
@@ -11819,6 +11853,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     leaveConversation();
     forgetOpenThread(); // v1.311.0: the next visit starts fresh too
     chatGenRef.current += 1; // orphan any in-flight /chat reply
+    // 04-a: a chat still being opened is left: this is a new chat.
+    openingGenRef.current = null;
+    setOpeningChat(false);
     stream.abort(); // tear down a live streaming turn (its throw won't fall back)
     tts.cancel(); // stop reading the old thread's reply
     setMessages([]);
@@ -14300,8 +14337,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       the work block, as a record. It steps aside while the box
                       holds words or files. `projectId`, not `activeProject`:
                       the id is what the turn is sent, even before the
-                      projects list has loaded. */}
-                  {emptyHero && !threadId && workspaceDir && !projectId ? (
+                      projects list has loaded. `openingChat`: a chat being
+                      opened (the restore at start, a ?thread= link, a row)
+                      has no id and no messages until its read answers, and
+                      is not a new chat. The chat Continue starts is named
+                      after the work it continues (`continuedTitle`). */}
+                  {emptyHero && !threadId && !openingChat && workspaceDir && !projectId ? (
                     <div data-testid="chat-hero-pick-up" className="mb-1.5 px-2 empty:hidden">
                       <ChatPickUpCard
                         store={composer}
@@ -14309,7 +14350,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         folder={workspaceDir}
                         local={localOnly}
                         disabled={busy}
-                        onContinue={() => send(CONTINUE_SENTENCE)}
+                        onContinue={(card) => send(CONTINUE_SENTENCE, { title: continuedTitle(card) })}
                       />
                     </div>
                   ) : null}

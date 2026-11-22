@@ -12,9 +12,13 @@
  *    in words with Try again; it steps aside while the box holds words;
  *  - mounted on all three surfaces: a NEW chat (the real chat page: a folder
  *    pick shows it, Continue sends the fixed sentence as the chat's one
- *    message, an opened chat neither reads nor shows it), a new Chat › Code
- *    session (HarnessStartComposer) and a new Build › Code session
- *    (StartComposer: Continue starts the session with the fixed sentence).
+ *    message, a chat being opened neither reads nor shows it, even while its
+ *    read is still out), a new Chat › Code session (HarnessStartComposer) and
+ *    a new Build › Code session (StartComposer: Continue starts the session
+ *    with the fixed sentence, and the card says on screen that the coding
+ *    tool is not shown it);
+ *  - what Continue starts is named after the work it continues
+ *    ("<title> (continued)"), never after the fixed sentence.
  */
 
 import React from "react";
@@ -41,6 +45,7 @@ const H = vi.hoisted(() => {
     api: {
       gets: [] as string[],
       posts: [] as { path: string; body: Record<string, unknown> }[],
+      puts: [] as { path: string; body: Record<string, unknown> }[],
       getResponses: {} as Record<string, unknown>,
       postResponses: {} as Record<string, unknown>,
     },
@@ -70,7 +75,8 @@ vi.mock("@/lib/api", () => ({
     if (typeof r === "function") return (r as (b: Record<string, unknown>) => unknown)(body);
     return r ?? {};
   },
-  put: async (path: string) => {
+  put: async (path: string, body: Record<string, unknown>) => {
+    H.api.puts.push({ path, body });
     const m = /^\/chat\/threads\/(.+)$/.exec(path);
     return { id: m && m[1] !== "new" ? m[1] : "t1", title: "t" };
   },
@@ -133,12 +139,14 @@ vi.mock("remark-gfm", () => ({ default: () => {} }));
 vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => <div data-testid="tree" /> }));
 
 import ChatPage from "@/app/chat/page";
-import { HarnessStartComposer, type StartRequest } from "@/components/harness/HarnessStartComposer";
+import { HarnessStartComposer, startCreateBody, type StartRequest } from "@/components/harness/HarnessStartComposer";
 import { StartComposer } from "@/components/buildCode/StartComposer";
 import { PickUpCard } from "@/components/work/PickUpCard";
 import { decodeCodingTools } from "@/lib/buildApp";
 import {
   CONTINUE_SENTENCE,
+  PICK_UP_TOOL_NOTE,
+  continuedTitle,
   dayWords,
   decodePickUp,
   hideFor,
@@ -181,9 +189,14 @@ function answer(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
+/** The name the chat or session Continue starts is given (the card's last
+ *  piece of work, then "(continued)"). */
+const CONTINUED = "Reconcile March bank statement (continued)";
+
 beforeEach(() => {
   H.api.gets.length = 0;
   H.api.posts.length = 0;
+  H.api.puts.length = 0;
   H.stream.bodies.length = 0;
   for (const k of Object.keys(H.api.postResponses)) delete H.api.postResponses[k];
   H.api.getResponses = {
@@ -202,6 +215,7 @@ beforeEach(() => {
   H.api.postResponses["/documents/folder-check"] = { problem: null, checked: true };
   window.history.replaceState({}, "", "/chat");
   window.localStorage.clear();
+  window.sessionStorage.clear();
   Element.prototype.scrollIntoView = vi.fn();
 });
 afterEach(() => {
@@ -250,6 +264,22 @@ describe("the answer, the day and the cross", () => {
     expect(isHidden(LEDGERS, p)).toBe(false);
     const later = decodePickUp(answer({ last: { ...(answer().last as object), at: "2026-11-19T10:00:00+00:00" } })) as PickUp;
     expect(isHidden(BOOKS, later)).toBe(false);
+  });
+
+  it("names what Continue starts after the work it continues, never after the fixed sentence", () => {
+    const named = (title: string, name = "Books") =>
+      continuedTitle(decodePickUp(answer({ name, last: { ...(answer().last as object), title } })) as PickUp);
+    expect(named("Reconcile March bank statement")).toBe(CONTINUED);
+    // A chain of Continues keeps one mark.
+    expect(named(CONTINUED)).toBe(CONTINUED);
+    expect(named(`${CONTINUED} (continued)`)).toBe(CONTINUED);
+    // A last piece named by the sentence itself (typed by the owner): the folder's name.
+    expect(named(CONTINUE_SENTENCE)).toBe("Books (continued)");
+    expect(named(CONTINUE_SENTENCE.toLowerCase(), "")).toBe("Earlier work (continued)");
+    // As long as a chat's own name from its first message, at most.
+    const long = named("x".repeat(120));
+    expect(long).toBe(`${"x".repeat(47)}… (continued)`);
+    expect(long.includes(CONTINUE_SENTENCE)).toBe(false);
   });
 });
 
@@ -392,8 +422,28 @@ describe("a new chat", () => {
     expect(users.map((m) => m.content)).toEqual([CONTINUE_SENTENCE]);
     // The conversation has started: the card is gone.
     await waitFor(() => expect(screen.queryByTestId("pick-up-card")).toBeNull());
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => {});
     expect(H.stream.bodies).toHaveLength(1);
+    // The chat is named after the work it continues, by its FIRST save only
+    // (a later save never undoes a rename), never after the fixed sentence.
+    await waitFor(() => expect(H.api.puts.filter((p) => p.path.startsWith("/chat/threads/")).length).toBeGreaterThan(1));
+    const saves = H.api.puts.filter((p) => p.path.startsWith("/chat/threads/"));
+    expect(saves[0].path).toBe("/chat/threads/new");
+    expect(saves[0].body.title).toBe(CONTINUED);
+    expect(saves.slice(1).every((p) => !("title" in p.body))).toBe(true);
+  });
+
+  it("a message typed in a new chat is named by the daemon as before (no title is sent)", async () => {
+    desktop({ path: BOOKS });
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByTestId("chat-hero-folder-choose"));
+    await screen.findByTestId("pick-up-card");
+    const input = await box();
+    fireEvent.change(input, { target: { value: "check the March figures" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(H.api.puts.some((p) => p.path === "/chat/threads/new")).toBe(true));
+    expect(H.api.puts.every((p) => !("title" in p.body))).toBe(true);
   });
 
   it("steps aside while the box holds words", async () => {
@@ -416,29 +466,66 @@ describe("a new chat", () => {
     window.history.replaceState({}, "", "/chat?project=p1");
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByTestId("chat-hero-folder").getAttribute("data-folder")).toBe(BOOKS));
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => {});
     expect(screen.queryByTestId("pick-up-card")).toBeNull();
     expect(pickUpReads()).toEqual([]);
   });
 
-  it("an opened chat neither reads nor shows it", async () => {
-    H.api.getResponses["/chat/threads/t9"] = {
-      id: "t9",
-      title: "books",
-      updated_at: "S1",
-      messages: [
-        { role: "user", content: "hi" },
-        { role: "assistant", content: "hello" },
-      ],
-      setup: { workspace_dir: BOOKS },
-    };
+  // The reviewer's probe: the folder this browser remembers is already the
+  // new-chat folder while a chat is being OPENED (no thread id, no messages
+  // until its read answers). The card must neither read nor flash a live
+  // Continue over the chat being opened: on a ?thread= link (the card's own
+  // title link among them) and on the restore of the last open chat at start.
+  it.each([
+    ["a ?thread= link", () => window.history.replaceState({}, "", "/chat?thread=t9")],
+    [
+      "the restore of the last open chat",
+      () => window.sessionStorage.setItem("ij_chat_open_thread", JSON.stringify({ id: "t9", project: null })),
+    ],
+  ])("a chat being opened (%s) neither reads nor shows it, before or after its read answers", async (_how, land) => {
+    window.localStorage.setItem("ij_chat_workspace", BOOKS);
+    let answerThread: () => void = () => {};
+    const thread = new Promise<unknown>(
+      (r) =>
+        (answerThread = () =>
+          r({
+            id: "t9",
+            title: "books",
+            updated_at: "S1",
+            messages: [
+              { role: "user", content: "hi there" },
+              { role: "assistant", content: "hello back" },
+            ],
+            setup: { workspace_dir: BOOKS },
+          })),
+    );
+    H.api.getResponses["/chat/threads/t9"] = () => thread;
     H.api.getResponses[pickUpPath(BOOKS)] = answer();
-    window.history.replaceState({}, "", "/chat?thread=t9");
+    land();
     render(<ChatPage />);
-    await waitFor(() => expect(screen.getByTestId("chat-folder-chip").getAttribute("data-folder")).toBe(BOOKS));
-    await new Promise((r) => setTimeout(r, 20));
+    // The pane a new chat in Books would show: the hero, its folder chip on
+    // Books, and the chat's read asked for (and not answered).
+    await waitFor(() => expect(screen.getByTestId("chat-hero-folder").getAttribute("data-folder")).toBe(BOOKS));
+    await waitFor(() => expect(H.api.gets).toContain("/chat/threads/t9"));
+    await act(async () => {});
     expect(screen.queryByTestId("pick-up-card")).toBeNull();
     expect(pickUpReads()).toEqual([]);
+    // The read answers: the chat is open, and still nothing was read for it.
+    await act(async () => answerThread());
+    expect(await screen.findByText("hello back")).toBeTruthy();
+    await act(async () => {});
+    expect(screen.queryByTestId("pick-up-card")).toBeNull();
+    expect(pickUpReads()).toEqual([]);
+  });
+
+  it("a chat that could not be opened is a new chat again: its card shows", async () => {
+    window.localStorage.setItem("ij_chat_workspace", BOOKS);
+    window.sessionStorage.setItem("ij_chat_open_thread", JSON.stringify({ id: "gone", project: null }));
+    H.api.getResponses["/chat/threads/gone"] = new H.FakeApiError("not found", 404);
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(<ChatPage />);
+    expect(await screen.findByTestId("pick-up-continue")).toBeTruthy();
+    expect(H.api.gets).toContain("/chat/threads/gone");
   });
 });
 
@@ -462,7 +549,23 @@ describe("a new Chat › Code session", () => {
     await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
     expect(starts[0].text).toBe(CONTINUE_SENTENCE);
     expect(starts[0].folder).toBe(BOOKS);
+    // Named after the work it continues, at its create (a session with a
+    // name is not named by its first message).
+    expect(starts[0].title).toBe(CONTINUED);
+    expect(startCreateBody(starts[0]).title).toBe(CONTINUED);
     await act(async () => release(null));
+  });
+
+  it("a session started from the box sends no name (its first message names it, as before)", async () => {
+    H.api.getResponses[pickUpPath(BOOKS, false, true)] = answer();
+    const onStart = vi.fn(async (_req: StartRequest) => null);
+    render(<HarnessStartComposer initialFolder={BOOKS} onStart={onStart} />);
+    await screen.findByTestId("pick-up-card");
+    fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "fix the import" } });
+    fireEvent.keyDown(screen.getByTestId("harness-new-box"), { key: "Enter" });
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
+    expect(onStart.mock.calls[0][0].title).toBeUndefined();
+    expect("title" in startCreateBody(onStart.mock.calls[0][0])).toBe(false);
   });
 
   it("asks as Local only when the session is, and steps aside while the box holds words", async () => {
@@ -526,8 +629,15 @@ describe("a new Build › Code session", () => {
     render(<StartComposer tools={TOOLS} toolsError={null} startFolder={BOOKS} onStarted={onStarted} />);
     await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Codex"));
     const press = await screen.findByTestId("pick-up-continue");
-    // The user's own coding tool is not shown Iron Jarvis's record: the press says so.
-    expect(press.getAttribute("title")).toContain("Your coding tool does not see this card");
+    // The user's own coding tool is not shown Iron Jarvis's record: the card
+    // SAYS so, on screen beside Continue (a hover is never seen on a phone),
+    // and the press's hover says it too.
+    const card = screen.getByTestId("pick-up-card");
+    expect(within(card).getByTestId("pick-up-tool-note").textContent).toBe(PICK_UP_TOOL_NOTE);
+    expect(PICK_UP_TOOL_NOTE).toBe(
+      `Your coding tool does not see this card. Continue sends it only "${CONTINUE_SENTENCE}" and it works from the folder's own files.`,
+    );
+    expect(press.getAttribute("title")).toBe(PICK_UP_TOOL_NOTE);
     fireEvent.click(press);
     fireEvent.click(press);
     await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
@@ -535,5 +645,14 @@ describe("a new Build › Code session", () => {
     const creates = H.api.posts.filter((p) => p.path === "/build/app/sessions");
     expect(creates).toHaveLength(1);
     expect(creates[0].body.folder).toBe(BOOKS);
+    // Named after the work it continues, never after the fixed sentence.
+    expect(creates[0].body.title).toBe(CONTINUED);
+  });
+
+  it("a new chat and a Chat › Code session say nothing about a coding tool", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    await screen.findByTestId("pick-up-continue");
+    expect(screen.queryByTestId("pick-up-tool-note")).toBeNull();
   });
 });

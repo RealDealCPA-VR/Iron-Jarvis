@@ -6,10 +6,15 @@ scroll-back.md``).
 chat, a new Chat › Code session or a new Build › Code session in ``folder``
 shows before its first message. "Last time (12 Mar): <title>. Decided: …
 Still open: …", with Continue. Continue sends one fixed sentence written in
-the dashboard's code ("Continue where we left off in this folder."); the
-lines below reach the model the way they already do, through the work block
-(``workmap/block.work_block``), as a record. Nothing a model wrote is ever
-sent as the owner's words.
+the dashboard's code (:data:`CONTINUE_SENTENCE`, "Continue where we left off
+in this folder."); the lines below reach the model the way they already do,
+through the work block (``workmap/block.work_block``), as a record. Nothing a
+model wrote is ever sent as the owner's words. The block takes the sentence
+out of the turn's words before it matches anything (``block.without_continue``),
+so Continue's turn is told this folder's work and nothing the sentence's own
+words match elsewhere. The chat or session Continue starts is named by the
+dashboard after the work it continues ("<title> (continued)"), never after
+the sentence.
 
 THE CARD SHOWS ONLY WHAT CONTINUE'S TURN IS TOLD (D-04.1: "the card already
 shows what will be picked up"). It reads through THE ONE READER
@@ -67,6 +72,8 @@ from .models import KIND_CHAT, KIND_CODE
 
 log = logging.getLogger(__name__)
 
+#: What Continue sends, word for word (the block's own constant).
+CONTINUE_SENTENCE = _block.CONTINUE_SENTENCE
 #: Rows read for the folder (the block reads as many).
 ROWS_READ = _block.HERE_MAX * 6
 #: Lines of each kind the card carries, at most.
@@ -242,6 +249,6 @@ def pick_up(platform: Any, folder: str, now: "datetime | None" = None, *,
 
 
 __all__ = [
-    "DECIDED_MAX", "DONE_MAX", "FRESH_DAYS", "IN_PROJECT_WORDS", "NOTHING_WORDS", "OPEN_MAX",
-    "Unreadable", "pick_up",
+    "CONTINUE_SENTENCE", "DECIDED_MAX", "DONE_MAX", "FRESH_DAYS", "IN_PROJECT_WORDS", "NOTHING_WORDS",
+    "OPEN_MAX", "Unreadable", "pick_up",
 ]

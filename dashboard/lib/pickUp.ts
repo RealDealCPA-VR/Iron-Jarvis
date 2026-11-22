@@ -31,8 +31,32 @@ export function pickUpPath(folder: string, local = false, chatCode = false): str
   return `${PICK_UP_PATH}?folder=${encodeURIComponent(folder)}${local ? "&local=true" : ""}${chatCode ? "&chat_code=true" : ""}`;
 }
 
-/** What Continue sends, word for word (written in code, never by a model). */
+/** What Continue sends, word for word (written in code, never by a model).
+ *  The daemon takes it out of the turn's words before it matches earlier
+ *  work (`workmap/block.without_continue`, a test reads it here): it points
+ *  at this folder and nothing else. */
 export const CONTINUE_SENTENCE = "Continue where we left off in this folder.";
+
+/** What the name of a chat or session Continue starts ends with. */
+export const CONTINUED_MARK = " (continued)";
+/** The longest name of the work continued that is kept (a chat's own name
+ *  from its first message is cut at the same length). */
+const CONTINUED_BASE_CHARS = 48;
+
+/** The name of the chat or session Continue starts: the work it continues,
+ *  then "(continued)" — never the fixed sentence, which every such chat
+ *  would share (the next card would be headed by it, and the record would
+ *  list one name for many pieces of work). A chain of Continues keeps one
+ *  mark. A last piece named by the sentence itself (a chat the owner typed
+ *  it into) gives the folder's name instead. */
+export function continuedTitle(p: PickUp): string {
+  let base = p.last.title.replace(/\s+/g, " ").trim();
+  while (base.toLowerCase().endsWith(CONTINUED_MARK.toLowerCase()))
+    base = base.slice(0, base.length - CONTINUED_MARK.length).trim();
+  if (!base || base.toLowerCase() === CONTINUE_SENTENCE.toLowerCase()) base = p.name.trim() || "Earlier work";
+  if (base.length > CONTINUED_BASE_CHARS) base = `${base.slice(0, CONTINUED_BASE_CHARS - 1).trimEnd()}…`;
+  return `${base}${CONTINUED_MARK}`;
+}
 
 /** One Decided or Still open line, with the piece of work it came from. */
 export interface PickUpLine {
@@ -140,12 +164,16 @@ export const PICK_UP_PENDING =
 /** Lines of one kind the card shows before "and N more". */
 export const PICK_UP_LINES_SHOWN = 3;
 
+/** Build › Code: said ON the card, under Continue (a hover is never seen on
+ *  a phone, and most never hover): the user's own coding tool is not told
+ *  Iron Jarvis's record (that is next leaps 14-c), so Continue does not hand
+ *  it what the card lists. */
+export const PICK_UP_TOOL_NOTE = `Your coding tool does not see this card. Continue sends it only "${CONTINUE_SENTENCE}" and it works from the folder's own files.`;
+
 /** Continue's hover words: what is sent, and who is told the card. In
  *  Build › Code the coding tool is not shown Iron Jarvis's record. */
 export function continueTitle(tool: boolean): string {
-  return tool
-    ? `Starts the session with "${CONTINUE_SENTENCE}" Your coding tool does not see this card: it works from the folder's own files.`
-    : `Sends "${CONTINUE_SENTENCE}" The reply is told what this card shows.`;
+  return tool ? PICK_UP_TOOL_NOTE : `Sends "${CONTINUE_SENTENCE}" The reply is told what this card shows.`;
 }
 
 /** What failed to load, in the app's one sentence shape. */

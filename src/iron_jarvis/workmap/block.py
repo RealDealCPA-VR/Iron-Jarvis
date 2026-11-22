@@ -50,11 +50,19 @@ THE PHONE (v1.547.0, decision D-13.2): a turn that answers the phone gets
 titles, ages and how each ended only (no folder, file names, run result or
 recap; ``PHONE_NOTE`` says so), never Local only work, and a row with an
 owner only when every owner is a client the owner's own message named.
+
+CONTINUE (next leaps 04-a): the pick-up card's Continue sends one fixed
+sentence, :data:`CONTINUE_SENTENCE`. It points at THIS folder and at nothing
+else, so :func:`work_block` takes it out of ``query`` before anything is
+matched, named or walled (:func:`without_continue`): its words ("continue",
+"left") never list work in another folder as "matching this message" and
+never put another client's work behind ``WALL_NOTE``.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone, tzinfo
 from typing import Any
 
@@ -73,6 +81,19 @@ HEAD = (
 )
 HERE_LEAD = "In this folder, newest first:"
 ELSEWHERE_LEAD = "In other folders, matching this message:"
+#: What the pick-up card's Continue sends, word for word (next leaps 04-a;
+#: written in the dashboard's code, ``lib/pickUp.ts`` ``CONTINUE_SENTENCE``,
+#: and a test reads it there).
+CONTINUE_SENTENCE = "Continue where we left off in this folder."
+_CONTINUE_RX = re.compile(r"continue\s+where\s+we\s+left\s+off\s+in\s+this\s+folder\.?", re.IGNORECASE)
+
+
+def without_continue(query: str) -> str:
+    """``query`` with every :data:`CONTINUE_SENTENCE` taken out (any case and
+    spacing). The sentence points at the turn's own folder and at nothing
+    else; what else the owner wrote still points."""
+    return _CONTINUE_RX.sub(" ", str(query or ""))
+
 #: Lines listed for the turn's own folder / for other folders.
 HERE_MAX = 6
 ELSEWHERE_MAX = 3
@@ -414,7 +435,13 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
     folder, file names, run result or recap; no Local only work (the
     reader's ``phone`` rule); a row with an owner only when every owner is a
     confirmed client the owner's own message named. So the model has no
-    folder or file name to relay to the messaging service."""
+    folder or file name to relay to the messaging service.
+
+    CONTINUE (next leaps 04-a): :data:`CONTINUE_SENTENCE` is taken out of
+    ``query`` first (:func:`without_continue`), so the turn Continue starts
+    is told this folder's work and nothing that the sentence's own words
+    happen to match elsewhere."""
+    query = without_continue(query)
     try:
         phone = not outside and _answers_the_phone()
         # THE ONE READER (v1.547.0, ``workmap/lookup.Reader``): the record
@@ -568,7 +595,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
 
 
 __all__ = [
-    "BLOCK_CHARS", "CLIENT_OTHER_MAX", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD", "HERE_LEAD",
-    "HERE_MAX", "NAMED_MAX", "PHONE_NOTE", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE", "date_words",
-    "entry_line", "here_part", "recap_lines", "work_block",
+    "BLOCK_CHARS", "CLIENT_OTHER_MAX", "CONTINUE_SENTENCE", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD",
+    "HERE_LEAD", "HERE_MAX", "NAMED_MAX", "PHONE_NOTE", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE",
+    "date_words", "entry_line", "here_part", "recap_lines", "without_continue", "work_block",
 ]

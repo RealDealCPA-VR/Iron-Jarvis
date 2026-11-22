@@ -2056,7 +2056,7 @@ record, so nothing has to be typed again.
 **When it shows.**
 
 - Only in a new chat or a new coding session (Chat › Code or Build › Code),
-  never in a chat you opened.
+  never in a chat you opened, not even while it is still opening.
 - Only for exactly that folder. Work in a folder inside it, or in any other
   folder, is not on the card.
 - The full card when something is still open or the last work there was in
@@ -2081,13 +2081,17 @@ record, so nothing has to be typed again.
 - Inside a project the card does not show (a chat in a project, or a
   Chat › Code session in a project's folder): those are told the project's
   own recent activity instead.
-- A chat that Continue starts is named after its first message, "Continue
-  where we left off in this folder.", until you rename it. Its own recap
-  says what it did, and the Decided and Still open lines of the chats
-  before it stay on the card.
+- A chat or session that Continue starts is named after the work it
+  continues, with "(continued)": "Reconcile March bank statement
+  (continued)". So the next card says what was done, and you can rename it
+  as usual. Its own recap says what it did, and the Decided and Still open
+  lines of the chats before it stay on the card.
+- The sentence Continue sends points only at this folder: the reply is not
+  told about work elsewhere just because it used the same words.
 - In Build › Code, your own coding tool (Claude Code, Codex and the others)
-  is not shown this record. There Continue starts the session with the same
-  sentence, and the tool works from the folder's own files.
+  is not shown this record, and the card says so under Continue. There
+  Continue starts the session with the same sentence, and the tool works
+  from the folder's own files.
 - In a chat that works in the folder you can also ask "where did we leave
   off?".
 - If the record cannot be read, the card says "Earlier work in this folder

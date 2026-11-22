@@ -55,7 +55,7 @@ import { announceChatViewLink } from "@/lib/chatSurface";
 import { CODING_SESSIONS_PLACE } from "@/lib/buildWords";
 import { FolderChip } from "@/components/folders/FolderChip";
 import { PickUpCard } from "@/components/work/PickUpCard";
-import { CONTINUE_SENTENCE } from "@/lib/pickUp";
+import { CONTINUE_SENTENCE, continuedTitle } from "@/lib/pickUp";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { ModeChip } from "@/components/buildCode/ModeChip";
 import { ModelPicker } from "@/components/buildCode/ModelPicker";
@@ -395,7 +395,7 @@ export function StartComposer({
   /** v1.412.0: pictures and files for the first message (uploaded). */
   const att = useHarnessAttachments();
   // A start held for an upload runs this render's `start` when it settles.
-  const startRef = useRef<(override?: string) => Promise<void>>(async () => undefined);
+  const startRef = useRef<(override?: string, title?: string) => Promise<void>>(async () => undefined);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const accountShift = useInsideWindow(accountMenuRef, accountOpen);
   // v1.426.0 (E5): the folder's defaults for new sessions — a chip the user
@@ -512,12 +512,14 @@ export function StartComposer({
     setAccountOpen(asksForAccount(next));
   }
 
-  /** `override`: the words to start with instead of the box's (the pick-up
-   *  card's Continue sends its one fixed sentence, next leaps 04-a). */
-  async function start(override?: string) {
+  /** `override`: the words to start with instead of the box's, and `title`
+   *  the session's name (the pick-up card's Continue sends its one fixed
+   *  sentence and names the session after the work it continues, next
+   *  leaps 04-a; a session with a name is not named by its first message). */
+  async function start(override?: string, title?: string) {
     // v1.412.0: a picture still going up holds the start (it goes WITH it).
     if (att.busyRef.current) {
-      att.whenSettled(() => void startRef.current(override));
+      att.whenSettled(() => void startRef.current(override, title));
       return;
     }
     const words = (override ?? boxRef.current?.value ?? text).trim();
@@ -540,6 +542,7 @@ export function StartComposer({
         ...(mode.confirm ? { confirm: true } : {}),
         ...(model ? { model } : {}),
         ...(effort && efforts.includes(effort) ? { effort } : {}),
+        ...(title ? { title } : {}),
       });
       const made = decodeCodeSession(raw);
       if (!made) throw new Error("The session could not be made.");
@@ -880,16 +883,17 @@ export function StartComposer({
 
         {/* Next leaps 04-a (build-out plan R2.1): what was done in this
             folder last time, with Continue (the session starts with one
-            fixed sentence). The user's own coding tool is not shown Iron
-            Jarvis's record, and the press says so. Steps aside while the box
-            holds words or files. */}
+            fixed sentence, named after the work it continues). The user's
+            own coding tool is not shown Iron Jarvis's record, and the card
+            says so under Continue. Steps aside while the box holds words or
+            files. */}
         <div data-testid="code-start-pick-up" className="px-1 empty:hidden">
           <PickUpCard
             folder={folder}
             tool
             hidden={!!text.trim() || att.files.length > 0}
             disabled={busy || !tool || !!unavailable}
-            onContinue={() => start(CONTINUE_SENTENCE)}
+            onContinue={(card) => start(CONTINUE_SENTENCE, continuedTitle(card))}
           />
         </div>
 

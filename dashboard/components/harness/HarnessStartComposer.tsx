@@ -42,7 +42,7 @@ import Link from "next/link";
 import { ArrowUp, House, Loader2 } from "lucide-react";
 import { FolderChip } from "@/components/folders/FolderChip";
 import { PickUpCard } from "@/components/work/PickUpCard";
-import { CONTINUE_SENTENCE } from "@/lib/pickUp";
+import { CONTINUE_SENTENCE, continuedTitle } from "@/lib/pickUp";
 import { PermissionChip } from "@/components/chat/PermissionChip";
 import {
   ModelMenu,
@@ -128,6 +128,10 @@ export interface StartRequest {
   /** v1.437.0: the models the FIRST MESSAGE is tried on ("Try on…") — it
    *  rides that message (`try_on`), never the create. */
   tryOn?: TryOnPick[];
+  /** Next leaps 04-a: the session's name, given at its create (the pick-up
+   *  card's Continue names it after the work it continues, never after the
+   *  fixed sentence its first message is). Omitted: named by that message. */
+  title?: string;
   text: string;
   files: HarnessFile[];
 }
@@ -137,6 +141,7 @@ export interface StartRequest {
  *  the daemon's default. Pure. */
 export function startCreateBody(req: StartRequest): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  if (req.title) out.title = req.title;
   if (typeof req.branch === "boolean") out.branch = req.branch;
   if (req.provider) out.provider = req.provider;
   if (req.model) out.model = req.model;
@@ -601,12 +606,14 @@ export function HarnessStartComposer({
     }
   }
 
-  /** `override`: the words to send instead of the box's (the pick-up card's
-   *  Continue sends its one fixed sentence, next leaps 04-a). */
-  async function send(override?: string) {
+  /** `override`: the words to send instead of the box's, and `title` the
+   *  session's name (the pick-up card's Continue sends its one fixed
+   *  sentence and names the session after the work it continues, next
+   *  leaps 04-a). */
+  async function send(override?: string, title?: string) {
     if (busyRef.current) return;
     if (att.busyRef.current) {
-      att.whenSettled(() => void send(override));
+      att.whenSettled(() => void send(override, title));
       return;
     }
     const words = (override ?? boxRef.current?.value ?? text).trim();
@@ -635,6 +642,7 @@ export function HarnessStartComposer({
       ...(team && Object.keys(teamMembers).length ? { teamMembers } : {}),
       ...(localOnly ? { local_only: true } : {}),
       ...(trying ? { tryOn } : {}),
+      ...(title ? { title } : {}),
       text: words,
       files,
     });
@@ -908,7 +916,7 @@ export function HarnessStartComposer({
           chatCode
           hidden={!!text.trim() || att.files.length > 0}
           disabled={busy}
-          onContinue={() => send(CONTINUE_SENTENCE)}
+          onContinue={(card) => send(CONTINUE_SENTENCE, continuedTitle(card))}
         />
       </div>
       {/* v1.445.0 (ease-of-use review, item 11): the two Code views point at

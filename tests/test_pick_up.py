@@ -338,6 +338,65 @@ def test_each_chat_continue_started_keeps_its_own_lines(scene):
         assert line in told
 
 
+BOOKS = r"C:\Work\Books"
+LEDGERS = r"C:\Work\Ledgers"
+
+
+def test_continues_sentence_points_at_no_other_folder(scene):
+    # The reviewer's first probe: an earlier Continue in another folder (a
+    # chat named by the sentence, as one the owner typed it into is) must not
+    # be listed as "matching this message" when Continue is pressed here: the
+    # model would be handed another folder's path and files at the moment it
+    # is asked to continue THIS one.
+    _recap(scene, _chat(scene, "Reconcile March bank statement", BOOKS, hours_ago=5),
+           "Open: Two cheques are still unmatched")
+    _chat(scene, CONTINUE, LEDGERS, hours_ago=3, docs=[LEDGERS + r"\ledger_2026.xlsx"])
+    scene.wm.refresh(force=True)
+    # The setup can see another folder at all: the same words typed some
+    # other way still point (the owner's own words are never taken out).
+    assert B.ELSEWHERE_LEAD in B.work_block(scene.platform, folder=BOOKS, query="continue from where we left")
+    for query in (CONTINUE, CONTINUE.lower(), f"{CONTINUE} \n yes"):  # a short reply after it is composed onto it
+        told = B.work_block(scene.platform, folder=BOOKS, query=query)
+        assert B.ELSEWHERE_LEAD not in told, (query, told)
+        assert "Ledgers" not in told and "ledger_2026" not in told, (query, told)
+        # This folder's own work is still told, with its recap.
+        assert "Reconcile March bank statement" in told and "Two cheques are still unmatched" in told
+
+
+def test_continue_in_a_clients_folder_puts_no_other_clients_work_behind_the_wall(scene):
+    # The reviewer's second probe: a Continue in Smith's folder, then
+    # Continue in Hartleys': the sentence's words matched Smith's chat, and
+    # the wall note told the model (falsely) that another client's work
+    # "matches this message".
+    _chat(scene, CONTINUE, S, hours_ago=3)
+    _recap(scene, _chat(scene, "Hartleys payroll", H, hours_ago=5), "Open: Confirm the bonus")
+    scene.wm.refresh(force=True)
+    assert B.WALL_NOTE in B.work_block(scene.platform, folder=H, query="continue from where we left")
+    told = B.work_block(scene.platform, folder=H, query=CONTINUE)
+    assert B.WALL_NOTE not in told, told
+    assert B.ELSEWHERE_LEAD not in told and "Smith" not in told
+    assert "Confirm the bonus" in told
+
+
+def test_without_continue_takes_out_only_the_sentence():
+    assert B.without_continue(CONTINUE).strip() == ""
+    assert B.without_continue("  continue   WHERE we left off\nin this folder  ").strip() == ""
+    assert B.without_continue(f"{CONTINUE} Also check the Hartleys payroll").split() == [
+        "Also", "check", "the", "Hartleys", "payroll"]
+    assert B.without_continue("Continue the reconciliation") == "Continue the reconciliation"
+
+
+def test_the_sentence_is_the_one_the_dashboard_sends():
+    import re
+    from pathlib import Path
+
+    ts = (Path(__file__).resolve().parents[1] / "dashboard" / "lib" / "pickUp.ts").read_bytes().decode("utf-8")
+    ts = ts.replace("\r\n", "\n")  # CI's Windows runners check out with CRLF
+    m = re.search(r'export const CONTINUE_SENTENCE = "([^"]+)";', ts)
+    assert m, "lib/pickUp.ts no longer says CONTINUE_SENTENCE"
+    assert m.group(1) == B.CONTINUE_SENTENCE == pickup.CONTINUE_SENTENCE == CONTINUE
+
+
 def test_repeats_of_one_piece_are_folded(scene):
     for h in (1, 2, 3):
         _chat(scene, "Nightly ledger check", H, hours_ago=h)
