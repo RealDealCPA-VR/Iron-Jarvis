@@ -190,12 +190,21 @@ describe("Commit and Open a pull request under the reply, in the real view", () 
   });
 
   it("while a card waits: no row", async () => {
-    open({
-      pending: [{ request_id: "r1", kind: "command", title: "Run npm install?", command: "npm install" }],
-    });
+    // The tool's question is open (its turn has not ended) while the read
+    // says no reply runs: only the waiting card holds the row back.
+    const ask = {
+      type: "approval",
+      at: "2026-11-22T10:00:03Z",
+      request_id: "r1",
+      kind: "command",
+      title: "Run npm install?",
+      command: "npm install",
+      turn: "t1",
+    };
+    open({ events: [...TURN.slice(0, 2), ask], running: null });
     view();
     await screen.findByText(REPLY, {}, { timeout: 10_000 });
-    await waitFor(() => expect(screen.getAllByText(/npm install/).length).toBeGreaterThan(0));
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(H.placed).toEqual([]);
     expect(screen.queryByTestId("code-git")).toBeNull();
   });

@@ -2304,7 +2304,8 @@ session in a git folder, the start box asks once: *Work on a new branch in
 this folder?* **Yes, a new branch** makes new sessions there work in their
 own copy of the folder, on a new branch, so your folder stays as it was
 until you merge (pull requests need it). **No, in the folder** keeps working
-in the folder directly and is not asked again. After the answer, a quiet
+in the folder directly and is not asked again; starting a session without
+answering counts as **No, in the folder**. After the answer, a quiet
 switch **Work on a new branch** changes it for one session. On a session with
 its own branch, the Changes tab has a **Branch** view: its commits, its pull
 request and its checks, Push, Merge into the branch it started from, and

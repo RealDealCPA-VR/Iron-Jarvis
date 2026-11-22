@@ -1427,7 +1427,8 @@ function SessionPane({
   const sendFromPanes = useCallback((t: string) => void sendRef.current?.(t), []);
   // 22-b: the Branch view's Discard, the same function frame after frame
   // (a new one per render drew the panes again on every streamed word).
-  const paneSessionId = session.id;
+  // The session is still being read on the first frames (null then).
+  const paneSessionId = session?.id ?? "";
   const archivedFromPanes = useCallback(() => onArchived(paneSessionId), [onArchived, paneSessionId]);
   const paneEventsRef = useRef<readonly CodeEvent[]>([]);
   const paneEvents = useMemo(() => {

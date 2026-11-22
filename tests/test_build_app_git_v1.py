@@ -599,7 +599,8 @@ async def test_a_reply_that_starts_while_the_commit_waits_for_the_locks_stops_th
         r = await c.post(f"/build/app/sessions/{sid}/git/commit", json={"message": "m", "paths": ["app.py"]})
         assert r.status_code == 409 and r.json()["detail"] == BR.OTHER_SESSION, r.text
         assert git("rev-parse", "HEAD", cwd=repo) == head, "nothing was committed"
-        assert git("status", "--porcelain", "--", "app.py", cwd=repo) == "M app.py"
+        # Changed and still not staged: the refused commit touched nothing.
+        assert git("status", "--porcelain", "--", "app.py", cwd=repo) == " M app.py"
         monkeypatch.setattr(BR, "_files_free", real_free)
         await reply(svc, other)
     await stop_all(app)
