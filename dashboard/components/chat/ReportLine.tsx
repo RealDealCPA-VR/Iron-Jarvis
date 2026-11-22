@@ -23,7 +23,10 @@ import {
   setReportTarget,
 } from "@/lib/reports";
 
-export function ReportLine({ from, count }: { from: ReportFrom; count?: number }) {
+/** `chatId`: the chat this report is in. Stop reporting then stops the
+ *  record only while it still reports HERE (review: it may report to another
+ *  chat since), and says so in words otherwise. */
+export function ReportLine({ from, count, chatId }: { from: ReportFrom; count?: number; chatId?: string }) {
   const [stopped, setStopped] = useState<{ previous: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -35,7 +38,7 @@ export function ReportLine({ from, count }: { from: ReportFrom; count?: number }
     setBusy(true);
     setError("");
     try {
-      const out = await setReportTarget(kind, from.id, "");
+      const out = await setReportTarget(kind, from.id, "", chatId || undefined);
       setStopped({ previous: out.previous });
     } catch (e) {
       setError(e instanceof Error ? e.message : "That could not be changed.");

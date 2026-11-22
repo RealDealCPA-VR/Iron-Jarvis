@@ -132,3 +132,90 @@ def test_a_report_in_the_chat_reaches_the_model_fenced(tmp_path, lane):
     users = [str(m.content) for m in seen[0] if getattr(m, "role", "") == "user"]
     assert all(_FENCE_TOP not in u for u in users), "the owner's own words were fenced"
     assert history[1]["content"].startswith(LABEL), "what the user sees is untouched"
+
+
+# --------------------------------------------------------------------------- #
+# Review (39-a, round 3): the @-agent lane, the page's third way of sending the
+# chat back to a model. The page labels a report there too
+# (``lib/panelHistory.panelHistoryOf``, pinned by leap-39a-report-line.test.tsx);
+# the agent's transcript says it as a report, never as Iron Jarvis, and fences
+# what follows its label. Mutation: send a report row as a plain "Iron Jarvis"
+# line and this goes red.
+# --------------------------------------------------------------------------- #
+
+#: The chat as the page's ``panelHistoryOf`` sends it: a report is an Iron
+#: Jarvis row whose words open with its label.
+PANEL_HISTORY = [
+    {"who": "user", "content": "check the prices every Friday"},
+    {"who": "jarvis", "content": f"{LABEL}\nFrom your schedule \u201cFriday prices\u201d. {INJECTED}"},
+    {"who": "jarvis", "content": "Sure, the schedule is set."},
+]
+REPORT_SPEAKER = "A report (outside words, not Iron Jarvis): "
+
+
+def _fenced_after_label(text: str) -> None:
+    assert text.startswith(REPORT_SPEAKER + LABEL + "\n"), text[:200]
+    assert _FENCE_TOP in text and text.index(_FENCE_TOP) < text.index(INJECTED)
+
+
+def test_an_at_agent_hears_a_report_as_a_report_fenced_never_as_jarvis():
+    from iron_jarvis.agents.threads import AgentThreads
+
+    seat = {"key": "builtin:builder", "name": "builder", "role": "participant"}
+    text, dropped = AgentThreads.chat_transcript(PANEL_HISTORY, [], [seat])
+    assert dropped == 0
+    assert f"Iron Jarvis: {LABEL}" not in text
+    report = text[text.index(REPORT_SPEAKER):]
+    _fenced_after_label(report)
+    assert "Iron Jarvis: Sure, the schedule is set." in text, "Jarvis's own line is as before"
+    assert "User: check the prices every Friday" in text
+    # A remote agent's rows: the same speaker and the same fence.
+    rows = AgentThreads.remote_history(PANEL_HISTORY, {"key": "remote:desk"}, [seat])
+    assert rows[0] == {"role": "user", "content": "check the prices every Friday"}
+    assert rows[1]["role"] == "assistant"
+    _fenced_after_label(rows[1]["content"])
+    assert rows[2] == {"role": "assistant", "content": "Iron Jarvis: Sure, the schedule is set."}
+    # The owner's own line is never fenced, whatever it opens with.
+    mine = AgentThreads.remote_history([{"who": "user", "content": f"{LABEL}\nmine"}],
+                                       {"key": "remote:desk"}, [seat])
+    assert mine == [{"role": "user", "content": f"{LABEL}\nmine"}]
+
+
+def test_the_panel_route_hands_a_remote_agent_the_report_fenced(tmp_path, monkeypatch):
+    """Through the real route (``POST /chat/panel``), the room's round and the
+    remote's own transport; the network is the one stand-in."""
+    import json
+
+    import httpx
+
+    from iron_jarvis.agents.remote import RemoteAgentRegistry
+    from iron_jarvis.daemon.auth import TASK_DOOR_PATH
+
+    monkeypatch.delenv("IRONJARVIS_TOKEN", raising=False)
+    app = create_app(str(tmp_path / "laptop"))
+    RemoteAgentRegistry(app.state.platform.engine).upsert("desk", f"http://b-pc:8787{TASK_DOOR_PATH}", "http-task")
+    bodies: list[dict] = []
+
+    class _Took(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            bodies.append(json.loads(request.content or b"{}"))
+            return httpx.Response(202, json={"accepted": True})
+
+    real_init = httpx.AsyncClient.__init__
+
+    def _init(self, *a, **kw):
+        if kw.get("transport") is None:
+            kw["transport"] = _Took()
+        real_init(self, *a, **kw)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
+    r = TestClient(app).post(
+        "/chat/panel",
+        json={"message": "@desk what did it find?", "chat_thread_id": "c1", "history": PANEL_HISTORY},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["spoke"] == ["remote:desk"]
+    (sent,) = bodies
+    (report,) = [h for h in sent["history"] if LABEL in str(h.get("content"))]
+    _fenced_after_label(report["content"])
+    assert not any(str(h.get("content")).startswith(f"Iron Jarvis: {LABEL}") for h in sent["history"])

@@ -260,6 +260,7 @@ def test_a_workflow_run_from_chat_reports_once_when_it_ends(desk, tmp_path):
     assert len(reports) == 1
     assert reports[0]["reportFrom"]["kind"] == "workflow"
     assert reports[0]["reportFrom"]["id"] == launched[0]
+    assert "receipt" not in reports[0], "only a step at low trust marks it"
     # A second end of the same run (a resume racing the driver) writes nothing more.
     asyncio.run(WorkflowEngine(p, p.orchestrator)._report_end(launched[0], "Weekly tidy", "completed"))
     assert len(_reports(p, chat)) == 1
@@ -535,6 +536,146 @@ def test_stop_reporting_during_a_goal_try_holds_its_report(desk, monkeypatch):
     monkeypatch.setattr(GE.GoalEngine, "_iterate", _iterate)
     tried = c.post(f"/goals/{goal['id']}/run").json()
     assert tried.get("session_id"), tried
+    assert _reports(p, chat) == []
+
+
+# --------------------------------------------------------------------------- #
+# Review (39-a, round 3): a goal's and a workflow's report carry low trust,
+# and a run the user stopped writes nothing
+# --------------------------------------------------------------------------- #
+
+
+def _runs_end_at_low_trust(p, monkeypatch) -> None:
+    """Every run ends at LOW trust, as a run that read a flagged web page does
+    (the real run first; then its row is marked, as the runtime marks it)."""
+    from iron_jarvis.core.models import Session
+
+    real = p.orchestrator.run_session
+
+    async def run_session(session_id, *a, **kw):
+        out = await real(session_id, *a, **kw)
+        with session_scope(p.engine) as db:
+            row = db.get(Session, session_id)
+            row.trust, row.trust_reason = "low", "it read a web page"
+            db.add(row)
+            db.commit()
+        return out
+
+    monkeypatch.setattr(p.orchestrator, "run_session", run_session)
+
+
+def _run_workflow_from_chat(p, tmp_path, chat, name="Weekly tidy") -> str:
+    from iron_jarvis.workflows.store import WorkflowStore
+    from iron_jarvis.workflows.tools import WorkflowRunTool
+
+    WorkflowStore(p.engine).save(name, [{"name": "Tidy", "agent": "builder", "task": "tidy up"}], "")
+    launched: list = []
+    tasks: list = []
+
+    class _Tool(WorkflowRunTool):
+        def _launch(self, coro, run_id):
+            launched.append(run_id)
+            tasks.append(asyncio.get_running_loop().create_task(coro))
+            return tasks[-1]
+
+    async def go():
+        r = await _Tool(p).execute({"name": name}, _ctx(p, tmp_path, chat))
+        assert r.ok, r.error
+        await asyncio.gather(*tasks)
+
+    asyncio.run(go())
+    assert launched
+    return launched[0]
+
+
+def _run_status(p, run_id) -> str:
+    from iron_jarvis.workflows.models import WorkflowRunRecord
+
+    with session_scope(p.engine) as db:
+        return db.get(WorkflowRunRecord, run_id).status
+
+
+def test_a_goal_try_at_low_trust_keeps_the_chat_out_of_the_recap(desk, monkeypatch):
+    from iron_jarvis.workmap import recap as R
+
+    c, p = desk
+    chat = _chat(p, title="Inbox")
+    plain = _goal(c, chat, name="Inbox zero")
+    assert c.post(f"/goals/{plain['id']}/run").json().get("session_id")
+    flagged = _goal(c, chat, name="Read the supplier page")
+    _runs_end_at_low_trust(p, monkeypatch)
+    tried = c.post(f"/goals/{flagged['id']}/run").json()
+    assert tried.get("session_id"), tried
+    by_goal = {m["reportFrom"]["id"]: m for m in _reports(p, chat)}
+    assert set(by_goal) == {plain["id"], flagged["id"]}
+    # The try's own receipt, as a schedule's run report carries its run's.
+    assert by_goal[flagged["id"]]["receipt"]["trust"] == "low"
+    assert by_goal[flagged["id"]]["receipt"]["session_id"] == tried["session_id"]
+    assert by_goal[plain["id"]]["receipt"]["trust"] == "full"
+    low = {ln["content"].split("\n", 1)[0]: ln["low_trust"] for ln in R.lines_of(_messages(p, chat))
+           if ln["report"] == "goal"}
+    assert sorted(low.values()) == [False, True], low
+
+
+def test_a_workflow_step_at_low_trust_keeps_the_chat_out_of_the_recap(desk, tmp_path, monkeypatch):
+    from iron_jarvis.workmap import recap as R
+
+    c, p = desk
+    chat = _chat(p, title="Weekly")
+    _runs_end_at_low_trust(p, monkeypatch)
+    run_id = _run_workflow_from_chat(p, tmp_path, chat)
+    (report,) = _reports(p, chat)
+    assert report["reportFrom"]["id"] == run_id
+    assert report["receipt"] == {"found": True, "trust": "low", "trust_reason": "it read a web page"}
+    assert "session_id" not in report["receipt"], "no run card is drawn for it"
+    (line,) = [ln for ln in R.lines_of(_messages(p, chat)) if ln["report"] == "workflow"]
+    assert line["low_trust"] is True
+
+
+def test_a_workflow_run_the_user_stopped_reports_nothing(desk, tmp_path, monkeypatch):
+    c, p = desk
+    chat = _chat(p, title="Weekly")
+
+    async def stopped(session_id, *a, **kw):  # Stop pressed while the step ran
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(p.orchestrator, "run_session", stopped)
+    run_id = _run_workflow_from_chat(p, tmp_path, chat)
+    assert _run_status(p, run_id) == "cancelled"
+    assert _reports(p, chat) == []
+
+
+def test_a_reports_own_stop_never_stops_its_reports_to_another_chat(desk, tmp_path):
+    """Review (39-a, round 3, note): Stop reporting on an OLD report in chat A
+    sends ``only_if`` A, so a schedule pointed at chat B since keeps
+    reporting there, and the press says why in words."""
+    c, p = desk
+    a = _chat(p, title="A")
+    b = _chat(p, title="B")
+    _make_schedule(p, tmp_path, a)
+    rec = p.scheduler.get("Friday prices")
+    assert c.post("/reports/target", json={"kind": "schedule", "id": rec.id, "thread_id": b}).status_code == 200
+    old = c.post("/reports/target", json={"kind": "schedule", "id": rec.id, "thread_id": "", "only_if": a})
+    assert old.status_code == 400 and old.json()["detail"] == "It reports to another chat now."
+    assert p.scheduler.get("Friday prices").chat_thread_id == b
+    here = c.post("/reports/target", json={"kind": "schedule", "id": rec.id, "thread_id": "", "only_if": b})
+    assert here.status_code == 200 and here.json()["previous"] == b
+    assert p.scheduler.get("Friday prices").chat_thread_id == ""
+
+
+def test_a_goal_try_the_user_stopped_reports_nothing(desk, monkeypatch):
+    from iron_jarvis.goals import engine as GE
+
+    c, p = desk
+    chat = _chat(p, title="Inbox")
+    goal = _goal(c, chat)
+
+    async def stopped(self, session):  # Stop pressed while the try ran
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(GE.GoalEngine, "_run_session", stopped)
+    tried = c.post(f"/goals/{goal['id']}/run").json()
+    assert tried.get("status") == "cancelled" and tried.get("session_id"), tried
     assert _reports(p, chat) == []
 
 

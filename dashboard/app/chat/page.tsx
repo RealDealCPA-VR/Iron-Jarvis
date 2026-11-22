@@ -124,6 +124,8 @@ import {
 } from "@/components/chat/WorkflowDraftCard";
 import { ReportLine } from "@/components/chat/ReportLine";
 import { type ReportFrom, reportRequestLabel } from "@/lib/reports";
+// The chat as the @-agent panel route reads it (a report labelled, 39-a).
+import { panelHistoryOf } from "@/lib/panelHistory";
 import type { RunResult } from "@/components/chat/RunResultCard";
 import { CopyIconButton, Markdown, MemoMarkdown } from "@/components/Markdown";
 import { OPEN_PLACE_EVENT, placeKey, withoutPlaceLinks, type SourceAt } from "@/lib/sourceLink";
@@ -1158,20 +1160,6 @@ function stripMentions(text: string): string {
     .replace(/^[\s,:;\-—]+/, "")
     .trim();
   return out || text.trim();
-}
-
-/** The chat so far as the panel route reads it (v1.284.0): who said each
- *  line — the user, Iron Jarvis, or a panel agent by its key — and the words.
- *  Empty bubbles (hand-off markers, a stopped turn) carry nothing and are
- *  skipped; the daemon budgets the rest to the speaker's model. */
-function panelHistoryOf(msgs: ChatMessage[]): { who: string; content: string }[] {
-  const out: { who: string; content: string }[] = [];
-  for (const m of msgs) {
-    const content = (m.content || "").trim();
-    if (!content) continue;
-    out.push({ who: m.role === "user" ? "user" : m.panelWho || "jarvis", content });
-  }
-  return out;
 }
 
 /** The room this conversation's @-rounds live in — the last panel reply's
@@ -14051,7 +14039,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           }
                         >
                         {m.reportFrom && m.role === "assistant" ? (
-                          <ReportLine from={m.reportFrom} count={m.reportCount} />
+                          <ReportLine from={m.reportFrom} count={m.reportCount} chatId={threadId ?? undefined} />
                         ) : null}
                         <MessageRow
                           m={m}

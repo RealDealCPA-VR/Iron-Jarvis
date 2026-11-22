@@ -199,6 +199,34 @@ def delivery_result(
     return result
 
 
+def low_trust_receipt(engine: Any, session_ids: Any) -> "dict[str, Any] | None":
+    """The receipt a report of SEVERAL runs carries (idea 39, 39-a, third
+    review: a workflow's steps): ``{"found": True, "trust": "low",
+    "trust_reason": ...}`` when any of ``session_ids`` ran at low trust (it
+    read flagged content, or an outside signal started it), else None. The
+    recap reads it (``workmap.recap._low_trust``), so a report whose words may
+    carry such content keeps the chat out of the recap pass. It names no
+    ``session_id``, so the page draws no run card for it
+    (``chatReread.looksLikeRunResult``). BLOCKING (SQLite); never raises."""
+    ids = [str(s).strip() for s in (session_ids or []) if isinstance(s, str) and s.strip()]
+    if not ids:
+        return None
+    try:
+        from ..core.db import session_scope
+        from ..core.models import Session
+
+        with session_scope(engine) as db:
+            for sid in dict.fromkeys(ids):
+                row = db.get(Session, sid)
+                if row is not None and str(getattr(row, "trust", "") or "").lower() == "low":
+                    reason = str(getattr(row, "trust_reason", "") or "").strip()
+                    return {"found": True, "trust": "low", "trust_reason": reason}
+    except Exception:  # noqa: BLE001 — an unreadable run is treated as low
+        log.warning("could not read the trust of runs %s", ids[:5], exc_info=True)
+        return {"found": True, "trust": "low", "trust_reason": ""}
+    return None
+
+
 def deliver_session_line(
     engine: Any,
     session: Any,

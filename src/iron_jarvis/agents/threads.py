@@ -92,6 +92,9 @@ _TRANSCRIPT_CHARS_PER_TOKEN = 3.5
 #: ``who`` is ``"user"`` / ``"jarvis"`` / a participant key; a key resolves to
 #: the participant's name+role like the room's own entries do.
 _CHAT_WHO_LABELS = {"user": "User", "jarvis": "Iron Jarvis"}
+#: Idea 39 (39-a, third review): who a REPORT row in the chat's history is
+#: said by (``AgentThreads._speaker_line``): outside words, never Iron Jarvis.
+_REPORT_SPEAKER = "A report (outside words, not Iron Jarvis)"
 #: The header a chat-backed transcript opens with, so a speaker knows the
 #: "Iron Jarvis" lines are the assistant's earlier answers in the same chat.
 _CHAT_TRANSCRIPT_HEADER = (
@@ -1225,6 +1228,24 @@ class AgentThreads:
         return f"{who.split(':', 1)[1]} (agent)" if ":" in who else who
 
     @classmethod
+    def _speaker_line(cls, who: str, content: str, names: dict[str, str]) -> str:
+        """``"<speaker>: <words>"`` for one chat-history row.
+
+        Idea 39 (39-a, third review): a REPORT (a schedule's run summary, a
+        watcher's file names) reaches the page's history as an Iron Jarvis row
+        that opens with its label (``chat_refs.REPORT_LINE_PREFIX``, the
+        page's ``panelHistoryOf``). It is said by :data:`_REPORT_SPEAKER`,
+        never "Iron Jarvis", and what follows its label is fenced as outside
+        data, the fence the two Iron Jarvis lanes give it
+        (``chat_refs.fence_agent_lines``)."""
+        if who == "jarvis":
+            from ..daemon.chat_refs import REPORT_LINE_PREFIX, _fenced_agent_text
+
+            if content.startswith(REPORT_LINE_PREFIX):
+                return f"{_REPORT_SPEAKER}: {_fenced_agent_text(content) or content}"
+        return f"{cls._label_for(who, names)}: {content}"
+
+    @classmethod
     def chat_transcript(
         cls,
         history: list[dict[str, Any]],
@@ -1254,7 +1275,7 @@ class AgentThreads:
                 if not error:
                     return ""
                 content = f"(could not answer: {error})"
-            return f"{cls._label_for(str(row.get('who') or 'user'), names)}: {content}"
+            return cls._speaker_line(str(row.get("who") or "user"), content, names)
 
         round_lines = [ln for ln in (_line(e) for e in round_entries) if ln]
         round_text = "\n\n".join(round_lines)
@@ -2035,7 +2056,7 @@ class AgentThreads:
                 rows.append({"role": "assistant", "content": content})
             else:
                 rows.append(
-                    {"role": "assistant", "content": f"{cls._label_for(who, names)}: {content}"}
+                    {"role": "assistant", "content": cls._speaker_line(who, content, names)}
                 )
         return rows
 

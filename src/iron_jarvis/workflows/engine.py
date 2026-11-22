@@ -1089,6 +1089,19 @@ class WorkflowEngine:
                 "kind": "workflow", "name": workflow_name, "id": run_id, "href": "/workflows",
                 "outcome": word, "reason": lead, "words": body, "key": f"workflow:{run_id}",
             }
+            # Review (39-a, round 3): a step that ran at low trust (it read
+            # flagged content; a later step may carry its words) marks the
+            # report, so the chat stays out of the recap pass.
+            try:
+                ran = json.loads(getattr(rec, "session_ids_json", "") or "[]")
+            except (TypeError, ValueError):
+                ran = []
+            ran = (ran if isinstance(ran, list) else []) + [
+                o.get("session_id") for o in outs.values() if isinstance(o, dict)
+            ]
+            receipt = await asyncio.to_thread(_cd.low_trust_receipt, self.platform.engine, ran)
+            if receipt is not None:
+                report["receipt"] = receipt
             await asyncio.to_thread(_cd.report_to_chat, self.platform, chat, report)
         except Exception:  # noqa: BLE001 — the run's own record stands
             log.warning("workflow run %s could not report to its chat", run_id, exc_info=True)

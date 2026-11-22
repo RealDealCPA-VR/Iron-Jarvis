@@ -467,9 +467,34 @@ class GoalEngine:
                 "run_id": sid, "outcome": outcome, "reason": reason, "words": summary,
                 "key": f"goal:{goal.id}:{sid or result.get('iteration')}",
             }
+            # Review (39-a, round 3): the try's receipt, as a schedule's run
+            # report carries its run's, so a try that read flagged content
+            # (its session at low trust) keeps the chat out of the recap
+            # pass (``workmap.recap._low_trust``).
+            receipt = await self._try_receipt(sid) if sid else None
+            if receipt is not None:
+                report["receipt"] = receipt
             await asyncio.to_thread(_cd.report_to_chat, self.p, chat, report)
         except Exception:  # noqa: BLE001 — the goal's own record stands
             log.warning("goal %s could not report its try", goal.id, exc_info=True)
+
+    async def _try_receipt(self, session_id: str) -> "dict[str, Any] | None":
+        """The ledger's receipt of one try (``chat_delivery.delivery_result``,
+        what a schedule's run report carries), read off the loop; None when
+        it could not be read (the report still lands, without it)."""
+        from ..agents import chat_delivery as _cd
+
+        try:
+            return await asyncio.to_thread(
+                _cd.delivery_result,
+                self.p.engine,
+                session_id,
+                manager=getattr(self.p, "providers", None),
+                config=getattr(self.p, "config", None),
+            )
+        except Exception:  # noqa: BLE001 — the report lands without its card
+            log.warning("could not read the receipt of goal try %s", session_id, exc_info=True)
+            return None
 
     # -- the iteration body ----------------------------------------------------
 

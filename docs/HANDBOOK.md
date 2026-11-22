@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Results come home to the chat that asked (v1.547.0)
+## Results come home to the chat that asked (v1.549.0)
 
 Something you set up from a chat now reports back into that same chat. Say
 "check this supplier's prices every Friday" and the schedule it makes says
@@ -2089,6 +2089,8 @@ first message of a new chat included.
   Schedules, Watchers and Autonomy pages ("Reports to <chat>"), and a
   workflow run's row on the Workflows page while it runs. **Undo** is right
   beside it. A run already going when you press it reports nothing more.
+  On an old report in a chat the record no longer reports to, the press
+  changes nothing and says "It reports to another chat now."
 - In chat: "stop reporting the Friday prices schedule here", "report the
   Intake watcher in this chat", or the same for a goal. The change shows on
   the usual card and has Undo. Undoing a pause or a time change never turns

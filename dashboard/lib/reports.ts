@@ -78,16 +78,20 @@ export function reportRequestLabel(from: ReportFrom): string {
 }
 
 /** Point a record at a chat, or stop its reports (`threadId` ""). Answers
- *  the chat it reported to before, so an Undo puts it back. */
+ *  the chat it reported to before, so an Undo puts it back. `onlyIf`: change
+ *  it only while the record still reports to that chat (a report's own Stop
+ *  reporting; the daemon says "It reports to another chat now." otherwise). */
 export async function setReportTarget(
   kind: string,
   id: string,
   threadId: string,
+  onlyIf?: string,
 ): Promise<{ previous: string; thread_id: string }> {
   const out = await post<{ previous?: string; thread_id?: string }>("/reports/target", {
     kind,
     id,
     thread_id: threadId,
+    ...(onlyIf ? { only_if: onlyIf } : {}),
   });
   return { previous: out?.previous ?? "", thread_id: out?.thread_id ?? "" };
 }
