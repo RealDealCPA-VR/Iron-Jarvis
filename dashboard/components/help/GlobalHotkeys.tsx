@@ -53,14 +53,15 @@ export function hotkeyLines(h: ShellHotkeys): HotkeyLine[] {
   };
   return [
     line("window", "Bring up Iron Jarvis from anywhere", "Open Iron Jarvis"),
-    line("spotlight", "Quick task, from any app", "Quick task…"),
+    // 36-a: one name, Quick Ask, as the tray's item says.
+    line("spotlight", "Quick Ask from any app: the answer appears right there", "Quick Ask…"),
   ];
 }
 
 export const BROWSER_HOTKEYS_WORDS =
   "These keys belong to the Iron Jarvis desktop app. In a browser tab there are none; open the desktop app to use them.";
 export const UNREAD_HOTKEYS_WORDS =
-  "The desktop app did not say which keys it holds. Its tray menu shows them next to Open Iron Jarvis and Quick task.";
+  "The desktop app did not say which keys it holds. Its tray menu shows them next to Open Iron Jarvis and Quick Ask.";
 
 type Read = { kind: "browser" } | { kind: "reading" } | { kind: "unread" } | { kind: "ok"; keys: ShellHotkeys };
 

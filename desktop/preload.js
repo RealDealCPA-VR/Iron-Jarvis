@@ -44,6 +44,20 @@ if (POPOUT_PATH) {
   });
 }
 
+// 36-a: is THIS window Quick Ask's answer window? main.js says so
+// (`--ij-quick-answer=1`), so its chat page draws compact through a reload
+// or a changed address, as a pop-out's path does.
+const QUICK_ANSWER = readArg("--ij-quick-answer=") === "1";
+
+// What `quickAsk.toMain` may carry: a chat id or a dashboard path, as plain
+// strings (main.js checks both again).
+function quickTarget(target) {
+  if (!target || typeof target !== "object") return {};
+  if (typeof target.thread === "string") return { thread: target.thread };
+  if (typeof target.path === "string") return { path: target.path };
+  return {};
+}
+
 // v1.468.0: is THIS window the narrow chat window beside Excel? main.js says
 // so ("excel:beside") after it places the window and after every page load;
 // the page's "Working with Excel" line then starts switched on.
@@ -174,7 +188,29 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // v1.506.0 (north-star 6.5): the hotkey quick window's words, taken ONCE by
   // the chat page it opened (`/chat?new=1&quick=1`, dashboard/lib/chatAsk).
   // Resolves the words, "" when none wait, null when the sender is refused.
-  quickAsk: { take: () => ipcRenderer.invoke("quick-ask:take") },
+  // 36-a: the page that takes them is Quick Ask's answer window
+  // (`isAnswerWindow`). `toMain({thread})` is "Continue in the main window",
+  // `toMain({path})` a door to another page; `hide()` is Esc; `onFocus(cb)`
+  // hears the hotkey pressed while the window is open. All sender-checked in
+  // main.js (the answer window's own frame only) and null when refused.
+  quickAsk: {
+    take: () => ipcRenderer.invoke("quick-ask:take"),
+    isAnswerWindow: QUICK_ANSWER,
+    toMain: (target) => ipcRenderer.invoke("quick-ask:to-main", quickTarget(target)),
+    hide: () => ipcRenderer.invoke("quick-ask:hide"),
+    onFocus: (cb) => {
+      if (typeof cb !== "function") return () => {};
+      const handler = () => {
+        try {
+          cb();
+        } catch {
+          /* a listener's fault is its own */
+        }
+      };
+      ipcRenderer.on("quick-ask:focus", handler);
+      return () => ipcRenderer.removeListener("quick-ask:focus", handler);
+    },
+  },
   // v1.456.0: the Text size setting (90-150 %), applied as the window's zoom.
   // `onChanged` hears a size the View menu's keys or Ctrl + wheel chose, so
   // the page saves it as the setting. Calls resolve null when refused.

@@ -37,6 +37,7 @@
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -585,6 +586,8 @@ import { OFFLINE_WORDS } from "@/lib/offlineWords";
 import { PACK_OFF_IN_CHAT_LINE, PACK_OFF_WORD } from "@/lib/extensionWords";
 import { useDaemonEpoch } from "@/lib/daemonEpoch";
 import { QUICK_ASK_PARAM, takeQuickAsk } from "@/lib/chatAsk";
+import { CompactChatContext, toMainWindow, useAnswerWindow } from "@/lib/quickAnswer";
+import { QuickAskHeader } from "@/components/chat/QuickAskHeader";
 import { ModuleTitle } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
@@ -2224,6 +2227,7 @@ const ComposerInput = memo(function ComposerInput({
   onPasteFiles,
   talkingTo = "",
   atKeys,
+  escStops = true,
 }: {
   store: ComposerStore;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -2258,6 +2262,9 @@ const ComposerInput = memo(function ComposerInput({
   /** v1.275.0: files on the clipboard (a screenshot, a copied file) become
    *  attachments exactly as a drop does; text pastes fall through untouched. */
   onPasteFiles: (files: File[]) => void;
+  /** 36-a: Esc while a turn runs stops it (the keyboard Stop). False in
+   *  Quick Ask's answer window, where Esc hides the window instead. */
+  escStops?: boolean;
 }) {
   const composerState = useComposer(store);
   const { text, caret } = composerState;
@@ -2367,7 +2374,9 @@ const ComposerInput = memo(function ComposerInput({
     // "/" menu, so it is only asked when that one is closed.
     if (!slashActive && atKeys?.current?.(e)) return;
     // Escape cancels an in-flight turn (keyboard "Stop") without leaving the composer.
-    if (e.key === "Escape" && busy) {
+    // 36-a: not in Quick Ask's answer window, where Esc hides the window and
+    // the reply carries on (lib/quickAnswer); Stop is still its button.
+    if (e.key === "Escape" && busy && escStops) {
       e.preventDefault();
       onStop();
       return;
@@ -4010,6 +4019,12 @@ function LiveReply({
  *  view is in front — the chat stays mounted (its draft, its running reply)
  *  but gives the sidebar's list slot to the coding sessions. */
 function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }) {
+  /** 36-a: Quick Ask's answer window (lib/quickAnswer; the surface around
+   *  this chat provides it). The same chat, drawn small: the messages, the
+   *  composer at the bottom and a slim header with "Continue in the main
+   *  window"; no chat list, no top bar, no project drawer. The turn, the
+   *  save, the cards and Undo are unchanged. */
+  const compact = useContext(CompactChatContext);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   // WHO that session runs on (v1.284.0): the roster target it was OPENED with
@@ -11999,10 +12014,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
    * column whose only scrolling child is the transcript: never scrolled away,
    * and not `sticky` (v1.215.0's reason still holds). No border: the calm
    * look is hairlines at most, and the bar needs none.
+   *
+   * 36-a: none in Quick Ask's answer window. Its chat list, project, Share
+   * and "⋯" are the main window's; the window's slim QuickAskHeader stands
+   * in its place.
    */
   const menuRow =
     "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
-  const chatTopBar = (
+  const chatTopBar = compact ? null : (
     <div
       data-testid="chat-topbar"
       className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 py-1 sm:h-12 sm:flex-nowrap sm:py-0"
@@ -13292,7 +13311,21 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // the composer in the middle of the screen. The SAME composer element moves
   // to the bottom dock after the first message: only its containers change
   // layout, so the typed text and the focus survive the move.
-  const emptyHero = messages.length === 0 && !busy;
+  // 36-a: never in Quick Ask's answer window. A quick question is already on
+  // its way, so the composer sits at the bottom from the first frame.
+  const emptyHero = !compact && messages.length === 0 && !busy;
+
+  // 36-a: Quick Ask's answer window. Esc hides it (after the page's own
+  // menus had their turn), the hotkey pressed while it is open puts the
+  // cursor back in the box, and a door to another page opens in the main
+  // window (lib/quickAnswer.useAnswerWindow). Nothing at all outside it.
+  const focusComposer = useCallback(() => inputRef.current?.focus(), []);
+  useAnswerWindow(compact, focusComposer);
+  const continueInMainWindow = () => {
+    // The save that named the chat may be newer than the `threadId` state.
+    const id = saveTargetRef.current.id || threadId;
+    if (id) void toMainWindow({ thread: id });
+  };
 
   // v1.353.0 (G36): the empty chat's machine check and connect-your-apps
   // line, from ONE read of GET /onboarding the first time the empty chat
@@ -13470,7 +13503,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             height there instead. */}
         <div
           data-testid="chat-room"
-          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px)-var(--ij-switch-h,0px))] md:min-h-[28rem] md:flex-row md:items-stretch"
+          className={
+            compact
+              ? // 36-a: Quick Ask's answer window is ONE column that fills the
+                // small window at every width (the title bar and
+                // MainContent's py-4, as below; there is no switch row), so
+                // the transcript scrolls and the composer stays at the bottom.
+                "flex h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))] min-h-[16rem] flex-col gap-2"
+              : "flex flex-col gap-4 md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px)-var(--ij-switch-h,0px))] md:min-h-[28rem] md:flex-row md:items-stretch"
+          }
         >
           {/* Threads: in the app sidebar on a wide screen (redesign S7) and
               in the phone nav drawer while it is open (v1.329.0, calm chat W4
@@ -13480,8 +13521,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               pop-out window, which has no sidebar) the
               rail sits beside the chat from md up; on a phone it never sits
               in the page: the top bar's Chats opens the drawer, which holds
-              this same list (one list, not two). */}
-          {chatSlot ? (
+              this same list (one list, not two). 36-a: Quick Ask's answer
+              window has no chat list at all (the chat is in the main
+              window's list like any other). */}
+          {compact ? null : chatSlot ? (
             createPortal(threadRail, chatSlot)
           ) : (
           <aside
@@ -13723,12 +13766,20 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               making the chat seem more minimalistic". */}
           <div
             className={`flex min-w-0 flex-1 flex-col gap-3 md:min-h-0 ${
+              // 36-a: the answer window's column has a height to share at
+              // every width, not only from md up.
+              compact ? "min-h-0" : ""
+            } ${
               // v1.326.0: on a wide screen an open project drawer takes its
               // own room instead of covering the end of the conversation.
-              workspaceOpen ? "xl:pr-[var(--rail-w)]" : ""
+              workspaceOpen && !compact ? "xl:pr-[var(--rail-w)]" : ""
             }`}
             style={{ "--rail-w": `${railW}px` } as CSSProperties}
           >
+            {/* 36-a: the answer window's slim header (its one way onward) in
+                place of the top bar, whose chat list, project, Share and
+                "⋯" belong to the main window. */}
+            {compact && <QuickAskHeader canContinue={threadId !== null} onContinue={continueInMainWindow} />}
             {chatTopBar}
             {/* Both of these are CONDITIONAL and both moved in here
                 (v1.215.0). Left in the page flow above the row, either one
@@ -14001,7 +14052,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                 // takes its own height (`flex-none`), so the group can centre;
                 // there is nothing to fade there, so no mask and no fade room
                 // (the greeting would be faded, and sit far above the card).
+                // 36-a: in Quick Ask's answer window the column has a set
+                // height at every width, so the phone-width 60vh cap is lifted.
                 className={`flex flex-col gap-4 overflow-y-auto [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[760px] ${
+                  compact ? "!max-h-none" : ""
+                } ${
                   emptyHero
                     ? "flex-none px-4 pb-4 pt-4 sm:px-5"
                     : "max-h-[60vh] min-h-0 flex-1 p-4 pb-8 sm:p-5 sm:pb-8 md:max-h-none [-webkit-mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)]"
@@ -15357,6 +15412,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       onPasteFiles={(files) => void addFilesRef.current(files)}
                       talkingTo={addressee.map(agentDisplayName).join(", ")}
                       atKeys={atKeysRef}
+                      escStops={!compact}
                     />
                     {/* v1.400.0: ONE ROW whatever model is picked (lib/toolbarFit).
                         From sm up the toolbar measures itself and sets its own
@@ -16178,11 +16234,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         }}
                       />
                     )}
+                    {/* 36-a: not in Quick Ask's answer window, where Esc
+                        hides the window rather than stopping the reply. */}
+                    {!compact && (
                     <span className="hidden sm:inline">
                       {askInDock
                         ? dockAskKeyHint(dockAsks[0].kind, dockAsks[0])
                         : composerKeyHint(busy, !commMeta, atFilesRoot !== null)}
                     </span>
+                    )}
                   </div>
                   {/* Calm chat W1-3: under the card on a NEW chat, quietly. The
                       preflight warning, then (v1.310.0: the way forward comes
@@ -16246,8 +16306,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               Project button or its "⋯" menu, no longer a permanent column.
               Its contents are unchanged; ProjectDrawer owns the shell (the
               portal, Escape, focus in and back, the phone scrim, the resize
-              grip). */}
-          {workspaceOpen && (
+              grip). 36-a: never in Quick Ask's answer window (the drawer
+              is the main window's). */}
+          {workspaceOpen && !compact && (
             <ProjectDrawer
               width={railW}
               takeFocus={drawerTakeFocus}

@@ -457,9 +457,13 @@ def test_a_link_opens_outside_only_when_it_is_a_web_or_mail_address(tmp_path):
 
 
 def test_every_window_link_seam_goes_through_the_scheme_filter():
-    """Both windows (main and pop-out) × the three seams. A bare
+    """Every window (main, pop-out and, since next leaps 36-a, Quick Ask's
+    answer window: moved on purpose from two) × the three seams. A bare
     ``shell.openExternal(url)`` with the page's own address would bypass it."""
     src = _read(_MAIN)
     assert "shell.openExternal(url)" not in src, "a link seam still hands any scheme to the system"
-    assert src.count("openExternalIfSafe(url);") == 6, src.count("openExternalIfSafe(url);")
-    assert src.count("setWindowOpenHandler(({ url }) => {\n    openExternalIfSafe(url);") == 2
+    assert src.count("openExternalIfSafe(url);") == 9, src.count("openExternalIfSafe(url);")
+    assert src.count("setWindowOpenHandler(({ url }) => {\n    openExternalIfSafe(url);") == 3
+    answer = src[src.index("function createQuickAnswerWindow(") :]
+    answer = answer[: answer.index("\n}\n")]
+    assert answer.count("openExternalIfSafe(url);") == 3

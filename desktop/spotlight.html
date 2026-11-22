@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>Iron Jarvis — Quick task</title>
+<title>Iron Jarvis — Quick Ask</title>
 <style>
   :root { color-scheme: dark; }
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
@@ -47,7 +47,7 @@
     <input id="task" autofocus placeholder="Tell Iron Jarvis what to do…" autocomplete="off" spellcheck="false" />
   </div>
   <div class="hint">
-    <span id="status">Opens in chat, where you see the answer.</span>
+    <span id="status">The answer opens here.</span>
     <span><kbd>Enter</kbd> send &nbsp; <kbd>Esc</kbd> close</span>
   </div>
 </div>
@@ -68,11 +68,12 @@
     input.disabled = true;
     setStatus("Sending…");
     try {
-      // v1.506.0 (north-star 6.5): the words go to CHAT in the main window
-      // (desktop/main.js runSpotlightTask), not to a background run.
+      // v1.506.0 (north-star 6.5): the words go to CHAT, not to a background
+      // run. 36-a: in Quick Ask's small answer window, opened where this box
+      // is (desktop/main.js runSpotlightTask); the main window is not touched.
       const res = await window.spotlight.submit(task);
       if (res && res.ok) {
-        setStatus("✓ Opening in chat…");
+        setStatus("✓ Opening the answer…");
         setTimeout(() => window.spotlight?.close(), 550);
       } else {
         setStatus((res && res.error) || "Could not start the task.", true);
@@ -88,7 +89,7 @@
   // Clear + refocus each time the overlay is shown.
   window.spotlight?.onShow(() => {
     input.disabled = false; input.value = "";
-    setStatus("Opens in chat, where you see the answer.");
+    setStatus("The answer opens here.");
     setTimeout(() => input.focus(), 30);
   });
 </script>

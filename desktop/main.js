@@ -3392,6 +3392,9 @@ function scheduleSpotlightDestroy(win) {
 }
 
 function toggleSpotlight() {
+  // 36-a: while Quick Ask's answer window is on screen the hotkey goes back
+  // to it (one at a time), with the cursor in its box.
+  if (focusQuickAnswer()) return;
   const win = createSpotlightWindow();
   if (win.isVisible()) {
     win.hide();
@@ -3436,12 +3439,374 @@ function takeQuickAsk(now) {
 // Send the quick window's words to chat. Iron Jarvis is asked first whether
 // it is answering, so a stopped app still reads "Iron Jarvis isn't running
 // yet" in the quick window (spotlightErrorWords) instead of an empty chat.
+// 36-a: the answer appears right there. The words wait as before, and the
+// small answer window opens where the box was (openQuickAnswer); the main
+// window is not touched.
 async function runSpotlightTask(task) {
   await daemonRequest("GET", "/health", null);
   pendingQuickAsk = { text: task, at: Date.now() };
-  showMainWindow();
-  if (mainWin && !mainWin.isDestroyed()) mainWin.loadURL(quickAskUrl(DASHBOARD_URL));
-  return { ok: true, opened: "chat" };
+  openQuickAnswer();
+  return { ok: true, opened: "answer" };
+}
+
+// --- Quick Ask: the answer appears right there (next leaps 36-a) ----------
+// The box used to pull the WHOLE main window forward onto a new chat. Now
+// Enter opens ONE small window where the box was: the chat page itself
+// (`quickAnswerUrl`), which draws itself compact (dashboard/lib/quickAnswer:
+// the messages, the composer at the bottom, "Continue in the main window"),
+// takes the waiting words over the same sender-checked `quick-ask:take` and
+// answers in the same stream lane, so a Quick Ask is an ordinary saved chat.
+// It is built like a pop-out (the main preload and token, the external-link
+// guards, a did-fail-load retry, the crash reload) but small, floating on
+// top and with no taskbar button, and it is NOT a pop-out: not in `popouts`,
+// never the window that speaks for the app (its bell stays quiet).
+// D-36.1: clicking back into another program does not hide it; Esc (the
+// page's `quick-ask:hide`) or its close button does. Hidden for
+// SPOTLIGHT_IDLE_DESTROY_MS it is destroyed, like the box. One at a time:
+// the hotkey pressed while it is on screen puts the cursor in its box
+// (`focusQuickAnswer`). A page other than the chat opens in the MAIN window
+// (`quick-ask:to-main`, the will-navigate guard and did-navigate-in-page),
+// because it is another page; so does "Continue in the main window", which
+// then hides the small one.
+const QUICK_ANSWER_WIDTH = 480;
+const QUICK_ANSWER_HEIGHT = 560;
+const QUICK_ANSWER_ROUTE = "/chat";
+const QUICK_THREAD_RX = /^[A-Za-z0-9_-]{1,128}$/;
+let quickAnswerWin = null;
+let _quickAnswerDestroyTimer = null;
+
+// The address the answer window opens: a NEW chat told to take the waiting
+// words, drawn compact, as a pop-out (no sidebar). Never the words. Pure.
+function quickAnswerUrl(base) {
+  return `${quickAskUrl(base)}&compact=1&popout=1`;
+}
+
+// Where the answer window goes (pure): centred under the box, at the box's
+// top edge, inside the work area of the box's screen and never bigger than
+// it. With no box (already destroyed) it takes the box's own place.
+function quickAnswerBounds(box, work) {
+  const area =
+    work && [work.x, work.y, work.width, work.height].every(Number.isFinite)
+      ? work
+      : { x: 0, y: 0, width: QUICK_ANSWER_WIDTH, height: QUICK_ANSWER_HEIGHT };
+  const width = Math.min(QUICK_ANSWER_WIDTH, area.width);
+  const height = Math.min(QUICK_ANSWER_HEIGHT, area.height);
+  const hasBox = box && [box.x, box.y, box.width].every(Number.isFinite);
+  let x = hasBox ? box.x + Math.round((box.width - width) / 2) : area.x + Math.round((area.width - width) / 2);
+  let y = hasBox ? box.y : area.y + 180;
+  x = Math.min(Math.max(x, area.x), area.x + area.width - width);
+  y = Math.min(Math.max(y, area.y), area.y + area.height - height);
+  return { x, y, width, height };
+}
+
+// What the answer window may open in the MAIN window (pure): a saved chat by
+// its id (`{thread}`), or a dashboard path (`{path}`, a door) with its query
+// and anchor. Anything else, another host above all, is "".
+function quickAnswerMainPath(raw) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  if (typeof r.thread === "string") {
+    const id = r.thread.trim();
+    return QUICK_THREAD_RX.test(id) ? `/chat?thread=${id}` : "";
+  }
+  if (typeof r.path !== "string") return "";
+  const p = r.path.trim();
+  // A backslash is a slash to a URL parser ("/\\host" is another host).
+  if (!p.startsWith("/") || p.startsWith("//") || /[\\\s]/.test(p) || p.length > 512) return "";
+  let u;
+  try {
+    u = new URL(p, `${DASHBOARD_URL}/`);
+  } catch {
+    return "";
+  }
+  if (!DASHBOARD_ORIGINS.has(u.origin)) return "";
+  return `${u.pathname}${u.search}${u.hash}`;
+}
+
+// The work area of the screen the box is on (else the primary screen's).
+function quickAnswerWorkArea(box) {
+  try {
+    const d = box ? screen.getDisplayMatching(box) : screen.getPrimaryDisplay();
+    return d && d.workArea ? d.workArea : null;
+  } catch {
+    return null;
+  }
+}
+
+// The path, query and anchor of an address ("" when unreadable). Pure.
+function dashboardPathOf(url) {
+  try {
+    const u = new URL(String(url));
+    return `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    return "";
+  }
+}
+
+// Is `url` the chat page, the one page the answer window shows?
+function isQuickAnswerPage(url) {
+  try {
+    return new URL(String(url)).pathname === QUICK_ANSWER_ROUTE;
+  } catch {
+    return false;
+  }
+}
+
+function liveQuickAnswer() {
+  if (quickAnswerWin && quickAnswerWin.isDestroyed()) quickAnswerWin = null;
+  return quickAnswerWin;
+}
+
+// Did this IPC message come from the answer window itself? (Each handler
+// checks the dashboard origin too: isTrustedDashboardSender.)
+function isFromQuickAnswer(event) {
+  const win = liveQuickAnswer();
+  const sender = event && event.sender;
+  const own = win && win.webContents;
+  if (!sender || !own) return false;
+  // The same contents object, or the same contents by its unique id.
+  return sender === own || (sender.id !== undefined && sender.id === own.id);
+}
+
+function cancelQuickAnswerDestroy() {
+  if (_quickAnswerDestroyTimer) clearTimeout(_quickAnswerDestroyTimer);
+  _quickAnswerDestroyTimer = null;
+}
+
+// Light on the PC: a hidden answer window keeps a whole renderer alive, so
+// after the box's idle span hidden it is destroyed (its chat is saved; the
+// next Quick Ask builds a new one). Its own timer: the box has its own.
+function scheduleQuickAnswerDestroy(win) {
+  cancelQuickAnswerDestroy();
+  _quickAnswerDestroyTimer = setTimeout(() => {
+    _quickAnswerDestroyTimer = null;
+    if (!win || win.isDestroyed() || win.isVisible()) return;
+    win.destroy();
+  }, SPOTLIGHT_IDLE_DESTROY_MS);
+  if (typeof _quickAnswerDestroyTimer.unref === "function") _quickAnswerDestroyTimer.unref();
+}
+
+// Show the window once its page has drawn (a reused window would otherwise
+// flash its last chat first), or after a few seconds whatever happened.
+function showQuickAnswerWhenDrawn(win) {
+  let done = false;
+  let timer = null;
+  const show = () => {
+    if (done || win.isDestroyed()) return;
+    done = true;
+    if (timer) clearTimeout(timer);
+    win.show();
+    win.focus();
+  };
+  win.webContents.once("did-finish-load", show);
+  timer = setTimeout(show, 3000);
+  if (timer && typeof timer.unref === "function") timer.unref();
+}
+
+function createQuickAnswerWindow(box) {
+  const placed = quickAnswerBounds(box, quickAnswerWorkArea(box));
+  const win = new BrowserWindow({
+    x: placed.x,
+    y: placed.y,
+    width: placed.width,
+    height: placed.height,
+    // Narrower than this and the title bar's controls and the window's own
+    // buttons would meet; the chat itself already works at a phone's 390 px.
+    minWidth: 380,
+    minHeight: 320,
+    backgroundColor: "#0a0a0f",
+    show: false,
+    title: "Quick Ask — Iron Jarvis",
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#0a0a0f", symbolColor: "#a6b0ba", height: 40 },
+    icon: windowIcon(),
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      spellcheck: true,
+      additionalArguments: [`--ij-token=${authToken || ""}`, `--ij-popout=${QUICK_ANSWER_ROUTE}`, "--ij-quick-answer=1"],
+    },
+  });
+  quickAnswerWin = win;
+  installSpellcheckMenu(win);
+  // "floating", not the box's "screen-saver": on top of the program you are
+  // reading in, under the system's own overlays.
+  win.setAlwaysOnTop(true, "floating");
+  // The token safety net, exactly as the main window and a pop-out have it.
+  let tokenEnsured = false;
+  win.webContents.on("did-finish-load", () => {
+    if (tokenEnsured || !authToken) return;
+    const lit = JSON.stringify(authToken);
+    const js =
+      "(() => { try {" +
+      `  if (localStorage.getItem('ij_token') !== ${lit}) {` +
+      `    localStorage.setItem('ij_token', ${lit}); return 'set';` +
+      "  } return 'present';" +
+      "} catch (e) { return 'error'; } })()";
+    win.webContents
+      .executeJavaScript(js)
+      .then((result) => {
+        tokenEnsured = true;
+        if (result === "set" && !win.isDestroyed()) win.webContents.reload();
+      })
+      .catch(() => {
+        tokenEnsured = true;
+      });
+  });
+  // Links leave for the system browser; the window stays on the chat page.
+  // Another page of the app is the main window's: it opens there.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalIfSafe(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!isDashboardUrl(url)) {
+      event.preventDefault();
+      openExternalIfSafe(url);
+      return;
+    }
+    if (!isQuickAnswerPage(url)) {
+      event.preventDefault();
+      const target = quickAnswerMainPath({ path: dashboardPathOf(url) });
+      if (target) openDashboardPath(target);
+    }
+  });
+  win.webContents.on("will-redirect", (event, url) => {
+    if (!isDashboardUrl(url)) {
+      event.preventDefault();
+      openExternalIfSafe(url);
+    }
+  });
+  // A page change made INSIDE the page (a link the page's router followed,
+  // which no will-navigate sees) also goes to the main window, and the small
+  // window steps back to its chat. The page catches the links itself first
+  // (lib/quickAnswer.useAnswerWindow); this is for everything else.
+  win.webContents.on("did-navigate-in-page", (_e, url, isMainFrame) => {
+    if (isMainFrame === false || !isDashboardUrl(url) || isQuickAnswerPage(url)) return;
+    const target = quickAnswerMainPath({ path: dashboardPathOf(url) });
+    if (target) openDashboardPath(target);
+    try {
+      const history = win.webContents.navigationHistory;
+      if (history && history.canGoBack()) history.goBack();
+      else win.loadURL(`${DASHBOARD_URL}${QUICK_ANSWER_ROUTE}?compact=1&popout=1`);
+    } catch {
+      /* the window is closing */
+    }
+  });
+  // A dashboard outage must not strand the window on Chromium's error page:
+  // wait for the dashboard and load the same address again.
+  let reloadPending = false;
+  win.webContents.on("did-fail-load", (_e, code, _desc, url, isMainFrame) => {
+    if (code === -3 || !isMainFrame || !isDashboardUrl(url) || reloadPending) return;
+    reloadPending = true;
+    waitForDashboard(60000, 500)
+      .then(() => {
+        reloadPending = false;
+        if (!win.isDestroyed()) win.loadURL(url);
+      })
+      .catch(() => {
+        reloadPending = false;
+      });
+  });
+  installPopoutCrashReload(win, QUICK_ANSWER_ROUTE);
+  // The close button hides it (the chat is saved; the turn is the daemon's).
+  // Quit and an update's teardown close it for real.
+  win.on("close", (event) => {
+    if (isQuitting || shuttingDown) return;
+    event.preventDefault();
+    win.hide();
+  });
+  win.on("hide", () => scheduleQuickAnswerDestroy(win));
+  win.on("show", () => cancelQuickAnswerDestroy());
+  win.on("closed", () => {
+    cancelQuickAnswerDestroy();
+    if (quickAnswerWin === win) quickAnswerWin = null;
+  });
+  return win;
+}
+
+// Open the answer window on a fresh Quick Ask: the box steps aside and the
+// window (built, or the hidden one reused: ONE at a time) loads the chat
+// page where the box was, and shows once the page has drawn.
+function openQuickAnswer() {
+  let box = null;
+  if (spotlightWin && !spotlightWin.isDestroyed()) {
+    try {
+      box = spotlightWin.getBounds();
+    } catch {
+      box = null;
+    }
+    spotlightWin.hide();
+  }
+  let win = liveQuickAnswer();
+  if (!win) {
+    win = createQuickAnswerWindow(box);
+  } else {
+    cancelQuickAnswerDestroy();
+    if (!win.isVisible()) {
+      try {
+        win.setBounds(quickAnswerBounds(box, quickAnswerWorkArea(box)));
+      } catch {
+        /* keep where it was */
+      }
+    }
+  }
+  showQuickAnswerWhenDrawn(win);
+  win.loadURL(quickAnswerUrl(DASHBOARD_URL));
+  return win;
+}
+
+// The hotkey while the answer window is on screen: back to it, cursor in
+// its box (the page listens for "quick-ask:focus"). False when it is not on
+// screen, and the box opens as before.
+function focusQuickAnswer() {
+  const win = liveQuickAnswer();
+  if (!win || !win.isVisible()) return false;
+  win.focus();
+  try {
+    win.webContents.send("quick-ask:focus");
+  } catch {
+    /* mid-teardown */
+  }
+  return true;
+}
+
+function hideQuickAnswer() {
+  const win = liveQuickAnswer();
+  if (win && win.isVisible()) win.hide();
+}
+
+// `quick-ask:to-main`: "Continue in the main window" (`{thread}`: that chat
+// opens there and the small window steps aside) or a door (`{path}`: the
+// page opens there, the answer stays on screen to read). Only the answer
+// window's own dashboard frame may ask; null otherwise.
+function quickAskToMain(event, raw) {
+  if (!isTrustedDashboardSender(event) || !isFromQuickAnswer(event)) return null;
+  const target = quickAnswerMainPath(raw);
+  if (!target) return { ok: false };
+  openDashboardPath(target);
+  if (raw && typeof raw.thread === "string") hideQuickAnswer();
+  return { ok: true };
+}
+
+// `quick-ask:hide`: Esc in the answer window. Only that window may ask.
+function quickAskHide(event) {
+  if (!isTrustedDashboardSender(event) || !isFromQuickAnswer(event)) return false;
+  hideQuickAnswer();
+  return true;
+}
+
+// `quick-ask:take`: the waiting words, once. Only the answer window's own
+// page takes them: they were typed for it, and another window opened on a
+// `?quick=1` address (a link) must not send them.
+function quickAskTake(event) {
+  if (!isTrustedDashboardSender(event) || !isFromQuickAnswer(event)) return null;
+  return takeQuickAsk(Date.now());
 }
 
 // v1.450.0 (Wave D, item 39): what Spotlight says when its task did not
@@ -3492,11 +3857,13 @@ function installSpotlightIpc() {
   });
   // v1.506.0 (north-star 6.5): the chat page takes the quick window's words,
   // once (`takeQuickAsk`). Only the dashboard may ask: the words are the
-  // user's send, and no other frame gets to read or spend them.
-  ipcMain.handle("quick-ask:take", (event) => {
-    if (!isTrustedDashboardSender(event)) return null;
-    return takeQuickAsk(Date.now());
-  });
+  // user's send, and no other frame gets to read or spend them. 36-a: only
+  // the answer window's page (quickAskTake).
+  ipcMain.handle("quick-ask:take", (event) => quickAskTake(event));
+  // 36-a: "Continue in the main window" and a door pressed in the answer
+  // window; Esc there. Sender-checked: the answer window's own dashboard frame.
+  ipcMain.handle("quick-ask:to-main", (event, raw) => quickAskToMain(event, raw));
+  ipcMain.handle("quick-ask:hide", (event) => quickAskHide(event));
   // Native clipboard for the terminal (paste/copy) — never permission-gated.
   // Native toast for the "This PC" notification destination (v1.118.0).
   // Clicking it restores the window — the alert is an invitation back in.
@@ -3804,9 +4171,10 @@ function buildTrayContextMenu() {
       click: () => showMainWindow(),
     },
     {
+      // 36-a: one name, Quick Ask ("quick task" stays a search word).
       label: hotkeyState.spotlight
-        ? `Quick task…  (${accelLabel(hotkeyState.spotlight)})`
-        : "Quick task… — hotkey unavailable (taken by another app)",
+        ? `Quick Ask…  (${accelLabel(hotkeyState.spotlight)})`
+        : "Quick Ask… — hotkey unavailable (taken by another app)",
       click: () => toggleSpotlight(),
     },
     // The always-available unfreeze: reloads just the UI (state lives in the

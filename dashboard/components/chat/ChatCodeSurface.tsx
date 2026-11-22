@@ -45,6 +45,7 @@ import {
 import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import { CHAT_VIEW_NAME, CODE_VIEW_NAME } from "@/lib/buildWords";
 import { NEW_CHAT_EVENT, closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
+import { CompactChatContext, isCompactChat } from "@/lib/quickAnswer";
 import { ViewSwitch } from "@/components/ViewSwitch";
 
 // The Code view: browser only, loaded when it is first shown (it brings the
@@ -88,6 +89,12 @@ export function ChatCodeSurface({ renderChat }: { renderChat: (hidden: boolean) 
   const [view, setView] = useState<ChatSurfaceView>(() => cachedView() ?? "chat");
   const [linkSession, setLinkSession] = useState<string | null>(null);
   const [linkNight, setLinkNight] = useState<{ night: string; n: number } | null>(null);
+  // 36-a: Quick Ask's answer window draws the chat alone, compact
+  // (lib/quickAnswer): no switch row, never the Code view, and the chat is
+  // told through CompactChatContext. Read in the same layout effect as the
+  // address (false on the server and the first client frame alike), so the
+  // first PAINTED frame is already compact.
+  const [compact, setCompact] = useState(false);
   const slot = useChatSlot();
 
   // v1.500.0: a LAYOUT effect, so the address is read before the chat's own
@@ -95,6 +102,11 @@ export function ChatCodeSurface({ renderChat }: { renderChat: (hidden: boolean) 
   // passive effects run child first, so a chat row pressed in the sidebar on
   // another page landed on Code in a window that last showed Code.
   useLayoutEffect(() => {
+    const compactNow = isCompactChat(window.location.search);
+    setCompact(compactNow);
+    // The answer window is a chat and nothing else: no view is read from
+    // the address or the window's memory, and none is written back.
+    if (compactNow) return;
     let fromAddress: ChatSurfaceView | null = null;
     try {
       fromAddress = viewFromSearch(window.location.search);
@@ -165,29 +177,35 @@ export function ChatCodeSurface({ renderChat }: { renderChat: (hidden: boolean) 
     };
   }, [choose]);
 
-  const code = view === "code";
+  // 36-a: compact never shows Code, whatever the window remembered or a link
+  // announced. The chat keeps its place in the tree either way (the switch
+  // row is a null sibling), so turning compact on never remounts the chat.
+  const code = view === "code" && !compact;
   return (
     <div
       data-testid="chat-surface"
-      data-view={view}
-      style={{ "--ij-switch-h": SWITCH_ROW_HEIGHT } as CSSProperties}
+      data-view={code ? "code" : "chat"}
+      data-compact={compact ? "" : undefined}
+      style={{ "--ij-switch-h": compact ? "0px" : SWITCH_ROW_HEIGHT } as CSSProperties}
     >
-      <div data-testid="chat-view-switch-row" className="mb-2 flex h-9 shrink-0 items-center justify-center">
-        {/* THE SWITCH: Build's old view switch, its look kept — plain text
-            tabs in one quiet box, the open one in ink. v1.409.0: lifted into
-            components/ViewSwitch, which Build's Code | Terminal switch shares
-            (one component, so the two can never drift). */}
-        <ViewSwitch views={VIEWS} value={view} onChange={choose} label="Chat or code" prefix="chat-view" />
-      </div>
+      {compact ? null : (
+        <div data-testid="chat-view-switch-row" className="mb-2 flex h-9 shrink-0 items-center justify-center">
+          {/* THE SWITCH: Build's old view switch, its look kept — plain text
+              tabs in one quiet box, the open one in ink. v1.409.0: lifted into
+              components/ViewSwitch, which Build's Code | Terminal switch shares
+              (one component, so the two can never drift). */}
+          <ViewSwitch views={VIEWS} value={view} onChange={choose} label="Chat or code" prefix="chat-view" />
+        </div>
+      )}
       <div
         id="chat-view-panel-chat"
-        role="tabpanel"
-        aria-labelledby="chat-view-tab-chat"
+        role={compact ? undefined : "tabpanel"}
+        aria-labelledby={compact ? undefined : "chat-view-tab-chat"}
         data-testid="chat-view-panel-chat"
         hidden={code}
         inert={code}
       >
-        {renderChat(code)}
+        <CompactChatContext.Provider value={compact}>{renderChat(code)}</CompactChatContext.Provider>
       </div>
       {code ? (
         <div

@@ -42,13 +42,15 @@ the sidebar (the ☰ menu on a phone):
 |---|---|---|
 | Daemon | FastAPI — state, agents, tools, memory, events | `127.0.0.1:8787` |
 | Dashboard | Next.js — every page below | `127.0.0.1:8788` |
-| Desktop | Electron — tray, hotkeys, updater, Spotlight | wraps both |
+| Desktop | Electron — tray, hotkeys, updater, Quick Ask | wraps both |
 
 **Hotkeys:** `Ctrl+Shift+J` toggles the window — or `Ctrl+Alt+J` when
 another app holds it (the desktop app tries the two in order and retries a
 taken key every 30 minutes); the tray menu and **Help › Keyboard shortcuts**
 show the key that is live, or say "hotkey unavailable" when both are taken.
-`Ctrl+Shift+Space` opens Spotlight. State lives in `%APPDATA%/Iron Jarvis/.ironjarvis/` (SQLite DB,
+`Ctrl+Shift+Space` opens **Quick Ask** over any program, and its answer
+appears right there in a small window (see "Quick Ask: the answer appears
+right there"). State lives in `%APPDATA%/Iron Jarvis/.ironjarvis/` (SQLite DB,
 config.toml, secrets vault, skills, backups). Updates download automatically
 (checked at boot and every 30 min) and install only when you click
 **Restart to update**. Since v1.260.0 the check reads a small manifest file the
@@ -2390,6 +2392,43 @@ skills. It now asks each time you type `/`.
 **What has not changed.** The list opens when `/` is the first thing on a
 line, in both boxes. A `/` inside a sentence is ordinary text. A tool that
 lists no commands says so, and what you type is still sent to it as typed.
+
+## Quick Ask: the answer appears right there (v1.557.0)
+
+Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows
+the key that is live, if another app holds that one), type your question,
+and press Enter. The answer appears right there: the box becomes a small
+window where it was, and the reply is written into it while you keep
+working. Your main Iron Jarvis window stays exactly where it was. You do
+nothing differently: the same key, the same box, the same Enter.
+
+**Reading while you work.**
+
+- The window stays on top of the program you are in, so you can read the
+  answer beside your document. Clicking back into that program does not hide
+  it.
+- **Esc** or the window's close button hides it. A reply still being written
+  carries on, and the chat is saved. While a menu or a question card is open
+  in the window, Esc closes that first.
+- Press the key again while the window is open and the cursor goes back into
+  its box, so a follow-up question is one press away. Once it is hidden, the
+  key opens the box for a new question.
+
+**Going further.**
+
+- **Continue in the main window**, at the top of the small window, opens the
+  same chat in the main window, where every control is.
+- A link in the answer to another page (Schedules, Settings…) opens that page
+  in the main window. Links to websites open in your browser, as everywhere.
+- A Quick Ask is an ordinary chat: it is in your chat list, it can use
+  everything a chat can (its cards, Undo, the record of what it did), and
+  anything you set up from it reports back into it.
+
+**Keeping it light.** One small window at a time. Hidden for ten minutes, it
+is closed to free its memory; the chat stays in your chat list.
+
+The box and the tray's item are both called **Quick Ask** now (they used to
+say "Quick task"; searching for that still finds it).
 
 ## Pick up where you left off in a folder (v1.556.0)
 

@@ -33,6 +33,7 @@ import {
   SlidersHorizontal,
   Gauge,
   ScanText,
+  Keyboard,
   type LucideIcon,
 } from "lucide-react";
 import { EVERYTHING_TAB_EVENT, SURFACES } from "@/lib/surfaces";
@@ -167,6 +168,18 @@ const DEEP_LINK_ITEMS: PaletteRow[] = [
     aliases: ["auto-approve", "mcp", "connect a pack", "connect a plug-in", "plug-ins", "extensions"],
     href: "/tools?focus=packs",
     icon: Package,
+  },
+  {
+    // 36-a (R2.2): Quick Ask is the desktop app's box, not a page, so the row
+    // opens its Handbook section in Help. The tray's old word ("quick task")
+    // and the code's ("spotlight") stay search words (VOCABULARY.md).
+    id: "deep:quick-ask",
+    kind: "page",
+    label: "Quick Ask, from any app",
+    blurb: "Press the Quick Ask key in any program, ask, and the answer appears in a small window right there.",
+    aliases: ["quick ask", "quick task", "spotlight", "hotkey", "ask from anywhere", "global shortcut"],
+    href: "/help?guide=handbook&section=quick-ask-the-answer-appears-right-there",
+    icon: Keyboard,
   },
   {
     id: "deep:schedule-task",
