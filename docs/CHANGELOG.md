@@ -32,7 +32,7 @@
 
 ## v1.557.0
 
-**The `/` list in Build › Code works before a session starts.** Type `/` in Build › Code's start box (the box you see before any session is open) and the coding tool's own commands and skills are listed above the box, as they already were in an open session.
+**The `/` list in Build › Code works before a session starts.** Type `/` in Build › Code's start box (the box you see before any session is open) and the coding tool's own commands and skills are listed above the box, as they already were in an open session. **Quick Ask: the answer appears right there.** Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows the key that is live, if another app holds that one), type your question, and press Enter.
 
 ## v1.556.0
 
