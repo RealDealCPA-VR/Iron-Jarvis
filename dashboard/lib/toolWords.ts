@@ -105,7 +105,7 @@ const WORDS: Record<string, string> = {
   write_document: "create a document",
   excel_edit: "edit a workbook",
   excel_live_edit: "change a workbook that is open in Excel",
-  // v1.560.0 (idea 31-a): the plan card's Confirm answers this ask.
+  // v1.562.0 (idea 31-a): the plan card's Confirm answers this ask.
   stack_apply: "save the documents sorted from a scan",
   generate_media: "make an image, video or sound",
   // v1.364.0 (IJ harness Phase 1): the two that ask (a long-running program

@@ -139,7 +139,7 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   tool_script: { did: "Ran a script over its tools", noun: "tool script" },
   excel_trace: { did: "Traced how a number is built", noun: "number trace" },
   excel_reconcile: { did: "Matched two lists of transactions", noun: "transaction match" },
-  // v1.560.0 (idea 31-a; twin: agents/mission.py _RUN_TOOL_WORDS).
+  // v1.562.0 (idea 31-a; twin: agents/mission.py _RUN_TOOL_WORDS).
   stack_plan: { did: "Made a plan to sort a scan", noun: "sorting plan" },
   stack_apply: { did: "Saved the documents sorted from a scan", noun: "save of sorted documents", nouns: "saves of sorted documents" },
   code_handoff_start: { did: "Handed work to another coding tool", noun: "hand-off to another coding tool" },
