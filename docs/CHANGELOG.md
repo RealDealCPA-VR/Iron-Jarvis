@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.554.0
+
+**Agents and terminal help know what was done before.** An agent you give a job in a folder now starts knowing what was done there before, the way a chat in that folder already does: the pieces of earlier work on Iron Jarvis's own record (each chat, coding session or agent run there, how it ended and the files it wrote) and, for work in exactly that folder, its checked recap (Done, Decided, Open).
+
 ## v1.553.0
 
 **Before and after pictures under a coding reply.** When a reply in a coding session (Chat › Code) changes how a page looks, you can see it: two pictures under the reply, the page **Before** the change and **After** it, each with the page's address and the time.
@@ -12,7 +16,7 @@
 
 ## v1.551.0
 
-**Agents and terminal help know what was done before.** An agent you give a job in a folder now starts knowing what was done there before, the way a chat in that folder already does: the pieces of earlier work on Iron Jarvis's own record (each chat, coding session or agent run there, how it ended and the files it wrote) and, for work in exactly that folder, its checked recap (Done, Decided, Open). **Iron Jarvis checks every Build › Code reply.** Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity), its reply now ends the same way.
+**Iron Jarvis checks every Build › Code reply.** Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity), its reply now ends the same way.
 
 ## v1.550.0
 
@@ -77,7 +81,3 @@
 ## v1.538.0
 
 **Connected apps keep working by themselves.** The sixth of nine releases from the fourth review.
-
-## v1.537.0
-
-**A tidier sidebar: Terminals, Other tools and Projects start folded.** The lower part of the sidebar now starts out of the way, and you open what you want with one press.

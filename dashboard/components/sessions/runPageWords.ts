@@ -441,7 +441,7 @@ export function detailsRemovedWords(days: number | null | undefined): string | n
   );
 }
 
-/* ---- What the run started with (v1.551.0, next leaps 14-a) --------------- */
+/* ---- What the run started with (v1.554.0, next leaps 14-a) --------------- */
 
 /** The label of the run page's line that lists what the run was given. */
 export const STARTED_WITH_LABEL = "Started with";

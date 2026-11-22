@@ -270,7 +270,7 @@ def test_workspace_root_reaches_the_session_and_folder_rules_are_injected_scanne
     assert ran["last_status"] == "ok", ran
     row = _session(client, ran["last_session_id"])
     assert row["workspace_path"] == str(folder)
-    # (v1.551.0: every fire also keeps the prompt the owner saved, for the
+    # (v1.554.0: every fire also keeps the prompt the owner saved, for the
     # run's "Earlier work on record".)
     assert _options(client, ran["last_session_id"]) == {"folder_rules": True, STORY: "Report."}
     sys_prompt = next(s for s in seen["systems"] if "# Folder rules" in s)
@@ -557,7 +557,7 @@ def test_skip_memory_is_inherited_by_rerun_and_continue(client):
     assert cont["id"] not in (sid, rerun["id"])
     assert _options(client, cont["id"]) == {"skip_memory": True, STORY: "T."}
     # Control: a plain session's row carries no knob, only the prompt the
-    # owner saved (v1.551.0).
+    # owner saved (v1.554.0).
     assert _add(client, "plain", {"task": "T."}).status_code == 200
     assert _options(client, _fire(client, "plain")["last_session_id"]) == {STORY: "T."}
     del platform

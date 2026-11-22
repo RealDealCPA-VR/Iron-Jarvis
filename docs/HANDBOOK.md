@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Agents and terminal help know what was done before (v1.551.0)
+## Agents and terminal help know what was done before (v1.554.0)
 
 An agent you give a job in a folder now starts knowing what was done there
 before, the way a chat in that folder already does: the pieces of earlier

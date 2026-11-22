@@ -2424,7 +2424,7 @@ def build_platform(
                     knob["skills"],
                 )
             fire_options: dict = {}
-            # THE SCHEDULE'S OWN WORDS (v1.551.0, next leaps 14-a, the second
+            # THE SCHEDULE'S OWN WORDS (v1.554.0, next leaps 14-a, the second
             # review): the prompt the owner saved, for the run's "Earlier work
             # on record" (``runtime.STORY_WORDS_OPTION``). The task the run
             # reads may grow below (a pre-run script's output, an earlier

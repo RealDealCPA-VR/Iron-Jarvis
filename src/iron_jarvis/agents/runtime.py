@@ -802,7 +802,7 @@ async def run_client_block(platform, session) -> str:
 
 
 class RunStory:
-    """What one run's "Earlier work on record" is asked with (v1.551.0, next
+    """What one run's "Earlier work on record" is asked with (v1.554.0, next
     leaps 14-a, "Every worker starts with the full story"): ``words`` are the
     OWNER's (the run's task when the owner started it; "" for a helper or a
     child, whose task the model wrote) and ``skip`` the pieces of work the
@@ -820,7 +820,7 @@ class RunStory:
         self.wall = wall
 
 
-#: The origins of a run whose TASK the owner typed (v1.551.0, the
+#: The origins of a run whose TASK the owner typed (v1.554.0, the
 #: independent review), ``origin == o`` or ``origin.startswith(o + ":")``,
 #: beside a run with no origin (the owner's page, ``POST /sessions``): a
 #: chat's hand-off, a project page, an objective, the Agents page, the
@@ -831,7 +831,7 @@ class RunStory:
 #: added later are nobody's words.
 OWNER_TASK_ORIGINS = ("chat", "project", "job:mission", "job:agents", "schedule", "comm")
 
-#: A SCHEDULE'S WORDS (v1.551.0, the second review): the run option the fire
+#: A SCHEDULE'S WORDS (v1.554.0, the second review): the run option the fire
 #: (``platform._dispatch_scheduled``) keeps the prompt the owner SAVED on the
 #: schedule under. A schedule run's task is not all the owner's: the fire
 #: appends a pre-run script's output and an earlier job's result to it, and
@@ -855,7 +855,7 @@ def owner_typed_task(origin: object) -> bool:
     return any(text == o or text.startswith(o + ":") for o in OWNER_TASK_ORIGINS)
 
 
-#: THE STORY SPREADS DOWN (v1.551.0): set by ``run`` around the run body,
+#: THE STORY SPREADS DOWN (v1.554.0): set by ``run`` around the run body,
 #: like :data:`SKIP_MEMORY`, so a child run awaited inside it knows the runs
 #: it is part of. None outside a run.
 RUN_STORY: "contextvars.ContextVar[RunStory | None]" = contextvars.ContextVar(
@@ -942,7 +942,7 @@ def run_story(session, parent_id: str | None = None) -> RunStory:
 
 
 def story_wall(story: RunStory, run_wall: Any) -> Any:
-    """The wall ``story`` is told behind (v1.551.0, the independent review),
+    """The wall ``story`` is told behind (v1.554.0, the independent review),
     worked out in ``run`` from the run's own wall (:func:`run_client_wall`)
     BEFORE that wall is set. The run's wall names the clients its TASK
     names, so it is the story's only when the task is the owner's words
@@ -1025,7 +1025,7 @@ async def run_story_wall(platform, session, story: RunStory, run_wall: Any) -> A
 
 
 async def run_work_block(platform, session, turn=None) -> str:
-    """THE STORY a run is told (v1.551.0, next leaps 14-a): the chat lanes'
+    """THE STORY a run is told (v1.554.0, next leaps 14-a): the chat lanes'
     "Earlier work on record" (``workmap.block.work_block``) for the run's own
     folder (:func:`run_client_folder`; a scratch folder is nobody's, so only
     work the owner's words point at), behind the run's OWN wall ``turn``
@@ -1085,7 +1085,7 @@ async def run_work_block(platform, session, turn=None) -> str:
 
 def told_parts(session) -> list[str]:
     """What ``session``'s prompt carried that its page names
-    (``Session.told_json``; v1.551.0): known parts only, in order. [] for
+    (``Session.told_json``; v1.554.0): known parts only, in order. [] for
     none, an older row (NULL) or anything unreadable. Never raises."""
     try:
         raw = json.loads(str(getattr(session, "told_json", "") or "[]"))
@@ -2733,7 +2733,7 @@ class AgentRuntime:
             # closed, never raises.
             from ..workmap.clients import wall as _client_wall
 
-            # v1.551.0 (next leaps 14-a): whose words the run's task is, and
+            # v1.554.0 (next leaps 14-a): whose words the run's task is, and
             # the work it is part of — read BEFORE its own wall is set below
             # (a wall already set is the caller's: the model delegated it).
             _story = run_story(session, parent_id)
@@ -2772,7 +2772,7 @@ class AgentRuntime:
             # SKIP MEMORY (v1.501.0, north-star 1.4): set for the run body so
             # every child run awaited inside it skips memory too.
             _skip_token = SKIP_MEMORY.set(run_skips_memory(session))
-            # THE STORY SPREADS DOWN (v1.551.0): a child run awaited inside
+            # THE STORY SPREADS DOWN (v1.554.0): a child run awaited inside
             # this one leaves this run out of its earlier work.
             _story_token = RUN_STORY.set(_story)
             # v1.529.0 (owner decision 3): the run counts its own model calls
@@ -3449,7 +3449,7 @@ class AgentRuntime:
             _client_text = await run_client_block(self.p, session)
             if _client_text:
                 system_prompt += "\n\n" + _client_text
-            # THE STORY (v1.551.0, next leaps 14-a, "Every worker starts with
+            # THE STORY (v1.554.0, next leaps 14-a, "Every worker starts with
             # the full story"): "Earlier work on record", the block a chat in
             # this folder is told, right after the client block, behind the
             # run's OWN wall (set around the run by ``run``; a helper's is

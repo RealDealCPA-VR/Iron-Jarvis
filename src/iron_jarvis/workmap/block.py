@@ -320,7 +320,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
     folder out of "other folders". ``query`` is the OWNER's words: it points
     at earlier work and names clients for the wall. Never raises.
 
-    ``turn`` (v1.551.0, next leaps 14-a): a wall the caller already has (an
+    ``turn`` (v1.554.0, next leaps 14-a): a wall the caller already has (an
     agent run's own, ``agents/runtime.run_client_wall``: a helper's is
     NARROWED to the turn or run it was started in), used instead of one
     built from ``folder`` and ``query``. ``exclude_refs``: more pieces of

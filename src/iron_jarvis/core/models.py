@@ -258,7 +258,7 @@ class Session(SQLModel, table=True):
     #: column (auto-reconciled; NULL on older rows); indexed through
     #: ``core.db._HOT_INDEXES`` for an existing install.
     handed_from_turn: str = Field(default="", index=True)
-    #: WHAT THE RUN WAS TOLD before it started that its page names (v1.551.0,
+    #: WHAT THE RUN WAS TOLD before it started that its page names (v1.554.0,
     #: next leaps 14-a): a JSON list of parts (``"work"``: "Earlier work on
     #: record"), written by ``agents.runtime.note_told`` when the part is in
     #: the run's prompt; served as ``told`` by ``GET /sessions/{id}`` only.
