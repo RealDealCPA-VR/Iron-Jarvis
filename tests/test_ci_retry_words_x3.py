@@ -368,6 +368,23 @@ def test_each_attempt_is_bounded_and_so_is_the_number_printed():
     assert [text for _, text in listed] == [r.nodeid for r in reruns]
 
 
+def test_past_the_most_attempts_a_test_that_passed_on_its_retry_is_printed_first():
+    """A test that failed again also gets pytest's own FAILURES section; one
+    that passed on its retry has only this block, so it is never the one left
+    out, even when it comes last."""
+    red = [_failed(f"a.py::red{i}") for i in range(R.MOST_ATTEMPTS)]
+    flaky = _failed("a.py::flaky")
+    stats = {"rerun": [*red, flaky], "failed": [SimpleNamespace(nodeid=r.nodeid) for r in red],
+             "passed": [_passed(flaky.nodeid)]}
+    out = R.build(stats)
+    heads = [text for kind, text in out if kind == "_" and "(attempt " in text]
+    assert len(heads) == R.MOST_ATTEMPTS, heads
+    assert "a.py::flaky (attempt 1, call; it passed on its retry)" in heads, heads
+    assert sum(text.endswith("; it failed again)") for text in heads) == R.MOST_ATTEMPTS - 1, heads
+    assert ("_", f"1 more failed attempts are not printed (the most is {R.MOST_ATTEMPTS})") in out, out[-6:]
+    assert out[-2:] == [("_", "passed only on a retry: 1"), ("|", "a.py::flaky")], out[-2:]
+
+
 def test_nothing_run_again_prints_nothing():
     assert R.build({"passed": [_passed("a.py::t")]}) == []
     assert R.build({}) == []
