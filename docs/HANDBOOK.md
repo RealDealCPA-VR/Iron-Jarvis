@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.552.0 (2026-11-19).*
+holds itself to. Current as of v1.553.0 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Before and after pictures under a coding reply
+## Before and after pictures under a coding reply (v1.553.0)
 
 When a reply in a coding session (Chat › Code) changes how a page looks, you
 can see it: two pictures under the reply, the page **Before** the change and

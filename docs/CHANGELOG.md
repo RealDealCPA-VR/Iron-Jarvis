@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.553.0
+
+**Before and after pictures under a coding reply.** When a reply in a coding session (Chat › Code) changes how a page looks, you can see it: two pictures under the reply, the page **Before** the change and **After** it, each with the page's address and the time.
+
 ## v1.552.0
 
 **Choose what each of your other computers may do.** Each computer you paired with this one now has its own switches: what it may do HERE.
@@ -77,7 +81,3 @@
 ## v1.537.0
 
 **A tidier sidebar: Terminals, Other tools and Projects start folded.** The lower part of the sidebar now starts out of the way, and you open what you want with one press.
-
-## v1.536.0
-
-**A hand-off is never lost.** The fifth of nine releases from the fourth review.
