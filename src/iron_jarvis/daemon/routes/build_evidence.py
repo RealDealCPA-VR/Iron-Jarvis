@@ -103,10 +103,12 @@ def register(app: FastAPI, d: Any) -> None:
             return JSONResponse(status_code=409, content={"detail": ARCHIVED})
         if thread_id in _build._STARTING or _build._running_turn(d, thread_id):
             return JSONResponse(status_code=409, content={"detail": RUNNING})
-        line = _reply_line(row, body.turn_id)
+        # The conversation's JSON is read in a worker, never on the loop
+        # (a long session's transcript is large; review note).
+        line = await asyncio.to_thread(_reply_line, row, body.turn_id)
         if line is None:
             return JSONResponse(status_code=404, content={"detail": NO_REPLY})
-        why = not_offered(row, body.turn_id, after_too=False)
+        why = await asyncio.to_thread(not_offered, row, body.turn_id, after_too=False)
         if why:
             return JSONResponse(status_code=409, content={"detail": why})
         setup = _build._setup_of(row)
@@ -126,7 +128,7 @@ def register(app: FastAPI, d: Any) -> None:
                 return NO_SESSION
             if getattr(now, "archived_at", None) is not None:
                 return ARCHIVED
-            return not_offered(now, body.turn_id)
+            return await asyncio.to_thread(not_offered, now, body.turn_id)
 
         lock = _LOCKS.setdefault(thread_id, asyncio.Lock())
         async with lock:
@@ -137,7 +139,7 @@ def register(app: FastAPI, d: Any) -> None:
                     # The line as it is NOW (a press that waited on the lock
                     # finds the after the first one kept).
                     now = await asyncio.to_thread(S.get_row, engine(), thread_id)
-                    current = _reply_line(now, body.turn_id) if now is not None else None
+                    current = await asyncio.to_thread(_reply_line, now, body.turn_id) if now is not None else None
                     rec = await E.take_after_now(
                         home, thread_id, body.turn_id, address,
                         (current or line).get("evidence"), still=still,

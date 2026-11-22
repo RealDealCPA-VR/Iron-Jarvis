@@ -127,8 +127,12 @@ NOT_ASKED_WORDS = (
 )
 #: A turn that asked (or the setting is on) with no page open when it began.
 NO_PAGE_WORDS = "No before picture: no page was open in the Browser when the reply began."
-#: A turn Iron Jarvis started itself (the night, a fix of failing checks).
+#: A turn Iron Jarvis started itself with words of its own (a fix of a pull
+#: request's failing checks).
 STARTED_WORDS = "No before picture: Iron Jarvis started this reply itself, not a message of yours."
+#: A night task's turn: Iron Jarvis started it, but its words are the
+#: person's own (queued for tonight), so it is never "not a message of yours".
+NIGHT_WORDS = "No before picture: Iron Jarvis started this reply itself, for a task you queued for tonight."
 #: A reply Iron Jarvis carried on by itself (Resume when ready after an
 #: account limit, a move to another account of the group, a restart): it
 #: usually carries out your own message, so it is never called "not yours".
@@ -194,14 +198,17 @@ def asks(text: Any) -> bool:
 
 
 def no_before_words(setting: Any, text: Any, address: str, *, by_person: bool,
-                    carried: bool = False) -> str:
+                    carried: bool = False, night: bool = False) -> str:
     """Why this turn takes no before picture by itself, as the reply says it
     ("" when it does take one: :func:`takes`). The true reason, in order: a
-    turn Iron Jarvis started, or (``carried``) a reply it carried on by
-    itself; a message that did not ask with the setting not on; no page open
+    turn Iron Jarvis started — (``carried``) a reply it carried on by itself,
+    (``night``) a task the person queued for tonight, else one with words of
+    its own; a message that did not ask with the setting not on; no page open
     in the Browser when the reply began."""
     if not by_person:
-        return CARRIED_WORDS if carried else STARTED_WORDS
+        if carried:
+            return CARRIED_WORDS
+        return NIGHT_WORDS if night else STARTED_WORDS
     if not (setting is True or asks(text)):
         return NOT_ASKED_WORDS
     if not address:

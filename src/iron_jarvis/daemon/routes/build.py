@@ -4103,6 +4103,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # Resume when ready, a move within the group, a restart: a reply
             # carried on (usually the person's), never "not a message of yours".
             carried=started_by in (_night.BY_WAIT, _night.BY_RESTART),
+            # Review 5: a night task's words are the person's own, queued for
+            # tonight; only a fix of failing checks (CI) is in Iron Jarvis's.
+            night=started_by == _night.BY_NIGHT,
         )
         evidence_token = _evidence.arm(
             platform.config.home, thread_id, turn_id, _shown_page,

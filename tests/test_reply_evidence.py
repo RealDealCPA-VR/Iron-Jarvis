@@ -183,6 +183,11 @@ def test_the_true_reason_a_turn_takes_no_before_picture():
     # carries out a message, so it is never called "not a message of yours".
     carried = E.no_before_words(True, "show me it works", DEV, by_person=False, carried=True)
     assert carried == E.CARRIED_WORDS and "not a message of yours" not in carried
+    # Review 5 (should): a night task's words are the person's own (queued
+    # for tonight), so its reply is never called "not a message of yours".
+    night = E.no_before_words(True, "show me it works", DEV, by_person=False, night=True)
+    assert night == E.NIGHT_WORDS and "not a message of yours" not in night
+    assert "queued for tonight" in night
     assert E.no_before_words(None, "make it blue and show me it works", DEV, by_person=True) == ""
 
 
@@ -852,6 +857,37 @@ async def test_without_asking_no_browser_starts_and_show_me_takes_the_after(tmp_
     assert status == 200 and body["offer"] is False  # … and never again
 
 
+async def test_show_me_reads_the_conversation_off_the_event_loop(tmp_path, monkeypatch, browsers):
+    """Review note (hard rule: nothing blocking on the event loop): a Show me
+    press reads the session's whole conversation (its JSON) several times
+    — the line, newest-reply check before and after the picture — each in a
+    worker thread, never on the loop that serves every other request."""
+    from iron_jarvis.harness import sessions as S
+
+    from tests.test_build_sessions_v1367 import asgi
+
+    app, sid, work = _scene(tmp_path, monkeypatch)
+    _PageBackend.watch = work / "src" / "App.tsx"
+    await _reply(app, sid, "Make the button blue.", "t-loop", moves=[_write_call("c1", "<button>blue</button>")])
+    real = S._messages
+    reads: list[bool] = []
+
+    def watched(row):
+        try:
+            asyncio.get_running_loop()
+            reads.append(True)  # on the event loop
+        except RuntimeError:
+            reads.append(False)  # in a worker thread
+        return real(row)
+
+    monkeypatch.setattr(S, "_messages", watched)
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/evidence", {"turn_id": "t-loop", "preview_url": DEV})
+    monkeypatch.setattr(S, "_messages", real)
+    assert status == 200, body
+    assert [i["id"] for i in body["evidence"]["items"]] == ["after"]
+    assert reads and True not in reads, reads
+
+
 async def test_with_the_setting_on_pictures_are_taken_by_themselves(tmp_path, monkeypatch, browsers):
     from tests.test_build_sessions_v1367 import asgi, messages_of
 
@@ -1028,8 +1064,9 @@ async def test_asking_with_no_page_open_says_so_not_that_you_did_not_ask(tmp_pat
 
 
 @pytest.mark.parametrize(("started_by", "continuation", "why"), [
-    ("wait", True, E.CARRIED_WORDS), ("restart", True, E.CARRIED_WORDS), ("night", False, E.STARTED_WORDS),
-], ids=["wait", "restart", "night"])
+    ("wait", True, E.CARRIED_WORDS), ("restart", True, E.CARRIED_WORDS), ("night", False, E.NIGHT_WORDS),
+    ("ci", False, E.STARTED_WORDS),
+], ids=["wait", "restart", "night", "ci"])
 async def test_a_turn_iron_jarvis_started_takes_no_pictures_by_itself(tmp_path, monkeypatch, browsers,
                                                                      started_by, continuation, why):
     """Review A/B: the wiring (``by_person``) that keeps a night task or a
@@ -1037,7 +1074,9 @@ async def test_a_turn_iron_jarvis_started_takes_no_pictures_by_itself(tmp_path, 
     starting the invisible browser, with the setting ON, a page open and the
     words in the message. (A carry-on a PERSON pressed is theirs: below.)
     Review note: a carry-on says it was CARRIED ON, never "not a message of
-    yours"; the night's own task says Iron Jarvis started it."""
+    yours". Review 5: a night task carries out words the person queued for
+    tonight, so it says so, never "not a message of yours"; only a fix of
+    failing checks (CI, Iron Jarvis's own words) says STARTED_WORDS."""
     from iron_jarvis.daemon.routes import build as build_routes
 
     from tests.test_build_sessions_v1367 import Script, messages_of, until, wire
@@ -1058,6 +1097,8 @@ async def test_a_turn_iron_jarvis_started_takes_no_pictures_by_itself(tmp_path, 
     line = [m for m in messages_of(app, sid) if m.get("role") == "assistant" and m.get("turnId") == turn][-1]
     assert line["evidence"] == {"kind": "pictures", "screen": True, "items": [], "note": "",
                                 "beforeNote": why}
+    if started_by != "ci":
+        assert "not a message of yours" not in json.dumps(line["evidence"])
 
 
 @pytest.mark.parametrize(("setting", "words", "pictures"), [
