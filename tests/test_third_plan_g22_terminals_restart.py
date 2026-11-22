@@ -181,11 +181,30 @@ GONE = "gone-program"
 HANGS = "hangs-program"
 
 
-def _boot(tmp_path, monkeypatch, shells: list[str], gate: threading.Event | None = None, **kw):
+def _boot(
+    tmp_path,
+    monkeypatch,
+    shells: list[str],
+    gate: threading.Event | None = None,
+    *,
+    wait_s: float = _BOUND_S,
+    start_lag_s: float = 0.0,
+    **kw,
+):
+    """*wait_s* is how long the boot waits for its restores. A restore that
+    must END inside the boot (a shell, a gone program) gets the file's bound,
+    which only a RED run reaches (the join returns the moment the restores
+    end); only a test whose restore HANGS on purpose passes a short one. A
+    real 0.3 s for every test failed on a loaded CI runner (Tests run
+    45014562546, backend (10): the TM3 test passed only on its retry).
+    *start_lag_s* is that runner: every start takes this long (a real wait,
+    it makes the timing WORSE, never better)."""
     gate = gate or threading.Event()
 
     class _Maybe(FakeBackend):
         def start(self, argv, cwd, env, cols, rows):
+            if start_lag_s:
+                time.sleep(start_lag_s)
             if argv and argv[0] == GONE:
                 raise FileNotFoundError(2, "The system cannot find the file specified")
             if argv and argv[0] == HANGS:
@@ -193,7 +212,7 @@ def _boot(tmp_path, monkeypatch, shells: list[str], gate: threading.Event | None
             return super().start(argv, cwd, env, cols, rows)
 
     monkeypatch.setattr(sess_mod, "default_backend", lambda: _Maybe())
-    monkeypatch.setattr(mgr_mod, "RESTORE_WAIT_S", 0.3)
+    monkeypatch.setattr(mgr_mod, "RESTORE_WAIT_S", wait_s)
     sp = tmp_path / "terminals.json"
     entries = [
         {"id": f"term_b{i}", "shell": "sh", "argv": [sh], "cwd": str(tmp_path), "cols": 80, "rows": 24,
@@ -216,8 +235,13 @@ def _saved_ids(path: Path) -> list[str]:
     return [e["id"] for e in json.loads(path.read_text(encoding="utf-8"))["terminals"]]
 
 
-def test_tm3_a_terminal_whose_program_is_gone_is_kept_and_listed_with_its_reason(tmp_path, monkeypatch):
-    m, entries, _clock, _gate = _boot(tmp_path, monkeypatch, ["sh", GONE])
+@pytest.mark.parametrize("start_lag_s", [0.0, 0.4], ids=["starts-at-once", "each-start-is-slow"])
+def test_tm3_a_terminal_whose_program_is_gone_is_kept_and_listed_with_its_reason(
+    tmp_path, monkeypatch, start_lag_s
+):
+    # "each-start-is-slow" is the loaded runner: under the old 0.3 s boot
+    # wait it returned 0, not 1 (the shell was still starting).
+    m, entries, _clock, _gate = _boot(tmp_path, monkeypatch, ["sh", GONE], start_lag_s=start_lag_s)
     ok_id, gone_id = entries[0]["id"], entries[1]["id"]
     try:
         assert m.rehydrate() == 1
@@ -278,7 +302,8 @@ def test_tm19_close_removes_a_terminal_that_could_not_be_reopened_and_its_histor
 
 
 def test_tm19_a_given_up_terminal_closed_then_starting_late_is_not_brought_back(tmp_path, monkeypatch):
-    m, entries, clock, gate = _boot(tmp_path, monkeypatch, [HANGS])
+    # The restore hangs on purpose: the boot must stop waiting for it.
+    m, entries, clock, gate = _boot(tmp_path, monkeypatch, [HANGS], wait_s=0.3)
     rid = entries[0]["id"]
     try:
         m.rehydrate()
