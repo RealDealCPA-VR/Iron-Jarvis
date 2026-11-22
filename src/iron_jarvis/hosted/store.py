@@ -73,6 +73,15 @@ def list_rows(engine: Any, *, archived: bool = False, folder: str = "") -> list[
     return rows
 
 
+def all_ids(engine: Any) -> set[str]:
+    """FU-3a: the id of EVERY session row, archived or not, helpers included.
+    RAISES when the rows cannot be read — and never makes the table first: a
+    missing table is not "no sessions" (the sweep of left-behind stores then
+    removes nothing)."""
+    with session_scope(engine) as db:
+        return {str(i) for i in db.exec(select(HostedSessionRecord.id))}
+
+
 def helpers_of(engine: Any, parent: str) -> list[HostedSessionRecord]:
     """v1.474.0: the helpers ``parent``'s coding tool started (not archived),
     newest first."""

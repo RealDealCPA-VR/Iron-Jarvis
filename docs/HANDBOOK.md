@@ -2042,6 +2042,23 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A deleted session's copies of your files always go (v1.551.1)
+
+When you delete a Build › Code session in a folder without git, Iron Jarvis
+now removes its copies of your files even when one of them was in use at
+that moment. Those are the copies "Rewind to here" uses there (see "Rewind
+works in folders without git too" below).
+
+**What was wrong.** If another program had a file of a copy open when you
+pressed Delete (an antivirus scan, for example), the copy stayed in Iron
+Jarvis's data folder on this PC, with no session to use it, and nothing
+tried again or said so.
+
+**Now.** Iron Jarvis tries again a minute later, ten minutes later and an
+hour later, and each time it starts, until the copy is gone. The copies of
+every session you still have, archived or not, are never touched. Nothing
+changes on screen.
+
 ## The night review leaves suggestions for the morning (v1.559.0)
 
 Iron Jarvis can now look at what went wrong during the day while your PC is
@@ -2827,7 +2844,8 @@ anything is copied. A folder on a network share gets no copy.
 - The copies are your files, kept on this PC. They hold everything in the
   folder that is not left out, including files such as `.env` with keys in
   them. They are left out of Iron Jarvis's backups, kept while the session is
-  archived, and removed when you delete the session.
+  archived, and removed when you delete the session (a little later when a
+  file in them is in use then; v1.551.1).
 - Once a session keeps its own copies, it goes on doing so even if the folder
   later becomes a git repository, and it writes nothing into that repository.
 - A folder that is inside a git repository git cannot read right now (a

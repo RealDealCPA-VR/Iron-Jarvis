@@ -141,6 +141,11 @@ POOL_RECHECK_S = 5.0
 IDLE_S = 15 * 60.0
 #: How often the reaper looks.
 REAP_EVERY_S = 60.0
+#: FU-3a (privacy): a store of a deleted session's files that is still on
+#: disk (a file in it was held open) is swept again after each of these waits,
+#: in order, until none is left — after a delete that could not remove one,
+#: and after a start that found one it could not remove. Then the next start.
+STORE_RETRY_S: tuple[float, ...] = (60.0, 10 * 60.0, 60 * 60.0)
 #: v1.417.0 (a USER BUG): a process whose tool still runs BACKGROUND tasks
 #: (Claude Code's helper agents and background commands, which outlive the
 #: reply that started them) is never reaped or evicted — stopping it killed
@@ -1377,6 +1382,11 @@ class HostedService:
         self._opening: set[LiveSession] = set()
         #: v1.512.0 (H1): the watchers of a Stop the tool has not acted on.
         self._stop_watch: set[asyncio.Task] = set()
+        #: FU-3a: the sweep that removes a deleted session's own store later,
+        #: after a delete that could not (:data:`STORE_RETRY_S`; the wait is
+        #: ``_sleep``, which a test replaces).
+        self._store_sweep: asyncio.Task | None = None
+        self._sleep: Any = asyncio.sleep
 
     # -- helpers -----------------------------------------------------------------
     def _lock(self) -> asyncio.Lock:
@@ -2766,6 +2776,11 @@ class HostedService:
             from . import checkpoints as CK
 
             await asyncio.to_thread(CK.forget_session, self.home, sid, str(getattr(row, "folder", "") or ""))
+            # FU-3a (privacy): a store of its own that a file held open kept
+            # from going (an antivirus scan, a ``git gc`` still packing) is a
+            # copy of the user's files with no session: swept again later.
+            if await asyncio.to_thread(CK.own_store_left, self.home, sid):
+                self._sweep_stores_later()
             await asyncio.to_thread(self._drop_own_folder, row)
             moved = await asyncio.to_thread(self._trash_events, sid)
             # v1.425.0 (C3): the session's kept index (a cache of its folder,
@@ -2776,6 +2791,18 @@ class HostedService:
         finally:
             live.claim = ""
         return {"ok": True, "deleted": sid, "events_moved_to": moved}
+
+    def _sweep_stores_later(self) -> None:
+        """FU-3a: the stores of deleted sessions are swept after each wait of
+        :data:`STORE_RETRY_S` until none is left (then at the next start).
+        One round of waits at a time: a later failed delete starts them again
+        (each sweep covers every deleted session's store)."""
+        if self._closing:
+            return
+        if self._store_sweep is not None and not self._store_sweep.done():
+            self._store_sweep.cancel()
+        self._store_sweep = asyncio.ensure_future(
+            sweep_stores_until_gone(self.home, self.engine, at_once=False, sleep=self._sleep))
 
     def _trash_events(self, sid: str) -> str:
         """BLOCKING: the session's events folder moved to Iron Jarvis's own
@@ -4716,6 +4743,8 @@ class HostedService:
         self._closing = True
         if self._reaper is not None:
             self._reaper.cancel()
+        if self._store_sweep is not None:
+            self._store_sweep.cancel()  # FU-3a: the next start sweeps instead
         # Lead review: a watcher of a pending Stop has nothing left to watch
         # (every tool goes below); never left to wake up after the service.
         for watcher in list(self._stop_watch):
@@ -5186,6 +5215,58 @@ class HostedService:
 # --------------------------------------------------------------------------- #
 #: How much of a session's log the boot reconcile reads (its END).
 _RECONCILE_TAIL = 256 * 1024
+
+
+def sweep_left_stores(home: Any, engine: Any) -> Any:
+    """BLOCKING, never raises (FU-3a): every session's own checkpoint store
+    (``hosted/checkpoints``) whose session row no longer exists is removed,
+    and how many is logged (a ``checkpoints.Swept``). Nothing is removed while
+    the database is SET ASIDE and not yet answered
+    (``core.db.read_set_aside_marker``): the app then runs on a fresh
+    database, and the rows of the sessions may come back with a restore."""
+    from ..core.db import read_set_aside_marker
+    from . import checkpoints as CK
+
+    def rows() -> set[str]:
+        if read_set_aside_marker(home) is not None:
+            raise RuntimeError("the database was set aside: its rows are not yet the sessions'")
+        return store.all_ids(engine)
+
+    got = CK.sweep_own_stores(home, rows)
+    if got.removed:
+        log.info("removed %d copy(ies) of a deleted Code-view session's files (its own checkpoint store)",
+                 got.removed)
+    if got.left:
+        log.warning("%d Code-view checkpoint store(s) of deleted sessions could not be removed yet; "
+                    "tried again later", got.left)
+    return got
+
+
+async def sweep_stores_until_gone(home: Any, engine: Any, *, at_once: bool = True,
+                                  waits: "Collection[float] | None" = None, sleep: Any = None) -> Any:
+    """FU-3a: :func:`sweep_left_stores` off the loop — at once (*at_once*;
+    the daemon's start), then again after each of *waits*
+    (:data:`STORE_RETRY_S`) while a store of a deleted session is left. A
+    PC with no such store costs one folder look. Never raises but a cancel."""
+    from . import checkpoints as CK
+
+    sleep = asyncio.sleep if sleep is None else sleep
+    got = CK.Swept(0, 0)
+    try:
+        if at_once:
+            got = await asyncio.to_thread(sweep_left_stores, home, engine)
+            if not got.left:
+                return got
+        for wait in (STORE_RETRY_S if waits is None else waits):
+            await sleep(wait)
+            got = await asyncio.to_thread(sweep_left_stores, home, engine)
+            if not got.left:
+                break
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a sweep never breaks the daemon
+        log.warning("could not sweep left-behind Code-view checkpoint stores", exc_info=True)
+    return got
 
 
 def reconcile_cut_turns(home: Any, keep: "Collection[str]" = ()) -> int:

@@ -2211,6 +2211,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _hosted_carry_loop(platform, lambda ok, exc: _tick("build_app_carry", ok, exc))
         )
 
+        # FU-3a (Build › Code follow-up, privacy): a copy of a DELETED Code-view
+        # session's files (its own checkpoint store, v1.546.0) that its delete
+        # could not remove — a file in it held open — is removed now, off the
+        # loop, and again after STORE_RETRY_S while one is left. Never a store
+        # whose session row exists, archived or not; nothing while the database
+        # is set aside. A PC with no such store costs one folder look; boot
+        # never waits on it; it logs how many it removed.
+        from ..hosted.service import sweep_stores_until_gone as _sweep_left_stores
+
+        bg_tasks["build_code_stores"] = asyncio.create_task(
+            _sweep_left_stores(platform.config.home, platform.engine)
+        )
+
         # NIGHT SHIFT (v1.398.0, N1): the queued coding tasks start by
         # themselves inside the night window, each on its own branch, on THIS
         # loop (never a scheduler thread). Each pass reports ITS OWN outcome on

@@ -80,8 +80,9 @@ import re
 import shutil
 import stat
 import uuid
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import panes as PN
 
@@ -437,25 +438,118 @@ def make_own_store(home: Any, sid: Any) -> Path:
 def forget_own_store(home: Any, sid: Any) -> bool:
     """BLOCKING, never raises: a deleted session's own store goes with it (a
     copy of files that are still in the user's folder: never moved to the
-    trash). True when there was one."""
+    trash). True when there was one and it is gone. A store a file of which
+    another program holds open (an antivirus scan, a ``git gc`` still
+    packing) STAYS: :func:`own_store_left` says so, and
+    :func:`sweep_own_stores` removes it later (FU-3a)."""
     path = own_store(home, sid)
     try:
         if path is None or not path.is_dir():
             return False
-        shutil.rmtree(path, onerror=_writable_then_again)
-        return not path.exists()
     except OSError:
-        log.debug("could not remove a session's own checkpoint store", exc_info=True)
+        return False
+    if _remove_store(path):
+        return True
+    log.warning("a deleted Code-view session's own checkpoint store could not be removed yet "
+                "(a file in it is in use); it is removed later")
+    return False
+
+
+def own_store_left(home: Any, sid: Any) -> bool:
+    """BLOCKING, never raises: is anything of session *sid*'s own store still
+    on disk (after a delete that could not remove it all)?"""
+    path = own_store(home, sid)
+    try:
+        return path is not None and os.path.lexists(path)
+    except (OSError, ValueError):
+        return False
+
+
+def _remove_store(path: Path) -> bool:
+    """BLOCKING, never raises: *path* (one store, or a half-made one) removed
+    as far as it can be; True when nothing of it is left."""
+    try:
+        shutil.rmtree(path, onexc=_writable_then_again)
+    except Exception:  # noqa: BLE001 — what is left is said by the caller
+        log.debug("could not remove a Code-view checkpoint store", exc_info=True)
+    try:
+        return not os.path.lexists(path)
+    except (OSError, ValueError):
         return False
 
 
 def _writable_then_again(fn: Any, path: str, _exc: Any) -> None:
-    """git's object files are read-only (Windows refuses to delete them)."""
+    """git's object files are read-only (Windows refuses to delete them):
+    made writable, then tried once more. The write bit is ADDED to what the
+    file or folder has (FU-3a: setting the mode to write-only took a POSIX
+    folder's read and search bits, and nothing could remove it after). A
+    second failure is left for the caller to see (the path still there)."""
     try:
-        os.chmod(path, stat.S_IWRITE)
+        os.chmod(path, stat.S_IMODE(os.lstat(path).st_mode) | stat.S_IWRITE)
         fn(path)
-    except OSError:
+    except Exception:  # noqa: BLE001 — e.g. ``os.open`` cannot be retried with only a path
         pass
+
+
+#: A name under :data:`OWN_DIR` that is a session's store (``<safe>.git``) or
+#: one :func:`make_own_store` was still making (``<safe>.git.<8 hex>.new``).
+_STORE_NAME = re.compile(r"(?P<own>.+?\.git)(?:\.[0-9a-f]{8}\.new)?")
+
+
+class Swept(NamedTuple):
+    """What one :func:`sweep_own_stores` did: stores removed, and stores of
+    deleted sessions still there (a file in use; or, when the rows could not
+    be read, every store it found: none was removed)."""
+
+    removed: int
+    left: int
+
+
+def sweep_own_stores(home: Any, row_ids: Callable[[], Iterable[str]]) -> Swept:
+    """BLOCKING, never raises (FU-3a, privacy): every store under
+    :data:`OWN_DIR` whose session row no longer exists is removed — a copy of
+    a deleted session's files that its delete could not remove (a file in it
+    held open). A store whose row exists, archived or not, is never touched,
+    nor anything under the folder that is not a store (or is a link).
+
+    *row_ids()* gives the id of every session row and RAISES when the rows
+    cannot be read: then nothing is removed. It is called AFTER the folder is
+    listed, so a store a new session makes meanwhile is never taken for a
+    deleted one (a store is made only for a row that exists, and a row never
+    comes back)."""
+    if home is None:
+        return Swept(0, 0)
+    base = Path(str(home)).joinpath(*OWN_DIR)
+    found: list[tuple[str, str]] = []
+    try:
+        with os.scandir(base) as entries:
+            for entry in entries:
+                m = _STORE_NAME.fullmatch(entry.name)
+                # (A symbolic link is no directory here; a Windows junction is.)
+                if m is not None and entry.is_dir(follow_symlinks=False) and not entry.is_junction():
+                    found.append((entry.name, m.group("own")))
+    except FileNotFoundError:
+        return Swept(0, 0)  # no session ever kept its own store here
+    except OSError:
+        log.warning("could not look for left-behind Code-view checkpoint stores", exc_info=True)
+        return Swept(0, 0)
+    if not found:
+        return Swept(0, 0)
+    try:
+        kept = {p.name for p in (own_store(home, rid) for rid in row_ids()) if p is not None}
+    except Exception:  # noqa: BLE001 — rows that cannot be read are never "no sessions"
+        log.warning("the Code-view session rows could not be read: no checkpoint store was removed",
+                    exc_info=True)
+        return Swept(0, len(found))
+    removed = left = 0
+    for name, own in found:
+        if own in kept:
+            continue
+        if _remove_store(base / name):
+            removed += 1
+        else:
+            left += 1
+    return Swept(removed, left)
 
 
 def own_fits(folder: str) -> str:
