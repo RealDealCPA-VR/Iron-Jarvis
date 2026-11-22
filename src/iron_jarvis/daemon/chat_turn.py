@@ -5715,6 +5715,13 @@ def settings_ask_tools(
         from ..settings.records_usage import usage_tools_for
 
         names += usage_tools_for(text)
+        # Next leaps 04-b: a folder's open item closed or reopened, at the
+        # owner's own words ("mark the bank item done", "reopen it"); a
+        # question arms neither. The tools refuse an item outside the turn's
+        # own folder (workmap/open_item_tools).
+        from ..workmap.open_item_tools import open_item_tools_for
+
+        names += open_item_tools_for(text)
         # v1.470.0: "create a skill for …" offers `skill_create` (its own tier
         # is ask, so it shows the ordinary card). Chat used to offer only the
         # workflow exit, and a request for a skill came back as a workflow.
@@ -12672,6 +12679,10 @@ async def _gather_grounding(
     # recent activity (never said twice). Reads SQLite, so off the loop like
     # every hop; never raises; "" when nothing is on record.
     _work_folder = turn_work_folder(body, resolved_proj)
+    # Next leaps 04-b: the open item the owner pressed Continue on (the body's
+    # ``pick_up_item``), read HERE so both lanes get it from one place; the
+    # block tells it, marked, when it is an open item of this very folder.
+    _pick_item = str(getattr(body, "pick_up_item", "") or "").strip()
 
     def _work() -> str:
         from ..workmap.block import work_block
@@ -12680,6 +12691,7 @@ async def _gather_grounding(
             platform, folder=_work_folder, query=recall_query,
             exclude_ref=str(getattr(body, "thread_id", "") or ""),
             list_folder=resolved_proj is None,
+            **({"chosen": _pick_item} if _pick_item else {}),
         )
 
     # THE CLIENT BLOCK (v1.499.0, vision plan leap 3, Phase 3): the confirmed

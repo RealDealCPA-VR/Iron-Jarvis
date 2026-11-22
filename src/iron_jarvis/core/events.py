@@ -272,6 +272,11 @@ class EventType:
     # own page now. {kind, name, id, href}.
     REPORT_ARRIVED = "report.arrived"
     REPORT_CHAT_GONE = "report.chat_gone"
+    # Next leaps 04-b (workmap/open_items): an open item of a folder was
+    # closed (Done, No longer needed) or reopened, by the owner's press or a
+    # chat the owner asked. {id, status} — IDS ONLY, never the item's words
+    # or its folder: events can reach the phone channel.
+    WORK_OPEN_ITEM_CHANGED = "work.open_item_changed"
     # IJ harness accounts (v1.368.0, Phase 5). A Build session's ONE account
     # could not serve its turn (parked, needs sign-in, gone) and the turn
     # ended on the account-limit card: {thread_id, title, account_name,

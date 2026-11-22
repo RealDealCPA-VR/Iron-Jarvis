@@ -142,6 +142,9 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "client_preference_add",
       "client_preference_change",
       "client_preference_forget",
+      // Next leaps 04-b: a folder's open item closed (every later chat there
+      // is told the list).
+      "open_item_close",
     ],
   },
 

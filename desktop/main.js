@@ -4654,6 +4654,8 @@ const TOOL_WORDS_BUILTIN = {
   notebook: "update its notebook",
   notebook_edit: "change a notebook",
   notify: "send a notification",
+  open_item_close: "close an open item",
+  open_item_reopen: "reopen an open item",
   pack_restart: "restart an extension",
   pack_status: "check your extensions",
   page_click: "click on a page in its browser",

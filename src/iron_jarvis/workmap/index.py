@@ -233,12 +233,15 @@ class WorkMap:
                 self.pending = len(changed) - min(len(changed), start + _WRITE_CHUNK)
                 time.sleep(0.005)
         removed = 0
+        from . import open_items
+
         for start in range(0, len(gone), 400):
             chunk = gone[start : start + 400]
             with session_scope(self.engine) as db:
                 db.exec(sa_delete(WorkEntry).where(WorkEntry.id.in_(chunk)))  # type: ignore[attr-defined]
-                # Work that is gone takes its recap with it.
+                # Work that is gone takes its recap and its open items with it.
                 db.exec(sa_delete(WorkRecap).where(WorkRecap.id.in_(chunk)))  # type: ignore[attr-defined]
+                open_items.drop_entries(db, chunk)
                 db.commit()
             removed += len(chunk)
             self.version += 1
@@ -519,6 +522,8 @@ class WorkMap:
             W.folder_key.startswith(prefix, autoescape=True),
             W.folder_key.startswith(base + keys.WORKTREES_SUFFIX + "/", autoescape=True),
         )
+        from . import open_items
+
         with self._lock:
             with session_scope(self.engine) as db:
                 db.merge(WorkForgotten(folder_key=base, folder=shown))
@@ -526,6 +531,8 @@ class WorkMap:
                 for i in range(0, len(ids), 400):
                     chunk = ids[i : i + 400]
                     db.exec(sa_delete(WorkRecap).where(WorkRecap.id.in_(chunk)))  # type: ignore[attr-defined]
+                    # Next leaps 04-b: the open items go with their work.
+                    open_items.drop_entries(db, chunk)
                     db.exec(sa_delete(W).where(W.id.in_(chunk)))  # type: ignore[attr-defined]
                 db.commit()
             self.version += 1

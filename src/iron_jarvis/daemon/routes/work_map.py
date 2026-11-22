@@ -28,7 +28,12 @@
   the card a new chat or coding session shows for its folder
   (``workmap/pickup.py``): ``{folder, name, client, last, done, decided,
   open, pieces, recap_pending, full, in_project, words}``. 503 when the
-  record cannot be read.
+  record cannot be read. Next leaps 04-b: ``open`` is every open item of the
+  folder (``workmap/open_items``), each with ``maybe_done``, and
+  ``closed_lately`` the items closed in the last 14 days.
+* Next leaps 04-b: ``POST /work-record/open-items/{id}/close {how}`` (done |
+  dropped) and ``POST /work-record/open-items/{id}/reopen`` → ``{ok, item}``;
+  each publishes ``work.open_item_changed {id, status}``.
 * Next leaps 13-b: ``GET /work-record/piece?id=`` → ``{id, folder, name,
   entry}``: where one piece of work is, and the piece itself, for the
   Memory page's ``?work=<id>`` (the Decisions link under a chat reply's
@@ -64,6 +69,27 @@ PIECE_GONE = "That piece of work is not on record any more."
 
 class FolderBody(BaseModel):
     folder: str = ""
+
+
+class OpenItemCloseBody(BaseModel):
+    #: "done" | "dropped" (No longer needed).
+    how: str = "done"
+
+
+NO_SUCH_ITEM = "That open item is not on record any more."
+CLOSE_HOW = "Say done or dropped."
+
+
+def _item_changed(d, item: dict[str, Any]) -> None:
+    """``work.open_item_changed {id, status}`` (ids only), from a route's
+    worker thread. Never raises: the change landed."""
+    try:
+        from ...core.events import EventType
+        from ...workmap.clients.store import publish
+
+        publish(d.platform, EventType.WORK_OPEN_ITEM_CHANGED, {"id": item["id"], "status": item["status"]})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _map(d):
@@ -317,6 +343,44 @@ def register(app: FastAPI, d) -> None:
             return pickup.pick_up(d.platform, place, local=bool(local), chat_code=bool(chat_code))
         except Exception as exc:  # noqa: BLE001 — said, never an empty card
             raise HTTPException(status_code=503, detail=UNREADABLE) from exc
+
+    @app.post("/work-record/open-items/{item_id}/close")
+    def work_open_item_close(item_id: str, body: OpenItemCloseBody) -> dict[str, Any]:
+        """Next leaps 04-b (R2.13): the owner's press on the card's ⋯ menu:
+        Done (``how`` "done") or No longer needed ("dropped"). The item stays
+        under "Closed lately" with Reopen. 404 in words for an item that is
+        not on record; 400 for another ``how``; 503 for a store that cannot
+        be written. Publishes ``work.open_item_changed``."""
+        from ...workmap import open_items
+
+        how = str(body.how or "").strip().lower()
+        if how not in open_items.CLOSE_AS:
+            raise HTTPException(status_code=400, detail=CLOSE_HOW)
+        try:
+            got = open_items.close(getattr(d.platform, "engine", None), item_id, as_=how)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=UNREADABLE) from exc
+        if got is None:
+            raise HTTPException(status_code=404, detail=NO_SUCH_ITEM)
+        _item_changed(d, got)
+        return {"ok": True, "item": got}
+
+    @app.post("/work-record/open-items/{item_id}/reopen")
+    def work_open_item_reopen(item_id: str) -> dict[str, Any]:
+        """Next leaps 04-b: Reopen (a closed item is open again, and a
+        rewritten recap no longer settles it), and on an item still open the
+        "Mark it done?" question's Not yet (the question goes, and that later
+        piece of work never asks it again). 404 / 503 in words."""
+        from ...workmap import open_items
+
+        try:
+            got = open_items.reopen(getattr(d.platform, "engine", None), item_id)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=UNREADABLE) from exc
+        if got is None:
+            raise HTTPException(status_code=404, detail=NO_SUCH_ITEM)
+        _item_changed(d, got)
+        return {"ok": True, "item": got}
 
     @app.post("/work-record/forget")
     def work_forget(body: FolderBody) -> dict[str, Any]:

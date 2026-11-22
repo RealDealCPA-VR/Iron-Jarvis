@@ -305,7 +305,7 @@ import { ChatFolderChip } from "@/components/chat/ChatFolderChip";
 import { FolderChip, useFolderPicker } from "@/components/folders/FolderChip";
 // Next leaps 04-a (build-out plan R2.1): the card when a new chat's folder is picked.
 import { ChatPickUpCard } from "@/components/work/PickUpCard";
-import { CONTINUE_SENTENCE, continuedTitle } from "@/lib/pickUp";
+import { CONTINUE_SENTENCE, PICK_ITEM_SENTENCE, continuedTitle } from "@/lib/pickUp";
 import {
   CHAT_NO_FOLDER_TITLE,
   CLEAR_CHAT_FOLDER_TITLE,
@@ -969,6 +969,10 @@ interface ChatMessage {
   /** v1.325.0: the dashboard page this question was asked about ("Ask Jarvis
    *  about this page") — sent with this turn, and again on a Try again. */
   pageContext?: PageContext;
+  /** Next leaps 04-b: the open item this user message's Continue picked (the
+   *  pick-up card) — sent as `pick_up_item` with this turn, and again on a
+   *  Try again. The message's words are the fixed PICK_ITEM_SENTENCE. */
+  pickUpItem?: string;
   /** v1.328.0 (calm chat W3-1): the saved chats this user message pointed at
    *  with "@" ({id, title}) — sent as `thread_refs` with this turn, and again
    *  on a Try again. */
@@ -1086,6 +1090,7 @@ type ChatRequestBody = {
   resources?: { pack: string; uri: string; name?: string }[]; // v1.324.0: "@" → from your apps
   mcp_cards?: boolean; // v1.324.0: this page draws the apps' question/model-request cards
   page_context?: { title: string; path: string; text: string }; // v1.325.0: "Ask Jarvis about this page"
+  pick_up_item?: string; // next leaps 04-b: the open item a per-item Continue picked
   excel_now?: { workbook: string; sheet: string; selection: string }; // v1.468.0: "Use Excel in this chat"
   thread_refs?: string[]; // v1.328.0: "@" → saved chats read as reference material (≤ 3 ids)
   local_only?: boolean; // v1.332.0: this chat is "local only" (sent every turn)
@@ -9887,6 +9892,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // read from the message, so a Try again sends it again.
     const turnPage = asked?.role === "user" ? asked.pageContext : undefined;
     if (turnPage?.text.trim()) body.page_context = turnPage;
+    // Next leaps 04-b: the open item the card's per-item Continue picked —
+    // read from the message, so a Try again sends it again.
+    const turnItem = asked?.role === "user" ? asked.pickUpItem : undefined;
+    if (turnItem) body.pick_up_item = turnItem;
     // v1.468.0: what is in front in Excel, only while the user switched
     // "Use it in this chat" on (read from the strip's store at send time).
     const excelNow = excelNowForSend();
@@ -10601,7 +10610,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   /** CHAT MODE: append the user's message and run one completion. */
   async function sendChat(
     message: string,
-    opts: { queued?: QueuedMessage; editBefore?: ChatMessage[] | null; cloudOnce?: string } = {},
+    opts: { queued?: QueuedMessage; editBefore?: ChatMessage[] | null; cloudOnce?: string; pickUpItem?: string } = {},
   ) {
     // v1.323.0: the draft's words are now a message — never restore them.
     if (!opts.queued && saveTargetRef.current.id) clearDraft(saveTargetRef.current.id);
@@ -10627,6 +10636,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       content: message,
       at: new Date().toISOString(),
       ...(page ? { pageContext: page } : {}),
+      // 04-b: the open item a per-item Continue picked (never from the box).
+      ...(opts.pickUpItem ? { pickUpItem: opts.pickUpItem } : {}),
       // Saved as id + title only: the age shown in the menu and on the chip is
       // for telling chats apart at pick time, not part of the conversation.
       ...(refs.length ? { chatRefs: refs.map((r) => ({ id: r.id, title: r.title })) } : {}),
@@ -11364,8 +11375,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
 
   /** `opts.title` (next leaps 04-a): the name a NEW chat this send starts is
    *  saved under (the pick-up card's Continue); ignored once the chat has
-   *  messages or an id. */
-  function send(text: string, opts: { cloudOnce?: string; title?: string } = {}) {
+   *  messages or an id. `opts.pickUpItem` (04-b): the open item an item's
+   *  own Continue picked, sent with this turn as `pick_up_item`. */
+  function send(text: string, opts: { cloudOnce?: string; title?: string; pickUpItem?: string } = {}) {
     const message = text.trim();
     // v1.275.0: a message can be a file alone ("here" + a PDF), and a send
     // pressed mid-upload is QUEUED — it fires with the box's text the moment
@@ -11475,7 +11487,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // One entry point (v1.108.0). Every message starts as fast chat; the turn
     // escalates itself when it needs the full agent (see completeChat), so the
     // user never routes their own request.
-    void sendChat(message, { editBefore, ...(opts.cloudOnce ? { cloudOnce: opts.cloudOnce } : {}) });
+    void sendChat(message, {
+      editBefore,
+      ...(opts.cloudOnce ? { cloudOnce: opts.cloudOnce } : {}),
+      ...(opts.pickUpItem ? { pickUpItem: opts.pickUpItem } : {}),
+    });
   }
 
   /**
@@ -14646,6 +14662,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         local={localOnly}
                         disabled={busy}
                         onContinue={(card) => send(CONTINUE_SENTENCE, { title: continuedTitle(card) })}
+                        onContinueItem={(card, item) =>
+                          send(PICK_ITEM_SENTENCE, { title: continuedTitle(card), pickUpItem: item.id })
+                        }
                       />
                     </div>
                   ) : null}

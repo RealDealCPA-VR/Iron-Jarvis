@@ -203,6 +203,11 @@ def default_permissions() -> dict[str, str]:
         # record. Read-only, behind the turn's client wall; without "allow" a
         # headless run's ask is a deny and agents could never ask it.
         "work_history": "allow",
+        # Next leaps 04-b (workmap/open_item_tools): a folder's open item
+        # closed or reopened from chat, at the owner's words. Only Iron
+        # Jarvis's own list on this PC changes; Reopen (and Undo) puts it back.
+        "open_item_close": "allow",
+        "open_item_reopen": "allow",
         "brain_save": "allow",
         "brain_change": "ask",
         # Memory housekeeping (v1.143.0): FILE a suggest-only cleanup proposal.

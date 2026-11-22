@@ -695,6 +695,10 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # "cost lookup", not "usage report": the article rule reads a leading u
     # as a vowel and would say "tried an usage report".
     "usage_report": ("looked up what your work cost", "cost lookup"),
+    # Next leaps 04-b: a folder's open item closed or reopened from chat.
+    # Twin: lib/runWords.ts AGENT_TOOLS.
+    "open_item_close": ("closed an open item", "open item change"),
+    "open_item_reopen": ("reopened an open item", "open item change"),
     "client_list": ("listed your clients", "client list"),
     "client_answer": ("noted whether a name is one of your clients", "client answer"),
     "client_update": ("changed one of your clients", "client change"),
@@ -942,6 +946,9 @@ _PRESENT: dict[str, str] = {
     "cleared": "clear",
     # Leap 06-a.
     "rehearsed": "rehearse",
+    # Next leaps 04-b: an open item closed or reopened from chat.
+    "closed": "close",
+    "reopened": "reopen",
 }
 
 
@@ -1046,6 +1053,7 @@ _ING: dict[str, str] = {
     "disconnected": "disconnecting", "forgot": "forgetting", "cancelled": "cancelling",
     "cleared": "clearing",
     "rehearsed": "rehearsing",
+    "closed": "closing", "reopened": "reopening",
 }
 
 

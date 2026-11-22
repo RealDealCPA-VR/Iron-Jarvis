@@ -50,9 +50,24 @@ and the same room. So:
   its folder (``routes/build.py``, ``project_for_path``), so for such a
   folder the answer is the empty card with ``in_project`` True.
 
-A record that cannot be read (no record, the rows, the sources or the recaps)
-RAISES :class:`Unreadable`: the route answers 503 in words, never "nothing
-here". BLOCKING (SQLite); the route is a plain ``def``.
+OPEN ITEMS (next leaps 04-b, R2.13): "Still open" is no longer the Open
+lines of the newest six recaps. It is EVERY open item of exactly the folder,
+however old (``workmap/open_items``: carried from each kept recap until the
+owner or its own conversation closes it), oldest first, through the same
+reader (each item's work asked again, walled, Local only only when
+``local``), each with ``maybe_done`` (a later Done line here seems to settle
+it: the card asks "This may be done. Mark it done?", D-04.3). The block
+tells the first ``open_items.TOLD_MAX`` of them and counts the rest; an
+item's own Continue sends ``PICK_ITEM_SENTENCE`` with ``pick_up_item`` and
+is told that one wherever it is. ``closed_lately``: the items closed in the
+last ``open_items.CLOSED_LATELY_DAYS`` days (Done, No longer needed, or
+settled by their own conversation), newest first, each with Reopen. The
+"In this folder" part gets the room the items leave (``block.here_part``'s
+``room``), the way the block works it out.
+
+A record that cannot be read (no record, the rows, the sources, the recaps
+or the open items) RAISES :class:`Unreadable`: the route answers 503 in
+words, never "nothing here". BLOCKING (SQLite); the route is a plain ``def``.
 """
 
 from __future__ import annotations
@@ -66,6 +81,7 @@ from ..core.db import session_scope
 from . import block as _block
 from . import keys
 from . import lookup as _lookup
+from . import open_items as _items
 from . import recap as _recap
 from .index import _iso, link_for
 from .models import KIND_CHAT, KIND_CODE
@@ -74,12 +90,16 @@ log = logging.getLogger(__name__)
 
 #: What Continue sends, word for word (the block's own constant).
 CONTINUE_SENTENCE = _block.CONTINUE_SENTENCE
+#: What an open item's own Continue sends (04-b; the block's own constant).
+PICK_ITEM_SENTENCE = _block.PICK_ITEM_SENTENCE
 #: Rows read for the folder (the block reads as many).
 ROWS_READ = _block.HERE_MAX * 6
-#: Lines of each kind the card carries, at most.
+#: Lines of each kind the card carries, at most. (04-b: the card carries
+#: every open item; ``OPEN_MAX`` is how many the block tells,
+#: ``open_items.TOLD_MAX``.)
 DONE_MAX = 4
 DECIDED_MAX = 6
-OPEN_MAX = 6
+OPEN_MAX = _items.TOLD_MAX
 #: D-04.4: the full card when the last work is at most this many days old.
 FRESH_DAYS = 30
 #: The kinds of work that get recaps (``recap.py``: chats and Chat › Code).
@@ -117,9 +137,30 @@ def _labelled(line: str) -> "tuple[str, str] | None":
 def _nothing(folder: str, client: "dict[str, str] | None", *, in_project: bool = False) -> dict[str, Any]:
     return {
         "folder": folder, "name": keys.folder_name(folder), "client": client, "last": None,
-        "done": [], "decided": [], "open": [], "pieces": 0, "recap_pending": False,
-        "full": False, "in_project": in_project,
+        "done": [], "decided": [], "open": [], "closed_lately": [], "pieces": 0,
+        "recap_pending": False, "full": False, "in_project": in_project,
         "words": IN_PROJECT_WORDS if in_project else NOTHING_WORDS,
+    }
+
+
+def _item(it: dict[str, Any]) -> dict[str, Any]:
+    """One open item as the card answers it (no datetime, no row)."""
+    out = {k: it.get(k) for k in ("id", "text", "entry_id", "title", "link", "at")}
+    out["maybe_done"] = it.get("maybe_done")
+    return out
+
+
+def _closed(it: dict[str, Any]) -> dict[str, Any]:
+    out = {k: it.get(k) for k in ("id", "text", "entry_id", "title", "link", "at", "status", "how",
+                                  "closed_at")}
+    return out
+
+
+def _last_of(row: dict[str, Any], title: str) -> dict[str, Any]:
+    return {
+        "id": row["id"], "kind": row["kind"], "title": title, "tool": row.get("tool") or "",
+        "at": _iso(row.get("updated")), "link": link_for(row["kind"], row["ref"]),
+        "outcome": row.get("outcome") or "",
     }
 
 
@@ -180,7 +221,16 @@ def pick_up(platform: Any, folder: str, now: "datetime | None" = None, *,
             kept = _recap.recaps_for(db, [r["id"] for r in exact])
     except Exception as exc:  # noqa: BLE001
         raise Unreadable("the recaps could not be read") from exc
-    told, _groups = _block.here_part(reader.engine, place, here_rows, now, kept=kept)
+    # 04-b: every open item of exactly this folder, the block's way (its room
+    # is worked out first, as the block does, so the card's Done and Decided
+    # lines are the ones Continue's turn is told).
+    try:
+        items = _items.told(reader, place, now=now, lately=True)
+    except Exception as exc:  # noqa: BLE001
+        raise Unreadable("the open items could not be read") from exc
+    _lines, items_used, _told_ids = _items.block_part(items.open, now)
+    told, _groups = _block.here_part(reader.engine, place, here_rows, now, kept=kept,
+                                     room=_block.BLOCK_CHARS - items_used)
     pieces: list[dict[str, Any]] = []
     for t in told:
         row = t["row"]
@@ -190,12 +240,13 @@ def pick_up(platform: Any, folder: str, now: "datetime | None" = None, *,
         if not title:
             continue
         pieces.append({**t, "title": title})
-    if not pieces:
-        return _nothing(place, client)
+    still_open = [_item(it) for it in items.open]
+    lately = [_closed(it) for it in items.lately]
+    if not pieces and not still_open:
+        return {**_nothing(place, client), "closed_lately": lately}
 
     done: list[str] = []
     decided: list[dict[str, Any]] = []
-    still_open: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     pending = False
     for i, p in enumerate(pieces):
@@ -222,33 +273,34 @@ def pick_up(platform: Any, folder: str, now: "datetime | None" = None, *,
             elif label == "Decided":
                 if len(decided) < DECIDED_MAX:
                     decided.append({"text": text, **source})
-            elif len(still_open) < OPEN_MAX:
-                still_open.append({"text": text, **source})
+            # "Open" lines: the open items above are the folder's list now.
 
-    first = pieces[0]["row"]
-    title = pieces[0]["title"]
+    if pieces:
+        first = pieces[0]["row"]
+        title = pieces[0]["title"]
+    else:
+        # Open items whose work is older than the pieces the block tells:
+        # the newest of THEIR pieces of work heads the card.
+        first = max(items.rows.values(), key=lambda r: (_when_naive(r.get("updated")) or datetime.min, r["id"]))
+        title = _block._safe(_block._clip(first.get("title") or "", _block.TITLE_CHARS)).strip() or keys.folder_name(place)
     when = _when_naive(first.get("updated"))
     fresh = when is not None and now - when <= timedelta(days=FRESH_DAYS)
-    last = {
-        "id": first["id"], "kind": first["kind"], "title": title, "tool": first.get("tool") or "",
-        "at": _iso(first.get("updated")), "link": link_for(first["kind"], first["ref"]),
-        "outcome": first.get("outcome") or "",
-    }
+    last = _last_of(first, title)
     day = _block.date_words(first.get("updated"))
     words = f"Last time ({day}): {title}." if day else f"Last time: {title}."
     if still_open:
         words += f" {len(still_open)} still open."
-    log.info("pick-up: %d pieces, %d decided, %d open, pending=%s", len(pieces), len(decided),
-             len(still_open), pending)
+    log.info("pick-up: %d pieces, %d decided, %d open, %d closed lately, pending=%s", len(pieces),
+             len(decided), len(still_open), len(lately), pending)
     return {
         "folder": place, "name": keys.folder_name(place), "client": client, "last": last,
-        "done": done, "decided": decided, "open": still_open, "pieces": len(pieces),
-        "recap_pending": pending, "full": bool(still_open) or fresh, "in_project": False,
-        "words": words,
+        "done": done, "decided": decided, "open": still_open, "closed_lately": lately,
+        "pieces": len(pieces), "recap_pending": pending, "full": bool(still_open) or fresh,
+        "in_project": False, "words": words,
     }
 
 
 __all__ = [
     "CONTINUE_SENTENCE", "DECIDED_MAX", "DONE_MAX", "FRESH_DAYS", "IN_PROJECT_WORDS", "NOTHING_WORDS",
-    "OPEN_MAX", "Unreadable", "pick_up",
+    "OPEN_MAX", "PICK_ITEM_SENTENCE", "Unreadable", "pick_up",
 ]

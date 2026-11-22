@@ -60,6 +60,17 @@ never put another client's work behind ``WALL_NOTE``. A chat turn's ONE
 recall query (``daemon.chat_turn._compose_recall_query``) takes it out the
 same way, so no other grounding (the memory fabric's past conversations in
 every folder above all) matches on it either.
+
+STILL OPEN (next leaps 04-b): a numbered "Still open in this folder, oldest
+first" part (:func:`open_part`, ``workmap/open_items``): every open item of
+EXACTLY the turn's folder, however old, each item's piece of work asked again
+and walled, never on the phone, the turn's own conversations left out. It is
+worked out BEFORE "In this folder" (its room kept first, at most
+``open_items.ITEMS_CHARS``), so an item from long ago is always told; the
+item the owner picked (``chosen``, the chat body's ``pick_up_item``) is told
+wherever it is, marked. :data:`PICK_ITEM_SENTENCE` (an item's own Continue)
+is taken out of ``query`` like :data:`CONTINUE_SENTENCE`. With no open items
+the block is byte for byte what it was.
 """
 
 from __future__ import annotations
@@ -88,13 +99,21 @@ ELSEWHERE_LEAD = "In other folders, matching this message:"
 #: written in the dashboard's code, ``lib/pickUp.ts`` ``CONTINUE_SENTENCE``,
 #: and a test reads it there).
 CONTINUE_SENTENCE = "Continue where we left off in this folder."
-_CONTINUE_RX = re.compile(r"continue\s+where\s+we\s+left\s+off\s+in\s+this\s+folder\.?", re.IGNORECASE)
+#: What an open item's own Continue sends (next leaps 04-b), word for word
+#: (``lib/pickUp.ts`` ``PICK_ITEM_SENTENCE``; a test reads it there). Which
+#: item rides the chat body's ``pick_up_item``, and the block says it.
+PICK_ITEM_SENTENCE = "Continue with the open item I picked in this folder."
+_CONTINUE_RX = re.compile(
+    r"continue\s+(?:where\s+we\s+left\s+off|with\s+the\s+open\s+item\s+i\s+picked)\s+in\s+this\s+folder\.?",
+    re.IGNORECASE,
+)
 
 
 def without_continue(query: str) -> str:
-    """``query`` with every :data:`CONTINUE_SENTENCE` taken out (any case and
-    spacing). The sentence points at the turn's own folder and at nothing
-    else; what else the owner wrote still points."""
+    """``query`` with every :data:`CONTINUE_SENTENCE` and
+    :data:`PICK_ITEM_SENTENCE` taken out (any case and spacing). Both point
+    at the turn's own folder and at nothing else; what else the owner wrote
+    still points."""
     return _CONTINUE_RX.sub(" ", str(query or ""))
 
 #: Lines listed for the turn's own folder / for other folders.
@@ -338,7 +357,8 @@ def _fold(rows: list[dict[str, Any]]) -> list[tuple[dict[str, Any], int]]:
 
 def here_part(engine: Any, folder: str, here_rows: list[dict[str, Any]], now: datetime, *,
               phone: bool = False,
-              kept: "dict[str, dict[str, Any]] | None" = None) -> tuple[list[dict[str, Any]], int]:
+              kept: "dict[str, dict[str, Any]] | None" = None,
+              room: int = BLOCK_CHARS) -> tuple[list[dict[str, Any]], int]:
     """THE "In this folder" PART, exactly as a turn in ``folder`` is told it
     (next leaps 04-a: the pick-up card is built from it, so the card never
     shows a line the turn that Continue starts is not told). ``here_rows``:
@@ -351,7 +371,10 @@ def here_part(engine: Any, folder: str, here_rows: list[dict[str, Any]], now: da
     "recap"}`` in order (``line`` carries its recap lines under it when they
     fit :data:`BLOCK_CHARS`; ``recap`` the lines told, [] for none), at most
     :data:`HERE_MAX`, and how many groups (repeats folded by :func:`_fold`,
-    never a piece with its own recap) there were."""
+    never a piece with its own recap) there were. ``room`` (next leaps
+    04-b): the block's room left after its "Still open in this folder" part
+    (``open_items.block_part``, worked out first so an old open item is
+    always told); the card passes the same."""
     own = keys.folder_key(keys.home_folder(folder))
     if not phone:
         exact = [r for r in here_rows
@@ -367,17 +390,40 @@ def here_part(engine: Any, folder: str, here_rows: list[dict[str, Any]], now: da
         if len(told) >= HERE_MAX:
             break
         line = _safe(entry_line(row, now, times=times, titles_only=phone))
-        if not line or used + len(line) + 1 > BLOCK_CHARS:
+        if not line or used + len(line) + 1 > room:
             continue
         shown: list[str] = []
         extra = row.get("recap") or []
         if extra:
             whole = "\n".join([line, *extra])
-            if used + len(whole) + 1 <= BLOCK_CHARS:
+            if used + len(whole) + 1 <= room:
                 line, shown = whole, list(extra)
         told.append({"row": row, "times": times, "line": line, "recap": shown})
         used += len(line) + 1
     return told, len(groups)
+
+
+def open_part(reader: Any, folder: str, now: datetime, *, listed: bool = True,
+              exclude_refs: "tuple[str, ...] | list[str]" = (), chosen: str = "") -> tuple[list[str], int]:
+    """THE "Still open in this folder" PART (next leaps 04-b): ``(lines,
+    chars used)`` from ``open_items.told`` (exactly the folder, each item's
+    work asked again through ``reader`` and walled, the turn's own
+    conversations left out) and ``open_items.block_part`` (oldest first, at
+    most ``TOLD_MAX``, the owner's pick marked). Nothing on the phone (a
+    phone reader is told no item: ``open_items.told``), for a turn with no
+    folder, or where the folder's part is another block's (a project:
+    ``listed`` False). Never raises: the record is extra."""
+    if not listed or not str(folder or "").strip():
+        return [], 0
+    from . import open_items
+
+    try:
+        got = open_items.told(reader, folder, exclude_refs=exclude_refs, now=now)
+        lines, used, _ids = open_items.block_part(got.open, now, chosen=str(chosen or "").strip())
+        return lines, used
+    except Exception:  # noqa: BLE001
+        log.debug("work record: the open items could not be read", exc_info=True)
+        return [], 0
 
 
 #: Rows a turn's own refresh may rebuild (``lookup.TURN_REBUILD``).
@@ -416,7 +462,8 @@ def _client_rows(wm: Any, roots: Any, *, exclude_ref: str, limit: int) -> list[d
 
 def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref: str = "",
                list_folder: bool = True, now: datetime | None = None, outside: bool = False,
-               turn: Any = None, exclude_refs: "tuple[str, ...] | list[str]" = ()) -> str:
+               turn: Any = None, exclude_refs: "tuple[str, ...] | list[str]" = (),
+               chosen: str = "") -> str:
     """The block for one turn, or "". ``folder`` is the folder the turn works
     in ("" = none); ``list_folder`` False leaves the "In this folder" part to
     another block (a project's own recent activity) while still keeping that
@@ -447,7 +494,16 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
     CONTINUE (next leaps 04-a): :data:`CONTINUE_SENTENCE` is taken out of
     ``query`` first (:func:`without_continue`), so the turn Continue starts
     is told this folder's work and nothing that the sentence's own words
-    happen to match elsewhere."""
+    happen to match elsewhere.
+
+    STILL OPEN (next leaps 04-b): with the "In this folder" part, a numbered
+    "Still open in this folder, oldest first" part (``open_items``: every
+    open item of EXACTLY the folder, however old, its work asked again and
+    walled; at most ``open_items.TOLD_MAX`` inside ``open_items.ITEMS_CHARS``
+    of :data:`BLOCK_CHARS`, worked out first). ``chosen``: the open item the
+    owner picked (the chat body's ``pick_up_item``), told and marked
+    wherever it is. Never on the phone; the turn's own conversation's items
+    are never listed."""
     query = without_continue(query)
     try:
         phone = not outside and _answers_the_phone()
@@ -546,9 +602,15 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         # title and file names say where to look, its details stay there.
         # The phone is never told a recap (D-13.2). ``here_part`` is the ONE
         # place this part is worked out (the pick-up card reads it too).
-        told_here, n_groups = here_part(engine, folder, here_rows, now, phone=phone)
+        # Next leaps 04-b: the folder's open items first (their room is kept,
+        # so an item from long ago is always told), the same way on the card.
+        items_lines, items_used = open_part(reader, folder, now,
+                                            listed=bool(folder and list_folder),
+                                            exclude_refs=[exclude_ref, *skip], chosen=chosen)
+        told_here, n_groups = here_part(engine, folder, here_rows, now, phone=phone,
+                                        room=BLOCK_CHARS - items_used)
         here = [t["line"] for t in told_here]
-        used = sum(len(line) + 1 for line in here)
+        used = items_used + sum(len(line) + 1 for line in here)
         recapped = any(t["recap"] for t in told_here)
 
         lines: list[str] = []
@@ -565,6 +627,7 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
             older = n_groups - len(here)
             if older > 0:
                 lines.append(f"(and {older} older in this folder)")
+        lines += items_lines
         others: list[str] = []
         for row in other_kept:
             if len(others) >= CLIENT_OTHER_MAX:
@@ -654,7 +717,7 @@ def work_block_with_rows(platform: Any, **kw: Any) -> "tuple[str, list[dict[str,
 
 __all__ = [
     "BLOCK_CHARS", "CLIENT_OTHER_MAX", "CONTINUE_SENTENCE", "ELSEWHERE_LEAD", "ELSEWHERE_MAX", "HEAD",
-    "HERE_LEAD", "HERE_MAX", "NAMED_MAX", "PHONE_NOTE", "RECAP_CHARS", "RECAP_NOTE", "WALL_NOTE",
-    "date_words", "entry_line", "here_part", "recap_lines", "without_continue", "work_block",
-    "work_block_with_rows",
+    "HERE_LEAD", "HERE_MAX", "NAMED_MAX", "PHONE_NOTE", "PICK_ITEM_SENTENCE", "RECAP_CHARS", "RECAP_NOTE",
+    "WALL_NOTE", "date_words", "entry_line", "here_part", "open_part", "recap_lines", "without_continue",
+    "work_block", "work_block_with_rows",
 ]

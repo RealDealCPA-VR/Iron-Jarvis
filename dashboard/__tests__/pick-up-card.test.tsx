@@ -148,8 +148,12 @@ import { PickUpCard } from "@/components/work/PickUpCard";
 import { decodeCodingTools } from "@/lib/buildApp";
 import {
   CONTINUE_SENTENCE,
+  PICK_ITEM_SENTENCE,
   PICK_UP_TOOL_NOTE,
+  afterAnswer,
   continuedTitle,
+  openItemClosePath,
+  openItemReopenPath,
   dayWords,
   decodePickUp,
   forgetPickUpNote,
@@ -165,6 +169,8 @@ const BOOKS = "C:\\Work\\Books";
 const LEDGERS = "C:\\Work\\Ledgers";
 
 const NOW = Date.parse("2026-11-20T15:00:00Z");
+/** An open item's id, as the daemon makes them. */
+const ITEM = "open_0123456789ab";
 
 function answer(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -185,8 +191,17 @@ function answer(over: Record<string, unknown> = {}): Record<string, unknown> {
       { text: "Use the bank's dates", entry_id: "chat:t1", title: "Reconcile March", link: "/chat?thread=t1", at: "2026-11-18T10:00:00+00:00" },
     ],
     open: [
-      { text: "Two cheques are still unmatched", entry_id: "chat:t1", title: "Reconcile March", link: "/chat?thread=t1", at: "2026-11-18T10:00:00+00:00" },
+      {
+        id: ITEM,
+        text: "Two cheques are still unmatched",
+        entry_id: "chat:t1",
+        title: "Reconcile March",
+        link: "/chat?thread=t1",
+        at: "2026-11-18T10:00:00+00:00",
+        maybe_done: null,
+      },
     ],
+    closed_lately: [],
     pieces: 1,
     recap_pending: false,
     full: true,
@@ -318,8 +333,8 @@ describe("the card", () => {
     expect(within(card).getByTestId("pick-up-decided").textContent).toContain("Use the bank's dates");
     expect(within(card).getByTestId("pick-up-open").textContent).toContain("Still open");
     expect(within(card).getByTestId("pick-up-open").textContent).toContain("Two cheques are still unmatched");
-    // One main press (G4).
-    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual(["", "Continue"]);
+    // One main press (G4): the cross, the item's quiet ⋯ menu, Continue.
+    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual(["", "", "Continue"]);
     expect(within(card).getByTestId("pick-up-continue").getAttribute("title")).toContain(CONTINUE_SENTENCE);
   });
 
@@ -779,5 +794,241 @@ describe("Forget this folder on the Memory page", () => {
     await waitFor(() => expect(H.api.posts.filter((x) => x.path === WORK_FORGET_PATH)).toHaveLength(1));
     await waitFor(() => expect(isHidden(BOOKS, p)).toBe(false));
     expect(isHidden(LEDGERS, p)).toBe(true);
+  });
+});
+
+/* ------------------------------------------------ open items (next leaps 04-b) */
+
+const ITEM2 = "open_0123456789cd";
+const ITEM3 = "open_0123456789ef";
+
+function item(id: string, text: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id,
+    text,
+    entry_id: "chat:t0",
+    title: "Bank work",
+    link: "/chat?thread=t0",
+    at: "2026-10-01T10:00:00+00:00",
+    maybe_done: null,
+    ...over,
+  };
+}
+
+function closed(id: string, text: string, status: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...item(id, text),
+    status,
+    how: status === "settled" ? "conversation" : "you",
+    closed_at: "2026-11-19T10:00:00+00:00",
+    ...over,
+  };
+}
+
+describe("open items that stay until they are done (04-b)", () => {
+  it("decodes every open item with its id and question, and the items closed lately", () => {
+    const p = decodePickUp(
+      answer({
+        open: [
+          item(ITEM, "Call the bank", { maybe_done: { entry_id: "chat:t2", title: "April close", link: "/chat?thread=t2" } }),
+          item("not-an-id", "dropped: no id"),
+        ],
+        closed_lately: [closed(ITEM2, "Send the letter", "done"), closed(ITEM3, "x", "maybe")],
+      }),
+    ) as PickUp;
+    expect(p.open.map((i) => i.id)).toEqual([ITEM]);
+    expect(p.open[0].maybeDone).toEqual({ entryId: "chat:t2", title: "April close", link: "/chat?thread=t2" });
+    expect(p.closedLately.map((i) => [i.id, i.status])).toEqual([[ITEM2, "done"]]);
+    expect(openItemClosePath(ITEM)).toBe(`/work-record/open-items/${ITEM}/close`);
+    expect(openItemReopenPath(ITEM)).toBe(`/work-record/open-items/${ITEM}/reopen`);
+  });
+
+  it("each item has ONE main press, Continue, and its menu holds Done and No longer needed", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    const onContinueItem = vi.fn();
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} onContinueItem={onContinueItem} />);
+    const row = await screen.findByTestId(`pick-up-item-${ITEM}`);
+    expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual(["Continue", ""]);
+    expect(within(row).getByTestId(`pick-up-item-continue-${ITEM}`).getAttribute("title")).toContain(PICK_ITEM_SENTENCE);
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(within(row).getByTestId(`pick-up-item-menu-${ITEM}`));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Done", "No longer needed"]);
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(within(row).getByTestId(`pick-up-item-continue-${ITEM}`));
+    expect(onContinueItem).toHaveBeenCalledTimes(1);
+    expect(onContinueItem.mock.calls[0][1].id).toBe(ITEM);
+  });
+
+  it("a second press on an item's Continue while the first is being sent does nothing", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    let release: () => void = () => {};
+    const onContinueItem = vi.fn(() => new Promise<void>((r) => (release = r)));
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} onContinueItem={onContinueItem} />);
+    const press = await screen.findByTestId(`pick-up-item-continue-${ITEM}`);
+    fireEvent.click(press);
+    fireEvent.click(press);
+    expect(onContinueItem).toHaveBeenCalledTimes(1);
+    await act(async () => release());
+    await waitFor(() => expect(press.hasAttribute("disabled")).toBe(false));
+  });
+
+  it("a host that cannot say which item shows no item Continue, only the menu", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    const row = await screen.findByTestId(`pick-up-item-${ITEM}`);
+    expect(within(row).queryByTestId(`pick-up-item-continue-${ITEM}`)).toBeNull();
+    expect(within(row).getByTestId(`pick-up-item-menu-${ITEM}`)).toBeTruthy();
+  });
+
+  it("Done moves the item to Closed lately, which starts folded, and Reopen in its menu puts it back", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    H.api.postResponses[openItemClosePath(ITEM)] = {
+      ok: true,
+      item: { id: ITEM, status: "done", how: "you", closed_at: "2026-11-20T10:00:00+00:00" },
+    };
+    H.api.postResponses[openItemReopenPath(ITEM)] = { ok: true, item: { id: ITEM, status: "open", how: "", closed_at: null } };
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    fireEvent.click(await screen.findByTestId(`pick-up-item-menu-${ITEM}`));
+    fireEvent.click(screen.getByTestId(`pick-up-item-done-${ITEM}`));
+    await waitFor(() => expect(screen.queryByTestId(`pick-up-item-${ITEM}`)).toBeNull());
+    expect(H.api.posts.filter((x) => x.path === openItemClosePath(ITEM)).map((x) => x.body)).toEqual([{ how: "done" }]);
+    // Folded: the count only, nothing listed until it is opened.
+    const toggle = screen.getByTestId("pick-up-closed-toggle");
+    expect(toggle.textContent).toBe("Closed lately (1)");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId(`pick-up-closed-${ITEM}`)).toBeNull();
+    fireEvent.click(toggle);
+    const shut = screen.getByTestId(`pick-up-closed-${ITEM}`);
+    expect(shut.textContent).toContain("Two cheques are still unmatched · Done");
+    fireEvent.click(within(shut).getByTestId(`pick-up-item-menu-${ITEM}`));
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Reopen"]);
+    fireEvent.click(screen.getByTestId(`pick-up-item-reopen-${ITEM}`));
+    expect(await screen.findByTestId(`pick-up-item-${ITEM}`)).toBeTruthy();
+    expect(screen.queryByTestId("pick-up-closed")).toBeNull();
+  });
+
+  it("No longer needed is its own answer, and a closed list from Iron Jarvis starts folded", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer({ closed_lately: [closed(ITEM3, "Old item", "settled")] });
+    H.api.postResponses[openItemClosePath(ITEM)] = { ok: true, item: { id: ITEM, status: "dropped", how: "you", closed_at: null } };
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    expect((await screen.findByTestId("pick-up-closed-toggle")).getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByTestId(`pick-up-item-menu-${ITEM}`));
+    fireEvent.click(screen.getByTestId(`pick-up-item-drop-${ITEM}`));
+    await waitFor(() => expect(screen.getByTestId("pick-up-closed-toggle").textContent).toBe("Closed lately (2)"));
+    expect(H.api.posts.map((x) => x.body)).toContainEqual({ how: "dropped" });
+    fireEvent.click(screen.getByTestId("pick-up-closed-toggle"));
+    expect(screen.getByTestId(`pick-up-closed-${ITEM}`).textContent).toContain("No longer needed");
+    expect(screen.getByTestId(`pick-up-closed-${ITEM3}`).textContent).toContain("Settled in the work it came from");
+  });
+
+  it("D-04.3: where later work may have done it, the card ASKS, and Not yet only takes the question away", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer({
+      open: [item(ITEM, "Send recon_march.xlsx to Ann", { maybe_done: { entry_id: "chat:t2", title: "April close", link: "" } })],
+    });
+    H.api.postResponses[openItemReopenPath(ITEM)] = { ok: true, item: { id: ITEM, status: "open" } };
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    const ask = await screen.findByTestId(`pick-up-maybe-${ITEM}`);
+    expect(ask.textContent).toContain("This may be done. Mark it done?");
+    expect(H.api.posts).toEqual([]); // asking closes nothing
+    fireEvent.click(within(ask).getByTestId(`pick-up-maybe-no-${ITEM}`));
+    await waitFor(() => expect(screen.queryByTestId(`pick-up-maybe-${ITEM}`)).toBeNull());
+    expect(H.api.posts.map((x) => x.path)).toEqual([openItemReopenPath(ITEM)]);
+    expect(screen.getByTestId(`pick-up-item-${ITEM}`)).toBeTruthy(); // still open
+  });
+
+  it("Mark it done closes it", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer({
+      open: [item(ITEM, "Send the file", { maybe_done: { entry_id: "chat:t2", title: "April close", link: "" } })],
+    });
+    H.api.postResponses[openItemClosePath(ITEM)] = { ok: true, item: { id: ITEM, status: "done", how: "you" } };
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    fireEvent.click(await screen.findByTestId(`pick-up-maybe-yes-${ITEM}`));
+    await waitFor(() => expect(screen.queryByTestId(`pick-up-item-${ITEM}`)).toBeNull());
+    expect(H.api.posts.map((x) => [x.path, x.body])).toEqual([[openItemClosePath(ITEM), { how: "done" }]]);
+  });
+
+  it("a press that did not land says so in words, and the item stays where it was", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    H.api.postResponses[openItemClosePath(ITEM)] = new H.FakeApiError("That open item is not on record any more.", 404);
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    fireEvent.click(await screen.findByTestId(`pick-up-item-menu-${ITEM}`));
+    fireEvent.click(screen.getByTestId(`pick-up-item-done-${ITEM}`));
+    expect((await screen.findByTestId("pick-up-item-problem")).textContent).toBe(
+      "That item couldn't be changed: That open item is not on record any more.",
+    );
+    expect(screen.getByTestId(`pick-up-item-${ITEM}`)).toBeTruthy();
+    H.api.postResponses[openItemClosePath(ITEM)] = new H.FakeApiError("boom", 503);
+    fireEvent.click(screen.getByTestId(`pick-up-item-menu-${ITEM}`));
+    fireEvent.click(screen.getByTestId(`pick-up-item-done-${ITEM}`));
+    await waitFor(() =>
+      expect(screen.getByTestId("pick-up-item-problem").textContent).toBe("Couldn't change that item. Try again."),
+    );
+  });
+
+  it("every open item is on the card: the oldest three, then Show N more", async () => {
+    const all = ["a", "b", "c", "d", "e"].map((t, i) => item(`open_0123456789${i}0`, `item ${t}`));
+    H.api.getResponses[pickUpPath(BOOKS)] = answer({ open: all });
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    const open = await screen.findByTestId("pick-up-open");
+    expect(within(open).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["item a", "item b", "item c"]);
+    expect(within(open).getByTestId("pick-up-open-more").textContent).toBe("Show 2 more");
+    fireEvent.click(within(open).getByTestId("pick-up-open-more"));
+    expect(within(screen.getByTestId("pick-up-open")).getAllByRole("listitem")).toHaveLength(5);
+    expect(screen.queryByTestId("pick-up-open-more")).toBeNull();
+  });
+
+  it("afterAnswer moves items only by Iron Jarvis's own answer", () => {
+    const p = decodePickUp(answer({ closed_lately: [closed(ITEM2, "Sent", "done")] })) as PickUp;
+    const shut = afterAnswer(p, ITEM, { status: "done", how: "you", closed_at: "2026-11-20T10:00:00+00:00" });
+    expect(shut.open).toEqual([]);
+    expect(shut.closedLately.map((i) => i.id)).toEqual([ITEM, ITEM2]);
+    const back = afterAnswer(shut, ITEM2, { status: "open" });
+    expect(back.open.map((i) => i.id)).toEqual([ITEM2]);
+    expect(afterAnswer(p, ITEM, { status: "nonsense" })).toBe(p);
+  });
+
+  it("in a new chat an item's Continue sends the fixed sentence with that item, as the chat's one message", async () => {
+    desktop({ path: BOOKS });
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByTestId("chat-hero-folder-choose"));
+    const press = await screen.findByTestId(`pick-up-item-continue-${ITEM}`);
+    fireEvent.click(press);
+    fireEvent.click(press);
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    const body = H.stream.bodies[0];
+    expect(body.pick_up_item).toBe(ITEM);
+    expect(body.workspace_dir).toBe(BOOKS);
+    const users = (body.messages as { role: string; content: string }[]).filter((m) => m.role === "user");
+    expect(users.map((m) => m.content)).toEqual([PICK_ITEM_SENTENCE]);
+    await waitFor(() => expect(H.api.puts.filter((p) => p.path.startsWith("/chat/threads/")).length).toBeGreaterThan(0));
+    expect(H.api.puts.filter((p) => p.path.startsWith("/chat/threads/"))[0].body.title).toBe(CONTINUED);
+    await act(async () => {});
+    expect(H.stream.bodies).toHaveLength(1);
+  });
+
+  it("the card's own Continue sends no item", async () => {
+    desktop({ path: BOOKS });
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByTestId("chat-hero-folder-choose"));
+    fireEvent.click(await screen.findByTestId("pick-up-continue"));
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    expect("pick_up_item" in H.stream.bodies[0]).toBe(false);
+  });
+
+  it("both Code views show the items with their menu, and no item Continue", async () => {
+    H.api.getResponses[pickUpPath(BOOKS, false, true)] = answer();
+    render(<HarnessStartComposer initialFolder={BOOKS} onStart={async () => null} />);
+    const row = await screen.findByTestId(`pick-up-item-${ITEM}`);
+    expect(within(row).queryByTestId(`pick-up-item-continue-${ITEM}`)).toBeNull();
+    expect(within(row).getByTestId(`pick-up-item-menu-${ITEM}`)).toBeTruthy();
+    cleanup();
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(<StartComposer tools={TOOLS} toolsError={null} startFolder={BOOKS} onStarted={() => {}} />);
+    const row2 = await screen.findByTestId(`pick-up-item-${ITEM}`);
+    expect(within(row2).queryByTestId(`pick-up-item-continue-${ITEM}`)).toBeNull();
   });
 });

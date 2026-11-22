@@ -540,6 +540,14 @@
       "ok": "sent a notification",
       "failed": "tried a notification and it failed"
     },
+    "open_item_close": {
+      "ok": "closed an open item",
+      "failed": "tried an open item change and it failed"
+    },
+    "open_item_reopen": {
+      "ok": "reopened an open item",
+      "failed": "tried an open item change and it failed"
+    },
     "pack_restart": {
       "ok": "restarted an extension",
       "failed": "tried an extension restart and it failed"

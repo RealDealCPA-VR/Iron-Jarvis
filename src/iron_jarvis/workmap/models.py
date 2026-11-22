@@ -122,6 +122,82 @@ class WorkRecap(SQLModel, table=True):
     #: later, and then left until the conversation changes).
     tries: int = 0
     created_at: datetime = Field(default_factory=utcnow, index=True)
+    #: Next leaps 04-b: this recap's Open and Done lines were carried into
+    #: the open items (``workmap/open_items.sync``, in the same write that
+    #: keeps a recap). False (or NULL on a row kept before 04-b) = not yet:
+    #: ``open_items.backfill`` carries it once.
+    open_synced: bool = False
+
+
+# --------------------------------------------------------------------------- #
+# Open items (next leaps 04-b; build-out plan R2.13, idea 04). The contract is
+# the docstring of ``workmap/open_items.py``.
+# --------------------------------------------------------------------------- #
+#: An item still to do.
+OPEN_ITEM_OPEN = "open"
+#: The owner (or a chat the owner asked) said it is done.
+OPEN_ITEM_DONE = "done"
+#: The owner said it is no longer needed.
+OPEN_ITEM_DROPPED = "dropped"
+#: Its own conversation's rewritten recap no longer lists it.
+OPEN_ITEM_SETTLED = "settled"
+OPEN_ITEM_STATUSES = (OPEN_ITEM_OPEN, OPEN_ITEM_DONE, OPEN_ITEM_DROPPED, OPEN_ITEM_SETTLED)
+#: Who closed it (``WorkOpenItem.closed_how``).
+CLOSED_BY_YOU = "you"
+CLOSED_BY_CHAT = "chat"
+CLOSED_BY_CONVERSATION = "conversation"
+
+
+class WorkOpenItem(SQLModel, table=True):
+    """One open item in a folder (next leaps 04-b): an ``Open:`` line of a
+    kept recap, carried forward until the owner or its own conversation
+    closes it. Derived from CHECKED recap lines only (model-written, then
+    checked against the record): DATA, scanned again whenever it is told.
+
+    Its own table, never columns of :class:`WorkEntry` (rebuilt whole from
+    its sources) or :class:`WorkRecap` (replaced whole by each recap): a
+    status the owner set must outlive both. Removed with its piece of work
+    (a deleted source, a forgotten folder)."""
+
+    __tablename__ = "workopenitem"
+
+    #: ``core.ids.new_id("open")``: ``open_<12 hex>``.
+    id: str = Field(primary_key=True)
+    #: The work entry whose recap listed it (``<kind>:<ref>``).
+    entry_id: str = Field(default="", index=True)
+    #: ``keys.folder_key(keys.home_folder(folder))``: a coding session's own
+    #: copy counts as its repository, as on the pick-up card.
+    folder_key: str = Field(default="", index=True)
+    #: The folder as the owner would read it.
+    folder: str = ""
+    #: The line's words (without "Open:"), at most ``recap.RECAP_LINE_CHARS``.
+    text: str = ""
+    #: ``open_items.text_key(text)``: how a reworded line is matched.
+    text_key: str = ""
+    #: :data:`OPEN_ITEM_STATUSES`.
+    status: str = Field(default=OPEN_ITEM_OPEN, index=True)
+    opened_at: datetime = Field(default_factory=utcnow, index=True)
+    closed_at: datetime | None = None
+    #: :data:`CLOSED_BY_YOU` | :data:`CLOSED_BY_CHAT` |
+    #: :data:`CLOSED_BY_CONVERSATION` ("" while open).
+    closed_how: str = ""
+    #: What closed it: the chat's thread id, or the work entry whose
+    #: rewritten recap settled it.
+    closed_ref: str = ""
+    #: A LATER piece of work in the same folder whose Done line seems to
+    #: settle this item (``open_items.may_be_done``). It only asks "Mark it
+    #: done?" (D-04.3); it never closes anything.
+    maybe_done_entry: str = ""
+    #: The piece of work the owner answered "Not yet" for: it never asks
+    #: about that one again.
+    maybe_declined: str = ""
+    #: The owner reopened it: from then on only the owner (or a chat the
+    #: owner asks) closes it; a rewritten recap no longer settles it.
+    owner_kept: bool = False
+    #: The work was Local only (or kept home) when the item was written. The
+    #: piece of work's own state, asked again, decides what a turn is told.
+    local_only: bool = False
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class WorkForgotten(SQLModel, table=True):
@@ -305,4 +381,6 @@ __all__ = [
     "CLIENT_PREF_TYPED", "CLIENT_PROPOSED", "CLIENT_STATUSES", "KINDS", "KIND_CHAT",
     "KIND_CODE", "KIND_RUN", "KIND_TOOL_CODE", "RECAP_KEPT", "RECAP_NONE", "WorkClient",
     "WorkClientFolder", "WorkClientPreference", "WorkEntry", "WorkForgotten", "WorkRecap",
+    "CLOSED_BY_CHAT", "CLOSED_BY_CONVERSATION", "CLOSED_BY_YOU", "OPEN_ITEM_DONE", "OPEN_ITEM_DROPPED",
+    "OPEN_ITEM_OPEN", "OPEN_ITEM_SETTLED", "OPEN_ITEM_STATUSES", "WorkOpenItem",
 ]

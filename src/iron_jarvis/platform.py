@@ -1669,6 +1669,13 @@ def build_platform(
 
     for tool in work_history_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # OPEN ITEMS (next leaps 04-b): a folder's open item closed or reopened
+    # from chat, at the owner's own words (armed by
+    # ``chat_turn.settings_ask_tools``); on no agent roster.
+    from .workmap.open_item_tools import open_item_tools
+
+    for tool in open_item_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
     # THE LOOKUP (capability search plan, Phase 1): ``find_capability`` lets
     # the model ask what Iron Jarvis can do, in its own words, and answers
     # from one index of every built-in tool, setting, page step and "not

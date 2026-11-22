@@ -149,8 +149,9 @@ def test_the_answer_says_last_time_what_was_done_decided_and_still_open(scene):
     assert got["done"] == ["Wrote recon_march.xlsx"]
     # Newest first, each with the piece of work it came from.
     assert _texts(got["decided"]) == ["Use the bank's dates", "Keep the old vendor codes"]
-    assert _texts(got["open"]) == ["Two cheques are still unmatched", "Ask Ann about the March deposit"]
-    first = got["open"][1]
+    # 04-b: Still open is the folder's open items, OLDEST first (the block's order).
+    assert _texts(got["open"]) == ["Ask Ann about the March deposit", "Two cheques are still unmatched"]
+    first = got["open"][0]
     assert first["entry_id"] == f"chat:{old}"
     assert first["title"] == "Reconcile February bank statement"
     assert first["link"] == f"/chat?thread={old}"
@@ -193,7 +194,9 @@ def test_the_newest_six_pieces_are_read(scene):
         _recap(scene, tid, f"Open: item {i}")
     got = _ask(scene, DOWNLOADS)
     assert got["pieces"] == 6
-    assert _texts(got["open"]) == [f"item {i}" for i in (7, 6, 5, 4, 3, 2)]
+    # 04-b: every open item of the folder stays on the card, however old,
+    # oldest first (tests/test_open_items.py); the pieces read stay six.
+    assert _texts(got["open"]) == [f"item {i}" for i in range(8)]
 
 
 # --------------------------------------------------------------------------- #
@@ -240,11 +243,15 @@ def test_a_forgotten_folder_shows_nothing(scene):
 
 def test_a_recap_older_than_its_conversation_is_not_shown_and_is_pending(scene):
     tid = _chat(scene, "Changed after its recap", H, hours_ago=1)
-    _recap(scene, tid, "Done: Old line", "Open: old open line", stale=True)
+    _recap(scene, tid, "Done: Old line", "Decided: Old decision", "Open: old open line", stale=True)
     got = _ask(scene, H)
     assert got["last"]["title"] == "Changed after its recap"
-    assert got["done"] == [] and got["open"] == []
+    assert got["done"] == [] and got["decided"] == []
     assert got["recap_pending"] is True
+    # 04-b: an open item, once on record, stays until the owner closes it or
+    # the conversation's NEXT recap settles it; a later message alone does
+    # not close it (tests/test_open_items.py).
+    assert _texts(got["open"]) == ["old open line"]
 
 
 def test_local_only_work_is_shown_only_to_a_card_that_asks_as_local_only(scene):

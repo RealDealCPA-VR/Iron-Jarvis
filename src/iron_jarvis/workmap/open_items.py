@@ -1,0 +1,702 @@
+"""Open items that stay until they are done (next leaps 04-b; build-out plan
+R2.13, idea 04 "Pick up where you left off";
+``docs/next-leaps/01-comes-to-you-and-scroll-back.md``).
+
+A recap (``workmap/recap.py``) keeps checked ``Open:`` lines for ONE
+conversation, and 04-a showed them only while that conversation's recap was
+among the newest six pieces of work and still current. Here each such line
+becomes an OPEN ITEM (``WorkOpenItem``, table ``workopenitem``) that stays on
+the folder's list, however old, until it is closed:
+
+* **by the owner**: Done, or No longer needed (the card's ⋯ menu, or a chat
+  the owner asks: ``open_item_tools``); Reopen puts it back;
+* **by its own conversation**: a rewritten recap that no longer lists the
+  line SETTLES it (``closed_how`` "conversation"); it stays visible under
+  "Closed lately" for :data:`CLOSED_LATELY_DAYS` with Reopen. An item the
+  owner reopened is never settled again by a recap (``owner_kept``).
+
+THE RECORD DECIDES (vision plan rule 3, decision D-04.3). Only CHECKED recap
+lines become items, and only through :func:`sync`, called where a recap is
+kept (``recap._store``), IN THE SAME WRITE. :func:`may_be_done` is a pure
+match (a shared file name, figure or quoted span, or three shared content
+words, with a LATER Done line in the same folder): it only sets
+``maybe_done_entry`` so the card asks "This may be done. Mark it done?". It
+never closes anything.
+
+WHAT A TURN IS TOLD (:func:`told` then :func:`block_part`): through THE ONE
+READER (``lookup.Reader``), as the "In this folder" part is: items in
+EXACTLY the folder (a coding session's own copy counts as its repository),
+each item's piece of work ASKED AGAIN (deleted, archived or forgotten work
+takes its items out of every answer; Local only and kept-home work only for
+a turn that stays on this network), behind the client wall, never on the
+phone, every line masked and scanned (``block._safe``; a flagged line is
+left out). The turn's own conversation is never listed. The block tells at
+most :data:`TOLD_MAX`, oldest first, inside :data:`ITEMS_CHARS`, plus the one
+the owner picked (``pick_up_item``) wherever it is.
+
+Removed with their work: ``WorkMap.forget`` and a source that is gone
+(``WorkMap._refresh``) delete the items of those entries; a recap a reply
+marked low trust AFTER it was kept takes its items with it (``drop_entries``).
+
+Everything here is BLOCKING (SQLite) and runs off the event loop.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Iterable
+
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import or_
+from sqlmodel import select
+
+from ..core.db import session_scope, storable_text
+from ..core.ids import new_id
+from . import keys
+from .models import (
+    CLOSED_BY_CHAT,
+    CLOSED_BY_CONVERSATION,
+    CLOSED_BY_YOU,
+    OPEN_ITEM_DONE,
+    OPEN_ITEM_DROPPED,
+    OPEN_ITEM_OPEN,
+    OPEN_ITEM_SETTLED,
+    RECAP_KEPT,
+    WorkEntry,
+    WorkOpenItem,
+    WorkRecap,
+)
+
+log = logging.getLogger(__name__)
+
+#: An item's words, at most (a recap line's own cap).
+TEXT_CHARS = 220
+#: A closed item stays under "Closed lately" this long (with Reopen).
+CLOSED_LATELY_DAYS = 14
+#: Items of one folder read at most (open ones, then closed lately).
+OPEN_READ = 200
+LATELY_MAX = 20
+#: Open items the work block tells, at most (the one the owner picked is
+#: told on top), and the room they take in it, at most.
+TOLD_MAX = 6
+ITEMS_CHARS = 1500
+#: Recaps carried forward by one :func:`backfill` call, at most.
+BACKFILL_BATCH = 400
+
+#: What the owner may close an item AS.
+CLOSE_AS = {"done": OPEN_ITEM_DONE, "dropped": OPEN_ITEM_DROPPED}
+CLOSED_STATUSES = (OPEN_ITEM_DONE, OPEN_ITEM_DROPPED, OPEN_ITEM_SETTLED)
+
+ITEMS_LEAD = (
+    "Still open in this folder, oldest first (carried from the checked recaps of earlier work "
+    "here until the owner closes them; a record of then, not a request now; [open_…] is the "
+    "item's id):"
+)
+
+_LABEL_RX = re.compile(r"^(done|decided|open)\s*:\s*(.+)$", re.IGNORECASE)
+_TOKEN_RX = re.compile(r"\d+(?:[.,]\d+)*|[a-z]+")
+#: Words that never tell two items apart.
+_KEY_STOP = frozenset(
+    """
+    a an the is are was were be been being to of for on in at by with and or still yet now it
+    its this that these those has have had will we our you your they them there here then
+    """.split()
+)
+_NUMBER_WORDS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+    "seven": "7", "eight": "8", "nine": "9", "ten": "10", "eleven": "11", "twelve": "12",
+}
+#: Two keys are one item when this share of their words is the same (and at
+#: least two words are) and no figure differs.
+SAME_SHARE = 0.6
+#: Content words a Done line must share with an item to ask "Mark it done?".
+DONE_WORDS = 3
+
+
+class Unreadable(RuntimeError):
+    """The open items, or the work they belong to, could not be read."""
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _naive(value: Any) -> "datetime | None":
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo is None else value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _iso(value: Any) -> "str | None":
+    v = _naive(value)
+    return v.replace(tzinfo=timezone.utc).isoformat() if v is not None else None
+
+
+# --------------------------------------------------------------------------- #
+# pure: reading recap lines, matching items
+# --------------------------------------------------------------------------- #
+def labelled(lines: Iterable[Any]) -> list[tuple[str, str]]:
+    """``[("open", "Call the bank"), ("done", …)]`` for a recap's lines
+    (``"Open: …"``), in order; a line with no label is left out. Pure."""
+    out: list[tuple[str, str]] = []
+    for raw in lines or ():
+        m = _LABEL_RX.match(" ".join(str(raw or "").split()))
+        if not m:
+            continue
+        text = m.group(2).strip()
+        if text:
+            out.append((m.group(1).lower(), text[:TEXT_CHARS]))
+    return out
+
+
+def _key_words(text: Any) -> list[str]:
+    from ..core.numbers import number_key
+
+    words: list[str] = []
+    low = keys._no_apostrophes(str(text or "")[:2000].lower())
+    for tok in _TOKEN_RX.findall(low):
+        if tok[0].isdigit():
+            words.append(number_key(tok))
+            continue
+        if tok in _NUMBER_WORDS:
+            words.append(_NUMBER_WORDS[tok])
+            continue
+        if tok in _KEY_STOP:
+            continue
+        if len(tok) > 3 and tok.endswith("s") and not tok.endswith("ss"):
+            tok = tok[:-1]
+        words.append(tok)
+    return words
+
+
+def text_key(text: Any) -> str:
+    """How an item's words are compared: lower case, figures as one key each
+    ("1,250.00" is "1250", "two" is "2"), the words that never tell items
+    apart left out, a plural's "s" dropped; a line made only of such words
+    is its own words, lower case. Pure."""
+    return " ".join(_key_words(text)) or " ".join(str(text or "").lower().split())[:TEXT_CHARS]
+
+
+def same_item(a: str, b: str) -> bool:
+    """Are two text keys the SAME item reworded ("Ask Ann about the March
+    deposit" / "Ask Ann about March deposit")? Equal keys, or no figure that
+    differs and at least two words and :data:`SAME_SHARE` of them shared.
+    "Send the March invoice" and "Send the April invoice" are two. Pure."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    aw, bw = set(a.split()), set(b.split())
+    af = {w for w in aw if w[:1].isdigit()}
+    bf = {w for w in bw if w[:1].isdigit()}
+    if af and bf and af != bf:
+        return False
+    shared = aw & bw
+    return len(shared) >= 2 and len(shared) / max(1, len(aw | bw)) >= SAME_SHARE
+
+
+def _quoted(text: str) -> set[str]:
+    from .recap import _QUOTE_RXS
+
+    out: set[str] = set()
+    for rx in _QUOTE_RXS:
+        for m in rx.finditer(text):
+            said = " ".join(m.group(1).lower().split()).strip(" .,;:!?")
+            if said:
+                out.add(said)
+    return out
+
+
+def _figures(text: str) -> set[str]:
+    from ..core.numbers import figures
+
+    return {f.key for f in figures(text)}
+
+
+def may_be_done(item: str, done: str) -> bool:
+    """Does a LATER Done line seem to settle this item? A shared file name, a
+    shared figure worth a record, a shared quoted span, or
+    :data:`DONE_WORDS` shared content words. It only ASKS (D-04.3); nothing
+    is ever closed on it. Pure."""
+    from .recap import _file_names
+
+    a, b = str(item or ""), str(done or "")
+    if not a.strip() or not b.strip():
+        return False
+    if _file_names(a) & _file_names(b):
+        return True
+    if _figures(a) & _figures(b):
+        return True
+    if _quoted(a) & _quoted(b):
+        return True
+    return len(keys.words(a) & keys.words(b)) >= DONE_WORDS
+
+
+# --------------------------------------------------------------------------- #
+# writing: in the same write as a kept recap
+# --------------------------------------------------------------------------- #
+def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None" = None) -> dict[str, int]:
+    """Carry one KEPT recap's lines into the open items, inside the caller's
+    session (``recap._store``: the same write that keeps the recap; the
+    caller commits). New Open lines are added; an open item of this piece of
+    work the rewritten recap no longer lists is SETTLED (never one the owner
+    reopened); a settled one it lists again is open again; one the owner
+    closed stays closed. The recap's Done lines then ask "Mark it done?"
+    about OTHER pieces' open items in the same folder (:func:`may_be_done`).
+    Work no longer on record: nothing. ``{added, settled, reopened, asked}``."""
+    stats = {"added": 0, "settled": 0, "reopened": 0, "asked": 0}
+    entry = db.get(WorkEntry, entry_id)
+    if entry is None:
+        return stats
+    when = _naive(now) or _now()
+    folder = keys.home_folder(entry.folder or "")
+    fkey = keys.folder_key(folder)
+    local = bool(entry.local_only or entry.keep_home)
+    pairs = labelled(lines)
+    opens: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for label, text in pairs:
+        if label != "open":
+            continue
+        key = text_key(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        opens.append((storable_text(text), key))
+    dones = [text for label, text in pairs if label == "done"]
+
+    mine = list(db.exec(select(WorkOpenItem).where(WorkOpenItem.entry_id == entry_id)))
+    matched: set[str] = set()
+    for n, (text, key) in enumerate(opens):
+        hit = next((it for it in mine if it.id not in matched and it.text_key == key), None)
+        if hit is None:
+            hit = next((it for it in mine if it.id not in matched and same_item(it.text_key, key)), None)
+        if hit is None:
+            # A microsecond apart, so a recap's lines keep their order.
+            item = WorkOpenItem(
+                id=new_id("open"), entry_id=entry_id, folder_key=fkey, folder=storable_text(folder),
+                text=text, text_key=key, status=OPEN_ITEM_OPEN, opened_at=when + timedelta(microseconds=n),
+                local_only=local, updated_at=when,
+            )
+            db.add(item)
+            mine.append(item)
+            matched.add(item.id)
+            stats["added"] += 1
+            continue
+        matched.add(hit.id)
+        if hit.status == OPEN_ITEM_OPEN:
+            if hit.text != text:
+                hit.text, hit.text_key = text, key  # the latest checked wording
+        elif hit.status == OPEN_ITEM_SETTLED:
+            # Its own conversation lists it again: open again.
+            hit.status, hit.closed_at, hit.closed_how, hit.closed_ref = OPEN_ITEM_OPEN, None, "", ""
+            hit.text, hit.text_key = text, key
+            stats["reopened"] += 1
+        hit.updated_at = when
+        db.add(hit)
+    for it in mine:
+        changed = False
+        if it.folder_key != fkey:
+            it.folder_key, it.folder, changed = fkey, storable_text(folder), True
+        if it.local_only != local:
+            it.local_only, changed = local, True
+        if it.id not in matched and it.status == OPEN_ITEM_OPEN and not it.owner_kept:
+            it.status, it.closed_at = OPEN_ITEM_SETTLED, when
+            it.closed_how, it.closed_ref = CLOSED_BY_CONVERSATION, entry_id
+            stats["settled"] += 1
+            changed = True
+        if changed:
+            it.updated_at = when
+            db.add(it)
+    if dones and fkey:
+        others = db.exec(
+            select(WorkOpenItem)
+            .where(WorkOpenItem.folder_key == fkey)
+            .where(WorkOpenItem.status == OPEN_ITEM_OPEN)
+            .where(WorkOpenItem.entry_id != entry_id)
+            .limit(OPEN_READ)
+        )
+        for it in others:
+            if it.maybe_done_entry or it.maybe_declined == entry_id:
+                continue
+            opened = _naive(it.opened_at)
+            if opened is not None and opened > when:
+                continue  # opened after this Done line: not "later work"
+            if any(may_be_done(it.text, d) for d in dones):
+                it.maybe_done_entry = entry_id
+                it.updated_at = when
+                db.add(it)
+                stats["asked"] += 1
+    return stats
+
+
+def drop_entries(db: Any, entry_ids: Iterable[str]) -> int:
+    """Remove every item of these pieces of work (inside the caller's
+    session; the caller commits): work that left the record, or a recap a
+    reply marked low trust after it was kept. A "may be done" that pointed
+    at one of them is cleared too."""
+    ids = [str(i) for i in entry_ids if i]
+    n = 0
+    for i in range(0, len(ids), 400):
+        chunk = ids[i : i + 400]
+        got = db.exec(sa_delete(WorkOpenItem).where(WorkOpenItem.entry_id.in_(chunk)))  # type: ignore[attr-defined]
+        n += int(getattr(got, "rowcount", 0) or 0)
+        for it in db.exec(select(WorkOpenItem).where(WorkOpenItem.maybe_done_entry.in_(chunk))):  # type: ignore[attr-defined]
+            it.maybe_done_entry = ""
+            db.add(it)
+    return n
+
+
+def backfill(engine: Any) -> int:
+    """Carry forward, once, the kept recaps written before open items
+    existed (or written straight into the table): every kept recap not yet
+    synced, oldest first (so a later Done line asks about an earlier item),
+    each item dated by its recap. Bounded per call; idempotent (a synced
+    recap is marked). RAISES when the store cannot be written."""
+    if engine is None:
+        return 0
+    R = WorkRecap
+    with session_scope(engine) as db:
+        todo = list(db.exec(
+            select(R)
+            .where(R.state == RECAP_KEPT)
+            .where(or_(R.open_synced == False, R.open_synced.is_(None)))  # noqa: E712  # type: ignore[union-attr]
+            .order_by(R.created_at, R.id)  # type: ignore[attr-defined]
+            .limit(BACKFILL_BATCH)
+        ))
+        if not todo:
+            return 0
+        last: "datetime | None" = None
+        for r in todo:
+            when = _naive(r.created_at) or _now()
+            if last is not None and when <= last:
+                # Two recaps kept in the same instant (a coarse clock): still
+                # one after the other, in the order they were kept.
+                when = last + timedelta(microseconds=50)
+            last = when
+            sync(db, str(r.id), [ln for ln in (r.text or "").split("\n") if ln.strip()], now=when)
+            r.open_synced = True
+            db.add(r)
+        db.commit()
+    log.info("open items: %d recap(s) carried forward", len(todo))
+    return len(todo)
+
+
+# --------------------------------------------------------------------------- #
+# the owner's answers
+# --------------------------------------------------------------------------- #
+def _view(it: WorkOpenItem) -> dict[str, Any]:
+    return {
+        "id": it.id, "entry_id": it.entry_id, "text": it.text, "status": it.status,
+        "how": it.closed_how or "", "closed_at": _iso(it.closed_at), "opened_at": _iso(it.opened_at),
+        "folder_key": it.folder_key,
+    }
+
+
+def get(engine: Any, item_id: str) -> "dict[str, Any] | None":
+    with session_scope(engine) as db:
+        it = db.get(WorkOpenItem, str(item_id or ""))
+        return _view(it) if it is not None else None
+
+
+def snapshot(engine: Any, item_id: str) -> "dict[str, Any] | None":
+    """What an answer may change, as it is now (a tool's Undo)."""
+    with session_scope(engine) as db:
+        it = db.get(WorkOpenItem, str(item_id or ""))
+        if it is None:
+            return None
+        return {
+            "status": it.status, "closed_at": _iso(it.closed_at), "closed_how": it.closed_how,
+            "closed_ref": it.closed_ref, "maybe_done_entry": it.maybe_done_entry,
+            "maybe_declined": it.maybe_declined, "owner_kept": bool(it.owner_kept),
+        }
+
+
+def restore(engine: Any, item_id: str, before: "dict[str, Any] | None") -> bool:
+    """Put an item back as :func:`snapshot` saw it. False when it is gone."""
+    if not isinstance(before, dict):
+        return False
+    with session_scope(engine) as db:
+        it = db.get(WorkOpenItem, str(item_id or ""))
+        if it is None:
+            return False
+        status = str(before.get("status") or OPEN_ITEM_OPEN)
+        it.status = status if status in (OPEN_ITEM_OPEN, *CLOSED_STATUSES) else OPEN_ITEM_OPEN
+        closed = before.get("closed_at")
+        try:
+            it.closed_at = _naive(datetime.fromisoformat(str(closed))) if closed else None
+        except ValueError:
+            it.closed_at = None
+        it.closed_how = str(before.get("closed_how") or "")
+        it.closed_ref = str(before.get("closed_ref") or "")
+        it.maybe_done_entry = str(before.get("maybe_done_entry") or "")
+        it.maybe_declined = str(before.get("maybe_declined") or "")
+        it.owner_kept = bool(before.get("owner_kept"))
+        it.updated_at = _now()
+        db.add(it)
+        db.commit()
+    return True
+
+
+def close(engine: Any, item_id: str, *, as_: str = "done", by: str = CLOSED_BY_YOU,
+          ref: str = "") -> "dict[str, Any] | None":
+    """Close one item: Done (``as_`` "done") or No longer needed ("dropped"),
+    by the owner (``by`` "you") or a chat the owner asked ("chat", ``ref`` =
+    the chat). Closing a closed item again changes nothing. None when there
+    is no such item; ``ValueError`` for another ``as_``."""
+    status = CLOSE_AS.get(str(as_ or ""))
+    if status is None:
+        raise ValueError("close as done or dropped")
+    with session_scope(engine) as db:
+        it = db.get(WorkOpenItem, str(item_id or ""))
+        if it is None:
+            return None
+        if it.status != status:
+            now = _now()
+            it.status, it.closed_at = status, now
+            it.closed_how = by if by in (CLOSED_BY_YOU, CLOSED_BY_CHAT) else CLOSED_BY_YOU
+            it.closed_ref = storable_text(str(ref or ""))[:200]
+            it.maybe_done_entry = ""
+            it.updated_at = now
+            db.add(it)
+            db.commit()
+            db.refresh(it)
+        return _view(it)
+
+
+def reopen(engine: Any, item_id: str) -> "dict[str, Any] | None":
+    """Put a closed item back on the open list (Reopen), for good: a
+    rewritten recap no longer settles it (``owner_kept``). On an item that
+    is still open it answers the "Mark it done?" question with Not yet: the
+    question goes, and that piece of work never asks it again. None when
+    there is no such item."""
+    with session_scope(engine) as db:
+        it = db.get(WorkOpenItem, str(item_id or ""))
+        if it is None:
+            return None
+        now = _now()
+        if it.status == OPEN_ITEM_OPEN:
+            if it.maybe_done_entry:
+                it.maybe_declined = it.maybe_done_entry
+                it.maybe_done_entry = ""
+        else:
+            it.status, it.closed_at, it.closed_how, it.closed_ref = OPEN_ITEM_OPEN, None, "", ""
+            it.maybe_done_entry = ""
+            it.owner_kept = True
+        it.updated_at = now
+        db.add(it)
+        db.commit()
+        db.refresh(it)
+        return _view(it)
+
+
+# --------------------------------------------------------------------------- #
+# reading: what a turn (and the card) may be told
+# --------------------------------------------------------------------------- #
+@dataclass
+class Told:
+    """The items one turn in a folder may be told (:func:`told`): ``open``
+    oldest first, ``lately`` (closed in the last :data:`CLOSED_LATELY_DAYS`)
+    newest first, and ``rows`` the pieces of work they belong to, as they
+    are now (by entry id)."""
+
+    open: list[dict[str, Any]] = field(default_factory=list)
+    lately: list[dict[str, Any]] = field(default_factory=list)
+    rows: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+def told(reader: Any, folder: str, *, exclude_refs: Iterable[str] = (), now: "datetime | None" = None,
+         lately: bool = False) -> Told:
+    """The open items (and, with ``lately``, the ones closed lately) of
+    EXACTLY ``folder`` that the turn ``reader`` reads for may be told (see
+    the module docstring). RAISES :class:`Unreadable` when the items, their
+    work or its sources cannot be read (the card answers 503; the block
+    leaves the part out)."""
+    from . import block as _block
+    from .index import _row, link_for
+
+    out = Told()
+    if reader is None or getattr(reader, "phone", False):
+        return out
+    own = keys.folder_key(keys.home_folder(str(folder or "").strip()))
+    if not own:
+        return out
+    when = _naive(now) or _now()
+    skip = {str(r) for r in exclude_refs or () if str(r or "").strip()}
+    engine = reader.engine
+    try:
+        backfill(engine)
+    except Exception:  # noqa: BLE001 — the items already carried are still read
+        log.debug("open items: the backfill could not run", exc_info=True)
+    try:
+        with session_scope(engine) as db:
+            items = list(db.exec(
+                select(WorkOpenItem)
+                .where(WorkOpenItem.folder_key == own)
+                .where(WorkOpenItem.status == OPEN_ITEM_OPEN)
+                .order_by(WorkOpenItem.opened_at, WorkOpenItem.id)  # type: ignore[arg-type]
+                .limit(OPEN_READ)
+            ))
+            closed: list[WorkOpenItem] = []
+            if lately:
+                closed = list(db.exec(
+                    select(WorkOpenItem)
+                    .where(WorkOpenItem.folder_key == own)
+                    .where(WorkOpenItem.status.in_(CLOSED_STATUSES))  # type: ignore[attr-defined]
+                    .where(WorkOpenItem.closed_at >= when - timedelta(days=CLOSED_LATELY_DAYS))  # type: ignore[operator]
+                    .order_by(WorkOpenItem.closed_at.desc(), WorkOpenItem.id)  # type: ignore[union-attr]
+                    .limit(LATELY_MAX)
+                ))
+            wanted = {it.entry_id for it in [*items, *closed]} | {
+                it.maybe_done_entry for it in items if it.maybe_done_entry}
+            entries = {}
+            ids = sorted(i for i in wanted if i)
+            for i in range(0, len(ids), 400):
+                for e in db.exec(select(WorkEntry).where(WorkEntry.id.in_(ids[i : i + 400]))):  # type: ignore[attr-defined]
+                    entries[e.id] = _row(e)
+            for it in [*items, *closed]:
+                db.expunge(it)
+    except Exception as exc:  # noqa: BLE001
+        raise Unreadable("the open items could not be read") from exc
+    if not items and not closed:
+        return out
+    try:
+        live = reader.live(list(entries.values()))
+    except Exception as exc:  # noqa: BLE001
+        raise Unreadable("the work the open items belong to could not be asked") from exc
+
+    def shown_row(entry_id: str) -> "dict[str, Any] | None":
+        row = live.get(entry_id)
+        if row is None or str(row.get("ref") or "") in skip:
+            return None
+        if keys.folder_key(keys.home_folder(row.get("folder") or "")) != own:
+            return None  # the work moved to another folder since
+        if not reader.allowed(row) or not reader.told(row):
+            return None
+        return row
+
+    def view(it: WorkOpenItem, row: dict[str, Any]) -> "dict[str, Any] | None":
+        text = _block._safe(_block._clip(it.text or "", TEXT_CHARS)).strip()
+        title = _block._safe(_block._clip(row.get("title") or "", _block.TITLE_CHARS)).strip()
+        if not text or not title:
+            # A line that reads as an instruction is never told, nor an item
+            # of a piece whose title does (the block drops that piece too).
+            return None
+        return {
+            "id": it.id, "text": text, "entry_id": it.entry_id, "title": title,
+            "kind": row.get("kind") or "", "link": link_for(row["kind"], row["ref"]),
+            "at": _iso(it.opened_at), "updated": row.get("updated"),
+        }
+
+    for it in items:
+        row = shown_row(it.entry_id)
+        if row is None:
+            continue
+        got = view(it, row)
+        if got is None:
+            continue
+        maybe = None
+        if it.maybe_done_entry:
+            later = shown_row(it.maybe_done_entry)
+            later_ok = later is not None and bool(
+                _block._safe(_block._clip(later.get("title") or "", _block.TITLE_CHARS)).strip())
+            if later is not None and later_ok:
+                later_title = _block._safe(_block._clip(later.get("title") or "", _block.TITLE_CHARS)).strip()
+                maybe = {"entry_id": it.maybe_done_entry, "title": later_title,
+                         "link": link_for(later["kind"], later["ref"])}
+        got["maybe_done"] = maybe
+        out.open.append(got)
+        out.rows[it.entry_id] = row
+    for it in closed:
+        row = shown_row(it.entry_id)
+        if row is None:
+            continue
+        got = view(it, row)
+        if got is None:
+            continue
+        got.update({"status": it.status, "how": it.closed_how or "", "closed_at": _iso(it.closed_at)})
+        out.lately.append(got)
+        out.rows.setdefault(it.entry_id, row)
+    return out
+
+
+def block_part(items: list[dict[str, Any]], now: datetime, *, chosen: str = "",
+               room: int = ITEMS_CHARS) -> tuple[list[str], int, list[str]]:
+    """The work block's "Still open in this folder" part for ``items``
+    (:func:`told`'s ``open``, oldest first): ``(lines, chars used, ids
+    told)``. At most :data:`TOLD_MAX` numbered lines inside ``room``, and
+    the item the owner picked (``chosen``, the chat body's
+    ``pick_up_item``) on top of them wherever it is, said to be the one the
+    owner chose. The rest is counted. Every line through ``block._safe``."""
+    from ..projects.recent_activity import age_words
+    from . import block as _block
+
+    if not items:
+        return [], 0, []
+    pick = next((it for it in items if chosen and it["id"] == chosen), None)
+    first = items[:TOLD_MAX]
+    order = first + ([pick] if pick is not None and pick not in first else [])
+    lead = _block._safe(ITEMS_LEAD)
+    if not lead:
+        return [], 0, []
+
+    def body(it: dict[str, Any]) -> str:
+        kind = _block.KIND_WORDS.get(it.get("kind") or "", "work")
+        title = _block._clip(it.get("title") or "", 60)
+        line = f"{it['text']} [{it['id']}] (from {kind} \"{title}\", {age_words(it.get('updated'), now)})"
+        if it.get("maybe_done"):
+            line += " (later work here may have done this; ask the owner before marking it done)"
+        if it is pick:
+            line += " (the owner picked this one to continue with now)"
+        return line
+
+    # The picked item's room is kept first, so it is always told; and the
+    # room of the "(and N more …)" line.
+    said_pick = "The owner picked open item 0 to continue with now."
+    reserve = 50 + ((len(body(pick)) + 4 + len(said_pick) + 1) if pick is not None else 0)
+    used = len(lead) + 1
+    kept: list[dict[str, Any]] = []
+    for it in order:
+        if it is pick:
+            kept.append(it)
+            continue
+        size = len(body(it)) + 4
+        if used + size + reserve > room:
+            continue
+        kept.append(it)
+        used += size
+    lines = [lead]
+    used = len(lead) + 1
+    told_ids: list[str] = []
+    picked_n = 0
+    for it in kept:
+        line = _block._safe(f"{len(told_ids) + 1}. {body(it)}")
+        if not line:
+            continue  # flagged: left out, and counted below
+        lines.append(line)
+        used += len(line) + 1
+        told_ids.append(it["id"])
+        if it is pick:
+            picked_n = len(told_ids)
+    if not told_ids:
+        return [], 0, []
+    more = len(items) - len(told_ids)
+    if more > 0:
+        tail = f"(and {more} more still open in this folder)"
+        lines.append(tail)
+        used += len(tail) + 1
+    if picked_n:
+        said = f"The owner picked open item {picked_n} to continue with now."
+        lines.append(said)
+        used += len(said) + 1
+    return lines, used, told_ids
+
+
+__all__ = [
+    "BACKFILL_BATCH", "CLOSED_LATELY_DAYS", "CLOSE_AS", "ITEMS_CHARS", "ITEMS_LEAD", "TOLD_MAX", "Told",
+    "Unreadable", "backfill", "block_part", "close", "drop_entries", "get", "labelled",
+    "may_be_done", "reopen", "restore", "same_item", "snapshot", "sync", "text_key", "told",
+]

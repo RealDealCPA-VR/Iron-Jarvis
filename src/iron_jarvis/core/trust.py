@@ -212,6 +212,9 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # Next leaps 43-a: nor a model downloaded (it fills the drive and
         # reaches a registry on the internet). What fits stays allowed.
         "model_download",
+        # Next leaps 04-b: nor a folder's open item closed (every later chat
+        # there is told the list). Reopening one only puts it back.
+        "open_item_close",
     }
 )
 

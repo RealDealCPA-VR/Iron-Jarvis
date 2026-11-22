@@ -376,6 +376,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # it (settings.records_usage.usage_tools_for). Pinned by
     # tests/test_next_leaps_46a_usage_by.py.
     "usage_report",
+    # Next leaps 04-b: a folder's open item closed or reopened from chat, at
+    # the owner's own words (D-04.3: an item that only looks done is the
+    # owner's to close); chat arms them (chat_turn.settings_ask_tools →
+    # workmap/open_item_tools.open_item_tools_for). An agent run reports;
+    # it never clears the owner's list. Pinned by tests/test_open_items.py.
+    "open_item_close", "open_item_reopen",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

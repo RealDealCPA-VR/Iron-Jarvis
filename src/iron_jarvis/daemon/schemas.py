@@ -695,11 +695,25 @@ class ChatBody(BaseModel):
     #: anything else is a 409 in words before the turn starts. The route
     #: object then ends with ``account: {id, name}``.
     account: str = ""
+    #: Next leaps 04-b: the open item the owner pressed "Continue" on (its id,
+    #: ``open_<12 hex>``; "" = none). Read ONLY in the shared grounding
+    #: gather (``chat_turn._gather_grounding``, the work hop), so both lanes
+    #: get it from one place: the work block tells that item, marked as the
+    #: one the owner picked, wherever it is on the folder's list. An id that
+    #: is not an open item of the turn's own folder marks nothing. It grants
+    #: and arms nothing.
+    pick_up_item: str = ""
 
     @field_validator("account", mode="before")
     @classmethod
     def _account_text(cls, v: Any) -> Any:
         return "" if v is None else " ".join(str(v).split())[:120]
+
+    @field_validator("pick_up_item", mode="before")
+    @classmethod
+    def _pick_up_item_text(cls, v: Any) -> Any:
+        text = "" if v is None else str(v).strip()
+        return text if re.fullmatch(r"open_[0-9a-f]{12}", text) else ""
 
     @field_validator("allow_cloud_once", mode="before")
     @classmethod

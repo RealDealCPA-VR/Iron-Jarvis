@@ -789,16 +789,28 @@ def _running_threads(platform: Any) -> set[str]:
 def _store(engine: Any, *, id: str, kind: str, ref: str, state: str, text: str = "",
            reason: str = "", covers: str = "", source_updated: str = "", dropped: int = 0,
            provider: str = "", model: str = "", asked: bool = False, tries: int = 0) -> None:
+    from . import open_items
+
     with session_scope(engine) as db:
         if db.get(WorkEntry, id) is None:
             # The work left the record meanwhile (deleted, or its folder was
             # forgotten): nothing about it is kept.
             return
+        now = _now()
+        kept = state == RECAP_KEPT
+        if kept:
+            # Next leaps 04-b: the recap's Open lines become (or settle) the
+            # folder's open items IN THIS SAME WRITE.
+            open_items.sync(db, id, [ln for ln in str(text or "").split("\n") if ln.strip()], now=now)
+        elif reason == WHY_LOW_TRUST:
+            # A reply marked low trust took the recap away: its items go too
+            # (they were carried from that recap).
+            open_items.drop_entries(db, [id])
         db.merge(WorkRecap(
             id=id, kind=kind, ref=ref, state=state, text=storable_text(text),
             reason=storable_text(reason), covers=covers, source_updated=source_updated,
             dropped=int(dropped), provider=storable_text(provider), model=storable_text(model),
-            asked=bool(asked), tries=int(tries), created_at=_now(),
+            asked=bool(asked), tries=int(tries), created_at=now, open_synced=kept,
         ))
         db.commit()
 

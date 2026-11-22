@@ -20,6 +20,13 @@
  *   what the card lists, and the card says so in those words under Continue
  *   (`PICK_UP_TOOL_NOTE`).
  *
+ * - Next leaps 04-b: "Still open" is every open item of the folder (they stay
+ *   until the owner closes them or their own conversation settles them),
+ *   each with its id, `maybeDone` (the card asks "This may be done. Mark it
+ *   done?", D-04.3) and its own Continue (`PICK_ITEM_SENTENCE`, the id in the
+ *   chat body's `pick_up_item`); `closedLately` the last 14 days, with
+ *   Reopen. `afterAnswer` moves an item only by the daemon's own answer.
+ *
  * Decoders keep only what the card shows, typed. No imports from lib/api
  * (many tests mock that module whole).
  */
@@ -41,6 +48,13 @@ export function pickUpPath(folder: string, local = false, chatCode = false): str
  *  work (`workmap/block.without_continue`, a test reads it here): it points
  *  at this folder and nothing else. */
 export const CONTINUE_SENTENCE = "Continue where we left off in this folder.";
+
+/** What an open item's own Continue sends, word for word (next leaps 04-b).
+ *  WHICH item rides the chat body's `pick_up_item`; the daemon's work block
+ *  tells that item, marked as the one picked (`workmap/block.
+ *  PICK_ITEM_SENTENCE`, a test reads it here). It points at this folder and
+ *  nothing else, like CONTINUE_SENTENCE. */
+export const PICK_ITEM_SENTENCE = "Continue with the open item I picked in this folder.";
 
 /** What the name of a chat or session Continue starts ends with. */
 export const CONTINUED_MARK = " (continued)";
@@ -83,13 +97,36 @@ export interface PickUpLast {
   outcome: string;
 }
 
+/** Next leaps 04-b: one open item of the folder (it stays until the owner
+ *  closes it or its own conversation settles it). `maybeDone`: a later piece
+ *  of work here seems to have done it, so the card asks (D-04.3). */
+export interface PickUpItem extends PickUpLine {
+  id: string;
+  maybeDone: { entryId: string; title: string; link: string } | null;
+}
+
+/** How a closed item was closed. */
+export type ClosedStatus = "done" | "dropped" | "settled";
+
+/** One item closed in the last 14 days ("Closed lately", with Reopen). */
+export interface PickUpClosed extends PickUpLine {
+  id: string;
+  status: ClosedStatus;
+  /** "you" | "chat" | "conversation". */
+  how: string;
+  closedAt: string | null;
+}
+
 export interface PickUp {
   folder: string;
   name: string;
   last: PickUpLast;
   done: string[];
   decided: PickUpLine[];
-  open: PickUpLine[];
+  /** 04-b: every open item of the folder, oldest first. */
+  open: PickUpItem[];
+  /** 04-b: closed in the last 14 days, newest first. */
+  closedLately: PickUpClosed[];
   pieces: number;
   /** A recap here was written before the latest messages (not shown). */
   recapPending: boolean;
@@ -118,6 +155,45 @@ function line(v: unknown): PickUpLine | null {
 
 function lines(v: unknown): PickUpLine[] {
   return (Array.isArray(v) ? v : []).map(line).filter((l): l is PickUpLine => l !== null);
+}
+
+/** An open item's id: `open_` and 12 hex (anything else is not one). */
+export const OPEN_ITEM_ID = /^open_[0-9a-f]{12}$/;
+
+function itemId(v: unknown): string {
+  const s = text(v);
+  return OPEN_ITEM_ID.test(s) ? s : "";
+}
+
+function openItem(v: unknown): PickUpItem | null {
+  const l = line(v);
+  if (!l) return null;
+  const o = v as Record<string, unknown>;
+  const id = itemId(o.id);
+  if (!id) return null;
+  const m = o.maybe_done;
+  let maybeDone: PickUpItem["maybeDone"] = null;
+  if (m && typeof m === "object" && !Array.isArray(m)) {
+    const mm = m as Record<string, unknown>;
+    if (text(mm.entry_id)) {
+      maybeDone = { entryId: text(mm.entry_id), title: text(mm.title).slice(0, 200), link: insideLink(mm.link) };
+    }
+  }
+  return { ...l, id, maybeDone };
+}
+
+function closedItem(v: unknown): PickUpClosed | null {
+  const l = line(v);
+  if (!l) return null;
+  const o = v as Record<string, unknown>;
+  const id = itemId(o.id);
+  const status = text(o.status);
+  if (!id || (status !== "done" && status !== "dropped" && status !== "settled")) return null;
+  return { ...l, id, status, how: text(o.how), closedAt: text(o.closed_at) || null };
+}
+
+function many<T>(v: unknown, one: (x: unknown) => T | null): T[] {
+  return (Array.isArray(v) ? v : []).map(one).filter((x): x is T => x !== null);
 }
 
 /** The card, or null when the folder has no earlier work on record (or the
@@ -149,7 +225,8 @@ export function decodePickUp(raw: unknown): PickUp | null {
     },
     done,
     decided: lines(o.decided),
-    open: lines(o.open),
+    open: many(o.open, openItem),
+    closedLately: many(o.closed_lately, closedItem),
     pieces,
     recapPending: o.recap_pending === true,
     full: o.full === true,
@@ -186,6 +263,94 @@ export function continueTitle(tool: boolean): string {
 
 /** What failed to load, in the app's one sentence shape. */
 export const PICK_UP_FAILED_THING = "Earlier work in this folder";
+
+// ------------------------------------------- open items (next leaps 04-b)
+
+/** An open item's one main press (G4): Continue with this one. */
+export const PICK_UP_ITEM_CONTINUE = "Continue";
+/** Its hover words: what is sent, and that the reply is told which item. */
+export const PICK_UP_ITEM_CONTINUE_TITLE = `Continue with this one: sends "${PICK_ITEM_SENTENCE}" The reply is told which item you picked.`;
+/** The ⋯ menu of an open item, and of a closed one. */
+export const PICK_UP_ITEM_MENU = "More for this item";
+export const PICK_UP_ITEM_DONE = "Done";
+export const PICK_UP_ITEM_DROP = "No longer needed";
+export const PICK_UP_ITEM_REOPEN = "Reopen";
+/** D-04.3: later work seems to have done it. It only asks. */
+export const PICK_UP_MAYBE_DONE = "This may be done. Mark it done?";
+export const PICK_UP_MAYBE_YES = "Mark it done";
+export const PICK_UP_MAYBE_NO = "Not yet";
+/** The folded list of items closed in the last 14 days. */
+export const PICK_UP_CLOSED_LATELY = "Closed lately";
+/** What a press that did not land says (then the reason). */
+export const PICK_UP_CHANGE_FAILED = "That item couldn't be changed";
+
+/** "Show 4 more" — the rest of the open items, on the card itself. */
+export function showMoreWords(n: number): string {
+  return n > 0 ? `Show ${n} more` : "";
+}
+
+/** How a closed item was closed, in words. */
+export function closedWords(c: Pick<PickUpClosed, "status">): string {
+  if (c.status === "done") return "Done";
+  if (c.status === "dropped") return "No longer needed";
+  return "Settled in the work it came from";
+}
+
+export function openItemClosePath(id: string): string {
+  return `/work-record/open-items/${encodeURIComponent(id)}/close`;
+}
+
+export function openItemReopenPath(id: string): string {
+  return `/work-record/open-items/${encodeURIComponent(id)}/reopen`;
+}
+
+/** The card after one of the owner's answers landed (the daemon's own item
+ *  back): Done / No longer needed move the item to "Closed lately"; Reopen
+ *  moves a closed one back to the open list (oldest first again); Not yet
+ *  (a Reopen on an item still open) only takes its question away. Pure. */
+export function afterAnswer(
+  p: PickUp,
+  id: string,
+  next: { status: string; how?: string; closed_at?: string | null },
+): PickUp {
+  const open = p.open.find((i) => i.id === id);
+  const closed = p.closedLately.find((i) => i.id === id);
+  if (next.status === "open") {
+    if (open) return { ...p, open: p.open.map((i) => (i.id === id ? { ...i, maybeDone: null } : i)) };
+    if (!closed) return p;
+    const back: PickUpItem = {
+      text: closed.text,
+      entryId: closed.entryId,
+      title: closed.title,
+      link: closed.link,
+      at: closed.at,
+      id,
+      maybeDone: null,
+    };
+    const items = [...p.open, back].sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
+    return { ...p, open: items, closedLately: p.closedLately.filter((i) => i.id !== id) };
+  }
+  const status = next.status;
+  if (status !== "done" && status !== "dropped" && status !== "settled") return p;
+  const from = open ?? closed;
+  if (!from) return p;
+  const shut: PickUpClosed = {
+    text: from.text,
+    entryId: from.entryId,
+    title: from.title,
+    link: from.link,
+    at: from.at,
+    id,
+    status,
+    how: next.how ?? "you",
+    closedAt: next.closed_at ?? null,
+  };
+  return {
+    ...p,
+    open: p.open.filter((i) => i.id !== id),
+    closedLately: [shut, ...p.closedLately.filter((i) => i.id !== id)],
+  };
+}
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
