@@ -160,15 +160,56 @@ ALLOWS_MAX_BODY_BYTES = 4 * 1024
 ALLOWS_NOT_KEPT = "This computer could not note that just now. Try again."
 NO_SUCH_PEER = "No paired computer has that name."
 
-#: Tells to the other computer that are still on their way (tests wait on
-#: these; :func:`drain_tells`).
-_TELLS: set[asyncio.Task] = set()
+#: The name every tell to the other computer runs under, so a drain finds the
+#: tells of ITS OWN event loop (``asyncio.all_tasks``) with no list kept at
+#: module level (Z-1).
+TELL_TASK_NAME = "peer-tell"
+#: How long :func:`drain_tells` waits before it fails loudly: a tell is one
+#: bounded try (``link.TELL_TIMEOUT_S``) after one vault read.
+DRAIN_TELLS_MAX_S = 30.0
 
 
-async def drain_tells() -> None:
-    """Wait for every tell still on its way (tests)."""
-    while _TELLS:
-        await asyncio.gather(*list(_TELLS), return_exceptions=True)
+def tells_still_going_words(count: int, seconds: float) -> str:
+    return f"{count} tell(s) to a paired computer still on their way after {seconds:g} s."
+
+
+def _tells_of(d: Any) -> set[asyncio.Task]:
+    """This app's tells still on their way (the strong reference that keeps
+    each task alive until it ends). Kept on the app's own state (``d``),
+    never in a module-level set (Z-1): two apps in one process never share
+    them, nothing here outlives the app, and a drain never reads it (it finds
+    its own loop's tells by name)."""
+    tells = getattr(d, "peer_tells", None)
+    if tells is None:
+        tells = set()
+        d.peer_tells = tells
+    return tells
+
+
+async def drain_tells(timeout: float = DRAIN_TELLS_MAX_S) -> None:
+    """Wait for the tells still on their way on THIS event loop (tests).
+
+    Only tells not yet ``done()`` are awaited, through ``asyncio.wait``, which
+    always yields: ``while tells: await asyncio.gather(*tells)`` spins forever
+    when every listed tell has finished but its removal callback has not run
+    yet (``docs/rules/daemon.md``, v1.388.2; the v1.555.0 Linux release hung
+    300 s on exactly that). The loop gets one turn at the end, so those
+    removals run before this returns. Another loop's tells are never touched.
+    Raises :class:`TimeoutError` in words after ``timeout`` seconds."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(float(timeout), 0.0)
+    while True:
+        going = [
+            t for t in asyncio.all_tasks(loop)
+            if t.get_name() == TELL_TASK_NAME and not t.done()
+        ]
+        if not going:
+            break
+        left = deadline - loop.time()
+        if left <= 0:
+            raise TimeoutError(tells_still_going_words(len(going), timeout))
+        await asyncio.wait(going, timeout=left)
+    await asyncio.sleep(0)
 
 
 class AllowsRefused(Exception):
@@ -225,9 +266,12 @@ def stop_runs_of(d: Any, peer: Any, summary: str, *, limit: int = 500) -> list[s
     return stopped
 
 
-def _tell_later(store: S.PeerStore, peer: Any, allows: list[str]) -> None:
+def _tell_later(d: Any, store: S.PeerStore, peer: Any, allows: list[str]) -> None:
     """Tell the other computer what it may do now, without holding the
-    answer up (one bounded try; its next Check reads the same anyway)."""
+    answer up (one bounded try; its next Check reads the same anyway). The
+    task is kept on this app's own list until it ends (:func:`_tells_of`);
+    the daemon's shutdown cancels one still on its way with the loop's other
+    tasks, and nothing waits on it."""
 
     async def _tell() -> None:
         try:
@@ -238,11 +282,13 @@ def _tell_later(store: S.PeerStore, peer: Any, allows: list[str]) -> None:
             log.warning("pairing: could not tell a paired computer what it may do", exc_info=True)
 
     try:
-        task = asyncio.ensure_future(_tell())
+        loop = asyncio.get_running_loop()
     except RuntimeError:  # no loop (a thread's caller): its next Check says it
         return
-    _TELLS.add(task)
-    task.add_done_callback(_TELLS.discard)
+    tells = _tells_of(d)
+    task = loop.create_task(_tell(), name=TELL_TASK_NAME)
+    tells.add(task)
+    task.add_done_callback(tells.discard)
 
 
 async def change_allows(d: Any, name: str, changes: dict[str, Any]) -> dict[str, Any]:
@@ -278,7 +324,7 @@ async def change_allows(d: Any, name: str, changes: dict[str, Any]) -> dict[str,
         except Exception:  # noqa: BLE001 — the change stands either way
             log.warning("could not publish %s", EventType.PEER_ALLOWS_CHANGED, exc_info=True)
     if A.on_keys(before) != A.on_keys(after):
-        _tell_later(store, fresh, A.on_keys(after))
+        _tell_later(d, store, fresh, A.on_keys(after))
     return {
         "peer": S.peer_view(fresh),
         "before": before,
