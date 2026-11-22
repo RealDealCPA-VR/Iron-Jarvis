@@ -796,14 +796,18 @@ class Config(BaseModel):
     #: 10-b (build-out R2.4): may the files Jarvis made for a message sent
     #: from the phone go back to it with the answer? "ask" (default: the
     #: first time on each destination the phone is asked, naming how many
-    #: files and their size, and the answer is kept here), "yes", "no". A
-    #: Local only chat asks every time and never names a file (D-10.3).
+    #: files and their size, and each destination's answer is kept for it),
+    #: "yes", "no". A Local only chat asks every time and never names a file
+    #: (D-10.3). How the two records below are read: ``comm/files_back.consent``.
     phone_send_files: str = "ask"
-    #: 10-b: the destinations a yes said ON THE PHONE was for (their names).
-    #: Not a setting of its own: a record written beside that yes. While a
-    #: yes holds, a destination not listed here is asked its first time; an
-    #: empty list (a yes chosen in Settings) is every destination.
+    #: 10-b: the destinations whose answer ON THE PHONE was Send (their
+    #: names). Not a setting of its own: a record written beside the
+    #: setting. A destination in neither list is asked its first time.
     phone_send_files_to: list[str] = Field(default_factory=list)
+    #: 10-b: the destinations whose answer on the phone was Keep it on the
+    #: PC: kept for that destination only (a Keep on Slack never stops a
+    #: Telegram that said Send).
+    phone_send_files_kept: list[str] = Field(default_factory=list)
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     #: THE FOLDERS JARVIS MAY READ (v1.356.0, G81) — Settings › Permissions.
     #: Empty (the default) = no limit: chat and agents read any file except
@@ -1306,7 +1310,7 @@ class Config(BaseModel):
         text = str(v or "").strip().lower()
         return text if text in ("ask", "yes", "no") else "ask"
 
-    @field_validator("phone_send_files_to", mode="before")
+    @field_validator("phone_send_files_to", "phone_send_files_kept", mode="before")
     @classmethod
     def _clean_phone_send_files_to(cls, v: Any) -> list[str]:
         # 10-b: one name typed by hand is a list of one; anything else that

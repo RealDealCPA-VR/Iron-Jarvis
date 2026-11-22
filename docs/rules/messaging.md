@@ -584,12 +584,27 @@ How to use this file: read the contents list, then read only the entries your ch
   mirrors `chat_turn._resolve_tool_workspace`; a run's `run_folders`), links
   followed first (`tools.base.safe_path`), `PHONE_CAPS` five of 20 MB; what is
   left out is named with why. A run that did not finish sends nothing.
-  WHEN (G10): `files_back.consent` reads `phone_send_files` (ask, yes, no;
-  schema row with Undo, `floor_when=("yes",)` from chat) and the record
-  `phone_send_files_to` (the destinations a phone's yes named, written BEFORE
-  the writer's yes); a destination not named while others are is asked its own
-  first time (prompt kind `file_send`, Send / Keep it on the PC, `ref_id` JSON
-  of the paths). A Local only chat (`files_back.work_is_local_only`, read
+  WHEN (G10): each phone answer is kept FOR ITS DESTINATION, a Send in
+  `phone_send_files_to`, a Keep in `phone_send_files_kept` (records written
+  BEFORE the writer; a Keep on Slack never stops a Telegram that said Send);
+  `phone_send_files` (ask, yes, no; schema row with Undo, `floor_when=("yes",)`
+  from chat) follows them (`files_back._follows`: "yes" once one said Send).
+  `files_back.consent` never sends where nobody said Send: no answer on
+  record, the setting decides; "no" keeps every destination; "ask" put back
+  over a Send (its Undo) asks again; otherwise each destination's own answer,
+  an unasked one asked, even under a yes (an Undo can put back a yes the
+  phone said for one destination; pinned by
+  `test_no_reading_of_the_kept_answers_sends_where_nobody_said_send`). So
+  clearing the records on a Settings change would be WRONG: an Undo of that
+  change would then read a phone's one-destination yes as every destination.
+  A never-asked destination is asked its own first
+  time (prompt kind `file_send`, Send / Keep it on the PC, `ref_id` JSON of the
+  paths; the typed "Reply 1 … or 2 …" rides WITH the buttons, since a Slack app
+  without interactivity shows buttons no press comes back from). After Send
+  the reply names only the files that WENT (`_send_files_now` returns them).
+  The open question's freshness look stats files: every async door uses
+  `_open_prompt` / `_reminder` (`asyncio.to_thread`), never the sync look on
+  the loop. A Local only chat (`files_back.work_is_local_only`, read
   STRICTLY: a failed read is Local only) asks every time with count, kind and
   size only, never a name (not in the words, a button or the kept question),
   and its answer changes no setting; "no" sends and asks nothing. Sending:
@@ -610,7 +625,11 @@ How to use this file: read the contents list, then read only the entries your ch
   write path, first answer wins); then `answer_press` turns the buttons into
   `prompts.pressed_label`, and for an approval or files sent that IS the reply
   (`_PRESS_HOLD` holds it back, sent after all if the buttons could not
-  change). The alert carries buttons only where a press can be answered
+  change); a tap on the answered button (`DONE_DATA`) is only answered
+  (`answer_press(edit=False)`), so the decision stays on the message. The
+  preview's two arguments say where it acts first (`prompts._PREVIEW_FIRST`)
+  and never a file's or message's own text (`_PREVIEW_NEVER`). The alert
+  carries buttons only where a press can be answered
   (`Notifier._approval_buttons`: buttons, two-way chat, an allowed identity;
   Slack's `supports_buttons` only with Socket Mode, its app token set);
   `prompts.approval_preview` (cost note, build words, or `card_words` and two
@@ -618,5 +637,7 @@ How to use this file: read the contents list, then read only the entries your ch
   only work and a bare ask (the old line stays). A safety card still reaches
   no destination. Left open: the voice question and a workflow ask's options
   have no buttons yet; the desk door (`POST /comm/threads/{id}/send`) sends
-  no files; not driven against real Telegram or Slack.
+  no files; on email the files go as their own message, not on the reply;
+  `two_way_note` checks Slack's files:read, not files:write; not driven
+  against real Telegram, Slack or email.
   Pins: `tests/test_leap10b_*.py`.

@@ -62,8 +62,10 @@ def test_nothing_leaves_until_send_and_the_ask_names_no_file(platform, setting):
     assert res[0]["files"] == "asked"
     assert fake.uploads == []
     question = fake.sent[-1]["text"]
+    # The buttons, and the typed answer with them (it always works).
     assert question == ("Iron Jarvis: This chat is Local only, so the 1 spreadsheet (2 KB) it made "
-                        "was not sent. Send it through Telegram?")
+                        "was not sent. Send it through Telegram? Reply 1 to send or 2 to keep it "
+                        "on the PC.")
     assert [b["text"] for b in fake.keyboards[-1]] == ["Send", "Keep it on the PC"]
     assert SECRET_NAME not in _everything_sent(fake)
     rec = _open_prompt(platform)
@@ -81,6 +83,7 @@ def test_nothing_leaves_until_send_and_the_ask_names_no_file(platform, setting):
     # A Local only chat's answer changes no setting: it asks every time.
     assert platform.config.phone_send_files == setting
     assert platform.config.phone_send_files_to == []
+    assert platform.config.phone_send_files_kept == []
 
 
 def test_keep_it_on_the_pc_sends_nothing_and_changes_no_setting(platform):
@@ -97,6 +100,7 @@ def test_keep_it_on_the_pc_sends_nothing_and_changes_no_setting(platform):
     assert fake.edits() == ["Kept on the PC"]
     assert fake.texts[-1] == "Iron Jarvis: OK: it stays on this PC."
     assert platform.config.phone_send_files == "ask"
+    assert platform.config.phone_send_files_kept == []  # not kept for the destination either
     # The next file in this chat is asked about again.
     fake.updates = [message(3, text="and another")]
     again = run(poll)

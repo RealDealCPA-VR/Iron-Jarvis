@@ -208,15 +208,36 @@ def _defang(text: str) -> str:
     return re.sub(r"\b(https?|ftp)://([^\s]+)", _url, flat, flags=re.IGNORECASE)
 
 
+#: Arguments that say WHERE or WHAT a call acts on, shown first in a preview.
+_PREVIEW_FIRST = frozenset({
+    "path", "paths", "file", "file_path", "filename", "folder", "directory", "dir", "target",
+    "destination", "dest", "dst", "src", "source", "url", "command", "cmd", "cwd", "pattern",
+    "glob", "name", "count", "sheet", "range", "to", "subject", "query",
+})
+#: Arguments that carry a file's or a message's own text: never in a preview
+#: (it would cross to the messaging service, and a write's text may be a
+#: client's).
+_PREVIEW_NEVER = frozenset({
+    "content", "contents", "text", "body", "data", "new_string", "old_string", "new_text",
+    "old_text", "patch", "diff", "html", "markdown", "code", "script", "base64", "bytes", "rows",
+    "values", "cells", "message", "edits",
+})
+
+
 def _arg_words(args: Any, limit: int = 2) -> str:
     """Two of a call's (already redacted) arguments, masked again: "path
-    Documents/Intake, pattern *.pdf"."""
+    Documents/Intake, pattern *.pdf". Where it acts comes first
+    (:data:`_PREVIEW_FIRST`, the call's own order kept among them); a
+    file's or a message's own text never shows (:data:`_PREVIEW_NEVER`)."""
     from ..detections.redact import mask
 
     if not isinstance(args, dict):
         return ""
+    keys = [k for k in args if str(k).lower() not in _PREVIEW_NEVER]
+    keys.sort(key=lambda k: str(k).lower() not in _PREVIEW_FIRST)  # a stable sort
     parts: list[str] = []
-    for key, value in args.items():
+    for key in keys:
+        value = args[key]
         if len(parts) >= limit:
             break
         if value is None or value == "" or value == [] or value == {}:

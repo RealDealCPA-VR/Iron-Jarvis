@@ -2501,12 +2501,18 @@ arrives with a short preview and two buttons.
 - **The first time, it asks.** A file leaves this PC when it goes to your
   phone, so the first time Jarvis has made something for a message on a
   destination, it asks there: "Send 1 spreadsheet (48 KB) to Telegram?",
-  with **Send** and **Keep it on the PC** (on email: reply 1 or 2). Your
-  answer is kept in Settings › Connections › Phone › **Send finished files to
-  your phone** (change it there, with Undo). After a Send, files come with
-  the answer on that destination without asking. A Send on Telegram is not a
-  Send for Slack: each destination asks once. **Keep it on the PC** keeps
-  every finished file on this PC from now on.
+  with **Send** and **Keep it on the PC** (or reply 1 or 2, which always
+  works). Your answer is kept for that destination: after a Send, files
+  come with the answer there without asking; after **Keep it on the PC**,
+  they stay on this PC. An answer on Telegram is not an answer for Slack:
+  each destination asks once. Settings › Connections › Phone › **Send
+  finished files to your phone** follows your answers and changes them
+  (with Undo): **Keep them on this PC** there keeps every file here, and a
+  destination that has not answered is still asked first, even with **Send
+  them** chosen there.
+- **What it says it sent.** After a Send, the reply names only the files
+  that went ("→ Sent 1 spreadsheet (48 KB) to Telegram."), and names any
+  that did not with the reason.
 - **Which files.** What the work made, read from its own record: the files
   the answer's own steps created or changed, inside the folder the work was
   done in (the phone chat's folder, its project's folder, or the task's own
@@ -2523,20 +2529,25 @@ arrives with a short preview and two buttons.
   your phone says what it wants to do, built from the request itself ("An
   agent wants to run a command: command dir Intake") with **Approve** and
   **Deny** under it. After a press the buttons read **Approved by you** or
-  **Denied by you**, and the agent carries on. A press on a question already
-  answered (in Iron Jarvis, or by a second press) reads **That was already
-  answered** and changes nothing. Typing approve, deny, 1 or 2 still works,
-  and a phone answer is always for that one use. Local only work shows no
-  preview, and a commit, a push or a risky page click is never sent to the
-  phone at all: answer those in Iron Jarvis.
+  **Denied by you**, and the agent carries on (tapping that button again
+  only shows **That was already answered**; it keeps saying what you
+  decided). A press on a question already answered elsewhere (in Iron
+  Jarvis, or by typing) reads **That was already answered** and changes
+  nothing. Typing approve, deny, 1 or 2 still works, and a phone answer is
+  always for that one use. The preview names where the agent acts (a
+  folder, a file, a command), never the text it would write. Local only
+  work shows no preview, and a commit, a push or a risky page click is
+  never sent to the phone at all: answer those in Iron Jarvis.
 - **Only from you.** A press counts only from someone on the destination's
   allowlist, in their own chat (in Slack also the destination's own channel),
   and only for their own question.
 - **Slack.** Files back and buttons need the newer Slack app setup (the
   files:write permission and interactivity, already in the manifest from
   Add a destination → Slack), and buttons need the app-level token (Socket
-  Mode); without it the question comes with its words only. If Slack refuses
-  a file, Jarvis says so in words.
+  Mode); without it the question comes with its words only. If a press does
+  nothing (a Slack app set up before interactivity was in the manifest),
+  reply 1 or 2 instead, as the question says. If Slack refuses a file,
+  Jarvis says so in words.
 
 ## The `/` list in Build › Code works before a session starts (v1.557.0)
 

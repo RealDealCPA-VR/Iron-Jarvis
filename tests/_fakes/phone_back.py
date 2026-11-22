@@ -31,6 +31,8 @@ class FakeTelegramBack(FakeTelegram):
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.upload_answer: Any = {"ok": True, "result": {"message_id": 99}}
         self.upload_error: Exception | None = None
+        #: File names whose upload fails (the others go).
+        self.fail_names: set[str] = set()
 
     def post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         method = url.rsplit("/", 1)[-1]
@@ -47,6 +49,8 @@ class FakeTelegramBack(FakeTelegram):
         if self.upload_error is not None:
             raise self.upload_error
         field, name, data, mime = file
+        if name in self.fail_names:
+            raise RuntimeError("the line dropped")
         self.uploads.append({"method": method, "fields": dict(fields), "field": field,
                              "name": name, "data": bytes(data), "mime": mime, "url": url})
         return self.upload_answer
@@ -134,6 +138,19 @@ def making_turn(path: Path, data: bytes = b"PK-sheet", reply: str = "Here is you
                 "escalate": False, "escalate_reason": "", "documents": [str(path)]}
 
     turn.calls = []
+    return turn
+
+
+def making_turn_of(paths: list[Path], data: bytes = b"PK-sheet", reply: str = "Here are your spreadsheets."):
+    """A chat turn that writes every one of ``paths`` and reports them all."""
+
+    async def turn(platform, personas, body, **kw) -> dict[str, Any]:
+        for p in paths:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+        return {"reply": reply, "provider": "mock", "model": "m", "tools_used": [],
+                "escalate": False, "escalate_reason": "", "documents": [str(p) for p in paths]}
+
     return turn
 
 

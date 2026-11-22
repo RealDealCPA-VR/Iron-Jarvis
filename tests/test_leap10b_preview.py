@@ -24,6 +24,20 @@ def test_two_redacted_arguments_say_what_the_call_does():
     assert line == "An agent wants to run a command: command dir Intake, cwd Documents"
 
 
+def test_where_it_acts_is_shown_and_a_files_own_text_never_is():
+    # A write's arguments are a path and the text written: the preview names
+    # the path, never what goes in the file (it would cross to the service).
+    line = approval_preview({"tool": "write_file", "args": {
+        "content": "Notes from the March meeting with the client", "path": "Documents/Intake/notes.txt"}})
+    assert "Documents/Intake/notes.txt" in line
+    assert "March meeting" not in line and "content" not in line
+    line = approval_preview({"tool": "edit_file", "args": {
+        "old_string": "draft words", "new_string": "final words", "path": "Documents/a.md"}})
+    assert "Documents/a.md" in line and "words" not in line
+    # Only bulk text to show: no preview, the old line stays.
+    assert approval_preview({"tool": "write_file", "args": {"content": "only the text"}}) == ""
+
+
 def test_the_cards_own_cost_note_wins_over_the_arguments():
     line = approval_preview({"tool": "image_generate", "args": {"prompt": "a cat"},
                              "cost_note": "This uses about 4 credits of your Pixio plan."})

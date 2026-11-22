@@ -738,10 +738,12 @@ class Channel(ABC):
                 out.append(self._fail(upload_failed_words(exc)))
         return out
 
-    def answer_press(self, press: Press, label: str) -> bool:
+    def answer_press(self, press: Press, label: str, *, edit: bool = True) -> bool:
         """Answer a button press (10-b): the buttons under the message become
-        ``label`` ("Approved by you"). True when the service took it.
-        BLOCKING. A destination with no buttons has nothing to answer."""
+        ``label`` ("Approved by you"). ``edit=False`` only answers the press
+        (Telegram's toast) and leaves the message as it is. True when the
+        message changed. BLOCKING. A destination with no buttons has nothing
+        to answer."""
         return False
 
     # -- contract --------------------------------------------------------

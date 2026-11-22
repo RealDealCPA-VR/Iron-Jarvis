@@ -20,6 +20,7 @@ from iron_jarvis.comm import Notifier
 from iron_jarvis.comm.models import PendingPromptRecord
 from iron_jarvis.comm.prompts import (
     APPROVAL_KIND,
+    DONE_DATA,
     FILE_SEND_KIND,
     FILE_SEND_OPTIONS,
     approval_button_data,
@@ -196,6 +197,29 @@ def test_a_second_press_answers_already_answered(platform):
     second, decision = asyncio.run(go())
     assert decision == "once"
     assert second[0]["status"] == "press_stale"
+    assert fake.answered() == ["Approved by you", "That was already answered"]
+
+
+def test_a_press_on_the_answered_button_keeps_the_decision_on_the_message(platform):
+    # After a press the buttons become one button reading "Approved by you"
+    # (it looks like a button, so people tap it). That tap hears "That was
+    # already answered" as a toast; the record of the decision stays.
+    fake = FakeTelegramBack([])
+    poll = _rig(platform, fake)
+
+    async def go():
+        approval_id, fut, _regs = await _ask(platform, poll)
+        fake.updates = [press(5, approval_button_data(approval_id, 1), sender=ME)]
+        await poll.poll_once()
+        fake.updates = [press(6, DONE_DATA, sender=ME)]
+        res = await poll.poll_once()
+        return res, await asyncio.wait_for(fut, 2)
+
+    res, decision = asyncio.run(go())
+
+    assert decision == "once"
+    assert res[0]["status"] == "press_stale"
+    assert fake.edits() == ["Approved by you"]
     assert fake.answered() == ["Approved by you", "That was already answered"]
 
 

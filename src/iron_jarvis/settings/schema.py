@@ -609,16 +609,19 @@ SETTINGS: tuple[SettingDef, ...] = (
       aliases=("phone file size", "attachment size from phone", "file limit from telegram")),
     # 10-b (build-out R2.4): a file Jarvis made for a message from the phone
     # goes back with the answer only after a yes, asked the first time on
-    # each destination ("1 spreadsheet, 48 KB, to Telegram"); the answer is
-    # kept here, with Undo. A yes from chat always asks (it sends files off
-    # the PC). A Local only chat asks every time, never naming a file.
+    # each destination ("1 spreadsheet, 48 KB, to Telegram"); each answer is
+    # kept for its destination (comm/files_back.consent), and this row
+    # follows them, with Undo. A yes from chat always asks (it sends files
+    # off the PC). A Local only chat asks every time, never naming a file.
     S("phone_send_files", "Send finished files to your phone", "connections", "enum",
       "When Jarvis makes a file for a message you sent from Telegram, Slack or email, it can send "
-      "the file back there with the answer, up to five files of 20 MB each. The first time on "
-      "each destination it asks you there, naming how many files and their size. A Local only "
-      "chat asks every time and never names the file.",
+      "it back there with the answer (up to five files of 20 MB each). Each destination is asked "
+      "the first time, with how many files and their size, and keeps its answer. Once one has "
+      "answered, the others are still asked first, even with Send them. Keep them on this PC "
+      "keeps every file here. A Local only chat asks every time and never names the file.",
       tier="ask", floor_when=("yes",), section="Phone",
-      options=(("ask", "Ask me the first time on each destination (default)"),
+      # The words fit the row's select at 390 px and at desktop width.
+      options=(("ask", "Ask each destination first (default)"),
                ("yes", "Send them"), ("no", "Keep them on this PC")),
       aliases=("files back to my phone", "send files to telegram", "send the spreadsheet to my phone")),
     S("calendar_trigger_enabled", "Calendar reminders", "connections", "bool",

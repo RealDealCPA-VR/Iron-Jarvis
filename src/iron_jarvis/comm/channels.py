@@ -236,9 +236,12 @@ class SlackChannel(Channel):
         except FileNotTaken as exc:
             return self._fail(exc.words)
 
-    def answer_press(self, press: Press, label: str) -> bool:
+    def answer_press(self, press: Press, label: str, *, edit: bool = True) -> bool:
         """The buttons under the message become ``label`` (10-b,
-        ``chat.update``: the message's own text, then one quiet line)."""
+        ``chat.update``: the message's own text, then one quiet line).
+        ``edit=False``: nothing to say (the socket pump already acked it)."""
+        if not edit:
+            return False
         token = self._resolve_secret(self.config.get("token_secret"))
         if not token or not press.chat or not press.message:
             return False
@@ -431,18 +434,19 @@ class TelegramChannel(Channel):
         why = f"Telegram refused it ({str(said)[:80]})" if said else "Telegram refused it"
         return self._fail(why.replace(token, "***"))
 
-    def answer_press(self, press: Press, label: str) -> bool:
+    def answer_press(self, press: Press, label: str, *, edit: bool = True) -> bool:
         """Answer a press (10-b): ``answerCallbackQuery`` (the button stops
         spinning, ``label`` shows), then ``editMessageReplyMarkup``: the
-        buttons become one answered button saying ``label``. True when the
-        message changed."""
+        buttons become one answered button saying ``label``. ``edit=False``
+        stops after the first (a tap on the answered button keeps it). True
+        when the message changed."""
         token = self._resolve_secret(self.config.get("token_secret"))
         if not token:
             return False
         if press.ref:
             self._post(f"{TELEGRAM_API}/bot{token}/answerCallbackQuery",
                        {"callback_query_id": press.ref, "text": label[:200]})
-        if press.chat is None or not str(press.message or "").isdecimal():
+        if not edit or press.chat is None or not str(press.message or "").isdecimal():
             return False
         from .prompts import DONE_DATA
 

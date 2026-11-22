@@ -70,6 +70,7 @@ from .prompts import (
     APPROVAL_KIND,
     APPROVAL_USAGE_REPLY,
     APPROVAL_WORDS,
+    DONE_DATA,
     FILE_SEND_KIND,
     FILE_SEND_OPTIONS,
     NOTHING_WAITING_REPLY,
@@ -1524,7 +1525,7 @@ class InboundPoller:
         # so a keyword rule can never steal "1" from an open gate. isdecimal
         # (not isdigit) — "²" passes isdigit but crashes int().
         if self.prompt_store is not None and text.isdecimal():
-            prompt, gone_status = self._fresh_open_prompt_ex(name, msg.sender_id)
+            prompt, gone_status = await self._open_prompt(name, msg.sender_id)
             if prompt is not None:
                 options = prompt_options(prompt)
                 pick = int(text)
@@ -1559,7 +1560,7 @@ class InboundPoller:
         # free-text-never-resolves rule, so "approve" aimed at a workflow ask
         # stays a normal chat turn.
         if self.prompt_store is not None and low in APPROVAL_WORDS:
-            prompt, gone_status = self._fresh_open_prompt_ex(name, msg.sender_id)
+            prompt, gone_status = await self._open_prompt(name, msg.sender_id)
             if prompt is not None and getattr(prompt, "kind", "") == APPROVAL_KIND:
                 return await self._resolve_prompt(
                     name, ch, msg, display, chat_on, prompt, low, text
@@ -1877,7 +1878,7 @@ class InboundPoller:
             # where it was read; the phone gets the words only.
             from ..documents.sources import without_figure_links
 
-            outbound = without_figure_links(reply) + self._pending_reminder(name, msg.sender_id)
+            outbound = without_figure_links(reply) + await self._reminder(name, msg.sender_id)
             sent = await self.send_chunked(ch, outbound, chat_id=msg.reply_to)
             # 10-b: the files this turn made go back after its words: its own
             # record (``documents``) inside the folder its tools worked in,
@@ -2299,6 +2300,17 @@ class InboundPoller:
         """The identity's newest open prompt, or None (see the _ex variant)."""
         return self._fresh_open_prompt_ex(channel, sender_id)[0]
 
+    async def _open_prompt(self, channel: str, sender_id: Any) -> tuple[Any, str]:
+        """:meth:`_fresh_open_prompt_ex` OFF the event loop (10-b review):
+        it reads rows and, for a voice or files question, stats the files on
+        disk, which may sit on a network share or a cloud folder not yet on
+        this PC. Every async door uses this, never the sync look."""
+        return await asyncio.to_thread(self._fresh_open_prompt_ex, channel, sender_id)
+
+    async def _reminder(self, channel: str, sender_id: Any) -> str:
+        """:meth:`_pending_reminder` off the event loop (see :meth:`_open_prompt`)."""
+        return await asyncio.to_thread(self._pending_reminder, channel, sender_id)
+
     def _fresh_open_prompt_ex(self, channel: str, sender_id: Any) -> tuple[Any, str]:
         """The identity's newest open prompt, EXPIRING it first when its run
         un-parked by other means (answered from the desktop, cancelled) — the
@@ -2492,7 +2504,7 @@ class InboundPoller:
         and for an empty answer. A numeric argument maps to the prompt's
         options exactly like a bare numbered pick."""
         answer = text[len("/answer"):].strip()
-        prompt = self._fresh_open_prompt(name, msg.sender_id)
+        prompt, _gone = await self._open_prompt(name, msg.sender_id)
         if prompt is None:
             return await self._answer_reply(
                 name, ch, msg, display, chat_on, text,
@@ -2566,7 +2578,7 @@ class InboundPoller:
                 # ANOTHER run may still be parked (back-to-back gates): now
                 # that this prompt is closed, surface the next-open one on the
                 # phone copy so it is not orphaned until the next chat reply.
-                outbound_suffix=self._pending_reminder(name, msg.sender_id),
+                outbound_suffix=await self._reminder(name, msg.sender_id),
                 prompt_id=prompt.id, run_id=prompt.ref_id,
             )
         # Claim lost: first answer wins, and it wasn't this one.
@@ -2574,7 +2586,7 @@ class InboundPoller:
         return await self._answer_reply(
             name, ch, msg, display, chat_on, original_text,
             ALREADY_ANSWERED_REPLY, "answer_superseded",
-            outbound_suffix=self._pending_reminder(name, msg.sender_id),
+            outbound_suffix=await self._reminder(name, msg.sender_id),
             prompt_id=prompt.id, run_id=prompt.ref_id,
         )
 
@@ -2771,7 +2783,7 @@ class InboundPoller:
                 approval_echo(decision), "approval_answered",
                 # Another gate may still be open — surface it on the phone
                 # copy, same rule as the workflow tail above.
-                outbound_suffix=self._pending_reminder(name, msg.sender_id),
+                outbound_suffix=await self._reminder(name, msg.sender_id),
                 prompt_id=prompt.id, approval_id=prompt.ref_id,
                 decision=decision,
             )
@@ -2781,7 +2793,7 @@ class InboundPoller:
         return await self._answer_reply(
             name, ch, msg, display, chat_on, original_text,
             APPROVAL_GONE_REPLY, "approval_expired",
-            outbound_suffix=self._pending_reminder(name, msg.sender_id),
+            outbound_suffix=await self._reminder(name, msg.sender_id),
             prompt_id=prompt.id, approval_id=prompt.ref_id,
         )
 
@@ -2814,10 +2826,11 @@ class InboundPoller:
             log.warning("inbound: a pressed button could not be read on %r", channel, exc_info=True)
             return None, PRESS_ANSWERED
 
-    def _say_on_press(self, ch: Channel, press: Any, label: str) -> bool:
-        """``ch.answer_press``, never raising (BLOCKING)."""
+    def _say_on_press(self, ch: Channel, press: Any, label: str, *, edit: bool = True) -> bool:
+        """``ch.answer_press``, never raising (BLOCKING). ``edit=False``
+        answers the press only, leaving the buttons as they are."""
         try:
-            return bool(ch.answer_press(press, label))
+            return bool(ch.answer_press(press, label, edit=edit))
         except Exception:  # noqa: BLE001 — the answer stands; the button stays
             log.warning("inbound: a pressed button could not be answered", exc_info=True)
             return False
@@ -2844,7 +2857,12 @@ class InboundPoller:
         options = prompt_options(prompt) if prompt is not None else []
         n = parsed[2] if parsed is not None else 0
         if prompt is None or not 1 <= n <= len(options):
-            await asyncio.to_thread(self._say_on_press, ch, press, why)
+            # The answered button ("Approved by you") looks like a button and
+            # gets tapped: that tap only hears it, the record of the decision
+            # stays on the message. Any other stale press turns its buttons
+            # into "That was already answered" (they no longer look live).
+            done = str(getattr(press, "data", "") or "") == DONE_DATA
+            await asyncio.to_thread(self._say_on_press, ch, press, why, edit=not done)
             return {"channel": name, "status": "press_stale", "sender": str(msg.sender_id)}
         kind = getattr(prompt, "kind", "")
         answer = options[n - 1]
@@ -2920,8 +2938,8 @@ class InboundPoller:
                 asked = await self._ask_files_back(name, ch, msg, files, left, tid=tid,
                                                    local_only=local_only, display=display)
                 return {"files": "asked" if asked else "not_asked"}
-            sent, _line = await self._send_files_now(name, ch, msg, files, left, tid=tid, display=display)
-            return {"files": "sent", "sent": sent}
+            went, _line = await self._send_files_now(name, ch, msg, files, left, tid=tid, display=display)
+            return {"files": "sent", "sent": len(went)}
         except Exception:  # noqa: BLE001 — the answer already went; the files stay
             log.warning("inbound: the files could not go back on %r", name, exc_info=True)
             return {"files": "error"}
@@ -2930,20 +2948,21 @@ class InboundPoller:
         self, name: str, ch: Channel, msg: InboundMessage, files: list[str],
         left: list[tuple[str, str]], *, tid: str = "", display: str = "", local_only: bool = False,
         say: bool = True,
-    ) -> tuple[int, str]:
+    ) -> tuple[list[str], str]:
         """Send ``files`` through the channel (off the loop), one
         ``comm.file_sent {channel, kind, bytes}`` each (never a name), then
         ONE line for what did not go (by name and why; by count in a Local
         only chat), on the phone and the phone chat (``say``; an answer's
-        reply carries it instead). ``(sent, line)``."""
+        reply carries it instead). ``(the paths that went, line)``: what a
+        reply says was sent is read from these, never from what was picked."""
         from . import files_back
 
         results = await asyncio.to_thread(ch.send_files, files, chat_id=msg.reply_to)
-        sent = 0
+        sent: list[str] = []
         failed: list[tuple[str, str]] = []
         for path, res in zip(files, list(results or []) + [{}] * len(files)):
             if (res or {}).get("ok"):
-                sent += 1
+                sent.append(path)
                 try:
                     size = await asyncio.to_thread(lambda p=path: Path(p).stat().st_size)
                 except OSError:
@@ -2969,8 +2988,8 @@ class InboundPoller:
     ) -> bool:
         """The ONE question before files go (10-b): a ``file_send`` prompt
         (Send, Keep it on the PC) on this sender's chat, with buttons where
-        the destination has them, else "Reply 1 to send or 2 to keep it on
-        the PC". An older unanswered one is closed and its files join this
+        the destination has them, and always "Reply 1 to send or 2 to keep it
+        on the PC". An older unanswered one is closed and its files join this
         one. In a Local only chat it names no file. True when asked."""
         from . import files_back
 
@@ -2998,17 +3017,19 @@ class InboundPoller:
         if tid:
             self._safe_append(tid, "assistant", question, channel=name, sender_id=msg.sender_id,
                               display=display)
-        words = f"{self.reply_prefix}{question}"
+        # The typed answer rides WITH the buttons: Slack shows buttons
+        # whenever its app token is set, but an app set up before
+        # interactivity was in its manifest never gets a press back, and
+        # "1" or "2" always works.
+        asked = f"{question} {files_back.answer_hint(len(files))}"
         try:
             if getattr(ch, "supports_buttons", False):
-                res = await asyncio.to_thread(ch.send, words, chat_id=msg.reply_to,
+                res = await asyncio.to_thread(ch.send, f"{self.reply_prefix}{asked}", chat_id=msg.reply_to,
                                               buttons=prompt_buttons(rec.id, FILE_SEND_OPTIONS))
                 if not (res or {}).get("ok"):
-                    await self.send_chunked(ch, f"{question} {files_back.answer_hint(len(files))}",
-                                            chat_id=msg.reply_to)
+                    await self.send_chunked(ch, asked, chat_id=msg.reply_to)
             else:
-                await self.send_chunked(ch, f"{question} {files_back.answer_hint(len(files))}",
-                                        chat_id=msg.reply_to)
+                await self.send_chunked(ch, asked, chat_id=msg.reply_to)
         except Exception:  # noqa: BLE001 — the question stays answerable by "1"
             log.warning("inbound: the files question could not be sent on %r", name, exc_info=True)
         return True
@@ -3027,11 +3048,12 @@ class InboundPoller:
         """The answer to "Send 1 spreadsheet (48 KB) to Telegram?" (10-b).
         The prompt is claimed FIRST (first answer wins: a second answer hears
         "That was already answered"). Send: the files go now (each checked
-        again: still on this PC, within the caps); on the first-time question
-        the yes is kept for THIS destination (``files_back.keep_choice``,
-        the settings writer, Undo). Keep: nothing goes; the first-time
-        question keeps "no". A Local only chat's question changes no
-        setting: it asks every time (D-10.3)."""
+        again: still on this PC, within the caps), and the reply names what
+        WENT; on the first-time question the yes is kept for THIS destination
+        (``files_back.keep_choice``, the settings writer, Undo). Keep:
+        nothing goes, and the first-time question's Keep is kept for THIS
+        destination too. A Local only chat's question changes no setting: it
+        asks every time (D-10.3)."""
         from ..agents.reply_files import PHONE_CAPS, pick
         from . import files_back
 
@@ -3051,7 +3073,8 @@ class InboundPoller:
                 await asyncio.to_thread(files_back.keep_choice, self.platform, "keep", name)
             return await self._answer_reply(
                 name, ch, msg, display, chat_on, original_text,
-                files_back.kept_reply(local_only, len(paths)), "file_kept",
+                files_back.kept_reply(local_only, len(paths), files_back.destination_words(ch, name)),
+                "file_kept",
             )
         if not local_only:
             await asyncio.to_thread(files_back.keep_choice, self.platform, "send", name)
@@ -3060,8 +3083,8 @@ class InboundPoller:
         picked = await asyncio.to_thread(pick, paths, [Path(p).parent for p in paths], PHONE_CAPS)
         files = [str(p) for p in picked.files]
         where = files_back.destination_words(ch, name)
-        what = await asyncio.to_thread(files_back.what_words, files) if files else ""
-        sent, line = (0, "")
+        sent: list[str] = []
+        line = ""
         if files:
             # The line for what did not go rides this answer's reply (below).
             sent, line = await self._send_files_now(
@@ -3069,11 +3092,16 @@ class InboundPoller:
                 tid="", display=display, local_only=local_only, say=False)
         else:
             line = files_back.not_sent_line(picked.left, [], where, local_only=local_only)
+        # Named from the files that WENT, never from what was picked.
+        what = await asyncio.to_thread(files_back.what_words, sent) if sent else ""
         head = f"→ Sent {what} to {where}." if sent else ""
         if not sent and not line:
             line = f"Nothing could be sent to {where}: the files are no longer on this PC."
         reply = "\n".join(x for x in (head, line) if x)
-        extra = {} if sent else {"press_label": "Not sent"}
+        # The pressed button says what went too: "Sent 1 of 2" when an upload failed.
+        extra = ({"press_label": "Not sent"} if not sent
+                 else {"press_label": f"Sent {len(sent)} of {len(files)}"} if len(sent) < len(files)
+                 else {})
         return await self._answer_reply(
             name, ch, msg, display, chat_on, original_text, reply,
             "file_sent" if sent and not line else "file_send_failed", **extra,

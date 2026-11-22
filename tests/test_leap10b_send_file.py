@@ -130,6 +130,9 @@ def test_the_first_time_on_a_destination_asks_and_send_sends_and_is_kept(platfor
     question = fake.sent[-1]
     assert question["text"].startswith("Iron Jarvis: Send 1 spreadsheet (1 KB) to Telegram?")
     assert [b["text"] for b in question["reply_markup"]["inline_keyboard"][0]] == ["Send", "Keep it on the PC"]
+    # The buttons AND the typed answer: a press that cannot come back (a
+    # Slack app set up before interactivity) still leaves a way to answer.
+    assert question["text"].endswith("Reply 1 to send or 2 to keep it on the PC.")
 
     # The answer by a typed "1" (the bare number answers the newest question).
     fake.updates = [_text(2, "1")]
@@ -174,12 +177,42 @@ def test_keep_it_on_the_pc_keeps_it_and_the_next_answer_is_not_asked(platform):
     run(poll)
 
     assert fake.uploads == []
-    assert platform.config.phone_send_files == "no"
-    assert fake.texts[-1] == ("Iron Jarvis: OK: finished files stay on this PC from now on "
-                              "(Settings, Phone, Send finished files to your phone changes it).")
+    # Kept for Telegram, the destination it was asked on: no global "no".
+    assert platform.config.phone_send_files_kept == ["tg"]
+    assert platform.config.phone_send_files == "ask"
+    assert fake.texts[-1] == ("Iron Jarvis: OK: finished files stay on this PC from now on when you "
+                              "ask from Telegram (Settings, Phone, Send finished files to your phone "
+                              "changes it).")
     fake.updates = [_text(3, "make another")]
     run(poll)
     assert fake.uploads == [] and "Send 1" not in fake.texts[-1]
+
+
+def test_a_keep_said_on_slack_is_not_a_keep_for_telegram(platform):
+    # The reviewer's probe: a Send on Telegram, then a Keep on Slack. The
+    # question says "Your answer is kept for <destination>": both hold.
+    from iron_jarvis.settings.writer import ConfigWriter
+
+    platform.config_writer = ConfigWriter(SimpleNamespace(platform=platform))
+    files_back.keep_choice(platform, "send", "tg")
+    files_back.keep_choice(platform, "keep", "slack")
+    cfg = platform.config
+    assert files_back.consent(cfg, "tg") == "send"
+    assert files_back.consent(cfg, "slack") == "keep"
+    assert files_back.consent(cfg, "mail") == "ask"  # never asked: asks its own first time
+
+
+def test_a_first_keep_on_slack_leaves_telegram_to_ask(platform):
+    from iron_jarvis.settings.writer import ConfigWriter
+
+    platform.config_writer = ConfigWriter(SimpleNamespace(platform=platform))
+    files_back.keep_choice(platform, "keep", "slack")
+    assert files_back.consent(platform.config, "slack") == "keep"
+    assert files_back.consent(platform.config, "tg") == "ask"
+    # A later Send on Telegram is Telegram's alone.
+    files_back.keep_choice(platform, "send", "tg")
+    assert files_back.consent(platform.config, "tg") == "send"
+    assert files_back.consent(platform.config, "slack") == "keep"
 
 
 def test_a_yes_said_on_telegram_is_not_a_yes_for_slack():
@@ -191,6 +224,122 @@ def test_a_yes_said_on_telegram_is_not_a_yes_for_slack():
     assert files_back.consent(SimpleNamespace(phone_send_files="no", phone_send_files_to=["tg"]), "tg") == "keep"
     assert files_back.consent(SimpleNamespace(phone_send_files="ask", phone_send_files_to=["tg"]), "tg") == "ask"
     assert files_back.consent(SimpleNamespace(), "tg") == "ask"
+
+
+def test_no_reading_of_the_kept_answers_sends_where_nobody_said_send():
+    def consent(setting, to, kept, where):
+        return files_back.consent(SimpleNamespace(phone_send_files=setting, phone_send_files_to=to,
+                                                  phone_send_files_kept=kept), where)
+
+    # A Keep chosen in Settings (or in chat) keeps every destination's files.
+    assert consent("no", ["tg"], ["slack"], "tg") == "keep"
+    assert consent("no", [], ["slack"], "mail") == "keep"
+    # Undo of the phone's first Send puts "ask" back: Telegram is asked again.
+    assert consent("ask", ["tg"], [], "tg") == "ask"
+    # A Keep on Slack after a Send on Telegram, then that Keep undone: the
+    # yes that comes back is never wider than the phone's own answers.
+    assert consent("yes", ["tg"], ["slack"], "tg") == "send"
+    assert consent("yes", ["tg"], ["slack"], "slack") == "keep"
+    assert consent("yes", ["tg"], ["slack"], "mail") == "ask"
+    # A Send on Telegram, then a Keep on Telegram, then that Keep undone.
+    assert consent("yes", [], ["tg"], "tg") == "keep"
+    assert consent("yes", [], ["tg"], "mail") == "ask"
+    # Only Keeps on record, Settings left at ask: the Keeps hold, the rest ask.
+    assert consent("ask", [], ["slack"], "slack") == "keep"
+    assert consent("ask", [], ["slack"], "tg") == "ask"
+
+
+def test_undoing_the_phones_first_send_asks_again(platform):
+    from iron_jarvis.settings.writer import ConfigWriter
+
+    writer = ConfigWriter(SimpleNamespace(platform=platform))
+    platform.config_writer = writer
+    files_back.keep_choice(platform, "send", "tg")
+    assert files_back.consent(platform.config, "tg") == "send"
+    writer.restore({"phone_send_files": "ask"})  # what the ledger's Undo puts back
+    assert files_back.consent(platform.config, "tg") == "ask"
+    # The next answer (a Keep on Slack) starts the record again: the undone
+    # Send on Telegram does not come back with it.
+    files_back.keep_choice(platform, "keep", "slack")
+    assert platform.config.phone_send_files_to == []
+    assert platform.config.phone_send_files_kept == ["slack"]
+    assert files_back.consent(platform.config, "tg") == "ask"
+    assert files_back.consent(platform.config, "slack") == "keep"
+
+
+def test_after_send_the_reply_names_only_the_files_that_went(platform):
+    from tests._fakes.phone_back import making_turn_of
+
+    a, b = _uploads_dir(platform) / "a.xlsx", _uploads_dir(platform) / "b.xlsx"
+    fake = FakeTelegramBack([_text(1, "make the two sheets")])
+    poll = poller(platform, telegram_back(fake), turn=making_turn_of([a, b]))
+    run(poll)
+    assert fake.uploads == []
+
+    fake.fail_names = {"b.xlsx"}
+    fake.updates = [_text(2, "1")]
+    run(poll)
+
+    assert [u["name"] for u in fake.uploads] == ["a.xlsx"]
+    said = fake.texts[-1]
+    assert said.startswith("Iron Jarvis: → Sent 1 spreadsheet (1 KB) to Telegram.")
+    assert "2 spreadsheets" not in said
+    assert "I couldn't send b.xlsx to Telegram: the upload failed (RuntimeError)." in said
+
+
+def test_the_question_says_how_to_answer_by_typing_on_slack_too(platform):
+    # Slack shows buttons whenever its app token is set, but an app set up
+    # before interactivity was in the manifest never gets the press back.
+    sheet = _uploads_dir(platform) / "march.xlsx"
+    api = FakeSlackApi()
+    ch = slack(api)
+    poll = poller(platform, ch, name="slack", turn=making_turn(sheet))
+    msg = InboundMessage(sender_id=SLACK_USER, text="make the sheet", reply_to=SLACK_USER)
+
+    async def go():
+        out = await poll._handle("slack", ch, msg)
+        await poll.drain()
+        return out
+
+    res = asyncio.run(go())
+
+    assert res["files"] == "asked"
+    asked = [p for m, p in api.posts if m == "chat.postMessage" and p.get("blocks")]
+    assert asked, "the question went without its buttons"
+    assert asked[-1]["text"].startswith("Iron Jarvis: Send 1 spreadsheet (1 KB) to Slack?")
+    assert asked[-1]["text"].endswith("Reply 1 to send or 2 to keep it on the PC.")
+
+
+def test_the_files_question_is_looked_at_off_the_event_loop(platform, monkeypatch):
+    # Whether the question still waits stats its files on disk (a project
+    # folder can be a network share or a OneDrive folder not on this PC):
+    # never on the event loop (CLAUDE.md, Daemon). Three doors reach it: a
+    # chat reply's reminder, "/answer" and a bare number.
+    import threading
+
+    from tests._fakes.phone_files import fake_turn
+
+    sheet = _uploads_dir(platform) / "march.xlsx"
+    fake = FakeTelegramBack([_text(1, "make the sheet")])
+    poll = poller(platform, telegram_back(fake), turn=making_turn(sheet))
+    run(poll)
+    loop_thread = threading.get_ident()  # run() drives the loop on this thread
+    seen: list[int] = []
+    real = files_back.prompt_fresh
+
+    def spy(prompt):
+        seen.append(threading.get_ident())
+        return real(prompt)
+
+    monkeypatch.setattr(files_back, "prompt_fresh", spy)
+    poll.chat_turn = fake_turn("You're welcome.")
+    for i, words in enumerate(("thanks", "/answer", "1"), start=2):
+        fake.updates = [_text(i, words)]
+        run(poll)
+
+    assert len(seen) >= 3, seen
+    assert loop_thread not in seen
+    assert [u["name"] for u in fake.uploads] == ["march.xlsx"]  # the "1" still answered
 
 
 def test_the_phones_answer_goes_through_the_settings_writer_with_undo(platform):
