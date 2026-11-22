@@ -122,7 +122,10 @@ function Lines({ label, rows, testId }: { label: string; rows: readonly string[]
   );
 }
 
-/** The ⋯ menu of one item: its presses, as menu items. Escape closes it. */
+/** The ⋯ menu of one item: its presses, as menu items. Escape closes it.
+ *  Opened on a row at the window's bottom edge (a phone), it scrolls just
+ *  enough to be seen: it opens below its row, inside the page's own
+ *  scrolling area, which never clips it (opened at 390 px). */
 function ItemMenu({
   id,
   label,
@@ -138,6 +141,10 @@ function ItemMenu({
   onToggle: () => void;
   children: ReactNode;
 }) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (open) listRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [open]);
   return (
     <span className="relative shrink-0">
       <button
@@ -155,6 +162,7 @@ function ItemMenu({
       </button>
       {open ? (
         <div
+          ref={listRef}
           role="menu"
           aria-label={label}
           data-testid={`pick-up-item-menu-list-${id}`}

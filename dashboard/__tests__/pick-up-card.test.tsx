@@ -862,6 +862,16 @@ describe("open items that stay until they are done (04-b)", () => {
     expect(onContinueItem.mock.calls[0][1].id).toBe(ITEM);
   });
 
+  it("an item's menu, once open, scrolls just enough to be seen (a row at a phone's bottom edge)", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(<PickUpCard folder={BOOKS} onContinue={() => {}} />);
+    fireEvent.click(await screen.findByTestId(`pick-up-item-menu-${ITEM}`));
+    const menu = screen.getByTestId(`pick-up-item-menu-list-${ITEM}`);
+    const scrolled = (Element.prototype.scrollIntoView as unknown as ReturnType<typeof vi.fn>).mock.contexts;
+    expect(scrolled).toContain(menu);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+  });
+
   it("a second press on an item's Continue while the first is being sent does nothing", async () => {
     H.api.getResponses[pickUpPath(BOOKS)] = answer();
     let release: () => void = () => {};
