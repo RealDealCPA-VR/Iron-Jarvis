@@ -122,7 +122,9 @@ function Lines({ label, rows, testId }: { label: string; rows: readonly string[]
   );
 }
 
-/** The ⋯ menu of one item: its presses, as menu items. Escape closes it.
+/** The ⋯ menu of one item: its presses, as menu items. Escape (with the
+ *  focus on ⋯ or in the menu) closes it and puts the focus back on ⋯; a
+ *  press anywhere outside it closes it, as the chat's other ⋯ menus do.
  *  Opened on a row at the window's bottom edge (a phone), it scrolls just
  *  enough to be seen: it opens below its row, inside the page's own
  *  scrolling area, which never clips it (opened at 390 px). */
@@ -132,6 +134,7 @@ function ItemMenu({
   open,
   busy,
   onToggle,
+  onClose,
   children,
 }: {
   id: string;
@@ -139,15 +142,45 @@ function ItemMenu({
   open: boolean;
   busy: boolean;
   onToggle: () => void;
+  /** Close THIS menu (a no-op when another one is open). */
+  onClose: () => void;
   children: ReactNode;
 }) {
+  const boxRef = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
   useEffect(() => {
     if (open) listRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: Event) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) closeRef.current();
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [open]);
   return (
-    <span className="relative shrink-0">
+    <span
+      ref={boxRef}
+      className="relative shrink-0"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || !open) return;
+        e.stopPropagation();
+        closeRef.current();
+        triggerRef.current?.focus();
+      }}
+    >
       <button
+        ref={triggerRef}
         type="button"
         data-testid={`pick-up-item-menu-${id}`}
         aria-label={`${PICK_UP_ITEM_MENU}: ${label}`}
@@ -166,11 +199,6 @@ function ItemMenu({
           role="menu"
           aria-label={label}
           data-testid={`pick-up-item-menu-list-${id}`}
-          onKeyDown={(e) => {
-            if (e.key !== "Escape") return;
-            e.stopPropagation();
-            onToggle();
-          }}
           className="absolute right-0 top-full z-30 mt-0.5 w-44 space-y-0.5 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
         >
           {children}
@@ -386,6 +414,7 @@ export function PickUpCard({
             open={menuFor === item.id}
             busy={busy}
             onToggle={() => setMenuFor((cur) => (cur === item.id ? null : item.id))}
+            onClose={() => setMenuFor((cur) => (cur === item.id ? null : cur))}
           >
             <button
               type="button"
@@ -448,6 +477,7 @@ export function PickUpCard({
           open={menuFor === item.id}
           busy={busy}
           onToggle={() => setMenuFor((cur) => (cur === item.id ? null : item.id))}
+          onClose={() => setMenuFor((cur) => (cur === item.id ? null : cur))}
         >
           <button
             type="button"

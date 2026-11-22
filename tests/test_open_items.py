@@ -284,6 +284,108 @@ def test_the_same_words_match_first_and_a_plain_reword_keeps_the_item(scene):
         "Ask Ann about the March deposit again"])
 
 
+SHARED = "Ask the bank for the missing statement"
+
+
+def _shared_line(scene):
+    """Two conversations in one folder whose recaps list the SAME Open line:
+    the second one was started by Continue on the first (review 2 of 04-b)."""
+    a = _chat(scene, "Bank reconciliation", H, hours_ago=30)
+    _keep(scene, a, "Done: Matched the deposits", f"Open: {SHARED}")
+    b = _chat(scene, "Bank reconciliation (continued)", H, hours_ago=1)
+    _keep(scene, b, "Done: Called the branch", f"Open: {SHARED}")
+    return a, b
+
+
+def _numbered(told: str, text: str) -> list[str]:
+    return [ln for ln in told.split("\n") if f"{text} [open_" in ln]
+
+
+def test_the_same_line_in_two_conversations_is_one_item_and_one_done_closes_it(scene):
+    a, b = _shared_line(scene)
+    card = _card(scene, H)
+    assert _texts(card["open"]) == [SHARED]
+    (shown,) = card["open"]
+    assert shown["entry_id"] == f"chat:{a}"  # the oldest
+    told = _block(scene, H, query=CONTINUE)
+    (line,) = _numbered(told, SHARED)
+    assert line.startswith("1. ")
+    # One Done closes it, whichever conversation listed it.
+    r = scene.client.post(f"/work-record/open-items/{shown['id']}/close", json={"how": "done"})
+    assert r.status_code == 200 and r.json()["item"]["status"] == OPEN_ITEM_DONE
+    card = _card(scene, H)
+    assert card["open"] == [] and _texts(card["closed_lately"]) == [SHARED]
+    assert SHARED not in _block(scene, H, query=CONTINUE)
+    assert {i.status for i in _items(scene)} == {OPEN_ITEM_DONE}
+    # The second conversation goes on and its recap lists the line again: the
+    # owner's Done stands.
+    _keep(scene, b, "Done: Called the branch", "Done: Wrote to the branch", f"Open: {SHARED}")
+    assert _card(scene, H)["open"] == []
+    # A third conversation lists the same words while the Done is under
+    # Closed lately: it stands there too, told nowhere as open.
+    c = _chat(scene, "Bank reconciliation, third go", H, hours_ago=0.5)
+    _keep(scene, c, f"Open: {SHARED}")
+    card = _card(scene, H)
+    assert card["open"] == [] and _texts(card["closed_lately"]) == [SHARED]
+    assert SHARED not in _block(scene, H, query=CONTINUE)
+    # Reopen puts the line back, once, for every conversation that listed it.
+    r = scene.client.post(f"/work-record/open-items/{shown['id']}/reopen")
+    assert r.status_code == 200
+    card = _card(scene, H)
+    assert _texts(card["open"]) == [SHARED] and card["closed_lately"] == []
+    assert {i.status for i in _items(scene)} == {OPEN_ITEM_OPEN}
+    assert len(_items(scene)) == 3
+
+
+def test_each_conversation_settles_only_its_own_copy_of_a_shared_line(scene):
+    a, b = _shared_line(scene)
+    # The second conversation's rewritten recap no longer lists it: its own
+    # copy is settled, the first conversation's stays open, and the line is
+    # never also under Closed lately while it is open.
+    _keep(scene, b, "Done: Called the branch")
+    card = _card(scene, H)
+    assert _texts(card["open"]) == [SHARED] and card["closed_lately"] == []
+    states = {i.entry_id: i.status for i in _items(scene)}
+    assert states == {f"chat:{a}": OPEN_ITEM_OPEN, f"chat:{b}": OPEN_ITEM_SETTLED}
+
+
+def test_a_line_whose_first_conversation_is_deleted_stays_on_the_list(scene):
+    a, _b = _shared_line(scene)
+    with session_scope(scene.engine) as db:
+        db.delete(db.get(ChatThreadRecord, a))
+        db.commit()
+    card = _card(scene, H)
+    assert _texts(card["open"]) == [SHARED]
+    assert len(_numbered(_block(scene, H, query=CONTINUE), SHARED)) == 1
+
+
+def test_the_same_words_after_closed_lately_ends_are_new_work(scene):
+    a = _chat(scene, "Bank reconciliation", H, hours_ago=600)
+    _keep(scene, a, f"Open: {SHARED}")
+    (first,) = _items(scene)
+    open_items.close(scene.engine, first.id, as_="done")
+    with session_scope(scene.engine) as db:
+        row = db.get(WorkOpenItem, first.id)
+        row.closed_at = utcnow().replace(tzinfo=None) - timedelta(days=open_items.CLOSED_LATELY_DAYS + 6)
+        db.add(row)
+        db.commit()
+    c = _chat(scene, "Next month's reconciliation", H, hours_ago=1)
+    _keep(scene, c, f"Open: {SHARED}")
+    card = _card(scene, H)
+    assert _texts(card["open"]) == [SHARED] and card["open"][0]["entry_id"] == f"chat:{c}"
+
+
+def test_the_journal_undo_puts_back_every_conversations_copy(scene):
+    _shared_line(scene)
+    shown = _card(scene, H)["open"][0]["id"]
+    close, _reopen = open_item_tools.open_item_tools(scene.platform)
+    undo = asyncio.run(close.capture_undo({"item": shown}, _ctx(scene)))
+    assert _run(close, {"item": shown, "how": "done"}, scene, H).ok
+    assert {i.status for i in _items(scene)} == {OPEN_ITEM_DONE}
+    assert asyncio.run(close.revert(undo, _ctx(scene))).ok
+    assert {i.status for i in _items(scene)} == {OPEN_ITEM_OPEN}
+
+
 def test_two_readers_carrying_the_old_recaps_at_once_carry_each_once(scene, monkeypatch):
     import threading
 
@@ -729,6 +831,63 @@ def test_chat_refuses_an_item_outside_its_folder_or_with_no_folder(scene):
     got = _run(close, {"item": item.id}, scene, "")
     assert not got.ok and got.error == open_item_tools.NO_FOLDER
     assert _items(scene)[0].status == OPEN_ITEM_OPEN
+
+
+NOTES = r"C:\Users\Owner\Desktop\Notes"
+
+
+def test_chat_refuses_an_item_of_another_folder_that_is_nobodys(scene):
+    """Two folders that belong to no client: the wall tells either turn the
+    other's work, so only the folder check keeps one's items from the other."""
+    _keep(scene, _chat(scene, "Downloads work", DOWNLOADS, hours_ago=2),
+          "Open: a downloads item", "Open: a closed downloads item")
+    _keep(scene, _chat(scene, "Notes work", NOTES), "Open: a notes item")
+    down, shut = _items(scene)[:2]
+    open_items.close(scene.engine, shut.id, as_="done")
+    close, reopen = open_item_tools.open_item_tools(scene.platform)
+    for tool, item in ((close, down), (reopen, shut)):
+        got = _run(tool, {"item": item.id}, scene, NOTES)
+        assert not got.ok and got.error == open_item_tools.NOT_HERE, tool.name
+        assert item.text not in got.error
+    listed = _run(reopen, {}, scene, NOTES)
+    assert listed.output == open_item_tools.NONE_CLOSED
+    assert {i.id: i.status for i in _items(scene)}[down.id] == OPEN_ITEM_OPEN
+    assert {i.id: i.status for i in _items(scene)}[shut.id] == OPEN_ITEM_DONE
+    # From its own folder, the same item closes.
+    assert _run(close, {"item": down.id}, scene, DOWNLOADS).ok
+
+
+def test_on_the_phone_the_tools_tell_and_change_nothing(scene, monkeypatch):
+    """D-13.2: recap lines and Local only work never go to the phone. A phone
+    turn carries its thread's folder (``comm/inbound``), so the tools refuse
+    there in one sentence that names no item, in a client's folder and in a
+    folder that is nobody's."""
+    from iron_jarvis.providers import failure_words
+    from iron_jarvis.workmap import lookup
+
+    monkeypatch.setattr(lookup, "withhold_local_only", lambda: False)  # the phone alone refuses
+    _keep(scene, _chat(scene, "Hartleys private matter", H), "Open: Hartleys private matter",
+          "Open: Hartleys second matter")
+    _keep(scene, _chat(scene, "Downloads private", DOWNLOADS, local_only=True), "Open: a private downloads item")
+    first, second, private = _items(scene)
+    open_items.close(scene.engine, first.id, as_="done")
+    close, reopen = open_item_tools.open_item_tools(scene.platform)
+    token = failure_words.mark_answers_the_phone(True)
+    try:
+        said = [_run(reopen, {}, scene, H), _run(reopen, {"item": first.id}, scene, H),
+                _run(close, {"item": second.id}, scene, H), _run(close, {"item": private.id}, scene, DOWNLOADS),
+                _run(reopen, {}, scene, DOWNLOADS)]
+    finally:
+        failure_words.reset_answers_the_phone(token)
+    for got in said:
+        assert not got.ok and got.error == open_item_tools.ON_PHONE
+        words = f"{got.output or ''} {got.error or ''} {json.dumps(got.data or {})}"
+        for it in (first, second, private):
+            assert it.text not in words and it.id not in words
+    assert {i.id: i.status for i in _items(scene)} == {
+        first.id: OPEN_ITEM_DONE, second.id: OPEN_ITEM_OPEN, private.id: OPEN_ITEM_OPEN}
+    # Off the phone, the same turn closes it.
+    assert _run(close, {"item": private.id}, scene, DOWNLOADS).ok
 
 
 def test_chat_refuses_a_local_only_item_in_a_turn_that_leaves_the_network(scene, monkeypatch):

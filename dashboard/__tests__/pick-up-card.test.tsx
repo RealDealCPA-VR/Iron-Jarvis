@@ -852,14 +852,49 @@ describe("open items that stay until they are done (04-b)", () => {
     expect(within(row).getAllByRole("button").map((b) => b.textContent)).toEqual(["Continue", ""]);
     expect(within(row).getByTestId(`pick-up-item-continue-${ITEM}`).getAttribute("title")).toContain(PICK_ITEM_SENTENCE);
     expect(screen.queryByRole("menu")).toBeNull();
-    fireEvent.click(within(row).getByTestId(`pick-up-item-menu-${ITEM}`));
+    const trigger = within(row).getByTestId(`pick-up-item-menu-${ITEM}`);
+    trigger.focus();
+    fireEvent.click(trigger);
     const menu = screen.getByRole("menu");
     expect(within(menu).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Done", "No longer needed"]);
-    fireEvent.keyDown(menu, { key: "Escape" });
+    // A real Escape: the focus is still on ⋯ after the press that opened it.
+    expect(document.activeElement).toBe(trigger);
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
     fireEvent.click(within(row).getByTestId(`pick-up-item-continue-${ITEM}`));
     expect(onContinueItem).toHaveBeenCalledTimes(1);
     expect(onContinueItem.mock.calls[0][1].id).toBe(ITEM);
+  });
+
+  it("an item's menu closes on a press outside it, and Escape from inside it puts the focus back on ⋯", async () => {
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    render(
+      <div>
+        <button type="button" data-testid="outside">elsewhere</button>
+        <PickUpCard folder={BOOKS} onContinue={() => {}} onContinueItem={() => {}} />
+      </div>,
+    );
+    const trigger = await screen.findByTestId(`pick-up-item-menu-${ITEM}`);
+    fireEvent.click(trigger);
+    // A press inside the menu does not close it before its click lands.
+    const done = screen.getByTestId(`pick-up-item-done-${ITEM}`);
+    fireEvent.pointerDown(done);
+    fireEvent.mouseDown(done);
+    expect(screen.queryByRole("menu")).not.toBeNull();
+    // A press anywhere else does.
+    const outside = screen.getByTestId("outside");
+    fireEvent.pointerDown(outside);
+    fireEvent.mouseDown(outside);
+    expect(screen.queryByRole("menu")).toBeNull();
+    // Opened again, Escape with the focus on one of its entries.
+    fireEvent.click(trigger);
+    const drop = screen.getByTestId(`pick-up-item-drop-${ITEM}`);
+    drop.focus();
+    fireEvent.keyDown(drop, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(H.api.posts).toEqual([]);
   });
 
   it("an item's menu, once open, scrolls just enough to be seen (a row at a phone's bottom edge)", async () => {

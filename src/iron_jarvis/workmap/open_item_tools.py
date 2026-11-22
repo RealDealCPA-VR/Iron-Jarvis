@@ -16,6 +16,12 @@ THE RULES, each pinned (``tests/test_open_items.py``):
   this turn is not told (``open_items.told`` through the ONE reader: its
   work asked again, walled, Local only withheld from a turn that leaves the
   network). The refusal never says the item's words.
+* REFUSED ON THE PHONE (D-13.2, review 2 of 04-b): a phone turn carries
+  its thread's folder (``comm/inbound``), but an item's words are a recap
+  line, and recap lines and Local only work never go to the phone. The
+  reader is opened with ``phone=failure_words.answers_the_phone()``, as
+  ``work_history`` does, and a phone turn gets :data:`ON_PHONE`: no item's
+  words or id, nothing changed.
 * Undone by Reopen (and by the journal's Undo: ``REVERSIBLE``, the item as
   it was is captured before the change and put back by ``revert``).
 * Tier ``allow`` (``core/config``): closing or reopening an item changes
@@ -58,6 +64,12 @@ UNREADABLE = (
     "again in a moment."
 )
 NONE_CLOSED = "Nothing in this folder was closed in the last 14 days."
+#: D-13.2: an item's words are a recap line, and recap lines never go to
+#: the phone (nor does Local only work).
+ON_PHONE = (
+    "Open items are not shown or changed from your phone: their words stay on this PC. Close or "
+    "reopen one in a chat on this PC."
+)
 HOW_WORDS = {"done": "done", "dropped": "no longer needed"}
 
 
@@ -89,9 +101,13 @@ class _OpenItemTool(Tool):
     def _engine(self) -> Any:
         return getattr(self.platform, "engine", None)
 
-    def _find(self, item_id: str, *, lately: bool) -> "tuple[str, dict[str, Any] | None]":
-        """``("", item)`` when ``item_id`` is one this turn is told in its own
-        folder, else ``(refusal, None)``. BLOCKING."""
+    def _told(self, *, lately: bool) -> "tuple[str, Any]":
+        """``("", open_items.Told)``: what this turn is told of its OWN
+        folder's items, through the reader every read of the record uses,
+        with the turn's wall and the phone's rule (D-13.2: a turn that
+        answers the phone is refused, it is never sent a recap line or Local
+        only work). Else ``(refusal, None)``. BLOCKING."""
+        from ..providers.failure_words import answers_the_phone
         from . import open_items
         from .clients import wall
         from .lookup import Reader
@@ -101,12 +117,21 @@ class _OpenItemTool(Tool):
         if not folder:
             return NO_FOLDER, None
         try:
-            reader = Reader.open(self.platform, turn=turn)
+            reader = Reader.open(self.platform, turn=turn, phone=answers_the_phone())
             if reader is None:
                 return UNREADABLE, None
-            got = open_items.told(reader, folder, lately=lately)
+            if reader.phone:
+                return ON_PHONE, None
+            return "", open_items.told(reader, folder, lately=lately)
         except Exception:  # noqa: BLE001
             return UNREADABLE, None
+
+    def _find(self, item_id: str, *, lately: bool) -> "tuple[str, dict[str, Any] | None]":
+        """``("", item)`` when ``item_id`` is one this turn is told in its own
+        folder, else ``(refusal, None)``. BLOCKING."""
+        why, got = self._told(lately=lately)
+        if got is None:
+            return why, None
         for it in [*got.open, *(got.lately if lately else [])]:
             if it["id"] == item_id:
                 return "", it
@@ -225,25 +250,10 @@ class OpenItemReopenTool(_OpenItemTool):
             if str(args.get("item") or "").strip():
                 return ToolResult(ok=False, error=NO_ID)
 
-            def listing() -> "tuple[str, list[dict[str, Any]]]":
-                from .clients import wall
-                from .lookup import Reader
-
-                turn = wall.current()
-                folder = str(getattr(turn, "folder_key", "") or "")
-                if not folder:
-                    return NO_FOLDER, []
-                try:
-                    reader = Reader.open(self.platform, turn=turn)
-                    if reader is None:
-                        return UNREADABLE, []
-                    return "", open_items.told(reader, folder, lately=True).lately
-                except Exception:  # noqa: BLE001
-                    return UNREADABLE, []
-
-            why, rows = await asyncio.to_thread(listing)
-            if why:
+            why, got = await asyncio.to_thread(self._told, lately=True)
+            if got is None:
                 return ToolResult(ok=False, error=why)
+            rows = got.lately
             if not rows:
                 return ToolResult(ok=True, output=NONE_CLOSED, data={"rows": []})
             from datetime import datetime, timezone
@@ -340,6 +350,6 @@ def open_item_tools_for(text: Any) -> list[str]:
 
 
 __all__ = [
-    "CLOSE_NAME", "NOT_HERE", "NO_FOLDER", "OpenItemCloseTool", "OpenItemReopenTool", "REOPEN_NAME",
+    "CLOSE_NAME", "NOT_HERE", "NO_FOLDER", "ON_PHONE", "OpenItemCloseTool", "OpenItemReopenTool", "REOPEN_NAME",
     "TOOL_NAMES", "open_item_tools", "open_item_tools_for",
 ]

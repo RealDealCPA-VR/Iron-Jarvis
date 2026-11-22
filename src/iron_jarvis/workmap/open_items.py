@@ -43,6 +43,22 @@ carrier at a time (:data:`WRITING`): two readers' :func:`backfill` never
 carry a recap twice. A closed item's Open line is never told as open under
 its piece of work (:func:`closed_keys`, ``block._attach_recaps``).
 
+THE SAME LINE IN TWO CONVERSATIONS (review 2 of 04-b): Continue starts a
+new chat on the same work, and its recap often lists the same Open line.
+Each conversation keeps its OWN copy (so its own rewritten recap settles
+only that copy, and deleting one conversation leaves the line on the list),
+but the copies of one folder with exactly the same words (equal
+:func:`text_key`; never the loose :func:`same_line`) are ONE item to the
+owner: :func:`told` tells and shows it once (the oldest copy the turn may be
+told; "may be done" when any copy asks it), Closed lately never shows a line
+that is open; Done or No longer needed closes every open copy
+(:func:`close`), Reopen reopens every closed copy and Not yet answers every
+open one (:func:`reopen`), and a tool's Undo puts them all back
+(:func:`snapshot`). A NEW copy whose words the owner closed in another
+conversation in the last :data:`CLOSED_LATELY_DAYS` is written closed the
+same way (:func:`_owner_closed_twin`): the owner's answer stands, and Reopen
+brings it back. After that window, the same words are new work.
+
 Removed with their work: ``WorkMap.forget`` and a source that is gone
 (``WorkMap._refresh``) delete the items of those entries; a recap a reply
 marked low trust AFTER it was kept takes its items with it (``drop_entries``).
@@ -292,6 +308,50 @@ def may_be_done(item: str, done: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# the same line in two conversations (review 2 of 04-b)
+# --------------------------------------------------------------------------- #
+def _twins(db: Any, it: WorkOpenItem) -> list[WorkOpenItem]:
+    """The OTHER items of ``it``'s folder with exactly its words
+    (:func:`text_key`): other conversations' copies of the same line, which
+    the owner sees and answers as ONE item. Inside the caller's session."""
+    key = it.text_key or text_key(it.text)
+    if not it.folder_key or not key:
+        return []
+    return list(db.exec(
+        select(WorkOpenItem)
+        .where(WorkOpenItem.folder_key == it.folder_key)
+        .where(WorkOpenItem.text_key == key)
+        .where(WorkOpenItem.id != it.id)
+        .limit(OPEN_READ)
+    ))
+
+
+def _owner_closed_twin(db: Any, fkey: str, key: str, entry_id: str, when: datetime) -> "WorkOpenItem | None":
+    """For a NEW Open line of ``entry_id``: the item of another conversation
+    in the same folder with exactly these words that the owner closed (Done
+    or No longer needed, by the card or a chat) in the last
+    :data:`CLOSED_LATELY_DAYS`, the newest, when no copy of the line is
+    still open. None otherwise: the line is open (a copy still open, one
+    settled by its own conversation, or a Done older than Closed lately,
+    after which the same words are new work)."""
+    if not fkey or not key:
+        return None
+    rows = list(db.exec(
+        select(WorkOpenItem)
+        .where(WorkOpenItem.folder_key == fkey)
+        .where(WorkOpenItem.text_key == key)
+        .where(WorkOpenItem.entry_id != entry_id)
+        .limit(OPEN_READ)
+    ))
+    if any(r.status == OPEN_ITEM_OPEN for r in rows):
+        return None
+    since = when - timedelta(days=CLOSED_LATELY_DAYS)
+    shut = [r for r in rows if r.status in (OPEN_ITEM_DONE, OPEN_ITEM_DROPPED)
+            and r.closed_how in (CLOSED_BY_YOU, CLOSED_BY_CHAT) and (_naive(r.closed_at) or since) > since]
+    return max(shut, key=lambda r: (_naive(r.closed_at), r.id)) if shut else None
+
+
+# --------------------------------------------------------------------------- #
 # writing: in the same write as a kept recap
 # --------------------------------------------------------------------------- #
 def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None" = None) -> dict[str, int]:
@@ -349,12 +409,19 @@ def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None"
     for n, (text, key) in enumerate(opens):
         hit = hits[n]
         if hit is None:
+            # The same words as an item the owner closed lately in another
+            # conversation here: this copy is closed the same way, so the
+            # owner's answer stands (review 2 of 04-b).
+            shut = _owner_closed_twin(db, fkey, key, entry_id, when)
             # A microsecond apart, so a recap's lines keep their order.
             item = WorkOpenItem(
                 id=new_id("open"), entry_id=entry_id, folder_key=fkey, folder=storable_text(folder),
                 text=text, text_key=key, status=OPEN_ITEM_OPEN, opened_at=when + timedelta(microseconds=n),
                 local_only=local, updated_at=when,
             )
+            if shut is not None:
+                item.status, item.closed_at = shut.status, shut.closed_at
+                item.closed_how, item.closed_ref = shut.closed_how, shut.closed_ref
             db.add(item)
             mine.append(item)
             matched.add(item.id)
@@ -526,41 +593,58 @@ def get(engine: Any, item_id: str) -> "dict[str, Any] | None":
         return _view(it) if it is not None else None
 
 
+def _state(it: WorkOpenItem) -> dict[str, Any]:
+    return {
+        "status": it.status, "closed_at": _iso(it.closed_at), "closed_how": it.closed_how,
+        "closed_ref": it.closed_ref, "maybe_done_entry": it.maybe_done_entry,
+        "maybe_declined": it.maybe_declined, "owner_kept": bool(it.owner_kept),
+    }
+
+
+def _put_back(it: WorkOpenItem, before: dict[str, Any], now: datetime) -> None:
+    status = str(before.get("status") or OPEN_ITEM_OPEN)
+    it.status = status if status in (OPEN_ITEM_OPEN, *CLOSED_STATUSES) else OPEN_ITEM_OPEN
+    closed = before.get("closed_at")
+    try:
+        it.closed_at = _naive(datetime.fromisoformat(str(closed))) if closed else None
+    except ValueError:
+        it.closed_at = None
+    it.closed_how = str(before.get("closed_how") or "")
+    it.closed_ref = str(before.get("closed_ref") or "")
+    it.maybe_done_entry = str(before.get("maybe_done_entry") or "")
+    it.maybe_declined = str(before.get("maybe_declined") or "")
+    it.owner_kept = bool(before.get("owner_kept"))
+    it.updated_at = now
+
+
 def snapshot(engine: Any, item_id: str) -> "dict[str, Any] | None":
-    """What an answer may change, as it is now (a tool's Undo)."""
+    """What an answer may change, as it is now (a tool's Undo): the item and
+    its other conversations' copies (``twins``: an answer changes them too)."""
     with session_scope(engine) as db:
         it = db.get(WorkOpenItem, str(item_id or ""))
         if it is None:
             return None
-        return {
-            "status": it.status, "closed_at": _iso(it.closed_at), "closed_how": it.closed_how,
-            "closed_ref": it.closed_ref, "maybe_done_entry": it.maybe_done_entry,
-            "maybe_declined": it.maybe_declined, "owner_kept": bool(it.owner_kept),
-        }
+        return {**_state(it), "twins": {t.id: _state(t) for t in _twins(db, it)}}
 
 
 def restore(engine: Any, item_id: str, before: "dict[str, Any] | None") -> bool:
-    """Put an item back as :func:`snapshot` saw it. False when it is gone."""
+    """Put an item (and the copies :func:`snapshot` saw) back as they were.
+    False when the item is gone."""
     if not isinstance(before, dict):
         return False
     with session_scope(engine) as db:
         it = db.get(WorkOpenItem, str(item_id or ""))
         if it is None:
             return False
-        status = str(before.get("status") or OPEN_ITEM_OPEN)
-        it.status = status if status in (OPEN_ITEM_OPEN, *CLOSED_STATUSES) else OPEN_ITEM_OPEN
-        closed = before.get("closed_at")
-        try:
-            it.closed_at = _naive(datetime.fromisoformat(str(closed))) if closed else None
-        except ValueError:
-            it.closed_at = None
-        it.closed_how = str(before.get("closed_how") or "")
-        it.closed_ref = str(before.get("closed_ref") or "")
-        it.maybe_done_entry = str(before.get("maybe_done_entry") or "")
-        it.maybe_declined = str(before.get("maybe_declined") or "")
-        it.owner_kept = bool(before.get("owner_kept"))
-        it.updated_at = _now()
+        now = _now()
+        _put_back(it, before, now)
         db.add(it)
+        twins = before.get("twins")
+        for tid, state in (twins.items() if isinstance(twins, dict) else ()):
+            row = db.get(WorkOpenItem, str(tid)) if isinstance(state, dict) else None
+            if row is not None and row.id != it.id:
+                _put_back(row, state, now)
+                db.add(row)
         db.commit()
     return True
 
@@ -569,8 +653,10 @@ def close(engine: Any, item_id: str, *, as_: str = "done", by: str = CLOSED_BY_Y
           ref: str = "") -> "dict[str, Any] | None":
     """Close one item: Done (``as_`` "done") or No longer needed ("dropped"),
     by the owner (``by`` "you") or a chat the owner asked ("chat", ``ref`` =
-    the chat). Closing a closed item again changes nothing. None when there
-    is no such item; ``ValueError`` for another ``as_``."""
+    the chat), with every copy of it still open in another conversation of
+    the folder (:func:`_twins`: the owner answers the line once). Closing a
+    closed item again changes nothing. None when there is no such item;
+    ``ValueError`` for another ``as_``."""
     status = CLOSE_AS.get(str(as_ or ""))
     if status is None:
         raise ValueError("close as done or dropped")
@@ -578,40 +664,51 @@ def close(engine: Any, item_id: str, *, as_: str = "done", by: str = CLOSED_BY_Y
         it = db.get(WorkOpenItem, str(item_id or ""))
         if it is None:
             return None
-        if it.status != status:
-            now = _now()
-            it.status, it.closed_at = status, now
-            it.closed_how = by if by in (CLOSED_BY_YOU, CLOSED_BY_CHAT) else CLOSED_BY_YOU
-            it.closed_ref = storable_text(str(ref or ""))[:200]
-            it.maybe_done_entry = ""
-            it.updated_at = now
-            db.add(it)
+        now = _now()
+        changed = False
+        for row in [it, *(t for t in _twins(db, it) if t.status == OPEN_ITEM_OPEN)]:
+            if row.status == status:
+                continue
+            row.status, row.closed_at = status, now
+            row.closed_how = by if by in (CLOSED_BY_YOU, CLOSED_BY_CHAT) else CLOSED_BY_YOU
+            row.closed_ref = storable_text(str(ref or ""))[:200]
+            row.maybe_done_entry = ""
+            row.updated_at = now
+            db.add(row)
+            changed = True
+        if changed:
             db.commit()
             db.refresh(it)
         return _view(it)
 
 
 def reopen(engine: Any, item_id: str) -> "dict[str, Any] | None":
-    """Put a closed item back on the open list (Reopen), for good: a
-    rewritten recap no longer settles it (``owner_kept``). On an item that
-    is still open it answers the "Mark it done?" question with Not yet: the
-    question goes, and that piece of work never asks it again. None when
-    there is no such item."""
+    """Put a closed item back on the open list (Reopen), for good, with its
+    closed copies in other conversations of the folder: a rewritten recap no
+    longer settles them (``owner_kept``). On an item that is still open it
+    answers the "Mark it done?" question with Not yet, for its open copies
+    too: the question goes, and that piece of work never asks it again.
+    None when there is no such item."""
     with session_scope(engine) as db:
         it = db.get(WorkOpenItem, str(item_id or ""))
         if it is None:
             return None
         now = _now()
+        twins = _twins(db, it)
         if it.status == OPEN_ITEM_OPEN:
-            if it.maybe_done_entry:
-                it.maybe_declined = it.maybe_done_entry
-                it.maybe_done_entry = ""
+            for row in [it, *(t for t in twins if t.status == OPEN_ITEM_OPEN)]:
+                if row.maybe_done_entry:
+                    row.maybe_declined = row.maybe_done_entry
+                    row.maybe_done_entry = ""
+                row.updated_at = now
+                db.add(row)
         else:
-            it.status, it.closed_at, it.closed_how, it.closed_ref = OPEN_ITEM_OPEN, None, "", ""
-            it.maybe_done_entry = ""
-            it.owner_kept = True
-        it.updated_at = now
-        db.add(it)
+            for row in [it, *(t for t in twins if t.status != OPEN_ITEM_OPEN)]:
+                row.status, row.closed_at, row.closed_how, row.closed_ref = OPEN_ITEM_OPEN, None, "", ""
+                row.maybe_done_entry = ""
+                row.owner_kept = True
+                row.updated_at = now
+                db.add(row)
         db.commit()
         db.refresh(it)
         return _view(it)
@@ -715,26 +812,45 @@ def told(reader: Any, folder: str, *, exclude_refs: Iterable[str] = (), now: "da
             "at": _iso(it.opened_at), "updated": row.get("updated"),
         }
 
+    def maybe_of(it: WorkOpenItem) -> "dict[str, Any] | None":
+        if not it.maybe_done_entry:
+            return None
+        later = shown_row(it.maybe_done_entry)
+        if later is None:
+            return None
+        later_title = _block._safe(_block._clip(later.get("title") or "", _block.TITLE_CHARS)).strip()
+        if not later_title:
+            return None
+        return {"entry_id": it.maybe_done_entry, "title": later_title, "link": link_for(later["kind"], later["ref"])}
+
+    # The same line in two conversations here (exactly its words,
+    # :func:`text_key`) is ONE item: told once, the oldest copy this turn may
+    # be told, asking "may be done" when any copy does (review 2 of 04-b).
+    shown: dict[str, dict[str, Any]] = {}
     for it in items:
+        key = it.text_key or text_key(it.text)
         row = shown_row(it.entry_id)
         if row is None:
+            continue
+        first = shown.get(key)
+        if first is not None:
+            if first["maybe_done"] is None:
+                first["maybe_done"] = maybe_of(it)
             continue
         got = view(it, row)
         if got is None:
             continue
-        maybe = None
-        if it.maybe_done_entry:
-            later = shown_row(it.maybe_done_entry)
-            later_ok = later is not None and bool(
-                _block._safe(_block._clip(later.get("title") or "", _block.TITLE_CHARS)).strip())
-            if later is not None and later_ok:
-                later_title = _block._safe(_block._clip(later.get("title") or "", _block.TITLE_CHARS)).strip()
-                maybe = {"entry_id": it.maybe_done_entry, "title": later_title,
-                         "link": link_for(later["kind"], later["ref"])}
-        got["maybe_done"] = maybe
+        got["maybe_done"] = maybe_of(it)
+        shown[key] = got
         out.open.append(got)
         out.rows[it.entry_id] = row
+    # Closed lately: one line per line closed, newest first, and never a line
+    # that is open above.
+    shut: set[str] = set()
     for it in closed:
+        key = it.text_key or text_key(it.text)
+        if key in shown or key in shut:
+            continue
         row = shown_row(it.entry_id)
         if row is None:
             continue
@@ -742,6 +858,7 @@ def told(reader: Any, folder: str, *, exclude_refs: Iterable[str] = (), now: "da
         if got is None:
             continue
         got.update({"status": it.status, "how": it.closed_how or "", "closed_at": _iso(it.closed_at)})
+        shut.add(key)
         out.lately.append(got)
         out.rows.setdefault(it.entry_id, row)
     return out
