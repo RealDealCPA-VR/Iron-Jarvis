@@ -185,6 +185,32 @@ def local_only_question(what: str, where: str, n: int) -> str:
     return f"This chat is Local only, so the {what} {verb} not sent. Send {pronoun} through {where}?"
 
 
+def local_only_files_note(result: Any, *, finished: bool) -> str:
+    """The run summary's files line in Local only work (D-10.3): how many
+    files it wrote, never a name (``agents/outcome`` names them elsewhere),
+    read off the same ledger card. ``""`` when it wrote nothing or the card
+    is not one. Leading space: it is appended to a summary. Never raises."""
+    try:
+        if not isinstance(result, dict):
+            return ""
+        names: set[str] = set()
+        for key in ("files_created", "files_changed"):
+            for p in result.get(key) or []:
+                name = PurePath(str(p)).name.strip()
+                if name:
+                    names.add(name)
+        if not names:
+            return ""
+        total = max(int(result.get("files_created_total") or 0)
+                    + int(result.get("files_changed_total") or 0), len(names))
+        if finished:
+            return f" It wrote {'1 file' if total == 1 else f'{total} files'}."
+        return (" The file it wrote is kept on this PC." if total == 1
+                else f" The {total} files it wrote are kept on this PC.")
+    except Exception:  # noqa: BLE001 — wording never breaks a delivery
+        return ""
+
+
 def answer_hint(n: int) -> str:
     """How to answer without buttons."""
     return f"Reply 1 to send or 2 to keep {'it' if n == 1 else 'them'} on the PC."
@@ -266,13 +292,16 @@ _SEND_LABEL = "Send them"
 
 def kept_reply(local_only: bool, n: int, where: str = "", config: Any = None) -> str:
     """The reply to Keep it on the PC. On the first-time question it says
-    how to be asked again: the row's other choice than the one it shows now
-    (any new choice there, but Keep them on this PC, asks every destination
-    again, :func:`_answers_stand`)."""
+    how to be asked again, read off the row as it shows now (after
+    :func:`keep_choice`): "Send them" only while it reads "Ask each
+    destination first" (a new choice there asks every destination again,
+    :func:`_answers_stand`); otherwise "Ask each destination first", the one
+    choice that always asks. Under "Keep them on this PC" with no phone
+    answer on record, "Send them" would send without a question."""
     if local_only:
         return f"OK: {'it stays' if n == 1 else 'they stay'} on this PC."
     asked = f" when you ask from {where}" if where else ""
-    pick = _ASK_LABEL if config is not None and _setting(config) == "yes" else _SEND_LABEL
+    pick = _SEND_LABEL if _setting(config) == "ask" else _ASK_LABEL
     return (f"OK: finished files stay on this PC from now on{asked}. To be asked again, "
             f"choose {pick} in {SETTING_WHERE}.")
 

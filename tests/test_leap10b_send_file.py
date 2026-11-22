@@ -37,6 +37,7 @@ from tests._fakes.phone_back import (
     FakeSlackApi,
     FakeTelegramBack,
     making_turn,
+    making_turn_of,
     slack,
     telegram_back,
 )
@@ -442,16 +443,74 @@ def test_the_keep_reply_names_the_other_choice_than_the_one_shown():
     tg = "Telegram"
     shown_ask = SimpleNamespace(phone_send_files="ask")
     shown_yes = SimpleNamespace(phone_send_files="yes")
+    # Under "Keep them on this PC" with no phone answer on record, "Send
+    # them" would send everywhere with no question: the reply names Ask.
+    shown_no = SimpleNamespace(phone_send_files="no")
     assert files_back.kept_reply(False, 1, tg, shown_ask).endswith(
         "To be asked again, choose Send them in Settings, Phone, Send finished files to your phone.")
-    assert files_back.kept_reply(False, 1, tg, shown_yes).endswith(
-        "To be asked again, choose Ask each destination first in Settings, Phone, Send finished "
-        "files to your phone.")
+    for shown in (shown_yes, shown_no):
+        assert files_back.kept_reply(False, 1, tg, shown).endswith(
+            "To be asked again, choose Ask each destination first in Settings, Phone, Send finished "
+            "files to your phone."), shown
+
+
+@pytest.mark.parametrize("before", [
+    "fresh", "keep_them_chosen", "send_them_chosen", "slack_said_send",
+    "slack_said_send_then_keep_them", "slack_said_keep",
+])
+def test_the_choice_a_keep_reply_names_asks_that_destination_again(platform, before):
+    # 10-b review: what the Keep's reply says is true. Whatever came before
+    # Telegram's Keep, choosing in Settings the choice the reply names
+    # leaves Telegram asked again: never sent to without a question.
+    writer = _writer(platform)
+    if before == "keep_them_chosen":
+        writer.apply({"phone_send_files": "no"}, actor="settings_page")
+    elif before == "send_them_chosen":  # after the question was asked
+        writer.apply({"phone_send_files": "yes"}, actor="settings_page")
+    elif before.startswith("slack_said_send"):
+        files_back.keep_choice(platform, "send", "slack")
+        if before.endswith("keep_them"):
+            writer.apply({"phone_send_files": "no"}, actor="settings_page")
+    elif before == "slack_said_keep":
+        files_back.keep_choice(platform, "keep", "slack")
+    files_back.keep_choice(platform, "keep", "tg")  # the pipeline's order: kept, then the reply
+    reply = files_back.kept_reply(False, 1, "Telegram", platform.config)
+    label = reply.split("choose ", 1)[1].split(" in Settings", 1)[0]
+    value = {"Send them": "yes", "Ask each destination first": "ask"}[label]
+    assert value != platform.config.phone_send_files, "a choice the row does not show already"
+
+    writer.apply({"phone_send_files": value}, actor="settings_page")
+
+    assert files_back.consent(platform.config, "tg") == "ask", (before, label)
+
+
+def test_a_keep_after_keep_them_chosen_in_settings_names_the_choice_that_asks(platform):
+    # The reviewer's path: the question is open, "Keep them on this PC" is
+    # chosen in Settings, then the phone answers 2. The reply's choice, made
+    # in Settings, asks again on Telegram.
+    sheet = _uploads_dir(platform) / "march.xlsx"
+    fake = FakeTelegramBack([_text(1, "make the sheet")])
+    poll = poller(platform, telegram_back(fake), turn=making_turn(sheet))
+    run(poll)
+    writer = _writer(platform)
+    writer.apply({"phone_send_files": "no"}, actor="settings_page")
+
+    fake.updates = [_text(2, "2")]
+    run(poll)
+
+    assert fake.uploads == []
+    assert fake.texts[-1] == ("Iron Jarvis: OK: finished files stay on this PC from now on when you "
+                              "ask from Telegram. To be asked again, choose Ask each destination first "
+                              "in Settings, Phone, Send finished files to your phone.")
+    writer.apply({"phone_send_files": "ask"}, actor="settings_page")
+    fake.updates = [_text(3, "and one more")]
+    res = run(poll)
+    assert res[0]["files"] == "asked"
+    assert fake.texts[-1].startswith("Iron Jarvis: Send 1 spreadsheet (1 KB) to Telegram?")
+    assert fake.uploads == []
 
 
 def test_after_send_the_reply_names_only_the_files_that_went(platform):
-    from tests._fakes.phone_back import making_turn_of
-
     a, b = _uploads_dir(platform) / "a.xlsx", _uploads_dir(platform) / "b.xlsx"
     fake = FakeTelegramBack([_text(1, "make the two sheets")])
     poll = poller(platform, telegram_back(fake), turn=making_turn_of([a, b]))
@@ -589,6 +648,55 @@ def test_a_link_out_of_the_folder_is_not_followed(tmp_path):
         pytest.skip("this PC cannot make a link here")
     got = pick([str(link)], [folder], Caps())
     assert got.files == [] and got.left[0][0] == "shortcut.txt"
+
+
+def test_a_merged_question_sends_five_files_and_names_the_sixth(platform):
+    # 10-b review: two replies that make three files each leave ONE question
+    # waiting on six. One answer sends five, the most the Handbook promises
+    # (the Send reads every file again through the caps), and the sixth is
+    # named with why. The question counts what one answer can send.
+    up = _uploads_dir(platform)
+    first = [up / f"a{i}.xlsx" for i in range(3)]
+    second = [up / f"b{i}.xlsx" for i in range(3)]
+    fake = FakeTelegramBack([_text(1, "make three sheets")])
+    poll = poller(platform, telegram_back(fake), turn=making_turn_of(first))
+    run(poll)
+    poll.chat_turn = making_turn_of(second)
+    fake.updates = [_text(2, "and three more")]
+    run(poll)
+    assert fake.texts[-1].startswith("Iron Jarvis: Send 5 spreadsheets (1 KB) to Telegram?")
+    assert fake.uploads == []
+
+    fake.updates = [_text(3, "1")]
+    run(poll)
+
+    assert [u["name"] for u in fake.uploads] == ["a0.xlsx", "a1.xlsx", "a2.xlsx", "b0.xlsx", "b1.xlsx"]
+    said = fake.texts[-1]
+    assert said.startswith("Iron Jarvis: → Sent 5 spreadsheets (1 KB) to Telegram.")
+    assert "not sent: b2.xlsx (at most 5 files go back with one answer)." in said
+
+
+def test_send_checks_each_file_again_gone_or_grown_past_the_cap(platform, monkeypatch):
+    # Between the question and the Send one file was deleted and one grew
+    # past the size cap (shrunk here). Neither goes; both are named with why.
+    monkeypatch.setattr(reply_files, "PHONE_CAPS", Caps(count=5, each=64, total=None))
+    up = _uploads_dir(platform)
+    stays, gone, grown = up / "a.xlsx", up / "b.xlsx", up / "c.xlsx"
+    fake = FakeTelegramBack([_text(1, "make the sheets")])
+    poll = poller(platform, telegram_back(fake), turn=making_turn_of([stays, gone, grown]))
+    run(poll)
+    assert fake.texts[-1].startswith("Iron Jarvis: Send 3 spreadsheets (")
+    gone.unlink()
+    grown.write_bytes(b"x" * 100)
+
+    fake.updates = [_text(2, "1")]
+    run(poll)
+
+    assert [u["name"] for u in fake.uploads] == ["a.xlsx"]
+    said = fake.texts[-1]
+    assert said.startswith("Iron Jarvis: → Sent 1 spreadsheet (1 KB) to Telegram.")
+    assert "b.xlsx (it is not on this PC any more)" in said
+    assert "c.xlsx (it is " in said and "the most sent is" in said
 
 
 # --------------------------------------------------------------------------- #

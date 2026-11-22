@@ -5,24 +5,28 @@ Nothing leaves the PC until the user says Send, every time, whatever the
 setting says (only "Keep them on this PC" stops the question). The question
 names how many files, their kind and size, never a file's name: not in the
 words, not on a button, not in the prompt kept for it. Send goes through the
-same upload; Keep it on the PC sends nothing and changes no setting.
+same upload; Keep it on the PC sends nothing and changes no setting. A
+phone-started run's own line for the files it wrote counts them there too.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from iron_jarvis.comm import files_back
 from iron_jarvis.comm.prompts import FILE_SEND_KIND
 from iron_jarvis.core.db import session_scope
+from iron_jarvis.core.models import AgentRun, Session, SessionStatus, ToolInvocation, UndoJournal
 from tests._fakes.phone_back import FakeTelegramBack, making_turn, press, set_local_only, telegram_back
 from tests._fakes.phone_files import ME, message, poller, run
 
 pytestmark = pytest.mark.usefixtures("no_network")
 
-SECRET_NAME = "smith-family-return.xlsx"
+SECRET_NAME = "family-budget.xlsx"
 
 
 def _local_only_chat(platform, fake, **over):
@@ -128,3 +132,64 @@ def test_a_doubt_about_local_only_keeps_the_files_here(platform, monkeypatch):
 
     assert files_back.work_is_local_only(platform.engine, "thread_x") is True
     assert files_back.work_is_local_only(platform.engine, "", "session_y") is True
+
+
+# --------------------------------------------------------------------------- #
+# a phone-started run in Local only work: its own files line counts too
+# --------------------------------------------------------------------------- #
+class _LocalOnlyRun:
+    """A run created Local only (its own switch) that writes the file in its
+    folder and leaves the ledger rows a real write_file leaves. A run that
+    did not finish carries the orchestrator's named kept line, as a real
+    failed run's summary does."""
+
+    def __init__(self, platform, ws: Path, status: SessionStatus) -> None:
+        self.platform, self.ws, self.status = platform, ws, status
+        self.sid = "session_10b_local_only_run"
+
+    async def create_session(self, task, agent_type, **kw):
+        self.ws.mkdir(parents=True, exist_ok=True)
+        with session_scope(self.platform.engine) as db:
+            db.add(Session(id=self.sid, task=task, status=SessionStatus.ACTIVE,
+                           workspace_path=str(self.ws), origin=kw.get("origin"),
+                           options_json=json.dumps({"local_only": True})))
+            db.commit()
+        return SimpleNamespace(id=self.sid, provider="")
+
+    async def run_session(self, sid):
+        path = self.ws / SECRET_NAME
+        path.write_bytes(b"x" * 2048)
+        summary = ("Made the spreadsheet." if self.status is SessionStatus.COMPLETED
+                   else f"The run failed: the model went away. The file it wrote is kept: {SECRET_NAME}.")
+        with session_scope(self.platform.engine) as db:
+            db.add(AgentRun(id="run_10b_lo", session_id=sid))
+            db.add(ToolInvocation(id="tool_10b_lo", session_id=sid, agent_run_id="run_10b_lo",
+                                  tool="write_file", ok=True, reversibility="reversible"))
+            db.add(UndoJournal(action_id="tool_10b_lo", session_id=sid, agent_run_id="run_10b_lo",
+                               tool="write_file", kind="file_delete",
+                               pre_inline=json.dumps({"path": str(path)})))
+            row = db.get(Session, sid)
+            row.status = self.status
+            row.summary = summary
+            db.add(row)
+            db.commit()
+        return SimpleNamespace(summary=summary, status=self.status)
+
+
+@pytest.mark.parametrize("status, line", [
+    (SessionStatus.COMPLETED, "It wrote 1 file."),
+    (SessionStatus.FAILED, "The file it wrote is kept on this PC."),
+])
+def test_a_local_only_runs_files_line_counts_and_names_none(platform, tmp_path, status, line):
+    # 10-b review: the run's summary used to name the file it wrote ("Files
+    # it wrote: <name>.") before the files question that names none.
+    fake = FakeTelegramBack([message(1, text="make the spreadsheet")])
+    orch = _LocalOnlyRun(platform, tmp_path / "run-folder", status)
+
+    run(poller(platform, telegram_back(fake, chat_enabled=False), orchestrator=orch))
+
+    assert fake.uploads == []
+    assert any(t.endswith(line) for t in fake.texts), fake.texts
+    assert SECRET_NAME not in _everything_sent(fake)
+    if status is SessionStatus.COMPLETED:
+        assert fake.texts[-1].startswith("Iron Jarvis: This chat is Local only, so the 1 spreadsheet (2 KB)")

@@ -54,6 +54,12 @@ def card(monkeypatch):
         return state["card"]
 
     monkeypatch.setattr(O, "session_result", fake)
+    # 10-b: Local only work's line counts and never names (D-10.3), read
+    # strictly (this double's engine is no database, which reads as Local
+    # only); these runs are not Local only.
+    from iron_jarvis.comm import files_back
+
+    monkeypatch.setattr(files_back, "work_is_local_only", lambda *a, **k: False)
     return state
 
 

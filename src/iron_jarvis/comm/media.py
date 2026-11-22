@@ -15,7 +15,7 @@ into Chat on the desk is:
   day is shared;
 * what crosses the messaging service is the file's NAME and the folder from
   Documents down, never the whole path (the "names only" rule of the files
-  line, ``InboundPoller._files_line``).
+  line, ``InboundPoller._with_files_line``).
 
 What is taken: at most :data:`PHONE_FILES_PER_MESSAGE` files a message, each
 at most ``phone_file_max_mb`` (default :data:`DEFAULT_MAX_MB`, decision

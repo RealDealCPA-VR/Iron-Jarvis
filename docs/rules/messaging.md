@@ -606,12 +606,22 @@ How to use this file: read the contents list, then read only the entries your ch
   paths; the typed "Reply 1 … or 2 …" rides WITH the buttons, since a Slack app
   without interactivity shows buttons no press comes back from). After Send
   the reply names only the files that WENT (`_send_files_now` returns them).
+  A merged question (an older open one's files join, up to `MAX_WAITING`
+  ten) counts only the first `PHONE_CAPS.count`, and the Send re-picks every
+  stored path through `pick`: the ONE place five files hold for a merged
+  question, and a file gone or grown since is named (pinned by
+  `test_a_merged_question_sends_five_files_and_names_the_sixth`). The Keep's
+  reply names "Send them" only while the row reads ask, else "Ask each
+  destination first" (under "no" with no answer, Send them sends unasked).
   The open question's freshness look stats files: every async door uses
   `_open_prompt` / `_reminder` (`asyncio.to_thread`), never the sync look on
   the loop. A Local only chat (`files_back.work_is_local_only`, read
   STRICTLY: a failed read is Local only) asks every time with count, kind and
   size only, never a name (not in the words, a button or the kept question),
-  and its answer changes no setting; "no" sends and asks nothing. Sending:
+  and its answer changes no setting; "no" sends and asks nothing. A
+  phone-started run's own files line there counts too
+  (`InboundPoller._with_files_line`, `files_back.local_only_files_note`),
+  the orchestrator's named kept line in its summary included. Sending:
   `Channel.send_files` off the loop through the injected `http_post_file`
   (Telegram `sendPhoto` under 10 MB else `sendDocument`; Slack
   `conversations.open` for a DM, `files.getUploadURLExternal`, the bytes ONLY

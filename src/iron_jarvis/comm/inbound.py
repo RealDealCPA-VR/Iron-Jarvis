@@ -709,8 +709,9 @@ class InboundPoller:
             )
         # Readiness 0j.5 item 18: the reply NAMES the files the run wrote (or,
         # for a run that did not finish, the ones it kept) — names only,
-        # never where on this PC they are. Off the loop; never fails it.
-        summary += await self._files_line(session.id, finished=ran, summary=summary)
+        # never where on this PC they are; in Local only work by count
+        # (10-b, D-10.3). Off the loop; never fails it.
+        summary = await self._with_files_line(session.id, finished=ran, summary=summary, tid=tid)
         async with self._identity_lock(name, msg.sender_id):
             if tid:
                 self._safe_append(
@@ -736,24 +737,37 @@ class InboundPoller:
                     await self._files_back(name, ch, msg, picked, tid=tid,
                                            session_id=str(session.id), display=display)
 
-    async def _files_line(self, session_id: str, *, finished: bool, summary: str) -> str:
-        """" Files it wrote: a.md, b.xlsx." (a finished run) or " The files it
-        wrote are kept: …" (one that did not finish) — read off the run's
-        ledger card (``agents/outcome``), ``""`` when it wrote nothing, the
-        card cannot be read, or the summary already says it. Never raises."""
+    async def _with_files_line(self, session_id: str, *, finished: bool, summary: str, tid: str = "") -> str:
+        """``summary`` with one line for the files the run wrote: " Files it
+        wrote: a.md, b.xlsx." (a finished run) or " The files it wrote are
+        kept: …" (one that did not finish), read off the run's ledger card
+        (``agents/outcome``); unchanged when it wrote nothing, the card
+        cannot be read, or the summary already says it. In Local only work
+        (the chat's switch or the run's own, read strictly: a doubt is Local
+        only) by count, never a name (10-b, D-10.3: the files question after
+        it names none either), and a named line the run's own summary
+        carries (the orchestrator's kept line) is put in counts too. Never
+        raises (the summary as it was)."""
         try:
             from ..agents.outcome import kept_files_note, session_result, wrote_files_note
+            from . import files_back
 
             engine = getattr(getattr(self, "platform", None), "engine", None)
             if engine is None:
-                return ""
+                return summary
             result = await asyncio.to_thread(session_result, engine, str(session_id))
-            line = wrote_files_note(result) if finished else kept_files_note(result)
-            if not line or line.strip() in summary:
-                return ""
-            return "\n\n" + line.strip()
+            line = (wrote_files_note(result) if finished else kept_files_note(result)).strip()
+            if await asyncio.to_thread(files_back.work_is_local_only, engine, tid, str(session_id)):
+                counted = files_back.local_only_files_note(result, finished=finished).strip()
+                for named in {wrote_files_note(result).strip(), kept_files_note(result).strip()}:
+                    if named and named in summary:
+                        summary = summary.replace(named, counted)
+                line = counted
+            if not line or line in summary:
+                return summary
+            return f"{summary}\n\n{line}"
         except Exception:  # noqa: BLE001 — wording never fails a delivery
-            return ""
+            return summary
 
     # -- restart mid-run (v1.291.0, io-03) ---------------------------------
     def notify_interrupted(self, *, since: Any) -> int:
@@ -3035,10 +3049,16 @@ class InboundPoller:
             left = was_left + left
             local_only = local_only or was_local
         files = files[-files_back.MAX_WAITING:]
+        # The question names what ONE answer can send: the first five, in the
+        # order the Send reads them (it checks each again through the caps
+        # and names the rest with why). A merged question waits on up to ten.
+        from ..agents.reply_files import PHONE_CAPS
+
+        going = files[:PHONE_CAPS.count]
         where = files_back.destination_words(ch, name)
-        what = await asyncio.to_thread(files_back.what_words, files)
-        question = (files_back.local_only_question(what, where, len(files)) if local_only
-                    else files_back.first_time_question(what, where, len(files)))
+        what = await asyncio.to_thread(files_back.what_words, going)
+        question = (files_back.local_only_question(what, where, len(going)) if local_only
+                    else files_back.first_time_question(what, where, len(going)))
         rec = await asyncio.to_thread(
             self.prompt_store.register, FILE_SEND_KIND,
             files_back.ref_for(files, local_only=local_only, left=left),
@@ -3053,7 +3073,7 @@ class InboundPoller:
         # whenever its app token is set, but an app set up before
         # interactivity was in its manifest never gets a press back, and
         # "1" or "2" always works.
-        asked = f"{question} {files_back.answer_hint(len(files))}"
+        asked = f"{question} {files_back.answer_hint(len(going))}"
         try:
             if getattr(ch, "supports_buttons", False):
                 res = await asyncio.to_thread(ch.send, f"{self.reply_prefix}{asked}", chat_id=msg.reply_to,

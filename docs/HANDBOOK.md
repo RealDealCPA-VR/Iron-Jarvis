@@ -2525,10 +2525,15 @@ arrives with a short preview and two buttons.
   this PC. Email sends them as attachments of one email, up to 20 MB in all.
   Telegram sends a picture as a photo and anything else as a file. A task
   that did not finish sends nothing: its answer says which files it kept.
+  A later answer's files join a question still waiting, and the question
+  counts the five that can go; when you say Send, each file is checked
+  again, and one that is gone or too big by then is named with the reason.
 - **Local only chats.** Nothing is sent until you say so, every time: "This
   chat is Local only, so the 1 spreadsheet (48 KB) it made was not sent.
   Send it through Telegram?" The question names how many files, their kind
-  and size, never a file's name. Your answer there changes no setting.
+  and size, never a file's name. Your answer there changes no setting. A
+  task's answer there counts the files it wrote ("It wrote 1 file.")
+  instead of naming them.
 - **Approvals with buttons.** When an agent asks for your OK, the message on
   your phone says what it wants to do, built from the request itself ("An
   agent wants to run a command: command dir Intake") with **Approve** and
