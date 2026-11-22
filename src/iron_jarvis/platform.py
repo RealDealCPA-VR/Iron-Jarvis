@@ -71,7 +71,15 @@ from .blackboard import BlackboardStore, blackboard_tools
 from .blackboard import models as _bb_models  # noqa: F401  (registers BlackboardRecord)
 from .worklist import WORKLIST_TOOL_NAMES, WorklistStore, worklist_tools
 from .worklist import models as _wl_models  # noqa: F401  (registers WorklistItem)
-from .comm import Notifier, build_notifier, httpx_get, httpx_get_bytes, httpx_post, notify_tools
+from .comm import (
+    Notifier,
+    build_notifier,
+    httpx_get,
+    httpx_get_bytes,
+    httpx_post,
+    httpx_post_file,
+    notify_tools,
+)
 from .comm import models as _comm_models  # noqa: F401  (registers InboundOffsetRecord)
 from .comm.notifier import bell_pings as _bell_pings
 from .comm.notifier import schedule_fire as _schedule_fire
@@ -1408,6 +1416,7 @@ def build_platform(
         http_post=httpx_post,
         http_get=httpx_get,
         http_get_bytes=httpx_get_bytes,  # 10-a: files from the phone
+        http_post_file=httpx_post_file,  # 10-b: files back to the phone
     )
     # v1.502.0 (north-star 2.6): the database the Local only reading uses for
     # an event the bus did not stamp (the session row, the saved chat), set

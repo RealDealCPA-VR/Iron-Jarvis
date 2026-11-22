@@ -53,7 +53,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .base import InboundFile, InboundMessage
+from .base import InboundFile, InboundMessage, Press
 
 log = logging.getLogger(__name__)
 
@@ -390,6 +390,9 @@ class SlackSocketMode:
         of a mention (and any ``file_share``) is left to the ``app_mention``
         copy, so it can never use up the key that copy answers with.
         """
+        if envelope.get("type") == "interactive":
+            _note(name, last_event_at=_now())
+            return await self.process_press(name, (envelope.get("payload") or {}))
         if envelope.get("type") != "events_api":
             return None
         _note(name, last_event_at=_now())
@@ -490,6 +493,43 @@ class SlackSocketMode:
         if router is None:
             return None
         return {"channel": name, "status": "reflex", "sender": user}
+
+    async def process_press(self, name: str, payload: dict) -> dict[str, Any] | None:
+        """A button pressed under one of Jarvis's messages (10-b, a Socket
+        Mode ``interactive`` envelope of type ``block_actions``; the pump
+        acked it first). It reaches the SAME pipeline as a message, as a
+        press with no words: the allowlist and the private-chat guard decide
+        before anything is answered. A press in a DM answers in the DM; one
+        in the destination's own channel answers in the thread under that
+        message; a press anywhere else is not Jarvis's to take."""
+        if not isinstance(payload, dict) or payload.get("type") != "block_actions":
+            return None
+        ch = self.notifier.get(name)
+        if ch is None:
+            return None
+        user = str(((payload.get("user") or {}).get("id")) or "")
+        channel = str(((payload.get("channel") or {}).get("id")) or "")
+        container = payload.get("container") or {}
+        message = payload.get("message") or {}
+        ts = str(container.get("message_ts") or message.get("ts") or "")
+        actions = payload.get("actions") or []
+        action = actions[0] if actions and isinstance(actions[0], dict) else {}
+        data = str(action.get("value") or "")
+        if not user or not channel or not ts or not data.startswith("ij:"):
+            return None
+        press = Press(data=data[:200], ref="", chat=channel, message=ts,
+                      text=str(message.get("text") or "")[:3000])
+        own = self._own.get(name)
+        if channel.startswith("D"):
+            msg = InboundMessage(sender_id=user, text="", update_id=None, is_bot=False,
+                                 reply_to=user, press=press)
+        elif own and channel == own:
+            thread = str(message.get("thread_ts") or container.get("thread_ts") or ts)
+            msg = InboundMessage(sender_id=user, text="", update_id=None, is_bot=False,
+                                 reply_to=f"{channel}|{thread}", own_channel=True, press=press)
+        else:
+            return None
+        return await self.poller._handle(name, ch, msg)  # noqa: SLF001 - by design
 
     # -- the pump --------------------------------------------------------------
     async def run_channel(self, name: str, app_token: str, *, stop: asyncio.Event) -> None:

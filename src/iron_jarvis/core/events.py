@@ -190,6 +190,9 @@ class EventType:
     #: in the phone chat's folder. Carries {channel, kind, bytes} only: never
     #: the file's name or path (they cross to every event listener).
     COMM_FILE_RECEIVED = "comm.file_received"
+    #: 10-b: a finished file went back to the phone with an answer.
+    #: Carries {channel, kind, bytes} only, like the one above.
+    COMM_FILE_SENT = "comm.file_sent"
     # Reflex Loop (the ambient operator): an inbound signal (webhook / comm)
     # matched a rule and fired a bound action (workflow / remote agent / session).
     REFLEX_FIRED = "reflex.fired"

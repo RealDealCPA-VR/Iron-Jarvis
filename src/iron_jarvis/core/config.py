@@ -793,6 +793,17 @@ class Config(BaseModel):
     #: it. When Settings names another service, the phone asks again. ""
     #: (a yes chosen in Settings) follows the service chosen there.
     phone_voice_service_for: str = ""
+    #: 10-b (build-out R2.4): may the files Jarvis made for a message sent
+    #: from the phone go back to it with the answer? "ask" (default: the
+    #: first time on each destination the phone is asked, naming how many
+    #: files and their size, and the answer is kept here), "yes", "no". A
+    #: Local only chat asks every time and never names a file (D-10.3).
+    phone_send_files: str = "ask"
+    #: 10-b: the destinations a yes said ON THE PHONE was for (their names).
+    #: Not a setting of its own: a record written beside that yes. While a
+    #: yes holds, a destination not listed here is asked its first time; an
+    #: empty list (a yes chosen in Settings) is every destination.
+    phone_send_files_to: list[str] = Field(default_factory=list)
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     #: THE FOLDERS JARVIS MAY READ (v1.356.0, G81) — Settings › Permissions.
     #: Empty (the default) = no limit: chat and agents read any file except
@@ -1286,6 +1297,25 @@ class Config(BaseModel):
         # before the user says yes); the settings schema offers only these.
         text = str(v or "").strip().lower()
         return text if text in ("ask", "yes", "no") else "ask"
+
+    @field_validator("phone_send_files", mode="before")
+    @classmethod
+    def _clean_phone_send_files(cls, v: Any) -> str:
+        # 10-b: TOLERANT, like phone_voice_service: anything else reads as
+        # "ask" (nothing leaves the PC before the user says yes).
+        text = str(v or "").strip().lower()
+        return text if text in ("ask", "yes", "no") else "ask"
+
+    @field_validator("phone_send_files_to", mode="before")
+    @classmethod
+    def _clean_phone_send_files_to(cls, v: Any) -> list[str]:
+        # 10-b: one name typed by hand is a list of one; anything else that
+        # is not a list of names reads as none.
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, (list, tuple)):
+            return []
+        return [str(x).strip() for x in v if str(x or "").strip()][:50]
 
     @field_validator("phone_file_max_mb", mode="before")
     @classmethod

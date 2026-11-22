@@ -10,7 +10,10 @@ touched in tests. Missing token / url / chat-id yields ``ok=False`` with a clear
 
 from __future__ import annotations
 
+import json
+import mimetypes
 import re
+from pathlib import Path
 from typing import Any
 
 from ..core.logging import get_logger
@@ -21,8 +24,10 @@ from .base import (
     FileTooLarge,
     InboundFile,
     InboundMessage,
+    Press,
     auth_refusal,
     interpret_json,
+    interpret_response,
     too_large_words,
     without_signoff,
 )
@@ -30,7 +35,87 @@ from .base import (
 _log = get_logger("comm")
 
 SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
+SLACK_API = "https://slack.com/api/"
 TELEGRAM_API = "https://api.telegram.org"
+#: 10-b: the only address a file going to Slack is uploaded to (the address
+#: Slack hands back is checked against it before any bytes are sent).
+SLACK_UPLOAD_HOST = "https://files.slack.com/"
+#: 10-b: what the sender hears when Slack refuses an upload for a missing
+#: permission: the Slack app was made from an older manifest.
+SLACK_FILES_WRITE_WORDS = (
+    "your Slack app is missing the files:write permission. Update the app from "
+    "the manifest (api.slack.com/apps, App Manifest, paste the manifest from "
+    "Add a destination, Slack, Save, then reinstall the app)"
+)
+
+_MB = 1024 * 1024
+
+
+def _read_file(path: str, max_bytes: int, service: str) -> tuple[Path, bytes]:
+    """The bytes of the file at ``path`` for an upload (10-b): refused in
+    words when it is missing or larger than ``service`` takes."""
+    p = Path(path)
+    try:
+        size = p.stat().st_size
+    except OSError:
+        raise FileNotTaken("it is not on this PC any more") from None
+    if size > max_bytes:
+        raise FileTooLarge(f"it is {size / _MB:.0f} MB, and {service} takes at most {max_bytes // _MB} MB")
+    try:
+        return p, p.read_bytes()
+    except OSError:
+        raise FileNotTaken("it could not be read on this PC") from None
+
+
+def _media_type(name: str) -> str:
+    return mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+
+def _answer_dict(resp: Any) -> dict[str, Any]:
+    """A Web API answer as a dict (``{}`` when it is not JSON)."""
+    if isinstance(resp, dict):
+        return resp
+    getter = getattr(resp, "json", None)
+    if callable(getter):
+        try:
+            data = getter()
+        except Exception:  # noqa: BLE001
+            return {}
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _status_ok(resp: Any) -> bool:
+    ok, _detail = interpret_response(resp)
+    return ok
+
+
+def slack_blocks(message: str, buttons: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """The message as plain text with its buttons under it (10-b). The first
+    button is the main one (one main action per view); its ``value`` is the
+    ``ij:…`` data the press brings back."""
+    elements = []
+    for i, (label, data) in enumerate(buttons, 1):
+        button: dict[str, Any] = {
+            "type": "button",
+            "text": {"type": "plain_text", "text": str(label)[:75], "emoji": True},
+            "action_id": f"ij_{i}",
+            "value": str(data)[:2000],
+        }
+        if i == 1:
+            button["style"] = "primary"
+        elements.append(button)
+    return [
+        {"type": "section", "text": {"type": "plain_text", "text": str(message)[:3000], "emoji": True}},
+        {"type": "actions", "block_id": "ij_buttons", "elements": elements},
+    ]
+
+
+def telegram_keyboard(buttons: list[tuple[str, str]]) -> dict[str, Any]:
+    """Telegram's inline keyboard for ``buttons``, one row (10-b)."""
+    return {"inline_keyboard": [[
+        {"text": str(label)[:64], "callback_data": str(data)[:64]} for label, data in buttons
+    ]]}
 #: 10-a: the only address a Slack file is downloaded from with the bot token.
 #: A download address in an event that points anywhere else is never fetched
 #: (the token would go with it).
@@ -78,6 +163,97 @@ class SlackChannel(Channel):
     #: An inbound Slack DM fires "slack" reflex rules (CX-05), so a rule can scope
     #: to "a Slack message arrived" distinctly from a generic "comm" message.
     reflex_source = "slack"
+    #: 10-b: files back (files.getUploadURLExternal, the upload,
+    #: files.completeUploadExternal) and Block Kit buttons, answered over
+    #: Socket Mode (``interactive`` envelopes, ``comm/slack_socket``).
+    supports_files = True
+    display_name = "Slack"
+    #: The most one file sent to Slack may be (the phone's own cap is lower).
+    FILE_MAX_BYTES = 50 * _MB
+
+    @property
+    def supports_buttons(self) -> bool:  # type: ignore[override]
+        """Buttons only where a press can come back: Socket Mode (an app
+        token is set). Through the Events API webhook a press would go to an
+        address nobody set up, so that destination gets the words alone."""
+        return bool(self.config.get("app_token_secret"))
+
+    def _bot_headers(self) -> dict[str, str]:
+        token = self._resolve_secret(self.config.get("token_secret"))
+        if not token:
+            raise FileNotTaken("the Slack bot token is not set on this PC")
+        return {"Authorization": f"Bearer {token}"}
+
+    def _call(self, method: str, fields: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+        """One Slack Web API call as a form POST (10-b); Slack's error in
+        words (:class:`FileNotTaken`) when it answers ``ok: false``."""
+        data = _answer_dict(self._post_file(SLACK_API + method, fields, None, headers))
+        if data.get("ok"):
+            return data
+        error = str(data.get("error") or "no answer")
+        if error == "missing_scope":
+            raise FileNotTaken(SLACK_FILES_WRITE_WORDS)
+        if error in ("not_in_channel", "channel_not_found"):
+            raise FileNotTaken("Iron Jarvis is not in that Slack conversation")
+        raise FileNotTaken(f"Slack refused it ({error[:60]})")
+
+    def send_file(self, path: str, *, chat_id: Any = None, caption: str = "") -> dict[str, Any]:
+        """Upload one file to the chat that asked (10-b): a DM (``U…``, its
+        conversation opened with ``conversations.open``) or the destination's
+        own channel, in the thread under the message (``C…|<ts>``). Slack's
+        three steps: ``files.getUploadURLExternal``, the bytes to the address
+        it gives (only Slack's own file host), ``files.completeUploadExternal``.
+        BLOCKING; every failure in words."""
+        try:
+            headers = self._bot_headers()
+            p, data = _read_file(path, self.FILE_MAX_BYTES, "Slack")
+            target = str(chat_id or self.config.get("channel") or "").strip()
+            channel, _, thread_ts = target.partition("|")
+            if channel[:1] in ("U", "W"):
+                opened = self._call("conversations.open", {"users": channel}, headers)
+                channel = str(((opened.get("channel") or {}).get("id")) or "")
+            if not re.fullmatch(r"[CDG][A-Z0-9]{6,}", channel or ""):
+                raise FileNotTaken("Slack needs the conversation's id to take a file")
+            got = self._call(
+                "files.getUploadURLExternal", {"filename": p.name, "length": len(data)}, headers
+            )
+            url = str(got.get("upload_url") or "")
+            file_id = str(got.get("file_id") or "")
+            if not url.startswith(SLACK_UPLOAD_HOST) or not file_id:
+                raise FileNotTaken("Slack did not give an upload address")
+            if not _status_ok(self._post_file(url, {}, ("file", p.name, data, _media_type(p.name)))):
+                raise FileNotTaken("Slack did not take the upload")
+            fields: dict[str, Any] = {
+                "files": json.dumps([{"id": file_id, "title": p.name}]),
+                "channel_id": channel,
+            }
+            if thread_ts:
+                fields["thread_ts"] = thread_ts
+            if caption:
+                fields["initial_comment"] = caption[:3000]
+            self._call("files.completeUploadExternal", fields, headers)
+            return {"ok": True, "detail": "sent"}
+        except FileNotTaken as exc:
+            return self._fail(exc.words)
+
+    def answer_press(self, press: Press, label: str) -> bool:
+        """The buttons under the message become ``label`` (10-b,
+        ``chat.update``: the message's own text, then one quiet line)."""
+        token = self._resolve_secret(self.config.get("token_secret"))
+        if not token or not press.chat or not press.message:
+            return False
+        text = press.text or label
+        payload = {
+            "channel": press.chat,
+            "ts": press.message,
+            "text": text,
+            "blocks": [
+                {"type": "section", "text": {"type": "plain_text", "text": text[:3000], "emoji": True}},
+                {"type": "context", "elements": [{"type": "plain_text", "text": label[:150], "emoji": True}]},
+            ],
+        }
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+        return bool(self._post(SLACK_API + "chat.update", payload, headers).get("ok"))
 
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         # `chat_id` is the inbound pipeline's reply address (a Slack user id —
@@ -102,6 +278,12 @@ class SlackChannel(Channel):
             payload: dict[str, Any] = {"channel": channel, "text": message}
             if thread_ts:
                 payload["thread_ts"] = thread_ts
+            buttons = kw.get("buttons")
+            if buttons:
+                # 10-b: Block Kit buttons under the message (``text`` stays the
+                # fallback a notification shows). Plain text only: nothing in
+                # the message is read as a link or a mention.
+                payload["blocks"] = slack_blocks(message, buttons)
             # The token rides the Authorization header (never the JSON body),
             # and `interpret_response` reads Slack's {"ok": false, "error": …}
             # envelope so a 200-with-error is reported as the failure it is.
@@ -185,6 +367,19 @@ class TelegramChannel(Channel):
     #: they are read (one message carries one).
     _FILE_KEYS = ("photo", "document", "voice", "audio", "video", "video_note")
 
+    #: 10-b: files back (``sendPhoto`` / ``sendDocument``) and inline buttons
+    #: (``callback_query`` comes back through ``getUpdates``).
+    supports_files = True
+    supports_buttons = True
+    display_name = "Telegram"
+    #: Telegram's own limits for a bot: a picture by ``sendPhoto`` up to
+    #: 10 MB, any file by ``sendDocument`` up to 50 MB.
+    PHOTO_MAX_BYTES = 10 * _MB
+    FILE_MAX_BYTES = 50 * _MB
+    #: The pictures ``sendPhoto`` takes; any other file goes as a document.
+    _PHOTO_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                    ".webp": "image/webp"}
+
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         token_secret = self.config.get("token_secret")
         token = self._resolve_secret(token_secret)
@@ -198,7 +393,98 @@ class TelegramChannel(Channel):
         if not chat_id:
             return self._fail("telegram: config needs `chat_id`")
         url = f"{TELEGRAM_API}/bot{token}/sendMessage"
-        return self._post(url, {"chat_id": chat_id, "text": message})
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": message}
+        if kw.get("buttons"):
+            # 10-b: the buttons under a question (one row).
+            payload["reply_markup"] = telegram_keyboard(kw["buttons"])
+        return self._post(url, payload)
+
+    def send_file(self, path: str, *, chat_id: Any = None, caption: str = "") -> dict[str, Any]:
+        """Send one file to the chat (10-b): ``sendPhoto`` for a picture
+        under 10 MB, else ``sendDocument`` (50 MB is Telegram's own limit).
+        The address HOLDS THE BOT TOKEN: every failure is reworded and the
+        token never reaches a detail, a log or an event. BLOCKING."""
+        token = self._resolve_secret(self.config.get("token_secret"))
+        if not token:
+            return self._fail("Telegram's bot token is not set on this PC")
+        chat = chat_id or self.config.get("chat_id")
+        if not chat:
+            return self._fail("telegram: config needs `chat_id`")
+        try:
+            p, data = _read_file(path, self.FILE_MAX_BYTES, "Telegram")
+            mime = self._PHOTO_TYPES.get(p.suffix.lower())
+            if mime and len(data) <= self.PHOTO_MAX_BYTES:
+                method, field = "sendPhoto", "photo"
+            else:
+                method, field, mime = "sendDocument", "document", _media_type(p.name)
+            fields: dict[str, Any] = {"chat_id": chat}
+            if caption:
+                fields["caption"] = caption[:1024]
+            resp = self._post_file(f"{TELEGRAM_API}/bot{token}/{method}", fields,
+                                   (field, p.name, data, mime))
+        except FileNotTaken as exc:
+            return self._fail(exc.words)
+        ok, detail = interpret_response(resp)
+        if ok:
+            return {"ok": True, "detail": "sent"}
+        said = _answer_dict(resp).get("description")
+        why = f"Telegram refused it ({str(said)[:80]})" if said else "Telegram refused it"
+        return self._fail(why.replace(token, "***"))
+
+    def answer_press(self, press: Press, label: str) -> bool:
+        """Answer a press (10-b): ``answerCallbackQuery`` (the button stops
+        spinning, ``label`` shows), then ``editMessageReplyMarkup``: the
+        buttons become one answered button saying ``label``. True when the
+        message changed."""
+        token = self._resolve_secret(self.config.get("token_secret"))
+        if not token:
+            return False
+        if press.ref:
+            self._post(f"{TELEGRAM_API}/bot{token}/answerCallbackQuery",
+                       {"callback_query_id": press.ref, "text": label[:200]})
+        if press.chat is None or not str(press.message or "").isdecimal():
+            return False
+        from .prompts import DONE_DATA
+
+        res = self._post(f"{TELEGRAM_API}/bot{token}/editMessageReplyMarkup", {
+            "chat_id": press.chat,
+            "message_id": int(press.message),
+            "reply_markup": telegram_keyboard([(label, DONE_DATA)]),
+        })
+        return bool(res.get("ok"))
+
+    @staticmethod
+    def _press_of(upd: dict, update_id: Any) -> "InboundMessage | None":
+        """A ``callback_query`` (a button pressed under one of the bot's own
+        messages, 10-b) as an :class:`InboundMessage` with ``press`` set and
+        no words. Who pressed is ``from``; the chat is the message's. Read
+        by the pipeline only after its guards."""
+        cq = upd.get("callback_query")
+        if not isinstance(cq, dict):
+            return None
+        data = cq.get("data")
+        if not isinstance(data, str) or not data:
+            return None
+        frm = cq.get("from") or {}
+        msg = cq.get("message") or {}
+        chat = (msg.get("chat") or {}).get("id") if isinstance(msg, dict) else None
+        if chat is None:
+            # A press with no message of the bot's under it (inline mode) has
+            # no chat to check against the presser: never taken.
+            return None
+        return InboundMessage(
+            sender_id=str(frm.get("id", "")),
+            text="",
+            update_id=update_id,
+            reply_to=chat,
+            is_bot=bool(frm.get("is_bot", False)),
+            raw=upd,
+            press=Press(
+                data=data[:64], ref=str(cq.get("id") or ""), chat=chat,
+                message=str((msg or {}).get("message_id") or ""),
+                text=str((msg or {}).get("text") or "")[:4096],
+            ),
+        )
 
     def poll(
         self, offset: int = 0, *, timeout: int = 0
@@ -243,6 +529,12 @@ class TelegramChannel(Channel):
             if isinstance(update_id, int):
                 next_offset = max(next_offset, update_id + 1)
             try:
+                if "callback_query" in upd:
+                    # 10-b: a button pressed under one of the bot's messages.
+                    pressed = self._press_of(upd, update_id)
+                    if pressed is not None:
+                        messages.append(pressed)
+                    continue
                 msg = upd.get("message") or upd.get("edited_message") or {}
                 if not isinstance(msg, dict):
                     continue
@@ -826,6 +1118,11 @@ class EmailChannel(Channel):
         allow = {str(a).strip().lower() for a in self.allowed_senders()}
         return bool(allow) and sid in allow
 
+    #: 10-b: files back go as attachments of ONE email, 20 MB in all.
+    supports_files = True
+    display_name = "email"
+    ALL_FILES_MAX_BYTES = 20 * _MB
+
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         cfg = self.config
         host = cfg.get("host")
@@ -833,9 +1130,7 @@ class EmailChannel(Channel):
         to_addr = kw.get("to") or cfg.get("to_addr")
         if not host or not from_addr or not to_addr:
             return self._fail("email: config needs `host`, `from_addr` and `to_addr`")
-        password = self._resolve_secret(cfg.get("password_secret"))
         try:
-            import smtplib
             from email.message import EmailMessage
 
             msg = EmailMessage()
@@ -843,16 +1138,75 @@ class EmailChannel(Channel):
             msg["From"] = from_addr
             msg["To"] = to_addr
             msg.set_content(message)
-            port = int(cfg.get("port") or 587)
-            with smtplib.SMTP(host, port, timeout=15) as smtp:
-                if cfg.get("use_tls", True):
-                    smtp.starttls()
-                if cfg.get("username") and password:
-                    smtp.login(cfg["username"], password)
-                smtp.send_message(msg)
+            self._smtp_send(msg)
             return {"ok": True, "detail": f"emailed {to_addr}"}
         except Exception as exc:  # noqa: BLE001 — surface, never raise to the notifier
             return self._fail(f"email: {type(exc).__name__}: {exc}")
+
+    def _smtp_send(self, msg: Any) -> None:
+        """Send one built message over SMTP. BLOCKING; raises on failure."""
+        import smtplib
+
+        cfg = self.config
+        password = self._resolve_secret(cfg.get("password_secret"))
+        port = int(cfg.get("port") or 587)
+        with smtplib.SMTP(cfg.get("host"), port, timeout=15) as smtp:
+            if cfg.get("use_tls", True):
+                smtp.starttls()
+            if cfg.get("username") and password:
+                smtp.login(cfg["username"], password)
+            smtp.send_message(msg)
+
+    def send_file(self, path: str, *, chat_id: Any = None, caption: str = "") -> dict[str, Any]:
+        return self.send_files([path], chat_id=chat_id, caption=caption)[0]
+
+    def send_files(
+        self, paths: list[str], *, chat_id: Any = None, caption: str = ""
+    ) -> list[dict[str, Any]]:
+        """The files as attachments of ONE email (10-b), at most
+        :data:`ALL_FILES_MAX_BYTES` in all: a file past that is not attached
+        and says so. It goes where the reply's own email goes (``to_addr``,
+        as :meth:`send`: ``chat_id`` is not an address here). One answer per
+        path, in order. BLOCKING."""
+        cfg = self.config
+        to_addr = cfg.get("to_addr")
+        from_addr = cfg.get("from_addr") or cfg.get("username")
+        if not cfg.get("host") or not from_addr or not to_addr:
+            return [self._fail("email: config needs `host`, `from_addr` and `to_addr`") for _ in paths]
+        from email.message import EmailMessage
+
+        out: list[dict[str, Any]] = []
+        files: list[tuple[Path, bytes]] = []
+        total = 0
+        for path in paths:
+            try:
+                p, data = _read_file(path, self.ALL_FILES_MAX_BYTES, "email")
+            except FileNotTaken as exc:
+                out.append(self._fail(exc.words))
+                continue
+            if total + len(data) > self.ALL_FILES_MAX_BYTES:
+                out.append(self._fail(f"one email carries at most {self.ALL_FILES_MAX_BYTES // _MB} MB in all"))
+                continue
+            total += len(data)
+            files.append((p, data))
+            out.append({"ok": True, "detail": "sent"})
+        if not files:
+            return out
+        msg = EmailMessage()
+        msg["Subject"] = "Iron Jarvis: your files"
+        msg["From"] = from_addr
+        msg["To"] = str(to_addr)
+        msg.set_content(caption or ("The files you asked for: " + ", ".join(p.name for p, _ in files) + "."))
+        for p, data in files:
+            maintype, _, subtype = _media_type(p.name).partition("/")
+            msg.add_attachment(data, maintype=maintype or "application",
+                               subtype=subtype or "octet-stream", filename=p.name)
+        try:
+            self._smtp_send(msg)
+        except Exception as exc:  # noqa: BLE001 — every attached file failed together
+            why = f"the email could not be sent ({type(exc).__name__})"
+            return [self._fail(why) if r.get("ok") else r for r in out]
+        return out
 
     def poll(
         self, offset: int = 0, *, timeout: int = 0

@@ -188,6 +188,7 @@ EVENT_WORDS: dict[str, str] = {
     "comm.rejected": "A message from an unknown sender was refused",
     "comm.dropped": "A message was dropped during a restart",
     "comm.file_received": "A file from your phone was kept",
+    "comm.file_sent": "A file went to your phone",
     "reflex.fired": "A rule fired",
     "schedule.fired": "A schedule fired",
     "computeruse.run_finished": "A computer-use run finished",
@@ -751,6 +752,14 @@ def format_event(event: Any) -> str:
             # in the app for five minutes — the session by its title, what
             # the call would do in the card's own words.
             return f"⏸ {build_ask_words(payload)} — answer in Iron Jarvis, or reply here: approve / deny."
+        # 10-b: the short preview, built by code from the card itself (its
+        # cost note, or what the call does and two of its redacted
+        # arguments); none for Local only work or a bare ask.
+        from .prompts import approval_preview
+
+        preview = approval_preview(payload)
+        if preview:
+            return f"⏸ {preview} — approve from the dashboard bell, or reply here: approve / deny."
         return (
             f"⏸ An agent is asking to use {tool} — approve from the "
             "dashboard bell, or reply here: approve / deny."
@@ -1253,9 +1262,16 @@ class Notifier:
         return self.channels()
 
     def notify(
-        self, message: str, channels: list[str] | None = None
+        self,
+        message: str,
+        channels: list[str] | None = None,
+        *,
+        buttons: "dict[str, list[tuple[str, str]]] | None" = None,
     ) -> dict[str, dict[str, Any]]:
-        """Send ``message`` to ``channels`` (or the default/all) and report results."""
+        """Send ``message`` to ``channels`` (or the default/all) and report results.
+
+        ``buttons`` (10-b): per destination name, the buttons under the
+        message; a destination not named gets the words alone."""
         results: dict[str, dict[str, Any]] = {}
         for name in self._targets(channels):
             channel = self._channels.get(name)
@@ -1263,10 +1279,42 @@ class Notifier:
                 results[name] = {"ok": False, "detail": f"unknown channel '{name}'"}
                 continue
             try:
-                results[name] = channel.send(message)
+                row = (buttons or {}).get(name)
+                results[name] = channel.send(message, buttons=row) if row else channel.send(message)
             except Exception as exc:  # a channel must never break the fan-out
                 results[name] = {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
         return results
+
+    def _approval_buttons(self, targets: list[str], payload: dict) -> dict[str, list[tuple[str, str]]]:
+        """Approve and Deny under an approval's alert (10-b), on each
+        destination that can take a press AND answer it: buttons, two-way
+        chat, and an allowed sender who has talked to Jarvis there (the
+        pending-prompt handler gives each of them their own answerable
+        prompt, ``prompts.handle_approval_requested``). BLOCKING with an
+        engine (one read per destination; the bus runs this off the loop).
+        Never raises."""
+        out: dict[str, list[tuple[str, str]]] = {}
+        try:
+            from .prompts import _identities, approval_buttons
+
+            approval_id = str(payload.get("approval_id") or "").strip()
+            if not approval_id:
+                return out
+            for name in targets:
+                ch = self._channels.get(name)
+                try:
+                    if ch is None or not getattr(ch, "supports_buttons", False) or not ch.chat_enabled():
+                        continue
+                    if self.engine is not None and not any(
+                        ch.is_authorized(i.sender_id) for i in _identities(self.engine, name)
+                    ):
+                        continue
+                except Exception:  # noqa: BLE001 — a config quirk: the words alone
+                    continue
+                out[name] = approval_buttons(approval_id)
+        except Exception:  # noqa: BLE001 — an alert never fails over its buttons
+            log.warning("the approval's buttons could not be made", exc_info=True)
+        return out
 
     # -- event bus adapter ----------------------------------------------
     def on_event(self, event: Any) -> dict[str, dict[str, Any]] | None:
@@ -1408,6 +1456,13 @@ class Notifier:
             # only while a window is) added a second toast beside the first.
             # The phone and every other destination keep their one line.
             targets = self.without_desktop(targets)
+            if not targets:
+                return {}
+            # 10-b: the same one line, with Approve and Deny under it where
+            # a press can be answered.
+            rows = self._approval_buttons(targets, _ask_payload if isinstance(_ask_payload, dict) else {})
+            if rows:
+                return self.notify(self._formatter(_title_only(event)), targets, buttons=rows)
         elif etype in (EventType.BUILD_TURN_FINISHED, EventType.BUILD_TURN_STALLED,
                        EventType.BUILD_NIGHT_SUMMARY, EventType.BUILD_CI_DONE,
                        EventType.REFLEX_FAILED):

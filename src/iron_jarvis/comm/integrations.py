@@ -29,10 +29,12 @@ from .base import (
     HttpGet,
     HttpGetBytes,
     HttpPost,
+    HttpPostFile,
     SecretResolver,
     httpx_get,
     httpx_get_bytes,
     httpx_post,
+    httpx_post_file,
 )
 from .channels import CHANNEL_TYPES, MockChannel
 from .notifier import DEFAULT_ALERT_EVENTS, Notifier
@@ -120,6 +122,7 @@ def build_notifier(
     http_post: HttpPost | None = None,
     http_get: HttpGet | None = None,
     http_get_bytes: HttpGetBytes | None = None,
+    http_post_file: HttpPostFile | None = None,
 ) -> Notifier:
     """Construct a :class:`Notifier` from a ``config.comm`` mapping.
 
@@ -136,6 +139,9 @@ def build_notifier(
     # injected its own GET (a test) gets none unless it injects one too, so
     # no test can reach a network through it.
     bytes_transport = http_get_bytes or (httpx_get_bytes if http_get is None else None)
+    # 10-b: the upload (files back to the phone), the same rule: a caller
+    # that injected its own POST (a test) gets none unless it injects one.
+    upload_transport = http_post_file or (httpx_post_file if http_post is None else None)
 
     event_types = set(comm_config.get("event_types") or DEFAULT_ALERT_EVENTS)
     notifier = Notifier(
@@ -176,6 +182,7 @@ def build_notifier(
                 http_get=get_transport,
                 secret_resolver=secret_resolver,
                 http_get_bytes=bytes_transport,
+                http_post_file=upload_transport,
             ),
         )
 

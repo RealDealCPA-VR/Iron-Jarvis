@@ -1235,45 +1235,6 @@ def _reply_message(session: Any, caller: str = "", lead: str = "") -> str:
     return text + demo
 
 
-def _team_folders(engine: Any, session_id: str) -> list[Path]:
-    """The folders the run and its workers worked in (BLOCKING): the run's
-    own ``workspace_path`` and each delegated member's (``mission._walk``,
-    the same tree ``session_result(team=True)`` reads its files from).
-    ``[]`` on any error (then nothing is sent)."""
-    try:
-        from ..core.db import session_scope
-        from ..core.models import Session
-        from .mission import _walk
-
-        with session_scope(engine) as db:
-            root = db.get(Session, session_id)
-            members, _runs = _walk(db, session_id)
-            rows = ([root] if root is not None else []) + list(members)
-            spelled = [str(getattr(r, "workspace_path", "") or "").strip() for r in rows]
-    except Exception:  # noqa: BLE001 — unreadable: no folder, nothing sent
-        log.warning("task door: the run's folders could not be read", exc_info=True)
-        return []
-    out: list[Path] = []
-    for text in spelled:
-        if text and Path(text) not in out:
-            out.append(Path(text))
-    return out
-
-
-def _inside_a_folder(raw: str, folders: list[Path]) -> Path | None:
-    """``raw`` resolved (links followed) when it is inside one of
-    ``folders``, else None — the workspace check every file tool uses
-    (``tools.base.safe_path``). Never raises."""
-    from ..tools.base import safe_path
-
-    for folder in folders:
-        try:
-            return safe_path(folder, raw)
-        except Exception:  # noqa: BLE001 — outside this one (or unreadable)
-            continue
-    return None
-
-
 def _reply_files(engine: Any, session_id: str) -> tuple[list[dict[str, str]], list[str]]:
     """What the run made, as ``[{name, content_b64}]`` within the caps, and the
     names left behind (BLOCKING). Never raises.
@@ -1285,40 +1246,25 @@ def _reply_files(engine: Any, session_id: str) -> tuple[list[dict[str, str]], li
     files: list[dict[str, str]] = []
     left: list[str] = []
     try:
-        from .outcome import session_result
         from .remote_files import safe_filename
+        from .reply_files import Caps, files_made
 
         # v1.503.0 (north-star 3.13): the files the run's workers made too.
-        result = session_result(engine, session_id, team=True)
-        docs = [str(p) for p in (result.get("documents") or []) if p] if isinstance(result, dict) else []
+        # 10-b: the ONE reading the phone's reply uses too (agents/reply_files).
+        picked = files_made(
+            engine, session_id,
+            Caps(count=REPLY_FILES_MAX, each=REPLY_FILE_BYTES, total=REPLY_FILES_TOTAL_BYTES),
+        )
     except Exception:  # noqa: BLE001
         return [], []
-    folders = _team_folders(engine, session_id) if docs else []
-    total = 0
-    for raw in docs:
-        name = safe_filename(Path(raw).name)
-        inside = _inside_a_folder(raw, folders)
-        if inside is None:
-            left.append(name)
-            continue
-        path = inside
-        try:
-            size = path.stat().st_size
-        except OSError:
-            continue
-        if (
-            len(files) >= REPLY_FILES_MAX
-            or size > REPLY_FILE_BYTES
-            or total + size > REPLY_FILES_TOTAL_BYTES
-        ):
-            left.append(name)
-            continue
+    left.extend(safe_filename(name) for name, _why in picked.left)
+    for path in picked.files:
+        name = safe_filename(path.name)
         try:
             blob = path.read_bytes()
         except OSError:
             left.append(name)
             continue
-        total += len(blob)
         files.append({"name": name, "content_b64": base64.b64encode(blob).decode("ascii")})
     return files, left
 

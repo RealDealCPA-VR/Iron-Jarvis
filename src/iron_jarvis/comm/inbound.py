@@ -34,6 +34,7 @@ import asyncio
 import re
 import time
 from collections import deque
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -63,16 +64,24 @@ from .voice_note import ASK_KIND as _VOICE_ASK_KIND
 from .prompts import (
     ALREADY_ANSWERED_REPLY,
     ANSWER_USAGE_REPLY,
+    APPROVAL_BUTTONS,
     APPROVAL_DECISIONS,
     APPROVAL_GONE_REPLY,
     APPROVAL_KIND,
     APPROVAL_USAGE_REPLY,
     APPROVAL_WORDS,
+    FILE_SEND_KIND,
+    FILE_SEND_OPTIONS,
     NOTHING_WAITING_REPLY,
+    PRESS_ANSWERED,
+    PRESS_ELSEWHERE,
     answer_echo,
     approval_echo,
     approval_reminder,
+    parse_button,
     pending_reminder,
+    pressed_label,
+    prompt_buttons,
     prompt_options,
 )
 
@@ -173,6 +182,27 @@ class Taken:
     sent: bool = False
     #: The message ends here (a question was asked, or nothing is left).
     stop: dict[str, Any] | None = None
+
+
+@dataclass
+class _PressHold:
+    """10-b: an answer being resolved by a button press. ``_answer_reply``
+    holds back the reply a changed button already says (``held``); the
+    press's handler sends it after all when the button could not change."""
+
+    held: list[str] = field(default_factory=list)
+
+
+#: 10-b: set while a press resolves its prompt (``_handle_press``).
+_PRESS_HOLD: ContextVar["_PressHold | None"] = ContextVar("ij_press_hold", default=None)
+#: The answers whose reply the changed button says by itself.
+_PRESS_QUIET = frozenset({"approval_answered", "approval_expired", "answer_superseded",
+                          "file_sent", "file_gone"})
+#: The answers after which the buttons say what was decided.
+_PRESS_DONE = frozenset({"approval_answered", "answered", "voice_answered", "voice_asked",
+                         "file_sent", "file_send_failed", "file_kept"})
+#: The answers after which the buttons say it was already answered.
+_PRESS_GONE = frozenset({"approval_expired", "answer_superseded", "answer_expired", "file_gone"})
 
 
 def _with_files_note(text: str, count: int) -> str:
@@ -692,6 +722,18 @@ class InboundPoller:
                 # The one-shot lane's historical wire shape: prefixed + capped.
                 body = f"{self.reply_prefix}{summary}"[: self.max_reply_chars]
                 await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
+            if ran:
+                # 10-b: what the finished run made goes back after its words
+                # (read off its own record, inside its folders, the phone's
+                # caps), or the one question first. A run that did not
+                # finish sends nothing: its words say which files it kept.
+                from ..agents.reply_files import PHONE_CAPS, files_made
+
+                engine = getattr(getattr(self, "platform", None), "engine", None)
+                if engine is not None:
+                    picked = await asyncio.to_thread(files_made, engine, str(session.id), PHONE_CAPS)
+                    await self._files_back(name, ch, msg, picked, tid=tid,
+                                           session_id=str(session.id), display=display)
 
     async def _files_line(self, session_id: str, *, finished: bool, summary: str) -> str:
         """" Files it wrote: a.md, b.xlsx." (a finished run) or " The files it
@@ -1210,7 +1252,9 @@ class InboundPoller:
         """Best-effort human display name from the raw update (Telegram shape);
         empty string when unknown — the store then labels by sender id."""
         try:
-            m = (msg.raw or {}).get("message") or (msg.raw or {}).get("edited_message") or {}
+            raw = msg.raw or {}
+            # 10-b: a press names who pressed on the callback itself.
+            m = raw.get("message") or raw.get("edited_message") or raw.get("callback_query") or {}
             frm = m.get("from") or {}
             name = " ".join(
                 str(x) for x in (frm.get("first_name"), frm.get("last_name")) if x
@@ -1372,6 +1416,12 @@ class InboundPoller:
         ):
             log.warning("inbound: refusing non-private chat on channel %r", name)
             return {"channel": name, "status": "non_private", "sender": msg.sender_id}
+
+        # 10-b: a BUTTON PRESS, read only here, after the allowlist, the
+        # sender's proof and the private-chat guard: a stranger's press (or
+        # one in a group) never resolves anything.
+        if getattr(msg, "press", None) is not None:
+            return await self._handle_press(name, ch, msg)
 
         text = (msg.text or "").strip()
         # FULL CHAT (v1.136.0): when this destination opted into chat
@@ -1829,7 +1879,17 @@ class InboundPoller:
 
             outbound = without_figure_links(reply) + self._pending_reminder(name, msg.sender_id)
             sent = await self.send_chunked(ch, outbound, chat_id=msg.reply_to)
-            return {"channel": name, "status": "chat", "thread_id": tid, "sent": sent}
+            # 10-b: the files this turn made go back after its words: its own
+            # record (``documents``) inside the folder its tools worked in,
+            # within the phone's caps, or the one question first. The lane
+            # answering the desk changes nothing: this door alone sends.
+            picked = await asyncio.to_thread(
+                self._turn_files, str(files_here.get("workspace_dir") or ""), project_id,
+                result.get("documents"),
+            )
+            files = await self._files_back(name, ch, msg, picked, tid=tid, display=display)
+            return {"channel": name, "status": "chat", "thread_id": tid, "sent": sent,
+                    "files": files.get("files", "none")}
 
         # ESCALATE: ack now, run the normal supervised session (same
         # orchestrator + permission engine — a remote sender gains no power),
@@ -2254,34 +2314,53 @@ class InboundPoller:
             prompt = self.prompt_store.newest_open(channel, str(sender_id))
             if prompt is None:
                 return None, ""
-            if getattr(prompt, "kind", "") == APPROVAL_KIND:
-                # An approval pause has a HARD deadline (the runtime denies at
-                # SESSION_APPROVAL_TIMEOUT_S) and approval.resolved normally
-                # expires the row (prompts.handle_workflow_waiting dispatch);
-                # this age check is the belt for a missed event, so a dead
-                # gate is never nagged about or "answered" forever. The
-                # registry's resolve() stays the real arbiter — a failed
-                # resolve expires the prompt too (_resolve_approval_prompt).
-                if self._approval_prompt_stale(prompt):
-                    self.prompt_store.expire(prompt.id, status="expired")
-                    return None, "approval_gone"
-                return prompt, ""
-            if getattr(prompt, "kind", "") == _VOICE_ASK_KIND:
-                # 10-a: "use <service> for phone voice notes too?" waits for
-                # the recording it is about; a day later, or once the
-                # recording is gone, it is closed (a later "1" is chat).
-                if not _voice_prompt_fresh(prompt):
-                    self.prompt_store.expire(prompt.id, status="expired")
-                    return None, ""
-                return prompt, ""
-            status = self._run_state(prompt.ref_id)
-            if status != "waiting":
-                self.prompt_store.expire(prompt.id, status="expired")
-                return None, status
-            return prompt, ""
+            fresh, gone = self._prompt_fresh(prompt)
+            return (prompt, "") if fresh else (None, gone)
         except Exception:  # noqa: BLE001 — a prompt lookup must never break a turn
             log.warning("pending prompt lookup failed on %r", channel, exc_info=True)
             return None, ""
+
+    def _prompt_fresh(self, prompt: Any) -> tuple[bool, str]:
+        """Is the open ``prompt`` still answerable? ``(True, "")``, or
+        ``(False, <why>)`` after EXPIRING it (an approval past its window:
+        "approval_gone"; a workflow run that un-parked: its status; a voice
+        or files question past its day or whose files are gone: ""). Shared
+        by the newest-open look and a button's press (10-b)."""
+        kind = getattr(prompt, "kind", "")
+        if kind == APPROVAL_KIND:
+            # An approval pause has a HARD deadline (the runtime denies at
+            # SESSION_APPROVAL_TIMEOUT_S) and approval.resolved normally
+            # expires the row (prompts.handle_workflow_waiting dispatch);
+            # this age check is the belt for a missed event, so a dead
+            # gate is never nagged about or "answered" forever. The
+            # registry's resolve() stays the real arbiter — a failed
+            # resolve expires the prompt too (_resolve_approval_prompt).
+            if self._approval_prompt_stale(prompt):
+                self.prompt_store.expire(prompt.id, status="expired")
+                return False, "approval_gone"
+            return True, ""
+        if kind == _VOICE_ASK_KIND:
+            # 10-a: "use <service> for phone voice notes too?" waits for
+            # the recording it is about; a day later, or once the
+            # recording is gone, it is closed (a later "1" is chat).
+            if not _voice_prompt_fresh(prompt):
+                self.prompt_store.expire(prompt.id, status="expired")
+                return False, ""
+            return True, ""
+        if kind == FILE_SEND_KIND:
+            # 10-b: "send the files to your phone?" waits a day, and only
+            # while one of its files is still on this PC.
+            from . import files_back
+
+            if not files_back.prompt_fresh(prompt):
+                self.prompt_store.expire(prompt.id, status="expired")
+                return False, ""
+            return True, ""
+        status = self._run_state(prompt.ref_id)
+        if status != "waiting":
+            self.prompt_store.expire(prompt.id, status="expired")
+            return False, status
+        return True, ""
 
     @staticmethod
     def _approval_ttl() -> float:
@@ -2346,6 +2425,9 @@ class InboundPoller:
             return approval_reminder(prompt.question)
         if getattr(prompt, "kind", "") == _VOICE_ASK_KIND:
             return f"\n\n(Still waiting for your answer: {prompt.question} Reply 1 for yes or 2 for no.)"
+        if getattr(prompt, "kind", "") == FILE_SEND_KIND:
+            return (f"\n\n(Still waiting for your answer: {prompt.question} "
+                    "Reply 1 to send or 2 to keep it on the PC.)")
         return pending_reminder(prompt.question)
 
     async def _answer_reply(
@@ -2373,9 +2455,18 @@ class InboundPoller:
             if chat_on
             else ""
         )
-        sent = await self.send_chunked(
-            ch, reply + outbound_suffix, chat_id=msg.reply_to
-        )
+        hold = _PRESS_HOLD.get()
+        if hold is not None and status in _PRESS_QUIET and not outbound_suffix:
+            # 10-b: answered by a button press: the button turns into what
+            # was decided, and that IS the reply (one notice per answer).
+            # The press's handler sends this after all if the button could
+            # not change.
+            hold.held.append(reply)
+            sent = True
+        else:
+            sent = await self.send_chunked(
+                ch, reply + outbound_suffix, chat_id=msg.reply_to
+            )
         return {
             "channel": name,
             "status": status,
@@ -2441,6 +2532,10 @@ class InboundPoller:
             )
         if getattr(prompt, "kind", "") == _VOICE_ASK_KIND:
             return await self._resolve_voice_prompt(
+                name, ch, msg, display, chat_on, prompt, answer, original_text
+            )
+        if getattr(prompt, "kind", "") == FILE_SEND_KIND:
+            return await self._resolve_file_prompt(
                 name, ch, msg, display, chat_on, prompt, answer, original_text
             )
         if self.answer_run is None:
@@ -2685,6 +2780,300 @@ class InboundPoller:
             APPROVAL_GONE_REPLY, "approval_expired",
             outbound_suffix=self._pending_reminder(name, msg.sender_id),
             prompt_id=prompt.id, approval_id=prompt.ref_id,
+        )
+
+    # -- 10-b: buttons -------------------------------------------------------
+    def _pressed_prompt(self, channel: str, sender_id: Any, parsed: tuple[str, str, int]) -> tuple[Any, str]:
+        """The open prompt a button names, for THIS presser, or ``(None,
+        words)`` (BLOCKING: indexed reads). ``ij:p:<id>`` names one prompt,
+        which must be open, on this destination and the presser's own;
+        ``ij:a:<approval id>`` names an approval, answered through the
+        presser's own open prompt for it. A stale one is expired here
+        (:meth:`_prompt_fresh`). Never raises."""
+        kind, ref, _n = parsed
+        try:
+            if kind == "p":
+                rec = self.prompt_store.get(ref)
+                if (rec is None or rec.status != "open" or rec.channel != channel
+                        or str(rec.sender_id) != str(sender_id)):
+                    return None, PRESS_ANSWERED
+            else:
+                rec = self.prompt_store.open_for_ref(APPROVAL_KIND, ref, channel, str(sender_id))
+                if rec is None:
+                    # Still waiting, but this chat holds no answerable prompt
+                    # for it (it was asked before this sender talked here).
+                    approvals = getattr(self.platform, "approvals", None)
+                    waiting = approvals is not None and ref in set(approvals.pending_ids())
+                    return None, PRESS_ELSEWHERE if waiting else PRESS_ANSWERED
+            fresh, _gone = self._prompt_fresh(rec)
+            return (rec, "") if fresh else (None, PRESS_ANSWERED)
+        except Exception:  # noqa: BLE001 — a doubt resolves nothing
+            log.warning("inbound: a pressed button could not be read on %r", channel, exc_info=True)
+            return None, PRESS_ANSWERED
+
+    def _say_on_press(self, ch: Channel, press: Any, label: str) -> bool:
+        """``ch.answer_press``, never raising (BLOCKING)."""
+        try:
+            return bool(ch.answer_press(press, label))
+        except Exception:  # noqa: BLE001 — the answer stands; the button stays
+            log.warning("inbound: a pressed button could not be answered", exc_info=True)
+            return False
+
+    async def _handle_press(self, name: str, ch: Channel, msg: InboundMessage) -> dict[str, Any]:
+        """A button pressed under one of Iron Jarvis's own questions (10-b).
+
+        Reached only from ``_dispatch`` AFTER the allowlist, the sender's
+        proof and the private-chat guard. The press names a prompt (or an
+        approval) and an option; it resolves through the SAME
+        ``_resolve_prompt`` a typed "1" or "approve" does (one write path,
+        first answer wins, an approval through ``platform.approvals``). The
+        buttons then turn into what was decided ("Approved by you"), and for
+        an approval or files sent that IS the reply; a press on an answered,
+        expired or someone else's question resolves nothing and hears "That
+        was already answered"."""
+        press = msg.press
+        chat_on = self._chat_ready(ch)
+        display = self._display(msg) if chat_on else ""
+        parsed = parse_button(getattr(press, "data", ""))
+        prompt, why = None, PRESS_ANSWERED
+        if parsed is not None and self.prompt_store is not None:
+            prompt, why = await asyncio.to_thread(self._pressed_prompt, name, msg.sender_id, parsed)
+        options = prompt_options(prompt) if prompt is not None else []
+        n = parsed[2] if parsed is not None else 0
+        if prompt is None or not 1 <= n <= len(options):
+            await asyncio.to_thread(self._say_on_press, ch, press, why)
+            return {"channel": name, "status": "press_stale", "sender": str(msg.sender_id)}
+        kind = getattr(prompt, "kind", "")
+        answer = options[n - 1]
+        # The user's line on the phone chat is the button they pressed.
+        said = APPROVAL_BUTTONS[n - 1] if kind == APPROVAL_KIND and n <= len(APPROVAL_BUTTONS) else answer
+        hold = _PressHold() if kind in (APPROVAL_KIND, FILE_SEND_KIND) else None
+        token = _PRESS_HOLD.set(hold)
+        try:
+            res = await self._resolve_prompt(name, ch, msg, display, chat_on, prompt, answer, said)
+        finally:
+            _PRESS_HOLD.reset(token)
+        status = str(res.get("status") or "")
+        label = str(res.get("press_label") or "") or (
+            pressed_label(kind, answer) if status in _PRESS_DONE
+            else PRESS_ANSWERED if status in _PRESS_GONE else "")
+        changed = await asyncio.to_thread(self._say_on_press, ch, press, label) if label else False
+        if hold is not None and hold.held and not changed:
+            for text in hold.held:
+                await self.send_chunked(ch, text, chat_id=msg.reply_to)
+        return {**res, "pressed": True}
+
+    # -- 10-b: finished files back to the phone ------------------------------
+    def _turn_files(self, workspace_dir: str, project_id: str, documents: Any) -> Any:
+        """The files a phone chat turn made that may go back (BLOCKING):
+        its ``documents`` inside the folder its tools worked in, within the
+        phone's caps (``agents/reply_files``)."""
+        from ..agents.reply_files import PHONE_CAPS, pick
+        from . import files_back
+
+        docs = [str(p) for p in (documents or []) if str(p or "").strip()]
+        if not docs:
+            from ..agents.reply_files import Picked
+
+            return Picked()
+        return pick(docs, files_back.turn_folder(self.platform, workspace_dir, project_id), PHONE_CAPS)
+
+    async def _files_back(
+        self, name: str, ch: Channel, msg: InboundMessage, picked: Any, *, tid: str = "",
+        session_id: str = "", display: str = "",
+    ) -> dict[str, Any]:
+        """After the answer's words: the files the work made go back to the
+        chat that asked (10-b), or the one question first. Called with the
+        identity lock held (the delivery's, or the message's). Never raises.
+
+        * A Local only chat (D-10.3): nothing is sent; the question names
+          how many files, their kind and size, never a name, every time.
+        * Else the setting (``files_back.consent``): "keep" sends nothing;
+          "ask" asks the first time on this destination; "send" sends now.
+        """
+        from . import files_back
+
+        try:
+            files = [str(p) for p in (getattr(picked, "files", None) or [])]
+            left = list(getattr(picked, "left", None) or [])
+            if not (files or left) or not getattr(ch, "supports_files", False) or self.platform is None:
+                return {"files": "none"}
+            local_only = await asyncio.to_thread(
+                files_back.work_is_local_only, getattr(self.platform, "engine", None), tid, session_id)
+            choice = files_back.consent(getattr(self.platform, "config", None), name)
+            if choice == "keep":
+                return {"files": "kept"}
+            if not files:
+                # Only files that may not go (outside the work's folder, past
+                # the caps): named, with why (by count in a Local only chat).
+                line = files_back.not_sent_line(left, [], files_back.destination_words(ch, name),
+                                                local_only=local_only)
+                if tid:
+                    self._safe_append(tid, "assistant", line, channel=name, sender_id=msg.sender_id,
+                                      display=display)
+                await self.send_chunked(ch, line, chat_id=msg.reply_to)
+                return {"files": "named"}
+            if local_only or choice == "ask":
+                asked = await self._ask_files_back(name, ch, msg, files, left, tid=tid,
+                                                   local_only=local_only, display=display)
+                return {"files": "asked" if asked else "not_asked"}
+            sent, _line = await self._send_files_now(name, ch, msg, files, left, tid=tid, display=display)
+            return {"files": "sent", "sent": sent}
+        except Exception:  # noqa: BLE001 — the answer already went; the files stay
+            log.warning("inbound: the files could not go back on %r", name, exc_info=True)
+            return {"files": "error"}
+
+    async def _send_files_now(
+        self, name: str, ch: Channel, msg: InboundMessage, files: list[str],
+        left: list[tuple[str, str]], *, tid: str = "", display: str = "", local_only: bool = False,
+        say: bool = True,
+    ) -> tuple[int, str]:
+        """Send ``files`` through the channel (off the loop), one
+        ``comm.file_sent {channel, kind, bytes}`` each (never a name), then
+        ONE line for what did not go (by name and why; by count in a Local
+        only chat), on the phone and the phone chat (``say``; an answer's
+        reply carries it instead). ``(sent, line)``."""
+        from . import files_back
+
+        results = await asyncio.to_thread(ch.send_files, files, chat_id=msg.reply_to)
+        sent = 0
+        failed: list[tuple[str, str]] = []
+        for path, res in zip(files, list(results or []) + [{}] * len(files)):
+            if (res or {}).get("ok"):
+                sent += 1
+                try:
+                    size = await asyncio.to_thread(lambda p=path: Path(p).stat().st_size)
+                except OSError:
+                    size = 0
+                await self._publish(EventType.COMM_FILE_SENT, {
+                    "channel": name, "kind": files_back.kind_word(path), "bytes": int(size)})
+            else:
+                failed.append((Path(path).name, str((res or {}).get("detail") or "it did not go")))
+        line = files_back.not_sent_line(left, failed, files_back.destination_words(ch, name),
+                                        local_only=local_only)
+        if failed:
+            log.info("inbound: %d of %d file(s) could not go back on %r", len(failed), len(files), name)
+        if line and say:
+            if tid:
+                self._safe_append(tid, "assistant", line, channel=name, sender_id=msg.sender_id,
+                                  display=display)
+            await self.send_chunked(ch, line, chat_id=msg.reply_to)
+        return sent, line
+
+    async def _ask_files_back(
+        self, name: str, ch: Channel, msg: InboundMessage, files: list[str],
+        left: list[tuple[str, str]], *, tid: str, local_only: bool, display: str = "",
+    ) -> bool:
+        """The ONE question before files go (10-b): a ``file_send`` prompt
+        (Send, Keep it on the PC) on this sender's chat, with buttons where
+        the destination has them, else "Reply 1 to send or 2 to keep it on
+        the PC". An older unanswered one is closed and its files join this
+        one. In a Local only chat it names no file. True when asked."""
+        from . import files_back
+
+        if self.prompt_store is None:
+            return False
+        sender = str(msg.sender_id)
+        older = await asyncio.to_thread(self.prompt_store.expire_kind, FILE_SEND_KIND, name, sender)
+        for ref in older:
+            was, was_local, was_left = files_back.read_ref(ref)
+            files = [p for p in was if p not in files] + files
+            left = was_left + left
+            local_only = local_only or was_local
+        files = files[-files_back.MAX_WAITING:]
+        where = files_back.destination_words(ch, name)
+        what = await asyncio.to_thread(files_back.what_words, files)
+        question = (files_back.local_only_question(what, where, len(files)) if local_only
+                    else files_back.first_time_question(what, where, len(files)))
+        rec = await asyncio.to_thread(
+            self.prompt_store.register, FILE_SEND_KIND,
+            files_back.ref_for(files, local_only=local_only, left=left),
+            question, FILE_SEND_OPTIONS, name, sender, tid,
+        )
+        if rec is None:
+            return False
+        if tid:
+            self._safe_append(tid, "assistant", question, channel=name, sender_id=msg.sender_id,
+                              display=display)
+        words = f"{self.reply_prefix}{question}"
+        try:
+            if getattr(ch, "supports_buttons", False):
+                res = await asyncio.to_thread(ch.send, words, chat_id=msg.reply_to,
+                                              buttons=prompt_buttons(rec.id, FILE_SEND_OPTIONS))
+                if not (res or {}).get("ok"):
+                    await self.send_chunked(ch, f"{question} {files_back.answer_hint(len(files))}",
+                                            chat_id=msg.reply_to)
+            else:
+                await self.send_chunked(ch, f"{question} {files_back.answer_hint(len(files))}",
+                                        chat_id=msg.reply_to)
+        except Exception:  # noqa: BLE001 — the question stays answerable by "1"
+            log.warning("inbound: the files question could not be sent on %r", name, exc_info=True)
+        return True
+
+    async def _resolve_file_prompt(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        display: str,
+        chat_on: bool,
+        prompt: Any,
+        answer: str,
+        original_text: str,
+    ) -> dict[str, Any]:
+        """The answer to "Send 1 spreadsheet (48 KB) to Telegram?" (10-b).
+        The prompt is claimed FIRST (first answer wins: a second answer hears
+        "That was already answered"). Send: the files go now (each checked
+        again: still on this PC, within the caps); on the first-time question
+        the yes is kept for THIS destination (``files_back.keep_choice``,
+        the settings writer, Undo). Keep: nothing goes; the first-time
+        question keeps "no". A Local only chat's question changes no
+        setting: it asks every time (D-10.3)."""
+        from ..agents.reply_files import PHONE_CAPS, pick
+        from . import files_back
+
+        decision = files_back.decision_of(answer)
+        paths, local_only, left = files_back.read_ref(getattr(prompt, "ref_id", ""))
+        if not decision:
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                files_back.answer_hint(len(paths) or 1), "answer_usage",
+            )
+        if not await asyncio.to_thread(self.prompt_store.resolve, prompt.id, decision):
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text, f"{PRESS_ANSWERED}.", "file_gone",
+            )
+        if decision == "keep":
+            if not local_only:
+                await asyncio.to_thread(files_back.keep_choice, self.platform, "keep", name)
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                files_back.kept_reply(local_only, len(paths)), "file_kept",
+            )
+        if not local_only:
+            await asyncio.to_thread(files_back.keep_choice, self.platform, "send", name)
+        # Each file again: still on this PC and within the caps (it was
+        # checked inside the work's folder when the question was asked).
+        picked = await asyncio.to_thread(pick, paths, [Path(p).parent for p in paths], PHONE_CAPS)
+        files = [str(p) for p in picked.files]
+        where = files_back.destination_words(ch, name)
+        what = await asyncio.to_thread(files_back.what_words, files) if files else ""
+        sent, line = (0, "")
+        if files:
+            # The line for what did not go rides this answer's reply (below).
+            sent, line = await self._send_files_now(
+                name, ch, msg, files, ([] if local_only else left) + picked.left,
+                tid="", display=display, local_only=local_only, say=False)
+        else:
+            line = files_back.not_sent_line(picked.left, [], where, local_only=local_only)
+        head = f"→ Sent {what} to {where}." if sent else ""
+        if not sent and not line:
+            line = f"Nothing could be sent to {where}: the files are no longer on this PC."
+        reply = "\n".join(x for x in (head, line) if x)
+        extra = {} if sent else {"press_label": "Not sent"}
+        return await self._answer_reply(
+            name, ch, msg, display, chat_on, original_text, reply,
+            "file_sent" if sent and not line else "file_send_failed", **extra,
         )
 
     def _comm_trust(self, channel: str) -> tuple[str | None, str]:

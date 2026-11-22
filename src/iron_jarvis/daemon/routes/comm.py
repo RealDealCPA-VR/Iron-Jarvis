@@ -541,7 +541,7 @@ def register(app: FastAPI, d) -> None:
         channel is added LIVE (so a Send-test works at once) and persisted so it
         survives restart.
         """
-        from ...comm import CHANNEL_TYPES, httpx_get, httpx_get_bytes, httpx_post
+        from ...comm import CHANNEL_TYPES, httpx_get, httpx_get_bytes, httpx_post, httpx_post_file
 
         ctype = (body.type or "").strip().lower()
         if ctype not in d._CHANNEL_TYPE_FIELDS or ctype not in CHANNEL_TYPES:
@@ -715,6 +715,7 @@ def register(app: FastAPI, d) -> None:
             http_get=httpx_get,
             secret_resolver=d.platform.secrets.get,
             http_get_bytes=httpx_get_bytes,  # 10-a: files from the phone
+            http_post_file=httpx_post_file,  # 10-b: files back to the phone
         )
         d.platform.notifier.add_channel(name, channel)
         # A secret the user removed (or replaced under another name) leaves

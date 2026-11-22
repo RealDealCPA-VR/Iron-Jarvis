@@ -4335,6 +4335,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'tell me about this photo',
         'check out this image for me',
     ),
+    'phone_send_files': (
+        'send the spreadsheet you made to my phone',
+        'can jarvis send files back to telegram',
+        'stop sending files to my phone',
+        'send finished files back to slack',
+        'keep the files you make on this PC',
+        'email me the file you made',
+        'stop asking before sending files to my phone',
+        'why did the file not come to my phone',
+    ),
     'phone_voice_service': (
         'turn voice notes from my phone into words',
         'may my phone voice notes go to the speech service',

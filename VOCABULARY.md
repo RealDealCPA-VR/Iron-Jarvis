@@ -55,6 +55,7 @@ PR that ships it.
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
 | A photo, file or recording you send Jarvis from Telegram, Slack or email, kept on this PC (10-a) | a **file from your phone**; a recording is a **voice note**; it is kept in the dated **From your phone** folder in Documents › Iron Jarvis | — (voice message and voice memo stay search words) |
+| A file Jarvis made for a message from your phone, sent back with the answer, and the buttons under a question on the phone (10-b) | **Send finished files to your phone** (the setting); the question's buttons are **Send** and **Keep it on the PC**; an approval's are **Approve** and **Deny**, and once pressed they read **Approved by you** / **Denied by you** (a press on an answered one: **That was already answered**) | — (attachment, upload and callback stay search words) |
 | The one-tap connect gallery | **Directory** | marketplace |
 | The one thing you ask the team to get done (the Agents page's New task; a project's screen; the bell's "Your objective is done") | **objective** | mission |
 | Several agents answering one @-mention message in chat (each conversation is a *thread*, its seated agents the *panel*; pre-v1.308.0 rooms open read-only) | **round-table** | — |

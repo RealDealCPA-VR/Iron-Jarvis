@@ -118,6 +118,159 @@ APPROVAL_USAGE_REPLY = "Reply approve or deny (or 1 / 2)."
 #: Prompt statuses the store accepts for :meth:`PendingPromptStore.expire`.
 _EXPIRE_STATUSES = ("expired", "superseded")
 
+# --------------------------------------------------------------------------- #
+# 10-b: buttons under a question, and the approval's preview
+# --------------------------------------------------------------------------- #
+
+#: Prompt ``kind`` for "send the files this answer made to the phone?" (10-b):
+#: the first time on a destination (D-10.3's card in a Local only chat every
+#: time). ``ref_id`` is JSON: the files' paths, and whether the chat is Local
+#: only. Options: :data:`FILE_SEND_OPTIONS`.
+FILE_SEND_KIND = "file_send"
+FILE_SEND_OPTIONS = ["Send", "Keep it on the PC"]
+
+#: What a button carries: ``ij:p:<prompt id>:<n>`` answers ONE prompt (its
+#: own sender only); ``ij:a:<approval id>:<n>`` answers an approval through
+#: the presser's own open prompt for it (the notifier's alert is one message
+#: per destination, so it cannot name a prompt). ``n`` is the option's number,
+#: 1-based. Telegram allows at most 64 bytes.
+BUTTON_PREFIX = "ij"
+#: A button that is already answered (the label that replaced the buttons).
+DONE_DATA = "ij:x"
+#: What a press on an answered (or unknown) question hears.
+PRESS_ANSWERED = "That was already answered"
+#: What a press on an approval this chat cannot answer hears.
+PRESS_ELSEWHERE = "Answer this one in Iron Jarvis"
+
+#: The labels the buttons of an approval carry, in APPROVAL_OPTIONS order.
+APPROVAL_BUTTONS = ("Approve", "Deny")
+#: The longest preview line (10-b).
+PREVIEW_MAX = 300
+
+
+def button_data(prompt_id: str, n: int) -> str:
+    return f"{BUTTON_PREFIX}:p:{prompt_id}:{int(n)}"
+
+
+def approval_button_data(approval_id: str, n: int) -> str:
+    return f"{BUTTON_PREFIX}:a:{approval_id}:{int(n)}"
+
+
+def prompt_buttons(prompt_id: str, labels: list[str]) -> list[tuple[str, str]]:
+    """``[(label, data)]`` for a prompt's options, numbered from 1."""
+    return [(str(label), button_data(prompt_id, i)) for i, label in enumerate(labels, 1)]
+
+
+def approval_buttons(approval_id: str) -> list[tuple[str, str]]:
+    """Approve and Deny for one approval (10-b)."""
+    return [(label, approval_button_data(approval_id, i)) for i, label in enumerate(APPROVAL_BUTTONS, 1)]
+
+
+def parse_button(data: Any) -> "tuple[str, str, int] | None":
+    """``(kind, id, n)`` from a button's data (``kind`` "p" or "a"), or
+    ``None`` for anything that is not one of Iron Jarvis's own (an answered
+    button's :data:`DONE_DATA` included). Never raises."""
+    try:
+        parts = str(data or "").split(":")
+        if len(parts) != 4 or parts[0] != BUTTON_PREFIX or parts[1] not in ("p", "a"):
+            return None
+        if not parts[2] or not parts[3].isdecimal():
+            return None
+        return parts[1], parts[2], int(parts[3])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def pressed_label(kind: str, answer: str) -> str:
+    """What the buttons turn into once a press answered the question."""
+    a = str(answer or "").strip().lower()
+    if kind == APPROVAL_KIND:
+        return "Denied by you" if APPROVAL_DECISIONS.get(a) == "deny" else "Approved by you"
+    if kind == FILE_SEND_KIND:
+        return "Kept on the PC" if a.startswith("keep") else "Sent"
+    return f"Answered by you: {_snippet(answer, 40)}"
+
+
+def _defang(text: str) -> str:
+    """One line a messaging service shows as plain text (10-b): whitespace
+    collapsed, a web address that cannot be pressed ("hxxps://example[.]com"),
+    and none of the marks Slack reads as a link or a mention (``<``, ``>``)."""
+    import re
+
+    flat = " ".join(str(text or "").split())
+    flat = flat.replace("<", "‹").replace(">", "›")
+
+    def _url(m: "re.Match[str]") -> str:
+        scheme, rest = m.group(1), m.group(2)
+        host, sep, tail = rest.partition("/")
+        return f"{scheme.replace('t', 'x', 2)}://{host.replace('.', '[.]')}{sep}{tail}"
+
+    return re.sub(r"\b(https?|ftp)://([^\s]+)", _url, flat, flags=re.IGNORECASE)
+
+
+def _arg_words(args: Any, limit: int = 2) -> str:
+    """Two of a call's (already redacted) arguments, masked again: "path
+    Documents/Intake, pattern *.pdf"."""
+    from ..detections.redact import mask
+
+    if not isinstance(args, dict):
+        return ""
+    parts: list[str] = []
+    for key, value in args.items():
+        if len(parts) >= limit:
+            break
+        if value is None or value == "" or value == [] or value == {}:
+            continue
+        if isinstance(value, (dict, list)):
+            try:
+                value = json.dumps(value, ensure_ascii=False)
+            except Exception:  # noqa: BLE001
+                value = str(value)
+        shown = _snippet(mask(str(value)), 80)
+        parts.append(f"{_snippet(str(key), 30)} {shown}")
+    return ", ".join(parts)
+
+
+def approval_preview(payload: Any) -> str:
+    """The one line an approval shows on the phone (10-b), built by code:
+    a coding session's card in its own words (``build_ask_words``); else
+    what the call sets out to do (``agents/mission.card_words``) with the
+    card's own cost note, or two of its redacted arguments. One line,
+    defanged, at most :data:`PREVIEW_MAX` characters. ``""`` for Local only
+    work (its alert is the title only, ``notifier._title_only``) and for an
+    ask with nothing more to say than its tool (the old line stays). Never
+    raises."""
+    try:
+        if not isinstance(payload, dict) or payload.get("local_only") is True:
+            return ""
+        if payload.get("surface") == "build":
+            from .notifier import build_ask_words
+
+            line = build_ask_words(payload)
+        else:
+            tool = str(payload.get("tool") or "").strip()
+            cost = " ".join(str(payload.get("cost_note") or "").split())
+            args = payload.get("args")
+            count = payload.get("count")
+            if not cost and not _arg_words(args):
+                return ""
+            try:
+                from ..agents.mission import card_words
+
+                what = card_words(tool) if tool else "use a tool"
+            except Exception:  # noqa: BLE001 — wording only
+                what = f"use {tool}" if tool else "use a tool"
+            many = (
+                f" ({count} calls)"
+                if isinstance(count, int) and not isinstance(count, bool) and count > 1 else ""
+            )
+            detail = cost or _arg_words(args)
+            line = f"An agent wants to {what}{many}: {detail}"
+        line = _defang(line)
+        return line if len(line) <= PREVIEW_MAX else line[: PREVIEW_MAX - 1] + "…"
+    except Exception:  # noqa: BLE001 — a preview never stops the alert
+        return ""
+
 
 def _snippet(text: Any, limit: int = 60) -> str:
     """One-line, whitespace-collapsed snippet for echoes and reminders."""
@@ -367,6 +520,41 @@ class PendingPromptStore:
                 ).first()
         except Exception:  # noqa: BLE001
             log.warning("newest_open failed for %s/%s", channel, sender_id, exc_info=True)
+            return None
+
+    def get(self, prompt_id: str) -> PendingPromptRecord | None:
+        """One prompt by its id (10-b: a button names it), or ``None``."""
+        try:
+            with session_scope(self.engine) as db:
+                return db.get(PendingPromptRecord, str(prompt_id or ""))
+        except Exception:  # noqa: BLE001
+            log.warning("pending prompt get failed for %s", prompt_id, exc_info=True)
+            return None
+
+    def open_for_ref(
+        self, kind: str, ref_id: str, channel: str, sender_id: str
+    ) -> PendingPromptRecord | None:
+        """This identity's newest OPEN prompt for one gate (10-b: an
+        approval's button names the approval, and each allowed sender has
+        their own prompt for it), or ``None``."""
+        try:
+            with session_scope(self.engine) as db:
+                return db.exec(
+                    select(PendingPromptRecord)
+                    .where(
+                        PendingPromptRecord.kind == kind,
+                        PendingPromptRecord.ref_id == str(ref_id),
+                        PendingPromptRecord.channel == channel,
+                        PendingPromptRecord.sender_id == str(sender_id),
+                        PendingPromptRecord.status == "open",
+                    )
+                    .order_by(
+                        PendingPromptRecord.created_at.desc(),  # type: ignore[attr-defined]
+                        text("rowid DESC"),
+                    )
+                ).first()
+        except Exception:  # noqa: BLE001
+            log.warning("open_for_ref failed for %s/%s", kind, ref_id, exc_info=True)
             return None
 
     def open_count(self, channel: str, sender_id: str) -> int:

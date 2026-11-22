@@ -42,8 +42,35 @@ SecretResolver = Callable[[str], "str | None"]
 #: injects :func:`httpx_get_bytes`.
 HttpGetBytes = Callable[[str, "dict[str, str] | None", int], bytes]
 
+#: 10-b: ``(url, fields, file | None, headers | None)`` -> response-ish. A
+#: multipart POST: ``fields`` are form fields, ``file`` is ``(field name,
+#: file name, bytes, media type)`` or ``None`` (a plain form POST, which every
+#: Slack Web API method takes). Tests inject a recorder; production injects
+#: :func:`httpx_post_file`. Unset, an upload is refused in words.
+HttpPostFile = Callable[
+    [str, "dict[str, Any]", "tuple[str, str, bytes, str] | None", "dict[str, str] | None"], Any
+]
+
 #: 10-a: the kinds of file a two-way destination can bring.
 FILE_KINDS = ("photo", "document", "voice", "audio", "video")
+
+
+@dataclass
+class Press:
+    """A button pressed under one of Iron Jarvis's own messages (10-b).
+
+    ``data`` is what the button carries (``ij:...``, ``comm/prompts``);
+    ``ref`` the service's handle for the press itself (Telegram's callback
+    query id, answered so the button stops spinning); ``chat`` and
+    ``message`` say which message to change once it is answered (Telegram's
+    chat id and message id, Slack's channel id and ``ts``); ``text`` is that
+    message's own text (Slack's update needs it again)."""
+
+    data: str
+    ref: str = ""
+    chat: Any = None
+    message: str = ""
+    text: str = ""
 
 
 class FileNotTaken(Exception):
@@ -125,6 +152,10 @@ class InboundMessage:
     #: e-mail's is its body without what the mail app adds by itself
     #: (:func:`without_signoff`).
     own_words: str | None = None
+    #: 10-b: a button press, not a message (``text`` is empty). Read only
+    #: after the allowlist and the private-chat guard, like everything else:
+    #: a stranger's press resolves nothing.
+    press: Press | None = None
 
 
 #: 10-a: the line a mail app puts under an e-mail by itself, in the app's own
@@ -344,6 +375,46 @@ def httpx_get_bytes(url: str, headers: "dict[str, str] | None", max_bytes: int) 
         raise FileNotTaken(f"the download failed ({type(exc).__name__})") from None
 
 
+def _no_post_file(url: str, fields: Any, file: Any, headers: Any) -> Any:
+    raise FileNotTaken("this destination cannot send files")
+
+
+def httpx_post_file(
+    url: str,
+    fields: "dict[str, Any]",
+    file: "tuple[str, str, bytes, str] | None",
+    headers: "dict[str, str] | None" = None,
+) -> Any:
+    """Default production transport for a file sent to the phone (10-b): a
+    multipart POST of ``fields`` and ``file`` (``(field, name, bytes,
+    type)``), or a plain form POST when ``file`` is ``None``. BLOCKING: run it
+    through ``asyncio.to_thread``. The URL may hold a token (Telegram's
+    address holds the bot token): the caller rewords every failure, and this
+    raises only the transport's own exception. Imported lazily."""
+    import httpx
+
+    data = {str(k): str(v) for k, v in (fields or {}).items() if v is not None}
+    files = None
+    if file is not None:
+        field, name, blob, mime = file
+        files = {str(field): (str(name), bytes(blob), str(mime or "application/octet-stream"))}
+    return httpx.post(
+        url,
+        data=data,
+        files=files,
+        headers=dict(headers) if headers else None,
+        timeout=httpx.Timeout(120.0, connect=5.0),
+    )
+
+
+def upload_failed_words(exc: BaseException) -> str:
+    """Why an upload did not go, in Iron Jarvis's own words (10-b): never the
+    transport's message, which may name an address that holds a token."""
+    if isinstance(exc, FileNotTaken):
+        return exc.words
+    return f"the upload failed ({type(exc).__name__})"
+
+
 def _accepts_headers(transport: Any) -> bool:
     """Whether ``transport`` can be called as ``(url, payload, headers)``.
 
@@ -516,6 +587,14 @@ class Channel(ABC):
     #: message". Falls back to ``"comm"`` for any channel that doesn't set it.
     reflex_source: str = "comm"
 
+    #: 10-b: whether this destination can carry a finished file back to the
+    #: phone (:meth:`send_files`), and buttons under a question
+    #: (``send(..., buttons=...)`` and :meth:`answer_press`).
+    supports_files: bool = False
+    supports_buttons: bool = False
+    #: 10-b: how this destination is named in a sentence ("to Telegram").
+    display_name: str = ""
+
     def __init__(
         self,
         config: dict[str, Any] | None = None,
@@ -524,6 +603,7 @@ class Channel(ABC):
         http_get: HttpGet | None = None,
         secret_resolver: SecretResolver | None = None,
         http_get_bytes: HttpGetBytes | None = None,
+        http_post_file: HttpPostFile | None = None,
     ) -> None:
         self.config: dict[str, Any] = dict(config or {})
         self._http_post: HttpPost = http_post or _no_transport
@@ -532,6 +612,9 @@ class Channel(ABC):
         #: 10-a: the file download (streams, stops at the cap). Unset, a
         #: fetch is refused in words; nothing falls back to a network call.
         self._http_get_bytes: HttpGetBytes = http_get_bytes or _no_get_bytes
+        #: 10-b: the upload (a multipart POST). Unset, a send is refused in
+        #: words; nothing falls back to a network call.
+        self._http_post_file: HttpPostFile = http_post_file or _no_post_file
 
     # -- helpers ---------------------------------------------------------
     def _resolve_secret(self, secret_name: str | None) -> str | None:
@@ -617,6 +700,49 @@ class Channel(ABC):
         :class:`FileNotTaken` with the reason in words; a destination with no
         receive leg for files refuses."""
         raise FileNotTaken("files can't be taken from this destination")
+
+    # -- files back to the phone (10-b) ----------------------------------
+    def _post_file(
+        self, url: str, fields: dict[str, Any], file: "tuple[str, str, bytes, str] | None",
+        headers: "dict[str, str] | None" = None,
+    ) -> Any:
+        """Upload through the injected transport (10-b). Any failure is a
+        :class:`FileNotTaken` in Iron Jarvis's own words, raised ``from None``
+        (the address may hold a token); returns the response-ish answer."""
+        try:
+            return self._http_post_file(url, fields, file, headers)
+        except FileNotTaken as exc:
+            raise FileNotTaken(exc.words) from None
+        except Exception as exc:  # noqa: BLE001 — never its message
+            raise FileNotTaken(upload_failed_words(exc)) from None
+
+    def send_file(self, path: str, *, chat_id: Any = None, caption: str = "") -> dict[str, Any]:
+        """Send the file at ``path`` to ``chat_id`` (10-b): ``{"ok", "detail"}``,
+        the detail in words. BLOCKING (a read and an upload): the pipeline
+        calls it through ``asyncio.to_thread``, and only for a file inside
+        the chat's or the run's folders (``agents/reply_files``). A
+        destination that cannot carry files refuses."""
+        return self._fail("this destination can't take files")
+
+    def send_files(
+        self, paths: list[str], *, chat_id: Any = None, caption: str = ""
+    ) -> list[dict[str, Any]]:
+        """Send each of ``paths`` (10-b), one answer per path, in order. The
+        caption rides the first. Email overrides this to send them in one
+        message. BLOCKING."""
+        out: list[dict[str, Any]] = []
+        for i, p in enumerate(paths):
+            try:
+                out.append(self.send_file(p, chat_id=chat_id, caption=caption if i == 0 else ""))
+            except Exception as exc:  # noqa: BLE001 — one file never sinks the rest
+                out.append(self._fail(upload_failed_words(exc)))
+        return out
+
+    def answer_press(self, press: Press, label: str) -> bool:
+        """Answer a button press (10-b): the buttons under the message become
+        ``label`` ("Approved by you"). True when the service took it.
+        BLOCKING. A destination with no buttons has nothing to answer."""
+        return False
 
     # -- contract --------------------------------------------------------
     @abstractmethod

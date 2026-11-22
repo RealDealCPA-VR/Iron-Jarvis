@@ -106,6 +106,7 @@ export const EVENT_WORDS: Record<string, string> = {
   "comm.rejected": "A message from an unknown sender was refused",
   "comm.dropped": "A message was dropped during a restart",
   "comm.file_received": "A file from your phone was kept",
+  "comm.file_sent": "A file went to your phone",
   "reflex.fired": "A rule fired",
   "schedule.fired": "A schedule fired",
   "computeruse.run_finished": "A computer-use run finished",
@@ -474,6 +475,7 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
     case "comm.rejected":
     case "comm.dropped":
     case "comm.file_received":
+    case "comm.file_sent":
     case "slack.event":
       add(pick(p, "channel", "channel_name"));
       break;
