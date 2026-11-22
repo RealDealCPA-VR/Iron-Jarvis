@@ -217,6 +217,110 @@ def test_text_keys_match_a_reworded_line_and_keep_two_items_two():
     assert not open_items.same_item(k("Call the bank"), k("Email the client"))
 
 
+def test_a_line_that_differs_by_a_name_a_month_or_a_figure_is_its_own_item():
+    s = open_items.same_line
+    assert not s("Call the bank about the March deposit", "Call the bank about the April deposit")
+    assert not s("Send the Hartleys engagement letter", "Send the Smith engagement letter")
+    assert not s("Ask Ann for the March bank statement", "Ask Bob for the March bank statement")
+    assert not s("Pay the invoice for the move", "Pay the 980 invoice for the move")
+    # A month or a day tells two apart even written in lower case.
+    assert not s("Chase the deposit from march", "Chase the deposit from april")
+    assert not s("Chase the deposit due friday", "Chase the deposit due monday")
+    # Reworded only in words that never tell two items apart: one item.
+    assert s("Ask Ann about the March deposit", "Ask Ann about March deposit")
+    assert s("Two cheques are still unmatched", "2 cheques still unmatched")
+    assert s("Ask Ann about the March deposit", "Ask Ann about the March deposit again")
+
+
+def test_a_new_line_is_never_swallowed_by_an_item_the_owner_closed(scene):
+    tid = _chat(scene, "Bank work", H)
+    _keep(scene, tid, "Open: Call the bank about the March deposit")
+    (march,) = _items(scene)
+    open_items.close(scene.engine, march.id, as_="done")
+    _keep(scene, tid, "Done: Called about March", "Open: Call the bank about the April deposit")
+    assert {i.text: i.status for i in _items(scene)} == {
+        "Call the bank about the March deposit": OPEN_ITEM_DONE,
+        "Call the bank about the April deposit": OPEN_ITEM_OPEN,
+    }
+    # Even a line that differs from a closed one only in plain words is a new
+    # item: what the owner closed is never the match for a new line.
+    other = _chat(scene, "Fees", H, hours_ago=3)
+    _keep(scene, other, "Open: Call the bank about the deposit")
+    (first,) = _items(scene, entry_id=f"chat:{other}")
+    open_items.close(scene.engine, first.id, as_="dropped")
+    _keep(scene, other, "Open: Call the bank about the deposit fee")
+    assert {i.text: i.status for i in _items(scene, entry_id=f"chat:{other}")} == {
+        "Call the bank about the deposit": OPEN_ITEM_DROPPED,
+        "Call the bank about the deposit fee": OPEN_ITEM_OPEN,
+    }
+
+
+def test_an_open_item_is_never_renamed_to_another_name_or_month(scene):
+    tid = _chat(scene, "Letters", DOWNLOADS)
+    _keep(scene, tid, "Open: Send the Hartleys engagement letter", "Open: Ask Ann for the March bank statement")
+    first = {i.text: i.id for i in _items(scene)}
+    _keep(scene, tid, "Open: Send the Smith engagement letter", "Open: Ask Bob for the March bank statement")
+    got = {i.text: (i.id, i.status) for i in _items(scene)}
+    assert len(got) == 4
+    for old in first:
+        assert got[old] == (first[old], OPEN_ITEM_SETTLED), old  # settled, under Closed lately
+    for new in ("Send the Smith engagement letter", "Ask Bob for the March bank statement"):
+        assert got[new][1] == OPEN_ITEM_OPEN and got[new][0] not in first.values(), new
+
+
+def test_the_same_words_match_first_and_a_plain_reword_keeps_the_item(scene):
+    tid = _chat(scene, "Deposits", H)
+    _keep(scene, tid, "Open: Call the bank about the deposit", "Open: Ask Ann about the March deposit")
+    first = {i.text: i.id for i in _items(scene)}
+    # A new similar line listed BEFORE the old one: the old one keeps its id
+    # and words, the new one is its own item.
+    _keep(scene, tid, "Open: Call the bank about the deposit fee", "Open: Call the bank about the deposit",
+          "Open: Ask Ann about the March deposit again")
+    got = {i.id: (i.text, i.status) for i in _items(scene)}
+    assert got[first["Call the bank about the deposit"]] == ("Call the bank about the deposit", OPEN_ITEM_OPEN)
+    assert got[first["Ask Ann about the March deposit"]] == ("Ask Ann about the March deposit again", OPEN_ITEM_OPEN)
+    assert sorted(t for t, _s in got.values()) == sorted([
+        "Call the bank about the deposit", "Call the bank about the deposit fee",
+        "Ask Ann about the March deposit again"])
+
+
+def test_two_readers_carrying_the_old_recaps_at_once_carry_each_once(scene, monkeypatch):
+    import threading
+
+    refs = [_chat(scene, f"Old {n}", H, hours_ago=40 + n) for n in range(12)]
+    with session_scope(scene.engine) as db:
+        for ref in refs:
+            stamp = R.stamp_of(db.get(ChatThreadRecord, ref).updated_at)
+            db.add(WorkRecap(id=f"chat:{ref}", kind="chat", ref=ref, state=RECAP_KEPT, source_updated=stamp,
+                             text="Open: first thing\nOpen: second thing\nOpen: third thing"))
+        db.commit()
+    # Both readers have chosen their recaps before either writes: the race.
+    meet = threading.Barrier(2, timeout=2.0)
+    real = open_items.sync
+    first_call = threading.local()
+
+    def slow_sync(*a, **kw):
+        if not getattr(first_call, "seen", False):
+            first_call.seen = True
+            try:
+                meet.wait()
+            except threading.BrokenBarrierError:
+                pass  # the other reader is waiting its turn: no race to set up
+        return real(*a, **kw)
+
+    monkeypatch.setattr(open_items, "sync", slow_sync)
+    counts: list[int] = []
+    workers = [threading.Thread(target=lambda: counts.append(open_items.backfill(scene.engine))) for _ in range(2)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(30)
+    assert sorted(counts) == [0, len(refs)]
+    got = _items(scene)
+    assert len(got) == 3 * len(refs)
+    assert len({(i.entry_id, i.text_key) for i in got}) == len(got)
+
+
 def test_backfill_carries_the_recaps_kept_before_once(scene):
     tid = _chat(scene, "Old work", H, hours_ago=30)
     written = utcnow().replace(tzinfo=None) - timedelta(days=9)
@@ -413,9 +517,58 @@ def test_the_turns_own_conversation_and_the_phone_get_no_items(scene, monkeypatc
     assert "Downloads work" in phone and "Still open" not in phone and "a downloads item" not in phone
 
 
+def test_another_app_is_told_no_clients_item_and_no_local_only_item(scene):
+    """The other-app connector (``work_block(outside=True)``, work_search):
+    the outside wall drops work with an owner and Local only is always
+    withheld, for the open items as for the recaps."""
+    _keep(scene, _chat(scene, "Hartleys here", H), "Open: Hartleys item")
+    _keep(scene, _chat(scene, "Downloads work", DOWNLOADS, hours_ago=2), "Open: a downloads item")
+    _keep(scene, _chat(scene, "Private downloads", DOWNLOADS, hours_ago=3, local_only=True), "Open: private item")
+    out = _block(scene, DOWNLOADS, query="", outside=True)
+    assert "1. a downloads item" in out and "private item" not in out
+    assert "Hartleys item" not in _block(scene, H, query="", outside=True)
+
+
 def test_inside_a_project_the_folder_part_is_another_blocks(scene):
     _keep(scene, _chat(scene, "Project work", H), "Open: project item")
     assert "project item" not in _block(scene, H, query="", list_folder=False)
+
+
+def test_an_item_the_owner_closed_is_never_told_as_open_under_its_work(scene):
+    tid = _chat(scene, "Bank work", H)
+    _keep(scene, tid, "Done: Sorted the receipts", "Open: Call the bank about the fee", "Open: Post the letter")
+    fee, letter = _items(scene)
+    assert "  Open: Call the bank about the fee" in _block(scene, H, query="")
+    open_items.close(scene.engine, fee.id, as_="done")
+    told = _block(scene, H, query="")
+    # Its piece's recap is still current and still lists the line: never told.
+    assert "Call the bank about the fee" not in told
+    assert "  Done: Sorted the receipts" in told and "  Open: Post the letter" in told
+    card = _card(scene, H)
+    assert _texts(card["open"]) == ["Post the letter"] and card["done"] == ["Sorted the receipts"]
+    # Reopened: told again, as open.
+    open_items.reopen(scene.engine, fee.id)
+    assert "  Open: Call the bank about the fee" in _block(scene, H, query="")
+    # An item closed long ago (no longer under Closed lately) is still never told as open.
+    open_items.close(scene.engine, letter.id, as_="dropped")
+    with session_scope(scene.engine) as db:
+        row = db.get(WorkOpenItem, letter.id)
+        row.closed_at = utcnow().replace(tzinfo=None) - timedelta(days=60)
+        db.add(row)
+        db.commit()
+    assert "Post the letter" not in _block(scene, H, query="")
+
+
+def test_when_the_closed_items_cannot_be_read_no_open_line_is_told_under_its_work(scene, monkeypatch):
+    tid = _chat(scene, "Bank work", H)
+    _keep(scene, tid, "Done: Sorted the receipts", "Open: Call the bank about the fee")
+
+    def broken(db, ids):
+        raise RuntimeError("no such table: workopenitem")
+
+    monkeypatch.setattr(open_items, "closed_keys", broken)
+    told = _block(scene, H, query="")
+    assert "  Done: Sorted the receipts" in told and "  Open:" not in told
 
 
 def test_the_block_stays_inside_its_size_and_counts_the_rest(scene):
@@ -611,6 +764,43 @@ def test_the_owners_words_arm_the_tools_and_a_question_arms_nothing():
     assert f("did you mark it done?") == []
     assert f("what is still open here?") == []
     assert f("reconcile the March bank statement") == []
+    # The owner's own ways of saying it (the reviewer's list).
+    for close in ("the bank one is done", "The bank one is done now.", "I called the bank, that one is done",
+                  "done with the bank one", "cross the bank one off", "we finished that, take it off the list",
+                  "tick that one off", "the deposit one's finished", "strike the letter off the list"):
+        assert f(close) == ["open_item_close"], close
+    for reopen in ("bring back the item I marked done", "undo closing that open item", "make that item open again",
+                   "show what was closed lately here", "bring that one back"):
+        assert f(reopen) == ["open_item_reopen"], reopen
+    # Questions, and words that only look alike, arm nothing.
+    for nothing in ("is the bank one done?", "did you cross it off?", "what was closed lately?",
+                    "check the off-site backup", "the report is done", "I'm done with the report",
+                    "take the bank statement from the folder", "bring back the old theme",
+                    "send the cross-border payment off", "no one is done with the review"):
+        assert f(nothing) == [], nothing
+
+
+def test_every_example_the_handbook_and_the_lookup_give_arms_its_tool():
+    """What the Handbook tells the owner to say, and every lookup line of the
+    two tools, arms that tool (and only that one)."""
+    import re
+    from pathlib import Path
+
+    from iron_jarvis.capability_search.phrasings import PHRASINGS
+
+    f = open_item_tools.open_item_tools_for
+    for name in open_item_tools.TOOL_NAMES:
+        for line in PHRASINGS[name]:
+            assert f(line) == [name], (name, line)
+    hb = (Path(__file__).resolve().parents[1] / "docs" / "HANDBOOK.md").read_bytes().decode("utf-8")
+    hb = hb.replace("\r\n", "\n")
+    part = hb.split("## Open items stay until they are done", 1)[1].split("\n## ", 1)[0]
+    chat = " ".join(part.split("**In chat.**", 1)[1].split("\n\n", 1)[0].split())
+    said = re.findall(r'"([^"]+)"', chat)
+    assert len(said) >= 3, said
+    for words in said:
+        armed = f(words)
+        assert armed and set(armed) <= set(open_item_tools.TOOL_NAMES), words
 
 
 def test_the_tools_are_registered_allow_kept_from_low_trust_and_on_no_roster():
@@ -628,6 +818,10 @@ def test_the_tools_are_registered_allow_kept_from_low_trust_and_on_no_roster():
     assert "open_item_close" in LOW_TRUST_DENY
     close, reopen = open_item_tools.open_item_tools(None)
     assert close.reversibility is Reversibility.REVERSIBLE and close.returns_untrusted_content
+    # A feature lookup can bring them too (behind its card: they change something).
+    from iron_jarvis.capability_search import join as J
+
+    assert set(open_item_tools.TOOL_NAMES) <= J.joinable()
 
 
 # --------------------------------------------------------------------------- #

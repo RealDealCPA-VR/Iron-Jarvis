@@ -219,6 +219,9 @@ def pick_up(platform: Any, folder: str, now: "datetime | None" = None, *,
     try:
         with session_scope(reader.engine) as db:
             kept = _recap.recaps_for(db, [r["id"] for r in exact])
+            # 04-b: the block's own rule, so the room is the same (a closed
+            # item's Open line is never told as open).
+            closed = _items.closed_keys(db, list(kept)) if kept else {}
     except Exception as exc:  # noqa: BLE001
         raise Unreadable("the recaps could not be read") from exc
     # 04-b: every open item of exactly this folder, the block's way (its room
@@ -230,7 +233,7 @@ def pick_up(platform: Any, folder: str, now: "datetime | None" = None, *,
         raise Unreadable("the open items could not be read") from exc
     _lines, items_used, _told_ids = _items.block_part(items.open, now)
     told, _groups = _block.here_part(reader.engine, place, here_rows, now, kept=kept,
-                                     room=_block.BLOCK_CHARS - items_used)
+                                     room=_block.BLOCK_CHARS - items_used, closed=closed)
     pieces: list[dict[str, Any]] = []
     for t in told:
         row = t["row"]

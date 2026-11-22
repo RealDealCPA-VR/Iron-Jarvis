@@ -34,6 +34,15 @@ left out). The turn's own conversation is never listed. The block tells at
 most :data:`TOLD_MAX`, oldest first, inside :data:`ITEMS_CHARS`, plus the one
 the owner picked (``pick_up_item``) wherever it is.
 
+A NEW LINE IS NEVER LOST (review of 04-b): a rewritten recap's line is the
+same item as an earlier one only by equal :func:`text_key`, or, for an item
+still open or settled (never one the owner closed), by :func:`same_line`:
+reworded only in plain words, never in a name, a month or day, or a figure.
+So "the April deposit" after "the March deposit" is its own item. ONE
+carrier at a time (:data:`WRITING`): two readers' :func:`backfill` never
+carry a recap twice. A closed item's Open line is never told as open under
+its piece of work (:func:`closed_keys`, ``block._attach_recaps``).
+
 Removed with their work: ``WorkMap.forget`` and a source that is gone
 (``WorkMap._refresh``) delete the items of those entries; a recap a reply
 marked low trust AFTER it was kept takes its items with it (``drop_entries``).
@@ -45,6 +54,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -152,24 +162,24 @@ def labelled(lines: Iterable[Any]) -> list[tuple[str, str]]:
     return out
 
 
-def _key_words(text: Any) -> list[str]:
+def _key_word(tok: str) -> "str | None":
+    """One lower-case token as :func:`text_key` keeps it, or None."""
     from ..core.numbers import number_key
 
-    words: list[str] = []
+    if tok[0].isdigit():
+        return number_key(tok)
+    if tok in _NUMBER_WORDS:
+        return _NUMBER_WORDS[tok]
+    if tok in _KEY_STOP:
+        return None
+    if len(tok) > 3 and tok.endswith("s") and not tok.endswith("ss"):
+        tok = tok[:-1]
+    return tok
+
+
+def _key_words(text: Any) -> list[str]:
     low = keys._no_apostrophes(str(text or "")[:2000].lower())
-    for tok in _TOKEN_RX.findall(low):
-        if tok[0].isdigit():
-            words.append(number_key(tok))
-            continue
-        if tok in _NUMBER_WORDS:
-            words.append(_NUMBER_WORDS[tok])
-            continue
-        if tok in _KEY_STOP:
-            continue
-        if len(tok) > 3 and tok.endswith("s") and not tok.endswith("ss"):
-            tok = tok[:-1]
-        words.append(tok)
-    return words
+    return [w for w in (_key_word(tok) for tok in _TOKEN_RX.findall(low)) if w]
 
 
 def text_key(text: Any) -> str:
@@ -196,6 +206,52 @@ def same_item(a: str, b: str) -> bool:
         return False
     shared = aw & bw
     return len(shared) >= 2 and len(shared) / max(1, len(aw | bw)) >= SAME_SHARE
+
+
+#: Words that always tell two lines apart, whatever their case: a month or a
+#: day ("the March deposit" / "the April deposit" are two items).
+_TELLS_APART = frozenset(
+    """
+    january february march april may june july august september october november december
+    jan feb mar apr jun jul aug sep sept oct nov dec
+    monday tuesday wednesday thursday friday saturday sunday
+    """.split()
+)
+_CASED_RX = re.compile(r"[A-Za-z]+")
+
+
+def _written_as_names(text: Any) -> set[str]:
+    """The keys of the words ``text`` writes with a capital letter ("Ann",
+    "Hartleys", "IRS"), the first word included: a name may start a line."""
+    out: set[str] = set()
+    for tok in _CASED_RX.findall(keys._no_apostrophes(str(text or "")[:2000])):
+        if tok[0].isupper():
+            got = _key_word(tok.lower())
+            if got:
+                out.add(got)
+    return out
+
+
+def same_line(a: Any, b: Any) -> bool:
+    """Are two recap lines (their own words) the SAME open item? Equal
+    :func:`text_key`, or :func:`same_item` AND every word that differs is a
+    plain one: never a figure, a month or a day, nor a word either line
+    writes with a capital letter (a name). So "Ask Ann about the March
+    deposit" / "... again" is one item, and "Send the Hartleys letter" /
+    "Send the Smith letter", "the March deposit" / "the April deposit" and
+    "Ask Ann" / "Ask Bob" are two (review of 04-b: a new line must never be
+    taken for an earlier one and lost). Pure."""
+    ka, kb = text_key(a), text_key(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    if not same_item(ka, kb):
+        return False
+    differ = set(ka.split()) ^ set(kb.split())
+    if any(w[:1].isdigit() or w in _TELLS_APART for w in differ):
+        return False
+    return not differ & (_written_as_names(a) | _written_as_names(b))
 
 
 def _quoted(text: str) -> set[str]:
@@ -270,10 +326,28 @@ def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None"
 
     mine = list(db.exec(select(WorkOpenItem).where(WorkOpenItem.entry_id == entry_id)))
     matched: set[str] = set()
-    for n, (text, key) in enumerate(opens):
+    hits: list["WorkOpenItem | None"] = [None] * len(opens)
+    # The same words first, whatever the item's state (one the owner closed
+    # stays closed), so a new similar line listed before an old one never
+    # takes the old one's place.
+    for n, (_text, key) in enumerate(opens):
         hit = next((it for it in mine if it.id not in matched and it.text_key == key), None)
-        if hit is None:
-            hit = next((it for it in mine if it.id not in matched and same_item(it.text_key, key)), None)
+        if hit is not None:
+            hits[n] = hit
+            matched.add(hit.id)
+    # Then a line reworded only in plain words (:func:`same_line`), and only
+    # for an item still open or settled by this conversation: never one the
+    # owner closed, which a new line would otherwise vanish into.
+    for n, (text, _key) in enumerate(opens):
+        if hits[n] is not None:
+            continue
+        hit = next((it for it in mine if it.id not in matched
+                    and it.status in (OPEN_ITEM_OPEN, OPEN_ITEM_SETTLED) and same_line(it.text, text)), None)
+        if hit is not None:
+            hits[n] = hit
+            matched.add(hit.id)
+    for n, (text, key) in enumerate(opens):
+        hit = hits[n]
         if hit is None:
             # A microsecond apart, so a recap's lines keep their order.
             item = WorkOpenItem(
@@ -333,6 +407,40 @@ def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None"
     return stats
 
 
+def closed_keys(db: Any, entry_ids: Iterable[str]) -> dict[str, set[str]]:
+    """``{entry_id: {text_key, …}}``: the items of these pieces of work that
+    are CLOSED (Done, No longer needed, settled), however long ago, and not
+    also open under the same words (inside the caller's session). A recap
+    told under its piece of work leaves these Open lines out
+    (:func:`without_closed`): a line the owner closed is never told as open
+    again (review of 04-b)."""
+    ids = sorted({str(i) for i in entry_ids if i})
+    shut: dict[str, set[str]] = {}
+    still: dict[str, set[str]] = {}
+    for i in range(0, len(ids), 400):
+        stmt = select(WorkOpenItem.entry_id, WorkOpenItem.text_key, WorkOpenItem.status).where(
+            WorkOpenItem.entry_id.in_(ids[i : i + 400]))  # type: ignore[attr-defined]
+        for entry_id, key, status in db.exec(stmt):
+            (still if status == OPEN_ITEM_OPEN else shut).setdefault(str(entry_id), set()).add(str(key or ""))
+    out = {e: ks - still.get(e, set()) for e, ks in shut.items()}
+    return {e: ks for e, ks in out.items() if ks}
+
+
+def without_closed(lines: Iterable[Any], shut: "set[str] | frozenset[str] | None") -> list[str]:
+    """A recap's own lines minus the Open lines whose item is closed
+    (``shut``: :func:`closed_keys` of that piece of work); ``shut`` None
+    (the closed items could not be read) leaves out EVERY Open line. The
+    words are compared the way :func:`sync` carried them (:func:`text_key`
+    of the line as kept). Pure."""
+    out: list[str] = []
+    for raw in lines or ():
+        got = labelled([raw])
+        if got and got[0][0] == "open" and (shut is None or text_key(got[0][1]) in shut):
+            continue
+        out.append(str(raw))
+    return out
+
+
 def drop_entries(db: Any, entry_ids: Iterable[str]) -> int:
     """Remove every item of these pieces of work (inside the caller's
     session; the caller commits): work that left the record, or a recap a
@@ -350,14 +458,30 @@ def drop_entries(db: Any, entry_ids: Iterable[str]) -> int:
     return n
 
 
+#: ONE carrier of recap lines into the open items at a time in this process
+#: (the daemon is one process per home): every reader runs :func:`backfill`,
+#: so two at once would both pick the same recaps not yet carried and each
+#: add their items (review of 04-b); and a recap being kept
+#: (``recap._store``) never interleaves with a backfill of the same recap.
+#: Held around the whole read-then-write, so the second one reads what the
+#: first one wrote.
+WRITING = threading.RLock()
+
+
 def backfill(engine: Any) -> int:
     """Carry forward, once, the kept recaps written before open items
     existed (or written straight into the table): every kept recap not yet
     synced, oldest first (so a later Done line asks about an earlier item),
     each item dated by its recap. Bounded per call; idempotent (a synced
-    recap is marked). RAISES when the store cannot be written."""
+    recap is marked; :data:`WRITING` makes it so for two readers at once).
+    RAISES when the store cannot be written."""
     if engine is None:
         return 0
+    with WRITING:
+        return _backfill(engine)
+
+
+def _backfill(engine: Any) -> int:
     R = WorkRecap
     with session_scope(engine) as db:
         todo = list(db.exec(
@@ -697,6 +821,7 @@ def block_part(items: list[dict[str, Any]], now: datetime, *, chosen: str = "",
 
 __all__ = [
     "BACKFILL_BATCH", "CLOSED_LATELY_DAYS", "CLOSE_AS", "ITEMS_CHARS", "ITEMS_LEAD", "TOLD_MAX", "Told",
-    "Unreadable", "backfill", "block_part", "close", "drop_entries", "get", "labelled",
-    "may_be_done", "reopen", "restore", "same_item", "snapshot", "sync", "text_key", "told",
+    "Unreadable", "WRITING", "backfill", "block_part", "close", "closed_keys", "drop_entries", "get",
+    "labelled", "may_be_done", "reopen", "restore", "same_item", "same_line", "snapshot", "sync",
+    "text_key", "told", "without_closed",
 ]

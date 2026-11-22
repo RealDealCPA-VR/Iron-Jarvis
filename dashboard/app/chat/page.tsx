@@ -305,7 +305,7 @@ import { ChatFolderChip } from "@/components/chat/ChatFolderChip";
 import { FolderChip, useFolderPicker } from "@/components/folders/FolderChip";
 // Next leaps 04-a (build-out plan R2.1): the card when a new chat's folder is picked.
 import { ChatPickUpCard } from "@/components/work/PickUpCard";
-import { CONTINUE_SENTENCE, PICK_ITEM_SENTENCE, continuedTitle } from "@/lib/pickUp";
+import { CONTINUE_SENTENCE, PICK_ITEM_SENTENCE, continuedItemTitle, continuedTitle } from "@/lib/pickUp";
 import {
   CHAT_NO_FOLDER_TITLE,
   CLEAR_CHAT_FOLDER_TITLE,
@@ -14652,7 +14652,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       opened (the restore at start, a ?thread= link, a row)
                       has no id and no messages until its read answers, and
                       is not a new chat. The chat Continue starts is named
-                      after the work it continues (`continuedTitle`). */}
+                      after the work it continues (`continuedTitle`; an open
+                      item's own Continue, after the piece that item came
+                      from: `continuedItemTitle`). */}
                   {emptyHero && !threadId && !openingChat && workspaceDir && !projectId ? (
                     <div data-testid="chat-hero-pick-up" className="mb-1.5 px-2 empty:hidden">
                       <ChatPickUpCard
@@ -14663,7 +14665,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         disabled={busy}
                         onContinue={(card) => send(CONTINUE_SENTENCE, { title: continuedTitle(card) })}
                         onContinueItem={(card, item) =>
-                          send(PICK_ITEM_SENTENCE, { title: continuedTitle(card), pickUpItem: item.id })
+                          send(PICK_ITEM_SENTENCE, { title: continuedItemTitle(card, item), pickUpItem: item.id })
                         }
                       />
                     </div>

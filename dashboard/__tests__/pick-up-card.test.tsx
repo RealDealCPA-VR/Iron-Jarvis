@@ -151,6 +151,7 @@ import {
   PICK_ITEM_SENTENCE,
   PICK_UP_TOOL_NOTE,
   afterAnswer,
+  continuedItemTitle,
   continuedTitle,
   openItemClosePath,
   openItemReopenPath,
@@ -1004,9 +1005,25 @@ describe("open items that stay until they are done (04-b)", () => {
     const users = (body.messages as { role: string; content: string }[]).filter((m) => m.role === "user");
     expect(users.map((m) => m.content)).toEqual([PICK_ITEM_SENTENCE]);
     await waitFor(() => expect(H.api.puts.filter((p) => p.path.startsWith("/chat/threads/")).length).toBeGreaterThan(0));
-    expect(H.api.puts.filter((p) => p.path.startsWith("/chat/threads/"))[0].body.title).toBe(CONTINUED);
+    // Named after the piece THE ITEM came from ("Reconcile March"), not the
+    // card's last piece ("Reconcile March bank statement").
+    expect(H.api.puts.filter((p) => p.path.startsWith("/chat/threads/"))[0].body.title).toBe("Reconcile March (continued)");
     await act(async () => {});
     expect(H.stream.bodies).toHaveLength(1);
+  });
+
+  it("an item's Continue is named after the work that item came from, by Continue's own rules", () => {
+    const p = decodePickUp(
+      answer({ open: [item(ITEM, "Ask the bank for the statement", { title: "Bank reconciliation" })] }),
+    ) as PickUp;
+    expect(continuedTitle(p)).toBe(CONTINUED);
+    expect(continuedItemTitle(p, p.open[0])).toBe("Bank reconciliation (continued)");
+    expect(continuedItemTitle(p, { title: "Bank reconciliation (continued) (continued)" })).toBe(
+      "Bank reconciliation (continued)",
+    );
+    expect(continuedItemTitle(p, { title: PICK_ITEM_SENTENCE })).toBe("Books (continued)");
+    expect(continuedItemTitle(p, { title: CONTINUE_SENTENCE })).toBe("Books (continued)");
+    expect(continuedItemTitle(p, { title: "y".repeat(120) })).toBe(`${"y".repeat(47)}… (continued)`);
   });
 
   it("the card's own Continue sends no item", async () => {

@@ -791,7 +791,9 @@ def _store(engine: Any, *, id: str, kind: str, ref: str, state: str, text: str =
            provider: str = "", model: str = "", asked: bool = False, tries: int = 0) -> None:
     from . import open_items
 
-    with session_scope(engine) as db:
+    # 04-b: one carrier of recap lines into the open items at a time (a
+    # reader's backfill of this same recap never interleaves with this write).
+    with open_items.WRITING, session_scope(engine) as db:
         if db.get(WorkEntry, id) is None:
             # The work left the record meanwhile (deleted, or its folder was
             # forgotten): nothing about it is kept.

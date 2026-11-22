@@ -306,30 +306,52 @@ def recap_lines(recap: "dict[str, Any] | None") -> list[str]:
     return out
 
 
-def _attach_recaps(rows: list[dict[str, Any]], kept: dict[str, dict[str, Any]]) -> None:
+def _attach_recaps(rows: list[dict[str, Any]], kept: dict[str, dict[str, Any]],
+                   closed: "dict[str, set[str]] | None" = None) -> None:
     """Give each row its recap lines (``row["recap"]``) from ``kept`` (the
     kept recaps by work id), only for a recap written for the conversation
-    AS IT IS NOW (the source's own ``updated_at``, asked a moment ago)."""
+    AS IT IS NOW (the source's own ``updated_at``, asked a moment ago).
+    ``closed`` (next leaps 04-b, ``open_items.closed_keys``): an Open line
+    whose item is closed is left out, so a line the owner marked Done or No
+    longer needed is never told as open again."""
+    from . import open_items
     from . import recap as _recap
 
     for r in rows:
         got = kept.get(r["id"])
         if got and _recap.current_for(got, r.get("live_updated") or ""):
+            shut = (closed or {}).get(r["id"])
+            if shut:
+                got = {**got, "lines": open_items.without_closed(got.get("lines") or [], shut)}
             r["recap"] = recap_lines(got)
 
 
 def _with_recaps(engine: Any, rows: list[dict[str, Any]]) -> None:
     """:func:`_attach_recaps` with the recaps read here. Never raises: a
-    recap is extra."""
+    recap is extra. The closed open items are read in the same session; when
+    they cannot be read, no Open line is told under its work (a closed item
+    is never told as open)."""
+    from . import open_items
     from . import recap as _recap
 
+    closed: "dict[str, set[str]] | None" = {}
     try:
         with session_scope(engine) as db:
-            kept = _recap.recaps_for(db, [r["id"] for r in rows])
+            ids = [r["id"] for r in rows]
+            kept = _recap.recaps_for(db, ids)
+            if kept:
+                try:
+                    closed = open_items.closed_keys(db, ids)
+                except Exception:  # noqa: BLE001
+                    log.debug("work record: the closed open items could not be read", exc_info=True)
+                    closed = None
     except Exception:  # noqa: BLE001
         log.debug("work record: recaps could not be read", exc_info=True)
         return
-    _attach_recaps(rows, kept)
+    if closed is None:
+        kept = {k: {**v, "lines": open_items.without_closed(v.get("lines") or [], None)} for k, v in kept.items()}
+        closed = {}
+    _attach_recaps(rows, kept, closed)
 
 
 def _fold(rows: list[dict[str, Any]]) -> list[tuple[dict[str, Any], int]]:
@@ -358,7 +380,8 @@ def _fold(rows: list[dict[str, Any]]) -> list[tuple[dict[str, Any], int]]:
 def here_part(engine: Any, folder: str, here_rows: list[dict[str, Any]], now: datetime, *,
               phone: bool = False,
               kept: "dict[str, dict[str, Any]] | None" = None,
-              room: int = BLOCK_CHARS) -> tuple[list[dict[str, Any]], int]:
+              room: int = BLOCK_CHARS,
+              closed: "dict[str, set[str]] | None" = None) -> tuple[list[dict[str, Any]], int]:
     """THE "In this folder" PART, exactly as a turn in ``folder`` is told it
     (next leaps 04-a: the pick-up card is built from it, so the card never
     shows a line the turn that Continue starts is not told). ``here_rows``:
@@ -374,7 +397,9 @@ def here_part(engine: Any, folder: str, here_rows: list[dict[str, Any]], now: da
     never a piece with its own recap) there were. ``room`` (next leaps
     04-b): the block's room left after its "Still open in this folder" part
     (``open_items.block_part``, worked out first so an old open item is
-    always told); the card passes the same."""
+    always told); the card passes the same. A recap's Open line whose item
+    is closed is never told (``open_items.closed_keys``: read here with the
+    recaps, or passed as ``closed`` with ``kept`` by the card)."""
     own = keys.folder_key(keys.home_folder(folder))
     if not phone:
         exact = [r for r in here_rows
@@ -382,7 +407,7 @@ def here_part(engine: Any, folder: str, here_rows: list[dict[str, Any]], now: da
         if kept is None:
             _with_recaps(engine, exact)
         else:
-            _attach_recaps(exact, kept)
+            _attach_recaps(exact, kept, closed)
     told: list[dict[str, Any]] = []
     used = 0
     groups = _fold(here_rows)

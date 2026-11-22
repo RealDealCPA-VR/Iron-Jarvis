@@ -277,19 +277,39 @@ def open_item_tools(platform: Any) -> list[Tool]:
 # --------------------------------------------------------------------------- #
 # arming: the owner's own words (chat only)
 # --------------------------------------------------------------------------- #
-#: Words that ask to CLOSE an open item.
+#: Words that ask to CLOSE an open item. Review of 04-b: the owner's own
+#: ways of saying it, the Handbook's ("the bank one is done") and every
+#: lookup line of the tool (``capability_search/phrasings.py``) included;
+#: a test reads both.
 _CLOSE_RX = re.compile(
     r"\bmark\b[^.?!\n]{0,60}?\b(?:as\s+)?(?:done|finished|complete[d]?|closed)\b"
     r"|\bno\s+longer\s+needed\b|\bnot\s+needed\s+any\s*more\b"
     r"|\b(?:close|clear|drop|cross\s+off|tick\s+off|check\s+off)\b[^.?!\n]{0,40}?\b(?:open\s+)?items?\b"
-    r"|\b(?:open\s+)?items?\b[^.?!\n]{0,40}?\b(?:is|are)\s+(?:done|finished|no\s+longer\s+needed)\b",
+    r"|\b(?:open\s+)?items?\b[^.?!\n]{0,40}?\b(?:is|are)\s+(?:done|finished|no\s+longer\s+needed)\b"
+    # "the bank one is done", "that one is finished", "the deposit one's done"
+    r"|(?<!no )\b(?:one|item)(?:\s+is|\s*['’]s)\s+(?:now\s+|all\s+)?(?:done|finished|complete[d]?|sorted|handled)\b"
+    # "done with the bank one"
+    r"|\b(?:done|finished)\s+with\b[^.?!\n]{0,40}?\b(?:one|item)\b"
+    # "cross the bank one off", "tick that one off", "strike it off the list"
+    r"|\b(?:cross|tick|strike)\b(?!-)[^.?!\n]{0,40}?\boff\b(?![-\w])"
+    r"|\bcheck\b[^.?!\n]{0,40}?\boff\s+(?:the|my|our|this)\s+(?:open\s+)?list\b"
+    # "take it off the list", "remove that from the open list"
+    r"|\b(?:take|remove|get)\b[^.?!\n]{0,40}?\b(?:off|from)\s+(?:the|my|our|this)\s+(?:open\s+)?list\b",
     re.IGNORECASE,
 )
 #: Words that ask to REOPEN one.
 _REOPEN_RX = re.compile(
     r"\bre-?open\b[^.?!\n]{0,60}?\b(?:items?|it|that|this|one)\b"
     r"|\b(?:put|move)\b[^.?!\n]{0,40}?\bback\b[^.?!\n]{0,20}?\b(?:open|on\s+the\s+list)\b"
-    r"|\bnot\s+(?:actually\s+)?done\s+(?:yet|after\s+all)\b",
+    r"|\bnot\s+(?:actually\s+)?done\s+(?:yet|after\s+all)\b"
+    # "bring back the item I marked done", "bring that one back"
+    r"|\bbring\s+back\b[^.?!\n]{0,40}?\b(?:items?|one)\b"
+    r"|\bbring\s+(?:it|that|this|that\s+one|this\s+one|the\s+[^.?!\n]{0,30}?\b(?:one|item))\s+back\b"
+    r"|\bundo\s+closing\b"
+    # "make that item open again"
+    r"|\b(?:items?|one|it|that)\b[^.?!\n]{0,20}?\bopen\s+again\b"
+    # "show what was closed lately here" (it lists them)
+    r"|\bclosed\s+lately\b",
     re.IGNORECASE,
 )
 SCAN_CHARS = 2000

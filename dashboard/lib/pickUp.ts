@@ -69,10 +69,23 @@ const CONTINUED_BASE_CHARS = 48;
  *  mark. A last piece named by the sentence itself (a chat the owner typed
  *  it into) gives the folder's name instead. */
 export function continuedTitle(p: PickUp): string {
-  let base = p.last.title.replace(/\s+/g, " ").trim();
+  return continuedFrom(p.last.title, p.name);
+}
+
+/** 04-b: the name of the chat an open item's own Continue starts: the piece
+ *  of work THAT ITEM came from (often older than the card's last piece),
+ *  by the same rules as `continuedTitle`. */
+export function continuedItemTitle(p: PickUp, item: Pick<PickUpItem, "title">): string {
+  return continuedFrom(item.title, p.name);
+}
+
+function continuedFrom(title: string, folderName: string): string {
+  let base = title.replace(/\s+/g, " ").trim();
   while (base.toLowerCase().endsWith(CONTINUED_MARK.toLowerCase()))
     base = base.slice(0, base.length - CONTINUED_MARK.length).trim();
-  if (!base || base.toLowerCase() === CONTINUE_SENTENCE.toLowerCase()) base = p.name.trim() || "Earlier work";
+  const low = base.toLowerCase();
+  if (!base || low === CONTINUE_SENTENCE.toLowerCase() || low === PICK_ITEM_SENTENCE.toLowerCase())
+    base = folderName.trim() || "Earlier work";
   if (base.length > CONTINUED_BASE_CHARS) base = `${base.slice(0, CONTINUED_BASE_CHARS - 1).trimEnd()}…`;
   return `${base}${CONTINUED_MARK}`;
 }

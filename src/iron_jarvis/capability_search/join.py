@@ -121,6 +121,11 @@ OWN_PLACE = frozenset({
     # Next leaps 46-a: what everything cost (settings/records_usage), armed by
     # its words through chat_turn.settings_ask_tools.
     "usage_report",
+    # Next leaps 04-b: a folder's open items closed or reopened from chat
+    # (workmap/open_item_tools), armed by the owner's words through
+    # chat_turn.settings_ask_tools. Brought by a lookup they change something,
+    # so they join behind a card (rule 1): the owner still decides.
+    "open_item_close", "open_item_reopen",
 })
 
 

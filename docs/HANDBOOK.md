@@ -3081,7 +3081,7 @@ as it was.
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.
 
-## Open items stay until they are done (v1.557.0)
+## Open items stay until they are done (v1.559.0)
 
 The card a new chat or coding session shows for a folder you have worked in
 now keeps every **open item** of that folder, however old, until it is done
@@ -3121,7 +3121,12 @@ if later work only seems to have done one, it asks you first.
   client's items never. Work you delete, or a folder you forget, takes its
   items with it; the items of archived work are not shown.
 - An open item stays when its conversation goes on: it closes when you close
-  it, or when that conversation's next recap no longer lists it.
+  it, or when that conversation's next recap no longer lists it. A new line
+  that names another month, person or figure ("the April deposit" after "the
+  March deposit") is always its own item, never taken for the earlier one.
+- Something you closed is never told to a chat as still open, even where the
+  earlier work's summary still lists it.
+- Continue on an item names the new chat after the work that item came from.
 - In Chat › Code and in Build › Code the card shows the items with their ⋯
   menu, but an item has no Continue of its own there: use the card's
   Continue, or say which item in your first message.
