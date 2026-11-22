@@ -2066,7 +2066,9 @@ Secrets are masked in it.
 
 **It appears by itself**, and fades after about eight seconds, but only:
 
-- on the **newest** reply, while that chat is on your screen;
+- on the **newest** reply, while that chat is on your screen and you can see
+  that reply's line (if you scrolled up to read earlier messages, it waits
+  for a press);
 - when the reply uses words that came from those memories and not from your
   own message (so a preference about spelling does not pop up under every
   answer);

@@ -577,6 +577,39 @@ def test_a_client_preference_is_corrected_and_forgotten_with_an_undo(scene):
     assert back[0]["local_only"] is True, "Undo keeps a Local only preference Local only"
 
 
+def test_a_correction_never_keeps_a_secret_typed_into_it(scene):
+    """That's wrong is a place the owner types. A secret-looking value typed
+    into a correction is masked before it is kept, told to a later turn or
+    written into the ledger's summary and the journal (the v1.499.3 rule, on
+    every preference writer through ``learning.preferences.clean_text``)."""
+    from sqlmodel import select
+
+    from iron_jarvis.core.models import ToolInvocation, UndoJournal
+
+    value = f"hunter{'2' * 3}"
+    pref = scene.platform.learning.note_preference(PREF)
+    r = scene.client.patch(f"/memory/preferences/{pref.id}", json={"text": f"Always say the password={value} first"})
+    assert r.status_code == 200, r.text
+    assert value not in json.dumps(r.json())
+    assert [t for t in _pref_texts(scene.client) if value in t] == []
+    assert any("password=***" in t for t in _pref_texts(scene.client))
+
+    folder = scene.tmp / "Clients" / "Lee"
+    folder.mkdir(parents=True)
+    cid = client_store.create(scene.platform, folder=str(folder), name="Lee")["client"]["id"]
+    pid = client_store.keep_preference(scene.platform, cid, "Send drafts as PDF.", origin="said")["preference"]["id"]
+    r = scene.client.patch(f"/clients/{cid}/preferences/{pid}",
+                           json={"text": f"Their files open with password={value} today."})
+    assert r.status_code == 200, r.text
+    assert value not in json.dumps(r.json())
+    assert [p["text"] for p in client_store.preferences(scene.engine, cid) if value in p["text"]] == []
+    with session_scope(scene.engine) as db:
+        ledger = [str(row.output or "") for row in db.exec(select(ToolInvocation))]
+        journal = [str(row.pre_inline or "") for row in db.exec(select(UndoJournal))]
+    assert ledger and journal
+    assert [t for t in ledger + journal if value in t] == []
+
+
 # --------------------------------------------------------------------------- #
 # 6. the setting
 # --------------------------------------------------------------------------- #

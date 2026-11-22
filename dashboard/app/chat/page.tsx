@@ -9707,15 +9707,20 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
 
   /** Next leaps 15-a (decision D-15.1): open the newest reply's "From
    *  memory" pop-up by itself — only when memory shaped that reply with an
-   *  item this chat has not shown yet, only while this chat is on screen,
-   *  and only when Settings does not say "Only when I press" (read when it
-   *  might pop; a setting that cannot be read keeps it quiet). */
+   *  item this chat has not shown yet, only while this chat is on screen
+   *  with the reader following its newest message, and only when Settings
+   *  does not say "Only when I press" (read when it might pop; a setting
+   *  that cannot be read keeps it quiet). */
   function maybePopMemory(list: ChatMessage[], gen: number, turnId: string) {
     const chat = saveTargetRef.current.id ?? "";
     if (!opensByItself(list, "auto", memoryShownRef.current.get(chat))) return;
     // On screen: the window is shown (a chat behind the Code view is kept
-    // quiet by the line itself: MemoryUsedHidden).
-    const onScreen = () => typeof document === "undefined" || document.visibilityState !== "hidden";
+    // quiet by the line itself: MemoryUsedHidden), and the reader follows
+    // the newest message. One who scrolled up to earlier messages ("Jump to
+    // latest" shows) has the reply's line out of view: a box opening by
+    // itself there would sit nowhere near its reply. The line still opens it.
+    const onScreen = () =>
+      pinnedRef.current && (typeof document === "undefined" || document.visibilityState !== "hidden");
     if (!onScreen()) return;
     void get<{ settings?: { memory_used_popup?: unknown } }>("/settings")
       .then((d): PopupMode => decodePopupMode(d?.settings?.memory_used_popup))

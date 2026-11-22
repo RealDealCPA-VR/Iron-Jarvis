@@ -17,8 +17,9 @@
  * - fades after {@link SHOW_MS} untouched, and stays while the pointer or
  *   the keyboard focus is on it, or while a correction is being typed;
  * - opens by itself only when the page says so (`autoOpen`: the newest
- *   reply, the chat on screen, memory shaped the reply, items not shown in
- *   this chat yet, and the setting not "Only when I press");
+ *   reply, the chat on screen and following its newest message, memory
+ *   shaped the reply, items not shown in this chat yet, and the setting not
+ *   "Only when I press") and its line is in view ({@link lineInView});
  * - on a kept preference or a client's preference, That's wrong lets the
  *   owner type the right one (Save) or Forget it, through the EXISTING
  *   routes of the store it is kept in; then "Fixed." with Undo (the
@@ -107,29 +108,47 @@ export function ownedElsewhere(target: EventTarget | null, ...mine: (HTMLElement
  *  card). Looked at in a browser at 390 px: below its line, the box reached
  *  over the message box. */
 const KEEP_CLEAR = '[data-testid="chat-composer"]';
+/** The chat's scrolling list: the part of the chat the owner can see. */
+const CHAT_LIST = '[data-testid="chat-scroll"]';
 /** Room for a short list (about two items) below the line. */
 const ROOM = 220;
 const GAP = 6;
 
-/** The top of the message box when it is on screen BELOW the line, else the
- *  window's bottom edge: the lowest the pop-up may reach. */
-function floorFor(r: DOMRect | { bottom: number }, vh: number): number {
-  let floor = vh - EDGE;
+type Box = { top: number; bottom: number };
+
+function onScreenBox(el: Element | null | undefined, vh: number): DOMRect | null {
+  const b = el?.getBoundingClientRect();
+  return b && b.height > 0 && b.width > 0 && b.top < vh && b.bottom > 0 ? b : null;
+}
+
+/** The top of the message box when it is on screen and in the way, else
+ *  null. It is in the way unless it sits wholly above a line that is itself
+ *  on screen: a line at or below its top (the reader scrolled up, so the
+ *  newest reply's line is under the message box or past the window's edge)
+ *  is no reason to reach over it. */
+function clearTop(r: Box, vh: number): number | null {
   try {
-    const box = document.querySelector(KEEP_CLEAR);
-    const b = box?.getBoundingClientRect();
-    if (b && b.height > 0 && b.width > 0 && b.top > r.bottom && b.top < floor + EDGE) floor = Math.min(floor, b.top);
+    const b = onScreenBox(document.querySelector(KEEP_CLEAR), vh);
+    if (!b) return null;
+    const lineOnScreen = r.top >= 0 && r.bottom <= vh;
+    return b.bottom <= r.top && lineOnScreen ? null : b.top;
   } catch {
-    /* no document: the window's edge */
+    return null; // no document: nothing to keep clear
   }
-  return floor - GAP;
+}
+
+/** The lowest the pop-up may reach: the message box's top when it is in the
+ *  way, else the window's bottom edge (less the gap). */
+function floorFor(r: Box, vh: number): number {
+  const clear = clearTop(r, vh);
+  return Math.min(vh - EDGE, clear ?? Infinity) - GAP;
 }
 
 /** Where the pop-up sits for its line: beside it, never past the window's
  *  edge (at 390 px: the window's width less 16 px each side), and never over
  *  the message box: below the line only when a short list fits above the
- *  message box, else above the line; `maxHeight` keeps a long list inside
- *  that room (it scrolls). */
+ *  message box, else above the line, its lower edge above the message box
+ *  too; `maxHeight` keeps a long list inside that room (it scrolls). */
 export function placeBeside(anchor: HTMLElement | null): Place | null {
   if (!anchor || typeof window === "undefined") return null;
   const r = anchor.getBoundingClientRect();
@@ -139,12 +158,43 @@ export function placeBeside(anchor: HTMLElement | null): Place | null {
   const left = Math.min(Math.max(EDGE, r.left), Math.max(EDGE, vw - width - EDGE));
   const floor = floorFor(r, vh);
   const top = r.bottom + GAP;
-  const above = r.top - GAP - EDGE;
+  // Above the line: its lower edge at the line's top, and never lower than
+  // the floor (a line under the message box or past the window's edge).
+  const lowEdge = Math.min(r.top - GAP, floor);
+  const above = lowEdge - EDGE;
   if (floor - top >= ROOM || above < ROOM) {
-    const t = Math.min(top, Math.max(EDGE, floor));
+    const t = Math.max(EDGE, Math.min(top, floor));
     return { left, width, top: t, maxHeight: Math.max(0, Math.round(floor - t)) };
   }
-  return { left, width, bottom: Math.max(EDGE, vh - r.top + GAP), maxHeight: Math.max(0, Math.round(above)) };
+  return { left, width, bottom: Math.max(EDGE, vh - lowEdge), maxHeight: Math.max(0, Math.round(above)) };
+}
+
+/** True when the whole line is in the visible part of the chat: inside the
+ *  window and the chat's scrolling list, and above the message box. The
+ *  pop-up opens BY ITSELF only then: a reader who scrolled up to earlier
+ *  messages has the newest reply's line out of view, and a box opening there
+ *  would sit nowhere near its reply (a press still opens it). A line with no
+ *  size is not drawn, so it is not in view. */
+export function lineInView(anchor: HTMLElement | null): boolean {
+  if (!anchor || typeof window === "undefined") return false;
+  const r = anchor.getBoundingClientRect();
+  if (!(r.width > 0 && r.height > 0)) return false;
+  const vw = window.innerWidth || 0;
+  const vh = window.innerHeight || 0;
+  let top = 0;
+  let bottom = vh;
+  try {
+    const list = onScreenBox(anchor.closest(CHAT_LIST), vh);
+    if (list) {
+      top = Math.max(top, list.top);
+      bottom = Math.min(bottom, list.bottom);
+    }
+  } catch {
+    /* no list to measure: the window */
+  }
+  const clear = clearTop(r, vh);
+  if (clear !== null) bottom = Math.min(bottom, clear);
+  return r.top >= top && r.bottom <= bottom && r.right > 0 && r.left < vw;
 }
 
 export function MemoryUsed({
@@ -206,13 +256,16 @@ export function MemoryUsed({
     closedRef.current?.();
   }, []);
 
-  // By itself: once, when the page says so, and only while the chat is in
-  // front (a chat hidden behind the Code view lets the moment pass).
+  // By itself: once, when the page says so, only while the chat is in front
+  // (a chat hidden behind the Code view lets the moment pass) and only while
+  // its line is in the visible part of the chat (a reader who scrolled up to
+  // earlier messages is left alone: the box would open nowhere near its
+  // reply). A press still opens it.
   const autoSeen = useRef(false);
   useEffect(() => {
     if (!autoOpen || autoSeen.current || !items.length) return;
     autoSeen.current = true;
-    if (!hidden) show();
+    if (!hidden && lineInView(lineRef.current)) show();
   }, [autoOpen, items.length, show, hidden]);
 
   // The chat went behind the Code view: the pop-up over the page goes too.

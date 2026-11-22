@@ -253,12 +253,20 @@ def list_preferences(engine) -> dict[str, Any]:
 
 
 def clean_text(text: Any) -> str:
-    """A kept / edited sentence: 1–280 chars, scanned for prompt injection.
+    """A kept / edited sentence: 1–280 chars, scanned for prompt injection,
+    with every secret-looking value masked (``engine.without_secrets``, the
+    v1.499.3 rule: a preference is told to every later turn). Every writer
+    of a preference's sentence comes through here: an edit on the page or
+    from the chat's "From memory" box, a suggestion kept with its sentence
+    changed, chat's ``lesson_add`` / ``preference_edit``, and a client's
+    preference (``workmap/clients/store._clean_preference``, chat's
+    ``client_preference_add`` / ``_change``).
 
     Raises :class:`PreferenceInvalid` with a plain sentence otherwise."""
     from ..core.promptguard import scan_context
+    from .engine import without_secrets
 
-    clean = " ".join(str(text or "").split())
+    clean = " ".join(without_secrets(str(text or "")).split())
     if not clean:
         raise PreferenceInvalid("Write the preference as a sentence first — it is empty.")
     if len(clean) > MAX_TEXT:

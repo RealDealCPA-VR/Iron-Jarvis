@@ -52,6 +52,8 @@ const H = vi.hoisted(() => {
       /** ... and as `usedMore` (the hook's name for the done frame's `used_more`). */
       more: [] as unknown[],
       absent: false,
+      /** Runs while the turn is under way (before its reply). */
+      during: null as null | (() => void),
     },
   };
 });
@@ -105,6 +107,7 @@ vi.mock("@/lib/useChatStream", () => ({
       H.stream.bodies.push(body);
       if (H.stream.absent) throw new H.FakeStreamError("no stream", 404);
       await new Promise<void>((r) => setTimeout(r, 0));
+      H.stream.during?.();
       const n = H.stream.bodies.length;
       const reply = `Reply ${n}.`;
       onDelta(reply, reply);
@@ -159,7 +162,14 @@ vi.mock("next/link", () => ({
 }));
 
 import ChatPage from "@/app/chat/page";
-import { FADE_MS, MemoryUsed, MemoryUsedHidden, ownedElsewhere, placeBeside } from "@/components/chat/MemoryUsed";
+import {
+  FADE_MS,
+  MemoryUsed,
+  MemoryUsedHidden,
+  lineInView,
+  ownedElsewhere,
+  placeBeside,
+} from "@/components/chat/MemoryUsed";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 import {
   SHOW_MS,
@@ -211,6 +221,24 @@ const CHAT_GETS = (mode: unknown = "auto") => ({
   "/chat/approvals/pending": { approvals: [] },
 });
 
+/** jsdom lays nothing out (every box is 0 x 0), and the pop-up opens by
+ *  itself only beside a line in view (`lineInView`). So the "From memory"
+ *  line is given a box: by default one in the middle of the window; a test
+ *  moves it (`lineBox.top`) to put it out of view. Every other element keeps
+ *  jsdom's own answer. */
+const realRect = Element.prototype.getBoundingClientRect;
+const lineBox = { left: 40, top: 400, width: 115, height: 24 };
+function rectOf(b: { left: number; top: number; width: number; height: number }): DOMRect {
+  return {
+    ...b,
+    x: b.left,
+    y: b.top,
+    right: b.left + b.width,
+    bottom: b.top + b.height,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
 beforeEach(() => {
   H.api.posts.length = 0;
   H.api.puts.length = 0;
@@ -221,16 +249,24 @@ beforeEach(() => {
   H.stream.used = [];
   H.stream.more = [];
   H.stream.absent = false;
+  H.stream.during = null;
   for (const k of Object.keys(H.api.postResponses)) delete H.api.postResponses[k];
   H.api.getResponses = CHAT_GETS();
   window.history.replaceState({}, "", "/chat");
   window.localStorage.clear();
   Element.prototype.scrollIntoView = vi.fn();
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+  Object.assign(lineBox, { left: 40, top: 400, width: 115, height: 24 });
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    return this.matches('[data-testid="memory-used-line"]') ? rectOf(lineBox) : realRect.call(this);
+  };
 });
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.clearAllMocks();
+  Element.prototype.getBoundingClientRect = realRect;
 });
 
 // ---------------------------------------------------------------- the rules
@@ -616,6 +652,68 @@ describe("the pop-up (components/chat/MemoryUsed)", () => {
     }
   });
 
+  it("a line out of view (the reader scrolled up) never opens it by itself, and a press never puts it over the message box", () => {
+    // The review's case at 390 x 844: the message box from y 688, the newest
+    // reply's line below the window (y 1000) because the reader scrolled up
+    // to earlier messages. The old placement pinned the box to bottom: 16px,
+    // over the message box.
+    const composer = document.createElement("div");
+    composer.setAttribute("data-testid", "chat-composer");
+    composer.getBoundingClientRect = () => rectOf({ left: 24, top: 688, width: 342, height: 156 });
+    document.body.appendChild(composer);
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 844 });
+      const at = (top: number) =>
+        ({ getBoundingClientRect: () => rectOf({ left: 22, top, width: 115, height: 24 }) }) as unknown as HTMLElement;
+      // Placed above the message box, never over it.
+      const off = placeBeside(at(1000))!;
+      expect(off).toEqual({ left: 22, width: 340, bottom: 162, maxHeight: 666 });
+      expect(844 - off.bottom!).toBeLessThan(688);
+      // In view: above the message box and inside the window. Out of view:
+      // under the message box, past the window's edge, or not drawn.
+      expect(lineInView(at(580))).toBe(true);
+      expect(lineInView(at(1000))).toBe(false);
+      expect(lineInView(at(680))).toBe(false); // reaches under the message box
+      expect(lineInView(at(-30))).toBe(false); // scrolled past the top
+      expect(lineInView({ getBoundingClientRect: () => rectOf({ left: 0, top: 0, width: 0, height: 0 }) } as unknown as HTMLElement)).toBe(false);
+      // The page said "by itself", but the line is out of view: it stays shut.
+      lineBox.top = 1000;
+      const shown = vi.fn();
+      render(<MemoryUsed items={items(PREF)} autoOpen onShown={shown} />);
+      expect(screen.queryByTestId("memory-used-popup")).toBeNull();
+      expect(shown).not.toHaveBeenCalled();
+      // A press opens it, above the message box.
+      fireEvent.click(screen.getByTestId("memory-used-line"));
+      const pop = screen.getByTestId("memory-used-popup");
+      expect(pop.style.bottom).toBe("162px");
+      expect(pop.style.maxHeight).toBe("min(60vh, 666px)");
+      expect(shown).toHaveBeenCalledTimes(1);
+    } finally {
+      composer.remove();
+    }
+  });
+
+  it("inside the chat's list: a line scrolled out of the list is out of view", () => {
+    const list = document.createElement("div");
+    list.setAttribute("data-testid", "chat-scroll");
+    list.getBoundingClientRect = () => rectOf({ left: 0, top: 60, width: 1024, height: 500 });
+    const line = document.createElement("button");
+    list.appendChild(line);
+    document.body.appendChild(list);
+    try {
+      let top = 300;
+      line.getBoundingClientRect = () => rectOf({ left: 40, top, width: 115, height: 24 });
+      expect(lineInView(line)).toBe(true);
+      top = 40; // above the list's top (under the page's header)
+      expect(lineInView(line)).toBe(false);
+      top = 545; // past the list's bottom
+      expect(lineInView(line)).toBe(false);
+    } finally {
+      list.remove();
+    }
+  });
+
   it("the reply's details list every item under 'From memory'", () => {
     render(
       <TurnReceipt
@@ -785,6 +883,31 @@ describe("the chat page (both lanes)", () => {
     await send("and the team plan?", "Posted reply.");
     expect((await screen.findByTestId("memory-used-line")).textContent).toBe("From memory: 4");
     await waitFor(() => expect(lastSaved().at(-1)!.usedMore).toBe(3));
+  });
+
+  it("a reader who scrolled up to earlier messages while the reply ran: no pop-up by itself; the line still opens it", async () => {
+    H.stream.used = [[PREF]];
+    // While the turn runs, the reader scrolls the chat up, away from its
+    // newest message (the page stops following and shows "Jump to latest").
+    H.stream.during = () => {
+      const list = screen.getByTestId("chat-scroll");
+      Object.defineProperty(list, "scrollHeight", { configurable: true, value: 3000 });
+      Object.defineProperty(list, "clientHeight", { configurable: true, value: 600 });
+      Object.defineProperty(list, "scrollTop", { configurable: true, writable: true, value: 0 });
+      fireEvent.scroll(list);
+    };
+    render(<ChatPage />);
+    const before = await mounted();
+    await send("how much is the pro plan?", "Reply 1.");
+    await screen.findByTestId("memory-used-line");
+    // Decided at the reply's end, without reading the setting.
+    await waitFor(() => expect(savedReply("Reply 1.")).toBe(true));
+    expect(settingsReads()).toBe(before);
+    await drainPromises();
+    expect(screen.queryByTestId("memory-used-popup")).toBeNull();
+    // The line under the reply still opens it.
+    fireEvent.click(screen.getByTestId("memory-used-line"));
+    expect(screen.getByTestId("memory-used-popup")).toBeTruthy();
   });
 
   it("only while the chat is on screen: a reply that ends in a hidden window stays quiet", async () => {

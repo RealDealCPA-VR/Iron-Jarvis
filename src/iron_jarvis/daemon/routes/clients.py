@@ -95,6 +95,43 @@ def register(app: FastAPI, d) -> None:
     def _platform():
         return d.platform
 
+    # ---- Undo for a preference changed on a page (next leaps 15-a) ---------
+    # A change made from the client's page or the chat's "From memory" box is
+    # recorded the way chat's ``client_preference_change`` / ``_forget`` are:
+    # one ledger row and one journal row whose ops ``records_clients`` undoes
+    # (``POST /undo/{action_id}``: refused when the client changed again
+    # since). The answer carries ``action_id`` ("" when it could not be
+    # recorded: the change stands, the log says so). These helpers sit ABOVE
+    # the routes, and each handler calls ``journal_removal`` itself, so the
+    # delete-route scan (tests/test_north_star_delete_routes_scan_v1504.py)
+    # reads each handler's own journal call.
+    def _client_snapshot(cid: str) -> Any:
+        try:
+            from ...settings import records_clients as _rc
+
+            return _rc.snap_client(_platform(), cid)
+        except Exception:  # noqa: BLE001 — no snapshot: the change is made, with no Undo
+            return None
+
+    def _undo_entry(out: Any, cid: str, prior: Any, *, op: dict[str, Any]) -> dict[str, Any] | None:
+        """The ``journal_removal`` keywords for a recorded preference change,
+        or None when it cannot be recorded (no snapshot before or after)."""
+        if prior is None or not isinstance(out, dict):
+            return None
+        from ...settings import records_clients as _rc
+
+        after = _client_snapshot(cid)
+        if after is None:
+            return None
+        name = str((out.get("client") or {}).get("name") or prior.get("name") or "")
+        what = "Changed" if op.get("op") == "change_pref" else "Forgot"
+        said = str(op.get("old") or (op.get("view") or {}).get("text") or "")[:120]
+        return {
+            "record": _rc.KIND, "name": cid, "prior": prior,
+            "summary": f"{what} what is kept for {name}: “{said}”.",
+            "extra": {"ops": [op], "after": after, "label_name": name},
+        }
+
     # ---- reads (write nothing, notice nothing) ---------------------------
     @app.get("/clients")
     def clients_list() -> dict[str, Any]:
@@ -169,55 +206,32 @@ def register(app: FastAPI, d) -> None:
 
     @app.patch("/clients/{client_id}/preferences/{pref_id}")
     def clients_change_preference(client_id: str, pref_id: str, body: TextBody) -> dict[str, Any]:
+        from ...settings import page_records as _pr
+
         cid = _id(client_id)
         prior = _client_snapshot(cid)
         out = _call(store.change_preference, _platform(), cid, pref_id, body.text)
-        return _with_undo(out, cid, prior, tool="client_preference_change", op={
+        entry = _undo_entry(out, cid, prior, op={
             "op": "change_pref", "id": cid, "pref_id": pref_id,
             "text": str((out.get("preference") or {}).get("text") or ""), "old": str(out.get("before") or ""),
         })
+        if entry is None:
+            return out
+        return {**out, "action_id": _pr.journal_removal(_platform(), tool="client_preference_change", **entry)}
 
     @app.delete("/clients/{client_id}/preferences/{pref_id}")
     def clients_forget_preference(client_id: str, pref_id: str) -> dict[str, Any]:
+        from ...settings import page_records as _pr
+
         cid = _id(client_id)
         prior = _client_snapshot(cid)
         out = _call(store.forget_preference, _platform(), cid, pref_id)
-        return _with_undo(out, cid, prior, tool="client_preference_forget", op={
+        entry = _undo_entry(out, cid, prior, op={
             "op": "forget_pref", "id": cid, "pref_id": pref_id, "view": dict(out.get("preference") or {}),
         })
-
-    # ---- Undo for a preference changed on a page (next leaps 15-a) ---------
-    # A change made from the client's page or the chat's "From memory" box is
-    # recorded the way chat's ``client_preference_change`` / ``_forget`` are:
-    # one ledger row and one journal row whose ops ``records_clients`` undoes
-    # (``POST /undo/{action_id}``: refused when the client changed again
-    # since). The answer carries ``action_id`` ("" when it could not be
-    # recorded: the change stands, the log says so).
-    def _client_snapshot(cid: str) -> Any:
-        try:
-            from ...settings import records_clients as _rc
-
-            return _rc.snap_client(_platform(), cid)
-        except Exception:  # noqa: BLE001 — no snapshot: the change is made, with no Undo
-            return None
-
-    def _with_undo(out: dict[str, Any], cid: str, prior: Any, *, tool: str, op: dict[str, Any]) -> dict[str, Any]:
-        if prior is None or not isinstance(out, dict):
+        if entry is None:
             return out
-        from ...settings import page_records as _pr
-        from ...settings import records_clients as _rc
-
-        after = _client_snapshot(cid)
-        if after is None:
-            return out
-        name = str((out.get("client") or {}).get("name") or prior.get("name") or "")
-        what = "Changed" if op.get("op") == "change_pref" else "Forgot"
-        action = _pr.journal_removal(
-            _platform(), tool=tool, record=_rc.KIND, name=cid, prior=prior,
-            summary=f"{what} what is kept for {name}: “{str(op.get('old') or (op.get('view') or {}).get('text') or '')[:120]}”.",
-            extra={"ops": [op], "after": after, "label_name": name},
-        )
-        return {**out, "action_id": action}
+        return {**out, "action_id": _pr.journal_removal(_platform(), tool="client_preference_forget", **entry)}
 
 
 __all__ = ["register"]
