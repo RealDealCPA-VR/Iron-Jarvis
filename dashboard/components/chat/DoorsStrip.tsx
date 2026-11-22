@@ -39,6 +39,7 @@ import { subscriptionCliFor } from "@/lib/cliSignIn";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { DOOR_PILL } from "@/components/chat/doorStyle";
 import { InstallDoorPress, isInstallPress } from "@/components/chat/InstallDoorPress";
+import { OWN_PRESS_ATTR } from "@/lib/quickAnswer";
 
 export interface Door {
   href: string;
@@ -125,6 +126,11 @@ export function DoorsStrip({ doors, onOpen }: DoorsStripProps) {
           <Link
             key={d.href}
             href={d.href}
+            // 36-a review: in Quick Ask's window a door the host handles is
+            // the host's press (it stages the request, then opens the page in
+            // the main window), never caught on its way there
+            // (lib/quickAnswer.OWN_PRESS_ATTR).
+            {...(onOpen ? { [OWN_PRESS_ATTR]: "" } : {})}
             // Tally BEFORE navigating, like the Sidebar's recordOpen — the
             // local counter for the emergent-surface metric, not telemetry.
             onClick={(e) => {

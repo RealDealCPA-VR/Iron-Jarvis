@@ -429,12 +429,17 @@ def _ipc_lifted() -> str:
     return "\n".join(
         [
             _decl("QUICK_THREAD_RX"),
+            _decl("QUICK_CARRY_KEYS"),
+            _decl("QUICK_CARRY_FILE_KEY"),
+            _decl("QUICK_CARRY_MAX_CHARS"),
+            _decl("pendingMainCarry"),
             _lift("function takeQuickAsk("),
             _lift("function quickAnswerMainPath("),
             _lift("function liveQuickAnswer("),
             _lift("function isFromQuickAnswer("),
             _lift("function hideQuickAnswer("),
             _lift("function quickAskToMain("),
+            _lift("function quickCarryFor("),
             _lift("function quickAskHide("),
             _lift("function quickAskTake("),
         ]
@@ -494,3 +499,145 @@ def test_the_box_says_where_the_answer_opens_and_the_tray_calls_it_quick_ask():
     row = next(line for line in vocab.splitlines() if "**Quick Ask**" in line)
     assert "quick task" in row.lower()
     assert re.search(r"Continue in the main window", row)
+
+
+# ---------------------------------------------------------------------------
+# Third review: a hand-over goes WITH its page. A door's request was staged in
+# the answer window's sessionStorage, which the main window cannot read, so
+# its page opened empty there. It now rides `quick-ask:to-main` as `carry`,
+# is held here once, and only the main window's preload takes it, at the
+# page it was meant for.
+# ---------------------------------------------------------------------------
+
+_CARRY = """
+const DASHBOARD_URL = "http://localhost:8788";
+const DASHBOARD_ORIGINS = new Set(["http://localhost:8788", "http://127.0.0.1:8788"]);
+function isDashboardUrl(url) { try { return DASHBOARD_ORIGINS.has(new URL(String(url)).origin); } catch { return false; } }
+__TRUSTED__
+const opened = [];
+function openDashboardPath(p) { opened.push(p); return true; }
+const answerContents = { id: "answer" };
+const mainContents = { id: "main" };
+let quickAnswerWin = { isDestroyed() { return false; }, isVisible() { return true; }, hide() {}, webContents: answerContents };
+let mainWin = { isDestroyed() { return false; }, webContents: mainContents };
+const QUICK_ASK_TTL_MS = 120000;
+let NOW = 1000;
+const Date = { now: () => NOW };
+__LIFTED__
+const ev = (url, sender) => ({ senderFrame: { url }, sender });
+const fromAnswer = (raw) => quickAskToMain(ev("http://localhost:8788/chat?compact=1", answerContents), raw);
+const asMain = (path) => quickAskCarry(ev("http://localhost:8788" + path, mainContents), NOW);
+const CODE = { key: "ij.code.startRequest", value: '{"text":"build me a todo app","folder":null,"localOnly":true,"at":1}' };
+const out = {};
+// The coding door: held with its page, and only that page takes it, once.
+out.door = fromAnswer({ path: "/chat?view=code", carry: CODE });
+out.otherWindow = quickAskCarry(ev("http://localhost:8788/chat?view=code", answerContents), NOW);
+out.offOrigin = quickAskCarry(ev("https://evil.example.com/chat?view=code", mainContents), NOW);
+out.otherPage = asMain("/chat");
+out.taken = asMain("/chat?view=code");
+out.again = asMain("/chat?view=code");
+// A key that is not that page's own, a value too long, a non-string: never held.
+fromAnswer({ path: "/chat?view=code", carry: { key: "ij.agents.startRequest", value: "x" } });
+out.wrongKey = asMain("/chat?view=code");
+fromAnswer({ path: "/workflows", carry: { key: "ij_pending_workflow", value: "x".repeat(QUICK_CARRY_MAX_CHARS + 1) } });
+out.tooLong = asMain("/workflows");
+fromAnswer({ path: "/agents?from=chat", carry: { key: "ij.agents.startRequest", value: 7 } });
+out.notString = asMain("/agents?from=chat");
+fromAnswer({ path: "/constructor", carry: { key: "function Object() { [native code] }", value: "x" } });
+out.prototypeKey = asMain("/constructor");
+// The team door and a workflow draft go the same way.
+fromAnswer({ path: "/agents?from=chat", carry: { key: "ij.agents.startRequest", value: "team" } });
+out.team = asMain("/agents?from=chat");
+fromAnswer({ path: "/workflows", carry: { key: "ij_pending_workflow", value: "draft" } });
+out.workflow = asMain("/workflows");
+// A newer press without one: the earlier carry is not its page's.
+fromAnswer({ path: "/workflows", carry: { key: "ij_pending_workflow", value: "draft" } });
+fromAnswer({ path: "/schedules" });
+out.replaced = asMain("/workflows");
+// Not taken in time: dropped.
+fromAnswer({ path: "/workflows", carry: { key: "ij_pending_workflow", value: "draft" } });
+NOW += QUICK_ASK_TTL_MS + 1;
+out.stale = asMain("/workflows");
+// A file goes with its chat, under the file key only.
+fromAnswer({ thread: "t1", carry: { key: "ij.chat.openFile", value: '{"thread":"t1","path":"C:/work/out.md"}' } });
+out.fileOtherChat = asMain("/chat?thread=t2");
+out.file = asMain("/chat?thread=t1");
+fromAnswer({ thread: "t1", carry: { key: "ij.code.startRequest", value: "x" } });
+out.fileWrongKey = asMain("/chat?thread=t1");
+// No main window: nothing is handed to anyone.
+fromAnswer({ path: "/workflows", carry: { key: "ij_pending_workflow", value: "draft" } });
+mainWin = null;
+out.noMain = quickAskCarry(ev("http://localhost:8788/workflows", mainContents), NOW);
+out.opened = opened.slice();
+console.log(JSON.stringify(out));
+"""
+
+
+def _carry_lifted() -> str:
+    return "\n".join(
+        [
+            _decl("QUICK_THREAD_RX"),
+            _decl("QUICK_CARRY_KEYS"),
+            _decl("QUICK_CARRY_FILE_KEY"),
+            _decl("QUICK_CARRY_MAX_CHARS"),
+            _decl("pendingMainCarry"),
+            _lift("function quickAnswerMainPath("),
+            _lift("function dashboardPathOf("),
+            _lift("function liveQuickAnswer("),
+            _lift("function isFromQuickAnswer("),
+            _lift("function hideQuickAnswer("),
+            _lift("function quickAskToMain("),
+            _lift("function quickCarryFor("),
+            _lift("function isFromMainWindow("),
+            _lift("function quickAskCarry("),
+        ]
+    )
+
+
+@requires_node
+def test_a_doors_request_goes_with_its_page_and_only_the_main_window_takes_it_once(tmp_path):
+    script = _CARRY.replace("__TRUSTED__", _lift("function isTrustedDashboardSender(")).replace(
+        "__LIFTED__", _carry_lifted()
+    )
+    out = _run(script, tmp_path, "carry")
+    assert out["door"] == {"ok": True}
+    # Only the main window's own dashboard frame, only at that page.
+    assert out["otherWindow"] is None and out["offOrigin"] is None and out["otherPage"] is None
+    assert out["taken"] == {
+        "key": "ij.code.startRequest",
+        "value": '{"text":"build me a todo app","folder":null,"localOnly":true,"at":1}',
+    }
+    assert out["again"] is None
+    assert out["wrongKey"] is None and out["tooLong"] is None and out["notString"] is None
+    assert out["prototypeKey"] is None
+    assert out["team"] == {"key": "ij.agents.startRequest", "value": "team"}
+    assert out["workflow"] == {"key": "ij_pending_workflow", "value": "draft"}
+    assert out["replaced"] is None and out["stale"] is None
+    assert out["fileOtherChat"] is None
+    assert out["file"] == {"key": "ij.chat.openFile", "value": '{"thread":"t1","path":"C:/work/out.md"}'}
+    assert out["fileWrongKey"] is None
+    assert out["noMain"] is None
+    # The page itself still opens, carry or not; never the words in it.
+    assert out["opened"][:2] == ["/chat?view=code", "/chat?view=code"]
+    assert all("todo" not in p for p in out["opened"])
+
+
+def test_the_main_windows_preload_takes_the_hand_over_before_its_page_runs():
+    src = _src()
+    at = src.index('ipcMain.on("quick-ask:carry"')
+    handler = src[at : src.index("\n  });", at)]
+    assert "quickAskCarry(event, Date.now())" in handler
+    # A synchronous message must always be answered, or the page hangs.
+    assert "event.returnValue = answer;" in handler and "catch" in handler
+    pre = _read("desktop/preload.js")
+    at = pre.index("(function takeQuickCarry() {")
+    body = pre[at : pre.index("\n})();", at)]
+    # Only the main window asks (never a pop-out or the answer window itself),
+    # only on a page that reads one, before the page's code (a preload IIFE).
+    assert "if (POPOUT_PATH || QUICK_ANSWER) return;" in body
+    assert "QUICK_CARRY_PAGES.includes(window.location.pathname)" in body
+    assert 'ipcRenderer.sendSync("quick-ask:carry")' in body
+    assert "window.sessionStorage.setItem(c.key, c.value)" in body
+    # The bridge passes the carry on as plain strings.
+    qt = pre[pre.index("function quickTarget(") : pre.index("\n}\n", pre.index("function quickTarget(")) + 2]
+    assert 'typeof c.key === "string" && typeof c.value === "string"' in qt

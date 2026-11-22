@@ -209,7 +209,7 @@ import { chatRefRowParts } from "@/lib/chatRefsRows";
 import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, decodeDoors, type Door } from "@/components/chat/DoorsStrip";
-import { startCodingFromDoor } from "@/lib/codingStart";
+import { isCodingOffer, requestBefore, stageCodingStart, startCodingFromDoor } from "@/lib/codingStart";
 import { startMissionFromDoor } from "@/lib/missionStart";
 import { LocalOnlyOffer } from "@/components/chat/LocalOnlyOffer";
 import { ExcelNowStrip } from "@/components/chat/ExcelNowStrip";
@@ -586,7 +586,7 @@ import { OFFLINE_WORDS } from "@/lib/offlineWords";
 import { PACK_OFF_IN_CHAT_LINE, PACK_OFF_WORD } from "@/lib/extensionWords";
 import { useDaemonEpoch } from "@/lib/daemonEpoch";
 import { QUICK_ASK_PARAM, takeQuickAsk } from "@/lib/chatAsk";
-import { CompactChatContext, toMainWindow, useAnswerWindow } from "@/lib/quickAnswer";
+import { CompactChatContext, doorToMainWindow, takeMainWindowFile, toMainWindow, useAnswerWindow } from "@/lib/quickAnswer";
 import { QuickAskHeader } from "@/components/chat/QuickAskHeader";
 import { ModuleTitle } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -4025,6 +4025,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
    *  window"; no chat list, no top bar, no project drawer. The turn, the
    *  save, the cards and Undo are unchanged. */
   const compact = useContext(CompactChatContext);
+  // Read by listeners subscribed once (the figure's open request).
+  const compactRef = useRef(compact);
+  compactRef.current = compact;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   // WHO that session runs on (v1.284.0): the roster target it was OPENED with
@@ -5626,8 +5629,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         markSetupChanged();
         inputRef.current?.focus();
       }
-      if (thread) void openThread(thread);
-      else if (!ask && !skill && !wantPersona && !fresh && !about && !quick) {
+      if (thread) {
+        // 36-a review: a file pressed in Quick Ask's window came with this
+        // chat (lib/quickAnswer.takeMainWindowFile): open it once the chat is.
+        void openThread(thread).then(() => {
+          const file = takeMainWindowFile(thread);
+          if (file) openPlaceRef.current(file);
+        });
+      } else if (!ask && !skill && !wantPersona && !fresh && !about && !quick) {
         // v1.311.0: no landing params — reopen the conversation this window
         // had open (a ?thread= link wins and becomes the remembered one; an
         // ask/skill/persona landing is the start of something new). Only
@@ -9381,12 +9390,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // v1.549.0 (idea 30-a): a figure pressed in a reply asks for its file at
   // its place (lib/sourceLink OPEN_PLACE_EVENT); answering it says "opened".
   // On a phone the panel opens over the chat (ProjectDrawer, full width).
+  // 36-a review: never answered in Quick Ask's window, which draws no file
+  // panel: the figure then says the place in words beside itself.
   const openPlaceRef = useRef(openDocPreview);
   openPlaceRef.current = openDocPreview;
   useEffect(() => {
     function onPlace(e: Event) {
       const detail = (e as CustomEvent<{ path?: string; at?: SourceAt }>).detail;
-      if (!detail?.path) return;
+      if (!detail?.path || compactRef.current) return;
       e.preventDefault();
       openPlaceRef.current(detail.path, detail.at);
     }
@@ -12752,11 +12763,31 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // user presses Send there. Any other door is a plain link.
     // v1.426.0 review: a Local only chat's request starts its coding session
     // Local only too (the door must not carry the words out of that promise).
-    openDoor: (index, door) =>
-      startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current) ||
-      // v1.455.0 (Wave G item 26): the team door carries the request into the
-      // objective composer (lib/missionStart); its link then opens the page.
-      startMissionFromDoor(messagesRef.current, index, door.href, localOnlyRef.current),
+    openDoor: (index, door) => {
+      // 36-a review: in Quick Ask's window a door's page opens in the MAIN
+      // window with the request it carries (lib/quickAnswer.doorToMainWindow):
+      // staged here, then handed over with the page, Local only kept. Never
+      // the Code view in place: this window shows the chat alone.
+      if (
+        compact &&
+        doorToMainWindow(door.href, () => {
+          const local = localOnlyRef.current;
+          if (isCodingOffer(door.href)) {
+            stageCodingStart({ text: requestBefore(messagesRef.current, index), folder: atFilesRoot, localOnly: local });
+          } else {
+            startMissionFromDoor(messagesRef.current, index, door.href, local);
+          }
+        })
+      ) {
+        return true;
+      }
+      return (
+        startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current) ||
+        // v1.455.0 (Wave G item 26): the team door carries the request into the
+        // objective composer (lib/missionStart); its link then opens the page.
+        startMissionFromDoor(messagesRef.current, index, door.href, localOnlyRef.current)
+      );
+    },
     // v1.455.0 (Wave F, item 16): the failed media job's own request, made
     // again as the next message (every card and spend check applies to it).
     retryMedia: (jobId) => {
@@ -12773,7 +12804,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         });
     },
     promote: (content) => promoteNoteToKnowledge(content),
-    openDocument: (path) => openDocPreview(path),
+    // 36-a review: a file pressed in Quick Ask's window (which draws no file
+    // panel) continues the chat in the main window with that file open.
+    openDocument: (path) => (compact ? openFileInMainWindow(path) : openDocPreview(path)),
     undoFor: (path) => undoForPath(path),
     undoWrite: (actionId, path) => undoWrite(actionId, path),
   };
@@ -13326,6 +13359,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     const id = saveTargetRef.current.id || threadId;
     if (id) void toMainWindow({ thread: id });
   };
+  // 36-a review: "Continue in the main window" with a file of this chat open
+  // beside it there (the main window's chat takes it: takeMainWindowFile).
+  function openFileInMainWindow(path: string) {
+    const id = saveTargetRef.current.id || threadId;
+    if (id) void toMainWindow({ thread: id, file: path });
+  }
 
   // v1.353.0 (G36): the empty chat's machine check and connect-your-apps
   // line, from ONE read of GET /onboarding the first time the empty chat

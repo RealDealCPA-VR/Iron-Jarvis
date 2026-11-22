@@ -3475,6 +3475,21 @@ const QUICK_THREAD_RX = /^[A-Za-z0-9_-]{1,128}$/;
 let quickAnswerWin = null;
 let _quickAnswerDestroyTimer = null;
 
+// 36-a review: A HAND-OVER GOES WITH ITS PAGE. A door that carries the user's
+// request stages it in the answer window's sessionStorage, which the main
+// window cannot read, so its page opened there empty. The answer window now
+// sends what it staged with the path (`quick-ask:to-main {path, carry}`,
+// dashboard/lib/quickAnswer.MAIN_WINDOW_HAND_OVERS is the twin of
+// QUICK_CARRY_KEYS); it is held HERE once, like the quick words, never in the
+// address, and the main window's preload takes it (`quick-ask:carry`) for
+// the page it was meant for, before that page's own code reads its storage.
+// A file pressed in the answer window goes the same way with its chat
+// (QUICK_CARRY_FILE_KEY). Not taken within QUICK_ASK_TTL_MS, it is dropped.
+const QUICK_CARRY_KEYS = { "/chat?view=code": "ij.code.startRequest", "/agents?from=chat": "ij.agents.startRequest", "/workflows": "ij_pending_workflow" };
+const QUICK_CARRY_FILE_KEY = "ij.chat.openFile";
+const QUICK_CARRY_MAX_CHARS = 200000;
+let pendingMainCarry = null;
+
 // The address the answer window opens: a NEW chat told to take the waiting
 // words, drawn compact, as a pop-out (no sidebar). Never the words. Pure.
 function quickAnswerUrl(base) {
@@ -3783,15 +3798,58 @@ function hideQuickAnswer() {
 
 // `quick-ask:to-main`: "Continue in the main window" (`{thread}`: that chat
 // opens there and the small window steps aside) or a door (`{path}`: the
-// page opens there, the answer stays on screen to read). Only the answer
-// window's own dashboard frame may ask; null otherwise.
+// page opens there, the answer stays on screen to read). Either may bring
+// its hand-over (`carry`, held for the main window: quickCarryFor). Only the
+// answer window's own dashboard frame may ask; null otherwise.
 function quickAskToMain(event, raw) {
   if (!isTrustedDashboardSender(event) || !isFromQuickAnswer(event)) return null;
   const target = quickAnswerMainPath(raw);
   if (!target) return { ok: false };
+  // The newest press wins: a carry from an earlier one is not this page's.
+  pendingMainCarry = quickCarryFor(target, raw && raw.carry, Date.now());
   openDashboardPath(target);
   if (raw && typeof raw.thread === "string") hideQuickAnswer();
   return { ok: true };
+}
+
+// What may go with `target` (pure): the one hand-over its page reads, by its
+// own key, as a string no longer than QUICK_CARRY_MAX_CHARS; null otherwise.
+function quickCarryFor(target, carry, now) {
+  if (!carry || typeof carry !== "object") return null;
+  if (typeof carry.key !== "string" || typeof carry.value !== "string") return null;
+  if (!carry.value || carry.value.length > QUICK_CARRY_MAX_CHARS) return null;
+  const key = target.startsWith("/chat?thread=")
+    ? QUICK_CARRY_FILE_KEY
+    : Object.prototype.hasOwnProperty.call(QUICK_CARRY_KEYS, target)
+      ? QUICK_CARRY_KEYS[target]
+      : "";
+  if (!key || carry.key !== key) return null;
+  return { path: target, key, value: carry.value, at: now };
+}
+
+// Did this IPC message come from the main window itself?
+function isFromMainWindow(event) {
+  const own = mainWin && !mainWin.isDestroyed() ? mainWin.webContents : null;
+  const sender = event && event.sender;
+  if (!sender || !own) return false;
+  return sender === own || (sender.id !== undefined && sender.id === own.id);
+}
+
+// `quick-ask:carry` (sync, from the preload as a main-window page starts):
+// the hand-over held for THIS page, once. Only the main window's own
+// dashboard frame, only at the address it was meant for; null otherwise.
+function quickAskCarry(event, now) {
+  if (!isTrustedDashboardSender(event) || !isFromMainWindow(event)) return null;
+  const c = pendingMainCarry;
+  if (!c) return null;
+  const age = now - c.at;
+  if (age < 0 || age > QUICK_ASK_TTL_MS) {
+    pendingMainCarry = null;
+    return null;
+  }
+  if (dashboardPathOf(event.senderFrame.url) !== c.path) return null;
+  pendingMainCarry = null;
+  return { key: c.key, value: c.value };
 }
 
 // `quick-ask:hide`: Esc in the answer window. Only that window may ask.
@@ -3864,6 +3922,17 @@ function installSpotlightIpc() {
   // window; Esc there. Sender-checked: the answer window's own dashboard frame.
   ipcMain.handle("quick-ask:to-main", (event, raw) => quickAskToMain(event, raw));
   ipcMain.handle("quick-ask:hide", (event) => quickAskHide(event));
+  // 36-a review: the main window's preload takes a door's hand-over before
+  // its page runs. Synchronous, so it must always answer.
+  ipcMain.on("quick-ask:carry", (event) => {
+    let answer = null;
+    try {
+      answer = quickAskCarry(event, Date.now());
+    } catch {
+      answer = null;
+    }
+    event.returnValue = answer;
+  });
   // Native clipboard for the terminal (paste/copy) — never permission-gated.
   // Native toast for the "This PC" notification destination (v1.118.0).
   // Clicking it restores the window — the alert is an invitation back in.

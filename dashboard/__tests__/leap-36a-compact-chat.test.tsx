@@ -24,6 +24,10 @@
  *    MAIN window: this one never shows Code;
  *  - a link to another page opens in the main window; a chat link stays;
  *  - the hotkey pressed while the window is open puts the cursor in the box;
+ *  - (third review) a door that carries the request (coding, team) opens its
+ *    page in the main window WITH the request (Local only kept); a file in
+ *    the record continues the chat there with the file open; a figure says
+ *    its place in words (lib/quickAnswer: a hand-over goes with its page);
  *  - the full page is unchanged without `?compact=1`.
  */
 
@@ -166,7 +170,19 @@ import { CHAT_VIEW_EVENT, keepView, rememberedView, resetViewMemory } from "@/li
 import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT } from "@/lib/buildLinks";
 import { dockAskKeyHint, escAnswersCard, type DockAskItem } from "@/lib/dockAsk";
 import { LOCAL_ONLY_KEY } from "@/lib/localOnly";
-import { QUICK_ASK_WINDOW_TITLE, QUICK_COMPACT_PARAM, isCompactChat, mainWindowPath } from "@/lib/quickAnswer";
+import {
+  MAIN_WINDOW_CARRY_MAX_CHARS,
+  MAIN_WINDOW_FILE_KEY,
+  MAIN_WINDOW_HAND_OVERS,
+  PENDING_WORKFLOW_KEY,
+  QUICK_ASK_WINDOW_TITLE,
+  QUICK_COMPACT_PARAM,
+  isCompactChat,
+  mainWindowPath,
+} from "@/lib/quickAnswer";
+import { CODING_OFFER_HREF, CODING_START_KEY } from "@/lib/codingStart";
+import { MISSION_OFFER_HREF, MISSION_START_KEY } from "@/lib/missionStart";
+import { openPlace } from "@/lib/sourceLink";
 import { headingSlug, sectionMatches } from "@/lib/helpLinks";
 import { hotkeyLines } from "@/components/help/GlobalHotkeys";
 
@@ -606,6 +622,181 @@ describe("the answer window never shows the Code view (36-a review)", () => {
     expect(screen.queryByTestId("chat-view-panel-code")).toBeNull();
     expect(window.location.search).not.toContain("view=");
     expect(rememberedView()).not.toBe("code");
+  });
+});
+
+describe("a hand-over goes with its page (36-a third review)", () => {
+  const REQUEST = "build me a todo app";
+  const CODE_DOOR = { href: CODING_OFFER_HREF, label: "Work on this in a coding session" };
+  const TEAM_DOOR = { href: MISSION_OFFER_HREF, label: "Give this to the team as an objective" };
+  const ROUTE = { requested: "", provider: "anthropic", model: "claude-opus-4-8", reason: "default" };
+  type Sent = { path?: string; thread?: string; carry?: { key: string; value: string } };
+  const sent = (i = 0) => toMain.mock.calls[i][0] as Sent;
+
+  /** A Quick Ask whose reply carries `door`; resolves the door's link. */
+  async function quickReplyWithDoor(door: { href: string; label: string }) {
+    take.mockImplementation(async () => REQUEST);
+    window.history.replaceState({}, "", COMPACT_URL);
+    render(<ChatPage />);
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    await act(async () => {
+      H.stream.release!({ reply: "Sure, here is how.", doors: [door] });
+    });
+    return screen.findByRole("link", { name: door.label });
+  }
+
+  it("the coding door opens the main window's Code view WITH the request; this window stays on its chat", async () => {
+    const link = await quickReplyWithDoor(CODE_DOOR);
+    const views: string[] = [];
+    const onView = (e: Event) => views.push(String((e as CustomEvent<{ view?: string }>).detail?.view));
+    window.addEventListener(CHAT_VIEW_EVENT, onView);
+    let navigated: boolean;
+    try {
+      navigated = fireEvent.click(link);
+    } finally {
+      window.removeEventListener(CHAT_VIEW_EVENT, onView);
+    }
+    expect(navigated).toBe(false); // handled by the page: the link does not navigate here
+    await waitFor(() => expect(toMain).toHaveBeenCalledTimes(1));
+    expect(sent().path).toBe("/chat?view=code");
+    expect(sent().carry?.key).toBe(CODING_START_KEY);
+    expect(JSON.parse(sent().carry!.value)).toMatchObject({ text: REQUEST, folder: null });
+    expect(JSON.parse(sent().carry!.value).localOnly).toBeUndefined();
+    // The words never ride the address, and are gone from this window.
+    expect(sent().path).not.toContain("todo");
+    expect(window.sessionStorage.getItem(CODING_START_KEY)).toBeNull();
+    // Not switched to Code in place: this window shows its chat alone.
+    expect(views).toEqual([]);
+    expect(screen.getByTestId("chat-view-panel-chat").hasAttribute("hidden")).toBe(false);
+  });
+
+  it("a Local only chat's coding door: the session there starts Local only too", async () => {
+    const link = await quickReplyWithDoor(CODE_DOOR);
+    // The chat is kept on this PC (the composer's own Local only chip).
+    fireEvent.click(await screen.findByTestId("local-only-chip"));
+    await waitFor(() => expect(screen.getByTestId("local-only-chip")).toHaveAttribute("aria-pressed", "true"));
+    fireEvent.click(link);
+    await waitFor(() => expect(toMain).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(sent().carry!.value)).toMatchObject({ text: REQUEST, localOnly: true });
+  });
+
+  it("the team door opens the Agents page WITH the request", async () => {
+    const link = await quickReplyWithDoor(TEAM_DOOR);
+    expect(fireEvent.click(link)).toBe(false);
+    await waitFor(() => expect(toMain).toHaveBeenCalledTimes(1));
+    expect(sent().path).toBe("/agents?from=chat");
+    expect(sent().carry?.key).toBe(MISSION_START_KEY);
+    expect(JSON.parse(sent().carry!.value).text).toBe(REQUEST);
+    expect(window.sessionStorage.getItem(MISSION_START_KEY)).toBeNull();
+  });
+
+  it("a door that carries nothing still opens its page in the main window, alone", async () => {
+    const link = await quickReplyWithDoor({ href: "/schedules", label: "Open Schedules" });
+    expect(fireEvent.click(link)).toBe(false);
+    await waitFor(() => expect(toMain).toHaveBeenCalledTimes(1));
+    expect(sent()).toEqual({ path: "/schedules" });
+  });
+
+  it("a file in the record continues the chat in the main window with that file open", async () => {
+    window.history.replaceState({}, "", COMPACT_URL);
+    render(<ChatPage />);
+    await askedAndSaved();
+    await act(async () => {
+      H.stream.release!({ reply: "Done, it is in out.md.", route: ROUTE, documents: ["C:\\work\\out.md"] });
+    });
+    fireEvent.click(await screen.findByTestId("turn-receipt"));
+    fireEvent.click(await screen.findByTestId("turn-doc"));
+    await waitFor(() => expect(toMain).toHaveBeenCalledTimes(1));
+    expect(sent().thread).toBe("t1");
+    expect(sent().carry?.key).toBe(MAIN_WINDOW_FILE_KEY);
+    expect(JSON.parse(sent().carry!.value)).toMatchObject({ thread: "t1", path: "C:\\work\\out.md" });
+    expect(screen.queryByTestId("chat-project-drawer")).toBeNull();
+  });
+
+  it("a figure says where it was read in words in the small window; the full page opens the file", async () => {
+    window.history.replaceState({}, "", COMPACT_URL);
+    render(<ChatPage />);
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    let opened = true;
+    act(() => {
+      opened = openPlace("C:\\work\\statement.pdf", { page: 7 });
+    });
+    // Not answered: SourceLink then says "Read from page 7 of statement.pdf".
+    expect(opened).toBe(false);
+    expect(screen.queryByTestId("chat-project-drawer")).toBeNull();
+    expect(toMain).not.toHaveBeenCalled();
+
+    cleanup();
+    take.mockImplementation(async () => "");
+    W.ironjarvis!.quickAsk!.isAnswerWindow = false;
+    W.ironjarvis!.popout = undefined;
+    window.history.replaceState({}, "", "/chat");
+    render(<ChatPage />);
+    await screen.findByTestId("chat-topbar");
+    act(() => {
+      opened = openPlace("C:\\work\\statement.pdf", { page: 7 });
+    });
+    expect(opened).toBe(true);
+    await screen.findByTestId("chat-project-drawer");
+  });
+
+  it("the main window's chat opens the file that came with it, once, and never another chat's", async () => {
+    take.mockImplementation(async () => "");
+    W.ironjarvis!.quickAsk!.isAnswerWindow = false;
+    W.ironjarvis!.popout = undefined;
+    H.api.getResponses["/chat/threads/t1"] = {
+      id: "t1",
+      title: "Quick",
+      messages: [
+        { role: "user", content: "plain English?" },
+        { role: "assistant", content: "It means you pay on the first." },
+      ],
+    };
+    // Another chat's file first: not opened, and spent.
+    window.sessionStorage.setItem(
+      MAIN_WINDOW_FILE_KEY,
+      JSON.stringify({ thread: "t9", path: "C:\\work\\out.md", at: Date.now() }),
+    );
+    window.history.replaceState({}, "", "/chat?thread=t1");
+    render(<ChatPage />);
+    await screen.findByText("It means you pay on the first.");
+    await waitFor(() => expect(window.sessionStorage.getItem(MAIN_WINDOW_FILE_KEY)).toBeNull());
+    expect(screen.queryByTestId("chat-project-drawer")).toBeNull();
+
+    cleanup();
+    window.sessionStorage.setItem(
+      MAIN_WINDOW_FILE_KEY,
+      JSON.stringify({ thread: "t1", path: "C:\\work\\out.md", at: Date.now() }),
+    );
+    window.history.replaceState({}, "", "/chat?thread=t1");
+    render(<ChatPage />);
+    await screen.findByTestId("chat-project-drawer");
+    expect(window.sessionStorage.getItem(MAIN_WINDOW_FILE_KEY)).toBeNull();
+  });
+
+  it("main.js holds the same hand-overs, and the main window's preload asks on their pages", () => {
+    // Each key is the one its reader takes.
+    expect(MAIN_WINDOW_HAND_OVERS).toEqual({
+      [CODING_OFFER_HREF]: CODING_START_KEY,
+      [MISSION_OFFER_HREF]: MISSION_START_KEY,
+      "/workflows": PENDING_WORKFLOW_KEY,
+    });
+    const workflows = readFileSync(join(__dirname, "..", "app", "workflows", "page.tsx"), "utf-8");
+    expect(workflows).toContain(`sessionStorage.getItem(${JSON.stringify(PENDING_WORKFLOW_KEY)})`);
+    const main = readFileSync(join(__dirname, "..", "..", "desktop", "main.js"), "utf-8").replace(/\r\n/g, "\n");
+    const keys = /^const QUICK_CARRY_KEYS = (\{[^\n]*\});$/m.exec(main);
+    expect(keys).not.toBeNull();
+    expect(new Function(`return ${keys![1]}`)()).toEqual({ ...MAIN_WINDOW_HAND_OVERS });
+    expect(main).toContain(`const QUICK_CARRY_FILE_KEY = ${JSON.stringify(MAIN_WINDOW_FILE_KEY)};`);
+    expect(main).toContain(`const QUICK_CARRY_MAX_CHARS = ${MAIN_WINDOW_CARRY_MAX_CHARS};`);
+    const pre = readFileSync(join(__dirname, "..", "..", "desktop", "preload.js"), "utf-8").replace(/\r\n/g, "\n");
+    const pages = /^const QUICK_CARRY_PAGES = (\[[^\n]*\]);$/m.exec(pre);
+    expect(pages).not.toBeNull();
+    const asked = JSON.parse(pages![1]) as string[];
+    for (const href of Object.keys(MAIN_WINDOW_HAND_OVERS)) {
+      expect(asked).toContain(new URL(href, "http://localhost").pathname);
+    }
+    expect(asked).toContain("/chat"); // a file comes with a chat
   });
 });
 

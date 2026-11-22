@@ -2418,6 +2418,8 @@ nothing differently: the same key, the same box, the same Enter.
   would leave this PC. Nothing has been sent or saved yet, so Esc answers it
   with **Keep it local**, as it does everywhere: nothing is sent, your words
   go back into the box, and the window stays until you press Esc again.
+  Closing the window over that question puts it away instead: nothing is
+  sent or saved, and the words you typed are not kept.
 - Press the key again while the window is open and the cursor goes back into
   its box, so a follow-up question is one press away. Once it is hidden, the
   key opens the box for a new question.
@@ -2428,9 +2430,17 @@ nothing differently: the same key, the same box, the same Enter.
   same chat in the main window, where every control is.
 - A link in the answer to another page (Schedules, Settings…) opens that page
   in the main window. Links to websites open in your browser, as everywhere.
+- A button under the answer that carries your request opens its page in the
+  main window with your words already there, exactly as in the main window:
+  **Work on this in a coding session** (Local only stays on when the chat
+  was Local only), the team's objective, and a workflow draft's **Open in
+  editor**. Nothing starts until you press Send or Start there.
+- A file in the record of what it did opens beside the same chat in the main
+  window. A figure's **How this was worked out** says in words where the
+  figure was read (the page and the file), right in the small window.
 - A Quick Ask is an ordinary chat: it is in your chat list, it can use
-  everything a chat can (its cards, Undo, the record of what it did), and
-  anything you set up from it reports back into it.
+  its cards, Undo and the record of what it did, and anything you set up
+  from it reports back into it.
 
 **Keeping it light.** One small window at a time. Hidden for ten minutes, it
 is closed to free its memory; the chat stays in your chat list.

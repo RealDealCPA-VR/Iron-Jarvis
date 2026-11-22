@@ -17,7 +17,7 @@
 // chip must never disagree with the card about what "finished" means, so both
 // read the shared WORKFLOW_RUN_TERMINAL set from lib/types.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { useEvents } from "@/lib/useEvents";
 import { useRouter } from "next/navigation";
@@ -33,6 +33,7 @@ import {
 
 import { ApiError, get, post } from "@/lib/api";
 import { WORKFLOW_RUN_TERMINAL } from "@/lib/types";
+import { CompactChatContext, PENDING_WORKFLOW_KEY, WORKFLOWS_HREF, doorToMainWindow } from "@/lib/quickAnswer";
 import type {
   IJEvent,
   WorkflowDraft,
@@ -472,6 +473,8 @@ export function WorkflowDraftCard({
   events?: IJEvent[];
 }) {
   const router = useRouter();
+  // 36-a review: in Quick Ask's window the editor opens in the MAIN window.
+  const compact = useContext(CompactChatContext);
   const own = useEvents(120, WORKFLOW_RUN_EVENTS);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -539,19 +542,26 @@ export function WorkflowDraftCard({
   }
 
   function openInEditor() {
-    try {
-      sessionStorage.setItem(
-        "ij_pending_workflow",
-        JSON.stringify({
-          name: draft.name,
-          description: draft.description,
-          steps: draft.steps,
-        }),
-      );
-    } catch {
-      /* private mode — the editor just won't auto-load */
-    }
-    router.push("/workflows");
+    const stage = () => {
+      try {
+        sessionStorage.setItem(
+          PENDING_WORKFLOW_KEY,
+          JSON.stringify({
+            name: draft.name,
+            description: draft.description,
+            steps: draft.steps,
+          }),
+        );
+      } catch {
+        /* private mode — the editor just won't auto-load */
+      }
+    };
+    // 36-a review: in Quick Ask's window the draft goes with the page to the
+    // main window (lib/quickAnswer.doorToMainWindow); this window's own
+    // storage is never the main window's.
+    if (compact && doorToMainWindow(WORKFLOWS_HREF, stage)) return;
+    stage();
+    router.push(WORKFLOWS_HREF);
   }
 
   const running = Boolean(runId) && runIsLive(run.runStatus);

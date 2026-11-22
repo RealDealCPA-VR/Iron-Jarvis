@@ -50,13 +50,41 @@ if (POPOUT_PATH) {
 const QUICK_ANSWER = readArg("--ij-quick-answer=") === "1";
 
 // What `quickAsk.toMain` may carry: a chat id or a dashboard path, as plain
-// strings (main.js checks both again).
+// strings, and (36-a review) the hand-over that goes with it, `{key, value}`
+// strings (main.js checks all of it again).
 function quickTarget(target) {
   if (!target || typeof target !== "object") return {};
-  if (typeof target.thread === "string") return { thread: target.thread };
-  if (typeof target.path === "string") return { path: target.path };
+  const c = target.carry;
+  const carry =
+    c && typeof c === "object" && typeof c.key === "string" && typeof c.value === "string"
+      ? { carry: { key: c.key, value: c.value } }
+      : {};
+  if (typeof target.thread === "string") return { thread: target.thread, ...carry };
+  if (typeof target.path === "string") return { path: target.path, ...carry };
   return {};
 }
+
+// 36-a review: a door pressed in Quick Ask's window opens its page in the
+// MAIN window with the request it carries (the coding door's words, the
+// team's objective, a workflow draft, a file to open beside the chat).
+// main.js holds it once (`quick-ask:carry`, answered only to the main
+// window, only at the address it was meant for); taken HERE, before the
+// page's own code runs, into this window's sessionStorage, where the page
+// reads it as if the press had been made in this window. Only the pages
+// that read one ask.
+const QUICK_CARRY_PAGES = ["/chat", "/agents", "/workflows"];
+(function takeQuickCarry() {
+  if (POPOUT_PATH || QUICK_ANSWER) return;
+  try {
+    if (!QUICK_CARRY_PAGES.includes(window.location.pathname)) return;
+    const c = ipcRenderer.sendSync("quick-ask:carry");
+    if (c && typeof c.key === "string" && typeof c.value === "string") {
+      window.sessionStorage.setItem(c.key, c.value);
+    }
+  } catch {
+    /* the page opens without it, as before */
+  }
+})();
 
 // v1.468.0: is THIS window the narrow chat window beside Excel? main.js says
 // so ("excel:beside") after it places the window and after every page load;
