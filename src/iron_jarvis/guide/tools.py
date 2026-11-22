@@ -54,6 +54,10 @@ _OPEN: dict[str, str] = {
 #: pull the daemon routes in.
 _MISSION_ORIGIN = "job:mission"
 
+#: What a rehearsal's run says in place of its closing words (leap 06-a; the
+#: project's recent-activity line says the same).
+_REHEARSAL_BLURB = "a rehearsal: nothing was changed"
+
 #: Search order and the kinds a caller may ask for.
 APP_KINDS: tuple[str, ...] = tuple(_OPEN)
 
@@ -292,11 +296,20 @@ class AppSearchTool(Tool):
 
             from ..core.db import session_scope
             from ..core.models import Session as SessionModel
+            from ..tools.rehearsal import rehearsal_of
 
             with session_scope(p.engine) as db:
                 stmt = select(SessionModel).order_by(SessionModel.created_at.desc()).limit(300)  # type: ignore[attr-defined]
                 for r in db.exec(stmt):
-                    row = (kind, r.id, r.task[:100], f"{r.status.value}; {r.agent_type.value}; {(r.summary or '')[:120]}")
+                    if rehearsal_of(r):
+                        # Leap 06-a: a rehearsal's run changed nothing, and its
+                        # closing words say what it was told to carry on as if
+                        # it had done ("Renamed the files."). It is found as a
+                        # rehearsal, never as past work.
+                        blurb = f"rehearsed; {r.agent_type.value}; {_REHEARSAL_BLURB}"
+                    else:
+                        blurb = f"{r.status.value}; {r.agent_type.value}; {(r.summary or '')[:120]}"
+                    row = (kind, r.id, r.task[:100], blurb)
                     if r.origin == _MISSION_ORIGIN:
                         # v1.309.0 (contract 9): a mission's own place is
                         # its mission screen, inside its project when it has

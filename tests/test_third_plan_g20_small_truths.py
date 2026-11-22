@@ -553,6 +553,46 @@ async def test_a_send_right_after_done_waits_for_the_tidy_up_and_is_not_refused(
         await asyncio.wait_for(turns._task, 10)
 
 
+async def test_a_reset_right_after_done_waits_for_the_tidy_up_and_is_not_refused(monkeypatch, clean_turns):
+    """The same instant for Reset (seen on CI: ``test_third_plan_g18_sidebar_
+    chat``'s restart-right-after-reset test, "reset never answered", events
+    ``state, delta, done, error``): a Reset pressed once `done` is shown was
+    refused as "still working on the last message". It now waits for the
+    tidy-up, as a Send does. Pins ``_reset``'s ``_end_sent`` wait: without it
+    the Reset below is an error frame. (A Reset BEFORE `done` is still refused:
+    ``test_browser_sidepanel_context_v1270``.)"""
+    import iron_jarvis.daemon.chat_stream as chat_stream
+
+    tidy = asyncio.Event()
+
+    async def lane(platform, personas, body, **kw):
+        async def gen():
+            yield _sse("token", {"text": "Done."})
+            yield _sse("done", {"reply": "Done."})
+            await tidy.wait()  # the reply's tidy-up, after its `done`
+
+        return gen()
+
+    monkeypatch.setattr(chat_stream, "stream_chat_turn", lane)
+    turns = PanelTurns(SimpleNamespace(browser=None))
+    conn = _Conn()
+    await turns.handle(conn, P.PANEL_ACTION_SEND, {"text": "first"})
+    first = turns._task
+    assert first is not None
+    await until(lambda: conn.of(P.PANEL_EVENT_DONE), 10)
+    assert not first.done(), "the stand-in tidy-up should still be running"
+    answered = len(conn.of(P.PANEL_EVENT_HISTORY))
+    reset = asyncio.ensure_future(turns.handle(conn, P.PANEL_ACTION_RESET, {}))
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert conn.of(P.PANEL_EVENT_ERROR) == [], "a Reset right after `done` was refused"
+    tidy.set()
+    await asyncio.wait_for(reset, 10)
+    await asyncio.wait_for(first, 10)
+    assert conn.of(P.PANEL_EVENT_ERROR) == []
+    assert len(conn.of(P.PANEL_EVENT_HISTORY)) == answered + 1, "the Reset was never answered"
+
+
 async def test_a_send_while_the_reply_is_still_answering_is_refused_as_before(monkeypatch, clean_turns):
     """The control: before `done`, a second Send is still refused at once."""
     import iron_jarvis.daemon.chat_stream as chat_stream

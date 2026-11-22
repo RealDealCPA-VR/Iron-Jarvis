@@ -136,6 +136,18 @@ def event_is_rehearsal(event: Any, engine: Any = None) -> bool:
         sid = str(sid or payload.get("session_id") or "").strip()
         if engine is None or not sid:
             return False
+        return session_is_rehearsal(engine, sid)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def session_is_rehearsal(engine: Any, session_id: str) -> bool:
+    """Does the session ``session_id`` carry a rehearsal in its OWN options?
+    BLOCKING (one indexed read): call it off the loop. Never raises."""
+    try:
+        sid = str(session_id or "").strip()
+        if engine is None or not sid:
+            return False
         from sqlmodel import select
 
         from ..core.db import session_scope

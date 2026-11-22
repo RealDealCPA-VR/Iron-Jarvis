@@ -2396,9 +2396,14 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
     trust), whether or not its last line is a verdict. Review: and never from
     a report that reads AS A WHOLE like an instruction
     (:func:`_report_flagged`, the finish check's own scan) — neither its
-    verdict nor its findings."""
+    verdict nor its findings.
+
+    Leap 06-a: a piece worked inside a REHEARSAL writes nothing — no row, no
+    verdict, no finding. Its writes were held, so "finished" says nothing of
+    the member's work, and the team router picks members by this record."""
     import asyncio
 
+    from ..tools import rehearsal as _rehearsal
     from . import team_record as TR
 
     if record is None or not role or role not in roles_of(record):
@@ -2407,6 +2412,8 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
         return
 
     def _write() -> "str | None":
+        if _rehearsal.session_is_rehearsal(platform.engine, session_id):
+            return None
         return TR.note_run(
             platform.engine, member=record.name, role=role, session_id=session_id,
             scope=scope, piece=piece, finished=finished, provider=provider, model=model,

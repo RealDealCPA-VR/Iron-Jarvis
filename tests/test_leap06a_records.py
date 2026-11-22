@@ -155,6 +155,35 @@ async def test_a_rehearsal_is_never_found_as_past_work(daemon, tmp_path):
     assert real.id in lexical and sid not in lexical
 
 
+async def test_app_search_lists_a_rehearsal_as_one_never_with_its_closing_words(daemon, tmp_path):
+    """Review 4: ``app_search`` (the Guide's "where is my …?", one of chat's
+    safe reads) lists the newest runs with their closing words. A rehearsal's
+    run is still found, so the person can open it, but as a rehearsal that
+    changed nothing: never "completed … Renamed the files."."""
+    app, p = daemon
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    (folder / "2025_W2_smith.pdf").write_bytes(b"%PDF smith")
+    _rid, sid = await _rehearse_the_renames(p, folder)
+    # Control: the same work run for real in that folder, with its own words.
+    p.router.stream = _scripted([], closing="Renamed the W2s for real.")
+    real = await app.state.orchestrator.create_session(
+        TASK, AgentType.BUILDER, workspace_root=str(folder), origin="schedule:Sort the W2s",
+    )
+    await app.state.orchestrator.run_session(real.id)
+
+    tool = p.registry.get("app_search")
+    ctx = ToolContext(workspace=tmp_path, session_id="chat", agent_run_id="chat", config=p.config,
+                      event_bus=p.event_bus, engine=p.engine)
+    told = await tool.execute({"query": "W2", "kinds": ["session"]}, ctx)
+    assert told.ok, told.error
+    hits = {h["id"]: h for h in (told.data or {}).get("hits", [])}
+    assert sid in hits and real.id in hits, told.output
+    assert hits[sid]["detail"] == "rehearsed; builder; a rehearsal: nothing was changed", hits[sid]
+    assert "Renamed the files." not in told.output, told.output
+    assert "Renamed the W2s for real." in hits[real.id]["detail"]  # control
+
+
 async def test_a_rehearsals_old_history_doc_is_dropped(daemon, tmp_path):
     """A doc a rehearsal's run already has (an index written before this
     release, or a forced repair) is dropped the next time it is synced."""

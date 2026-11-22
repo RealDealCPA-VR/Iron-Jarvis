@@ -6,10 +6,12 @@ chat delivery, the post-run lessons, a remote agent's hand-off. Each one, in
 a rehearsal, records ONE rehearsed row and does nothing. This file scans the
 code each names for its guard, then drives each through the real daemon.
 
-It also scans the automation packages for EVERY direct send and process
-start (plan 06-a, Risk: "a side door nobody listed"): each one is in a
-reviewed table with why a rehearsal never goes through it, and a new one
-fails until it is reviewed.
+It also scans the automation packages, and ``platform.py`` where a
+schedule's own door lives, for EVERY direct send and process start (plan
+06-a, Risk: "a side door nobody listed"): each one is in a reviewed table
+with why a rehearsal never goes through it, and a new one fails until it is
+reviewed. Review 4: a helper's piece in a rehearsal leaves no mark on the
+model team's record either.
 """
 
 from __future__ import annotations
@@ -87,7 +89,13 @@ def test_every_side_door_is_guarded_where_the_table_says():
 # --------------------------------------------------------------------------- #
 
 #: The packages a rule's or a schedule's run, and what follows it, reach.
-SCANNED = ("reflex", "scheduling", "workflows", "webhooks", "comm", "agents")
+#: Review 4: and the one FILE that holds a schedule's own door,
+#: ``platform.py`` (``_dispatch_scheduled``, the pre-run script, the knobs and
+#: the schedule's real delivery line), plus the packages that fire a rule
+#: (``triggers``) or push a notice of their own (``motivation``). An entry
+#: ending in ``.py`` is one file; any other is a package.
+SCANNED = ("reflex", "scheduling", "workflows", "webhooks", "comm", "agents",
+           "triggers", "motivation", "platform.py")
 
 #: A direct effect outside ``registry.invoke``: a message or a request that
 #: leaves the PC, a post into a chat, a program started. Matched in CODE
@@ -156,11 +164,26 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
            "(it records would ask), and a workflow cannot be rehearsed yet"),
     ("comm/slack_socket.py", "http_client"): (
         2, "opens Slack's socket for the person's incoming messages; sends no run's words"),
+    ("motivation/engine.py", "notify"): (
+        1, "the morning briefing's push: only the person's own press on the autonomy route "
+           "(POST briefing with notify); the engine's bus handler only files a suggestion"),
+    ("platform.py", "notify"): (
+        1, "a schedule's REAL delivery line (_deliver_outcome), reached only through _fire; a "
+           "rehearsal goes through _rehearse_scheduled to _dispatch_scheduled and never _fire "
+           "(SIDE_DOORS schedule_delivery lists the line instead)"),
+    ("platform.py", "http_client"): (
+        4, "client wiring at start-up, called only by its owner: the Connections sign-in's token "
+           "exchange and refresh (no message, no change), the outgoing webhook's transport (skips "
+           "every event of a rehearsal's run), and the Notion and custom memory bases' clients "
+           "(read through the memory tools; a write is held)"),
     ("reflex/commands.py", "remote_agent"): (
         2, "the phone's /agents and /ask commands, typed by the person; no run reaches them"),
     ("reflex/router.py", "remote_agent"): (
         1, "a rule's REAL fire to a remote agent; a rehearsal goes through ReflexRouter.rehearse "
            "(SIDE_DOORS remote_agent) and never here"),
+    ("triggers/calendar.py", "http_client"): (
+        1, "the calendar feed's own poll, which reads the person's calendar to fire its rules; "
+           "a rehearsal starts from a made-up sample event (tools/rehearsal_runs) and never polls"),
     ("scheduling/knobs.py", "sandbox"): (
         1, "the pre-run script: _dispatch_scheduled runs it only outside a rehearsal "
            "(SIDE_DOORS pre_run_script)"),
@@ -193,8 +216,10 @@ def _code_only(text: str) -> str:
 def scan_doors(root: Path = SRC) -> dict[tuple[str, str], list[int]]:
     """``(file, kind) -> [line, …]`` of every direct door in :data:`SCANNED`."""
     found: dict[tuple[str, str], list[int]] = {}
-    for package in SCANNED:
-        for path in sorted((root / package).rglob("*.py")):
+    for entry in SCANNED:
+        paths = [root / entry] if entry.endswith(".py") else sorted((root / entry).rglob("*.py"))
+        assert all(p.is_file() for p in paths), f"{entry}: the scan lost a file it must read"
+        for path in paths:
             rel = path.relative_to(root).as_posix()
             code = _code_only(path.read_text(encoding="utf-8").replace("\r\n", "\n"))
             for kind, rx in DOOR_KINDS.items():
@@ -226,11 +251,15 @@ def test_every_direct_send_and_process_start_was_reviewed():
 
 def test_the_scan_sees_a_new_door_and_not_a_mention(tmp_path):
     """The scan's own check: a new ``notify(`` in a rule's code is found; the
-    same words in a comment or a docstring are not."""
+    same words in a comment or a docstring are not. Review 4: so is a new
+    door in the one top-level FILE it reads (``platform.py``)."""
     pkg = tmp_path / "reflex"
     pkg.mkdir()
     for other in SCANNED[1:]:
-        (tmp_path / other).mkdir()
+        if other.endswith(".py"):
+            (tmp_path / other).write_text("", encoding="utf-8")
+        else:
+            (tmp_path / other).mkdir()
     (pkg / "new_door.py").write_text(
         '"""Calls self.notifier.notify(text) and httpx.post(url)."""\n'
         "# platform.notifier.notify(message)\n"
@@ -240,6 +269,14 @@ def test_the_scan_sees_a_new_door_and_not_a_mention(tmp_path):
         encoding="utf-8",
     )
     assert scan_doors(tmp_path) == {("reflex/new_door.py", "notify"): [4]}
+    # A process start added to a schedule's own door, in platform.py.
+    (tmp_path / "platform.py").write_text(
+        "async def _dispatch_scheduled(task):\n"
+        "    # subprocess.run(x) in a comment is not one\n"
+        "    subprocess.run(['x'])\n",
+        encoding="utf-8",
+    )
+    assert scan_doors(tmp_path)[("platform.py", "process")] == [3]
 
 
 async def test_the_pre_run_script_and_the_delivery_line_do_nothing(daemon, tmp_path):
@@ -301,3 +338,52 @@ async def test_a_remote_agents_hand_off_sends_nothing(daemon, monkeypatch):
     assert [w["words"] for w in view["would"]] == ["hand the task to the remote agent hermes"]
     rows = _rows(p, view["id"], "remote_agent")
     assert [(r.rehearsed, json.loads(r.args_json)["target"]) for r in rows] == [(True, "hermes")]
+
+
+# --------------------------------------------------------------------------- #
+# Review 4: the model team's record
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_rehearsals_helper_leaves_no_mark_on_the_model_teams_record(tmp_path, monkeypatch):
+    """A helper's piece writes a row on the model-team member's record for its
+    role, and the team router picks members by that record. In a rehearsal
+    the piece's writes were held, so "finished" says nothing of the member's
+    work: the piece writes no row. Control: the same hand-off outside a
+    rehearsal writes its row."""
+    from iron_jarvis.agents import team_record as TR
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.core.models import Session
+    from iron_jarvis.providers import router as router_mod
+    from iron_jarvis.tools.base import ToolContext
+    from tests._fakes.team_world_v1395 import LOCAL, make_world, member
+
+    monkeypatch.setattr(router_mod.random, "uniform", lambda a, b: 0.0)
+    w = make_world(tmp_path, monkeypatch)
+    member(w.p, "glm", LOCAL[0], LOCAL[1], roles=("read",))
+
+    def team_rows() -> list[tuple[str, str, str]]:
+        with session_scope(w.p.engine) as db:
+            return [(r.member, r.role, r.session_id) for r in db.exec(select(TR.TeamRoleRun))]
+
+    async def hand_off(rehearsal_id: str) -> str:
+        parent = await Orchestrator(w.p).create_session(
+            "the parent's task", AgentType.SUPERVISOR, provider="google", model="gemini-3.8-flash",
+            options={R.REHEARSAL_OPTION: rehearsal_id} if rehearsal_id else None,
+        )
+        ctx = ToolContext(workspace=tmp_path, session_id=parent.id, agent_run_id="parent-run",
+                          config=w.p.config, event_bus=w.p.event_bus, engine=w.p.engine,
+                          rehearsal_id=rehearsal_id)
+        with R.scope(rehearsal_id):  # what registry.invoke sets around the call
+            res = await w.p.registry.get("delegate").execute(
+                {"role": "read", "task": "Read app.py and summarize it."}, ctx)
+        assert res.ok, res.error
+        assert res.data["target"] == "custom:glm"
+        return res.data["child_session_id"]
+
+    rehearsed = await hand_off("reh_team")
+    with session_scope(w.p.engine) as db:
+        assert R.rehearsal_of(db.get(Session, rehearsed)) == "reh_team", "the helper did not inherit"
+    assert team_rows() == [], "a rehearsal's piece was written on the member's record"
+    real = await hand_off("")
+    assert team_rows() == [("glm", "read", real)]  # control
