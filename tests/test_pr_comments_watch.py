@@ -14,8 +14,11 @@ Pinned:
 * new comments: a line on the session in Iron Jarvis's own words (the names
   ride the structured field, never the history) and at most ONE quiet bell
   row per pull request a day; "Stop telling me about comments here" makes no
-  line and no row (the comments are still kept); a Local only session's row
-  carries no words.
+  bell row (the comments still arrive in the session, where they are
+  answered); a Local only session's row carries no words;
+* while fixing checks is off the checks' own streak has not begun, so a
+  watch made for the comments long ago never ends the checks' watch as "still
+  running after 6 hours" once fixing is turned on.
 """
 
 from __future__ import annotations
@@ -183,23 +186,27 @@ async def test_one_bell_row_per_pull_request_a_day_and_stop_telling_me(app, tmp_
     clock.go(PC.TOLD_EVERY_S)
     await w.step()
     assert len(w.lines()) == 3 and len(w.rows()) == 2, "a day later the bell may say it again"
-    # Stop telling me about comments here: no line, no row; still kept.
+    # Stop telling me about comments here: no bell row. The comments still
+    # ARRIVE in the session (its line is where they are answered: without it
+    # a comment that came while it was on could never be answered there).
     status, got = await asgi(app, "POST", f"/build/sessions/{w.sid}/pr-comments/quiet", {"quiet": True})
     assert status == 200 and got == {"quiet": True, "was": False}
     w.fake.answer(comments=[line_comment(1), line_comment(4, created="2026-11-22T08:00:00Z")])
     clock.go(PC.TOLD_EVERY_S)
     await w.step()
-    assert len(w.lines()) == 3 and len(w.rows()) == 2
+    assert len(w.rows()) == 2, "a bell row after Stop telling me about comments here"
+    assert len(w.lines()) == 4 and w.lines()[-1]["prComments"]["ids"] == [f"{w.sid}:c4"]
     assert f"{w.sid}:c4" in [r["id"] for r in PC.listing(w.engine, w.sid, PR_URL)]
+    assert not w.rec()["comments_told_at"].startswith((clock.at.isoformat()[:16]))
     status, view = await asgi(app, "GET", f"/build/sessions/{w.sid}/pr-comments")
     assert status == 200 and view["quiet"] is True
-    # Its Undo: told again from the next new comment.
+    # Its Undo: the bell tells again from the next new comment.
     status, got = await asgi(app, "POST", f"/build/sessions/{w.sid}/pr-comments/quiet", {"quiet": False})
     assert got == {"quiet": False, "was": True}
     w.fake.answer(comments=[line_comment(5, created="2026-11-22T09:00:00Z")])
     clock.go(PC.READ_FIRST_S)
     await w.step()
-    assert len(w.lines()) == 4 and len(w.rows()) == 3
+    assert len(w.lines()) == 5 and len(w.rows()) == 3
 
 
 async def test_a_local_only_sessions_row_carries_no_words(app, tmp_path, monkeypatch):
@@ -260,6 +267,50 @@ async def test_reading_goes_on_while_fixing_checks_is_off(app, tmp_path, monkeyp
     clock.go(PC.READ_FIRST_S)
     await w.step()
     assert len(w.lines()) == 1 and not w.fake.calls("pr", "view")
+
+
+async def test_nothing_is_read_while_a_fix_turn_runs_or_after_the_checks_saw_it_closed(app, tmp_path, monkeypatch):
+    clock = Clock(monkeypatch)
+    w = await _world(app, tmp_path, monkeypatch, state=CI.FIXING)
+    app.state.platform.config.ci_autofix = False  # only the comments' own step runs
+    w.fake.answer(comments=[line_comment(1)])
+    for state in (CI.FIXING, CI.REVIEWING, CI.CLOSED):
+        CI.save(w.engine, w.sid, state=state)
+        for _ in range(2):
+            clock.go(PC.READ_MAX_S)
+            await w.step()
+        assert w.fake.calls("api") == [] and w.lines() == [], state
+    # Any other state of the checks' watch: read on the comments' own clock.
+    CI.save(w.engine, w.sid, state=CI.GAVE_UP)
+    await w.step()
+    clock.go(PC.READ_FIRST_S)
+    await w.step()
+    assert w.reads() == 1 and len(w.lines()) == 1
+
+
+async def test_the_checks_streak_begins_when_fixing_is_turned_on(app, tmp_path, monkeypatch):
+    """The watch's record may be made for the comments while fixing checks is
+    off. Its checks were never watched, so when fixing is turned on hours
+    later their streak begins THEN: the first check is never judged "still
+    running after 6 hours" from the day the record was made."""
+    seen: list[dict] = []
+
+    async def spy_check(d, thread_id, title, facts, rec, out, *, local_only):
+        seen.append(dict(rec))
+
+    Clock(monkeypatch)
+    w = await _world(app, tmp_path, monkeypatch, state=CI.WATCHING)
+    monkeypatch.setattr(W, "_check", spy_check)
+    # Made seven hours ago, while fixing was off.
+    CI.save(w.engine, w.sid, watch_since=CI.later(-7 * 3600))
+    app.state.platform.config.ci_autofix = False
+    await w.step()
+    assert seen == [] and not w.rec()["watch_since"], "the checks' streak began while they were not watched"
+    app.state.platform.config.ci_autofix = True
+    await w.step()
+    assert len(seen) == 1 and seen[0]["watch_since"], "fixing on: the streak begins"
+    assert not CI.watched_too_long(seen[0]), "judged from the day the record was made"
+    assert not CI.watched_too_long(seen[0], CI.later(5 * 3600)) and CI.watched_too_long(seen[0], CI.later(7 * 3600))
 
 
 async def test_five_failed_reads_stop_the_reading_said_once_and_thirty_quiet_days_end_it(app, tmp_path, monkeypatch):

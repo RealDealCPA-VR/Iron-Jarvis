@@ -597,7 +597,9 @@ def snap_pr_quiet(platform: Any, thread_id: str) -> "bool | None":
 
 
 def _quiet_words(quiet: Any) -> str:
-    return "not told (still read and shown in the session)" if quiet else "told (a line in the session, a bell row)"
+    if quiet:
+        return "not told by the bell (they still arrive in the session)"
+    return "told by the bell (one row a day at most)"
 
 
 def restore_pr_quiet(platform: Any, thread_id: str, prior: Any, desc: dict[str, Any]) -> str:
@@ -1882,7 +1884,7 @@ def _pr_reading_words(rec: "dict[str, Any] | None") -> str:
     }.get(done, "Iron Jarvis reads them now and then with your own GitHub sign-in (gh), every few minutes to "
                 "once an hour.")
     if rec.get("comments_quiet"):
-        said += " You asked not to be told about new ones: they are still read and shown in the session."
+        said += " You asked the bell not to tell you about new ones: they still arrive in the session."
     return said
 
 
@@ -1913,6 +1915,28 @@ class PrCommentsListTool(Tool):
         return ToolResult(ok=True, output=output, data=data)
 
 
+def _local_only_session(row: Any) -> bool:
+    """The coding session runs Local only (``setup.local_only``); unreadable
+    reads as Local only (fail closed)."""
+    try:
+        setup = json.loads(getattr(row, "setup_json", "") or "{}")
+    except (TypeError, ValueError):
+        return True
+    return isinstance(setup, dict) and setup.get("local_only") is True
+
+
+def _withhold_local_only() -> bool:
+    """Local only work is kept from the turn in flight unless that turn
+    itself stays on this network (the work record's rule,
+    ``workmap/lookup.withhold_local_only``); unsure keeps it home."""
+    try:
+        from ..providers.egress import may_recall_local_only_chats
+
+        return not may_recall_local_only_chats()
+    except Exception:  # noqa: BLE001 — unsure: keep it home (fail closed)
+        return True
+
+
 def _pr_comments_said(platform: Any, ctx: Any, ref: Any) -> "tuple[str, dict[str, Any]] | None":
     """BLOCKING: the answer of ``pr_comments_list``. Iron Jarvis's own words
     outside; who wrote what, and where, inside ONE fence."""
@@ -1936,6 +1960,15 @@ def _pr_comments_said(platform: Any, ctx: Any, ref: Any) -> "tuple[str, dict[str
         return f"{head} No review comments are kept for it. {_pr_reading_words(rec)}", {
             "session": row.id, "pr_url": pr_url, "comments": []}
     tally = ", ".join(f"{n} {_PR_STATE_WORDS.get(s, s).split(':')[0]}" for s, n in counts.items())
+    if _local_only_session(row) and _withhold_local_only():
+        # The work record's rule: a Local only session's work reaches only a
+        # turn that itself stays on this network. Its title, pull request,
+        # who wrote what and the code quoted stay home; the count does not.
+        n = len(rows)
+        return (f"A Chat › Code session that is Local only: its pull request has {n} review "
+                f"comment{'s' if n != 1 else ''} ({tally}). Who wrote them, where and what they say are told "
+                "only in that session, or in a chat that is Local only."), {
+            "session": row.id, "comments": [{"id": r["id"], "state": r["state"]} for r in rows]}
     lines: list[str] = []
     for i, r in enumerate(rows, start=1):
         state = _PR_STATE_WORDS.get(r["state"], r["state"]).format(files=", ".join(r.get("answer_files") or []) or "a file")
@@ -1964,9 +1997,9 @@ class PrCommentsQuietTool(_BuildTool):
     RECORD = "pr_comments_quiet"
     description = (
         "Stop telling the user about new review comments on a Chat › Code session's pull request (\"stop telling "
-        "me about comments here\"), or start telling again: no line in the session and no bell row for its new "
-        "comments; they are still read and shown in the session. `quiet` true = stop telling, false = tell "
-        "again. `session` as for pr_comments_list. Undo puts back what it was."
+        "me about comments here\"), or start telling again: no bell row for its new comments; they still arrive "
+        "in the session, where they are answered. `quiet` true = stop telling, false = tell again. `session` as "
+        "for pr_comments_list. Undo puts back what it was."
     )
     input_schema = {
         "type": "object",
@@ -1999,9 +2032,9 @@ class PrCommentsQuietTool(_BuildTool):
         _note(after=quiet)
         title = (row.title or "").strip()[:80] or "untitled"
         out = (f"Iron Jarvis no longer tells you about new review comments on the pull request of \"{title}\": no "
-               "line in the session and no bell row. They are still read and shown in the session." if quiet else
-               f"Iron Jarvis tells you again about new review comments on the pull request of \"{title}\": a line in "
-               "the session and at most one bell row a day.")
+               "bell row. They still arrive in the session, where you answer them." if quiet else
+               f"Iron Jarvis tells you again about new review comments on the pull request of \"{title}\": at most "
+               "one bell row a day.")
         return ToolResult(
             ok=True, output=out,
             data={"record_change": self._card(

@@ -5,8 +5,10 @@
  *   - lib/prComments: the whitelist decoder (an unknown author kind reads as
  *     "from outside the repository", a link that is not https dies), the
  *     session line's words from its field, what each state says, which
- *     comments a line's card offers and which are ticked first;
- *   - the line's card: an owner's, a member's or a collaborator's comment is
+ *     comments the card offers (every one still open) and which are ticked
+ *     first, and which line carries the card (the newest; an older line is
+ *     its sentence alone, so the view has ONE Answer these);
+ *   - the card: an owner's, a member's or a collaborator's comment is
  *     ticked; one from outside the repository and a bot's are not and say so;
  *     Answer these sends ONLY the ticked ids and hands the turn to the page;
  *     Set aside; Stop telling me about comments here and Tell me again; a
@@ -25,13 +27,17 @@ configure({ asyncUtilTimeout: 5_000 });
 
 const H = vi.hoisted(() => ({
   view: {} as Record<string, unknown>,
+  reads: 0,
   sent: [] as { path: string; body: unknown }[],
   reply: {} as Record<string, unknown>,
 }));
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
-  get: vi.fn(async () => H.view),
+  get: vi.fn(async () => {
+    H.reads += 1;
+    return H.view;
+  }),
   post: vi.fn(async (path: string, body: unknown) => {
     H.sent.push({ path, body });
     for (const [tail, answer] of Object.entries(H.reply)) if (path.endsWith(tail)) return answer;
@@ -58,8 +64,9 @@ import {
   arrivedWords,
   decodeComment,
   decodePrCommentsView,
+  cardLineIndex,
   firstTicks,
-  openOfLine,
+  openComments,
   stateWords,
   type PrComment,
 } from "@/lib/prComments";
@@ -82,6 +89,7 @@ function comment(id: string, over: Record<string, unknown> = {}): PrComment {
 }
 
 beforeEach(() => {
+  H.reads = 0;
   H.sent = [];
   H.reply = {};
   H.view = { pr_url: "https://github.com/acme/proj/pull/7", comments: [], quiet: false, done: "", max_answer: 20 };
@@ -111,19 +119,28 @@ describe("lib/prComments", () => {
     expect(stateWords(comment("c1", { state: "new" }))).toBe("");
   });
 
-  it("a line offers its own comments still to answer; writers are ticked first", () => {
+  it("the card offers every comment still to answer; writers are ticked first", () => {
     const view = decodePrCommentsView({
       comments: [
         raw("c1"),
         raw("c2", { author_kind: "outside", ticked: false }),
         raw("c3", { state: "answered" }),
         raw("c4", { author: "ci[bot]", author_kind: "bot", ticked: false }),
-        raw("c9"),
+        raw("c5", { state: "set_aside" }),
+        raw("c9", { state: "answering" }),
       ],
     });
-    const open = openOfLine(view, [`${SID}:c1`, `${SID}:c2`, `${SID}:c3`, `${SID}:c4`]);
-    expect(open.map((c) => c.id)).toEqual([`${SID}:c1`, `${SID}:c2`, `${SID}:c4`]);
+    const open = openComments(view);
+    expect(open.map((c) => c.id)).toEqual([`${SID}:c1`, `${SID}:c2`, `${SID}:c4`, `${SID}:c9`]);
     expect([...firstTicks(open)]).toEqual([`${SID}:c1`]);
+  });
+
+  it("the newest line of arrived comments carries the card, never a line that says reading stopped", () => {
+    const arrived = (ids: string[]) => ({ role: "assistant", content: "", prComments: { ids, n: ids.length, authors: [] } });
+    const stopped = { role: "assistant", content: "", prComments: { ids: [], n: 0, authors: [], stopped: true } };
+    expect(cardLineIndex([{ role: "user" }, arrived(["a"]), { role: "assistant" }, arrived(["b"]), stopped])).toBe(3);
+    expect(cardLineIndex([{ role: "user", prComments: { ids: ["a"] } }, stopped])).toBe(-1);
+    expect(cardLineIndex([])).toBe(-1);
   });
 });
 
@@ -144,7 +161,7 @@ describe("the session's line and its card", () => {
     };
     H.reply = { "/answer": { turn_id: "bt_answer1" } };
     const onAnswered = vi.fn();
-    render(<PrCommentsLine threadId={SID} raw={line(["c1", "c2", "c3"])} content="" archived={false} busy={false}
+    render(<PrCommentsLine card threadId={SID} raw={line(["c1", "c2", "c3"])} content="" archived={false} busy={false}
       onAnswered={onAnswered} />);
     expect(screen.getByTestId("pr-comments-line").textContent).toContain("3 review comments from sam and pat arrived.");
     const rows = await screen.findAllByTestId("pr-comment");
@@ -166,7 +183,7 @@ describe("the session's line and its card", () => {
 
   it("a comment from outside the repository is answered only when the user ticks it", async () => {
     H.view = { ...H.view, comments: [raw("c2", { author_kind: "outside", ticked: false })] };
-    render(<PrCommentsLine threadId={SID} raw={line(["c2"])} content="" archived={false} busy={false} />);
+    render(<PrCommentsLine card threadId={SID} raw={line(["c2"])} content="" archived={false} busy={false} />);
     const tick = (await screen.findByTestId("pr-comment-tick")) as HTMLInputElement;
     const answer = screen.getByTestId("pr-comments-answer") as HTMLButtonElement;
     expect(answer.disabled).toBe(true);
@@ -177,24 +194,24 @@ describe("the session's line and its card", () => {
   it("nothing starts while a reply runs or in an archived session; a reply's end reads the comments again", async () => {
     H.view = { ...H.view, comments: [raw("c1")] };
     const props = { threadId: SID, raw: line(["c1"]), content: "" };
-    const { rerender } = render(<PrCommentsLine {...props} archived={false} busy={false} />);
+    const { rerender } = render(<PrCommentsLine card {...props} archived={false} busy={false} />);
     await screen.findByTestId("pr-comment");
-    rerender(<PrCommentsLine {...props} archived={false} busy />);
+    rerender(<PrCommentsLine card {...props} archived={false} busy />);
     expect((screen.getByTestId("pr-comments-answer") as HTMLButtonElement).disabled).toBe(true);
     // The Answer these reply ends: its comment is settled, and the card says so.
     H.view = { ...H.view, comments: [raw("c1", { state: "answered", answer_files: ["app.py"] })] };
-    rerender(<PrCommentsLine {...props} archived={false} busy={false} />);
+    rerender(<PrCommentsLine card {...props} archived={false} busy={false} />);
     await waitFor(() => expect(screen.queryByTestId("pr-comment")).toBeNull());
     H.view = { ...H.view, comments: [raw("c1")] };
-    rerender(<PrCommentsLine {...props} archived busy />);
-    rerender(<PrCommentsLine {...props} archived busy={false} />);
+    rerender(<PrCommentsLine card {...props} archived busy />);
+    rerender(<PrCommentsLine card {...props} archived busy={false} />);
     await screen.findByTestId("pr-comment");
     expect((screen.getByTestId("pr-comments-answer") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("Set aside, and Stop telling me about comments here with its Undo", async () => {
     H.view = { ...H.view, comments: [raw("c1")] };
-    render(<PrCommentsLine threadId={SID} raw={line(["c1"])} content="" archived={false} busy={false} />);
+    render(<PrCommentsLine card threadId={SID} raw={line(["c1"])} content="" archived={false} busy={false} />);
     fireEvent.click(await screen.findByTestId("pr-comment-aside"));
     await waitFor(() => expect(H.sent[0]).toEqual({
       path: `/build/sessions/${SID}/pr-comments/${encodeURIComponent(`${SID}:c1`)}/set-aside`, body: { aside: true } }));
@@ -213,17 +230,34 @@ describe("the session's line and its card", () => {
 
   it("a line whose comments were all answered is its sentence alone", async () => {
     H.view = { ...H.view, comments: [raw("c1", { state: "answered" })] };
-    render(<PrCommentsLine threadId={SID} raw={line(["c1"])} content="" archived={false} busy={false} />);
+    render(<PrCommentsLine card threadId={SID} raw={line(["c1"])} content="" archived={false} busy={false} />);
     await waitFor(() => expect(screen.getByTestId("pr-comments-stop")).toBeTruthy());
     expect(screen.queryByTestId("pr-comment")).toBeNull();
     expect(screen.queryByTestId("pr-comments-answer")).toBeNull();
   });
 
   it("a line that says reading stopped is its own words, with no card", () => {
-    render(<PrCommentsLine threadId={SID} raw={{ ids: [], n: 0, authors: [], stopped: true }}
+    render(<PrCommentsLine card threadId={SID} raw={{ ids: [], n: 0, authors: [], stopped: true }}
       content="The review comments could not be read 5 times in a row." archived={false} busy={false} />);
     expect(screen.getByTestId("pr-comments-line").textContent).toBe("The review comments could not be read 5 times in a row.");
     expect(screen.queryByTestId("pr-comments-stop")).toBeNull();
+  });
+
+  it("an older line is its sentence alone and reads nothing; the newest offers every comment still open", async () => {
+    // Two reads: c1 arrived first, c2 later. Both are still to answer.
+    H.view = { ...H.view, comments: [raw("c1"), raw("c2", { author: "pat" })] };
+    const older = render(<PrCommentsLine threadId={SID} raw={line(["c1"], ["sam"])} content="" archived={false}
+      busy={false} />);
+    expect(older.getByTestId("pr-comments-line").textContent).toBe("1 review comment from sam arrived.");
+    expect(older.queryByTestId("pr-comments-answer")).toBeNull();
+    expect(older.queryByTestId("pr-comments-stop")).toBeNull();
+    expect(H.reads).toBe(0);
+    older.unmount();
+    render(<PrCommentsLine card threadId={SID} raw={line(["c2"], ["pat"])} content="" archived={false} busy={false} />);
+    const rows = await screen.findAllByTestId("pr-comment");
+    expect(rows.map((r) => r.getAttribute("data-id"))).toEqual([`${SID}:c1`, `${SID}:c2`]);
+    expect(screen.getAllByTestId("pr-comments-answer")).toHaveLength(1);
+    expect(screen.getByTestId("pr-comments-answer").textContent).toBe("Answer these (2)");
   });
 });
 

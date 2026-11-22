@@ -3,19 +3,21 @@
 /**
  * 26-a (R2.16): the line Iron Jarvis writes in a Chat › Code session when
  * review comments arrive on its pull request ("3 review comments from sam
- * arrived."), and under it the comments of THAT line still to answer, each
- * with a tick (an owner's, a member's or a collaborator's are ticked; someone
- * from outside the repository and a bot are not, and say so), its place, its
- * words and Set aside. ONE main button, Answer these: one coding turn in the
- * session, which the page follows like any turn. A quiet text button, Stop
- * telling me about comments here (and its Undo, Tell me again).
+ * arrived."). The session's NEWEST such line (`card`; lib/prComments
+ * cardLineIndex) carries the ONE card: every comment of the pull request
+ * still to answer, whichever line said it arrived, each with a tick (an
+ * owner's, a member's or a collaborator's are ticked; someone from outside
+ * the repository and a bot are not, and say so), its place, its words and
+ * Set aside. ONE main button for the view, Answer these: one coding turn in
+ * the session, which the page follows like any turn. A quiet text button,
+ * Stop telling me about comments here (the bell row; its Undo, Tell me
+ * again). An older line is its sentence alone.
  *
- * The comments are read when the line is drawn, when a reply in the session
+ * The comments are read when the card is drawn, when a reply in the session
  * ends, and after a press (lib/prComments: no GitHub call; nothing is ever
- * sent to GitHub). A line
- * whose comments were all answered or set aside is its sentence alone. A
- * comment's words are plain text, never Markdown: a person wrote them on
- * GitHub.
+ * sent to GitHub). A card with nothing left to answer is its sentence and
+ * the quiet stop. A comment's words are plain text, never Markdown: a person
+ * wrote them on GitHub.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -34,7 +36,7 @@ import {
   decodePrCommentsLine,
   firstTicks,
   getPrComments,
-  openOfLine,
+  openComments,
   setAsidePrComment,
   setPrCommentsQuiet,
   stateWords,
@@ -54,6 +56,7 @@ export function PrCommentsLine({
   content,
   archived,
   busy,
+  card = false,
   onAnswered,
 }: {
   threadId: string;
@@ -64,6 +67,8 @@ export function PrCommentsLine({
   archived: boolean;
   /** A reply runs in the session: nothing new can start. */
   busy: boolean;
+  /** The session's newest line of arrived comments: it carries the card. */
+  card?: boolean;
   /** Answer these started this turn: the page follows it. */
   onAnswered?: (turnId: string) => void;
 }) {
@@ -74,6 +79,7 @@ export function PrCommentsLine({
   const [error, setError] = useState("");
   const seq = useRef(0);
   const stopped = !line || line.stopped || line.ids.length === 0;
+  const drawn = card && !stopped;
 
   const load = useCallback(async () => {
     const mine = ++seq.current;
@@ -85,11 +91,12 @@ export function PrCommentsLine({
     }
   }, [threadId]);
 
-  // Read when the line is drawn, and again each time a reply in the session
-  // ends (an Answer these reply settles its comments then). Never on a clock.
+  // The card is read when it is drawn, and again each time a reply in the
+  // session ends (an Answer these reply settles its comments then). Never on
+  // a clock; an older line reads nothing.
   useEffect(() => {
-    if (!stopped && !busy) void load();
-  }, [stopped, busy, load]);
+    if (drawn && !busy) void load();
+  }, [drawn, busy, load]);
 
   if (!line) return null;
   if (stopped) {
@@ -99,7 +106,14 @@ export function PrCommentsLine({
       </p>
     );
   }
-  const open = openOfLine(view, line.ids);
+  if (!drawn) {
+    return (
+      <p data-testid="pr-comments-line" className="text-[13px] text-zinc-400">
+        {arrivedWords(line.n, line.authors)}
+      </p>
+    );
+  }
+  const open = openComments(view);
   const picked = ticks ?? firstTicks(open);
   const chosen = open.filter((c) => picked.has(c.id) && c.state === "new").map((c) => c.id);
   const locked = archived || busy || working !== "";

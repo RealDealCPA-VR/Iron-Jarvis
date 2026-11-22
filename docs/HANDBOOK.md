@@ -2876,17 +2876,18 @@ as it was.
 - Not yet: a rule or a schedule that starts a **workflow** or a **goal**
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.
-## Review comments arrive in the coding session (v1.557.0)
+## Review comments arrive in the coding session (v1.559.0)
 
 When people comment on a pull request a coding session (Chat › Code) opened,
 their comments now come to that session. You no longer copy them from GitHub
 into the chat.
 
 - **Where you see them.** A line in the session: "3 review comments from sam
-  arrived." Under it, each comment with who wrote it, where (a file and a
-  line, or the whole pull request) and its words. In the **Changes** tab
-  (Branch) each one sits under its line, marked **from GitHub**. A comment on
-  a line that has changed since is listed after the file's lines.
+  arrived." Under the newest such line, every comment still to answer, with
+  who wrote it, where (a file and a line, or the whole pull request) and its
+  words. In the **Changes** tab (Branch) each one sits under its line, marked
+  **from GitHub**. A comment on a line that has changed since is listed after
+  the file's lines.
 - **Answer these.** One press starts a reply in the session that works on the
   comments you ticked: it changes the code where a comment is right, and says
   which ones it changed nothing for. Comments from the repository's owner,
@@ -2910,12 +2911,14 @@ into the chat.
   often when nothing changes, up to once an hour, and it stops when the pull
   request is merged or closed. The bell says it at most once a day per pull
   request. **Stop telling me about comments here** on the comments turns off
-  the line and the bell row for that pull request (the comments are still
-  read and shown); **Tell me again** turns it back on. Nothing is read while
-  Emergency stop is on.
+  the bell row for that pull request (new comments still arrive in the
+  session, where you answer them); **Tell me again** turns it back on.
+  Nothing is read while Emergency stop is on, or while a reply is being
+  written in the session.
 - **From chat.** "What did the reviewers say on my pull request?" answers
-  from what Iron Jarvis keeps. "Stop telling me about comments here" asks
-  first and can be undone.
+  from what Iron Jarvis keeps (for a Local only session, what they wrote is
+  told only in that session or in a chat that is Local only). "Stop telling
+  me about comments here" asks first and can be undone.
 
 This works for coding sessions in Chat › Code. A Build › Code session (your
 own Claude Code or Codex) has no pull request of its own yet, so it gets no

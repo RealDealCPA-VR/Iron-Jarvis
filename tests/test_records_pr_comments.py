@@ -161,6 +161,34 @@ async def test_the_reader_says_the_comments_with_every_github_word_inside_the_fe
 
 
 @pytest.mark.asyncio
+async def test_a_local_only_sessions_words_reach_only_a_turn_that_stays_on_this_network(tmp_path):
+    """A Local only coding session's comments (their words and the code they
+    quote) are said only to a turn that itself stays on this network; any
+    other chat hears how many there are and where they stand, never what
+    they say (the work record's rule: ``egress.may_recall_local_only_chats``)."""
+    from iron_jarvis.providers import egress
+
+    app = create_app(str(tmp_path / "home"))
+    sid = _pr_session(app, tmp_path)
+    engine = app.state.platform.engine
+    S.update(engine, sid, setup={"local_only": True})
+    rows, _ = PC.rows_from(sid, PR_URL, [{**line_comment(11, login="sam", body="Rename the private thing."),
+                                          "_kind": "line"}])
+    PC.store(engine, sid, PR_URL, rows)
+    tool = next(t for t in RB.build_record_tools(app.state.platform) if t.name == "pr_comments_list")
+    for scope in ({}, {"allowed_once": "anthropic"}):
+        with egress.local_only_scope(bool(scope), **scope):
+            res = await tool.execute({"session": "parser"}, SimpleNamespace(thread_id=""))
+        assert res.ok, res.error
+        assert "1 review comment (1 new)" in res.output and "Local only" in res.output
+        for word in ("sam", "Rename", "private", "app.py", FENCE_TOP):
+            assert word not in res.output, (scope, word)
+    with egress.local_only_scope(True):
+        res = await tool.execute({"session": "parser"}, SimpleNamespace(thread_id=""))
+    assert res.ok and FENCE_TOP in res.output and "Rename the private thing." in res.output
+
+
+@pytest.mark.asyncio
 async def test_stop_telling_me_asks_on_a_card_and_undo_puts_it_back(tmp_path):
     app = _app(tmp_path / "home", [("pr_comments_quiet", {"quiet": True})])
     sid = _pr_session(app, tmp_path)
@@ -191,6 +219,19 @@ async def test_undo_after_tell_me_again_in_the_session_changes_nothing(tmp_path)
     with pytest.raises(R.RecordError) as exc:
         RB.restore_pr_quiet(app.state.platform, sid, False, {"after": True})
     assert "no longer watched" in str(exc.value)
+
+
+def test_undo_leaves_a_switch_changed_again_after_it(tmp_path):
+    """A change from chat that left it as it was (quiet already on), then Tell
+    me again in the session: the Undo of that change must not turn it back
+    on."""
+    app = create_app(str(tmp_path / "home"))
+    sid = _pr_session(app, tmp_path)
+    engine = app.state.platform.engine
+    CI.save(engine, sid, comments_quiet=False)
+    with pytest.raises(R.RecordError) as exc:
+        RB.restore_pr_quiet(app.state.platform, sid, True, {"after": True})
+    assert "changed again" in str(exc.value) and CI.get(engine, sid)["comments_quiet"] is False
 
 
 def test_the_words_are_iron_jarviss_own_and_plain():

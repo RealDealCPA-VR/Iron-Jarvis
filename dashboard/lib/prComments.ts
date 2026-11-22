@@ -72,7 +72,7 @@ export const PR_COMMENTS_FROM_GITHUB = "from GitHub";
 export const PR_COMMENTS_OPEN = "Open on GitHub";
 export const PR_COMMENTS_NOTHING_SENT = "Nothing is sent to GitHub.";
 export const PR_COMMENTS_QUIET_NOTE =
-  "You will not be told about new review comments here. They are still read and shown in this session.";
+  "The bell will not tell you about new review comments here. They still arrive in this session.";
 export const PR_COMMENTS_NOT_PINNED = "From GitHub, not on a line shown here";
 
 const AUTHOR_LABELS: Record<PrAuthorKind, string> = {
@@ -212,12 +212,25 @@ export function decodePrCommentsLine(raw: unknown): PrCommentsLine | null {
 
 // ------------------------------------------------------------------ the card
 
-/** The comments a line's card offers: those of ITS ids still to answer (new,
- *  or being answered), oldest first. */
-export function openOfLine(view: PrCommentsView | null, ids: readonly string[]): PrComment[] {
+/** The comments the session's ONE card offers (on its newest line): every
+ *  comment of the pull request still to answer (new, or being answered),
+ *  oldest first — whichever line said it arrived, so one press can answer
+ *  them all and the view keeps one main button. */
+export function openComments(view: PrCommentsView | null): PrComment[] {
   if (!view) return [];
-  const mine = new Set(ids);
-  return view.comments.filter((c) => mine.has(c.id) && (c.state === "new" || c.state === "answering"));
+  return view.comments.filter((c) => c.state === "new" || c.state === "answering");
+}
+
+/** Which line of a session draws the card: the newest line that said review
+ *  comments arrived (not one that says reading stopped). -1 = none. */
+export function cardLineIndex(messages: readonly { role?: string; prComments?: unknown }[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role !== "assistant" || !m.prComments) continue;
+    const line = decodePrCommentsLine(m.prComments);
+    if (line && !line.stopped && line.ids.length > 0) return i;
+  }
+  return -1;
 }
 
 /** Which are ticked when the card opens: an owner's, a member's or a

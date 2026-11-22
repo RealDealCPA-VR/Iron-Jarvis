@@ -263,6 +263,9 @@ export interface HarnessMessageRowProps {
    *  reply only ("" elsewhere) — folded into this reply's line (the box keeps
    *  its buttons visible). */
   nextRecap?: string;
+  /** 26-a (R2.16): this is the session's newest line of arrived review
+   *  comments — it carries the ONE card (lib/prComments cardLineIndex). */
+  prCard?: boolean;
   undoFor: (path: string) => ChangeUndoState | null;
   onUndo: (actionId: string, path: string) => Promise<void>;
   h: HarnessRowHandlers;
@@ -288,6 +291,7 @@ function HarnessMessageRowImpl({
   provider,
   localOnlyHeld,
   nextRecap = "",
+  prCard = false,
   undoFor,
   onUndo,
   h,
@@ -310,7 +314,8 @@ function HarnessMessageRowImpl({
   }, [m, prevUserAt, sessionId]);
   if (m.role === "assistant" && m.prComments) {
     // 26-a (R2.16): review comments arrived on the session's pull request —
-    // the line, and the comments still to answer with Answer these.
+    // the line; the newest one also carries the comments still to answer,
+    // with Answer these.
     return (
       <div data-testid="harness-reply" className="group/msg min-w-0">
         <PrCommentsLine
@@ -319,6 +324,7 @@ function HarnessMessageRowImpl({
           content={m.content ?? ""}
           archived={archived}
           busy={busy}
+          card={prCard}
           onAnswered={h.onAnswerComments}
         />
       </div>

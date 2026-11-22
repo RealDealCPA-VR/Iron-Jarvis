@@ -280,6 +280,7 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { HarnessStartFolder } from "@/components/harness/HarnessStartFolder";
 import { noteSessionUsed } from "@/lib/emptySessions";
 import { LOCAL_ONLY_LINE } from "@/lib/sessionRail";
+import { cardLineIndex } from "@/lib/prComments";
 import {
   answerQuestion,
   archiveSession,
@@ -3009,6 +3010,9 @@ export function HarnessSession({
   // panes are memoised and must see the same object until a card moves.
   const livePlan = useMemo(() => planFromCards(stream.tools), [stream.tools]);
   const rowPrevUserAts = useMemo(() => prevUserAtsOf(shown), [shown]);
+  // 26-a (R2.16): the newest line of arrived review comments carries the ONE
+  // card (every comment still to answer, one Answer these for the view).
+  const prCardAt = useMemo(() => cardLineIndex(shown), [shown]);
   const teamRoster = useMemo(
     () => sessionRoster(view?.team, view?.setup.team) ?? EMPTY_ROSTER,
     [view?.team, view?.setup.team],
@@ -3581,6 +3585,7 @@ export function HarnessSession({
           {shown.map((m, i) => (
             <HarnessMessageRow
               nextRecap={m === newestReply && nextStep ? nextStep.recap : ""}
+              prCard={i === prCardAt}
               key={i}
               m={m}
               index={i}

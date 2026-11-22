@@ -214,7 +214,8 @@ class CiWatchRecord(SQLModel, table=True):
     #: Why reading ended ("" = it goes on): merged | closed | quiet | failed.
     comments_done: str | None = None
     #: The newest bell row about this pull request's comments (at most one a
-    #: day), and "Stop telling me about comments here" (no bell row, no line).
+    #: day), and "Stop telling me about comments here" (no bell row; the
+    #: session's line still comes: it is where the comments are answered).
     comments_told_at: datetime | None = None
     comments_quiet: bool | None = None
     created_at: datetime = Field(default_factory=utcnow)

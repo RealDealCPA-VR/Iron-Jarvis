@@ -219,3 +219,34 @@ async def test_a_stopped_answer_gives_its_comments_back_as_new(app, tmp_path, mo
         row = PC.get_rows(engine, sid, [cid])[0]
         assert row["state"] == PC.NEW and row["turn_id"] == "", (turn, row)
     assert git("status", "--porcelain", cwd=Path(setup_of(app, sid)["git"]["worktree"])) == ""
+
+
+async def test_an_answer_still_starting_is_never_settled(app, tmp_path, monkeypatch):
+    """Between the press claiming its comments and its turn being listed as
+    running, the transcript has no reply of that turn yet. A watcher pass in
+    that window must leave the comments being answered: settling them then
+    gave them back as new, and the turn that went on to answer them found
+    nothing to settle."""
+    from iron_jarvis.daemon.routes import build as BR
+    from iron_jarvis.daemon.routes import ci_watch as W
+
+    install(tmp_path, monkeypatch)
+    sid, _wt = await _session(app, tmp_path, [{**line_comment(71), "_kind": "line"}])
+    engine = app.state.platform.engine
+    cid = f"{sid}:c71"
+    during: list[str] = []
+    real_start = BR.start_build_turn
+
+    async def start_then_a_pass(d, thread_id, text, turn_id, **kw):
+        # The watcher's pass runs while the turn is being started.
+        await W._settle_answers(d, thread_id, {})
+        during.append(PC.get_rows(engine, sid, [cid])[0]["state"])
+        return await real_start(d, thread_id, text, turn_id, **kw)
+
+    monkeypatch.setattr(BR, "start_build_turn", start_then_a_pass)
+    wire(app, Script(["Read it."]))
+    got = await _answer(app, sid, [cid])
+    assert during == [PC.ANSWERING], "a pass settled the answer before its turn had started"
+    assert W._ANSWER_STARTING == set(), "a started answer stays listed as starting"
+    rows = await _settled(app, sid, [cid])
+    assert rows[cid]["state"] == PC.UNCHANGED and rows[cid]["turn_id"] == got["turn_id"]
