@@ -721,7 +721,7 @@ async def ocr_pdf(
 ) -> "tuple[str, str]":
     """Transcribe up to *max_pages* scanned pages via the router's vision path.
 
-    ``vision=False`` (v1.562.0, idea 31-a, D-31.2): read on THIS PC only.
+    ``vision=False`` (v1.563.0, idea 31-a, D-31.2): read on THIS PC only.
     Windows' OCR reads every page as always (a doubtful reading is kept), and
     no page picture is sent to a model; a page this PC could not read is
     left out (``("", "")`` when it read none).
@@ -1032,7 +1032,7 @@ async def ocr_document(
     With no home in scope (a bare factory, a unit test) the cache is simply
     skipped and the transcription runs as normal.
 
-    ``vision=False`` (v1.562.0): read on this PC only (:func:`ocr_pdf`); a
+    ``vision=False`` (v1.563.0): read on this PC only (:func:`ocr_pdf`); a
     cached reading is still served (it sends nothing), and what this PC read
     is not stored, so a later turn that may use a vision model still does.
     """

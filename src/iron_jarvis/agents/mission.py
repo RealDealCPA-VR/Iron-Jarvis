@@ -303,7 +303,7 @@ ASK_WORDS: dict[str, str] = {
     "write_document": "create a document",
     "excel_edit": "edit a workbook",
     "excel_live_edit": "change a workbook that is open in Excel",
-    # v1.562.0 (idea 31-a): the card's Confirm answers this ask.
+    # v1.563.0 (idea 31-a): the card's Confirm answers this ask.
     "stack_apply": "save the documents sorted from a scan",
     "generate_media": "make an image, video or sound",
     # v1.364.0 (IJ harness Phase 1): the two that ask (a program that keeps
@@ -554,7 +554,7 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "tool_script": ("ran a script over its tools", "tool script"),
     "excel_trace": ("traced how a number is built", "number trace"),
     "excel_reconcile": ("matched two lists of transactions", "transaction match"),
-    # v1.562.0 (idea 31-a): a scanned pile becomes named documents.
+    # v1.563.0 (idea 31-a): a scanned pile becomes named documents.
     "stack_plan": ("made a plan to sort a scan", "sorting plan"),
     "stack_apply": ("saved the documents sorted from a scan", "save of sorted documents"),
     "excel_live_look": ("looked at the workbook open in Excel", "look at Excel"),
