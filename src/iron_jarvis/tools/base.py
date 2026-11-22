@@ -86,7 +86,7 @@ class ToolContext:
     #: folder, and ``safe_path`` lets a file tool use the task's scratch
     #: folder. None everywhere else: nothing changes.
     task_scope: Any = None
-    #: v1.547.0 (idea 30-a): the chat turn's record of what it read
+    #: v1.549.0 (idea 30-a): the chat turn's record of what it read
     #: (``documents/sources.SourceTurn``), set by both chat lanes. After a
     #: reader's ledger row the registry writes the figures it read there, so
     #: the reply can link each one to its page, line or cell. None (an agent

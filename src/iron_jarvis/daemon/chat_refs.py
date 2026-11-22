@@ -190,7 +190,7 @@ def _message_text(content: Any) -> str:
     multi-part list; anything else is not text."""
     if isinstance(content, str):
         if "#source/" in content:
-            # v1.547.0 (30-a): an earlier chat's figure links reach the model
+            # v1.549.0 (30-a): an earlier chat's figure links reach the model
             # as their words, never a record's id.
             from ..documents.sources import without_figure_links
 

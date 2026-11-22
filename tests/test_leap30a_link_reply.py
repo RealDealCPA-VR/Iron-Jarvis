@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -75,10 +76,14 @@ def test_several_places_with_one_value_are_one_link_to_a_chooser():
     "At https://example.com/r/48210 or <https://x.test/48210>",
     "    indented code 48210",
     '<abbr title="48210">x</abbr>',
+    # Second review: a link written inside code is code, left as written.
+    "```\n[99,999](#source/src_aaaa1111aaaa1111)\n```",
+    "Text\n\n    [99,999](#source/src_aaaa1111aaaa1111)",
 ])
 def test_code_links_and_addresses_are_never_touched(text):
     marks = [_mark("src_aaaa1111aaaa1111", "48210")]
     assert link_reply(text, marks) == text
+    assert strip_model_links(text) == text
 
 
 def test_small_numbers_years_and_dates_are_not_figures():
@@ -112,6 +117,13 @@ _ID = "src_aaaa1111aaaa1111"
     f"Bonus was [99,999][].\n\n[99,999]: #source/{_ID}",      # collapsed
     f"Bonus was [99,999].\n\n[99,999]: #source/{_ID}",        # shortcut
     f"Bonus was [a [99,999](#source/{_ID})](#source/{_ID}).",  # a link inside a link
+    # Second review: a line break in the words, before the address or the
+    # title, a definition in a blockquote, one past a code block.
+    f"See [the\ntotal 99,999](#source/{_ID}).",
+    f"Bonus was [99,999](\n#source/{_ID}).",
+    f"Bonus was [99,999](#source/{_ID}\n\"a title\").",
+    f"> Bonus [99,999][q].\n>\n> [q]: #source/{_ID}",
+    f"Bonus was [99,999][q].\n\n```\ncode\n```\n\n[q]: #source/{_ID}",
 ])
 def test_a_model_written_source_link_loses_its_link_whatever_way_it_is_written(forged):
     """Review A3 / B2: the page's Markdown resolves each of these to
@@ -406,6 +418,29 @@ def test_a_new_chats_first_turn_is_homed_by_the_turn_link_route(client, tmp_path
 
 
 @pytest.mark.parametrize("lane", LANES)
+def test_a_turn_linked_before_it_starts_writes_its_reads_under_the_chat(
+        client, tmp_path, monkeypatch, lane):
+    """Second review: the page saves a new chat before it sends the first
+    turn, so its link can land before the lane has made the turn's record.
+    The link waits for the turn (as the turn log's does): every row carries
+    the chat, and none is left to be swept after two days."""
+    pdf = make_pdf(tmp_path / "statement.pdf")
+    turn_id, tid = f"turn_early_{lane}", f"thr_early_{lane}"
+    r = client.post(f"/chat/turns/{turn_id}/thread", json={"thread_id": tid})
+    assert r.status_code == 200 and r.json()["linked"] == "later", r.text
+    _scripted_router(client.app.state.platform, monkeypatch,
+                     [[ToolCall(id="c1", name="read_document", arguments={"path": str(pdf)})]],
+                     FINAL)
+    body, _ = _post_turn(client, lane, {
+        "messages": [{"role": "user", "content": "what were the wages?"}],
+        "tools": ["read_document"], "approval_mode": "yolo", "turn_id": turn_id,
+    })
+    assert _rows_of_turn(client, turn_id) == {tid}
+    ids = [ids for _t, ids in _LINK.findall(_head(body["reply"])) if ids != NO_RECORD]
+    assert ids and client.get(f"/sources/{ids[0]}").status_code == 200
+
+
+@pytest.mark.parametrize("lane", LANES)
 def test_a_turn_linked_while_it_runs_writes_its_later_reads_under_the_chat(
         client, tmp_path, monkeypatch, lane):
     """Review B7: the page names the chat while the turn runs (between its
@@ -489,7 +524,7 @@ def test_the_page_compares_a_figure_the_way_the_daemon_does():
     from iron_jarvis.documents.sources import mark_key
 
     pairs = json.loads((Path(__file__).resolve().parents[1] / "dashboard" / "__tests__" / "fixtures"
-                        / "figure-keys-v1547.json").read_text(encoding="utf-8"))
+                        / "figure-keys-v1549.json").read_text(encoding="utf-8"))
     assert len(pairs) >= 20
     for text, key in pairs:
         first = next(iter(numbers(text)), ("", ""))[0]
@@ -584,3 +619,107 @@ def test_an_unknown_figure_link_is_a_plain_404_and_a_bad_one_400(client):
     assert client.get("/sources/src_0000000000000000").status_code == 404
     assert client.get("/sources/none").status_code == 400
     assert client.get("/sources/src_1,../etc").status_code in (400, 404)
+
+
+def _one_mark(client, path: Path, *, context: str = "Rent 1,250 in Q3") -> str:
+    from iron_jarvis.documents import source_store as store
+    from iron_jarvis.documents.sources import Mark, file_hash
+
+    rows = store.write_marks(
+        client.app.state.platform.engine,
+        [Mark({"line": 1}, "1,250", "1250", context)],
+        path=str(path), kind="text", thread_id="thr_routes", turn_id="turn_routes",
+        file_sha256=file_hash(path),
+    )
+    return rows[0]["id"]
+
+
+def test_a_figure_whose_file_changed_since_it_was_read_says_so(client, tmp_path):
+    """Second review: the panel's "The file has changed since it was read."
+    (and lighting nothing by position) rests on ``changed`` from here."""
+    ledger = tmp_path / "ledger.txt"
+    ledger.write_text("Rent 1,250 in Q3\n", encoding="utf-8")
+    mid = _one_mark(client, ledger)
+
+    def view() -> dict:
+        r = client.get(f"/sources/{mid}")
+        assert r.status_code == 200, r.text
+        (m,) = r.json()["marks"]
+        return m
+
+    first = view()
+    assert (first["present"], first["changed"], first["context"]) == (True, False, "Rent 1,250 in Q3")
+    ledger.write_text("Rent 1,900 in Q3\n", encoding="utf-8")
+    assert view()["changed"] is True
+    ledger.unlink()
+    gone = view()
+    assert (gone["present"], gone["changed"]) == (False, None)
+
+
+def test_a_figure_from_a_file_the_read_policy_now_refuses_shows_no_line(client):
+    """Second review: a mark whose file is now protected (Iron Jarvis's own
+    secrets folder) gives no line of it and does not say it is there."""
+    secrets = Path(client.app.state.platform.config.home) / "secrets"
+    secrets.mkdir(parents=True, exist_ok=True)
+    kept = secrets / "notes.txt"
+    kept.write_text("Rent 1,250 in Q3\n", encoding="utf-8")
+    mid = _one_mark(client, kept)
+    r = client.get(f"/sources/{mid}")
+    assert r.status_code == 200, r.text
+    (m,) = r.json()["marks"]
+    assert (m["context"], m["present"], m["changed"]) == ("", False, None)
+    assert m["name"] == "notes.txt" and "file_sha256" not in m
+
+
+def test_history_search_keeps_a_saved_replys_figure_words_never_its_links(tmp_path):
+    """Second review (note): history search hands saved chats to a model;
+    the index keeps a figure link's words, so no record's id reaches it."""
+    from iron_jarvis.core.db import init_db, make_engine
+    from iron_jarvis.search import SearchIndex
+
+    engine = make_engine(tmp_path / "history.db")
+    init_db(engine)
+    index = SearchIndex(engine)
+    index.sync_thread("thr_wages", "chat", "Wages", "", [
+        {"role": "user", "content": "what were the wages?", "at": "2026-11-20T08:00:00+00:00"},
+        {"role": "assistant", "content": LINKED, "at": "2026-11-20T08:00:01+00:00"},
+    ])
+    hits = index.search("wages year", limit=10)
+    assert hits, "the saved reply was not found"
+    text = " ".join(f"{h.snippet} {h.title}" for h in hits)
+    assert "source/" not in text and "src_" not in text
+    assert "48,210" in text or "48" in text
+
+
+async def test_a_chat_sent_to_another_computer_carries_words_not_links(tmp_path, monkeypatch):
+    """Second review: a round given the chat (a phone chat or the page's
+    chat handed to another computer) sends each saved reply's words, never
+    its figure links."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents.remote import RemoteAgentRegistry
+    from iron_jarvis.agents.threads import AgentThreads, clean_participants
+    from iron_jarvis.daemon.auth import TASK_DOOR_PATH
+
+    monkeypatch.delenv("IRONJARVIS_TOKEN", raising=False)
+    app = create_app(str(tmp_path / "laptop"))
+    platform = app.state.platform
+    RemoteAgentRegistry(platform.engine).upsert("desk", f"http://b-pc:8787{TASK_DOOR_PATH}", "http-task")
+    seen: list[dict] = []
+
+    async def fake_run(self, record, task, secret_get, **kw):
+        seen.append(kw)
+        return {"ok": True, "result": "noted"}
+
+    monkeypatch.setattr(RemoteAgentRegistry, "run", fake_run)
+    threads = AgentThreads(platform.engine)
+    room = threads.create("room", clean_participants([{"source": "remote", "name": "desk", "role": "participant"}]))
+    await threads.run_round(
+        room.id, "@desk go on", SimpleNamespace(platform=platform), directed=["desk"],
+        chat_history=[{"who": "user", "content": "what were the wages?"},
+                      {"who": "jarvis", "content": LINKED}],
+    )
+    assert seen, "the other computer was not asked"
+    sent = json.dumps(seen[-1].get("history"), default=str)
+    assert "48,210.00" in sent, sent
+    assert "source/" not in sent and "src_" not in sent, sent

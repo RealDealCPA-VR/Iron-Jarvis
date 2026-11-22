@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.549.0
+
+**Press a figure to see where it came from.** When a reply is about a file you gave Iron Jarvis or asked it to read (a PDF, a Word file, a text or CSV file, or a saved spreadsheet), the figures in the reply are now links.
+
 ## v1.548.1
 
 **Copy as a fix request leaves out Local only work.** A coding session you keep **Local only** is now never in the report that "Copy as a fix request" makes for a coding agent: not its errors, its commands, a reviewer's findings or even its name.
@@ -12,7 +16,7 @@
 
 ## v1.547.0
 
-**Press a figure to see where it came from.** When a reply is about a file you gave Iron Jarvis or asked it to read (a PDF, a Word file, a text or CSV file, or a saved spreadsheet), the figures in the reply are now links. **Ask what was done before, in any chat.** You can now ask Iron Jarvis about earlier work in plain words, in any chat and from an agent: "what did we do in this folder?", "what have we done on the price list?", "have I worked on this before?".
+**Ask what was done before, in any chat.** You can now ask Iron Jarvis about earlier work in plain words, in any chat and from an agent: "what did we do in this folder?", "what have we done on the price list?", "have I worked on this before?".
 
 ## v1.546.2
 
@@ -77,7 +81,3 @@
 ## v1.533.0
 
 **Every new address asks, and cards say why.** The second of nine releases from the fourth review.
-
-## v1.532.0
-
-**What other apps are told.** The first of nine releases from the fourth review.

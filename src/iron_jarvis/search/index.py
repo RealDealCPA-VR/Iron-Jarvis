@@ -959,6 +959,13 @@ class SearchIndex:
             if body is None:
                 body = entry.get("text")
             body = str(body or "").strip()
+            if "#source/" in body:
+                # v1.549.0 (idea 30-a): a saved reply's figure links are kept
+                # as their words, so history search never hands a model (or
+                # the page) a record's id.
+                from ..documents.sources import without_figure_links
+
+                body = without_figure_links(body).strip()
             if not body:
                 continue
             role = entry.get("role") or entry.get("who") or ""

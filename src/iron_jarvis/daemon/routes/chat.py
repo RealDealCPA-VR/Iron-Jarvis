@@ -355,7 +355,7 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         # v1.499.3: its older messages go with it — "delete" means all of it.
         if older_ok:
             drop_older(db, thread_id)
-        # v1.547.0 (30-a): and the record of where its figures were read
+        # v1.549.0 (30-a): and the record of where its figures were read
         # (not the kept ones), in this same transaction.
         if marks_ok:
             _marks.drop_thread(db, thread_id)
@@ -968,7 +968,7 @@ def _share_transcript(title: str, persona: str, updated_at, msgs: list) -> str:
         lines += ["", f"### {who}", ""]
         text = str(m.get("content") or "")
         if m.get("role") == "assistant" and "#source/" in text:
-            # v1.547.0 (idea 30-a): a shared chat carries a figure's words; its
+            # v1.549.0 (idea 30-a): a shared chat carries a figure's words; its
             # link to where it was read opens nothing outside the app.
             from ...documents.sources import without_figure_links
 
@@ -3748,7 +3748,7 @@ def register(app: FastAPI, d) -> None:
         from ...tools.tool_script import adopt_turn_worker
 
         await adopt_turn_worker(d.platform, turn_id, tid)
-        # v1.547.0 (30-a): where the turn's figures were read belongs to the
+        # v1.549.0 (30-a): where the turn's figures were read belongs to the
         # chat now named (rows already written, and any it writes from now).
         from ...documents import source_store as _marks
         from ...documents.sources import link_live_turn
@@ -4699,7 +4699,7 @@ async def chat_stream(
     # their order are unchanged. A Stop abandons the step it lands in and the
     # group cancels the rest. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
     _prep = prep if prep is not None else _chat_turn._PrepGroup()
-    # v1.547.0 (idea 30-a): what this turn READS, figure by figure (the
+    # v1.549.0 (idea 30-a): what this turn READS, figure by figure (the
     # attachments below and every reader through the tool context), so the
     # reply's figures link to their page, line or cell. MIRROR NOTE
     # (lock-step): chat_turn.run_chat_turn makes the same at the same seam.
@@ -4722,7 +4722,7 @@ async def chat_stream(
         project_root=(
             (resolved_proj.root or "") if resolved_proj is not None else ""
         ),
-        sources=_fig_turn,  # v1.547.0 (lock-step)
+        sources=_fig_turn,  # v1.549.0 (lock-step)
     ))
     # v1.400.9: the dashboard page AND the element the user pointed at — the
     # ONE question chat_turn's lane asks too (MIRROR NOTE, lock-step).
@@ -5429,7 +5429,7 @@ async def chat_stream(
             project_id=(pid if resolved_proj is not None else None),
             # v1.481.0: the task's write rules (lock-step: chat_turn).
             task_scope=(_deliv.scope if _deliv is not None else None),
-            # v1.547.0 (30-a) — lock-step: the readers record their figures here.
+            # v1.549.0 (30-a) — lock-step: the readers record their figures here.
             source_turn=_fig_turn,
         )
         # v1.470.0: start the isolated script worker now when `tool_script`
@@ -8875,7 +8875,7 @@ async def chat_stream(
         if workflow_draft is not None and resolved_proj is not None and pid:
             workflow_draft["project_id"] = pid
         reply = reply_text or ""
-        # v1.547.0 (idea 30-a): the model's OWN words with their figures
+        # v1.549.0 (idea 30-a): the model's OWN words with their figures
         # linked to where this turn read them; swapped in under the notes
         # just before the done frame. MIRROR NOTE (lock-step): chat_turn.
         from ...documents.sources import link_turn_reply, with_linked_head
@@ -9002,7 +9002,7 @@ async def chat_stream(
         # turn that the settled reply does not already show is appended as
         # the markdown image syntax — before the done frame, whose `reply`
         # is what the page saves. MIRROR NOTE (lock-step): chat_turn.py.
-        # v1.547.0 (idea 30-a): first the model's words, linked (lock-step).
+        # v1.549.0 (idea 30-a): first the model's words, linked (lock-step).
         reply = with_linked_head(reply, _fig_head, _fig_linked)
         reply = append_inline_media(reply, media_made)
         # UNREAD STEER NOTES (v1.287.0). A note posted while the model wrote

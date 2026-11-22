@@ -189,7 +189,7 @@ def extract_text(
 ) -> str:
     """Return the text content of ``path``, dispatched by file suffix.
 
-    ``layout`` (v1.547.0, idea 30-a; optional): a dict the PDF, Word and
+    ``layout`` (v1.549.0, idea 30-a; optional): a dict the PDF, Word and
     sheet readers fill with WHERE each page, paragraph, table row or sheet
     row starts in the returned text (``documents/sources.source_map_for``
     turns it into a read's map of figures). The text itself is exactly the
@@ -486,7 +486,7 @@ def _read_pdf(p: Path, *, page_range: str | None = None, layout: "dict | None" =
     texts = [(pages[i].extract_text() or "") for i in idxs]
     text = "\n".join(texts)
     if layout is not None:
-        # v1.547.0 (30-a): where each page starts, by its own number.
+        # v1.549.0 (30-a): where each page starts, by its own number.
         layout["kind"] = "pdf"
         if text.strip():
             layout["pages"] = [[i + 1, at] for i, at in zip(idxs, _layout_starts(texts))]
@@ -549,7 +549,7 @@ def _read_docx(p: Path, *, layout: "dict | None" = None) -> str:
 
     doc = docx.Document(str(p))
     parts: list[str] = []
-    # v1.547.0 (30-a): which part is which body paragraph / table row.
+    # v1.549.0 (30-a): which part is which body paragraph / table row.
     places: list[tuple[int, tuple]] = []
 
     # Section headers first — letterheads, document titles and running banners
@@ -632,7 +632,7 @@ def _read_xlsx(p: Path, *, sheet: str | int | None = None, layout: "dict | None"
     _guard_office_encrypted(p)
     from openpyxl import load_workbook
 
-    # v1.547.0 (30-a): which part is which sheet row. Rows are read from row 1
+    # v1.549.0 (30-a): which part is which sheet row. Rows are read from row 1
     # and column A (openpyxl pads what the file leaves out), so part k after
     # a sheet's "## title" is row k; a cell holding a line break stays inside
     # its own row's part.
@@ -763,7 +763,7 @@ def _read_csv(p: Path, *, layout: "dict | None" = None) -> str:
     text = _decode_bytes(p.read_bytes())
     rows: list[str] = ["\t".join(row) for row in csv.reader(io.StringIO(text))]
     if layout is not None:
-        # v1.547.0 (30-a): where each RECORD starts, by its row number. A
+        # v1.549.0 (30-a): where each RECORD starts, by its row number. A
         # quoted cell may hold a line break, so a record is not a line; the
         # row is what the preview shows.
         layout["kind"] = "csv"

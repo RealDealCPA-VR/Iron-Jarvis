@@ -515,7 +515,7 @@ def register(app: FastAPI, d) -> None:
         rows (engine-read, capped), PDFs as an embed pointer (the client
         iframes /documents/file), everything else as extracted text.
 
-        ``start`` (v1.547.0, idea 30-a): a sheet's rows from this row on, so
+        ``start`` (v1.549.0, idea 30-a): a sheet's rows from this row on, so
         a figure's cell past the first 80 rows can be shown lit (the answer
         says ``first_row``)."""
         p = _preview_path(path)
@@ -667,7 +667,7 @@ def register(app: FastAPI, d) -> None:
     @app.get("/documents/page-image")
     def document_page_image(path: str = "", page: int = 0, find: str = "", fig: str = "",
                             mark: str = ""):
-        """v1.547.0 (idea 30-a): page ``page`` of a PDF as a picture, with the
+        """v1.549.0 (idea 30-a): page ``page`` of a PDF as a picture, with the
         line ``find`` (a figure's recorded line) boxed and ``fig`` lit. When
         the line is not on the page, the page comes back with the line
         printed above it and words saying so (``X-Line-Found: 0``). The read
@@ -715,7 +715,7 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/sources/{ids}")
     def figure_sources(ids: str) -> dict[str, Any]:
-        """v1.547.0 (idea 30-a): where the figures a reply links were read —
+        """v1.549.0 (idea 30-a): where the figures a reply links were read —
         ``ids`` is a link's ``<id>[,<id>…]``. Each mark says its file, its
         place, the figure as the file writes it and the line it sat on
         (secret-masked), and whether the file is still there and unchanged

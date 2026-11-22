@@ -60,7 +60,7 @@ def _truncate(text: str) -> tuple[str, bool]:
 
 
 def _source_map(path: Path, raw: str, text: str, layout: dict, note: str, lead: str) -> dict:
-    """``{"source_map": …}`` for a read's data (v1.547.0, idea 30-a): where
+    """``{"source_map": …}`` for a read's data (v1.549.0, idea 30-a): where
     the file's own text sits in the answer (after ``lead``, at most
     ``_MAX_OUTPUT`` characters of it) and where its pages, paragraphs or rows
     start. ``{}`` when the place of a figure cannot be told. Never raises: a

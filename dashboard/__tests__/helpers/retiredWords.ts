@@ -73,7 +73,7 @@ export const RETIRED: readonly Retired[] = [
   // v1.420.0 (fix plan C5.2): Build's loading line said "Attaching to
   // sessions…" — the engine room's word for re-opening the terminals.
   { word: "attaching to sessions", re: /\battaching to sessions\b/i, use: "Opening your terminals…" },
-  // v1.547.0 (idea 30-a): where a figure came from is "How this was worked out".
+  // v1.549.0 (idea 30-a): where a figure came from is "How this was worked out".
   { word: "provenance", re: /\bprovenance\b/i, use: "How this was worked out" },
 ];
 

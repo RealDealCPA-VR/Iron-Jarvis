@@ -1,5 +1,5 @@
 """A picture of one PDF page with the line a figure was read from boxed
-(v1.547.0, idea 30-a).
+(v1.549.0, idea 30-a).
 
 ``GET /documents/page-image`` draws it for the preview beside the chat:
 

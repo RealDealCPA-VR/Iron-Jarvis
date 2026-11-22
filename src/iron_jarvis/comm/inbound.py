@@ -1411,7 +1411,7 @@ class InboundPoller:
             # PENDING PROMPTS: a free-form message never resolves an open gate
             # (see comm/prompts.py) — instead the OUTBOUND copy carries a
             # gentle reminder. The thread keeps the clean reply only.
-            # v1.547.0 (idea 30-a): the saved chat keeps a figure's link to
+            # v1.549.0 (idea 30-a): the saved chat keeps a figure's link to
             # where it was read; the phone gets the words only.
             from ..documents.sources import without_figure_links
 

@@ -721,7 +721,7 @@ def risk_value(tool: "Tool | None") -> str | None:
 #: that produced it could OCR, and an OCR-capable tool never accepts an entry
 #: produced without that capability. See ``_ocr_capable``.
 def _source_map_of(result: "ToolResult | None") -> "dict[str, Any] | None":
-    """A successful reader's own map of its answer (v1.547.0, idea 30-a:
+    """A successful reader's own map of its answer (v1.549.0, idea 30-a:
     ``documents/sources``), or None."""
     if result is None or not result.ok or not isinstance(result.data, dict):
         return None
@@ -1331,7 +1331,7 @@ class ToolRegistry:
                         ctx, name, args, decision.mode, ok=True,
                         output=cached.output, reversibility=rev_value,
                         grant_id=grant_id,
-                        # v1.547.0 (30-a): a remembered read is a read in
+                        # v1.549.0 (30-a): a remembered read is a read in
                         # THIS turn too: its figures are recorded for it.
                         source_map=_source_map_of(cached),
                     )
@@ -1617,7 +1617,7 @@ class ToolRegistry:
                 risk=risk,
                 grant_id=grant_id,
                 inv_id=inv_id,
-                # v1.547.0 (idea 30-a): a reader's map of its own answer.
+                # v1.549.0 (idea 30-a): a reader's map of its own answer.
                 source_map=_source_map_of(result),
             )
         )
@@ -2264,7 +2264,7 @@ class ToolRegistry:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
         captured) and return the invocation id so the caller can tag its event.
 
-        v1.547.0 (idea 30-a): ``source_map`` — a reader's own map of its
+        v1.549.0 (idea 30-a): ``source_map`` — a reader's own map of its
         answer (``ToolResult.data["source_map"]``). After the row is written,
         on this same worker thread, the figures of the answer are recorded
         for the chat turn (``documents/sources.record_marks``), never from a

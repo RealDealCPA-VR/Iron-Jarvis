@@ -1,5 +1,5 @@
 /**
- * Idea 30-a on the CHAT PAGE itself (v1.547.0, review A7): a saved reply's
+ * Idea 30-a on the CHAT PAGE itself (v1.549.0, review A7): a saved reply's
  * figure opens its file beside the chat at its place.
  *
  * The chain under test, end to end through the real page, the real Markdown

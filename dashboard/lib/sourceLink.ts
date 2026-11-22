@@ -1,5 +1,5 @@
 /**
- * A FIGURE THAT LINKS TO WHERE IT WAS READ (v1.547.0, idea 30-a).
+ * A FIGURE THAT LINKS TO WHERE IT WAS READ (v1.549.0, idea 30-a).
  *
  * After a chat turn that read a file, Iron Jarvis links each figure of the
  * reply to its own record of the read: "#source/<id>[,<id>…]" (several ids =
@@ -115,7 +115,7 @@ export function placeWords(at: SourceAt): string {
 // --- How a figure is compared (twin of core/numbers.number_key) -------------
 // "1,234.50" and "1234.5" are the same number; a scale is part of it ("25k"
 // is not "25"). Pinned equal to the daemon by a shared list of examples
-// (__tests__/fixtures/figure-keys-v1547.json).
+// (__tests__/fixtures/figure-keys-v1549.json).
 const NUMBER_RX =
   /(?:(?<![\w.,])\.(\d+)|(\d+(?:[.,]\d+)*))(?:(k|mm|m|bn|b)\b|[\s-]?(mil|mill|grand|thousands?|millions?|billions?|trillions?|hundreds?|lakhs?|crores?)\b)?/i;
 const THOUSANDS_RX = /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;

@@ -187,7 +187,7 @@ def lines_of(messages: Any) -> list[dict[str, Any]]:
         if not content.strip() and not docs:
             continue
         if role == "assistant" and "#source/" in content:
-            # v1.547.0 (30-a): a figure's link to where it was read is read
+            # v1.549.0 (30-a): a figure's link to where it was read is read
             # as its words; the digits of the record's id are no number on
             # record (the recap check would accept an invented one).
             from ..documents.sources import without_figure_links
@@ -311,7 +311,7 @@ def build_prompt(shown: str, files: list[str]) -> str:
 _LABEL_RX = re.compile(r"^(done|decided|open)\s*:\s*(.+)$", re.IGNORECASE)
 _LEAD_RX = re.compile(r"^[\s>*\-•\d.)]{0,6}")
 #: How a number is read and compared lives in ``core/numbers`` since
-#: v1.547.0 (idea 30-a): the figure links in a reply read numbers the same
+#: v1.549.0 (idea 30-a): the figure links in a reply read numbers the same
 #: way ("1,234.50" is "1234.5"; "25k" is not "25"). The names below are the
 #: ones this module always used.
 _NUMBER_RX = _numbers_mod.NUMBER_RX
@@ -452,7 +452,7 @@ def check(answer: str, *, shown: str, known_paths: set[str] | None = None) -> Ch
         return out
     known = set(known_paths or set())
     if "#source/" in (shown or ""):
-        # v1.547.0 (30-a): a figure link's words, never its record's id.
+        # v1.549.0 (30-a): a figure link's words, never its record's id.
         from ..documents.sources import without_figure_links
 
         shown = without_figure_links(shown)

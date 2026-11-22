@@ -29,7 +29,7 @@ function textOf(node: ReactNode): string {
 
 /**
  * A figure in a reply, drawn as a press that shows where it was read
- * (v1.547.0, idea 30-a, lib/sourceLink.ts). It looks like a link because it
+ * (v1.549.0, idea 30-a, lib/sourceLink.ts). It looks like a link because it
  * reads as one; it is a button because it opens no page.
  *
  * - A figure with a record: GET /sources/<ids>, then the file opens beside

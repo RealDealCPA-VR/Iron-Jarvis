@@ -1,4 +1,4 @@
-"""The record of where each figure was read (v1.547.0, idea 30-a).
+"""The record of where each figure was read (v1.549.0, idea 30-a).
 
 One ``sourcemark`` row per figure Iron Jarvis read from a file in a chat
 turn: the file, the place in it (page and line, paragraph, table cell, sheet

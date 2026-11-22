@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Press a figure to see where it came from (v1.547.0)
+## Press a figure to see where it came from (v1.549.0)
 
 When a reply is about a file you gave Iron Jarvis or asked it to read (a
 PDF, a Word file, a text or CSV file, or a saved spreadsheet), the figures

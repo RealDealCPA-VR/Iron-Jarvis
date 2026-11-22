@@ -70,11 +70,11 @@ export interface PreviewData {
   total_rows?: number;
   total_cols?: number;
   total_chars?: number;
-  /** v1.547.0: a sheet's first row shown (asked for with `start`). */
+  /** v1.549.0: a sheet's first row shown (asked for with `start`). */
   first_row?: number;
 }
 
-// --- A figure's place (v1.547.0, idea 30-a) ----------------------------------
+// --- A figure's place (v1.549.0, idea 30-a) ----------------------------------
 // A figure pressed in a reply opens its file here AT its place (`at`): a PDF
 // page as a picture with the line boxed (GET /documents/page-image), a sheet
 // with the cell lit, a text file with the line lit, a Word page with the
@@ -354,7 +354,7 @@ export function DocPreview({
 }: {
   path: string;
   onClose: () => void;
-  /** v1.547.0 (idea 30-a): open at the place a figure was read from. */
+  /** v1.549.0 (idea 30-a): open at the place a figure was read from. */
   at?: SourceAt;
   /** Other files this preview may be compared with (C-07). Optional on
    *  purpose: the panel also asks the daemon for the rest of THIS file's
@@ -391,7 +391,7 @@ export function DocPreview({
   const [compareWith, setCompareWith] = useState<string | null>(null);
   const [siblings, setSiblings] = useState<string[]>([]);
   const [pickCompare, setPickCompare] = useState(false);
-  // v1.547.0 (idea 30-a): the whole PDF instead of the one page, and the lit
+  // v1.549.0 (idea 30-a): the whole PDF instead of the one page, and the lit
   // cell or line, scrolled into view once it is on screen.
   const [showWhole, setShowWhole] = useState(false);
   const litRef = useRef<HTMLElement | null>(null);
@@ -636,7 +636,7 @@ export function DocPreview({
   // generation bump here is belt-and-braces with load()'s: a comparison
   // started under the OLD path must never land under the new one — that
   // would show file A's removal receipt under "a redacted copy of B".
-  // v1.547.0: a figure's place opens on its sheet, at its row (read once per
+  // v1.549.0: a figure's place opens on its sheet, at its row (read once per
   // mount; the page remounts the panel for another place).
   const firstAt = useRef(at);
   useEffect(() => {
@@ -677,7 +677,7 @@ export function DocPreview({
   }`;
   // The Word-faithful page: server HTML wrapped in our page chrome, rendered
   // in a FULLY sandboxed frame (no scripts/forms/navigation can run).
-  // v1.547.0: a figure's place lights the figure wherever the page writes it.
+  // v1.549.0: a figure's place lights the figure wherever the page writes it.
   const docSrcDoc = useMemo(
     () =>
       data?.kind === "html"
@@ -687,7 +687,7 @@ export function DocPreview({
         : "",
     [data, at?.shown],
   );
-  // v1.547.0: the cell or line a figure's place lights. A file that changed
+  // v1.549.0: the cell or line a figure's place lights. A file that changed
   // since it was read lights nothing by position: what sits there now may
   // be another figure (the place header says the file changed).
   const byPosition = !!at && !at.changed;
@@ -794,7 +794,7 @@ export function DocPreview({
           </button>
         </div>
       </div>
-      {/* A FIGURE'S PLACE (v1.547.0, idea 30-a): where in this file the
+      {/* A FIGURE'S PLACE (v1.549.0, idea 30-a): where in this file the
           pressed figure was read, and the line it sat on with it lit. */}
       {at && (
         <div
@@ -1133,7 +1133,7 @@ export function DocPreview({
             )}
           </div>
         ) : data.kind === "pdf" && pageImageUrl && !showWhole ? (
-          // v1.547.0: the page the figure was read from, its line boxed.
+          // v1.549.0: the page the figure was read from, its line boxed.
           <div className="flex h-full min-h-0 flex-col">
             <div className="min-h-0 flex-1 overflow-auto bg-[#50545a] p-2">
               {imgError ? (
@@ -1162,7 +1162,7 @@ export function DocPreview({
           </div>
         ) : data.kind === "pdf" ? (
           <iframe
-            // v1.547.0: the whole file, at the figure's page when there is one.
+            // v1.549.0: the whole file, at the figure's page when there is one.
             src={at?.page ? `${fileUrl}#page=${at.page}` : fileUrl}
             title={`Preview of ${name}`}
             className="h-full w-full border-0"
@@ -1185,7 +1185,7 @@ export function DocPreview({
             )}
           </div>
         ) : data.kind === "markdown" && !litLine ? (
-          // (v1.547.0: a figure's line in a Markdown file is shown in the
+          // (v1.549.0: a figure's line in a Markdown file is shown in the
           // plain lines below, lit; the rendered page has no lines.)
           <div className="h-full overflow-auto bg-[#50545a] px-3">
             <div className={MD_PAGE_CLASS}>
@@ -1223,7 +1223,7 @@ export function DocPreview({
             )}
             <div className="min-h-0 flex-1 overflow-auto p-1.5">
               {(data.first_row ?? 1) > 1 && (
-                // v1.547.0: a window further down the sheet, around a figure's cell.
+                // v1.549.0: a window further down the sheet, around a figure's cell.
                 <p className="px-1.5 pb-1 text-[11px] text-zinc-500">
                   Rows {data.first_row}–{(data.first_row ?? 1) + (data.rows ?? []).length - 1}
                 </p>
@@ -1234,7 +1234,7 @@ export function DocPreview({
                     <tr key={ri}>
                       {row.map((cell, ci) => {
                         const rowNo = ri + (data.first_row ?? 1);
-                        // v1.547.0: the cell a pressed figure was read from.
+                        // v1.549.0: the cell a pressed figure was read from.
                         const lit =
                           litRow === rowNo &&
                           litCol === ci + 1 &&
@@ -1261,7 +1261,7 @@ export function DocPreview({
                 </tbody>
               </table>
               {litRow !== null && litCol !== null && !cellShown && (
-                // v1.547.0: the figure's cell is past the rows or columns shown.
+                // v1.549.0: the figure's cell is past the rows or columns shown.
                 <p data-testid="doc-preview-place-past" className="px-1.5 pt-2 text-[11px] text-zinc-500">
                   {at?.cell ? `Cell ${at.cell}` : `Row ${litRow}, column ${litCol}`} is past the part shown here.
                 </p>
@@ -1281,7 +1281,7 @@ export function DocPreview({
         ) : (
           <div className="p-3">
             {litLine ? (
-              // v1.547.0: the line a pressed figure was read from, lit.
+              // v1.549.0: the line a pressed figure was read from, lit.
               <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-zinc-300">
                 {(data.content ?? "").split("\n").map((ln, i) =>
                   i + 1 === litLine ? (

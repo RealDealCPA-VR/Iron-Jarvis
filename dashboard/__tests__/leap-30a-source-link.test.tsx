@@ -1,6 +1,6 @@
 /**
  * Idea 30-a: a figure in a reply links to the page, line or cell it was read
- * from (v1.547.0).
+ * from (v1.549.0).
  *
  * - "#source/<id>" draws as a press: GET /sources/<id>, then the file opens
  *   beside the chat at its place (the chat page answers OPEN_PLACE_EVENT);
@@ -102,7 +102,7 @@ describe("reading a figure link", () => {
 
   it("compares a figure the way the daemon does (the shared examples)", () => {
     const pairs = JSON.parse(
-      readFileSync(join(process.cwd(), "__tests__", "fixtures", "figure-keys-v1547.json"), "utf-8"),
+      readFileSync(join(process.cwd(), "__tests__", "fixtures", "figure-keys-v1549.json"), "utf-8"),
     ) as [string, string][];
     expect(pairs.length).toBeGreaterThanOrEqual(20);
     for (const [text, key] of pairs) expect([text, figureKey(text)]).toEqual([text, key]);

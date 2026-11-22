@@ -927,7 +927,7 @@ def register(app: FastAPI, d) -> None:
 
         reply = str(result.get("reply") or "").strip() or "(no reply)"
         _append_reply(reply)
-        # v1.547.0 (idea 30-a): the chat keeps a figure's link to where it
+        # v1.549.0 (idea 30-a): the chat keeps a figure's link to where it
         # was read; the phone gets the words only (as comm/inbound does).
         from ...documents.sources import without_figure_links
 

@@ -599,7 +599,7 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
     # v1.509.0: another agent's line (a paired computer's answer) reaches the
     # model fenced as outside data, never as Iron Jarvis's own turn.
     items = fence_agent_lines(items)
-    # v1.547.0 (idea 30-a): a saved reply's figure links go back to the model
+    # v1.549.0 (idea 30-a): a saved reply's figure links go back to the model
     # as words, so it never sees a record's id to copy (and the numbers a
     # check reads are the reply's, never the digits of an id).
     from ..documents.sources import history_without_figure_links
@@ -10982,7 +10982,7 @@ def _attachable_file(p: "Path") -> bool:
 
 async def _record_attachment_marks(d, sources: Any, text: str, smap: dict, *,
                                    spans: "list | None" = None) -> None:
-    """v1.547.0 (30-a): an attachment's figures, recorded for the turn — off
+    """v1.549.0 (30-a): an attachment's figures, recorded for the turn — off
     the loop; a failure is logged and the turn goes on."""
     from ..documents.sources import record_attachment
 
@@ -11008,7 +11008,7 @@ async def _prepare_attachments(
 ) -> "tuple[list[dict[str, str]], str]":
     """This turn's attachments → ``(images, attach_block)``.
 
-    ``sources`` (v1.547.0, idea 30-a): the turn's ``SourceTurn``. The figures
+    ``sources`` (v1.549.0, idea 30-a): the turn's ``SourceTurn``. The figures
     of the text each attachment hands the model (all of it, or only the
     excerpts retrieved for a big one) are recorded there, so the reply can
     link them to their page, line or cell. Both lanes pass it.
@@ -11298,7 +11298,7 @@ async def _prepare_attachments(
                 text = _scan.text
                 if _scan.blocked:
                     publish_blocked(getattr(d.platform, "event_bus", None), "chat", _scan)
-            # v1.547.0 (30-a): where this file's figures sit (None when the
+            # v1.549.0 (30-a): where this file's figures sit (None when the
             # place cannot be told, e.g. text the safety scan changed).
             _smap = None
             if sources is not None and text:
@@ -13339,7 +13339,7 @@ async def run_chat_turn(
     # steps at the same seam.
     # (The unknown "/" skill was refused at the top of the turn — v1.433.0.)
     _prep = _PREP_GROUP.get() or _PrepGroup()
-    # v1.547.0 (idea 30-a): what this turn READS, figure by figure, so the
+    # v1.549.0 (idea 30-a): what this turn READS, figure by figure, so the
     # reply's figures link to their page, line or cell. Fed by the
     # attachments below and by every reader through the tool context.
     # MIRROR NOTE (lock-step): routes/chat.py makes the same at the same seam.
@@ -13363,7 +13363,7 @@ async def run_chat_turn(
         # project-grounded chat promised excel_edit on a file in <home>/uploads
         # that excel_edit refuses. MIRROR NOTE (lock-step): routes/chat.py.
         project_root=(resolved_proj.root or "") if resolved_proj is not None else "",
-        sources=_fig_turn,  # v1.547.0 (lock-step)
+        sources=_fig_turn,  # v1.549.0 (lock-step)
     ))
     # v1.400.9: the page blocks are the dashboard page AND the element the
     # user pointed at; ONE question decides whether there is anything to read.
@@ -13837,7 +13837,7 @@ async def run_chat_turn(
             # the body must not scope generations to a project that isn't real.
             # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
             project_id=(pid if resolved_proj is not None else None),
-            # v1.547.0 (30-a) — lock-step: the readers record their figures here.
+            # v1.549.0 (30-a) — lock-step: the readers record their figures here.
             source_turn=_fig_turn,
         )
         # v1.470.0 — lock-step with the stream lane: start the isolated script
@@ -15462,7 +15462,7 @@ async def run_chat_turn(
     if workflow_draft is not None and resolved_proj is not None and pid:
         workflow_draft["project_id"] = pid
     reply = model_text
-    # v1.547.0 (idea 30-a): the model's OWN words with their figures linked
+    # v1.549.0 (idea 30-a): the model's OWN words with their figures linked
     # to where this turn read them (`#source/<id>`; `#source/none` for one
     # found in nothing it was given). Worked out here, swapped in under the
     # notes below just before the reply is returned, so every check below
@@ -15613,7 +15613,7 @@ async def run_chat_turn(
     # model wrote (its path already feeds `documents` through created_paths).
     # On the SETTLED reply, after every note above. MIRROR NOTE (lock-step):
     # routes/chat.py appends the same helper before its done frame.
-    # v1.547.0 (idea 30-a): first, the model's own words swapped for their
+    # v1.549.0 (idea 30-a): first, the model's own words swapped for their
     # linked form (worked out where the reply settled). MIRROR NOTE
     # (lock-step): routes/chat.py swaps them in at the same seam.
     reply = with_linked_head(reply, _fig_head, _fig_linked)

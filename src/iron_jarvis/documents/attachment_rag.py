@@ -137,7 +137,7 @@ def honest_scan_note(base: str, *, image: bool = False, text: str = "") -> str:
 class Chunk:
     ref: str
     text: str
-    #: Where the chunk starts in the text it was cut from (v1.547.0, 30-a).
+    #: Where the chunk starts in the text it was cut from (v1.549.0, 30-a).
     start: int = 0
 
 
@@ -156,7 +156,7 @@ class Extraction:
     #: subtracts these from a per-turn budget so four scans cannot silently
     #: become forty vision calls.
     ocr_pages: int = 0
-    #: v1.547.0 (30-a): where the reader's pages / paragraphs / rows start in
+    #: v1.549.0 (30-a): where the reader's pages / paragraphs / rows start in
     #: ``raw`` (``readers.extract_text``'s ``layout``), and ``raw`` itself.
     layout: "dict | None" = None
     raw: str = ""
@@ -184,7 +184,7 @@ def pdf_text_with_pages(path: "str | Path") -> str:
 def extract_for_rag(path: "str | Path", *, layout: "dict | None" = None) -> str:
     """Full text of *path* for retrieval: PDFs page-marked, everything else via
     the standard reader (which handles docx/xlsx/pptx/csv/txt/encodings).
-    ``layout`` (v1.547.0, optional): see ``readers.extract_text``; a PDF's
+    ``layout`` (v1.549.0, optional): see ``readers.extract_text``; a PDF's
     ``[page N]`` marks are its layout."""
     p = Path(path)
     if p.suffix.lower() == ".pdf":
@@ -440,7 +440,7 @@ def rag_block(name: str, text: str, query: str, embedder, *,
     a ``[BLOCKED: …]`` placeholder in the index, never a retrievable excerpt.
     No cap here: ``MAX_CHUNKS`` already bounds what is indexed.
 
-    ``shown_out`` (v1.547.0, idea 30-a; optional): a list that receives the
+    ``shown_out`` (v1.549.0, idea 30-a; optional): a list that receives the
     text that was indexed and the ``(start, end)`` stretches of it the block
     shows, so the figures in those excerpts (and only those) are recorded."""
     from ..core.promptguard import guard

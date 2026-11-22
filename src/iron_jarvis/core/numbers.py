@@ -1,4 +1,4 @@
-"""Numbers as Iron Jarvis compares them (v1.547.0, idea 30-a).
+"""Numbers as Iron Jarvis compares them (v1.549.0, idea 30-a).
 
 Lifted out of ``workmap/recap.py`` (the recap check, v1.492.0) so the recap
 check and the figure links in a reply (``documents/sources``) read a number

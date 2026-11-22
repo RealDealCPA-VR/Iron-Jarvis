@@ -1,4 +1,4 @@
-"""Figures in a reply link to the place they were read (v1.547.0, idea 30-a).
+"""Figures in a reply link to the place they were read (v1.549.0, idea 30-a).
 
 THE RULE: a link comes only from Iron Jarvis's own record of what it read,
 written by code at the moment of the read, never from what a model wrote.
@@ -397,6 +397,12 @@ def file_hash(path: "str | Path") -> str:
 #: page links to its chat while it runs writes its later rows under that chat.
 _LIVE: "weakref.WeakValueDictionary[str, SourceTurn]" = weakref.WeakValueDictionary()
 _LIVE_LOCK = threading.Lock()
+#: Chats the page named for a turn that has not started yet (a new chat is
+#: saved before its first turn is sent, so the link can land first): turn id
+#: -> chat id, taken by the turn's record when it is made. Bounded, oldest
+#: dropped first (the turn log keeps its own waiting links the same way).
+_WAITING: "dict[str, str]" = {}
+MAX_WAITING_LINKS = 200
 
 
 @dataclass
@@ -421,6 +427,10 @@ class SourceTurn:
         if self.turn_id:
             with _LIVE_LOCK:
                 _LIVE[self.turn_id] = self
+                # A chat the page named before this turn started.
+                waiting = _WAITING.pop(self.turn_id, "")
+                if waiting and not self.thread_id:
+                    self.thread_id = waiting
 
     def took(self, rows: "list[dict]") -> None:
         with self._lock:
@@ -439,13 +449,24 @@ class SourceTurn:
 
 
 def link_live_turn(turn_id: str, thread_id: str) -> bool:
-    """The page named a running turn's chat: its rows from now on are that
-    chat's (the rows already written are homed by ``source_store.home_turn``,
-    and again when the reply settles)."""
-    with _LIVE_LOCK:
-        turn = _LIVE.get(str(turn_id or ""))
-    if turn is None or not thread_id:
+    """The page named a turn's chat: its rows from now on are that chat's
+    (the rows already written are homed by ``source_store.home_turn``, and
+    again when the reply settles). A turn whose record is not made yet (the
+    link landed before the turn started) takes the chat when it is made.
+    True when a running turn took it now."""
+    turn_id, thread_id = str(turn_id or ""), str(thread_id or "")
+    if not turn_id or not thread_id:
         return False
+    with _LIVE_LOCK:
+        turn = _LIVE.get(turn_id)
+        if turn is None:
+            # Under the same lock as the record's own registering, so a turn
+            # made at this moment either is found above or finds this.
+            _WAITING.pop(turn_id, None)
+            while len(_WAITING) >= MAX_WAITING_LINKS:
+                _WAITING.pop(next(iter(_WAITING)))
+            _WAITING[turn_id] = thread_id
+            return False
     with turn._lock:
         if not turn.thread_id:
             turn.thread_id = str(thread_id)
@@ -496,25 +517,36 @@ def record_attachment(engine: Any, turn: "SourceTurn | None", text: str, smap: "
 _FENCE_RX = re.compile(r"^\s*(`{3,}|~{3,})")
 #: A list item's marker ("- ", "* ", "+ ", "1. ", "2) ").
 _LIST_ITEM_RX = re.compile(r"^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)")
-#: Link words: brackets may nest one level, and a backslash escapes.
-_LINK_TEXT = r"(?:[^\[\]\n\\]|\\.|\[(?:[^\[\]\n\\]|\\.)*\])*"
+#: One line break inside a paragraph (never a blank line, which ends it):
+#: link words, a label and the space around a link's address may hold one.
+_NL = r"\n(?![ \t]*\n)"
+#: One character of link words or a label: a backslash escapes, and a line
+#: break is allowed. The three forms start differently, so nothing backtracks.
+_LINK_CHAR = r"(?:[^\[\]\n\\]|\\[^\n]|\\?" + _NL + r")"
+#: Link words: brackets may nest one level.
+_LINK_TEXT = r"(?:" + _LINK_CHAR + r"|\[" + _LINK_CHAR + r"*\])*"
 #: A link's address: the ``<…>`` form, or a run with balanced parentheses.
 _LINK_DEST = r"<[^<>\n]*>|(?:[^\s()\\]|\\.|\((?:[^\s()\\]|\\.)*\))+"
 _LINK_TITLE = r"""(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\))"""
+#: Spaces with at most one line break (around an address and its title).
+_GAP = r"[ \t]*(?:\n[ \t]*)?"
 #: An inline link or picture: ``[words](address "title")``.
 _INLINE_LINK_RX = re.compile(
-    r"!?\[(" + _LINK_TEXT + r")\]\([ \t]*(" + _LINK_DEST + r")?(?:[ \t]+" + _LINK_TITLE
-    + r")?[ \t]*\)"
+    r"!?\[(" + _LINK_TEXT + r")\]\(" + _GAP + r"(" + _LINK_DEST + r")?(?:(?:[ \t]+|[ \t]*\n[ \t]*)"
+    + _LINK_TITLE + r")?" + _GAP + r"\)"
 )
-#: A link definition, ``[label]: address`` (the address may sit on the next line).
+#: A blockquote's marks at the start of a line (``> ``, ``> > ``).
+_QUOTE = r"(?:[ ]{0,3}>[ ]?)*"
+#: A link definition, ``[label]: address`` (the address may sit on the next
+#: line), in a blockquote too.
 _DEFINITION_RX = re.compile(
-    r"^[ ]{0,3}\[((?:[^\[\]\n\\]|\\.)+)\]:[ \t]*\n?[ \t]*(" + _LINK_DEST + r")"
-    r"(?:[ \t]+" + _LINK_TITLE + r")?[ \t]*(?:\n|$)",
+    r"^" + _QUOTE + r"[ ]{0,3}\[(" + _LINK_CHAR + r"+)\]:[ \t]*(?:\n" + _QUOTE + r")?[ \t]*("
+    + _LINK_DEST + r")(?:[ \t]+" + _LINK_TITLE + r")?[ \t]*(?:\n|$)",
     re.MULTILINE,
 )
 #: A reference to a definition: ``[words][label]``, ``[label][]``, ``[label]``.
 _REFERENCE_RX = re.compile(
-    r"\[(" + _LINK_TEXT + r")\](?:\[((?:[^\[\]\n\\]|\\.)*)\])?(?![(\[:])"
+    r"\[(" + _LINK_TEXT + r")\](?:\[(" + _LINK_CHAR + r"*)\])?(?![(\[:])"
 )
 _ESCAPE_RX = re.compile(r"\\([!-/:-@\[-`{-~])")
 #: What a figure inside is never linked in: inline code, a link or picture
@@ -552,33 +584,84 @@ def _label(text: str) -> str:
     return " ".join(str(text or "").split()).casefold()
 
 
-def strip_model_links(text: str) -> str:
-    """Every figure link in ``text`` turned back into its words: only Iron
-    Jarvis's own record makes one. By the address the page would RESOLVE,
-    whatever way it is written: ``[x](#source/…)``, ``[x](<#source/…>)``,
-    ``[x](\\#source/…)``, ``[x](&#35;source/…)``, link words with brackets
-    inside, and a reference (``[x][1]`` with ``[1]: #source/…``: the
-    definition goes and every use of it becomes its words)."""
-    text = str(text or "")
-    if "](" not in text and "]:" not in text:
-        return text
-    labels: set[str] = set()
+def _line_kinds(lines: "list[str]") -> "list[str]":
+    """Each line of a reply as ``code``, ``blank`` or ``prose``. Code: a
+    fenced block (its fences too), and an indented code block (four spaces
+    or a tab after a blank line, outside a list). A nested list item or a
+    list item's next line indented as deep is prose."""
+    kinds: list[str] = []
+    fence = ""
+    in_code = False
+    in_list = False
+    after_blank = True
+    for line in lines:
+        m = _FENCE_RX.match(line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = ""
+            kinds.append("code")
+            continue
+        if not line.strip():
+            after_blank = True
+            kinds.append("blank")
+            continue
+        deep = _indent(line) >= 4
+        if in_code:
+            if deep:
+                kinds.append("code")
+                continue
+            in_code = False
+        if deep and after_blank and not in_list:
+            in_code = True
+            after_blank = False
+            kinds.append("code")
+            continue
+        if m:
+            fence = m.group(1)
+            after_blank = False
+            kinds.append("code")
+            continue
+        if _LIST_ITEM_RX.match(line):
+            in_list = True
+        elif after_blank and _indent(line) == 0:
+            in_list = False  # a paragraph at the margin after a blank line ends a list
+        after_blank = False
+        kinds.append("prose")
+    return kinds
 
-    def drop_definition(m: "re.Match[str]") -> str:
+
+def _stretches(text: str) -> "list[tuple[bool, str]]":
+    """``text`` cut into ``(is_code, stretch)`` runs of whole lines (their
+    line breaks kept), so joining them gives ``text`` back."""
+    lines = text.split("\n")
+    kinds = _line_kinds(lines)
+    out: list[tuple[bool, list[str]]] = []
+    for line, kind in zip(lines, kinds):
+        code = kind == "code"
+        if out and out[-1][0] == code:
+            out[-1][1].append(line)
+        else:
+            out.append((code, [line]))
+    return [(code, "\n".join(chunk)) for code, chunk in out]
+
+
+def _drop_definitions(text: str, labels: "set[str]") -> str:
+    def drop(m: "re.Match[str]") -> str:
         if not _is_figure_address(m.group(2)):
             return m.group(0)
         labels.add(_label(m.group(1)))
         return ""
 
-    if "]:" in text:
-        text = _DEFINITION_RX.sub(drop_definition, text)
+    return _DEFINITION_RX.sub(drop, text) if "]:" in text else text
 
+
+def _unlink(text: str, labels: "set[str]") -> str:
     def unlink(m: "re.Match[str]") -> str:
         return m.group(1) if _is_figure_address(m.group(2) or "") else m.group(0)
 
     # A link inside another link's words is undone on the next pass.
     for _ in range(4):
-        out = _INLINE_LINK_RX.sub(unlink, text)
+        out = _INLINE_LINK_RX.sub(unlink, text) if "](" in text else text
         if out == text:
             break
         text = out
@@ -589,6 +672,27 @@ def strip_model_links(text: str) -> str:
 
         text = _REFERENCE_RX.sub(unref, text)
     return text
+
+
+def strip_model_links(text: str) -> str:
+    """Every figure link in ``text`` turned back into its words: only Iron
+    Jarvis's own record makes one. By the address the page would RESOLVE,
+    whatever way it is written: ``[x](#source/…)``, ``[x](<#source/…>)``,
+    ``[x](\\#source/…)``, ``[x](&#35;source/…)``, link words with brackets
+    inside or a line break, a line break before the address, and a
+    reference (``[x][1]`` with ``[1]: #source/…``, in a blockquote too: the
+    definition goes and every use of it becomes its words). Code (a fenced
+    or indented block, see :func:`_line_kinds`) is left as it is: the page
+    shows it as written, never as a link."""
+    text = str(text or "")
+    if "](" not in text and "]:" not in text:
+        return text
+    parts = _stretches(text)
+    labels: set[str] = set()
+    # Definitions first, from every stretch of words: a reference may sit
+    # above its definition, or on the other side of a code block.
+    parts = [(code, s if code else _drop_definitions(s, labels)) for code, s in parts]
+    return "\n".join(s if code else _unlink(s, labels) for code, s in parts)
 
 
 #: A reply's words without its figure links (the phone, a copy, a check that
@@ -753,39 +857,9 @@ def link_reply(reply: str, marks: "list[dict]", *, read_any: bool = True,
         return text
     by_key = _places(marks)
     lines = text.split("\n")
-    fence = ""
-    in_code = False
-    in_list = False
-    after_blank = True
-    for i, line in enumerate(lines):
-        m = _FENCE_RX.match(line)
-        if fence:
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
-                fence = ""
-            continue
-        if not line.strip():
-            after_blank = True
-            continue
-        deep = _indent(line) >= 4
-        if in_code:
-            if deep:
-                continue
-            in_code = False
-        if deep and after_blank and not in_list:
-            # An indented code block: left alone.
-            in_code = True
-            after_blank = False
-            continue
-        if m:
-            fence = m.group(1)
-            after_blank = False
-            continue
-        if _LIST_ITEM_RX.match(line):
-            in_list = True
-        elif after_blank and _indent(line) == 0:
-            in_list = False  # a paragraph at the margin after a blank line ends a list
-        after_blank = False
-        lines[i] = _link_line(line, by_key, seen, dot)
+    for i, kind in enumerate(_line_kinds(lines)):
+        if kind == "prose":
+            lines[i] = _link_line(lines[i], by_key, seen, dot)
     return "\n".join(lines)
 
 

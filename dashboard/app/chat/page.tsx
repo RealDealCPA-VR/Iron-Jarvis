@@ -3684,7 +3684,7 @@ const MessageRow = memo(function MessageRow({
             : "opacity-0 transition-opacity focus-within:opacity-100 has-[form]:opacity-100 has-[[aria-expanded=true]]:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100"
         }`}
       >
-        {/* v1.547.0: the words, never a figure's link to where it was read. */}
+        {/* v1.549.0: the words, never a figure's link to where it was read. */}
         <CopyIconButton text={withoutPlaceLinks(m.content)} title="Copy message" className={REPLY_ACTION_BTN} />
         {canRegen && regen && (
           // v1.325.0: Try again — the same model, or "with…" another one for
@@ -4118,7 +4118,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // DOCUMENT PREVIEW (right rail): set when a turn creates/edits a document —
   // the chat column shifts over and the file renders beside the conversation.
   const [previewPath, setPreviewPath] = useState<string | null>(null);
-  // v1.547.0 (idea 30-a): the place a pressed figure was read from, for the
+  // v1.549.0 (idea 30-a): the place a pressed figure was read from, for the
   // file it belongs to (the preview opens there; any other open clears it).
   const [previewAt, setPreviewAt] = useState<{ path: string; at: SourceAt } | null>(null);
   // The conversation's generated documents — persisted in the thread setup so
@@ -9323,14 +9323,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     showProjectPanel("app");
   }
 
-  /** Reopen a remembered document's preview (the chip's click). v1.547.0:
+  /** Reopen a remembered document's preview (the chip's click). v1.549.0:
    *  `at` opens it at the place a figure was read from (idea 30-a). */
   function openDocPreview(path: string, at?: SourceAt) {
     setPreviewAt(at ? { path, at } : null);
     setPreviewPath(path);
     showProjectPanel("user");
   }
-  // v1.547.0 (idea 30-a): a figure pressed in a reply asks for its file at
+  // v1.549.0 (idea 30-a): a figure pressed in a reply asks for its file at
   // its place (lib/sourceLink OPEN_PLACE_EVENT); answering it says "opened".
   // On a phone the panel opens over the chat (ProjectDrawer, full width).
   const openPlaceRef = useRef(openDocPreview);
@@ -16252,7 +16252,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     <DocPreview
                       // The nonce remounts the preview after an undo so it
                       // refetches and shows the reverted file (v1.168.0).
-                      // v1.547.0: and a new place in the same file opens
+                      // v1.549.0: and a new place in the same file opens
                       // there (idea 30-a).
                       key={`${previewNonce}:${previewPath}:${
                         previewAt?.path === previewPath ? placeKey(previewAt.at) : ""

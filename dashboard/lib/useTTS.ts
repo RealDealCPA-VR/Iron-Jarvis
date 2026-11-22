@@ -8,6 +8,7 @@ import {
   onDeviceSetting,
   writeDeviceSetting,
 } from "@/lib/deviceSettings";
+import { withoutPlaceLinks } from "@/lib/sourceLink";
 
 /* -------------------------------------------------------------------------- */
 /*  Voice output (Web Speech Synthesis) — hear Iron Jarvis reply               */
@@ -312,7 +313,8 @@ export function useTTS(): UseTTS {
     (text: string) => {
       const s = synth();
       if (!s || !enabledRef.current) return;
-      const clean = (text || "").trim();
+      // Idea 30-a: a figure's link is never read out (its words are).
+      const clean = withoutPlaceLinks(text || "").trim();
       if (!clean || clean === lastSpokenRef.current) return;
       lastSpokenRef.current = clean;
 
@@ -343,8 +345,12 @@ export function useTTS(): UseTTS {
     (fullText: string, flush = false) => {
       const s = synth();
       if (!s || !enabledRef.current) return;
+      // Idea 30-a: the stream carries the model's plain words and the end of
+      // the turn its words with the figures linked. The counter counts the
+      // words, so both are fed without the links: the last flush starts where
+      // the stream stopped and reads no link out.
       const { sentences, consumed } = takeCompleteSentences(
-        fullText || "",
+        withoutPlaceLinks(fullText || ""),
         streamConsumedRef.current,
         flush,
       );

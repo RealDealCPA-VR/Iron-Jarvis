@@ -1597,6 +1597,17 @@ class AgentThreads:
         if not participants:
             raise ValueError("this thread has no participant agents")
         messages = json.loads(rec.messages_json or "[]")
+        if chat_history:
+            # v1.549.0 (idea 30-a): a saved reply's figure links reach a panel
+            # agent or another computer as their words, never a record's id.
+            from ..documents.sources import SOURCE_LINK_PREFIX, without_figure_links
+
+            chat_history = [
+                {**r, "content": without_figure_links(str(r.get("content") or ""))}
+                if isinstance(r, dict) and SOURCE_LINK_PREFIX in str(r.get("content") or "")
+                else r
+                for r in chat_history
+            ]
 
         new_entries: list[dict[str, Any]] = []
         spoke: list[str] = []

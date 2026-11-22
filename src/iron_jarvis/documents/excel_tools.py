@@ -186,7 +186,7 @@ class ExcelReadTool(Tool):
         import json
 
         output = json.dumps(data, ensure_ascii=False)
-        # v1.547.0 (30-a): where each figure of the block sits, AFTER the
+        # v1.549.0 (30-a): where each figure of the block sits, AFTER the
         # answer is written (the model's answer is unchanged).
         if path.suffix.lower() != ".xls" and data.get("rows") and not args.get("include_formulas"):
             smap = await asyncio.to_thread(_read_cells_map, path, data, args.get("range"))
@@ -196,7 +196,7 @@ class ExcelReadTool(Tool):
 
 
 def _read_cells_map(path: Path, data: dict[str, Any], cell_range: "str | None") -> "dict | None":
-    """The ``cells`` map of an ``excel_read`` block (v1.547.0). Never raises."""
+    """The ``cells`` map of an ``excel_read`` block (v1.549.0). Never raises."""
     try:
         from openpyxl.utils import range_boundaries
 
@@ -608,7 +608,7 @@ def _load_table(path: Path, sheet: "str | None") -> tuple[str, list[str], list[l
 def _query_cells(path: Path, sheet: str, headers: list[str], rows: "list[tuple[int, list[Any]]]",
                  *, only_col: int = -1) -> dict[str, Any]:
     """``{"source_map": …}`` for the cells an ``excel_query`` answer shows
-    (v1.547.0, idea 30-a): ``rows`` are ``(row number, values)``; with
+    (v1.549.0, idea 30-a): ``rows`` are ``(row number, values)``; with
     ``only_col``, just that column. ``{}`` when none holds a figure."""
     try:
         from .sources import cell_entry, cells_map
@@ -884,7 +884,7 @@ class ExcelQueryTool(Tool):
             missing = (len(recalc.failed) + recalc.skipped) if recalc else 0
             worked = recalc.computed if recalc else 0
             conds = [c for c in (args.get("where") or []) if isinstance(c, dict)]
-            # v1.547.0 (30-a): each data row's own row number in the sheet
+            # v1.549.0 (30-a): each data row's own row number in the sheet
             # (row 1 is the headings), kept through the filter.
             row_nos = list(range(2, len(rows) + 2))
             if conds:
@@ -1011,7 +1011,7 @@ class ExcelQueryTool(Tool):
                 out += FORMULAS_WORKED_OUT_NOTE.format(n=worked)
             if missing:
                 out += FORMULAS_LEFT_OUT_NOTE.format(n=missing)
-            # v1.547.0 (30-a): a smallest or largest value IS a cell the sheet
+            # v1.549.0 (30-a): a smallest or largest value IS a cell the sheet
             # holds (a sum or an average is worked out: idea 30-b).
             placed: dict[str, Any] = {}
             if op in ("min", "max"):
