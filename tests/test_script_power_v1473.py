@@ -38,6 +38,11 @@ from iron_jarvis.tools.tool_script import NAME
 
 pytestmark = pytest.mark.timeout(240)
 
+#: The most a held call waits for the others of its group (``hold_together``).
+#: Reached only when the map never lets them all in at once: the test then
+#: fails in words instead of hanging.
+HOLD_S = 30.0
+
 
 class _Echo(Tool):
     """A read-only stand-in that can be slow, and can fail for chosen inputs."""
@@ -61,14 +66,60 @@ class _Echo(Tool):
         #: when it ends, or ``quick_s`` when it has none.
         self.wall: "_Wall | None" = None
         self.quick_s = 0.0
+        #: Each call reaches the tool this long after the one before it, as
+        #: on a loaded PC where every call's ledger row queues behind the
+        #: last (a real wait: it makes the timing WORSE, never better).
+        self.lag_s = 0.0
+        self._lag: "tuple[object, asyncio.Lock] | None" = None
+        #: The group each held input belongs to (``hold_together``).
+        self._held: dict[str, dict] = {}
+        #: Held calls whose group never all began within ``HOLD_S``.
+        self.never_together: list[str] = []
+
+    def hold_together(self, *inputs: str) -> None:
+        """The calls for *inputs* wait for one another: none of them goes on
+        (to its own delay, then its end) before ALL of them have begun. So
+        "they ran side by side" is SHOWN, never timed. A real sleep that had
+        to outlast the others' start failed on a loaded Linux runner (release
+        run 44995953337: each call reaches the tool only after its "this
+        call has started" row is written, on a thread). The delay after the
+        wait still gives a map that lets MORE calls in the time to show
+        them."""
+        group = {"size": len(set(inputs)), "begun": 0, "met": None}
+        for q in inputs:
+            self._held[q] = group
+
+    async def _wait_for_the_others(self, q: str) -> None:
+        group = self._held[q]
+        if group["met"] is None:
+            group["met"] = asyncio.Event()
+        group["begun"] += 1
+        if group["begun"] >= group["size"]:
+            group["met"].set()
+        try:
+            async with asyncio.timeout(HOLD_S):
+                await group["met"].wait()
+        except TimeoutError:
+            self.never_together.append(q)
+
+    async def _arrive_late(self) -> None:
+        loop = asyncio.get_running_loop()
+        if self._lag is None or self._lag[0] is not loop:
+            self._lag = (loop, asyncio.Lock())
+        async with self._lag[1]:
+            await asyncio.sleep(self.lag_s)
 
     async def execute(self, args, ctx):
         q = str(args.get("q"))
+        if self.lag_s:
+            await self._arrive_late()
         self.calls.append(q)
         self.live += 1
         self.most_live = max(self.most_live, self.live)
         self.live_at_start.append(self.live)
         try:
+            if q in self._held:
+                await self._wait_for_the_others(q)
             delay = self.delay_for.get(q, self.delay)
             if delay:
                 await asyncio.sleep(delay)
@@ -99,7 +150,8 @@ def _said_times(world, monkeypatch, quick_s: float = 0.01) -> None:
     *quick_s* (well under ``MAP_QUICK_S``) when they have none."""
     assert quick_s < TS.MAP_QUICK_S
     wall = _Wall()
-    world.echo.wall, world.echo.quick_s = wall, quick_s
+    for tool in (world.echo, world.slow):
+        tool.wall, tool.quick_s = wall, quick_s
     monkeypatch.setattr(TS, "_wall_s", wall)
 
 
@@ -202,22 +254,36 @@ def test_map_takes_plain_values_with_arg_and_common_arguments(world):
     assert "['read:a', 'read:b']" in r.output
 
 
-def test_map_runs_safe_readers_side_by_side_and_others_one_at_a_time(world, monkeypatch):
+@pytest.mark.parametrize("lag_s", [0.0, 0.1], ids=["calls-start-at-once", "each-call-starts-late"])
+def test_map_runs_safe_readers_side_by_side_and_others_one_at_a_time(world, monkeypatch, lag_s):
+    """Shown, never timed. With each call really sleeping 0.15 s, "four at
+    once" needed the fourth call to reach the tool before the first had
+    slept: a loaded runner missed that once (v1.550.1's Linux release passed
+    this only on its retry). *lag_s* is that runner: each call reaches the
+    tool 0.1 s after the one before it, which turned the old version red
+    (2 at once, not 4)."""
     # `echo_read` joins the run-together list for this test; `slow_read`
     # (the same code under another name) does not.
     monkeypatch.setattr(TS, "MAP_TOGETHER", TS.MAP_TOGETHER | {"echo_read"})
     monkeypatch.setattr(TS, "_cpu_s", lambda: 0.0)  # these calls WAIT
+    _said_times(world, monkeypatch)  # each call took what it says: 0.15 s
     world.echo.delay = world.slow.delay = 0.15
+    world.echo.lag_s = world.slow.lag_s = lag_s
+    n = TS.MAP_PARALLEL
+    world.echo.hold_together(*(str(i) for i in range(1, n + 1)))
     r = _run(world, (
         "a = tools.map('echo_read', [{'q': str(i)} for i in range(8)])\n"
         "b = tools.map('slow_read', [{'q': str(i)} for i in range(3)])\n"
         "print(len(a), len(b))"
     ))
     assert r.ok, r.error
-    assert world.echo.most_live == TS.MAP_PARALLEL  # never more, and it got there
-    assert world.slow.most_live == 1
-    # The first call runs alone: it is how the script learns the calls wait.
-    assert world.echo.live_at_start[0] == 1
+    # The first call runs alone (it is how the script learns the calls
+    # wait); then n begin together, none of them ended; never more than n.
+    assert world.echo.live_at_start[:n + 1] == [1, *range(1, n + 1)], (
+        world.echo.live_at_start, world.echo.never_together)
+    assert world.echo.most_live == n, world.echo.live_at_start
+    # The same reader under a name not on the list: one at a time.
+    assert world.slow.most_live == 1, world.slow.live_at_start
 
 
 def test_quick_calls_run_in_order_never_side_by_side(world, monkeypatch):
@@ -256,6 +322,11 @@ def test_one_waiting_call_is_enough_and_the_rest_of_the_script_keeps_it(world, m
     _said_times(world, monkeypatch)
     world.echo.delay = 0.12
     world.echo.delay_for = {"0": 0.0, "1": 0.0}  # two quick ones first
+    n = TS.MAP_PARALLEL
+    # The calls that should run together wait for one another: shown, not
+    # timed (see the test above).
+    world.echo.hold_together(*(str(i) for i in range(3, 3 + n)))
+    world.echo.hold_together(*("b%d" % i for i in range(n)))
     r = _run(world, (
         "a = tools.map('echo_read', [{'q': str(i)} for i in range(8)])\n"
         "b = tools.map('echo_read', [{'q': 'b%d' % i} for i in range(5)])\n"
@@ -263,10 +334,13 @@ def test_one_waiting_call_is_enough_and_the_rest_of_the_script_keeps_it(world, m
     ))
     assert r.ok, r.error
     # 0 and 1 were quick, 2 waited (alone), 3..7 ran together.
-    assert world.echo.live_at_start[:3] == [1, 1, 1]
-    assert world.echo.most_live == TS.MAP_PARALLEL
-    # The second map did not learn again: its first calls began together.
-    assert max(world.echo.live_at_start[8:12]) >= 2
+    assert world.echo.live_at_start[:3 + n] == [1, 1, 1, *range(1, n + 1)], (
+        world.echo.live_at_start, world.echo.never_together)
+    assert world.echo.most_live == n
+    # The second map did not learn again: its first n calls began together
+    # (learning again, b0 would have run alone and b1 begun alone after it).
+    assert world.echo.live_at_start[8:8 + n] == list(range(1, n + 1)), (
+        world.echo.live_at_start, world.echo.never_together)
 
 
 def test_a_failed_item_does_not_stop_the_rest_and_does_not_raise(world):
