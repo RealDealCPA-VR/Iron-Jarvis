@@ -1706,6 +1706,50 @@ class HostedService:
         row = await self._row(sid)
         return self.commands_for(row.harness, self.live.get(sid), folder=row.folder or "")
 
+    def commands_state(self, harness: str, live: "LiveSession | None" = None, *,
+                       disk: bool = False, folder: str = "") -> dict[str, Any]:
+        """v1.557.0: the `/` list AND whether it is still being read
+        (``reading``: the page looks again shortly, so the menu never stays on
+        a list that was only half known when it was first asked for).
+
+        Claude Code's list is read per folder in the background
+        (``hosted.claude_catalog``); until that read ends the rows are only
+        its built-ins, or nothing. With NO folder (the start box, a session
+        before its first message) it is read in a folder of Iron Jarvis's
+        own: Claude Code's commands and the user's own commands and skills."""
+        if harness != CLAUDE or (live and live.driver and live.driver.commands):
+            return {"commands": self.commands_for(harness, live, disk=disk, folder=folder), "reading": False}
+        from . import claude_catalog as CCAT
+
+        where = folder or str(CCAT.no_folder_dir(self.home))
+        rows = self.commands_for(harness, live, disk=disk, folder=where)
+        reading = CCAT.reading(where)
+        if not reading:
+            # The read may have ended between the two looks: its list.
+            rows = self.commands_for(harness, live, disk=disk, folder=where)
+        return {"commands": rows, "reading": reading}
+
+    async def session_commands(self, sid: str) -> dict[str, Any]:
+        row = await self._row(sid)
+        return self.commands_state(row.harness, self.live.get(sid), folder=row.folder or "")
+
+    def start_commands(self, harness: Any, folder: Any = "") -> dict[str, Any]:
+        """BLOCKING. v1.557.0: the `/` list for a session that does not exist
+        yet (the start box): the tool's own commands and skills for the folder
+        chosen there, or for no folder. Never starts the tool's session; a
+        folder a session could not start in is not read."""
+        name = str(harness or "").strip().lower()
+        if name not in HARNESSES:
+            raise Refused('Choose "claude-code", "codex", "pi", "opencode", "grok" or "antigravity".', 400,
+                          field="tool")
+        where = str(folder or "").strip()
+        if where:
+            from ..core.fs_policy import root_problem
+
+            if root_problem(where):
+                where = ""
+        return self.commands_state(name, None, disk=True, folder=where)
+
     # -- v1.415.0: the Session tab's Context drop-down ---------------------------
     async def context_view(self, row: Any, events: list[dict[str, Any]]) -> dict[str, Any]:
         """What fills this session's conversation, in the TOOL's own numbers.
@@ -2125,7 +2169,11 @@ class HostedService:
             "turn_id": running,
             "pending": [a.event for a in (live.asks.values() if live else [])],
         }
-        out["commands"] = self.commands_for(row.harness, live, folder=row.folder or "")
+        # v1.557.0: with whether the list is still being read (the page looks
+        # again, so your own skills are never missing from the menu).
+        listed = self.commands_state(row.harness, live, folder=row.folder or "")
+        out["commands"] = listed["commands"]
+        out["commands_reading"] = listed["reading"]
         # v1.544.0: this daemon takes comments on changed code with a message
         # (the page offers them only when it says so: never silently dropped).
         out["takes_comments"] = True

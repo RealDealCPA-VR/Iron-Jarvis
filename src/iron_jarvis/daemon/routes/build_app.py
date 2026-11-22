@@ -320,9 +320,20 @@ def register(app: FastAPI, d: Any) -> None:
     @app.get("/build/app/sessions/{sid}/commands")
     async def app_commands(sid: str) -> dict[str, Any]:
         """The harness's own `/` commands (what its process said; never a
-        start just to ask)."""
+        start just to ask). v1.557.0: with ``reading`` while Claude Code's
+        list for the folder is still being read (the page looks again)."""
         try:
-            return {"commands": await svc().commands(sid)}
+            return await svc().session_commands(sid)
+        except S.Refused as r:
+            raise _http(r) from None
+
+    @app.get("/build/app/commands")
+    def app_start_commands(harness: str = "", folder: str = "") -> dict[str, Any]:
+        """v1.557.0: the `/` list for the START box, before a session exists:
+        the chosen tool's commands and skills for the chosen folder (or none).
+        Sync: a folder check and a few cached reads, on the threadpool."""
+        try:
+            return svc().start_commands(harness, folder)
         except S.Refused as r:
             raise _http(r) from None
 

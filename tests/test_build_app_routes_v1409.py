@@ -611,7 +611,9 @@ async def test_the_slash_list_is_the_harnesses_own_never_a_start_to_ask(app, wor
     use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
     async with client(app) as c:
         s = await new_session(c, work)
-        assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": []}
+        # v1.557.0 (moved on purpose): the answer also says whether the list
+        # is still being read (the page looks again while it is).
+        assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": [], "reading": False}
         before = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}
         assert before["claude-code"]["commands"] == []
         await c.post(f"/build/app/sessions/{s['id']}/turn", json={"text": "ready?", "turn_id": "t1"})
@@ -622,7 +624,7 @@ async def test_the_slash_list_is_the_harnesses_own_never_a_start_to_ask(app, wor
         notes = [{"name": n, "description": "Only in Claude Code's own terminal", "note": why}
                  for n, why in T.CLAUDE_TERMINAL_ONLY.items()]
         want = [{"name": "init", "description": "Set up a CLAUDE.md file"}] + notes
-        assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": want}
+        assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": want, "reading": False}
         assert (await c.get(f"/build/app/sessions/{s['id']}")).json()["commands"] == want
         after = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}
         # v1.426.0 (E4, moved on purpose): Codex's own compact is listed

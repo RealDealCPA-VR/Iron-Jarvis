@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.556.1 (2026-11-19).*
+holds itself to. Current as of v1.557.0 (2026-11-19).*
 
 ---
 
@@ -2041,6 +2041,33 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The `/` list in Build › Code works before a session starts (v1.557.0)
+
+Type `/` in Build › Code's start box (the box you see before any session is
+open) and the coding tool's own commands and skills are listed above the box,
+as they already were in an open session. Keep typing to narrow the list, move
+with the arrow keys, and press Enter or Tab (or click) to put the command in
+the box. A second Enter starts the session with it. Esc closes the list.
+
+**Which commands.** The list belongs to the tool chosen under the box. For
+Claude Code it holds Claude Code's commands, your own commands and skills,
+and, when a folder is chosen, that folder's own. With **No folder** you
+still get your own skills.
+
+**While the list is being read.** Claude Code's list is read in the
+background the first time it is needed after Iron Jarvis starts. That takes
+about three seconds and sends nothing to a model. Until it arrives the box
+says **Reading Claude Code's commands…**, and the list fills in by itself.
+
+**Also fixed in an open session.** A session's box asked for its list only
+once. If that happened while the folder's list was still being read, the
+list stayed on Claude Code's built-in commands and never showed your own
+skills. It now asks each time you type `/`.
+
+**What has not changed.** The list opens when `/` is the first thing on a
+line, in both boxes. A `/` inside a sentence is ordinary text. A tool that
+lists no commands says so, and what you type is still sent to it as typed.
 
 ## Pick up where you left off in a folder (v1.556.0)
 

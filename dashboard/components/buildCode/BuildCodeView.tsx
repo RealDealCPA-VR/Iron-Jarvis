@@ -182,9 +182,7 @@ import {
   sessionRowLine,
   backgroundRereadMs,
   CODE_SEEN_BEAT_MS,
-  COMMAND_SOURCE_WORDS,
   closeToolWords,
-  decodeCommands,
   modelGroups,
   oneMillionLabel,
   slashMenuRows,
@@ -288,6 +286,8 @@ import {
   type SwitchPreference,
 } from "@/lib/buildAppSwitch";
 import { ModeChip } from "@/components/buildCode/ModeChip";
+import { CommandRowBody } from "@/components/buildCode/CommandRowBody";
+import { slashStatusWords, useToolCommands } from "@/components/buildCode/useToolCommands";
 import { decodeCarry, type CarryFacts } from "@/lib/buildCodeCarry";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { JarvisToolsChip, ProfileShareOffer } from "@/components/buildCode/JarvisTools";
@@ -497,7 +497,6 @@ function SessionPane({
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuIndex, setMenuIndex] = useState(0);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [fetchedCommands, setFetchedCommands] = useState<ToolCommand[] | null>(null);
   const [viewCommands, setViewCommands] = useState<ToolCommand[] | null>(null);
   /** v1.411.0: the conversation keeps its last model and effort (Pi). */
   const [keepsLast, setKeepsLast] = useState(false);
@@ -736,7 +735,6 @@ function SessionPane({
     setKeepsLast(false);
     setHints({});
     setViewCommands(null);
-    setFetchedCommands(null);
     setTryChoices([]);
     setPiFolder(null);
   }, []);
@@ -951,7 +949,6 @@ function SessionPane({
     att.clear();
     setNote(null);
     setAskError(null);
-    setFetchedCommands(null);
     setViewCommands(null);
     setKeepsLast(false);
     setTakesComments(false);
@@ -2063,27 +2060,30 @@ function SessionPane({
   const slash = slashAt(text, caret);
   const at = /(^|\s)@(\S*)$/.exec(text);
   const filesState = useProjectFilesState(menuOpen && !!at, session?.folder ?? null);
-  const commands = useMemo(() => {
-    if (viewCommands && viewCommands.length) return viewCommands;
-    if (tool && tool.commands.length) return tool.commands;
-    return fetchedCommands ?? [];
-  }, [viewCommands, tool, fetchedCommands]);
   // Keyed on the TEXT a regex found (a new match object each render would
   // re-run these on every key press).
   const slashKey = slash ? `${slash.start}:${slash.query}` : null;
   const atKey = at ? at[0] : null;
-  useEffect(() => {
-    if (slashKey === null || !session || (viewCommands && viewCommands.length) || (tool && tool.commands.length) || fetchedCommands !== null)
-      return;
-    get<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/commands`)
-      .then((raw) => {
-        // v1.426.0 (E4): a Codex skill is typed `$<name>`; v1.429.0: each
-        // row keeps its kind and (Pi) why it stays in Pi's own terminal.
-        setFetchedCommands(decodeCommands(raw) ?? []);
-        setHints((cur) => ({ ...commandHints(raw), ...cur }));
-      })
-      .catch(() => setFetchedCommands([]));
-  }, [slashKey, session, viewCommands, tool, fetchedCommands]);
+  // v1.557.0: the list is read each time the menu OPENS and looked at again
+  // while the daemon is still reading it. (It used to be asked once, and only
+  // when the view had listed nothing: a view that listed Claude Code's
+  // built-ins while the folder's list was still being read kept the menu
+  // without the user's own skills.) v1.426.0 (E4): a Codex skill is typed
+  // `$<name>`; v1.429.0: each row keeps its kind and (Pi) why it stays in
+  // Pi's own terminal.
+  const listed = useToolCommands(
+    slashKey !== null,
+    session ? `${SESSIONS}/${encodeURIComponent(session.id)}/commands` : null,
+    session?.tool ?? "",
+  );
+  const commands = useMemo(() => {
+    if (listed.commands && listed.commands.length) return listed.commands;
+    if (viewCommands && viewCommands.length) return viewCommands;
+    if (tool && tool.commands.length) return tool.commands;
+    return listed.commands ?? [];
+  }, [listed.commands, viewCommands, tool]);
+  const commandHintsNow = useMemo(() => ({ ...listed.hints, ...hints }), [listed.hints, hints]);
+  const slashWords = slash ? slashStatusWords(toolName, listed.reading, commands.length) : null;
   const menuRows: MenuRow[] = useMemo(() => {
     if (slash) {
       return slashMenuRows(commands, slash.query, SLASH_ROWS).map((cmd) => ({ kind: "command", cmd }));
@@ -2677,25 +2677,7 @@ function SessionPane({
                       }`}
                     >
                       {row.kind === "command" ? (
-                        <>
-                          <span className="shrink-0 font-mono">
-                            {row.cmd.prefix ?? "/"}
-                            {row.cmd.name}
-                          </span>
-                          {hints[row.cmd.name] ? (
-                            <span data-testid="code-command-hint" className="shrink-0 font-mono text-[12px] text-zinc-500">
-                              {hints[row.cmd.name]}
-                            </span>
-                          ) : null}
-                          <span className="min-w-0 truncate text-[12px] text-zinc-500">
-                            {row.cmd.note ? `${row.cmd.description}: ${row.cmd.note}` : row.cmd.description}
-                          </span>
-                          {row.cmd.source ? (
-                            <span data-testid="code-command-source" className="ml-auto shrink-0 text-[11px] text-zinc-500">
-                              {COMMAND_SOURCE_WORDS[row.cmd.source]}
-                            </span>
-                          ) : null}
-                        </>
+                        <CommandRowBody cmd={row.cmd} hint={commandHintsNow[row.cmd.name]} />
                       ) : (
                         <span className="min-w-0 truncate">{row.entry.rel}</span>
                       )}
@@ -2703,6 +2685,15 @@ function SessionPane({
                   </li>
                 ))}
               </ul>
+            ) : menuOpen && slashWords ? (
+              // v1.557.0: never a silent gap while the list is read.
+              <p
+                data-testid="code-slash-status"
+                role="status"
+                className="absolute bottom-full left-0 mb-2 rounded-xl bg-ink-800 px-3 py-2 text-[12px] text-zinc-500 shadow-card"
+              >
+                {slashWords}
+              </p>
             ) : menuOpen && at && !filesState.listing ? (
               <p className="absolute bottom-full left-0 mb-2 rounded-xl bg-ink-800 px-3 py-2 text-[12px] text-zinc-500 shadow-card">
                 {filesState.failed ? "This folder's files could not be read." : "Reading this folder's files…"}

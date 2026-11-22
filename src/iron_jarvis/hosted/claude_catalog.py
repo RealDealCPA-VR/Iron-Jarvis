@@ -92,11 +92,22 @@ def refresh_soon(home: Path, argv_fn: Callable[[], list[str] | None], folder: st
     return True
 
 
+def no_folder_dir(home: Path) -> Path:
+    """v1.557.0: the folder Claude Code's list is read in when NO folder is
+    chosen yet (the start box, a session before its first message): one of
+    Iron Jarvis's own, so the list is Claude Code's commands plus the user's
+    own commands and skills, and no project's."""
+    return Path(home) / "hosted" / "claude-probe" / "no-folder"
+
+
 def _refresh(home: Path, argv_fn: Callable[[], list[str] | None], folder: str) -> None:
     from .claude import folder_key
 
     ok = False
     try:
+        if folder_key(folder) == folder_key(no_folder_dir(home)):
+            # Iron Jarvis's own folder: made here, on the reading thread.
+            Path(folder).mkdir(parents=True, exist_ok=True)
         argv0 = argv_fn()
         if argv0:
             with _ONE_AT_A_TIME:

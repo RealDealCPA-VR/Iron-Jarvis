@@ -59,6 +59,9 @@ import { CONTINUE_SENTENCE, continuedTitle } from "@/lib/pickUp";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { ModeChip } from "@/components/buildCode/ModeChip";
 import { ModelPicker } from "@/components/buildCode/ModelPicker";
+import { CommandRowBody } from "@/components/buildCode/CommandRowBody";
+import { slashStatusWords, useToolCommands } from "@/components/buildCode/useToolCommands";
+import { SLASH_ROWS, pickCommand, slashAt } from "@/lib/buildAppHistory";
 import { useFolderDefaults } from "@/components/folders/FolderDefaultsPanel";
 import { toolStartWants } from "@/lib/buildAppSwitch";
 import {
@@ -86,6 +89,7 @@ import {
   effortsFor,
   modeLabel,
   ownSignInWords,
+  slashMenuRows,
   toolChoiceWords,
   toolLabel,
   toolUnavailable,
@@ -99,6 +103,7 @@ import {
   TO_CHAT_CODE_LEAD,
   type CodeSession,
   type CodingTool,
+  type ToolCommand,
 } from "@/lib/buildApp";
 
 /** v1.445.0: a quiet in-line link, as the start box's other quiet words. */
@@ -392,6 +397,13 @@ export function StartComposer({
   // daemon's `field`), never on the folder chip by default.
   const [chipProblem, setChipProblem] = useState<{ field: string; words: string } | null>(null);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  /** v1.557.0: the `/` menu — where the caret is, the row in front, the
+   *  `/word` Esc closed it on, and the one line a terminal-only command says. */
+  const [caret, setCaret] = useState(0);
+  const [menuIndex, setMenuIndex] = useState(0);
+  const [menuShut, setMenuShut] = useState<string | null>(null);
+  const [slashNote, setSlashNote] = useState<string | null>(null);
+  const caretAfterPick = useRef<number | null>(null);
   /** v1.412.0: pictures and files for the first message (uploaded). */
   const att = useHarnessAttachments();
   // A start held for an upload runs this render's `start` when it settles.
@@ -475,6 +487,59 @@ export function StartComposer({
   useEffect(() => {
     boxRef.current?.focus({ preventScroll: true });
   }, []);
+
+  // ── v1.557.0: the `/` list, before a session exists ──
+  // The chosen tool's own commands and skills for the chosen folder (or for
+  // none), read when the menu opens: `/word` at the start of a line, as in a
+  // session's box.
+  const slash = busy ? null : slashAt(text, caret);
+  const slashKey = slash ? `${slash.start}:${slash.query}` : null;
+  const commandsPath = tool
+    ? `/build/app/commands?harness=${encodeURIComponent(tool.id)}${folder ? `&folder=${encodeURIComponent(folder)}` : ""}`
+    : null;
+  const listed = useToolCommands(slashKey !== null, commandsPath);
+  const toolCommands = tool?.commands;
+  const commands: readonly ToolCommand[] = useMemo(
+    () => (listed.commands && listed.commands.length ? listed.commands : (toolCommands ?? [])),
+    [listed.commands, toolCommands],
+  );
+  const slashQuery = slash ? slash.query : null;
+  const menuRows = useMemo(
+    () => (slashQuery === null ? [] : slashMenuRows(commands, slashQuery, SLASH_ROWS)),
+    [commands, slashQuery],
+  );
+  const menuOpen = slashKey !== null && menuShut !== slashKey;
+  const menuWords = menuOpen && tool ? slashStatusWords(tool.label, listed.reading, commands.length) : null;
+  useEffect(() => {
+    setMenuIndex(0);
+  }, [slashKey]);
+  // The caret goes right after a picked command (after the box has its text).
+  // It is set HERE too, not only in the pick: the key press that picked also
+  // reports the box's selection as it was before the text changed, and that
+  // older caret (still inside the `/word`) would keep the menu open.
+  useLayoutEffect(() => {
+    const at = caretAfterPick.current;
+    if (at === null) return;
+    caretAfterPick.current = null;
+    boxRef.current?.setSelectionRange?.(at, at);
+    setCaret(at);
+  }, [text]);
+
+  function pickSlash(cmd: ToolCommand) {
+    boxRef.current?.focus({ preventScroll: true });
+    if (cmd.note) {
+      // A command only the tool's own terminal has: the one line says why,
+      // and nothing is typed.
+      setSlashNote(`/${cmd.name}: ${cmd.note}`);
+      setMenuShut(slashKey);
+      return;
+    }
+    if (!slash) return;
+    const done = pickCommand(text, slash, cmd.name, cmd.prefix ?? "/");
+    caretAfterPick.current = done.caret;
+    setText(done.text);
+    setCaret(done.caret);
+  }
 
   const choices = accountChoices(tool);
   const showAccount = asksForAccount(tool);
@@ -566,6 +631,23 @@ export function StartComposer({
 
   const onKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    // v1.557.0: the `/` menu takes the arrows, Enter, Tab and Esc first.
+    const showing = menuOpen && menuRows.length > 0;
+    if (showing && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      setMenuIndex((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + menuRows.length) % menuRows.length);
+      return;
+    }
+    if (showing && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) {
+      e.preventDefault();
+      pickSlash(menuRows[Math.min(menuIndex, menuRows.length - 1)]);
+      return;
+    }
+    if (e.key === "Escape" && menuOpen) {
+      e.preventDefault();
+      setMenuShut(slashKey);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void start();
@@ -650,6 +732,41 @@ export function StartComposer({
             void att.add(dropped);
           }}
         >
+          {/* v1.557.0: the tool's own `/` commands and skills, above the box. */}
+          {menuOpen && menuRows.length > 0 ? (
+            <ul
+              role="listbox"
+              aria-label={`${tool?.label ?? "The coding tool"}'s commands`}
+              data-testid="code-start-slash-menu"
+              className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-full overflow-auto rounded-xl bg-ink-800 p-1 shadow-card"
+            >
+              {menuRows.map((cmd, i) => (
+                <li key={cmd.name}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={i === menuIndex}
+                    data-testid={`code-start-command-${cmd.name}`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pickSlash(cmd)}
+                    className={`flex w-full items-baseline gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] ${
+                      i === menuIndex ? "bg-white/[0.06] text-zinc-100" : "text-zinc-300"
+                    }`}
+                  >
+                    <CommandRowBody cmd={cmd} hint={listed.hints[cmd.name]} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : menuWords ? (
+            <p
+              data-testid="code-start-slash-status"
+              role="status"
+              className="absolute bottom-full left-0 mb-2 rounded-xl bg-ink-800 px-3 py-2 text-[12px] text-zinc-500 shadow-card"
+            >
+              {menuWords}
+            </p>
+          ) : null}
           <AttachmentChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
           {att.problem ? (
             <p data-testid="code-start-attach-problem" role="alert" className="px-3 pt-1 text-[12px] text-tone-warn">
@@ -664,7 +781,12 @@ export function StartComposer({
             rows={3}
             value={text}
             disabled={busy}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              setCaret(e.target.selectionStart ?? e.target.value.length);
+              setSlashNote(null);
+            }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? e.currentTarget.value.length)}
             onKeyDown={onKey}
             onPaste={(e) => {
               // A pasted picture is attached; pasted text is typed.
@@ -941,6 +1063,11 @@ export function StartComposer({
         ) : startWhy === START_NEEDS_ACCOUNT ? (
           // v1.450.0 (Wave D, item 38): the one reason not drawn elsewhere.
           <DisabledNote why={startWhy} testId="code-start-why" className="px-2" />
+        ) : null}
+        {slashNote ? (
+          <p data-testid="code-start-slash-note" role="status" className="px-2 text-[12px] text-zinc-500">
+            {slashNote}
+          </p>
         ) : null}
         {error ? (
           <p role="alert" data-testid="code-start-error" className="px-2 text-[12px] text-tone-danger">
