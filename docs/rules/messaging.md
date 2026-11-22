@@ -521,8 +521,9 @@ How to use this file: read the contents list, then read only the entries your ch
   download (`media.refusal`), `Channel.fetch_file` runs in `to_thread` and
   stops at the cap, `media.keep_inbound` writes to `<home>/uploads` then the
   chat's dated "From your phone" folder (saved as the thread's
-  `workspace_dir`; a chat tagged to a project keeps the project's folder),
-  five a message, one `comm.file_received {channel, kind,
+  `workspace_dir`; a chat tagged to a project is never given one, since the
+  desk opens a saved folder before the project's), five a message, every
+  file of one message in one folder, one `comm.file_received {channel, kind,
   bytes}` each (never a name). The receipt goes first; the turn gets
   `attachments`, `workspace_dir` and `thread_files` (`_chat_files`), the user
   line gets `attachmentNames`/`attachmentPaths` (chips), a one-shot or

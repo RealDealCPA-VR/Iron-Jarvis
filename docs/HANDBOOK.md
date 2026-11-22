@@ -2052,7 +2052,8 @@ takes files now.
 - **Where it is kept.** On this PC, in a dated folder in Documents › Iron
   Jarvis named "From your phone". The first file of a phone chat makes the
   folder; every later file of that chat joins it, and what Jarvis makes for
-  that chat lands there too. Your phone hears the file's name and the folder,
+  that chat lands there too (a chat tagged to a project keeps working in the
+  project's folder). Your phone hears the file's name and the folder,
   never the whole path: "Saved photo.jpg in Documents\Iron Jarvis\2026-11-20
   From your phone." The real answer follows.
 - **The phone chat on this PC shows it.** Open the chat in Chat: your message

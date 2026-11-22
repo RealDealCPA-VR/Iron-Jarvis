@@ -320,3 +320,23 @@ def test_the_doctor_runs_the_worker_and_says_what_is_missing(monkeypatch):
     monkeypatch.setattr(VN, "_ask_worker", lambda req, timeout: {"seconds": 1.0, "decoder": "pyav"})
     row = doctor.check_phone_voice_notes()
     assert row["ok"] is True and "can be decoded" in row["detail"]
+
+
+def test_a_check_that_did_not_finish_is_not_kept_as_the_answer(monkeypatch):
+    # On a busy PC the worker's start can outlast the check's minute (the
+    # frozen exe took 31-35 s to answer while other work ran). That is not
+    # "can't be decoded": it says the check did not finish, and the next
+    # look asks again instead of keeping the miss for the daemon's life.
+    import importlib
+
+    doctor = importlib.import_module("iron_jarvis.onboarding.doctor")
+    monkeypatch.setattr(doctor, "_VOICE_CHECK", {})
+    monkeypatch.setattr(VN, "_ask_worker", lambda req, timeout: None)
+    row = doctor.check_phone_voice_notes()
+    assert row["ok"] is False and row["level"] == "recommended"
+    assert "can't be decoded" not in row["detail"]
+    assert "did not finish" in row["detail"]
+
+    monkeypatch.setattr(VN, "_ask_worker", lambda req, timeout: {"seconds": 1.0, "decoder": "pyav"})
+    row = doctor.check_phone_voice_notes()
+    assert row["ok"] is True and "can be decoded" in row["detail"]

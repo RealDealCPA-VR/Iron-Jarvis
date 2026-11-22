@@ -768,15 +768,26 @@ def check_phone_voice_notes() -> dict:
     from ..comm import voice_note
 
     # One child per daemon: the answer cannot change until the app is
-    # reinstalled (and so restarted), and the doctor runs on page opens.
-    if "out" not in _VOICE_CHECK:
-        _VOICE_CHECK["out"] = voice_note._ask_worker({"op": "check"}, timeout=60.0) or {}
-    out = _VOICE_CHECK["out"]
+    # reinstalled (and so restarted), and the doctor runs on page opens. Only
+    # an ANSWER is kept: a child that did not answer in time (a busy PC: the
+    # frozen exe took over 30 s to start while other work ran) is asked again
+    # on the next look, never kept as "can't be decoded".
+    out = _VOICE_CHECK.get("out")
+    if out is None:
+        out = voice_note._ask_worker({"op": "check"}, timeout=60.0)
+        if out is None:
+            return _result(
+                "phone_voice_notes", False,
+                "The check for voice notes from your phone did not finish within a minute (the "
+                "PC may be busy). It runs again the next time these checks run.",
+                level=RECOMMENDED,
+            )
+        _VOICE_CHECK["out"] = out
     seconds = out.get("seconds")
     if isinstance(seconds, (int, float)) and seconds > 0.5 and out.get("decoder") == "pyav":
         return _result("phone_voice_notes", True,
                        "Voice notes from your phone can be decoded on this PC.", level=RECOMMENDED)
-    why = str(out.get("error") or "the audio worker did not answer")[:200]
+    why = str(out.get("error") or "the audio decoder's answer was not understood")[:200]
     return _result(
         "phone_voice_notes", False,
         f"Voice notes from your phone can't be decoded on this PC ({why}). They are kept, "

@@ -155,11 +155,33 @@ def _inside(child: Path, parent: Path) -> bool:
         return False
 
 
-def chat_folder(platform: Any, thread_store: Any, thread_id: str) -> Path:
+def _earlier_folder(thread_store: Any, thread_id: str, root: Path) -> "Path | None":
+    """The folder the chat's newest earlier phone file was kept in, when it
+    still exists under the chat files folder (``None`` otherwise)."""
+    try:
+        paths = list(thread_store.attached_paths(thread_id) or [])
+    except Exception:  # noqa: BLE001 — a doubt makes a new folder
+        return None
+    for raw in reversed(paths):
+        parent = Path(str(raw)).parent
+        if parent.is_dir() and _inside(parent, root):
+            return parent
+    return None
+
+
+def chat_folder(
+    platform: Any, thread_store: Any, thread_id: str, *, in_project: bool = False
+) -> Path:
     """The folder a phone chat's files are kept in (BLOCKING): its saved
     ``workspace_dir`` when that sits under the chat files folder and exists,
     else a new dated "From your phone" folder there, saved on the chat. With
-    no saved chat (two-way chat off), today's shared folder."""
+    no saved chat (two-way chat off), today's shared folder.
+
+    A chat tagged to a project (``in_project``), or one whose saved working
+    folder is somewhere else, KEEPS its working folder: the desk opens a chat
+    in its saved ``workspace_dir`` before its project's folder, so the phone
+    never writes one there. Its files go to the folder its earlier phone
+    files went to, else a new dated one that is not saved as the chat's."""
     from ..documents.workfolder import make_chat_workfolder
 
     cfg = platform.config
@@ -169,6 +191,11 @@ def chat_folder(platform: Any, thread_store: Any, thread_id: str) -> Path:
         saved = thread_store.get_setup_value(thread_id, "workspace_dir")
         if saved and Path(saved).is_dir() and _inside(Path(saved), root):
             return Path(saved)
+        if in_project or (saved and not _inside(Path(saved), root)):
+            earlier = _earlier_folder(thread_store, thread_id, root)
+            if earlier is not None:
+                return earlier
+            return Path(make_chat_workfolder(root, FOLDER_TITLE, [], uploads)["path"])
         made = Path(make_chat_workfolder(root, FOLDER_TITLE, [], uploads)["path"])
         thread_store.set_setup_value(thread_id, "workspace_dir", str(made))
         return made
@@ -178,16 +205,20 @@ def chat_folder(platform: Any, thread_store: Any, thread_id: str) -> Path:
 
 
 def keep_inbound(
-    platform: Any, thread_store: Any, thread_id: str, name: str, data: bytes, kind: str
+    platform: Any, thread_store: Any, thread_id: str, name: str, data: bytes, kind: str,
+    *, folder: "str | Path | None" = None, in_project: bool = False,
 ) -> KeptFile:
     """Keep one file from the phone (BLOCKING): into ``<home>/uploads`` with
-    the upload route's naming, then copied into the chat's folder. Raises
-    ``OSError`` when it cannot be written."""
+    the upload route's naming, then copied into the chat's folder: ``folder``
+    when the message's first file already found it (every file of one
+    message lands together), else :func:`chat_folder`. Raises ``OSError``
+    when it cannot be written."""
     from ..documents.workfolder import copy_uploads_into, store_upload, upload_name
 
     uploads = platform.config.home / "uploads"
     stored = store_upload(uploads, upload_name(name), data)
-    folder = chat_folder(platform, thread_store, thread_id)
+    folder = Path(folder) if folder else chat_folder(
+        platform, thread_store, thread_id, in_project=in_project)
     copied, skipped = copy_uploads_into(folder, [str(stored)], uploads)
     if not copied:
         why = skipped[0]["reason"] if skipped else "it could not be copied"

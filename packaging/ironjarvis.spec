@@ -131,7 +131,8 @@ _collect("vosk")
 # Only the audio-worker child imports it (iron_jarvis/audio_worker.py), so a
 # malformed file can only crash that child. collect_all pulls the native libs
 # (av.libs / *.dll) with the package; the `doctor` check "phone_voice_notes"
-# decodes the one-second clip that ships in iron_jarvis/assets through the
+# decodes the one-second clip that ships in iron_jarvis/comm/assets (the
+# collect_data_files("iron_jarvis") above carries it) through the
 # frozen exe's own audio-worker, so a build that lost a library says so.
 _collect("av")
 

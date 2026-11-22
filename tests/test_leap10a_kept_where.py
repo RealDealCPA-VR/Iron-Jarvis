@@ -189,3 +189,41 @@ def test_a_phone_chat_in_a_project_keeps_the_projects_folder(platform, tmp_path)
     assert body.attachments == [str(kept[0])]
     assert body.workspace_dir == ""  # the project's folder, not the phone's
     assert body.project_id == "proj_1"
+    # The chat's saved working folder is left alone too: the desk opens a
+    # chat in its saved folder before its project's, so writing the phone's
+    # folder there would move the project chat out of its project on the PC.
+    assert poll.thread_store.get_setup_value(tid, "workspace_dir") == ""
+
+    # The next file of the same chat joins the first one's folder.
+    fake.updates = [photo(301, "P2", caption="and this")]
+    fake.files["P2"] = b"img2"
+    run(poll)
+    kept = files_under(root)
+    assert len(kept) == 2 and kept[0].parent == kept[1].parent
+    assert poll.thread_store.get_setup_value(tid, "workspace_dir") == ""
+    assert turn.calls[1].workspace_dir == ""
+
+
+def test_an_album_in_a_project_chat_lands_in_one_folder(platform, tmp_path):
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    root = chat_root(platform, tmp_path)
+    fake = FakeTelegram([
+        photo(310, "P1", caption="both", media_group_id="g"),
+        photo(311, "P2", media_group_id="g"),
+    ], files={"P1": b"one", "P2": b"two"})
+    turn = fake_turn()
+    poll = poller(platform, telegram(fake), turn=turn)
+    tid = poll.thread_store.resolve("tg", str(ME), "").id
+    with session_scope(platform.engine) as db:
+        row = db.get(ChatThreadRecord, tid)
+        row.project_id = "proj_1"
+        db.add(row)
+        db.commit()
+
+    run(poll)
+
+    kept = files_under(root)
+    assert len(kept) == 2 and kept[0].parent == kept[1].parent
+    assert sorted(turn.calls[0].attachments) == sorted(str(p) for p in kept)

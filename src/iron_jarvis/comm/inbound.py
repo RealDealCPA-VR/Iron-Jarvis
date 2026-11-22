@@ -850,6 +850,7 @@ class InboundPoller:
         refused: list[str] = []
         tid = ""
         resolved = False
+        in_project = False
         for f in files[: media.PHONE_FILES_PER_MESSAGE]:
             why = media.refusal(f, cap) if cfg is not None else "files can't be kept here"
             if not why and not self._file_ok(name, msg.sender_id):
@@ -863,13 +864,19 @@ class InboundPoller:
                         # no empty chat behind.
                         resolved = True
                         try:
-                            tid = self.thread_store.resolve(
-                                name, str(msg.sender_id), self._display(msg)).id
+                            thread = self.thread_store.resolve(
+                                name, str(msg.sender_id), self._display(msg))
+                            tid = thread.id
+                            # A chat tagged to a project keeps its folder: the
+                            # phone's files are not made its working folder.
+                            in_project = bool(str(getattr(thread, "project_id", "") or ""))
                         except Exception:  # noqa: BLE001 — the file still goes to today's folder
                             log.warning("comm thread resolve failed on %r", name, exc_info=True)
+                    # Every file of one message lands in the folder the first found.
                     kept = await asyncio.to_thread(
                         media.keep_inbound, self.platform, self.thread_store if tid else None,
                         tid, f.name, data, f.kind,
+                        folder=out.folder or None, in_project=in_project,
                     )
                 except FileNotTaken as exc:
                     why = exc.words

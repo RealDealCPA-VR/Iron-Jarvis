@@ -152,6 +152,28 @@ def test_an_unproven_senders_parts_are_not_even_listed():
     assert len(ch._files_for(em, "alice@example.com", verified=True)) == 1
 
 
+def test_the_size_before_the_decode_is_the_files_own_size():
+    # The size is estimated from the encoded text, so a file over the cap is
+    # refused before it is decoded. The line breaks of the encoding are not
+    # the file: counting them made a file just under the cap look over it.
+    from email import message_from_bytes
+
+    data = bytes(range(256)) * 4000  # 1,024,000 bytes, base64 in 76-character lines
+    msg = _mail(pdfs=0)
+    msg.add_attachment(data, maintype="application", subtype="pdf", filename="big.pdf")
+    files = _email_attachments(message_from_bytes(msg.as_bytes()))
+    assert [f.name for f in files] == ["big.pdf"]
+    assert files[0].size == len(data)
+    # The same file is taken under a cap of its own size, and refused under
+    # one byte less, both before anything is decoded.
+    ch = EmailChannel(dict(CFG))
+    assert ch.fetch_file(files[0], len(data)) == data
+    from iron_jarvis.comm.base import FileTooLarge
+
+    with pytest.raises(FileTooLarge):
+        ch.fetch_file(files[0], len(data) - 4)
+
+
 def test_a_signature_and_a_body_picture_are_not_files():
     from email import message_from_bytes
     from email.mime.image import MIMEImage

@@ -651,12 +651,23 @@ def _email_file_count(em: Any) -> int:
 _MAX_EMAIL_FILES = 50
 
 
+def _base64_size(text: str) -> int:
+    """The size of what base64 ``text`` decodes to, without decoding it:
+    three bytes for every four characters, leaving out the line breaks and
+    spaces between its lines and the ``=`` padding at its end (counting them
+    made a file just under the cap look over it)."""
+    chars = len(text) - sum(text.count(c) for c in ("\r", "\n", " ", "\t"))
+    tail = text[-16:].rstrip()
+    chars -= len(tail) - len(tail.rstrip("="))
+    return max(0, chars) * 3 // 4
+
+
 def _email_attachments(em: Any, max_count: int = _MAX_EMAIL_FILES) -> "list[InboundFile]":
     """The sender's attachments as :class:`InboundFile` (10-a), at most
     ``max_count``. Each keeps its part as ``handle``; nothing is decoded until
-    :meth:`EmailChannel.fetch_file`. ``size`` is estimated from the encoded
-    payload (base64 is four characters for three bytes), so a file far over
-    the cap is refused before it is decoded. Never raises."""
+    :meth:`EmailChannel.fetch_file`. ``size`` is read from the encoded
+    payload (base64: three bytes for four characters, :func:`_base64_size`),
+    so a file over the cap is refused before it is decoded. Never raises."""
     from .media import file_name, kind_of
 
     out: list[InboundFile] = []
@@ -671,7 +682,12 @@ def _email_attachments(em: Any, max_count: int = _MAX_EMAIL_FILES) -> "list[Inbo
             size: int | None = None
             if isinstance(raw, str):
                 enc = str(part.get("Content-Transfer-Encoding") or "").strip().lower()
-                size = (len(raw) * 3) // 4 if enc == "base64" else len(raw)
+                if enc == "base64":
+                    size = _base64_size(raw)
+                elif enc in ("", "7bit", "8bit", "binary"):
+                    size = len(raw)
+                # quoted-printable: not known before the decode; the cap is
+                # checked on the decoded bytes (EmailChannel.fetch_file).
             out.append(InboundFile(kind=kind_of(name, ctype), name=name, mime=ctype,
                                    size=size, ref=str(n), handle=part))
         except Exception:  # noqa: BLE001 — a malformed part is left out
