@@ -85,11 +85,11 @@ def register(app: FastAPI, d: Any) -> None:
 
         def run(fn: Any, folder: str = "") -> Any:
             # (BLOCKING: the route's worker thread. The key is the folder's
-            # REPOSITORY, so nested folders and two spellings of one share it.)
-            key = CK.lock_key(folder) if folder else ""
-            if not key:
+            # REPOSITORY, so nested folders and two spellings of one share it;
+            # FU-3c: outside one, ``folder_locked`` keeps nested folders apart.)
+            if not folder:
                 return _locked(f"app:{sid}", fn)
-            return _locked(f"app:{sid}", lambda: _locked(key, fn))
+            return _locked(f"app:{sid}", lambda: CK.folder_locked(folder, fn))
 
         return run
 

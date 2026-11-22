@@ -134,11 +134,11 @@ def register(app: FastAPI, d: Any) -> None:
 
         def locked_act() -> dict[str, Any]:
             # v1.543.0: the folder's own lock too (a rewind's whole-folder
-            # restore takes it; ``checkpoints.lock_key``).
+            # restore takes it; ``checkpoints.folder_locked``).
             from ...hosted import checkpoints as CK
 
-            key = CK.lock_key(str(getattr(row, "folder", "") or ""))
-            return _locked(f"app:{sid}", (lambda: _locked(key, act)) if key else act)
+            folder = str(getattr(row, "folder", "") or "")
+            return _locked(f"app:{sid}", (lambda: CK.folder_locked(folder, act)) if folder else act)
 
         try:
             out = await asyncio.to_thread(locked_act)

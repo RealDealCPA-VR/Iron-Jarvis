@@ -63,6 +63,7 @@ import re
 import shutil
 import time
 import uuid
+import weakref
 from collections.abc import AsyncIterator, Collection
 from datetime import datetime, timezone
 from pathlib import Path
@@ -127,6 +128,10 @@ OWN_SIGN_IN: tuple[str, ...] = (PI, OPENCODE, ANTIGRAVITY)
 #: a start just to ask), each model with its own effort levels, and which keep
 #: a reopened conversation's last model.
 LISTED_MODELS: tuple[str, ...] = (PI, OPENCODE, GROK, ANTIGRAVITY)
+#: FU-3b: what a PATCH sets that is the session's CODING TOOL's own (a switch
+#: gives each the new tool's value), so it is never checked against one tool
+#: and written onto another's row (``HostedService.patch``).
+TOOL_FIELDS: tuple[str, ...] = ("model", "effort", "mode", "load_folder_resources")
 #: v1.416.0: the tools listed only when installed (Grok is newer to the view;
 #: the four before it are always listed, with "not installed" said).
 ONLY_WHEN_INSTALLED: tuple[str, ...] = (GROK, ANTIGRAVITY)
@@ -1389,12 +1394,27 @@ class HostedService:
         #: ``_sleep``, which a test replaces).
         self._store_sweep: asyncio.Task | None = None
         self._sleep: Any = asyncio.sleep
+        #: FU-3b: per session, ONE of these at a time: a change of its model,
+        #: effort or mode (``patch``), or a switch of its coding tool from its
+        #: plan to its new row (:mod:`.tool_switch`). Kept only while one of
+        #: them holds it (a weak map: nothing to clean up).
+        self._tool_gates: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     # -- helpers -----------------------------------------------------------------
     def _lock(self) -> asyncio.Lock:
         if self._pool_lock is None:
             self._pool_lock = asyncio.Lock()
         return self._pool_lock
+
+    def _tool_gate(self, sid: str) -> asyncio.Lock:
+        """FU-3b: the lock a tool switch and a change of the tool's own
+        settings share for session ``sid`` (see ``_tool_gates``). The caller
+        keeps the lock it got while it uses it (that is what keeps it here)."""
+        gate = self._tool_gates.get(sid)
+        if gate is None:
+            gate = asyncio.Lock()
+            self._tool_gates[sid] = gate
+        return gate
 
     def _handover(self) -> asyncio.Lock:
         """v1.426.0 (Wave 6, E3): ONE hand-over of a conversation at a time
@@ -2459,7 +2479,31 @@ class HostedService:
 
     async def patch(self, sid: str, body: dict[str, Any], *, say_change: bool = True) -> dict[str, Any]:
         """``say_change=False``: the caller writes its own line for a model or
-        effort change (a typed ``/model`` or ``/effort``), so none here."""
+        effort change (a typed ``/model`` or ``/effort``), so none here.
+
+        FU-3b: a change of the TOOL's own settings (:data:`TOOL_FIELDS`) is
+        checked against the row it reads and written onto that row with
+        waits in between (the tool's own live change, the model lists), so a
+        switch of the coding tool must never land in that gap: such a change
+        holds the session's tool gate, which a switch takes before it reads
+        the row (``tool_switch.switch``) — a change already under way lands
+        on the earlier tool first, and the switch parks it. One that comes
+        while a switch holds its claim is refused at once, in words: waiting
+        would check it against the NEW tool's row, and what was picked for
+        the earlier tool (a model name is checked for its shape only) would
+        then be written onto the new tool's. A name or the Capabilities
+        boxes belong to the session, not the tool: never held up."""
+        if not any(body.get(k) is not None for k in TOOL_FIELDS):
+            return await self._patch_now(sid, body, say_change=say_change)
+        live = self.live.get(sid)
+        if live is not None and live.claim == TS.CLAIM:
+            raise Refused(W.CLAIMED.format(what=TS.CLAIM))
+        # (No wait between that look and this lock: a switch that claims
+        # after it waits for this change.)
+        async with self._tool_gate(sid):
+            return await self._patch_now(sid, body, say_change=say_change)
+
+    async def _patch_now(self, sid: str, body: dict[str, Any], *, say_change: bool = True) -> dict[str, Any]:
         row = await self._row(sid)
         before_model, before_effort = row.model or "", row.effort or ""
         fields: dict[str, Any] = {}
@@ -2862,12 +2906,12 @@ class HostedService:
         from ..daemon.routes.build_git import _locked
         from . import checkpoints as CK
 
-        key = CK.lock_key(str(row.folder or "")) if row.folder else ""
+        folder = str(row.folder or "")
 
         def move() -> dict[str, Any]:
             return B.remove_worktree(self.home, facts)
 
-        done = _locked(f"app:{row.id}", (lambda: _locked(key, move)) if key else move)
+        done = _locked(f"app:{row.id}", (lambda: CK.folder_locked(folder, move)) if folder else move)
         return {**done, "branch": branch}
 
     def _sweep_stores_later(self) -> None:

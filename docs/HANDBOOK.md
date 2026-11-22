@@ -2044,6 +2044,29 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Two changes at once in Build › Code wait for each other (v1.565.1)
+
+Two small fixes for moments when two things change the same session or the
+same files at once.
+
+**Changing the model or mode while a session switches tools.** If you
+change a session's model, effort level or mode while it is switching to
+another coding tool (from another window, say), the change is not made, and
+you are told: "This session is switching to another coding tool — try
+again in a moment." Pick it again once the switch is done: the lists then
+show the new tool's own models and modes. A change you made just before you
+pressed **Switch to …** is kept with the tool you left (switching back to
+that tool's conversation uses it again), and the new tool does not get it.
+
+**Two sessions in folders inside each other.** In a folder that is not in a
+git repository, a session in `work` and another in `work/sub` both reach the
+files in `work/sub`. When one of them is putting files back ("Rewind to
+here", or its Undo), the other one's rewind now waits until it is done, and
+if that takes too long it says: "Something else is changing this folder's
+files right now. Try again in a moment." Nothing is put back halfway. (In a
+git repository this was already so.) Folders side by side never wait for
+each other.
+
 ## Finished files come back to your phone, and approvals have buttons (v1.565.0)
 
 Ask Jarvis from Telegram, Slack or email to "turn this into a spreadsheet",

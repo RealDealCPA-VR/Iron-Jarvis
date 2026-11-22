@@ -109,10 +109,9 @@ def register(app: FastAPI, d: Any) -> None:
     def locked(sid: str, folder: str, fn: Any) -> Any:
         """``fn()`` under the session's git lock and then its folder's (the
         Revert's and the rewind's own two). BLOCKING: a worker thread."""
-        key = CK.lock_key(folder) if folder else ""
-        if not key:
+        if not folder:
             return _locked(f"app:{sid}", fn)
-        return _locked(f"app:{sid}", lambda: _locked(key, fn))
+        return _locked(f"app:{sid}", lambda: CK.folder_locked(folder, fn))
 
     async def _events(service: S.HostedService, row: Any) -> list[dict[str, Any]]:
         """The session's record (from memory when this Iron Jarvis drove it,

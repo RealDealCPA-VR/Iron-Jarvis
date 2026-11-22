@@ -79,6 +79,7 @@ import os
 import re
 import shutil
 import stat
+import threading
 import uuid
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -785,9 +786,78 @@ def repo_of(folder: str) -> str:
 def lock_key(folder: str) -> str:
     """The name of the lock every write of a folder's files takes: one per
     REPOSITORY (a session in ``repo`` and one in ``repo/sub`` share it; two
-    spellings of one folder do too), or per folder outside a repository."""
-    where = repo_of(folder) or (os.path.abspath(folder) if folder else "")
+    spellings of one folder do too), or per folder outside a repository
+    (where :func:`folder_locked` also keeps NESTED folders apart)."""
+    return _key_of(repo_of(folder), folder)
+
+
+def _key_of(repo: str, folder: str) -> str:
+    where = repo or (os.path.abspath(folder) if folder else "")
     return "code-folder:" + os.path.normcase(where) if where else ""
+
+
+#: FU-3c: the folders OUTSIDE any repository whose files a write holds right
+#: now (:func:`_plain_path`). Their lock is the folder's own path, so a session
+#: in ``work`` and one in ``work/sub`` hold different ones although a write of
+#: ``work`` writes ``work/sub``'s files too: a write there also waits here.
+_PLAIN_HELD: list[str] = []
+_PLAIN_FREED = threading.Condition()
+#: Said when a write waited its whole time (the folder lock's own wait,
+#: ``build_git.GIT_LOCK_WAIT_S``) for one in a folder above or below it.
+NESTED_BUSY = (
+    "Another session is changing the files of a folder inside or around this one right now. "
+    "Try again in a moment."
+)
+
+
+def _plain_path(folder: str) -> str:
+    """The folder as the nesting check compares it: absolute, in one case
+    (as :func:`lock_key` spells it), no separator at its end."""
+    return os.path.normcase(os.path.abspath(folder)).rstrip("\\/")
+
+
+def _nested(a: str, b: str) -> bool:
+    """One folder, or one inside the other (two :func:`_plain_path` values;
+    ``work`` and ``work-2`` are neither)."""
+    return a == b or a.startswith(b + os.sep) or b.startswith(a + os.sep)
+
+
+def folder_locked(folder: str, fn: Callable[[], Any]) -> Any:
+    """``fn()`` under the lock of *folder*'s files (:func:`lock_key`; the
+    lock itself is ``build_git._locked``'s). BLOCKING: a worker thread. In a
+    repository that lock is the repository's, so nested folders share it.
+    FU-3c: outside any repository it is the folder's OWN, so the write also
+    waits while another holds a folder above or below it, at most the lock's
+    own wait, then is refused in words (:data:`NESTED_BUSY`, a
+    ``GitRefused``, as a lock that stays held is). Taken in that order (the
+    folder's lock, then this wait), never the other way round."""
+    from ..daemon.routes import build_git as BG
+
+    if not folder:
+        return fn()
+    repo = repo_of(folder)
+    key = _key_of(repo, folder)
+    if repo:
+        return BG._locked(key, fn)
+    return BG._locked(key, lambda: _apart(_plain_path(folder), fn, BG.GIT_LOCK_WAIT_S))
+
+
+def _apart(path: str, fn: Callable[[], Any], wait_s: float) -> Any:
+    from ..harness import branches as B
+
+    freed = _PLAIN_FREED
+    with freed:
+        if any(_nested(path, held) for held in _PLAIN_HELD):
+            log.info("a write of a folder's files waits for one in a folder above or below it")
+            if not freed.wait_for(lambda: not any(_nested(path, held) for held in _PLAIN_HELD), wait_s):
+                raise B.GitRefused(NESTED_BUSY, 409)
+        _PLAIN_HELD.append(path)
+    try:
+        return fn()
+    finally:
+        with freed:
+            _PLAIN_HELD.remove(path)
+            freed.notify_all()
 
 
 def keep(folder: str, ref: str, tree: str) -> bool:

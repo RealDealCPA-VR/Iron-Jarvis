@@ -802,7 +802,14 @@ async def switch(svc: Any, sid: str, tool: Any, *, model: Any = None, effort: An
     live = svc._live(row)
     svc._claim(live, CLAIM)
     try:
-        return await _switch_claimed(svc, sid, live, want, model, effort, prefer, str(expect or ""))
+        # FU-3b: a change of the model, effort or mode already under way
+        # (``service.patch``) lands on THIS tool first, and the plan below
+        # reads it (and parks it); one sent from now on is refused while the
+        # claim holds. The gate is let go before the claim (nothing waits in
+        # between), so no change sent during the switch waits for its end and
+        # is then checked against the NEW tool's row.
+        async with svc._tool_gate(sid):
+            return await _switch_claimed(svc, sid, live, want, model, effort, prefer, str(expect or ""))
     finally:
         if live.claim == CLAIM:
             live.claim = ""
