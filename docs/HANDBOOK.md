@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.562.0 (2026-11-19).*
+holds itself to. Current as of v1.563.0 (2026-11-19).*
 
 ---
 
@@ -2044,6 +2044,61 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Quick Ask: the answer appears right there (v1.563.0)
+
+Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows
+the key that is live, if another app holds that one), type your question,
+and press Enter. The answer appears right there: the box becomes a small
+window where it was, and the reply is written into it while you keep
+working. Your main Iron Jarvis window stays exactly where it was. You do
+nothing differently: the same key, the same box, the same Enter.
+
+**Reading while you work.**
+
+- The window stays on top of the program you are in, so you can read the
+  answer beside your document. Clicking back into that program does not hide
+  it.
+- **Esc** or the window's close button hides it. A reply still being written
+  carries on, and the chat is saved. While a menu is open in the window, Esc
+  closes the menu first.
+- Esc never answers an approval or an app's question in the window: the
+  window hides and the question waits in the chat, listed by the bell in
+  your main window, until you press one of its buttons. Enter still gives
+  its main answer there.
+- The one exception is the question a Local only chat asks before a message
+  would leave this PC. Nothing has been sent or saved yet, so Esc answers it
+  with **Keep it local**, as it does everywhere: nothing is sent, your words
+  go back into the box, and the window stays until you press Esc again.
+  Closing the window over that question puts it away instead: nothing is
+  sent or saved, and the words you typed are not kept.
+- Press the key again while the window is open and the cursor goes back into
+  its box, so a follow-up question is one press away. Once it is hidden, the
+  key opens the box for a new question.
+
+**Going further.**
+
+- **Continue in the main window**, at the top of the small window, opens the
+  same chat in the main window, where every control is.
+- A link in the answer to another page (Schedules, Settings…) opens that page
+  in the main window. Links to websites open in your browser, as everywhere.
+- A button under the answer that carries your request opens its page in the
+  main window with your words already there, exactly as in the main window:
+  **Work on this in a coding session** (Local only stays on when the chat
+  was Local only), the team's objective, and a workflow draft's **Open in
+  editor**. Nothing starts until you press Send or Start there.
+- A file in the record of what it did opens beside the same chat in the main
+  window. A figure's **How this was worked out** says in words where the
+  figure was read (the page and the file), right in the small window.
+- A Quick Ask is an ordinary chat: it is in your chat list, it can use
+  its cards, Undo and the record of what it did, and anything you set up
+  from it reports back into it.
+
+**Keeping it light.** One small window at a time. Hidden for ten minutes, it
+is closed to free its memory; the chat stays in your chat list.
+
+The box and the tray's item are both called **Quick Ask** now (they used to
+say "Quick task"; searching for that still finds it).
+
 ## Rehearse a rule or a schedule before it runs for real (v1.562.0)
 
 A rule or a schedule can now run once as a **rehearsal**. It really reads
@@ -2392,61 +2447,6 @@ skills. It now asks each time you type `/`.
 **What has not changed.** The list opens when `/` is the first thing on a
 line, in both boxes. A `/` inside a sentence is ordinary text. A tool that
 lists no commands says so, and what you type is still sent to it as typed.
-
-## Quick Ask: the answer appears right there (v1.557.0)
-
-Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows
-the key that is live, if another app holds that one), type your question,
-and press Enter. The answer appears right there: the box becomes a small
-window where it was, and the reply is written into it while you keep
-working. Your main Iron Jarvis window stays exactly where it was. You do
-nothing differently: the same key, the same box, the same Enter.
-
-**Reading while you work.**
-
-- The window stays on top of the program you are in, so you can read the
-  answer beside your document. Clicking back into that program does not hide
-  it.
-- **Esc** or the window's close button hides it. A reply still being written
-  carries on, and the chat is saved. While a menu is open in the window, Esc
-  closes the menu first.
-- Esc never answers an approval or an app's question in the window: the
-  window hides and the question waits in the chat, listed by the bell in
-  your main window, until you press one of its buttons. Enter still gives
-  its main answer there.
-- The one exception is the question a Local only chat asks before a message
-  would leave this PC. Nothing has been sent or saved yet, so Esc answers it
-  with **Keep it local**, as it does everywhere: nothing is sent, your words
-  go back into the box, and the window stays until you press Esc again.
-  Closing the window over that question puts it away instead: nothing is
-  sent or saved, and the words you typed are not kept.
-- Press the key again while the window is open and the cursor goes back into
-  its box, so a follow-up question is one press away. Once it is hidden, the
-  key opens the box for a new question.
-
-**Going further.**
-
-- **Continue in the main window**, at the top of the small window, opens the
-  same chat in the main window, where every control is.
-- A link in the answer to another page (Schedules, Settings…) opens that page
-  in the main window. Links to websites open in your browser, as everywhere.
-- A button under the answer that carries your request opens its page in the
-  main window with your words already there, exactly as in the main window:
-  **Work on this in a coding session** (Local only stays on when the chat
-  was Local only), the team's objective, and a workflow draft's **Open in
-  editor**. Nothing starts until you press Send or Start there.
-- A file in the record of what it did opens beside the same chat in the main
-  window. A figure's **How this was worked out** says in words where the
-  figure was read (the page and the file), right in the small window.
-- A Quick Ask is an ordinary chat: it is in your chat list, it can use
-  its cards, Undo and the record of what it did, and anything you set up
-  from it reports back into it.
-
-**Keeping it light.** One small window at a time. Hidden for ten minutes, it
-is closed to free its memory; the chat stays in your chat list.
-
-The box and the tray's item are both called **Quick Ask** now (they used to
-say "Quick task"; searching for that still finds it).
 
 ## Pick up where you left off in a folder (v1.556.0)
 

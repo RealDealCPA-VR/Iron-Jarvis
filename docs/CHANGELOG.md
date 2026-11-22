@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.563.0
+
+**Quick Ask: the answer appears right there.** Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows the key that is live, if another app holds that one), type your question, and press Enter.
+
 ## v1.562.0
 
 **Rehearse a rule or a schedule before it runs for real.** A rule or a schedule can now run once as a **rehearsal**.
@@ -32,7 +36,7 @@
 
 ## v1.557.0
 
-**The `/` list in Build › Code works before a session starts.** Type `/` in Build › Code's start box (the box you see before any session is open) and the coding tool's own commands and skills are listed above the box, as they already were in an open session. **Quick Ask: the answer appears right there.** Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows the key that is live, if another app holds that one), type your question, and press Enter.
+**The `/` list in Build › Code works before a session starts.** Type `/` in Build › Code's start box (the box you see before any session is open) and the coding tool's own commands and skills are listed above the box, as they already were in an open session.
 
 ## v1.556.0
 
@@ -77,7 +81,3 @@
 ## v1.547.0
 
 **Ask what was done before, in any chat.** You can now ask Iron Jarvis about earlier work in plain words, in any chat and from an agent: "what did we do in this folder?", "what have we done on the price list?", "have I worked on this before?".
-
-## v1.546.2
-
-**A task from another computer brings as much of its chat as fits.** When one of your other computers sends this one a task ("@desk read the notes"), the chat it was asked in rides along so the work starts with the same background.
