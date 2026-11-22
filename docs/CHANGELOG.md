@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.550.0
+
+**The Timeline shows the models that did the work.** A coding session's **Timeline** tab now opens on the models that did the reply, each one a card, joined by arrows where one handed work to another.
+
 ## v1.549.0
 
 **Press a figure to see where it came from.** When a reply is about a file you gave Iron Jarvis or asked it to read (a PDF, a Word file, a text or CSV file, or a saved spreadsheet), the figures in the reply are now links.
@@ -77,7 +81,3 @@
 ## v1.534.0
 
 **Done means done, for attempts and the night.** The third of nine releases from the fourth review.
-
-## v1.533.0
-
-**Every new address asks, and cards say why.** The second of nine releases from the fourth review.
