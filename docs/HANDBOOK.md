@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.560.0 (2026-11-19).*
+holds itself to. Current as of v1.561.0 (2026-11-19).*
 
 ---
 
@@ -2042,6 +2042,60 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Commit and Open a pull request in Build › Code (v1.561.0)
+
+When a Build › Code reply is done (and Iron Jarvis has checked it), a small
+box under it offers **Commit** with the message already written, then
+**Open a pull request**: one press each. Iron Jarvis writes the message from
+its own record of the session, your first message and the files, never with
+a model; edit it before you press Commit if you like.
+
+**Working in your folder (as always).** Build › Code keeps working straight
+in the folder you chose. The box lists every changed file of the repository
+with a tick. The files that changed since this session started are ticked;
+anything you (or another program) changed before is listed unticked. Only
+the ticked files are committed, and whatever you had staged yourself stays
+staged. A pull request is offered only when your folder is on a branch of its
+own. On the repository's main branch the box says *Start the next session on
+its own branch to open a pull request.*
+
+**Its own branch, offered once per folder.** The first time you start a
+session in a git folder, the start box asks once: *Work on a new branch in
+this folder?* **Yes, a new branch** makes new sessions there work in their
+own copy of the folder, on a new branch, so your folder stays as it was
+until you merge (pull requests need it). **No, in the folder** keeps working
+in the folder directly and is not asked again; starting a session without
+answering counts as **No, in the folder**. After the answer, a quiet
+switch **Work on a new branch** changes it for one session. On a session with
+its own branch, the Changes tab has a **Branch** view: its commits, its pull
+request and its checks, Push, Merge into the branch it started from, and
+Discard (its copy goes to Iron Jarvis's trash, the branch stays). Only Merge
+changes your own folder. The coding tool works in that copy with your main
+folder's `.venv` and `node_modules`, and Iron Jarvis's test check after each
+reply uses your folder's answer. **Delete** on such a session moves its copy
+to the trash too and keeps the branch. **Branch from here** on it makes a
+session that works in the same copy, on the same branch; while two sessions
+work in one copy, neither can Discard it, and deleting one leaves the copy to
+the other.
+
+**Pull requests** go through the GitHub CLI (`gh`, signed in). Without it the
+box opens GitHub's own page instead. The branch is pushed first, never with a
+force. Once the pull request is open, a later commit on that branch is not in
+it until it is pushed: the box says so and offers **Push** (never a force).
+The box shows the pull request only while your folder is on its branch; on
+another branch it offers a pull request of that branch.
+
+**Never while it works.** Commit and the pull request wait until the reply
+has finished and Iron Jarvis has checked it. Commit also waits until the tool
+has nothing still running and the session is not open in a terminal. No
+message starts while a commit or a pull request is being made.
+
+**From chat.** Say *start new Build › Code sessions in D:\code\shop on their
+own branch* (or *start new sessions in D:\code\shop in the folder, not on a
+new branch*): the card shows the change, and Undo puts back what the folder
+had. Chat does not commit a Build › Code session's work or open its pull
+request: ask, and it says where the two presses are.
+
 ## Browse and download models, with what fits this PC (v1.560.0)
 
 Model servers now has a second tab, **Models**: a model library in the style
@@ -2281,60 +2335,6 @@ skills. It now asks each time you type `/`.
 **What has not changed.** The list opens when `/` is the first thing on a
 line, in both boxes. A `/` inside a sentence is ordinary text. A tool that
 lists no commands says so, and what you type is still sent to it as typed.
-
-## Commit and Open a pull request in Build › Code
-
-When a Build › Code reply is done (and Iron Jarvis has checked it), a small
-box under it offers **Commit** with the message already written, then
-**Open a pull request**: one press each. Iron Jarvis writes the message from
-its own record of the session, your first message and the files, never with
-a model; edit it before you press Commit if you like.
-
-**Working in your folder (as always).** Build › Code keeps working straight
-in the folder you chose. The box lists every changed file of the repository
-with a tick. The files that changed since this session started are ticked;
-anything you (or another program) changed before is listed unticked. Only
-the ticked files are committed, and whatever you had staged yourself stays
-staged. A pull request is offered only when your folder is on a branch of its
-own. On the repository's main branch the box says *Start the next session on
-its own branch to open a pull request.*
-
-**Its own branch, offered once per folder.** The first time you start a
-session in a git folder, the start box asks once: *Work on a new branch in
-this folder?* **Yes, a new branch** makes new sessions there work in their
-own copy of the folder, on a new branch, so your folder stays as it was
-until you merge (pull requests need it). **No, in the folder** keeps working
-in the folder directly and is not asked again; starting a session without
-answering counts as **No, in the folder**. After the answer, a quiet
-switch **Work on a new branch** changes it for one session. On a session with
-its own branch, the Changes tab has a **Branch** view: its commits, its pull
-request and its checks, Push, Merge into the branch it started from, and
-Discard (its copy goes to Iron Jarvis's trash, the branch stays). Only Merge
-changes your own folder. The coding tool works in that copy with your main
-folder's `.venv` and `node_modules`, and Iron Jarvis's test check after each
-reply uses your folder's answer. **Delete** on such a session moves its copy
-to the trash too and keeps the branch. **Branch from here** on it makes a
-session that works in the same copy, on the same branch; while two sessions
-work in one copy, neither can Discard it, and deleting one leaves the copy to
-the other.
-
-**Pull requests** go through the GitHub CLI (`gh`, signed in). Without it the
-box opens GitHub's own page instead. The branch is pushed first, never with a
-force. Once the pull request is open, a later commit on that branch is not in
-it until it is pushed: the box says so and offers **Push** (never a force).
-The box shows the pull request only while your folder is on its branch; on
-another branch it offers a pull request of that branch.
-
-**Never while it works.** Commit and the pull request wait until the reply
-has finished and Iron Jarvis has checked it. Commit also waits until the tool
-has nothing still running and the session is not open in a terminal. No
-message starts while a commit or a pull request is being made.
-
-**From chat.** Say *start new Build › Code sessions in D:\code\shop on their
-own branch* (or *start new sessions in D:\code\shop in the folder, not on a
-new branch*): the card shows the change, and Undo puts back what the folder
-had. Chat does not commit a Build › Code session's work or open its pull
-request: ask, and it says where the two presses are.
 
 ## Pick up where you left off in a folder (v1.556.0)
 

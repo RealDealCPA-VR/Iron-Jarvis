@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.561.0
+
+**Commit and Open a pull request in Build › Code.** When a Build › Code reply is done (and Iron Jarvis has checked it), a small box under it offers **Commit** with the message already written, then **Open a pull request**: one press each.
+
 ## v1.560.0
 
 **Browse and download models, with what fits this PC.** Model servers now has a second tab, **Models**: a model library in the style of LM Studio.
@@ -77,7 +81,3 @@
 ## v1.546.1
 
 **Slack and email say when they could not take a file.** A file you send Jarvis in Slack or by email now gets a plain answer that it could not be used, the way Telegram already did, instead of silence.
-
-## v1.546.0
-
-**Rewind works in folders without git too.** "Rewind to here" can put a folder's files back as they were when a message started (v1.543.0).
