@@ -191,10 +191,32 @@ def _compose_recall_query(messages) -> str:
     tokens is used unchanged — identical to the pre-v1.141.0 behaviour for
     normal-length messages. Empty/whitespace-only history composes to ``""``
     (callers already skip grounding on a blank query).
+
+    CONTINUE (next leaps 04-a): the pick-up card's fixed sentence
+    (``workmap.block.CONTINUE_SENTENCE``) is taken out of every user message
+    first (``block.without_continue``), and a message that was only the
+    sentence takes no place at all. It points at the turn's own folder and
+    nothing else, so no grounding keyed off this query (the fabric's past
+    conversations in EVERY folder, project knowledge, connector memory, the
+    work record, the client wall and the client tools' owner words) ever
+    matches on it: every chat Continue starts has it as its first message,
+    so other folders' Continues were its top matches. A message without the
+    sentence is unchanged, byte for byte.
     """
     from ..memory.fabric import _tokens
+    from ..workmap.block import without_continue
 
-    users = [(m.content or "") for m in messages if m.role == "user"]
+    users: list[str] = []
+    for m in messages:
+        if m.role != "user":
+            continue
+        text = m.content or ""
+        words = without_continue(text)
+        if words != text:
+            words = words.strip()
+            if not words:
+                continue
+        users.append(words)
     if not users:
         return ""
     parts = [users[-1]]

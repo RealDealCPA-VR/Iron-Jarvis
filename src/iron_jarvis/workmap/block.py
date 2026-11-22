@@ -56,7 +56,10 @@ sentence, :data:`CONTINUE_SENTENCE`. It points at THIS folder and at nothing
 else, so :func:`work_block` takes it out of ``query`` before anything is
 matched, named or walled (:func:`without_continue`): its words ("continue",
 "left") never list work in another folder as "matching this message" and
-never put another client's work behind ``WALL_NOTE``.
+never put another client's work behind ``WALL_NOTE``. A chat turn's ONE
+recall query (``daemon.chat_turn._compose_recall_query``) takes it out the
+same way, so no other grounding (the memory fabric's past conversations in
+every folder above all) matches on it either.
 """
 
 from __future__ import annotations

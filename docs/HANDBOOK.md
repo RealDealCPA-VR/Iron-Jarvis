@@ -2087,7 +2087,8 @@ record, so nothing has to be typed again.
   as usual. Its own recap says what it did, and the Decided and Still open
   lines of the chats before it stay on the card.
 - The sentence Continue sends points only at this folder: the reply is not
-  told about work elsewhere just because it used the same words.
+  told about work or conversations elsewhere just because they used the
+  same words.
 - In Build › Code, your own coding tool (Claude Code, Codex and the others)
   is not shown this record, and the card says so under Continue. There
   Continue starts the session with the same sentence, and the tool works

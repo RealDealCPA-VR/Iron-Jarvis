@@ -378,6 +378,107 @@ def test_continue_in_a_clients_folder_puts_no_other_clients_work_behind_the_wall
     assert "Confirm the bonus" in told
 
 
+_FABRIC = ["files", "notes", "memory", "lessons", "sessions", "chats"]
+_MEMORY_HEAD = "# Relevant from memory"
+
+
+@pytest.fixture()
+def lanes(tmp_path, monkeypatch):
+    # The whole daemon (no port), for the turn's ONE recall query as both
+    # chat lanes build it. A loaded runner must never make an optional hop
+    # late: these tests are about WHAT is said, not how fast.
+    from iron_jarvis.daemon import chat_turn
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.providers.adapters.base import LLMResponse
+    from iron_jarvis.providers.router import RouteResult
+
+    monkeypatch.setattr(chat_turn, "GROUNDING_SOFT_S", 60.0)
+    books, ledgers = tmp_path / "Books", tmp_path / "Ledgers"
+    books.mkdir()
+    ledgers.mkdir()
+    seen: list[str] = []
+
+    async def fake_complete(*, provider=None, model=None, system, messages, tools=None, task_class=None, **kw):
+        seen.append(system)
+        return RouteResult(LLMResponse(text="Done."), "mock", "mock")
+
+    async def fake_stream(*, provider=None, model=None, system, messages, tools=None, session_id=None,
+                          task_class=None, **kw):
+        seen.append(system)
+        yield {"type": "text", "text": "Done."}
+        yield {"type": "final", "response": LLMResponse(text="Done."), "provider": "mock", "model": "mock"}
+
+    with TestClient(create_app(str(tmp_path / "home"))) as client:
+        platform = client.app.state.platform
+        platform.router.complete = fake_complete
+        platform.router.stream = fake_stream
+        yield SimpleNamespace(client=client, platform=platform, seen=seen,
+                              books=str(books), ledgers=str(ledgers))
+
+
+def _both_lanes_memory(lanes, messages, folder) -> list[str]:
+    """The "Relevant from memory" section each chat lane's prompt carries."""
+    body = {"messages": messages, "workspace_dir": folder, "auto_tools": False}
+    out = []
+    for path in ("/chat", "/chat/stream"):
+        r = lanes.client.post(path, json=body)
+        assert r.status_code == 200, r.text
+        system = lanes.seen[-1]
+        out.append(system.split(_MEMORY_HEAD, 1)[1].split("\n\n", 1)[0] if _MEMORY_HEAD in system else "")
+    return out
+
+
+def test_continues_sentence_recalls_no_other_folders_conversation_in_either_lane(lanes):
+    # The reviewer's third probe: the sentence was taken out of the work
+    # block only. The turn's ONE recall query (``_compose_recall_query``)
+    # kept it, and the memory fabric searches past conversations in EVERY
+    # folder with it: an earlier Continue in another folder has the sentence
+    # word for word as its only message, so it came back first, as
+    # "[conversation] Ledger 2026 (continued): [Continue where we left off
+    # in this folder]", at the moment the turn is asked to continue THIS one.
+    r = lanes.client.put("/chat/threads/new", json={
+        "messages": [{"role": "user", "content": CONTINUE},
+                     {"role": "assistant",
+                      "content": "Picking up ledger_2026.xlsx in the Ledgers folder: the March totals are next."}],
+        "title": "Ledger 2026 (continued)", "setup": {"workspace_dir": lanes.ledgers},
+    })
+    assert r.status_code == 200, r.text
+    # The setup can see that chat: recalled on the sentence itself, it comes back.
+    assert "Ledger 2026 (continued)" in lanes.platform.fabric.ground(CONTINUE, sources=_FABRIC)
+    for messages in (
+        [{"role": "user", "content": CONTINUE}],
+        # a short reply in the chat Continue started is composed onto it
+        [{"role": "user", "content": CONTINUE}, {"role": "assistant", "content": "Here is where it stands."},
+         {"role": "user", "content": "yes, go on"}],
+    ):
+        for told in _both_lanes_memory(lanes, messages, lanes.books):
+            assert "Ledger" not in told and "continued" not in told, (messages, told)
+    # The owner's other words still recall, in both lanes.
+    for told in _both_lanes_memory(
+        lanes, [{"role": "user", "content": f"{CONTINUE} Also total the ledger 2026 entries"}], lanes.books,
+    ):
+        assert "[conversation] Ledger 2026 (continued)" in told, told
+
+
+def test_the_recall_query_leaves_the_sentence_out_and_every_other_word_in():
+    from iron_jarvis.daemon.chat_turn import _compose_recall_query, client_owner_words
+
+    def m(*pairs):
+        return [SimpleNamespace(role=r, content=c) for r, c in pairs]
+
+    assert _compose_recall_query(m(("user", CONTINUE))) == ""
+    assert _compose_recall_query(m(("user", CONTINUE.lower()))) == ""
+    # A message that was only the sentence takes no place in the composition.
+    assert _compose_recall_query(m(("user", CONTINUE), ("assistant", "Here it is."), ("user", "yes, go on"))) == (
+        "yes, go on")
+    assert _compose_recall_query(m(("user", f"{CONTINUE} Also check the Hartleys payroll"))) == (
+        "Also check the Hartleys payroll")
+    # Words that only look like it are the owner's, byte for byte.
+    assert _compose_recall_query(m(("user", "Continue the reconciliation"))) == "Continue the reconciliation"
+    # The client wall and the client tools read the same words.
+    assert client_owner_words(SimpleNamespace(messages=m(("user", CONTINUE)))) == ""
+
+
 def test_without_continue_takes_out_only_the_sentence():
     assert B.without_continue(CONTINUE).strip() == ""
     assert B.without_continue("  continue   WHERE we left off\nin this folder  ").strip() == ""
