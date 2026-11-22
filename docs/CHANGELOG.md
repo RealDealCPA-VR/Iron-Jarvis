@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.559.2
+
+**A deleted session's copies of your files always go.** When you delete a Build › Code session in a folder without git, Iron Jarvis now removes its copies of your files even when one of them was in use at that moment.
+
 ## v1.559.0
 
 **The night review leaves suggestions for the morning.** Iron Jarvis can now look at what went wrong during the day while your PC is idle at night, and leave suggestions in **Improvements** for you to accept or decline in the morning.
@@ -77,7 +81,3 @@
 ## v1.545.0
 
 **Switch the coding tool in the same session.** A coding session in Build › Code used to stay on the tool it started with.
-
-## v1.544.0
-
-**Comment on a changed line.** When a coding tool changes your files, you often want to say something about one exact place: "use a different name here", "this branch is wrong".

@@ -13,7 +13,7 @@ pass; concurrent code passes however starved the machine is. The v1.257.0 cut
 asserted a wall-clock RATIO (four packs under twice one pack) and went red on
 the release runner at 3.21x with nothing wrong -- a ratio between two sleeps is
 still a measurement of the scheduler, and a loaded scheduler starts four threads
-late enough to look serial. The hung-packs test followed in v1.558.3: it is
+late enough to look serial. The hung-packs test followed in v1.559.2: it is
 proven by ORDER (every build started before the first pack is given up), never
 by a ratio of two wall times.
 
@@ -142,7 +142,7 @@ def test_a_slow_pack_does_not_eat_another_packs_timeout_budget(monkeypatch):
     the same three cost 3x the ceiling, which is how a single wedged pack used
     to turn into a boot that looked broken.
 
-    Proven by ORDER, not by a stopwatch (v1.558.3): every hung pack's build
+    Proven by ORDER, not by a stopwatch (v1.559.2): every hung pack's build
     must have STARTED before the FIRST pack is given up. A serial loop gives
     the first pack up before the second one starts, so it cannot pass. The
     v1.257.0 cut compared three packs' wall time with one pack's (under 2x)

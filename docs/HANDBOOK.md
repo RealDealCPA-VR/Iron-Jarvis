@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.559.1 (2026-11-19).*
+holds itself to. Current as of v1.559.2 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## A deleted session's copies of your files always go (v1.551.1)
+## A deleted session's copies of your files always go (v1.559.2)
 
 When you delete a Build › Code session in a folder without git, Iron Jarvis
 now removes its copies of your files even when one of them was in use at
@@ -2847,7 +2847,7 @@ anything is copied. A folder on a network share gets no copy.
   folder that is not left out, including files such as `.env` with keys in
   them. They are left out of Iron Jarvis's backups, kept while the session is
   archived, and removed when you delete the session (a little later when a
-  file in them is in use then; v1.551.1).
+  file in them is in use then; v1.559.2).
 - Once a session keeps its own copies, it goes on doing so even if the folder
   later becomes a git repository, and it writes nothing into that repository.
 - A folder that is inside a git repository git cannot read right now (a
