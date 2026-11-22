@@ -479,9 +479,10 @@ def _resolves(href: str) -> bool:
     if u.path == "/terminals":
         build_app = (DASH / "lib" / "buildApp.ts").read_text(encoding="utf-8")
         return q.get("view") == "terminal" and 'if (v === "terminal") return "terminal";' in build_app
-    if u.path == "/fleet":
+    if u.path == "/fleet" and q:
         # Next leaps 43-a: the Models tab of Model servers, read from the
-        # address by the page itself.
+        # address by the page itself. The bare /fleet (the Servers tab, the
+        # page's default, model_server_add's door) falls through below.
         lib = (DASH / "lib" / "modelLibrary.ts").read_text(encoding="utf-8")
         page = (DASH / "app" / "fleet" / "page.tsx").read_text(encoding="utf-8")
         return (
@@ -503,6 +504,11 @@ def test_every_door_leads_to_a_real_place():
     assert not _resolves("/help?guide=handbook&section=no-such-section-anywhere")
     assert not _resolves("/settings?section=connections-nothing")
     assert not _resolves("/nowhere")
+    # Model servers: the bare page (the Servers tab, model_server_add's door)
+    # and its Models tab are both real; a tab it does not have is not.
+    assert _resolves("/fleet")
+    assert _resolves("/fleet?view=models")
+    assert not _resolves("/fleet?view=nothing")
 
 
 def test_the_doors_reuse_the_places_other_doors_already_use():
