@@ -808,13 +808,37 @@ class RunStory:
     child, whose task the model wrote) and ``skip`` the pieces of work the
     run is part of (its own session, every run it was started inside, the
     chat it was started in or handed off from, a Build helper's coding
-    session), never listed to it as earlier work."""
+    session), never listed to it as earlier work. ``wall`` is the wall the
+    story is told behind (:func:`story_wall`, set by ``run``; None outside
+    a run)."""
 
-    __slots__ = ("words", "skip")
+    __slots__ = ("words", "skip", "wall")
 
-    def __init__(self, words: str = "", skip: tuple[str, ...] = ()) -> None:
+    def __init__(self, words: str = "", skip: tuple[str, ...] = (), wall: Any = None) -> None:
         self.words = words
         self.skip = skip
+        self.wall = wall
+
+
+#: The origins of a run whose TASK the owner typed (v1.549.0, the
+#: independent review), ``origin == o`` or ``origin.startswith(o + ":")``,
+#: beside a run with no origin (the owner's page, ``POST /sessions``): a
+#: chat's hand-off, a project page, an objective, the Agents page, the
+#: owner's own schedule and the phone. AN ALLOWLIST ON PURPOSE: a reflex
+#: (its task is rendered from an outside signal), autonomy (the model's
+#: planned task), a workflow's step, a goal's iteration, an assignment,
+#: self-improvement, a helper, a teammate, another computer and any origin
+#: added later are nobody's words.
+OWNER_TASK_ORIGINS = ("chat", "project", "job:mission", "job:agents", "schedule", "comm")
+
+
+def owner_typed_task(origin: object) -> bool:
+    """Is a run of ``origin`` one whose task the owner typed
+    (:data:`OWNER_TASK_ORIGINS`)? Pure; never raises."""
+    text = str(origin or "").strip()
+    if not text:
+        return True
+    return any(text == o or text.startswith(o + ":") for o in OWNER_TASK_ORIGINS)
 
 
 #: THE STORY SPREADS DOWN (v1.549.0): set by ``run`` around the run body,
@@ -835,8 +859,9 @@ def run_story(session, parent_id: str | None = None) -> RunStory:
     the run's own client wall is set (so a wall already set is a caller's).
 
     The task counts as the owner's words only for a run the owner started:
-    not a child (``parent_id``, or started inside another run), not a Build
-    helper or an objective's teammate (their origin), not work started
+    an origin whose task the owner typed (:func:`owner_typed_task`: never a
+    reflex, autonomy, a Build helper or an objective's teammate), not a
+    child (``parent_id``, or started inside another run), not work started
     inside a chat turn (a wall or a turn already set: the model delegated
     it), never a task from another computer. Unsure: no words (a story told
     from the folder alone). Never raises."""
@@ -877,7 +902,7 @@ def run_story(session, parent_id: str | None = None) -> RunStory:
         from .team import MISSION_MEMBER_ORIGIN
 
         origin = str(getattr(session, "origin", "") or "")
-        owners = not (
+        owners = owner_typed_task(origin) and not (
             parent_id or parent is not None or in_turn
             or _wall.inherited() is not None
             or origin in (HELPER_ORIGIN, MISSION_MEMBER_ORIGIN)
@@ -889,13 +914,52 @@ def run_story(session, parent_id: str | None = None) -> RunStory:
     return RunStory(words=words, skip=tuple(skip))
 
 
+def story_wall(story: RunStory, run_wall: Any) -> Any:
+    """The wall ``story`` is told behind (v1.549.0, the independent review),
+    worked out in ``run`` from the run's own wall (:func:`run_client_wall`)
+    BEFORE that wall is set. The run's wall names the clients its TASK
+    names, so it is the story's only when the task is the owner's words
+    (``story.words``). Otherwise the same wall, naming only the clients the
+    owner's own words named where the run was started: inside a chat turn,
+    that turn's (``run_wall`` is already narrowed to it); inside another
+    run, that run's story wall; started by nothing the owner said (a reflex,
+    autonomy, a helper started in the background), none. Unsure: none.
+    Pure; never raises."""
+    from dataclasses import replace
+
+    from ..workmap.clients import TurnWall
+    from ..workmap.clients import wall as _wall
+
+    if not isinstance(run_wall, TurnWall):
+        return run_wall
+    try:
+        if story.words:
+            return run_wall
+        parent = RUN_STORY.get()
+        if parent is not None:
+            pw = getattr(parent, "wall", None)
+            named = (frozenset(run_wall.named) & frozenset(pw.named)
+                     if isinstance(pw, TurnWall) else frozenset())
+            return replace(run_wall, named=named)
+        if _wall.inherited() is not None:  # a chat turn: the owner's message
+            return run_wall
+        return replace(run_wall, named=frozenset())
+    except Exception:  # noqa: BLE001 — unsure: nobody's words name a client
+        try:
+            return replace(run_wall, named=frozenset())
+        except Exception:  # noqa: BLE001
+            return TurnWall(ok=False, folder_key=getattr(run_wall, "folder_key", ""))
+
+
 async def run_work_block(platform, session, turn=None) -> str:
     """THE STORY a run is told (v1.549.0, next leaps 14-a): the chat lanes'
     "Earlier work on record" (``workmap.block.work_block``) for the run's own
     folder (:func:`run_client_folder`; a scratch folder is nobody's, so only
     work the owner's words point at), behind the run's OWN wall ``turn``
     (:func:`run_client_wall`, already NARROWED for a helper or child: never
-    wider than the turn or run it was started in), with the owner's words
+    wider than the turn or run it was started in; left out, the story's
+    :func:`story_wall`, which names a client only when the owner's own
+    words did), with the owner's words
     only (:data:`RUN_STORY`), the run's own session and every piece of work
     it is part of left out, and a project run's folder part left to the
     project's own recent activity (the chat rule). Local only and the phone
@@ -911,6 +975,12 @@ async def run_work_block(platform, session, turn=None) -> str:
         story = None
     if story is None:  # not inside ``run``: the folder alone, nobody's words
         story = RunStory(skip=(str(getattr(session, "id", "") or ""),))
+    if turn is None:  # the story's own wall (``story_wall``); else nobody named
+        turn = story.wall
+        if turn is None:
+            from ..workmap.clients import wall as _wall
+
+            turn = story_wall(RunStory(), _wall.current())
 
     def _read() -> str:
         from ..workmap.block import work_block
@@ -2595,6 +2665,9 @@ class AgentRuntime:
             # (a wall already set is the caller's: the model delegated it).
             _story = run_story(session, parent_id)
             _turn_wall = await run_client_wall(self.p, session)
+            # ...and the wall its story is told behind: the run's own, naming
+            # a client only when the owner's own words did (the review).
+            _story.wall = story_wall(_story, _turn_wall)
             # A TASK FROM ANOTHER COMPUTER (v1.509.0, F1): set for the run body
             # so every child run awaited inside it is one too.
             _remote_token = REMOTE_RUN.set(run_is_remote(session))
@@ -3306,15 +3379,15 @@ class AgentRuntime:
             # the full story"): "Earlier work on record", the block a chat in
             # this folder is told, right after the client block, behind the
             # run's OWN wall (set around the run by ``run``; a helper's is
-            # narrowed to the turn or run it was started in) and with the
-            # owner's words only. A memory injection, so gated by skip_memory;
-            # never for a task from another computer. "" when nothing is on
-            # record (byte-identical). Here, long before the planner prices
-            # the prompt. The run's page lists it among what it was given.
+            # narrowed to the turn or run it was started in) naming only the
+            # clients the owner's own words named (``story_wall``), and with
+            # the owner's words only. A memory injection, so gated by
+            # skip_memory; never for a task from another computer. "" when
+            # nothing is on record (byte-identical). Here, long before the
+            # planner prices the prompt. The run's page lists it among what
+            # it was given.
             if not remote_run:
-                from ..workmap.clients import wall as _story_wall
-
-                _work_text = await run_work_block(self.p, session, _story_wall.current())
+                _work_text = await run_work_block(self.p, session)
                 if _work_text:
                     system_prompt += "\n\n" + _work_text
                     await asyncio.to_thread(

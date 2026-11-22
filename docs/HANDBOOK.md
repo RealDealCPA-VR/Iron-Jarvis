@@ -2060,7 +2060,10 @@ Nothing to turn on.
   is told the same, behind the same wall: in a client's folder never another
   client's work, even when the helper's task names that client. A helper's
   task is written by the model, so it never points the helper at other
-  folders; only your own words do.
+  folders; only your own words do. The same holds for an agent Iron Jarvis
+  starts without you typing its task (a rule reacting to a message, its own
+  planned step, a workflow step, a reviewer): it is told its own folder's
+  earlier work, never a client's that its task names.
 - **Terminal help.** The AI help on a terminal is told the earlier work in
   the folder the terminal shows it is in now. When the terminal has moved
   into another client's folder, or its folder cannot be told from what it

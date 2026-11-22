@@ -373,6 +373,80 @@ async def test_a_child_is_never_told_the_run_it_is_part_of(clients):
 
 
 # --------------------------------------------------------------------------- #
+# 2b. a run whose task nobody typed names no client (the independent review)
+# --------------------------------------------------------------------------- #
+def _nobodys_origins() -> list[str]:
+    from iron_jarvis.harness.helpers import HELPER_ORIGIN
+
+    # A helper started in the background (the CI reviewer: no chat turn, no
+    # run around it), a reflex (its task is rendered from an outside
+    # signal), autonomy (the model's planned task), a workflow's step.
+    return [HELPER_ORIGIN, "reflex:inbox", "autonomy", "workflow:month end"]
+
+
+@pytest.mark.parametrize("origin", _nobodys_origins())
+async def test_a_run_nobody_typed_is_never_pointed_at_a_client_its_task_names(clients, origin):
+    """Started OUTSIDE any chat turn or run, in a folder with no client, with
+    a task naming Smith: told its own folder's work, never Smith's. The
+    control: the owner starting the very same run is told Smith's work."""
+    _chat(clients.engine, "Downloads bank letter draft", clients.downloads, hours_ago=2)
+    task = "Look at Smith's quarterly report"
+    owner, _row = await _run(clients, task, clients.downloads)
+    assert "Smith quarterly report" in _story(owner), owner[-1500:]
+    system, _row = await _run(clients, task, clients.downloads, origin=origin)
+    story = _story(system)
+    assert "Downloads bank letter draft" in story, system[-1500:]  # it IS told a story
+    assert "Smith quarterly report" not in story and str(clients.smith) not in story
+
+
+def test_only_a_task_the_owner_typed_counts_as_the_owners_words():
+    from iron_jarvis.agents import runtime as RT
+    from iron_jarvis.agents.team import MISSION_MEMBER_ORIGIN
+
+    for origin in (None, "", "chat", "project", "project:p1", "job:mission", "job:agents",
+                   "schedule:daily", "comm:slack"):
+        assert RT.owner_typed_task(origin), origin
+    for origin in (*_nobodys_origins(), "goal:g1", "assignment:a1", "self_dev", "memory-review",
+                   MISSION_MEMBER_ORIGIN, "remote:desk", "a new kind of start"):
+        assert not RT.owner_typed_task(origin), origin
+        assert RT.run_story(SimpleNamespace(id="s", task="t", origin=origin, options_json="{}")).words == ""
+
+
+def test_the_storys_wall_names_a_client_only_when_the_owners_words_did():
+    from iron_jarvis.agents import runtime as RT
+    from iron_jarvis.workmap.clients import TurnWall
+
+    run_wall = TurnWall(named=frozenset({"c_smith"}), folder_key="downloads")
+    # The owner's words: the run's own wall.
+    assert RT.story_wall(RT.RunStory(words="Look at Smith"), run_wall).named == {"c_smith"}
+    # Nobody's words, started by nothing: no client named; the rest is kept.
+    got = RT.story_wall(RT.RunStory(), run_wall)
+    assert got.named == frozenset() and got.folder_key == "downloads" and got.ok
+    # Inside a chat turn: the run's wall is already narrowed to the turn's.
+    with wall.turn_scope(TurnWall(named=frozenset({"c_smith"}))):
+        assert RT.story_wall(RT.RunStory(), run_wall).named == {"c_smith"}
+    # Inside another run: that run's STORY wall, never its task's wall.
+    for parent_named, want in ((frozenset(), frozenset()), (frozenset({"c_smith"}), {"c_smith"})):
+        token = RT.RUN_STORY.set(RT.RunStory(wall=TurnWall(named=parent_named)))
+        try:
+            assert RT.story_wall(RT.RunStory(), run_wall).named == want
+        finally:
+            RT.RUN_STORY.reset(token)
+
+
+async def test_a_run_the_phone_started_is_told_titles_and_how_each_ended_only(world):
+    """The Handbook's sentence: no file names, no recap lines."""
+    tid = _chat(world.engine, "Monday price list in euros", world.prices, hours_ago=48,
+                docs=[world.prices / "prices.xlsx"])
+    _recap(world.engine, tid, f"DONE: priced the spring list\n{EUROS}")
+    system, _row = await _run(world, "update the price list for Wednesday", world.prices,
+                              origin="comm:slack")
+    story = _story(system)
+    assert "Monday price list in euros" in story, system[-1500:]
+    assert "prices.xlsx" not in story and EUROS not in story and B.RECAP_NOTE not in story
+
+
+# --------------------------------------------------------------------------- #
 # 3. the run's page lists it among what the run was given
 # --------------------------------------------------------------------------- #
 def test_the_runs_page_reads_what_the_run_was_given(tmp_path):
