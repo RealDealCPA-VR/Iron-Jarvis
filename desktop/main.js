@@ -3998,6 +3998,9 @@ const TOOL_WORDS = {
   // Next leaps 41-a: a paired computer's switch, turned off from chat
   // (lib/toolWords.ts, pinned equal).
   peer_allow_off: "turn off something a paired computer may do here",
+  // Next leaps 43-a: a model downloaded into a model server (lib/toolWords.ts,
+  // pinned equal).
+  model_download: "download a model into your model server",
   // v1.499.0: your clients from chat (the card's own words, pinned equal).
   client_answer: "say whether a name is one of your clients",
   client_update: "change one of your clients",
@@ -4190,6 +4193,8 @@ const TOOL_WORDS_BUILTIN = {
   memory_search: "search its memory",
   memory_write: "save to its memory",
   message_agent: "message a teammate",
+  model_download: "download a model into your model server",
+  model_library: "look at which models fit this PC",
   model_server_add: "add a model server",
   model_server_default: "set the default model to one of a model server's",
   model_server_remove: "remove a model server",

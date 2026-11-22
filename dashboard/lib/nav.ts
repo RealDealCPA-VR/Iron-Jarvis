@@ -506,6 +506,12 @@ export const NAV: NavSectionDef[] = [
           "gpu",
           "loaded models",
           "what is running",
+          // Next leaps 43-a: the Models tab (the model library).
+          "model library",
+          "download a model",
+          "models that fit",
+          "which models fit my pc",
+          "hugging face",
         ],
         blurb: "Every model server you can reach, and what each one has loaded and is serving.",
       },

@@ -888,6 +888,39 @@ def _xls_missing_fix() -> str:
     return "Reinstall dependencies (`uv sync`); xlrd is missing from this checkout."
 
 
+def check_graphics_memory() -> dict:
+    """The model library reads graphics memory from ``nvidia-smi`` (next
+    leaps 43-a). RECOMMENDED: without it the library judges fit by the PC's
+    memory and says so. It RUNS the program through ``core/procs``, bounded,
+    the way the library does, because a child process is exactly what a
+    packaged build can break while the source run works."""
+    from ..fleet import hardware as HW
+
+    exe = HW.nvidia_smi_path()
+    if not exe:
+        return _result(
+            "graphics_memory",
+            True,
+            "No NVIDIA card's memory to read on this PC (no nvidia-smi), so the model library judges "
+            "which models fit by the PC's memory.",
+            level=RECOMMENDED,
+        )
+    cards = HW.gpus()
+    if not cards:
+        return _result(
+            "graphics_memory",
+            False,
+            "nvidia-smi is on this PC but did not say how much graphics memory there is, so the model "
+            "library judges which models fit by the PC's memory.",
+            fix="Update the NVIDIA driver, then run this check again. If this is the packaged app and it "
+            "keeps failing, its child process is being stopped.",
+            level=RECOMMENDED,
+        )
+    words = ", ".join(f"{c.name} ({c.total / 1e9:.0f} GB)" if c.total else c.name for c in cards)
+    return _result("graphics_memory", True, f"Graphics memory is read for the model library: {words}.",
+                   level=RECOMMENDED)
+
+
 #: Ordered list of every check callable — callers may render this directly.
 CHECKS = [
     check_python,
@@ -905,6 +938,7 @@ CHECKS = [
     check_legacy_office,
     check_guide_docs,
     check_browser_addon,
+    check_graphics_memory,
 ]
 
 

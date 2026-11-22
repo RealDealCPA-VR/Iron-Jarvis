@@ -46,6 +46,12 @@ vi.mock("@/lib/api", () => ({
       if (hooks.launchError) return Promise.reject(new hooks.FakeApiError(hooks.launchError, 409));
       return Promise.resolve({ id: "pane-7" });
     }
+    if (path.endsWith("/models/download")) {
+      return Promise.resolve({
+        download: { id: "dl1", node_id: "ollama", model: "llama3.2", name: "Llama 3.2 3B", state: "downloading",
+                    bytes_total: 2_019_390_340, bytes_done: 0 },
+      });
+    }
     return Promise.resolve({ ok: true });
   }),
   put: vi.fn((path: string, body?: unknown) => {
@@ -192,11 +198,18 @@ describe("Wave H item 28 — the Connections rows match the first-run door", () 
     const row = await screen.findByTestId("ollama-no-model-row");
     expect(row.textContent).toMatch(/Ollama is running but has no model yet/);
     expect(screen.queryByTestId("get-ollama-row")).toBeNull();
+    // Next leaps 43-a (moved on purpose): the starter downloads INSIDE the
+    // app, through the model library's own download, into Ollama on this PC;
+    // the row shows its progress (it opened a Build terminal before).
+    hooks.responses["/fleet/library"] = {
+      servers: [{ id: "ollama", label: "Ollama on this PC", kind: "ollama", this_pc: true, downloads: true }],
+    };
     fireEvent.click(within(row).getByTestId("ollama-starter-download"));
     await waitFor(() =>
-      expect(hooks.posts).toContainEqual({ path: "/terminals/launch", body: { cli: "ollama-starter" } }),
+      expect(hooks.posts).toContainEqual({ path: "/fleet/nodes/ollama/models/download", body: { model: "llama3.2" } }),
     );
-    expect(await within(row).findByTestId("ollama-starter-pane")).toBeTruthy();
+    expect(hooks.posts.map((p) => p.path)).not.toContain("/terminals/launch");
+    expect(await within(row).findByTestId("ollama-starter-progress")).toBeTruthy();
   });
 
   it("CONTROL: an Ollama that is not running still says where to get it", async () => {

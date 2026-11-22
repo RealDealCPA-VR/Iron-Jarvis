@@ -356,6 +356,12 @@ class EventType:
     # or "them" (the other computer said what it now lets this one do). The
     # card reads its list again. Never a token, never an address.
     PEER_ALLOWS_CHANGED = "peer.allows_changed"
+    # Next leaps 43-a (fleet/pulls): a model download from the library moved
+    # or ended. {id, node_id, model, bytes_done, bytes_total, percent} at most
+    # once per whole percent and once a second; ENDED adds state ("done" |
+    # "stopped" | "failed") and error (plain words). Never a key.
+    MODEL_DOWNLOAD_PROGRESS = "model.download.progress"
+    MODEL_DOWNLOAD_ENDED = "model.download.ended"
     # YOUR BROWSER (v1.235.0) — the user's own Chrome/Edge over /browser/ws.
     # Ambient facts about a browser, so they carry NO session_id: nothing here
     # belongs to one conversation. No payload ever carries the pairing token;

@@ -479,6 +479,16 @@ def _resolves(href: str) -> bool:
     if u.path == "/terminals":
         build_app = (DASH / "lib" / "buildApp.ts").read_text(encoding="utf-8")
         return q.get("view") == "terminal" and 'if (v === "terminal") return "terminal";' in build_app
+    if u.path == "/fleet":
+        # Next leaps 43-a: the Models tab of Model servers, read from the
+        # address by the page itself.
+        lib = (DASH / "lib" / "modelLibrary.ts").read_text(encoding="utf-8")
+        page = (DASH / "app" / "fleet" / "page.tsx").read_text(encoding="utf-8")
+        return (
+            q == {"view": "models"}
+            and 'export const LIBRARY_VIEW = "models";' in lib
+            and "viewFromSearch(window.location.search)" in page
+        )
     return not q
 
 

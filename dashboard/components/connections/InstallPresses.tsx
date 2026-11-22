@@ -19,7 +19,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Loader2, RefreshCw, TerminalSquare } from "lucide-react";
+import { Download as DownloadIcon, Loader2, RefreshCw, TerminalSquare } from "lucide-react";
 import { post } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import {
@@ -33,6 +33,7 @@ import {
 import { STARTER_MODEL_LABEL, useStarterModel } from "@/lib/starterModel";
 import { paneHref } from "@/lib/cliSignIn";
 import { CALM_ACTION } from "@/components/connections/endpointChip";
+import { DownloadProgress } from "@/components/fleet/DownloadProgress";
 
 const ROW_LINK =
   "font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent";
@@ -145,35 +146,37 @@ export function CliInstallPress({
   );
 }
 
-/** Ollama answers on this PC but has no model: the doors' starter download. */
+/** Ollama answers on this PC but has no model: the doors' starter download
+ *  (next leaps 43-a: inside the app, with its progress and Cancel). */
 export function OllamaStarterPress() {
   const starter = useStarterModel();
+  const d = starter.download;
   return (
     <div data-testid="ollama-no-model-row" className="mt-1 text-[11px] leading-relaxed text-zinc-500">
       Ollama is running but has no model yet.{" "}
-      {starter.paneId !== undefined ? (
-        <span data-testid="ollama-starter-pane" className="text-zinc-400">
-          A Build terminal opened and is downloading {STARTER_MODEL_LABEL}. When it says success, press Look
-          again.{" "}
-          <Link href={paneHref(starter.paneId)} className={ROW_LINK}>
-            Open the Build terminal
-          </Link>
+      {d && d.state !== "stopped" && d.state !== "failed" ? (
+        <span data-testid="ollama-starter-progress" className="mt-1 block text-zinc-400">
+          <DownloadProgress download={d} onChange={starter.update} testId="ollama-starter-row" />
+          {d.state === "done" && " Press Look again."}
         </span>
       ) : (
-        <button
-          type="button"
-          data-testid="ollama-starter-download"
-          onClick={() => void starter.start()}
-          disabled={starter.busy}
-          className={`-ml-1 ${CALM_ACTION}`}
-        >
-          {starter.busy ? (
-            <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />
-          ) : (
-            <TerminalSquare size={13} aria-hidden />
-          )}
-          Download a starter model ({STARTER_MODEL_LABEL}, about 2 GB)
-        </button>
+        <>
+          {d && <DownloadProgress download={d} testId="ollama-starter-row" />}
+          <button
+            type="button"
+            data-testid="ollama-starter-download"
+            onClick={() => void starter.start()}
+            disabled={starter.busy}
+            className={`-ml-1 ${CALM_ACTION}`}
+          >
+            {starter.busy ? (
+              <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : (
+              <DownloadIcon size={13} aria-hidden />
+            )}
+            Download a starter model ({STARTER_MODEL_LABEL}, about 2 GB)
+          </button>
+        </>
       )}
       {starter.error && (
         <span role="alert" className="mt-0.5 block text-tone-danger">

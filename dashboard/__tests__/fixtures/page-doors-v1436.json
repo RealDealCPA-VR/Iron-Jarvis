@@ -150,8 +150,8 @@
       },
       {
         "door": {
-          "href": "/help?guide=local-models",
-          "label": "Which local model to download"
+          "href": "/fleet?view=models",
+          "label": "Open the model library"
         },
         "id": "local_model"
       },

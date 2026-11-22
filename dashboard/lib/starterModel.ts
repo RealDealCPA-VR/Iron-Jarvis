@@ -1,53 +1,79 @@
 "use client";
 
 /**
- * Download a model for me, without a terminal (v1.355.0, G73).
+ * Download a model for me, without a terminal (v1.355.0, G73; next leaps
+ * 43-a).
  *
- * The free-and-private door used to say "Pull a model — copy this into a
- * terminal: ollama pull llama3.2". Now one press opens a Build pane that runs
- * the download — `POST /terminals/launch {cli: "ollama-starter"}`, the SAME
- * door the Sign in press uses (lib/cliSignIn). The launch route accepts only
- * catalog ids, so this asks for a set-up job by NAME
- * (`terminals/ai_clis.SETUP_LAUNCHES`) and never sends a command: nothing
- * here can type an arbitrary line into a shell. The click is the consent (the
- * ResumeStrip rule), and the pane shows the download as it happens.
+ * The free-and-private door's one press downloads the starter model INSIDE
+ * the app, through the model library's own download (`POST
+ * /fleet/nodes/{id}/models/download`, the one call every download uses): its
+ * size and the drive's free space are checked by Iron Jarvis first (a
+ * download that would leave less than a tenth of the drive free is refused in
+ * words), then the door shows its progress with Cancel. Before 43-a the press
+ * opened a Build terminal running the download, with no size, progress or
+ * Cancel in the app. The press is the consent (the door names the model and
+ * its size); nothing here types a command.
  *
- * `STARTER_MODEL_CLI` and `STARTER_MODEL` are pinned equal to the daemon's
- * catalog by tests/test_model_doors_v13550.py.
+ * `STARTER_MODEL` is pinned equal to the daemon's `terminals/ai_clis.
+ * STARTER_MODEL` by tests/test_model_doors_v13550.py.
  *
  * Its own file, not lib/api.ts, because ~70 test files mock that module.
  */
 
-import { useState } from "react";
-import { post } from "@/lib/api";
+import { useEffect, useState } from "react";
+import {
+  DOWNLOAD_EVENT_TYPES,
+  foldDownload,
+  readLibrary,
+  startDownload,
+  type Download,
+} from "@/lib/modelLibrary";
+import { useEvents } from "@/lib/useEvents";
 
-/** The set-up job's catalog id (terminals/ai_clis.SETUP_LAUNCHES). */
-export const STARTER_MODEL_CLI = "ollama-starter";
 /** The model it downloads (terminals/ai_clis.STARTER_MODEL). */
 export const STARTER_MODEL = "llama3.2";
 /** How the door names it. */
 export const STARTER_MODEL_LABEL = "Llama 3.2";
+/** Said when there is no Ollama on this PC to download into. */
+export const NO_OLLAMA_HERE = "Ollama is not on this PC yet. Install it (step 1), then press Download again.";
 
-/** Open the download pane. Resolves the new pane's id (null when the daemon
- *  did not say); rejects with the daemon's own sentence. */
-export async function launchStarterModel(): Promise<string | null> {
-  const res = await post<{ id?: string }>("/terminals/launch", { cli: STARTER_MODEL_CLI });
-  return res && typeof res.id === "string" ? res.id : null;
+/** Start the download into Ollama on this PC. Resolves the download's row;
+ *  rejects with the daemon's own sentence. */
+export async function downloadStarterModel(): Promise<Download> {
+  const lib = await readLibrary("");
+  const server = lib.servers.find((s) => s.kind === "ollama" && s.this_pc && s.downloads);
+  if (!server) throw new Error(NO_OLLAMA_HERE);
+  const d = await startDownload(server.id, STARTER_MODEL);
+  if (!d) throw new Error("The download did not start. Press Download again.");
+  return d;
 }
 
-/** The press, as a hook: in flight, the pane it opened (`null` = opened, id
- *  unknown; `undefined` = not pressed yet), or the refusal sentence. */
-export function useStarterModel(onLaunched?: () => void) {
+/** The press, as a hook: in flight, the download it started (`null` = not
+ *  pressed yet) with its live progress, or the refusal sentence. */
+export function useStarterModel(onStarted?: () => void) {
   const [busy, setBusy] = useState(false);
-  const [paneId, setPaneId] = useState<string | null | undefined>(undefined);
+  const [download, setDownload] = useState<Download | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { events } = useEvents(20, { types: DOWNLOAD_EVENT_TYPES });
+  const id = download?.id ?? "";
+
+  useEffect(() => {
+    if (!id) return;
+    const mine = events.filter((e) => e.payload?.id === id);
+    if (!mine.length) return;
+    setDownload((cur) => {
+      if (!cur) return cur;
+      const folded = mine.slice().reverse().reduce((acc, e) => foldDownload(acc, e.payload), [cur]);
+      return folded.find((d) => d.id === cur.id) ?? cur;
+    });
+  }, [events, id]);
 
   async function start() {
     setBusy(true);
     setError(null);
     try {
-      setPaneId(await launchStarterModel());
-      onLaunched?.();
+      setDownload(await downloadStarterModel());
+      onStarted?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -55,5 +81,15 @@ export function useStarterModel(onLaunched?: () => void) {
     }
   }
 
-  return { busy, paneId, error, start };
+  /** The row the daemon answered a Cancel with. */
+  function update(next: Download) {
+    setDownload(next);
+  }
+
+  /** A stopped or failed download: the door shows its press again. */
+  function again() {
+    setDownload(null);
+  }
+
+  return { busy, download, error, start, update, again };
 }

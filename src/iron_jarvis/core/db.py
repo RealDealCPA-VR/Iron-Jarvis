@@ -274,6 +274,7 @@ _LATE_MODEL_MODULES = (
     "..daemon.chat_append",   # ChatOlderMessage — a chat's messages past the live window (v1.499.3)
     "..documents.source_store",  # SourceMark — where each figure a chat read sits (v1.549.0)
     "..improve.models",       # NightReviewRecord — what one night's review did (17-a)
+    "..fleet.pull_models",    # ModelDownload — a model downloaded from the library (next leaps 43-a)
 )
 
 

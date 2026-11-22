@@ -165,6 +165,8 @@ const WORDS: Record<string, string> = {
   suggestion_answer: "answer a suggestion on the Improvements page",
   // Next leaps 41-a: a paired computer's switch, turned off from chat.
   peer_allow_off: "turn off something a paired computer may do here",
+  // Next leaps 43-a: a model downloaded into a model server.
+  model_download: "download a model into your model server",
   client_update: "change one of your clients",
   client_preference_add: "keep a preference for one client",
   client_preference_change: "change a preference kept for one client",

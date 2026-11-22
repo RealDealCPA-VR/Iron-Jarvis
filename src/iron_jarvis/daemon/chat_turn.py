@@ -5585,6 +5585,12 @@ def settings_ask_tools(
 
         if might_ask(text):
             names += peers_tools_for(text, peer_names(d.platform))
+        # Next leaps 43-a: the model library ("which models fit my PC",
+        # "download the newest coding model that fits"). Pure words; the
+        # download asks on its own once-only card.
+        from ..settings.records_library import library_tools_for
+
+        names += library_tools_for(text)
         # v1.470.0: "create a skill for …" offers `skill_create` (its own tier
         # is ask, so it shows the ordinary card). Chat used to offer only the
         # workflow exit, and a request for a skill came back as a workflow.
@@ -7347,6 +7353,13 @@ def config_cards_from_result(name: str, result: Any) -> list[dict[str, Any]]:
             out.append(
                 {"kind": "change", "restart": False, **{k: xc.get(k) for k in ("title", "key", "label", "old", "new", "change_id")}}
             )
+        # Next leaps 43-a: a model download started from chat ("Downloading
+        # Qwen3 8B · 5.2 GB [Cancel]"); the page reads its progress live.
+        dl = data.get("model_download") if name == "model_download" else None
+        if isinstance(dl, dict) and dl.get("id") and dl.get("node_id"):
+            out.append({"kind": "download", **{k: dl.get(k) for k in (
+                "id", "node_id", "model", "name", "server", "source", "size_words", "free_after_words", "bytes_total",
+            )}})
         reqs = data.get("secret_requests") if name in RECORD_CARD_TOOLS else None
         for r in reqs if isinstance(reqs, list) else []:
             if isinstance(r, dict) and r.get("name") and r.get("request_id"):

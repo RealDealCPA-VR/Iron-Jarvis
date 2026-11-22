@@ -111,6 +111,8 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       // Next leaps 41-a: a paired computer's switch turned off (it stops
       // that computer's tasks running here).
       "peer_allow_off",
+      // Next leaps 43-a: a model downloaded (it fills the drive).
+      "model_download",
     ],
   },
   {

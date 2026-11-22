@@ -480,6 +480,14 @@
       "ok": "saved to its memory",
       "failed": "tried a memory save and it failed"
     },
+    "model_download": {
+      "ok": "started downloading a model",
+      "failed": "tried a model download and it failed"
+    },
+    "model_library": {
+      "ok": "looked at which models fit this PC",
+      "failed": "tried a model library and it failed"
+    },
     "model_server_add": {
       "ok": "added a model server",
       "failed": "tried a model server addition and it failed"

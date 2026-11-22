@@ -86,6 +86,9 @@ INSTALL_BINARIES: dict[str, str] = {"claude": "claude", "codex": "codex"}
 #: address ``daemon/pages`` gives that place (one address per place).
 PAIRING_HREF = "/settings?section=connections-computers"
 PAIRING_PLACE = "Settings › Connections › Your other computers"
+#: Next leaps 43-a: the model library, the Models tab of Model servers.
+MODEL_LIBRARY_HREF = "/fleet?view=models"
+MODEL_LIBRARY_PLACE = "Model servers › Models"
 MAINTENANCE_HREF = "/settings?section=system-maintenance"
 UPDATES_HREF = "/updates"
 SECRETS_HREF = "/secrets"
@@ -833,15 +836,20 @@ STEPS: tuple[PageStep, ...] = (
         "cannot sign in to a plan or get a key for the user; say so plainly and point there.",
     ),
     PageStep(
-        "local_model", help_href("local-models"), "Which local model to download",
-        # Review: the first-run wizard is gone (an orphan module); the starter
-        # model is offered by a NEW chat's connect doors while no model is set
-        # up (components/onboarding/ConnectDoors, the chat page's own words).
-        f"Iron Jarvis does not download models by itself (only the small starter model, {STARTER_MODEL_NAME}, "
-        f"that a new chat's \"{CONNECT_DOORS_WORDS}\" choices offer while no model is set up). A local model "
-        "is downloaded with Ollama (ollama pull followed by the model's name, which can run in a terminal in "
-        f"Build) and then chosen in {CONNECTIONS_PLACE}. The guide \"Local Models by RAM Tier\" (in Help) says "
-        "which model fits this PC; say so plainly and point there.",
+        "local_model", MODEL_LIBRARY_HREF, "Open the model library",
+        # Next leaps 43-a: the library downloads (it used to be "ollama pull"
+        # in a terminal). The starter model, offered by a NEW chat's connect
+        # doors while no model is set up, downloads the same way.
+        f"Iron Jarvis downloads local models itself, into Ollama on this PC or on the user's network. The model "
+        f"library ({MODEL_LIBRARY_PLACE}) lists models with their download size, the memory each needs and "
+        "whether it fits this PC, and downloads one with its exact size shown first, then its progress with "
+        "Cancel. From chat, model_library says what fits and model_download downloads one: the user approves "
+        "it on a card that shows its size and the free space after, every time, and a download that would "
+        "leave less than a tenth of the drive free is refused. Iron Jarvis cannot download for LM Studio, "
+        "llama.cpp or vLLM: those download models in their own app. A downloaded model is then picked in the "
+        f"model menu above the message box, or made the default in {CONNECTIONS_PLACE}. The small starter "
+        f"model ({STARTER_MODEL_NAME}) is also offered by a new chat's \"{CONNECT_DOORS_WORDS}\" choices while "
+        "no model is set up. Say so plainly and point there.",
     ),
     # v1.506.0 (north-star plan 6.3): pairing with another computer was filed
     # under "not offered", which carries no door, and its words never matched

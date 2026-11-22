@@ -102,6 +102,9 @@ OWN_PLACE = frozenset({
     # Next leaps 41-a: what a paired computer may do (settings/records_peers),
     # armed by its words through chat_turn.settings_ask_tools.
     "peer_allows",
+    # Next leaps 43-a: the model library (settings/records_library), armed by its
+    # words through chat_turn.settings_ask_tools.
+    "model_library", "model_download",
 })
 
 
@@ -523,6 +526,8 @@ READER_FOR = {
     # Next leaps 41-a: a switch is turned off BY the computer's name, which
     # the list gives.
     "peer_allow_off": "peer_allows",
+    # Next leaps 43-a: a model is downloaded BY a name the library lists.
+    "model_download": "model_library",
 }
 
 #: v1.489.0: a tool that changes or lists a kind of record brings that

@@ -18,6 +18,7 @@ import {
   Activity,
   Clock,
   Pencil,
+  Boxes,
 } from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
@@ -51,6 +52,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { AllConnectionsLink } from "@/components/connections/AllConnectionsLink";
 import { PageShell, Reveal } from "@/components/motion";
 import { Sparkline } from "@/components/fleet/Sparkline";
+import { ModelLibrary } from "@/components/fleet/ModelLibrary";
+import { ViewSwitch } from "@/components/ViewSwitch";
+import { LIBRARY_VIEW, SERVERS_VIEW, viewFromSearch, type FleetView } from "@/lib/modelLibrary";
 import {
   DASH,
   SPARK_POINTS,
@@ -1034,11 +1038,50 @@ function AddModelServerLink() {
 /*  Page                                                                       */
 /* -------------------------------------------------------------------------- */
 
+/** Next leaps 43-a: the page's two tabs — the servers, and the model
+ *  library (`?view=models`). Not a page of its own (G2). */
+const FLEET_VIEWS = [
+  { value: SERVERS_VIEW, label: "Servers", icon: <Server size={13} aria-hidden /> },
+  { value: LIBRARY_VIEW, label: "Models", icon: <Boxes size={13} aria-hidden /> },
+] as const;
+
 export default function FleetPage() {
-  const { data, error, loading, reload } = usePolledApi<FleetResponse>("/fleet", POLL_MS);
+  // Next leaps 43-a: which tab. The first frame is Servers (no address on the
+  // server); the address (`?view=models`, a door from chat) is read once
+  // mounted, and a choice is written back so a reload keeps it.
+  const [view, setView] = useState<FleetView>(SERVERS_VIEW);
+  useEffect(() => {
+    const read = () => {
+      try {
+        const v = viewFromSearch(window.location.search);
+        if (v) setView(v);
+      } catch {
+        /* no address */
+      }
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+  const chooseView = useCallback((next: FleetView) => {
+    setView(next);
+    try {
+      const url = new URL(window.location.href);
+      if (next === LIBRARY_VIEW) url.searchParams.set("view", LIBRARY_VIEW);
+      else url.searchParams.delete("view");
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    } catch {
+      /* the tab still changes */
+    }
+  }, []);
+  const onServers = view === SERVERS_VIEW;
+
+  // G7: the servers are read every two seconds only while their tab is on
+  // screen; the Models tab reads on its own, by events.
+  const { data, error, loading, reload } = usePolledApi<FleetResponse>(onServers ? "/fleet" : null, POLL_MS);
   // Attribution is slow-moving and DB-backed — fetched once, refreshed with the
   // button rather than every 2s.
-  const { data: usage, reload: reloadUsage } = useApi<FleetUsage>("/fleet/usage");
+  const { data: usage, reload: reloadUsage } = useApi<FleetUsage>(onServers ? "/fleet/usage" : null);
 
   // `loading` flips true on EVERY 2s poll tick, so driving the spinner (or the
   // skeletons) off it would strobe. Manual refresh gets its own flag; first-load
@@ -1086,9 +1129,22 @@ export default function FleetPage() {
       <Reveal>
         <PageHeader
           title="Model servers"
-          subtitle="Every model server you can reach: what is loaded, what is serving, and what we cannot see."
+          subtitle={
+            onServers
+              ? "Every model server you can reach: what is loaded, what is serving, and what we cannot see."
+              : "Models for your own computer: what each needs, whether it fits this PC, and a download with its size shown first."
+          }
+          center={
+            <ViewSwitch
+              views={FLEET_VIEWS}
+              value={view}
+              onChange={chooseView}
+              label="Servers or models"
+              prefix="fleet-view"
+            />
+          }
           actions={
-            <div className="flex items-center gap-2">
+            !onServers ? undefined : <div className="flex items-center gap-2">
               {/* v1.314.0: say what the chip means ("live" was unexplained).
                   v1.330.0: the calm Badge (no border, no fill, the dot carries
                   the tone), not a hand-made bordered pill beside the calm
@@ -1124,6 +1180,14 @@ export default function FleetPage() {
         />
       </Reveal>
 
+      {!onServers ? (
+        <Reveal>
+          <div role="tabpanel" id="fleet-view-panel-models" aria-labelledby="fleet-view-tab-models">
+            <ModelLibrary />
+          </div>
+        </Reveal>
+      ) : (
+        <>
       {offline && (
         <Reveal>
           <OfflineHint />
@@ -1199,6 +1263,8 @@ export default function FleetPage() {
       <Reveal>
         <AddModelServerLink />
       </Reveal>
+        </>
+      )}
     </PageShell>
   );
 }

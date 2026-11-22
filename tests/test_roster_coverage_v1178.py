@@ -336,6 +336,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # agent run has no business changing what another computer may do.
     # Pinned by tests/test_next_leaps_41a_peer_switches.py.
     "peer_allows", "peer_allow_off",
+    # Next leaps 43-a: the model library from chat, where the owner is
+    # present (a download asks on its own once-only card, every time); chat
+    # arms them (settings.records_library.library_tools_for). Pinned by
+    # tests/test_next_leaps_43a_library.py.
+    "model_library", "model_download",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

@@ -12,9 +12,9 @@
  *    are listed to pick — on Connections' "Add an endpoint" form and in the
  *    key door's Custom endpoint. Nothing is probed before the press.
  *  - G73 Download a model for me: the free-and-private door has no command to
- *    copy; "Download a starter model" asks the daemon for its set-up job BY
- *    NAME (POST /terminals/launch {cli: "ollama-starter"}) and points at the
- *    pane it opened.
+ *    copy; since next leaps 43-a "Download a starter model" downloads in the
+ *    app (POST /fleet/nodes/ollama/models/download {model: "llama3.2"}) and
+ *    shows its progress with Cancel.
  *
  * The REAL ConnectDoors and the REAL ConnectionsPage render here; only the
  * transport seams are mocked (the fetch-models-v1328 harness).
@@ -43,6 +43,11 @@ const hooks = vi.hoisted(() => {
     probe: null as unknown,
     /** POST /terminals/launch: a pane id, or an error to throw. */
     launch: { id: "t9" } as unknown,
+    /** Next leaps 43-a: POST /fleet/nodes/{id}/models/download — a row, or an error to throw. */
+    download: {
+        download: { id: "dl1", node_id: "ollama", model: "llama3.2", name: "Llama 3.2 3B", state: "downloading",
+                    bytes_total: 2_019_390_340, bytes_done: 0 },
+      } as unknown,
   };
 });
 
@@ -60,6 +65,9 @@ vi.mock("@/lib/api", () => ({
     if (path === "/connections/endpoints/models") return Promise.resolve(hooks.probe);
     if (path === "/terminals/launch") {
       return hooks.launch instanceof Error ? Promise.reject(hooks.launch) : Promise.resolve(hooks.launch);
+    }
+    if (path.endsWith("/models/download")) {
+      return hooks.download instanceof Error ? Promise.reject(hooks.download) : Promise.resolve(hooks.download);
     }
     if (path.endsWith("/test")) {
       return Promise.resolve({ ok: true, detail: "google reachable — credential accepted" });
@@ -173,6 +181,10 @@ beforeEach(() => {
   hooks.puts.length = 0;
   hooks.probe = { models: MODELS, error: null, reason: null };
   hooks.launch = { id: "t9" };
+  hooks.download = {
+    download: { id: "dl1", node_id: "ollama", model: "llama3.2", name: "Llama 3.2 3B", state: "downloading",
+                bytes_total: 2_019_390_340, bytes_done: 0 },
+  };
 });
 afterEach(cleanup);
 
@@ -238,21 +250,27 @@ describe("G46: the first-run key door takes a Google Gemini key", () => {
 /* ========================================================================== */
 
 describe("G73: the free-and-private door downloads a starter model with one press", () => {
-  it("no command to copy; the press asks for the daemon's job by name and points at the pane", async () => {
+  // Next leaps 43-a (moved on purpose): the press downloads INSIDE the app,
+  // through the model library's own download into Ollama on this PC (its size
+  // and the drive's room are checked by Iron Jarvis first), and the step
+  // shows its progress with Cancel. It opened a Build terminal before.
+  it("no command to copy; the press downloads in the app and shows the progress", async () => {
+    hooks.responses["/fleet/library"] = {
+      servers: [{ id: "ollama", label: "Ollama on this PC", kind: "ollama", this_pc: true, downloads: true }],
+    };
     render(<ConnectDoors />);
     openDoor(/Free & private on this PC/);
     expect(document.body.textContent).not.toMatch(/ollama pull/);
     expect(document.body.textContent).not.toMatch(/copy this into a terminal/i);
-    expect(screen.queryByTestId("starter-model-pane")).toBeNull();
+    expect(screen.queryByTestId("starter-model-progress")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Download a starter model/ }));
-    const pane = await screen.findByTestId("starter-model-pane");
-    expect(pane.textContent).toMatch(/A Build terminal opened and is downloading it/);
-    expect(within(pane).getByRole("link", { name: "Open the Build terminal" }).getAttribute("href")).toBe(
-      "/terminals?focus=t9",
-    );
-    expect(hooks.posts).toEqual([{ path: "/terminals/launch", body: { cli: "ollama-starter" } }]);
-    // The press replaced itself with the pane line: it cannot be pressed twice.
+    const progress = await screen.findByTestId("starter-model-progress");
+    expect(progress.textContent).toMatch(/Llama 3\.2 3B/);
+    expect(within(progress).getByRole("progressbar")).toBeTruthy();
+    expect(within(progress).getByRole("button", { name: /Cancel/ })).toBeTruthy();
+    expect(hooks.posts).toEqual([{ path: "/fleet/nodes/ollama/models/download", body: { model: "llama3.2" } }]);
+    // The press replaced itself with the progress: it cannot be pressed twice.
     expect(screen.queryByRole("button", { name: /Download a starter model/ })).toBeNull();
     // Step 3 is the ONE press (v1.449.0, item 21, moved on purpose): while
     // replies are the demo it is "Use Ollama for answers" (the use-model
@@ -261,14 +279,29 @@ describe("G73: the free-and-private door downloads a starter model with one pres
   });
 
   it("a refusal is said in the daemon's own words and the press stays", async () => {
-    hooks.launch = new hooks.FakeApiError("Too many panes are open. Close one and try again.", 429);
+    hooks.responses["/fleet/library"] = {
+      servers: [{ id: "ollama", label: "Ollama on this PC", kind: "ollama", this_pc: true, downloads: true }],
+    };
+    hooks.download = new hooks.FakeApiError(
+      "Not downloaded: llama3.2 needs 2.0 GB and the drive Ollama uses has 1.0 GB free. Make room on that drive first.",
+      409,
+    );
     render(<ConnectDoors />);
     openDoor(/Free & private on this PC/);
     fireEvent.click(screen.getByRole("button", { name: /Download a starter model/ }));
-    const alert = await screen.findByText("Too many panes are open. Close one and try again.");
+    const alert = await screen.findByText(/^Not downloaded: llama3\.2 needs 2\.0 GB/);
     expect(alert.getAttribute("role")).toBe("alert");
     expect(screen.getByRole("button", { name: /Download a starter model/ })).toBeTruthy();
-    expect(screen.queryByTestId("starter-model-pane")).toBeNull();
+    expect(screen.queryByTestId("starter-model-progress")).toBeNull();
+  });
+
+  it("with no Ollama on this PC to download into, it says so and asks nothing", async () => {
+    hooks.responses["/fleet/library"] = { servers: [] };
+    render(<ConnectDoors />);
+    openDoor(/Free & private on this PC/);
+    fireEvent.click(screen.getByRole("button", { name: /Download a starter model/ }));
+    expect(await screen.findByText(/Ollama is not on this PC yet/)).toBeTruthy();
+    expect(hooks.posts).toEqual([]);
   });
 });
 

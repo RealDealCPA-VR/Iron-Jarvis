@@ -2228,6 +2228,53 @@ skills. It now asks each time you type `/`.
 line, in both boxes. A `/` inside a sentence is ordinary text. A tool that
 lists no commands says so, and what you type is still sent to it as typed.
 
+## Browse and download models, with what fits this PC (v1.557.0)
+
+Model servers now has a second tab, **Models**: a model library in the style
+of LM Studio. It lists models for running on your own computer, each with
+what it is good at, its download size, the memory it needs and a mark
+against this PC: **Fits this PC (64 GB)**, **Tight** (it runs, with little
+memory left for anything else) or **Too big**.
+
+- **Where.** Everything › Model servers, then **Models** at the top (or
+  Ctrl K, "model library"). The line on top says what this PC has, from what
+  it read: "This PC has 64 GB of memory and 412 GB free on the drive Ollama
+  uses. 7 of the 13 models below fit." Graphics memory is read from an NVIDIA
+  card when there is one; without one the marks are judged by the PC's
+  memory, and the line says so.
+- **Download.** Press **Download** on a model and Iron Jarvis first reads its
+  exact size from where it downloads (marked "measured just now"; when that
+  cannot be read, the list's own size, marked as the list's) and the free
+  space it would leave. Nothing starts until you press **Start download**.
+  Then the row shows its progress, with **Cancel**. Cancel stops it at once;
+  Ollama keeps the part already downloaded, so Download again carries on from
+  there. One download at a time per model server. When it is done it is in
+  the model menu above the message box.
+- **Your drive stays usable.** A download that would leave less than a tenth
+  of the drive free is refused before it starts, in words that say how much
+  room it needs.
+- **More models.** The **Search Hugging Face** box finds more models there.
+  Only the words you type in that box are sent, and only after you type
+  them; nothing is looked up online while you just browse the list.
+- **From chat.** "Which models fit my PC?" answers from the same list.
+  "Download the newest coding model that fits" asks you on a card that names
+  the model, where it comes from, its size and the free space after, every
+  time, whatever your approval setting. Once you allow it, the card under the
+  reply shows the same progress and Cancel.
+- **The starter model.** A new chat's "Free & private on this PC" door now
+  downloads its starter model (Llama 3.2) the same way, inside the app, with
+  its progress and Cancel. It used to open a terminal.
+- **What it downloads into.** Ollama, on this PC or on your network. LM
+  Studio, llama.cpp and vLLM are listed with what they have, but they
+  download models in their own app. A model server on another computer says
+  "not known" for its free space and for whether a model fits: no model
+  server tells another computer how much room it has, so Iron Jarvis does not
+  guess.
+- **Good to know.** The list ships with Iron Jarvis and says the date it was
+  checked; the size read just before a download is the one that counts.
+  Ollama's cloud models are not listed and are never downloaded: they run on
+  Ollama's servers, not on your computer.
+
 ## Pick up where you left off in a folder (v1.556.0)
 
 Start a new chat or a new coding session in a folder you have worked in

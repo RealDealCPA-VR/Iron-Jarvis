@@ -478,6 +478,11 @@ def default_permissions() -> dict[str, str]:
         # Undo is the user's press). Turning one ON is never a tool (D-41.2).
         "peer_allows": "allow",
         "peer_allow_off": "allow",
+        # Next leaps 43-a (settings/records_library): the model library. What fits
+        # reads only; a download asks every time (its card is once-only and
+        # names the size and the free space after).
+        "model_library": "allow",
+        "model_download": "ask",
         "client_answer": "ask",
         "client_update": "ask",
         "client_preference_add": "ask",

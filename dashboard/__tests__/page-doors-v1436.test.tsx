@@ -177,7 +177,10 @@ describe("the daemon's doors resolve on this dashboard", () => {
         expect(door.href).toBe(helpGuideHref(link!.guide, link!.section));
       }
     }
-    expect(helpDoors).toBe(2);
+    // Next leaps 43-a (moved on purpose): "Which local model to download"
+    // left Help for the model library (Model servers › Models).
+    expect(helpDoors).toBe(1);
+    expect(FIXTURE.table.steps.find((s) => s.id === "local_model")?.door.href).toBe("/fleet?view=models");
     // Anti-vacuity: a section no heading has is not "found".
     expect(HANDBOOK_SLUGS.some((s) => sectionMatches(s, "no-such-section-anywhere"))).toBe(false);
     // A shorter slug never matches the middle of another word.

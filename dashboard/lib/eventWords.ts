@@ -139,6 +139,8 @@ export const EVENT_WORDS: Record<string, string> = {
   "peer.removed": "A paired computer was removed",
   "peer.code_ended": "A pairing code was typed wrong too often and stopped working",
   "peer.allows_changed": "What a paired computer may do changed",
+  "model.download.progress": "A model download moved on",
+  "model.download.ended": "A model download ended",
   "browser.connected": "The browser add-on connected",
   "browser.disconnected": "The browser add-on disconnected",
   "browser.tab_activated": "You switched browser tabs",

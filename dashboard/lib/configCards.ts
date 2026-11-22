@@ -49,7 +49,23 @@ export interface SecretRequestCard {
   undone?: boolean;
 }
 
-export type ConfigCard = ConfigChangeCard | SecretRequestCard;
+/** Next leaps 43-a: a model download chat started (`model_download`). The
+ *  card reads the download's progress live (events) and has Cancel; what it
+ *  carries is only what the approval card already showed. */
+export interface ModelDownloadCard {
+  kind: "download";
+  id: string;
+  node_id: string;
+  model: string;
+  name: string;
+  server: string;
+  source: string;
+  size_words: string;
+  free_after_words: string;
+  bytes_total: number | null;
+}
+
+export type ConfigCard = ConfigChangeCard | SecretRequestCard | ModelDownloadCard;
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
@@ -74,6 +90,19 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
         change_id: str(r.change_id),
         ...(r.undone === true ? { undone: true } : {}),
         ...(r.undone === true && str(r.undone_note) ? { undone_note: str(r.undone_note).slice(0, 300) } : {}),
+      });
+    } else if (r.kind === "download" && str(r.id) && str(r.node_id)) {
+      out.push({
+        kind: "download",
+        id: str(r.id).slice(0, 80),
+        node_id: str(r.node_id).slice(0, 120),
+        model: str(r.model).slice(0, 200),
+        name: (str(r.name) || str(r.model)).slice(0, 120),
+        server: str(r.server).slice(0, 80),
+        source: str(r.source).slice(0, 40),
+        size_words: str(r.size_words).slice(0, 60),
+        free_after_words: str(r.free_after_words).slice(0, 120),
+        bytes_total: typeof r.bytes_total === "number" && Number.isFinite(r.bytes_total) ? r.bytes_total : null,
       });
     } else if (r.kind === "secret" && str(r.name) && str(r.request_id)) {
       out.push({
@@ -176,6 +205,7 @@ export function looksLikeSecret(text: string): boolean {
 
 /** A card's identity: the change it records, or the credential it asks for. */
 export function cardId(c: ConfigCard): string {
+  if (c.kind === "download") return `download:${c.id}`;
   return c.kind === "change" ? `change:${c.change_id}` : `secret:${c.request_id}`;
 }
 

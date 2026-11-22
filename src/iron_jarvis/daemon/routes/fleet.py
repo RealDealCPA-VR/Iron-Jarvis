@@ -135,6 +135,17 @@ class FleetVerifyBody(BaseModel):
     model: str = ""
 
 
+class ModelDownloadBody(BaseModel):
+    """Next leaps 43-a: the model to size or download (``qwen3:8b``, a name
+    from the library's list, or ``hf.co/<user>/<repo>[:<file>]``)."""
+
+    model: str = ""
+
+
+#: Next leaps 43-a: the library's sentence when it could not be read.
+LIBRARY_READ_FAILED = "The model library could not be read just now. Press Refresh to try again."
+
+
 class CodeRouteBody(BaseModel):
     """Configure code routing. ``target`` is "provider:model"; ``task_classes``
     is a CSV override ("" = the built-in set)."""
@@ -1517,3 +1528,75 @@ def register(app: FastAPI, d) -> None:
         if values:
             config_writer(d).apply(values, actor="fleet_page")
         return _code_route_view()
+
+    # --- the model library (next leaps 43-a): browse, what fits, download ---
+    # Every handler hands its blocking work (a disk read, nvidia-smi, one
+    # bounded GET to the server, the registry or Hugging Face) to a worker
+    # thread. Only a typed search reaches Hugging Face (D-43.1).
+
+    @app.get("/fleet/library")
+    async def fleet_library(node: str = "", q: str = "") -> dict[str, Any]:
+        """The library for one server (``node``; the first that can download
+        when empty): this PC's memory and the model drive's room, the shipped
+        list marked Fits / Tight / Too big, what is installed, and Hugging
+        Face's answer for ``q`` (only when it has words). Never raises."""
+        from ...fleet import library as _lib
+
+        try:
+            return await asyncio.to_thread(_lib.library_view, d, node, q)
+        except Exception as exc:  # noqa: BLE001 — the tab shows a sentence, never a 500
+            return {
+                "servers": [], "server": None, "hardware": None, "summary": "", "models": [],
+                "installed": [], "installed_why": "", "search": {"words": "", "models": [], "why": ""},
+                "error": plain_failure(LIBRARY_READ_FAILED, exc), "error_detail": _program_words(exc),
+            }
+
+    @app.post("/fleet/nodes/{node_id}/models/size")
+    async def fleet_model_size(node_id: str, body: ModelDownloadBody) -> dict[str, Any]:
+        """What a download would be BEFORE it starts: the exact size from the
+        registry (``measured``) or the list's (``about``), the free space after
+        it, and the refusal sentence when it may not start (D-43.2)."""
+        from ...fleet import library as _lib
+
+        try:
+            return await asyncio.to_thread(_lib.preview, d, node_id, body.model)
+        except _lib.LibraryProblem as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.words) from None
+
+    @app.post("/fleet/nodes/{node_id}/models/download")
+    async def fleet_model_download(node_id: str, body: ModelDownloadBody) -> dict[str, Any]:
+        """Start a download (the Download press): the size is read and the
+        free-space floor checked again first; nothing reaches the server when
+        it is refused. Progress: ``model.download.progress`` / ``.ended``."""
+        from ...fleet import library as _lib
+        from ...fleet import pulls as _pulls
+
+        loop = asyncio.get_running_loop()
+        try:
+            return await asyncio.to_thread(
+                _pulls.start_download, d, node_id, body.model, loop=loop, started_by="page"
+            )
+        except _lib.LibraryProblem as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.words) from None
+        except _pulls.PullRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.words) from None
+
+    @app.get("/fleet/downloads")
+    async def fleet_downloads() -> dict[str, Any]:
+        """The newest downloads, running ones with their live progress."""
+        from ...fleet import pulls as _pulls
+
+        mgr = await asyncio.to_thread(_pulls.manager_for, d)
+        return {"downloads": await asyncio.to_thread(mgr.list)}
+
+    @app.post("/fleet/downloads/{download_id}/cancel")
+    async def fleet_download_cancel(download_id: str) -> dict[str, Any]:
+        """Cancel: the connection is shut down and the row ends ``stopped``;
+        Ollama keeps the part already downloaded."""
+        from ...fleet import pulls as _pulls
+
+        mgr = await asyncio.to_thread(_pulls.manager_for, d)
+        try:
+            return {"download": await asyncio.to_thread(mgr.cancel, download_id)}
+        except _pulls.PullRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.words) from None

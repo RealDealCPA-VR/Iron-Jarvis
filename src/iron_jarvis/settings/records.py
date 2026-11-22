@@ -4021,7 +4021,15 @@ def record_tools(platform: Any) -> list[Tool]:
         *_upkeep_tools(platform),
         # Next leaps 41-a: what a paired computer may do here (show; off).
         *_peer_tools(platform),
+        # Next leaps 43-a: the model library (what fits; download one).
+        *_library_tools(platform),
     ]
+
+
+def _library_tools(platform: Any) -> list[Tool]:
+    from .records_library import library_tools
+
+    return library_tools(platform)
 
 
 def _peer_tools(platform: Any) -> list[Tool]:

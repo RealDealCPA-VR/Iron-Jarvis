@@ -93,6 +93,7 @@ import { EndpointModelPicker } from "@/components/connections/EndpointModelPicke
 import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
 import type { LocalServerPreset } from "@/lib/localServerPresets";
 import { STARTER_MODEL_LABEL, useStarterModel } from "@/lib/starterModel";
+import { DownloadProgress } from "@/components/fleet/DownloadProgress";
 import { useDaemon } from "@/lib/daemon";
 import {
   LOCAL_SERVER_PROVIDERS,
@@ -1003,30 +1004,31 @@ export function ConnectDoors({
               )}
             </li>
             <li data-testid="ollama-step-2">
-              {/* v1.355.0 (G73): no command to copy. One press opens a Build
-                  pane that runs the download, the way Sign in opens one.
-                  v1.449.0 (item 21): greyed until Ollama is on this PC —
-                  pressed before step 1 the terminal only showed an error
-                  while this said "downloading". */}
+              {/* v1.355.0 (G73): no command to copy. Next leaps 43-a: the
+                  press downloads INSIDE the app (the model library's own
+                  download: its size and the drive's room checked first), and
+                  the step shows its progress with Cancel; it used to open a
+                  Build terminal. v1.449.0 (item 21): greyed until Ollama is on
+                  this PC. A stopped or failed download offers the press again. */}
               2. Download a starter model ({STARTER_MODEL_LABEL}, about 2 GB):
-              {ollamaKnown && ollamaRunning && !ollamaHasModel && starter.paneId === undefined && (
+              {ollamaKnown && ollamaRunning && !ollamaHasModel && !starter.download && (
                 <span data-testid="ollama-no-model" className="mt-1 block text-tone-warn">
                   Ollama is running but has no model yet — press Download a starter model.
                 </span>
               )}
-              {starter.paneId !== undefined ? (
-                <span data-testid="starter-model-pane" className="mt-1.5 block text-zinc-400">
-                  A Build terminal opened and is downloading it. That takes a few minutes; when the
-                  terminal says success, come back for step 3.{" "}
-                  <Link
-                    href={paneHref(starter.paneId)}
-                    onClick={() => onOpenPane?.()}
-                    className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
-                  >
-                    Open the Build terminal
-                  </Link>
+              {starter.download && (
+                <span data-testid="starter-model-progress" className="mt-1.5 block">
+                  <DownloadProgress
+                    download={starter.download}
+                    onChange={starter.update}
+                    testId="starter-model-row"
+                  />
+                  {starter.download.state === "done" && (
+                    <span className="mt-1 block text-zinc-400">Downloaded. Step 3 is next.</span>
+                  )}
                 </span>
-              ) : (
+              )}
+              {(!starter.download || starter.download.state === "stopped" || starter.download.state === "failed") && (
                 <>
                   <button
                     type="button"

@@ -359,6 +359,30 @@ def _isolate_local_ollama_probe():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_model_library_outside():
+    """No test reads this PC's graphics card or reaches Ollama's registry or
+    Hugging Face (next leaps 43-a, the model library). ``nvidia-smi`` reads
+    "not known" (what CI sees) and the registry and the search point at a
+    closed port, so a test that forgot its stand-in fails at once instead of
+    going to the internet. A test of the library points them at its own
+    stand-in server with monkeypatch."""
+    from iron_jarvis.fleet import hardware, library
+
+    saved = (hardware.GPU_READ_FORCED_OFF, dict(library.REGISTRY_BASES), library.HF_API)
+    hardware.GPU_READ_FORCED_OFF = True
+    for host in list(library.REGISTRY_BASES):
+        library.REGISTRY_BASES[host] = "http://127.0.0.1:9"
+    library.HF_API = "http://127.0.0.1:9"
+    try:
+        yield
+    finally:
+        hardware.GPU_READ_FORCED_OFF = saved[0]
+        library.REGISTRY_BASES.clear()
+        library.REGISTRY_BASES.update(saved[1])
+        library.HF_API = saved[2]
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_local_model_servers_probe():
     """No test asks a REAL LM Studio (localhost:1234) or llama.cpp
     (localhost:8080) on this machine (v1.358.0, lane 8D).

@@ -206,6 +206,9 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # Next leaps 41-a: nor a paired computer's switch turned off (it stops
         # that computer's tasks running here). Listing them stays allowed.
         "peer_allow_off",
+        # Next leaps 43-a: nor a model downloaded (it fills the drive and
+        # reaches a registry on the internet). What fits stays allowed.
+        "model_download",
     }
 )
 

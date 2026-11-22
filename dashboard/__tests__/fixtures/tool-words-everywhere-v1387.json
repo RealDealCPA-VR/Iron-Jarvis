@@ -136,6 +136,8 @@
     "memory_search",
     "memory_write",
     "message_agent",
+    "model_download",
+    "model_library",
     "model_server_add",
     "model_server_default",
     "model_server_remove",
@@ -383,6 +385,8 @@
     "memory_search": "search its memory",
     "memory_write": "save to its memory",
     "message_agent": "message a teammate",
+    "model_download": "download a model into your model server",
+    "model_library": "look at which models fit this PC",
     "model_server_add": "add a model server",
     "model_server_default": "set the default model to one of a model server's",
     "model_server_remove": "remove a model server",
@@ -915,6 +919,14 @@
       "Messaged a teammate",
       "Messaging a teammate"
     ],
+    "model_download": [
+      "Started downloading a model",
+      "Starting downloading a model"
+    ],
+    "model_library": [
+      "Looked at which models fit this PC",
+      "Looking at which models fit this PC"
+    ],
     "model_server_add": [
       "Added a model server",
       "Adding a model server"
@@ -1392,6 +1404,8 @@
     "memory_search": "",
     "memory_write": "",
     "message_agent": "",
+    "model_download": "",
+    "model_library": "",
     "model_server_add": "",
     "model_server_default": "",
     "model_server_remove": "",

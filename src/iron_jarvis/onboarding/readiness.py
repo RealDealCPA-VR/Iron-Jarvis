@@ -43,6 +43,8 @@ CHECK_LABELS: dict[str, str] = {
     "old Office files": "Reading old .doc and .xls files",
     "guide_docs": "The built-in help guides",
     "browser_addon": "The browser add-on",
+    # Next leaps 43-a: what the model library reads to say which models fit.
+    "graphics_memory": "Graphics memory for the model library",
 }
 
 #: The providers the ONE "use this for answers" press accepts (W2-1): the two

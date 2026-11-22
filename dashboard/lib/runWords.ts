@@ -263,6 +263,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // Next leaps 41-a: what a paired computer may do here.
   peer_allows: { did: "Listed what your paired computers may do", noun: "paired computers list" },
   peer_allow_off: { did: "Switched off something a paired computer may do", noun: "paired computer switch" },
+  // Next leaps 43-a: the model library.
+  model_library: { did: "Looked at which models fit this PC", noun: "model library" },
+  model_download: { did: "Started downloading a model", noun: "model download" },
   client_list: { did: "Listed your clients", noun: "client list" },
   client_answer: { did: "Noted whether a name is one of your clients", noun: "client answer" },
   client_update: { did: "Changed one of your clients", noun: "client change" },

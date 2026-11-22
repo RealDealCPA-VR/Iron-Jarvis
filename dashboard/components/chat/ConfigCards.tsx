@@ -18,9 +18,9 @@
  * quiet Continue carries the user's task on (lib/appConnect).
  */
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, Eye, EyeOff, KeyRound, RotateCcw, Settings2 } from "lucide-react";
+import { ArrowRight, Check, Download as DownloadIcon, Eye, EyeOff, KeyRound, RotateCcw, Settings2 } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
 import {
@@ -30,8 +30,18 @@ import {
   undoRefusalWords,
   type ConfigCard,
   type ConfigChangeCard,
+  type ModelDownloadCard,
   type SecretRequestCard,
 } from "@/lib/configCards";
+import { DownloadProgress } from "@/components/fleet/DownloadProgress";
+import {
+  DOWNLOAD_EVENT_TYPES,
+  LIBRARY_HREF,
+  foldDownload,
+  readDownloads,
+  type Download,
+} from "@/lib/modelLibrary";
+import { useEvents } from "@/lib/useEvents";
 import {
   connectedFromSave,
   connectedOf,
@@ -40,6 +50,65 @@ import {
   waitingWords,
   type AppConnected,
 } from "@/lib/appConnect";
+
+/**
+ * Next leaps 43-a: a model download chat started (`model_download`, after its
+ * once-only card). Name, where it comes from, its size and the free space
+ * after (what the approval card said), then the SAME progress row and Cancel
+ * as Model servers › Models. Read once when shown, then by the daemon's
+ * events; nothing is polled.
+ */
+function ModelDownloadCardView({ card }: { card: ModelDownloadCard }) {
+  const [rows, setRows] = useState<Download[]>([]);
+  useEffect(() => {
+    let live = true;
+    readDownloads()
+      .then((list) => live && setRows(list.filter((d) => d.id === card.id)))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [card.id]);
+  const { events } = useEvents(20, { types: DOWNLOAD_EVENT_TYPES });
+  useEffect(() => {
+    const mine = events.filter((e) => e.payload?.id === card.id);
+    if (!mine.length) return;
+    setRows((cur) => mine.slice().reverse().reduce((acc, e) => foldDownload(acc, e.payload), cur));
+  }, [events, card.id]);
+  const row: Download = rows[0] ?? {
+    id: card.id,
+    node_id: card.node_id,
+    model: card.model,
+    name: card.name,
+    bytes_total: card.bytes_total,
+    bytes_done: 0,
+    percent: card.bytes_total ? 0 : null,
+    state: "downloading",
+    error: "",
+  };
+  return (
+    <div
+      data-testid="download-card"
+      className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 text-xs text-zinc-300"
+    >
+      <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+        <DownloadIcon size={13} className="shrink-0 text-zinc-500" aria-hidden />
+        <span className="min-w-0 break-words">
+          {card.name} from {card.source || "its registry"} into {card.server || "your model server"}: {card.size_words}
+          {card.free_after_words ? `, ${card.free_after_words}` : ""}.
+        </span>
+      </p>
+      <DownloadProgress
+        download={row}
+        onChange={(next) => setRows((cur) => foldDownload(cur, next))}
+        testId="download-card-row"
+      />
+      <Link href={LIBRARY_HREF} className="inline-flex items-center gap-1 text-[11px] text-accent-soft underline-offset-2 hover:underline">
+        Open Model servers › Models <ArrowRight size={11} aria-hidden />
+      </Link>
+    </div>
+  );
+}
 
 function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (next: ConfigCard) => void }) {
   const [busy, setBusy] = useState(false);
@@ -369,7 +438,9 @@ export function ConfigCards({
   return (
     <div data-testid="config-cards" className="mt-2 space-y-2">
       {cards.map((c, i) =>
-        c.kind === "change" ? (
+        c.kind === "download" ? (
+          <ModelDownloadCardView key={`download:${c.id}`} card={c} />
+        ) : c.kind === "change" ? (
           <ChangeCard key={c.change_id} card={c} onSettle={(n) => onSettle(i, n)} />
         ) : (
           <CredentialCard

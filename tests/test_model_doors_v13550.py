@@ -454,9 +454,14 @@ def test_the_starter_download_is_a_catalog_id_kept_off_the_launch_menu():
 
 
 def test_the_dashboard_asks_for_the_daemons_job_by_name():
+    """Next leaps 43-a (moved on purpose): the door's press downloads through
+    the model library's own download (size and room checked by Iron Jarvis
+    first), never by typing a command. The terminal job above stays in the
+    daemon's catalog (the Launch-by-id route still serves it)."""
     lib = _read(DASH / "lib" / "starterModel.ts")
-    assert f'STARTER_MODEL_CLI = "{_starter()["id"]}"' in lib
     assert f'STARTER_MODEL = "{ai_clis.STARTER_MODEL}"' in lib
+    assert "startDownload(server.id, STARTER_MODEL)" in _code(lib)
+    assert "/terminals/launch" not in _code(lib)
     assert "ollama pull" not in _code(lib), "the dashboard never sends a command"
 
 

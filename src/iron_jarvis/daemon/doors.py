@@ -139,6 +139,9 @@ _CATALOG: dict[str, dict[str, str]] = {
     # the card (turning one ON is a press there, D-41.2).
     "peer_allows": {"href": "/settings?section=connections-computers", "label": "Open Your other computers"},
     "peer_allow_off": {"href": "/settings?section=connections-computers", "label": "Open Your other computers"},
+    # Next leaps 43-a: the model library is the Models tab on Model servers.
+    "model_library": {"href": "/fleet?view=models", "label": "Open Model servers › Models"},
+    "model_download": {"href": "/fleet?view=models", "label": "Open Model servers › Models"},
 }
 
 #: v1.506.0 (north-star plan 6.4): the record tools that MAKE a record and

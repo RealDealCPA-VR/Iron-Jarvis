@@ -395,6 +395,8 @@ ASK_WORDS: dict[str, str] = {
     "suggestion_answer": "answer a suggestion on the Improvements page",
     # Next leaps 41-a: a paired computer's switch, turned off from chat.
     "peer_allow_off": "turn off something a paired computer may do here",
+    # Next leaps 43-a: a model downloaded into a model server.
+    "model_download": "download a model into your model server",
     "client_update": "change one of your clients",
     "client_preference_add": "keep a preference for one client",
     "client_preference_change": "change a preference kept for one client",
@@ -669,6 +671,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # lib/runWords.ts AGENT_TOOLS.
     "peer_allows": ("listed what your paired computers may do", "paired computers list"),
     "peer_allow_off": ("switched off something a paired computer may do", "paired computer switch"),
+    # Next leaps 43-a: the model library. Twin: lib/runWords.ts AGENT_TOOLS.
+    "model_library": ("looked at which models fit this PC", "model library"),
+    "model_download": ("started downloading a model", "model download"),
     "client_list": ("listed your clients", "client list"),
     "client_answer": ("noted whether a name is one of your clients", "client answer"),
     "client_update": ("changed one of your clients", "client change"),
