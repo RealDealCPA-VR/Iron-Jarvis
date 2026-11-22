@@ -435,20 +435,46 @@ def make_own_store(home: Any, sid: Any) -> Path:
     return path
 
 
+#: FU-3a: beside a store (``<safe>.git.deleted``), the mark its session's
+#: delete writes BEFORE it removes the store, and removes once it is gone. It
+#: tells a deleted session's store from one whose row is only missing for now
+#: (:func:`sweep_own_stores`), even when the delete was cut short.
+OWN_DELETED = ".deleted"
+_MARK_NAME = re.compile(r"(?P<own>.+\.git)" + re.escape(OWN_DELETED))
+
+
+def _mark_of(path: Path) -> Path:
+    return path.with_name(path.name + OWN_DELETED)
+
+
+def _drop_mark(mark: Path) -> None:
+    try:
+        mark.unlink(missing_ok=True)
+    except OSError:
+        log.debug("could not remove a deleted Code-view store's mark", exc_info=True)
+
+
 def forget_own_store(home: Any, sid: Any) -> bool:
     """BLOCKING, never raises: a deleted session's own store goes with it (a
     copy of files that are still in the user's folder: never moved to the
     trash). True when there was one and it is gone. A store a file of which
     another program holds open (an antivirus scan, a ``git gc`` still
-    packing) STAYS: :func:`own_store_left` says so, and
-    :func:`sweep_own_stores` removes it later (FU-3a)."""
+    packing) STAYS, marked as a deleted session's (:data:`OWN_DELETED`):
+    :func:`own_store_left` says so, and :func:`sweep_own_stores` removes it
+    later (FU-3a)."""
     path = own_store(home, sid)
     try:
         if path is None or not path.is_dir():
             return False
     except OSError:
         return False
+    mark = _mark_of(path)
+    try:
+        mark.write_text(f"{sid}\n", encoding="utf-8")
+    except OSError:  # the sweep still knows it by the session's folder, moved to the trash
+        log.debug("could not mark a deleted Code-view session's own checkpoint store", exc_info=True)
     if _remove_store(path):
+        _drop_mark(mark)
         return True
     log.warning("a deleted Code-view session's own checkpoint store could not be removed yet "
                 "(a file in it is in use); it is removed later")
@@ -497,33 +523,63 @@ _STORE_NAME = re.compile(r"(?P<own>.+?\.git)(?:\.[0-9a-f]{8}\.new)?")
 
 
 class Swept(NamedTuple):
-    """What one :func:`sweep_own_stores` did: stores removed, and stores of
-    deleted sessions still there (a file in use; or, when the rows could not
-    be read, every store it found: none was removed)."""
+    """What one :func:`sweep_own_stores` did: stores of deleted sessions
+    removed, and those still there (a file in use). *unread*: the rows or the
+    sessions' folders could not be read, so nothing was removed (and nothing
+    is known to be left)."""
 
     removed: int
     left: int
+    unread: bool = False
+
+
+def _own_names(home: Any, ids: Iterable[str]) -> set[str]:
+    return {p.name for p in (own_store(home, i) for i in ids) if p is not None}
+
+
+def _session_folder_names(home: Any) -> list[str]:
+    """BLOCKING: the name of everything under ``hosted/`` (each session's own
+    folder, ``events.session_dir``). Raises ``OSError`` when it cannot be read."""
+    from .events import sessions_dir
+
+    try:
+        with os.scandir(sessions_dir(home)) as entries:
+            return [entry.name for entry in entries]
+    except FileNotFoundError:
+        return []
 
 
 def sweep_own_stores(home: Any, row_ids: Callable[[], Iterable[str]]) -> Swept:
     """BLOCKING, never raises (FU-3a, privacy): every store under
-    :data:`OWN_DIR` whose session row no longer exists is removed — a copy of
-    a deleted session's files that its delete could not remove (a file in it
-    held open). A store whose row exists, archived or not, is never touched,
-    nor anything under the folder that is not a store (or is a link).
+    :data:`OWN_DIR` of a DELETED session is removed — a copy of its files
+    that its delete could not remove (a file in it held open). A store is a
+    deleted session's when its session row no longer exists AND either its
+    delete marked it (:data:`OWN_DELETED`) or the session's own folder
+    (``hosted/<sid>``: its log and its checkpoints' record, which the delete
+    moves to the trash) is gone too. A row alone may be missing for now: a
+    backup restored leaves out the rows of the sessions made since (and keeps
+    their folders: a restore removes nothing), and undoing it brings them
+    back. A store whose row exists, archived or not, is never touched, nor
+    anything under the folder that is not a store (or is a link). A mark whose
+    store is gone is removed.
 
     *row_ids()* gives the id of every session row and RAISES when the rows
     cannot be read: then nothing is removed. It is called AFTER the folder is
     listed, so a store a new session makes meanwhile is never taken for a
-    deleted one (a store is made only for a row that exists, and a row never
-    comes back)."""
+    deleted one (a store is made only for a session whose row exists)."""
     if home is None:
         return Swept(0, 0)
     base = Path(str(home)).joinpath(*OWN_DIR)
     found: list[tuple[str, str]] = []
+    marked: set[str] = set()
     try:
         with os.scandir(base) as entries:
             for entry in entries:
+                mark = _MARK_NAME.fullmatch(entry.name)
+                if mark is not None:
+                    if entry.is_file(follow_symlinks=False):
+                        marked.add(mark.group("own"))
+                    continue
                 m = _STORE_NAME.fullmatch(entry.name)
                 # (A symbolic link is no directory here; a Windows junction is.)
                 if m is not None and entry.is_dir(follow_symlinks=False) and not entry.is_junction():
@@ -534,21 +590,30 @@ def sweep_own_stores(home: Any, row_ids: Callable[[], Iterable[str]]) -> Swept:
         log.warning("could not look for left-behind Code-view checkpoint stores", exc_info=True)
         return Swept(0, 0)
     if not found:
+        for own in marked:  # (no store left at all: nothing for a mark to tell)
+            _drop_mark(base / (own + OWN_DELETED))
         return Swept(0, 0)
     try:
-        kept = {p.name for p in (own_store(home, rid) for rid in row_ids()) if p is not None}
-    except Exception:  # noqa: BLE001 — rows that cannot be read are never "no sessions"
-        log.warning("the Code-view session rows could not be read: no checkpoint store was removed",
-                    exc_info=True)
-        return Swept(0, len(found))
+        kept = _own_names(home, row_ids())
+        folders = _own_names(home, _session_folder_names(home))
+    except Exception as exc:  # noqa: BLE001 — rows that cannot be read are never "no sessions"
+        log.warning("the Code-view session rows could not be read: no checkpoint store was removed (%s)",
+                    type(exc).__name__)
+        log.debug("why the Code-view session rows could not be read", exc_info=True)
+        return Swept(0, 0, unread=True)
     removed = left = 0
+    standing: set[str] = set()
     for name, own in found:
-        if own in kept:
+        if own in kept or (own in folders and own not in marked):
+            standing.add(own)
             continue
         if _remove_store(base / name):
             removed += 1
         else:
             left += 1
+            standing.add(own)
+    for own in marked - standing:
+        _drop_mark(base / (own + OWN_DELETED))
     return Swept(removed, left)
 
 

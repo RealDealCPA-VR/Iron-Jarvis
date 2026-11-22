@@ -2795,8 +2795,10 @@ class HostedService:
     def _sweep_stores_later(self) -> None:
         """FU-3a: the stores of deleted sessions are swept after each wait of
         :data:`STORE_RETRY_S` until none is left (then at the next start).
-        One round of waits at a time: a later failed delete starts them again
-        (each sweep covers every deleted session's store)."""
+        The deletes' one round of waits at a time: a later failed delete
+        starts it again (each sweep covers every deleted session's store).
+        The start's own round is apart from it, so the two may sweep at the
+        same moment: harmless, a removal re-reads the disk for its answer."""
         if self._closing:
             return
         if self._store_sweep is not None and not self._store_sweep.done():
@@ -5217,28 +5219,30 @@ class HostedService:
 _RECONCILE_TAIL = 256 * 1024
 
 
-def sweep_left_stores(home: Any, engine: Any) -> Any:
-    """BLOCKING, never raises (FU-3a): every session's own checkpoint store
-    (``hosted/checkpoints``) whose session row no longer exists is removed,
-    and how many is logged (a ``checkpoints.Swept``). Nothing is removed while
-    the database is SET ASIDE and not yet answered
+def sweep_left_stores(home: Any, engine: Any, *, again: bool = True) -> Any:
+    """BLOCKING, never raises (FU-3a): every own checkpoint store of a DELETED
+    session (``hosted/checkpoints.sweep_own_stores``: its row is gone, and its
+    delete marked it or its session's folder is gone too) is removed, and how
+    many is logged (a ``checkpoints.Swept``); *again*: another sweep follows
+    (what the log says of a store left). Nothing is removed, and nothing is
+    left to try again, while the database is SET ASIDE and not yet answered
     (``core.db.read_set_aside_marker``): the app then runs on a fresh
-    database, and the rows of the sessions may come back with a restore."""
+    database, and the sessions' rows are in the one set aside."""
     from ..core.db import read_set_aside_marker
     from . import checkpoints as CK
 
-    def rows() -> set[str]:
-        if read_set_aside_marker(home) is not None:
-            raise RuntimeError("the database was set aside: its rows are not yet the sessions'")
-        return store.all_ids(engine)
-
-    got = CK.sweep_own_stores(home, rows)
+    if read_set_aside_marker(home) is not None:
+        log.info("the database was set aside and that is not answered yet: no copy of a deleted "
+                 "Code-view session's files is removed until it is (then at the next start)")
+        return CK.Swept(0, 0)
+    got = CK.sweep_own_stores(home, lambda: store.all_ids(engine))
     if got.removed:
         log.info("removed %d copy(ies) of a deleted Code-view session's files (its own checkpoint store)",
                  got.removed)
     if got.left:
-        log.warning("%d Code-view checkpoint store(s) of deleted sessions could not be removed yet; "
-                    "tried again later", got.left)
+        log.warning("%d copy(ies) of a deleted Code-view session's files could not be removed yet "
+                    "(a file in use); %s", got.left,
+                    "tried again later" if again else "tried again at the next start")
     return got
 
 
@@ -5246,21 +5250,23 @@ async def sweep_stores_until_gone(home: Any, engine: Any, *, at_once: bool = Tru
                                   waits: "Collection[float] | None" = None, sleep: Any = None) -> Any:
     """FU-3a: :func:`sweep_left_stores` off the loop — at once (*at_once*;
     the daemon's start), then again after each of *waits*
-    (:data:`STORE_RETRY_S`) while a store of a deleted session is left. A
-    PC with no such store costs one folder look. Never raises but a cancel."""
+    (:data:`STORE_RETRY_S`) while a store of a deleted session is left, or
+    the rows could not be read (a database locked for a moment). A PC with no
+    store costs one folder look. Never raises but a cancel."""
     from . import checkpoints as CK
 
     sleep = asyncio.sleep if sleep is None else sleep
+    waits = list(STORE_RETRY_S if waits is None else waits)
     got = CK.Swept(0, 0)
     try:
         if at_once:
-            got = await asyncio.to_thread(sweep_left_stores, home, engine)
-            if not got.left:
+            got = await asyncio.to_thread(sweep_left_stores, home, engine, again=bool(waits))
+            if not (got.left or got.unread):
                 return got
-        for wait in (STORE_RETRY_S if waits is None else waits):
+        for i, wait in enumerate(waits):
             await sleep(wait)
-            got = await asyncio.to_thread(sweep_left_stores, home, engine)
-            if not got.left:
+            got = await asyncio.to_thread(sweep_left_stores, home, engine, again=i + 1 < len(waits))
+            if not (got.left or got.unread):
                 break
     except asyncio.CancelledError:
         raise

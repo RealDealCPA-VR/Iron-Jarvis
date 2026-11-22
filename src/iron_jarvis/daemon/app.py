@@ -2215,9 +2215,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # session's files (its own checkpoint store, v1.546.0) that its delete
         # could not remove — a file in it held open — is removed now, off the
         # loop, and again after STORE_RETRY_S while one is left. Never a store
-        # whose session row exists, archived or not; nothing while the database
-        # is set aside. A PC with no such store costs one folder look; boot
-        # never waits on it; it logs how many it removed.
+        # whose session row exists, archived or not, nor one whose row is only
+        # missing (a backup restored: its session's folder is still there);
+        # nothing while the database is set aside. A PC with no store costs
+        # one folder look; boot never waits on it; it logs how many it removed.
         from ..hosted.service import sweep_stores_until_gone as _sweep_left_stores
 
         bg_tasks["build_code_stores"] = asyncio.create_task(

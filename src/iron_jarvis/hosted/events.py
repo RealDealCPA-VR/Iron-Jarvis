@@ -240,8 +240,13 @@ def unified_replace(path: str, old: str, new: str) -> str:
 # --------------------------------------------------------------------------- #
 # The bounded log
 # --------------------------------------------------------------------------- #
+def sessions_dir(home: Any) -> Path:
+    """The folder every session's own folder (:func:`session_dir`) is in."""
+    return Path(home) / "hosted"
+
+
 def session_dir(home: Any, sid: str) -> Path:
-    return Path(home) / "hosted" / str(sid)
+    return sessions_dir(home) / str(sid)
 
 
 def _mergeable(a: dict[str, Any], b: dict[str, Any]) -> bool:
