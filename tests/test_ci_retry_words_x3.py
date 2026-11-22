@@ -437,6 +437,41 @@ def test_a_huge_line_is_masked_whole_or_left_out_never_cut_before_the_mask():
     assert not any("zzzz" in t for t in texts), texts
 
 
+def _key_block(lines: int = 50) -> "tuple[str, str]":
+    """A private key's block, (its text, one of its body lines), joined at run
+    time like ``_pem`` in tests/test_fourth_review_mask_shapes_v1532.py, so no
+    source line looks like a credential. Its body is filler."""
+    body = "Q" * 64
+    return ("-----BEGIN " + "PRIVATE KEY-----\n" + "\n".join([body] * lines)
+            + "\n-----END " + "PRIVATE KEY-----\n"), body
+
+
+def test_a_secret_that_spans_lines_is_masked_whole_when_its_start_is_not_printed(monkeypatch):
+    """A key's block is about 50 lines: a part prints a section's last lines
+    only, so after a long traceback the block's BEGIN line is not among them.
+    The mask must still read the block whole (it reads ``_MARGIN`` lines past
+    those printed, as one text), or the key's body is printed."""
+    block, body = _key_block()
+    trace = "".join(f"trace line {i}\n" for i in range(40)) + "E       AssertionError: it broke\n"
+    captured = SimpleNamespace(nodeid="a.py::t", when="call", rerun=0, outcome="rerun", longrepr=trace,
+                               sections=[("Captured stdout call", "before the key\n" + block + "after the key\n")])
+    traced = SimpleNamespace(nodeid="a.py::u", when="call", rerun=0, outcome="rerun",
+                             longrepr="E       it printed a key\n" + block, sections=[])
+    for rep in (captured, traced):
+        stats = {"rerun": [rep], "passed": [_passed(rep.nodeid)]}
+        texts = _texts(stats)
+        assert not any(body in t for t in texts), (rep.nodeid, texts)
+        assert "-----BEGIN PRIVATE KEY-----***-----END PRIVATE KEY-----" in texts, (rep.nodeid, texts)
+        # The probe is the case: masked as nothing, the BEGIN line is not
+        # among the lines printed, and the body is.
+        with monkeypatch.context() as m:
+            m.setattr(R, "_mask_function", lambda: (lambda text: text))
+            bare = _texts(stats)
+        assert not any("-----BEGIN" in t for t in bare) and body in bare, (rep.nodeid, bare)
+    texts = _texts({"rerun": [captured], "passed": [_passed(captured.nodeid)]})
+    assert "E       AssertionError: it broke" in texts and "after the key" in texts, texts
+
+
 class _Writer:
     def __init__(self) -> None:
         self.lines: list[str] = []
