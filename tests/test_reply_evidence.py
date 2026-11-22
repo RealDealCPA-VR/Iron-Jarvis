@@ -490,7 +490,17 @@ async def test_the_before_says_when_it_was_taken_not_when_the_first_write_kept_i
     the first screen write, which can come minutes later in a long reply.
     Its time on the reply, and in ``evidence.json``, is when the picture was
     TAKEN; only ``saved_at`` is the save's."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
+
+    def picture_clock() -> datetime:
+        # The bounds are read the way the picture's own time is read:
+        # time.time() (ActResult.taken_at) made a datetime. E.utcnow()
+        # (datetime.now) cuts to the microsecond while a float timestamp
+        # rounds to the nearest one, so on Windows a picture taken BEFORE a
+        # utcnow() read could say 1 us after it (about a third of
+        # back-to-back reads on Python 3.12), and this test passed only on
+        # CI's retry. One clock read one way keeps the order exact.
+        return datetime.fromtimestamp(time.time(), timezone.utc)
 
     p, perms, ws, ctx = reg
     target = ws / "src" / "App.tsx"
@@ -499,10 +509,10 @@ async def test_the_before_says_when_it_was_taken_not_when_the_first_write_kept_i
     token = _arm(p)
     try:
         st = E.TURN.get()
-        began = E.utcnow()
+        began = picture_clock()
         assert E.start_before(local_only=False) is True
         await _early_done(st)
-        taken_by = E.utcnow()
+        taken_by = picture_clock()
         # The model reads and runs things for four minutes before its first
         # screen write: the app's clock reads that late from now on.
         later = taken_by + timedelta(minutes=4)
