@@ -766,6 +766,8 @@ def _make_row(svc: Any, row: Any, new_hid: str, kept: list[dict[str, Any]], drop
     what changed is added to ``notes``."""
     title = clip(f"{row.title or 'Session'} (branch)", 120)
     mode, said = branch_consent(row)
+    from . import session_git as SG
+
     made = store.create(
         svc.engine, harness=row.harness, folder=row.folder or "", title=title,
         account=row.account or "", account_json=row.account_json or "", model=row.model or "",
@@ -773,6 +775,11 @@ def _make_row(svc: Any, row: Any, new_hid: str, kept: list[dict[str, Any]], drop
         no_folder=bool(getattr(row, "no_folder", False)),
         capabilities_json=getattr(row, "capabilities_json", "") or "",
         load_folder_resources=False,
+        # 22-b review: a branch of a session on its own branch works in the
+        # same copy, ON THAT BRANCH: it carries the same facts (listed under
+        # the folder picked, the main folder's environment, and that copy is
+        # never discarded or deleted under it, ``session_git.others_in_copy``).
+        git_json=SG.shared_json(row),
     )
     if notes is not None:
         notes.extend(said)

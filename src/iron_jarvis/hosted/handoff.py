@@ -510,7 +510,14 @@ async def _start_locked(svc: Any, parent: str, prow: Any, *, tool: str, task: st
             # of the same group (never across work and personal).
             "account": await asyncio.to_thread(helper_account, svc, prow, want),
         })
-        crow = await asyncio.to_thread(store.update, svc.engine, made["id"], handed_from=parent)
+        # 22-b review: a helper of a session on its own branch works in its
+        # copy of the folder on that branch, like the session (``session_git.
+        # shared_json``): listed under the folder picked, with its environment.
+        from . import session_git as SG
+
+        shared = SG.shared_json(prow)
+        crow = await asyncio.to_thread(store.update, svc.engine, made["id"], handed_from=parent,
+                                       **({"git_json": shared} if shared else {}))
         if crow is None:
             raise Refused("The helper session could not be kept.", 500)
     text = PREFACE.format(parent=W.label(prow.harness)) + task

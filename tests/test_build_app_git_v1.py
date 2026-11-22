@@ -655,6 +655,171 @@ async def test_a_branch_sessions_work_record_and_project_row_name_the_picked_fol
     await stop_all(app)
 
 
+# --------------------------------------------------------------------------- #
+# Review 3: the copy goes with a delete, and is never moved under another
+# session that works in it; a branch session's check borrows the main folder
+# --------------------------------------------------------------------------- #
+def worktrees(repo: Path) -> list[str]:
+    return [ln for ln in git("worktree", "list", "--porcelain", cwd=repo).splitlines() if ln.startswith("worktree ")]
+
+
+async def test_deleting_a_branch_session_moves_its_copy_to_the_trash_and_keeps_the_branch(app, repo, monkeypatch):
+    """Chat › Code's delete rule (v1.375.0): the copy MOVES to the trash and
+    git forgets it; the branch stays. One that cannot move refuses the
+    delete in words, with nothing deleted."""
+    engine = app.state.platform.engine
+    async with client(app) as c:
+        made = (await c.post("/build/app/sessions",
+                             json={"harness": "codex", "folder": str(repo), "branch": True})).json()
+        sid, wt, branch = made["id"], Path(made["folder"]), made["git"]["branch"]
+        assert wt.is_dir() and len(worktrees(repo)) == 2
+
+        # A copy a program holds (the rename refused) is never half-moved.
+        real_rename = B._rename_retrying
+
+        def held(src, dst):
+            raise PermissionError(13, "The process cannot access the file because it is being used")
+
+        monkeypatch.setattr(B, "_rename_retrying", held)
+        r = await c.delete(f"/build/app/sessions/{sid}")
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"] == f"{B.IN_USE} {SG.NOT_DELETED}"
+        assert store.get(engine, sid) is not None and wt.is_dir() and len(worktrees(repo)) == 2
+        monkeypatch.setattr(B, "_rename_retrying", real_rename)
+
+        r = await c.delete(f"/build/app/sessions/{sid}")
+        assert r.status_code == 200, r.text
+        moved = r.json()["worktree"]
+        assert moved["moved"] is True and moved["branch"] == branch and Path(moved["trash"]).is_dir()
+        assert (Path(moved["trash"]) / "README.md").is_file(), "the copy is whole in the trash"
+    assert store.get(engine, sid) is None
+    assert not wt.exists(), "the copy stayed beside the repository"
+    assert len(worktrees(repo)) == 1, "git still lists the copy"
+    assert git_ok("rev-parse", "--verify", f"refs/heads/{branch}", cwd=repo), "the branch was kept"
+    # ...and the branch is free again for the user's own folder (no worktree holds it).
+    git("switch", "-q", branch, cwd=repo)
+    git("switch", "-q", "main", cwd=repo)
+    await stop_all(app)
+
+
+async def test_a_branch_of_a_branch_session_works_on_its_branch_and_its_copy_is_never_moved_under_it(
+        app, repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-home"))  # never the PC's own
+    (tmp_path / "claude-home").mkdir()
+    engine = app.state.platform.engine
+    async with client(app) as c:
+        made = (await c.post("/build/app/sessions",
+                             json={"harness": "claude-code", "folder": str(repo), "branch": True,
+                                   "title": "Rate limiter"})).json()
+        sid, wt, branch = made["id"], Path(made["folder"]), made["git"]["branch"]
+        store.update(engine, sid, harness_session_id="hs-1")  # the tool answered once
+        r = await c.post(f"/build/app/sessions/{sid}/fork", json={})
+        assert r.status_code == 201, r.text
+        fork = r.json()["session"]
+        # The same copy, ON THE SAME BRANCH, listed under the folder picked.
+        assert fork["folder"] == str(wt) and fork["checkout"] == str(repo)
+        assert fork["git"]["branch"] == branch and fork["git"]["worktree"] == str(wt)
+        listed = (await c.get("/build/app/sessions", params={"folder": str(repo)})).json()["sessions"]
+        assert {s["id"] for s in listed} == {sid, fork["id"]}
+
+        # Discard of either is refused while the other works in that copy,
+        # BEFORE its tool is stopped (it works in that copy).
+        svc = S.service_for(app.state.platform)
+        stopped: list[str] = []
+        real_stop = svc._stop_process
+
+        async def spy_stop(live, *a, **k):
+            stopped.append(str(k.get("why", "")))
+            return await real_stop(live, *a, **k)
+
+        monkeypatch.setattr(svc, "_stop_process", spy_stop)
+        r = await c.post(f"/build/app/sessions/{sid}/git/discard", json={"confirm": True})
+        assert r.status_code == 409 and r.json()["detail"] == SG.COPY_SHARED.format(
+            who=f"The session “{fork['title']}”"), r.text
+        r = await c.post(f"/build/app/sessions/{fork['id']}/git/discard", json={"confirm": True})
+        assert r.status_code == 409 and "Rate limiter" in r.json()["detail"], r.text
+        assert wt.is_dir() and len(worktrees(repo)) == 2
+        assert store.get(engine, sid).archived_at is None, "a refused Discard archived nothing"
+        assert "discarded" not in stopped, "a refused Discard stopped the tool"
+
+        # A delete leaves the copy to the one still in it...
+        r = await c.delete(f"/build/app/sessions/{fork['id']}")
+        assert r.status_code == 200, r.text
+        assert r.json()["worktree"]["moved"] is False and wt.is_dir() and len(worktrees(repo)) == 2
+        # ...and the last one takes it with it.
+        r = await c.delete(f"/build/app/sessions/{sid}")
+        assert r.status_code == 200, r.text
+        assert r.json()["worktree"]["moved"] is True
+    assert not wt.exists() and len(worktrees(repo)) == 1
+    assert git_ok("rev-parse", "--verify", f"refs/heads/{branch}", cwd=repo)
+    await stop_all(app)
+
+
+async def test_a_helper_of_a_branch_session_works_on_its_branch_and_never_keeps_its_discard(
+        app, repo, monkeypatch):
+    from iron_jarvis.hosted import handoff as HO
+
+    engine = app.state.platform.engine
+    svc = S.service_for(app.state.platform)
+    fake_tool(svc, monkeypatch)
+    monkeypatch.setattr(svc, "harnesses", lambda: [
+        {"id": "codex", "label": "Codex", "installed": True, "signed_in": True}])
+    async with client(app) as c:
+        made = (await c.post("/build/app/sessions",
+                             json={"harness": "codex", "folder": str(repo), "branch": True})).json()
+        sid = made["id"]
+        r = await c.patch(f"/build/app/sessions/{sid}", json={"capabilities": {"handoff": True}})
+        assert r.status_code == 200, r.text
+        got = await HO.start(svc, sid, tool="codex", task="Write the limiter's tests")
+        helper = store.get(engine, got["helper"])
+        assert helper.handed_from == sid and helper.folder == made["folder"]
+        assert SG.checkout_of(helper) == str(repo), "the helper is listed under the folder picked"
+        assert SG.facts_of(helper)["branch"] == made["git"]["branch"]
+        # The session's own helper never keeps the session's Discard; the
+        # session keeps the helper's.
+        assert SG.others_in_copy(engine, store.get(engine, sid)) == []
+        assert [r.id for r in SG.others_in_copy(engine, helper)] == [sid]
+    await stop_all(app)
+
+
+async def test_a_branch_sessions_check_runs_with_the_main_folders_node_modules(app, repo, monkeypatch):
+    """The check after a branch session's reply runs in its copy with the
+    picked folder's ``node_modules/.bin`` first on PATH (the copy has none:
+    it is ignored by git), through the real check up to the sandbox."""
+    from iron_jarvis.sandbox.base import SandboxResult
+    from iron_jarvis.sandbox.manager import SandboxManager
+
+    (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    git("add", ".gitignore", cwd=repo)
+    git("commit", "-q", "-m", "ignore", cwd=repo)
+    (repo / "node_modules" / ".bin").mkdir(parents=True)
+    FD.save_checks(app.state.platform.engine, str(repo), {
+        "command": "npm test", "confirmed_at": "2026-11-22T00:00:00Z", "source": "chat"})
+    await patient_start(monkeypatch)
+    seen: list[dict] = []
+
+    def run_check(self, command, cwd, *, timeout, env, on_spawn=None, cancelled=None):
+        seen.append({"command": command, "cwd": str(cwd),
+                     "path": next(v for k, v in env.items() if k.upper() == "PATH")})
+        return SandboxResult(stdout="Ran 1 test in 0.010s\n\nOK\n", returncode=0)
+
+    monkeypatch.setattr(SandboxManager, "run_check", run_check)
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    async with client(app) as c:
+        made = (await c.post("/build/app/sessions",
+                             json={"harness": "codex", "folder": str(repo), "branch": True})).json()
+        sid, wt = made["id"], Path(made["folder"])
+        assert not (wt / "node_modules").exists()
+        await message(svc, sid, drivers)
+        wrote(svc, sid, wt, "api/limits.py", "LIMIT = 4\n")
+        await reply(svc, sid)
+    assert [s["command"] for s in seen] == ["npm test"], seen
+    assert seen[0]["cwd"] == str(wt)
+    assert seen[0]["path"].split(os.pathsep)[0] == str(repo / "node_modules" / ".bin"), seen[0]["path"]
+    await stop_all(app)
+
+
 def test_chat_finds_where_commit_and_the_pull_request_are(tmp_path):
     """Chat does not commit a Build › Code session's work: the feature lookup
     finds the page that does, and its line names both presses."""

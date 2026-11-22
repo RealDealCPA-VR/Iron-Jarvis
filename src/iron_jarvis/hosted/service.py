@@ -2789,6 +2789,7 @@ class HostedService:
         live = self._live(row)
         self._claim(live, "being deleted")
         HO.stop_helpers_soon(self, sid)  # v1.474.0: its helpers stop with it
+        own_copy: dict[str, Any] | None = None
         try:
             async with live.lock:
                 # v1.512.0 (second review H2): under the session's lock — a
@@ -2797,6 +2798,14 @@ class HostedService:
                 # before the lock is let go, so a start waiting for it sees it
                 # gone and starts nothing.
                 await self._stop_process(live, why="deleted", lock_held=True)
+                # 22-b review: a session on its own branch takes its copy of
+                # the folder with it (moved to the trash, the branch kept),
+                # stopped first so the copy is free; one that cannot be moved
+                # refuses the delete in words, with nothing deleted.
+                try:
+                    own_copy = await asyncio.to_thread(self._move_own_copy, row)
+                except B.GitRefused as exc:
+                    raise Refused(f"{exc} {SG.NOT_DELETED}", exc.status) from None
                 self.live.pop(sid, None)
             await asyncio.to_thread(live.log.close)
             from . import checkpoints as CK
@@ -2829,7 +2838,37 @@ class HostedService:
             await asyncio.to_thread(PN.forget_kept_index, self.home, sid)
         finally:
             live.claim = ""
-        return {"ok": True, "deleted": sid, "events_moved_to": moved}
+        out: dict[str, Any] = {"ok": True, "deleted": sid, "events_moved_to": moved}
+        if own_copy is not None:
+            out["worktree"] = own_copy  # Chat › Code's delete answers the same key
+        return out
+
+    def _move_own_copy(self, row: Any) -> "dict[str, Any] | None":
+        """BLOCKING. 22-b review: a deleted session on its own branch takes its
+        copy of the folder with it — MOVED to Iron Jarvis's trash and
+        forgotten by git (``branches.remove_worktree``, the Discard path) — and
+        THE BRANCH STAYS, as Chat › Code's delete does (v1.375.0). Under the
+        session's git lock and then its folder's (the git routes' own two), so
+        a git read in flight finishes first. A copy another session works in
+        too (:func:`session_git.others_in_copy`) is left for it. None for a
+        session in its folder directly; :class:`branches.GitRefused` in words,
+        nothing moved, when the copy cannot be moved."""
+        facts = SG.facts_of(row)
+        if not facts or facts.get("removed_at"):
+            return None
+        branch = facts.get("branch", "")
+        if SG.others_in_copy(self.engine, row):
+            return {"moved": False, "trash": "", "kept": str(row.folder or ""), "branch": branch}
+        from ..daemon.routes.build_git import _locked
+        from . import checkpoints as CK
+
+        key = CK.lock_key(str(row.folder or "")) if row.folder else ""
+
+        def move() -> dict[str, Any]:
+            return B.remove_worktree(self.home, facts)
+
+        done = _locked(f"app:{row.id}", (lambda: _locked(key, move)) if key else move)
+        return {**done, "branch": branch}
 
     def _sweep_stores_later(self) -> None:
         """FU-3a: the stores of deleted sessions are swept after each wait of

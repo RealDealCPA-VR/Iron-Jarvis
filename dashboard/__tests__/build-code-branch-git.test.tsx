@@ -179,7 +179,8 @@ describe("Commit and Open a pull request under the reply", () => {
     const message = (await screen.findByTestId("code-git-message")) as HTMLTextAreaElement;
     fireEvent.change(message, { target: { value: "My own words" } });
     fireEvent.click((screen.getAllByTestId("code-git-tick") as HTMLInputElement[])[0]);
-    await new Promise((r) => setTimeout(r, 20));
+    // The tick itself landed: the press that would ask for a new draft ran.
+    await waitFor(() => expect((screen.getAllByTestId("code-git-tick") as HTMLInputElement[])[0].checked).toBe(true));
     expect(api.posts.some((p) => p.path === `${GIT}/draft`)).toBe(false);
     expect(message.value).toBe("My own words");
   });
@@ -384,7 +385,11 @@ describe("the start box offers a new branch once per folder", () => {
     api.gets[FOLDER_GIT] = { git: true, repo: false, branch: "", can_branch: false, note: "not a repo", worktrees_dir: "" };
     render(<StartComposer tools={TOOLS} toolsError={null} startFolder={FOLDER} onStarted={() => {}} />);
     await screen.findByTestId("code-start-box");
-    await new Promise((r) => setTimeout(r, 30));
+    // Asserted only once the box has READ the folder and its answer.
+    await waitFor(() => expect(api.getCalls).toEqual(expect.arrayContaining([FOLDER_GIT, DEFAULTS])));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0)); // the answers land
+    });
     expect(screen.queryByTestId("code-start-branch-offer")).toBeNull();
     expect(screen.queryByTestId("code-start-branch-switch")).toBeNull();
   });

@@ -331,10 +331,19 @@ def register(app: FastAPI, d: Any) -> None:
             facts = SG.facts_of(row)
             if facts is None:
                 return _no(SG.NO_DISCARD_HERE)
+            # 22-b review: never under another session that works in this copy
+            # too ("Branch from here" made it there), archived or not.
+            others = await asyncio.to_thread(SG.others_in_copy, service.engine, row)
+            if others:
+                return _no(SG.shared_refusal(others))
             await service._stop_process(live, why="discarded")  # noqa: SLF001
             home = d.platform.config.home
 
             def go() -> dict[str, Any]:
+                # Asked again inside the locks: one may have been made meanwhile.
+                again = SG.others_in_copy(service.engine, row)
+                if again:
+                    raise B.GitRefused(SG.shared_refusal(again), 409)
                 done = B.remove_worktree(home, facts)
                 store.merge_git(service.engine, sid, {"removed_at": utcnow().isoformat(),
                                                       "trash": done.get("trash") or None})

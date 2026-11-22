@@ -2312,7 +2312,11 @@ request and its checks, Push, Merge into the branch it started from, and
 Discard (its copy goes to Iron Jarvis's trash, the branch stays). Only Merge
 changes your own folder. The coding tool works in that copy with your main
 folder's `.venv` and `node_modules`, and Iron Jarvis's test check after each
-reply uses your folder's answer.
+reply uses your folder's answer. **Delete** on such a session moves its copy
+to the trash too and keeps the branch. **Branch from here** on it makes a
+session that works in the same copy, on the same branch; while two sessions
+work in one copy, neither can Discard it, and deleting one leaves the copy to
+the other.
 
 **Pull requests** go through the GitHub CLI (`gh`, signed in). Without it the
 box opens GitHub's own page instead. The branch is pushed first, never with a

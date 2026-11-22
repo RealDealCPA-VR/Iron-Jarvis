@@ -83,6 +83,14 @@ NO_MAIN = (
     "Iron Jarvis could not tell which branch is this repository's main one, so no pull request is "
     "offered from here."
 )
+#: 22-b review: a branch session's copy of the folder that another session
+#: works in too ("Branch from here" made one there) is never moved under it.
+COPY_SHARED = (
+    "{who} works in this copy of the folder too, so nothing was discarded. Delete that session first, "
+    "then discard."
+)
+#: A delete refused because the copy could not be moved (its words first).
+NOT_DELETED = "The session was not deleted; its coding tool was stopped."
 #: The claim a git action holds on the session (``service._claim``: "This
 #: session is <what> — try again in a moment.").
 CLAIM = "saving its work in git"
@@ -136,6 +144,42 @@ def checkout_from(folder: Any, git_json: Any) -> str:
 def view(row: Any) -> "dict[str, Any] | None":
     """``git`` on the session's view (a branch session only), no git call."""
     return B.view(facts_of(row))
+
+
+def shared_json(row: Any) -> str:
+    """22-b review: the git facts a session made IN ``row``'s own copy of the
+    folder carries ("Branch from here", a helper it hands work to): the same
+    branch and the same copy, so it is listed under the folder the user
+    picked, borrows the main folder's environment and commits on that branch.
+    "" for a session in its folder directly (or whose copy is gone)."""
+    facts = facts_of(row)
+    if not facts or facts.get("removed_at"):
+        return ""
+    return json.dumps(facts, sort_keys=True)
+
+
+def others_in_copy(engine: Any, row: Any) -> list[Any]:
+    """BLOCKING: the OTHER sessions whose folder is this branch session's own
+    copy of the folder (archived ones too: an archived session keeps its
+    folder, so unarchiving finds it) — a branch made with "Branch from here"
+    works there too. A helper THIS session started is its own work (it stops
+    with it), never another session's. [] for any other session."""
+    facts = facts_of(row)
+    copy = str(getattr(row, "folder", "") or "")
+    if not facts or facts.get("removed_at") or not copy:
+        return []
+    from . import store
+    from .service import same_folder
+
+    sid = str(getattr(row, "id", "") or "")
+    return [r for r in store.list_rows(engine, archived=True)
+            if r.id != sid and same_folder(r.folder, copy) and str(getattr(r, "handed_from", "") or "") != sid]
+
+
+def shared_refusal(others: list[Any]) -> str:
+    """:data:`COPY_SHARED` for the first of ``others``."""
+    title = " ".join(str(getattr(others[0], "title", "") or "").split())[:120]
+    return COPY_SHARED.format(who=f"The session “{title}”" if title else "Another session")
 
 
 _PR_URL = re.compile(r"^https://[^\s/]+/\S+/pull/\d+$")
@@ -578,9 +622,9 @@ def uncommitted_names(facts: dict[str, str]) -> list[str]:
 
 
 __all__ = [
-    "BRANCH_NEEDS_FOLDER", "BRANCH_NO_RESUME", "CHECKING_NOW", "CLAIM", "DIRECT", "NO_DIFF_HERE",
-    "NO_DISCARD_HERE", "NO_MERGE_HERE", "NOT_A_REPO_HERE", "ON_MAIN_PR", "TICK_FIRST", "changed_files",
-    "checkout_of", "direct_pr", "draft_message", "facts_of", "first_message", "folder_commit", "folder_pr",
-    "folder_pr_status", "folder_push", "folder_status", "main_branch", "ours", "record_of", "repo_top",
-    "tool_env", "uncommitted_names", "view",
+    "BRANCH_NEEDS_FOLDER", "BRANCH_NO_RESUME", "CHECKING_NOW", "CLAIM", "COPY_SHARED", "DIRECT", "NO_DIFF_HERE",
+    "NO_DISCARD_HERE", "NO_MERGE_HERE", "NOT_A_REPO_HERE", "NOT_DELETED", "ON_MAIN_PR", "TICK_FIRST",
+    "changed_files", "checkout_of", "direct_pr", "draft_message", "facts_of", "first_message", "folder_commit",
+    "folder_pr", "folder_pr_status", "folder_push", "folder_status", "main_branch", "others_in_copy", "ours",
+    "record_of", "repo_top", "shared_json", "shared_refusal", "tool_env", "uncommitted_names", "view",
 ]
