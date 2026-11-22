@@ -120,17 +120,25 @@ export const BOX_COMES_BACK_NOTE = "The message box comes back when you answer."
 
 /** The keys line under the card while a question is in the composer's place.
  *  `item` (v1.381.0 review): the question itself, so a card Enter does not
- *  allow says so instead of promising "Enter to allow". */
-export function dockAskKeyHint(kind: DockAskItem["kind"], item?: DockAskItem | null): string {
-  if (item && !enterAllows(item)) return CLICK_TO_ALLOW_HINT;
+ *  allow says so instead of promising "Enter to allow".
+ *  `escAnswers` (36-a review): false in Quick Ask's answer window, where Esc
+ *  hides the window and never answers a card, so the line names Enter only
+ *  ("" when Enter does nothing there either). */
+export function dockAskKeyHint(
+  kind: DockAskItem["kind"],
+  item?: DockAskItem | null,
+  { escAnswers = true }: { escAnswers?: boolean } = {},
+): string {
+  const line = (enter: string, esc: string) => (escAnswers ? [enter, esc] : [enter]).filter(Boolean).join(" · ");
+  if (item && !enterAllows(item)) return escAnswers ? CLICK_TO_ALLOW_HINT : ENTER_BLOCKED_NOTE;
   if (kind === "cloud") {
     // v1.428.0: a chat held Local only offers no "Send once".
     return item?.kind === "cloud" && (item.ask.held?.length ?? 0) > 0
-      ? "Esc to keep it local"
-      : "Enter to send once · Esc to keep it local";
+      ? line("", "Esc to keep it local")
+      : line("Enter to send once", "Esc to keep it local");
   }
-  if (kind === "question") return "Enter to send · Esc to skip";
-  return kind === "elicitation" ? "Enter to send · Esc to decline" : "Enter to allow · Esc to decline";
+  if (kind === "question") return line("Enter to send", "Esc to skip");
+  return kind === "elicitation" ? line("Enter to send", "Esc to decline") : line("Enter to allow", "Esc to decline");
 }
 
 /** Elements whose own Enter means something (a button presses, a field

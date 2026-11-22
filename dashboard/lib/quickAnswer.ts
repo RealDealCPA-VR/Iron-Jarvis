@@ -46,16 +46,20 @@ function bridge(): QuickBridge | null {
   }
 }
 
-/** Is the chat page drawn compact? `?compact=1` (the address the desktop
- *  opens), or the desktop saying THIS window is the answer window. Never
- *  throws. */
+/** Is the chat page drawn compact? In the desktop app the desktop's word
+ *  alone (THIS window is the answer window, through a reload or a changed
+ *  address): a `?compact=1` typed or written into the MAIN window must not
+ *  draw it as one, where its links would go nowhere (36-a review). Outside
+ *  the desktop app (a browser), `?compact=1`. Never throws. */
 export function isCompactChat(search: string): boolean {
+  const word = bridge()?.isAnswerWindow;
+  if (typeof word === "boolean") return word;
   try {
-    if (new URLSearchParams(search).get(QUICK_COMPACT_PARAM) === "1") return true;
+    return new URLSearchParams(search).get(QUICK_COMPACT_PARAM) === "1";
   } catch {
     /* a malformed address is not the flag */
+    return false;
   }
-  return bridge()?.isAnswerWindow === true;
 }
 
 /** Can this window hand a chat or a page to the main window? */
@@ -116,7 +120,9 @@ export function mainWindowPath(href: string, here: { origin: string; pathname: s
 
 /** Esc hides the window unless something on the page is in front: a key a
  *  handler already took (a menu's own Escape calls preventDefault), a word
- *  being composed, or an open dialog or menu, which Esc closes first. */
+ *  being composed, or an open dialog or menu, which Esc closes first. A
+ *  question card in the composer's place is NOT in front: Esc hides the
+ *  window and never answers it (components/chat/DockAsk, 36-a review). */
 export function escapeHidesWindow(e: KeyboardEvent, doc: Document): boolean {
   if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return false;
   try {

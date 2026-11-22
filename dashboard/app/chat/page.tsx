@@ -16184,14 +16184,21 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       map, the context gauge, a detected-model offer and the keys. The
                       old footer row (Share, Map, Approvals, Default model) is gone:
                       Share is in the top bar, the rest is in the card. */}
+                  {/* 36-a review: in Quick Ask's 480 by 560 window the messages
+                      need this row's room (measured by
+                      e2e/quick-ask-window.spec.ts): no map there, and the row
+                      takes no room at all when nothing is left in it. The
+                      demo offer stays: the demo reply's note points at "the
+                      button just below the message box" (chat_turn
+                      DEMO_NOTE_FIX_CHAT). */}
                   <div
                     data-testid="composer-meta"
-                    className="flex min-h-7 flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 pt-1.5 text-[12px] text-zinc-500"
+                    className={`flex min-h-7 flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 pt-1.5 text-[12px] text-zinc-500 ${compact ? "empty:hidden" : ""}`}
                   >
                     {/* v1.325.0: the conversation map — every question, one press away.
                         Calm chat W1-3: not on a new chat, where it could only be
                         a disabled button pointing at questions nobody asked. */}
-                    {!emptyHero && (
+                    {!emptyHero && !compact && (
                     <button
                       type="button"
                       data-testid="open-conversation-map"
@@ -16234,12 +16241,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         }}
                       />
                     )}
-                    {/* 36-a: not in Quick Ask's answer window, where Esc
-                        hides the window rather than stopping the reply. */}
-                    {!compact && (
-                    <span className="hidden sm:inline">
+                    {/* 36-a: in Quick Ask's answer window Esc hides the
+                        window: it never stops the reply (so no composer
+                        line) and never answers a card (so the card's line
+                        names Enter only). */}
+                    {(!compact || askInDock) && (
+                    <span data-testid="composer-key-hint" className="hidden sm:inline">
                       {askInDock
-                        ? dockAskKeyHint(dockAsks[0].kind, dockAsks[0])
+                        ? dockAskKeyHint(dockAsks[0].kind, dockAsks[0], { escAnswers: !compact })
                         : composerKeyHint(busy, !commMeta, atFilesRoot !== null)}
                     </span>
                     )}

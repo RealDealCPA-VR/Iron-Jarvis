@@ -16,6 +16,10 @@
  *  - Continue names the SAVED chat's id, and waits until there is one;
  *  - Esc hides the window (even mid-reply: the reply carries on), but never
  *    while a menu or dialog is open, which Esc closes first;
+ *  - (review) Esc never answers a question card there: the window hides, the
+ *    card stays, its buttons answer it, and its keys line names Enter only;
+ *  - (review) the Code view, a coding session and Last night open in the
+ *    MAIN window: this one never shows Code;
  *  - a link to another page opens in the main window; a chat link stays;
  *  - the hotkey pressed while the window is open puts the cursor in the box;
  *  - the full page is unchanged without `?compact=1`.
@@ -38,6 +42,20 @@ const H = vi.hoisted(() => {
     offline = false;
     partial = "";
   }
+  const stream = {
+    bodies: [] as Record<string, unknown>[],
+    release: null as null | ((r: Record<string, unknown>) => void),
+    aborts: 0,
+    // What the turn is waiting on (36-a review: a card in the answer window).
+    approval: null as null | { id: string; callId: string; tool: string; args?: Record<string, unknown> },
+    mcpAsks: [] as unknown[],
+    version: 0,
+    listeners: new Set<() => void>(),
+    bump() {
+      stream.version += 1;
+      for (const l of [...stream.listeners]) l();
+    },
+  };
   return {
     FakeApiError,
     FakeStreamError,
@@ -46,11 +64,7 @@ const H = vi.hoisted(() => {
       puts: [] as { path: string; body: Record<string, unknown> }[],
       getResponses: {} as Record<string, unknown>,
     },
-    stream: {
-      bodies: [] as Record<string, unknown>[],
-      release: null as null | ((r: Record<string, unknown>) => void),
-      aborts: 0,
-    },
+    stream,
   };
 });
 
@@ -75,26 +89,38 @@ vi.mock("@/lib/api", () => ({
   del: async () => ({}),
 }));
 
-vi.mock("@/lib/useChatStream", () => ({
-  StreamError: H.FakeStreamError,
-  useLiveText: (s: { text?: string }) => s?.text ?? "",
-  useChatStream: () => ({
-    streaming: false,
-    text: "",
-    tools: [],
-    approval: null,
-    mcpAsks: [],
-    run: (body: Record<string, unknown>) => {
-      H.stream.bodies.push(body);
-      return new Promise<Record<string, unknown>>((res) => {
-        H.stream.release = res;
-      });
+vi.mock("@/lib/useChatStream", async () => {
+  const React = await import("react");
+  const subscribe = (cb: () => void) => {
+    H.stream.listeners.add(cb);
+    return () => {
+      H.stream.listeners.delete(cb);
+    };
+  };
+  return {
+    StreamError: H.FakeStreamError,
+    useLiveText: (s: { text?: string }) => s?.text ?? "",
+    useChatStream: () => {
+      React.useSyncExternalStore(subscribe, () => H.stream.version);
+      return {
+        streaming: false,
+        text: "",
+        tools: [],
+        approval: H.stream.approval,
+        mcpAsks: H.stream.mcpAsks,
+        run: (body: Record<string, unknown>) => {
+          H.stream.bodies.push(body);
+          return new Promise<Record<string, unknown>>((res) => {
+            H.stream.release = res;
+          });
+        },
+        abort: () => {
+          H.stream.aborts += 1;
+        },
+      };
     },
-    abort: () => {
-      H.stream.aborts += 1;
-    },
-  }),
-}));
+  };
+});
 vi.mock("@/lib/useEvents", () => ({ useEvents: () => ({ events: [], connected: false }) }));
 vi.mock("@/lib/useRunStream", () => ({
   useRunStream: () => ({ text: "", tools: [], phase: null, active: false, start: () => {}, stop: () => {} }),
@@ -120,6 +146,10 @@ vi.mock("remark-gfm", () => ({ default: () => {} }));
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import ChatPage from "@/app/chat/page";
+import { ChatCodeSurface } from "@/components/chat/ChatCodeSurface";
+import { CHAT_VIEW_EVENT, keepView, rememberedView, resetViewMemory } from "@/lib/chatSurface";
+import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT } from "@/lib/buildLinks";
+import { dockAskKeyHint } from "@/lib/dockAsk";
 import { QUICK_COMPACT_PARAM, isCompactChat, mainWindowPath } from "@/lib/quickAnswer";
 import { headingSlug, sectionMatches } from "@/lib/helpLinks";
 import { hotkeyLines } from "@/components/help/GlobalHotkeys";
@@ -147,6 +177,8 @@ beforeEach(() => {
   H.stream.bodies.length = 0;
   H.stream.release = null;
   H.stream.aborts = 0;
+  H.stream.approval = null;
+  H.stream.mcpAsks = [];
   H.api.getResponses = {
     "/models": { models: [] },
     "/chat/personas": { personas: [] },
@@ -187,7 +219,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   delete W.ironjarvis;
+  resetViewMemory();
   window.history.replaceState({}, "", "/chat");
 });
 
@@ -217,6 +252,11 @@ describe("the answer window draws the chat page compact (36-a)", () => {
     // The room fills the small window at every width (no phone-only 60vh cap).
     expect(screen.getByTestId("chat-room").className).toContain("h-[calc(100vh-4.5rem");
     expect(screen.getByTestId("chat-scroll").className).toContain("!max-h-none");
+    // Review: the row under the composer gives its room to the messages (no
+    // map in the small window), and takes none when empty
+    // (e2e/quick-ask-window.spec.ts measures the room).
+    expect(screen.queryByTestId("open-conversation-map")).toBeNull();
+    expect(screen.getByTestId("composer-meta").className).toContain("empty:hidden");
   });
 
   it("the words go through the ORDINARY stream lane, once, and the chat is saved", async () => {
@@ -356,6 +396,147 @@ describe("the answer window draws the chat page compact (36-a)", () => {
   });
 });
 
+const SHELL_ASK = { id: "apr_1", callId: "c1", tool: "shell", args: { command: "git status" } };
+const CITY_ASK = {
+  kind: "elicitation",
+  id: "e1",
+  callId: "c9",
+  pack: "Weather",
+  message: "Which city?",
+  fields: [{ name: "city", type: "string", title: "City", description: "", required: true }],
+};
+
+/** The card's keys answer only after its first moment (DOCK_KEY_ARM_MS):
+ *  move the clock a minute on instead of waiting. */
+function pastTheArmDelay() {
+  const t0 = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => t0 + 60_000);
+}
+
+describe("a question card in the answer window (36-a review)", () => {
+  it("Esc hides the window and never answers the card, with the focus on the card or on the page", async () => {
+    window.history.replaceState({}, "", COMPACT_URL);
+    render(<ChatPage />);
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    act(() => {
+      H.stream.approval = SHELL_ASK;
+      H.stream.bump();
+    });
+    await screen.findByTestId("chat-approval-card");
+    const dock = screen.getByTestId("dock-ask");
+    pastTheArmDelay();
+
+    // The focus on the card (it takes it when it is shown).
+    dock.focus();
+    expect(document.activeElement).toBe(dock);
+    fireEvent.keyDown(dock, { key: "Escape" });
+    expect(hide).toHaveBeenCalledTimes(1);
+
+    // Nothing focused (the page itself).
+    dock.blur();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(hide).toHaveBeenCalledTimes(2);
+
+    // Neither press answered it: no decision was sent, the card is still up.
+    expect(H.api.posts.filter((p) => p.path.startsWith("/chat/approvals/"))).toEqual([]);
+    expect(screen.getByTestId("chat-approval-card")).toBeTruthy();
+    // Its keys line does not promise an Esc that hides instead.
+    expect(screen.getByTestId("composer-key-hint").textContent).toBe("Enter to allow");
+
+    // The card's own button still answers it.
+    fireEvent.click(dock.querySelector<HTMLButtonElement>("[data-dock-decline]")!);
+    await waitFor(() =>
+      expect(H.api.posts).toContainEqual({ path: "/chat/approvals/apr_1", body: { decision: "deny" } }),
+    );
+  });
+
+  it("Esc from inside an app's question card hides the window too, and never declines", async () => {
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    window.history.replaceState({}, "", COMPACT_URL);
+    render(<ChatPage />);
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    act(() => {
+      H.stream.mcpAsks = [CITY_ASK];
+      H.stream.bump();
+    });
+    const card = await screen.findByTestId("mcp-elicitation-card");
+    pastTheArmDelay();
+    // The card stops its own keys from bubbling; Esc on its Decline button.
+    const decline = card.querySelector<HTMLButtonElement>("[data-dock-decline]")!;
+    decline.focus();
+    fireEvent.keyDown(decline, { key: "Escape" });
+    expect(hide).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls.some((c) => String((c as unknown[])[0]).includes("/chat/mcp/elicitations/"))).toBe(false);
+    expect(screen.getByTestId("mcp-elicitation-card")).toBeTruthy();
+    expect(screen.getByTestId("composer-key-hint").textContent).toBe("Enter to send");
+  });
+
+  it("the full chat page keeps Esc for the card: it declines there", async () => {
+    W.ironjarvis!.quickAsk!.isAnswerWindow = false;
+    W.ironjarvis!.popout = undefined;
+    take.mockImplementation(async () => "");
+    window.history.replaceState({}, "", "/chat");
+    render(<ChatPage />);
+    const box0 = (await screen.findByPlaceholderText(/Message Iron Jarvis/)) as HTMLTextAreaElement;
+    fireEvent.change(box0, { target: { value: "check the repo" } });
+    fireEvent.keyDown(box0, { key: "Enter" });
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    act(() => {
+      H.stream.approval = SHELL_ASK;
+      H.stream.bump();
+    });
+    await screen.findByTestId("chat-approval-card");
+    pastTheArmDelay();
+    expect(screen.getByTestId("composer-key-hint").textContent).toBe("Enter to allow · Esc to decline");
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    await waitFor(() =>
+      expect(H.api.posts).toContainEqual({ path: "/chat/approvals/apr_1", body: { decision: "deny" } }),
+    );
+    expect(hide).not.toHaveBeenCalled();
+  });
+});
+
+describe("the answer window never shows the Code view (36-a review)", () => {
+  const chatOnly = () => <p>the chat</p>;
+
+  it("a window that last showed Code still draws its chat", async () => {
+    keepView("code");
+    window.history.replaceState({}, "", COMPACT_URL);
+    render(<ChatCodeSurface renderChat={chatOnly} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("chat-view-panel-chat").hasAttribute("hidden")).toBe(false);
+    expect(screen.queryByTestId("chat-view-panel-code")).toBeNull();
+  });
+
+  it("Ctrl K's Code view, a coding session's link and Last night open in the MAIN window", async () => {
+    window.history.replaceState({}, "", COMPACT_URL);
+    render(<ChatCodeSurface renderChat={chatOnly} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent(CHAT_VIEW_EVENT, { detail: { view: "code" } }));
+    });
+    expect(toMain).toHaveBeenLastCalledWith({ path: "/chat?view=code" });
+    act(() => {
+      window.dispatchEvent(new CustomEvent(BUILD_SESSION_EVENT, { detail: { id: "s1" } }));
+    });
+    expect(toMain).toHaveBeenLastCalledWith({ path: "/chat?view=code&session=s1" });
+    act(() => {
+      window.dispatchEvent(new CustomEvent(BUILD_NIGHT_EVENT, { detail: { id: "2026-11-21" } }));
+    });
+    expect(toMain).toHaveBeenLastCalledWith({ path: "/chat?view=code&night=2026-11-21" });
+    expect(toMain).toHaveBeenCalledTimes(3);
+    // This window stays on its chat; its address and memory never say Code.
+    expect(screen.getByTestId("chat-view-panel-chat").hasAttribute("hidden")).toBe(false);
+    expect(screen.queryByTestId("chat-view-panel-code")).toBeNull();
+    expect(window.location.search).not.toContain("view=");
+    expect(rememberedView()).not.toBe("code");
+  });
+});
+
 describe("the full chat page is unchanged", () => {
   it("without ?compact=1 and outside the answer window: the switch, the top bar, no Quick Ask header", async () => {
     take.mockImplementation(async () => "");
@@ -366,6 +547,7 @@ describe("the full chat page is unchanged", () => {
     await screen.findByTestId("chat-topbar");
     expect(screen.getByTestId("chat-view-switch-row")).toBeTruthy();
     expect(screen.queryByTestId("quick-ask-header")).toBeNull();
+    expect(screen.getByTestId("composer-meta").className).not.toContain("empty:hidden");
     // Esc does not hide anything here.
     fireEvent.keyDown(window, { key: "Escape" });
     expect(hide).not.toHaveBeenCalled();
@@ -395,15 +577,41 @@ describe("one name, and search finds it", () => {
 });
 
 describe("lib/quickAnswer (pure)", () => {
-  it("isCompactChat: the address flag, or the desktop's word", () => {
+  it("isCompactChat: in the desktop app the desktop's word alone; in a browser the address flag", () => {
+    // 36-a review: `?compact=1` in the MAIN window does not make it one.
     W.ironjarvis!.quickAsk!.isAnswerWindow = false;
-    expect(isCompactChat("?compact=1")).toBe(true);
-    expect(isCompactChat("?compact=0")).toBe(false);
+    expect(isCompactChat("?compact=1")).toBe(false);
     expect(isCompactChat("")).toBe(false);
     W.ironjarvis!.quickAsk!.isAnswerWindow = true;
     expect(isCompactChat("")).toBe(true);
+    expect(isCompactChat("?compact=0")).toBe(true);
+    // A browser (no desktop bridge): the address says.
     delete W.ironjarvis;
+    expect(isCompactChat("?compact=1")).toBe(true);
+    expect(isCompactChat("?compact=0")).toBe(false);
     expect(isCompactChat("")).toBe(false);
+  });
+
+  it("dockAskKeyHint names Enter only where Esc does not answer (the answer window)", () => {
+    const noEsc = { escAnswers: false };
+    expect(dockAskKeyHint("approval", null, noEsc)).toBe("Enter to allow");
+    expect(dockAskKeyHint("elicitation", null, noEsc)).toBe("Enter to send");
+    expect(dockAskKeyHint("question", null, noEsc)).toBe("Enter to send");
+    expect(dockAskKeyHint("cloud", null, noEsc)).toBe("Enter to send once");
+    // Everywhere else, word for word as before.
+    expect(dockAskKeyHint("approval")).toBe("Enter to allow · Esc to decline");
+    expect(dockAskKeyHint("question")).toBe("Enter to send · Esc to skip");
+    expect(dockAskKeyHint("cloud")).toBe("Enter to send once · Esc to keep it local");
+  });
+
+  it("a ?compact=1 typed into the main window draws the full chat page", async () => {
+    take.mockImplementation(async () => "");
+    W.ironjarvis!.quickAsk!.isAnswerWindow = false;
+    W.ironjarvis!.popout = undefined;
+    window.history.replaceState({}, "", "/chat?compact=1");
+    render(<ChatPage />);
+    await screen.findByTestId("chat-topbar");
+    expect(screen.queryByTestId("quick-ask-header")).toBeNull();
   });
 
   it("mainWindowPath: another page of the app goes to the main window; the chat itself stays", () => {

@@ -2408,8 +2408,12 @@ nothing differently: the same key, the same box, the same Enter.
   answer beside your document. Clicking back into that program does not hide
   it.
 - **Esc** or the window's close button hides it. A reply still being written
-  carries on, and the chat is saved. While a menu or a question card is open
-  in the window, Esc closes that first.
+  carries on, and the chat is saved. While a menu is open in the window, Esc
+  closes the menu first.
+- Esc never answers a question in the window (an approval, say): the window
+  hides and the question waits in the chat, listed by the bell in your main
+  window, until you press one of its buttons. Enter still gives its main
+  answer there.
 - Press the key again while the window is open and the cursor goes back into
   its box, so a follow-up question is one press away. Once it is hidden, the
   key opens the box for a new question.

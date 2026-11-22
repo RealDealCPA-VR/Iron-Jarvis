@@ -39,8 +39,13 @@
 // v1.332.0: the page's OWN question joins them (kind `cloud`): a "local only"
 // chat about to send a message to a model that would leave this PC asks
 // first. Enter is "Send once", Esc is "Keep it local", like the others.
+//
+// 36-a review: in Quick Ask's answer window (lib/quickAnswer
+// CompactChatContext) Esc HIDES THE WINDOW and never answers a card: the key
+// the user presses to put the window away must not record a "no" they never
+// gave. The card stays, its buttons answer it, and Enter keeps its meaning.
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { House } from "lucide-react";
 import { ApprovalCard, type ApprovalScope } from "@/components/chat/ApprovalCard";
 import { Button } from "@/components/ui";
@@ -67,6 +72,7 @@ import {
   type CloudAsk,
 } from "@/lib/localOnly";
 import type { AnswerResult } from "@/lib/mcpInteract";
+import { CompactChatContext, escapeHidesWindow, hideAnswerWindow } from "@/lib/quickAnswer";
 
 /** How long after a question appears before Enter / Esc answer it. */
 export const DOCK_KEY_ARM_MS = 400;
@@ -202,6 +208,9 @@ export function DockAsk({
   // v1.381.0 review: read by `press` (a callback the key listeners keep).
   const enterAllowsRef = useRef(true);
   enterAllowsRef.current = enterAllows(head);
+  // 36-a review: Quick Ask's answer window keeps Esc for hiding itself.
+  const escDeclinesRef = useRef(true);
+  escDeclinesRef.current = !useContext(CompactChatContext);
   // v1.417.0 (C1.7): the question an Enter was just refused on (the note
   // under the card); a new question, or the timer, clears it.
   const [enterBlockedOn, setEnterBlockedOn] = useState<string | null>(null);
@@ -248,6 +257,9 @@ export function DockAsk({
   const press = useCallback(
     (which: "primary" | "decline"): boolean => {
       if (Date.now() - shownAtRef.current < armDelayMs) return false;
+      // 36-a review: in the answer window Esc is the window's, never a "no".
+      // False = nothing happened, so the key goes on to hide the window.
+      if (which === "decline" && !escDeclinesRef.current) return false;
       // v1.381.0 review: a once-only safety card is allowed by a click only.
       // v1.417.0 (C1.7): and the key says so, briefly, instead of nothing.
       if (which === "primary" && !enterAllowsRef.current) {
@@ -327,6 +339,17 @@ export function DockAsk({
       e.target as Element,
       true,
     );
+    // 36-a review: Esc from inside the card in the answer window hides the
+    // window here, because an app's card stops its keys from bubbling and the
+    // window's own listener would never hear it. It never declines. An open
+    // menu or dialog keeps its Esc (lib/quickAnswer.escapeHidesWindow).
+    if (action === "decline" && !escDeclinesRef.current) {
+      if (escapeHidesWindow(e.nativeEvent, document) && hideAnswerWindow()) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
     if (action && press(action)) {
       e.preventDefault();
       e.stopPropagation();

@@ -29,11 +29,12 @@
  * (`--ij-switch-h`), as every full-height module subtracts the demo strip.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { Code2, Loader2, MessageSquare } from "lucide-react";
 import {
   CHAT_VIEW_EVENT,
+  CODE_VIEW_HREF,
   cachedView,
   keepView,
   rememberedView,
@@ -42,10 +43,10 @@ import {
   writeViewToAddress,
   type ChatSurfaceView,
 } from "@/lib/chatSurface";
-import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
+import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT, buildSessionHref, lastNightHref, sessionOfEvent } from "@/lib/buildLinks";
 import { CHAT_VIEW_NAME, CODE_VIEW_NAME } from "@/lib/buildWords";
 import { NEW_CHAT_EVENT, closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
-import { CompactChatContext, isCompactChat } from "@/lib/quickAnswer";
+import { CompactChatContext, isCompactChat, toMainWindow } from "@/lib/quickAnswer";
 import { ViewSwitch } from "@/components/ViewSwitch";
 
 // The Code view: browser only, loaded when it is first shown (it brings the
@@ -95,6 +96,9 @@ export function ChatCodeSurface({ renderChat }: { renderChat: (hidden: boolean) 
   // address (false on the server and the first client frame alike), so the
   // first PAINTED frame is already compact.
   const [compact, setCompact] = useState(false);
+  // Read by the link listeners below (subscribed once).
+  const compactRef = useRef(false);
+  compactRef.current = compact;
   const slot = useChatSlot();
 
   // v1.500.0: a LAYOUT effect, so the address is read before the chat's own
@@ -138,23 +142,40 @@ export function ChatCodeSurface({ renderChat }: { renderChat: (hidden: boolean) 
 
   // Links pressed while this page is open (the bell, Running now, Ctrl K):
   // Next keeps the page, so the link announces itself (lib/buildLinks,
-  // lib/chatSurface) and this switches.
+  // lib/chatSurface) and this switches. 36-a review: in Quick Ask's answer
+  // window (the bell and Ctrl K are in its title bar too) a coding session,
+  // Last night or the Code view opens in the MAIN window instead, like any
+  // other page; this window stays on its chat, and neither its address nor
+  // its memory is moved to Code.
   useEffect(() => {
     const onSession = (e: Event) => {
       const id = sessionOfEvent(e);
       if (!id) return;
+      if (compactRef.current) {
+        void toMainWindow({ path: buildSessionHref(id) });
+        return;
+      }
       setLinkSession(id);
       choose("code");
     };
     const onNight = (e: Event) => {
       const night = sessionOfEvent(e);
       if (!night) return;
+      if (compactRef.current) {
+        void toMainWindow({ path: lastNightHref(night) });
+        return;
+      }
       setLinkNight((cur) => ({ night, n: (cur?.n ?? 0) + 1 }));
       choose("code");
     };
     const onView = (e: Event) => {
       const v = viewOfEvent(e);
-      if (v) choose(v);
+      if (!v) return;
+      if (compactRef.current) {
+        if (v === "code") void toMainWindow({ path: CODE_VIEW_HREF });
+        return;
+      }
+      choose(v);
     };
     // The sidebar's New chat starts a chat — in the Chat view.
     const onNewChat = () => choose("chat");
