@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.562.0
+
+**Rehearse a rule or a schedule before it runs for real.** A rule or a schedule can now run once as a **rehearsal**.
+
 ## v1.561.0
 
 **Commit and Open a pull request in Build › Code.** When a Build › Code reply is done (and Iron Jarvis has checked it), a small box under it offers **Commit** with the message already written, then **Open a pull request**: one press each.
@@ -77,7 +81,3 @@
 ## v1.546.2
 
 **A task from another computer brings as much of its chat as fits.** When one of your other computers sends this one a task ("@desk read the notes"), the chat it was asked in rides along so the work starts with the same background.
-
-## v1.546.1
-
-**Slack and email say when they could not take a file.** A file you send Jarvis in Slack or by email now gets a plain answer that it could not be used, the way Telegram already did, instead of silence.

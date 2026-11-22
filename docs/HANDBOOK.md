@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.561.1 (2026-11-19).*
+holds itself to. Current as of v1.562.0 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Rehearse a rule or a schedule before it runs for real
+## Rehearse a rule or a schedule before it runs for real (v1.562.0)
 
 A rule or a schedule can now run once as a **rehearsal**. It really reads
 your files, pages and memory, and it uses the same model and the same agent
