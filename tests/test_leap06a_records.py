@@ -578,6 +578,51 @@ def test_a_rehearsals_run_never_teaches_the_agents_coach(daemon):
     assert [r.id for r in recent_runs(p, "Bookkeeper")] == ["s_real"]
 
 
+def _out_of_steps(p, roster: str, at, *, rehearsal: str = "", n: int = 4) -> None:
+    """``n`` runs of ``roster`` that used all 10 steps unfinished (the coach's
+    "scope-creep" pattern, as 17-a's own tests make it)."""
+    import json
+    from datetime import timedelta
+
+    from iron_jarvis.core.models import AgentRun, SessionStatus, ToolInvocation
+
+    options = {"rehearsal_id": rehearsal} if rehearsal else {}
+    with session_scope(p.engine) as db:
+        for i in range(n):
+            sess = SessionRow(task=f"sort the reports folder ({i})", agent_type=AgentType.BUILDER,
+                              agent_name=roster, status=SessionStatus.FAILED, max_steps=10,
+                              summary="out of steps", provider="claude-cli", model="claude-sonnet-4-6",
+                              options_json=json.dumps(options))
+            sess.created_at = at + timedelta(minutes=i)
+            sess.finished_at = sess.created_at + timedelta(minutes=1)
+            db.add(sess)
+            run = AgentRun(session_id=sess.id, steps=10, agent_type=AgentType.BUILDER,
+                           provider="claude-cli", model="claude-sonnet-4-6")
+            db.add(run)
+            db.add(ToolInvocation(session_id=sess.id, agent_run_id=run.id, tool="read_file", ok=True,
+                                  output="ok", args_json=json.dumps({"path": f"report-{i}.pdf"})))
+        db.commit()
+
+
+def test_the_night_review_never_coaches_an_agent_from_a_rehearsals_runs(daemon):
+    """17-a's night review (master v1.559.0) gathers yesterday's runs ITSELF,
+    not through ``coach/signals.recent_runs``, and runs the coach (one model
+    request) for an agent whose runs show a pattern. A rehearsal's runs did
+    nothing, so they never make such a job (found on the rebase onto 17-a:
+    ``improve/night_review._coach_jobs`` read them). The control, the same
+    runs for real, does."""
+    from datetime import datetime, timedelta, timezone
+
+    from iron_jarvis.improve import night_review as NR
+
+    app, p = daemon
+    at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=6)
+    _out_of_steps(p, "Steady", at)
+    _out_of_steps(p, "Rehearsed", at, rehearsal="reh_night")
+    jobs = NR._coach_jobs(p, at - timedelta(hours=1), at + timedelta(hours=1))
+    assert [j["target"] for j in jobs] == ["Steady"], jobs
+
+
 def test_the_memory_review_card_never_records_a_rehearsal_as_a_review(tmp_path):
     """Opening the memory review card records each finished review run the
     schedule did not record itself (``_reconcile_unrecorded_reviews``). A

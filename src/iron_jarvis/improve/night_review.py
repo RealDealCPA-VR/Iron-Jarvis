@@ -341,6 +341,12 @@ def _coach_jobs(platform: Any, start: datetime, end: datetime) -> list[dict[str,
         ))
         for r in rows:
             db.expunge(r)
+    # Leap 06-a: a REHEARSAL's run did nothing and was told to carry on as if
+    # it had; no agent is coached from it (``coach/signals.recent_runs`` keeps
+    # it out the same way).
+    from ..tools.rehearsal import rehearsal_of
+
+    rows = [r for r in rows if not rehearsal_of(r)]
     by_agent: dict[str, list[Any]] = {}
     for r in rows:
         by_agent.setdefault(str(r.agent_name), []).append(r)
