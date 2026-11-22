@@ -294,6 +294,11 @@ LETS_RUN: dict[str, str] = {
     "mcp_read_resource": _APP_READS,
     "memory_read": _MEMORY,
     "memory_search": _MEMORY,
+    "model_library": (
+        "lists the models the library offers and which fit this PC (43-a): reads the shipped list, "
+        "this PC's memory and a model server's own list of what it has installed; downloads "
+        "nothing (model_download is a write, so it is held)"
+    ),
     "night_task_list": _RECORDS,
     "pack_status": _SELF,
     "page_open": _OWN_BROWSER,
