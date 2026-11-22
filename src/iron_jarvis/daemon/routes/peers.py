@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool
 
 from ...core.events import EventType
 from ...core.logging import get_logger
+from ...peers import allows as A
 from ...peers import codes as C
 from ...peers import link as L
 from ...peers import store as S
@@ -107,9 +108,17 @@ def join_failed_words(name: str, told: bool) -> str:
         "then show a new code there and try again."
     )
 
-#: What this computer's screen says after a pairing it made.
-def paired_words(name: str) -> str:
-    return f"Paired with {name}. In chat, write “@{name}” and a task to hand it to that computer."
+#: What this computer's screen says after a pairing it made. ``takes_tasks``:
+#: the other computer said at pairing that it takes this one's tasks already
+#: (an Iron Jarvis from before the switches). Otherwise every switch there
+#: starts off (next leaps 41-a), so the words name the one step it takes.
+def paired_words(name: str, takes_tasks: bool = False) -> str:
+    if takes_tasks:
+        return f"Paired with {name}. In chat, write “@{name}” and a task to hand it to that computer."
+    return (
+        f"Paired with {name}. To hand it tasks, turn on “Send me tasks” for this computer on {name} "
+        f"(Settings › Connections › Your other computers there). Then, in chat, write “@{name}” and a task."
+    )
 
 
 def removed_words(name: str, told: bool, stopped: int = 0) -> str:
@@ -246,7 +255,6 @@ async def change_allows(d: Any, name: str, changes: dict[str, Any]) -> dict[str,
     one bounded tell to the other computer so its card's line is true.
     Raises :class:`AllowsRefused` in words."""
     from ...core.events import EventType
-    from ...peers import allows as A
 
     store = await asyncio.to_thread(S.store_for, d.platform)
     peer = await asyncio.to_thread(store.get, name)
@@ -490,10 +498,19 @@ def register(app: FastAPI, d: Any) -> None:
                 status_code=500,
                 detail=join_failed_words(S.peer_name(their_name) if their_name else address, told),
             ) from None
+        # Next leaps 41-a: what the other computer said it lets this one do
+        # (nothing, for a new pairing; an Iron Jarvis from before the switches
+        # says nothing and takes tasks), kept for the card's line and said.
+        they = answer.get("allows")
+        older = they is None
+        await asyncio.to_thread(
+            store.note_they_allow, peer.id, [A.SEND_TASKS] if older else list(they), older=older
+        )
+        peer = await asyncio.to_thread(store.get, peer.name) or peer
         await _publish(EventType.PEER_PAIRED, {"name": peer.name})
         return {
             "peer": S.peer_view(peer),
-            "said": paired_words(peer.name),
+            "said": paired_words(peer.name, takes_tasks=older or A.SEND_TASKS in they),
             **(await asyncio.to_thread(_view, request)),
         }
 
@@ -607,6 +624,10 @@ def register(app: FastAPI, d: Any) -> None:
             "name": this_name,
             "door_token": in_token,
             "seen_as": str(seen),
+            # Next leaps 41-a: what this computer lets the other one do (a new
+            # pairing: nothing), so its screen names the step and its card's
+            # line is right from the start.
+            "allows": A.on_keys(A.allows_of(peer)),
         }
 
     async def _take_back_late(keeping: "asyncio.Future[tuple[Any, str]]") -> None:

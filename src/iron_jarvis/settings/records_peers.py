@@ -158,7 +158,9 @@ def _lines(peers: list[Any]) -> list[str]:
         if off:
             line += " Off: " + ", ".join(s.label for s in off) + "."
         if later:
-            line += " Coming in a later version: " + ", ".join(s.label for s in later) + "."
+            # The card's own words (``dashboard/lib/otherComputers.ts``
+            # LATER_SWITCHES; VOCABULARY.md): one wording for one thing.
+            line += " Coming in later versions: " + ", ".join(s.label for s in later) + "."
         they = A.they_allow_of(getattr(p, "they_allow_json", None))
         out.append(f"- {line} {A.they_line(p.name, they)}")
     return out
@@ -326,8 +328,19 @@ _OFF_VERB = re.compile(
     r"|forbid|prevent|(?:don['’]?t|do\s+not|no\s+longer|never)\s+(?:let|allow))\b",
     re.IGNORECASE,
 )
+#: "let me know", "let us see" are the user's own doing, never a switch.
 _ON_VERB = re.compile(
-    r"\b(?:let|allow|permit|enable|turn\s+on|switch\s+on)\b",
+    r"\b(?:let(?!\s+(?:me|us)\b)|allow|permit|enable|turn\s+on|switch\s+on)\b",
+    re.IGNORECASE,
+)
+#: "send me tasks" with no other computer in the message counts only when the
+#: ON verb governs it, right before it: "let desk send me tasks", "allow
+#: studio to send me tasks", "turn on Send me tasks". Never "can you let me
+#: know and send me tasks for tomorrow", nor a two-word name ("let Claude
+#: Code send me tasks": a pairing's name is one word, as "@desk" is).
+_ON_SEND_ME_TASKS = re.compile(
+    r"\b(?:(?:let|allow|permit|enable)\s+(?!(?:me|us|it|them|you)\b)@?[\w-]{1,40}\s+(?:to\s+)?"
+    r"|(?:turn|switch)\s+on\s+[\"“']?)send\s+me\s+tasks\b",
     re.IGNORECASE,
 )
 _NOT_OFF_BEFORE_ON = re.compile(r"\b(?:don['’]?t|do\s+not|no\s+longer|never)\s+$", re.IGNORECASE)
@@ -335,7 +348,8 @@ _NOT_OFF_BEFORE_ON = re.compile(r"\b(?:don['’]?t|do\s+not|no\s+longer|never)\s
 #: so a switch's everyday words ("turn on my models", "enable coding work in
 #: this folder") count only beside another computer: a peer noun, a computer
 #: word ("the desk", "my laptop") or an "@" name. The one exception is the
-#: switch's own words "send me tasks", which nothing else in the app uses.
+#: switch's own words "send me tasks", which nothing else in the app uses —
+#: and then only with the ON verb right before them (``_ON_SEND_ME_TASKS``).
 _COMPUTER_WORD = re.compile(
     r"\b(?:my|the|our|your|that)\s+(?:other\s+)?(?:desk|desktop|laptop|pc|computer|machine|workstation|tower"
     r"|mac|macbook|server|notebook)s?\b"
@@ -394,13 +408,17 @@ def switch_on_asked(text: str) -> bool:
     t = str(text or "")[:SCAN_CHARS]
     if not _SWITCH_WORDS.search(t):
         return False
-    if not (_SEND_ME_TASKS.search(t) or _PEER_NOUN.search(t) or _COMPUTER_WORD.search(t)):
+    if _PEER_NOUN.search(t) or _COMPUTER_WORD.search(t):
+        hits = _ON_VERB.finditer(t)
+    elif _SEND_ME_TASKS.search(t):
+        hits = _ON_SEND_ME_TASKS.finditer(t)
+    else:
         return False
-    for m in _ON_VERB.finditer(t):
+    for m in hits:
         if not _NOT_OFF_BEFORE_ON.search(t[max(0, m.start() - 12):m.start()]):
             return True
     return False
 
 
 ALL_PATTERNS = (_PEER_NOUN, _SWITCH_WORDS, _PERMIT_WORDS, _PERMIT_STRICT, _OFF_VERB, _ON_VERB, _NOT_OFF_BEFORE_ON,
-                _COMPUTER_WORD, _SEND_ME_TASKS)
+                _COMPUTER_WORD, _SEND_ME_TASKS, _ON_SEND_ME_TASKS)

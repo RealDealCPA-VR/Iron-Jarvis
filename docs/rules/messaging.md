@@ -467,12 +467,18 @@ How to use this file: read the contents list, then read only the entries your ch
   `allows`: read as `older`, taking tasks). D-41.1: the reconciler adds the
   columns to an old table as NULL, and `PeerStore.settle_older` (every store
   start, one transaction, idempotent; the daemon's start makes the store on a
-  worker, boot step `settle_paired_computers`, and the task door reaches it
-  only through `asyncio.to_thread`, so the write never lands on the loop)
+  worker, boot step `settle_paired_computers`, and the task door and the
+  peer door reach it only inside `asyncio.to_thread(lambda: store_for(...)
+  ...)`, so the write never lands on the loop)
   turns "Send me tasks" on for those rows
   only, the rest off, and sets `kept_note` so the card says so once (OK or
   any change clears it); `allows._flag` reads an unsettled NULL the same way.
-  A re-pair after the update is a new pairing: all off. D-41.2: chat's
+  A re-pair after the update is a new pairing: all off. The pair door's
+  answer carries `allows` (what it lets the joining computer do: nothing,
+  for a new pairing), so the joining screen's words (`routes/peers.
+  paired_words`) name the one step ("turn on Send me tasks for this computer
+  on desk") and its card's line is right from the start; an Iron Jarvis from
+  before sends none and takes tasks, so the old words stay. D-41.2: chat's
   `peer_allows` (allow, reads) and `peer_allow_off` (allow, narrows, in
   `LOW_TRUST_DENY` because it stops tasks; neither on `REMOTE_RUN_KEEP`) take
   no "on" argument; its Undo (`records_peers.restore_kind`) puts back only
@@ -484,7 +490,8 @@ How to use this file: read the contents list, then read only the entries your ch
   pairing names, so a switch's everyday words count only beside another
   computer, a peer noun, "the desk" / "my laptop" or an "@" name; "turn on my
   models" is about THIS computer and gets no door; "send me tasks" alone
-  counts). Arming: `chat_turn.settings_ask_tools` (both lanes, off the
+  counts only with the ON verb right before it, `_ON_SEND_ME_TASKS`: "let
+  desk send me tasks", never "let me know and send me tasks"). Arming: `chat_turn.settings_ask_tools` (both lanes, off the
   loop) reads the pairings' names only when `might_ask` says so. D-41.3 (20
   files, 100 MB) is `allows.HAND_OVER_MAX_*`, for 41-c. Left open: an Undo
   from chat does not tell the other computer (its next Check does);

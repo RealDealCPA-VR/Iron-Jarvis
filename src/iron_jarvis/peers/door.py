@@ -80,7 +80,10 @@ async def peer_for(platform: Any, request: Request, switch: str | None = None) -
         raise HTTPException(status_code=429, detail=TOO_MANY)
     token = _bearer(request)
     try:
-        peer = await asyncio.to_thread(store_for(platform).verify, token) if token else None
+        # The store is made in the worker too: making it settles older
+        # pairings' switches (``PeerStore.settle_older``), a write that must
+        # never run on the loop.
+        peer = await asyncio.to_thread(lambda: store_for(platform).verify(token)) if token else None
     except Exception:  # noqa: BLE001 — a store that cannot be read lets nobody in by it
         log.warning("peer door: the paired computers could not be read", exc_info=True)
         peer = None

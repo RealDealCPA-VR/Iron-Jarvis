@@ -151,7 +151,10 @@ def _refused(status: int, text: str, address: str) -> LinkFailed:
 async def pair(address: str, *, code: str, name: str, port: int, door_token: str,
                guess: str) -> dict[str, Any]:
     """Ask the computer at ``address`` to pair with this one. Returns its
-    answer ``{name, door_token, seen_as}``; raises LinkFailed in words."""
+    answer ``{name, door_token, seen_as, allows}``; raises LinkFailed in words.
+    ``allows`` (next leaps 41-a) is what it lets this computer do, or None
+    from an Iron Jarvis before the switches (it takes this one's tasks)."""
+    from .allows import wire_allows
     from .store import valid_token
 
     body = {
@@ -178,6 +181,7 @@ async def pair(address: str, *, code: str, name: str, port: int, door_token: str
         "name": str(answer.get("name") or ""),
         "door_token": str(answer["door_token"]),
         "seen_as": str(answer.get("seen_as") or ""),
+        "allows": wire_allows(answer["allows"]) if isinstance(answer.get("allows"), list) else None,
     }
 
 

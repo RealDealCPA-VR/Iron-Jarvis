@@ -266,6 +266,9 @@ async def test_a_computer_named_like_an_agent_here_gets_a_name_chat_sends_to_it(
         entry = await asyncio.to_thread(resolve_target, app.state.platform, peer.name, require_delegable=False)
         assert entry is not None and entry.name == f"remote:{peer.name}", (peer.name, entry)
     assert out["said"] == R.paired_words(_peers(a)[0].name)
+    # Next leaps 41-a: the name chat sends to, AND the step a task takes now.
+    assert f"“@{_peers(a)[0].name}”" in out["said"]
+    assert f"turn on “Send me tasks” for this computer on {_peers(a)[0].name}" in out["said"]
 
 
 @pytest.mark.parametrize("taken_by", ["a hand-made remote", "an agent here"])

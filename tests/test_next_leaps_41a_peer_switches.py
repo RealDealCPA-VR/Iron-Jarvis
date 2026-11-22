@@ -342,9 +342,11 @@ async def test_the_desks_switches_reach_the_laptops_card(tmp_path, lan):
     lan({A_HOST: a, B_HOST: b})
     async with _client(A_HOST) as ca, _client(B_HOST) as cb:
         await _pair(ca, cb)
+        # The desk's pairing answer said it: nothing yet (a new pairing).
         before = _view_of((await ca.get("/peers")).json(), "desk")
-        assert before["they_allow"]["known"] is False
-        assert before["they_line"] == "desk has not said yet what it lets this computer do. Press Check."
+        assert before["they_allow"]["known"] is True and before["they_allow"]["older"] is False
+        assert before["they_allow"]["allows"] == []
+        assert before["they_line"] == "desk lets this computer do nothing yet."
 
         # The desk's probe (the laptop's Check) says what it allows: nothing.
         checked = (await ca.post("/peers/desk/check")).json()
@@ -372,6 +374,82 @@ async def test_the_desks_switches_reach_the_laptops_card(tmp_path, lan):
     # for the desk did not move.
     (pa,) = _peers(a)
     assert pa.may_send_tasks is False
+
+
+async def test_a_check_reads_what_the_tell_missed(tmp_path, lan):
+    """The Handbook's promise: when the laptop is off as the desk's switch
+    moves, the tell misses, and the laptop's next Check reads it from the
+    desk's probe (both ways: on, then off again)."""
+    a, b = _two(tmp_path)
+    net = lan({A_HOST: a, B_HOST: b})
+    async with _client(A_HOST) as ca, _client(B_HOST) as cb:
+        await _pair(ca, cb)
+        net.down.add(A_HOST)  # the laptop is off: the desk's tell cannot reach it
+        await cb.patch("/peers/laptop/allows", json={"may_send_tasks": True})
+        await R.drain_tells()
+        net.down.discard(A_HOST)
+        missed = _view_of((await ca.get("/peers")).json(), "desk")
+        assert missed["they_allow"]["allows"] == [], "the tell reached the laptop after all"
+
+        checked = (await ca.post("/peers/desk/check")).json()
+        assert checked["ok"] is True
+        assert checked["peer"]["they_allow"]["allows"] == [A.SEND_TASKS]
+        assert checked["peer"]["they_line"] == "desk lets this computer: send tasks."
+
+        net.down.add(A_HOST)
+        await cb.patch("/peers/laptop/allows", json={"may_send_tasks": False})
+        await R.drain_tells()
+        net.down.discard(A_HOST)
+        checked = (await ca.post("/peers/desk/check")).json()
+        assert checked["peer"]["they_allow"]["allows"] == []
+        assert checked["peer"]["they_line"] == "desk lets this computer do nothing yet."
+
+
+async def test_a_pairing_says_the_one_step_a_task_now_takes(tmp_path, lan):
+    """Every switch starts off, so "write @desk and a task" alone would be
+    turned away: the words after pairing name the step, on the computer that
+    does the work."""
+    a, b = _two(tmp_path)
+    lan({A_HOST: a, B_HOST: b})
+    async with _client(A_HOST) as ca, _client(B_HOST) as cb:
+        shown = (await cb.post("/peers/code", json={"this_name": "desk"})).json()
+        r = await ca.post("/peers/join", json={"address": B_HOST, "code": shown["code"]["code"],
+                                                "name": "", "this_name": "laptop"})
+    assert r.status_code == 200, r.text
+    said = r.json()["said"]
+    assert said == R.paired_words("desk")
+    assert "turn on “Send me tasks” for this computer on desk" in said
+    assert "Settings › Connections › Your other computers" in said and "“@desk”" in said
+
+
+async def test_a_pairing_with_an_iron_jarvis_from_before_keeps_its_words(tmp_path, lan):
+    """An Iron Jarvis from before the switches answers the pairing with no
+    ``allows`` and takes this computer's tasks: the words and the card's
+    line say so, and name no switch there."""
+    from iron_jarvis.daemon.auth import PEER_PAIR_PATH
+
+    a, b = _two(tmp_path)
+    net = lan({A_HOST: a, B_HOST: b})
+    real = net.handle_async_request
+
+    async def as_older(request: httpx.Request) -> httpx.Response:
+        resp = await real(request)
+        if request.url.path == PEER_PAIR_PATH and resp.status_code == 200:
+            body = json.loads(await resp.aread())
+            body.pop("allows", None)
+            return httpx.Response(resp.status_code, json=body)
+        return resp
+
+    net.handle_async_request = as_older
+    async with _client(A_HOST) as ca, _client(B_HOST) as cb:
+        shown = (await cb.post("/peers/code", json={"this_name": "desk"})).json()
+        r = await ca.post("/peers/join", json={"address": B_HOST, "code": shown["code"]["code"],
+                                                "name": "", "this_name": "laptop"})
+        assert r.status_code == 200, r.text
+        assert r.json()["said"] == R.paired_words("desk", takes_tasks=True)
+        assert "Send me tasks" not in r.json()["said"]
+        row = _view_of((await ca.get("/peers")).json(), "desk")
+        assert row["they_line"] == "desk runs an older Iron Jarvis: it takes tasks from this computer."
 
 
 async def test_a_switch_that_is_off_is_a_200_at_the_probe_never_a_gone_pairing(tmp_path, lan):
@@ -594,9 +672,12 @@ def test_the_daemons_start_settles_an_older_pairing_off_the_loop(tmp_path, monke
         assert conn.execute(text("SELECT may_send_tasks, kept_note FROM peerrecord")).all() == [(1, A.KEPT_TASKS)]
 
 
-async def test_the_task_door_makes_the_store_off_the_loop_when_it_is_the_first_caller(tmp_path, lan, monkeypatch):
-    """Without the start (a door reached first), making the store, which
-    settles older pairings, still runs on a worker, never on the loop."""
+@pytest.mark.parametrize("method,path", [("GET", TASK_DOOR_PATH), ("POST", PEER_ALLOWS_PATH)])
+async def test_a_door_makes_the_store_off_the_loop_when_it_is_the_first_caller(tmp_path, lan, monkeypatch,
+                                                                               method, path):
+    """Without the start (a door reached first: the task door, or the peer
+    door), making the store, which settles older pairings, still runs on a
+    worker, never on the loop."""
     a, b = _two(tmp_path)
     lan({A_HOST: a, B_HOST: b})
     if hasattr(b.state.platform, "_peer_store"):
@@ -614,7 +695,8 @@ async def test_the_task_door_makes_the_store_off_the_loop_when_it_is_the_first_c
 
     monkeypatch.setattr(S.PeerStore, "settle_older", spy)
     async with httpx.AsyncClient(base_url=f"http://{B_HOST}") as raw:
-        r = await raw.get(TASK_DOOR_PATH, headers={"Authorization": "Bearer not-a-pairing-token"})
+        r = await raw.request(method, path, headers={"Authorization": "Bearer not-a-pairing-token"},
+                              json={"protocol": L.PROTOCOL, "allows": []} if method == "POST" else None)
     assert r.status_code in (401, 403), r.text
     assert on_loop == [False], f"the store was made on the loop (or not at all): {on_loop}"
 
@@ -655,7 +737,7 @@ async def test_chat_lists_what_each_paired_computer_may_do(tmp_path, lan):
         await R.drain_tells()
     assert res.ok, res.error
     assert "laptop may: send tasks." in res.output
-    assert "Coming in a later version: Look up my work record" in res.output
+    assert "Coming in later versions: Look up my work record" in res.output
     assert RP.ON_IS_A_PRESS in res.output
     assert res.data["computers"] == [{"name": "laptop", "may": [A.SEND_TASKS], "lets_this_computer": []}]
 
@@ -767,6 +849,11 @@ ARMS = [
     ("block tasks from my laptop", {"peer_allows", "peer_allow_off"}),
     # Turning on is the card's press: the reader only (the page door says it).
     ("let desk send me tasks", {"peer_allows"}),
+    # A question that holds an off verb only asks: the reader, never the
+    # writer (it would turn a switch off and stop that computer's tasks).
+    ("did I block tasks from my laptop?", {"peer_allows"}),
+    ("is the desk stopped from sending me tasks?", {"peer_allows"}),
+    ("should I turn off Send me tasks for laptop?", {"peer_allows"}),
 ]
 NEAR = [
     "the desk is noisy today",
@@ -820,7 +907,8 @@ def test_turning_one_on_gets_the_cards_door():
 
     for words in ("let desk send me tasks", "allow my other computer to send work here",
                  "turn on send me tasks for my laptop", "let the desk use my models",
-                 "allow my laptop to look up my work record", "let @studio ask me questions"):
+                 "allow my laptop to look up my work record", "let @studio ask me questions",
+                 "allow studio to send me tasks", "turn on Send me tasks"):
         step = P.page_step(words)
         assert step is not None and step.id == "peer_switches", words
         assert step.href == P.PAIRING_HREF
@@ -830,10 +918,27 @@ def test_turning_one_on_gets_the_cards_door():
     for words in ("don't let desk send me tasks", "stop sending tasks to the desk", "let me know when it is done",
                   "turn on my models", "let me use my models offline", "allow access to my models",
                   "enable coding work in this folder", "let the agent read my work record",
-                  "allow it to ask me questions when it is unsure", "let me hand a whole chat to the council"):
+                  "allow it to ask me questions when it is unsure", "let me hand a whole chat to the council",
+                  # "send me tasks" counts alone only with the ON verb right
+                  # before it: never "let me know", nor a two-word name.
+                  "can you let me know and send me tasks for tomorrow", "let Claude Code send me tasks",
+                  "let me know when my laptop is done and send me tasks"):
         step = P.page_step(words)
         assert step is None or step.id != "peer_switches", words
         assert not any(s.id == "peer_switches" for s in P.page_steps(words)), words
+
+
+def test_what_the_model_is_told_about_pairing_names_the_switch():
+    """The model's pairing lines no longer say "@ and its name hands it a
+    task" alone: every switch starts off, so they name the step."""
+    from iron_jarvis.daemon import page_doors as P
+
+    lines = {s.id: s.line for s in P.STEPS} | {n.id: n.line for n in P.NOT_OFFERED}
+    for item in ("pair_computer", "another_computer"):
+        line = lines[item]
+        assert "starts off for a new pairing" in line, item
+        assert "turns on \"Send me tasks\" for the other one" in line, item
+        assert line.index("Send me tasks") < line.index("hands it a task"), item
 
 
 def test_the_patterns_are_linear_on_pathological_input():
@@ -847,7 +952,8 @@ def test_the_patterns_are_linear_on_pathological_input():
         "from iron_jarvis.settings import records_peers as RP\n"
         "bad = ['send ' * 20000, 'send me ' + 'x ' * 40000, 'tasks from ' * 15000, 'dont ' * 30000,"
         " '@' * 60000, 'other ' * 30000 + 'computer', 'let ' * 30000 + 'send me tasks',"
-        " 'let my ' + 'my other ' * 20000 + 'models', 'allow ' + '@x ' * 30000 + 'my models']\n"
+        " 'let my ' + 'my other ' * 20000 + 'models', 'allow ' + '@x ' * 30000 + 'my models',"
+        " 'let ' + 'a-' * 30000 + ' send me tasks', 'turn on ' * 20000 + 'send me tasks']\n"
         "t = time.perf_counter()\n"
         "for s in bad:\n"
         "    RP.peers_tools_for(s, ('desk',)); RP.switch_on_asked(s); RP.might_ask(s)\n"

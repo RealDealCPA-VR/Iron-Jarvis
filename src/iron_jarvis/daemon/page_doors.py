@@ -853,9 +853,11 @@ STEPS: tuple[PageStep, ...] = (
         "pair_computer", PAIRING_HREF, "Pair your other computer in Settings",
         f"Pairing this computer with another one running Iron Jarvis is done by the user in {PAIRING_PLACE}: "
         "one computer shows a six-digit pairing code (Show a pairing code) and the other types it, with the "
-        "first one's address (Use a pairing code). Iron Jarvis cannot pair them from chat. Once they are "
-        "paired, \"@\" and the other computer's name in chat hands it a task, and the answer comes back to "
-        "that chat. Say so plainly and point there.",
+        "first one's address (Use a pairing code). Iron Jarvis cannot pair them from chat. Every switch "
+        "starts off for a new pairing: once they are paired, the computer that will do the work turns on "
+        "\"Send me tasks\" for the other one, under that computer's name on the same card. Then \"@\" and "
+        "the other computer's name in chat hands it a task, and the answer comes back to that chat. Say so "
+        "plainly and point there.",
     ),
     # Next leaps 41-a (D-41.2): letting a paired computer DO something here is
     # the user's press on its switch on that card; chat shows the switches
@@ -998,8 +1000,9 @@ NOT_OFFERED: tuple[NotOffered, ...] = (
         "remote agent the user connected send its messages back); it never opens these screens there. To "
         "have two computers hand each other tasks, the user pairs them in Settings › Connections › Your "
         "other computers: one computer shows a six-digit code and the other types it, with the first one's "
-        "address. Then \"@\" and the other computer's name in chat hands it a task, and the answer comes "
-        "back to that chat. From a phone, the user can chat with Jarvis through a notification destination "
+        "address. Every switch starts off for a new pairing: the computer that will do the work then turns "
+        "on \"Send me tasks\" for the other one, under its name on that card. Then \"@\" and the other "
+        "computer's name in chat hands it a task, and the answer comes back to that chat. From a phone, the user can chat with Jarvis through a notification destination "
         "with two-way chat turned on (Telegram, Slack or email). Say so plainly.",
     ),
     NotOffered(

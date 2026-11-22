@@ -375,6 +375,9 @@ async def test_pairing_makes_both_sides_and_the_tokens_cross_match(tmp_path, lan
     async with _client(A_HOST) as ca, _client(B_HOST) as cb:
         out = await _pair(ca, cb)
         assert out["said"] == R.paired_words("desk")
+        # Next leaps 41-a: every switch starts off, so the words name the one
+        # step a task takes now (on the desk, for this computer).
+        assert "turn on “Send me tasks” for this computer on desk" in out["said"]
         assert out["peer"]["name"] == "desk" and out["peer"]["their_name"] == "desk"
         assert out["peer"]["address"] == f"http://{B_HOST}"
 
