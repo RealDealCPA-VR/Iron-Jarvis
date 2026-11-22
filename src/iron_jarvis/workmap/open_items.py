@@ -52,8 +52,10 @@ but the copies of one folder with exactly the same words (equal
 owner: :func:`told` tells and shows it once (the oldest copy the turn may be
 told; "may be done" when any copy asks it), Closed lately never shows a line
 that is open; Done or No longer needed closes every open copy
-(:func:`close`), Reopen reopens every closed copy and Not yet answers every
-open one (:func:`reopen`), and a tool's Undo puts them all back
+(:func:`close`), Reopen reopens the copies THAT answer closed (never a copy
+the owner closed in another answer, or one its own conversation settled:
+:func:`_same_answer`, review 4) and Not yet answers every open one
+(:func:`reopen`), and a tool's Undo puts them all back
 (:func:`snapshot`). A NEW copy whose words the owner closed in another
 conversation in the last :data:`CLOSED_LATELY_DAYS` is written closed only
 when ITS conversation was already going when the owner answered
@@ -575,7 +577,10 @@ def _backfill(engine: Any) -> int:
             select(R)
             .where(R.state == RECAP_KEPT)
             .where(or_(R.open_synced == False, R.open_synced.is_(None)))  # noqa: E712  # type: ignore[union-attr]
-            .order_by(R.created_at, R.id)  # type: ignore[attr-defined]
+            # Kept in one instant (a coarse clock): in the order of the work
+            # they recap (its last change, as the recap stamps it), never by
+            # their random ids (review 4 of 04-b).
+            .order_by(R.created_at, R.source_updated, R.id)  # type: ignore[attr-defined]
             .limit(BACKFILL_BATCH)
         ))
         if not todo:
@@ -702,13 +707,43 @@ def close(engine: Any, item_id: str, *, as_: str = "done", by: str = CLOSED_BY_Y
         return _view(it)
 
 
+#: How an item was closed by an answer of the owner's: by the owner (card or
+#: chat), or written closed after that answer (a copy).
+_ANSWERED = (CLOSED_BY_YOU, CLOSED_BY_CHAT, CLOSED_WITH_COPY)
+
+
+def _same_answer(it: WorkOpenItem, twins: list[WorkOpenItem]) -> list[WorkOpenItem]:
+    """The copies (of ``twins``) that ONE answer of the owner's closed along
+    with ``it`` (review 4 of 04-b): :func:`close` stamps every copy it
+    closes with one ``closed_at``, and a copy written closed after it
+    (:data:`CLOSED_WITH_COPY`) takes that same ``closed_at`` and points at
+    one of them (``closed_ref``). A copy closed by another answer, earlier or
+    later, and one settled by its own conversation are not this answer's.
+    Nothing when ``it`` was settled by its own conversation. Pure."""
+    at = _naive(it.closed_at)
+    if it.closed_how not in _ANSWERED or at is None:
+        return []
+
+    def same(t: WorkOpenItem) -> bool:
+        return t.status == it.status and _naive(t.closed_at) == at
+
+    owners = [t for t in twins if same(t) and t.closed_how in (CLOSED_BY_YOU, CLOSED_BY_CHAT)]
+    ids = {it.id, *(t.id for t in owners)}
+    if it.closed_how == CLOSED_WITH_COPY and it.closed_ref:
+        ids.add(str(it.closed_ref))
+    copies = [t for t in twins if same(t) and t.closed_how == CLOSED_WITH_COPY and t.closed_ref in ids]
+    return [*owners, *copies]
+
+
 def reopen(engine: Any, item_id: str) -> "dict[str, Any] | None":
-    """Put a closed item back on the open list (Reopen), for good, with its
-    closed copies in other conversations of the folder: a rewritten recap no
-    longer settles them (``owner_kept``). On an item that is still open it
-    answers the "Mark it done?" question with Not yet, for its open copies
-    too: the question goes, and that piece of work never asks it again.
-    None when there is no such item."""
+    """Put a closed item back on the open list (Reopen), for good, with the
+    copies in other conversations of the folder that the SAME answer closed
+    (:func:`_same_answer`): never a copy the owner closed in another answer
+    or one its own conversation settled (review 4 of 04-b). A rewritten
+    recap no longer settles what was reopened (``owner_kept``). On an item
+    that is still open it answers the "Mark it done?" question with Not yet,
+    for its open copies too: the question goes, and that piece of work never
+    asks it again. None when there is no such item."""
     with session_scope(engine) as db:
         it = db.get(WorkOpenItem, str(item_id or ""))
         if it is None:
@@ -723,7 +758,7 @@ def reopen(engine: Any, item_id: str) -> "dict[str, Any] | None":
                 row.updated_at = now
                 db.add(row)
         else:
-            for row in [it, *(t for t in twins if t.status != OPEN_ITEM_OPEN)]:
+            for row in [it, *_same_answer(it, twins)]:
                 row.status, row.closed_at, row.closed_how, row.closed_ref = OPEN_ITEM_OPEN, None, "", ""
                 row.maybe_done_entry = ""
                 row.owner_kept = True

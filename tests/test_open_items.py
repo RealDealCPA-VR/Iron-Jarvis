@@ -77,6 +77,24 @@ class _Bus:
         self.events.append((str(etype), dict(payload or {})))
 
 
+@pytest.fixture(autouse=True)
+def _clock(monkeypatch):
+    """Time through an injected clock (CLAUDE.md): each read of the store's
+    clock (``recap._now`` for a kept recap, ``open_items._now`` for an
+    answer) is at least a millisecond after the one before, so two recaps
+    kept, or two answers given, in one tick of a coarse clock (a Windows
+    runner's) still come one after the other. Never behind the real time."""
+    last = [datetime.min]
+
+    def now() -> datetime:
+        t = max(datetime.now(timezone.utc).replace(tzinfo=None), last[0] + timedelta(milliseconds=1))
+        last[0] = t
+        return t
+
+    monkeypatch.setattr(R, "_now", now)
+    monkeypatch.setattr(open_items, "_now", now)
+
+
 @pytest.fixture()
 def scene(tmp_path, monkeypatch):
     engine = make_engine(tmp_path / "record.db")
@@ -380,6 +398,75 @@ def test_a_chat_started_after_the_owners_done_that_lists_the_line_is_open_work(s
         f"chat:{a}": (OPEN_ITEM_DONE, "you"), f"chat:{c}": (OPEN_ITEM_OPEN, "")}
 
 
+def test_reopen_brings_back_only_what_that_one_answer_closed(scene):
+    """Review 4 of 04-b: Reopen undoes ONE answer of the owner's. Week 46 was
+    marked Done a week ago, in an answer of its own; week 47 is marked Done
+    now, then reopened: week 47 is open again, week 46 stays Done, and the
+    card's line is week 47's."""
+    a = _chat(scene, "Payroll week 46", H, hours_ago=8 * 24, started_hours_ago=8 * 24 + 1)
+    _keep(scene, a, f"Open: {PAYROLL}")
+    (week46,) = _items(scene)
+    open_items.close(scene.engine, week46.id, as_="done")
+    with session_scope(scene.engine) as db:
+        row = db.get(WorkOpenItem, week46.id)
+        row.closed_at = utcnow().replace(tzinfo=None) - timedelta(days=7)
+        db.add(row)
+        db.commit()
+    c = _chat(scene, "Payroll week 47", H, hours_ago=1)
+    _keep(scene, c, f"Open: {PAYROLL}")
+    (week47,) = _items(scene, entry_id=f"chat:{c}")
+    r = scene.client.post(f"/work-record/open-items/{week47.id}/close", json={"how": "done"})
+    assert r.status_code == 200
+    card = _card(scene, H)
+    assert card["open"] == [] and [x["id"] for x in card["closed_lately"]] == [week47.id]
+    r = scene.client.post(f"/work-record/open-items/{week47.id}/reopen")
+    assert r.status_code == 200 and r.json()["item"]["status"] == OPEN_ITEM_OPEN
+    got = {i.entry_id: (i.status, i.closed_how, bool(i.owner_kept)) for i in _items(scene)}
+    assert got == {f"chat:{a}": (OPEN_ITEM_DONE, "you", False), f"chat:{c}": (OPEN_ITEM_OPEN, "", True)}
+    card = _card(scene, H)
+    (shown,) = card["open"]
+    assert (shown["id"], shown["entry_id"], shown["title"]) == (week47.id, f"chat:{c}", "Payroll week 47")
+    assert card["closed_lately"] == []  # never a line that is open
+
+
+def test_reopen_leaves_a_copy_its_own_conversation_settled(scene):
+    """A copy settled by its own conversation's recap is that conversation's
+    answer, not the owner's: Reopen of the owner's Done leaves it settled."""
+    a, b = _shared_line(scene)
+    _keep(scene, b, "Done: Called the branch")  # b's own recap settles b's copy
+    (mine,) = _items(scene, entry_id=f"chat:{a}")
+    open_items.close(scene.engine, mine.id, as_="done")
+    open_items.reopen(scene.engine, mine.id)
+    assert {i.entry_id: i.status for i in _items(scene)} == {
+        f"chat:{a}": OPEN_ITEM_OPEN, f"chat:{b}": OPEN_ITEM_SETTLED}
+    # Both copies settled by their own conversations in one instant (a coarse
+    # clock): reopening one is no answer of the owner's about the other.
+    with session_scope(scene.engine) as db:
+        rows = list(db.exec(select(WorkOpenItem)))
+        at = utcnow().replace(tzinfo=None) - timedelta(hours=1)
+        for row in rows:
+            row.status, row.closed_how, row.closed_at, row.owner_kept = OPEN_ITEM_SETTLED, "conversation", at, False
+            db.add(row)
+        db.commit()
+    open_items.reopen(scene.engine, mine.id)
+    assert {i.entry_id: i.status for i in _items(scene)} == {
+        f"chat:{a}": OPEN_ITEM_OPEN, f"chat:{b}": OPEN_ITEM_SETTLED}
+
+
+def test_reopen_of_a_copy_brings_back_the_answer_it_followed(scene):
+    """A copy written closed after the owner's Done (its conversation was
+    already going) reopens with that Done's own rows, and nothing else."""
+    a, b = _shared_line(scene)
+    c = _chat(scene, "Bank reconciliation, third go", H, hours_ago=0.5, started_hours_ago=2)
+    shown = _card(scene, H)["open"][0]["id"]
+    open_items.close(scene.engine, shown, as_="done")
+    _keep(scene, c, f"Open: {SHARED}")
+    (third,) = _items(scene, entry_id=f"chat:{c}")
+    assert third.closed_how == "copy"
+    open_items.reopen(scene.engine, third.id)
+    assert {i.status for i in _items(scene)} == {OPEN_ITEM_OPEN} and len(_items(scene)) == 3
+
+
 def test_a_conversation_whose_start_is_not_known_lists_the_line_as_open(scene):
     """With no start on record, nothing shows the conversation was going when
     the owner answered: its copy is open, never closed in the owner's name."""
@@ -508,6 +595,23 @@ def test_backfill_carries_the_recaps_kept_before_once(scene):
                          text="Open: Send the engagement letter", source_updated=stamp))
         db.commit()
     assert _texts(_card(scene, S)["open"]) == ["Send the engagement letter"]
+
+
+def test_recaps_kept_in_one_instant_are_carried_in_the_order_of_their_work(scene):
+    """Review 4 of 04-b: a coarse clock (a Windows runner's) can give several
+    recaps one kept time; the backfill then carries them in the order of the
+    work they recap (its last change), never by their random ids."""
+    refs = [_chat(scene, f"Piece {i}", H, hours_ago=30 - i) for i in range(6)]
+    kept = utcnow().replace(tzinfo=None) - timedelta(hours=1)
+    with session_scope(scene.engine) as db:
+        for i in (3, 0, 5, 1, 4, 2):
+            ref = refs[i]
+            stamp = R.stamp_of(db.get(ChatThreadRecord, ref).updated_at)
+            db.add(WorkRecap(id=f"chat:{ref}", kind="chat", ref=ref, state=RECAP_KEPT, source_updated=stamp,
+                             text=f"Open: item number {i}", created_at=kept))
+        db.commit()
+    assert open_items.backfill(scene.engine) == 6
+    assert _texts(_card(scene, H)["open"]) == [f"item number {i}" for i in range(6)]
 
 
 # --------------------------------------------------------------------------- #

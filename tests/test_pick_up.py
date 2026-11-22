@@ -107,11 +107,14 @@ def _chat(scene, title, folder, *, hours_ago=1.0, local_only=False, archived=Fal
 
 
 def _recap(scene, tid, *lines, stale=False):
+    # Kept at its conversation's last change (or, stale, five minutes before
+    # it): an injected time, so the open items of several recaps keep the
+    # order of their work, never one a coarse clock ties (CLAUDE.md).
     with session_scope(scene.engine) as db:
         rec = db.get(ChatThreadRecord, tid)
-        stamp = R.stamp_of(rec.updated_at - timedelta(minutes=5)) if stale else R.stamp_of(rec.updated_at)
+        kept = rec.updated_at - timedelta(minutes=5) if stale else rec.updated_at
         db.add(WorkRecap(id=f"chat:{tid}", kind="chat", ref=tid, state=RECAP_KEPT,
-                         text="\n".join(lines), source_updated=stamp))
+                         text="\n".join(lines), source_updated=R.stamp_of(kept), created_at=kept))
         db.commit()
 
 
