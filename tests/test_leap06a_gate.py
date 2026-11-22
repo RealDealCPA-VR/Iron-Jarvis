@@ -332,6 +332,11 @@ LETS_RUN: dict[str, str] = {
     "skill_load": "reads a skill's instructions; runs nothing",
     "skill_search": "searches the skills; runs nothing",
     "spawn_agent": _HELPER,
+    "stack_plan": (
+        "reads one scan on this PC and asks the model the real run would use for a sorting plan, "
+        "kept in Iron Jarvis's own folder (31-a); writes no document (stack_apply is a write, so "
+        "it is held)"
+    ),
     "suggestion_list": _RECORDS,
     "tool_list": _RECORDS,
     "tool_script": (
