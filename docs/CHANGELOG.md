@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.559.0
+
+**The night review leaves suggestions for the morning.** Iron Jarvis can now look at what went wrong during the day while your PC is idle at night, and leave suggestions in **Improvements** for you to accept or decline in the morning.
+
 ## v1.558.1
 
 **New conversation works the moment a sidebar reply ends.** In the browser sidebar, New conversation now works as soon as a reply's end is on screen.
@@ -77,7 +81,3 @@
 ## v1.544.0
 
 **Comment on a changed line.** When a coding tool changes your files, you often want to say something about one exact place: "use a different name here", "this branch is wrong".
-
-## v1.543.0
-
-**Rewind puts your files back too.** Build › Code could already rewind a conversation.

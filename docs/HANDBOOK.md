@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.558.2 (2026-11-19).*
+holds itself to. Current as of v1.559.0 (2026-11-19).*
 
 ---
 
@@ -2042,7 +2042,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## The night review leaves suggestions for the morning (v1.556.0)
+## The night review leaves suggestions for the morning (v1.559.0)
 
 Iron Jarvis can now look at what went wrong during the day while your PC is
 idle at night, and leave suggestions in **Improvements** for you to accept
