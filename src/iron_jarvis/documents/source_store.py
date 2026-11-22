@@ -112,7 +112,7 @@ def write_marks(
     linker needs of each (``id``, ``key``, ``path``, ``kind``, ``locator``).
     One transaction. Rows that never got a chat are swept here too.
 
-    ``kept`` (v1.563.0, idea 31-a): the facts of a document Iron Jarvis
+    ``kept`` (v1.564.0, idea 31-a): the facts of a document Iron Jarvis
     wrote from a sorted scan stay when their chat is deleted."""
     rows: list[dict[str, Any]] = []
     out: list[dict[str, Any]] = []
@@ -179,7 +179,7 @@ def drop_thread(db: Any, thread_id: str) -> None:
 
 def drop_kept_paths(engine: Any, paths: "Iterable[str]") -> int:
     """Remove the kept rows of files that were taken away again (the Undo of
-    a sorted scan, v1.563.0): a fact must not point at a file that is gone."""
+    a sorted scan, v1.564.0): a fact must not point at a file that is gone."""
     wanted = [str(p) for p in dict.fromkeys(paths) if p]
     if not wanted or not ensure_table(engine):
         return 0

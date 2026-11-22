@@ -442,7 +442,7 @@ export function ConfigCards({
   /** v1.351.0 (G15): Continue on a connected app's card (card index). Given
    *  only while the reply is the newest and no turn runs. */
   onContinue?: (index: number) => void;
-  /** v1.563.0 (idea 31-a): the chat a sorting plan's press belongs to (its
+  /** v1.564.0 (idea 31-a): the chat a sorting plan's press belongs to (its
    *  id and Local only), read at the press. */
   stackScope?: () => StackScope;
 }) {
@@ -456,7 +456,7 @@ export function ConfigCards({
           // Leap 06-a: "rehearse it" — the report reads itself until it ends.
           <RehearsalReport key={`rehearsal-${c.rehearsal_id}`} id={c.rehearsal_id} />
         ) : c.kind === "stack" ? (
-          // v1.563.0 (idea 31-a): a sorting plan, confirmed here.
+          // v1.564.0 (idea 31-a): a sorting plan, confirmed here.
           <StackPlanCard key={`stack:${c.plan_id}`} card={c} onSettle={(n) => onSettle(i, n)} scope={stackScope} />
         ) : c.kind === "change" ? (
           <ChangeCard key={c.change_id} card={c} onSettle={(n) => onSettle(i, n)} />

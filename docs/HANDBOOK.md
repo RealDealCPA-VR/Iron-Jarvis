@@ -2044,7 +2044,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Sort a scanned pile into its documents (v1.563.0)
+## Sort a scanned pile into its documents (v1.564.0)
 
 One PDF that holds a whole scanned pile becomes separate, named documents in
 their folders, after you check the plan. Attach the scan (a bank statement,

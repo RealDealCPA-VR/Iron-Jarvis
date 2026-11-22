@@ -7,7 +7,7 @@
  *   { kind: "change", key, label, old, new, restart, change_id }
  *   { kind: "secret", name, label, help, why, request_id }
  *   { kind: "rehearsal", rehearsal_id, subject_kind, name } (leap 06-a)
- *   { kind: "stack", plan_id, documents, … }  (v1.563.0: lib/stackPlan)
+ *   { kind: "stack", plan_id, documents, … }  (v1.564.0: lib/stackPlan)
  * A secret card never carries a value — the model never had one.
  */
 
@@ -143,7 +143,7 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
         name: str(r.name).slice(0, 120),
       });
     } else if (r.kind === "stack") {
-      // v1.563.0 (idea 31-a): a sorting plan's card, whitelisted by its own decoder.
+      // v1.564.0 (idea 31-a): a sorting plan's card, whitelisted by its own decoder.
       const stack = decodeStackCard(r);
       if (stack) out.push(stack);
     }
