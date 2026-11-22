@@ -473,7 +473,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
   view: BuildSessionView;
   live: LiveTimelineHandle | null;
   models?: readonly CatalogRow[];
-  /** v1.549.0: open on the graph of the models (components/harness/
+  /** v1.550.0: open on the graph of the models (components/harness/
    *  HarnessGraph); a press on a node shows its steps here, on the axis. Off,
    *  the steps are shown at once (the v1.390.0 tab). */
   graph?: boolean;
@@ -486,7 +486,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
   const [choice, setChoice] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [picked, setPicked] = useState<string | null>(null);
-  /** v1.549.0: the node whose steps are open ("lead", "back:<n>",
+  /** v1.550.0: the node whose steps are open ("lead", "back:<n>",
    *  "helper:<id>"), null = the graph. */
   const [focus, setFocus] = useState<string | null>(null);
   const [tick, setTick] = useState(0);

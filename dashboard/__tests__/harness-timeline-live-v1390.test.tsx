@@ -197,7 +197,7 @@ describe("the Timeline tab sits beside Plan", () => {
   });
 });
 
-/** v1.549.0: the tab opens on the graph of the models; the steps on the axis
+/** v1.550.0: the tab opens on the graph of the models; the steps on the axis
  *  are the lead's node, pressed. */
 async function openLeadSteps(): Promise<void> {
   const lead = await waitFor(() => {

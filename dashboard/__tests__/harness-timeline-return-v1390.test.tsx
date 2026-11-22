@@ -139,7 +139,7 @@ describe("a return mid-reply carries the Timeline on", () => {
       again.push("caught_up", { id: `${BODY.length - 1}:0` });
     });
     fireEvent.click(await screen.findByTestId("harness-pane-tab-timeline"));
-    // v1.549.0: the tab opens on the graph; the lead's node opens its steps.
+    // v1.550.0: the tab opens on the graph; the lead's node opens its steps.
     const lead = await waitFor(
       () => {
         const n = screen.getAllByTestId("graph-node").find((x) => x.getAttribute("data-key") === "lead");

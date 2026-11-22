@@ -1013,7 +1013,7 @@ table {
 :root[data-scheme="light"] .hover\:text-rose-400:hover { color: rgb(159 18 57 / 1); }
 /* light-tone-overrides:end */
 
-/* v1.549.0: the Timeline's graph (components/harness/HarnessGraph) lights a
+/* v1.550.0: the Timeline's graph (components/harness/HarnessGraph) lights a
    handoff for a few seconds (lib/buildGraph FRESH_MS): a dash runs along the
    edge four times, then stops. Nothing else on the graph moves; under
    reduced motion the edge only changes colour. */
