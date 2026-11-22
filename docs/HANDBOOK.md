@@ -3081,7 +3081,7 @@ as it was.
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.
 
-## Open items stay until they are done (v1.560.0)
+## Open items stay until they are done (v1.562.0)
 
 The card a new chat or coding session shows for a folder you have worked in
 now keeps every **open item** of that folder, however old, until it is done
@@ -3111,8 +3111,10 @@ newer pieces of work come along.
 **In chat.** A chat in the folder is told the folder's open items (the oldest
 six, and how many more there are). Say "the bank one is done", "that is no
 longer needed" or "reopen the bank item" and the chat closes or reopens it.
-It only changes an item of the chat's own folder, and only when you say so:
-if later work only seems to have done one, it asks you first.
+An item past the first six is found by your words ("the payroll one is
+done"): the chat looks it up in the folder's list first. It only changes an
+item of the chat's own folder, and only when you say so: if later work only
+seems to have done one, it asks you first.
 
 **Good to know.**
 
@@ -3126,6 +3128,10 @@ if later work only seems to have done one, it asks you first.
   March deposit") is always its own item, never taken for the earlier one.
 - Something you closed is never told to a chat as still open, even where the
   earlier work's summary still lists it.
+- The same line in two chats here (a chat started with Continue often
+  repeats it) is one item, and Done closes it in both. A chat you start
+  after you closed an item, whose recap lists the same words again (next
+  week's payroll, say), is new work: the item is open until you close it.
 - Continue on an item names the new chat after the work that item came from.
 - In Chat › Code and in Build › Code the card shows the items with their ⋯
   menu, but an item has no Continue of its own there: use the card's

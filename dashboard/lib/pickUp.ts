@@ -125,7 +125,9 @@ export type ClosedStatus = "done" | "dropped" | "settled";
 export interface PickUpClosed extends PickUpLine {
   id: string;
   status: ClosedStatus;
-  /** "you" | "chat" | "conversation". */
+  /** "you" | "chat" | "conversation" | "copy" (closed with the same words
+   *  the owner closed in another conversation). Not shown: closedWords reads
+   *  the status. */
   how: string;
   closedAt: string | null;
 }

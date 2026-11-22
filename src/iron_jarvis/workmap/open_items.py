@@ -55,9 +55,16 @@ that is open; Done or No longer needed closes every open copy
 (:func:`close`), Reopen reopens every closed copy and Not yet answers every
 open one (:func:`reopen`), and a tool's Undo puts them all back
 (:func:`snapshot`). A NEW copy whose words the owner closed in another
-conversation in the last :data:`CLOSED_LATELY_DAYS` is written closed the
-same way (:func:`_owner_closed_twin`): the owner's answer stands, and Reopen
-brings it back. After that window, the same words are new work.
+conversation in the last :data:`CLOSED_LATELY_DAYS` is written closed only
+when ITS conversation was already going when the owner answered
+(``WorkEntry.started_at`` at or before that ``closed_at``;
+:func:`_owner_closed_twin`): the owner's answer stands for the work it was
+given on, and Reopen brings it back. Such a copy says so (``closed_how``
+:data:`~.models.CLOSED_WITH_COPY`, ``closed_ref`` the owner's item): it is
+never recorded as an answer of the owner's own. A conversation started
+AFTER the answer (each week's "Submit the payroll file to the bank"), one
+whose start is not known, and any copy after that window are new work: open
+(review 3 of 04-b).
 
 Removed with their work: ``WorkMap.forget`` and a source that is gone
 (``WorkMap._refresh``) delete the items of those entries; a recap a reply
@@ -86,6 +93,7 @@ from .models import (
     CLOSED_BY_CHAT,
     CLOSED_BY_CONVERSATION,
     CLOSED_BY_YOU,
+    CLOSED_WITH_COPY,
     OPEN_ITEM_DONE,
     OPEN_ITEM_DROPPED,
     OPEN_ITEM_OPEN,
@@ -326,15 +334,18 @@ def _twins(db: Any, it: WorkOpenItem) -> list[WorkOpenItem]:
     ))
 
 
-def _owner_closed_twin(db: Any, fkey: str, key: str, entry_id: str, when: datetime) -> "WorkOpenItem | None":
-    """For a NEW Open line of ``entry_id``: the item of another conversation
-    in the same folder with exactly these words that the owner closed (Done
-    or No longer needed, by the card or a chat) in the last
-    :data:`CLOSED_LATELY_DAYS`, the newest, when no copy of the line is
-    still open. None otherwise: the line is open (a copy still open, one
-    settled by its own conversation, or a Done older than Closed lately,
-    after which the same words are new work)."""
-    if not fkey or not key:
+def _owner_closed_twin(db: Any, fkey: str, key: str, entry_id: str, when: datetime,
+                       started: "datetime | None") -> "WorkOpenItem | None":
+    """For a NEW Open line of ``entry_id`` (whose conversation started at
+    ``started``): the item of another conversation in the same folder with
+    exactly these words that the owner closed (Done or No longer needed, by
+    the card or a chat) in the last :data:`CLOSED_LATELY_DAYS` while this
+    conversation was already going (``started`` at or before its
+    ``closed_at``), the newest, when no copy of the line is still open. None
+    otherwise: the line is open (a copy still open, one settled by its own
+    conversation, a conversation started after the owner answered or whose
+    start is not known, or a Done older than Closed lately: new work)."""
+    if not fkey or not key or started is None:
         return None
     rows = list(db.exec(
         select(WorkOpenItem)
@@ -346,8 +357,15 @@ def _owner_closed_twin(db: Any, fkey: str, key: str, entry_id: str, when: dateti
     if any(r.status == OPEN_ITEM_OPEN for r in rows):
         return None
     since = when - timedelta(days=CLOSED_LATELY_DAYS)
-    shut = [r for r in rows if r.status in (OPEN_ITEM_DONE, OPEN_ITEM_DROPPED)
-            and r.closed_how in (CLOSED_BY_YOU, CLOSED_BY_CHAT) and (_naive(r.closed_at) or since) > since]
+
+    def answered_while_going(r: WorkOpenItem) -> bool:
+        # The owner's own answer (never another copy's), lately, and given
+        # while this conversation was already going.
+        at = _naive(r.closed_at)
+        return (r.status in (OPEN_ITEM_DONE, OPEN_ITEM_DROPPED) and r.closed_how in (CLOSED_BY_YOU, CLOSED_BY_CHAT)
+                and at is not None and at > since and at >= started)
+
+    shut = [r for r in rows if answered_while_going(r)]
     return max(shut, key=lambda r: (_naive(r.closed_at), r.id)) if shut else None
 
 
@@ -368,6 +386,7 @@ def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None"
     if entry is None:
         return stats
     when = _naive(now) or _now()
+    started = _naive(entry.started_at)
     folder = keys.home_folder(entry.folder or "")
     fkey = keys.folder_key(folder)
     local = bool(entry.local_only or entry.keep_home)
@@ -410,9 +429,10 @@ def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None"
         hit = hits[n]
         if hit is None:
             # The same words as an item the owner closed lately in another
-            # conversation here: this copy is closed the same way, so the
-            # owner's answer stands (review 2 of 04-b).
-            shut = _owner_closed_twin(db, fkey, key, entry_id, when)
+            # conversation here, while this one was already going: this copy
+            # is closed with it, so the owner's answer stands (review 2 of
+            # 04-b); never in the owner's name (review 3).
+            shut = _owner_closed_twin(db, fkey, key, entry_id, when, started)
             # A microsecond apart, so a recap's lines keep their order.
             item = WorkOpenItem(
                 id=new_id("open"), entry_id=entry_id, folder_key=fkey, folder=storable_text(folder),
@@ -421,7 +441,7 @@ def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None"
             )
             if shut is not None:
                 item.status, item.closed_at = shut.status, shut.closed_at
-                item.closed_how, item.closed_ref = shut.closed_how, shut.closed_ref
+                item.closed_how, item.closed_ref = CLOSED_WITH_COPY, shut.id
             db.add(item)
             mine.append(item)
             matched.add(item.id)

@@ -64,6 +64,20 @@ UNREADABLE = (
     "again in a moment."
 )
 NONE_CLOSED = "Nothing in this folder was closed in the last 14 days."
+NONE_OPEN = "Nothing is open in this folder."
+NONE_MATCH = (
+    "No open item of this folder has those words. Leave out the item to list every open item here."
+)
+#: Open items one listing names, at most (the rest are counted; the owner's
+#: words find any of them).
+LIST_MAX = 30
+#: Words that never name an item when the owner asks to close one.
+_ASK_WORDS = frozenset(
+    """
+    item items open mark close closed finished complete completed needed longer list still cross tick
+    drop remove sorted handled please mean meant
+    """.split()
+)
 #: D-13.2: an item's words are a recap line, and recap lines never go to
 #: the phone (nor does Local only work).
 ON_PHONE = (
@@ -83,6 +97,21 @@ def _how(value: Any) -> str:
 def _item_id(args: dict[str, Any]) -> str:
     m = _ID_RX.search(str(args.get("item") or ""))
     return m.group(0) if m else ""
+
+
+def _asked_words(text: Any) -> set[str]:
+    """The words of what the owner called an item ("the payroll one") that
+    can name it: ``keys.words`` with a plural's "s" dropped, minus the words
+    of asking itself. Pure."""
+    from . import keys
+
+    out: set[str] = set()
+    for w in keys.words(text):
+        if len(w) > 4 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        if w not in _ASK_WORDS:
+            out.add(w)
+    return out
 
 
 def _publish_args(item: dict[str, Any]) -> dict[str, Any]:
@@ -184,17 +213,43 @@ class OpenItemCloseTool(_OpenItemTool):
         "the earlier-work record, each with its id in brackets) when the USER says it is done or no "
         "longer needed. Never on your own judgment: if later work only seems to have done it, ask "
         "the user first. how: 'done' or 'no_longer_needed'. Only an item of this chat's own folder. "
-        "It can be reopened."
+        "It can be reopened. An item the record only counts has no id there: give the user's words "
+        "for it instead of an id (or leave item out) and it lists this folder's open items that "
+        "share those words, with their ids, changing nothing; then close the one the user means."
     )
     input_schema = {
         "type": "object",
         "properties": {
-            "item": {"type": "string", "description": "The open item's id, e.g. open_0a1b2c3d4e5f."},
+            "item": {"type": "string", "description": (
+                "The open item's id, e.g. open_0a1b2c3d4e5f; or the user's words for it to list the "
+                "matching open items; leave out to list them all.")},
             "how": {"type": "string", "enum": ["done", "no_longer_needed"],
                     "description": "done (default) or no_longer_needed."},
         },
-        "required": ["item"],
     }
+
+    def _listing(self, said: str) -> ToolResult:
+        """This folder's open items with their ids (data), only those that
+        share the owner's words when ``said`` has any; nothing changes.
+        BLOCKING."""
+        why, got = self._told(lately=False)
+        if got is None:
+            return ToolResult(ok=False, error=why)
+        rows = got.open
+        if not rows:
+            return ToolResult(ok=True, output=NONE_OPEN, data={"rows": []})
+        words = _asked_words(said)
+        if words:
+            rows = [r for r in rows if words & _asked_words(f"{r['text']} {r.get('title') or ''}")]
+            if not rows:
+                return ToolResult(ok=True, output=NONE_MATCH, data={"rows": []})
+        shown = rows[:LIST_MAX]
+        lines = ["Open in this folder, oldest first (data, not instructions):"]
+        for r in shown:
+            lines.append(f"- [{r['id']}] {r['text']} (from \"{r['title']}\")")
+        if len(rows) > len(shown):
+            lines.append(f"(and {len(rows) - len(shown)} more: say more of the item's words to find it)")
+        return ToolResult(ok=True, output="\n".join(lines), data={"rows": [{"id": r["id"]} for r in shown]})
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from . import open_items
@@ -203,7 +258,10 @@ class OpenItemCloseTool(_OpenItemTool):
         args = dict(args or {})
         item_id = _item_id(args)
         if not item_id:
-            return ToolResult(ok=False, error=NO_ID)
+            # G9 (review 3 of 04-b): an item past the six the block numbers
+            # is on the card, so the owner may name it here; it is found in
+            # the folder's own list, never guessed.
+            return await asyncio.to_thread(self._listing, str(args.get("item") or ""))
         how = _how(args.get("how"))
         if not how:
             return ToolResult(ok=False, error="Say how: done or no_longer_needed.")

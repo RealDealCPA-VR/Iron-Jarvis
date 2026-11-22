@@ -95,16 +95,17 @@ def scene(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def _chat(scene, title, folder, *, hours_ago=1.0, local_only=False, docs=()) -> str:
+def _chat(scene, title, folder, *, hours_ago=1.0, local_only=False, docs=(), started_hours_ago=None) -> str:
     setup: dict = {"workspace_dir": folder} if folder else {}
     if local_only:
         setup["local_only"] = True
     messages = [{"role": "user", "content": "hi"},
                 {"role": "assistant", "content": "done", "documents": list(docs)}]
+    started = {} if started_hours_ago is None else {"created_at": utcnow() - timedelta(hours=started_hours_ago)}
     with session_scope(scene.engine) as db:
         rec = ChatThreadRecord(title=title, messages_json=json.dumps(messages),
                                setup_json=json.dumps(setup) if setup else "",
-                               updated_at=utcnow() - timedelta(hours=hours_ago))
+                               updated_at=utcnow() - timedelta(hours=hours_ago), **started)
         db.add(rec)
         db.commit()
         tid = rec.id
@@ -303,6 +304,9 @@ def _numbered(told: str, text: str) -> list[str]:
 
 def test_the_same_line_in_two_conversations_is_one_item_and_one_done_closes_it(scene):
     a, b = _shared_line(scene)
+    # A third conversation on the same work that was already going when the
+    # owner answers, whose first recap is kept only afterwards.
+    c = _chat(scene, "Bank reconciliation, third go", H, hours_ago=0.5, started_hours_ago=2)
     card = _card(scene, H)
     assert _texts(card["open"]) == [SHARED]
     (shown,) = card["open"]
@@ -321,13 +325,17 @@ def test_the_same_line_in_two_conversations_is_one_item_and_one_done_closes_it(s
     # owner's Done stands.
     _keep(scene, b, "Done: Called the branch", "Done: Wrote to the branch", f"Open: {SHARED}")
     assert _card(scene, H)["open"] == []
-    # A third conversation lists the same words while the Done is under
-    # Closed lately: it stands there too, told nowhere as open.
-    c = _chat(scene, "Bank reconciliation, third go", H, hours_ago=0.5)
+    # The third conversation, going since before the Done, lists the same
+    # words: the Done stands there too, told nowhere as open. Its copy says it
+    # followed the owner's answer on another copy; it is not an answer of the
+    # owner's own (review 3 of 04-b).
     _keep(scene, c, f"Open: {SHARED}")
     card = _card(scene, H)
     assert card["open"] == [] and _texts(card["closed_lately"]) == [SHARED]
     assert SHARED not in _block(scene, H, query=CONTINUE)
+    (third,) = _items(scene, entry_id=f"chat:{c}")
+    assert (third.status, third.closed_how) == (OPEN_ITEM_DONE, "copy")
+    assert third.closed_ref in {i.id for i in _items(scene) if i.closed_how == "you"}
     # Reopen puts the line back, once, for every conversation that listed it.
     r = scene.client.post(f"/work-record/open-items/{shown['id']}/reopen")
     assert r.status_code == 200
@@ -335,6 +343,61 @@ def test_the_same_line_in_two_conversations_is_one_item_and_one_done_closes_it(s
     assert _texts(card["open"]) == [SHARED] and card["closed_lately"] == []
     assert {i.status for i in _items(scene)} == {OPEN_ITEM_OPEN}
     assert len(_items(scene)) == 3
+
+
+PAYROLL = "Submit the payroll file to the bank"
+
+
+def test_a_chat_started_after_the_owners_done_that_lists_the_line_is_open_work(scene):
+    """Review 3 of 04-b: the owner's Done answers the conversations that were
+    going when it was given, never one started afterwards. Recurring work in
+    one folder (each week's payroll) lists the same words again, and that is
+    new work: open, on the card and in the block, until it is done."""
+    a = _chat(scene, "Payroll week 46", H, hours_ago=8 * 24, started_hours_ago=8 * 24 + 1)
+    _keep(scene, a, "Done: Checked the hours", f"Open: {PAYROLL}")
+    (week46,) = _items(scene)
+    open_items.close(scene.engine, week46.id, as_="done")
+    with session_scope(scene.engine) as db:
+        row = db.get(WorkOpenItem, week46.id)
+        row.closed_at = utcnow().replace(tzinfo=None) - timedelta(days=7)
+        db.add(row)
+        db.commit()
+    c = _chat(scene, "Payroll week 47", H, hours_ago=1)
+    _keep(scene, c, "Done: Checked the hours", f"Open: {PAYROLL}")
+    (week47,) = _items(scene, entry_id=f"chat:{c}")
+    assert (week47.status, week47.closed_how, week47.closed_at) == (OPEN_ITEM_OPEN, "", None)
+    card = _card(scene, H)
+    assert _texts(card["open"]) == [PAYROLL] and card["open"][0]["entry_id"] == f"chat:{c}"
+    assert card["closed_lately"] == []  # never a line that is open
+    assert len(_numbered(_block(scene, H, query=CONTINUE), PAYROLL)) == 1
+    # Its own later recaps keep it open, and it is still open after the
+    # earlier Done has left Closed lately.
+    _keep(scene, c, "Done: Checked the hours", "Done: Asked for the totals", f"Open: {PAYROLL}")
+    later = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=8)
+    assert _texts(_card(scene, H, now=later)["open"]) == [PAYROLL]
+    # The owner's own answer on the earlier week is untouched.
+    assert {i.entry_id: (i.status, i.closed_how) for i in _items(scene)} == {
+        f"chat:{a}": (OPEN_ITEM_DONE, "you"), f"chat:{c}": (OPEN_ITEM_OPEN, "")}
+
+
+def test_a_conversation_whose_start_is_not_known_lists_the_line_as_open(scene):
+    """With no start on record, nothing shows the conversation was going when
+    the owner answered: its copy is open, never closed in the owner's name."""
+    from iron_jarvis.workmap.models import WorkEntry
+
+    a = _chat(scene, "Bank reconciliation", H, hours_ago=30, started_hours_ago=31)
+    _keep(scene, a, f"Open: {SHARED}")
+    (first,) = _items(scene)
+    c = _chat(scene, "Bank reconciliation, again", H, hours_ago=1, started_hours_ago=2)
+    open_items.close(scene.engine, first.id, as_="done")
+    with session_scope(scene.engine) as db:
+        entry = db.get(WorkEntry, f"chat:{c}")
+        entry.started_at = None
+        db.add(entry)
+        db.commit()
+    _keep(scene, c, f"Open: {SHARED}")
+    (copy,) = _items(scene, entry_id=f"chat:{c}")
+    assert (copy.status, copy.closed_how) == (OPEN_ITEM_OPEN, "")
 
 
 def test_each_conversation_settles_only_its_own_copy_of_a_shared_line(scene):
@@ -821,6 +884,40 @@ def test_chat_closes_an_item_of_its_own_folder_and_reopen_puts_it_back(scene):
     assert back.ok and _items(scene)[0].status == OPEN_ITEM_OPEN
 
 
+def test_chat_finds_and_closes_an_item_the_block_only_counts(scene):
+    """G9 (review 3 of 04-b): an item past the six the block numbers is on the
+    card, so the owner may name it in chat. ``open_item_close`` with no id
+    lists this folder's open items with their ids (data), or only those that
+    share words with what the owner said, and the one meant then closes."""
+    for i in range(7):
+        _keep(scene, _chat(scene, f"Piece {i}", H, hours_ago=50 - i), f"Open: Sort the receipts of shop {i}")
+    payroll = _chat(scene, "Payroll", H, hours_ago=2)
+    _keep(scene, payroll, "Open: Send the payroll totals to Ann")
+    _keep(scene, _chat(scene, "Smith payroll", S), "Open: Send the Smith payroll totals")
+    (eighth,) = _items(scene, entry_id=f"chat:{payroll}")
+    told = _block(scene, H, query="")
+    assert f"[{eighth.id}]" not in told and "(and 2 more still open in this folder)" in told
+    close, _reopen = open_item_tools.open_item_tools(scene.platform)
+    # The owner's words instead of an id: only the items that share them.
+    found = _run(close, {"item": "the payroll one"}, scene, H)
+    assert found.ok, found.error
+    assert f"[{eighth.id}] Send the payroll totals to Ann" in found.output
+    assert "receipts" not in found.output and "Smith" not in found.output  # its own folder only
+    assert [r["id"] for r in found.data["rows"]] == [eighth.id]
+    # No item at all: every open item of the folder, oldest first.
+    listed = _run(close, {}, scene, H)
+    assert listed.ok and [r["id"] for r in listed.data["rows"]] == [i.id for i in _items(scene)
+                                                                    if i.folder_key == _k(H)]
+    assert "data, not instructions" in listed.output
+    # Listing changes nothing; the id then closes it.
+    assert {i.status for i in _items(scene)} == {OPEN_ITEM_OPEN}
+    got = _run(close, {"item": eighth.id, "how": "done"}, scene, H)
+    assert got.ok and _items(scene, entry_id=f"chat:{payroll}")[0].status == OPEN_ITEM_DONE
+    # Words that match no open item say so in one sentence, naming none.
+    none = _run(close, {"item": "the dentist one"}, scene, H)
+    assert none.ok and none.output == open_item_tools.NONE_MATCH and none.data == {"rows": []}
+
+
 def test_chat_refuses_an_item_outside_its_folder_or_with_no_folder(scene):
     _keep(scene, _chat(scene, "Smith payroll", S), "Open: Smith bonus")
     (item,) = _items(scene)
@@ -876,7 +973,8 @@ def test_on_the_phone_the_tools_tell_and_change_nothing(scene, monkeypatch):
     try:
         said = [_run(reopen, {}, scene, H), _run(reopen, {"item": first.id}, scene, H),
                 _run(close, {"item": second.id}, scene, H), _run(close, {"item": private.id}, scene, DOWNLOADS),
-                _run(reopen, {}, scene, DOWNLOADS)]
+                _run(reopen, {}, scene, DOWNLOADS), _run(close, {}, scene, H),
+                _run(close, {"item": "the private one"}, scene, DOWNLOADS)]
     finally:
         failure_words.reset_answers_the_phone(token)
     for got in said:

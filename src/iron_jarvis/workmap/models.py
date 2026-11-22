@@ -146,6 +146,10 @@ OPEN_ITEM_STATUSES = (OPEN_ITEM_OPEN, OPEN_ITEM_DONE, OPEN_ITEM_DROPPED, OPEN_IT
 CLOSED_BY_YOU = "you"
 CLOSED_BY_CHAT = "chat"
 CLOSED_BY_CONVERSATION = "conversation"
+#: Closed with another conversation's copy of the same words: this one was
+#: already going when the owner closed them there (``closed_ref`` = the
+#: owner's item). Never an answer of the owner's own.
+CLOSED_WITH_COPY = "copy"
 
 
 class WorkOpenItem(SQLModel, table=True):
@@ -179,10 +183,11 @@ class WorkOpenItem(SQLModel, table=True):
     opened_at: datetime = Field(default_factory=utcnow, index=True)
     closed_at: datetime | None = None
     #: :data:`CLOSED_BY_YOU` | :data:`CLOSED_BY_CHAT` |
-    #: :data:`CLOSED_BY_CONVERSATION` ("" while open).
+    #: :data:`CLOSED_BY_CONVERSATION` | :data:`CLOSED_WITH_COPY` ("" while
+    #: open).
     closed_how: str = ""
-    #: What closed it: the chat's thread id, or the work entry whose
-    #: rewritten recap settled it.
+    #: What closed it: the chat's thread id, the work entry whose rewritten
+    #: recap settled it, or the owner's item it was closed with.
     closed_ref: str = ""
     #: A LATER piece of work in the same folder whose Done line seems to
     #: settle this item (``open_items.may_be_done``). It only asks "Mark it
@@ -381,6 +386,7 @@ __all__ = [
     "CLIENT_PREF_TYPED", "CLIENT_PROPOSED", "CLIENT_STATUSES", "KINDS", "KIND_CHAT",
     "KIND_CODE", "KIND_RUN", "KIND_TOOL_CODE", "RECAP_KEPT", "RECAP_NONE", "WorkClient",
     "WorkClientFolder", "WorkClientPreference", "WorkEntry", "WorkForgotten", "WorkRecap",
-    "CLOSED_BY_CHAT", "CLOSED_BY_CONVERSATION", "CLOSED_BY_YOU", "OPEN_ITEM_DONE", "OPEN_ITEM_DROPPED",
+    "CLOSED_BY_CHAT", "CLOSED_BY_CONVERSATION", "CLOSED_BY_YOU", "CLOSED_WITH_COPY", "OPEN_ITEM_DONE",
+    "OPEN_ITEM_DROPPED",
     "OPEN_ITEM_OPEN", "OPEN_ITEM_SETTLED", "OPEN_ITEM_STATUSES", "WorkOpenItem",
 ]
