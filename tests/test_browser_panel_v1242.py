@@ -470,6 +470,14 @@ def test_a_question_from_the_sidebar_is_answered_by_the_daemons_chat_engine(
         )
         assert delta["text"] == "Your notes tab is open."
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never told the panel it ended")
+        # v1.561.1: the turn's ledger row is written on a worker thread, and
+        # the lane waits for that write AFTER `done` (chat_turn.
+        # settle_usage_writes). So the row is read once the reply itself has
+        # ended, never on `done` alone: it passed only on its retry in Linux
+        # release run 45059060290, and failed every time with the write held
+        # 1.5 s ("list index out of range").
+        turns = app.platform.browser.backend.panel_handler.__self__
+        _wait_for(lambda: not turns.running, "the reply never ended after its done")
 
         assert _chat_runs(app.platform)[0].state == AgentState.COMPLETED, (
             "the panel's turn was not ledgered like every other chat turn"
