@@ -4506,6 +4506,12 @@ class HostedService:
             self._emit(live, make("notice", text=W.MODE_AFTER_PLAN.format(
                 label=W.label(live.harness), mode=MODE_LABELS[new_mode])))
         if payload is not None:
+            # X-4: what the tool's answer to THIS reply depends on is noted
+            # before the write (Antigravity ends its reply on a Deny at once,
+            # and its frames can reach the loop before the write returns).
+            answering = getattr(driver, "answering", None)
+            if callable(answering):
+                answering(ask, decision)
             try:
                 await driver.write(payload)
             except HarnessGone:

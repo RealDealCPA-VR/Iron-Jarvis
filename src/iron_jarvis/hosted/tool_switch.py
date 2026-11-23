@@ -181,7 +181,12 @@ NOT_CHECKED = "(The record of the work could not be checked, so it is not includ
 #: How ``branching`` starts the conversation's own line for files it put back.
 _FILES_BACK = ("Rewind: ", "Undo rewind: ")
 
-_LOCK = threading.Lock()
+#: Every read AND write of a session's file holds it (X-4: reads too). On
+#: Windows a file open for reading cannot be replaced (``os.replace``: "Access
+#: is denied") and one being replaced cannot be opened, so the session view's
+#: read beside a write failed the write (a switched-back tool's failed resume
+#: went unsaid) or read "no file". Re-entrant: a write reads under it first.
+_LOCK = threading.RLock()
 
 
 # --------------------------------------------------------------------------- #
@@ -193,7 +198,8 @@ def _path(home: Any, sid: str) -> Path:
 
 def _there(home: Any, sid: str) -> bool:
     try:
-        return _path(home, sid).is_file()
+        with _LOCK:
+            return _path(home, sid).is_file()
     except OSError:
         return False
 
@@ -246,7 +252,8 @@ def read(home: Any, sid: str) -> dict[str, Any]:
     * ``unproven``: the tool whose own earlier conversation was opened again
       and has not answered yet ("" = none)."""
     try:
-        data = json.loads(_path(home, sid).read_text(encoding="utf-8"))
+        with _LOCK:
+            data = json.loads(_path(home, sid).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
     if not isinstance(data, dict):

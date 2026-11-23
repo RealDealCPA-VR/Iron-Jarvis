@@ -314,6 +314,49 @@ async def test_a_command_card_is_allow_once_only_and_a_deny_ends_the_reply_in_wo
     assert evs[-1]["stop"] == "completed", "a Deny is not the user's Stop"
 
 
+#: How long a held answer's write waits for the reply's end (reached only by a
+#: reply that never ends while the answer is held: a broken run).
+_HOLD_S = 10.0
+
+
+async def test_a_deny_is_said_even_when_antigravity_ends_its_reply_before_the_answers_write_returns(
+        tmp_path, monkeypatch):
+    """X-4: Antigravity reads a Deny and ends its reply at once. Its frames are
+    read on their own thread, so the end can reach the loop before the
+    answer's own write has returned (a busy runner): the test above passed
+    only on its retry in Linux release 45022659281 (python 5), and the reply
+    ended without saying the Deny ended it. The driver notes the Deny before
+    the answer is written (``answering``). Here every card answer's write
+    returns only once the reply has ended: the worst order, every time."""
+    from iron_jarvis.hosted import process as PROC
+
+    ended = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    real_end = S.HostedService._end_turn
+    real_write = PROC.HarnessProcess.write
+
+    async def end_turn(self, live, stop, done=None):
+        try:
+            return await real_end(self, live, stop, done)
+        finally:
+            ended.set()
+
+    def write(self, obj):
+        real_write(self, obj)
+        if isinstance(obj, dict) and "result" in obj and "method" not in obj:
+            # The answer is out; its return waits for the reply's end.
+            asyncio.run_coroutine_threadsafe(asyncio.wait_for(ended.wait(), _HOLD_S), loop).result()
+
+    monkeypatch.setattr(S.HostedService, "_end_turn", end_turn)
+    monkeypatch.setattr(PROC.HarnessProcess, "write", write)
+    evs, _s, _w, log, _v, _a = await run_agy(tmp_path, monkeypatch, "antigravity_command_denied_ends_the_reply")
+    assert _picked(log) == ["deny"]
+    assert ended.is_set()
+    assert W.ANTIGRAVITY_DECLINED_ENDS in [e.get("text") for e in evs if e["type"] == "notice"], [
+        e.get("text") for e in evs if e["type"] == "notice"]
+    assert evs[-1]["stop"] == "completed", "a Deny is not the user's Stop"
+
+
 def _ask(options):
     return Ask("ask_1", "approval", "run_command", "7", {"options": [{"optionId": i, "kind": k} for i, k in options]},
                {})

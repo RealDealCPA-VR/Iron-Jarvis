@@ -16,6 +16,8 @@ what is parked, and the rules it borrows (``hosted/tool_switch.py``).
 
 from __future__ import annotations
 
+import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -751,3 +753,75 @@ def test_the_archive_summary_names_every_tool_the_session_used():
               {"type": "notice", "text": "no switch here"}]
     assert AS._earlier_tools(events, "pi") == " (earlier in this session: Claude Code, Codex)"
     assert AS._earlier_tools(events[2:], "pi") == ""
+
+
+# --------------------------------------------------------------------------- #
+# X-4: the session's file is read and written one at a time
+# --------------------------------------------------------------------------- #
+def _state(n: int, unproven: str = "") -> dict:
+    return {"n": n, "parked": {}, "pending": None, "last": None, "anchor": "", "unproven": unproven}
+
+
+def test_a_read_of_the_sessions_file_holds_the_lock_every_write_holds(tmp_path, monkeypatch):
+    """On Windows a file that is open for reading cannot be replaced
+    (``os.replace``: "Access is denied"), and a file being replaced cannot be
+    opened: a read beside a write failed the write, or read "no file" (nothing
+    parked, nothing waiting). Measured on Windows: one thread replacing the
+    file and one reading it, for 5 s: 1214 of 2602 replaces and 1247 of 41400
+    reads failed. So the session view, which reads the file, could make a
+    switched-back tool's failed resume go unsaid (``resume_failed`` raised).
+    A read now holds the lock every write holds: while a read has the file
+    open, no other thread can take it."""
+    home = tmp_path / "home"
+    TS._write(home, "s1", _state(1, unproven="claude-code"))
+    took: list[bool] = []
+
+    def try_the_lock() -> None:
+        got = TS._LOCK.acquire(blocking=False)
+        if got:
+            TS._LOCK.release()
+        took.append(got)
+
+    real = Path.read_text
+
+    def read_text(self, *a, **kw):
+        if self.name == TS.FILE:
+            other = threading.Thread(target=try_the_lock)
+            other.start()
+            other.join(30)
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert TS.read(home, "s1")["unproven"] == "claude-code"
+    assert TS.unproven(home, "s1", "claude-code")
+    assert took and not any(took), "another thread took the lock while a read had the file open"
+
+
+def test_reads_beside_writes_never_fail_a_write_or_read_no_file(tmp_path):
+    """The same, as it happens: one thread writes the file again and again
+    while another reads it. Every write lands and every read sees a file."""
+    home = tmp_path / "home"
+    TS._write(home, "s1", _state(1))
+    done = threading.Event()
+    failed: list[str] = []
+    seen: list[int] = []
+
+    def reader() -> None:
+        while not done.is_set():
+            seen.append(TS.read(home, "s1")["n"])
+
+    t = threading.Thread(target=reader)
+    t.start()
+    try:
+        for n in range(2, 302):
+            try:
+                with TS._LOCK:
+                    TS._write(home, "s1", _state(n))
+            except OSError as exc:
+                failed.append(repr(exc))
+    finally:
+        done.set()
+        t.join(30)
+    assert failed == [], f"{len(failed)} of 300 writes failed beside a read: {failed[:3]}"
+    assert seen and min(seen) >= 1, f"a read found no file {seen.count(0)} times of {len(seen)}"
+    assert TS.read(home, "s1")["n"] == 301

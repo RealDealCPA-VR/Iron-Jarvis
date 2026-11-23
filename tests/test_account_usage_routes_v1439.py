@@ -12,12 +12,15 @@ Pinned here:
   its limit), ``usage_read`` and ``can_refresh``;
 * the lifespan starts the in-use loop and it reports on ``loop_health``;
 * the REAL bundle keeps windows told through ``/signal`` with ``status: 200``
-  — nothing parked, no request counted (``reportSignal`` -> ``recordLimits``).
+  — nothing parked, no request counted (``reportSignal`` -> ``recordLimits``),
+  also when each signal arrives late (a new account's own sign-in check ends
+  before it does).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import time
@@ -164,18 +167,73 @@ def test_the_lifespan_runs_the_in_use_loop(fake, tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 _REPO = Path(__file__).resolve().parents[1]
 _BUNDLE = _REPO / "desktop" / "vendor" / "iron-proxy" / "iron-proxy.mjs"
+#: The vendors' own programs the account manager runs to check a new
+#: account's sign-in (its ``status`` command: ``claude auth status``, ...).
+_CODING_TOOLS = ("claude", "codex", "grok", "gemini")
+
+
+def _no_coding_tools_on_path(monkeypatch) -> None:
+    """No test starts a real coding tool (ci.md, v1.507.0): Iron-Proxy runs
+    the vendor's own CLI from PATH to check each new account's sign-in, so
+    every folder that holds one is left off PATH, as on GitHub (where none is
+    installed). Node is named outright, so it still starts if it shared one."""
+    monkeypatch.setenv("IRONJARVIS_IRON_PROXY_NODE", shutil.which("node") or "")
+    keep = [d for d in os.environ.get("PATH", "").split(os.pathsep)
+            if d and not any(shutil.which(name, path=d) for name in _CODING_TOOLS)]
+    monkeypatch.setenv("PATH", os.pathsep.join(keep))
+
+
+def _settled_states(client, ids, within: float = 20.0) -> dict:
+    """The states once each new account's own sign-in check has ended.
+    Iron-Proxy starts that check in the background when an account is made
+    (``refreshStatus``) and it moves the status from "unknown" (to "ready"
+    here: no CLI is found). Read before it ended, a status compared after a
+    signal changed by itself: it read "unknown" before and "ready" after on
+    the first attempt in Linux release 45078189144 (and passed only on its
+    retry in Linux release 44991984718, early in its shard); the
+    ``signals_told_late`` case below makes that order every time."""
+    deadline = time.monotonic() + within
+    states = client.states()
+    while time.monotonic() < deadline and any(states[i].get("status") == "unknown" for i in ids):
+        time.sleep(0.05)
+        states = client.states()
+    assert all(states[i].get("status") != "unknown" for i in ids), states
+    return states
+
+
+#: How late each signal reaches Iron-Proxy in the ``signals_told_late`` case.
+SIGNAL_LATE_S = 1.5
+
+
+def _signals_told_late(monkeypatch) -> None:
+    """Each signal reaches Iron-Proxy SIGNAL_LATE_S late, so a sign-in check
+    still running when ``before`` is read has ended by the time ``after`` is:
+    the order this test's first attempt failed in on Linux release
+    45078189144 (python (6): ``'ready' == 'unknown'``). With
+    ``_settled_states`` deleted this case is red; with it, green."""
+    told = U._tell
+
+    def late(*args, **kwargs):
+        time.sleep(SIGNAL_LATE_S)
+        return told(*args, **kwargs)
+
+    monkeypatch.setattr(U, "_tell", late)
 
 
 @pytest.mark.timeout(150)
 @pytest.mark.skipif(not _BUNDLE.is_file(), reason="Iron-Proxy bundle not vendored")
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
-def test_the_real_bundle_keeps_the_windows_without_parking_or_counting(tmp_path, monkeypatch):
+@pytest.mark.parametrize("late", [False, True], ids=["signals_as_they_come", "signals_told_late"])
+def test_the_real_bundle_keeps_the_windows_without_parking_or_counting(tmp_path, monkeypatch, late):
     monkeypatch.delenv("IRONJARVIS_IRON_PROXY_BUNDLE", raising=False)
+    if late:
+        _signals_told_late(monkeypatch)
     monkeypatch.setattr("iron_jarvis.iron_proxy.service.START_TIMEOUT_S", 60.0)
     from iron_jarvis.iron_proxy import service as _svc_mod
 
     monkeypatch.setattr(_svc_mod, "HEALTH_TIMEOUT_S", 30.0)
     monkeypatch.setattr(_svc_mod._health, "__defaults__", (30.0,))
+    _no_coding_tools_on_path(monkeypatch)
     with TestClient(create_app(str(tmp_path / "home"))) as c:
         st = c.post("/iron-proxy/enable").json()["status"]
         assert st["running"] is True and st["error"] is None, json.dumps(st, default=str)
@@ -184,7 +242,8 @@ def test_the_real_bundle_keeps_the_windows_without_parking_or_counting(tmp_path,
         claude = c.post("/iron-proxy/accounts", json={"provider": "anthropic", "title": "C"}).json()
         codex = c.post("/iron-proxy/accounts", json={"provider": "openai", "title": "X"}).json()
         client = svc.client()
-        before = client.states()
+        ids = (claude["id"], codex["id"])
+        before = _settled_states(client, ids)
         # Exactly what a read hands Iron-Proxy (the parsers' own outputs).
         headers = U.claude_headers({"rate_limits": {
             "five_hour": {"utilization": 42, "resets_at": "2100-01-01T00:00:00Z"},

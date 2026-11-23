@@ -966,10 +966,15 @@ class AntigravityDriver(AcpDriver):
         return super().prepare_answer(ask, decision, message, answers)
 
     # -- the user's side ----------------------------------------------------------
-    def answered(self, ask: Ask, decision: str) -> None:
-        self._asking.discard(ask.native)
+    def answering(self, ask: Ask, decision: str) -> None:
+        # X-4: noted before the write — Antigravity ends its reply on a Deny at
+        # once, and on a busy runner that end was read before the write had
+        # returned (the reply then ended without saying the Deny ended it).
         if ask.kind == "approval" and decision == "deny" and not self._interrupting:
             self._declined = True
+
+    def answered(self, ask: Ask, decision: str) -> None:
+        self._asking.discard(ask.native)
 
     def turn_started(self) -> None:
         self._declined = False

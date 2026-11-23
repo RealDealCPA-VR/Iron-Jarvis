@@ -501,9 +501,19 @@ class AcpDriver(Driver):
         return "failed"
 
     async def answer(self, ask: Ask, decision: str, message: str, answers: Any) -> str:
-        await self.write(self.prepare_answer(ask, decision, message, answers))
+        payload = self.prepare_answer(ask, decision, message, answers)
+        self.answering(ask, decision)
+        await self.write(payload)
         self.answered(ask, decision)
         return decision
+
+    def answering(self, ask: Ask, decision: str) -> None:
+        """X-4: the answer is about to be written (``service.answer`` calls
+        this before the write, :meth:`answered` after it). Whatever the tool's
+        reaction to the answer is read against is noted HERE: the tool reads
+        the answer and can answer at once, and its frames are read on their
+        own thread, so they can reach the loop before the write has returned.
+        Nothing by default."""
 
     def answered(self, ask: Ask, decision: str) -> None:
         """Nothing to keep: the tool's own session-wide allow lives in the tool."""
