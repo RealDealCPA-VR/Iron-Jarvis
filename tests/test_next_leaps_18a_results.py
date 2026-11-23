@@ -374,6 +374,74 @@ def test_an_unreadable_store_names_its_kind_and_makes_no_zeros(desk, monkeypatch
     assert named == ["Results of changes you accepted (skills)"], named
 
 
+def test_a_store_that_fails_after_its_results_exist_holds_each_one_back(desk, monkeypatch):
+    """The stores read at one count and not at the next. A result whose
+    kind's store could not be read was never looked at (its own record was
+    not even tried, so only the store names it): a waiting one says it was
+    held back, one with numbers says when they were counted. A settled one,
+    whose numbers no longer move, reads as it was."""
+    waiting = _accept_coach(desk)
+    ready = _approve_skill(desk, "weekly-report")
+    for i in range(7):
+        _use(desk, "weekly-report", ACCEPTED_AT + timedelta(hours=3 * (i + 1)), ok=i != 3)
+    long_ago = ACCEPTED_AT - timedelta(days=20)
+    settled = _approve_skill(desk, "old-report", at=long_ago)
+    for i in range(6):
+        _use(desk, "old-report", long_ago + timedelta(hours=3 * (i + 1)), ok=True)
+
+    # The first count reads every store; only the agent's own record fails,
+    # so the coach result is made and waits.
+    first = ACCEPTED_AT + timedelta(days=3)
+    monkeypatch.setattr(R, "coach_outcomes", _boom)
+    out = R.refresh(desk.engine, now=first)
+    assert out["unreadable"] == ["coach"] and out["not_read"] == [f"coach:{waiting}"], out
+    monkeypatch.undo()
+    assert _result(desk, f"coach:{waiting}", first)["state"] == M.WAITING
+    assert _result(desk, f"skill:{ready}", first)["state"] == M.READY
+    with session_scope(desk.engine) as db:
+        assert json.loads(db.get(ChangeResultRecord, f"skill:{settled}").after_json)["final"] is True
+
+    # The next count cannot read the coach store nor the skill store.
+    stores = tuple((kinds, reader if kinds == (R.KIND_HABIT,) else _boom) for kinds, reader in R.STORES)
+    monkeypatch.setattr(R, "STORES", stores)
+    second = ACCEPTED_AT + timedelta(days=5)
+    out = R.refresh(desk.engine, now=second)
+    assert out["unreadable"] == ["coach", "skill", "skill_refine"] and out["not_read"] == [], out
+    check = R.last_check(desk.engine)
+    assert check["not_read"] == [] and check["stores"] == ["coach", "skill", "skill_refine"], check
+
+    got = _result(desk, f"coach:{waiting}", second)
+    assert got["words"] == R.NOT_READ_YET.format(day=M.day_words(second, second)), got["words"]
+    assert got["words"] != R.NOT_MEASURED_YET
+    got = _result(desk, f"skill:{ready}", second)
+    assert got["words"] == ("Used in 7 tasks since you accepted it on 12 March; 6 ended well."
+                            + R.NOT_READ_SINCE.format(day=M.day_words(first, second))), got["words"]
+    got = _result(desk, f"skill:{settled}", second)
+    assert got["words"] == (f"Used in 6 tasks in the two weeks after you accepted it on "
+                            f"{M.day_words(long_ago, second)}; 6 ended well."), got["words"]
+
+
+def test_a_last_count_that_cannot_be_read_is_named(desk, monkeypatch):
+    """The record of the last count itself cannot be read: Improvements and
+    chat name the part, never a page that looks as if nothing went wrong,
+    and the results still show."""
+    from iron_jarvis.inbox import tools as IT
+
+    pid = _accept_coach(desk, at=_recent(3))
+    assert R.refresh(desk.engine)["unreadable"] == []
+    monkeypatch.setattr(R, "last_check", _boom)
+
+    body = desk.client.get("/improvements").json()
+    named = [u for u in body["unreadable"] if u["kind"] == "results"]
+    assert named == [{"kind": "results", "label": R.LABEL}], body["unreadable"]
+    assert [r["id"] for r in body["results"]] == [f"coach:{pid}"]
+
+    said = asyncio.run(desk.platform.registry.get(IT.RESULTS).execute({}, SimpleNamespace()))
+    assert said.ok, said.error
+    assert said.data["unreadable"] == [R.LABEL], said.data
+    assert IT.RESULTS_NOT_READ.format(R.LABEL) in said.output, said.output
+
+
 def test_a_record_that_cannot_be_read_leaves_no_numbers(desk, monkeypatch):
     pid = _accept_coach(desk)
     _ten(desk, ACCEPTED_AT - timedelta(days=6), good=6)

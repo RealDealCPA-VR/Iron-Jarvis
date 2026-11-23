@@ -59,6 +59,7 @@ vi.mock("next/link", () => ({
 import type React from "react";
 import { ImprovementsInbox } from "@/components/improvements/ImprovementsInbox";
 import { RESULTS_MAX, RESULTS_TITLE, decodeInbox, decodeResults } from "@/lib/improvements";
+import { loopWords } from "@/lib/loopWords";
 
 const IDEA = "Since you accepted this on 12 March, research finished 9 of 10 tasks without help. Before, it was 6 of 10.";
 const NOT_YET = "Not enough work yet: 3 of 5 tasks since you accepted this on 2 April.";
@@ -173,5 +174,15 @@ describe("decodeResults", () => {
   it("keeps at most thirty, and an older daemon's answer has none", () => {
     expect(decodeResults(Array.from({ length: 40 }, (_, i) => result(`coach:${i}`)))).toHaveLength(RESULTS_MAX);
     expect(decodeInbox({ items: [], groups: [], total: 0, unreadable: [] }).results).toEqual([]);
+  });
+});
+
+describe("the daily count's health row", () => {
+  it("says some results are not counted, never that none are", () => {
+    // The pass fails its row when one kind or one change could not be read
+    // while every other result is counted.
+    const w = loopWords("change_results");
+    expect(w.problem).toBe("Some results of changes you accepted aren't being counted");
+    expect(w.href).toBe("/improvements");
   });
 });

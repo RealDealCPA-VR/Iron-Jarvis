@@ -145,10 +145,12 @@ const ROWS: Readonly<Record<string, Row>> = {
     href: "/improvements",
   },
   // 18-a: once a day, the results of the changes you accepted are counted
-  // from the records (no model) and shown on Improvements.
+  // from the records (no model) and shown on Improvements. The pass fails
+  // its health row when ONE kind or one change could not be read, while
+  // the rest are counted: "Some", never a row that says none are.
   change_results: {
     label: "Results of changes you accepted",
-    problem: "The results of changes you accepted aren't being counted",
+    problem: "Some results of changes you accepted aren't being counted",
     href: "/improvements",
   },
   // v1.499.0: the pass that notices names in your folder names that may be clients.
