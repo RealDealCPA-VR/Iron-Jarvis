@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.566.0
+
+**Changes you accepted show their result.** When you accept a change from **Improvements**, Iron Jarvis now counts how the work went before and after it, from its own records, and shows the result under the waiting suggestions, in **Results of changes you accepted**.
+
 ## v1.565.1
 
 **Two changes at once in Build › Code wait for each other.** Two small fixes for moments when two things change the same session or the same files at once.
@@ -77,7 +81,3 @@
 ## v1.550.0
 
 **The Timeline shows the models that did the work.** A coding session's **Timeline** tab now opens on the models that did the reply, each one a card, joined by arrows where one handed work to another.
-
-## v1.549.0
-
-**Press a figure to see where it came from.** When a reply is about a file you gave Iron Jarvis or asked it to read (a PDF, a Word file, a text or CSV file, or a saved spreadsheet), the figures in the reply are now links.

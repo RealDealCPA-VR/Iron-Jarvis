@@ -148,10 +148,10 @@ function runs.
 | `sandbox` | tools | 9 | **11**: agents, daemon, harness, hosted, iron_proxy, mcp, platform, providers, repl, scheduling, tools | core, tools | detections, git, harness |
 | `learning` | memory | 7 | **10**: coach, daemon, improvement, inbox, memory, onboarding, platform, profile, settings, workmap | core, tools | agents, detections, history, memory, profile, settings, workmap |
 | `comm` | messaging | 15 | **9**: browser, daemon, onboarding, peers, platform, providers, reflex, settings, workflows | core, tools | agents, daemon, detections, documents, harness, providers, scheduling, workflows |
+| `eval` | providers | 10 | **9**: agents, daemon, goals, harness, harness_bench, improve, platform, providers, tools | core, providers | daemon, harness, tools |
 | `terminals` | build | 18 | **9**: daemon, harness_bench, hosted, mcp, onboarding, platform, profile, providers, tools | browser, core, detections, hosted, iron_proxy, providers | connectors, daemon |
 | `workmap` | memory | 22 | **9**: agents, daemon, inbox, learning, mcpserver, memory, platform, search, settings | core, tools | agents, daemon, detections, documents, harness, history, hosted, iron_proxy, learning, mcpserver, projects, providers |
 | `browser` | browser | 19 | **8**: daemon, hosted, mcpserver, onboarding, platform, providers, terminals, tools | computeruse, core, providers, tools | comm, daemon, detections, harness, skills |
-| `eval` | providers | 10 | **8**: agents, daemon, goals, harness, harness_bench, platform, providers, tools | core, providers | daemon, harness, tools |
 | `projects` | memory | 7 | **8**: agents, daemon, harness, hosted, mcp, mcpserver, scheduling, workmap | core | agents, assignments, harness, hosted, providers, tools |
 | `scheduling` | automations | 7 | **8**: agents, comm, daemon, improve, platform, sentinels, settings, tools | core, tools | agents, projects, sandbox, settings |
 | `skills` | memory | 13 | **8**: agents, brain, browser, daemon, improve, inbox, platform, tools | core, improvement, tools | agents, context, harness, providers, settings |
@@ -197,7 +197,7 @@ function runs.
 | `connections` | connections | 7 | **2**: daemon, platform | core | providers |
 | `excel_worker` | documents | 1 | **2**: daemon, documents | none | none |
 | `filesearch` | documents | 4 | **2**: daemon, platform | core, tools | documents |
-| `improve` | memory | 4 | **2**: daemon, inbox | core | agents, coach, daemon, harness, improvement, iron_proxy, motivation, providers, scheduling, skills, tools |
+| `improve` | memory | 6 | **2**: daemon, inbox | core | agents, coach, daemon, eval, harness, improvement, iron_proxy, motivation, providers, scheduling, skills, tools |
 | `onboarding` | dashboard | 4 | **2**: daemon, tools | core | __init__, browser, comm, connectors, daemon, documents, fleet, guide, harness, learning, maintenance, mcp, mcpserver, providers, terminals, voice |
 | `secrets` | tools | 4 | **2**: core, platform | core, tools | none |
 | `templates` | agents | 1 | **2**: daemon, platform | core | none |
