@@ -1,6 +1,6 @@
 // Iron Jarvis — preload (runs in an isolated context with limited Node access).
 // Exposes a tiny, read-only surface to the dashboard renderer.
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 // --- Per-install auth token injection (primary path, zero 401 race) ---------
 // main.js generates a per-install token, passes it to the daemon as
@@ -130,6 +130,16 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // Lets the dashboard detect it's running inside the desktop shell.
   isDesktop: true,
   version: process.versions.electron,
+  // Idea 33-a: where a file dropped or picked in the window is on this PC,
+  // so a recording too large to upload is read where it is. "" when the
+  // file has no path (pasted, made in the page). Reads nothing itself.
+  pathForFile: (file) => {
+    try {
+      return (webUtils && webUtils.getPathForFile(file)) || "";
+    } catch {
+      return "";
+    }
+  },
   // Native clipboard via the main process — the reliable path for terminal
   // paste/copy inside Electron (navigator.clipboard can be permission-gated).
   clipboardReadText: () => ipcRenderer.invoke("clipboard:read"),

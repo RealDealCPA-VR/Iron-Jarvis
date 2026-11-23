@@ -324,6 +324,9 @@ def default_permissions() -> dict[str, str]:
         # card's Confirm is the answer), and its one Undo removes the files.
         "stack_plan": "allow",
         "stack_apply": "ask",
+        # Idea 33-a: a recording handed to a chat becomes a transcript and
+        # notes — NEW files in the chat's folder, journaled, one Undo.
+        "transcribe_recording": "allow",
         # Confirmed redaction: the scan is read-only; redact_pii writes only a
         # NEW .redacted copy (never the source) and is TX-01 undoable.
         "redact_scan": "allow",
@@ -1030,6 +1033,13 @@ class Config(BaseModel):
     # <home>/vosk-model. When a model is found, /voice/status prefers it and the
     # client streams over the /voice/stream WebSocket.
     voice_vosk_model_path: str = ""
+    #: Idea 33-a: who turns a RECORDING handed to a chat into text.
+    #: "same_as_voice" (default): the speech server chosen for voice when it
+    #: is on this network, else the offline model on this PC. "this_pc": only
+    #: that model. "voice_service": the speech service chosen for voice,
+    #: wherever it is (OpenAI bills per minute). A Local only chat never
+    #: sends a recording off the network (``documents/recording``).
+    recording_transcriber: str = "same_as_voice"
     # User-added REST integrations (id/name/description); re-registered at boot so
     # they survive a restart. Their per-instance config (base_url, auth secret
     # NAME) lives in the IntegrationRecord table; the token lives in the vault.
@@ -1308,6 +1318,14 @@ class Config(BaseModel):
         if v not in ("low", "full"):
             raise ValueError("comm_trust must be low | full")
         return v
+
+    @field_validator("recording_transcriber", mode="before")
+    @classmethod
+    def _clean_recording_transcriber(cls, v: Any) -> str:
+        # 33-a: TOLERANT, like phone_voice_service: a hand-edited value that
+        # is not one of the three reads as the default (local first).
+        text = str(v or "").strip().lower()
+        return text if text in ("same_as_voice", "this_pc", "voice_service") else "same_as_voice"
 
     @field_validator("phone_voice_service", mode="before")
     @classmethod

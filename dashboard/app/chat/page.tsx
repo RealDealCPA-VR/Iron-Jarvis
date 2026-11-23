@@ -246,6 +246,7 @@ import {
   type ConfigCard,
 } from "@/lib/configCards";
 import type { StackScope } from "@/lib/stackPlan";
+import { desktopPathOf, isRecordingName } from "@/lib/recording";
 import {
   appConnectIds,
   connectedOf,
@@ -7716,18 +7717,30 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       return;
     }
     const accepted: File[] = [];
+    // Idea 33-a: a recording too large to upload is read WHERE IT IS on this
+    // PC (the desktop app knows its path), never copied.
+    const inPlace: UploadedFile[] = [];
     for (const f of files) {
       if (f.size > MAX_FILE_BYTES) {
-        setNotice(`${f.name} is too large (max 20 MB).`);
+        const where = isRecordingName(f.name) ? desktopPathOf(f) : "";
+        if (!where) {
+          setNotice(`${f.name} is too large (max 20 MB).`);
+          continue;
+        }
+        if (accepted.length + inPlace.length >= room) {
+          setNotice(`Up to ${MAX_ATTACHMENTS} files per message.`);
+          break;
+        }
+        inPlace.push({ name: f.name, path: where, bytes: f.size });
         continue;
       }
-      if (accepted.length >= room) {
+      if (accepted.length + inPlace.length >= room) {
         setNotice(`Up to ${MAX_ATTACHMENTS} files per message.`);
         break;
       }
       accepted.push(f);
     }
-    if (accepted.length === 0) return;
+    if (accepted.length === 0 && inPlace.length === 0) return;
     const convGen = convGenRef.current;
     setUploading(true);
     uploadingRef.current = true;
@@ -7764,7 +7777,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // The user left this conversation while the files went up: they are not
       // this new conversation's files (and a send queued behind them is gone).
       if (convGen !== convGenRef.current) return;
-      const ok = uploaded.filter((u): u is UploadedFile => !!u);
+      // A recording read in place rides with the uploads: the chat gets its
+      // folder for the transcript, and the recording itself stays put.
+      const ok = [...uploaded.filter((u): u is UploadedFile => !!u), ...inPlace];
       if (ok.length) {
         const placed = await placeInWorkfolder(ok);
         if (convGen !== convGenRef.current) return;

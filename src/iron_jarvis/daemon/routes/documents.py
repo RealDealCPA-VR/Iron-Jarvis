@@ -1220,3 +1220,8 @@ def register(app: FastAPI, d) -> None:
     from . import stack as _stack_routes
 
     _stack_routes.register(app, d)
+
+    # Idea 33-a: a recording's card — its own module.
+    from . import recording as _recording_routes
+
+    _recording_routes.register(app, d)

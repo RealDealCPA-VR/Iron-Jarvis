@@ -8,9 +8,11 @@
  *   { kind: "secret", name, label, help, why, request_id }
  *   { kind: "rehearsal", rehearsal_id, subject_kind, name } (leap 06-a)
  *   { kind: "stack", plan_id, documents, … }  (v1.564.0: lib/stackPlan)
+ *   { kind: "recording", recording_id, status, … }  (idea 33-a: lib/recording)
  * A secret card never carries a value — the model never had one.
  */
 
+import { decodeRecordingCard, type RecordingCard } from "./recording";
 import { decodeStackCard, type StackCard } from "./stackPlan";
 
 export interface ConfigChangeCard {
@@ -104,7 +106,8 @@ export type ConfigCard =
   | SecretRequestCard
   | ModelDownloadCard
   | RehearsalCard
-  | StackCard;
+  | StackCard
+  | RecordingCard;
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
@@ -168,6 +171,10 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
       // v1.564.0 (idea 31-a): a sorting plan's card, whitelisted by its own decoder.
       const stack = decodeStackCard(r);
       if (stack) out.push(stack);
+    } else if (r.kind === "recording") {
+      // Idea 33-a: a recording's card, whitelisted by its own decoder.
+      const rec = decodeRecordingCard(r);
+      if (rec) out.push(rec);
     }
   }
   return out;
@@ -260,6 +267,7 @@ export function cardId(c: ConfigCard): string {
   if (c.kind === "download") return `download:${c.id}`;
   if (c.kind === "rehearsal") return `rehearsal:${c.rehearsal_id}`;
   if (c.kind === "stack") return `stack:${c.plan_id}`;
+  if (c.kind === "recording") return `recording:${c.recording_id}`;
   return c.kind === "change" ? `change:${c.change_id}` : `secret:${c.request_id}`;
 }
 

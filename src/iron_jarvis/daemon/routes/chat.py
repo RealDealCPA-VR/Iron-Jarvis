@@ -3790,6 +3790,15 @@ def register(app: FastAPI, d) -> None:
                 media_homed = await jobs.home_turn(turn_id, tid)
             except Exception:  # noqa: BLE001 — the link itself already landed
                 log.warning("media: homing turn %s failed", turn_id, exc_info=True)
+        # Idea 33-a: a recording this turn handed in reports to the chat now
+        # named (one that already ended reports here).
+        try:
+            from ...documents import recording_jobs as _rec_jobs
+            from .recording import env_of as _rec_env
+
+            await _rec_jobs.home_turn(_rec_env(d), turn_id, tid)
+        except Exception:  # noqa: BLE001 — the link itself already landed
+            log.warning("recording: homing turn %s failed", turn_id, exc_info=True)
         return {"ok": True, "linked": linked, "media_homed": media_homed, "reports_linked": reports_linked}
 
     @app.get("/chat/turns/running")

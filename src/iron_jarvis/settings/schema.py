@@ -551,6 +551,19 @@ SETTINGS: tuple[SettingDef, ...] = (
       options=(("ask", "Ask me first (default)"), ("yes", "Use the speech service chosen above"),
                ("no", "Only on this PC")),
       aliases=("phone voice notes", "voice messages from my phone", "transcribe voice notes")),
+    # Idea 33-a: a recording handed to a chat (a meeting, a voice memo) is
+    # turned into text by this choice, local first; changing it has Undo.
+    S("recording_transcriber", "Recordings: who turns speech into text", "models", "enum",
+      "A recording you hand Jarvis in a chat becomes a transcript and notes. By default it is turned "
+      "into text by your speech server when it is on your network, else by the offline speech model on "
+      "this PC. \"The speech service chosen for voice\" sends the recording to that service wherever it "
+      "is; OpenAI bills per minute. A Local only chat never sends a recording off your network.",
+      tier="ask", section="Voice",
+      options=(("same_as_voice", "This PC or your speech server on your network (default)"),
+               ("this_pc", "Only the offline model on this PC"),
+               ("voice_service", "The speech service chosen for voice")),
+      aliases=("recordings", "meeting recordings", "transcribe recordings", "transcript of a meeting",
+               "voice memos")),
     # ------------------------------------------------------------ connections
     S("iron_proxy_enabled", "Use several accounts", "connections", "bool",
       "Pick which of your signed-in Claude, Codex or Grok accounts each request uses. "

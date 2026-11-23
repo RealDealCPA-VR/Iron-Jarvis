@@ -3695,6 +3695,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'what did you learn about my tastes',
         'tell me the lessons you learned about me',
     ),
+    'recording_transcriber': (
+        'keep my meeting recordings on this computer',
+        'who turns my recordings into text',
+        'use my speech server for recordings',
+        'send recordings to the voice service I picked',
+        'transcribe recordings only on this PC',
+        'where do my voice memos get written out',
+        'stop sending recordings to openai',
+        'choose how recordings become a transcript',
+    ),
     'redact_pii': (
         'remove the private info from this document',
         'make a copy with personal details blacked out',
@@ -4314,6 +4324,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'go over each document and pull out names',
         'combine the results from all the files',
         'do this for every item in the list',
+    ),
+    'transcribe_recording': (
+        'transcribe this meeting recording',
+        'what did we decide in this recording',
+        'turn this voice memo into text',
+        'write up notes from this call',
+        'who owes what from this meeting',
+        'give me the transcript of this audio',
+        'what was said in this video',
+        'make minutes from this recording',
     ),
     'update_channel': (
         'Get updates as soon as they come out',

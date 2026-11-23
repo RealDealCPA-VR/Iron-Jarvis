@@ -5853,6 +5853,46 @@ def stack_turn(d, body) -> bool:
         return False
 
 
+def recording_turn(d, body) -> bool:
+    """A recording (audio, or a video's sound) is handed to this turn, now or
+    earlier in the chat (idea 33-a): Auto tools is on and
+    ``transcribe_recording`` is registered and not set to Never run. ONE
+    answer for both lanes: ``_resolve_armed_tools`` arms the tool from it BY
+    THE FILE'S TYPE, and ``_prepare_attachments`` tells the model the
+    recording's words are not in the message. Not through
+    ``attachment_rag.live_verbs_for``'s read verbs: those arm on type alone
+    because each is READONLY (asserted), and this tool makes two new files.
+    Never raises."""
+    try:
+        if not getattr(body, "auto_tools", False):
+            return False
+        platform = getattr(d, "platform", None)
+        tool = platform.registry.get("transcribe_recording") if platform is not None else None
+        if tool is None:
+            return False
+        perms = getattr(platform, "permissions", None)
+        if perms is not None and getattr(perms.mode_for(tool.perm_key()), "value", "deny") == "deny":
+            return False
+        from ..documents.recording import is_recording
+
+        files = [str(a) for a in (body.attachments or [])] + [str(a) for a in _thread_file_paths(body)]
+        return any(is_recording(f) for f in files)
+    except Exception:  # noqa: BLE001 — a fault arms nothing and changes nothing
+        return False
+
+
+#: Idea 33-a: what the model is told about an attached recording.
+RECORDING_ARMED_NOTE = (
+    "A recording: its words are not in this message. Call transcribe_recording with this path to turn it "
+    "into a transcript with the time of each line and checked notes, on this PC; do not try to read it "
+    "with read_document, and do not guess what was said."
+)
+RECORDING_NOT_ARMED_NOTE = (
+    "A recording: its words are not in this message, and turning it into text needs Auto tools on in this "
+    "chat (or transcribe_recording picked from the + menu). Tell the user that; do not guess what was said."
+)
+
+
 def _resolve_armed_tools(
     d, body, max_tools: "int | None" = None, *, apps_on: "list[str] | tuple[str, ...] | None" = None
 ) -> "ArmedSelection":
@@ -6241,6 +6281,18 @@ def _resolve_armed_tools(
         and stack_turn(d, body)
     ):
         auto.append("stack_plan")
+    # A RECORDING HANDED TO THE CHAT, IN ITS OWN PLACE (idea 33-a). An
+    # attached audio or video file arms `transcribe_recording` by its TYPE
+    # (`recording_turn`): allow tier, REVERSIBLE (two new files in the chat's
+    # folder, one Undo). Outside the cap and the envelope ceiling for
+    # `stack_plan`'s reason: it is the one tool that can hear the file, and
+    # the attachment block tells the model to call it.
+    if (
+        "transcribe_recording" not in explicit
+        and "transcribe_recording" not in auto
+        and recording_turn(d, body)
+    ):
+        auto.append("transcribe_recording")
     # LIVE EXCEL (v1.466.0): the READ tool for a workbook the user has open in
     # Excel, in its own place like the calculator and under the same ceiling.
     # `excel_seen()` never waits (a remembered answer, refreshed in the
@@ -7492,6 +7544,12 @@ def config_cards_from_result(name: str, result: Any) -> list[dict[str, Any]]:
         sc = data.get("stack_plan") if name == "stack_plan" else None
         if isinstance(sc, dict) and sc.get("kind") == "stack" and sc.get("plan_id"):
             out.append(dict(sc))
+        # Idea 33-a: a recording's card (how far it is, then the notes with
+        # their times), built by the job from its own record; it reads the
+        # job again while it is on screen.
+        rc = data.get("recording") if name == "transcribe_recording" else None
+        if isinstance(rc, dict) and rc.get("kind") == "recording" and rc.get("recording_id"):
+            out.append(dict(rc))
     except Exception:  # noqa: BLE001 — a card never breaks a turn
         return out
     return out
@@ -11280,6 +11338,9 @@ async def _prepare_attachments(
     # scanned pages are not sent to a vision model here first (the same
     # answer `_resolve_armed_tools` arms from).
     _sorting = stack_turn(d, body)
+    # Idea 33-a: a recording is armed by its type (the same answer
+    # `_resolve_armed_tools` arms from), or picked from the "+" menu.
+    _hearing = recording_turn(d, body) or "transcribe_recording" in set(getattr(body, "tools", None) or ())
 
     # WHICH CHANGE VERBS THIS TURN MAY NAME — the same question, asked of the
     # same function with the same arguments, that `_resolve_armed_tools` asks
@@ -11426,6 +11487,16 @@ async def _prepare_attachments(
         if not await asyncio.to_thread(_attachable_file, p):
             continue
         suffix = p.suffix.lower()
+        from ..documents.recording import is_recording as _is_recording
+
+        if _is_recording(p):
+            # Idea 33-a: a recording's words are not text any reader can
+            # give; the tool that hears it is named (or why it cannot run).
+            parts.append(
+                f"\n\n## Attached recording: {p.name}\nPath: {p}\n("
+                + (RECORDING_ARMED_NOTE if _hearing else RECORDING_NOT_ARMED_NOTE) + ")"
+            )
+            continue
         if suffix in _ATTACH_IMAGE_TYPES:
             import base64 as _b64
 

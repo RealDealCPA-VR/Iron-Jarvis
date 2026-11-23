@@ -558,6 +558,8 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # v1.564.0 (idea 31-a): a scanned pile becomes named documents.
     "stack_plan": ("made a plan to sort a scan", "sorting plan"),
     "stack_apply": ("saved the documents sorted from a scan", "save of sorted documents"),
+    # Idea 33-a: a recording becomes a transcript and checked notes.
+    "transcribe_recording": ("made a transcript and notes from a recording", "recording transcript"),
     "excel_live_look": ("looked at the workbook open in Excel", "look at Excel"),
     "excel_live_edit": ("changed the workbook open in Excel", "change in Excel"),
     "excel_sheet_spec": ("captured a sheet's layout", "sheet layout capture"),

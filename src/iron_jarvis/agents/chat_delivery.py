@@ -384,6 +384,9 @@ REPORT_KINDS: tuple[str, ...] = (
     "night",
     "paired_computer",
     "review",
+    # Idea 33-a: a recording handed to a chat, turned into text and notes
+    # after the reply (``documents/recording_jobs``).
+    "recording",
 )
 
 #: How each kind is said in a report's first words ("From your schedule ...")
@@ -400,6 +403,7 @@ REPORT_KIND_WORDS: dict[str, str] = {
     "night": "night task",
     "paired_computer": "other computer",
     "review": "night review",
+    "recording": "recording",
 }
 
 #: Where each kind's record is (the report's "Open"), unless the report names one.

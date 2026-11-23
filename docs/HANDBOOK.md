@@ -2044,6 +2044,64 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Hand Jarvis a recording (v1.572.0)
+
+Drop a meeting recording, a call or a voice memo into a chat (an .m4a, .mp3,
+.wav, .ogg or another sound file, or a video, whose sound is used) and ask
+what you want to know, such as "what did we decide?". You get the
+transcript, the decisions and the open items, each with the time it was
+said, saved as two new files in the chat's folder: **meeting
+transcript.md** and **meeting notes.md**.
+
+- **The words are turned into text on this PC** by the small offline speech
+  model that comes with Iron Jarvis. A card under the reply says how far it
+  is (**Turning speech into text on this PC: 12 of 40 minutes**). A voice
+  memo is usually done before the reply; a long meeting keeps going after
+  it, and when it is done it comes back to the chat as one message, **From
+  your recording "meeting.m4a".**, with the notes and both files.
+- **The notes** list the **Decisions**, the **Things you owe** and the
+  **Things they owe**, each with its time (**[12:31]**). A model writes them
+  from the transcript, and then Iron Jarvis checks every item itself: its
+  time must be in the recording, and the words it quotes must have been said
+  within a minute of that time. An item that fails is left out, and the card
+  says how many were (**2 items were left out: their words are not in the
+  recording near the time given.**).
+- **Who writes the notes.** A model on this PC or your network, when you have
+  one, with no question. Otherwise the notes would go to your chat's model
+  in the cloud, so the card asks first, once in each chat: **Write the notes
+  with Claude? The transcript (812 words) is sent to it. Nothing has been
+  sent yet.** Only that press sends it, to that model only. In a Local only
+  chat the transcript never leaves this PC or your network.
+- **Undo** (on the reply's list of changed files, or in Activity) removes
+  both files, as long as you have not changed them since. A recording still
+  being heard is stopped. The recording itself is never changed.
+- Handing the same recording again in the same folder makes nothing new: you
+  get the transcript and notes already made.
+
+**Who turns speech into text** is a setting: **Recordings: who turns speech
+into text** (Settings, Voice). The default uses your speech server when it is
+on your network, or else the offline model on this PC. **Only the offline
+model on this PC** never uses anything else. **The speech service chosen for
+voice** sends the recording to the service you picked for dictation wherever
+it is, a minute at a time (OpenAI bills per minute). Choosing OpenAI for
+dictation alone never sends a recording to it. If what you picked cannot be
+used (it is off your network in a Local only chat, or the offline model is
+missing), the reply says so by name and nothing is sent anywhere: Iron Jarvis
+never switches to another service on its own. You can ask in chat too:
+"keep my recordings on this PC".
+
+**Good to know.** The small offline model hears less well than a person and
+cannot tell voices apart, so who owes what is read from the words ("I will
+send the plan") and the card says so. Up to the first 2 hours of a recording
+are turned into text; a longer one says how much was. A rare file type that
+this PC cannot read is said by its type; saving it again as .m4a or .mp3
+helps. In the Iron Jarvis app a recording larger than 20 MB is read where
+it is on this PC, never copied; in a web browser a file over 20 MB cannot be
+attached. If Iron Jarvis restarts while a recording is
+being heard, it starts it again once by itself. From your phone, a recording
+of up to a few minutes is answered there; the card and the question about
+the notes are only in Iron Jarvis on this PC.
+
 ## Auto in chat: tools Jarvis looks up no longer ask every time (v1.575.0)
 
 In a chat, Iron Jarvis looks up which of its tools fit your message and

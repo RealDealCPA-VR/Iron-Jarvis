@@ -142,6 +142,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // v1.564.0 (idea 31-a; twin: agents/mission.py _RUN_TOOL_WORDS).
   stack_plan: { did: "Made a plan to sort a scan", noun: "sorting plan" },
   stack_apply: { did: "Saved the documents sorted from a scan", noun: "save of sorted documents", nouns: "saves of sorted documents" },
+  // Idea 33-a (twin: agents/mission.py _RUN_TOOL_WORDS).
+  transcribe_recording: { did: "Made a transcript and notes from a recording", noun: "recording transcript" },
   code_handoff_start: { did: "Handed work to another coding tool", noun: "hand-off to another coding tool" },
   code_handoff_check: { did: "Checked on a helper coding tool", noun: "helper check" },
   code_handoff_stop: { did: "Stopped a helper coding tool", noun: "helper stop" },

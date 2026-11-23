@@ -1479,6 +1479,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
     from .excel_tools import excel_tools
     from .office_tools import office_tools
     from .pdf_tools import pdf_page_tools
+    from .recording_tools import recording_tools
     from .stack_tools import stack_tools
 
     return [
@@ -1499,6 +1500,9 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         # v1.564.0 (idea 31-a): a scanned pile becomes named documents — the
         # plan (read on this PC, shown on a card) and its writing (asks).
         *stack_tools(router_resolver),
+        # Idea 33-a: a recording becomes a transcript and checked notes,
+        # turned into text on this PC (new files in the chat's folder).
+        *recording_tools(router_resolver),
         # C-03/C-07/C-09 — docx_edit, compare_documents, pdf_form_fields,
         # pdf_form_fill. A tool that is not in THIS list is registered nowhere,
         # however complete its module is (the v1.218.0 lesson).
