@@ -412,7 +412,11 @@ def own_output(engine: Any, rule: Any, paths: list[str]) -> set[str]:
         return set()
 
 
-def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
+def file_rule_fire(
+    get_hub: Callable[[], Any],
+    get_loop: Callable[[], Any],
+    mark_seen: Callable[[str, list[dict]], None] | None = None,
+):
     """The callback a rule-mode watcher hands its settled files to
     (``SentinelService.rule_fire``). It runs on the WATCHER'S thread: each
     start is sent to the daemon's loop and waited for (bounded), so a file
@@ -426,13 +430,43 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
     and the next scan hands it again. It is NOT started again while that
     start runs (it waits); the first scan after it ends takes its answer —
     decided, or (it ended held, or failed) started again. Kept in memory
-    on the callback as ``under_way``: ``{(rule id, file): (start, when)}``."""
+    on the callback as ``under_way``: ``{(rule id, file): (start, when,
+    (time, size))}``. ``mark_seen`` (``SentinelService.mark_rule_seen``):
+    such a start that ENDS decided marks its files seen right then, on a
+    thread of its own (never on the loop), so a restart before the next
+    scan does not start them again. An ended start answers only for the
+    same file (the same time and size): a new file of the same name later
+    starts the rule as any new file does."""
     import concurrent.futures
     import threading
     import time
 
-    under_way: dict[tuple[str, str], tuple[Any, float]] = {}
+    under_way: dict[tuple[str, str], tuple[Any, float, tuple[Any, Any]]] = {}
     lock = threading.Lock()
+
+    def _stat(it: dict) -> tuple[Any, Any]:
+        return (it.get("mtime"), it.get("size"))
+
+    def _seen_when_it_ends(fut: Any, watcher_name: str, group_items: list[dict]) -> None:
+        """A start that outlasted the wait: once it ends decided, its files
+        are marked seen (off the loop: the done callback runs there)."""
+        if mark_seen is None or not watcher_name:
+            return
+
+        def _mark() -> None:
+            try:
+                mark_seen(watcher_name, group_items)
+            except Exception:  # noqa: BLE001 — not marked: the next scan takes its answer
+                log.warning("the files of a late start could not be marked seen", exc_info=True)
+
+        def _ended(f: Any) -> None:
+            try:
+                if _ended_decided(f):
+                    threading.Thread(target=_mark, name="rule-start-seen", daemon=True).start()
+            except Exception:  # noqa: BLE001 — never breaks the loop
+                log.warning("a late start's end could not be read", exc_info=True)
+
+        fut.add_done_callback(_ended)
 
     def _decided(fired: Any) -> bool:
         return not any(isinstance(f, dict) and f.get("held") for f in (fired or []))
@@ -470,7 +504,7 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
         todo: list[tuple[int, dict]] = []
         now = time.monotonic()
         with lock:
-            for key, (f, t) in list(under_way.items()):
+            for key, (f, t, _st) in list(under_way.items()):
                 if f.done() and now - t > UNDER_WAY_KEEP_S:
                     under_way.pop(key, None)
         for i, it in enumerate(items):
@@ -488,7 +522,7 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
             if prior is not None and not ended:
                 answers[i] = False  # its start is still under way: never twice
                 continue
-            if prior is not None and _ended_decided(prior[0]):
+            if prior is not None and prior[2] == _stat(it) and _ended_decided(prior[0]):
                 answers[i] = True  # it started meanwhile: decided now
                 continue
             todo.append((i, it))
@@ -506,7 +540,10 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
                 if fut is not None:
                     with lock:
                         for _i, it in group:
-                            under_way[(rule_id, _norm(str(it.get("path") or "")))] = (fut, time.monotonic())
+                            under_way[(rule_id, _norm(str(it.get("path") or "")))] = (
+                                fut, time.monotonic(), _stat(it),
+                            )
+                    _seen_when_it_ends(fut, str(getattr(watcher, "name", "") or ""), [it for _i, it in group])
                 log.warning("rule %s: a start took longer than %d s; its file waits for it",
                             rule_id, int(FILE_FIRE_TIMEOUT_S))
             except Exception:  # noqa: BLE001 — not reached: the files wait
@@ -517,6 +554,7 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
         return [answers.get(i, False) for i in range(len(items))]
 
     _fire.under_way = under_way  # type: ignore[attr-defined]
+    _fire.mark_seen = mark_seen  # type: ignore[attr-defined]
     return _fire
 
 

@@ -3041,7 +3041,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     platform.start_hub = reflex_router.start_hub
     if platform.sentinels is not None:
-        platform.sentinels.rule_fire = _starts.file_rule_fire(_current_hub, _current_loop)
+        platform.sentinels.rule_fire = _starts.file_rule_fire(
+            _current_hub, _current_loop, mark_seen=platform.sentinels.mark_rule_seen,
+        )
     platform.event_bus.add_handler(_starts.download_handler(_current_hub, _current_loop))
     app.state.command_interpreter = command_interpreter
     # v1.136.0 messaging surfaces: reachable for tests + diagnostics (the

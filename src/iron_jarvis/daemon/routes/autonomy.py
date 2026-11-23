@@ -250,8 +250,11 @@ def register(app: FastAPI, d) -> None:
 
         Mints SUGGEST-ONLY proposals for any noticed changes — never a session.
         Guarded by config.sentinels_enabled so a manual poke can't bypass opt-in.
+        Review (05-a): only the watchers that suggest — a rule's own watcher
+        is checked by the loop, which starts its rule; this answer (and the
+        page's sentence) is about suggestions only.
         """
         if not getattr(d.platform.config, "sentinels_enabled", False):
             return {"ran": False, "reason": "sentinels_disabled", "proposals": []}
-        created = d.platform.sentinels.poll_once(d.platform.intent)
+        created = d.platform.sentinels.poll_once(d.platform.intent, suggest_only=True)
         return {"ran": True, "proposals": [p.id for p in created]}

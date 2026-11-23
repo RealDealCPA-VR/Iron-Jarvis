@@ -74,6 +74,13 @@ class SentinelService:
         # A rule-mode watcher's scan reads each file's size too (an injected
         # ``scanner`` replaces both, for tests).
         self.rule_scanner: Scanner = scanner or stat_scanner
+        # Review (05-a): the rule watchers a sweep is scanning and starting
+        # right now. ``_lock`` covers one read or write; this covers a whole
+        # scan -> start -> mark seen, so a second sweep at the same time (a
+        # loop re-armed while its old sweep still runs) never reads a file
+        # whose start is being sent as new and starts it again.
+        self._rule_sweeps: set[str] = set()
+        self._rule_sweeps_lock = threading.Lock()
 
     # --- persistence helpers ---------------------------------------------
 
@@ -463,22 +470,36 @@ class SentinelService:
     def _poll_rule(self, rec: SentinelRecord, scanner: Scanner | None) -> int:
         """One scan of a rule-mode watcher: at most
         :data:`RULE_FIRES_PER_SCAN` settled files go to :attr:`rule_fire`;
-        those it decided are marked seen. Returns how many were decided."""
-        ready = self.check_rule(rec.name, scanner=scanner)
-        batch = ready[: self.RULE_FIRES_PER_SCAN]
-        fire = self.rule_fire
-        if not batch or fire is None:
-            return 0
-        try:
-            answers = list(fire(rec, batch) or [])
-        except Exception:  # noqa: BLE001 — nothing decided: they wait
-            log.warning("rule watcher %s could not hand on its files", rec.name, exc_info=True)
-            return 0
-        decided = [it for it, ok in zip(batch, answers) if ok]
-        self.mark_rule_seen(rec.name, decided)
-        return len(decided)
+        those it decided are marked seen. Returns how many were decided.
 
-    def poll_once(self, intent, *, scanner: Scanner | None = None, rules_only: bool = False) -> list:
+        Review (05-a): one sweep of a watcher at a time. A sweep that finds
+        another one scanning and starting this watcher leaves it to that one
+        (it would read the file being started as new and start it again)."""
+        with self._rule_sweeps_lock:
+            if rec.name in self._rule_sweeps:
+                return 0
+            self._rule_sweeps.add(rec.name)
+        try:
+            ready = self.check_rule(rec.name, scanner=scanner)
+            batch = ready[: self.RULE_FIRES_PER_SCAN]
+            fire = self.rule_fire
+            if not batch or fire is None:
+                return 0
+            try:
+                answers = list(fire(rec, batch) or [])
+            except Exception:  # noqa: BLE001 — nothing decided: they wait
+                log.warning("rule watcher %s could not hand on its files", rec.name, exc_info=True)
+                return 0
+            decided = [it for it, ok in zip(batch, answers) if ok]
+            self.mark_rule_seen(rec.name, decided)
+            return len(decided)
+        finally:
+            with self._rule_sweeps_lock:
+                self._rule_sweeps.discard(rec.name)
+
+    def poll_once(
+        self, intent, *, scanner: Scanner | None = None, rules_only: bool = False, suggest_only: bool = False,
+    ) -> list:
         """Check every enabled sentinel; mint one suggest-only proposal per match.
 
         Returns the list of created :class:`ProposalRecord`s (possibly empty).
@@ -490,12 +511,17 @@ class SentinelService:
         :attr:`rule_fire` (the rule it belongs to starts, inside its limits)
         and mints nothing. ``rules_only``: only those are checked (the loop
         runs for them while suggestion watchers are switched off).
+        ``suggest_only`` (review): only suggestion watchers are checked (the
+        page's "Check now": it says what it suggested, and a rule's folder is
+        the loop's to check).
         """
         created: list = []
         for rec in self.list():
             if not rec.enabled:
                 continue
             if getattr(rec, "mode", "suggest") == "rule":
+                if suggest_only:
+                    continue
                 try:
                     self._poll_rule(rec, scanner)
                 except Exception:  # noqa: BLE001 — keep sweeping the rest

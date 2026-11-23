@@ -29,6 +29,7 @@ const api = vi.hoisted(() => {
     posts: [] as { path: string; body: unknown }[],
     gets: [] as string[],
     responses: {} as Record<string, unknown>,
+    postResponses: {} as Record<string, unknown>,
     FakeApiError,
   };
 });
@@ -46,7 +47,7 @@ vi.mock("@/lib/api", () => ({
   },
   post: (path: string, body?: unknown) => {
     api.posts.push({ path, body });
-    return Promise.resolve({ ok: true });
+    return Promise.resolve(api.postResponses[path] ?? { ok: true });
   },
   patch: () => Promise.resolve({}),
   put: () => Promise.resolve({}),
@@ -88,6 +89,7 @@ afterEach(() => {
   api.posts = [];
   api.gets = [];
   api.responses = {};
+  api.postResponses = {};
 });
 
 const LINES = {
@@ -264,6 +266,32 @@ describe("the notice, the Always button, the watcher and search", () => {
     const off = screen.getByTestId("watchers-off-rules-on");
     expect(off.textContent).toContain("The folders your rules watch are still checked every few minutes.");
     expect(document.body.textContent).not.toContain("nothing is being watched");
+  });
+
+  it("Check now says a rule's folder is checked on its own, never that nothing happened there", async () => {
+    // Review (05-a): the button checks the watchers that suggest; the
+    // daemon leaves a rule's watcher to its loop.
+    const rows = [
+      {
+        id: "sentinel_1", name: "Rule: Sort intake", kind: "file", config: { path: "C:\\Users\\me\\Intake" },
+        task: "", agent_type: "builder", risk: "low", enabled: true, last_checked_at: null,
+        created_at: "2026-11-20T10:00:00Z", mode: "rule", rule_id: "reflex_1", rule_name: "Sort intake",
+      },
+    ];
+    api.responses["/sentinels"] = { enabled: true, sentinels: rows };
+    api.responses["/agents"] = { agents: [] };
+    api.responses["/agents/definitions*"] = { agents: [] };
+    api.postResponses["/sentinels/poll"] = { ran: true, proposals: [] };
+    render(<SentinelsPage />);
+    await screen.findByTestId("sentinel-starts-rule-sentinel_1");
+    const button = screen.getByRole("button", { name: /Check now/ });
+    expect(button.getAttribute("title")).toBe("Check the folders of the watchers that suggest now");
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "Checked — no changes noticed, nothing to suggest. The folders your rules watch are checked on their own every few minutes.",
+      ),
+    );
   });
 
   it("with no rule's watcher, watchers off still says nothing is watched", async () => {

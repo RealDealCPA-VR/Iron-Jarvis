@@ -434,7 +434,7 @@ def test_a_start_that_outlasts_the_watchers_wait_starts_its_file_once(desk, tmp_
     def let_go(n: int, *, held: bool = False) -> None:
         hub.held = held
         loop.call_soon_threadsafe(hub.gates[n].set)
-        concurrent.futures.wait([f for f, _t in fire.under_way.values()], timeout=30)
+        concurrent.futures.wait([v[0] for v in fire.under_way.values()], timeout=30)
 
     try:
         (folder / "a.txt").write_text("a")
@@ -467,6 +467,154 @@ def test_a_start_that_outlasts_the_watchers_wait_starts_its_file_once(desk, tmp_
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=30)
         loop.close()
+
+
+@pytest.fixture()
+def slow_loop():
+    """A daemon-like loop on its own thread, and a hub whose starts wait at
+    a gate until the test lets them go."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    hubs: list[_SlowHub] = []
+
+    def make(store) -> _SlowHub:
+        hub = _SlowHub(store)
+        hubs.append(hub)
+        return hub
+
+    yield loop, make
+    for hub in hubs:
+        for gate in list(hub.gates):
+            loop.call_soon_threadsafe(gate.set)
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=30)
+    loop.close()
+
+
+def test_two_sweeps_at_once_start_one_file_once(desk, tmp_path, slow_loop):
+    """Review (05-a): two sweeps of the watchers at the same time (the loop
+    re-armed while its old sweep still waits on a start) must not both read
+    a settled file as new and start its rule twice. The second sweep leaves
+    a watcher that is being scanned and started to the first.
+
+    MUTATION (red): drop the one-sweep-at-a-time guard in
+    ``SentinelService._poll_rule`` -> a.txt starts twice."""
+    c, p, router = desk
+    loop, make_hub = slow_loop
+    folder = tmp_path / "Twice"
+    folder.mkdir()
+    _file_rule(p, folder)
+    hub = make_hub(p.reflex)
+    p.sentinels.rule_fire = starts.file_rule_fire(lambda: hub, lambda: loop)
+
+    def scan() -> None:
+        p.sentinels.poll_once(None, rules_only=True)
+
+    (folder / "a.txt").write_text("a")
+    scan()  # new, settling
+    first = threading.Thread(target=scan, daemon=True)
+    first.start()  # settled: its start waits at the gate
+    assert hub.started.acquire(timeout=30), "the start never reached the loop"
+    second = threading.Thread(target=scan, daemon=True)
+    second.start()  # the other sweep, while the first one is starting a.txt
+    second.join(timeout=30)
+    assert not second.is_alive(), "the second sweep waited on a start of its own"
+    assert hub.calls == ["a.txt"], "started twice for one file"
+    loop.call_soon_threadsafe(hub.gates[0].set)
+    first.join(timeout=30)
+    assert not first.is_alive()
+    scan()
+    scan()
+    assert hub.calls == ["a.txt"]
+
+
+def test_a_late_start_that_ends_marks_its_file_seen_so_a_restart_starts_nothing(desk, tmp_path, slow_loop, monkeypatch):
+    """Review (05-a): a start that outlasts the watcher's wait and then ends
+    marks its file seen when it ends, not on the next scan; so a restart in
+    between (the in-memory list of starts under way is gone) does not start
+    the file again. A new file of the same name later starts the rule.
+
+    MUTATION (each red): drop ``_seen_when_it_ends`` -> the file is never
+    marked when its start ends (and starts again after the restart); answer
+    an ended start for any file of that name (drop the time-and-size check)
+    -> the new a.txt never starts."""
+    c, p, router = desk
+    loop, make_hub = slow_loop
+    folder = tmp_path / "Late"
+    folder.mkdir()
+    rule = _file_rule(p, folder)
+    monkeypatch.setattr(starts, "FILE_FIRE_TIMEOUT_S", 0.05)
+    # The daemon's own callback marks a late start's files through the watcher service.
+    assert p.sentinels.rule_fire.mark_seen == p.sentinels.mark_rule_seen
+    hub = make_hub(p.reflex)
+    marked = threading.Event()
+
+    def mark_seen(name, items):
+        p.sentinels.mark_rule_seen(name, items)
+        marked.set()
+
+    fire = starts.file_rule_fire(lambda: hub, lambda: loop, mark_seen=mark_seen)
+    p.sentinels.rule_fire = fire
+    (folder / "a.txt").write_text("a")
+    p.sentinels.poll_once(None, rules_only=True)  # new, settling
+    p.sentinels.poll_once(None, rules_only=True)  # settled: its start outlasts the wait
+    assert hub.started.acquire(timeout=30)
+    assert hub.calls == ["a.txt"]
+    loop.call_soon_threadsafe(hub.gates[0].set)
+    assert marked.wait(30), "the start ended, but its file was not marked seen"
+    # A restart before the next scan: a fresh watcher service and callback.
+    from iron_jarvis.sentinels.service import SentinelService
+
+    svc = SentinelService(p.engine)
+    svc.rule_fire = starts.file_rule_fire(lambda: hub, lambda: loop, mark_seen=svc.mark_rule_seen)
+    svc.poll_once(None, rules_only=True)
+    svc.poll_once(None, rules_only=True)
+    assert hub.calls == ["a.txt"], "started again after a restart"
+    # The same name, a new file: it starts the rule (through the first callback,
+    # which still holds the ended start for the old a.txt).
+    (folder / "a.txt").unlink()
+    p.sentinels.poll_once(None, rules_only=True)  # gone: forgotten
+    (folder / "a.txt").write_text("a new and longer file")
+    p.sentinels.poll_once(None, rules_only=True)  # new, settling
+    marked.clear()
+    p.sentinels.poll_once(None, rules_only=True)  # settled: started
+    assert hub.started.acquire(timeout=30), "a new file of the same name never started"
+    assert hub.calls == ["a.txt", "a.txt"]
+    loop.call_soon_threadsafe(hub.gates[1].set)
+    assert marked.wait(30)
+    assert p.reflex.get(rule.id) is not None
+
+
+def test_check_now_checks_only_the_watchers_that_suggest(desk, tmp_path):
+    """Review (05-a): the Watchers page's "Check now" answers with what it
+    suggested; a rule's own watcher is the loop's to check (it starts the
+    rule there), so the button never starts a rule behind a sentence that
+    says nothing happened.
+
+    MUTATION (red): sweep every watcher in ``POST /sentinels/poll`` -> the
+    rule's file is handed on from the button."""
+    c, p, router = desk
+    folder = tmp_path / "Button"
+    folder.mkdir()
+    _file_rule(p, folder)
+    handed: list[str] = []
+
+    def fire(watcher, items):
+        handed.extend(Path(i["path"]).name for i in items)
+        return [True] * len(items)
+
+    p.sentinels.rule_fire = fire
+    p.config.sentinels_enabled = True
+    (folder / "a.txt").write_text("a")
+    for _ in range(3):
+        out = c.post("/sentinels/poll")
+        assert out.status_code == 200, out.text
+        assert out.json()["ran"] is True
+    assert handed == []
+    p.sentinels.poll_once(None, rules_only=True)  # the loop: new, settling
+    p.sentinels.poll_once(None, rules_only=True)  # settled: handed on
+    assert handed == ["a.txt"]
 
 
 # --------------------------------------------------------------------------- #

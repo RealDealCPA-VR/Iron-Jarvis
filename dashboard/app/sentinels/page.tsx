@@ -224,12 +224,20 @@ export default function SentinelsPage() {
         setStatusOk(
           "Nothing was checked — watchers are off. Turn them on first, then check again.",
         );
-      } else if (r.proposals.length === 0) {
-        setStatusOk("Checked — no changes noticed, nothing to suggest.");
       } else {
-        setStatusOk(
-          `Checked — ${r.proposals.length} suggestion${r.proposals.length === 1 ? "" : "s"} waiting for you. Review them in Autonomy → Suggestions.`,
-        );
+        // Review (05-a): "Check now" checks the watchers that suggest; a
+        // rule's folder is checked on its own (that is where it starts its
+        // rule), so the sentence never stands for a rule's folder.
+        const rulesToo = ruleWatching
+          ? " The folders your rules watch are checked on their own every few minutes."
+          : "";
+        if (r.proposals.length === 0) {
+          setStatusOk(`Checked — no changes noticed, nothing to suggest.${rulesToo}`);
+        } else {
+          setStatusOk(
+            `Checked — ${r.proposals.length} suggestion${r.proposals.length === 1 ? "" : "s"} waiting for you. Review them in Autonomy → Suggestions.${rulesToo}`,
+          );
+        }
       }
       reload();
     } catch (err) {
@@ -316,7 +324,13 @@ export default function SentinelsPage() {
                 type="button"
                 onClick={pollNow}
                 disabled={polling}
-                title={featureEnabled ? "Check every watched folder now" : "Turn watchers on first"}
+                title={
+                  !featureEnabled
+                    ? "Turn watchers on first"
+                    : ruleWatching
+                      ? "Check the folders of the watchers that suggest now"
+                      : "Check every watched folder now"
+                }
                 className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
               >
                 {polling ? <LoaderInline label="Checking…" /> : <><Radar size={14} /> Check now</>}
