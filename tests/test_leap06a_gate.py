@@ -242,6 +242,10 @@ LETS_RUN: dict[str, str] = {
     "browser_read_page": _USER_BROWSER,
     "build_folder_show": _RECORDS,
     "calculate": "exact arithmetic in the spreadsheet engine; touches no file",
+    "change_results": (
+        "reads the results Iron Jarvis already counted for the changes you accepted (18-a); "
+        "counts nothing again and writes nothing"
+    ),
     "changes_list": _RECORDS,
     "client_list": _RECORDS,
     "code_handoff_check": "waits on a coding helper that code_handoff_start started, and a rehearsal holds that",
