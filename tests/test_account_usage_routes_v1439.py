@@ -184,7 +184,20 @@ def test_the_real_bundle_keeps_the_windows_without_parking_or_counting(tmp_path,
         claude = c.post("/iron-proxy/accounts", json={"provider": "anthropic", "title": "C"}).json()
         codex = c.post("/iron-proxy/accounts", json={"provider": "openai", "title": "X"}).json()
         client = svc.client()
+        # A new account starts "unknown" and Iron-Proxy's own status check
+        # (createProfile -> refreshStatus, in the background) moves it to
+        # "ready" or "unauthenticated" a moment later. Wait for that before
+        # the "before" read and the signals: on v1.566.0's branch gate this
+        # test passed only on its retry, with "before" read while that check
+        # still ran ('ready' == 'unknown'), and the check writes the state the
+        # signals write.
+        ids = (claude["id"], codex["id"])
+        deadline = time.monotonic() + 30
         before = client.states()
+        while time.monotonic() < deadline and any(before[i]["status"] == "unknown" for i in ids):
+            time.sleep(0.05)
+            before = client.states()
+        assert all(before[i]["status"] != "unknown" for i in ids), before
         # Exactly what a read hands Iron-Proxy (the parsers' own outputs).
         headers = U.claude_headers({"rate_limits": {
             "five_hour": {"utilization": 42, "resets_at": "2100-01-01T00:00:00Z"},
