@@ -338,49 +338,74 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
         1, "re-exports the phone channels' transports (httpx_post, httpx_get) by name; sends "
            "nothing"),
     ("comm/base.py", "http_client"): (
-        3, "a phone channel's transport: reached through Notifier.notify (listed) or a reply "
+        4, "a phone channel's transport: reached through Notifier.notify (listed) or a reply "
            "to the person's own message; and (10-a) the download of a file the person sent "
            "from the phone (httpx_get_bytes, a GET that stops at the cap), reached only from "
            "the phone poller's _take_files on that person's own message, after the allowlist: "
-           "it carries no run's words, and a rehearsal's run is never phone-started"),
+           "it carries no run's words, and a rehearsal's run is never phone-started; and "
+           "(10-b) the upload of a file Jarvis made for the person's own phone message "
+           "(httpx_post_file), reached only through send_file from the phone poller's files "
+           "back (listed under comm/inbound.py)"),
+    ("comm/base.py", "direct_send"): (
+        1, "10-b: Channel.send_files' default loop over send_file, reached only from the phone "
+           "poller's _send_files_now: after the answer to the person's own phone message or a "
+           "phone-started run, or on their Send under the files question. A rehearsal's run is "
+           "never phone-started, and its held writes are in no phone turn's files"),
     ("comm/base.py", "http_post"): (
         3, "a phone channel's transport (the same as above); the third is a look at the "
            "transport's signature (_accepts_headers), not a send"),
     ("comm/channels.py", "smtp"): (
         1, "the email channel's transport: reached through Notifier.notify (listed)"),
     ("comm/channels.py", "direct_send"): (
-        6, "the email channel's send_message on that same SMTP line and the phone channels' "
-           "own transport inside their send (self._post: Slack's two, Discord's, Telegram's), "
-           "reached through Notifier.notify (listed) or a reply to the person's own message, "
-           "and Telegram's one-line notice that it cannot read a photo, sent only while "
-           "polling, to the person who sent the photo in their own private chat"),
+        13, "the email channel's send_message on that same SMTP line and the phone channels' "
+            "own transport inside their send (self._post: Slack's two, Discord's, Telegram's), "
+            "reached through Notifier.notify (listed) or a reply to the person's own message, "
+            "and Telegram's one-line notice that it cannot read a photo, sent only while "
+            "polling, to the person who sent the photo in their own private chat. 10-b: a "
+            "file's upload (Slack's upload-address and complete steps and the upload, "
+            "Telegram's sendPhoto or sendDocument, email's send_file), reached only from the "
+            "phone poller's files back (listed under comm/inbound.py); and a pressed button's "
+            "answer (Slack's chat.update, Telegram's answerCallbackQuery and "
+            "editMessageReplyMarkup), only for the person's own press under their own question"),
     ("comm/compose.py", "smtp"): (
         2, "an email the person writes on the Email page (daemon/routes/comm.py); no run reaches it"),
     ("comm/compose.py", "direct_send"): (
         2, "that email's send_message on the same SMTP line, and run_compose's call of "
            "send_mail that leads to it: only from the Email page"),
     ("comm/inbound.py", "channel_send"): (
-        10, "replies to the person's own phone message (_dispatch, send_chunked, a phone-started "
+        11, "replies to the person's own phone message (_dispatch, send_chunked, a phone-started "
             "job's result) and the notices about one a restart lost or cut off: reached only from "
             "a message the phone sent, a run of origin comm:<channel>, or a remote agent's line "
             "coming home to a phone thread. A rehearsal's run is reflex:<rule> or "
             "schedule:<name>, it hands nothing to a remote agent (both hand-offs are held), and "
             "a rehearsal the phone asks for answers in that reply with its report's words "
-            "(rehearsal_runs._report_words)"),
+            "(rehearsal_runs._report_words). 10-b: the files question with its buttons "
+            "(_ask_files_back), asked only after such a reply"),
     ("comm/inbound.py", "direct_send"): (
-        14, "the same replies through the poller's own send_chunked (counted once more where it "
+        21, "the same replies through the poller's own send_chunked (counted once more where it "
             "calls ch.send): each answers a message the phone sent (a command, a new thread, "
             "the rate limit, a refusal, an escalation, a job's start, an answer to a question, a "
             "remote agent's answer to the person's line, the sentence that the files a message "
             "brought were not used: _say_files_not_read, R0.3) or a phone-started run's result; "
-            "a rehearsal's run is never phone-started"),
+            "a rehearsal's run is never phone-started. 10-b: the files back after such a reply "
+            "or on the person's Send (_files_back, _send_files_now twice, the line for what "
+            "did not go twice, the files question without buttons twice) and a reply held "
+            "under a press (_handle_press): the files a phone chat turn made are read off that "
+            "turn's own documents, never a rehearsal's held run"),
+    ("comm/inbound.py", "handed_off"): (
+        1, "10-b: _send_files_now hands ch.send_files to a worker: the files back listed above, "
+           "only after the answer to the person's own phone message or on their Send"),
     ("comm/integrations.py", "http_client"): (
         3, "build_notifier's default transports (httpx_post, httpx_get): imported, then handed "
            "to the phone channels it builds when the caller passed none; sends nothing itself"),
     ("comm/notifier.py", "channel_send"): (
-        1, "Notifier.notify's own fan-out to each destination (its callers are listed)"),
+        2, "Notifier.notify's own fan-out to each destination (its callers are listed), on one "
+           "line: with an approval's Approve and Deny buttons (10-b) or without"),
     ("comm/notifier.py", "notify"): (
-        1, "the bus alerts: say nothing for a rehearsal's run (comm/notifier.is_rehearsal_run)"),
+        2, "the bus alerts: say nothing for a rehearsal's run (comm/notifier.is_rehearsal_run); "
+           "the second (10-b) is the same approval alert with Approve and Deny under it, and a "
+           "rehearsal never asks: registry.invoke holds a call that would ask as \"would ask "
+           "first\", never parked, so no approval is requested"),
     ("comm/prompts.py", "channel_send"): (
         1, "a question or an approval the phone can answer: a held call never asks "
            "(it records would ask), and a workflow cannot be rehearsed yet"),
