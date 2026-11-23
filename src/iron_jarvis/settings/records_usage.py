@@ -22,6 +22,13 @@ through):
   names no folder, and tells a client's work only when every owner is a
   client the owner's own message named (decision D-13.2's rule).
 
+A NAME THAT FINDS NOTHING never reads as a made-up negative: a name the model
+gave with no grouping is looked for by automation, then client, folder and
+agent (one read of the window); a name made only of kind words ("my
+schedules", "rules") lists that kind; and when rows were kept out of the
+answer the sentence says nothing THIS CHAT may be told about matches, never
+"on record" (the kept-out rows might have matched).
+
 Read-only (permission ``allow``), armed by the message's own words
 (:func:`usage_tools_for`, read by ``daemon.chat_turn.settings_ask_tools``
 for both lanes), refused to a task from another computer
@@ -123,15 +130,79 @@ _STOP = frozenset(
     "did does do cost costs costing spend spent spending use used usage tokens it its all each every "
     "month week year day days today yesterday last past so far".split()
 )
-_KIND_WORDS = frozenset(
-    "rule rules schedule schedules workflow workflows goal goals automation automations agent agents "
-    "folder folders client clients queued task tasks".split()
-)
+#: A kind word -> the automation kind it names (``usage_by.AUTOMATION_KINDS``'
+#: prefix, the start of an automation row's key; "*" every automation).
+_KIND_OF_WORD: dict[str, str] = {
+    "rule": "reflex", "rules": "reflex",
+    "schedule": "schedule", "schedules": "schedule",
+    "workflow": "workflow", "workflows": "workflow",
+    "goal": "goal", "goals": "goal",
+    "queued": "assignment", "task": "assignment", "tasks": "assignment",
+    "automation": "*", "automations": "*",
+}
+#: A grouping's own word -> that grouping.
+_GROUP_OF_WORD: dict[str, str] = {
+    "folder": "folder", "folders": "folder",
+    "client": "client", "clients": "client",
+    "agent": "agent", "agents": "agent",
+}
+_KIND_WORDS = frozenset(_KIND_OF_WORD) | frozenset(_GROUP_OF_WORD)
+#: What one row of each automation kind, or of each grouping, is called in
+#: a sentence that found none ("No schedule on record …").
+_NOUN_OF_KIND = {
+    "reflex": "rule", "schedule": "schedule", "workflow": "workflow", "goal": "goal",
+    "assignment": "queued task", "*": "automation",
+}
+_NOUN_OF_GROUP = {"automation": "automation", "client": "client", "folder": "folder", "agent": "agent"}
+#: Where a name the model gave with no grouping is looked for after the
+#: automations (a name is as often a client's or a folder's).
+_FALLBACK_GROUPS = ("client", "folder", "agent")
 _WORD = re.compile(r"[\w'’-]+", re.UNICODE)
 
 
 def _words(text: str) -> list[str]:
     return [w.strip("'’-").lower() for w in _WORD.findall(str(text or "")) if w.strip("'’-")]
+
+
+def kinds_named(name: str) -> "tuple[str, frozenset[str]] | None":
+    """When ``name`` is made ONLY of kind words (and stop words) it names a
+    KIND of row, never one row: "my schedules" is every schedule, "clients"
+    is the breakdown by client. Answers ``(grouping, automation kinds)``
+    (the kinds empty for a grouping's own word), or None when the name has a
+    word of its own (or none at all). Pure."""
+    words = [w for w in _words(name) if w not in _STOP]
+    if not words or any(w not in _KIND_WORDS for w in words):
+        return None
+    kinds = frozenset(_KIND_OF_WORD[w] for w in words if w in _KIND_OF_WORD)
+    if kinds:
+        return "automation", kinds
+    return _GROUP_OF_WORD[words[0]], frozenset()
+
+
+def _either(nouns: list[str]) -> str:
+    """"rule", "rule or schedule", "automation, client, folder or agent"."""
+    seen = list(dict.fromkeys(n for n in nouns if n))
+    if len(seen) <= 1:
+        return seen[0] if seen else "row"
+    return ", ".join(seen[:-1]) + " or " + seen[-1]
+
+
+def nothing_sentence(name: str, kinds: "frozenset[str]", groups: list[str], when: str, *,
+                     withheld: bool, phone: bool) -> str:
+    """The sentence for a name or a kind that found no row, which says WHAT
+    was looked through and never says "on record" when rows were kept out of
+    this answer (they might have matched). Pure."""
+    if kinds:
+        nouns = _either([_NOUN_OF_KIND.get(k, "") for k in sorted(kinds)])
+    else:
+        nouns = _either([_NOUN_OF_GROUP.get(g, g) for g in groups])
+    whose = (
+        f"that {'this answer to the phone' if phone else 'this chat'} may be told about"
+        if withheld else "on record"
+    )
+    if name:
+        return f"No {nouns} {whose} matches “{name}” {when}."
+    return f"No {nouns} {whose} used a model {when}."
 
 
 def matches(name: str, label: str) -> bool:
@@ -192,7 +263,10 @@ class UsageReportTool(Tool):
             "group": {
                 "type": "string",
                 "enum": ["folder", "client", "automation", "agent"],
-                "description": "How to break it down (default: automation when `name` names one, else folder).",
+                "description": (
+                    "How to break it down (default: folder; a `name` given without it is looked for "
+                    "by automation, then client, folder and agent)."
+                ),
             },
             "name": {"type": "string", "description": "One row to report on: a rule's, folder's, client's or agent's name."},
             "days": {"type": "integer", "minimum": 1, "maximum": 365,
@@ -210,7 +284,9 @@ class UsageReportTool(Tool):
         from ..workmap.lookup import withhold_local_only
 
         args = dict(args or {})
-        group = UB.clean_group(args.get("group")) or ("automation" if args.get("name") else "folder")
+        # "" when the model gave no grouping: _report decides (and then looks
+        # for a name in every grouping).
+        group = UB.clean_group(args.get("group"))
         days = UB.clamp_days(args.get("days") if args.get("days") is not None else UB.DAYS_DEFAULT)
         name = " ".join(str(args.get("name") or "").split())[:200]
         phone = answers_the_phone()
@@ -223,9 +299,30 @@ class UsageReportTool(Tool):
         return result
 
 
+def _sum_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The "In all" figures of the rows a kind picked (``usage_by``'s row
+    shape): money measured only when every row with money was. Pure."""
+    usd = sum(float((r.get("pay_per_use") or {}).get("usd") or 0.0) for r in rows)
+    paid = [r for r in rows if float((r.get("pay_per_use") or {}).get("usd") or 0.0) > 0]
+    return {
+        "pay_per_use": {
+            "usd": usd,
+            "measured": bool(paid) and all((r.get("pay_per_use") or {}).get("measured") for r in paid),
+            "price_unknown_tokens": sum(
+                int((r.get("pay_per_use") or {}).get("price_unknown_tokens") or 0) for r in rows),
+        },
+        "plan": {"tokens": sum(int((r.get("plan") or {}).get("tokens") or 0) for r in rows),
+                 "window_share": None, "window": ""},
+        "free": {"tokens": sum(int((r.get("free") or {}).get("tokens") or 0) for r in rows)},
+        "asks": sum(int(r.get("asks") or 0) for r in rows),
+    }
+
+
 def _report(platform: Any, engine: Any, turn: Any, group: str, days: int, name: str, *,
             phone: bool, withhold: bool) -> ToolResult:
-    """The answer (BLOCKING: the usage read and the client map)."""
+    """The answer (BLOCKING: the usage read and the client map). ``group``
+    is "" when the model gave no grouping."""
+    from ..core.ids import utcnow
     from ..eval import usage_by as UB
     from ..workmap.block import _safe
     from ..workmap.clients import wall
@@ -253,57 +350,126 @@ def _report(platform: Any, engine: Any, turn: Any, group: str, days: int, name: 
                 return False
         return True
 
-    def keep(who: Any) -> str:
-        """One usage row's verdict, BEFORE anything is summed: Local only
-        work for a turn off this network, the folder's wall, and the row's
-        own name in this grouping (an automation or an agent named after a
-        client is that client's work)."""
-        if withhold and who.local_only:
-            return "local_only"
-        if who.client_id and (kept_home is None or who.client_id in kept_home):
-            return "local_only"
-        if not _owned_ok(who.folder):
-            return "wall"
-        if group == "automation" and who.auto_key and who.auto_name:
-            if not _owned_ok("", UB.automation_label(who.auto_kind, who.auto_name)):
+    def keep_for(g: str) -> Any:
+        def keep(who: Any) -> str:
+            """One usage row's verdict, BEFORE anything is summed: Local only
+            work for a turn off this network, the folder's wall, and the
+            row's own name in this grouping (an automation or an agent named
+            after a client is that client's work)."""
+            if withhold and who.local_only:
+                return "local_only"
+            if who.client_id and (kept_home is None or who.client_id in kept_home):
+                return "local_only"
+            if not _owned_ok(who.folder):
                 return "wall"
-        if group == "agent" and who.agent_key and who.agent_key != UB.CHAT_SESSION:
-            if not _owned_ok("", who.agent_label):
-                return "wall"
-        return ""
+            if g == "automation" and who.auto_key and who.auto_name:
+                if not _owned_ok("", UB.automation_label(who.auto_kind, who.auto_name)):
+                    return "wall"
+            if g == "agent" and who.agent_key and who.agent_key != UB.CHAT_SESSION:
+                if not _owned_ok("", who.agent_label):
+                    return "wall"
+            return ""
 
-    data = UB.usage_by(platform, group, days, keep=keep)
-    if data.get("error"):
-        return ToolResult(ok=False, error=str(data["error"]), data={"door": HREF})
+        return keep
+
+    # A name made only of kind words ("my schedules", "clients") names a KIND
+    # of row, never one row; a name of stop words only names nothing.
+    given = group
+    kinds: frozenset[str] = frozenset()
+    named_kind = kinds_named(name)
+    if named_kind is not None:
+        kind_group, kinds = named_kind
+        name = ""
+        group = group or kind_group
+        if group != "automation":
+            kinds = frozenset()
+    elif name and all(w in _STOP for w in _words(name)):
+        name = ""
+    group = group or ("automation" if name else "folder")
+    # A name with no grouping of the model's own is looked for by automation,
+    # then by client, folder and agent (one read of the window for them all).
+    order = [group] + ([g for g in _FALLBACK_GROUPS if g != group] if (name and not given) else [])
+    now = utcnow()
+    window = UB.read_window(platform, days, now=now)
+
+    def tellable(data: dict[str, Any], g: str) -> tuple[list[tuple[str, dict[str, Any]]], int, int]:
+        """``(told, held, hidden)``: the rows this answer may name, the ones
+        whose names could not be told, and the folders the phone is not told."""
+        told: list[tuple[str, dict[str, Any]]] = []
+        held = hidden = 0
+        for row in data.get("rows") or []:
+            label = str(row.get("label") or "")
+            # Masked and scanned: a name that reads as an instruction is not told.
+            shown = _safe(label) if label else ""
+            if not shown:
+                held += 1
+                continue
+            if phone and g == "folder" and row.get("key"):
+                hidden += 1
+                continue
+            told.append((shown, row))
+        return told, held, hidden
+
+    def picked(told: list[tuple[str, dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
+        if name:
+            return [(lbl, r) for lbl, r in told if matches(name, lbl)]
+        if kinds:
+            return [(lbl, r) for lbl, r in told if r.get("key") and (
+                "*" in kinds or str(r.get("key") or "").partition(":")[0] in kinds)]
+        return told
+
+    searched: list[str] = []
+    withheld = False
+    #: What every grouping looked through kept out (said when none matched).
+    kept_out: dict[str, int] = {}
+    held_any = 0
+    chosen: "tuple[str, dict[str, Any], list, int] | None" = None
+    first: "tuple[str, dict[str, Any], list, int] | None" = None
+    for g in order:
+        got = UB.usage_by(platform, g, days, now=now, keep=keep_for(g), read=window)
+        if got.get("error"):
+            if g == group:
+                return ToolResult(ok=False, error=str(got["error"]), data={"door": HREF})
+            continue  # a grouping looked through only for the name: skipped
+        searched.append(g)
+        told_g, held_g, hidden_g = tellable(got, g)
+        withheld = withheld or bool(int(got.get("left_out") or 0) + held_g + hidden_g)
+        for why, n in (got.get("left_out_by") or {}).items():
+            kept_out[why] = max(kept_out.get(why, 0), int(n or 0))
+        held_any = max(held_any, held_g)
+        here = (g, got, picked(told_g), held_g)
+        first = first or here
+        if here[2] or not (name or kinds):
+            chosen = here
+            break
+    found = chosen is not None
+    group, data, told, held = chosen or first  # type: ignore[misc]
+    if not found:
+        # Nothing matched anywhere: what any grouping kept out is said.
+        data = {**data, "left_out_by": kept_out}
+        held = held_any
     rows = list(data.get("rows") or [])
-    told: list[tuple[str, dict[str, Any]]] = []
-    held = 0
-    for row in rows:
-        label = str(row.get("label") or "")
-        # Masked and scanned: a name that reads as an instruction is not told.
-        shown = _safe(label) if label else ""
-        if not shown:
-            held += 1
-            continue
-        told.append((shown, row))
-    if name:
-        told = [(lbl, r) for lbl, r in told if matches(name, lbl)]
     when = _when(days)
-    head = f"What it cost {when}, {_GROUP_WORDS.get(group, group)}. {LEAD}"
+    if not found and len(searched) > 1:
+        head = f"What it cost {when}. {LEAD}"
+    else:
+        head = f"What it cost {when}, {_GROUP_WORDS.get(group, group)}. {LEAD}"
     lines: list[str] = [head]
     if phone and group == "folder":
-        told = [(lbl, r) for lbl, r in told if not r.get("key")]
         lines.append(PHONE_FOLDERS)
     asks = group == "automation"
-    if name and not told:
-        lines.append(f"Nothing on record matches “{_safe(name) or 'that'}” {when}.")
+    if (name or kinds) and not told:
+        lines.append(nothing_sentence(_safe(name) or ("that" if name else ""), kinds,
+                                      searched if not kinds else [group], when,
+                                      withheld=withheld, phone=phone))
     for lbl, r in told[:LIST_MAX]:
         lines.append("- " + row_sentence(lbl, r, asks=asks))
     more = len(told) - LIST_MAX
     if more > 0:
         lines.append(f"(and {more} more; Usage in the app lists them all)")
     if not name and len(told) > 1:
-        lines.append(row_sentence("In all", data.get("totals") or {}, asks=asks))
+        totals = _sum_rows([r for _l, r in told]) if kinds else (data.get("totals") or {})
+        lines.append(row_sentence("In all", totals, asks=asks))
     if any(int((r.get("plan") or {}).get("tokens") or 0) > 0 for _l, r in told):
         lines.append(PLAN_NOTE)
     if data.get("truncated"):
@@ -353,6 +519,7 @@ def usage_tools_for(text: str) -> list[str]:
 
 
 __all__ = [
-    "HREF", "NAME", "UsageReportTool", "asked_words", "figure_parts", "left_out_sentences",
-    "matches", "money", "row_sentence", "usage_tools", "usage_tools_for",
+    "HREF", "NAME", "UsageReportTool", "asked_words", "figure_parts", "kinds_named",
+    "left_out_sentences", "matches", "money", "nothing_sentence", "row_sentence", "usage_tools",
+    "usage_tools_for",
 ]

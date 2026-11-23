@@ -1012,6 +1012,10 @@ class CodexNativeAdapter(LLMAdapter):
         cost = _list_price(s.served_model or self.model, usage)
         if cost is not None:
             usage["cost_usd"] = cost
+            # Next leaps 46-a: the price table's figure, never OpenAI's own.
+            from ....eval.pricing import PRICED_FROM_TABLE
+
+            usage[PRICED_FROM_TABLE] = True
         extra: dict[str, Any] = {"codex": {"thread": s.thread_id, "model": s.served_model}}
         if s.rate_limits is not None:
             extra["rate_limits"] = dict(s.rate_limits)

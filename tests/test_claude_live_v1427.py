@@ -898,6 +898,37 @@ async def test_a_live_step_is_priced_by_the_model_that_answered(tmp_path, upstre
         assert cost != pytest.approx(pricing.cost_for_usage("claude-cli", "sonnet", usage))
 
 
+async def test_a_live_steps_price_table_figure_reads_estimated_never_measured(tmp_path, upstream, monkeypatch):
+    """Next leaps 46-a (review): a live step's ``cost_usd`` is the PRICE
+    TABLE's (:func:`live.served_cost`), not a figure Anthropic reported. For a
+    model that draws pay-as-you-go usage credits (pay per use, not plan
+    work) the usage row must read estimated, never "measured". The control:
+    today's path (outside a turn scope) keeps the CLI's own
+    ``total_cost_usd``, which reads measured."""
+    from iron_jarvis.eval import pricing
+
+    monkeypatch.setattr(pricing, "draws_usage_credits", lambda _model: True)
+    assert not pricing.is_list_price_equivalent("claude-cli", "sonnet"), "pay per use, not plan"
+    up = upstream(THREE)
+    up.served_model = "claude-sonnet-5-5"
+    ad = _adapter(tmp_path, up, model="sonnet")
+    async with _scope():
+        _, final, responses = await _reply(ad, [_user("fix it")])
+    assert final.text == "Done REAL-a|REAL-b"
+    tally = pricing.UsageTally()
+    for resp in responses:
+        assert pricing.native_cost(resp.usage) is not None, "a figure, but the table's"
+        assert pricing.step_source("claude-cli", "sonnet", resp.usage) == pricing.SOURCE_TABLE
+        tally.add("claude-cli", "sonnet", resp.usage)
+    assert tally.cost_source == pricing.SOURCE_TABLE
+
+    today = upstream(THREE)
+    _, _final, plain = await _reply(_adapter(tmp_path, today, model="sonnet"), [_user("fix it")])
+    await asyncio.wait_for(transport.drain_teardowns(), 60)
+    assert pricing.native_cost(plain[-1].usage) is not None, "today's path keeps the CLI's own cost"
+    assert pricing.step_source("claude-cli", "sonnet", plain[-1].usage) == pricing.SOURCE_VENDOR
+
+
 def test_served_cost_never_guesses():
     usage = {"input_tokens": 16, "output_tokens": 7, "cache_read_input_tokens": 4,
              "cache_creation_input_tokens": 2}

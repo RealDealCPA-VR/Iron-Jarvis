@@ -1588,5 +1588,13 @@ How to use this file: read the contents list, then read only the entries your ch
   the phone gets no folder name and only named clients. What is kept out
   is in no figure and is said in a sentence that names nobody. OpenCode and
   Pi work read from their own stores is not in the breakdown (no folder on
-  record). Pins: `tests/test_next_leaps_46a_usage_by.py`,
-  `dashboard/__tests__/usage-by.test.tsx`.
+  record). An adapter whose `cost_usd` is its OWN price-table figure (the
+  Claude CLI's live path, Codex) sets `usage[pricing.PRICED_FROM_TABLE]`,
+  so `step_source` reads it as `table`, never measured. A name that finds
+  nothing is never a made-up negative: with no grouping of the model's own
+  it is looked for by automation, then client, folder and agent (one
+  `usage_by.read_window` for all); a name of kind words only ("my
+  schedules") lists that kind; and with any row kept out the sentence says
+  nothing this chat may be told about matches, never "on record". Pins:
+  `tests/test_next_leaps_46a_usage_by.py`,
+  `tests/test_claude_live_v1427.py`, `dashboard/__tests__/usage-by.test.tsx`.

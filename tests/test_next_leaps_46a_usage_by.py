@@ -421,6 +421,84 @@ def test_a_name_that_reads_as_an_instruction_is_not_told(month):
     assert "names could not be told here" in out
 
 
+# Review of 46-a: a name that finds nothing never reads as a made-up
+# negative. (No test name below holds a client's name: the folder rows' labels
+# hold the test's own temporary folder.)
+def test_a_name_kept_out_by_the_wall_is_not_said_to_be_off_the_record(month):
+    out = _ask_tool(month, {"name": "Hartleys"}, folder=str(month.smith),
+                    words="what did Hartleys cost this month?")
+    assert "on record" not in out and "$1.50" not in out and "Hartleys:" not in out, out
+    assert ("No automation, client, folder or agent that this chat may be told about matches "
+            "“Hartleys” in the last 30 days.") in out, out
+    assert "left out of this client's chat" in out
+
+
+def test_a_name_kept_out_only_by_the_last_grouping_or_the_phone_is_still_said(month):
+    from iron_jarvis.providers import failure_words
+    from iron_jarvis.workmap.clients import store
+
+    words = "what did Zeta, Hartleys and Smith cost?"
+    # An agent named after a client the message does not name: kept out only
+    # where the name is looked for last (by agent), and still said.
+    quill = month.tmp / "Work" / "Quill"
+    quill.mkdir()
+    store.create(month.platform, folder=str(quill), name="Quill")
+    sid = _session(month.engine, origin=None, agent="custom:Quill Reader", folder=month.prices)
+    _run(month.engine, sid, provider="anthropic", model="claude-sonnet-5", tin=10, tout=10, cost=0.45,
+         source="vendor")
+    out = _ask_tool(month, {"name": "Zeta"}, words=words)
+    assert "No automation, client, folder or agent that this chat may be told about matches “Zeta”" in out, out
+    assert "your own message did not name those clients" in out, out
+    # The phone names no folder: a folder's name finds nothing it may be told.
+    token = failure_words.mark_answers_the_phone(True)
+    try:
+        phone = _ask_tool(month, {"group": "folder", "name": "Price list"},
+                          words="what did the Price list folder cost for Hartleys and Smith?")
+    finally:
+        failure_words.reset_answers_the_phone(token)
+    assert "No folder that this answer to the phone may be told about matches “Price list”" in phone, phone
+
+
+def test_a_name_with_no_grouping_is_looked_for_by_client_folder_and_agent(month):
+    out = _ask_tool(month, {"name": "Hartleys"}, words="what did Hartleys cost this month?")
+    assert "Hartleys: $1.50 pay per use (estimated)" in out, out
+    assert "What it cost in the last 30 days, by client." in out
+    assert "No automation" not in out and "matches" not in out
+    # Nothing kept out and nothing found: it says what it looked through.
+    none = _ask_tool(month, {"name": "Zeta"}, words="what did Zeta, Hartleys and Smith cost?")
+    assert "No automation, client, folder or agent on record matches “Zeta” in the last 30 days." in none, none
+    # The model's own grouping is the only one looked through, and is named.
+    own = _ask_tool(month, {"group": "automation", "name": "Zeta"}, words="what did Zeta, Hartleys and Smith cost?")
+    assert "No automation on record matches “Zeta” in the last 30 days." in own, own
+
+
+def test_a_name_of_kind_words_only_lists_that_kind(month):
+    from iron_jarvis.settings.records_usage import kinds_named
+
+    assert kinds_named("my schedules") == ("automation", frozenset({"schedule"}))
+    assert kinds_named("clients") == ("client", frozenset())
+    assert kinds_named("the invoice rule") is None
+    e = month.engine
+    for name, usd in (("weekly report", 0.20), ("month end", 0.30)):
+        sid = _session(e, origin=f"schedule:{name}", folder=month.prices)
+        _run(e, sid, provider="anthropic", model="claude-sonnet-5", tin=10, tout=10, cost=usd, source="vendor")
+    out = _ask_tool(month, {"name": "my schedules"}, words="how much did my schedules cost")
+    assert "Schedule “weekly report”: $0.20 pay per use (measured)" in out, out
+    assert "Schedule “month end”: $0.30 pay per use (measured)" in out, out
+    assert "In all: $0.50 pay per use (measured)" in out, out  # the schedules only
+    assert "invoice rule" not in out and "nightly" not in out and "matches" not in out, out
+    rules = _ask_tool(month, {"group": "automation", "name": "rules"}, words="what did my rules cost")
+    assert "Rule “invoice rule”: " + EXAMPLE in rules, rules
+    assert "weekly report" not in rules and "matches" not in rules, rules
+    # No workflow at all: with a client's rows kept out it never says "on
+    # record" (they might have been one) …
+    kept = _ask_tool(month, {"name": "workflows"}, words="what did my workflows cost")
+    assert "No workflow that this chat may be told about used a model in the last 30 days." in kept, kept
+    # … and with nothing kept out it does.
+    none = _ask_tool(month, {"name": "workflows"}, words="what did my workflows for Hartleys and Smith cost")
+    assert "No workflow on record used a model in the last 30 days." in none, none
+
+
 def test_a_cloud_turn_is_not_told_a_client_known_only_from_local_only_work(month):
     from iron_jarvis.workmap.clients import store
 

@@ -573,6 +573,19 @@ def _row_key(group: str, who: Who) -> tuple[str, str, str, str]:
     return who.agent_key, who.agent_label, "", ""
 
 
+def read_window(platform: Any, days: int = DAYS_DEFAULT, *, now: datetime | None = None) -> "_Read | None":
+    """ONE read of the window, for a caller that breaks it down more than one
+    way (the chat tool looks for a name by automation, then client, folder and
+    agent): hand it to :func:`usage_by` as ``read``. None when the read
+    failed (:func:`usage_by` then reads again and answers ``error``). Never
+    raises. BLOCKING (SQLite)."""
+    try:
+        return _read(platform, clamp_days(days), now or _now())
+    except Exception:  # noqa: BLE001 — the caller's usage_by says it in words
+        log.debug("usage by: the window could not be read", exc_info=True)
+        return None
+
+
 def usage_by(
     platform: Any,
     group: str,
@@ -580,12 +593,15 @@ def usage_by(
     *,
     now: datetime | None = None,
     keep: "Callable[[Who], bool | str] | None" = None,
+    read: "_Read | None" = None,
 ) -> dict[str, Any]:
     """The rows for ``group`` over the last ``days`` (see the module
     docstring). ``keep`` answers for each usage row's :class:`Who`: True or
     "" keeps it; False or a reason word drops it, counted in ``left_out``
     and ``left_out_by[reason]`` ("held" for False) and in no figure. A
-    ``keep`` that raises drops the row. Never raises."""
+    ``keep`` that raises drops the row. ``read`` is :func:`read_window`'s
+    answer for the same ``days`` and ``now`` (read again when None). Never
+    raises."""
     g = clean_group(group) or GROUP_FOLDER
     n = clamp_days(days)
     when = now or _now()
@@ -595,7 +611,7 @@ def usage_by(
         "truncated": False, "left_out": 0, "left_out_by": {}, "error": "",
     }
     try:
-        read = _read(platform, n, when)
+        read = read if read is not None else _read(platform, n, when)
     except Exception:  # noqa: BLE001 — said in words, never a traceback
         log.warning("usage by %s could not be read", g, exc_info=True)
         out["error"] = "Usage could not be read just now. Nothing was changed."
@@ -691,5 +707,5 @@ __all__ = [
     "AUTOMATION_KINDS", "CHAT_AGENT", "DAYS_DEFAULT", "DAYS_MAX", "DAYS_MIN", "GROUPS",
     "GROUP_AGENT", "GROUP_AUTOMATION", "GROUP_CLIENT", "GROUP_FOLDER", "NOBODY", "NOT_AUTOMATION",
     "NO_AGENT", "NO_CLIENT", "NO_FOLDER", "OTHER_APPS", "QUEUED_TASKS", "Who", "automation_label",
-    "automation_of", "clamp_days", "clean_group", "usage_by",
+    "automation_of", "clamp_days", "clean_group", "read_window", "usage_by",
 ]

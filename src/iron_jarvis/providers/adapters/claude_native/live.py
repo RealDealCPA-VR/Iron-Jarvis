@@ -1202,6 +1202,11 @@ async def _drive(
         priced = served_cost(response.usage, message)
         if priced is not None:
             response.usage["cost_usd"] = priced
+            # Next leaps 46-a: the price table's figure, never the vendor's
+            # own, so the usage row says "estimated" (pricing.step_source).
+            from ....eval.pricing import PRICED_FROM_TABLE
+
+            response.usage[PRICED_FROM_TABLE] = True
         if end in ("tools", "done") and message is not None:
             s.known = presented + [{"type": "assistant", "message": copy.deepcopy(message)}]
             if end == "tools":

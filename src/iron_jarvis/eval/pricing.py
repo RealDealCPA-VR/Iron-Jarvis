@@ -304,13 +304,21 @@ SOURCE_FREE = "free"
 COST_SOURCES = (SOURCE_VENDOR, SOURCE_TABLE, SOURCE_PLAN, SOURCE_FREE)
 _PAY_SOURCES = frozenset({SOURCE_VENDOR, SOURCE_TABLE})
 
+#: A usage key an adapter sets (True) when the ``cost_usd`` it hands back is
+#: ITS OWN pricing from :data:`PRICES`, not a figure the vendor reported: the
+#: Claude CLI's live path (``claude_native/live.served_cost``, which drops the
+#: CLI's whole-query figure) and Codex (``codex_native._list_price``). The
+#: figure still wins in :func:`step_cost`; :func:`step_source` reads it as
+#: estimated (``table``), never measured.
+PRICED_FROM_TABLE = "cost_from_price_table"
+
 
 def step_source(provider: str, model: str, usage: Mapping | None) -> str:
     """Where ONE completion's :func:`step_cost` came from (one of
     :data:`COST_SOURCES`). The user's own hardware first (its tokens are
     free), then a flat subscription (never money), then the vendor's own
-    figure, else the price table. Never raises (an unreadable call is
-    ``table``: estimated)."""
+    figure (unless the adapter marked it :data:`PRICED_FROM_TABLE`), else the
+    price table. Never raises (an unreadable call is ``table``: estimated)."""
     try:
         from ..providers.local import is_local_provider
 
@@ -318,7 +326,7 @@ def step_source(provider: str, model: str, usage: Mapping | None) -> str:
             return SOURCE_FREE
         if is_list_price_equivalent(provider, model):
             return SOURCE_PLAN
-        if native_cost(usage) is not None:
+        if native_cost(usage) is not None and (usage or {}).get(PRICED_FROM_TABLE) is not True:
             return SOURCE_VENDOR
     except Exception:  # noqa: BLE001 — unsure: estimated
         pass

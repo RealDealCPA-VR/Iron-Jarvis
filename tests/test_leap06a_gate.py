@@ -352,6 +352,10 @@ LETS_RUN: dict[str, str] = {
         "a script that may call only the tools on this list, each through registry.invoke, "
         "in an isolated worker that writes no file"
     ),
+    "usage_report": (
+        "reads Iron Jarvis's own usage record, through the client wall (46-a); "
+        "changes nothing"
+    ),
     "view_image": "looks at a picture with the vision model the real run would use; writes nothing",
     "web_extract": _WEB,
     "web_fetch": _WEB,
