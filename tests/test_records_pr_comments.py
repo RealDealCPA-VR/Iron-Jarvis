@@ -248,5 +248,6 @@ def test_undo_leaves_a_switch_changed_again_after_it(tmp_path):
 
 
 def test_the_words_are_iron_jarviss_own_and_plain():
-    for words in (PC.RULES, PC.answer_text(1), PC.answer_text(3), RB.NO_PR_SESSION):
+    for words in (PC.RULES, PC.answer_text(1), PC.answer_text(3), RB.NO_PR_SESSION, PC.QUIET_WORDS,
+                  RB._pr_reading_words({"comments_done": PC.DONE_QUIET})):
         assert not re.search(r"\b(harness|daemon|webhook|token)\b", words, re.IGNORECASE), words

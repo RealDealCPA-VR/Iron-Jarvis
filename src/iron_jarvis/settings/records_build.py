@@ -1879,7 +1879,8 @@ def _pr_reading_words(rec: "dict[str, Any] | None") -> str:
     said = {
         PC.DONE_MERGED: "The pull request was merged, so Iron Jarvis no longer reads its comments.",
         PC.DONE_CLOSED: "The pull request was closed, so Iron Jarvis no longer reads its comments.",
-        PC.DONE_QUIET: f"No new comment came for {PC.READ_FOR_DAYS} days, so Iron Jarvis stopped reading them.",
+        PC.DONE_QUIET: f"No new comment came for {PC.READ_FOR_DAYS} days, so Iron Jarvis stopped reading them. "
+                       "Pushing the branch from the Changes tab starts reading again.",
         PC.DONE_FAILED: "GitHub refused the reads several times in a row, so Iron Jarvis tries again once a day "
                         "until a read works.",
     }.get(done, "Iron Jarvis reads them now and then with your own GitHub sign-in (gh), every few minutes to "

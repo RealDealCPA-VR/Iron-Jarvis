@@ -1168,7 +1168,8 @@ async def _read_comments(d: Any, thread_id: str, title: str, facts: dict[str, st
     (first :data:`~iron_jarvis.harness.pr_comments.READ_FIRST_S` after the
     watch first sees the pull request, then less often up to an hour, back to
     the first wait after a new comment; ended by merged or closed, or by
-    ``READ_FOR_DAYS`` with nothing new; ``READ_FAILS_MAX`` failed reads in a
+    ``READ_FOR_DAYS`` with no new comment and no push from Iron Jarvis (said
+    once; a push after that reads again); ``READ_FAILS_MAX`` failed reads in a
     row rest it for ``READ_AGAIN_S``, then it reads again). NOTHING is read
     under Emergency stop or while the session is busy (a reply of the
     user's, a fix turn): the comments wait for it."""
@@ -1181,10 +1182,24 @@ async def _read_comments(d: Any, thread_id: str, title: str, facts: dict[str, st
                                 comments_interval_s=PC.READ_FIRST_S, comments_since=at, comments_read_fails=0,
                                 comments_done="")
         return
+    # A push of the branch from Iron Jarvis is new work on the pull request:
+    # the quiet days count from it, and after they ended it reads again.
+    pushed_at = facts.get("pushed_at")
+    if PC.read_again(rec, at, pushed_at):
+        await asyncio.to_thread(CI.save, engine, thread_id, comments_done="", comments_since=at,
+                                comments_next_at=PC.later(PC.READ_FIRST_S, at),
+                                comments_interval_s=PC.READ_FIRST_S, comments_read_fails=0)
+        return
     if not PC.due(rec, at):
         return
-    if PC.read_too_long(rec, at):
+    if PC.read_too_long(rec, at, pushed_at):
+        # Ended, and SAID once (``due`` is never true again until a push):
+        # a review that comes later must not go unread with nothing said.
         await asyncio.to_thread(CI.save, engine, thread_id, comments_done=PC.DONE_QUIET, comments_next_at=None)
+        line = {"role": "assistant", "content": PC.QUIET_WORDS,
+                "prComments": {"ids": [], "n": 0, "authors": [], "stopped": True}}
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(S.append_lines, engine, thread_id, [line], title_from_first=False)
         return
     try:
         got = await asyncio.to_thread(_git_locked, thread_id, lambda: PC.read(facts))

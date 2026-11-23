@@ -80,8 +80,16 @@ READ_FIRST_S = 300.0
 READ_GROWTH = 1.5
 #: …up to this long. A new comment starts the waits again from the first.
 READ_MAX_S = 3600.0
-#: Reading ends this long after it began or the newest comment arrived.
+#: Reading ends this long after it began, the newest comment arrived or the
+#: branch was last pushed from Iron Jarvis (said once on the session); a
+#: push after that starts it again.
 READ_FOR_DAYS = 30
+#: Said once on the session when reading ends after the quiet days (the
+#: chat's answer about the comments says it too).
+QUIET_WORDS = (
+    f"No new review comment came on this session's pull request for {READ_FOR_DAYS} days, so Iron Jarvis "
+    "stopped reading its comments. Pushing the branch from the Changes tab starts reading again."
+)
 #: Failed reads in a row before reading rests (said once on the session)…
 READ_FAILS_MAX = 5
 #: …for this long; then it is tried again, a day apart, until a read works
@@ -686,9 +694,23 @@ def first_wait(rec: dict[str, Any]) -> bool:
     return not str(rec.get("comments_done") or "") and _when(rec.get("comments_next_at")) is None
 
 
-def read_too_long(rec: dict[str, Any], at: "datetime | None" = None) -> bool:
+def read_too_long(rec: dict[str, Any], at: "datetime | None" = None, pushed_at: Any = None) -> bool:
+    """:data:`READ_FOR_DAYS` have gone by since reading began, the newest
+    comment arrived, or the branch was last pushed from Iron Jarvis
+    (``pushed_at``: a push is new work on the pull request, which reviewers
+    comment on)."""
     since = _when(rec.get("comments_since"))
-    return since is not None and ((at or now()) - since) > timedelta(days=READ_FOR_DAYS)
+    if since is None:
+        return False
+    pushed = _when(pushed_at) if pushed_at else None
+    latest = max(since, pushed) if pushed is not None else since
+    return ((at or now()) - latest) > timedelta(days=READ_FOR_DAYS)
+
+
+def read_again(rec: dict[str, Any], at: "datetime | None" = None, pushed_at: Any = None) -> bool:
+    """Reading ended after the quiet days, and the branch was pushed from Iron
+    Jarvis since: it starts again (a merged or closed pull request never)."""
+    return str(rec.get("comments_done") or "") == DONE_QUIET and not read_too_long(rec, at, pushed_at)
 
 
 def may_tell(rec: dict[str, Any], at: "datetime | None" = None) -> bool:
@@ -904,7 +926,7 @@ def answering_turns(engine: Any, thread_id: str) -> list[str]:
 
 __all__ = [
     "ANSWERED", "ANSWERING", "AUTHOR_KINDS", "KINDS", "MAX_ANSWER", "MAX_KEPT", "NEW", "PrCommentRecord", "PrRef",
-    "READ_FIRST_S", "READ_FOR_DAYS", "READ_MAX_S", "RULES", "SET_ASIDE", "STATES", "TICKED", "UNCHANGED",
-    "answer_text", "arrived_words", "block", "due", "first_wait", "judge", "listing", "may_tell", "pr_ref",
-    "read", "rows_from", "store", "turn_files",
+    "QUIET_WORDS", "READ_FIRST_S", "READ_FOR_DAYS", "READ_MAX_S", "RULES", "SET_ASIDE", "STATES", "TICKED",
+    "UNCHANGED", "answer_text", "arrived_words", "block", "due", "first_wait", "judge", "listing", "may_tell",
+    "pr_ref", "read", "read_again", "read_too_long", "rows_from", "store", "turn_files",
 ]

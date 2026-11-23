@@ -8,8 +8,10 @@ Pinned:
 * the first read waits five minutes; then each wait grows × 1.5 up to an
   hour while nothing new comes, and a new comment starts it again;
 * reading goes on after the checks pass (and while fixing checks is off);
-* a merged or closed pull request ends the reading; so do 30 quiet days and
-  five failed reads in a row (said once on the session);
+* a merged or closed pull request ends the reading; so do 30 quiet days
+  (said once on the session; a push of the branch from Iron Jarvis counts as
+  news, and after the end starts the reading again) and five failed reads in
+  a row (said once on the session);
 * NOTHING is read under Emergency stop, nor while the session is busy;
 * new comments: a line on the session in Iron Jarvis's own words (the names
   ride the structured field, never the history) and at most ONE quiet bell
@@ -384,6 +386,60 @@ async def test_five_failed_reads_stop_the_reading_said_once_and_thirty_quiet_day
     clock.go(5 * 24 * 3600)
     await w.step()
     assert w.rec()["comments_done"] == PC.DONE_QUIET
+
+
+async def test_thirty_quiet_days_end_the_reading_said_once_and_a_push_starts_it_again(app, tmp_path, monkeypatch):
+    """A pull request still waiting for its first review after 30 days: the
+    reading ends and the session SAYS so, once, in Iron Jarvis's own words
+    (otherwise a later review never arrives and nothing says it was missed).
+    A push of the branch from Iron Jarvis is new work on the pull request: the
+    30 days count from it, and after the end it starts the reading again, so
+    the review that comes then arrives."""
+    clock = Clock(monkeypatch)
+    w = await _world(app, tmp_path, monkeypatch, state=CI.WATCHING)
+    app.state.platform.config.ci_autofix = False
+    day = 24 * 3600
+
+    def push() -> None:
+        setup = setup_of(app, w.sid)
+        S.update(w.engine, w.sid, setup={**setup, "git": {**setup["git"], "pushed_at": clock.at.isoformat()}})
+
+    await w.step()
+    for _ in range(4):
+        clock.go(5 * day)
+        await w.step()
+    push()  # day 20
+    for _ in range(3):
+        clock.go(5 * day)
+        await w.step()
+    assert w.rec()["comments_done"] == "", "a push on day 20 is news: day 35 is not the end"
+    assert w.lines() == []
+    for _ in range(3):  # day 50: exactly 30 days after the push, not yet
+        clock.go(5 * day)
+        await w.step()
+    assert w.rec()["comments_done"] == ""
+    clock.go(5 * day)
+    await w.step()
+    assert w.rec()["comments_done"] == PC.DONE_QUIET
+    said = w.lines()
+    assert len(said) == 1 and said[0]["prComments"]["stopped"] is True and said[0]["prComments"]["ids"] == []
+    assert said[0]["content"] == PC.QUIET_WORDS
+    assert f"for {PC.READ_FOR_DAYS} days" in said[0]["content"] and "Pushing the branch" in said[0]["content"]
+    assert w.rows() == [], "the end of the reading rings no bell"
+    reads = w.reads()
+    clock.go(2 * day)
+    await w.step()
+    assert w.reads() == reads and len(w.lines()) == 1, "read or said again after the end"
+    # The branch is pushed again: reading starts again, from the first wait.
+    push()
+    await w.step()
+    rec = w.rec()
+    assert rec["comments_done"] == "" and w.reads() == reads
+    assert (datetime.fromisoformat(rec["comments_next_at"]) - clock.at).total_seconds() == PC.READ_FIRST_S
+    w.fake.answer(comments=[line_comment(1, login="sam")])
+    clock.go(PC.READ_FIRST_S)
+    await w.step()
+    assert w.lines()[-1]["prComments"]["ids"] == [f"{w.sid}:c1"] and len(w.lines()) == 2
 
 
 async def test_failed_reads_rest_a_day_then_read_again_until_one_works(app, tmp_path, monkeypatch):
