@@ -988,6 +988,40 @@ def test_chat_closes_an_item_of_its_own_folder_and_reopen_puts_it_back(scene):
     assert back.ok and _items(scene)[0].status == OPEN_ITEM_OPEN
 
 
+def test_reopen_on_an_item_that_is_still_open_never_says_it_reopened_it(scene):
+    """Review 5 of 04-b (north star 1): the block asks the owner about an item
+    later work may have done, "it's not done yet" arms ``open_item_reopen``,
+    and the model calls it on that OPEN item. It answers the question Not yet
+    (as the card's Not yet does) and says that, never "Reopened". An open item
+    that asks nothing is refused, and nothing about it changes."""
+    old = _chat(scene, "March close", H, hours_ago=5)
+    _keep(scene, old, "Open: Send recon_march.xlsx to Ann")
+    new = _chat(scene, "April close", H, hours_ago=1)
+    _keep(scene, new, "Done: Sent recon_march.xlsx to Ann")
+    payroll = _chat(scene, "Payroll", H, hours_ago=3)
+    _keep(scene, payroll, "Open: Confirm the bonus")
+    (asked,) = _items(scene, entry_id=f"chat:{old}")
+    (plain,) = _items(scene, entry_id=f"chat:{payroll}")
+    assert asked.maybe_done_entry == f"chat:{new}" and not plain.maybe_done_entry
+    assert open_item_tools.open_item_tools_for("It's not done yet") == [open_item_tools.REOPEN_NAME]
+    _close, reopen = open_item_tools.open_item_tools(scene.platform)
+    got = _run(reopen, {"item": asked.id}, scene, H)
+    assert got.ok, got.error
+    assert "Reopened" not in got.output
+    assert "still open" in got.output and "Not yet" in got.output and "Send recon_march.xlsx to Ann" in got.output
+    (after,) = _items(scene, entry_id=f"chat:{old}")
+    assert after.status == OPEN_ITEM_OPEN
+    assert after.maybe_done_entry == "" and after.maybe_declined == f"chat:{new}"
+    assert scene.bus.events[-1] == ("work.open_item_changed", {"id": asked.id, "status": OPEN_ITEM_OPEN})
+    events = len(scene.bus.events)
+    got = _run(reopen, {"item": plain.id}, scene, H)
+    assert not got.ok and got.error == open_item_tools.NOT_CLOSED
+    assert "Reopened" not in f"{got.output or ''} {got.error}"
+    (same,) = _items(scene, entry_id=f"chat:{payroll}")
+    assert (same.status, same.updated_at, same.maybe_declined) == (OPEN_ITEM_OPEN, plain.updated_at, "")
+    assert len(scene.bus.events) == events
+
+
 def test_chat_finds_and_closes_an_item_the_block_only_counts(scene):
     """G9 (review 3 of 04-b): an item past the six the block numbers is on the
     card, so the owner may name it in chat. ``open_item_close`` with no id

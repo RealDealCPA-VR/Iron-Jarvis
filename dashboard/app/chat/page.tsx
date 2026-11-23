@@ -11418,8 +11418,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         },
         () => {
           // A send that did not come from the box (a suggestion) keeps its
-          // words there instead, so nothing the user chose is lost.
-          if (!composer.get().text.trim()) composer.setText(text);
+          // words there instead, so nothing the user chose is lost. An open
+          // item's own Continue (04-b, review 5) leaves the box empty: its
+          // sentence alone would lose WHICH item was picked, and an empty
+          // box keeps the card, whose Continue sends that item again.
+          if (!opts.pickUpItem && !composer.get().text.trim()) composer.setText(text);
         },
       )
     )

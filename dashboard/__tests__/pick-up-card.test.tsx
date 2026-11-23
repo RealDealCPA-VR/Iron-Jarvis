@@ -1081,6 +1081,29 @@ describe("open items that stay until they are done (04-b)", () => {
     expect("pick_up_item" in H.stream.bodies[0]).toBe(false);
   });
 
+  it("a Local only chat: Keep it local after an item's Continue keeps the pick (the box stays empty, the card stays)", async () => {
+    // Review 5 of 04-b: the sentence alone in the box would send no
+    // pick_up_item, and words in the box put the card (and its item
+    // Continue) aside.
+    desktop({ path: BOOKS });
+    H.api.getResponses[pickUpPath(BOOKS)] = answer();
+    H.api.getResponses[pickUpPath(BOOKS, true)] = answer();
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByTestId("local-only-chip"));
+    await waitFor(() => expect(screen.getByTestId("local-only-chip").getAttribute("aria-pressed")).toBe("true"));
+    fireEvent.click(await screen.findByTestId("chat-hero-folder-choose"));
+    fireEvent.click(await screen.findByTestId(`pick-up-item-continue-${ITEM}`));
+    fireEvent.click(await screen.findByRole("button", { name: "Keep it local" }));
+    await waitFor(() => expect(screen.queryByTestId("cloud-ask-card")).toBeNull());
+    expect((await box()).value).toBe("");
+    expect(H.stream.bodies).toHaveLength(0);
+    // The item's own Continue is there again, and still sends that item.
+    fireEvent.click(await screen.findByTestId(`pick-up-item-continue-${ITEM}`));
+    fireEvent.click(await screen.findByRole("button", { name: "Send once" }));
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    expect(H.stream.bodies[0].pick_up_item).toBe(ITEM);
+  });
+
   it("both Code views show the items with their menu, and no item Continue", async () => {
     H.api.getResponses[pickUpPath(BOOKS, false, true)] = answer();
     render(<HarnessStartComposer initialFolder={BOOKS} onStart={async () => null} />);

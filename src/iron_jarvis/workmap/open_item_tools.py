@@ -64,6 +64,12 @@ UNREADABLE = (
     "again in a moment."
 )
 NONE_CLOSED = "Nothing in this folder was closed in the last 14 days."
+#: Review 5 of 04-b (north star 1): ``open_item_reopen`` on an item that was
+#: never closed and asks no question: nothing changes, and it says so.
+NOT_CLOSED = (
+    "That open item was never closed, so there is nothing to reopen: it is still open. Nothing was "
+    "changed."
+)
 NONE_OPEN = "Nothing is open in this folder."
 NONE_MATCH = (
     "No open item of this folder has those words. Leave out the item to list every open item here."
@@ -330,10 +336,26 @@ class OpenItemReopenTool(_OpenItemTool):
         why, item = await asyncio.to_thread(self._find, item_id, lately=True)
         if item is None:
             return ToolResult(ok=False, error=why)
+        # Review 5 of 04-b (north star 1): an item of the open list (it has no
+        # status: it was never closed) is never said to be reopened. Where
+        # later work may have done it, "not done yet" answers that question
+        # Not yet, as the card's Not yet does, and says that; with no
+        # question, nothing changes.
+        still_open = not item.get("status")
+        if still_open and not item.get("maybe_done"):
+            return ToolResult(ok=False, error=NOT_CLOSED)
         got = await asyncio.to_thread(open_items.reopen, self._engine(), item_id)
         if got is None:
             return ToolResult(ok=False, error=NOT_HERE)
         await self._changed(got)
+        if still_open:
+            return ToolResult(
+                ok=True,
+                output=(f"The open item [{item_id}] was never closed and is still open: {item['text']}. Its "
+                        "question, whether later work did it, is now answered Not yet, so that work will "
+                        "not ask it again."),
+                data={"id": item_id, "status": got["status"]},
+            )
         return ToolResult(ok=True, output=f"Reopened the open item [{item_id}]: {item['text']}.",
                           data={"id": item_id, "status": got["status"]})
 
@@ -408,6 +430,6 @@ def open_item_tools_for(text: Any) -> list[str]:
 
 
 __all__ = [
-    "CLOSE_NAME", "NOT_HERE", "NO_FOLDER", "ON_PHONE", "OpenItemCloseTool", "OpenItemReopenTool", "REOPEN_NAME",
+    "CLOSE_NAME", "NOT_CLOSED", "NOT_HERE", "NO_FOLDER", "ON_PHONE", "OpenItemCloseTool", "OpenItemReopenTool", "REOPEN_NAME",
     "TOOL_NAMES", "open_item_tools", "open_item_tools_for",
 ]
