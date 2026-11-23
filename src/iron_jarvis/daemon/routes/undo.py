@@ -18,7 +18,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pathlib import Path
 from typing import Any
 
@@ -457,8 +457,114 @@ async def perform_undo(d, action_id: str, *, pressed: bool = False) -> dict[str,
     }
 
 
+def _newest_first(d, action_ids: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Next leaps 40-a: ``(changes newest first, ids that are no change)``.
+    Each change carries its name (``records_history.change_row``) so a skip
+    can say which one it was. Blocking."""
+    from ...settings import records_history as H
+
+    found: list[tuple[Any, dict[str, Any]]] = []
+    missing: list[dict[str, Any]] = []
+    with session_scope(d.platform.engine) as db:
+        rows = {
+            inv.id: inv
+            for inv in db.exec(select(ToolInvocation).where(ToolInvocation.id.in_(action_ids)))  # type: ignore[attr-defined]
+        }
+        for aid in action_ids:
+            inv = rows.get(aid)
+            if inv is None or inv.undo_of is not None:
+                missing.append({"id": aid, "target": "", "what": "", "kind": "", "reason": "there is no such change"})
+                continue
+            row = H.change_row(inv, db.get(UndoJournal, aid))
+            found.append((inv.created_at, {"id": aid, "target": row["target"], "what": row["what"], "kind": row["kind"]}))
+    # NEWEST FIRST, the only order that composes (the run revert's rule):
+    # three edits to one file replay backwards to the original.
+    found.sort(key=lambda pair: (pair[0] is not None, pair[0], pair[1]["id"]), reverse=True)
+    return [row for _at, row in found], missing
+
+
+async def undo_many(d, action_ids: Any, *, pressed: bool) -> dict[str, Any]:
+    """Next leaps 40-a: put several changes back — THE Undo
+    (:func:`perform_undo`) once per change, NEWEST FIRST whatever order they
+    were picked in, exactly as ``POST /sessions/{id}/revert`` does. A change
+    that cannot be put back (changed since, already undone, no such change)
+    is skipped BY NAME with why, and the rest still revert: never
+    all-or-nothing. ``pressed``: a person pressed "Undo these" (the page),
+    the consent a tool set to ask needs (PG4); chat's ``change_undo`` passes
+    False, as its single Undo does. ``{reverted, skipped, considered,
+    words}``."""
+    from ...settings import records_day as RD
+
+    ids = list(dict.fromkeys(str(a).strip() for a in (action_ids or []) if str(a or "").strip()))
+    known, skipped = await asyncio.to_thread(_newest_first, d, ids)
+    reverted: list[dict[str, Any]] = []
+    for row in known:
+        aid = row["id"]
+        try:
+            out = await perform_undo(d, PressedUndo(aid) if pressed else aid, pressed=pressed)
+            reverted.append({**row, "undo_invocation_id": out.get("undo_invocation_id")})
+        except HTTPException as exc:
+            skipped.append({**row, "reason": RD.plain_skip(exc.detail)})
+        except Exception as exc:  # noqa: BLE001 — one bad change, not the batch
+            logger.warning("undo many: change %s failed", aid, exc_info=True)
+            skipped.append({**row, "reason": plain_failure("That change could not be undone.", exc)})
+    return {
+        "reverted": reverted,
+        "skipped": skipped,
+        "considered": len(ids),
+        "words": RD.put_back_words(reverted, skipped),
+    }
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
+
+    # ---- Your day (next leaps 40-a, R2.18) --------------------------------
+    # The Activity page's "Your day" tab. Every read and every Undo is off
+    # the loop; before and after is for the person's own screen (D-40.2).
+
+    @app.get("/changes/day")
+    async def changes_day(date: str = "") -> dict[str, Any]:
+        """One LOCAL day's changes, grouped by where they came from, with
+        what cannot be undone listed apart (``records_day.day_changes``)."""
+        from ...settings import records_day as RD
+
+        day = RD.parse_day(date) if str(date or "").strip() else RD.today_local()
+        if day is None:
+            raise HTTPException(status_code=422, detail="date is a day as YYYY-MM-DD")
+        return await asyncio.to_thread(RD.day_changes, d.platform.engine, day, home=d.platform.config.home)
+
+    @app.get("/changes/{action_id}/before-after")
+    async def change_before_after(action_id: str) -> dict[str, Any]:
+        """One change's before and after, read on this PC (D-40.2)."""
+        from ...settings import records_day as RD
+        from .settings import config_writer
+
+        writer = config_writer(d)
+        out = await asyncio.to_thread(RD.before_after, d.platform, action_id, current_setting=writer.current)
+        if out is None:
+            raise HTTPException(status_code=404, detail="unknown change")
+        return out
+
+    @app.post("/changes/undo")
+    async def changes_undo(request: Request) -> dict[str, Any]:
+        """"Undo these": the changes ticked on the page, newest first, after
+        the one confirmation that listed them (D-40.1). The press is the
+        consent (PG4)."""
+        from ...settings import records_day as RD
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail="send {action_ids: [...]}")
+        ids = body.get("action_ids") if isinstance(body, dict) else None
+        if not isinstance(ids, list) or not ids or not all(isinstance(x, str) and x.strip() for x in ids):
+            raise HTTPException(status_code=422, detail="send {action_ids: [...]}, the changes to undo")
+        if len(ids) > RD.PAGE_MAX:
+            raise HTTPException(
+                status_code=422, detail=f"At most {RD.PAGE_MAX} changes can be undone at once; this asked for {len(ids)}."
+            )
+        return await undo_many(d, ids, pressed=True)
 
     @app.get("/undo")
     def list_undoable(

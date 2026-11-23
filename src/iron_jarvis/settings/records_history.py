@@ -158,6 +158,12 @@ _OTHER_CHATS_RX = re.compile(
 _THIS_CHAT_RX = re.compile(r"\b" + _THIS_CHAT + r"\b", re.IGNORECASE)
 
 _ACTOR = r"(?:you|jarvis|iron\s+jarvis)"
+#: Next leaps 40-a: the words that put many changes back at once.
+_UNDO_VERB = r"(?:undo|revert|reverse|roll\s*back|put\s+back|take\s+back)"
+_MANY = (
+    r"(?:everything|every\s+change|all(?:\s+of)?(?:\s+(?:the|my|your|these|those|them))?"
+    r"(?:\s+(?:changes|edits|files))?)"
+)
 _CHANGES_LIST_RX = re.compile(
     # "what did you change today?", "what have you edited?"
     r"\bwhat\s+(?:did|have|has)\s+" + _ACTOR + r"\s+(?:just\s+|already\s+)?"
@@ -171,7 +177,10 @@ _CHANGES_LIST_RX = re.compile(
     r"|\b(?:show|list|tell)\s+(?:me\s+)?what\s+" + _ACTOR + r"\s+(?:changed|edited|did)\b"
     r"|\bchanges\s+(?:you(?:'ve|\s+have)?\s+made|you\s+did|(?:iron\s+)?jarvis\s+made)\b"
     r"|\b(?:change|undo)\s+history\b"
-    r"|\bhistory\s+of\s+(?:your|the|my)\s+changes\b",
+    r"|\bhistory\s+of\s+(?:your|the|my)\s+changes\b"
+    # Next leaps 40-a: "what did the 3 pm run change?"
+    r"|\bwhat\s+(?:did|has)\s+(?:the|my|this|that|today'?s|yesterday'?s)\s+[^.!?\n]{0,30}?\b(?:run|schedule)\s+"
+    r"(?:change|changed|edit|edited|touch|touched|do|did)\b",
     re.IGNORECASE,
 )
 _CHANGE_UNDO_RX = re.compile(
@@ -192,7 +201,21 @@ _CHANGE_UNDO_RX = re.compile(
     r"(?:it|they)\s+(?:was|were)\b"
     # "undo that" — config_undo's own phrases (records._UNDO_WORDS): the
     # newest change of ANY kind, named on the card.
-    r"|\bundo\s+(?:that|it|this|my\s+last\s+change)\b",
+    r"|\bundo\s+(?:that|it|this|my\s+last\s+change)\b"
+    # Next leaps 40-a: many at once. "undo everything from the 3 pm run",
+    # "revert all the changes from the 3pm task", "roll back everything the
+    # 15:00 schedule did" — a run, task or schedule is named (never "undo
+    # everything in this paragraph").
+    + r"|\b" + _UNDO_VERB + r"\s+" + _MANY
+    + r"\s+(?:from|in|by|during|of|that|the|made\s+(?:by|in|during))\s+[^.!?\n]{0,40}?\b(?:run|task|schedule)s?\b"
+    # "put back everything you changed today"
+    + r"|\b" + _UNDO_VERB + r"\s+(?:everything|all)\s+" + _ACTOR
+    + r"\s+(?:just\s+)?(?:did|changed|made|wrote|edited)\b"
+    # "undo all of these changes", "undo these two changes" (after a list)
+    + r"|\b" + _UNDO_VERB + r"\s+(?:all\s+(?:of\s+)?)?(?:these|those)(?:\s+(?:\d{1,3}|two|three|four|five|six|"
+    r"seven|eight|nine|ten|eleven|twelve))?\s+(?:changes|edits)\b"
+    # "undo everything from today", "undo all the changes made this morning"
+    + r"|\b" + _UNDO_VERB + r"\s+" + _MANY + r"\s+(?:from|made)\s+(?:today|yesterday|this\s+(?:morning|afternoon|evening))\b",
     re.IGNORECASE,
 )
 
@@ -900,9 +923,6 @@ _RECORD_WORDS = {
     "grant": "the always-allow",
     "chat_local_only": "Local only for a chat",
 }
-NOT_LISTED_NOTE = (
-    "Commands Iron Jarvis ran and messages it sent are not in this list: they have no Undo."
-)
 _SCAN_ROWS = 400
 
 
@@ -1077,21 +1097,50 @@ def local_only_rows(db: Any, engine: Any, invs: list[Any]) -> set[str]:
     return out
 
 
+#: Next leaps 40-a: why a change whose before-copy is gone cannot be undone
+#: (a cleanup cleared the undo history, or the day is older than it keeps).
+NO_COPY_KEPT = "no copy of how it was is kept any more"
+
+
+def copy_kept(journal: Any, home: Any) -> bool:
+    """Next leaps 40-a: whether *journal*'s before-copy is still on this PC —
+    False only for a row that refers to a blob under ``<home>/undo/`` that is
+    gone. An inline copy, or a kind with no copy, is kept. BLOCKING (one
+    stat); never raises (unknown = kept: the Undo itself still refuses)."""
+    ref = getattr(journal, "pre_ref", None) if journal is not None else None
+    if not ref or home is None:
+        return True
+    try:
+        from pathlib import Path
+
+        return (Path(home) / "undo" / str(ref)).is_file()
+    except (OSError, TypeError, ValueError):
+        return True
+
+
 def change_row(
-    inv: Any, journal: Any, now: datetime | None = None, *, local_work: bool = False
+    inv: Any, journal: Any, now: datetime | None = None, *, local_work: bool = False, home: Any = None
 ) -> dict[str, Any]:
     """One change in plain words: ``{id, at, ago, where, kind, what, state,
     why}`` — ``state`` is ``can`` (can be undone), ``undone`` or ``cannot``.
     ``local_work`` (review): made in Local only work — ``what`` keeps its
     name for the person's card, ``what_safe`` is what a turn that may not
-    recall Local only chats is told."""
+    recall Local only chats is told. ``target`` (next leaps 40-a) is the
+    name alone ("notes.txt", "the schedule “nightly”"), "" when none;
+    ``home`` (40-a): a row whose before-copy is gone from ``<home>/undo/``
+    reads ``cannot`` (:data:`NO_COPY_KEPT`), never an Undo that would fail."""
     from ..agents.mission import fallback_line
 
     now = now or datetime.now(timezone.utc)
     jkind = getattr(journal, "kind", "") if journal is not None else ""
     target = _target_words(jkind, getattr(journal, "pre_inline", None) if journal is not None else None)
     did = fallback_line(str(inv.tool or ""), True)
-    what = f"{did}: {_masked(target, 120)}" if target else did
+    target = _masked(target, 120) if target else ""
+    what = f"{did}: {target}" if target else did
+    if target and jkind in ("setting_restore", "secret_restore") and did.startswith("used "):
+        # Next leaps 40-a: the settings page's and the key card's own rows
+        # read "changed the setting …", never "used update settings: …".
+        what = f"changed {target}"
     if inv.tool == LOCAL_ONLY_TOOL:
         try:
             was_on = bool((json.loads(getattr(journal, "pre_inline", None) or "{}").get("prior") or {}).get("local_only"))
@@ -1108,6 +1157,8 @@ def change_row(
         state, why = "cannot", "it left this PC (a message sent or money spent)"
     elif not bool(getattr(journal, "reversible", False)):
         state, why = "cannot", "Iron Jarvis kept no safe way back for it"
+    elif not copy_kept(journal, home):
+        state, why = "cannot", NO_COPY_KEPT
     else:
         state, why = "can", ""
     at = inv.created_at
@@ -1119,7 +1170,9 @@ def change_row(
         "at": at.isoformat() if at is not None else None,
         "ago": _ago(at, now),
         "where": _where(inv.session_id),
+        "session_id": str(inv.session_id or ""),
         "kind": kind_of(jkind),
+        "target": target,
         "what": what,
         "what_safe": f"{did} {LOCAL_WORK_WORDS}" if local_work else what,
         "local_work": bool(local_work),
@@ -1134,12 +1187,36 @@ def _for_model(row: dict[str, Any], recall_local: bool) -> dict[str, Any]:
     turn that may not recall Local only chats."""
     if recall_local or not row.get("local_work"):
         return row
-    return {**row, "what": row["what_safe"]}
+    out = {**row, "what": row["what_safe"], "target": ""}
+    if isinstance(row.get("source"), dict):
+        # Next leaps 40-a: the run or chat it came from is named no more
+        # than the change itself is.
+        out["source"] = {**row["source"], "name": LOCAL_SOURCE_WORDS}
+    return out
 
 
-def list_changes(engine: Any, *, hours: int = 24, kind: str = "any", limit: int = 20) -> tuple[list[dict[str, Any]], int]:
+#: Next leaps 40-a: where a Local only change came from, as a turn that may
+#: not recall Local only chats is told it.
+LOCAL_SOURCE_WORDS = "Local only work"
+
+
+def list_changes(
+    engine: Any,
+    *,
+    hours: int = 24,
+    kind: str = "any",
+    limit: int = 20,
+    day: Any = None,
+    session_ids: Any = None,
+    home: Any = None,
+) -> tuple[list[dict[str, Any]], int]:
     """The journaled changes of the last *hours*, newest first: ``(rows,
-    total in the window)``. Blocking; bounded (``_SCAN_ROWS``)."""
+    total in the window)``. Next leaps 40-a: ``day`` (a ``date``) reads that
+    LOCAL day instead (``records_day.day_bounds``), ``session_ids`` narrows
+    to those sources (a run and its helpers), ``home`` marks a row whose
+    before-copy is gone as ``cannot``. A change that left this PC is not
+    here: ``records_day.cannot_rows`` lists those. Blocking; bounded
+    (``_SCAN_ROWS``)."""
     from datetime import timedelta
 
     from sqlmodel import select
@@ -1148,32 +1225,46 @@ def list_changes(engine: Any, *, hours: int = 24, kind: str = "any", limit: int 
     from ..core.models import ToolInvocation, UndoJournal
 
     now = datetime.now(timezone.utc)
-    since = (now - timedelta(hours=hours)).replace(tzinfo=None)
+    if day is not None:
+        from .records_day import day_bounds
+
+        since, until = day_bounds(day)
+    else:
+        since, until = (now - timedelta(hours=hours)).replace(tzinfo=None), None
     out: list[dict[str, Any]] = []
     total = 0
     with session_scope(engine) as db:
-        rows = db.exec(
+        stmt = (
             select(ToolInvocation, UndoJournal)
             .where(UndoJournal.action_id == ToolInvocation.id)
             .where(ToolInvocation.ok == True)  # noqa: E712
             .where(ToolInvocation.undo_of == None)  # noqa: E711
             .where(ToolInvocation.created_at >= since)
-            .order_by(ToolInvocation.created_at.desc())  # type: ignore[attr-defined]
-            .limit(_SCAN_ROWS)
-        ).all()
-        picked = [(inv, j) for inv, j in rows if kind == "any" or kind_of(j.kind) == kind]
+        )
+        if until is not None:
+            stmt = stmt.where(ToolInvocation.created_at < until)
+        if session_ids is not None:
+            stmt = stmt.where(ToolInvocation.session_id.in_(sorted(set(session_ids))))  # type: ignore[attr-defined]
+        rows = db.exec(stmt.order_by(ToolInvocation.created_at.desc()).limit(_SCAN_ROWS)).all()  # type: ignore[attr-defined]
+        picked = [
+            (inv, j)
+            for inv, j in rows
+            if (kind == "any" or kind_of(j.kind) == kind)
+            and (inv.reversibility or "").lower() != Reversibility.IRREVERSIBLE.value
+        ]
         total = len(picked)
         picked = picked[:limit]
         local = local_only_rows(db, engine, [inv for inv, _j in picked])
-        out = [change_row(inv, j, now, local_work=inv.id in local) for inv, j in picked]
+        out = [change_row(inv, j, now, local_work=inv.id in local, home=home) for inv, j in picked]
     return out, total
 
 
-def find_change(engine: Any, action_id: str = "", kind: str = "any") -> dict[str, Any] | None:
+def find_change(engine: Any, action_id: str = "", kind: str = "any", *, home: Any = None) -> dict[str, Any] | None:
     """The change ``change_undo`` reverses. With an id: that ledger row
     whatever its state (None when there is no such action, or it is itself
-    an undo). Without: the NEWEST change that can still be undone, of *kind*.
-    Blocking."""
+    an undo). Without: the NEWEST change that can still be undone, of *kind*
+    (next leaps 40-a: with ``home``, one whose before-copy is gone is passed
+    over, as it cannot be undone). Blocking."""
     from sqlmodel import select
 
     from ..core.db import session_scope
@@ -1185,7 +1276,8 @@ def find_change(engine: Any, action_id: str = "", kind: str = "any") -> dict[str
             if inv is None or inv.undo_of is not None:
                 return None
             return change_row(
-                inv, db.get(UndoJournal, action_id), local_work=inv.id in local_only_rows(db, engine, [inv])
+                inv, db.get(UndoJournal, action_id), local_work=inv.id in local_only_rows(db, engine, [inv]),
+                home=home,
             )
         rows = db.exec(
             select(ToolInvocation, UndoJournal)
@@ -1202,7 +1294,9 @@ def find_change(engine: Any, action_id: str = "", kind: str = "any") -> dict[str
                 continue
             if kind != "any" and kind_of(j.kind) != kind:
                 continue
-            return change_row(inv, j, local_work=inv.id in local_only_rows(db, engine, [inv]))
+            if not copy_kept(j, home):
+                continue
+            return change_row(inv, j, local_work=inv.id in local_only_rows(db, engine, [inv]), home=home)
     return None
 
 
@@ -1211,22 +1305,56 @@ def _kind_arg(args: dict[str, Any]) -> str:
     return k if k in CHANGE_KINDS else "any"
 
 
+#: Next leaps 40-a: what the history says of what has no Undo. They are
+#: listed now (``records_day.cannot_rows``), so the note says where.
+CANNOT_NOTE = "Commands Iron Jarvis ran and messages it sent have no Undo: they are listed under Can't be undone."
+NONE_CANNOT_NOTE = "Commands Iron Jarvis ran and messages it sent have no Undo; there were none in this time."
+_STATE_WORDS = {"can": "can be undone", "undone": "already undone", "cannot": "cannot be undone"}
+
+
+def _group_head(source: dict[str, Any] | None) -> str:
+    from .records_day import source_words
+
+    src = source or {}
+    if src.get("kind") == "chat":
+        return "In chat:"
+    if src.get("kind") == "settings":
+        return "On a settings page:"
+    words = source_words(src) or str(src.get("name") or "") or "Elsewhere"
+    return f"From {words}:"
+
+
+def _safe_source(source: dict[str, Any] | None, rows: list[dict[str, Any]], recall_local: bool) -> dict[str, Any]:
+    """*source* as a turn is told it: named no more than its changes are."""
+    src = dict(source or {})
+    if recall_local or not any(r.get("local_work") for r in rows):
+        return src
+    return {**src, "kind": "other", "name": LOCAL_SOURCE_WORDS, "started": None}
+
+
 class ChangesListTool(Tool):
-    """What Iron Jarvis changed recently — read-only (D4)."""
+    """What Iron Jarvis changed recently — read-only (D4); one day, or one
+    run, with what cannot be undone (next leaps 40-a)."""
 
     name = "changes_list"
     description = (
-        "List what Iron Jarvis changed recently — settings, keys (by name), records (schedules, "
+        "List what Iron Jarvis changed — settings, keys (by name), records (schedules, "
         "workflows, goals, rules…), files and memory notes — newest first, each with its id, when, "
-        "where (in chat, on a settings page, in a task) and whether it can still be undone. "
-        "`hours` (default 24) is how far back; `kind` narrows it (setting, record, file, memory). "
-        "Names and plain words only, never a value or a file's contents. To undo one, call "
-        "change_undo with its id."
+        "where it came from (chat, a settings page, a run, a schedule, a coding session) and whether "
+        "it can still be undone, and what cannot be undone (messages sent, commands run). "
+        "`hours` (default 24) is how far back; `date` (YYYY-MM-DD, today, yesterday) lists that whole "
+        "day instead, grouped by where each change came from; `run` lists what one run changed (its "
+        "id, or the time it started: \"the 3 pm run\", on `date`, default today); `kind` narrows it "
+        "(setting, record, file, memory). Names and plain words only, never a value or a file's "
+        "contents. To undo one, call change_undo with its id; several, with action_ids; everything "
+        "one run changed, with run."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "hours": {"type": "integer", "minimum": 1, "maximum": 720},
+            "date": {"type": "string"},
+            "run": {"type": "string"},
             "kind": {"type": "string", "enum": list(CHANGE_KINDS)},
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
         },
@@ -1237,59 +1365,115 @@ class ChangesListTool(Tool):
         self.platform = platform
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from . import records_day as RD
+
         try:
             hours = max(1, min(int(args.get("hours") or 24), 720))
             limit = max(1, min(int(args.get("limit") or 20), 50))
         except (TypeError, ValueError):
             return ToolResult(ok=False, error="hours and limit are whole numbers.")
         kind = _kind_arg(args)
+        day = None
+        if str(args.get("date") or "").strip():
+            day = RD.parse_day(args.get("date"))
+            if day is None:
+                return ToolResult(ok=False, error="date is a day as YYYY-MM-DD, or today, or yesterday.")
         from ..providers import egress
 
         recall_local = egress.may_recall_local_only_chats()
-        rows, total = await asyncio.to_thread(list_changes, self.platform.engine, hours=hours, kind=kind, limit=limit)
-        rows = [_for_model(r, recall_local) for r in rows]
-        span = f"the last {hours} hour{'s' if hours != 1 else ''}"
-        noun = "change" if kind == "any" else f"{kind} change"
-        if not rows:
-            return ToolResult(
-                ok=True,
-                output=f"No {noun}s in {span}. {NOT_LISTED_NOTE}",
-                data={"changes": [], "count": 0, "total": 0, "hours": hours},
-            )
-        state_words = {"can": "can be undone", "undone": "already undone", "cannot": "cannot be undone"}
-        lines = [f"{noun.capitalize()}s in {span}, newest first ({len(rows)} of {total}):"]
-        for r in rows:
-            bits = [r["id"], r["ago"], r["where"]]
-            head = " · ".join(b for b in bits if b)
-            why = f" ({r['why']})" if r["state"] == "cannot" and r["why"] else ""
-            lines.append(f"- {head} — {r['what']} — {state_words[r['state']]}{why}")
-        lines.append(NOT_LISTED_NOTE)
-        lines.append("To undo one, call change_undo with its id.")
-        return ToolResult(
-            ok=True,
-            output="\n".join(lines),
-            data={"changes": rows, "count": len(rows), "total": total, "hours": hours},
+        engine = self.platform.engine
+        source = None
+        session_ids = None
+        run_ref = str(args.get("run") or "").strip()
+        if run_ref:
+            source, session_ids, problem = await asyncio.to_thread(RD.resolve_run, engine, run_ref, day)
+            if problem:
+                return ToolResult(ok=False, error=problem)
+        listed = await asyncio.to_thread(
+            RD.listing, engine, hours=hours, kind=kind, limit=limit, day=day,
+            session_ids=session_ids, home=self.platform.config.home, everything=bool(run_ref),
         )
+        rows = [_for_model(r, recall_local) for r in listed["rows"]]
+        cannot = [_for_model(r, recall_local) for r in listed["cannot"]] if kind == "any" else []
+        total = listed["total"]
+        if run_ref:
+            src_safe = _safe_source(source, listed["rows"] + listed["cannot"], recall_local)
+            span = RD.source_words(src_safe) or "that run"
+        elif day is not None:
+            span = f"on {RD.day_words(day)}"
+        else:
+            span = f"in the last {hours} hour{'s' if hours != 1 else ''}"
+        noun = "change" if kind == "any" else f"{kind} change"
+        note = CANNOT_NOTE if cannot else NONE_CANNOT_NOTE
+        data = {
+            "changes": rows, "count": len(rows), "total": total, "hours": hours,
+            "cannot": cannot, "more": listed["more"],
+            **({"date": day.isoformat()} if day is not None else {}),
+            **({"source": _safe_source(source, listed["rows"] + listed["cannot"], recall_local)} if run_ref else {}),
+        }
+        if not rows and not cannot:
+            return ToolResult(ok=True, output=f"No {noun}s {'from' if run_ref else ''} {span}. {note}".replace("  ", " "), data=data)
+        lines = [
+            f"{noun.capitalize()}s {'from ' if run_ref else ''}{span}, newest first ({len(rows)} of {total}):"
+        ]
+        if day is None and not run_ref:
+            for r in rows:
+                head = " · ".join(b for b in (r["id"], r["ago"], r["where"]) if b)
+                why = f" ({r['why']})" if r["state"] == "cannot" and r["why"] else ""
+                lines.append(f"- {head} — {r['what']} — {_STATE_WORDS[r['state']]}{why}")
+        else:
+            groups: dict[str, list[dict[str, Any]]] = {}
+            for r in rows:
+                groups.setdefault(r["session_id"], []).append(r)
+            for sid, members in groups.items():
+                if not run_ref:
+                    src = _safe_source(listed["sources"].get(sid), members, recall_local)
+                    lines.append(_group_head(src))
+                for r in members:
+                    head = " · ".join(b for b in (r["id"], r.get("clock") or r["ago"]) if b)
+                    why = f" ({r['why']})" if r["state"] == "cannot" and r["why"] else ""
+                    lines.append(f"- {head} — {r['what']} — {_STATE_WORDS[r['state']]}{why}")
+        if cannot:
+            lines.append("Can't be undone (they left this PC or ran):")
+            for c in cannot:
+                src = _safe_source(listed["sources"].get(c["session_id"]), [c], recall_local)
+                where = "" if run_ref else RD.source_words(src)
+                head = " · ".join(b for b in (c.get("clock") or "", where) if b)
+                lines.append(f"- {head} — {c['what']} ({c['why']})")
+        lines.append(note)
+        lines.append(
+            "To undo one, call change_undo with its id; several, with action_ids (at most "
+            f"{RD.CHAT_IDS_MAX}); everything one run changed, with run."
+        )
+        return ToolResult(ok=True, output="\n".join(lines), data=data)
 
 
 class ChangeUndoTool(Tool):
-    """Undo one change Iron Jarvis made (D4): ALWAYS a card naming it, then
-    THE code ``POST /undo/{id}`` runs (``routes.undo.perform_undo``) — the
-    Undo the receipts, the Settings ledger and ``config_undo`` share."""
+    """Undo one change Iron Jarvis made (D4), or many at once (next leaps
+    40-a): ALWAYS a card naming each, then THE code ``POST /undo/{id}`` runs
+    (``routes.undo.perform_undo``; many go newest first through
+    ``routes.undo.undo_many``, the run revert's order) — the Undo the
+    receipts, the Settings ledger and ``config_undo`` share."""
 
     name = "change_undo"
     description = (
         "Undo ONE change Iron Jarvis made — a file edit, a setting, a key, a schedule, workflow, "
         "goal, rule or other record — through the same Undo as the receipts. `action_id` names "
         "it (changes_list shows ids); with none it undoes the NEWEST change that can still be "
-        "undone, of `kind` if given (file, setting, record, memory). The user always approves on "
-        "a card that names exactly the change. Commands, sent messages and money spent cannot be "
-        "undone. Tell the user what was undone."
+        "undone, of `kind` if given (file, setting, record, memory). Or SEVERAL at once: "
+        "`action_ids` (at most 50 ids from changes_list), or `run`: everything one run changed, "
+        "named by its id or by the time it started (\"the 3 pm run\", on `date`, default today). "
+        "The user always approves on ONE card that names every change; what cannot be undone is "
+        "said first. Commands, sent messages and money spent cannot be undone. Tell the user what "
+        "was put back and what was not, with why."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "action_id": {"type": "string"},
+            "action_ids": {"type": "array", "items": {"type": "string"}},
+            "run": {"type": "string"},
+            "date": {"type": "string"},
             "kind": {"type": "string", "enum": list(CHANGE_KINDS)},
         },
     }
@@ -1308,19 +1492,60 @@ class ChangeUndoTool(Tool):
         self._held: dict[str, list[tuple[float, dict[str, Any] | None]]] = {}
 
     @staticmethod
+    def _many(args: dict[str, Any]) -> bool:
+        """Next leaps 40-a: several at once (``action_ids`` or ``run``)."""
+        return args.get("action_ids") not in (None, []) or bool(str(args.get("run") or "").strip())
+
+    @staticmethod
     def _key(args: dict[str, Any], ctx: ToolContext) -> str:
-        return json.dumps(
-            [
-                str(getattr(ctx, "session_id", "") or ""),
-                str(getattr(ctx, "turn_id", "") or ""),
-                str(args.get("action_id") or "").strip(),
-                _kind_arg(args),
+        key = [
+            str(getattr(ctx, "session_id", "") or ""),
+            str(getattr(ctx, "turn_id", "") or ""),
+            str(args.get("action_id") or "").strip(),
+            _kind_arg(args),
+        ]
+        if ChangeUndoTool._many(args):
+            ids = args.get("action_ids")
+            key += [
+                sorted(str(x) for x in ids) if isinstance(ids, list) else str(ids),
+                " ".join(str(args.get("run") or "").split()),
+                str(args.get("date") or "").strip(),
             ]
-        )
+        return json.dumps(key)
 
     async def _target(self, args: dict[str, Any]) -> dict[str, Any] | None:
         return await asyncio.to_thread(
-            find_change, self.platform.engine, str(args.get("action_id") or "").strip(), _kind_arg(args)
+            find_change, self.platform.engine, str(args.get("action_id") or "").strip(), _kind_arg(args),
+            home=self.platform.config.home,
+        )
+
+    @staticmethod
+    def _many_problem(args: dict[str, Any]) -> str:
+        """What is wrong with a many-at-once call's arguments ("" = none)."""
+        from . import records_day as RD
+
+        ids = args.get("action_ids")
+        run = str(args.get("run") or "").strip()
+        if ids not in (None, []) and (not isinstance(ids, list) or not all(isinstance(x, str) and x.strip() for x in ids)):
+            return "action_ids is a list of change ids (changes_list shows them)."
+        if isinstance(ids, list) and len(ids) > RD.CHAT_IDS_MAX:
+            return (
+                f"At most {RD.CHAT_IDS_MAX} changes can be undone at once by id; this asked for {len(ids)}. "
+                "Ask for them in parts, or undo them on Activity › Your day."
+            )
+        if ids not in (None, []) and run:
+            return "Give action_ids or run, not both."
+        if str(args.get("date") or "").strip() and RD.parse_day(args.get("date")) is None:
+            return "date is a day as YYYY-MM-DD, or today, or yesterday."
+        return ""
+
+    async def _many_targets(self, args: dict[str, Any]) -> dict[str, Any]:
+        from . import records_day as RD
+
+        ids = args.get("action_ids") if isinstance(args.get("action_ids"), list) else None
+        return await asyncio.to_thread(
+            RD.many_targets, self.platform.engine, home=self.platform.config.home,
+            action_ids=ids, run=str(args.get("run") or "").strip(), day=RD.parse_day(args.get("date")),
         )
 
     def _hold(self, key: str, target: dict[str, Any] | None) -> None:
@@ -1363,9 +1588,12 @@ class ChangeUndoTool(Tool):
         change, or one that cannot be undone) has no card: it is refused.
         Outside a chat on the Chat page there is no card either (review):
         execute refuses in words, so an agent run never parks an undo where
-        the phone could answer it."""
+        the phone could answer it. Next leaps 40-a: MANY at once is ONE card
+        that names every change (D-40.1), what cannot be undone first."""
         if _chat_page_problem(ctx, "An undo"):
             return SpendCheck(ask=False)  # no card: execute refuses in words
+        if self._many(args):
+            return await self._many_check(args, ctx)
         try:
             target = await self._target(args)
         except Exception:  # noqa: BLE001 — unknown: no card, execute reads again and refuses honestly
@@ -1377,6 +1605,30 @@ class ChangeUndoTool(Tool):
         words = f"Undo this change: {target['what']}" + (f" ({when})" if when else "") + "."
         return SpendCheck(ask=True, words=words[:400], once_only=True, attended_only=True, reason=UNDO_REASON)
 
+    async def _many_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck:
+        from . import records_day as RD
+
+        key = self._key(args, ctx)
+        problem = self._many_problem(args)
+        if problem:
+            self._hold(key, {"many": True, "asked": False, "problem": problem})
+            return SpendCheck(ask=False)
+        try:
+            targets = await self._many_targets(args)
+        except Exception:  # noqa: BLE001 — unknown: no card; execute refuses in words
+            log.warning("change_undo: the changes to undo could not be read", exc_info=True)
+            self._hold(key, {"many": True, "asked": False, "problem": "The changes could not be read just now."})
+            return SpendCheck(ask=False)
+        asked = not targets.get("problem") and bool(targets.get("can"))
+        self._hold(key, {"many": True, "asked": asked, **targets})
+        if not asked:
+            return SpendCheck(ask=False)
+        words = RD.card_words(
+            targets["can"], targets["cannot"], source=targets.get("source"),
+            undone=int(targets.get("undone") or 0), other=targets.get("other"),
+        )
+        return SpendCheck(ask=True, words=words, once_only=True, attended_only=True, reason=UNDO_REASON)
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from fastapi import HTTPException
 
@@ -1385,6 +1637,8 @@ class ChangeUndoTool(Tool):
         problem = _chat_page_problem(ctx, "An undo")
         if problem:
             return ToolResult(ok=False, error=problem + " Nothing was undone.")
+        if self._many(args):
+            return await self._execute_many(args, ctx)
         d = R._d(self.platform)
         if d is None:
             return ToolResult(ok=False, error="Undo from chat needs the running app.")
@@ -1395,7 +1649,9 @@ class ChangeUndoTool(Tool):
         elif target is not None:
             # Exactly the change the card named, as it stands NOW (undone on
             # a page while the card waited → refused in words below).
-            now_row = await asyncio.to_thread(find_change, self.platform.engine, target["id"])
+            now_row = await asyncio.to_thread(
+                find_change, self.platform.engine, target["id"], home=self.platform.config.home
+            )
             target = now_row if now_row is not None else target
         aid = str(args.get("action_id") or "").strip()
         if target is None:
@@ -1430,6 +1686,58 @@ class ChangeUndoTool(Tool):
                 "undo_invocation_id": out.get("undo_invocation_id"),
             },
         )
+
+    async def _execute_many(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """Next leaps 40-a: exactly the changes the ONE card named, newest
+        first, through the one Undo (``routes.undo.undo_many``). With no card
+        held for these arguments nothing is undone (fail closed)."""
+        from ..daemon.routes.undo import undo_many
+        from ..providers import egress as _egress
+        from . import records_day as RD
+
+        problem = self._many_problem(args)
+        if problem:
+            return ToolResult(ok=False, error=problem + " Nothing was undone.")
+        d = R._d(self.platform)
+        if d is None:
+            return ToolResult(ok=False, error="Undo from chat needs the running app.")
+        found, held = self._pick_held(self._key(args, ctx))
+        if not found or not isinstance(held, dict) or not held.get("many"):
+            return ToolResult(ok=False, error="Nothing was undone: no card named these changes. Ask again.")
+        recall_local = _egress.may_recall_local_only_chats()
+        if not held.get("asked"):
+            why = str(held.get("problem") or "")
+            if not why:
+                gone = held.get("cannot") or []
+                why = "Nothing there can still be undone" + (
+                    ": " + "; ".join(f"{_for_model(c, recall_local)['what']} ({c.get('why')})" for c in gone[:10])
+                    if gone else "."
+                )
+                why = why if why.endswith(".") else why + "."
+            return ToolResult(ok=False, error=why)
+        can = list(held.get("can") or [])
+        by_id = {r["id"]: r for r in can}
+        out = await undo_many(d, [r["id"] for r in can], pressed=False)
+        reverted = [{**by_id.get(x["id"], {}), **x} for x in out["reverted"]]
+        skipped = [{**by_id.get(x["id"], {}), **x} for x in out["skipped"]]
+        words = RD.put_back_words(reverted, skipped, safe=not recall_local)
+        gone = held.get("cannot") or []
+        if gone:
+            words += " Left as they are (they can't be undone): " + "; ".join(
+                _for_model(c, recall_local)["what"] for c in gone[:20]
+            ) + "."
+        data = {
+            "undone": [x["id"] for x in reverted],
+            "skipped": [
+                {"id": x["id"], "what": _for_model(x, recall_local).get("target") or _for_model(x, recall_local).get("what"),
+                 "reason": x.get("reason")}
+                for x in skipped
+            ],
+            "put_back": len(reverted),
+        }
+        if not reverted:
+            return ToolResult(ok=False, error=words, data=data)
+        return ToolResult(ok=True, output=words, data=data)
 
 
 def history_tools(platform: Any) -> list[Tool]:

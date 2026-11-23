@@ -144,6 +144,10 @@ _CATALOG: dict[str, dict[str, str]] = {
     # Next leaps 43-a: the model library is the Models tab on Model servers.
     "model_library": {"href": "/fleet?view=models", "label": "Open Model servers › Models"},
     "model_download": {"href": "/fleet?view=models", "label": "Open Model servers › Models"},
+    # Next leaps 40-a: the day's changes, with before and after and Undo for
+    # one or many, are the Your day tab on Activity.
+    "changes_list": {"href": "/activity?view=day", "label": "See your day on Activity"},
+    "change_undo": {"href": "/activity?view=day", "label": "See your day on Activity"},
 }
 
 #: v1.506.0 (north-star plan 6.4): the record tools that MAKE a record and

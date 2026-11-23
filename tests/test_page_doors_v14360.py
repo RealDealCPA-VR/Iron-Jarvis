@@ -490,6 +490,17 @@ def _resolves(href: str) -> bool:
             and 'export const LIBRARY_VIEW = "models";' in lib
             and "viewFromSearch(window.location.search)" in page
         )
+    if u.path == "/activity" and q:
+        # Next leaps 40-a: the Your day tab of Activity (``?view=day``, and a
+        # day), read from the address by the page itself.
+        lib = (DASH / "lib" / "dayChanges.ts").read_text(encoding="utf-8")
+        page = (DASH / "app" / "activity" / "page.tsx").read_text(encoding="utf-8")
+        return (
+            q.get("view") == "day"
+            and set(q) <= {"view", "date"}
+            and 'export const DAY_VIEW = "day";' in lib
+            and "viewFromSearch(window.location.search)" in page
+        )
     return not q
 
 
@@ -509,6 +520,9 @@ def test_every_door_leads_to_a_real_place():
     assert _resolves("/fleet")
     assert _resolves("/fleet?view=models")
     assert not _resolves("/fleet?view=nothing")
+    # Activity: the Timeline (the bare page) and Your day; no other tab.
+    assert _resolves("/activity") and _resolves("/activity?view=day")
+    assert not _resolves("/activity?view=week")
 
 
 def test_the_doors_reuse_the_places_other_doors_already_use():

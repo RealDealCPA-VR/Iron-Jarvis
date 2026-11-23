@@ -2044,6 +2044,59 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Your day: everything Iron Jarvis changed, and Undo for one or many (v1.572.0)
+
+The Activity page has a second tab, **Your day**, beside the **Timeline**
+(Everything › Activity, or Ctrl K and "your day"). It shows one day of every
+file, setting, key, record (a schedule, a workflow, a rule…) and memory note
+Iron Jarvis changed. Today opens first; **Previous day**, **Next day** and
+the date box move to another day.
+
+- **Can't be undone** comes first: what left this PC or ran that day, such
+  as a message sent or commands run ("ran 37 commands"), with where it came
+  from and why there is no way back. These have no Undo, and the page never
+  offers one.
+- Then the changes, **grouped by where they came from**: a chat, an agent
+  run (its task's first words, a link to its page), a schedule, a coding
+  session, or a settings page, and inside each by the hour. Each row says
+  what changed and when.
+- **Before and after** on a row shows how it was beside how it is now: for a
+  text file, the lines that changed (removed in red, added in green); for a
+  file that is not text, its size and when it changed; for a setting, its
+  value before and now; for a key, only whether one is saved (a key is never
+  shown); for a record, its card's words; for a memory note, its text. All
+  of it is read on this PC from Iron Jarvis's own copy and never sent
+  anywhere. On a phone the two sides stack.
+- **Undo** on a row takes two presses (**Confirm undo?**), like the
+  Timeline's.
+- **Tick several** and press **Undo these (3)**: one confirmation lists every
+  change by name, then they go back newest first (so a file changed three
+  times returns to how it was before the first). Up to 100 at once. A change
+  that was edited again since is left as it is and named ("Not put back:
+  report.txt (it was changed again since…)"); the rest still go back.
+- A change whose before-copy is gone (cleared by a cleanup of the undo
+  history, or older than Iron Jarvis keeps) says "Can't be undone: no copy of
+  how it was is kept any more" and offers no Undo.
+
+**In chat.** "What did you change today?" or "what did the 3 pm run change?"
+lists the day by where each change came from, with what cannot be undone,
+and a link to Your day. "Undo everything from the 3 pm run" (or "undo these
+changes" after a list) shows ONE card naming every change it will undo,
+what cannot be undone first; after you allow it the reply says "12 files put
+back" and names any it could not put back, with why. "The 3 pm run" is the
+run that started nearest 3 pm that day; if none started within an hour and a
+half, the reply names that day's runs instead. Like every undo from chat, it
+asks every time, Enter never allows it, it is never asked on your phone, and
+it works only in a chat on the Chat page.
+
+**Good to know.** The day is this PC's day. All chat replies are one group,
+"In chat", for now. "Undo everything from a run" includes the helpers that
+run started. A run with more than 100 changes is undone on this page in
+parts, or with Revert on the run's own page. What Iron Jarvis is told about
+the day is names only, never a file's contents or a setting's value, and a
+change made in Local only work keeps its name out of a chat that is not
+Local only.
+
 ## Local models waste fewer steps in a coding session (v1.573.0)
 
 A benchmark of a local model (GLM) in **Chat › Code** showed that no task was
