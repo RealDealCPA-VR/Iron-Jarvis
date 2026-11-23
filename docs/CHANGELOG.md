@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.568.0
+
+**Say "when this happens, do that" once: a folder or a download can start a rule.** Say one sentence in chat, such as "when a PDF lands in Intake, read it and file it by sender", and Iron Jarvis makes **one rule**.
+
 ## v1.567.0
 
 **See what memory gave a reply, and fix a preference.** When a chat reply was given things Iron Jarvis remembers (your preferences, a client's preferences, earlier work in the folder and its recap, notes, earlier chats and agent runs, files, project knowledge), the reply says so.
@@ -77,7 +81,3 @@
 ## v1.552.0
 
 **Choose what each of your other computers may do.** Each computer you paired with this one now has its own switches: what it may do HERE.
-
-## v1.551.0
-
-**Iron Jarvis checks every Build › Code reply.** Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity), its reply now ends the same way.

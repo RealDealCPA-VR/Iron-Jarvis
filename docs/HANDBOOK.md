@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.567.0 (2026-11-19).*
+holds itself to. Current as of v1.568.0 (2026-11-19).*
 
 ---
 
@@ -2044,7 +2044,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Say "when this happens, do that" once: a folder or a download can start a rule
+## Say "when this happens, do that" once: a folder or a download can start a rule (v1.568.0)
 
 Say one sentence in chat, such as "when a PDF lands in Intake, read it and
 file it by sender", and Iron Jarvis makes **one rule**. Its card says four
