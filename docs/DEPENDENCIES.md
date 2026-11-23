@@ -150,15 +150,16 @@ function runs.
 | `comm` | messaging | 15 | **9**: browser, daemon, onboarding, peers, platform, providers, reflex, settings, workflows | core, tools | agents, daemon, detections, documents, harness, providers, scheduling, workflows |
 | `eval` | providers | 10 | **9**: agents, daemon, goals, harness, harness_bench, improve, platform, providers, tools | core, providers | daemon, harness, tools |
 | `terminals` | build | 18 | **9**: daemon, harness_bench, hosted, mcp, onboarding, platform, profile, providers, tools | browser, core, detections, hosted, iron_proxy, providers | connectors, daemon |
-| `workmap` | memory | 22 | **9**: agents, daemon, inbox, learning, mcpserver, memory, platform, search, settings | core, tools | agents, daemon, detections, documents, harness, history, hosted, iron_proxy, learning, mcpserver, projects, providers |
+| `workmap` | memory | 22 | **9**: agents, daemon, inbox, learning, mcpserver, memory, platform, search, settings | core, tools | agents, daemon, detections, documents, harness, history, hosted, iron_proxy, learning, mcpserver, memory, projects, providers |
 | `browser` | browser | 19 | **8**: daemon, hosted, mcpserver, onboarding, platform, providers, terminals, tools | computeruse, core, providers, tools | comm, daemon, detections, harness, skills |
-| `projects` | memory | 7 | **8**: agents, daemon, harness, hosted, mcp, mcpserver, scheduling, workmap | core | agents, assignments, harness, hosted, providers, tools |
+| `projects` | memory | 7 | **8**: agents, daemon, harness, hosted, mcp, mcpserver, scheduling, workmap | core | agents, assignments, harness, hosted, memory, providers, tools |
 | `scheduling` | automations | 7 | **8**: agents, comm, daemon, improve, platform, sentinels, settings, tools | core, tools | agents, projects, sandbox, settings |
 | `skills` | memory | 13 | **8**: agents, brain, browser, daemon, improve, inbox, platform, tools | core, improvement, tools | agents, context, harness, providers, settings |
 | `workflows` | automations | 7 | **8**: agents, comm, daemon, goals, guide, platform, reflex, settings | core, tools | agents, comm, computeruse, providers, reflex, settings |
 | `context` | context | 6 | **7**: agents, capability_search, daemon, harness, hosted, providers, skills | core | agents |
 | `fleet` | providers | 16 | **7**: agents, daemon, envelope, onboarding, platform, providers, settings | core, providers | daemon |
 | `ltm` | memory | 16 | **7**: brain, connectors, daemon, memory, platform, providers, settings | core, documents, tools | detections, mcp, providers |
+| `memory` | memory | 19 | **7**: agents, daemon, inbox, learning, platform, projects, workmap | computeruse, core, ltm, search, tools | detections, learning, profile, providers, workmap |
 | `profile` | memory | 8 | **7**: agents, core, daemon, learning, memory, platform, settings | core | detections, iron_proxy, learning, terminals |
 | `connectors` | connections | 7 | **6**: daemon, mcp, onboarding, settings, terminals, tools | core, mcp | daemon, detections, ltm, providers, tools |
 | `motivation` | automations | 4 | **6**: daemon, improve, improvement, inbox, platform, settings | agents, core, tools | providers, settings |
@@ -168,7 +169,6 @@ function runs.
 | `goals` | automations | 5 | **5**: agents, daemon, inbox, platform, settings | core | agents, eval, providers, tools, workflows |
 | `maintenance` | daemon | 1 | **5**: agents, daemon, harness, onboarding, settings | core | iron_proxy |
 | `mcpserver` | connections | 6 | **5**: daemon, hosted, onboarding, platform, workmap | __init__, core, hosted, mcp, workmap | agents, browser, computeruse, daemon, platform, projects, tools |
-| `memory` | memory | 18 | **5**: agents, daemon, inbox, learning, platform | computeruse, core, ltm, search, tools | detections, learning, profile, providers, workmap |
 | `assignments` | agents | 6 | **4**: agents, daemon, platform, projects | core, tools | agents |
 | `blackboard` | agents | 4 | **4**: agents, daemon, platform, worklist | core, tools | none |
 | `brain` | memory | 5 | **4**: agents, daemon, platform, settings | core, ltm, tools | computeruse, detections, providers, skills |

@@ -2044,7 +2044,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## See what memory gave a reply, and fix a preference (v1.563.0)
+## See what memory gave a reply, and fix a preference (v1.567.0)
 
 When a chat reply was given things Iron Jarvis remembers (your preferences,
 a client's preferences, earlier work in the folder and its recap, notes,
