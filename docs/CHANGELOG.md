@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.565.0
+
+**Finished files come back to your phone, and approvals have buttons.** Ask Jarvis from Telegram, Slack or email to "turn this into a spreadsheet", and the answer arrives with the spreadsheet.
+
 ## v1.564.0
 
 **Sort a scanned pile into its documents.** One PDF that holds a whole scanned pile becomes separate, named documents in their folders, after you check the plan.
@@ -77,7 +81,3 @@
 ## v1.548.1
 
 **Copy as a fix request leaves out Local only work.** A coding session you keep **Local only** is now never in the report that "Copy as a fix request" makes for a coding agent: not its errors, its commands, a reviewer's findings or even its name.
-
-## v1.548.0
-
-**Scroll back to the start of a long chat.** In a long chat, scroll up and the earlier messages load in place, back to the first one kept.
