@@ -730,11 +730,16 @@ def _record_class(kind: str) -> Any:
         from ..harness.night import NightTaskRecord
 
         return NightTaskRecord
+    if kind == "rule":
+        # Leap 05-a: a rule made in a chat reports each of its runs there.
+        from ..reflex.models import ReflexRule
+
+        return ReflexRule
     return None
 
 
 #: The kinds whose record holds the field (the rest report through a run).
-REPORT_TARGET_KINDS: tuple[str, ...] = ("schedule", "watcher", "goal", "workflow", "night")
+REPORT_TARGET_KINDS: tuple[str, ...] = ("schedule", "watcher", "goal", "workflow", "night", "rule")
 
 
 def report_target_of(engine: Any, kind: str, record_id: str) -> str:

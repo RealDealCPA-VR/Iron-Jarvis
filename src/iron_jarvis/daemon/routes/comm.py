@@ -1107,8 +1107,12 @@ def register(app: FastAPI, d) -> None:
                     },
                 )
                 try:
-                    await app.state.reflex_router.on_slack(
-                        text=msg.text, channel=slack_channel, sender=user
+                    # Leap 05-a: through the start hub, which calls on_slack
+                    # exactly as before.
+                    from ...triggers.starts import hub_for as _hub_for
+
+                    await _hub_for(app.state.reflex_router).signal(
+                        "slack", fields={"text": msg.text, "channel": slack_channel, "sender": user}
                     )
                 except Exception:  # noqa: BLE001 — a bad rule never 500s Slack
                     _log.exception("slack channel reflex failed on %r", name)
@@ -1312,7 +1316,12 @@ def register(app: FastAPI, d) -> None:
                 try:
                     router = getattr(app.state, "reflex_router", None)
                     if router is not None:
-                        fired = await router.on_webhook(_slug, payload)
+                        # Leap 05-a: through the start hub (on_webhook, as before).
+                        from ...triggers.starts import hub_for as _hub_for
+
+                        fired = await _hub_for(router).signal(
+                            "webhook", fields={"slug": _slug, "body": payload}
+                        )
                 except Exception:  # noqa: BLE001 — a reflex failure never breaks the ack
                     from ...core.logging import get_logger
 

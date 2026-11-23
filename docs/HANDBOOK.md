@@ -2044,6 +2044,63 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Say "when this happens, do that" once: a folder or a download can start a rule
+
+Say one sentence in chat, such as "when a PDF lands in Intake, read it and
+file it by sender", and Iron Jarvis makes **one rule**. Its card says four
+things, in plain words: **When** (a new file lands in Intake, matching
+`*.pdf`), **Do** (what Jarvis does with each file), **Where it works** (the
+folder the work runs in: the folder it watches, unless you name another) and
+**Limits** (it starts at most 12 times an hour, then pauses and tells you;
+anything risky still asks you first). **Undo** on the card removes the rule.
+The same rule is a row on **Rules** with the same four lines.
+
+**What can start a rule.** A new file in a folder on this PC, a download
+that finishes in your browser (optionally only from one site, such as
+irs.gov), an email, a calendar event, a message from your phone, a Slack
+message or a webhook. Searching "automation" finds the Rules page.
+
+**A new file in a folder.** The folder is watched by the watcher you know
+from **Watchers** (its row there says **Starts the rule** and its name;
+change or remove it on Rules, and it goes with the rule). It looks every few
+minutes (the Watchers pace, 5 minutes unless you changed it). Files already
+in the folder when the rule is made are left alone. A file counts once it has
+stopped changing between two looks, so a big copy or a synced file that is
+still arriving never starts it half-written; each file starts it once, also
+after a restart, and at most 20 files start it per look (the rest go on the
+next look). Only new files count: a file the rule's own work changes does
+not start it again. The folder is watched even while suggestion watchers are
+off, because the rule is your switch; while the rule is off, new files are
+left alone. A folder on a network location cannot be watched.
+
+**A finished download.** A download that Your browser reports with a
+location on this PC starts the download rules that hear it. The work starts
+in the **careful mode** used for messages from outside, because the file came
+from a website. A file's name, its location and the site are given to the
+agent as data to work on, never as instructions, whoever named the file.
+
+**When a rule starts too often.** A rule that starts 12 times in one hour
+(you can change the number) **pauses itself**. The bell says so once a day at
+most ("Your rule Sort intake paused itself"), and its row opens the rule,
+where the card offers **Resume** or **Keep it paused**. While it is paused it
+starts nothing; a folder rule's new files wait and go once you resume it.
+**Keep it paused** turns the rule off until you turn it on again (files that
+land while it is off are left alone). Run now, on the row's **…** menu, is
+never held and never counted.
+
+**Good to know.**
+
+- A rule made in a chat reports each run in that chat (Stop reporting is on
+  the rule's row and on each report). A rule made in a Local only chat runs
+  Local only.
+- A rule can name one of your own agents to do the work ("…and let Remy do
+  it"); an agent that is paused, gone or cannot take work on its own is
+  refused in words on the rule's row, never swapped for another.
+- "Always" on a question a rule's run asks keeps that answer on the rule
+  (**Always for this rule**, 30 days, exactly those details). It covers no
+  other rule, and it goes when the rule is removed. All of them are listed on
+  the Autonomy page.
+
 ## See what memory gave a reply, and fix a preference (v1.567.0)
 
 When a chat reply was given things Iron Jarvis remembers (your preferences,

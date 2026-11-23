@@ -13,6 +13,7 @@ at the bottom of create_app). Request models live in schemas.py.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import sys
 import time
@@ -1539,7 +1540,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 # failure never fails the webhook ack.
                 fired: list[Any] = []
                 try:
-                    fired = await app.state.reflex_router.on_webhook(_slug, body)
+                    # Leap 05-a: through the start hub (the one entry for
+                    # every kind of start), which calls on_webhook as before.
+                    from ..triggers.starts import hub_for as _hub_for
+
+                    fired = await _hub_for(app.state.reflex_router).signal(
+                        "webhook", fields={"slug": _slug, "body": body}
+                    )
                 except Exception:  # noqa: BLE001 — never break the ack
                     log.exception("reflex on_webhook failed for %r", _slug)
                 return {"ok": True, **_summarize_fires(fired)}  # AE6: failed != fired
@@ -2054,8 +2061,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
             await asyncio.sleep(30)  # let boot settle before the first poll
             while True:
                 try:
+                    # Leap 05-a: while suggestion watchers are off, the loop
+                    # runs only for the folders a file rule watches.
                     await asyncio.to_thread(
-                        platform.sentinels.poll_once, platform.intent
+                        functools.partial(
+                            platform.sentinels.poll_once,
+                            platform.intent,
+                            rules_only=not getattr(platform.config, "sentinels_enabled", False),
+                        )
                     )
                     _tick("sentinels", True)
                 except asyncio.CancelledError:
@@ -2069,10 +2082,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
             task = bg_tasks.pop("sentinels", None)
             if task is not None:
                 task.cancel()
+            # Leap 05-a: a FILE rule's folder is watched even while
+            # suggestion watchers are off (the rule is the user's switch;
+            # its card says folder watching is on). One small read, at arm
+            # time only (boot, a settings change, a file rule made/removed).
+            _rule_watchers = False
+            if platform.sentinels is not None:
+                try:
+                    _rule_watchers = platform.sentinels.has_rule_watchers()
+                except Exception:  # noqa: BLE001 — unreadable: as before
+                    _rule_watchers = False
             if (
-                getattr(platform.config, "sentinels_enabled", False)
+                (
+                    (getattr(platform.config, "sentinels_enabled", False) and platform.intent is not None)
+                    or _rule_watchers
+                )
                 and platform.sentinels is not None
-                and platform.intent is not None
                 and os.environ.get("IRONJARVIS_SENTINELS", "on").strip().lower()
                 not in {"0", "false", "no", "off"}
             ):
@@ -3002,6 +3027,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # Also reachable from platform-bound tools (v1.122.0): the agent-facing
     # webhook_add must install a reflex-firing handler like the route does.
     platform.reflex_router = reflex_router
+    # Leap 05-a: the start hub, and the two starts a folder or a download
+    # makes. Both reach the hub of the router app.state holds NOW (a test that
+    # swaps the router swaps the hub) on the daemon's loop (set by lifespan;
+    # before it runs, nothing is started: a file waits, a download is let go).
+    from ..triggers import starts as _starts
+
+    def _current_hub() -> Any:
+        return _starts.hub_for(getattr(app.state, "reflex_router", None))
+
+    def _current_loop() -> Any:
+        return _live_rearm.get("loop")
+
+    platform.start_hub = reflex_router.start_hub
+    if platform.sentinels is not None:
+        platform.sentinels.rule_fire = _starts.file_rule_fire(_current_hub, _current_loop)
+    platform.event_bus.add_handler(_starts.download_handler(_current_hub, _current_loop))
     app.state.command_interpreter = command_interpreter
     # v1.136.0 messaging surfaces: reachable for tests + diagnostics (the
     # routes go through ``d``; TestClient callers only have app.state).
@@ -4092,6 +4133,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "created_at": s.created_at.isoformat(),
             # Idea 39 (39-a): the chat it reports to ("" = none).
             "chat_thread_id": str(getattr(s, "chat_thread_id", "") or ""),
+            # Leap 05-a: a watcher that STARTS a rule (its folder is the rule's).
+            "mode": str(getattr(s, "mode", "") or "suggest"),
+            "rule_id": str(getattr(s, "rule_id", "") or ""),
         }
 
     # --- Communication channels -------------------------------------------

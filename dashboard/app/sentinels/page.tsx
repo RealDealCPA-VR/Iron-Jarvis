@@ -30,6 +30,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { ReportsTo } from "@/components/ReportsTo";
+import { startsRuleWords } from "@/lib/reflexRules";
 // v1.316.0 (agent-names-raw-lowercase): THE agent-name rule — built-ins
 // read as words ("maintainer" → "Maintainer"), a custom agent keeps the name
 // the user typed. The workflow editor's map knew only its own five agents.
@@ -55,6 +56,11 @@ interface Sentinel {
   created_at: string;
   /** Idea 39 (39-a): the chat it reports to (null = none). */
   reports_to?: { thread_id: string; title: string } | null;
+  /** Leap 05-a: "rule" = it STARTS a rule (its folder is the rule's), named
+   *  by `rule_name`; changed and removed with the rule, on Rules. */
+  mode?: string;
+  rule_id?: string;
+  rule_name?: string;
 }
 
 interface SentinelsResponse {
@@ -666,16 +672,29 @@ export default function SentinelsPage() {
                         </span>
                       </td>
                       <td className="max-w-[14rem] px-2 py-2.5">
-                        <span
-                          className="block truncate text-[12px] text-zinc-400"
-                          title={s.task || undefined}
-                        >
-                          {s.task || <span className="text-zinc-600">review what changed</span>}
-                        </span>
-                        {/* v1.316.0: the agent's name; its id stays in title. */}
-                        <span className="text-[11px] text-zinc-600" title={s.agent_type}>
-                          → {nameOf(s.agent_type)}
-                        </span>
+                        {s.mode === "rule" ? (
+                          // Leap 05-a: this watcher starts a rule, not a suggestion.
+                          <Link
+                            href={s.rule_id ? `/reflex?rule=${encodeURIComponent(s.rule_id)}` : "/reflex"}
+                            data-testid={`sentinel-starts-rule-${s.id}`}
+                            className="block truncate text-[12px] text-accent-soft underline-offset-2 hover:underline"
+                          >
+                            {startsRuleWords(s.rule_name)}
+                          </Link>
+                        ) : (
+                          <>
+                            <span
+                              className="block truncate text-[12px] text-zinc-400"
+                              title={s.task || undefined}
+                            >
+                              {s.task || <span className="text-zinc-600">review what changed</span>}
+                            </span>
+                            {/* v1.316.0: the agent's name; its id stays in title. */}
+                            <span className="text-[11px] text-zinc-600" title={s.agent_type}>
+                              → {nameOf(s.agent_type)}
+                            </span>
+                          </>
+                        )}
                       </td>
                       <td className="px-2 py-2.5">
                         <Badge value={s.risk} tone={s.risk === "low" ? "green" : "amber"} />
@@ -695,21 +714,33 @@ export default function SentinelsPage() {
                         )}
                       </td>
                       <td className="px-2 py-2.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => startEdit(s)}
-                          data-testid={`sentinel-edit-${s.id}`}
-                          title={`Edit watcher "${s.name}"`}
-                          aria-label={`Edit watcher ${s.name}`}
-                          className="mr-1.5 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
-                        >
-                          <Pencil size={13} /> Edit
-                        </button>
-                        <ConfirmButton
-                          onConfirm={() => remove(s.name)}
-                          label="Delete"
-                          title={`Delete watcher "${s.name}"`}
-                        />
+                        {s.mode === "rule" ? (
+                          // Leap 05-a: its rule owns it — changed and removed there.
+                          <Link
+                            href={s.rule_id ? `/reflex?rule=${encodeURIComponent(s.rule_id)}` : "/reflex"}
+                            className="text-xs text-zinc-400 hover:text-zinc-100"
+                          >
+                            Change it on Rules
+                          </Link>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => startEdit(s)}
+                              data-testid={`sentinel-edit-${s.id}`}
+                              title={`Edit watcher "${s.name}"`}
+                              aria-label={`Edit watcher ${s.name}`}
+                              className="mr-1.5 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+                            >
+                              <Pencil size={13} /> Edit
+                            </button>
+                            <ConfirmButton
+                              onConfirm={() => remove(s.name)}
+                              label="Delete"
+                              title={`Delete watcher "${s.name}"`}
+                            />
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}

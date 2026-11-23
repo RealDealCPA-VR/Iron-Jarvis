@@ -116,7 +116,10 @@ def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     # v1.299.0; nothing ever put them here.
     if first.get("can_always") is True:
         out["can_always"] = True
-        if first.get("always_scope") in ("schedule", "workflow"):
+        from ...core.grants import PLACED_ALWAYS_SCOPES
+
+        # Leap 05-a: "rule" too ("Always for this rule").
+        if first.get("always_scope") in PLACED_ALWAYS_SCOPES:
             out["always_scope"] = first["always_scope"]
         if first.get("args_hash"):
             out["args_hash"] = str(first["args_hash"])

@@ -205,6 +205,11 @@ class EventType:
     #: target, reason} — ``reason`` is plain words. The bell's attention row,
     #: the tray's notice and a default phone alert (comm/notifier).
     REFLEX_FAILED = "reflex.failed"
+    #: Leap 05-a (D-05.3): a rule started 12 times in an hour (its own
+    #: ``max_fires_per_hour``) and PAUSED itself. Said at most once a day per
+    #: rule; the bell's row opens the rule (Resume, or Keep it paused). Not
+    #: sent to the phone. {rule, rule_id, source, reason, limit}.
+    REFLEX_PAUSED = "reflex.paused"
     SCHEDULE_FIRED = "schedule.fired"
     COMPUTERUSE_RUN_FINISHED = "computeruse.run_finished"
     # Motivation Layer (the pulse): a deliberation tick produced a candidate

@@ -1595,7 +1595,11 @@ class InboundPoller:
         if self.reflex_router is not None:
             source = getattr(ch, "reflex_source", "comm")
             try:
-                fired = await self.reflex_router.on_signal(
+                # Leap 05-a: through the start hub (the one entry for every
+                # kind of start), which calls on_signal exactly as before.
+                from ..triggers.starts import hub_for as _hub_for
+
+                fired = await _hub_for(self.reflex_router).signal(
                     source,
                     {
                         "text": text[:2000],

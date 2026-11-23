@@ -1776,6 +1776,15 @@ class ReflexRuleBody(BaseModel):
     #: session action spawns carrying it; a workflow action uses it only when
     #: the def has no pin of its own. None/"" = ungrounded.
     project_id: str | None = None
+    #: Leap 05-a: a file rule's folder (``path``, ``glob``), a download rule's
+    #: site (``match_site``), the custom agent that does the work, the folder
+    #: it works in, and how often it may start in an hour (12 when omitted).
+    path: str | None = None
+    glob: str | None = None
+    match_site: str | None = None
+    agent_name: str | None = None
+    workspace_root: str | None = None
+    max_fires_per_hour: int | None = None
 
 
 class ReflexToggleBody(BaseModel):
@@ -1800,6 +1809,13 @@ class ReflexToggleBody(BaseModel):
     action: str | None = None
     target: str | None = None
     task_template: str | None = None
+    #: Leap 05-a (omitted = keep, given = replace).
+    path: str | None = None
+    glob: str | None = None
+    match_site: str | None = None
+    agent_name: str | None = None
+    workspace_root: str | None = None
+    max_fires_per_hour: int | None = None
 
 
 class RehearsalBody(BaseModel):

@@ -28,6 +28,9 @@ from ..core.ids import new_id, utcnow
 # until the integration/network layer exists (they are NOT faked here).
 KINDS: tuple[str, ...] = ("file",)
 
+#: Leap 05-a: what a watcher does with what it notices.
+MODES: tuple[str, ...] = ("suggest", "rule")
+
 
 class SentinelRecord(SQLModel, table=True):
     """A durable always-on watcher (registry row for the SentinelService)."""
@@ -62,6 +65,12 @@ class SentinelRecord(SQLModel, table=True):
     #: report (``report_pending_json``: a JSON list of paths, bounded).
     report_at: datetime | None = None
     report_pending_json: str = ""
+    #: Leap 05-a: ``suggest`` (the default: a change mints a suggestion) or
+    #: ``rule`` (a new file that has SETTLED starts the rule ``rule_id``
+    #: through the start hub, ``triggers/starts``; no suggestion, no report
+    #: of its own: the rule's run reports). Additive columns.
+    mode: str = "suggest"
+    rule_id: str = Field(default="", index=True)
     created_at: datetime = Field(default_factory=utcnow)
 
     def decoded_config(self) -> dict:

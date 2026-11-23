@@ -2380,103 +2380,41 @@ def build_platform(
             # "123", and the fire must agree with what the list shows.
             _raw_agent = payload.get("agent_type")
             agent_name = _raw_agent.strip() if isinstance(_raw_agent, str) else ""
-            agent_type = _AgentType.BUILDER
-            definition = None
-            provider = payload.get("provider") or None
-            model = payload.get("model") or None
-            fire_max_steps = None
-            fire_approval = None
+            # Leap 05-a: the resolution is ONE helper now, shared with a
+            # rule's fire (and idea 08's goals): ``agents/resolve`` holds the
+            # dynamic record / builtin / refusal rules this block had, word
+            # for word. A refusal is recorded on the row and delivered.
+            from .agents.resolve import UnattendedRefusal as _UnattendedRefusal
+            from .agents.resolve import resolve_for_unattended as _resolve_unattended
+
+            try:
+                _who = _resolve_unattended(
+                    platform,
+                    agent_name,
+                    provider=payload.get("provider") or None,
+                    model=payload.get("model") or None,
+                    who="schedule",
+                    default=_AgentType.BUILDER,
+                )
+            except _UnattendedRefusal as exc:
+                raise _ScheduleRefused(str(exc)) from None
+            agent_type = _who.agent_type
+            definition = _who.definition
+            provider = _who.provider
+            model = _who.model
+            # The job card's posture and step budget (v1.295.0); None for a
+            # builtin or an unset card.
+            fire_max_steps = _who.max_steps
+            fire_approval = _who.approval_mode
             # v1.505.0 (north-star 5.2): the CUSTOM agent's roster name
             # (``custom:<name>``, as its spawn route credits it) — so its own
             # standing grants apply to the fire and the run is credited to it.
             # None for a builtin: a builtin's name as a grant scope would let
             # one "Always" cover every builder run anywhere.
-            fire_agent_name = None
+            fire_agent_name = _who.agent_name
             # v1.395.0: a MODEL TEAM MEMBER's fire runs HELD to its own model
             # (``model_team.run_as_member``), like every door that starts it.
-            fire_member = None
-            if agent_name:
-                registry = getattr(platform, "agents_registry", None)
-                definition = (
-                    registry.definition(agent_name) if registry is not None else None
-                )
-                if definition is not None:
-                    if definition.type is _AgentType.SUPERVISOR:
-                        # Mirrors the spawn route's 409 (v1.166.0): run_session
-                        # reroutes SUPERVISOR-typed sessions to the builtin
-                        # supervisor, which would silently discard this
-                        # record's custom system prompt.
-                        raise _ScheduleRefused(
-                            f"dynamic agent '{agent_name}' is based on "
-                            "'supervisor' and cannot take a schedule — "
-                            "re-create it with a non-supervisor base type"
-                        )
-                    agent_type = definition.type
-                    # Parity with the spawn route: an explicit payload
-                    # provider/model wins; the record's pinned pair is the
-                    # fallback.
-                    rec = registry.get(agent_name)
-                    # THE DAY OFF / THE ALLOWANCE (v1.295.0): a paused or
-                    # exhausted agent fails the fire HONESTLY — recorded on
-                    # the row and delivered — exactly like the supervisor
-                    # refusal above, never a silent builder run.
-                    from .agents import allowance as _allowance
-
-                    _reason = _allowance.refusal_for(rec, platform.engine)
-                    if _reason:
-                        raise _ScheduleRefused(_reason)
-                    # A MODEL TEAM MEMBER (v1.395.0, the Phase 5 review's open
-                    # item): refused in words BEFORE any session row when its
-                    # account is not one the user's groups allow, or the
-                    # schedule names ANOTHER model than the member runs on
-                    # (never silently swapped); else it runs on ITS OWN model —
-                    # that provider's default when it names none — held there.
-                    from .agents import model_team as _mt
-
-                    _why = _mt.queued_refusal(
-                        platform,
-                        rec,
-                        provider=str(payload.get("provider") or ""),
-                        model=str(payload.get("model") or ""),
-                    )
-                    if _why:
-                        raise _ScheduleRefused(_why)
-                    provider = provider or (
-                        rec.provider if (rec and rec.provider) else None
-                    )
-                    model = model or (rec.model if (rec and rec.model) else None)
-                    if _mt.runs_elsewhere(rec):
-                        fire_member = rec
-                        provider = str(rec.provider or "").strip() or None
-                        model = _mt.pinned_model(platform, rec) or None
-                    elif _mt.has_own_account(rec):
-                        # v1.424.0 (D6): a custom agent that is not on the
-                        # team but names an account of its own runs on THAT
-                        # account (``member_scope``'s pin), refused in words
-                        # first when the user's account groups forbid it.
-                        _why = _mt.account_refusal(platform, rec)
-                        if _why:
-                            raise _ScheduleRefused(_why)
-                        fire_member = rec
-                    # The job card's posture and step budget (v1.295.0).
-                    fire_max_steps = (rec.max_steps or None) if rec else None
-                    fire_approval = (rec.approval_mode or None) if rec else None
-                    if rec is not None and str(getattr(rec, "name", "") or "").strip():
-                        fire_agent_name = f"custom:{rec.name}"
-                else:
-                    try:
-                        agent_type = _AgentType(agent_name)
-                    except ValueError:
-                        # A dynamic agent deleted AFTER scheduling: fail the
-                        # fire HONESTLY (recorded on the row + delivered) —
-                        # never silently degrade to the builder, which would
-                        # run the task without the prompt/tools the user
-                        # scheduled it for.
-                        raise _ScheduleRefused(
-                            f"scheduled agent '{agent_name}' no longer exists "
-                            "— it may have been deleted; re-create it or "
-                            "re-add the schedule with another agent"
-                        )
+            fire_member = _who.member
             # THE SCHEDULE KNOBS (v1.299.0, scheduling/knobs.py): decoded the
             # way GET /schedules shows them (garbage = absent, never coerced).
             from .scheduling import knobs as _knobs
@@ -3306,6 +3244,27 @@ def build_platform(
     platform.sentinels.event_bus = getattr(platform, "event_bus", None)
     for tool in sentinel_tools(platform):
         platform.registry.register(tool)
+
+    # Leap 05-a: a removed rule takes its folder watcher and its standing OKs
+    # with it. Held WEAKLY (the v1.505.1 lesson: a hook keyed by the engine
+    # that held the platform's stores kept every platform alive).
+    import weakref as _weakref_rules
+
+    from .reflex import store as _reflex_store
+
+    _sentinels_ref = _weakref_rules.ref(platform.sentinels)
+    _rule_grants = getattr(platform, "grants", None)
+    _rule_grants_ref = _weakref_rules.ref(_rule_grants) if _rule_grants is not None else None
+
+    def _rule_removed(rule_id: str) -> None:
+        sentinels = _sentinels_ref()
+        if sentinels is not None:
+            sentinels.remove_for_rule(str(rule_id))
+        grants = _rule_grants_ref() if _rule_grants_ref is not None else None
+        if grants is not None:
+            grants.revoke_scope("rule", str(rule_id))
+
+    _reflex_store.on_removed(engine, _rule_removed)
 
     # ImprovementEngine: the consumer of evaluation scores. Built last so it can
     # reach learning/evaluator/intent. record_outcome() is hooked into the

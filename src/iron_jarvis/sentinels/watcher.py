@@ -32,6 +32,36 @@ _MAX_FILES = 5000
 _GLOB_CHARS = "*?["
 
 
+def stat_scanner(path: str, pattern: str | None = None) -> dict[str, list[float]]:
+    """Leap 05-a: :func:`default_scanner` with each file's SIZE beside its
+    time, ``{filepath: [mtime, size]}`` — what a rule-mode watcher compares
+    across two scans so a file still being written never starts a rule. The
+    same resolution rules, policy checks and cap (it is the same scan)."""
+    out: dict[str, list[float]] = {}
+    for fp in default_scanner(path, pattern):
+        try:
+            st = os.stat(fp)
+        except OSError:
+            continue
+        out[fp] = [st.st_mtime, float(st.st_size)]
+    return out
+
+
+def stat_of(value: object) -> tuple[float, "float | None"]:
+    """``(mtime, size)`` from a scan value: a plain mtime (an older or an
+    injected scanner: size unknown) or ``[mtime, size]``."""
+    if isinstance(value, (list, tuple)) and value:
+        try:
+            size = float(value[1]) if len(value) > 1 and value[1] is not None else None
+            return float(value[0]), size
+        except (TypeError, ValueError):
+            return 0.0, None
+    try:
+        return float(value), None  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0, None
+
+
 def default_scanner(path: str, pattern: str | None = None) -> dict[str, float]:
     """Stat-based scan returning ``{filepath: mtime}`` for the watch spec.
 

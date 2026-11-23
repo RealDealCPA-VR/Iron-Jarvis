@@ -37,8 +37,10 @@ export function expiresWords(iso: string | null | undefined, now = Date.now()): 
 }
 
 /** The scope in plain words: "goal · inbox-zero", "agent · remy", "chat". */
-export function scopeWords(g: Pick<StandingGrant, "scope_kind" | "scope_id">): string {
+export function scopeWords(g: Pick<StandingGrant, "scope_kind" | "scope_id"> & { scope_name?: string }): string {
   if (g.scope_kind === "chat") return "chat";
+  // Leap 05-a: a rule's grant is kept on its id; the daemon names the rule.
+  if (typeof g.scope_name === "string" && g.scope_name.trim()) return `${g.scope_kind} · ${g.scope_name.trim()}`;
   return g.scope_id ? `${g.scope_kind} · ${g.scope_id}` : g.scope_kind;
 }
 

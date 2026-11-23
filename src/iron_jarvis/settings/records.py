@@ -1804,7 +1804,12 @@ def _describe_goal(g: dict[str, Any] | None) -> str | None:
 
 #: The fields a rule change (and its Undo) touches; the fire bookkeeping is
 #: only put back on a recreate.
-_REFLEX_FIELDS = ("name", "source", "match", "action", "target", "task_template", "project_id", "enabled")
+_REFLEX_FIELDS = (
+    "name", "source", "match", "action", "target", "task_template", "project_id", "enabled",
+    # Leap 05-a: a file rule's folder or a download rule's site, who does the
+    # work, where, the chat it reports to, and its hourly limit.
+    "start_json", "agent_name", "workspace_root", "chat_thread_id", "max_fires_per_hour",
+)
 
 
 def validate_reflex(source: str, match: str, action: str, target: str) -> str:
@@ -1823,11 +1828,55 @@ def validate_reflex(source: str, match: str, action: str, target: str) -> str:
     return ""
 
 
+#: Leap 05-a: a file rule with no folder, in words.
+FILE_RULE_NEEDS_FOLDER = "A rule that starts when a file lands needs the folder to watch (`path`)."
+
+
+def sync_rule_watcher(platform: Any, rule_id: str) -> str:
+    """Leap 05-a: a FILE rule has exactly one watcher of its folder (made,
+    or brought in line with the rule's folder and pattern); any other rule
+    has none. "" when done, else the refusal in words. BLOCKING."""
+    from ..triggers import starts as _starts
+
+    rule = platform.reflex.get(rule_id)
+    if rule is None or rule.source != "file":
+        _starts.remove_file_watcher(platform, rule_id)
+        return ""
+    have = _starts.watcher_for_rule(platform, rule_id)
+    start = rule.decoded_start()
+    path = str(start.get("path") or "").strip()
+    glob = str(start.get("glob") or "").strip()
+    try:
+        if have is None:
+            _starts.ensure_file_watcher(platform, rule)
+        else:
+            cfg = have.decoded_config()
+            if str(cfg.get("path") or "") != path or str(cfg.get("glob") or "") != glob:
+                platform.sentinels.update(have.name, path=path, glob=glob)
+    except ValueError as exc:
+        return str(exc)
+    return ""
+
+
+def rearm_folder_watching(platform: Any) -> None:
+    """Leap 05-a: the watch loop runs for a file rule even while suggestion
+    watchers are off: re-arm it now (on the daemon's loop) after a file
+    rule is made, changed or removed. Never raises."""
+    try:
+        d = _d(platform)
+        rearm = getattr(d, "_live_rearm", None) or {}
+        loop, fn = rearm.get("loop"), rearm.get("sentinels")
+        if loop is not None and fn is not None:
+            loop.call_soon_threadsafe(fn)
+    except Exception:  # noqa: BLE001 — the next start re-arms it
+        pass
+
+
 def snap_reflex(platform: Any, rule_id: str) -> dict[str, Any] | None:
     r = platform.reflex.get(rule_id)
     if r is None:
         return None
-    out = {f: getattr(r, f) for f in _REFLEX_FIELDS}
+    out = {f: getattr(r, f, None) for f in _REFLEX_FIELDS}
     out.update(
         id=r.id,
         created_at=_iso(r.created_at),
@@ -1856,7 +1905,9 @@ def restore_reflex(platform: Any, rule_id: str, prior: dict[str, Any] | None) ->
 
     store = platform.reflex
     if prior is None:
+        # Leap 05-a: removing the rule removes its watcher (the store's hook).
         store.remove(rule_id)
+        rearm_folder_watching(platform)
         return f"undo: removed the rule '{rule_id}'"
     with session_scope(store.engine) as db:
         row = db.get(ReflexRule, rule_id)
@@ -1871,16 +1922,37 @@ def restore_reflex(platform: Any, rule_id: str, prior: dict[str, Any] | None) ->
             row.last_error = prior.get("last_error")
             row.last_result = prior.get("last_result")
         for f in _REFLEX_FIELDS:
+            if f == "chat_thread_id" and not recreated:
+                # Idea 39's rule: an Undo of a change never re-points reports
+                # the user stopped since (only a recreate puts the chat back).
+                continue
             if f in prior:
                 setattr(row, f, prior[f])
         db.add(row)
         db.commit()
-    return f"undo: {'recreated' if recreated else 'restored'} the rule '{prior.get('name') or rule_id}'"
+    # Leap 05-a: a file rule brought back has its watcher back (a fresh
+    # baseline: files that landed meanwhile are left alone).
+    problem = sync_rule_watcher(platform, rule_id)
+    rearm_folder_watching(platform)
+    tail = f" (its folder could not be watched: {problem})" if problem else ""
+    return f"undo: {'recreated' if recreated else 'restored'} the rule '{prior.get('name') or rule_id}'{tail}"
 
 
 def _describe_reflex(r: dict[str, Any] | None) -> str | None:
     if r is None:
         return None
+    if r.get("source") in ("file", "download"):
+        # Leap 05-a: the card's own first line (its When, in words).
+        from ..reflex.models import ReflexRule
+        from ..triggers.starts import describe
+
+        try:
+            probe = ReflexRule(**{k: r.get(k) for k in ("source", "match", "start_json") if r.get(k) is not None})
+            when = describe(probe)["when_words"].split(". ")[0].rstrip(".")
+        except Exception:  # noqa: BLE001
+            when = f"on a {r.get('source')}"
+        act = "an agent does the task" if r.get("action") == "session" else f"{r.get('action')} {r.get('target')}".strip()
+        return f"{when} → {act}" + ("" if r.get("enabled", True) else " (off)")
     on = f"{r.get('source')} '{r.get('match')}'" if r.get("match") else f"any {r.get('source')} signal"
     act = f"{r.get('action')} {r.get('target')}".strip()
     return f"on {on} → {act}" + ("" if r.get("enabled", True) else " (off)")
@@ -1928,6 +2000,13 @@ def resolve_grant(platform: Any, ref: str) -> tuple[str, str]:
             g for g in store.list()
             if g.scope_kind in ("schedule", "workflow") and g.scope_id == ref
         ]
+    if not live:
+        # Leap 05-a: a rule's own grants, by the rule's id or its name (a
+        # rule's grants are kept on its id: two rules may share a name).
+        rule_ids = {ref} | {
+            r.id for r in platform.reflex.list() if (r.name or "").strip().casefold() == ref.casefold()
+        }
+        live = [g for g in store.list() if g.scope_kind == "rule" and g.scope_id in rule_ids]
     if len(live) == 1:
         return live[0].id, ""
     if not live:
@@ -3670,33 +3749,75 @@ class _ReflexTool(_RecordTool):
 class ReflexCreateTool(_ReflexTool):
     name = "reflex_create"
     description = (
-        "Make a rule that starts work when something happens: a signal from `source` "
-        "(webhook, comm, email, calendar, slack) whose `match` is the webhook's slug or a "
-        "keyword in the message (empty = every message of that source) starts `action` "
-        "(workflow, remote_agent or session) on `target` (the workflow or agent name), with an "
-        "optional `task_template` ({body}, {text}, {slug} are filled in). An `email` rule hears only "
-        "mail that reaches an email destination with two-way listening on (channel_connect with "
-        "`imap_host`, then channel_toggle), from a sender on that destination's Allowed senders "
-        "list. For an everyday request (\"when an email from the tax office arrives, file it in "
-        "the Tax folder\"): `source` email, `match` a word that marks those messages (the sender's "
-        "name), `action` session, `task_template` what to do with each one in plain words. A word to "
-        "match is enough: you do not need the sender's exact address or a folder's full location "
-        "to make the rule. The user approves on a card; Undo removes the rule."
+        "Make ONE rule that starts work when something happens (\"when this happens, do that\"): "
+        "a signal from `source` starts `action` (workflow, remote_agent or session) on `target` (the "
+        "workflow or agent name), with an optional `task_template` (what to do, in plain words; "
+        "{body}, {text}, {slug}, and for a file or a download {file}, {path}, {folder}, {site} are "
+        "filled in, as data). Sources: `file` (a new file lands in a folder: `path` is the folder's "
+        "full location, `glob` an optional pattern such as *.pdf; ONE call makes the rule and the "
+        "watcher of that folder, and the work runs in that folder unless `folder` says another), "
+        "`download` (a download finishes in the user's browser: `match_site` an optional site such "
+        "as irs.gov, `match` an optional word in the file's name), webhook (`match` is its slug), "
+        "comm (a phone message), email, calendar, slack (`match` a keyword in the message; empty = "
+        "every message). An `email` rule hears only mail that reaches an email destination with "
+        "two-way listening on (channel_connect with `imap_host`, then channel_toggle), from a sender "
+        "on that destination's Allowed senders list. For an everyday request (\"when a PDF lands in "
+        "Intake, read it and file it by sender\"): `source` file, `path` the Intake folder, `glob` "
+        "*.pdf, `action` session, `task_template` what to do with each file. (\"when an email from "
+        "the tax office arrives, file it in the Tax folder\"): `source` email, `match` a word that "
+        "marks those messages, `action` session. Optional: `agent` (a custom agent that does the "
+        "work), `folder` (where the work runs), `max_fires_per_hour` (1-120, default 12: then the "
+        "rule pauses and says so). Made in a chat, each run reports in that chat. The user approves "
+        "on a card that says When, Do, Where it works and Limits; Undo removes the rule and its "
+        "watcher."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "name": {"type": "string"},
-            "source": {"type": "string", "enum": ["webhook", "comm", "email", "calendar", "slack"]},
+            "source": {"type": "string", "enum": ["webhook", "comm", "email", "calendar", "slack", "file", "download"]},
             "match": {"type": "string"},
             "action": {"type": "string", "enum": ["workflow", "remote_agent", "session"]},
             "target": {"type": "string"},
             "task_template": {"type": "string"},
             "enabled": {"type": "boolean"},
             "project_id": {"type": "string"},
+            "path": {"type": "string"},
+            "glob": {"type": "string"},
+            "per_file": {"type": "boolean"},
+            "match_site": {"type": "string"},
+            "agent": {"type": "string"},
+            "folder": {"type": "string"},
+            "max_fires_per_hour": {"type": "integer", "minimum": 1, "maximum": 120},
         },
         "required": ["source", "action"],
     }
+    # Leap 05-a: WHICH folder a file rule watches is a detail only the user
+    # has (the watcher tool's own rule, v1.489.0): left out, or given as a
+    # bare name, the user is asked for the full location on a card first.
+    user_details = {
+        "path": {
+            "title": "The folder's full location",
+            "what": "the full location of the folder to watch",
+            "description": "Starting with its drive, for example C:\\Users\\you\\Documents\\Intake",
+        },
+    }
+    user_details_lead = "Iron Jarvis needs to know which folder the rule watches."
+
+    def missing_details(self, args: dict[str, Any], ctx: ToolContext | None = None) -> dict[str, dict[str, Any]]:
+        given = args if isinstance(args, dict) else {}
+        if str(given.get("source") or "") != "file":
+            return {}
+        text = str(given.get("path") or "").strip().strip("\"'")
+        if text:
+            try:
+                from .records_build import _absolute, _network
+
+                if _network(text) or _absolute(text):
+                    return {}
+            except Exception:  # noqa: BLE001 — a fault asks nothing
+                return {}
+        return dict(self.user_details)
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         # The store mints the rule's id, so the capture is named after the write.
@@ -3711,7 +3832,19 @@ class ReflexCreateTool(_ReflexTool):
         problem = validate_reflex(source, match, action, target)
         if problem:
             return ToolResult(ok=False, error=problem)
+        start, root, problem = await asyncio.to_thread(rule_start_from_args, self.platform, source, args)
+        if problem:
+            return ToolResult(ok=False, error=problem)
+        agent = str(args.get("agent") or "").strip()
+        if agent:
+            problem = await asyncio.to_thread(rule_agent_problem, self.platform, agent)
+            if problem:
+                return ToolResult(ok=False, error=problem)
         enabled = args.get("enabled") if isinstance(args.get("enabled"), bool) else True
+        from ..agents.chat_delivery import report_chat_for, stamp_when_linked
+
+        # Idea 39: made in a chat, each run reports there.
+        report_chat = await asyncio.to_thread(report_chat_for, self.platform, ctx)
         rule = await asyncio.to_thread(
             lambda: self.platform.reflex.add(
                 name=str(args.get("name") or ""),
@@ -3722,27 +3855,129 @@ class ReflexCreateTool(_ReflexTool):
                 task_template=str(args.get("task_template") or ""),
                 enabled=enabled,
                 project_id=args.get("project_id") or None,
+                start=start or None,
+                agent_name=agent,
+                workspace_root=root,
+                chat_thread_id=report_chat,
+                max_fires_per_hour=args.get("max_fires_per_hour"),
             )
         )
         bind_created(rule.id)
+        if source == "file":
+            # ONE call makes the rule and the watcher of its folder.
+            problem = await asyncio.to_thread(sync_rule_watcher, self.platform, rule.id)
+            if problem:
+                await asyncio.to_thread(self.platform.reflex.remove, rule.id)
+                return ToolResult(ok=False, error=problem)
+            await asyncio.to_thread(rearm_folder_watching, self.platform)
+        reports = bool(report_chat)
+        if not reports:
+            reports = await stamp_when_linked(self.platform, ctx, "rule", rule.id)
         after = await asyncio.to_thread(snap_reflex, self.platform, rule.id)
-        data: dict[str, Any] = {"id": rule.id, "name": rule.name}
+        fresh = await asyncio.to_thread(self.platform.reflex.get, rule.id)
+        from ..triggers.starts import describe_for
+
+        words = describe_for(self.platform, fresh) if fresh is not None else {}
+        data: dict[str, Any] = {"id": rule.id, "name": rule.name, "reports_here": reports, **words}
         card = create_card("reflex", rule.id, _describe_reflex(after), label=f"Rule “{rule.name}”")
         if card:
+            if reports:
+                from ..scheduling.tools import REPORTS_HERE_CARD
+
+                card["new"] = f"{card.get('new') or ''} \u00b7 {REPORTS_HERE_CARD}".strip(" \u00b7")
+            # Leap 05-a: the card's four lines, composed by code.
+            card["rule"] = {
+                "when": words.get("when_words", ""),
+                "does": words.get("does_words", ""),
+                "where": words.get("where_words", ""),
+                "limits": words.get("limits_words", ""),
+            }
             data["record_change"] = card
-        return ToolResult(ok=True, output=f"Made the rule '{rule.name}' ({_describe_reflex(after)}).", data=data)
+        said = " ".join(w for w in (words.get("when_words"), words.get("does_words"),
+                                    words.get("where_words"), words.get("limits_words")) if w)
+        output = f"Made the rule '{rule.name}'. {said}".strip()
+        if reports:
+            output += " Each run reports in this chat (Stop reporting is on its row and on each report)."
+        return ToolResult(ok=True, output=output, data=data)
+
+
+def rule_start_from_args(platform: Any, source: str, args: dict[str, Any]) -> tuple[dict, str, str]:
+    """Leap 05-a: ``(start, workspace_root, problem)`` for a rule made from
+    ``args``: a FILE rule's folder and pattern (checked by the watcher
+    service's own rules: no network location, nothing protected, a pattern
+    that parses) and the folder its work runs in (``folder``, else the
+    watched folder when this app may write there); a DOWNLOAD rule's site.
+    BLOCKING (folder probes)."""
+    from ..core.fs_policy import usable_workspace_root
+
+    start: dict[str, Any] = {}
+    root = str(args.get("folder") or "").strip().strip("\"'")
+    if root and not usable_workspace_root(root):
+        from ..scheduling.knobs import WORKSPACE_ROOT_DETAIL
+
+        return {}, "", WORKSPACE_ROOT_DETAIL.format(root=root).replace("workspace_root", "The folder it works in")
+    if source == "file":
+        path = str(args.get("path") or "").strip().strip("\"'")
+        if not path:
+            return {}, "", FILE_RULE_NEEDS_FOLDER
+        glob = str(args.get("glob") or "").strip()
+        try:
+            platform.sentinels.check_watch(path, glob or None)
+        except ValueError as exc:
+            return {}, "", str(exc)
+        start = {"path": path}
+        if glob:
+            start["glob"] = glob
+        if args.get("per_file") is False:
+            start["per_file"] = False
+        if not root:
+            try:
+                root = path if usable_workspace_root(path) else ""
+            except Exception:  # noqa: BLE001 — no folder: the run's own
+                root = ""
+    elif source == "download":
+        site = str(args.get("match_site") or "").strip()
+        if site:
+            start = {"match_site": site[:200]}
+    return start, root, ""
+
+
+def rule_agent_problem(platform: Any, agent: str) -> str:
+    """Leap 05-a: "" when ``agent`` can do a rule's work, else why not (the
+    fire-time resolution's own words). BLOCKING."""
+    from ..agents.resolve import UnattendedRefusal, resolve_for_unattended
+    from ..core.models import AgentType
+
+    try:
+        resolve_for_unattended(platform, agent, who="rule", default=AgentType.SUPERVISOR)
+    except UnattendedRefusal as exc:
+        return str(exc)
+    return ""
 
 
 class ReflexUpdateTool(_ReflexTool):
     name = "reflex_update"
     description = (
-        "Turn a rule (`rule` = its id or exact name) on or off with `enabled`, or ground it in "
-        "a project with `project_id` (\"\" clears it). The user approves on a card; the change "
-        "has an Undo."
+        "Change a rule (`rule` = its id or exact name): turn it on or off with `enabled` (on also "
+        "resumes a rule that paused itself), ground it in a project with `project_id` (\"\" clears "
+        "it), or change what it does (`task_template`, `agent`, `folder` where the work runs), how "
+        "often it may start (`max_fires_per_hour`, 1-120), a file rule's folder (`path`, `glob`) or "
+        "a download rule's site (`match_site`). The user approves on a card; the change has an Undo."
     )
     input_schema = {
         "type": "object",
-        "properties": {"rule": {"type": "string"}, "enabled": {"type": "boolean"}, "project_id": {"type": "string"}},
+        "properties": {
+            "rule": {"type": "string"},
+            "enabled": {"type": "boolean"},
+            "project_id": {"type": "string"},
+            "task_template": {"type": "string"},
+            "agent": {"type": "string"},
+            "folder": {"type": "string"},
+            "max_fires_per_hour": {"type": "integer", "minimum": 1, "maximum": 120},
+            "path": {"type": "string"},
+            "glob": {"type": "string"},
+            "match_site": {"type": "string"},
+        },
         "required": ["rule"],
     }
 
@@ -3753,24 +3988,94 @@ class ReflexUpdateTool(_ReflexTool):
             return self._missing(args)
         enabled = args.get("enabled") if isinstance(args.get("enabled"), bool) else None
         project = args.get("project_id") if isinstance(args.get("project_id"), str) else None
-        if enabled is None and project is None:
-            return ToolResult(ok=False, error="Say what to change: enabled or project_id.")
+        edits, problem = await asyncio.to_thread(rule_edits_from_args, self.platform, before, args)
+        if problem:
+            return ToolResult(ok=False, error=problem)
+        if enabled is None and project is None and not edits:
+            return ToolResult(
+                ok=False,
+                error="Say what to change: enabled, project_id, task_template, agent, folder, "
+                "max_fires_per_hour, path, glob or match_site.",
+            )
         # PATCH /reflex/rules/{id}'s three intents: omitted = unchanged,
         # "" = clear the grounding, a value = re-ground.
-        if enabled is not None:
+        if edits:
+            await asyncio.to_thread(lambda: self.platform.reflex.update(rid, **edits))
+            if "start_json" in edits:
+                problem = await asyncio.to_thread(sync_rule_watcher, self.platform, rid)
+                if problem:
+                    await asyncio.to_thread(restore_reflex, self.platform, rid, before)
+                    return ToolResult(ok=False, error=problem)
+        if enabled is True:
+            # Leap 05-a: on is on — a rule that paused itself resumes too.
+            await asyncio.to_thread(self.platform.reflex.resume, rid)
+        elif enabled is False:
             await asyncio.to_thread(self.platform.reflex.set_enabled, rid, enabled)
         if project is not None:
             await asyncio.to_thread(self.platform.reflex.set_project, rid, project)
+        if before.get("source") == "file":
+            await asyncio.to_thread(rearm_folder_watching, self.platform)
         after = await asyncio.to_thread(snap_reflex, self.platform, rid)
         label = f"Rule “{before['name']}”"
         old, new = _describe_reflex(before), _describe_reflex(after)
         if old == new:
-            old, new = before.get("project_id") or "no project", (after or {}).get("project_id") or "no project"
+            changed = [k for k in _REFLEX_FIELDS if (before or {}).get(k) != (after or {}).get(k)]
+            if changed and changed != ["project_id"]:
+                old = "; ".join(f"{k}: {before.get(k)!s}"[:120] for k in changed)
+                new = "; ".join(f"{k}: {(after or {}).get(k)!s}"[:120] for k in changed)
+            else:
+                old, new = before.get("project_id") or "no project", (after or {}).get("project_id") or "no project"
         return ToolResult(
             ok=True,
             output=f"Changed the rule '{before['name']}': {old} → {new}.",
             data={"record_change": self._card("Rule changed", label, old, new, f"reflex.{rid}")},
         )
+
+
+def rule_edits_from_args(platform: Any, before: dict[str, Any], args: dict[str, Any]) -> tuple[dict, str]:
+    """Leap 05-a: ``(edits for ReflexStore.update, problem)`` from a
+    ``reflex_update`` call, checked by the same rules a new rule meets.
+    BLOCKING (folder probes)."""
+    edits: dict[str, Any] = {}
+    if isinstance(args.get("task_template"), str):
+        edits["task_template"] = args["task_template"]
+    if isinstance(args.get("agent"), str):
+        agent = args["agent"].strip()
+        if agent:
+            problem = rule_agent_problem(platform, agent)
+            if problem:
+                return {}, problem
+        edits["agent_name"] = agent
+    if args.get("max_fires_per_hour") is not None:
+        edits["max_fires_per_hour"] = args.get("max_fires_per_hour")
+    source = str(before.get("source") or "")
+    if isinstance(args.get("folder"), str):
+        root = args["folder"].strip().strip("\"'")
+        if root:
+            from ..core.fs_policy import usable_workspace_root
+
+            if not usable_workspace_root(root):
+                from ..scheduling.knobs import WORKSPACE_ROOT_DETAIL
+
+                return {}, WORKSPACE_ROOT_DETAIL.format(root=root).replace("workspace_root", "The folder it works in")
+        edits["workspace_root"] = root
+    if source == "file" and (isinstance(args.get("path"), str) or isinstance(args.get("glob"), str)):
+        from ..reflex.models import ReflexRule
+
+        current = ReflexRule(start_json=str(before.get("start_json") or "")).decoded_start()
+        path = str(args["path"]).strip() if isinstance(args.get("path"), str) else str(current.get("path") or "")
+        glob = str(args["glob"]).strip() if isinstance(args.get("glob"), str) else str(current.get("glob") or "")
+        merged = dict(args, path=path, glob=glob, folder="")
+        start, _root, problem = rule_start_from_args(platform, "file", merged)
+        if problem:
+            return {}, problem
+        if current.get("per_file") is False:
+            start["per_file"] = False
+        edits["start_json"] = start
+    if source == "download" and isinstance(args.get("match_site"), str):
+        site = args["match_site"].strip()
+        edits["start_json"] = {"match_site": site[:200]} if site else {}
+    return edits, ""
 
 
 class ReflexDeleteTool(_ReflexTool):
@@ -3783,7 +4088,11 @@ class ReflexDeleteTool(_ReflexTool):
         before = await asyncio.to_thread(snap_reflex, self.platform, rid) if rid else None
         if before is None:
             return self._missing(args)
+        # Leap 05-a: its watcher and its standing OKs go with it (the store's
+        # hook); Undo brings the rule and its watcher back.
         await asyncio.to_thread(self.platform.reflex.remove, rid)
+        if before.get("source") == "file":
+            await asyncio.to_thread(rearm_folder_watching, self.platform)
         return ToolResult(
             ok=True,
             output=f"Removed the rule '{before['name']}'.",

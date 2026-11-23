@@ -147,6 +147,10 @@ _HOT_INDEXES = (
     ("ix_goalcontract_chat_thread_id", "goalcontract", "chat_thread_id"),
     ("ix_workflowrunrecord_chat_thread_id", "workflowrunrecord", "chat_thread_id"),
     ("ix_nighttaskrecord_chat_thread_id", "nighttaskrecord", "chat_thread_id"),
+    # Leap 05-a: a rule made in a chat reports there too, and a rule-mode
+    # watcher names the rule it starts.
+    ("ix_reflexrule_chat_thread_id", "reflexrule", "chat_thread_id"),
+    ("ix_sentinelrecord_rule_id", "sentinelrecord", "rule_id"),
 )
 
 

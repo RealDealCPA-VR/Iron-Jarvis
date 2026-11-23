@@ -18,6 +18,9 @@ import {
   Bot,
   TerminalSquare,
   Pencil,
+  FolderInput,
+  Download as DownloadIcon,
+  PauseCircle,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, patch, del, ApiError } from "@/lib/api";
@@ -40,10 +43,18 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { RehearsalReport, decodeRehearsal, type RehearsalView } from "@/components/RehearsalReport";
 import { RowMenu } from "@/components/RowMenu";
+import { ReportsTo } from "@/components/ReportsTo";
+import { RuleLines } from "@/components/RuleLines";
+import type { ReportsTo as ReportsToRow } from "@/lib/reports";
 import {
   EVERYDAY_ACTION,
   EVERYDAY_SOURCES,
+  KEEP_PAUSED,
+  KEEP_PAUSED_WORDS,
+  PAUSED_FILES_WAIT,
+  RESUME,
   isEveryday,
+  pausedWords,
   sourceActive,
   sourceOffHref,
   sourceOffWords,
@@ -81,6 +92,23 @@ interface ReflexRule {
   last_href?: string | null;
   /** Leap 06-a: when Keep it was pressed on a rehearsal of this rule. */
   rehearsed_at?: string | null;
+  /** Leap 05-a: what a file rule watches / a download rule hears. */
+  start?: { path?: string; glob?: string; match_site?: string; per_file?: boolean };
+  agent_name?: string;
+  workspace_root?: string;
+  max_fires_per_hour?: number;
+  /** Set while the rule is paused (it started too often in an hour). */
+  paused_at?: string | null;
+  paused_reason?: string | null;
+  /** The four lines of its card (the daemon's words). */
+  when_words?: string;
+  does_words?: string;
+  where_words?: string;
+  limits_words?: string;
+  /** Idea 39: the chat its runs report to. */
+  reports_to?: ReportsToRow | null;
+  /** A file rule's watcher of its folder. */
+  watcher?: { name: string; last_error?: string | null } | null;
 }
 
 /** POST /reflex/rules/{id}/test result. */
@@ -114,7 +142,7 @@ const ACTION_LABEL: Record<ReflexAction, string> = {
 /*  grouping, and per-rule badge. Mirrors reflex/models.py::REFLEX_SOURCES.     */
 /* -------------------------------------------------------------------------- */
 
-const SOURCE_ORDER: ReflexSource[] = ["webhook", "comm", "email", "calendar", "slack"];
+const SOURCE_ORDER: ReflexSource[] = ["file", "download", "webhook", "comm", "email", "calendar", "slack"];
 
 interface SourceMeta {
   option: string; // dropdown label
@@ -184,6 +212,29 @@ const SOURCE_META: Record<ReflexSource, SourceMeta> = {
     matchHint: "Keyword in the message (whole word). Blank = every message.",
     matchPlaceholder: "deploy",
   },
+  // Leap 05-a: a folder or a download can start a rule.
+  file: {
+    option: "A new file lands in a folder",
+    section: "Folder rules",
+    badge: "folder",
+    tone: "cyan",
+    icon: FolderInput,
+    iconClass: "text-accent-soft",
+    matchLabel: "Folder",
+    matchHint: "",
+    matchPlaceholder: "C:\\Users\\you\\Documents\\Intake",
+  },
+  download: {
+    option: "A download finishes",
+    section: "Download rules",
+    badge: "download",
+    tone: "amber",
+    icon: DownloadIcon,
+    iconClass: "text-amber-300",
+    matchLabel: "A word in the file's name (optional)",
+    matchHint: "Blank = every download (from the site below, if you name one).",
+    matchPlaceholder: "invoice",
+  },
 };
 
 // GET /triggers is read through lib/reflexRules (v1.449.0): the Triggers card
@@ -250,6 +301,10 @@ function RuleSentence({ r }: { r: ReflexRule }) {
     ) : (
       <>When any Slack message arrives</>
     );
+  } else if (r.source === "file") {
+    trigger = <>When a new file lands in {chip(r.start?.path || "?")}</>;
+  } else if (r.source === "download") {
+    trigger = <>When a download finishes{r.start?.match_site ? <> from {chip(r.start.match_site)}</> : null}</>;
   } else {
     trigger = kw ? <>When a message contains {chip(kw)}</> : <>When any message arrives</>;
   }
@@ -337,6 +392,13 @@ export default function ReflexPage() {
   const [taskTemplate, setTaskTemplate] = useState("");
   const [projectId, setProjectId] = useState("");
   const [enabled, setEnabled] = useState(true);
+  // Leap 05-a: a file rule's folder and pattern, a download rule's site, the
+  // folder the work runs in, and how often it may start in an hour.
+  const [folderPath, setFolderPath] = useState("");
+  const [glob, setGlob] = useState("");
+  const [site, setSite] = useState("");
+  const [worksIn, setWorksIn] = useState("");
+  const [perHour, setPerHour] = useState("");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formOk, setFormOk] = useState<string | null>(null);
@@ -358,8 +420,25 @@ export default function ReflexPage() {
     }
   }, []);
 
+  // Leap 05-a: ?rule=<id> (the bell's "paused itself" row) opens on that rule.
+  const [focusRule, setFocusRule] = useState("");
+  useEffect(() => {
+    try {
+      setFocusRule(new URLSearchParams(window.location.search).get("rule") || "");
+    } catch {
+      /* malformed URL — ignore */
+    }
+  }, []);
+  // Once: a later poll never pulls the page back to it.
+  const focused = useRef(false);
+  useEffect(() => {
+    if (focused.current || !focusRule || !rules.some((r) => r.id === focusRule)) return;
+    focused.current = true;
+    document.getElementById(`rule-${focusRule}`)?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [focusRule, rules]);
+
   // Per-row state
-  const [acting, setActing] = useState<string | null>(null); // "toggle:id" | "test:id" | "rehearse:id"
+  const [acting, setActing] = useState<string | null>(null); // "toggle:id" | "test:id" | "rehearse:id" | "pause:id"
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   // Leap 06-a: each row's latest rehearsal report (one at a time per rule).
   const [rehearsals, setRehearsals] = useState<Record<string, RehearsalView>>({});
@@ -396,13 +475,14 @@ export default function ReflexPage() {
   // A remote agent runs on someone else's endpoint — no grounding seam there,
   // so the picker (and the submitted project) applies to session/workflow only.
   const projectShown = action !== "remote_agent";
-  const matchReady = source !== "webhook" || !!match.trim();
+  const matchReady = (source !== "webhook" || !!match.trim()) && (source !== "file" || !!folderPath.trim());
   const targetReady = !targetNeeded || !!target.trim();
   const canSubmit = matchReady && targetReady && !targetUnknown && !busy;
 
   function pickSource(v: ReflexSource) {
     setSource(v);
     setMatch(""); // slug vs. keyword don't transfer between sources
+    if (v === "file" || v === "download") setAction("session");
   }
   function pickAction(v: ReflexAction) {
     setAction(v);
@@ -422,6 +502,11 @@ export default function ReflexPage() {
     setTaskTemplate("");
     setProjectId("");
     setEnabled(true);
+    setFolderPath("");
+    setGlob("");
+    setSite("");
+    setWorksIn("");
+    setPerHour("");
     setEveryday(true);
     setSource("comm");
     setAction(EVERYDAY_ACTION);
@@ -439,6 +524,11 @@ export default function ReflexPage() {
     setTaskTemplate(r.task_template);
     setProjectId(r.project_id ?? "");
     setEnabled(r.enabled);
+    setFolderPath(r.start?.path ?? "");
+    setGlob(r.start?.glob ?? "");
+    setSite(r.start?.match_site ?? "");
+    setWorksIn(r.workspace_root ?? "");
+    setPerHour(r.max_fires_per_hour ? String(r.max_fires_per_hour) : "");
     setFormError(null);
     setFormOk(null);
     setOpen(true);
@@ -452,6 +542,10 @@ export default function ReflexPage() {
       setFormError("A webhook rule needs a webhook slug.");
       return;
     }
+    if (source === "file" && !folderPath.trim()) {
+      setFormError("A rule that starts when a file lands needs the folder to watch.");
+      return;
+    }
     if (targetNeeded && !target.trim()) {
       setFormError(`A '${ACTION_LABEL[action]}' action needs a target.`);
       return;
@@ -460,13 +554,19 @@ export default function ReflexPage() {
     setFormError(null);
     setFormOk(null);
     try {
+      const limit = parseInt(perHour, 10);
       const fields = {
         name: name.trim(),
         source,
-        match: match.trim(),
+        match: source === "file" ? "" : match.trim(),
         action,
         target: targetNeeded ? target.trim() : "",
         task_template: templateShown ? taskTemplate : "",
+        // Leap 05-a: where it starts, where it works, how often.
+        ...(source === "file" ? { path: folderPath.trim(), glob: glob.trim() } : {}),
+        ...(source === "download" ? { match_site: site.trim() } : {}),
+        ...(action === "session" ? { workspace_root: worksIn.trim() } : {}),
+        ...(Number.isFinite(limit) && limit > 0 ? { max_fires_per_hour: limit } : {}),
       };
       if (editingId) {
         // PARTIAL on the daemon, but the form holds every field, so all ride;
@@ -492,6 +592,11 @@ export default function ReflexPage() {
         setTaskTemplate("");
         setProjectId("");
         setEnabled(true);
+        setFolderPath("");
+        setGlob("");
+        setSite("");
+        setWorksIn("");
+        setPerHour("");
       }
       reload();
     } catch (err) {
@@ -507,6 +612,20 @@ export default function ReflexPage() {
     setRowError(null);
     try {
       await patch(`/reflex/rules/${encodeURIComponent(r.id)}`, { enabled: !r.enabled });
+      reload();
+    } catch (err) {
+      setRowError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setActing(null);
+    }
+  }
+
+  // Leap 05-a (D-05.3): the two answers to a rule that paused itself.
+  async function answerPause(r: ReflexRule, how: "resume" | "keep-paused") {
+    setActing(`pause:${r.id}`);
+    setRowError(null);
+    try {
+      await post(`/reflex/rules/${encodeURIComponent(r.id)}/${how}`);
       reload();
     } catch (err) {
       setRowError(err instanceof ApiError ? err.message : String(err));
@@ -581,15 +700,24 @@ export default function ReflexPage() {
     // right now says so on its row (only when /triggers answered — a guess
     // never reads as "off"; a switched-off rule says nothing more).
     const offWords = r.enabled ? sourceOffWords(r.source, triggersApi.data) : "";
+    const paused = r.enabled ? pausedWords(r) : "";
+    const meta = SOURCE_META[r.source] ?? SOURCE_META.comm;
+    const lines = r.when_words
+      ? { when: r.when_words, does: r.does_words ?? "", where: r.where_words ?? "", limits: r.limits_words ?? "" }
+      : null;
     return (
       <div
         key={r.id}
-        className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 transition-colors hover:bg-white/[0.03]"
+        id={`rule-${r.id}`}
+        data-testid={`reflex-row-${r.id}`}
+        className={`rounded-xl border bg-white/[0.02] p-4 transition-colors hover:bg-white/[0.03] ${
+          focusRule === r.id ? "border-accent/40" : "border-white/[0.06]"
+        }`}
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Badge value={SOURCE_META[r.source].badge} tone={SOURCE_META[r.source].tone} />
+              <Badge value={meta.badge} tone={meta.tone} />
               {r.name ? (
                 <span className="truncate font-medium text-zinc-100">{r.name}</span>
               ) : (
@@ -605,8 +733,10 @@ export default function ReflexPage() {
               )}
             </div>
             <div className="mt-1.5">
-              <RuleSentence r={r} />
+              {/* Leap 05-a: the same four lines as its card in chat. */}
+              {lines ? <RuleLines lines={lines} testId={`reflex-lines-${r.id}`} /> : <RuleSentence r={r} />}
             </div>
+            <ReportsTo kind="rule" id={r.id} to={r.reports_to} onChanged={reload} />
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-600">
               <span>
                 Fired <span className="text-zinc-400">{r.fire_count}×</span>
@@ -648,9 +778,16 @@ export default function ReflexPage() {
                   )}
                 </span>
               )}
-              {templateShownFor(r) && r.task_template.trim() && (
+              {!lines && templateShownFor(r) && r.task_template.trim() && (
                 <span className="max-w-[18rem] truncate" title={r.task_template}>
                   task: {r.task_template.trim()}
+                </span>
+              )}
+              {r.watcher?.last_error && (
+                <span data-testid={`reflex-watcher-error-${r.id}`} className="text-tone-warn">
+                  {r.watcher.last_error.startsWith("root unreachable")
+                    ? "The folder it watches can't be reached right now."
+                    : "The folder it watches could not be read."}
                 </span>
               )}
             </div>
@@ -715,6 +852,41 @@ export default function ReflexPage() {
           </div>
         </div>
 
+        {paused && (
+          <div
+            data-testid={`reflex-paused-${r.id}`}
+            className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 text-[12px] text-amber-200/90"
+          >
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <PauseCircle size={13} aria-hidden="true" className="shrink-0" />
+              <span className="min-w-0 break-words">
+                {paused} {r.source === "file" ? PAUSED_FILES_WAIT : ""}
+              </span>
+            </span>
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void answerPause(r, "resume")}
+                disabled={acting === `pause:${r.id}`}
+                data-testid={`reflex-resume-${r.id}`}
+                className="rounded-lg border border-white/15 px-2.5 py-1 text-xs font-medium text-zinc-100 hover:border-white/30 disabled:opacity-50"
+              >
+                {RESUME}
+              </button>
+              <button
+                type="button"
+                onClick={() => void answerPause(r, "keep-paused")}
+                disabled={acting === `pause:${r.id}`}
+                data-testid={`reflex-keep-paused-${r.id}`}
+                title={KEEP_PAUSED_WORDS}
+                className="text-xs text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline disabled:opacity-50"
+              >
+                {KEEP_PAUSED}
+              </button>
+            </span>
+          </div>
+        )}
+
         {rehearsals[r.id] && (
           <div className="mt-3">
             <RehearsalReport
@@ -769,7 +941,7 @@ export default function ReflexPage() {
       <Reveal>
         <PageHeader
           title="Rules"
-          subtitle="When a webhook fires or a message arrives, run a workflow, a remote agent, or Jarvis on this PC, automatically."
+          subtitle="When a file lands in a folder, a download finishes, a message arrives or a webhook fires, run a workflow, a remote agent, or Jarvis on this PC, automatically."
           actions={
             <button
               type="button"
@@ -850,7 +1022,21 @@ export default function ReflexPage() {
                   <label htmlFor={`${fid}-match`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     {SOURCE_META[source].matchLabel}
                   </label>
-                  {source === "webhook" ? (
+                  {source === "file" ? (
+                    <>
+                      <input
+                        id={`${fid}-match`}
+                        value={folderPath}
+                        onChange={(e) => setFolderPath(e.target.value)}
+                        placeholder={SOURCE_META.file.matchPlaceholder}
+                        className="field font-mono"
+                        data-testid="reflex-folder"
+                      />
+                      <div className="mt-1 text-[11px] text-zinc-600">
+                        Its full location on this PC. Files already there are left alone; it looks every few minutes.
+                      </div>
+                    </>
+                  ) : source === "webhook" ? (
                     inboundSlugs.length > 0 ? (
                       <select
                         id={`${fid}-match`}
@@ -903,6 +1089,39 @@ export default function ReflexPage() {
                   )}
                 </div>
               </div>
+
+              {/* Leap 05-a: a file rule's pattern, a download rule's site. */}
+              {source === "file" && (
+                <div>
+                  <label htmlFor={`${fid}-glob`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
+                    Only files like (optional)
+                  </label>
+                  <input
+                    id={`${fid}-glob`}
+                    value={glob}
+                    onChange={(e) => setGlob(e.target.value)}
+                    placeholder="*.pdf"
+                    className="field font-mono"
+                  />
+                </div>
+              )}
+              {source === "download" && (
+                <div>
+                  <label htmlFor={`${fid}-site`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
+                    From the site (optional)
+                  </label>
+                  <input
+                    id={`${fid}-site`}
+                    value={site}
+                    onChange={(e) => setSite(e.target.value)}
+                    placeholder="irs.gov"
+                    className="field font-mono"
+                  />
+                  <div className="mt-1 text-[11px] text-zinc-600">
+                    A download starts its work carefully: the file came from a website.
+                  </div>
+                </div>
+              )}
 
               {/* Action: action + target (the everyday shape is always "an
                   agent does the task below", so it shows no picker). */}
@@ -1022,10 +1241,59 @@ export default function ReflexPage() {
                     className="field font-mono"
                   />
                   <div className="mt-1 text-[11px] text-zinc-600">
-                    Placeholders <code className="font-mono text-accent-soft">{"{body}"}</code> /{" "}
-                    <code className="font-mono text-accent-soft">{"{text}"}</code> /{" "}
-                    <code className="font-mono text-accent-soft">{"{slug}"}</code> are filled from
-                    the triggering signal. Blank = a sensible default.
+                    {source === "file" || source === "download" ? (
+                      <>
+                        Placeholders <code className="font-mono text-accent-soft">{"{file}"}</code> /{" "}
+                        <code className="font-mono text-accent-soft">{"{path}"}</code> /{" "}
+                        <code className="font-mono text-accent-soft">{"{folder}"}</code>
+                        {source === "download" ? (
+                          <>
+                            {" "}/ <code className="font-mono text-accent-soft">{"{site}"}</code>
+                          </>
+                        ) : null}{" "}
+                        are filled from the file. Blank = a sensible default.
+                      </>
+                    ) : (
+                      <>
+                        Placeholders <code className="font-mono text-accent-soft">{"{body}"}</code> /{" "}
+                        <code className="font-mono text-accent-soft">{"{text}"}</code> /{" "}
+                        <code className="font-mono text-accent-soft">{"{slug}"}</code> are filled from
+                        the triggering signal. Blank = a sensible default.
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Leap 05-a: where the work runs, and how often it may start. */}
+              {action === "session" && (
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <div>
+                    <label htmlFor={`${fid}-works-in`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
+                      Where it works (optional)
+                    </label>
+                    <input
+                      id={`${fid}-works-in`}
+                      value={worksIn}
+                      onChange={(e) => setWorksIn(e.target.value)}
+                      placeholder={source === "file" ? "The folder it watches" : "A folder of its own"}
+                      className="field font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor={`${fid}-per-hour`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
+                      Starts an hour, at most
+                    </label>
+                    <input
+                      id={`${fid}-per-hour`}
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={perHour}
+                      onChange={(e) => setPerHour(e.target.value)}
+                      placeholder="12"
+                      className="field w-24 font-mono"
+                    />
                   </div>
                 </div>
               )}
@@ -1139,6 +1407,7 @@ export default function ReflexPage() {
               icon={<Zap size={24} />}
               title="Start work when something happens"
               examples={[
+                "When a PDF lands in your Intake folder, file it by sender",
                 "When an email about “invoice” arrives, start a task to file it",
                 "When a calendar event called “standup” is coming up, run a workflow",
                 "When another app calls your webhook, start a session",

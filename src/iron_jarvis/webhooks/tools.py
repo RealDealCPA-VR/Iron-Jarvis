@@ -235,7 +235,10 @@ class WebhookAddTool(Tool):
                 router = getattr(self.platform, "reflex_router", None)
                 if router is not None:
                     try:
-                        fired = await router.on_webhook(_slug, body)
+                        # Leap 05-a: through the start hub (on_webhook, as before).
+                        from ..triggers.starts import hub_for as _hub_for
+
+                        fired = await _hub_for(router).signal("webhook", fields={"slug": _slug, "body": body})
                     except Exception:  # noqa: BLE001 — never break the ack
                         pass
                 from ..reflex.router import summarize_fires  # AE6: failed != fired

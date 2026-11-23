@@ -151,6 +151,9 @@ EVENT_WORDS: dict[str, str] = {
     "review.rejected": "Review declined",
     # v1.446.0 (ease-of-use review item 20): a rule that could not start.
     "reflex.failed": "A rule couldn't start",
+    # Leap 05-a (D-05.3): words for the Activity page only; the kind is not
+    # sent to the phone (only the bell says it, once a day per rule).
+    "reflex.paused": "A rule paused itself",
     # v1.449.0 (readiness 0h.5 item 14): EVERY EventType member and every
     # OTHER_PUBLISHED_TYPES name — ``tests/test_event_words_every_type_v1449.py``
     # fails on a new type with no words; the dashboard twin is lib/eventWords.

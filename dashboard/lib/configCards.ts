@@ -37,6 +37,26 @@ export interface ConfigChangeCard {
    *  in it, a change that was already undone) — the daemon's own words, so
    *  the card never claims more than the Undo did. */
   undone_note?: string;
+  /** Leap 05-a: a rule's card says When, Do, Where it works and Limits —
+   *  the daemon's words (composed by code, triggers/starts.describe). */
+  rule?: RuleCardLines;
+}
+
+/** Leap 05-a: the four lines of a rule's card (and of its row on Rules). */
+export interface RuleCardLines {
+  when: string;
+  does: string;
+  where: string;
+  limits: string;
+}
+
+/** The four lines, whitelisted and cut; null unless at least one is there. */
+export function decodeRuleLines(raw: unknown): RuleCardLines | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const cut = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 400) : "");
+  const out = { when: cut(r.when), does: cut(r.does), where: cut(r.where), limits: cut(r.limits) };
+  return out.when || out.does || out.where || out.limits ? out : null;
 }
 
 export interface SecretRequestCard {
@@ -96,6 +116,7 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
     if (!c || typeof c !== "object") continue;
     const r = c as Record<string, unknown>;
     if (r.kind === "change" && str(r.key) && str(r.change_id)) {
+      const rule = decodeRuleLines(r.rule);
       out.push({
         kind: "change",
         ...(str(r.title) ? { title: str(r.title).slice(0, 60) } : {}),
@@ -109,6 +130,7 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
         change_id: str(r.change_id),
         ...(r.undone === true ? { undone: true } : {}),
         ...(r.undone === true && str(r.undone_note) ? { undone_note: str(r.undone_note).slice(0, 300) } : {}),
+        ...(rule ? { rule } : {}),
       });
     } else if (r.kind === "download" && str(r.id) && str(r.node_id)) {
       out.push({

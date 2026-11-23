@@ -303,6 +303,10 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // v1.446.0 (ease-of-use review item 20): a rule that could not start its
   // action rings (once per failure episode; a successful fire stays quiet).
   "reflex.failed",
+  // Leap 05-a (D-05.3): a rule started 12 times in an hour and paused itself.
+  // Said at most once a day per rule; the row opens the rule, whose card has
+  // Resume and Keep it paused (the stop answer: the rule is switched off).
+  "reflex.paused",
   // v1.446.0 (review item 21): a folder watcher made a NEW suggestion — a
   // quiet row (a suggestion is not a failure). Deliberation's own proposals
   // (no watcher) stay off the bell, as before.
@@ -729,6 +733,23 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: AlertTriangle,
       title: name ? `Your rule ${name} couldn't start` : "A rule couldn't start",
       body: clip(p.reason),
+      attention: true,
+    };
+  }
+  if (e.type === "reflex.paused") {
+    // Leap 05-a (D-05.3): a rule reached its starts for the hour and paused
+    // itself — once a day per rule (the daemon's cap). The row opens that
+    // rule on Rules, where Resume and Keep it paused wait. Payload: {rule,
+    // rule_id, source, reason, limit}; `reason` is the row's own words.
+    const name = typeof p.rule === "string" ? p.rule.trim() : "";
+    const id = typeof p.rule_id === "string" ? p.rule_id.trim() : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: id ? `/reflex?rule=${encodeURIComponent(id)}` : "/reflex",
+      icon: AlertTriangle,
+      title: name ? `Your rule ${name} paused itself` : "A rule paused itself",
+      body: `${clip(p.reason) || "It started too often in an hour."} Resume it, or keep it paused.`,
       attention: true,
     };
   }

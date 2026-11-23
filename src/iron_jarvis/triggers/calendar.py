@@ -136,10 +136,17 @@ class CalendarPoller:
             if not await asyncio.to_thread(self._claim, key):
                 continue
             try:
-                fired = await self.reflex_router.on_calendar(
-                    title=ev.get("summary", ""),
-                    start=_iso(start),
-                    description=ev.get("description", ""),
+                # Leap 05-a: through the start hub, which calls on_calendar
+                # exactly as before.
+                from .starts import hub_for as _hub_for
+
+                fired = await _hub_for(self.reflex_router).signal(
+                    "calendar",
+                    fields={
+                        "title": ev.get("summary", ""),
+                        "start": _iso(start),
+                        "description": ev.get("description", ""),
+                    },
                 )
             except Exception:  # noqa: BLE001 — one bad event never breaks the pass
                 log.exception("calendar trigger: on_calendar failed for %r", uid)

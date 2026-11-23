@@ -50,13 +50,16 @@ export const ALWAYS_EXACT = "Always allow exactly this";
  *  Workflows page lists it with a Remove press. */
 export const ALWAYS_SCHEDULE = "Always for this schedule";
 export const ALWAYS_WORKFLOW = "Always for this workflow";
+/** Leap 05-a: a rule's run keeps its "Always" on the RULE. */
+export const ALWAYS_RULE = "Always for this rule";
 
-/** Where the daemon keeps an "Always" it names: only these two say so. */
-export type AlwaysScope = "schedule" | "workflow";
+/** Where the daemon keeps an "Always" it names (core/grants
+ *  PLACED_ALWAYS_SCOPES): only these say so. */
+export type AlwaysScope = "schedule" | "workflow" | "rule";
 
 /** The daemon's `always_scope`, or null for anything else (absent, unknown). */
 export function alwaysScopeOf(raw: unknown): AlwaysScope | null {
-  return raw === "schedule" || raw === "workflow" ? raw : null;
+  return raw === "schedule" || raw === "workflow" || raw === "rule" ? raw : null;
 }
 
 /** The "Always" button's words: the place when the daemon named one, else
@@ -65,11 +68,15 @@ export function alwaysLabel(raw: unknown): string {
   const scope = alwaysScopeOf(raw);
   if (scope === "schedule") return ALWAYS_SCHEDULE;
   if (scope === "workflow") return ALWAYS_WORKFLOW;
+  if (scope === "rule") return ALWAYS_RULE;
   return ALWAYS_EXACT;
 }
 
-/** The page whose row lists a placed "Always" (its Remove press). */
+/** The page whose row lists a placed "Always" (its Remove press). A rule's
+ *  "Always" is listed with every other on the Autonomy page (its own row on
+ *  Rules comes with 05-c), and goes with the rule when it is removed. */
 export function alwaysPage(scope: AlwaysScope): string {
+  if (scope === "rule") return "Autonomy";
   return scope === "schedule" ? "Schedules" : "Workflows";
 }
 

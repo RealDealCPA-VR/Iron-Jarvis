@@ -274,7 +274,10 @@ class ChatApprovals:
         if meta is None:
             return
         meta["can_always"] = bool(can_always)
-        if can_always and always_scope in ("schedule", "workflow"):
+        from .grants import PLACED_ALWAYS_SCOPES
+
+        # Leap 05-a: "rule" too ("Always for this rule").
+        if can_always and always_scope in PLACED_ALWAYS_SCOPES:
             meta["always_scope"] = always_scope
         if can_always and args_hash:
             meta["args_hash"] = str(args_hash)

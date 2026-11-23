@@ -323,8 +323,10 @@ export const NAV: NavSectionDef[] = [
         href: "/reflex",
         label: "Rules",
         icon: Zap,
-        aliases: ["reflexes", "when this then that", "auto react", "if this", "triggers"],
-        blurb: "When a webhook fires or a message arrives, run something automatically.",
+        // Leap 05-a (D-05.1): the one place for "when this happens, do that";
+        // "automation" finds it.
+        aliases: ["reflexes", "when this then that", "auto react", "if this", "triggers", "automation", "automations"],
+        blurb: "When a file lands in a folder, a download finishes, a message arrives or a webhook fires, start work automatically.",
       },
       {
         href: "/self-dev",

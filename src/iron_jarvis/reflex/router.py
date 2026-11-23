@@ -46,6 +46,8 @@ async def _off_loop(fn: Any, *args: Any) -> Any:
 #: (email {sender}/{subject}/{from}, calendar {title}/{start}, slack {channel}).
 _TEMPLATE_KEYS = (
     "body", "text", "slug", "sender", "from", "subject", "title", "start", "channel",
+    # Leap 05-a: a file or a download that started the rule.
+    "path", "file", "folder", "site",
 )
 
 
@@ -53,7 +55,11 @@ _TEMPLATE_KEYS = (
 #: event title). What Jarvis reads from outside is data, never instructions
 #: (v1.499.3): each is put in as a fenced untrusted block, so the rule's own
 #: template stays the only instruction the session gets.
-_FENCED_KEYS = frozenset({"body", "text", "subject", "title"})
+#: Leap 05-a: a file's NAME is chosen by whoever made the file (a website names
+#: the files it sends), so ``{file}``, ``{path}`` (which ends in the name) and
+#: ``{site}`` (a download's address) are fenced too; ``{folder}`` is the
+#: folder the user chose, put in on one line (:func:`_short`).
+_FENCED_KEYS = frozenset({"body", "text", "subject", "title", "file", "path", "site"})
 
 _PLACEHOLDER = _re.compile(r"\{(" + "|".join(_TEMPLATE_KEYS) + r")\}")
 #: A fence marker written INSIDE outside text would close the fence early.
@@ -72,7 +78,102 @@ OUTSIDE_SOURCES: dict[str, str] = {
     "slack": "a Slack message",
     "calendar": "a calendar event",
     "comm": "a phone message",
+    # Leap 05-a (D-05.2): work a downloaded file starts begins in the careful
+    # mode used for outside messages, because the file came from a website.
+    "download": "a downloaded file",
 }
+
+
+# -- the contexts each kind of signal carries (leap 05-a: built here once, so
+# -- the router's own entry points and the start hub read the same shape) ----
+
+
+def comm_context(text: str) -> dict[str, str]:
+    """A phone message's context (``on_comm``)."""
+    text = text or ""
+    return {"text": text[:2000], "body": text[:2000], "slug": ""}
+
+
+def email_context(*, sender: str, subject: str, body: str) -> dict[str, str]:
+    """An inbound email's context (``on_email``): matching reads subject+body."""
+    subject = subject or ""
+    body = body or ""
+    text = f"{subject}\n{body}".strip()
+    return {
+        "text": text[:2000],
+        "body": body[:2000],
+        "subject": subject[:500],
+        "sender": (sender or "")[:200],
+        "from": (sender or "")[:200],
+        "slug": "",
+    }
+
+
+def calendar_context(*, title: str, start: str = "", description: str = "") -> dict[str, str]:
+    """A calendar event's context (``on_calendar``)."""
+    title = title or ""
+    description = description or ""
+    text = f"{title}\n{description}".strip()
+    return {
+        "text": text[:2000],
+        "body": description[:2000],
+        "title": title[:500],
+        "start": (start or "")[:100],
+        "slug": "",
+    }
+
+
+def slack_context(*, text: str, channel: str = "", sender: str = "") -> dict[str, str]:
+    """A Slack message's context (``on_slack``)."""
+    text = text or ""
+    return {
+        "text": text[:2000],
+        "body": text[:2000],
+        "channel": (channel or "")[:100],
+        "sender": (sender or "")[:100],
+        "slug": "",
+    }
+
+
+def file_context(paths: list[str], *, rule_id: str) -> dict[str, str]:
+    """Leap 05-a: the context a rule-mode watcher hands the hub for the new
+    file(s) that settled in its folder. ``text`` (what a keyword is matched
+    against) is the file NAME; one start may carry several files (a rule with
+    ``per_file`` off), named one per line."""
+    import os
+
+    paths = [str(p) for p in paths if str(p or "").strip()]
+    first = paths[0] if paths else ""
+    names = [os.path.basename(p) or p for p in paths]
+    return {
+        "rule_id": str(rule_id or ""),
+        "path": "\n".join(paths)[:4000],
+        "file": "\n".join(names)[:2000],
+        "folder": os.path.dirname(first)[:500],
+        "text": "\n".join(names)[:2000],
+        "body": "",
+        "slug": "",
+    }
+
+
+def download_context(*, local_path: str, site: str) -> dict[str, str]:
+    """Leap 05-a: a finished download's context: the VERIFIED local path
+    (``browser/extension_backend.download_bus_payload``), its name and folder,
+    and the site it came from (scheme, host and path, never a query:
+    ``browser/downloads.site_of``)."""
+    import os
+
+    path = str(local_path or "")
+    name = os.path.basename(path) or path
+    return {
+        "path": path[:1000],
+        "file": name[:500],
+        "folder": os.path.dirname(path)[:500],
+        "site": str(site or "")[:300],
+        "text": name[:500],
+        "body": "",
+        "slug": "",
+    }
 
 
 def _defanged(value: str) -> str:
@@ -128,6 +229,17 @@ class ReflexRouter:
         #: started, kept in memory only — what a rehearsal of that rule runs
         #: on (``sample_for``). Never written anywhere.
         self._last_signal: dict[str, dict[str, str]] = {}
+        #: Leap 05-a: the clock the hourly limit and its once-a-day notice
+        #: read (a test injects one).
+        from ..core.ids import utcnow
+
+        self.clock = utcnow
+        #: Leap 05-a: the ONE entry every kind of start goes through
+        #: (``triggers/starts.StartHub``); callers reach it by
+        #: ``starts.hub_for(router)``.
+        from ..triggers.starts import StartHub
+
+        self.start_hub = StartHub(self)
 
     def sample_for(self, rule: ReflexRule) -> dict[str, str]:
         """The signal a REHEARSAL of ``rule`` runs on (leap 06-a): the last
@@ -171,58 +283,65 @@ class ReflexRouter:
 
     async def on_comm(self, text: str) -> list[dict[str, Any]]:
         """Fire every enabled comm rule whose keyword matches this message."""
-        return await self.on_signal(
-            "comm", {"text": text[:2000], "body": text[:2000], "slug": ""}
-        )
+        return await self.on_signal("comm", comm_context(text))
 
     async def on_email(
         self, *, sender: str, subject: str, body: str
     ) -> list[dict[str, Any]]:
         """Fire every enabled ``email`` rule matching an inbound message. Matching
         runs over subject+body; the template can reference {sender}/{subject}."""
-        subject = subject or ""
-        body = body or ""
-        text = f"{subject}\n{body}".strip()
-        context = {
-            "text": text[:2000],
-            "body": body[:2000],
-            "subject": subject[:500],
-            "sender": (sender or "")[:200],
-            "from": (sender or "")[:200],
-            "slug": "",
-        }
-        return await self.on_signal("email", context)
+        return await self.on_signal(
+            "email", email_context(sender=sender, subject=subject, body=body)
+        )
 
     async def on_calendar(
         self, *, title: str, start: str = "", description: str = ""
     ) -> list[dict[str, Any]]:
         """Fire every enabled ``calendar`` rule matching an event. Matching runs
         over title+description; the template can reference {title}/{start}."""
-        title = title or ""
-        description = description or ""
-        text = f"{title}\n{description}".strip()
-        context = {
-            "text": text[:2000],
-            "body": description[:2000],
-            "title": title[:500],
-            "start": (start or "")[:100],
-            "slug": "",
-        }
-        return await self.on_signal("calendar", context)
+        return await self.on_signal(
+            "calendar", calendar_context(title=title, start=start, description=description)
+        )
 
     async def on_slack(
         self, *, text: str, channel: str = "", sender: str = ""
     ) -> list[dict[str, Any]]:
         """Fire every enabled ``slack`` rule matching a message (DM or channel)."""
-        text = text or ""
-        context = {
-            "text": text[:2000],
-            "body": text[:2000],
-            "channel": (channel or "")[:100],
-            "sender": (sender or "")[:100],
-            "slug": "",
-        }
-        return await self.on_signal("slack", context)
+        return await self.on_signal(
+            "slack", slack_context(text=text, channel=channel, sender=sender)
+        )
+
+    async def on_file(self, context: dict[str, str]) -> list[dict[str, Any]]:
+        """Leap 05-a: a rule-mode watcher saw new file(s) settle in the folder
+        it watches for the rule ``context["rule_id"]`` — fire THAT rule (the
+        watcher is the rule's own; no other rule hears it). A rule that is off
+        or gone starts nothing (``[]``); a paused one answers ``held`` (its
+        files wait, ``sentinels.service``). Never raises."""
+        rid = str((context or {}).get("rule_id") or "")
+        try:
+            rule = await _off_loop(self.store.get, rid) if rid else None
+        except Exception:  # noqa: BLE001 — unreadable: nothing starts
+            log.warning("file rule %s could not be read", rid, exc_info=True)
+            return []
+        if rule is None or not rule.enabled or rule.source != "file":
+            return []
+        self._remember([rule], context)
+        return [await self.execute(rule, context)]
+
+    async def on_download(self, context: dict[str, str]) -> list[dict[str, Any]]:
+        """Leap 05-a: a download finished in Your browser — fire every enabled
+        ``download`` rule whose keyword is in the file's name and whose site
+        (when it names one) is the download's. Never raises."""
+        ctx = context or {}
+        try:
+            rules = await _off_loop(
+                self.store.matching_download, str(ctx.get("file") or ""), str(ctx.get("site") or "")
+            )
+        except Exception:  # noqa: BLE001 — unreadable: nothing starts
+            log.warning("download rules could not be read", exc_info=True)
+            return []
+        self._remember(rules, ctx)
+        return [await self.execute(r, ctx) for r in rules]
 
     async def start(self, action: str, *, target: str = "", task: str = "") -> dict[str, Any]:
         """Fire an action MANUALLY (e.g. a ``/run`` command) without a stored
@@ -314,10 +433,21 @@ class ReflexRouter:
         # the switch's own sentence — never ``EmergencyStopOn: …``.
         stop = getattr(self.orch, "emergency_stop_reason", None)
         why = stop(f"reflex:{rule.name}") if callable(stop) else ""
+        unattended = not attended and not str(rule.name or "").startswith("manual:")
         if why:
             result: dict[str, Any] = {"ok": False, "error": why}
             reason = why
         else:
+            # Leap 05-a (D-05.3): a rule starts at most ``max_fires_per_hour``
+            # times an hour on its own; the next signal PAUSES it, and the
+            # pause is said once a day. A paused rule starts nothing until
+            # Resume. Its row, fire count and failure notices are left alone:
+            # a held signal is not a failed start. A person's press (Run now)
+            # is not held, and is not counted.
+            if unattended:
+                held = await self._hold_if_paused(rule)
+                if held is not None:
+                    return held
             try:
                 # v1.502.0 (north-star 2.8): the posture the work starts at.
                 # Passed only when low, so a full fire calls exactly as before.
@@ -332,9 +462,17 @@ class ReflexRouter:
                 else:
                     result = {"ok": False, "error": f"unknown action '{rule.action}'"}
             except Exception as exc:  # noqa: BLE001 — one bad rule never breaks the rest
-                log.exception("reflex rule %r failed", rule.name)
-                result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                reason = _exception_words(exc)
+                from ..agents.resolve import UnattendedRefusal
+
+                if isinstance(exc, UnattendedRefusal):
+                    # Leap 05-a: its agent is gone or cannot take a rule —
+                    # the refusal's own sentence, on the row and the bell.
+                    result = {"ok": False, "error": str(exc)}
+                    reason = str(exc)
+                else:
+                    log.exception("reflex rule %r failed", rule.name)
+                    result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                    reason = _exception_words(exc)
 
         # v1.231.0 (audit AE6): the row carries the outcome either way — a
         # failed start is written as ``last_error`` where the user looks,
@@ -345,6 +483,12 @@ class ReflexRouter:
             # both say it (never "Fired session · session <id>").
             words, href = result_words(result)
             result = {**result, "words": words, "href": href}
+            if unattended and getattr(self, "store", None) is not None:
+                # Leap 05-a: a start on its own counts toward the hourly limit.
+                try:
+                    await _off_loop(functools.partial(self.store.note_start, rule.id, now=self._now()))
+                except Exception:  # noqa: BLE001 — counting never undoes a start
+                    log.warning("rule %r: could not count its start", rule.name, exc_info=True)
         # v1.505.0 (north-star 5.4): off the loop — a webhook's fire must not
         # park the daemon behind a long writer — and still BEFORE the fire is
         # announced (a page that re-reads the row on ``reflex.fired`` finds it).
@@ -365,6 +509,64 @@ class ReflexRouter:
                 attended=attended,
             )
         return {"rule": rule.name, "rule_id": rule.id, **result}
+
+    def _now(self) -> Any:
+        clock = getattr(self, "clock", None)
+        if callable(clock):
+            return clock()
+        from ..core.ids import utcnow
+
+        return utcnow()
+
+    async def _hold_if_paused(self, rule: ReflexRule) -> "dict[str, Any] | None":
+        """Leap 05-a (D-05.3): None when ``rule`` may start now; else the
+        held answer (the rule is paused; when THIS signal paused it, the
+        pause is announced, at most once a day). Never raises: a limit that
+        cannot be read lets the start go on (its own writes would fail
+        loudly)."""
+        store = getattr(self, "store", None)
+        if store is None:
+            return None
+        try:
+            gate = await _off_loop(functools.partial(store.start_gate, rule.id, now=self._now()))
+        except Exception:  # noqa: BLE001
+            log.warning("rule %r: its hourly limit could not be read", rule.name, exc_info=True)
+            return None
+        if gate.get("ok"):
+            return None
+        words = str(gate.get("words") or "Paused.")
+        if gate.get("tripped"):
+            await self._announce_pause(rule, words)
+        return {
+            "rule": rule.name, "rule_id": rule.id, "ok": False,
+            "held": True, "paused": True, "error": words,
+        }
+
+    async def _announce_pause(self, rule: ReflexRule, words: str) -> None:
+        """Publish ``reflex.paused`` (the bell's row: Resume, or Keep it
+        paused) — at most ONCE A DAY per rule (``ReflexStore.note_told``).
+        Never raises."""
+        try:
+            if not await _off_loop(functools.partial(self.store.note_told, rule.id, now=self._now())):
+                return
+        except Exception:  # noqa: BLE001
+            return
+        bus = getattr(self.p, "event_bus", None)
+        if bus is None:
+            return
+        try:
+            await bus.publish(
+                EventType.REFLEX_PAUSED,
+                {
+                    "rule": rule.name,
+                    "rule_id": rule.id,
+                    "source": rule.source,
+                    "reason": words[:300],
+                    "limit": int(getattr(rule, "max_fires_per_hour", 0) or 0),
+                },
+            )
+        except Exception:  # noqa: BLE001 — the bus must never block a reflex
+            pass
 
     def _signal_trust(self, rule: ReflexRule, *, attended: bool) -> dict[str, str]:
         """``{"trust": "low", "trust_reason": …}`` for work a rule fired by an
@@ -493,25 +695,73 @@ class ReflexRouter:
         # what the runtime's ask allowlist reads, so an unstamped reflex
         # session could never pause on an ask-tier tool; and the project's
         # own folder is resolved by create_session (AE1), not here.
+        # Leap 05-a: WHO does the work — the rule's custom agent, resolved at
+        # fire time exactly the way a schedule's is (one helper,
+        # ``agents/resolve``; refused in words when it is gone or cannot be
+        # given unattended work) — else the supervisor, as before.
+        from ..agents.resolve import UnattendedAgent, resolve_for_unattended
+
+        agent_name = str(getattr(rule, "agent_name", "") or "").strip()
+        if agent_name:
+            # Off the loop: an agent's allowance is a database read.
+            who = await _off_loop(functools.partial(
+                resolve_for_unattended, self.p, agent_name, who="rule", default=AgentType.SUPERVISOR,
+            ))
+        else:
+            who = UnattendedAgent(agent_type=AgentType.SUPERVISOR)
+        options: dict[str, Any] = {}
+        if not str(rule.name or "").startswith("manual:"):
+            # The run names its rule, so an "Always for this rule" is kept on
+            # the RULE (``runtime.grant_scopes`` reads it off the run's own
+            # row, never from anything the model wrote).
+            options[RULE_OPTION] = rule.id
+            # Idea 39: a rule made in a chat reports each run there (and a
+            # Local only chat's rule runs Local only).
+            options.update(await _off_loop(functools.partial(rule_report_options, self.p, rule)))
+        if rehearsal:
+            # Leap 06-a: a REHEARSAL's run carries it.
+            options[_rehearsal_option()] = rehearsal
+        extra: dict[str, Any] = {}
+        root = str(getattr(rule, "workspace_root", "") or "").strip()
+        if root:
+            extra["workspace_root"] = root
+        if who.agent_name:
+            extra["agent_name"] = who.agent_name
+        for key in ("provider", "model", "max_steps", "approval_mode"):
+            value = getattr(who, key)
+            if value:
+                extra[key] = value
         session = await self.orch.create_session(
             task,
-            AgentType.SUPERVISOR,
+            who.agent_type,
             project_id=rule.project_id or None,
             origin=f"reflex:{rule.name}",
             # v1.502.0 (north-star 2.8): an outside signal's work starts LOW
             # (passed only then, so a test double's call is unchanged).
             **(trust or {}),
-            # Leap 06-a: a REHEARSAL's run carries it, and the person who
-            # pressed Rehearse started it (passed only then: a real fire's
-            # call is unchanged).
-            **(
-                {"options": {_rehearsal_option(): rehearsal}, "started_by_person": True}
-                if rehearsal
-                else {}
-            ),
+            **({"options": options} if options else {}),
+            **extra,
+            # Leap 06-a: the person who pressed Rehearse started it (passed
+            # only then: a real fire's call is unchanged).
+            **({"started_by_person": True} if rehearsal else {}),
         )
-        self._launch(self.orch.run_session(session.id), session.id)
+        self._launch(self._run_as(who, session.id), session.id)
         return {"ok": True, "kind": "session", "session_id": session.id}
+
+    def _run_as(self, who: Any, session_id: str) -> Any:
+        """The run, the way the schedule's fire runs it: a model team member
+        held to its own model, a custom agent with its definition, else
+        exactly ``run_session(id)`` as before (a test double's call)."""
+        if getattr(who, "member", None) is not None:
+            from ..agents import model_team as _mt
+
+            return _mt.run_as_member(
+                self.p, who.member,
+                lambda: self.orch.run_session(session_id, definition=who.definition),
+            )
+        if getattr(who, "definition", None) is not None:
+            return self.orch.run_session(session_id, definition=who.definition)
+        return self.orch.run_session(session_id)
 
     # -- helpers -----------------------------------------------------------
     def _launch(self, coro: Any, session_id: str) -> Any:
@@ -589,6 +839,37 @@ class ReflexRouter:
 
 #: v1.446.0: the reason when nothing better is known.
 CANNOT_START_WORDS = "it could not start its action"
+
+#: Leap 05-a: the run option naming the rule a run was started by (its id),
+#: which ``runtime.grant_scopes`` turns into the ``rule`` scope of a standing
+#: OK ("Always for this rule").
+RULE_OPTION = "rule_id"
+
+
+def rule_report_options(platform: Any, rule: ReflexRule) -> dict[str, Any]:
+    """Idea 39 for a rule (leap 05-a): the run options that make a rule's
+    run report into the chat it was made in — ``chat_thread_id``,
+    ``report_from`` (kind ``rule``) and, for a Local only chat,
+    ``local_only`` (the run is Local only). ``{}`` for a rule made on a page
+    or set to Stop reporting. BLOCKING (one row read); never raises."""
+    from ..agents import chat_delivery as _cd
+
+    chat = _cd.clean_chat_thread_id(getattr(rule, "chat_thread_id", "") or "")
+    if not chat:
+        return {}
+    out: dict[str, Any] = {
+        "chat_thread_id": chat,
+        _cd.REPORT_OPTION: {"kind": "rule", "name": rule.name, "id": rule.id, "href": "/reflex"},
+    }
+    engine = getattr(platform, "engine", None)
+    try:
+        from ..providers.egress import thread_local_only
+
+        if engine is not None and thread_local_only(engine, chat):
+            out["local_only"] = True
+    except Exception:  # noqa: BLE001 — unreadable: the chat decides nothing
+        log.warning("could not read whether a rule's chat is Local only", exc_info=True)
+    return out
 
 
 def _reason_words(rule: ReflexRule, error: str) -> str:
@@ -695,6 +976,18 @@ def _text_of(body: Any) -> str:
 
 
 def _default_task(rule: ReflexRule, context: dict[str, str]) -> str:
+    if rule.source in ("file", "download") and context.get("path"):
+        # Leap 05-a: the file's name was chosen by whoever made it, so its
+        # location goes in fenced, as data.
+        what = (
+            f"A new file landed in the folder {_short(context.get('folder') or '')}"
+            if rule.source == "file"
+            else "A download finished in your browser"
+        )
+        return (
+            f"{what}, and it started the rule '{_short(rule.name)}'. Decide what to do with "
+            f"it and act. Where the file is, as data:\n\n{_fenced(context.get('path') or '')}"
+        )
     signal = context.get("text") or context.get("body") or ""
     where = f"{rule.source}" + (f" '{rule.match}'" if rule.match else "")
     if signal:

@@ -70,6 +70,8 @@ export const EVENT_WORDS: Record<string, string> = {
   "review.rejected": "Review declined",
   // v1.446.0 (ease-of-use review item 20): a rule that could not start.
   "reflex.failed": "A rule couldn't start",
+  // Leap 05-a (D-05.3): a rule started 12 times in an hour and paused itself.
+  "reflex.paused": "A rule paused itself",
   // v1.449.0 (readiness 0h.5 item 14): the rest of core/events.py's
   // EventType, in the order it declares them.
   "session.queued": "A run was queued until a slot frees",
@@ -410,8 +412,9 @@ export function eventDetail(type: string, payload: Record<string, unknown> | nul
       break;
     case "reflex.fired":
     case "reflex.failed":
+    case "reflex.paused":
       add(pick(p, "rule"));
-      if (type === "reflex.failed") add(pick(p, "reason"));
+      if (type === "reflex.failed" || type === "reflex.paused") add(pick(p, "reason"));
       break;
     case "schedule.fired":
       add(pick(p, "name", "schedule"));

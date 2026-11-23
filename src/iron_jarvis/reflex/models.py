@@ -21,9 +21,13 @@ from ..core.ids import new_id, utcnow
 #: event coming due, or a Slack message can each fire a rule. Every source still
 #: runs the SAME gated action path — a remote signal gets no more power than a
 #: local one.
-REFLEX_SOURCES = ("webhook", "comm", "email", "calendar", "slack")
+REFLEX_SOURCES = ("webhook", "comm", "email", "calendar", "slack", "file", "download")
 #: What firing does.
 REFLEX_ACTIONS = ("workflow", "remote_agent", "session")
+
+#: Leap 05-a (D-05.3): how many times one rule may start in an hour before it
+#: pauses itself and says so (once a day per rule).
+MAX_FIRES_PER_HOUR = 12
 
 
 class ReflexRule(SQLModel, table=True):
@@ -73,3 +77,38 @@ class ReflexRule(SQLModel, table=True):
     #: Leap 06-a: when the user pressed Keep it on a rehearsal of this rule
     #: (None = never). Additive column (auto-reconciled).
     rehearsed_at: datetime | None = None
+    #: Leap 05-a: what the start needs beyond ``match``, by source (JSON):
+    #: ``{"path", "glob", "per_file"}`` for ``file`` (the folder it watches;
+    #: its watcher is a ``rule``-mode SentinelRecord naming this rule) and
+    #: ``{"match_site"}`` for ``download``. "" for every other source.
+    start_json: str = ""
+    #: The custom agent (its roster name) the work is done by; "" keeps the
+    #: supervisor, as before. Resolved at fire time the way a schedule's is
+    #: (``agents/resolve.resolve_for_unattended``).
+    agent_name: str = ""
+    #: The folder the work runs IN ("" = the run's own folder). A file rule
+    #: made from chat works in the folder it watches unless told otherwise.
+    workspace_root: str = ""
+    #: Idea 39: the saved chat this rule was made in; its runs report there
+    #: (``agents/chat_delivery``). "" = it reports nowhere.
+    chat_thread_id: str = Field(default="", index=True)
+    #: D-05.3: starts allowed in one hour before the rule pauses itself.
+    max_fires_per_hour: int = MAX_FIRES_PER_HOUR
+    #: When (UTC, ISO) each start of the last hour happened (JSON list).
+    recent_starts_json: str = ""
+    #: Set when the rule paused itself (the hourly limit); cleared by Resume.
+    #: A paused rule starts nothing; a file rule's files wait for it.
+    paused_at: datetime | None = None
+    paused_reason: str | None = None
+    #: When the pause was last SAID (bell): at most once a day per rule.
+    pause_told_at: datetime | None = None
+
+    def decoded_start(self) -> dict:
+        """``start_json`` as a dict (junk reads ``{}``)."""
+        import json
+
+        try:
+            data = json.loads(self.start_json or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}

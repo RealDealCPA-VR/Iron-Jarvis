@@ -7405,9 +7405,14 @@ def config_cards_from_result(name: str, result: Any) -> list[dict[str, Any]]:
 
         rc = data.get("record_change") if name in RECORD_CARD_TOOLS else None
         if isinstance(rc, dict) and rc.get("key") and rc.get("change_id"):
-            out.append(
-                {"kind": "change", "restart": False, **{k: rc.get(k) for k in ("title", "key", "label", "old", "new", "change_id")}}
-            )
+            card = {"kind": "change", "restart": False, **{k: rc.get(k) for k in ("title", "key", "label", "old", "new", "change_id")}}
+            # Leap 05-a: a rule's card says When, Do, Where it works and
+            # Limits (words composed by code, ``triggers/starts.describe``).
+            # Both lanes carry it through this one helper.
+            rule = rc.get("rule")
+            if isinstance(rule, dict):
+                card["rule"] = {k: str(rule.get(k) or "")[:400] for k in ("when", "does", "where", "limits")}
+            out.append(card)
         # v1.466.0: a change made in a workbook open in Excel ("Excel changed
         # Budget.xlsx 12 cells on Data [Undo]"); the same card, the same Undo.
         xc = data.get("excel_change") if name == "excel_live_edit" else None

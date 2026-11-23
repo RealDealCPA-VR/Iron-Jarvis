@@ -1967,7 +1967,10 @@ def register(app: FastAPI, d) -> None:
             # answered "Always" from the bell, where a schedule's is answered.
             if payload.get("can_always") is True:
                 meta[aid]["can_always"] = True
-                if payload.get("always_scope") in ("schedule", "workflow"):
+                from ...core.grants import PLACED_ALWAYS_SCOPES
+
+                # Leap 05-a: "rule" too ("Always for this rule").
+                if payload.get("always_scope") in PLACED_ALWAYS_SCOPES:
                     meta[aid]["always_scope"] = payload["always_scope"]
             # Readiness 0j.5 item 13 — WORDS, never args: who asks and why
             # (the runtime's `card_why`), so the bell and a reloaded page can

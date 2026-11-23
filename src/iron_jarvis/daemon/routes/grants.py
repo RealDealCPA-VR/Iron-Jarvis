@@ -63,7 +63,16 @@ def register(app: FastAPI, d) -> None:
             )
         store = _store(d)
         rows = store.list(kind or None, (scope_id or "").strip() or None, live_only=bool(live))
-        return {"grants": [store.as_dict(r) for r in rows[:_LIST_MAX]]}
+        out = [store.as_dict(r) for r in rows[:_LIST_MAX]]
+        # Leap 05-a: a rule's grant is kept on the rule's id; its row names
+        # the rule (never the id on screen).
+        rule_ids = {g.get("scope_id") for g in out if g.get("scope_kind") == "rule"}
+        if rule_ids:
+            names = {r.id: r.name for r in d.platform.reflex.list() if r.id in rule_ids}
+            for g in out:
+                if g.get("scope_kind") == "rule":
+                    g["scope_name"] = names.get(g.get("scope_id"), "a removed rule")
+        return {"grants": out}
 
     @app.post("/grants/{grant_id}/revoke")
     def revoke_grant(grant_id: str) -> dict[str, Any]:

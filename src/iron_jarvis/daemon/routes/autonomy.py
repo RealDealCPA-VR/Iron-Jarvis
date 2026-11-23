@@ -169,10 +169,16 @@ def register(app: FastAPI, d) -> None:
 
         rows = d.platform.sentinels.list()
         titles = _cd.chat_titles(d.platform.engine, [getattr(s, "chat_thread_id", "") for s in rows])
+        # Leap 05-a: a watcher that starts a rule names its rule.
+        rule_names: dict[str, str] = {}
+        if any(getattr(s, "mode", "") == "rule" for s in rows):
+            rule_names = {r.id: r.name for r in d.platform.reflex.list()}
         out = []
         for s in rows:
             view = d._sentinel_view(s)
             view["reports_to"] = _cd.reports_to_view(view.get("chat_thread_id"), titles)
+            if view.get("mode") == "rule":
+                view["rule_name"] = rule_names.get(view.get("rule_id") or "", "")
             out.append(view)
         return {
             "enabled": getattr(d.platform.config, "sentinels_enabled", False),

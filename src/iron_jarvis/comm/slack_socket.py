@@ -458,8 +458,11 @@ class SlackSocketMode:
         # where it was written (module docstring).
         router = getattr(self.poller, "reflex_router", None)
         if router is not None:
-            await router.on_slack(
-                text=str(event.get("text") or ""), channel=channel, sender=user
+            # Leap 05-a: through the start hub, which calls on_slack as before.
+            from ..triggers.starts import hub_for as _hub_for
+
+            await _hub_for(router).signal(
+                "slack", fields={"text": str(event.get("text") or ""), "channel": channel, "sender": user}
             )
         text = self._clean(str(event.get("text") or ""))
         if own and channel == own:

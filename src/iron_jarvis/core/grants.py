@@ -69,10 +69,22 @@ log = get_logger("core.grants")
 #: D10): ``schedule`` and ``workflow`` — a schedule or a workflow is approved
 #: ONCE; its runs read the scope off their origin (``schedule:<name>``,
 #: ``workflow:<name>``), never from anything the model wrote.
-SCOPE_KINDS: tuple[str, ...] = ("goal", "agent", "project", "chat", "schedule", "workflow")
+#: Leap 05-a: ``rule`` — a rule is approved ONCE too. Its scope id is the
+#: RULE'S ID (two rules may share a name), read off the run's own options
+#: (``reflex/router.RULE_OPTION``, written by the rule's door) for a run
+#: stamped ``reflex:<name>`` (``runtime.grant_scopes``).
+SCOPE_KINDS: tuple[str, ...] = ("goal", "agent", "project", "chat", "schedule", "workflow", "rule")
 
-#: The origin prefixes a run's own stamp turns into a scope (v1.505.0).
+#: The origin prefixes a run's own stamp turns into a scope (v1.505.0). A
+#: rule's stamp (``reflex:<name>``) carries its name, not its id, so the
+#: ``rule`` scope is read from the run's options instead (see above).
 ORIGIN_SCOPES: tuple[str, ...] = ("goal", "schedule", "workflow")
+
+#: The scopes whose "Always" the card NAMES ("Always for this schedule /
+#: rule / workflow", the event's ``always_scope``): the grant is kept on that
+#: record, shown on its row and covers nothing else. ONE tuple, read by the
+#: runtime, the approvals registry, the bell's listing and the run's page.
+PLACED_ALWAYS_SCOPES: tuple[str, ...] = ("schedule", "rule", "workflow")
 
 #: How long a card-minted grant lives. The ladder may pass ``None`` (never)
 #: for a GOAL-scoped grant only — a goal is the one scope with its own
@@ -96,7 +108,10 @@ HASH_LEN = 64
 #: runs and the project it is grounded in: the card names that place, its row
 #: shows the grant with a Remove press, and it covers nothing else. (A run
 #: has one origin, so the two never meet a goal's scope.)
-SCOPE_PRECEDENCE: tuple[str, ...] = ("schedule", "workflow", "agent", "project", "goal", "chat")
+#: Leap 05-a: a rule's run keeps its "Always" on the RULE ("Always for this
+#: rule"), after a schedule and before a workflow (a run has one origin, so
+#: in practice it never meets either).
+SCOPE_PRECEDENCE: tuple[str, ...] = ("schedule", "rule", "workflow", "agent", "project", "goal", "chat")
 
 
 #: The app's OWN control keys — never part of a call's identity (third fix

@@ -26,6 +26,7 @@ import { Button } from "@/components/ui";
 import { RehearsalReport } from "@/components/RehearsalReport";
 import { StackPlanCard } from "@/components/chat/StackPlanCard";
 import type { StackScope } from "@/lib/stackPlan";
+import { RuleLines } from "@/components/RuleLines";
 import {
   settingsHrefFor,
   showValue,
@@ -198,6 +199,8 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
           Undo
         </button>
       </span>
+      {/* Leap 05-a: a rule's card says When, Do, Where it works, Limits. */}
+      {card.rule && <RuleLines lines={card.rule} testId="config-card-rule" />}
       {error && (
         <p role="alert" className="basis-full text-[12px] text-tone-danger">
           {error}

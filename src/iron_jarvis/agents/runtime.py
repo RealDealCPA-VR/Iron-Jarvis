@@ -2278,6 +2278,19 @@ class AgentRuntime:
         kind, sep, ident = origin.partition(":")
         if sep and kind in _ORIGIN_SCOPES and ident:
             scopes.append((kind, ident))
+        elif sep and kind == "reflex" and ident:
+            # Leap 05-a: a rule's run keeps its "Always" on the RULE, by the
+            # rule's id the rule's door put in the run's options (two rules
+            # may share a name), never anything the model wrote.
+            try:
+                from ..reflex.router import RULE_OPTION as _RULE_OPTION
+                from ..scheduling.knobs import session_options as _session_options
+
+                rid = str(_session_options(session).get(_RULE_OPTION) or "").strip()
+            except Exception:  # noqa: BLE001 — unreadable: no rule scope
+                rid = ""
+            if rid:
+                scopes.append(("rule", rid))
         agent = str(getattr(session, "agent_name", "") or "")
         if agent:
             scopes.append(("agent", agent))
@@ -4489,9 +4502,10 @@ class AgentRuntime:
         # Additive and ONLY for those two scopes, so every other card's event
         # is the shape it was.
         _always_at = _pick_scope(_grant_scopes)
-        if requested["can_always"] and _always_at is not None and _always_at[0] in (
-            "schedule", "workflow",
-        ):
+        from ..core.grants import PLACED_ALWAYS_SCOPES as _PLACED
+
+        # Leap 05-a: a rule's run says "Always for this rule" too.
+        if requested["can_always"] and _always_at is not None and _always_at[0] in _PLACED:
             requested["always_scope"] = _always_at[0]
         # The registry keeps the same verdict beside the ask, so the run's
         # own page (``routes/sessions._waiting_on``) offers what this event

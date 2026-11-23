@@ -1,7 +1,7 @@
 // Rules (Reflex) — the words and readings the Rules page shares (v1.449.0,
 // Wave D item 34). Pure: no React, no fetch.
 
-export type ReflexSource = "webhook" | "comm" | "email" | "calendar" | "slack";
+export type ReflexSource = "webhook" | "comm" | "email" | "calendar" | "slack" | "file" | "download";
 export type ReflexAction = "workflow" | "remote_agent" | "session";
 
 /** The everyday rule: a message arrives (from one of these) → an agent does a
@@ -71,4 +71,27 @@ export function sourceOffWords(source: string, data: TriggersStatus | null | und
 /** Where the off line's fix lives. */
 export function sourceOffHref(source: string): string {
   return source === "calendar" ? "#reflex-triggers" : "/channels";
+}
+
+/* ---- Leap 05-a: a rule that paused itself ------------------------------- */
+
+/** The Rules page's two answers to a rule that paused itself (D-05.3). */
+export const RESUME = "Resume";
+export const KEEP_PAUSED = "Keep it paused";
+/** What Keep it paused does, said under it. */
+export const KEEP_PAUSED_WORDS = "Keep it paused turns the rule off until you turn it on again.";
+/** What a paused file rule does with files that land meanwhile. */
+export const PAUSED_FILES_WAIT = "New files wait and go once you resume it.";
+
+/** A rule that paused itself (the daemon's `paused_at`), and its words. */
+export function pausedWords(r: { paused_at?: string | null; paused_reason?: string | null }): string {
+  if (!r.paused_at) return "";
+  const why = typeof r.paused_reason === "string" && r.paused_reason.trim() ? r.paused_reason.trim() : "Paused.";
+  return why;
+}
+
+/** Leap 05-a: a watcher that starts a rule says so on the Watchers page. */
+export function startsRuleWords(name?: string | null): string {
+  const n = typeof name === "string" ? name.trim() : "";
+  return n ? `Starts the rule ${n}` : "Starts a rule";
 }
