@@ -19,13 +19,13 @@ a run's launch is closed (the session row is what is asserted, never a model).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
-import os
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -382,6 +382,93 @@ def test_a_file_that_is_never_decided_waits_and_is_not_marked_seen(desk, tmp_pat
     assert handed == ["x.txt", "x.txt"]
 
 
+class _SlowHub:
+    """A hub whose start does not end until the test lets it go (a stalled
+    loop, a locked database, a busy thread pool)."""
+
+    def __init__(self, store) -> None:
+        self.router = SimpleNamespace(store=store)
+        self.calls: list[str] = []
+        self.started = threading.Semaphore(0)
+        self.gates: list[asyncio.Event] = []
+        self.held = False
+
+    async def signal(self, kind, ctx):
+        gate = asyncio.Event()
+        self.gates.append(gate)
+        self.calls.append(ctx["file"])
+        self.started.release()
+        await gate.wait()
+        return [{"ok": not self.held, "held": self.held}]
+
+
+def test_a_start_that_outlasts_the_watchers_wait_starts_its_file_once(desk, tmp_path, monkeypatch):
+    """Review (05-a): the watcher waits a bounded time for each start. A
+    start that takes longer is still under way on the daemon's loop, so the
+    next scan (which hands the same file again: it is not seen yet) must not
+    start it a second time; once the start ends, its answer counts. A start
+    that ended held (the rule paused) leaves its file waiting, so it starts
+    once the rule may start again.
+
+    MUTATION (each red): drop the under-way check in ``file_rule_fire`` ->
+    a.txt starts twice; take a start that outlasts the wait as decided ->
+    b.txt, whose start ended held, never starts again."""
+    c, p, router = desk
+    folder = tmp_path / "Slow"
+    folder.mkdir()
+    _file_rule(p, folder)
+    monkeypatch.setattr(starts, "FILE_FIRE_TIMEOUT_S", 0.05)
+    hub = _SlowHub(p.reflex)
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    fire = starts.file_rule_fire(lambda: hub, lambda: loop)
+    p.sentinels.rule_fire = fire
+
+    def scan() -> None:
+        p.sentinels.poll_once(None, rules_only=True)
+
+    def started() -> None:
+        assert hub.started.acquire(timeout=30), "the start never reached the loop"
+
+    def let_go(n: int, *, held: bool = False) -> None:
+        hub.held = held
+        loop.call_soon_threadsafe(hub.gates[n].set)
+        concurrent.futures.wait([f for f, _t in fire.under_way.values()], timeout=30)
+
+    try:
+        (folder / "a.txt").write_text("a")
+        scan()  # new, settling
+        scan()  # settled: its start outlasts the wait
+        started()
+        assert hub.calls == ["a.txt"]
+        scan()  # handed again (not seen yet), but its start is under way
+        assert hub.calls == ["a.txt"], "started twice for one file"
+        let_go(0)
+        scan()  # its start ended: decided, seen
+        scan()
+        assert hub.calls == ["a.txt"]
+        # A start that ends held: the file waits, and goes on a later scan.
+        (folder / "b.txt").write_text("b")
+        scan()
+        scan()
+        started()
+        let_go(1, held=True)
+        scan()  # held: started again
+        started()
+        assert hub.calls == ["a.txt", "b.txt", "b.txt"]
+        let_go(2)
+        scan()
+        scan()
+        assert hub.calls == ["a.txt", "b.txt", "b.txt"]
+    finally:
+        for gate in list(hub.gates):
+            loop.call_soon_threadsafe(gate.set)
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=30)
+        loop.close()
+
+
 # --------------------------------------------------------------------------- #
 # 3. A finished download starts a download rule, carefully.
 # --------------------------------------------------------------------------- #
@@ -696,3 +783,42 @@ def test_the_many_files_a_split_or_a_sort_writes_in_its_folder_start_nothing(des
     _scan(p, router)
     assert len(_started_on(p)) == 2, "and none of its results is handed again later"
     assert p.reflex.get(rule.id).fire_count == 2
+
+
+def test_a_file_written_against_the_watched_folder_from_another_run_folder_starts_nothing(desk, tmp_path):
+    """Review (05-a): the folder a tool wrote against is the one the tool
+    registry stamped on its Undo row, which need not be the run's own folder
+    (a tool's folder can differ from the run's, as chat's does per turn). A
+    result written against the watched folder starts nothing, even when the
+    run's folder is elsewhere.
+
+    MUTATION (red): read every row against the run's own folder in
+    ``own_output`` -> the summary starts the rule again."""
+    from iron_jarvis.tools.base import ToolContext
+
+    c, p, router = desk
+    folder = tmp_path / "Intake"
+    folder.mkdir()
+    rule = _file_rule(p, folder, task="Write a summary of {file} next to it")
+    (folder / "letter.pdf").write_bytes(b"%PDF-1.4 letter")
+    _scan(p, router)
+    _scan(p, router)
+    (run,) = [s for s in _sessions(p) if str(s.origin or "").startswith("reflex:")]
+    elsewhere = tmp_path / "its own folder"
+    elsewhere.mkdir()
+    with session_scope(p.engine) as db:
+        row = db.get(Session, run.id)
+        row.workspace_path = str(elsewhere)
+        db.add(row)
+        db.commit()
+    ctx = ToolContext(workspace=folder, session_id=run.id, agent_run_id=run.id,
+                      config=p.config, event_bus=p.event_bus, engine=p.engine)
+    wrote = asyncio.run(p.registry.invoke("write_file", {"path": "letter summary.md", "content": "A letter."},
+                                          ctx, p.permissions, session_allow=["write_file"]))
+    assert wrote.ok, wrote.error
+    assert (folder / "letter summary.md").exists() and not (elsewhere / "letter summary.md").exists()
+    _scan(p, router)
+    _scan(p, router)
+    _scan(p, router)
+    assert len(_started_on(p)) == 1, _started_on(p)
+    assert p.reflex.get(rule.id).fire_count == 1

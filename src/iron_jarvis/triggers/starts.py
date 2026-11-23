@@ -53,6 +53,10 @@ WIRE_SOURCE: dict[str, str] = {"phone": "comm"}
 
 #: How long the watcher's thread waits for the hub to start a file rule.
 FILE_FIRE_TIMEOUT_S = 120.0
+#: A start that outlasted that wait is remembered (so its file is never
+#: started twice) until the scan after it ends; one whose file was never
+#: handed again is forgotten this long after it ended.
+UNDER_WAY_KEEP_S = 24 * 3600.0
 
 Waiter = Callable[[str, dict], "Awaitable[None] | None"]
 
@@ -415,7 +419,31 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
     is marked seen only once its start was decided. Returns one bool per
     file: True = decided (started, refused, or its rule is off or gone),
     False = it waits for the next scan (the rule is paused, or the start
-    could not be reached)."""
+    could not be reached).
+
+    Review (05-a): a start that outlasts the wait (a stalled loop, a locked
+    database) is still under way on the loop, so its file is not seen yet
+    and the next scan hands it again. It is NOT started again while that
+    start runs (it waits); the first scan after it ends takes its answer —
+    decided, or (it ended held, or failed) started again. Kept in memory
+    on the callback as ``under_way``: ``{(rule id, file): (start, when)}``."""
+    import concurrent.futures
+    import threading
+    import time
+
+    under_way: dict[tuple[str, str], tuple[Any, float]] = {}
+    lock = threading.Lock()
+
+    def _decided(fired: Any) -> bool:
+        return not any(isinstance(f, dict) and f.get("held") for f in (fired or []))
+
+    def _ended_decided(fut: Any) -> bool:
+        """A start that ended: True = decided; False = start it again (it
+        ended held, failed or was cancelled)."""
+        try:
+            return _decided(fut.result(timeout=0))
+        except Exception:  # noqa: BLE001 — it never started (or was cancelled): again
+            return False
 
     def _fire(watcher: Any, items: list[dict]) -> list[bool]:
         loop, hub = get_loop(), get_hub()
@@ -440,20 +468,47 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
                          [str(it.get("path") or "") for it in items]) if rule is not None else set()
         answers: dict[int, bool] = {}
         todo: list[tuple[int, dict]] = []
+        now = time.monotonic()
+        with lock:
+            for key, (f, t) in list(under_way.items()):
+                if f.done() and now - t > UNDER_WAY_KEEP_S:
+                    under_way.pop(key, None)
         for i, it in enumerate(items):
-            if own and _norm(str(it.get("path") or "")) in own:
+            norm = _norm(str(it.get("path") or ""))
+            if own and norm in own:
                 answers[i] = True
                 log.info("rule %s: %s was written by its own work, so it starts nothing",
                          rule_id, Path(str(it.get("path") or "")).name)
-            else:
-                todo.append((i, it))
+                continue
+            with lock:
+                prior = under_way.get((rule_id, norm))
+                ended = prior is not None and prior[0].done()
+                if ended:
+                    under_way.pop((rule_id, norm), None)
+            if prior is not None and not ended:
+                answers[i] = False  # its start is still under way: never twice
+                continue
+            if prior is not None and _ended_decided(prior[0]):
+                answers[i] = True  # it started meanwhile: decided now
+                continue
+            todo.append((i, it))
         groups = [[x] for x in todo] if per_file else ([todo] if todo else [])
         for group in groups:
             ctx = file_context([str(it.get("path") or "") for _i, it in group], rule_id=rule_id)
+            fut = None
             try:
                 fut = asyncio.run_coroutine_threadsafe(hub.signal("file", ctx), loop)
-                fired = fut.result(timeout=FILE_FIRE_TIMEOUT_S)
-                decided = not any(isinstance(f, dict) and f.get("held") for f in (fired or []))
+                decided = _decided(fut.result(timeout=FILE_FIRE_TIMEOUT_S))
+            except concurrent.futures.TimeoutError:
+                # Still under way on the loop: its files wait, and the scan
+                # after it ends takes its answer (never a second start).
+                decided = False
+                if fut is not None:
+                    with lock:
+                        for _i, it in group:
+                            under_way[(rule_id, _norm(str(it.get("path") or "")))] = (fut, time.monotonic())
+                log.warning("rule %s: a start took longer than %d s; its file waits for it",
+                            rule_id, int(FILE_FIRE_TIMEOUT_S))
             except Exception:  # noqa: BLE001 — not reached: the files wait
                 log.warning("a file rule could not be started", exc_info=True)
                 decided = False
@@ -461,6 +516,7 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
                 answers[i] = decided
         return [answers.get(i, False) for i in range(len(items))]
 
+    _fire.under_way = under_way  # type: ignore[attr-defined]
     return _fire
 
 
