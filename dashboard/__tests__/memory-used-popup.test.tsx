@@ -910,6 +910,59 @@ describe("the chat page (both lanes)", () => {
     expect(screen.getByTestId("memory-used-popup")).toBeTruthy();
   });
 
+  it("rows going in under a reader who follows the newest message never unpin them: no Jump to latest, and the pop-up appears by itself", async () => {
+    H.stream.used = [[PREF]];
+    // A chat taller than the window, the reader at its bottom. As the reply
+    // ends, its rows go in and the scroll moves DOWN with them but lands
+    // short of the new bottom (measured in a browser: 116-139 px short). That
+    // is not the reader leaving: the page finishes the move to the bottom.
+    let bottomScrolls = 0;
+    H.stream.during = () => {
+      const list = screen.getByTestId("chat-scroll");
+      Object.defineProperty(list, "clientHeight", { configurable: true, value: 600 });
+      Object.defineProperty(list, "scrollHeight", { configurable: true, value: 3000 });
+      Object.defineProperty(list, "scrollTop", { configurable: true, writable: true, value: 2400 });
+      fireEvent.scroll(list); // at the bottom: following
+      const bottom = screen.getByTestId("chat-bottom");
+      bottom.scrollIntoView = vi.fn(() => {
+        bottomScrolls += 1;
+      });
+      Object.defineProperty(list, "scrollHeight", { configurable: true, value: 3400 });
+      (list as unknown as { scrollTop: number }).scrollTop = 2660; // down, 140 px short
+      fireEvent.scroll(list);
+    };
+    render(<ChatPage />);
+    const before = await mounted();
+    await send("how much is the pro plan?", "Reply 1.");
+    expect(bottomScrolls).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
+    // Still following at the reply's end: the setting is read, and it opens.
+    await waitFor(() => expect(settingsReads()).toBe(before + 1));
+    expect(await screen.findByTestId("memory-used-popup")).toBeTruthy();
+  });
+
+  it("a reader who scrolls UP while rows go in is left where they are, with Jump to latest", async () => {
+    H.stream.used = [[PREF]];
+    H.stream.during = () => {
+      const list = screen.getByTestId("chat-scroll");
+      Object.defineProperty(list, "clientHeight", { configurable: true, value: 600 });
+      Object.defineProperty(list, "scrollHeight", { configurable: true, value: 3000 });
+      Object.defineProperty(list, "scrollTop", { configurable: true, writable: true, value: 2400 });
+      fireEvent.scroll(list);
+      Object.defineProperty(list, "scrollHeight", { configurable: true, value: 3400 });
+      (list as unknown as { scrollTop: number }).scrollTop = 1800; // up, away from the newest
+      fireEvent.scroll(list);
+    };
+    render(<ChatPage />);
+    const before = await mounted();
+    await send("how much is the pro plan?", "Reply 1.");
+    expect(await screen.findByRole("button", { name: /Jump to latest/ })).toBeTruthy();
+    await waitFor(() => expect(savedReply("Reply 1.")).toBe(true));
+    expect(settingsReads()).toBe(before);
+    await drainPromises();
+    expect(screen.queryByTestId("memory-used-popup")).toBeNull();
+  });
+
   it("only while the chat is on screen: a reply that ends in a hidden window stays quiet", async () => {
     H.stream.used = [[PREF]];
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });

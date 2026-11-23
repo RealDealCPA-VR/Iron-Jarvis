@@ -288,11 +288,92 @@ def test_the_chat_the_turn_is_in_is_never_listed_as_an_earlier_chat(scene, monke
     assert ("chats", tid) in told, f"{lane}: the fabric did not recall the chat's own messages: {told}"
     assert done["used"] == [], f"{lane}: the chat on screen was listed as memory: {done['used']}"
     assert done["used_more"] == 0, f"{lane}: {done['used_more']}"
-    # The same messages from a new chat: that saved chat IS an earlier chat.
+    # The same messages from a new chat: that saved chat IS an earlier chat,
+    # listed. It did not change the answer: every word the reply shares with
+    # it (oak, shelves, Larsen, Friday) is in the conversation sent with the
+    # turn, so it is not ``shaped`` and the box does not open by itself.
     fresh = _turn(scene.client, lane, {"messages": follow, "auto_tools": False})
     chats = _by_kind(fresh["used"], "chat")
     assert [(c["id"], c["label"]) for c in chats] == [(tid, "Oak shelves supplier")], f"{lane}: {fresh['used']}"
-    assert chats[0]["href"] == f"/chat?thread={tid}" and chats[0]["shaped"] is True
+    assert chats[0]["href"] == f"/chat?thread={tid}"
+    assert chats[0]["shaped"] is False, f"{lane}: words the conversation already had made it shaped"
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_an_older_chat_recalled_on_a_follow_up_shapes_the_reply_only_with_its_own_words(
+    scene, monkeypatch, lane,
+):
+    """D-15.1: the box opens by itself only when memory changed the answer.
+    A short follow-up ("ok, so what next?") is recalled on with the owner's
+    EARLIER messages (``_compose_recall_query``), so an older chat on the same
+    topic is found by the conversation's own words. A reply that repeats only
+    words the conversation (the owner's messages or an earlier reply) already
+    had lists that chat with ``shaped`` False. A reply that carries a word
+    only the older chat has (Larsen) lists it with ``shaped`` True."""
+    from iron_jarvis.memory import fabric as F
+
+    # The fabric recalls a chat by ONE message (its best match), so both
+    # carry the words this test turns on (Larsen, Aarhus).
+    older = [
+        {"role": "user", "content": "Should Larsen in Aarhus make the oak shelves for the shop?"},
+        {"role": "assistant", "content": "Yes: Larsen makes the oak shelves for the shop, from Aarhus."},
+    ]
+    r = scene.client.put("/chat/threads/new", json={"title": "Oak shelves for the shop", "messages": older})
+    assert r.status_code == 200, r.text
+    tid = r.json()["id"]
+    told: list[tuple[str, str]] = []
+    real = F._note_hits
+
+    def spy(hits):
+        told.extend((h.source, h.ref) for h, _snippet in hits)
+        return real(hits)
+
+    monkeypatch.setattr(F, "_note_hits", spy)
+    follow = [
+        {"role": "user", "content": "We need new oak shelves in the shop."},
+        {"role": "assistant", "content": "Oak shelves from Aarhus would suit the shop well."},
+        {"role": "user", "content": "ok, so what next?"},
+    ]
+    # Only the conversation's words: "shop" came from the owner, "Aarhus"
+    # (which the older chat has too) from the earlier reply.
+    _scripted(scene.platform, monkeypatch, "Next, measure the shop so the Aarhus oak shelves suit it well.")
+    same = _turn(scene.client, lane, {"messages": follow, "auto_tools": False})
+    assert ("chats", tid) in told, f"{lane}: the older chat was not recalled: {told}"
+    chats = _by_kind(same["used"], "chat")
+    assert [c["id"] for c in chats] == [tid], f"{lane}: {same['used']}"
+    assert chats[0]["shaped"] is False, f"{lane}: words the conversation already had made it shaped"
+    # A word only the older chat has.
+    _scripted(scene.platform, monkeypatch, "Next, ask Larsen for the oak shelves.")
+    new = _turn(scene.client, lane, {"messages": follow, "auto_tools": False})
+    chats = _by_kind(new["used"], "chat")
+    assert [c["id"] for c in chats] == [tid], f"{lane}: {new['used']}"
+    assert chats[0]["shaped"] is True, f"{lane}: 'Larsen' came only from the older chat"
+
+
+def test_shaped_leaves_out_every_word_the_conversation_already_had():
+    """``conversation`` reads every message sent with the turn, the newest
+    first, within its bound; an earlier reply's words count as said."""
+    item = U.make("chat", "chat_aaaaaaaaaaaa", "Oak shelves", text="Larsen supplies the oak shelves")
+    assert item is not None
+    history = [
+        {"role": "user", "content": "Who supplies the oak shelves?"},
+        {"role": "assistant", "content": "Larsen supplies them."},
+        {"role": "user", "content": "ok, so what next?"},
+    ]
+
+    def shaped(reply: str, messages) -> bool:
+        return U.finish([item], reply=reply, question=U.conversation(messages))[0]["shaped"]
+
+    assert shaped("Order the oak shelves from Larsen.", history) is False
+    assert shaped("Order the oak shelves from Larsen.", history[-1:]) is True, "only the last message was sent"
+    assert U.conversation([]) == ""
+    assert U.conversation([{"role": "user", "content": "x" * (U.CONVERSATION_CHARS + 50)}]) == (
+        "x" * U.CONVERSATION_CHARS
+    )
+    # The bound keeps the NEWEST messages: an old one past it is not read.
+    long_ago = [{"role": "user", "content": "Larsen"}, {"role": "user", "content": "y" * U.CONVERSATION_CHARS}]
+    assert "Larsen" not in U.conversation(long_ago)
+    assert shaped("Ask Larsen.", long_ago) is True
 
 
 def test_merge_leaves_out_only_the_chat_the_turn_is_in():
@@ -360,6 +441,19 @@ def test_a_recap_told_under_its_work_is_listed_as_a_recap(scene, monkeypatch):
         assert recaps[0]["shaped"] is True, "the reply carries words from the recap line"
         assert not _by_kind(done["used"], "work"), "the same piece of work is one item"
         assert "order the oak shelves from Larsen" in seen["systems"][-1]
+
+
+def test_the_work_block_reader_outside_a_hop_gives_the_same_text_and_its_items(scene):
+    """``work_block_with_rows`` (the plan's reader, for 15-c's agent runs):
+    the very text ``work_block`` gives, and the pieces of work it told, with
+    no collector of its own left open after it."""
+    from iron_jarvis.workmap.block import work_block, work_block_with_rows
+
+    _chat(scene, "March reconciliation", folder=scene.folder)
+    text, items = work_block_with_rows(scene.platform, folder=str(scene.folder), query="what next?")
+    assert text and text == work_block(scene.platform, folder=str(scene.folder), query="what next?")
+    assert [(i["kind"], i["label"]) for i in items] == [("work", "March reconciliation")], items
+    assert not U.collecting(), "the reader's collector is closed again"
 
 
 def test_only_the_client_preferences_the_capped_block_says_are_listed(scene, monkeypatch):
@@ -756,6 +850,61 @@ def test_the_ledger_never_carries_a_secret_an_older_path_kept(scene):
     assert value not in r.text and "password=***" in r.json()["text"]
 
 
+def test_the_ledger_never_carries_a_secret_an_older_client_preference_kept(scene):
+    """The same for a client's preference: one kept before secrets were
+    masked at the source may still hold one. A correction from the box, its
+    Undo, a forget and its Undo each write a ledger line, and the lines that
+    quote the OLD sentence mask it. Chat's own words for the same change
+    (``records_clients.did_words``, a ledger line too) mask it as well."""
+    from sqlmodel import select
+
+    from iron_jarvis.core.models import ToolInvocation
+    from iron_jarvis.settings import records_clients as RC
+    from iron_jarvis.workmap.models import WorkClientPreference
+
+    value = f"hunter{'2' * 3}"
+    folder = scene.tmp / "Clients" / "Moss"
+    folder.mkdir(parents=True)
+    cid = client_store.create(scene.platform, folder=str(folder), name="Moss")["client"]["id"]
+
+    def kept_before_masking(text: str, old: str) -> str:
+        pid = client_store.keep_preference(scene.platform, cid, text, origin="said")["preference"]["id"]
+        with session_scope(scene.engine) as db:
+            row = db.get(WorkClientPreference, pid)
+            row.text = old
+            db.add(row)
+            db.commit()
+        return pid
+
+    changed = kept_before_masking("Upload through the portal first.", f"Portal password={value} for uploads")
+    forgotten = kept_before_masking("Send the portal link on Mondays.", f"Mail password={value} on Mondays")
+    with session_scope(scene.engine) as db:
+        before = {str(row.id) for row in db.exec(select(ToolInvocation))}
+    undos = []
+    r = scene.client.patch(f"/clients/{cid}/preferences/{changed}", json={"text": "Upload through the portal."})
+    assert r.status_code == 200 and r.json().get("action_id"), r.text
+    u = scene.client.post(f"/undo/{r.json()['action_id']}", json={})
+    assert u.status_code == 200, u.text
+    undos.append(u.text)
+    r = scene.client.delete(f"/clients/{cid}/preferences/{forgotten}")
+    assert r.status_code == 200 and r.json().get("action_id"), r.text
+    u = scene.client.post(f"/undo/{r.json()['action_id']}", json={})
+    assert u.status_code == 200, u.text
+    undos.append(u.text)
+    with session_scope(scene.engine) as db:
+        ledger = [str(row.output or "") for row in db.exec(select(ToolInvocation)) if str(row.id) not in before]
+    assert len(ledger) >= 2, ledger
+    assert [t for t in ledger if value in t] == [], ledger
+    quoted = [t for t in ledger if "password=" in t]
+    assert len(quoted) >= 2 and all("password=***" in t for t in quoted), ledger  # the change, the forget
+    assert [a for a in undos if value in a] == [], "an Undo's answer quoted the secret"
+    # Chat's words for the same change and forget.
+    for op in ({"op": "change_pref", "old": f"Portal password={value} for uploads", "text": "Upload."},
+               {"op": "forget_pref", "view": {"text": f"Mail password={value} on Mondays"}}):
+        words = RC.did_words("Moss", cid, [op])
+        assert value not in words and "password=***" in words, words
+
+
 # --------------------------------------------------------------------------- #
 # 6. the setting
 # --------------------------------------------------------------------------- #
@@ -780,11 +929,13 @@ def test_the_popup_setting_is_a_schema_row_with_two_choices_and_an_undo(scene):
 
 def test_the_popup_setting_is_found_from_chat_in_the_handbooks_words(scene):
     """Chat reaches it (G9): the feature lookup a chat turn uses finds the
-    setting for the words the Handbook gives, so ``config_set`` can change it
-    (with its Undo, above)."""
+    setting for the words the Handbook gives (its chat sentence and the
+    setting's own name there), so ``config_set`` can change it (with its
+    Undo, above). Only the Handbook's words: a request is never fitted to
+    the generated phrasings."""
     from iron_jarvis.capability_search import index as CI
 
     for words in ("only show what memory gave a reply when I press",
-                  "stop the from memory box popping up after replies"):
+                  "Show what memory gave a reply"):
         found = [e.id for e in CI.search(scene.platform, words, 5)]
         assert "memory_used_popup" in found, (words, found)

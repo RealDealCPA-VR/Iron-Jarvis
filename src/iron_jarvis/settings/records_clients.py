@@ -173,7 +173,12 @@ def _flat(text: Any, n: int = 80) -> str:
 
 
 def _q(text: Any, n: int = 120) -> str:
-    return "“" + _flat(text, n) + "”"
+    # Masked before it is cut: these quotes are chat's words and ledger lines
+    # (a change's ``did_words``), and a client preference kept before secrets
+    # were masked at the source may still hold a secret-looking value.
+    from ..learning.engine import without_secrets
+
+    return "“" + _flat(without_secrets(str(text or "")), n) + "”"
 
 
 def possessive(name: Any) -> str:

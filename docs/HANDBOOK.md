@@ -2070,9 +2070,9 @@ are the conversation, not memory. Secrets are masked in it.
 - on the **newest** reply, while that chat is on your screen and you can see
   that reply's line (if you scrolled up to read earlier messages, it waits
   for a press);
-- when the reply uses words that came from those memories and not from your
-  own message (so a preference about spelling does not pop up under every
-  answer);
+- when the reply uses words that came from those memories and not from the
+  chat itself, your messages or the replies before it (so a preference about
+  spelling does not pop up under every answer);
 - once for the same things in a chat: after it has shown them, by itself or
   because you pressed it, the same things never bring it back in that chat.
 

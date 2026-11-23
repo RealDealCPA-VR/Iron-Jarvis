@@ -12036,16 +12036,19 @@ def memory_used_receipt(grounding: Any, reply: Any, body: Any) -> list[dict[str,
     """Next leaps 15-a (master plan R2.7): the reply's ``used`` list — what
     the turn was GIVEN from memory (``_Grounding.used``, recorded where each
     hop built its text), each item with ``shaped`` measured against the
-    final reply and the owner's own last message (``memory.used.finish``).
-    ALWAYS a list ([] when nothing was given). MIRROR NOTE (lock-step): both
-    lanes call this one helper for their answer / done frame. Never raises."""
+    final reply and EVERY message sent with the turn
+    (``memory.used.conversation``: a short follow-up is recalled on with the
+    owner's earlier words, so a word the chat already had never makes an
+    item ``shaped``; ``memory.used.finish``). ALWAYS a list ([] when nothing
+    was given). MIRROR NOTE (lock-step): both lanes call this one helper for
+    their answer / done frame. Never raises."""
     try:
         from ..memory import used as _used
 
         return _used.finish(
             list(getattr(grounding, "used", None) or []),
             reply=str(reply or ""),
-            question=_last_user_text(getattr(body, "messages", None) or []),
+            question=_used.conversation(getattr(body, "messages", None) or []),
         )
     except Exception:  # noqa: BLE001 — the list is extra; the reply is not
         log.debug("the memory-used list could not be made", exc_info=True)

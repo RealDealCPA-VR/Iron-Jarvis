@@ -118,6 +118,7 @@ def register(app: FastAPI, d) -> None:
         or None when it cannot be recorded (no snapshot before or after)."""
         if prior is None or not isinstance(out, dict):
             return None
+        from ...learning.engine import without_secrets
         from ...settings import records_clients as _rc
 
         after = _client_snapshot(cid)
@@ -125,7 +126,10 @@ def register(app: FastAPI, d) -> None:
             return None
         name = str((out.get("client") or {}).get("name") or prior.get("name") or "")
         what = "Changed" if op.get("op") == "change_pref" else "Forgot"
-        said = str(op.get("old") or (op.get("view") or {}).get("text") or "")[:120]
+        # The OLD sentence, masked BEFORE it is cut at 120: a preference kept
+        # before secrets were masked at the source may still hold one, and
+        # the summary is a ledger line, which never carries one.
+        said = without_secrets(str(op.get("old") or (op.get("view") or {}).get("text") or ""))[:120]
         return {
             "record": _rc.KIND, "name": cid, "prior": prior,
             "summary": f"{what} what is kept for {name}: “{said}”.",

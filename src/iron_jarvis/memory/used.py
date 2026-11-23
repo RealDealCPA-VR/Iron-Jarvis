@@ -34,8 +34,9 @@ earlier messages, recalled by the fabric, are left out (:func:`merge`).
 THE WORDS ARE HONEST. The list is what Iron Jarvis was GIVEN for the reply,
 not a claim about what the model relied on. ``shaped`` (:func:`finish`) says
 only that the reply carries words that came from that item and not from the
-owner's own message: the page opens the pop-up by itself only for such an
-item (D-15.1, "only when memory changed the answer"); the item is listed
+conversation sent with the turn (:func:`conversation`: the owner's messages
+and the earlier replies): the page opens the pop-up by itself only for such
+an item (D-15.1, "only when memory changed the answer"); the item is listed
 either way.
 
 An item, as it goes on the reply::
@@ -90,8 +91,11 @@ FIXES: tuple[str, ...] = (FIX_CORRECT, FIX_FORGET)
 PREFERENCES_HREF = "/memory#prefs-kept"
 #: How much of an item's own text is compared with the reply.
 _TEXT_CHARS = 600
-#: How much of a reply (or the owner's message) is read for its words.
+#: How much of a reply is read for its words.
 _READ_CHARS = 20000
+#: How much of the conversation sent with a turn is read for the words it
+#: already had (:func:`conversation`, the newest messages first).
+CONVERSATION_CHARS = 80000
 
 #: The most items one hop keeps (what it tells past this is only counted).
 HOP_ITEMS = MAX_ITEMS * 4
@@ -135,12 +139,13 @@ def _stops() -> frozenset[str]:
 _STOP = _stops()
 
 
-def stems(text: object) -> frozenset[str]:
-    """The distinctive word stems of ``text``: words of three letters or
-    more (or numbers of two digits or more) that are not stop words, lower
-    case, a plural ``s`` dropped, cut at six characters. Pure."""
+def stems(text: object, *, limit: int = _READ_CHARS) -> frozenset[str]:
+    """The distinctive word stems of the first ``limit`` characters of
+    ``text``: words of three letters or more (or numbers of two digits or
+    more) that are not stop words, lower case, a plural ``s`` dropped, cut
+    at six characters. Pure."""
     out: set[str] = set()
-    for raw in _WORD.findall(str(text or "")[:_READ_CHARS].lower()):
+    for raw in _WORD.findall(str(text or "")[: max(0, int(limit))].lower()):
         if raw.isdigit():
             if len(raw) >= 2:
                 out.add(raw)
@@ -283,6 +288,40 @@ def merge(parts: Iterable[Iterable[dict[str, Any]]], *, own_chat: str = "") -> T
     return out
 
 
+def conversation(messages: Any) -> str:
+    """What the conversation sent with a turn already said: the text of
+    EVERY message in it (the owner's and the replies before this one), the
+    newest first, at most :data:`CONVERSATION_CHARS` characters in all. It
+    is the ``question`` :func:`finish` measures ``shaped`` against.
+
+    The owner's last message alone is not enough: a short follow-up ("ok,
+    so what next?") is recalled on with the owner's EARLIER messages
+    (``chat_turn._compose_recall_query``), so memory is found by the
+    conversation's own words, and a reply that repeats them (or an earlier
+    reply's) would count an older chat on the same topic as having changed
+    the answer. A word the conversation already had is not memory's
+    (D-15.1: the box opens by itself only when memory changed the answer).
+    Messages are objects with ``content`` or dicts. Never raises ("" on a
+    fault: the owner's words are then not taken out, as before 15-a)."""
+    parts: list[str] = []
+    left = CONVERSATION_CHARS
+    try:
+        for m in reversed(list(messages or ())):
+            if left <= 0:
+                break
+            content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+            text = str(content or "")
+            if not text.strip():
+                continue
+            piece = text[:left]
+            parts.append(piece)
+            left -= len(piece) + 1
+    except Exception:  # noqa: BLE001
+        log.debug("memory used: the conversation could not be read", exc_info=True)
+        return ""
+    return "\n".join(parts)
+
+
 def _pick(items: "list[dict[str, Any]]", shaped: "list[bool]") -> "list[int]":
     """Which items the capped list keeps, as indexes in their own order:
     every one when they fit; else the items that shaped the reply first,
@@ -313,14 +352,16 @@ def finish_with_more(
 ) -> "tuple[list[dict[str, Any]], int]":
     """``(the used list, how many were given and not listed)``. Each item
     goes without its private words, plus ``shaped`` — True when the reply
-    carries a word stem that came from the item and is not in the owner's
-    own message (the page opens the pop-up by itself only for such an item).
-    ``shaped`` is worked out for EVERY item before the cap, and the cap keeps
-    the shaped items first (:func:`_pick`). ([], 0) when nothing was given.
-    Never raises (a fault answers ([], 0))."""
+    carries a word stem that came from the item and is not in ``question``:
+    what the conversation already said (the chat lanes pass
+    :func:`conversation`, every message sent with the turn; the page opens
+    the pop-up by itself only for such an item). ``shaped`` is worked out
+    for EVERY item before the cap, and the cap keeps the shaped items first
+    (:func:`_pick`). ([], 0) when nothing was given. Never raises (a fault
+    answers ([], 0))."""
     try:
         said = stems(reply)
-        asked = stems(question)
+        asked = stems(question, limit=CONVERSATION_CHARS)
         dropped = max(0, int(getattr(items, "dropped", 0) or 0))
         valid: list[dict[str, Any]] = []
         shaped: list[bool] = []
@@ -362,7 +403,7 @@ def left_out(items: Iterable[dict[str, Any]]) -> int:
 
 
 __all__ = [
-    "FIXES", "FIX_CORRECT", "FIX_FORGET", "HOP_ITEMS", "KINDS", "LABEL_CHARS", "MAX_ITEMS",
-    "PREFERENCES_HREF", "Told", "collecting", "finish", "finish_with_more", "left_out", "make",
-    "merge", "note", "run_collecting", "stems",
+    "CONVERSATION_CHARS", "FIXES", "FIX_CORRECT", "FIX_FORGET", "HOP_ITEMS", "KINDS", "LABEL_CHARS",
+    "MAX_ITEMS", "PREFERENCES_HREF", "Told", "collecting", "conversation", "finish", "finish_with_more",
+    "left_out", "make", "merge", "note", "run_collecting", "stems",
 ]

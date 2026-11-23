@@ -8531,14 +8531,35 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
 
   // Track the reader's pin state; releasing the pin surfaces a "Jump to latest"
   // pill instead of fighting them for the scroll position.
+  const lastScrollRef = useRef({ top: 0, height: 0 });
   function onThreadScroll() {
     const el = scrollRef.current;
     if (!el) return;
+    const top = el.scrollTop;
+    const height = el.scrollHeight;
+    const last = lastScrollRef.current;
+    const movedDown = top > last.top;
+    const grew = height > last.height;
+    lastScrollRef.current = { top, height };
     // v1.315.0: scrolling the empty state is reading it, not leaving a
     // conversation behind — there is nothing below to jump to.
     if (messages.length === 0 && !busy) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const nearBottom = height - top - el.clientHeight < 80;
     const wasPinned = pinnedRef.current;
+    // 15-a review 4: rows going in under a reader who follows the newest
+    // message never unpin them. Looked at in a browser (headless Edge, a
+    // production build, a model streaming word by word): when a reply ended
+    // in a chat taller than the window, the finished reply's rows went in and
+    // the scroll moved DOWN with them but landed 116-139 px short of the new
+    // bottom, so this handler read "the reader left", showed "Jump to latest"
+    // over a reply nobody scrolled away from and stopped following: the
+    // reply's end (and its "From memory" line) sat under the message box. A
+    // reader leaves the bottom UPWARD, and a scroll with no new rows (the
+    // pill's own glide) is read as before. So finish the move instead.
+    if (wasPinned && !nearBottom && movedDown && grew) {
+      scrollToLatest(bottomRef.current, "auto");
+      return;
+    }
     pinnedRef.current = nearBottom;
     setShowJump((prev) => (prev === !nearBottom ? prev : !nearBottom));
     // 48-a: the "Earlier messages" line was already in view while the reader
