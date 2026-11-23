@@ -2044,6 +2044,72 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Finished files come back to your phone, and approvals have buttons (v1.565.0)
+
+Ask Jarvis from Telegram, Slack or email to "turn this into a spreadsheet",
+and the answer arrives with the spreadsheet. A question that needs your OK
+arrives with a short preview and two buttons.
+
+- **The first time, it asks.** A file leaves this PC when it goes to your
+  phone, so the first time Jarvis has made something for a message on a
+  destination, it asks there: "Send 1 spreadsheet (48 KB) to Telegram?",
+  with **Send** and **Keep it on the PC** (or reply 1 or 2, which always
+  works). Your answer is kept for that destination: after a Send, files
+  come with the answer there without asking; after **Keep it on the PC**,
+  they stay on this PC. An answer on Telegram is not an answer for Slack:
+  each destination asks once, and one that has not answered is still asked
+  first.
+- **Changing your answers.** Settings › Connections › Phone › **Send
+  finished files to your phone** follows your answers (your first Send has
+  an Undo). Once a destination has answered, a new choice there asks every
+  destination again, even **Send them**; **Keep them on this PC** keeps
+  every file here. An Undo of a choice there puts the row back, and the
+  destinations are asked again rather than given their old answers. The
+  reply to **Keep it on the PC** names the choice that asks again.
+- **What it says it sent.** After a Send, the reply names only the files
+  that went ("→ Sent 1 spreadsheet (48 KB) to Telegram."), and names any
+  that did not with the reason.
+- **Which files.** What the work made, read from its own record: the files
+  the answer's own steps created or changed, inside the folder the work was
+  done in (the phone chat's folder, its project's folder, or the task's own
+  folder). Up to five files of 20 MB each go with one answer; a file past
+  that, or one outside that folder, is named with the reason and stays on
+  this PC. Email sends them as attachments of one email, up to 20 MB in all.
+  Telegram sends a picture as a photo and anything else as a file. A task
+  that did not finish sends nothing: its answer says which files it kept.
+  A later answer's files join a question still waiting, and the question
+  counts the five that can go; when you say Send, each file is checked
+  again, and one that is gone or too big by then is named with the reason.
+- **Local only chats.** Nothing is sent until you say so, every time: "This
+  chat is Local only, so the 1 spreadsheet (48 KB) it made was not sent.
+  Send it through Telegram?" The question names how many files, their kind
+  and size, never a file's name. Your answer there changes no setting. A
+  task's answer there counts the files it wrote ("It wrote 1 file.")
+  instead of naming them.
+- **Approvals with buttons.** When an agent asks for your OK, the message on
+  your phone says what it wants to do, built from the request itself ("An
+  agent wants to run a command: command dir Intake") with **Approve** and
+  **Deny** under it. After a press the buttons read **Approved by you** or
+  **Denied by you**, and the agent carries on (tapping that button again
+  only shows **That was already answered**; it keeps saying what you
+  decided). A press on a question already answered elsewhere (in Iron
+  Jarvis, or by typing) reads **That was already answered** and changes
+  nothing. Typing approve, deny, 1 or 2 still works, and a phone answer is
+  always for that one use. The preview names where the agent acts (a
+  folder, a file, a command), never the text it would write. Local only
+  work shows no preview, and a commit, a push or a risky page click is
+  never sent to the phone at all: answer those in Iron Jarvis.
+- **Only from you.** A press counts only from someone on the destination's
+  allowlist, in their own chat (in Slack also the destination's own channel),
+  and only for their own question.
+- **Slack.** Files back and buttons need the newer Slack app setup (the
+  files:write permission and interactivity, already in the manifest from
+  Add a destination → Slack), and buttons need the app-level token (Socket
+  Mode); without it the question comes with its words only. If a press does
+  nothing (a Slack app set up before interactivity was in the manifest),
+  reply 1 or 2 instead, as the question says. If Slack refuses a file,
+  Jarvis says so in words.
+
 ## Sort a scanned pile into its documents (v1.564.0)
 
 One PDF that holds a whole scanned pile becomes separate, named documents in
@@ -2491,72 +2557,6 @@ takes files now.
 - With "Chat with Iron Jarvis from this destination" off, the file is kept
   and the task it starts is told where.
 - Telegram still can't use stickers, contacts or locations, and says so.
-
-## Finished files come back to your phone, and approvals have buttons (v1.562.0)
-
-Ask Jarvis from Telegram, Slack or email to "turn this into a spreadsheet",
-and the answer arrives with the spreadsheet. A question that needs your OK
-arrives with a short preview and two buttons.
-
-- **The first time, it asks.** A file leaves this PC when it goes to your
-  phone, so the first time Jarvis has made something for a message on a
-  destination, it asks there: "Send 1 spreadsheet (48 KB) to Telegram?",
-  with **Send** and **Keep it on the PC** (or reply 1 or 2, which always
-  works). Your answer is kept for that destination: after a Send, files
-  come with the answer there without asking; after **Keep it on the PC**,
-  they stay on this PC. An answer on Telegram is not an answer for Slack:
-  each destination asks once, and one that has not answered is still asked
-  first.
-- **Changing your answers.** Settings › Connections › Phone › **Send
-  finished files to your phone** follows your answers (your first Send has
-  an Undo). Once a destination has answered, a new choice there asks every
-  destination again, even **Send them**; **Keep them on this PC** keeps
-  every file here. An Undo of a choice there puts the row back, and the
-  destinations are asked again rather than given their old answers. The
-  reply to **Keep it on the PC** names the choice that asks again.
-- **What it says it sent.** After a Send, the reply names only the files
-  that went ("→ Sent 1 spreadsheet (48 KB) to Telegram."), and names any
-  that did not with the reason.
-- **Which files.** What the work made, read from its own record: the files
-  the answer's own steps created or changed, inside the folder the work was
-  done in (the phone chat's folder, its project's folder, or the task's own
-  folder). Up to five files of 20 MB each go with one answer; a file past
-  that, or one outside that folder, is named with the reason and stays on
-  this PC. Email sends them as attachments of one email, up to 20 MB in all.
-  Telegram sends a picture as a photo and anything else as a file. A task
-  that did not finish sends nothing: its answer says which files it kept.
-  A later answer's files join a question still waiting, and the question
-  counts the five that can go; when you say Send, each file is checked
-  again, and one that is gone or too big by then is named with the reason.
-- **Local only chats.** Nothing is sent until you say so, every time: "This
-  chat is Local only, so the 1 spreadsheet (48 KB) it made was not sent.
-  Send it through Telegram?" The question names how many files, their kind
-  and size, never a file's name. Your answer there changes no setting. A
-  task's answer there counts the files it wrote ("It wrote 1 file.")
-  instead of naming them.
-- **Approvals with buttons.** When an agent asks for your OK, the message on
-  your phone says what it wants to do, built from the request itself ("An
-  agent wants to run a command: command dir Intake") with **Approve** and
-  **Deny** under it. After a press the buttons read **Approved by you** or
-  **Denied by you**, and the agent carries on (tapping that button again
-  only shows **That was already answered**; it keeps saying what you
-  decided). A press on a question already answered elsewhere (in Iron
-  Jarvis, or by typing) reads **That was already answered** and changes
-  nothing. Typing approve, deny, 1 or 2 still works, and a phone answer is
-  always for that one use. The preview names where the agent acts (a
-  folder, a file, a command), never the text it would write. Local only
-  work shows no preview, and a commit, a push or a risky page click is
-  never sent to the phone at all: answer those in Iron Jarvis.
-- **Only from you.** A press counts only from someone on the destination's
-  allowlist, in their own chat (in Slack also the destination's own channel),
-  and only for their own question.
-- **Slack.** Files back and buttons need the newer Slack app setup (the
-  files:write permission and interactivity, already in the manifest from
-  Add a destination → Slack), and buttons need the app-level token (Socket
-  Mode); without it the question comes with its words only. If a press does
-  nothing (a Slack app set up before interactivity was in the manifest),
-  reply 1 or 2 instead, as the question says. If Slack refuses a file,
-  Jarvis says so in words.
 
 ## The `/` list in Build › Code works before a session starts (v1.557.0)
 
