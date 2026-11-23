@@ -171,6 +171,10 @@ const WORDS: Record<string, string> = {
   peer_allow_off: "turn off something a paired computer may do here",
   // Next leaps 43-a: a model downloaded into a model server.
   model_download: "download a model into your model server",
+  // Next leaps 04-b: what a call of each may do. agents/mission.ASK_WORDS
+  // says the same (pinned equal).
+  open_item_close: "close an open item",
+  open_item_reopen: "reopen an open item",
   client_update: "change one of your clients",
   client_preference_add: "keep a preference for one client",
   client_preference_change: "change a preference kept for one client",

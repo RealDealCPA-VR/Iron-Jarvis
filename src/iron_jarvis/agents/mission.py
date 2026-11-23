@@ -401,6 +401,10 @@ ASK_WORDS: dict[str, str] = {
     "peer_allow_off": "turn off something a paired computer may do here",
     # Next leaps 43-a: a model downloaded into a model server.
     "model_download": "download a model into your model server",
+    # Next leaps 04-b: what a call of each may do (its step words do not say
+    # it, as a call that works may only list).
+    "open_item_close": "close an open item",
+    "open_item_reopen": "reopen an open item",
     "client_update": "change one of your clients",
     "client_preference_add": "keep a preference for one client",
     "client_preference_change": "change a preference kept for one client",
@@ -696,9 +700,11 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # as a vowel and would say "tried an usage report".
     "usage_report": ("looked up what your work cost", "cost lookup"),
     # Next leaps 04-b: a folder's open item closed or reopened from chat.
-    # Twin: lib/runWords.ts AGENT_TOOLS.
-    "open_item_close": ("closed an open item", "open item change"),
-    "open_item_reopen": ("reopened an open item", "open item change"),
+    # Twin: lib/runWords.ts AGENT_TOOLS. Review 6 (north star 1): a call that
+    # works may only list, or answer Not yet on an item still open, so these
+    # words are true for every such call; the card's are in ASK_WORDS.
+    "open_item_close": ("looked over this folder's open items", "open item check"),
+    "open_item_reopen": ("looked over this folder's open items", "open item check"),
     "client_list": ("listed your clients", "client list"),
     "client_answer": ("noted whether a name is one of your clients", "client answer"),
     "client_update": ("changed one of your clients", "client change"),
@@ -946,9 +952,6 @@ _PRESENT: dict[str, str] = {
     "cleared": "clear",
     # Leap 06-a.
     "rehearsed": "rehearse",
-    # Next leaps 04-b: an open item closed or reopened from chat.
-    "closed": "close",
-    "reopened": "reopen",
 }
 
 
@@ -1053,7 +1056,6 @@ _ING: dict[str, str] = {
     "disconnected": "disconnecting", "forgot": "forgetting", "cancelled": "cancelling",
     "cleared": "clearing",
     "rehearsed": "rehearsing",
-    "closed": "closing", "reopened": "reopening",
 }
 
 

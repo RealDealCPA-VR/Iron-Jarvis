@@ -1000,12 +1000,12 @@
       "Sending a notification"
     ],
     "open_item_close": [
-      "Closed an open item",
-      "Closing an open item"
+      "Looked over this folder's open items",
+      "Looking over this folder's open items"
     ],
     "open_item_reopen": [
-      "Reopened an open item",
-      "Reopening an open item"
+      "Looked over this folder's open items",
+      "Looking over this folder's open items"
     ],
     "pack_restart": [
       "Restarted an extension",

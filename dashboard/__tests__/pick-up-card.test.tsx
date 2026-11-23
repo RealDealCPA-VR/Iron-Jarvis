@@ -165,6 +165,8 @@ import {
 } from "@/lib/pickUp";
 import { WorkByFolder } from "@/components/memory/WorkByFolder";
 import { FORGET_CONFIRM, WORK_FOLDERS_PATH, WORK_FORGET_PATH, workEntriesPath } from "@/lib/workRecord";
+import { builtinStepWords, stepCounts, stepPhrase, stepPhraseText } from "@/lib/stepWords";
+import { toolStepLine } from "@/lib/runWords";
 
 const BOOKS = "C:\\Work\\Books";
 const LEDGERS = "C:\\Work\\Ledgers";
@@ -1102,6 +1104,23 @@ describe("open items that stay until they are done (04-b)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Send once" }));
     await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
     expect(H.stream.bodies[0].pick_up_item).toBe(ITEM);
+  });
+
+  it("a step of either open item tool never says Closed or Reopened: a listing and a Not yet close or reopen nothing", () => {
+    // Review 6 of 04-b (north star 1): the work line, its count and the run
+    // log word a step that worked by its tool alone.
+    const claims = /\b(?:re)?(?:open|clos)(?:ed|ing)\b/i;
+    for (const name of ["open_item_close", "open_item_reopen"]) {
+      const said = [
+        ...(builtinStepWords(name) ?? []),
+        stepPhraseText(stepPhrase(name)),
+        ...stepCounts([{ name, ok: true }]),
+        toolStepLine(name, true),
+        toolStepLine(name, false),
+      ];
+      expect(said.length).toBe(6);
+      for (const words of said) expect(words).not.toMatch(claims);
+    }
   });
 
   it("both Code views show the items with their menu, and no item Continue", async () => {

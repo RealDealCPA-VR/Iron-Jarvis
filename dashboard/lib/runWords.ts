@@ -278,9 +278,10 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   model_download: { did: "Started downloading a model", noun: "model download" },
   // Next leaps 46-a: what everything cost.
   usage_report: { did: "Looked up what your work cost", noun: "cost lookup" },
-  // Next leaps 04-b: a folder's open item closed or reopened from chat.
-  open_item_close: { did: "Closed an open item", noun: "open item change" },
-  open_item_reopen: { did: "Reopened an open item", noun: "open item change" },
+  // Next leaps 04-b: a folder's open item closed or reopened from chat. A call
+  // that works may only list, or answer Not yet, so the words claim neither.
+  open_item_close: { did: "Looked over this folder's open items", noun: "open item check" },
+  open_item_reopen: { did: "Looked over this folder's open items", noun: "open item check" },
   client_list: { did: "Listed your clients", noun: "client list" },
   client_answer: { did: "Noted whether a name is one of your clients", noun: "client answer" },
   client_update: { did: "Changed one of your clients", noun: "client change" },

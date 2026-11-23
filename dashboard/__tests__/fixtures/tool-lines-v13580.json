@@ -541,12 +541,12 @@
       "failed": "tried a notification and it failed"
     },
     "open_item_close": {
-      "ok": "closed an open item",
-      "failed": "tried an open item change and it failed"
+      "ok": "looked over this folder's open items",
+      "failed": "tried an open item check and it failed"
     },
     "open_item_reopen": {
-      "ok": "reopened an open item",
-      "failed": "tried an open item change and it failed"
+      "ok": "looked over this folder's open items",
+      "failed": "tried an open item check and it failed"
     },
     "pack_restart": {
       "ok": "restarted an extension",

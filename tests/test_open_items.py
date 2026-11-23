@@ -1022,6 +1022,40 @@ def test_reopen_on_an_item_that_is_still_open_never_says_it_reopened_it(scene):
     assert len(scene.bus.events) == events
 
 
+def test_a_call_that_closes_or_reopens_nothing_is_never_worded_as_a_close_or_a_reopen(scene):
+    """Review 6 of 04-b (north star 1): the chat's work line, its receipt and
+    the run log word a call that worked by its tool alone. A Not yet answer on
+    an item that is still open and a listing of either tool work (ok) and
+    close or reopen nothing, so neither tool's step words ever say "Closed"
+    or "Reopened". The approval card still names what a call may do."""
+    import re
+
+    from iron_jarvis.agents import mission
+
+    old = _chat(scene, "March close", H, hours_ago=5)
+    _keep(scene, old, "Open: Send recon_march.xlsx to Ann")
+    _keep(scene, _chat(scene, "April close", H, hours_ago=1), "Done: Sent recon_march.xlsx to Ann")
+    (asked,) = _items(scene, entry_id=f"chat:{old}")
+    assert asked.maybe_done_entry
+    close, reopen = open_item_tools.open_item_tools(scene.platform)
+    claims = re.compile(r"\b(?:re)?(?:open|clos)(?:ed|ing)\b", re.IGNORECASE)
+    calls = [
+        (reopen, {"item": asked.id}),  # Not yet, on an item that is still open
+        (reopen, {}),  # the closed-lately listing
+        (close, {}),  # the open listing
+        (close, {"item": "the recon one"}),  # the owner's words: a listing too
+    ]
+    for tool, args in calls:
+        got = _run(tool, args, scene, H)
+        assert got.ok, (tool.name, args, got.error)
+        done, doing = mission.step_line_words(tool.name)
+        for words in (done, doing, mission.tool_line(tool.name, args, True), mission.tool_line(tool.name, args, False)):
+            assert words and not claims.search(words), (tool.name, args, words)
+    assert {i.status for i in _items(scene)} == {OPEN_ITEM_OPEN}
+    assert mission.card_words(open_item_tools.CLOSE_NAME) == "close an open item"
+    assert mission.card_words(open_item_tools.REOPEN_NAME) == "reopen an open item"
+
+
 def test_chat_finds_and_closes_an_item_the_block_only_counts(scene):
     """G9 (review 3 of 04-b): an item past the six the block numbers is on the
     card, so the owner may name it in chat. ``open_item_close`` with no id
