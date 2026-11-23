@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.567.0
+
+**See what memory gave a reply, and fix a preference.** When a chat reply was given things Iron Jarvis remembers (your preferences, a client's preferences, earlier work in the folder and its recap, notes, earlier chats and agent runs, files, project knowledge), the reply says so.
+
 ## v1.566.0
 
 **Changes you accepted show their result.** When you accept a change from **Improvements**, Iron Jarvis now counts how the work went before and after it, from its own records, and shows the result under the waiting suggestions, in **Results of changes you accepted**.
@@ -77,7 +81,3 @@
 ## v1.551.0
 
 **Iron Jarvis checks every Build › Code reply.** Whichever coding tool did the work in Build › Code (Claude Code, Codex, Pi, OpenCode, Grok or Antigravity), its reply now ends the same way.
-
-## v1.550.0
-
-**The Timeline shows the models that did the work.** A coding session's **Timeline** tab now opens on the models that did the reply, each one a card, joined by arrows where one handed work to another.
