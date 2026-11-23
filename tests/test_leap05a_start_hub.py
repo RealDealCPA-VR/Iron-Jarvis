@@ -78,6 +78,8 @@ CALLERS = (
     "src/iron_jarvis/daemon/app.py",
     "src/iron_jarvis/daemon/routes/comm.py",
     "src/iron_jarvis/webhooks/tools.py",
+    # Review: the handler an Undo of a removed webhook puts back.
+    "src/iron_jarvis/settings/records.py",
 )
 _DIRECT = re.compile(r"\.on_(?:webhook|signal|slack|calendar|email|comm|file|download)\(")
 
@@ -88,6 +90,36 @@ def test_no_old_caller_calls_the_router_past_the_hub():
         assert "hub_for(" in text, f"{rel} does not go through the start hub"
         hits = [m.group(0) for m in _DIRECT.finditer(text)]
         assert not hits, f"{rel} calls the router directly: {hits}"
+
+
+def test_nothing_in_the_app_calls_the_router_past_the_hub():
+    """Review: the list above missed the handler an Undo puts back; so the
+    whole app is read. Only the router's own wrappers and the hub may call
+    the router's entry points (a bench task's sample repository is not the
+    app)."""
+    own = {"src/iron_jarvis/reflex/router.py", "src/iron_jarvis/triggers/starts.py"}
+    hits = []
+    for path in sorted((ROOT / "src" / "iron_jarvis").rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        if rel in own or "/harness_bench/tasks/" in rel:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+        hits += [f"{rel}: {m.group(0)}" for m in _DIRECT.finditer(text)]
+    assert hits == []
+
+
+def test_a_webhook_an_undo_puts_back_starts_its_rule_through_the_hub(desk):
+    """MUTATION (red): call ``router.on_webhook`` in
+    ``records._inbound_handler`` again -> the hub's waiters never see it."""
+    from iron_jarvis.settings import records as R
+
+    c, p, router = desk
+    p.reflex.add(name="back", source="webhook", match="back", action="session", task_template="Handle: {body}")
+    seen = _watched(router)
+    handler = R._inbound_handler(p, "back")
+    ack = asyncio.run(handler({"x": 1}))
+    assert ack["fired"] == 1, ack
+    assert [k for k, _ in seen] == ["webhook"]
 
 
 class _Recorder:
@@ -481,3 +513,125 @@ def test_a_paused_file_rules_files_wait_and_go_after_resume(desk, tmp_path):
     assert c.post(f"/reflex/rules/{rule.id}/resume").status_code == 200
     _scan(p, router)
     assert len(_started_on(p)) == 2, "the waiting file went once the rule was resumed"
+
+
+# --------------------------------------------------------------------------- #
+# Review (05-a): signals that arrive TOGETHER are held to the hourly limit too.
+# --------------------------------------------------------------------------- #
+
+
+def test_thirty_signals_at_once_start_twelve_and_the_rest_are_held(desk):
+    """A burst of webhooks (or several downloads) reaches the router at the
+    same time: the gate counts each start as it lets it through, in one
+    locked step, so exactly 12 start and the rest are held.
+
+    MUTATION (each red): count the start only after the run was made
+    (``reserve`` ignored in ``ReflexStore.start_gate``) -> 30 start; drop
+    ``_GATE_LOCK`` from ``start_gate`` -> more than 12 can start."""
+    c, p, router = desk
+    rule = p.reflex.add(name="burst", source="webhook", match="burst", action="session", task_template="Note it")
+    hub = starts.hub_for(router)
+    real_create = router.orch.create_session
+
+    async def slow_create(*a, **kw):
+        # The run takes a moment to be made, as it does in the app: every
+        # signal of the burst has passed the gate before any run exists.
+        await asyncio.sleep(0.05)
+        return await real_create(*a, **kw)
+
+    router.orch.create_session = slow_create
+
+    async def burst():
+        return await asyncio.gather(*(hub.signal("webhook", fields={"slug": "burst", "body": n}) for n in range(30)))
+
+    try:
+        out = [r[0] for r in asyncio.run(burst())]
+    finally:
+        router.orch.create_session = real_create
+    started = [r for r in out if r.get("ok")]
+    held = [r for r in out if r.get("held")]
+    assert (len(started), len(held)) == (12, 18), (len(started), len(held))
+    row = p.reflex.get(rule.id)
+    assert row.paused_at is not None and row.fire_count == 12
+    assert len(_bus_events(p, "reflex.paused")) == 1
+
+
+def test_a_start_that_fails_is_not_counted_toward_the_hour(desk):
+    """The gate counts a start as it passes; one that then fails gives its
+    count back (a failed start is not a start).
+
+    MUTATION (red): drop the ``release_start`` call in ``execute`` -> the
+    failed starts use up the hour and the next good one is held."""
+    c, p, router = desk
+    rule = p.reflex.add(name="flaky", source="webhook", match="flaky", action="session",
+                        task_template="Note it", max_fires_per_hour=2)
+    hub = starts.hub_for(router)
+    real_create = router.orch.create_session
+
+    async def broken(*a, **kw):
+        raise RuntimeError("the run could not be made")
+
+    router.orch.create_session = broken
+    try:
+        for _ in range(3):
+            assert asyncio.run(hub.signal("webhook", fields={"slug": "flaky", "body": ""}))[0]["ok"] is False
+    finally:
+        router.orch.create_session = real_create
+    assert json.loads(p.reflex.get(rule.id).recent_starts_json or "[]") == []
+    for _ in range(2):
+        assert asyncio.run(hub.signal("webhook", fields={"slug": "flaky", "body": ""}))[0]["ok"] is True
+    assert p.reflex.get(rule.id).paused_at is None
+
+
+# --------------------------------------------------------------------------- #
+# Review (05-a): a file rule never starts itself on what its own work wrote.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_file_the_rules_own_run_wrote_in_its_folder_starts_nothing(desk, tmp_path):
+    """"When a file lands in Intake, write a summary of it": the run works in
+    the folder it watches and saves "X summary.md" there. That file must not
+    start the rule again (a chain the hourly limit would never stop: one hop
+    every two scans). A file the user drops meanwhile still starts it, and a
+    file the user drops with another's name but other bytes is the user's.
+
+    MUTATION (each red): skip ``own_output`` in ``file_rule_fire`` -> the
+    summary starts a second run; drop the hash check in ``own_output`` -> the
+    user's file under the run's name is taken for the run's."""
+    from iron_jarvis.tools.base import ToolContext
+
+    c, p, router = desk
+    folder = tmp_path / "Intake"
+    folder.mkdir()
+    rule = _file_rule(p, folder, task="Write a summary of {file} next to it")
+    (folder / "letter.pdf").write_bytes(b"%PDF-1.4 letter")
+    _scan(p, router)
+    _scan(p, router)
+    (run,) = [s for s in _sessions(p) if str(s.origin or "").startswith("reflex:")]
+    # The run's own work writes its result in the folder, through the real
+    # tool (its Undo journal records the file and what it left).
+    ctx = ToolContext(workspace=Path(run.workspace_path), session_id=run.id, agent_run_id=run.id,
+                      config=p.config, event_bus=p.event_bus, engine=p.engine)
+    wrote = asyncio.run(p.registry.invoke("write_file", {"path": "letter summary.md", "content": "A letter."},
+                                          ctx, p.permissions, session_allow=["write_file"]))
+    assert wrote.ok, wrote.error
+    assert (folder / "letter summary.md").exists()
+    # The user drops another letter meanwhile.
+    (folder / "second.pdf").write_bytes(b"%PDF-1.4 second")
+    _scan(p, router)
+    _scan(p, router)
+    tasks = _started_on(p)
+    assert len(tasks) == 2 and "second.pdf" in tasks[1], tasks
+    assert not any("letter summary.md" in t for t in tasks), "its own result started it again"
+    _scan(p, router)
+    assert len(_started_on(p)) == 2, "and it is not handed again later"
+    assert p.reflex.get(rule.id).fire_count == 2
+    # The user removes the summary and drops their OWN file under that name:
+    # other bytes, so it is the user's, and it starts the rule.
+    (folder / "letter summary.md").unlink()
+    _scan(p, router)
+    (folder / "letter summary.md").write_text("the user's own notes")
+    _scan(p, router)
+    _scan(p, router)
+    tasks = _started_on(p)
+    assert len(tasks) == 3 and "letter summary.md" in tasks[2], tasks

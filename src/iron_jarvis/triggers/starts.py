@@ -31,6 +31,7 @@ their work at low trust (``reflex/router.OUTSIDE_SOURCES``).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -199,11 +200,28 @@ def watcher_name_for(rule: Any) -> str:
     return f"Rule: {name}"
 
 
+def take_baseline(platform: Any, watcher: Any) -> None:
+    """Review (05-a): a file rule's watcher records what is in its folder
+    NOW — the moment the rule is made, its folder changes or it comes back
+    on Undo — so the files already there are left alone and a file dropped
+    right after (before the watch loop's first scan) starts the rule. Never
+    fires; never raises. BLOCKING (it lists the folder)."""
+    sentinels = getattr(platform, "sentinels", None)
+    if sentinels is None or watcher is None or getattr(watcher, "last_checked_at", None) is not None:
+        return
+    try:
+        sentinels.check_rule(watcher.name)
+    except Exception:  # noqa: BLE001 — the loop's first scan takes it instead
+        log.warning("the folder of rule watcher %s could not be read yet", getattr(watcher, "name", ""),
+                    exc_info=True)
+
+
 def ensure_file_watcher(platform: Any, rule: Any) -> Any:
     """Make (or keep) the ``rule``-mode watcher of a FILE rule: the folder
-    and pattern of ``start_json``. Adding a watcher never scans or fires;
-    its first check is the baseline (files already there are left alone).
-    Returns the watcher, or None for a rule that is not a file rule. Raises
+    and pattern of ``start_json``. Adding a watcher never fires; it records
+    what is in the folder now (:func:`take_baseline`: files already there
+    are left alone, a file dropped after it starts the rule). Returns the
+    watcher, or None for a rule that is not a file rule. Raises
     ``ValueError`` in words for a folder the watcher service refuses (a
     network location, a protected path). BLOCKING."""
     if str(getattr(rule, "source", "") or "") != "file":
@@ -213,6 +231,7 @@ def ensure_file_watcher(platform: Any, rule: Any) -> Any:
         raise ValueError("Folder watching is not available in this Iron Jarvis.")
     existing = watcher_for_rule(platform, rule.id)
     if existing is not None:
+        take_baseline(platform, existing)
         return existing
     start = rule.decoded_start()
     path = str(start.get("path") or "").strip()
@@ -221,7 +240,7 @@ def ensure_file_watcher(platform: Any, rule: Any) -> Any:
     name = watcher_name_for(rule)
     if sentinels.get(name) is not None:
         name = f"{name} ({rule.id[-6:]})"
-    return sentinels.add(
+    made = sentinels.add(
         name,
         path=path,
         glob=str(start.get("glob") or "").strip() or None,
@@ -229,6 +248,8 @@ def ensure_file_watcher(platform: Any, rule: Any) -> Any:
         mode="rule",
         rule_id=rule.id,
     )
+    take_baseline(platform, made)
+    return sentinels.get(made.name) or made
 
 
 def watcher_for_rule(platform: Any, rule_id: str) -> Any:
@@ -242,6 +263,28 @@ def watcher_for_rule(platform: Any, rule_id: str) -> Any:
     return None
 
 
+def rule_owns_words(platform: Any, watcher: Any) -> str:
+    """Review (05-a): "" for a watcher the user manages on Watchers; for the
+    watcher a file rule keeps of its folder (while that rule exists), the
+    refusal in words — it is changed and removed WITH its rule, never on its
+    own (a lone change would leave the rule watching nothing, and its Undo
+    would bring it back as a plain suggestion watcher). BLOCKING."""
+    if watcher is None or getattr(watcher, "mode", "") != "rule":
+        return ""
+    rid = str(getattr(watcher, "rule_id", "") or "")
+    try:
+        reflex = getattr(platform, "reflex", None)
+        rule = reflex.get(rid) if reflex is not None and rid else None
+    except Exception:  # noqa: BLE001 — unreadable: refuse, the rule may be there
+        rule = None
+        return (f"The watcher “{watcher.name}” belongs to a rule: it is changed or removed with that "
+                "rule, on the Rules page.")
+    if rule is None:
+        return ""  # its rule is gone: nothing depends on it
+    return (f"The watcher “{watcher.name}” belongs to the rule “{rule.name}”: it is changed or removed "
+            "with that rule, on the Rules page.")
+
+
 def remove_file_watcher(platform: Any, rule_id: str) -> int:
     """Remove every watcher that starts ``rule_id`` (the rule is gone).
     BLOCKING; never raises."""
@@ -249,6 +292,91 @@ def remove_file_watcher(platform: Any, rule_id: str) -> int:
     if sentinels is None:
         return 0
     return sentinels.remove_for_rule(rule_id)
+
+
+#: How far back a rule's own runs are read to tell the files they wrote.
+OWN_RUNS_DAYS = 2
+#: At most this many of a rule's recent runs are read for it.
+OWN_RUNS_MAX = 200
+
+
+def _norm(path: str) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(str(path or "")))
+    except (TypeError, ValueError):
+        return ""
+
+
+def own_output(engine: Any, rule: Any, paths: list[str]) -> set[str]:
+    """Review (05-a): which of ``paths`` (new files in a file rule's folder)
+    were written by the rule's OWN runs — a summary its work saved next to
+    the file it read must never start the rule again, or the rule would keep
+    starting itself (at the watcher's pace, under its hourly limit, never
+    pausing). Read from the Undo journal of the rule's recent runs (each
+    file a run's tools wrote, with the hash of what they left): a file counts
+    only when its path AND its bytes are what the run wrote, so a file the
+    user drops is never taken for one. Returns the normalized paths. Never
+    raises (``set()``). BLOCKING."""
+    rid = str(getattr(rule, "id", "") or "")
+    if engine is None or not rid or not paths:
+        return set()
+    wanted = {_norm(p): p for p in paths if p}
+    try:
+        from datetime import timedelta
+
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.ids import utcnow
+        from ..core.models import Session, UndoJournal
+        from ..tools import undo as _undo
+
+        since = utcnow() - timedelta(days=OWN_RUNS_DAYS)
+        origin = f"reflex:{getattr(rule, 'name', '')}"
+        with session_scope(engine) as db:
+            rows = db.exec(
+                select(Session.id, Session.workspace_path, Session.origin, Session.options_json)
+                .where(Session.origin.like("reflex:%"))  # type: ignore[union-attr]
+                .where(Session.created_at >= since)
+                .order_by(Session.created_at.desc())  # type: ignore[attr-defined]
+                .limit(OWN_RUNS_MAX)
+            ).all()
+            runs: dict[str, str] = {}
+            for sid, workspace, run_origin, options in rows:
+                try:
+                    opts = json.loads(options or "{}")
+                except (TypeError, ValueError):
+                    opts = {}
+                if (isinstance(opts, dict) and opts.get("rule_id") == rid) or run_origin == origin:
+                    runs[sid] = str(workspace or "")
+            if not runs:
+                return set()
+            entries = db.exec(select(UndoJournal).where(UndoJournal.session_id.in_(list(runs)))).all()  # type: ignore[attr-defined]
+            written: list[tuple[str, str, Any]] = []  # (normalized path, mode, post hash)
+            for j in entries:
+                meta = _undo.read_envelope({"pre_inline": j.pre_inline})
+                base = runs.get(j.session_id, "")
+                if j.kind == _undo.PATCH_UNDO_KIND:
+                    items = [(e.get("path"), "raw", e.get("post_sha256")) for e in _undo.patch_entries(meta)]
+                else:
+                    items = [(meta.get("path"), meta.get("mode") or "raw", getattr(j, "post_sha256", None))]
+                for rel, mode, post in items:
+                    if not rel:
+                        continue
+                    full = Path(str(rel))
+                    if not full.is_absolute() and base:
+                        full = Path(base) / full
+                    written.append((_norm(str(full)), str(mode), post))
+        out: set[str] = set()
+        for key, mode, post in written:
+            if key not in wanted or key in out:
+                continue
+            if post is None or _undo.sha256_target(wanted[key], mode) == post:
+                out.add(key)
+        return out
+    except Exception:  # noqa: BLE001 — unreadable: every file is the user's
+        log.warning("the files rule %s wrote could not be read", rid, exc_info=True)
+        return set()
 
 
 def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
@@ -266,6 +394,8 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
             return [False] * len(items)
         rule_id = str(getattr(watcher, "rule_id", "") or "")
         per_file = True
+        rule = None
+        store = None
         try:
             store = getattr(getattr(hub, "router", None), "store", None)
             rule = store.get(rule_id) if store is not None and rule_id else None
@@ -275,10 +405,22 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
             per_file = True
         from ..reflex.router import file_context
 
-        groups = [[it] for it in items] if per_file else [list(items)]
-        out: list[bool] = []
+        # Review (05-a): a file the rule's own work wrote is decided (seen)
+        # and starts nothing — the rule never starts itself on its results.
+        own = own_output(getattr(store, "engine", None), rule,
+                         [str(it.get("path") or "") for it in items]) if rule is not None else set()
+        answers: dict[int, bool] = {}
+        todo: list[tuple[int, dict]] = []
+        for i, it in enumerate(items):
+            if own and _norm(str(it.get("path") or "")) in own:
+                answers[i] = True
+                log.info("rule %s: %s was written by its own work, so it starts nothing",
+                         rule_id, Path(str(it.get("path") or "")).name)
+            else:
+                todo.append((i, it))
+        groups = [[x] for x in todo] if per_file else ([todo] if todo else [])
         for group in groups:
-            ctx = file_context([str(it.get("path") or "") for it in group], rule_id=rule_id)
+            ctx = file_context([str(it.get("path") or "") for _i, it in group], rule_id=rule_id)
             try:
                 fut = asyncio.run_coroutine_threadsafe(hub.signal("file", ctx), loop)
                 fired = fut.result(timeout=FILE_FIRE_TIMEOUT_S)
@@ -286,8 +428,9 @@ def file_rule_fire(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
             except Exception:  # noqa: BLE001 — not reached: the files wait
                 log.warning("a file rule could not be started", exc_info=True)
                 decided = False
-            out.extend([decided] * len(group))
-        return out
+            for i, _it in group:
+                answers[i] = decided
+        return [answers.get(i, False) for i in range(len(items))]
 
     return _fire
 
@@ -417,15 +560,16 @@ def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
     limit = int(getattr(rule, "max_fires_per_hour", 0) or 12)
     limits = f"Starts at most {limit} times an hour, then pauses and tells you. Anything risky asks you first."
     if careful is None:
-        from ..reflex.router import OUTSIDE_SOURCES
+        from ..reflex.router import OUTSIDE_SOURCES, watches_downloads
 
-        careful = source in OUTSIDE_SOURCES
+        careful = source in OUTSIDE_SOURCES or watches_downloads(rule)
     if careful:
-        limits += (
-            " It starts carefully: the file came from a website."
-            if source == "download"
-            else " It starts carefully, because what starts it comes from outside this PC."
-        )
+        if source == "download":
+            limits += " It starts carefully: the file came from a website."
+        elif source == "file":
+            limits += " It starts carefully: files in a Downloads folder come from websites."
+        else:
+            limits += " It starts carefully, because what starts it comes from outside this PC."
     return {"when_words": when, "does_words": does, "where_words": where, "limits_words": limits}
 
 
@@ -437,10 +581,10 @@ def describe_for(platform: Any, rule: Any) -> dict[str, str]:
         tick = int(getattr(cfg, "sentinels_tick_seconds", 300) or 300)
     except (TypeError, ValueError):
         tick = 300
-    from ..reflex.router import OUTSIDE_SOURCES
+    from ..reflex.router import OUTSIDE_SOURCES, watches_downloads
 
     source = str(getattr(rule, "source", "") or "")
     full = str(getattr(cfg, "comm_trust", "low") or "low").strip().lower() == "full"
-    careful = source in OUTSIDE_SOURCES and not full
+    careful = (source in OUTSIDE_SOURCES or watches_downloads(rule)) and not full
     watching = os.environ.get("IRONJARVIS_SENTINELS", "on").strip().lower() not in {"0", "false", "no", "off"}
     return describe(rule, tick_seconds=tick, careful=careful, watching=watching)

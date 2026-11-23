@@ -123,7 +123,8 @@ def test_a_standing_request_about_a_folder_still_is(d, text):
     """MUTATION (red): drop ``_A_REQUEST_FOLLOWS`` -> "Every new PDF I save
     to my Desktop should be renamed" loses it."""
     assert W.files_arrive_in_folder(text), text
-    assert "sentinel_add" in _offered(d, text), text
+    # Leap 05-a (moved on purpose): a RULE with a file start does the work.
+    assert "reflex_create" in _offered(d, text), text
 
 
 # --------------------------------------------------------------------------- #

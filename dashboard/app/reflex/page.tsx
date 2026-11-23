@@ -790,6 +790,13 @@ export default function ReflexPage() {
                     : "The folder it watches could not be read."}
                 </span>
               )}
+              {/* Review (05-a): a file rule whose folder is not watched says
+                  so (its watcher is missing: nothing will start it). */}
+              {r.source === "file" && r.watcher === null && (
+                <span data-testid={`reflex-watcher-missing-${r.id}`} className="text-tone-warn">
+                  Its folder is not being watched, so no file can start it. Save the rule again to watch it.
+                </span>
+              )}
             </div>
           </div>
           {/* Leap 06-a: the row's presses wrap at 390 px (never pan). */}

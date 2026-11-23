@@ -1043,15 +1043,22 @@ NOT_OFFERED: tuple[NotOffered, ...] = (
         # sentinels/service._propose → motivation/engine.add_backlog (never
         # spawns a session); the Sentinels page: "Each suggestion waits in
         # Autonomy → Suggestions for your approval" (v1.506.0, north-star 8.4:
-        # the page's list was called Proposals).
+        # the page's list was called Proposals). Leap 05-a: a RULE with a file
+        # or download start does the work by itself (reflex/models
+        # REFLEX_SOURCES; its own watcher is a rule-mode one, which the watch
+        # loop checks even while "Folder watchers" is off: daemon/app.py
+        # _arm_sentinels; the hourly limit: reflex/store.start_gate).
         "watcher_suggests",
-        "A folder watcher (sentinel_add, when it is offered in this reply) only notices new or changed files: "
-        "each time, it leaves one suggestion, carrying the task it was given, in the Suggestions list on the "
-        "Autonomy page (it also waits on the Improvements page), and nothing runs until the user approves it. "
-        "Watchers are off until the setting "
-        "\"Folder watchers\" is turned on. So Iron Jarvis cannot file new files by itself the "
-        "moment they arrive: the filing runs when the user approves a suggestion, or right now in this chat. "
-        "Say so plainly.",
+        "To have new files handled by themselves, make ONE rule with reflex_create (when it is offered in this "
+        "reply): source file, with the folder's full location as path and a pattern such as *.pdf as glob, "
+        "for a new file landing in a folder on this PC; source download for a download finishing in Your "
+        "browser (the browser paired with Iron Jarvis), with match_site for one site. The user approves it on "
+        "its card; from then on each new file starts the work by itself, at most 12 times an hour, and the "
+        "rule watches its folder itself even while the setting \"Folder watchers\" is off. A folder watcher "
+        "(sentinel_add, when it is offered in this reply) is different: it only notices new or changed files "
+        "and each time leaves one suggestion, carrying the task it was given, in the Suggestions list on the "
+        "Autonomy page (it also waits on the Improvements page), and nothing runs until the user approves it; "
+        "such watchers are off until \"Folder watchers\" is turned on. Say so plainly.",
     ),
     NotOffered(
         # agents/allowance reads DynamicAgentRecord (agents the user made);
@@ -1102,7 +1109,7 @@ _NOT_OFFERED_RULES: dict[str, Callable[[str], bool]] = {
     "another_computer": _any(_ELSEWHERE_RULES),
     "full_access_default": _full_default,
     "jarvis_backup": W.jarvis_backup,
-    "watcher_suggests": W.watch_and_act,
+    "watcher_suggests": lambda t: W.watch_and_act(t) or W.download_finishes(t),
     "builtin_agent_limit": W.builtin_agent_limit,
     "voice_press": W.asks_for_voice,
     "internet_calls_in": W.internet_calls_in,

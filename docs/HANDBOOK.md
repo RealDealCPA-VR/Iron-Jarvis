@@ -2062,22 +2062,29 @@ message or a webhook. Searching "automation" finds the Rules page.
 
 **A new file in a folder.** The folder is watched by the watcher you know
 from **Watchers** (its row there says **Starts the rule** and its name;
-change or remove it on Rules, and it goes with the rule). It looks every few
-minutes (the Watchers pace, 5 minutes unless you changed it). Files already
-in the folder when the rule is made are left alone. A file counts once it has
-stopped changing between two looks, so a big copy or a synced file that is
-still arriving never starts it half-written; each file starts it once, also
-after a restart, and at most 20 files start it per look (the rest go on the
-next look). Only new files count: a file the rule's own work changes does
-not start it again. The folder is watched even while suggestion watchers are
-off, because the rule is your switch; while the rule is off, new files are
-left alone. A folder on a network location cannot be watched.
+change or remove it on Rules, and it goes with the rule: Watchers and chat
+will not change it on its own). It looks every few minutes (the Watchers
+pace, 5 minutes unless you changed it). Files already in the folder when the
+rule is made are left alone; a file you drop right after starts it. A file
+counts once it has stopped changing between two looks, so a big copy or a
+synced file that is still arriving never starts it half-written; each file
+starts it once, also after a restart, and at most 20 files start it per look
+(the rest go on the next look). Only new files count: a file the rule's own
+work changes does not start it again, and neither does a file its own work
+saves in that folder (a summary next to the letter it read). A file that a
+program the work runs saves there is not told apart, so for work that writes
+many files, give the rule another folder to work in. The folder is watched
+even while suggestion watchers are off, because the rule is your switch
+(Watchers says so); while the rule is off, and while Emergency stop is on,
+new files are left alone. A folder on a network location cannot be watched.
 
 **A finished download.** A download that Your browser reports with a
 location on this PC starts the download rules that hear it. The work starts
 in the **careful mode** used for messages from outside, because the file came
-from a website. A file's name, its location and the site are given to the
-agent as data to work on, never as instructions, whoever named the file.
+from a website. A rule that watches a folder named Downloads starts carefully
+too, for the same reason (its card says so). A file's name, its location and
+the site are given to the agent as data to work on, never as instructions,
+whoever named the file.
 
 **When a rule starts too often.** A rule that starts 12 times in one hour
 (you can change the number) **pauses itself**. The bell says so once a day at
@@ -2085,8 +2092,12 @@ most ("Your rule Sort intake paused itself"), and its row opens the rule,
 where the card offers **Resume** or **Keep it paused**. While it is paused it
 starts nothing; a folder rule's new files wait and go once you resume it.
 **Keep it paused** turns the rule off until you turn it on again (files that
-land while it is off are left alone). Run now, on the row's **…** menu, is
-never held and never counted.
+land while it is off are left alone). Saving a change to a paused rule keeps
+it paused. Run now, on the row's **…** menu, is never held and never counted.
+Signals that arrive together (a burst of webhooks, several downloads at once)
+are counted as they start, so the limit holds for them too. In chat, ask
+"why did my Intake rule stop?": Jarvis reads the rule's own row and says
+whether it is off or paused itself.
 
 **Good to know.**
 

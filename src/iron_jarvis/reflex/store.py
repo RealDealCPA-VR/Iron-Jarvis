@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -28,6 +29,13 @@ log = get_logger("reflex.store")
 #: are revoked). Keyed weakly by the engine (the ``WorkflowStore.on_removed``
 #: pattern): a ``ReflexStore`` is made wherever one is needed.
 _ON_REMOVED: "weakref.WeakKeyDictionary[Engine, Callable[[str], None]]" = weakref.WeakKeyDictionary()
+
+#: Leap 05-a (review): a rule's counters (the hourly count, the fire count)
+#: are read and written in ONE step for every store in this process, so
+#: starts that arrive together (each on its own worker thread) cannot all
+#: read "11 so far" and all go, nor lose each other's count. Held only for
+#: one small row read and write; never taken twice.
+_GATE_LOCK = threading.Lock()
 
 
 def on_removed(engine: Engine, callback: "Callable[[str], None]") -> None:
@@ -210,15 +218,22 @@ class ReflexStore:
         return row
 
     # -- the hourly limit (leap 05-a, D-05.3) ------------------------------
-    def start_gate(self, rule_id: str, *, now: datetime | None = None) -> dict[str, Any]:
+    def start_gate(
+        self, rule_id: str, *, now: datetime | None = None, reserve: bool = False
+    ) -> dict[str, Any]:
         """May the rule start now? ``{"ok": True}``, or ``{"ok": False,
         "paused": True, "tripped": bool, "words": ...}`` when it is paused:
         ``tripped`` when THIS signal is the one that found it at its hourly
         limit (the row is paused now, ``paused_at``/``paused_reason``). An
         unknown id (the manual ``start`` path's unpersisted rule) may start.
-        BLOCKING."""
+
+        ``reserve`` (review): an ``ok`` answer also COUNTS the start in the
+        same locked read-and-write, and carries its ``slot`` — so signals
+        that arrive together (a burst of webhooks, several downloads) can
+        never all pass the check before any of them is counted. A start that
+        then fails gives its slot back (:meth:`release_start`). BLOCKING."""
         when = _aware(now) or utcnow()
-        with session_scope(self.engine) as db:
+        with _GATE_LOCK, session_scope(self.engine) as db:
             row = db.get(ReflexRule, rule_id)
             if row is None:
                 return {"ok": True}
@@ -226,19 +241,46 @@ class ReflexStore:
             if row.paused_at is not None:
                 return {"ok": False, "paused": True, "tripped": False,
                         "words": row.paused_reason or pause_words(limit)}
-            if len(_recent(row.recent_starts_json, when)) < limit:
-                return {"ok": True}
+            kept = _recent(row.recent_starts_json, when)
+            if len(kept) < limit:
+                if not reserve:
+                    return {"ok": True}
+                kept.append(when)
+                row.recent_starts_json = json.dumps([k.isoformat() for k in kept[-200:]])
+                db.add(row)
+                db.commit()
+                return {"ok": True, "slot": when.isoformat()}
             row.paused_at = when
             row.paused_reason = pause_words(limit)
             db.add(row)
             db.commit()
             return {"ok": False, "paused": True, "tripped": True, "words": row.paused_reason}
 
+    def release_start(self, rule_id: str, slot: str) -> None:
+        """Give back a start :meth:`start_gate` reserved (``slot``) that did
+        not happen: a failed start is not counted. BLOCKING."""
+        if not slot:
+            return
+        with _GATE_LOCK, session_scope(self.engine) as db:
+            row = db.get(ReflexRule, rule_id)
+            if row is None:
+                return
+            try:
+                items = json.loads(row.recent_starts_json or "[]")
+            except (TypeError, ValueError):
+                return
+            if not isinstance(items, list) or slot not in items:
+                return
+            items.remove(slot)
+            row.recent_starts_json = json.dumps(items)
+            db.add(row)
+            db.commit()
+
     def note_start(self, rule_id: str, *, now: datetime | None = None) -> None:
         """Count one START toward the hourly limit (a failed start is not
         one). BLOCKING."""
         when = _aware(now) or utcnow()
-        with session_scope(self.engine) as db:
+        with _GATE_LOCK, session_scope(self.engine) as db:
             row = db.get(ReflexRule, rule_id)
             if row is None:
                 return
@@ -299,7 +341,7 @@ class ReflexStore:
         return row
 
     def mark_fired(self, rule_id: str) -> None:
-        with session_scope(self.engine) as db:
+        with _GATE_LOCK, session_scope(self.engine) as db:
             row = db.get(ReflexRule, rule_id)
             if row is None:
                 return
@@ -317,8 +359,10 @@ class ReflexStore:
         as :meth:`mark_fired`) and clears ``last_error``; a failed start writes
         the reason to ``last_error`` and touches nothing else — a fire that did
         not happen is not counted as one. Unknown ids (the manual ``start``
-        path's unpersisted rule) are a no-op."""
-        with session_scope(self.engine) as db:
+        path's unpersisted rule) are a no-op. Leap 05-a (review): under the
+        rule's counter lock, so starts that finish together are each
+        counted."""
+        with _GATE_LOCK, session_scope(self.engine) as db:
             row = db.get(ReflexRule, rule_id)
             if row is None:
                 return

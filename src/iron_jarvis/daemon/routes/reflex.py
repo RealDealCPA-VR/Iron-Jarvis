@@ -170,10 +170,12 @@ def register(app: FastAPI, d) -> None:
         switch. A remote-agent action drops the grounding (a remote has no
         grounding seam), as the page's add does. Leap 05-a: a file rule's
         folder and a download rule's site are merged and checked the same
-        way; turning a rule ON resumes one that paused itself."""
+        way; turning a rule ON (from off) starts it fresh, and an edit never
+        resumes a rule that paused itself (only Resume does)."""
         rule = d.platform.reflex.get(rule_id)
         if rule is None:
             raise HTTPException(status_code=404, detail="no such reflex rule")
+        was_on = bool(rule.enabled)
         edits: dict[str, Any] = {k: getattr(body, k) for k in _EDIT_FIELDS if getattr(body, k) is not None}
         merged = {k: getattr(rule, k) for k in _EDIT_FIELDS}
         merged.update(edits)
@@ -210,7 +212,11 @@ def register(app: FastAPI, d) -> None:
             problem = _records.sync_rule_watcher(d.platform, rule_id)
             if problem:
                 raise HTTPException(status_code=400, detail=problem)
-        if body.enabled is True:
+        if body.enabled is True and not was_on:
+            # Turning a rule ON (it was off: switched off, or Keep it paused)
+            # starts it fresh. Review: an edit of a rule that is already on
+            # carries enabled too (the page's form sends every field), and it
+            # never resumes a pause by itself: only Resume does.
             rule = d.platform.reflex.resume(rule_id) or rule
         elif body.enabled is False:
             rule = d.platform.reflex.set_enabled(rule_id, False) or rule

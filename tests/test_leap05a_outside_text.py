@@ -8,8 +8,9 @@ sends), so a rule that a file or a download starts puts the name in FENCED:
   the rule's template stays the only instruction;
 * a name that tries to close the fence early cannot;
 * ``{folder}`` (the folder the user chose) is one line;
-* work a download starts begins in the careful mode (D-05.2); work a file in
-  the user's own folder starts does not.
+* work a download starts begins in the careful mode (D-05.2), and so does
+  work a file in a Downloads folder starts; work a file in the user's own
+  folder starts does not.
 """
 
 from __future__ import annotations
@@ -95,3 +96,28 @@ def test_a_file_in_the_users_own_folder_starts_at_full_trust():
     rule = ReflexRule(name="Sort", source="file", action="session", task_template="Sort {file}")
     call = _run(rule, file_context([r"C:\Intake\a.pdf"], rule_id="r1"), config=SimpleNamespace(comm_trust="low"))
     assert "trust" not in call
+
+
+def test_a_file_rule_on_a_downloads_folder_starts_carefully_too():
+    """Review (D-05.2's reason): what lands in a Downloads folder came from
+    websites, so a FILE rule that watches one starts its work in the careful
+    mode, and its card says so; the owner's "full" choice keeps full trust.
+
+    MUTATION (red): drop ``watches_downloads`` from
+    ``ReflexRouter._signal_trust`` -> it starts at full trust."""
+    import json
+
+    from iron_jarvis.triggers.starts import describe
+
+    rule = ReflexRule(name="Grab", source="file", action="session", task_template="File {file}",
+                      start_json=json.dumps({"path": r"C:\Users\me\Downloads" + "\\"}))
+    ctx = file_context([r"C:\Users\me\Downloads\a.pdf"], rule_id="r1")
+    call = _run(rule, ctx, config=SimpleNamespace(comm_trust="low"))
+    assert call.get("trust") == "low" and "a file in a Downloads folder" in call.get("trust_reason", "")
+    assert describe(rule)["limits_words"].endswith("It starts carefully: files in a Downloads folder come from websites.")
+    assert "trust" not in _run(rule, ctx, config=SimpleNamespace(comm_trust="full"))
+    # Any other folder of the user's own: full trust, as before.
+    own = ReflexRule(name="Sort", source="file", action="session", task_template="Sort {file}",
+                     start_json=json.dumps({"path": r"C:\Users\me\Downloads Archive"}))
+    assert "trust" not in _run(own, ctx, config=SimpleNamespace(comm_trust="low"))
+    assert "carefully" not in describe(own)["limits_words"]

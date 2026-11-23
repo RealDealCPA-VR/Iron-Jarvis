@@ -271,7 +271,9 @@ SETUP_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     ("Add the QuickBooks MCP server I use in Claude Desktop.", (), (AP, S)),
     ("Stop asking me before you run tests.", SET, (S,)),
     ("Make the app start with Windows and keep my PC awake while you work.", SET, (S,)),
-    ("Watch my Downloads folder and file new PDFs into the right client folder.", ("sentinel_add",) + SET, (SE, S)),
+    # Leap 05-a: filing what lands is a rule's job too (reflex_create).
+    ("Watch my Downloads folder and file new PDFs into the right client folder.",
+     ("sentinel_add", "reflex_create") + SET, (SE, RE, S)),
     ("Create a workflow that drafts a reply to every new email from a client.",
      ("reflex_create", "channel_connect"), (WF, RE, CH)),
     ("Set a monthly spending limit for my builder agent.", (), (S,)),
@@ -594,18 +596,25 @@ WAVE_A_NEGATIVES: list[str] = [
 # wrong thing or nothing; each is red on v1.454.0.
 # ---------------------------------------------------------------------------
 SENT = ("sentinel_add",)
+RULE = ("reflex_create",)
 WAVE_G_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
     # 19: a plan used "with Jarvis" / "with you" / "in this app".
     ("I want to use my Claude Pro subscription with Jarvis.", SET, (S,)),
     ("I want to use my ChatGPT subscription with Jarvis.", SET, (S,)),
     ("I'd like to use my Claude Max subscription in this app.", SET, (S,)),
     ("Use my Claude Pro subscription with Jarvis from now on.", SET, (S,)),
-    # 20: files arriving in a FOLDER is a watcher (never a rule, which has no
-    # folder source) — and the "Folder watchers" setting may need turning on.
-    ("Whenever a new PDF shows up in my Downloads folder, rename it by client name.", SENT + SET, (SE, S)),
-    (r"When a new invoice lands in C:\Scans, file it under the client's folder.", SENT + SET, (SE, S)),
-    ("Every time a PDF is saved to my Desktop, move it to Documents.", SENT + SET, (SE, S)),
-    ("Every new scan in my Scans folder should be renamed by date.", SENT + SET, (SE, S)),
+    # 20: files arriving in a FOLDER — leap 05-a (moved on purpose): a RULE
+    # with a file start does the work by itself (reflex/models sources: file,
+    # download); a plain watcher only suggests and is offered when one is
+    # named. The settings stay offered ("Folder watchers").
+    ("Whenever a new PDF shows up in my Downloads folder, rename it by client name.", RULE + SET, (RE, S)),
+    (r"When a new invoice lands in C:\Scans, file it under the client's folder.", RULE + SET, (RE, S)),
+    ("Every time a PDF is saved to my Desktop, move it to Documents.", RULE + SET, (RE, S)),
+    ("Every new scan in my Scans folder should be renamed by date.", RULE + SET, (RE, S)),
+    # Leap 05-a: the phase's own sentence, and a finished download.
+    ("When a PDF lands in my Intake folder, read it and file it by sender.", RULE + SET, (RE, S)),
+    ("When a download finishes from irs.gov, file it in my Tax folder.", RULE, (RE,)),
+    ("Whenever I download a PDF from my bank, rename it by month.", RULE, (RE,)),
     # 22: the folders Jarvis may read.
     (r"Only let Jarvis look at C:\Clients.", SET, (S,)),
     (r"Only let Jarvis read C:\Clients", SET, (S,)),
@@ -758,8 +767,8 @@ def test_wave_a_model_words_and_everyday_nouns_arm_the_right_tool(d):
 def test_wave_g_requests_arm_the_right_tool_and_its_near_misses_arm_nothing(d):
     """v1.455.0 (readiness Wave G, items 19-23). MUTATION (each red): drop the
     "with Jarvis" tail from setup_words.ANSWERS_TAIL -> the plan rows lose SET;
-    drop the folder-arrival branch in records._record_tools_named -> the
-    watcher rows lose sentinel_add and gain reflex_create; drop the
+    drop ``file_rule`` from records._record_tools_named's rule arming (leap
+    05-a) -> the folder and download rows lose reflex_create; drop the
     readable-folders shapes in trigger._EXTRA_REFERENCES -> those rows lose
     SET; drop MAIL_FROM_RULE -> the IRS rows lose reflex_create; drop
     _persons_schedule or the calendar-time words in _NOT_OUR_SCHEDULE -> the
@@ -778,11 +787,20 @@ def test_wave_g_requests_arm_the_right_tool_and_its_near_misses_arm_nothing(d):
     for text, offer in WAVE_G_SCHEDULES:
         armed, ask = lanes(d, text)
         assert set(offer) <= set(armed) | set(ask), (text, armed, ask)
-    # Item 20: a folder arrival is never a rule — reflex_create cannot watch
-    # a folder (reflex/models.py sources: webhook, comm, email, calendar,
-    # slack); a rule on new EMAIL keeps it.
+    # Item 20, leap 05-a (moved on purpose): a folder arrival is a RULE with a
+    # file start (reflex/models.py sources: … file, download), never only a
+    # suggestion watcher; a watcher named keeps sentinel_add; a rule on new
+    # EMAIL keeps it; one download now ("when THE download finishes, open
+    # it"), a question and a habit are no rule.
     for text in ("Whenever a new PDF shows up in my Downloads folder, rename it by client name.",
                  "Every new scan in my Scans folder should be renamed by date."):
+        armed, ask = lanes(d, text)
+        assert "reflex_create" in set(armed) | set(ask), text
+        assert "sentinel_add" not in set(armed) | set(ask), text
+    armed, ask = lanes(d, "Watch my Downloads folder and file new PDFs into the right client folder.")
+    assert {"reflex_create", "sentinel_add"} <= set(armed) | set(ask)
+    for text in ("When the download finishes, open it.", "Did my download finish?",
+                 "Whenever I download something it goes to my Downloads folder."):
         armed, ask = lanes(d, text)
         assert "reflex_create" not in set(armed) | set(ask), text
     _, ask = lanes(d, "Whenever a new email comes in, start an intake session.")

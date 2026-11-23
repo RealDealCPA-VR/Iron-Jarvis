@@ -784,12 +784,17 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
         out += ["webhook_update", "webhook_delete"]
         if _CREATE_WEBHOOK.search(t):
             out.append("webhook_add")
-    # v1.455.0 (readiness Wave G, item 20): files arriving in a FOLDER
-    # ("Whenever a new PDF shows up in my Downloads folder, rename it") is a
-    # folder watcher's job — and never a rule's: a rule hears webhooks,
-    # email, messages, the calendar and Slack, and has no folder source.
-    folder_arrival = W.files_arrive_in_folder(t)
-    sentinel_new = bool(_CREATE_SENTINEL.search(t)) or folder_arrival
+    # v1.455.0 (readiness Wave G, item 20), leap 05-a: files arriving in a
+    # FOLDER ("Whenever a new PDF shows up in my Downloads folder, rename
+    # it"), a folder watched with something done to what lands ("Watch my
+    # Downloads folder and file new PDFs…") or a DOWNLOAD finishing ("When a
+    # download finishes from irs.gov, file it…") starts work through ONE rule
+    # (reflex_create with source file / download: the rule makes its own
+    # watcher of the folder). A plain watcher only SUGGESTS: sentinel_add is
+    # offered when a watcher is named or a folder is to be watched, and the
+    # watcher_suggests line (daemon/page_doors) says which does what.
+    file_rule = W.files_arrive_in_folder(t) or W.watch_and_act(t) or W.download_finishes(t)
+    sentinel_new = bool(_CREATE_SENTINEL.search(t))
     if _SENTINEL_WORDS.search(t) or sentinel_new:
         out += ["sentinel_update", "sentinel_delete"]
         if sentinel_new:
@@ -803,11 +808,10 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
     # v1.442.0 (Wave 7): "a workflow that drafts a reply to EVERY NEW EMAIL
     # from a client" — a standing request about every new arrival is a rule's
     # trigger (a workflow alone never starts by itself).
-    # The rule words are read with the folder arrivals blanked (item 20), and
-    # a rule on mail FROM someone with an order after it ("When I get an email
-    # from the IRS, forward it to my phone", item 23) is a rule too.
-    t_rules = W.without_folder_arrivals(t) if folder_arrival else t
-    if _REFLEX_WORDS.search(t_rules) or W.every_new_arrival(t_rules) or W.mail_from_rule(t):
+    # A rule on mail FROM someone with an order after it ("When I get an email
+    # from the IRS, forward it to my phone", item 23) is a rule too, and so
+    # (leap 05-a) is a file landing in a folder or a download finishing.
+    if _REFLEX_WORDS.search(t) or W.every_new_arrival(t) or W.mail_from_rule(t) or file_rule:
         out += ["reflex_create", "reflex_update", "reflex_delete"]
     if _GRANT_WORDS.search(t):
         out += ["grant_revoke"]
@@ -1518,8 +1522,12 @@ def _inbound_handler(platform: Any, slug: str) -> Any:
         fired: list[Any] = []
         router = getattr(platform, "reflex_router", None)
         if router is not None:
+            # Leap 05-a (review): through the start hub, the ONE entry every
+            # start goes through (its waiters see it), the same call as before.
+            from ..triggers.starts import hub_for
+
             try:
-                fired = await router.on_webhook(_slug, body)
+                fired = await hub_for(router).signal("webhook", fields={"slug": _slug, "body": body})
             except Exception:  # noqa: BLE001 — never break the ack
                 pass
         from ..reflex.router import summarize_fires
@@ -1651,6 +1659,14 @@ def _describe_webhook(w: dict[str, Any] | None) -> str | None:
 # ------------------------------------------------------------- sentinels
 
 
+def _rule_owns(platform: Any, name: str) -> str:
+    """Leap 05-a (review): the refusal when watcher ``name`` is a file rule's
+    own (``triggers/starts.rule_owns_words``), else "". BLOCKING."""
+    from ..triggers.starts import rule_owns_words
+
+    return rule_owns_words(platform, platform.sentinels.get(name))
+
+
 def snap_sentinel(platform: Any, name: str) -> dict[str, Any] | None:
     rec = platform.sentinels.get(name)
     if rec is None:
@@ -1670,6 +1686,9 @@ def snap_sentinel(platform: Any, name: str) -> dict[str, Any] | None:
         "last_error": rec.last_error,
         # Idea 39 (39-a): where it reports, so an Undo puts it back.
         "chat_thread_id": str(getattr(rec, "chat_thread_id", "") or ""),
+        # Leap 05-a (review): a rule's own watcher comes back as the rule's.
+        "mode": str(getattr(rec, "mode", "") or "suggest"),
+        "rule_id": str(getattr(rec, "rule_id", "") or ""),
     }
 
 
@@ -1704,6 +1723,10 @@ def restore_sentinel(platform: Any, name: str, prior: dict[str, Any] | None) -> 
         row.agent_type = prior.get("agent_type") or "builder"
         row.risk = prior.get("risk") or "low"
         row.enabled = bool(prior.get("enabled", True))
+        if "mode" in prior:
+            # Leap 05-a (review): a rule's own watcher stays the rule's.
+            row.mode = str(prior.get("mode") or "suggest")
+            row.rule_id = str(prior.get("rule_id") or "")
         db.add(row)
         db.commit()
         row_id = row.id
@@ -1852,7 +1875,9 @@ def sync_rule_watcher(platform: Any, rule_id: str) -> str:
         else:
             cfg = have.decoded_config()
             if str(cfg.get("path") or "") != path or str(cfg.get("glob") or "") != glob:
-                platform.sentinels.update(have.name, path=path, glob=glob)
+                # A new folder or pattern starts a new baseline, taken NOW
+                # (review: a file dropped right after the change starts it).
+                _starts.take_baseline(platform, platform.sentinels.update(have.name, path=path, glob=glob))
     except ValueError as exc:
         return str(exc)
     return ""
@@ -1884,6 +1909,9 @@ def snap_reflex(platform: Any, rule_id: str) -> dict[str, Any] | None:
         fire_count=int(r.fire_count or 0),
         last_error=r.last_error,
         last_result=r.last_result,
+        # Leap 05-a (review): read by the card's words, never put back by an
+        # Undo (only Resume or Keep it paused clear a pause).
+        paused_reason=getattr(r, "paused_reason", None) if getattr(r, "paused_at", None) else None,
     )
     return out
 
@@ -1941,6 +1969,10 @@ def restore_reflex(platform: Any, rule_id: str, prior: dict[str, Any] | None) ->
 def _describe_reflex(r: dict[str, Any] | None) -> str | None:
     if r is None:
         return None
+    if r.get("enabled", True) and r.get("paused_reason"):
+        # Leap 05-a (review): a rule that paused itself says so on the card.
+        base = _describe_reflex({**r, "paused_reason": None}) or ""
+        return f"{base} (paused itself)"
     if r.get("source") in ("file", "download"):
         # Leap 05-a: the card's own first line (its When, in words).
         from ..reflex.models import ReflexRule
@@ -3538,6 +3570,9 @@ class SentinelUpdateTool(_RecordTool):
         before = await asyncio.to_thread(snap_sentinel, self.platform, name)
         if before is None:
             return ToolResult(ok=False, error=f"There is no sentinel called {name!r}.")
+        owned = await asyncio.to_thread(_rule_owns, self.platform, name)
+        if owned:
+            return ToolResult(ok=False, error=owned + " Use reflex_update or reflex_delete on that rule.")
         report_here = args.get("report_here")
         if not isinstance(args.get("enabled"), bool) and not isinstance(report_here, bool):
             return ToolResult(ok=False, error="Say `enabled`: true to resume it, false to pause it.")
@@ -3576,6 +3611,9 @@ class SentinelDeleteTool(_RecordTool):
         before = await asyncio.to_thread(snap_sentinel, self.platform, name)
         if before is None:
             return ToolResult(ok=False, error=f"There is no sentinel called {name!r}.")
+        owned = await asyncio.to_thread(_rule_owns, self.platform, name)
+        if owned:
+            return ToolResult(ok=False, error=owned + " Use reflex_delete on that rule.")
         await asyncio.to_thread(self.platform.sentinels.remove, name)
         return ToolResult(
             ok=True,

@@ -8,7 +8,9 @@
  *    rule paused itself — Resume and Keep it paused, each one press;
  *  - the bell's row for a rule that paused itself opens that rule;
  *  - "Always for this rule" is the button's words on a rule's run;
- *  - a watcher that starts a rule says so on Watchers and is changed on Rules;
+ *  - a watcher that starts a rule says so on Watchers and is changed on Rules,
+ *    and the Watchers page never calls a rule's folder "not watched";
+ *  - a file rule whose folder is not watched says so on its row;
  *  - "automation" finds Rules in search.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -257,6 +259,40 @@ describe("the notice, the Always button, the watcher and search", () => {
     expect(link.textContent).toBe(startsRuleWords("Sort intake"));
     expect(link.getAttribute("href")).toBe("/reflex?rule=reflex_1");
     expect(screen.queryByTestId("sentinel-edit-sentinel_1")).toBeNull();
+    // Review: with suggestion watchers off, the page never says "nothing is
+    // being watched" while a rule's folder is checked.
+    const off = screen.getByTestId("watchers-off-rules-on");
+    expect(off.textContent).toContain("The folders your rules watch are still checked every few minutes.");
+    expect(document.body.textContent).not.toContain("nothing is being watched");
+  });
+
+  it("with no rule's watcher, watchers off still says nothing is watched", async () => {
+    api.responses["/sentinels"] = {
+      enabled: false,
+      sentinels: [
+        {
+          id: "sentinel_2", name: "Scans", kind: "file", config: { path: "C:\\Scans" },
+          task: "Sort it", agent_type: "builder", risk: "low", enabled: true, last_checked_at: null,
+          created_at: "2026-11-20T10:00:00Z", mode: "suggest",
+        },
+      ],
+    };
+    api.responses["/agents"] = { agents: [] };
+    api.responses["/agents/definitions*"] = { agents: [] };
+    render(<SentinelsPage />);
+    await screen.findAllByText("Scans");
+    expect(document.body.textContent).toContain("nothing is being watched");
+    expect(screen.queryByTestId("watchers-off-rules-on")).toBeNull();
+  });
+
+  it("a file rule whose folder is not watched says so on its row", async () => {
+    mountRules([ruleRow({ watcher: null })]);
+    const missing = await screen.findByTestId("reflex-watcher-missing-reflex_1");
+    expect(missing.textContent).toContain("Its folder is not being watched, so no file can start it.");
+    cleanup();
+    mountRules([ruleRow()]);
+    await screen.findByTestId("reflex-lines-reflex_1");
+    expect(screen.queryByTestId("reflex-watcher-missing-reflex_1")).toBeNull();
   });
 
   it("automation finds Rules in search", () => {

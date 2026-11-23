@@ -102,6 +102,8 @@ export default function SentinelsPage() {
   const offline = error && error.status === 0;
   const sentinels = data?.sentinels ?? [];
   const featureEnabled = data?.enabled ?? false;
+  // Leap 05-a: a rule's own watcher is checked whatever the switch says.
+  const ruleWatching = sentinels.some((s) => s.mode === "rule" && s.enabled !== false);
 
   // Agent types a fired sentinel can suggest (built-in + dynamic).
   const { data: agentsData } = useApi<AgentsResponse>("/agents");
@@ -354,6 +356,14 @@ export default function SentinelsPage() {
                   <span className="text-zinc-200">
                     Watchers are <span className="text-emerald-300">on</span> — your watched
                     folders are checked every few minutes.
+                  </span>
+                ) : ruleWatching ? (
+                  // Review (05-a): a rule's folder is checked even while
+                  // suggestion watchers are off, so "nothing is being
+                  // watched" would be untrue.
+                  <span className="text-zinc-300" data-testid="watchers-off-rules-on">
+                    Watchers that suggest are <span className="text-amber-300">off</span>. The
+                    folders your rules watch are still checked every few minutes.
                   </span>
                 ) : (
                   <span className="text-zinc-300">

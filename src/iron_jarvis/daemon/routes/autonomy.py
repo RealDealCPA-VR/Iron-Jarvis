@@ -201,6 +201,15 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail=plain_failure("That watcher could not be saved.", exc))
         return d._sentinel_view(rec)
 
+    def _refuse_a_rules_watcher(name: str) -> None:
+        """Leap 05-a (review): a file rule's own watcher is changed and
+        removed with its rule (Rules), never here: 409 in words."""
+        from ...triggers.starts import rule_owns_words
+
+        words = rule_owns_words(d.platform, d.platform.sentinels.get(name))
+        if words:
+            raise HTTPException(status_code=409, detail=words)
+
     @app.patch("/sentinels/{name}")
     def edit_sentinel(name: str, body: SentinelPatch) -> dict[str, Any]:
         """PARTIAL edit (v1.449.0, Wave D item 34): the fields given replace
@@ -208,6 +217,7 @@ def register(app: FastAPI, d) -> None:
         add-time rules first (400 in words) and starts a new baseline. 404
         for an unknown watcher."""
         fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None or k == "glob"}
+        _refuse_a_rules_watcher(name)
         try:
             rec = d.platform.sentinels.update(name, **fields)
         except ValueError as exc:
@@ -222,6 +232,7 @@ def register(app: FastAPI, d) -> None:
         # chat's sentinel_delete is (settings/page_records).
         from ...settings import page_records as _pr
 
+        _refuse_a_rules_watcher(name)
         prior = _pr.snapshot(d.platform, "sentinel", name)
         if not d.platform.sentinels.remove(name):
             raise HTTPException(status_code=404, detail="sentinel not found")

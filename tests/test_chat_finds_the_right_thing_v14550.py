@@ -9,7 +9,8 @@ its fixes added beyond the shared tables (the arming rows live in
 ``tests/test_page_doors_v14360.py``):
 
 * item 19 — a plan used "with Jarvis" reaches the Connections door;
-* item 20 — files arriving in a folder get the true watcher line, never a rule;
+* item 20 — files arriving in a folder get the true watcher line (leap 05-a:
+  it names the rule that does the work, and the rule is offered);
 * item 23 — the email rule's step; the one-press install door (`install`,
   never offered for a program already on this PC); the `model_provider` door
   only for a vendor that is NOT connected; LM Studio and a Slack destination
@@ -72,7 +73,8 @@ def test_a_plan_in_passing_gets_no_door(text):
 
 
 # --------------------------------------------------------------------------- #
-# item 20 — files arriving in a folder: the watcher line, never a rule
+# item 20 — files arriving in a folder: the watcher line (leap 05-a, moved on
+# purpose: it now names the rule that does the work, and the rule is offered)
 # --------------------------------------------------------------------------- #
 ARRIVALS = [
     "Whenever a new PDF shows up in my Downloads folder, rename it by client name.",
@@ -105,17 +107,27 @@ def test_arrivals_elsewhere_are_not_a_folder(text):
     assert "watcher_suggests" not in {n.id for n in P.not_offered(text)}, text
 
 
-def test_the_watcher_line_is_true_about_what_a_rule_cannot_hear():
-    """The line says a watcher only suggests; a rule's sources really are no
-    folder (``reflex/models``), which is why reflex_create is not offered."""
+def test_the_watcher_line_is_true_about_what_a_rule_now_hears():
+    """The line says a watcher only suggests, and (leap 05-a, moved on
+    purpose) that a RULE with a file or a download start does the work by
+    itself: a rule's sources really are a folder and a download now
+    (``reflex/models``), so a folder arrival arms reflex_create.
+
+    MUTATION (red): take ``file_rule`` out of ``_record_tools_named``'s rule
+    arming -> no reflex_create for the arrivals."""
     line = next(n.line for n in P.NOT_OFFERED if n.id == "watcher_suggests")
     # v1.506.0 (north-star 8.4, moved on purpose): the Autonomy page's list
     # is called Suggestions, the one word for the thing.
     assert "sentinel_add" in line and "Suggestions list on the Autonomy page" in line
     assert "Proposals" not in line
-    from iron_jarvis.reflex.models import REFLEX_SOURCES
+    assert "reflex_create" in line and "source file" in line and "source download" in line
+    assert "at most 12 times an hour" in line and 'even while the setting "Folder watchers" is off' in line
+    from iron_jarvis.reflex.models import MAX_FIRES_PER_HOUR, REFLEX_SOURCES
+    from iron_jarvis.settings import records as R
 
-    assert not any(s in ("folder", "file", "files", "sentinel") for s in REFLEX_SOURCES)
+    assert {"file", "download"} <= set(REFLEX_SOURCES) and MAX_FIRES_PER_HOUR == 12
+    for text in ARRIVALS:
+        assert "reflex_create" in R.record_tools_for(text), text
 
 
 # --------------------------------------------------------------------------- #

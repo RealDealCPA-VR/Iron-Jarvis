@@ -328,7 +328,11 @@ def test_the_email_rule_line_is_what_inbound_mail_really_needs():
     inbound = _read("src/iron_jarvis/comm/inbound.py")
     assert "FAIL-CLOSED allowlist. An unauthorized sender spawns NOTHING." in inbound
     i = inbound.index("FAIL-CLOSED allowlist")
-    assert inbound.index("if not ch.is_authorized(msg.sender_id)", i) < inbound.index("reflex_router.on_signal")
+    # Leap 05-a (moved on purpose): the rules are reached through the start
+    # hub (triggers/starts), still only after the allowlist.
+    assert inbound.index("if not ch.is_authorized(msg.sender_id)", i) < inbound.index(
+        "_hub_for(self.reflex_router).signal("
+    )
     assert '"Allowed senders"' in _read("dashboard/components/settings/pages/NotificationsPage.tsx")
     rec = _read("src/iron_jarvis/settings/records.py")
     assert "has no allowlist yet — add who may message it on the Notifications page first" in rec

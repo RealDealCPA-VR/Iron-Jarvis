@@ -583,10 +583,13 @@ ROWS: list[Row] = [
         ],
         lands=_l_start_awake),
     # The settings writers are real neighbours: "Folder watchers (sentinels)"
-    # must be switched on for a watcher to notice anything.
+    # must be switched on for a watcher to notice anything. Leap 05-a (moved
+    # on purpose): the line now names the rule that files new PDFs by itself
+    # (a file start), so the rule's writers are real neighbours too.
     Row(17, "Watch my Downloads folder and file new PDFs into the right client folder.", "honest",
         honest_id="watcher_suggests",
-        may_arm=frozenset({"sentinel_add", "sentinel_update", "sentinel_delete"}) | SETTINGS),
+        may_arm=frozenset({"sentinel_add", "sentinel_update", "sentinel_delete",
+                           "reflex_create", "reflex_update", "reflex_delete"}) | SETTINGS),
     Row(18, "Create a workflow that drafts a reply to every new email from a client.", "done",
         plan=[
             Call("reflex_create", {"name": "Client emails", "source": "email", "match": "",

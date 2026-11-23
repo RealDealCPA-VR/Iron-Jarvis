@@ -195,10 +195,11 @@ _ACTS_ON_ARRIVALS = re.compile(
 
 #: v1.455.0 (readiness Wave G, item 20): FILES arriving in a FOLDER on this
 #: PC — "Whenever a new PDF shows up in my Downloads folder, rename it by
-#: client name", "every new scan in C:\Scans". That is a folder watcher's
-#: job (``sentinel_add``): a rule (``reflex_create``) hears webhooks, email,
-#: messages, the calendar and Slack, never a folder. Never an app's own place
-#: ("…in my Google Drive", "…in QuickBooks"), never a repository.
+#: client name", "every new scan in C:\Scans". Leap 05-a: that is a RULE with
+#: a file start (``reflex_create``, source ``file``: the rule makes its own
+#: watcher of the folder); a plain watcher (``sentinel_add``) only suggests.
+#: Never an app's own place ("…in my Google Drive", "…in QuickBooks"), never
+#: a repository.
 _FILE_THING = (
     r"(?:files?|documents?|docs?|pdfs?|invoices?|receipts?|scans?|images?|photos?|pictures?|screenshots?"
     r"|spreadsheets?|downloads?|attachments?|statements?|reports?|w-?2s?|1099s?|k-?1s?|csvs?)"
@@ -262,6 +263,44 @@ def watch_and_act(text: str) -> bool:
     return any(
         (WATCH_FOLDER.search(s) and _ACTS_ON_ARRIVALS.search(s)) or FILES_ARRIVE_IN_FOLDER.search(s)
         for s in sentences(text)
+    )
+
+
+#: Leap 05-a: a DOWNLOAD finishing, said as a standing request with an order
+#: after it — "When a download finishes from irs.gov, file it in my Tax
+#: folder", "Whenever I download a PDF from my bank, rename it". A download
+#: rule's start (``reflex_create``, source ``download``). Never one download
+#: now ("when THE download finishes, open it", "did my download finish?"),
+#: never the person's habit ("whenever I download something it goes to my
+#: Downloads folder"). Every repeat is bounded (linear).
+#: One character of the same sentence: a dot only inside a word ("irs.gov").
+_IN_SENTENCE = r"(?:[^.!?\n]|\.(?=\w))"
+_IN_CLAUSE = r"(?:[^.!?\n,]|\.(?=\w))"
+_A_REQUEST_AFTER = (
+    r"(?=" + _IN_SENTENCE + r"{0,80}?(?:,\s*(?:(?:please|then|also|just)\s+)?"
+    r"(?:(?:i|we)\s+(?:want|need|would\s+like|['’]d\s+like)\b"
+    r"|(?!(?:i|we|it|they|he|she|that|this|there|you|my|our)\b)[a-z]{2,}\b)"
+    r"|\b(?:should|must|please|needs?\s+to|has\s+to|have\s+to)\b))"
+)
+DOWNLOAD_FINISHES = re.compile(
+    r"(?:\b(?:whenever|every\s+time|each\s+time|any\s*time)\b" + _IN_CLAUSE + r"{0,40}?\bdownload(?:s|ed|ing)?\b"
+    r"|\bwhen\s+(?:(?:a|an|any|each|every)\s+(?:new\s+)?(?:[\w'’-]+\s+){0,3}?"
+    r"(?:download\b" + _IN_CLAUSE + r"{0,30}?\b(?:finish(?:es)?|completes?|is\s+(?:done|finished|complete))\b"
+    r"|(?:is|gets?)\s+downloaded\b)"
+    r"|(?:i|we)\s+download\b))" + _A_REQUEST_AFTER,
+    re.IGNORECASE,
+)
+
+
+#: Sentences whose dots inside a word are kept ("irs.gov" is a site, not the
+#: end of a sentence). Linear: one pass, each piece bounded.
+_SENTENCE_KEEPING_SITES = re.compile(_IN_SENTENCE + r"{1,600}")
+
+
+def download_finishes(text: str) -> bool:
+    """A finished download, said as a standing request (leap 05-a)."""
+    return any(
+        DOWNLOAD_FINISHES.search(s) is not None for s in _SENTENCE_KEEPING_SITES.findall(str(text or ""))
     )
 
 

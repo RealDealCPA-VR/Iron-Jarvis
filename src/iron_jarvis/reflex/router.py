@@ -83,6 +83,22 @@ OUTSIDE_SOURCES: dict[str, str] = {
     "download": "a downloaded file",
 }
 
+#: Leap 05-a (review): a FILE rule that watches a Downloads folder starts
+#: carefully too (D-05.2's reason: those files came from websites).
+DOWNLOADS_FOLDER_LABEL = "a file in a Downloads folder"
+
+
+def watches_downloads(rule: Any) -> bool:
+    """Is ``rule`` a file rule on a folder named Downloads (the browser's
+    usual place, on any drive)? Never raises."""
+    try:
+        if str(getattr(rule, "source", "") or "") != "file" or not hasattr(rule, "decoded_start"):
+            return False
+        path = str(rule.decoded_start().get("path") or "").strip().strip("\"'").rstrip("\\/")
+        return bool(path) and _re.split(r"[\\/]", path)[-1].casefold() == "downloads"
+    except Exception:  # noqa: BLE001 — unreadable: as before
+        return False
+
 
 # -- the contexts each kind of signal carries (leap 05-a: built here once, so
 # -- the router's own entry points and the start hub read the same shape) ----
@@ -434,6 +450,7 @@ class ReflexRouter:
         stop = getattr(self.orch, "emergency_stop_reason", None)
         why = stop(f"reflex:{rule.name}") if callable(stop) else ""
         unattended = not attended and not str(rule.name or "").startswith("manual:")
+        slot = ""
         if why:
             result: dict[str, Any] = {"ok": False, "error": why}
             reason = why
@@ -443,9 +460,11 @@ class ReflexRouter:
             # pause is said once a day. A paused rule starts nothing until
             # Resume. Its row, fire count and failure notices are left alone:
             # a held signal is not a failed start. A person's press (Run now)
-            # is not held, and is not counted.
+            # is not held, and is not counted. Review: the gate COUNTS the
+            # start as it lets it through (one locked step, so a burst of
+            # signals cannot all pass it); a start that fails gives it back.
             if unattended:
-                held = await self._hold_if_paused(rule)
+                held, slot = await self._hold_if_paused(rule)
                 if held is not None:
                     return held
             try:
@@ -483,12 +502,13 @@ class ReflexRouter:
             # both say it (never "Fired session · session <id>").
             words, href = result_words(result)
             result = {**result, "words": words, "href": href}
-            if unattended and getattr(self, "store", None) is not None:
-                # Leap 05-a: a start on its own counts toward the hourly limit.
-                try:
-                    await _off_loop(functools.partial(self.store.note_start, rule.id, now=self._now()))
-                except Exception:  # noqa: BLE001 — counting never undoes a start
-                    log.warning("rule %r: could not count its start", rule.name, exc_info=True)
+        elif slot and getattr(self, "store", None) is not None:
+            # Leap 05-a (review): the start the gate counted did not happen,
+            # so it is not counted toward the hourly limit.
+            try:
+                await _off_loop(functools.partial(self.store.release_start, rule.id, slot))
+            except Exception:  # noqa: BLE001 — a count left too high only pauses sooner
+                log.warning("rule %r: could not uncount a failed start", rule.name, exc_info=True)
         # v1.505.0 (north-star 5.4): off the loop — a webhook's fire must not
         # park the daemon behind a long writer — and still BEFORE the fire is
         # announced (a page that re-reads the row on ``reflex.fired`` finds it).
@@ -518,29 +538,30 @@ class ReflexRouter:
 
         return utcnow()
 
-    async def _hold_if_paused(self, rule: ReflexRule) -> "dict[str, Any] | None":
-        """Leap 05-a (D-05.3): None when ``rule`` may start now; else the
-        held answer (the rule is paused; when THIS signal paused it, the
-        pause is announced, at most once a day). Never raises: a limit that
-        cannot be read lets the start go on (its own writes would fail
-        loudly)."""
+    async def _hold_if_paused(self, rule: ReflexRule) -> "tuple[dict[str, Any] | None, str]":
+        """Leap 05-a (D-05.3): ``(None, slot)`` when ``rule`` may start now —
+        the start is COUNTED as it passes (``slot``, given back by
+        ``release_start`` when the start fails); else ``(held answer, "")``
+        (the rule is paused; when THIS signal paused it, the pause is
+        announced, at most once a day). Never raises: a limit that cannot be
+        read lets the start go on (its own writes would fail loudly)."""
         store = getattr(self, "store", None)
         if store is None:
-            return None
+            return None, ""
         try:
-            gate = await _off_loop(functools.partial(store.start_gate, rule.id, now=self._now()))
+            gate = await _off_loop(functools.partial(store.start_gate, rule.id, now=self._now(), reserve=True))
         except Exception:  # noqa: BLE001
             log.warning("rule %r: its hourly limit could not be read", rule.name, exc_info=True)
-            return None
+            return None, ""
         if gate.get("ok"):
-            return None
+            return None, str(gate.get("slot") or "")
         words = str(gate.get("words") or "Paused.")
         if gate.get("tripped"):
             await self._announce_pause(rule, words)
         return {
             "rule": rule.name, "rule_id": rule.id, "ok": False,
             "held": True, "paused": True, "error": words,
-        }
+        }, ""
 
     async def _announce_pause(self, rule: ReflexRule, words: str) -> None:
         """Publish ``reflex.paused`` (the bell's row: Resume, or Keep it
@@ -574,6 +595,10 @@ class ReflexRouter:
         person is watching (the Reflex page's Test press) and an owner who set
         ``comm_trust`` to "full" keep full trust. Never raises."""
         label = OUTSIDE_SOURCES.get(str(getattr(rule, "source", "") or ""))
+        if not label and watches_downloads(rule):
+            # Leap 05-a (review, D-05.2): what lands in a Downloads folder
+            # came from websites, like a download rule's file.
+            label = DOWNLOADS_FOLDER_LABEL
         if attended or not label:
             return {}
         cfg = getattr(self.p, "config", None)

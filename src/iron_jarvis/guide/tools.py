@@ -75,6 +75,34 @@ _QUERY_STOP = frozenset(
 _MIN_MATCH = 0.6
 
 
+def _rule_blurb(platform: Any, rule: Any) -> str:
+    """Leap 05-a (review): a rule as chat reads it — its own When and Do
+    (``triggers/starts.describe``, the card's words), and its STATE: off, or
+    paused by its hourly limit (and how it starts again), or why its last
+    start failed — so "why did my Intake rule stop?" is answered from the
+    rule's own row. Never raises (the old one-line form)."""
+    head = f"{rule.source} '{rule.match}' → {rule.action} {rule.target}".strip()
+    try:
+        from ..triggers.starts import describe_for
+
+        lines = describe_for(platform, rule)
+        head = f"{lines['when_words']} {lines['does_words']}"
+    except Exception:  # noqa: BLE001
+        pass
+    if not rule.enabled:
+        state = "It is off."
+    elif getattr(rule, "paused_at", None) is not None:
+        why = str(getattr(rule, "paused_reason", "") or "Paused.").rstrip(".")
+        state = (f"It paused itself ({why}); it starts again only after Resume (on its row on the Rules "
+                 "page, or reflex_update with enabled true).")
+    else:
+        state = "It is on."
+    error = str(getattr(rule, "last_error", "") or "").strip()
+    if error:
+        state += f" Its last start failed: {error[:160]}"
+    return f"{head} {state}"
+
+
 def _score(query_tokens: list[str], *fields: Any) -> float:
     """Cheap relevance: the share of MEANINGFUL query terms present across
     the fields (0 unless at least ``_MIN_MATCH`` of them are), plus a bonus
@@ -261,7 +289,7 @@ class AppSearchTool(Tool):
                 out.append((kind, r.name, r.name, f"{r.kind}; {'enabled' if r.enabled else 'disabled'}; {str(what)[:120]}"))
         elif kind == "reflex":
             for r in p.reflex.list():
-                out.append((kind, r.id, r.name or r.id, f"{r.source} '{r.match}' → {r.action} {r.target}"))
+                out.append((kind, r.id, r.name or r.id, _rule_blurb(p, r)))
         elif kind == "goal":
             eng = getattr(p, "goal_engine", None)
             for r in (eng.store.list() if eng is not None else []):
