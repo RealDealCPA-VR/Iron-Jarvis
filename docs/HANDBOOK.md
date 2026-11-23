@@ -2070,10 +2070,11 @@ counts once it has stopped changing between two looks, so a big copy or a
 synced file that is still arriving never starts it half-written; each file
 starts it once, also after a restart, and at most 20 files start it per look
 (the rest go on the next look). Only new files count: a file the rule's own
-work changes does not start it again, and neither does a file its own work
-saves in that folder (a summary next to the letter it read). A file that a
-program the work runs saves there is not told apart, so for work that writes
-many files, give the rule another folder to work in. The folder is watched
+work changes does not start it again, and neither does a file Jarvis's own
+file steps save in that folder for that work (a summary next to the letter
+it read, the parts of a split PDF, the documents a sorted scan becomes). A
+file that a program the work runs saves there is not told apart, so for that
+kind of work, give the rule another folder to work in. The folder is watched
 even while suggestion watchers are off, because the rule is your switch
 (Watchers says so); while the rule is off, and while Emergency stop is on,
 new files are left alone. A folder on a network location cannot be watched.
@@ -2093,7 +2094,9 @@ where the card offers **Resume** or **Keep it paused**. While it is paused it
 starts nothing; a folder rule's new files wait and go once you resume it.
 **Keep it paused** turns the rule off until you turn it on again (files that
 land while it is off are left alone). Saving a change to a paused rule keeps
-it paused. Run now, on the row's **…** menu, is never held and never counted.
+it paused. **Undo** on a change made while the rule was paused (turning it
+back on, say, or removing it) pauses it again, as it was; an Undo never
+lifts a pause. Run now, on the row's **…** menu, is never held and never counted.
 Signals that arrive together (a burst of webhooks, several downloads at once)
 are counted as they start, so the limit holds for them too. In chat, ask
 "why did my Intake rule stop?": Jarvis reads the rule's own row and says
@@ -2109,8 +2112,9 @@ whether it is off or paused itself.
   refused in words on the rule's row, never swapped for another.
 - "Always" on a question a rule's run asks keeps that answer on the rule
   (**Always for this rule**, 30 days, exactly those details). It covers no
-  other rule, and it goes when the rule is removed. All of them are listed on
-  the Autonomy page.
+  other rule, and it goes when the rule is removed (Undo of the removal
+  brings the rule back, not those answers: its steps ask again). All of them
+  are listed on the Autonomy page.
 
 ## See what memory gave a reply, and fix a preference (v1.567.0)
 

@@ -307,6 +307,37 @@ def _norm(path: str) -> str:
         return ""
 
 
+def _written_files(kind: str, meta: Any, post: Any) -> list[tuple[str, str, Any]]:
+    """Review (05-a): every file ONE Undo journal row says its tool wrote,
+    as ``(path, mode, hash of what it left)`` (``path`` as the row has it:
+    relative to the run's folder, or absolute). Read by the row's shape, so a
+    tool that writes many files is read too: an ``apply_patch`` row's
+    ``files``; a single file's ``path``; a ``paths`` list with its
+    ``sha256`` map (``stack_apply``'s ``files_delete``); a ``dir`` with the
+    ``outputs`` written in it and their ``hashes`` (``pdf_split``'s
+    ``pdf_split_delete``). Never raises."""
+    from ..tools import undo as _undo
+
+    if not isinstance(meta, dict):
+        return []
+    if kind == _undo.PATCH_UNDO_KIND:
+        return [(str(e.get("path")), "raw", e.get("post_sha256")) for e in _undo.patch_entries(meta)]
+    out: list[tuple[str, str, Any]] = []
+    mode = str(meta.get("mode") or "raw")
+    if meta.get("path"):
+        out.append((str(meta["path"]), mode, post))
+    paths = meta.get("paths")
+    if isinstance(paths, list):
+        sums = meta.get("sha256") if isinstance(meta.get("sha256"), dict) else {}
+        out += [(p, mode, sums.get(p)) for p in paths if isinstance(p, str) and p]
+    outputs = meta.get("outputs")
+    if isinstance(outputs, list):
+        folder = str(meta.get("dir") or ".")
+        sums = meta.get("hashes") if isinstance(meta.get("hashes"), dict) else {}
+        out += [(str(Path(folder) / n), "raw", sums.get(n)) for n in outputs if isinstance(n, str) and n]
+    return out
+
+
 def own_output(engine: Any, rule: Any, paths: list[str]) -> set[str]:
     """Review (05-a): which of ``paths`` (new files in a file rule's folder)
     were written by the rule's OWN runs — a summary its work saved next to
@@ -355,12 +386,10 @@ def own_output(engine: Any, rule: Any, paths: list[str]) -> set[str]:
             written: list[tuple[str, str, Any]] = []  # (normalized path, mode, post hash)
             for j in entries:
                 meta = _undo.read_envelope({"pre_inline": j.pre_inline})
-                base = runs.get(j.session_id, "")
-                if j.kind == _undo.PATCH_UNDO_KIND:
-                    items = [(e.get("path"), "raw", e.get("post_sha256")) for e in _undo.patch_entries(meta)]
-                else:
-                    items = [(meta.get("path"), meta.get("mode") or "raw", getattr(j, "post_sha256", None))]
-                for rel, mode, post in items:
+                # The folder the tool wrote against, as the registry stamped
+                # it on the row; else the run's own folder.
+                base = str((meta.get("workspace") if isinstance(meta, dict) else "") or runs.get(j.session_id, ""))
+                for rel, mode, post in _written_files(j.kind, meta, getattr(j, "post_sha256", None)):
                     if not rel:
                         continue
                     full = Path(str(rel))

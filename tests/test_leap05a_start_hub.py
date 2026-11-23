@@ -635,3 +635,64 @@ def test_a_file_the_rules_own_run_wrote_in_its_folder_starts_nothing(desk, tmp_p
     _scan(p, router)
     tasks = _started_on(p)
     assert len(tasks) == 3 and "letter summary.md" in tasks[2], tasks
+
+
+def test_the_many_files_a_split_or_a_sort_writes_in_its_folder_start_nothing(desk, tmp_path, monkeypatch):
+    """Review (05-a): "When a PDF lands in Intake, split it" (``pdf_split``:
+    its Undo row names a folder and the parts it wrote there) and "sort this
+    scan into documents" (``stack_apply``: its row lists every file it wrote,
+    in their folders). Their results land in the folder the rule watches
+    (``**/*.pdf``, subfolders too) and none of them starts the rule again; a
+    PDF the user drops meanwhile still does.
+
+    MUTATION (each red): read only a row's single ``path`` in
+    ``_written_files`` (the old reading) -> the parts and the sorted
+    documents start the rule again; drop the ``outputs`` reading -> the
+    split's parts do; drop the ``paths`` reading -> the sorted documents do."""
+    from iron_jarvis.documents.sources import SourceTurn
+    from iron_jarvis.tools.base import ToolContext
+    from tests.test_leap31a_boundaries import Planner, make_stack, model_plan
+
+    c, p, router = desk
+    folder = tmp_path / "Intake"
+    folder.mkdir()
+    rule = p.reflex.add(name="Split intake", source="file", match="", action="session",
+                        task_template="Split {file} and sort it", start={"path": str(folder), "glob": "**/*.pdf"},
+                        workspace_root=str(folder))
+    starts.ensure_file_watcher(p, rule)
+    _scan(p, router)
+    make_stack(folder / "scan.pdf")
+    _scan(p, router)
+    _scan(p, router)
+    (run,) = [s for s in _sessions(p) if str(s.origin or "").startswith("reflex:")]
+    assert "scan.pdf" in run.task
+
+    def ctx(turn: str) -> ToolContext:
+        return ToolContext(workspace=Path(run.workspace_path), session_id=run.id, agent_run_id=run.id,
+                           config=p.config, event_bus=p.event_bus, engine=p.engine,
+                           source_turn=SourceTurn(turn_id=turn, engine=p.engine))
+
+    def invoke(name: str, args: dict, turn: str):
+        out = asyncio.run(p.registry.invoke(name, args, ctx(turn), p.permissions, session_allow=[name]))
+        assert out.ok, (name, out.error)
+        return out
+
+    # The run's own work, through the real tools: three parts of 20 pages ...
+    invoke("pdf_split", {"path": "scan.pdf", "every": 20}, "turn-1")
+    parts = sorted(x.name for x in folder.glob("scan-part*.pdf"))
+    assert len(parts) == 3, parts
+    # ... and the scan sorted into eight documents in their own folders.
+    monkeypatch.setattr(p.router, "complete", Planner(model_plan(forget=(), double=False)).complete)
+    plan = invoke("stack_plan", {"path": "scan.pdf"}, "turn-2").data["stack_plan"]
+    invoke("stack_apply", {"plan_id": plan["plan_id"]}, "turn-3")
+    sorted_docs = [x for x in folder.rglob("*.pdf") if x.parent != folder]
+    assert len(sorted_docs) == 8, sorted_docs
+    # The user drops a PDF meanwhile.
+    (folder / "mine.pdf").write_bytes(b"%PDF-1.4 the user's own")
+    _scan(p, router)
+    _scan(p, router)
+    tasks = _started_on(p)
+    assert len(tasks) == 2 and "mine.pdf" in tasks[1], tasks
+    _scan(p, router)
+    assert len(_started_on(p)) == 2, "and none of its results is handed again later"
+    assert p.reflex.get(rule.id).fire_count == 2

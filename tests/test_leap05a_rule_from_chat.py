@@ -467,3 +467,64 @@ def test_an_edit_on_the_rules_page_never_resumes_a_pause_by_itself(desk, tmp_pat
     assert c.patch(f"/reflex/rules/{rule.id}", json={"enabled": True}).status_code == 200
     row = p.reflex.get(rule.id)
     assert row.enabled and row.paused_at is None and not row.recent_starts_json, "on again: fresh"
+
+
+def _undo_card(c, result) -> dict:
+    action = c.get(f"/config/changes/{result.data['record_change']['change_id']}").json()["action_id"]
+    out = c.post(f"/undo/{action}")
+    assert out.status_code == 200, out.text
+    return out.json()
+
+
+def test_undo_puts_a_rules_pause_back_and_never_lifts_a_pause_that_came_later(desk, tmp_path):
+    """Review (05-a): "resume my ping rule", then Undo on its card: the rule
+    is paused again, as it was (the answer says so), and it starts nothing.
+    A paused rule removed and brought back by Undo comes back paused, from
+    chat and from the Rules page. An Undo of a change made BEFORE the rule
+    paused itself never lifts that pause (only Resume does).
+
+    MUTATION (each red): leave ``paused_at`` out of ``snap_reflex`` -> the
+    Undo of the resume leaves the rule running; skip putting the pause back
+    in ``restore_reflex`` -> the same; clear the pause in ``restore_reflex``
+    when the snapshot had none -> the later pause is lifted by the Undo."""
+    c, p, router = desk
+    rule = p.reflex.add(name="ping", source="webhook", match="ping", action="session", task_template="Note it")
+    rid = rule.id
+    for _ in range(12):
+        p.reflex.note_start(rid)
+    assert p.reflex.start_gate(rid)["tripped"] is True
+    words = p.reflex.get(rid).paused_reason
+    # "Resume my ping rule", then Undo on its card.
+    r = _invoke(p, "reflex_update", {"rule": "ping", "enabled": True}, _ctx(p, tmp_path))
+    assert r.ok, r.error
+    assert p.reflex.get(rid).paused_at is None
+    answer = _undo_card(c, r)
+    row = p.reflex.get(rid)
+    assert row.paused_at is not None and row.paused_reason == words and row.enabled, "the pause is back"
+    assert "paused again" in str(answer), answer
+    gate = p.reflex.start_gate(rid)
+    assert gate["ok"] is False and gate["tripped"] is False, "a paused rule starts nothing"
+    # A paused rule removed from chat comes back paused.
+    gone = _invoke(p, "reflex_delete", {"rule": "ping"}, _ctx(p, tmp_path))
+    assert gone.ok, gone.error
+    assert p.reflex.get(rid) is None
+    answer = _undo_card(c, gone)
+    back = p.reflex.get(rid)
+    assert back is not None and back.paused_at is not None and back.paused_reason == words, "back as it was"
+    assert "paused again" in str(answer), answer
+    # ... and from the Rules page.
+    out = c.delete(f"/reflex/rules/{rid}")
+    assert out.status_code == 200, out.text
+    assert c.post(f"/undo/{out.json()['action_id']}").status_code == 200
+    assert p.reflex.get(rid).paused_at is not None
+    # A change made while the rule ran, then the rule paused itself: the
+    # Undo of that change puts the words back and leaves the pause alone.
+    p.reflex.resume(rid)
+    edit = _invoke(p, "reflex_update", {"rule": "ping", "task_template": "Note it twice"}, _ctx(p, tmp_path))
+    assert edit.ok, edit.error
+    for _ in range(12):
+        p.reflex.note_start(rid)
+    assert p.reflex.start_gate(rid)["tripped"] is True
+    _undo_card(c, edit)
+    row = p.reflex.get(rid)
+    assert row.task_template == "Note it" and row.paused_at is not None, "an Undo never lifts a later pause"

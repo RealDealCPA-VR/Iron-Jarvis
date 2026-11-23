@@ -1909,8 +1909,10 @@ def snap_reflex(platform: Any, rule_id: str) -> dict[str, Any] | None:
         fire_count=int(r.fire_count or 0),
         last_error=r.last_error,
         last_result=r.last_result,
-        # Leap 05-a (review): read by the card's words, never put back by an
-        # Undo (only Resume or Keep it paused clear a pause).
+        # Leap 05-a (review): a rule that paused itself. The card's words
+        # read it, and an Undo puts it back (the Undo of a resume, of a
+        # remove); an Undo never lifts a pause (only Resume does).
+        paused_at=_iso(getattr(r, "paused_at", None)),
         paused_reason=getattr(r, "paused_reason", None) if getattr(r, "paused_at", None) else None,
     )
     return out
@@ -1956,13 +1958,26 @@ def restore_reflex(platform: Any, rule_id: str, prior: dict[str, Any] | None) ->
                 continue
             if f in prior:
                 setattr(row, f, prior[f])
+        # Leap 05-a (review): a rule that had paused itself is paused again,
+        # as it was (the Undo of "resume it", of its removal). A snapshot
+        # with no pause leaves the rule's pause as it is now: an Undo never
+        # lifts a pause that came later (only Resume does).
+        paused_again = False
+        paused_at = _dt(prior.get("paused_at"))
+        if paused_at is not None and row.paused_at is None:
+            from ..reflex.store import pause_words
+
+            row.paused_at = paused_at
+            row.paused_reason = prior.get("paused_reason") or pause_words(row.max_fires_per_hour)
+            paused_again = bool(row.enabled)
         db.add(row)
         db.commit()
     # Leap 05-a: a file rule brought back has its watcher back (a fresh
     # baseline: files that landed meanwhile are left alone).
     problem = sync_rule_watcher(platform, rule_id)
     rearm_folder_watching(platform)
-    tail = f" (its folder could not be watched: {problem})" if problem else ""
+    tail = " (it is paused again, as it was: Resume starts it)" if paused_again else ""
+    tail += f" (its folder could not be watched: {problem})" if problem else ""
     return f"undo: {'recreated' if recreated else 'restored'} the rule '{prior.get('name') or rule_id}'{tail}"
 
 
@@ -4118,7 +4133,11 @@ def rule_edits_from_args(platform: Any, before: dict[str, Any], args: dict[str, 
 
 class ReflexDeleteTool(_ReflexTool):
     name = "reflex_delete"
-    description = "Remove a rule (`rule` = its id or exact name). The user approves on a card; Undo brings it back as it was."
+    description = (
+        "Remove a rule (`rule` = its id or exact name). The user approves on a card; Undo brings it back "
+        "as it was (paused, if it had paused itself), except its \"Always for this rule\" answers: "
+        "those are taken back with it, so its steps ask again."
+    )
     input_schema = {"type": "object", "properties": {"rule": {"type": "string"}}, "required": ["rule"]}
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
