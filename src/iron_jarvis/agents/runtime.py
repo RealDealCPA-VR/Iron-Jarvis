@@ -389,6 +389,10 @@ SESSION_APPROVAL_MODES = ("approve_for_me", "always_ask")
 #: ``yolo``: a rule or a model letting a call through with nobody there to see
 #: the receipt is not what the person chose when they picked Auto in a chat.
 ATTENDED_EASED_MODES = ("accept_edits", "auto")
+#: v1.570.0: the attended origins whose TASK a model wrote (a coding session's
+#: helper, a mission's teammate). Auto's quick check never takes such a brief
+#: for "what the person asked" (``AgentRuntime._person_words``).
+MODEL_BRIEF_ORIGINS = ("job:build-helper", "job:mission-member")
 
 
 def inherited_approval_mode(raw: object, origin: object = None) -> str:
@@ -2005,6 +2009,15 @@ class AgentRuntime:
         #: Auto run may have changed (``_note_auto_changes``), so a test run
         #: after a setup file changed is never passed by rule.
         self._auto_changed: dict[str, list[str]] = {}
+        #: v1.570.0: an Auto run's quick check (``core/auto_approve.AutoJudge``),
+        #: one per run, and what was decided about THIS step's calls, by call
+        #: identity -> rule name: ``_auto_judged`` (the check said allow —
+        #: ``_auto_rule`` answers with it) and ``_auto_kept`` (a rule or the
+        #: check kept the pause — the card's reason). Both are replaced at
+        #: every step (``_judge_step``) and dropped when the run ends.
+        self._auto_judges: dict[str, Any] = {}
+        self._auto_judged: dict[str, dict[int, str]] = {}
+        self._auto_kept: dict[str, dict[int, str]] = {}
         #: session id -> True once THIS run's own reading lowered its trust
         #: (v1.298.0): the fence's ``detect_injection`` flag. Reset per run;
         #: the row (``Session.trust``/``tainted_at``) is the durable record
@@ -2835,6 +2848,10 @@ class AgentRuntime:
             self._run_grants.pop(session.id, None)
             self._held_grants.pop(session.id, None)
             self._held_once.pop(session.id, None)
+            # v1.570.0: the run's quick check and what it said.
+            self._auto_judges.pop(session.id, None)
+            self._auto_judged.pop(session.id, None)
+            self._auto_kept.pop(session.id, None)
             self._tainted.pop(session.id, None)
             self._shell_syntax.pop(session.id, None)  # v1.421.0 (A1)
             self._script_armable.pop(session.id, None)  # v1.473.0
@@ -3097,6 +3114,9 @@ class AgentRuntime:
         self._run_grants.pop(session.id, None)
         self._held_grants.pop(session.id, None)
         self._held_once.pop(session.id, None)
+        self._auto_judges.pop(session.id, None)  # v1.570.0
+        self._auto_judged.pop(session.id, None)
+        self._auto_kept.pop(session.id, None)
         # …and no taint (v1.298.0): the row's ``trust`` is what this run
         # starts from; a lowering is this run's own doing.
         self._tainted.pop(session.id, None)
@@ -3962,8 +3982,8 @@ class AgentRuntime:
         no pause is needed (v1.247.0).
 
         ``eased`` (v1.406.0 part 2): under Accept edits / Auto a call the
-        RULES pass (``core/auto_approve``; the runtime has no model judge, so
-        a call they leave undecided keeps its pause) needs no pause. False
+        RULES pass (``core/auto_approve``), or under Auto one the quick check
+        allowed for this step (v1.570.0, ``_judge_step``), needs no pause. False
         asks what the DEFAULT posture would say — ``_pause_for_approval``
         uses it to tell a rule pass (which must carry the call's grant) from
         a call that needed nothing.
@@ -4131,17 +4151,35 @@ class AgentRuntime:
         del bucket[:-500]
 
     def _auto_rule(self, session: Session, tc, agent_def: AgentDefinition) -> str:
-        """The PASS rule Accept edits / Auto let ``tc`` through by, or "" —
-        the rules only (v1.406.0 part 2). Under Local only a tool that
-        reaches outside this PC, low trust, a quarantined tool and a spend
-        (decided before this is read) always keep their pause."""
+        """The rule Accept edits / Auto let ``tc`` through by, or "": a PASS
+        rule (v1.406.0 part 2), or under Auto the quick check's ``allow`` for
+        THIS call of this step (v1.570.0, ``_judge_step``). Under Local only a
+        tool that reaches outside this PC, low trust, a quarantined tool and a
+        spend (decided before this is read) always keep their pause."""
+        from ..core import auto_approve as _auto
+
+        verdict = self._auto_verdict(session, tc, agent_def)
+        if verdict is None:
+            return ""
+        if verdict.passes:
+            return verdict.rule
+        # The check's allow holds only while the RULES still leave the call
+        # undecided: a taint that landed since (low trust) or anything else
+        # that now reads as "always ask" keeps the pause.
+        if verdict.kind == _auto.JUDGE and id(tc) in getattr(self, "_auto_judged", {}).get(session.id, {}):
+            return _auto.JUDGE_RULE
+        return ""
+
+    def _auto_verdict(self, session: Session, tc, agent_def: AgentDefinition):
+        """The RULES' verdict on ``tc`` for an Accept edits / Auto run
+        (``core/auto_approve.classify``), or None for any other posture."""
         from ..core import auto_approve as _auto
 
         posture = inherited_approval_mode(
             getattr(session, "approval_mode", ""), getattr(session, "origin", None)
         )
         if posture not in ATTENDED_EASED_MODES:
-            return ""
+            return None
         forced = ""
         try:
             from ..providers import egress as _eg
@@ -4159,7 +4197,146 @@ class AgentRuntime:
             # v1.406.0 part 2 follow-ups: what this run may have changed.
             changed=tuple(getattr(self, "_auto_changed", {}).get(session.id, ())),
         )
-        return verdict.rule if verdict.passes else ""
+        return verdict
+
+    def _person_words(self, session: Session) -> "tuple[str, str]":
+        """``(the person's own request, the brief a model wrote)`` for the
+        quick check of this run, or ``("", "")`` when nobody's own words are
+        known (then nothing is judged and the pause stays).
+
+        A run whose task the owner typed (``owner_typed_task``: a chat's
+        hand-off, a project page, an objective, the Agents page) is judged
+        against that task. A HELPER of a coding session is briefed by a
+        MODEL: its commands are judged against the words the person typed in
+        the turn that started it (``HelperParent.request``, carried as a run
+        option), and the brief is shown to the check only as what the
+        assistant said. A brief alone is never "what the person asked": a
+        model could then write itself permission. A mission's teammate has no
+        person's words on its run, so it keeps its pause."""
+        origin = str(getattr(session, "origin", None) or "").strip()
+        task = str(getattr(session, "task", "") or "").strip()
+        if not origin:
+            return "", ""  # an unattributed run is never eased (belt and braces)
+        if origin.startswith(MODEL_BRIEF_ORIGINS):
+            try:
+                from ..harness.helpers import PERSON_REQUEST_OPTION
+                from ..scheduling.knobs import session_options
+
+                person = session_options(session).get(PERSON_REQUEST_OPTION)
+            except Exception:  # noqa: BLE001 — cannot read: nobody's words
+                person = ""
+            person = person.strip() if isinstance(person, str) else ""
+            return (person, task) if person else ("", "")
+        if owner_typed_task(origin):
+            return task, ""
+        return "", ""
+
+    async def _judge_step(
+        self, session: Session, run: "AgentRun", calls, agent_def: AgentDefinition,
+        session_allow: set[str], spend_by_call: dict, armed_names: set[str], skip,
+    ) -> None:
+        """AUTO'S QUICK CHECK FOR A RUN (v1.570.0), the runtime's half of the
+        stream lane's pre-pass (MIRROR NOTE: ``routes/chat.py``'s
+        ``_auto_cands`` / ``_to_judge``). Before a step's pauses are grouped,
+        every call that WOULD pause and that the rules leave undecided
+        (``classify`` says JUDGE) gets one judgement on the run's own model,
+        the step's judgements together. ``allow`` lets that one call through
+        (``_auto_rule``; it carries its grant from ``_pause_for_approval``);
+        anything else keeps the pause, and the card says which.
+
+        Never judged: a spend check's verdict (it decides by itself), the
+        plan door, a held-back or locked app tool, a call ``skip`` names (the
+        breaker's, low trust's, a rehearsal's held call) and a run with
+        nobody's own words (``_person_words``). Accept edits has no judge.
+        Fails closed: any fault here leaves every pause as it was."""
+        judged: dict[int, str] = {}
+        kept: dict[int, str] = {}
+        for name, value in (("_auto_judged", judged), ("_auto_kept", kept)):
+            if not hasattr(self, name):
+                setattr(self, name, {})
+            getattr(self, name)[session.id] = value
+        if getattr(self.p, "approvals", None) is None:
+            return
+        posture = inherited_approval_mode(
+            getattr(session, "approval_mode", ""), getattr(session, "origin", None)
+        )
+        if posture not in ATTENDED_EASED_MODES:
+            return
+        from ..core import auto_approve as _auto
+
+        routes: list = []
+        judge = None
+        try:
+            to_judge: list = []
+            for c in calls or []:
+                if c.name not in armed_names or c.name == PLAN_APPROVAL_TOOL or skip(c):
+                    continue
+                if spend_by_call.get(id(c)) is not None:
+                    continue
+                if not self._pause_needed(session, c, agent_def, session_allow):
+                    continue
+                verdict = self._auto_verdict(session, c, agent_def)
+                if verdict is None:
+                    continue
+                if verdict.kind == _auto.ASK and verdict.rule:
+                    kept[id(c)] = verdict.rule
+                elif verdict.kind == _auto.JUDGE and posture == _auto.AUTO and not self._held_back(c.name):
+                    to_judge.append(c)
+            if not to_judge:
+                return
+            if not hasattr(self, "_auto_judges"):
+                self._auto_judges = {}
+            judge = self._auto_judges.get(session.id)
+            if judge is None:
+                request, brief = self._person_words(session)
+                if not request:
+                    return
+                judge = _auto.AutoJudge(
+                    router=self.p.router, provider="", model="", request=request,
+                    last_reply=brief,
+                    # Read at call time (a seam tests set).
+                    timeout_s=_auto.JUDGE_TIMEOUT_S, max_calls=_auto.MAX_JUDGEMENTS_PER_TURN,
+                    folder=str(getattr(session, "workspace_path", "") or ""),
+                )
+                self._auto_judges[session.id] = judge
+            # The pair that serves the run NOW (a failover moves it).
+            judge.provider = str(getattr(run, "provider", "") or getattr(session, "provider", "") or "")
+            judge.model = str(getattr(run, "model", "") or getattr(session, "model", "") or "")
+            judge.bill = routes.append
+
+            def _redacted(c):
+                t = self.p.registry.get(c.name)
+                return t.redact_args(c.arguments) if t is not None else c.arguments
+
+            hashes = [_grant_hash(c.name, c.arguments) for c in to_judge]
+            answers = await asyncio.gather(*(
+                judge.judge(c.name, _redacted(c), h) for c, h in zip(to_judge, hashes)
+            ))
+            for c, h, answer in zip(to_judge, hashes, answers):
+                if answer == "allow":
+                    judged[id(c)] = _auto.JUDGE_RULE
+                else:
+                    kept[id(c)] = judge.kept_rule(c.name, h)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — fail closed: nothing was allowed
+            logging.getLogger("iron_jarvis.agents.runtime").warning(
+                "run %s: the quick check failed; its calls keep their pause", session.id, exc_info=True,
+            )
+            return
+        for route in routes:
+            # Counted on the run like any other model call of it. Accounting
+            # never decides a pause: a fault here changes no answer.
+            try:
+                usage = getattr(getattr(route, "response", None), "usage", None) or {}
+                run.input_tokens += int(usage.get("input_tokens", 0) or 0)
+                run.output_tokens += int(usage.get("output_tokens", 0) or 0)
+                add_step_cost(
+                    run, session, str(getattr(route, "provider", "") or judge.provider),
+                    str(getattr(route, "model", "") or judge.model), usage,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _pause_for_approval(
         self,
@@ -4388,6 +4565,7 @@ class AgentRuntime:
         # and the pending listing say it), and nothing else.
         from ..core import auto_approve as _auto_why
 
+        _kept_rule = getattr(self, "_auto_kept", {}).get(session.id, {}).get(id(tc), "")
         _why = _auto_why.card_why(
             plan=tc.name == PLAN_APPROVAL_TOOL,
             spend_words=(
@@ -4401,6 +4579,10 @@ class AgentRuntime:
             default=_auto_why.RUN_NOT_GRANTED_WHY,
             # Owner decision 8: "its app asks before each use".
             forced="locked" if _lock_ask else "",
+            # v1.570.0: under Accept edits / Auto, the rule that kept this
+            # pause, or what the quick check did (said ask, never answered,
+            # out of checks). MIRROR NOTE: the stream lane's `_auto_kept`.
+            rule=_kept_rule,
         )
         _cost_kw["why"] = _why
         _cost_kw["asker"] = _auto_why.ASKER_MODEL
@@ -4557,6 +4739,11 @@ class AgentRuntime:
             once_only=bool(requested.get("once_only")) or _priced,
             reason=str(requested.get("once_reason") or ("priced" if _priced else "")),
             args_hash=str(requested.get("args_hash") or ""),
+            # v1.570.0: the level and the rule that kept the pause.
+            mode=inherited_approval_mode(
+                getattr(session, "approval_mode", ""), getattr(session, "origin", None)
+            ),
+            rule=_kept_rule,
         )
         _m_normal = False
         _m_actor = "app"
@@ -5571,6 +5758,18 @@ class AgentRuntime:
                 )
                 if getattr(self.p, "approvals", None) is not None
                 else {}
+            )
+            # AUTO'S QUICK CHECK (v1.570.0): before the pauses are grouped,
+            # a call the rules leave undecided is judged on the run's own
+            # model; an "allow" needs no pause (``_judge_step``).
+            await self._judge_step(
+                session, run, resp.tool_calls, agent_def, session_allow, spend_by_call,
+                armed_names,
+                lambda _c: bool(
+                    broken_calls.get(call_signature(_c.name, _c.arguments), "")
+                    or self._low_trust_refusal_for(session, _c.name)
+                    or _held_here(_c.name)
+                ),
             )
             if (
                 len(resp.tool_calls) > 1

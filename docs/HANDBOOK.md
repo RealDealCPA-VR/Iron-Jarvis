@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.569.0 (2026-11-19).*
+holds itself to. Current as of v1.570.0 (2026-11-19).*
 
 ---
 
@@ -2043,6 +2043,29 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Auto reaches helpers and handed-off work (v1.570.0)
+
+Under **Auto**, the quick check that lets routine commands through worked only
+in a reply. A helper of a coding session, work a chat hands off to an agent,
+and a job started on the Agents page still paused on every command the rules
+could not decide by themselves. Now they get the same quick check:
+
+- **Routine commands run without asking** in those runs too: building the
+  project, a copy inside the folder, a look at the local server. What always
+  asks is unchanged (deleting, sending, paying, anything outside the folder).
+- **Judged against your words.** A helper gets its instructions from the model
+  leading the session. Its commands are checked against what you typed in that
+  session, and those instructions are shown to the check only as something the
+  assistant said. Instructions a model wrote never count as your request.
+  Where your own words are not known (a teammate in an objective), the run
+  asks as before.
+- **The card says why** in a run as well: the rule that kept it, or what the
+  quick check did (it was not sure, it did not answer in time, or the run has
+  used all of its checks).
+
+Unchanged: a run nobody is watching (a schedule, a goal, your phone) never
+uses Auto, and Accept edits has no quick check.
 
 ## Auto asks less: your own pages open, and the quick check knows your folder (v1.569.0)
 

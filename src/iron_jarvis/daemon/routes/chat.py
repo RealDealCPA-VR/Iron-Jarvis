@@ -8015,6 +8015,10 @@ async def chat_stream(
                                         # review only READS (lock-step:
                                         # chat_turn.run_chat_turn).
                                         review_only=_finish is not None and _finish.owns_review(tc),
+                                        # v1.570.0: the person's own words,
+                                        # for the helper's quick check under
+                                        # Auto (lock-step: the POST lane).
+                                        request=_auto.request_of(getattr(body, "messages", None)),
                                     ),
                                     tc.id, tc.name, tc.arguments,
                                     lambda: _registry_invoke(tc, _p, _low_kw, _deny_reason, _deny_label),

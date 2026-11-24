@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.570.0
+
+**Auto reaches helpers and handed-off work.** Under **Auto**, the quick check that lets routine commands through worked only in a reply.
+
 ## v1.569.0
 
 **Auto asks less: your own pages open, and the quick check knows your folder.** With the approval level on **Auto**, Iron Jarvis still stopped to ask about work nobody needed to approve, and a card nobody saw held the work for hours.
@@ -77,7 +81,3 @@
 ## v1.554.0
 
 **Agents and terminal help know what was done before.** An agent you give a job in a folder now starts knowing what was done there before, the way a chat in that folder already does: the pieces of earlier work on Iron Jarvis's own record (each chat, coding session or agent run there, how it ended and the files it wrote) and, for work in exactly that folder, its checked recap (Done, Decided, Open).
-
-## v1.553.0
-
-**Before and after pictures under a coding reply.** When a reply in a coding session (Chat › Code) changes how a page looks, you can see it: two pictures under the reply, the page **Before** the change and **After** it, each with the page's address and the time.

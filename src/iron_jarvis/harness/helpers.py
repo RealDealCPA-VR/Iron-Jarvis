@@ -121,6 +121,13 @@ BUILD_SESSION_OPTION = "build_session"
 #: v1.401.0: the run option of a READ-ONLY reviewer (the finish check's team
 #: review): the runtime arms nothing on top of its definition's tools.
 REVIEW_ONLY_OPTION = "review_only"
+#: v1.570.0: the run option holding the words the PERSON typed in the turn
+#: that started the helper. Auto's quick check judges a helper's command
+#: against these, never against the brief a model wrote for it
+#: (``agents/runtime.AgentRuntime._person_words``).
+PERSON_REQUEST_OPTION = "person_request"
+#: How much of the person's words a helper's run keeps.
+MAX_PERSON_REQUEST_CHARS = 2_000
 #: v1.401.0: the ONLY tools a read-only reviewer may hold (those of them the
 #: turn holds): reading and searching the folder. Never a write, a command, a
 #: process tool, the web, a page or a helper door.
@@ -197,6 +204,10 @@ class HelperParent:
     pin: Any = None
     #: The call this parent was armed for (set by :func:`helper_call`).
     call: "HelperCall | None" = None
+    #: v1.570.0: the words the PERSON typed in this turn (their newest
+    #: message), for the helper's quick check under Auto. "" = not known:
+    #: the helper's undecided commands keep their pause.
+    request: str = ""
     #: v1.372.0 review: the real tools THIS turn may run (the lane's armed +
     #: ask-armed set). A helper works with these and NO others
     #: (:func:`helper_definition`); ``()`` leaves the definition unchanged.
@@ -277,6 +288,9 @@ class HelperParent:
             # v1.401.0: the runtime arms nothing on top of the reviewer's
             # read-only tools (not even an agent's own notebook).
             out[REVIEW_ONLY_OPTION] = True
+        words = str(self.request or "").strip()
+        if words:
+            out[PERSON_REQUEST_OPTION] = words[:MAX_PERSON_REQUEST_CHARS]
         return out or None
 
 

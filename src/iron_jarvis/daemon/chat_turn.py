@@ -8815,6 +8815,7 @@ def helper_parent_now(
     grants: Any, overrides: "dict[str, str]", trust_state: "dict[str, Any]",
     tools: Any = (),
     review_only: bool = False,
+    request: str = "",
 ):
     """The parent a helper call starts from, completed AT CALL TIME: the
     provider + model that serve the turn now (its route), its approval
@@ -8833,7 +8834,11 @@ def helper_parent_now(
     v1.401.0: ``review_only`` — the call is the finish check's TEAM REVIEW
     (``FinishCheck.owns_review``): the helper only reads
     (``HelperParent.review_only``). Both lanes pass it (MIRROR NOTE); False
-    leaves every other helper exactly as it was."""
+    leaves every other helper exactly as it was.
+
+    v1.570.0: ``request`` — the words the PERSON typed in this turn
+    (``core/auto_approve.request_of``), for the helper's quick check under
+    Auto (``HelperParent.request``). Both lanes pass it (MIRROR NOTE)."""
     if base is None:
         return None
     import dataclasses as _dc
@@ -8947,6 +8952,7 @@ def helper_parent_now(
         tools=turn_tools,
         rules=tuple(sorted(rules.items())),
         review_only=bool(review_only),
+        request=str(request or ""),
     )
 
 
@@ -15063,6 +15069,10 @@ async def run_chat_turn(
                                 # v1.401.0: the finish check's team review
                                 # only READS (lock-step: the stream lane).
                                 review_only=_finish is not None and _finish.owns_review(tc),
+                                # v1.570.0: the person's own words, for the
+                                # helper's quick check under Auto
+                                # (lock-step: the stream lane).
+                                request=_auto.request_of(getattr(body, "messages", None)),
                             ),
                             tc.id, tc.name, tc.arguments,
                             lambda: _registry_invoke(tc, _deny_kw),
