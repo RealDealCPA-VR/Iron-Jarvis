@@ -262,7 +262,10 @@ async def test_page_open_asks_only_for_a_local_page_that_is_not_the_panes(tmp_pa
         other = await tool.spend_check({"url": OTHER}, c)
         assert other is not None and other.ask is True
         assert "localhost:8020/admin" in other.words and "pane" not in other.words
-        assert await tool.spend_check({"url": "https://example.com"}, c) is None
+        # v1.569.0: an address the tool REFUSES says "no card" (it carded,
+        # then refused, while it had no opinion).
+        public = await tool.spend_check({"url": "https://example.com"}, c)
+        assert public is not None and public.ask is False
         # Allowed once, the address stays allowed for this browser: no card.
         res = await tool.execute({"url": OTHER}, c)
         assert res.ok, res.error

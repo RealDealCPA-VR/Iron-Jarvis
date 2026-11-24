@@ -126,7 +126,9 @@ async def test_the_panes_page_runs_without_a_card_and_any_other_asks():
         assert other is not None and other.ask is True
         assert "http://localhost:8765/" in other.words and "Browser" in other.words
         assert "pane" not in other.words  # a retired word on a card (v13600 scan)
-        assert await tool.spend_check({"url": "https://example.com"}, None) is None
+        # v1.569.0: an address the tool REFUSES says "no card".
+        public = await tool.spend_check({"url": "https://example.com"}, None)
+        assert public is not None and public.ask is False
     finally:
         PV.reset_preview(token)
     # With no pane address, every local page asks.

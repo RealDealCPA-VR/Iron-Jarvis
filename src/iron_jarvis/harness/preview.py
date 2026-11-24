@@ -92,6 +92,35 @@ def is_preview_page(url: str) -> bool:
     return bool(shown) and origin(url) == shown
 
 
+#: The longest the look at which program listens on a port may take; past it
+#: the answer is "not this session's" and the card stays.
+OWN_PAGE_TIMEOUT_S = 3.0
+
+
+async def own_program_page(ctx: object, url: str) -> bool:
+    """True when ``url`` is a page on THIS PC served by a program this
+    session started itself with ``process_start`` (its dev server): the
+    session's own work, like the page the Browser pane shows, so opening it
+    asks nobody. Read from the operating system (who LISTENS on the port),
+    never from what a program printed. A helper of a coding session counts
+    its session's programs. Off the event loop, bounded; never raises (cannot
+    tell = False: the card stays)."""
+    try:
+        import asyncio
+
+        from . import page_browser as PB
+        from . import process as P
+
+        ids = {str(getattr(ctx, "session_id", "") or ""), PB.browser_key(ctx)} - {""}
+        if not any(P.TABLE.sessions(sid) for sid in ids):
+            return False  # nothing started: no thread, no system call
+        return bool(await asyncio.wait_for(
+            asyncio.to_thread(P.serves_address, ids, url), OWN_PAGE_TIMEOUT_S,
+        ))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def prompt_line(armed: "set[str] | frozenset[str]") -> str:
     """One sentence for the harness prompt naming the page the user is
     looking at — only when there is one AND the tool that can look at it is

@@ -623,6 +623,8 @@ class InterruptNote:
         reason: str = "",
         args_hash: str = "",
         thread_for: "Callable[[], str] | None" = None,
+        mode: str = "",
+        rule: str = "",
     ) -> None:
         self._bus = bus
         #: (review) Where to find the chat LATER when it had no id yet: a new
@@ -646,6 +648,14 @@ class InterruptNote:
             why = str(reason or "").strip()
             if why and len(why) <= 32 and why.replace("-", "_").isidentifier():
                 facts["reason"] = why
+        # The approval level the ask was made under and the rule that kept
+        # the card (``core/auto_approve``: a rule's NAME, never its words or
+        # the call's arguments). With them the record answers "why was I
+        # asked while Auto was on?" without a guess.
+        for key, value in (("mode", mode), ("rule", rule)):
+            word = str(value or "").strip()
+            if word and len(word) <= 32 and word.replace("-", "_").isidentifier():
+                facts[key] = word
         self.facts = facts
         self._t0 = time.monotonic()
         self._asked = False

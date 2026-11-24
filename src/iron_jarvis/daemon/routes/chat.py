@@ -7136,6 +7136,10 @@ async def chat_stream(
                                     # Read at call time (a seam tests set).
                                     timeout_s=_auto.JUDGE_TIMEOUT_S,
                                     max_calls=_auto.MAX_JUDGEMENTS_PER_TURN,
+                                    # The turn's working folder: without
+                                    # it the judge cannot tell a copy made
+                                    # inside the folder from one elsewhere.
+                                    folder=str(_auto_ws or ""),
                                 )
                             _judge = _auto_state["judge"]
                             _judge.bill = _judge_routes.append
@@ -7156,7 +7160,12 @@ async def chat_stream(
                                 if _ans == "allow":
                                     _auto_ok[id(_c)] = _auto.JUDGE_RULE
                                 else:
-                                    _auto_kept[id(_c)] = _auto.JUDGE_ASKED_RULE
+                                    # Looked and said ask, never answered,
+                                    # or out of judgements: the card says
+                                    # which (three different things to fix).
+                                    _auto_kept[id(_c)] = _judge.kept_rule(
+                                        _c.name, _grant_hash(_c.name, _c.arguments),
+                                    )
                         for _jr in _judge_routes:
                             # Billed to the turn like any other model call.
                             _ju = getattr(getattr(_jr, "response", None), "usage", None) or {}
@@ -7631,6 +7640,10 @@ async def chat_stream(
                                 once_only=_card_once,
                                 reason=_card_reason,
                                 args_hash=str(_frame.get("args_hash") or ""),
+                                # The level and the rule that kept the card,
+                                # so the record says why Auto still asked.
+                                mode=str(approval_mode or ""),
+                                rule=_auto_kept.get(id(tc), ""),
                                 # (review) a new chat's first turn learns its
                                 # chat when the page's first save links it.
                                 thread_for=_turn_thread_lookup(d, _step_turn),

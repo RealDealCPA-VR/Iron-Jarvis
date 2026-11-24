@@ -2,7 +2,8 @@
 
 Each undecided command was a SERIAL model call of up to 6 s, and the judge
 saw only the newest user message ("yes, go ahead" says nothing alone). Now a
-round's judgements run together (one wait), each is bounded by 3 s, and the
+round's judgements run together (one wait), each is bounded (8 s since
+v1.569.0: at 3 s a slow answer became a card that waited hours), and the
 judge reads the turn's FIRST request and the assistant's last words beside the
 newest request. Driven through the REAL stream lane (only the model, the
 judge's model call and each tool's execute are doubles).
@@ -70,9 +71,9 @@ async def test_a_rounds_undecided_commands_are_judged_together(env, monkeypatch)
     assert state["peak"] == len(UNDECIDED), state
 
 
-def test_one_judgement_is_bounded_by_three_seconds():
-    assert A.JUDGE_TIMEOUT_S == 3.0
-    assert A.AutoJudge(router=None, provider="x", model="y", request="").timeout_s == 3.0
+def test_one_judgement_is_bounded():
+    assert A.JUDGE_TIMEOUT_S == 8.0
+    assert A.AutoJudge(router=None, provider="x", model="y", request="").timeout_s == 8.0
 
 
 async def test_the_judge_reads_the_first_request_and_the_assistants_last_words(env, monkeypatch):

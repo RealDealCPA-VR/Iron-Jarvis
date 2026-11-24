@@ -383,6 +383,76 @@ def program_rows(session_id: str) -> list[dict[str, Any]]:
         return []
 
 
+# --------------------------------------------------------------------------- #
+# the pages a session's own programs serve
+# --------------------------------------------------------------------------- #
+
+#: The names an address uses for this PC itself.
+THIS_PC_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _program_pids(mp: ManagedProcess) -> set[int]:
+    """Every live process of one program: its Job's members (Windows: also
+    what it started and left running), the command itself and its tree."""
+    pids: set[int] = set()
+    if mp.stopped:
+        return pids
+    job = procs._job_of(mp.proc)
+    if job is not None and not job.closed:
+        with contextlib.suppress(Exception):
+            pids.update(int(p) for p in job.member_pids())
+    pid = getattr(mp.proc, "pid", None)
+    if pid and mp.returncode() is None:
+        pids.add(int(pid))
+        with contextlib.suppress(Exception):
+            import psutil
+
+            pids.update(int(c.pid) for c in psutil.Process(int(pid)).children(recursive=True))
+    return pids
+
+
+def listening_ports(session_ids: Any) -> set[int]:
+    """The TCP ports the programs these sessions started are LISTENING on
+    right now, read from the operating system (never from what a program
+    printed: output is the program's own words). BLOCKING: call off the event
+    loop. Never raises; a port that cannot be read is not in the answer."""
+    try:
+        pids: set[int] = set()
+        for sid in session_ids:
+            for mp in TABLE.sessions(str(sid or "")):
+                pids |= _program_pids(mp)
+        if not pids:
+            return set()
+        import psutil
+
+        ports: set[int] = set()
+        for conn in psutil.net_connections(kind="tcp"):
+            if conn.status == psutil.CONN_LISTEN and conn.pid in pids and conn.laddr:
+                ports.add(int(conn.laddr.port))
+        return ports
+    except Exception:  # noqa: BLE001 — cannot tell reads as "not this session's"
+        return set()
+
+
+def serves_address(session_ids: Any, url: str) -> bool:
+    """True when ``url`` names THIS PC (localhost / 127.0.0.1 / ::1) and the
+    port it names is one a program these sessions started is listening on:
+    the page is the session's own work, served by a program it started
+    itself. BLOCKING (see :func:`listening_ports`). Never raises."""
+    try:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(str(url or ""))
+        if parts.scheme not in ("http", "https"):
+            return False
+        if (parts.hostname or "").lower() not in THIS_PC_HOSTS:
+            return False
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        return int(port) in listening_ports(session_ids)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class CouldNotStop(Exception):
     """The Stop could not reach what the program started (v1.404.0 review):
     no Job holds it and its command had already ended, so the tree kill had

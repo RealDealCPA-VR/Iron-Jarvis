@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.569.0
+
+**Auto asks less: your own pages open, and the quick check knows your folder.** With the approval level on **Auto**, Iron Jarvis still stopped to ask about work nobody needed to approve, and a card nobody saw held the work for hours.
+
 ## v1.568.0
 
 **Say "when this happens, do that" once: a folder or a download can start a rule.** Say one sentence in chat, such as "when a PDF lands in Intake, read it and file it by sender", and Iron Jarvis makes **one rule**.
@@ -77,7 +81,3 @@
 ## v1.553.0
 
 **Before and after pictures under a coding reply.** When a reply in a coding session (Chat › Code) changes how a page looks, you can see it: two pictures under the reply, the page **Before** the change and **After** it, each with the page's address and the time.
-
-## v1.552.0
-
-**Choose what each of your other computers may do.** Each computer you paired with this one now has its own switches: what it may do HERE.

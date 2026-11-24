@@ -61,7 +61,7 @@ from ..tools.base import (
     ToolContext,
     ToolResult,
 )
-from .preview import is_preview_page, local_address
+from .preview import is_preview_page, local_address, own_program_page
 
 log = get_logger(__name__)
 
@@ -250,18 +250,23 @@ class PageScreenshotTool(Tool):
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> "SpendCheck | None":
         """The page the user's Browser pane shows runs without a card; any
-        other local page asks; a non-local address has no opinion (execute
-        refuses it in words). v1.376.0: the page the agent's own browser is
+        other local page asks. v1.376.0: the page the agent's own browser is
         on, and an address the user allowed for that browser, need no card
-        either (the user already allowed it)."""
+        either (the user already allowed it). An address ``execute`` REFUSES
+        (not on this PC or network, or none given) never cards: the user was
+        asked to allow a call that was then refused in words. A page a
+        program this session started is serving is the session's own work
+        (``preview.own_program_page``) and needs no card."""
         if _session_page(args, ctx):
             return SpendCheck(ask=False)
-        url = local_address(str((args or {}).get("url") or ""))
+        url = local_address(str((args or {}).get("url") or "").strip())
         if not url:
-            return None
+            return SpendCheck(ask=False)
         from . import page_browser as PB
 
         if is_preview_page(url) or PB.BROWSERS.allowed(PB.browser_key(ctx), url):
+            return SpendCheck(ask=False)
+        if await own_program_page(ctx, url):
             return SpendCheck(ask=False)
         return SpendCheck(
             ask=True,

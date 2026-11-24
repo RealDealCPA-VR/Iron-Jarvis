@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.568.0 (2026-11-19).*
+holds itself to. Current as of v1.569.0 (2026-11-19).*
 
 ---
 
@@ -2043,6 +2043,41 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Auto asks less: your own pages open, and the quick check knows your folder (v1.569.0)
+
+With the approval level on **Auto**, Iron Jarvis still stopped to ask about
+work nobody needed to approve, and a card nobody saw held the work for hours.
+These are gone:
+
+- **A page your session is serving opens without asking.** When a coding
+  session starts a program (a dev server) and then opens its page on this PC
+  in its own browser, or takes a picture of it, it no longer asks. Iron Jarvis
+  checks with the operating system that a program this session started is the
+  one listening on that address; what a program prints does not count. Any
+  other page on this PC or your network still asks, and a public site is still
+  refused. A Local only session still asks about every page.
+- **No card for a page that cannot open.** Asking to open a file
+  (`file:///...`) or a public site showed a card, and your "Allow" was then
+  answered by a refusal. Now the refusal comes straight away, with no card.
+- **The quick check knows your folder.** Under Auto, a command no rule can
+  decide is looked at by a quick check on the reply's own model. It is now
+  told which folder you are working in, and that making or copying files
+  there, running the project there, and reaching this PC itself (localhost)
+  are routine. It still asks about files outside the folder, installing
+  software, settings, spending, sending, other computers and secrets.
+- **More time and more checks.** The quick check has 8 seconds to answer
+  (it had 3) and one reply may use 30 of them (it had 12, so a long reply
+  turned back into asking part-way through).
+- **The card says what happened.** "a quick check could not say it is routine"
+  now means it looked and was not sure. When it never answered, the card says
+  it "did not answer in time"; when the reply has used all of its checks, the
+  card says that.
+
+Under Auto these still ask, on purpose: deleting or overwriting, sending,
+paying, a commit or push from a coding session, an app's tool that changes
+something, a locked app, acting in your browser or on your desktop, and an
+edit outside the folder.
 
 ## Say "when this happens, do that" once: a folder or a download can start a rule (v1.568.0)
 

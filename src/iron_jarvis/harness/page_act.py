@@ -53,7 +53,7 @@ from ..tools.base import (
     ToolResult,
 )
 from . import page_browser as PB
-from .preview import current_preview, is_preview_page, local_address
+from .preview import current_preview, is_preview_page, local_address, own_program_page
 
 #: The longest visible text a read hands the model.
 READ_CHARS = PB.MAX_TEXT_CHARS
@@ -199,12 +199,17 @@ class PageOpenTool(_PageTool):
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> "SpendCheck | None":
         """The Browser pane's page, or an address the user already allowed
-        for this browser, opens without a card; any other local page asks; a
-        non-local address has no opinion (execute refuses it in words)."""
+        for this browser, opens without a card; any other local page asks.
+        An address ``execute`` REFUSES (a file, a public site) never cards:
+        the user was asked to allow a call that was then refused in words. A
+        page a program this session started is serving is the session's own
+        work (``preview.own_program_page``) and opens without a card."""
         url = local_address(PB.normalize((args or {}).get("url")))
         if not url:
-            return None
+            return SpendCheck(ask=False)
         if is_preview_page(url) or PB.BROWSERS.allowed(PB.browser_key(ctx), url):
+            return SpendCheck(ask=False)
+        if await own_program_page(ctx, url):
             return SpendCheck(ask=False)
         return SpendCheck(
             ask=True,
