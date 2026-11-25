@@ -115,6 +115,8 @@ const WORDS: Record<string, string> = {
   process_start: "start a program that keeps running",
   process_write: "type into a running program",
   mcp_read_resource: "read something from one of your apps",
+  // v1.577.0: looks up more of an extension's tools for the reply.
+  app_tools_find: "look up more of an app's tools",
   // v1.364.0 review: the IJ harness editors card under "Ask before file
   // edits" (chat_turn.STRICT_ASK_TOOLS), so the card says what they do.
   multi_edit: "change a file",

@@ -13,6 +13,7 @@
     "app_search",
     "app_status",
     "app_switch",
+    "app_tools_find",
     "apply_changes",
     "apply_patch",
     "ask_user",
@@ -267,6 +268,7 @@
     "app_search": "search your Iron Jarvis setup",
     "app_status": "check your Iron Jarvis setup",
     "app_switch": "turn an app on or off",
+    "app_tools_find": "look up more of an app's tools",
     "apply_changes": "make a batch of file changes",
     "apply_patch": "change files with a patch",
     "ask_user": "ask you a question",
@@ -556,6 +558,10 @@
     "app_switch": [
       "Switched an app on or off",
       "Switching an app on or off"
+    ],
+    "app_tools_find": [
+      "Looked up an app's tools",
+      "Looking up an app's tools"
     ],
     "apply_changes": [
       "Made a batch of file changes",
@@ -1311,6 +1317,7 @@
     "app_search": "",
     "app_status": "",
     "app_switch": "",
+    "app_tools_find": "",
     "apply_changes": "",
     "apply_patch": "",
     "ask_user": "",

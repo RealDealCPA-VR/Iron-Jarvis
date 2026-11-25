@@ -311,6 +311,7 @@ ASK_WORDS: dict[str, str] = {
     "process_start": "start a program that keeps running",
     "process_write": "type into a running program",
     "mcp_read_resource": "read something from one of your apps",
+    "app_tools_find": "look up more of an app's tools",
     # v1.364.0 review: the IJ harness editors card under "Ask before file
     # edits" (chat_turn.STRICT_ASK_TOOLS).
     "multi_edit": "change a file",
@@ -636,6 +637,7 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "process_write": ("typed into a running program", "program input"),
     "process_stop": ("stopped a running program", "program stop"),
     "mcp_list_resources": ("listed an app's resources", "resource listing"),
+    "app_tools_find": ("looked up an app's tools", "tool look-up"),
     "mcp_read_resource": ("read an app's resource", "resource read"),
     # v1.367.0 (IJ harness Phase 4): a Build session's question and plan door.
     "ask_user": ("asked you a question", "question"),

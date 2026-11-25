@@ -4508,6 +4508,7 @@ const TOOL_WORDS_BUILTIN = {
   app_search: "search your Iron Jarvis setup",
   app_status: "check your Iron Jarvis setup",
   app_switch: "turn an app on or off",
+  app_tools_find: "look up more of an app's tools",
   apply_changes: "make a batch of file changes",
   apply_patch: "change files with a patch",
   approve_plan: "follow this plan",
