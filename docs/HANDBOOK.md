@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.575.0 (2026-11-19).*
+holds itself to. Current as of v1.576.0 (2026-11-19).*
 
 ---
 
@@ -2044,7 +2044,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Hand Jarvis a recording (v1.572.0)
+## Hand Jarvis a recording (v1.576.0)
 
 Drop a meeting recording, a call or a voice memo into a chat (an .m4a, .mp3,
 .wav, .ogg or another sound file, or a video, whose sound is used) and ask
@@ -2085,8 +2085,8 @@ transcript.md** and **meeting notes.md**.
   more about it comes to the chat. A transcript already saved stays, and the
   chat says so in one message; the notes are not written. A recording that
   was done just as you pressed Stop keeps its files, and they come to the
-  chat as one message. If the reply ends without Stop (you closed the page),
-  the recording carries on and comes back to the chat when it is done.
+  chat as one message. If you close the page or leave the chat, the
+  recording carries on and comes back to the chat when it is done.
 - Handing the same recording again in the same folder makes nothing new: you
   get the transcript and notes already made. While another chat's recording
   is still being heard, the card here shows it, and its report goes to the

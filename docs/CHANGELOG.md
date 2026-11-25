@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.576.0
+
+**Hand Jarvis a recording.** Drop a meeting recording, a call or a voice memo into a chat (an .m4a, .mp3, .wav, .ogg or another sound file, or a video, whose sound is used) and ask what you want to know, such as "what did we decide?".
+
 ## v1.575.0
 
 **Auto in chat: tools Jarvis looks up no longer ask every time.** In a chat, Iron Jarvis looks up which of its tools fit your message and brings them into the reply.
@@ -77,7 +81,3 @@
 ## v1.558.1
 
 **New conversation works the moment a sidebar reply ends.** In the browser sidebar, New conversation now works as soon as a reply's end is on screen.
-
-## v1.558.0
-
-**Photos, files and voice notes reach Jarvis from your phone.** Send Jarvis a photo of a page, a PDF, a spreadsheet or a voice note in Telegram, Slack or email, and it works on it the way it works on a file you drop into Chat on this PC.
