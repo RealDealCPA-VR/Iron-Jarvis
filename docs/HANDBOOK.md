@@ -2077,9 +2077,14 @@ the date box move to another day.
   times returns to how it was before the first). Up to 100 at once. A change
   that was edited again since is left as it is and named ("Not put back:
   report.txt (it was changed again since…)"); the rest still go back.
-- A change whose before-copy is gone (cleared by a cleanup of the undo
-  history, or older than Iron Jarvis keeps) says "Can't be undone: no copy of
-  how it was is kept any more" and offers no Undo.
+- A change whose before-copy is no longer on this PC says "Can't be undone:
+  no copy of how it was is kept any more" and offers no Undo.
+- Iron Jarvis keeps what it changed for as long as the **Keep activity
+  history** setting says (90 days unless you change it); a cleanup run by
+  hand, or a shorter setting you had before, can have removed more. A day
+  older than that says so ("Iron Jarvis keeps what it changed for 90 days…
+  This day is older, so what it changed then is no longer listed."), on this
+  page and in chat. It never reads as a day when nothing changed.
 
 **In chat.** "What did you change today?" or "what did the 3 pm run change?"
 lists the day by where each change came from, with what cannot be undone,

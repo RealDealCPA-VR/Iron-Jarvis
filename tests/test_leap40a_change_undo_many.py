@@ -15,7 +15,6 @@ card answered through ``/chat/approvals``), the real write tool and the real
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import pytest
 from sqlmodel import select
@@ -27,7 +26,7 @@ from iron_jarvis.harness import stall
 from iron_jarvis.settings import records_day as RD
 from iron_jarvis.settings import records_history as H
 from tests.test_chat_approvals_v1187 import _drive_stream
-from tests.test_chat_history_tools_v14350 import _approver, _ctx, _finished, _never, _out
+from tests.test_chat_history_tools_v14350 import _approver, _ctx, _finished, _out
 from tests.test_leap40a_day_changes import _app, _local_utc, _run, _sent, _stamp, _write
 from tests.test_settings_chat_tools_v1321 import _body, _calls_stream
 
@@ -99,6 +98,7 @@ async def test_the_card_is_a_safety_card_enter_and_the_phone_never_allow_it(tmp_
     seen: list = []
     await _drive_stream(app, _body("undo everything from the 3 pm run", mode="yolo"), _approver(app, seen, "deny"))
     assert [s["tool"] for s in seen] == [UNDO], "it cards even in Don't ask"
+    assert seen[0]["once_only"] is True and seen[0].get("once_reason") == H.UNDO_REASON, seen[0]
     assert all((ws / f"r{i}.txt").read_text(encoding="utf-8") == f"new {i}\n" for i in range(13)), "a denied card undoes nothing"
 
 
@@ -141,7 +141,11 @@ async def test_undo_by_ids_names_each_and_a_long_list_is_refused_in_words(tmp_pa
 async def test_a_time_no_run_started_near_names_the_days_runs(tmp_path):
     app, p, ws, run, ids, _m = await _three_pm(tmp_path)
     p.router.stream = _calls_stream([(UNDO, {"run": "the 11 pm run"})])
-    frames = await _drive_stream(app, _body("undo everything from the 11 pm run"), _never)
+    # Review (40-a): a card here is answered at once (denied) and fails the
+    # test fast, instead of waiting out the card's time.
+    seen: list = []
+    frames = await _drive_stream(app, _body("undo everything from the 11 pm run"), _approver(app, seen, "deny"))
+    assert seen == [], "no run near the time asked: no card"
     (fin,) = _finished(frames, UNDO)
     out = _out(fin)
     assert fin["ok"] is False and "No run started near 11:00 pm" in out
@@ -150,7 +154,6 @@ async def test_a_time_no_run_started_near_names_the_days_runs(tmp_path):
 
 
 def test_the_requests_arm_the_undo_and_near_misses_do_not():
-    lane = SimpleNamespace(platform=None)
     for text in (
         "undo everything from the 3 pm run",
         "undo everything from this morning's run",
@@ -185,6 +188,16 @@ async def test_changes_list_by_date_lists_the_day_and_what_cannot_be_undone(tmp_
     assert "Commands Iron Jarvis ran" in out
     data = res.data
     assert data["date"] == RD.today_local().isoformat() and data["cannot"][0]["what"] == "sent a notification"
+    # Review (40-a): narrowed to one kind, the list leaves out what cannot be
+    # undone, and never says there was none of it.
+    for args in ({"date": "today", "kind": "file"}, {"kind": "file"}):
+        narrowed = await p.registry.get("changes_list").execute(args, _ctx(p, tmp_path))
+        assert narrowed.ok, narrowed.error
+        assert "there were none" not in narrowed.output, narrowed.output
+        assert "file changes only" in narrowed.output and "1 action" in narrowed.output, narrowed.output
+        assert "sent a notification" not in narrowed.output and narrowed.data["cannot"] == []
+    quiet = await p.registry.get("changes_list").execute({"kind": "memory"}, _ctx(p, tmp_path))
+    assert "there were none" not in quiet.output and "1 action" in quiet.output, quiet.output
     # Review (40-a): the sent message kept a journal entry, yet it is only
     # ever under "Can't be undone", never one of the changes.
     (sent,) = data["cannot"][0]["ids"]
@@ -264,6 +277,35 @@ async def test_a_local_only_runs_names_stay_out_of_a_turn_that_may_not_recall_th
 
     page = TestClient(app).get("/changes/day?date=today").text
     assert "Hartley garden plans" in page and "hartley-plans.txt" in page
+
+
+@pytest.mark.asyncio
+async def test_only_a_local_only_chats_changes_read_as_local_only_work(tmp_path):
+    """Review (40-a, a note): every chat reply is one source ("chat") until
+    40-b stamps the turn, so changes_list's day splits chat's changes: a
+    Local only chat's read "From Local only work:" with no name, and an
+    ordinary chat's stay "In chat:", named."""
+    from iron_jarvis.core.models import AgentRun, ChatThreadRecord
+
+    app, p = _app(tmp_path)
+    ws = tmp_path / "ws"
+    day = RD.today_local()
+    with session_scope(p.engine) as db:
+        db.add(ChatThreadRecord(id="chat_lo", setup_json=json.dumps({"local_only": True})))
+        db.add(AgentRun(id="run_lo_turn", session_id="chat", thread_id="chat_lo",
+                        created_at=_local_utc(day, 10, 0), finished_at=_local_utc(day, 10, 5)))
+        db.commit()
+    _stamp(p, [await _write(p, ws, "chat", "garden-plans.txt", "x\n")], _local_utc(day, 10, 2))
+    _stamp(p, [await _write(p, ws, "chat", "shopping.txt", "y\n")], _local_utc(day, 11, 0))
+    res = await p.registry.get("changes_list").execute({"date": "today"}, _ctx(p, tmp_path))
+    assert res.ok, res.error
+    lines = res.output.splitlines()
+    assert "garden-plans" not in res.output, res.output
+    heads = [i for i, line in enumerate(lines) if line.endswith(":") and not line.startswith("- ")]
+    shop = next(i for i, line in enumerate(lines) if "shopping.txt" in line)
+    lo = next(i for i, line in enumerate(lines) if H.LOCAL_WORK_WORDS in line)
+    assert lines[max(h for h in heads if h < shop)] == "In chat:", res.output
+    assert lines[max(h for h in heads if h < lo)] == "From Local only work:", res.output
 
 
 @pytest.mark.asyncio

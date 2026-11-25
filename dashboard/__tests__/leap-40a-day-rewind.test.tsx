@@ -96,7 +96,7 @@ vi.mock("@/components/motion", () => ({
 }));
 
 import ActivityPage from "@/app/activity/page";
-import { CANNOT_LINE, DayRewind } from "@/components/activity/DayRewind";
+import { CANNOT_LINE, DayRewind, NOTHING_LINE } from "@/components/activity/DayRewind";
 import { DAY_REFRESH_MS, shiftDay, todayLocal, viewFromSearch } from "@/lib/dayChanges";
 
 const DASH = join(__dirname, "..");
@@ -285,9 +285,35 @@ describe("the day", () => {
   });
 
   it("an empty day says so", async () => {
-    hooks.day = { date: TODAY, words: "x", today: true, groups: [], cannot: [], count: 0, more: false };
+    hooks.day = { date: TODAY, words: "x", today: true, groups: [], cannot: [], count: 0, more: false, cleared: null };
     render(<DayRewind date={TODAY} onDate={() => {}} />);
     expect((await screen.findByTestId("empty-state")).textContent).toContain("Iron Jarvis changed nothing on this day.");
+  });
+
+  it("a day older than the history keeps never reads as a day when nothing changed", async () => {
+    // 40-a review: the cleanup removed that day's changes; they are gone, not "none".
+    const words =
+      "Iron Jarvis keeps what it changed for 90 days, as the “Keep activity history” setting says. " +
+      "This day is older, so what it changed then is no longer listed.";
+    const old = shiftDay(TODAY, -100);
+    hooks.day = {
+      date: old, words: "x", today: false, groups: [], cannot: [], count: 0, more: false,
+      cleared: { days: 90, before: "2026-08-27T16:00:00+00:00", whole: true, words },
+    };
+    render(<DayRewind date={old} onDate={() => {}} />);
+    const empty = await screen.findByTestId("empty-state");
+    expect(within(empty).getByTestId("day-cleared").textContent).toBe(words);
+    expect(empty.textContent).not.toContain(NOTHING_LINE);
+    cleanup();
+
+    // Partly older, with changes still listed: the note sits beside them.
+    const partly = shiftDay(TODAY, -90);
+    seedDay(partly);
+    hooks.day.cleared = { days: 90, before: "x", whole: false, words: "What it changed before 11:00 am is no longer listed." };
+    render(<DayRewind date={partly} onDate={() => {}} />);
+    await screen.findAllByTestId("day-group");
+    expect(screen.getByTestId("day-cleared").textContent).toContain("before 11:00 am");
+    expect(screen.queryByTestId("empty-state")).toBeNull();
   });
 });
 

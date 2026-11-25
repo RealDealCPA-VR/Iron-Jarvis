@@ -73,6 +73,17 @@ export interface DayGroup {
   changes: DayChange[];
 }
 
+/** 40-a review: the day is wholly or partly older than the history keeps
+ *  (the "Keep activity history" setting, or a cleanup run by hand). Its
+ *  changes are gone, not "none": the page says this in place of "changed
+ *  nothing". `days` is the setting's number, null after a cleanup. */
+export interface DayCleared {
+  days: number | null;
+  before: string;
+  whole: boolean;
+  words: string;
+}
+
 export interface DayChanges {
   date: string;
   words: string;
@@ -81,6 +92,7 @@ export interface DayChanges {
   cannot: DayCannot[];
   count: number;
   more: boolean;
+  cleared: DayCleared | null;
 }
 
 export interface Side {
@@ -209,7 +221,16 @@ export function decodeDay(raw: unknown): DayChanges {
     cannot: arr(r.cannot).map(decodeCannot).filter((x): x is DayCannot => x !== null),
     count: num(r.count) ?? groups.reduce((n, g) => n + g.changes.length, 0),
     more: r.more === true,
+    cleared: decodeCleared(r.cleared),
   };
+}
+
+export function decodeCleared(raw: unknown): DayCleared | null {
+  const r = obj(raw);
+  const words = str(r.words, 400);
+  if (!words) return null;
+  const days = num(r.days);
+  return { days: days && days > 0 ? days : null, before: str(r.before, 60), whole: r.whole === true, words };
 }
 
 function decodeSide(raw: unknown): Side {

@@ -473,6 +473,92 @@ def cannot_rows(
 
 
 # --------------------------------------------------------------------------
+# what the history no longer holds (40-a review)
+# --------------------------------------------------------------------------
+
+
+def cleared_cutoff(home: Any, keep_days: Any, now: datetime | None = None) -> tuple[datetime | None, int | None]:
+    """``(cutoff, days)``: before *cutoff* (naive UTC) the changes are no
+    longer in the history, because the cleanup (``core.db.prune_events``)
+    deletes a change's ledger and Undo rows together. The later of the
+    "Keep activity history" setting (*keep_days*, the rule the run page's
+    ``details_removed_after_days`` uses; ``days`` is then that number) and
+    the newest cut-off a cleanup recorded (``core.db.history_cleared_before``:
+    a cleanup run by hand, or a keep that was shorter once; ``days`` is then
+    None). ``(None, None)`` when everything is kept.
+    Blocking (one small read); never raises."""
+    from ..core.db import history_cleared_before
+
+    now = now or datetime.now(timezone.utc)
+    try:
+        days = max(0, int(keep_days or 0))
+    except (TypeError, ValueError):
+        days = 0
+    by_setting = (now - timedelta(days=min(days, 365_000))).astimezone(timezone.utc).replace(tzinfo=None) if days else None
+    by_cleanup = history_cleared_before(home)
+    if by_cleanup is not None and (by_setting is None or by_cleanup > by_setting):
+        return by_cleanup, None
+    return by_setting, (days if by_setting is not None else None)
+
+
+def _when_words(cut: datetime, day: date | None) -> str:
+    """*cut* in this PC's time: "3:00 pm" inside *day*, else "Saturday 22
+    November, 3:00 pm"."""
+    lt = _local(cut)
+    if lt is None:
+        return ""
+    if day is not None and lt.date() == day:
+        return clock(cut)
+    return f"{day_words(lt.date())}, {clock(cut)}"
+
+
+def cleared_note(
+    cutoff: datetime | None, days: int | None, since: datetime, until: datetime | None, *,
+    day: date | None = None, listed_before: bool = False,
+) -> dict[str, Any] | None:
+    """What a view of ``[since, until)`` says when part or all of it is
+    older than the history keeps (:func:`cleared_cutoff`): ``{days, before,
+    whole, words}``, or None when all of it is kept. Its changes are GONE,
+    not "none": a page or a reply that finds nothing there says this,
+    never that nothing changed. ``listed_before``: some row older than the
+    cut-off is still listed (the cleanup has not run since the keep was
+    shortened), so the words say "may". Pure."""
+    if cutoff is None or since >= cutoff:
+        return None
+    whole = until is not None and until <= cutoff
+    if days:
+        head = (f"Iron Jarvis keeps what it changed for {days} day{'s' if days != 1 else ''}, "
+                "as the “Keep activity history” setting says.")
+    else:
+        head = f"A cleanup of the activity history removed what Iron Jarvis changed before {_when_words(cutoff, None)}."
+    gone = "may no longer be listed" if listed_before else "is no longer listed"
+    if whole:
+        tail = ("This day is older, so " if day is not None else "This time is older, so ") + (
+            f"some of what it changed then {gone}." if listed_before else f"what it changed then {gone}."
+        )
+    elif days or listed_before:
+        tail = f"What it changed before {_when_words(cutoff, day)} {gone}."
+    else:
+        tail = ""  # the cleanup's own sentence already says it
+    return {
+        "days": days or None,
+        "before": cutoff.replace(tzinfo=timezone.utc).isoformat(),
+        "whole": bool(whole),
+        "words": f"{head} {tail}".strip(),
+    }
+
+
+def _older_listed(rows: list[dict[str, Any]], cutoff: datetime | None) -> bool:
+    if cutoff is None:
+        return False
+    for r in rows:
+        at = _parse_iso(r.get("at"))
+        if at is not None and H._naive(at) < cutoff:
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------
 # the day
 # --------------------------------------------------------------------------
 
@@ -483,15 +569,19 @@ def _hour_of(row: dict[str, Any]) -> int | None:
 
 
 def day_changes(
-    engine: Any, day: date, *, home: Any = None, session_ids: Any = None
+    engine: Any, day: date, *, home: Any = None, session_ids: Any = None, keep_days: Any = None
 ) -> dict[str, Any]:
     """The day *day* (local): ``{date, words, groups: [{source, rows}],
-    cannot: [rows], count, more}``. ``groups`` are by where each change came
-    from, the source with the newest change first, rows newest first, each
-    with ``hour`` and ``clock`` (this PC's time) and ``has_before_after``.
-    ``cannot`` is what left this PC or ran, listed first on the page.
-    Every name is kept (the person's own screen); a caller that tells a
-    model uses :func:`for_model`. Blocking; bounded."""
+    cannot: [rows], count, more, cleared}``. ``groups`` are by where each
+    change came from, the source with the newest change first, rows newest
+    first, each with ``hour`` and ``clock`` (this PC's time) and
+    ``has_before_after``. ``cannot`` is what left this PC or ran, listed
+    first on the page. ``cleared`` (40-a review): when the day is wholly or
+    partly older than the history keeps (*keep_days*, the "Keep activity
+    history" setting, and the cleanup's own record), :func:`cleared_note`;
+    the page then never says nothing changed. Every name is kept (the
+    person's own screen); a caller that tells a model uses
+    :func:`for_model`. Blocking; bounded."""
     from sqlmodel import select
 
     from ..core.db import session_scope
@@ -533,6 +623,7 @@ def day_changes(
         g["rows"].append(row)
     for c in cannot:
         c["source"] = sources.get(c["session_id"]) or {}
+    cut, days = cleared_cutoff(home, keep_days, now)
     return {
         "date": day.isoformat(),
         "words": day_words(day),
@@ -541,6 +632,7 @@ def day_changes(
         "cannot": cannot,
         "count": len(rows),
         "more": bool(more or more_cannot),
+        "cleared": cleared_note(cut, days, since, until, day=day, listed_before=_older_listed(rows + cannot, cut)),
     }
 
 
@@ -555,12 +647,18 @@ _EVER = datetime(2000, 1, 1)
 
 def listing(
     engine: Any, *, hours: int = 24, kind: str = "any", limit: int = 20, day: date | None = None,
-    session_ids: Any = None, home: Any = None, everything: bool = False,
+    session_ids: Any = None, home: Any = None, everything: bool = False, keep_days: Any = None,
+    started: Any = None,
 ) -> dict[str, Any]:
-    """What ``changes_list`` reads: ``{rows, total, cannot, sources, more}``
-    for the last *hours*, the day *day*, or (``everything``) every change of
-    ``session_ids`` whenever it was made. Rows keep every name; the tool
-    tells the model through :func:`for_model`. Blocking; bounded."""
+    """What ``changes_list`` reads: ``{rows, total, cannot, cannot_count,
+    cannot_more, sources, more, cleared}`` for the last *hours*, the day
+    *day*, or (``everything``) every change of ``session_ids`` whenever it
+    was made (*started*: when that run started, for ``cleared``). Rows keep
+    every name; the tool tells the model through :func:`for_model`.
+    ``cannot_count`` is how many calls in that time cannot be undone
+    (``cannot_more``: more than that); ``cleared`` (40-a review) is
+    :func:`cleared_note` when part of that time is older than the history
+    keeps. Blocking; bounded."""
     from ..core.db import session_scope
 
     now = datetime.now(timezone.utc)
@@ -578,8 +676,15 @@ def listing(
     with session_scope(engine) as db:
         cannot, more = cannot_rows(db, engine, since, until, session_ids=session_ids)
         sources = sources_for(db, {r["session_id"] for r in rows} | {c["session_id"] for c in cannot}, engine=engine)
+    cut, days = cleared_cutoff(home, keep_days, now)
+    began = H._naive(_parse_iso(started)) if everything else since
+    cleared = (
+        cleared_note(cut, days, began, until, day=day, listed_before=_older_listed(rows + cannot, cut))
+        if began is not None else None
+    )
     return {"rows": rows, "total": total, "cannot": cannot[:20], "sources": sources,
-            "more": bool(more or len(cannot) > 20 or total > len(rows))}
+            "cannot_count": sum(int(c.get("count") or 1) for c in cannot), "cannot_more": bool(more),
+            "more": bool(more or len(cannot) > 20 or total > len(rows)), "cleared": cleared}
 
 
 def many_targets(

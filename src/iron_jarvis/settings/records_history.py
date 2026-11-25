@@ -1337,7 +1337,34 @@ CANNOT_NOTE = "Commands Iron Jarvis ran and messages it sent have no Undo: they 
 #: Iron Jarvis keeps no way back for); each row says its own reason.
 CANNOT_HEAD = "Can't be undone (each says why):"
 NONE_CANNOT_NOTE = "Commands Iron Jarvis ran and messages it sent have no Undo; there were none in this time."
+#: 40-a review: narrowed to one kind, the list leaves out what cannot be
+#: undone, so it says how many there are instead of "there were none".
+KIND_CANNOT_NOTE = (
+    "This list holds {kind} changes only. {n} action{s} {span} can't be undone (commands run, "
+    "messages sent); list without a kind to see them."
+)
 _STATE_WORDS = {"can": "can be undone", "undone": "already undone", "cannot": "cannot be undone"}
+
+
+def _cannot_note(kind: str, cannot: list[dict[str, Any]], listed: dict[str, Any], span: str) -> str:
+    """The line on what cannot be undone, true of this list: when it is
+    narrowed to a kind (which leaves those out) it counts them; when part
+    of the time is older than the history keeps (``listed["cleared"]``) it
+    never says there were none (40-a review)."""
+    cleared = bool(listed.get("cleared"))
+    if kind == "any":
+        if cannot:
+            return CANNOT_NOTE
+        return "" if cleared else NONE_CANNOT_NOTE
+    n = int(listed.get("cannot_count") or 0)
+    if n:
+        more = bool(listed.get("cannot_more"))
+        return KIND_CANNOT_NOTE.format(
+            kind=kind, n=f"More than {n}" if more else str(n), s="" if n == 1 and not more else "s", span=span,
+        )
+    if cleared:
+        return f"This list holds {kind} changes only."
+    return f"This list holds {kind} changes only. {NONE_CANNOT_NOTE}"
 
 
 def _group_head(source: dict[str, Any] | None) -> str:
@@ -1422,9 +1449,11 @@ class ChangesListTool(Tool):
             )
             if problem:
                 return ToolResult(ok=False, error=problem)
+        cfg = self.platform.config
         listed = await asyncio.to_thread(
             RD.listing, engine, hours=hours, kind=kind, limit=limit, day=day,
-            session_ids=session_ids, home=self.platform.config.home, everything=bool(run_ref),
+            session_ids=session_ids, home=cfg.home, everything=bool(run_ref),
+            keep_days=getattr(cfg, "event_retention_days", 0), started=(source or {}).get("started"),
         )
         rows = [_for_model(r, recall_local) for r in listed["rows"]]
         cannot = [_for_model(r, recall_local) for r in listed["cannot"]] if kind == "any" else []
@@ -1437,15 +1466,22 @@ class ChangesListTool(Tool):
         else:
             span = f"in the last {hours} hour{'s' if hours != 1 else ''}"
         noun = "change" if kind == "any" else f"{kind} change"
-        note = CANNOT_NOTE if cannot else NONE_CANNOT_NOTE
+        note = _cannot_note(kind, cannot, listed, f"from {span}" if run_ref else span)
+        # 40-a review: part or all of this time is older than the history
+        # keeps, so its changes are GONE (the cleanup removed them), never
+        # "none": said in so many words.
+        cleared = listed.get("cleared")
+        gone = str(cleared["words"]) if cleared else ""
         data = {
             "changes": rows, "count": len(rows), "total": total, "hours": hours,
-            "cannot": cannot, "more": listed["more"],
+            "cannot": cannot, "more": listed["more"], "cleared": cleared,
             **({"date": day.isoformat()} if day is not None else {}),
             **({"source": _safe_source(source, listed["rows"] + listed["cannot"], recall_local)} if run_ref else {}),
         }
         if not rows and not cannot:
-            return ToolResult(ok=True, output=f"No {noun}s {'from' if run_ref else ''} {span}. {note}".replace("  ", " "), data=data)
+            head = (f"No {noun}s are listed {'from ' if run_ref else ''}{span}." if gone
+                    else f"No {noun}s {'from ' if run_ref else ''}{span}.")
+            return ToolResult(ok=True, output=" ".join(b for b in (head, gone, note) if b), data=data)
         lines = [
             f"{noun.capitalize()}s {'from ' if run_ref else ''}{span}, newest first ({len(rows)} of {total}):"
         ]
@@ -1455,10 +1491,14 @@ class ChangesListTool(Tool):
                 why = f" ({r['why']})" if r["state"] == "cannot" and r["why"] else ""
                 lines.append(f"- {head} — {r['what']} — {_STATE_WORDS[r['state']]}{why}")
         else:
-            groups: dict[str, list[dict[str, Any]]] = {}
+            groups: dict[tuple[str, bool], list[dict[str, Any]]] = {}
             for r in rows:
-                groups.setdefault(r["session_id"], []).append(r)
-            for sid, members in groups.items():
+                # 40-a review: every chat reply is one source ("chat") until
+                # 40-b stamps the turn, so a Local only chat's changes are a
+                # group of their own; only they read "Local only work".
+                own = r["session_id"] == "chat" and not recall_local and bool(r.get("local_work"))
+                groups.setdefault((r["session_id"], own), []).append(r)
+            for (sid, _own), members in groups.items():
                 if not run_ref:
                     src = _safe_source(listed["sources"].get(sid), members, recall_local)
                     lines.append(_group_head(src))
@@ -1473,7 +1513,10 @@ class ChangesListTool(Tool):
                 where = "" if run_ref else RD.source_words(src)
                 head = " · ".join(b for b in (c.get("clock") or "", where) if b)
                 lines.append(f"- {head} — {c['what']} ({c['why']})")
-        lines.append(note)
+        if gone:
+            lines.append(gone)
+        if note:
+            lines.append(note)
         lines.append(
             "To undo one, call change_undo with its id; several, with action_ids (at most "
             f"{RD.CHAT_IDS_MAX}); everything one run changed, with run."

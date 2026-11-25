@@ -17,6 +17,8 @@
  *    confirmation that lists every change by name (D-40.1), then they go
  *    back newest first; the result says how many were put back and names
  *    each that was not, with why.
+ *  - A day older than the history keeps ("Keep activity history", or a
+ *    cleanup run by hand) says so (`cleared`), never "changed nothing".
  *  - Calm (G7): read when the day is opened; while TODAY is on screen a new
  *    change or Undo refreshes it, at most every few seconds. Nothing moves
  *    while idle. At 390 px every row stacks and wraps (G11).
@@ -371,8 +373,17 @@ export function DayRewind({ date, onDate }: { date: string; onDate: (next: strin
         </section>
       )}
 
+      {/* 40-a review: a day older than the history keeps lost its changes to
+          the cleanup; it never reads as a day when nothing changed. */}
       {day && day.groups.length === 0 && day.cannot.length === 0 && (
-        <Empty icon={<CalendarDays size={22} aria-hidden />}>{NOTHING_LINE}</Empty>
+        <Empty icon={<CalendarDays size={22} aria-hidden />}>
+          {day.cleared ? <span data-testid="day-cleared">{day.cleared.words}</span> : NOTHING_LINE}
+        </Empty>
+      )}
+      {day?.cleared && (day.groups.length > 0 || day.cannot.length > 0) && (
+        <p data-testid="day-cleared" className="text-[12px] text-zinc-500 [overflow-wrap:anywhere]">
+          {day.cleared.words}
+        </p>
       )}
 
       {day?.groups.map((g) => (

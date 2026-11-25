@@ -237,6 +237,73 @@ async def test_a_change_whose_copy_is_gone_says_so_and_offers_no_undo(tmp_path):
     assert item["before"]["kept"] is False
 
 
+def _age(p, aid: str, at: datetime) -> None:
+    """Pin a change's ledger row AND its Undo row to *at* (the cleanup
+    removes each by its own time)."""
+    with session_scope(p.engine) as db:
+        inv, j = db.get(ToolInvocation, aid), db.get(UndoJournal, aid)
+        inv.created_at = at
+        db.add(inv)
+        if j is not None:
+            j.created_at = at
+            db.add(j)
+        db.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_day_older_than_the_history_keeps_never_reads_as_a_day_with_no_changes(tmp_path):
+    """Review (40-a), the plan's Risk: the cleanup (``prune_events``) deletes
+    a day's ledger and Undo rows together once they pass "Keep activity
+    history" (90 days unless changed, a daily sweep), and a cleanup run by
+    hand (``POST /diagnostics/repair``, ``ironjarvis prune-events``) clears
+    anything older than N days. Such a day's changes are GONE, so neither
+    the page nor changes_list may say nothing changed then ("there were
+    none"): each says what the history keeps."""
+    from iron_jarvis.core.db import prune_events
+    from tests.test_chat_history_tools_v14350 import _ctx
+
+    app, p = _app(tmp_path)
+    assert int(p.config.event_retention_days) == 90
+    client = TestClient(app)
+    listing = p.registry.get("changes_list")
+    ctx = _ctx(p, tmp_path)
+    ws = tmp_path / "ws"
+    old = RD.today_local() - timedelta(days=100)
+    _age(p, await _write(p, ws, "chat", "ledger.txt", "x\n"), _local_utc(old, 11, 0))
+    _sent(p, "chat", "shell", _local_utc(old, 11, 5))
+    before = client.get(f"/changes/day?date={old.isoformat()}").json()
+    assert before["count"] == 1, "listed until the cleanup runs"
+    assert "may no longer be listed" in before["cleared"]["words"], before["cleared"]
+    prune_events(p.engine, 90)
+    body = client.get(f"/changes/day?date={old.isoformat()}").json()
+    assert body["groups"] == [] and body["cannot"] == [], "the cleanup removed them"
+    cleared = body["cleared"]
+    assert cleared and cleared["days"] == 90 and cleared["whole"] is True, cleared
+    assert "keeps what it changed for 90 days" in cleared["words"], cleared
+    assert "no longer listed" in cleared["words"] and "may" not in cleared["words"], cleared
+    res = await listing.execute({"date": old.isoformat()}, ctx)
+    assert res.ok, res.error
+    assert "there were none" not in res.output and "nothing" not in res.output.lower(), res.output
+    assert cleared["words"] in res.output and res.data["cleared"]["days"] == 90, res.output
+    # A kept day is not said to be cleared.
+    assert client.get("/changes/day?date=today").json()["cleared"] is None
+    # A cleanup run by hand ("older than 7 days") removes days the setting
+    # still keeps: said as a cleanup, by its time.
+    ten = RD.today_local() - timedelta(days=10)
+    _age(p, await _write(p, ws, "chat", "ten.txt", "y\n"), _local_utc(ten, 9, 0))
+    prune_events(p.engine, 7)
+    body = client.get(f"/changes/day?date={ten.isoformat()}").json()
+    assert body["groups"] == [] and body["cleared"]["days"] is None and body["cleared"]["whole"] is True
+    assert body["cleared"]["words"].startswith("A cleanup of the activity history removed"), body["cleared"]
+    res = await listing.execute({"date": ten.isoformat()}, ctx)
+    assert "there were none" not in res.output and "A cleanup of the activity history" in res.output, res.output
+    res = await listing.execute({"hours": 720}, ctx)
+    assert "there were none" not in res.output and "A cleanup of the activity history" in res.output, res.output
+    # A later sweep that keeps longer never moves the cleanup's time back.
+    prune_events(p.engine, 90)
+    assert client.get(f"/changes/day?date={ten.isoformat()}").json()["cleared"]["days"] is None
+
+
 @pytest.mark.asyncio
 async def test_a_file_that_is_not_text_shows_its_size_and_time_only(tmp_path):
     app, p = _app(tmp_path)

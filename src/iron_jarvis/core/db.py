@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -715,6 +716,47 @@ def _expiring_undo_backups(db: Any, cutoff: Any) -> list[str]:
     return names
 
 
+#: Next leaps 40-a review: the NEWEST cut-off a cleanup of the activity
+#: history (:func:`prune_events`: the daily "Keep activity history" sweep, or
+#: one run by hand: ``POST /diagnostics/repair``, ``ironjarvis prune-events``)
+#: has applied. Everything older is gone, so Activity › Your day and chat's
+#: ``changes_list`` say a day before it was cleared instead of "nothing
+#: changed" (``settings/records_day.cleared_cutoff``). One small file in the
+#: home holding a time, nothing else.
+HISTORY_CLEARED_FILE = "history_cleared.json"
+
+
+def history_cleared_before(home: Any) -> datetime | None:
+    """The newest cut-off a history cleanup applied, as naive UTC (the
+    ledger's own form); None when none ran. Blocking (one small read);
+    never raises."""
+    if home is None:
+        return None
+    try:
+        raw = json.loads((Path(home) / HISTORY_CLEARED_FILE).read_text(encoding="utf-8"))
+        at = datetime.fromisoformat(str(raw.get("before")))
+    except (OSError, TypeError, ValueError, AttributeError):
+        return None
+    return at.astimezone(timezone.utc).replace(tzinfo=None) if at.tzinfo is not None else at
+
+
+def _note_history_cleared(home: Path, cutoff: datetime) -> None:
+    """Record *cutoff* as how far back the history is cleared, keeping the
+    NEWEST (a later sweep that keeps longer never moves it back: what an
+    earlier cleanup removed stays removed). Never raises."""
+    try:
+        cut = cutoff.astimezone(timezone.utc).replace(tzinfo=None) if cutoff.tzinfo is not None else cutoff
+        prior = history_cleared_before(home)
+        if prior is not None and prior >= cut:
+            return
+        path = Path(home) / HISTORY_CLEARED_FILE
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"before": cut.replace(tzinfo=timezone.utc).isoformat()}), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:  # noqa: BLE001 — the note must never fail a prune
+        logger.debug("history-cleared note skipped", exc_info=True)
+
+
 def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> int:
     """Delete EventRecord + the parallel audit tables (ToolInvocation,
     UndoJournal) older than N days (retention parity). Returns the total count.
@@ -839,6 +881,13 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
             result = db.execute(sa_delete(model).where(model.created_at < cutoff))
             deleted += int(result.rowcount or 0)
         db.commit()
+    # Next leaps 40-a review: how far back the history is now cleared, so a
+    # day before it never reads as a day when nothing changed.
+    try:
+        if engine.url.database and engine.url.database != ":memory:":
+            _note_history_cleared(Path(engine.url.database).parent, cutoff)
+    except Exception:  # noqa: BLE001 — the note must never fail a prune
+        pass
     if stale_refs:
         # The undo blob store lives at <home>/undo/ and the DB at <home>/ironjarvis.db,
         # so the home is the DB file's parent. Best-effort unlink; never raise here.

@@ -526,13 +526,20 @@ def register(app: FastAPI, d) -> None:
     @app.get("/changes/day")
     async def changes_day(date: str = "") -> dict[str, Any]:
         """One LOCAL day's changes, grouped by where they came from, with
-        what cannot be undone listed apart (``records_day.day_changes``)."""
+        what cannot be undone listed apart (``records_day.day_changes``).
+        40-a review: a day older than the history keeps ("Keep activity
+        history", or a cleanup) says so in ``cleared``, never as a day with
+        no changes."""
         from ...settings import records_day as RD
 
         day = RD.parse_day(date) if str(date or "").strip() else RD.today_local()
         if day is None:
             raise HTTPException(status_code=422, detail="date is a day as YYYY-MM-DD")
-        return await asyncio.to_thread(RD.day_changes, d.platform.engine, day, home=d.platform.config.home)
+        cfg = d.platform.config
+        return await asyncio.to_thread(
+            RD.day_changes, d.platform.engine, day, home=cfg.home,
+            keep_days=getattr(cfg, "event_retention_days", 0),
+        )
 
     @app.get("/changes/{action_id}/before-after")
     async def change_before_after(action_id: str) -> dict[str, Any]:
