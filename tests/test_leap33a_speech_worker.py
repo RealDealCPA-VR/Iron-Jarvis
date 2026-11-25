@@ -151,13 +151,20 @@ def test_a_worker_that_stops_making_progress_is_killed_and_the_job_ends_in_words
 
 def test_a_worker_past_its_deadline_is_killed_even_while_it_reports_progress(tmp_path, monkeypatch):
     # Progress keeps moving, but the recording is 1 s long: the deadline is
-    # its length times RTF_CAP, plus the start and the slack.
+    # its length times RTF_CAP, plus the start and the slack. Like the real
+    # worker's _write_progress, a write that fails is skipped: on Windows the
+    # replace is refused while the job reads the file, and a stand-in that
+    # died of that ended "without an answer" before its deadline.
     busy = (
         "import sys, json, time, os\n"
         "r = json.loads(sys.stdin.read()); p = r['progress']\n"
         "for i in range(400):\n"
-        "    open(p + '.t', 'w').write(json.dumps({'heard_s': i * 0.01, 'total_s': 1.0}))\n"
-        "    os.replace(p + '.t', p)\n"
+        "    try:\n"
+        "        with open(p + '.t', 'w') as fh:\n"
+        "            fh.write(json.dumps({'heard_s': i * 0.01, 'total_s': 1.0}))\n"
+        "        os.replace(p + '.t', p)\n"
+        "    except OSError:\n"
+        "        pass\n"
         "    time.sleep(0.05)\n"
     )
     monkeypatch.setattr(J, "_worker_argv", lambda: [sys.executable, "-c", busy])
