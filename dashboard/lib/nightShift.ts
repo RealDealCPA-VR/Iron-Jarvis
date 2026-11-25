@@ -44,9 +44,17 @@ export interface NightTask {
   /** v1.398.0 review: the user's MAIN folder changed while the task ran
    *  (its commands are not confined to its branch) — shown un-folded. */
   mainChanged: boolean;
+  /** Next leaps 12-a: started from the phone with Start (its row says
+   *  "From your phone"); an older Iron Jarvis sends none (false). */
+  fromPhone: boolean;
+  /** 12-a: it starts now, not in the night window. */
+  startNow: boolean;
   startedAt: string | null;
   endedAt: string | null;
 }
+
+/** 12-a: the words a row started from the phone carries. */
+export const FROM_PHONE_WORDS = "From your phone";
 
 /** The note the row shows OPEN when the main folder changed (the daemon's
  *  "outside" note), else "" — never folded under "What happened". */
@@ -116,6 +124,8 @@ export function decodeTask(raw: unknown): NightTask | null {
     branch: str(r.branch, 300),
     notes: (Array.isArray(r.notes) ? (r.notes as unknown[]) : []).map(decodeNote).filter((n): n is NightNote => n !== null),
     mainChanged: r.main_changed === true,
+    fromPhone: r.from_phone === true,
+    startNow: r.start_now === true,
     startedAt: typeof r.started_at === "string" ? r.started_at : null,
     endedAt: typeof r.ended_at === "string" ? r.ended_at : null,
   };

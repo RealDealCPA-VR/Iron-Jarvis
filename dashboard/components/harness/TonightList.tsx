@@ -37,6 +37,7 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import type { ModelOption } from "@/lib/types";
 import {
   EMERGENCY_LINE,
+  FROM_PHONE_WORDS,
   NIGHT_POLL_MS,
   addNight,
   cancelNight,
@@ -417,6 +418,9 @@ function TaskRow({
       <p className="break-words text-[12px] text-zinc-500">
         {folderName(task.folder)}
         {task.branch ? ` · ${task.branch}` : ""} · {howItRunsWords(task, nameOf)}
+        {/* Next leaps 12-a: started from the phone with Start (it runs now,
+            not in the night window; its ending goes to the phone). */}
+        {task.fromPhone ? <span data-testid={`tonight-from-phone-${task.id}`}>{` · ${FROM_PHONE_WORDS}`}</span> : null}
       </p>
       {task.mainChanged ? (
         // v1.398.0 review: never folded, never by hue alone — the icon and

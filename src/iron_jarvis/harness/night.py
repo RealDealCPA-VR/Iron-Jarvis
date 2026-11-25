@@ -199,6 +199,19 @@ class NightTaskRecord(SQLModel, table=True):
     #: Additive; NULL on an older table reads as "". Indexed (the plan;
     #: ``core.db._HOT_INDEXES`` gives an older table the same index).
     chat_thread_id: str = Field(default="", index=True)
+    #: Next leaps 12-a (R2.5, D-12.1): started from the phone with Start — it
+    #: starts NOW, inside the night shift's own limits (how many at once, one
+    #: per folder, its time limit, the pay limit, Emergency stop), the night
+    #: window or not. False = it waits for the window, as every task did.
+    #: Additive; NULL on an older table reads as False.
+    start_now: bool | None = Field(default=False)
+    #: Who asked for it: "" (the Tonight list, a chat) or ``comm:<channel>``
+    #: (the phone, ``harness/phone_code``). Additive.
+    asked_from: str = ""
+    #: Where its start and its ending are told (12-a): ``{channel, sender_id,
+    #: thread_id, reply_to, name}`` of the phone chat that pressed Start.
+    #: Never shown on a page. Additive.
+    report_json: str = ""
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
@@ -274,6 +287,12 @@ def view(row: Any) -> dict[str, Any]:
         "night": str(getattr(row, "night", "") or ""),
         "commit_sha": str(getattr(row, "commit_sha", "") or ""),
         "morning": morning_of(row),
+        # Next leaps 12-a: started from the phone (the Tonight row says so)
+        # and whether it starts now rather than in the night window. Where it
+        # reports (``report_json``) stays off every page.
+        "start_now": bool(getattr(row, "start_now", False) or False),
+        "asked_from": str(getattr(row, "asked_from", "") or ""),
+        "from_phone": str(getattr(row, "asked_from", "") or "").startswith("comm:"),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
         "started_at": _iso(row.started_at),
@@ -306,9 +325,11 @@ def _queued_rows(db: Any) -> list[NightTaskRecord]:
 
 def add_task(engine: Any, *, folder: str, words: str, provider: str = "", model: str = "",
              team: bool = False, try_on: "list[dict[str, str]] | None" = None,
-             account: str = "") -> dict[str, Any]:
+             account: str = "", start_now: bool = False, asked_from: str = "",
+             report_json: str = "") -> dict[str, Any]:
     """Queue one task LAST. The caller checked the folder and the models
-    (the route). BLOCKING."""
+    (the route). ``start_now`` / ``asked_from`` / ``report_json``: next leaps
+    12-a, a task the phone's Start made (``harness/phone_code``). BLOCKING."""
     text = str(words or "").strip()
     if not text:
         raise NightRefused(NO_WORDS)
@@ -327,6 +348,7 @@ def add_task(engine: Any, *, folder: str, words: str, provider: str = "", model:
             folder=str(folder), words=text, provider=str(provider or ""), model=str(model or ""),
             team=bool(team), try_on_json=json.dumps(list(try_on or [])) if try_on else "",
             position=position, account=str(account or ""),
+            start_now=bool(start_now), asked_from=str(asked_from or ""), report_json=str(report_json or ""),
         )
         db.add(row)
         db.commit()
@@ -658,6 +680,14 @@ def report_ended(engine: Any, task_id: str, *, event_bus: Any = None) -> dict[st
                 return {"ok": False, "why": "no such task"}
             task = view(row)
             chat = _cd.clean_chat_thread_id(getattr(row, "chat_thread_id", "") or "")
+        if task.get("from_phone"):
+            # Next leaps 12-a: a task the phone started tells ITS ending to
+            # the phone chat that pressed Start (``phone_code.deliver``, read
+            # from this record), and nowhere else: one notice per outcome.
+            from .phone_code import STEP_ENDED, publish
+
+            publish(event_bus, task["id"], STEP_ENDED)
+            return {"ok": True, "why": "told the phone"}
         if not chat or task["state"] not in _REPORT_WORDS:
             return {"ok": False, "why": "nothing to report"}
         morning = task.get("morning") if isinstance(task.get("morning"), dict) else {}
@@ -814,13 +844,20 @@ def awake_needed(engine: Any, config: Any, now: "datetime | None" = None) -> boo
             queued = db.exec(
                 select(NightTaskRecord.id).where(NightTaskRecord.state == QUEUED)
             ).first()
+            # Next leaps 12-a: a task the phone started waits for room NOW,
+            # not for the window.
+            now_task = db.exec(
+                select(NightTaskRecord.id).where(
+                    NightTaskRecord.state == QUEUED, NightTaskRecord.start_now == True,  # noqa: E712
+                )
+            ).first()
         if queued is None:
             return False
         from ..agents.orchestrator import emergency_stop_on
 
         if emergency_stop_on(config):
             return False
-        if window_open(config, now):
+        if now_task is not None or window_open(config, now):
             return True
         # v1.398.0 review: the plan's own words — "keep-awake holds while a
         # night task is QUEUED or running". Holding only once the window was
@@ -1065,6 +1102,21 @@ BY_RESTART = "restart"
 #: v1.406.0 part 3: a fix of a pull request's failing checks
 #: (``daemon/routes/ci_watch``) — Emergency stop covers it like the rest.
 BY_CI = "ci"
+#: Next leaps 12-a: the first turn of a task the phone's Start made
+#: (``harness/phone_code``) — a night task's own first turn, by another door.
+BY_PHONE = "phone"
+#: Who starts a task's OWN first turn (never a carry-on of it).
+TASK_STARTERS = (BY_NIGHT, BY_PHONE)
+
+
+def may_run_now(task: "dict[str, Any] | None", config: Any, now: "datetime | None" = None) -> bool:
+    """May this task start, or carry on by itself, now (next leaps 12-a,
+    D-12.1)? A task the phone started with Start runs NOW, inside the night
+    shift's other limits; every other task only inside the night window.
+    Pure (the clock)."""
+    if task is not None and task.get("start_now"):
+        return True
+    return window_open(config, now)
 
 _UNATTENDED: dict[str, tuple[str, str]] = {}
 _UNATTENDED_LOCK = threading.Lock()
@@ -1117,7 +1169,7 @@ def stop_unattended_turns(engine: Any = None, *, note: str = EMERGENCY_NOTE) -> 
         except Exception:  # noqa: BLE001 — one turn never keeps the rest going
             log.warning("Emergency stop could not stop coding turn %s", turn_id, exc_info=True)
             continue
-        if engine is not None and by == BY_NIGHT and thread_id:
+        if engine is not None and by in TASK_STARTERS and thread_id:
             task = running_task_for(engine, thread_id)
             if task is not None:
                 add_note(engine, task["id"], "emergency", note)
@@ -1433,7 +1485,8 @@ def last_reply_line(messages: list[dict[str, Any]], turn_ids: "set[str] | None" 
 
 
 __all__ = [
-    "BY_CI", "BY_NIGHT", "BY_PERSON", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED", "FAILED",
+    "BY_CI", "BY_NIGHT", "BY_PERSON", "BY_PHONE", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED",
+    "FAILED", "TASK_STARTERS", "may_run_now",
     "NEEDS_YOU", "NIGHT_TURN", "NightRefused", "NightTaskRecord", "NightTurn", "POSTURE", "QUEUED",
     "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
     "card_wait_seconds", "current", "edit_task", "finish_needs_you", "finish_task", "finish_unmet",

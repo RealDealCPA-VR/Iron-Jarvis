@@ -72,6 +72,7 @@
     "code_load",
     "code_run",
     "code_search",
+    "code_start",
     "coding_reply_check",
     "compare_documents",
     "computer_use_status",
@@ -327,6 +328,7 @@
     "code_load": "open a saved script",
     "code_run": "run a saved script",
     "code_search": "search its saved scripts",
+    "code_start": "ask on your phone before starting coding work in a folder",
     "coding_reply_check": "look up whether a coding reply's tests passed",
     "compare_documents": "compare documents",
     "computer_use_status": "check the computer control settings",
@@ -734,6 +736,10 @@
     "code_search": [
       "Searched its saved scripts",
       "Searching its saved scripts"
+    ],
+    "code_start": [
+      "Asked on your phone before starting coding work in a folder",
+      "Asking on your phone before starting coding work in a folder"
     ],
     "coding_reply_check": [
       "Looked up whether a coding reply's tests passed",
@@ -1376,6 +1382,7 @@
     "code_load": "",
     "code_run": "",
     "code_search": "",
+    "code_start": "",
     "coding_reply_check": "",
     "compare_documents": "",
     "computer_use_status": "",

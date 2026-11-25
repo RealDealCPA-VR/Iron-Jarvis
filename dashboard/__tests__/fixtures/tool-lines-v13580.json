@@ -272,6 +272,10 @@
       "ok": "searched its saved scripts",
       "failed": "tried a script search and it failed"
     },
+    "code_start": {
+      "ok": "asked on your phone before starting coding work in a folder",
+      "failed": "tried a coding work card and it failed"
+    },
     "coding_reply_check": {
       "ok": "looked up whether a coding reply's tests passed",
       "failed": "tried a test result lookup and it failed"

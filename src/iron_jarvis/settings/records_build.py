@@ -101,10 +101,15 @@ FOLDER_TOOLS: tuple[str, ...] = (
 )
 #: 22-a (R1.9): Iron Jarvis's check after each Build › Code reply.
 CHECK_TOOLS: tuple[str, ...] = ("build_checks_set", "coding_reply_check")
+#: Next leaps 12-a: coding work started from the phone (asks on ONE card;
+#: writes no task itself).
+PHONE_TOOLS: tuple[str, ...] = ("code_start",)
 #: The ones that only READ: a question still arms them.
 READERS = frozenset({"night_task_list", "build_folder_show", "coding_reply_check"})
 #: Each tool's default permission (``core/config.py`` holds the same rows).
 TIERS: dict[str, str] = {
+    # 12-a: allow — it starts nothing; the sender's own Start on its card does.
+    "code_start": "allow",
     "night_task_add": "ask",
     "night_task_list": "allow",
     "night_task_cancel": "ask",
@@ -1720,9 +1725,66 @@ def newest_check(platform: Any, ref: str) -> "tuple[Any, dict[str, Any] | None, 
     return row, rec, facts
 
 
+class CodeStartTool(Tool):
+    """Next leaps 12-a (R2.5): "in the website folder, fix the broken contact
+    form", said to Iron Jarvis on the PHONE. It WRITES NO TASK: it finds the
+    folder among the ones the user has used, runs every check the night
+    task's add and start would run, and asks the sender who wrote it on ONE
+    card (Start, Not now; ``harness/phone_code.propose``) that follows the
+    reply. Only the sender's own Start queues the work — which is why it is
+    not on the low-trust list while ``night_task_add`` stays there. Armed
+    only in the phone's own chat turn (``phone_code.door_open``), through the
+    one arming table both chat lanes read (:func:`build_tools_for`)."""
+
+    name = "code_start"
+    description = (
+        "Start coding work from the user's phone in a folder they have used in Iron Jarvis: `folder` is "
+        "the folder as the user named it (its name, for example website), `words` EXACTLY what the user "
+        "asked the work to do (their own words; the card shows them and Start queues them), `when` now "
+        "(the default) or tonight when the user said tonight. It starts nothing: the user gets a card with "
+        "Start and Not now right after your reply. Do not repeat the card; say in one short line that it "
+        "waits for their Start."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "folder": {"type": "string"},
+            "words": {"type": "string"},
+            "when": {"type": "string", "enum": ["now", "tonight"]},
+        },
+        "required": ["folder", "words"],
+    }
+
+    def __init__(self, platform: Any) -> None:
+        self.platform = platform
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from ..harness import phone_code as PC
+
+        who = PC.asking()
+        if who is None:
+            return ToolResult(ok=False, error=PC.NOT_ON_PHONE)
+        card = await PC.from_words(
+            self.platform, who, str(args.get("folder") or ""), str(args.get("words") or ""),
+            str(args.get("when") or PC.WHEN_NOW),
+        )
+        if not card.ok:
+            return ToolResult(ok=False, error=card.words)
+        who.cards.append(card)
+        return ToolResult(
+            ok=True,
+            output=(
+                "This card goes to the user's phone right after your reply, with Start and Not now; "
+                f"nothing starts until they press Start:\n{card.words}"
+            ),
+            data={"prompt_id": card.prompt_id, "kind": card.kind},
+        )
+
+
 def build_record_tools(platform: Any) -> list[Tool]:
-    """The eleven tools, for ``records.record_tools``."""
+    """The twelve tools, for ``records.record_tools``."""
     return [
+        CodeStartTool(platform),
         NightTaskAddTool(platform),
         NightTaskListTool(platform),
         NightTaskCancelTool(platform),
@@ -2097,6 +2159,45 @@ def _folder_request(text: str, clauses: list[str]) -> bool:
     return False
 
 
+#: 12-a: what asks for coding work in a folder — a work verb, and the folder
+#: named as one ("the website folder", "my shop repo") or by a name the user
+#: has used in Iron Jarvis ("in website, fix …"). Linear: word alternations.
+_CODE_WORK_VERB = re.compile(
+    r"\b(?:fix|add|change|update|refactor|write|implement|build|make|remove|delete|rename|create|clean|tidy"
+    r"|improve|upgrade|bump|test|debug|port|migrate|start|run|redo|rewrite|replace|move)\b",
+    re.IGNORECASE,
+)
+_CODE_PLACE = re.compile(r"\b(?:folder|repo|repository|codebase|project|coding\s+work|code)\b", re.IGNORECASE)
+
+
+def _phone_code_request(text: str) -> bool:
+    """Does this message, in the phone's own chat turn, ask for coding work
+    in a folder (12-a)? Off the phone, never. A question never arms it.
+    May read the folders' names (BLOCKING: the POST lane arms off the loop).
+    Never raises."""
+    try:
+        from ..harness import phone_code as PC
+
+        if not PC.door_open():
+            return False
+        t = text or ""
+        if not t.strip() or R.is_question(t) or _CODE_WORK_VERB.search(t) is None:
+            return False
+        if _CODE_PLACE.search(t) is not None:
+            return True
+        who = PC.asking()
+        engine = getattr(getattr(who, "store", None), "engine", None)
+        if engine is None:
+            return False
+        for folder in PC.used_folders(engine):
+            name = str(folder.get("name") or "").strip()
+            if name and re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", t, re.IGNORECASE):
+                return True
+        return False
+    except Exception:  # noqa: BLE001 — a matcher fault arms nothing
+        return False
+
+
 def build_tools_for(text: str) -> list[str]:
     """The tools of this module a chat message asks for (called ONCE by
     ``records.record_tools_for``). A request about tonight's list arms the
@@ -2108,6 +2209,10 @@ def build_tools_for(text: str) -> list[str]:
         t = (text or "")[:4000]
         low = t.lower()
         out: list[str] = []
+        # Next leaps 12-a: coding work asked for in the PHONE's own chat turn
+        # (only there: ``phone_code.door_open``) offers the one card.
+        if _phone_code_request(t):
+            out.append("code_start")
         nightish = any(w in low for w in ("tonight", "night", "overnight", "task", "queue", "sleep", "move", "bump"))
         # 22-a (R1.9): the check after each Build › Code reply.
         checkish = "test" in low or "check" in low
@@ -2159,6 +2264,7 @@ def build_tools_for(text: str) -> list[str]:
 
 
 __all__ = [
-    "CHECK_TOOLS", "FOLDER_TOOLS", "KINDS", "NIGHT_TOOLS", "READERS", "SNAP", "TIERS", "build_record_tools",
+    "CHECK_TOOLS", "FOLDER_TOOLS", "KINDS", "NIGHT_TOOLS", "PHONE_TOOLS", "READERS", "SNAP", "TIERS",
+    "build_record_tools",
     "build_tools_for", "resolve_folder", "restore_kind",
 ]

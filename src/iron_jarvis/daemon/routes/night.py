@@ -552,6 +552,10 @@ async def morning_pass(d: Any, settled: "list[str] | None" = None) -> list[str]:
     now = N.now_local()
     current = M.night_key(now, start, end) if N.window_open(config, now) else ""
     tasks = await asyncio.to_thread(N.list_tasks, engine)
+    # Next leaps 12-a: a task the phone started tells its own ending to the
+    # phone (``phone_code.deliver``); it is never in a night's summary too —
+    # one notice per outcome — and never holds one back.
+    tasks = [t for t in tasks if not t.get("from_phone")]
     queued = any(t["state"] == N.QUEUED for t in tasks)
     emergency = _emergency(d)
     by_night: dict[str, list[dict[str, Any]]] = {}
@@ -748,7 +752,9 @@ async def settle_running(d: Any) -> list[str]:
             _keep_held(d, tid)
             continue
         waiting = bool(setup.get("account_wait"))
-        if (not stopping and waiting and N.window_open(platform.config)
+        # Next leaps 12-a: a task the phone started waits on its account by
+        # day too (it runs now, inside its time limit).
+        if (not stopping and waiting and N.may_run_now(task, platform.config)
                 and N.minutes_left(task, platform.config) >= 1.0):
             # Waiting on its account's reset (Resume when ready carries it
             # on, inside the window): still the night's task.
@@ -761,7 +767,7 @@ async def settle_running(d: Any) -> list[str]:
             # by day, under the night's posture.
             await asyncio.to_thread(S.update, engine, thread, setup={"account_wait": None})
             if not stopping:
-                forced.append(("account", N.WAIT_WINDOW_CLOSED if not N.window_open(platform.config)
+                forced.append(("account", N.WAIT_WINDOW_CLOSED if not N.may_run_now(task, platform.config)
                                else N.WAIT_TIME_USED_UP))
         if thread in kept:
             # v1.398.0 review: a cut-off reply nothing carried on is never
@@ -968,8 +974,12 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
                 if lg is None:
                     raise CreateRefused("The models to try it on could not be found in your model menu.")
             else:
+                # Next leaps 12-a: a task the phone started is that door's
+                # own first turn (``N.BY_PHONE``: listed for Emergency stop,
+                # the night posture and wait, like the night's own).
                 await start_build_turn(
-                    d, row.id, task["words"], turn_id, started_by=N.BY_NIGHT,
+                    d, row.id, task["words"], turn_id,
+                    started_by=N.BY_PHONE if task.get("from_phone") else N.BY_NIGHT,
                     model_note=TEAM_NOTE if task.get("team") else "",
                 )
             await asyncio.to_thread(N.set_session, engine, tid, turn_id=turn_id)
@@ -985,6 +995,12 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
                 except Exception:  # noqa: BLE001 — the stop matters more than its author
                     now_task = None
                 _stop_turn(turn_id, by=_stop_author_of(now_task, False))
+            elif task.get("from_phone"):
+                # Next leaps 12-a: the phone that pressed Start hears it has
+                # started, and on which branch (``phone_code.deliver``).
+                from ...harness.phone_code import STEP_STARTED, publish_now
+
+                await publish_now(getattr(platform, "event_bus", None), tid, STEP_STARTED)
             return True
         except _StoppedWhileStarting:
             # Nothing started: the task ends STOPPED with the user's own note
@@ -1053,9 +1069,13 @@ async def _night_pass(d: Any) -> dict[str, list[str]]:
     config = platform.config
     if _emergency(d):
         return out
-    if not N.window_open(config):
-        return out
     engine = platform.engine
+    queued = await asyncio.to_thread(N.rows_in, engine, N.QUEUED)
+    # Next leaps 12-a (D-12.1): a task the phone started with Start runs NOW,
+    # inside every other limit below; the rest wait for the night window.
+    queued = [t for t in queued if N.may_run_now(t, config)]
+    if not queued:
+        return out
     running = await asyncio.to_thread(N.rows_in, engine, N.RUNNING)
     # Third plan NA7 (decision G12): "Night tasks at once" counts REPLIES — a
     # task tried on several models runs up to that many of its attempts at a
@@ -1064,7 +1084,6 @@ async def _night_pass(d: Any) -> dict[str, list[str]]:
     busy = {S.folder_key(t["folder"]) for t in running}
     if room <= 0:
         return out
-    queued = await asyncio.to_thread(N.rows_in, engine, N.QUEUED)
     for task in queued:
         weight = N.task_weight(task, config)
         if room <= 0:

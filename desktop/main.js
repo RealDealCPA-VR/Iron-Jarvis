@@ -4457,6 +4457,8 @@ const TOOL_WORDS = {
   build_team_clear: "stop using a coding team in a folder",
   // 22-a (R1.9): Iron Jarvis's check after each Build › Code reply (pinned equal).
   build_checks_set: "turn tests after each Build › Code reply on or off in a folder",
+  // Next leaps 12-a: the phone's card before coding work starts (pinned equal).
+  code_start: "ask on your phone before starting coding work in a folder",
 };
 
 //: The batch forms ("rename or move 4 files") for the asks that come in
@@ -4570,6 +4572,7 @@ const TOOL_WORDS_BUILTIN = {
   code_load: "open a saved script",
   code_run: "run a saved script",
   code_search: "search its saved scripts",
+  code_start: "ask on your phone before starting coding work in a folder",
   coding_reply_check: "look up whether a coding reply's tests passed",
   compare_documents: "compare documents",
   computer_use_status: "check the computer control settings",

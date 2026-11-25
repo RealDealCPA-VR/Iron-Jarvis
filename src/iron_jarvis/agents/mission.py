@@ -415,6 +415,8 @@ ASK_WORDS: dict[str, str] = {
     "build_team_set": "set a folder's coding team",
     "build_team_clear": "stop using a coding team in a folder",
     "build_checks_set": "turn tests after each Build › Code reply on or off in a folder",
+    # Next leaps 12-a: the phone's card before coding work starts.
+    "code_start": "ask on your phone before starting coding work in a folder",
 }
 
 
@@ -709,6 +711,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # Twin: lib/runWords.ts AGENT_TOOLS.
     "build_checks_set": ("switched tests after each Build › Code reply on or off in a folder", "folder tests switch"),
     "coding_reply_check": ("looked up whether a coding reply's tests passed", "test result lookup"),
+    # Next leaps 12-a: the phone's card before coding work starts.
+    # Twin: lib/runWords.ts AGENT_TOOLS.
+    "code_start": ("asked on your phone before starting coding work in a folder", "coding work card"),
 }
 
 #: browser/tools.py's 15 built-in browser tools, by EXACT name (the

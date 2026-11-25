@@ -269,6 +269,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # check of a session (read only); chat arms them
     # (records_build.build_tools_for); pinned by tests/test_records_build_checks_v1.py.
     "build_checks_set", "coding_reply_check",
+    # Next leaps 12-a: coding work from the phone — the card goes to the
+    # sender the phone door proved, so only the phone's own chat turn arms it
+    # (records_build.build_tools_for, phone_code.door_open); an agent run has
+    # nobody's phone to ask. Pinned by tests/test_leap12a_tool_starts_nothing.py.
+    "code_start",
     # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
     # a model server, its default model, an Iron-Proxy account and a memory
     # base from chat — a card + Undo where the user is present; pinned by

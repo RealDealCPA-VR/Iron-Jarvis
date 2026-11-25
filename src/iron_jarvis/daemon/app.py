@@ -1130,6 +1130,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     platform.event_bus.add_handler(_on_workflow_waiting)
 
+    def _on_phone_code(event: Any) -> None:
+        """Next leaps 12-a: a phone task's start and its ending, read from
+        its record, to the phone chat that pressed Start (a sync bus handler,
+        off the loop; fully guarded in ``harness/phone_code.deliver``)."""
+        from ..harness.phone_code import EVENT as _PHONE_CODE_EVENT
+        from ..harness.phone_code import deliver as _deliver_phone_code
+
+        if getattr(event, "type", "") != _PHONE_CODE_EVENT:
+            return
+        _deliver_phone_code(
+            event, notifier=platform.notifier, thread_store=comm_thread_store,
+            engine=platform.engine, config=platform.config,
+        )
+
+    platform.event_bus.add_handler(_on_phone_code)
+
     # CX-05 "inbound everything": the calendar trigger poller. Cheap to build (no
     # network); OFF unless calendar_trigger_enabled AND a secret ICS URL is stored
     # (its .enabled() gates loop creation, exactly like inbound_poller). Fires

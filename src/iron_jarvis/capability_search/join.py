@@ -77,6 +77,8 @@ MAX_JOINING_LOOKUPS = 2
 NEVER_JOINED = frozenset({
     "shell", "repl", "run_code", "code_run", "tool_script", "apply_changes",
     "process_start", "process_write",
+    # Next leaps 12-a: the phone's own door arms it (``phone_code.door_open``).
+    "code_start",
 })
 
 #: The settings tools: together they take ONE of a lookup's places.

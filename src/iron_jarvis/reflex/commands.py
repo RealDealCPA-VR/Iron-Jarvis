@@ -28,6 +28,7 @@ _HELP = (
     "/runs — recent workflow runs\n"
     "/cancel <run_id> — stop a running workflow\n"
     "/answer <text> — answer a waiting workflow question\n"
+    "/code <folder>: <what to do> — start coding work in a folder you have used (add tonight after the folder to queue it for tonight)\n"
     "/agents — list remote agents\n"
     "/ask <agent> <task> — ask a remote agent\n"
     "/sessions — recent sessions\n"
@@ -167,6 +168,14 @@ class CommandInterpreter:
         from ..comm.prompts import NOTHING_WAITING_REPLY
 
         return NOTHING_WAITING_REPLY
+
+    async def _cmd_code(self, _rest: str) -> str:
+        # Next leaps 12-a: the REAL "/code" lives in the inbound poller, which
+        # knows who sent it (the card is theirs to answer). Reaching this
+        # handler means no phone door is wired here, so nothing is started.
+        from ..harness.phone_code import NOT_ON_PHONE
+
+        return NOT_ON_PHONE
 
     async def _cmd_agents(self, _rest: str) -> str:
         from ..agents.remote import RemoteAgentRegistry

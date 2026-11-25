@@ -2044,6 +2044,58 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Start coding work from your phone (v1.578.0)
+
+Text Iron Jarvis from Telegram, Slack or email: "in the website folder, fix
+the broken contact form", or the command `/code website: fix the broken
+contact form`. Your phone answers with ONE card first, and nothing starts
+until you press **Start**:
+
+"Start coding work in website (code/website) now? It works on a new branch
+of its own, edits and runs commands only there, may take up to 90 minutes,
+and nothing is merged. Uses your Claude plan (42% of this 5-hour window
+used). What it will do: fix the broken contact form", with **Start** and
+**Not now** (or reply 1 or 2, which always works).
+
+- **What it uses.** The card names the model it runs on and what that costs
+  you: your plan and how much of its window is used, a model on this PC or
+  your network at no cost, or a model billed per use and what is left of
+  your monthly pay-per-use limit. The usage figure is the one Iron Jarvis
+  already has; it never asks the vendor just to fill the card.
+- **Only folders you have used.** It starts work only in a folder you have
+  worked in with Iron Jarvis: a coding session's folder (by the name the
+  Coding sessions list shows, or the folder's own name), a project's folder,
+  or the folder of an earlier night task. Any other name is refused, and the
+  reply names your folders. When two of your folders share a name, it asks
+  which one, numbered. A full path counts only when it is one of them.
+- **It runs now, like a night task.** After Start it runs on this PC the way
+  a night task does, at once instead of waiting for the night window: on a
+  new branch of its own, editing and running commands only there; anything
+  else it would need is asked on your phone and skipped if nobody answers.
+  It keeps the night shift's limits (how many run at once, one per folder,
+  the time limit, your pay-per-use limit), so it may wait for room, and the
+  reply says so. Your phone hears "Started on branch ij/…" when it begins.
+- **When it ends**, ONE message, written from Iron Jarvis's own record of the
+  task, never from the model's words: "Done in website: 3 files changed;
+  tests passed. Its work is committed on the branch ij/…; nothing is
+  merged.", or "Checks failed", "Needs you" with the first reason, or
+  "Stopped" with why. Iron Jarvis commits the work to its branch; pushing
+  and opening a pull request stay your presses. The task is on Coding
+  sessions › Tonight, marked **From your phone**, and it is not in the night
+  shift's morning summary too.
+- **Tonight instead.** Say tonight ("tonight, in the website folder, …", or
+  `/code website tonight: …`) and the card queues it for the night window.
+- **Checked before the card, and again at Start.** Emergency stop, a folder
+  that is not a git repository with a commit, a model billed per use with no
+  room left under your limit, and a Local only phone chat whose model is not
+  on this PC or your network are each refused in words, and no card is
+  shown. If one of these changes between the card and your Start, nothing
+  starts and the reply says why.
+- **Only from you.** Only someone on the destination's allowlist can ask,
+  and only you can answer your own card; the first answer counts, and a
+  second press reads **That was already answered**. A card waits an hour.
+  `/help` lists `/code`.
+
 ## Big extensions work the way you set them (v1.577.0)
 
 An extension with dozens of tools, such as an accounting app, now works

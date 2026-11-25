@@ -319,6 +319,11 @@ class EventType:
     # with a line per task; "This PC" stays quiet for it
     # (comm/notifier.bell_pings). No session id.
     BUILD_NIGHT_SUMMARY = "build.night_summary"
+    # Next leaps 12-a (harness/phone_code): coding work the PHONE started has
+    # started, or ended: {task_id, step: "started" | "ended"} — never its
+    # words (the daemon's own handler reads them from the task's record and
+    # tells the phone chat that pressed Start). Not a bell row, not an alert.
+    BUILD_PHONE_CODE = "build.phone_code"
     # v1.406.0 part 3 (a pull request's checks, watched and fixed —
     # harness/ci_fix, daemon/routes/ci_watch): ONE STEP of the watch on a
     # coding session's pull request — checks failed, a fix started, the

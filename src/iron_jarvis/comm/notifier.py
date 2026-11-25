@@ -218,6 +218,7 @@ EVENT_WORDS: dict[str, str] = {
     "chat.turn_finished": "A long chat reply finished",
     "build.turn_stalled": "A coding session's reply stalled",
     "build.night_summary": "The night shift's summary is ready",
+    "build.phone_code": "Coding work from your phone started or ended",
     "build.ci_step": "A pull-request check step",
     "build.ci_done": "A pull-request check ended",
     "library.proposal": "A lesson or rule was proposed for a folder",

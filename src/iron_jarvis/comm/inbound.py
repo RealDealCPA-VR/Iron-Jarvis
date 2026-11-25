@@ -70,6 +70,8 @@ from .prompts import (
     APPROVAL_KIND,
     APPROVAL_USAGE_REPLY,
     APPROVAL_WORDS,
+    CODE_FOLDER_KIND,
+    CODE_START_KIND,
     DONE_DATA,
     FILE_SEND_KIND,
     FILE_SEND_OPTIONS,
@@ -198,12 +200,16 @@ class _PressHold:
 _PRESS_HOLD: ContextVar["_PressHold | None"] = ContextVar("ij_press_hold", default=None)
 #: The answers whose reply the changed button says by itself.
 _PRESS_QUIET = frozenset({"approval_answered", "approval_expired", "answer_superseded",
-                          "file_sent", "file_gone"})
+                          "file_sent", "file_gone",
+                          # 12-a: "Starting" / "Not started" on the button say it.
+                          "code_started", "code_not_now", "code_gone"})
 #: The answers after which the buttons say what was decided.
 _PRESS_DONE = frozenset({"approval_answered", "answered", "voice_answered", "voice_asked",
-                         "file_sent", "file_send_failed", "file_kept"})
+                         "file_sent", "file_send_failed", "file_kept",
+                         "code_started", "code_queued", "code_not_now", "code_card"})
 #: The answers after which the buttons say it was already answered.
-_PRESS_GONE = frozenset({"approval_expired", "answer_superseded", "answer_expired", "file_gone"})
+_PRESS_GONE = frozenset({"approval_expired", "answer_superseded", "answer_expired", "file_gone",
+                         "code_gone"})
 
 
 def _with_files_note(text: str, count: int) -> str:
@@ -212,6 +218,24 @@ def _with_files_note(text: str, count: int) -> str:
     if not count:
         return text
     return f"{text}\n\n{files_not_read_note(count)}"
+
+
+def _code_prompt_fresh(prompt: Any) -> bool:
+    """12-a: a coding-work card (or folder pick) is answerable for
+    ``phone_code.CARD_TTL_S`` after it was asked. Never raises (a doubt
+    reads as stale: nothing starts from a card nobody can date)."""
+    try:
+        from ..harness.phone_code import CARD_TTL_S
+
+        created = getattr(prompt, "created_at", None)
+        if created is None:
+            return False
+        now = utcnow()
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=now.tzinfo)
+        return (now - created).total_seconds() <= CARD_TTL_S
+    except Exception:  # noqa: BLE001
+        return False
 
 
 #: How long that question waits for "1" or "2".
@@ -1506,6 +1530,15 @@ class InboundPoller:
         ):
             return await self._handle_answer_command(name, ch, msg, text, display, chat_on)
 
+        # NEXT LEAPS 12-a: "/code <folder>: <what to do>" starts coding work
+        # (one card, Start and Not now). Handled HERE, beside "/answer": the
+        # card is registered for THIS sender, whom only this door knows (the
+        # command grammar sees text alone).
+        if self.prompt_store is not None and self.platform is not None and (
+            low == "/code" or low.startswith("/code ")
+        ):
+            return await self._handle_code_command(name, ch, msg, text, display, chat_on)
+
         # COMMAND GRAMMAR: an authorized "/command" is a fast, deterministic
         # operation (status / run a workflow / cancel / ask a remote agent),
         # replied immediately — no agent session spun up. Non-command text falls
@@ -1849,6 +1882,13 @@ class InboundPoller:
         )
         body = ChatBody(messages=history, auto_tools=True, project_id=project_id, thread_id=tid or "",
                         **files_here)
+        # NEXT LEAPS 12-a: the sender THIS door proved, for the chat's
+        # ``code_start`` (it asks only them, and only from here); the cards it
+        # asked go out after the reply.
+        who = await self._asking_for(name, msg, display, True, tid=tid)
+        from ..harness.phone_code import reset_asking, set_asking
+
+        asking_token = set_asking(who)
         try:
             # LOW TRUST (v1.298.0): the lane drops its auto-armed memory
             # writers for a turn the phone started (``_chat_turn_kwargs``).
@@ -1862,6 +1902,7 @@ class InboundPoller:
                     self.platform, self.personas, body, **self._chat_turn_kwargs(name)
                 )
         except HTTPException as exc:
+            reset_asking(asking_token)
             reply = f"I hit a problem: {_failure_words_for_phone(exc)}"
             if tid:
                 tid = self._safe_append(
@@ -1869,8 +1910,10 @@ class InboundPoller:
                     channel=name, sender_id=msg.sender_id, display=display,
                 )
             sent = await self.send_chunked(ch, reply, chat_id=msg.reply_to)
+            await self._send_asked_cards(name, ch, msg, who, tid=tid, display=display)
             return {"channel": name, "status": "chat_error", "thread_id": tid, "sent": sent}
         except Exception as exc:  # noqa: BLE001 — the loop must reply, not die
+            reset_asking(asking_token)
             log.exception("chat turn failed on %r", name)
             # v1.420.0 (C6.5): the run's plain sentence, never a class name.
             reply = f"I hit a problem: {_run_problem(exc, manager=self._providers(), started=False)}"
@@ -1880,7 +1923,9 @@ class InboundPoller:
                     channel=name, sender_id=msg.sender_id, display=display,
                 )
             sent = await self.send_chunked(ch, reply, chat_id=msg.reply_to)
+            await self._send_asked_cards(name, ch, msg, who, tid=tid, display=display)
             return {"channel": name, "status": "chat_error", "thread_id": tid, "sent": sent}
+        reset_asking(asking_token)
 
         if not result.get("escalate"):
             reply = str(result.get("reply") or "").strip() or "(no reply)"
@@ -1907,12 +1952,15 @@ class InboundPoller:
             # A files question about to be asked takes in an open one: that
             # one is not announced first (10-b review).
             asks = await self._files_will_ask(name, ch, picked, tid=tid)
+            # 12-a: a card this turn asked follows the reply; it is not
+            # announced as "still waiting" first.
             outbound = without_figure_links(reply) + await self._reminder(
-                name, msg.sender_id, skip_files=asks)
+                name, msg.sender_id, skip_files=asks, skip_code=bool(who.cards))
             sent = await self.send_chunked(ch, outbound, chat_id=msg.reply_to)
             files = await self._files_back(name, ch, msg, picked, tid=tid, display=display)
+            cards = await self._send_asked_cards(name, ch, msg, who, tid=tid, display=display)
             return {"channel": name, "status": "chat", "thread_id": tid, "sent": sent,
-                    "files": files.get("files", "none")}
+                    "files": files.get("files", "none"), "cards": cards}
 
         # ESCALATE: ack now, run the normal supervised session (same
         # orchestrator + permission engine — a remote sender gains no power),
@@ -1944,6 +1992,7 @@ class InboundPoller:
                     channel=name, sender_id=msg.sender_id, display=display,
                 ) or tid
             sent = await self.send_chunked(ch, refusal, chat_id=msg.reply_to)
+            await self._send_asked_cards(name, ch, msg, who, tid=tid, display=display)
             return {
                 "channel": name,
                 "status": "chat_refused",
@@ -1958,6 +2007,7 @@ class InboundPoller:
                 channel=name, sender_id=msg.sender_id, display=display,
             ) or tid
         sent = await self.send_chunked(ch, ESCALATE_ACK, chat_id=msg.reply_to)
+        await self._send_asked_cards(name, ch, msg, who, tid=tid, display=display)
         _spawn_kwargs: dict[str, Any] = {}
         if esc_provider:
             _spawn_kwargs["provider"] = esc_provider
@@ -2329,9 +2379,11 @@ class InboundPoller:
         this PC. Every async door uses this, never the sync look."""
         return await asyncio.to_thread(self._fresh_open_prompt_ex, channel, sender_id)
 
-    async def _reminder(self, channel: str, sender_id: Any, *, skip_files: bool = False) -> str:
+    async def _reminder(self, channel: str, sender_id: Any, *, skip_files: bool = False,
+                        skip_code: bool = False) -> str:
         """:meth:`_pending_reminder` off the event loop (see :meth:`_open_prompt`)."""
-        return await asyncio.to_thread(self._pending_reminder, channel, sender_id, skip_files=skip_files)
+        return await asyncio.to_thread(self._pending_reminder, channel, sender_id, skip_files=skip_files,
+                                       skip_code=skip_code)
 
     def _fresh_open_prompt_ex(self, channel: str, sender_id: Any) -> tuple[Any, str]:
         """The identity's newest open prompt, EXPIRING it first when its run
@@ -2387,6 +2439,13 @@ class InboundPoller:
             from . import files_back
 
             if not files_back.prompt_fresh(prompt):
+                self.prompt_store.expire(prompt.id, status="expired")
+                return False, ""
+            return True, ""
+        if kind in (CODE_START_KIND, CODE_FOLDER_KIND):
+            # 12-a: a card (or a folder pick) waits an hour; after that a
+            # "1" is chat, and nothing starts from an old card.
+            if not _code_prompt_fresh(prompt):
                 self.prompt_store.expire(prompt.id, status="expired")
                 return False, ""
             return True, ""
@@ -2448,17 +2507,21 @@ class InboundPoller:
         except Exception:  # noqa: BLE001
             return False
 
-    def _pending_reminder(self, channel: str, sender_id: Any, *, skip_files: bool = False) -> str:
+    def _pending_reminder(self, channel: str, sender_id: Any, *, skip_files: bool = False,
+                          skip_code: bool = False) -> str:
         """The '(… still waiting …)' suffix for the outbound phone copy of a
         normal chat reply — '' when nothing fresh is open. Kind-aware: an
         approval gate must not be announced in a workflow's words.
         ``skip_files`` (10-b review): this reply's own files are about to be
         asked about, and that question takes in the open files question's
-        files and closes it, so the open one is not announced first."""
+        files and closes it, so the open one is not announced first.
+        ``skip_code`` (12-a): the card this reply's turn asked follows it."""
         prompt = self._fresh_open_prompt(channel, sender_id)
         if prompt is None:
             return ""
         if skip_files and getattr(prompt, "kind", "") == FILE_SEND_KIND:
+            return ""
+        if skip_code and getattr(prompt, "kind", "") in (CODE_START_KIND, CODE_FOLDER_KIND):
             return ""
         if getattr(prompt, "kind", "") == APPROVAL_KIND:
             return approval_reminder(prompt.question)
@@ -2470,6 +2533,10 @@ class InboundPoller:
             paths, _local, _left = files_back.read_ref(getattr(prompt, "ref_id", ""))
             return (f"\n\n(Still waiting for your answer: {prompt.question} "
                     f"{files_back.answer_hint(len(paths) or 1)})")
+        if getattr(prompt, "kind", "") in (CODE_START_KIND, CODE_FOLDER_KIND):
+            from ..harness.phone_code import answer_hint as _code_hint
+
+            return f"\n\n(Still waiting for your answer: {prompt.question} {_code_hint(prompt.kind)})"
         return pending_reminder(prompt.question)
 
     async def _answer_reply(
@@ -2578,6 +2645,10 @@ class InboundPoller:
             )
         if getattr(prompt, "kind", "") == FILE_SEND_KIND:
             return await self._resolve_file_prompt(
+                name, ch, msg, display, chat_on, prompt, answer, original_text
+            )
+        if getattr(prompt, "kind", "") in (CODE_START_KIND, CODE_FOLDER_KIND):
+            return await self._resolve_code_prompt(
                 name, ch, msg, display, chat_on, prompt, answer, original_text
             )
         if self.answer_run is None:
@@ -2895,7 +2966,7 @@ class InboundPoller:
         answer = options[n - 1]
         # The user's line on the phone chat is the button they pressed.
         said = APPROVAL_BUTTONS[n - 1] if kind == APPROVAL_KIND and n <= len(APPROVAL_BUTTONS) else answer
-        hold = _PressHold() if kind in (APPROVAL_KIND, FILE_SEND_KIND) else None
+        hold = _PressHold() if kind in (APPROVAL_KIND, FILE_SEND_KIND, CODE_START_KIND) else None
         token = _PRESS_HOLD.set(hold)
         try:
             res = await self._resolve_prompt(name, ch, msg, display, chat_on, prompt, answer, said)
@@ -3162,6 +3233,141 @@ class InboundPoller:
         return await self._answer_reply(
             name, ch, msg, display, chat_on, original_text, reply,
             "file_sent" if sent and not line else "file_send_failed", **extra,
+        )
+
+    # -- 12-a: start coding work from the phone ------------------------------
+    async def _asking_for(
+        self, name: str, msg: InboundMessage, display: str, chat_on: bool, *, tid: str = "",
+    ) -> Any:
+        """The ASKING sender as this door proved it (``phone_code.Asking``):
+        the destination, the sender, their phone chat on the PC (two-way chat
+        on), where a reply goes, whether that chat is Local only (read
+        STRICTLY: a failed read is Local only, ``files_back``) and the prompt
+        store. Only this door makes one (after its allowlist, its proof and
+        the private-chat guard). Never raises."""
+        from ..harness.phone_code import Asking
+        from . import files_back
+
+        if not tid and chat_on and self.thread_store is not None:
+            try:
+                tid = (await asyncio.to_thread(self.thread_store.resolve, name, str(msg.sender_id), display)).id
+            except Exception:  # noqa: BLE001 — no chat on the PC: the card still asks
+                log.warning("inbound: the phone chat could not be read on %r", name, exc_info=True)
+                tid = ""
+        local = False
+        if tid:
+            local = bool(await asyncio.to_thread(
+                files_back.work_is_local_only, getattr(self.platform, "engine", None), tid))
+        reply_to = msg.reply_to if msg.reply_to is not None else msg.sender_id
+        return Asking(channel=name, sender_id=str(msg.sender_id), thread_id=tid or "",
+                      reply_to=str(reply_to), local_only=local, store=self.prompt_store)
+
+    async def _send_card(self, ch: Channel, msg: InboundMessage, card: Any) -> bool:
+        """One card (or folder pick) to the phone, with its buttons where the
+        destination has them; the typed "Reply 1 …" rides WITH the buttons
+        (10-b's rule: a Slack app without interactivity shows buttons no
+        press comes back from). Never raises."""
+        asked = f"{card.words}\n{card.hint}" if card.hint else card.words
+        try:
+            if getattr(ch, "supports_buttons", False) and card.prompt_id and card.options:
+                res = await asyncio.to_thread(ch.send, f"{self.reply_prefix}{asked}", chat_id=msg.reply_to,
+                                              buttons=prompt_buttons(card.prompt_id, list(card.options)))
+                if (res or {}).get("ok"):
+                    return True
+            return await self.send_chunked(ch, asked, chat_id=msg.reply_to)
+        except Exception:  # noqa: BLE001 — the card stays answerable by "1"
+            log.warning("inbound: a coding-work card could not be sent", exc_info=True)
+            return False
+
+    async def _send_asked_cards(
+        self, name: str, ch: Channel, msg: InboundMessage, who: Any, *, tid: str = "", display: str = "",
+    ) -> int:
+        """The cards the chat's ``code_start`` asked this turn, after the
+        reply: onto the phone chat on the PC, then to the phone. Returns how
+        many went."""
+        sent = 0
+        for card in list(getattr(who, "cards", None) or []):
+            if tid:
+                self._safe_append(tid, "assistant", card.words, channel=name, sender_id=msg.sender_id,
+                                  display=display)
+            if await self._send_card(ch, msg, card):
+                sent += 1
+        return sent
+
+    async def _handle_code_command(
+        self, name: str, ch: Channel, msg: InboundMessage, text: str, display: str, chat_on: bool,
+    ) -> dict[str, Any]:
+        """``/code <folder>: <what to do>`` (12-a): the card, a numbered pick
+        when two used folders share the name, or the refusal in words (the
+        user's folders named, or the check that failed). Nothing starts
+        here: only the sender's Start does."""
+        from ..harness import phone_code as PC
+
+        parsed = PC.parse_code(text[len("/code"):])
+        if parsed is None:
+            usage = await asyncio.to_thread(PC.usage_words, self.platform.engine)
+            return await self._answer_reply(name, ch, msg, display, chat_on, text, usage, "code_usage")
+        folder, words, when = parsed
+        who = await self._asking_for(name, msg, display, chat_on)
+        card = await PC.from_words(self.platform, who, folder, words, when)
+        if not card.ok:
+            return await self._answer_reply(name, ch, msg, display, chat_on, text, card.words, "code_refused")
+        tid = self._append_exchange(name, msg, display, text, card.words) if chat_on else ""
+        sent = await self._send_card(ch, msg, card)
+        return {"channel": name, "status": "code_card", "thread_id": tid, "sent": sent,
+                "prompt_id": card.prompt_id, "kind": card.kind}
+
+    async def _resolve_code_prompt(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        display: str,
+        chat_on: bool,
+        prompt: Any,
+        answer: str,
+        original_text: str,
+    ) -> dict[str, Any]:
+        """The answer to a coding-work card or a folder pick (12-a). The
+        prompt is CLAIMED FIRST (first answer wins; one Start makes one task,
+        a second hears "That was already answered"). Not now starts nothing.
+        Start runs every check again and makes ONE task with the card's own
+        words (``phone_code.start_from_card``). A folder picked gets its
+        card."""
+        from ..harness import phone_code as PC
+
+        kind = getattr(prompt, "kind", "")
+        said = " ".join(str(answer or "").split())
+        match = next((o for o in prompt_options(prompt) if o.casefold() == said.casefold()), None)
+        if match is None:
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text, PC.answer_hint(kind), "answer_usage",
+            )
+        if not await asyncio.to_thread(self.prompt_store.resolve, prompt.id, match):
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text, f"{PRESS_ANSWERED}.", "code_gone",
+            )
+        who = await self._asking_for(name, msg, display, chat_on)
+        if kind == CODE_FOLDER_KIND:
+            card = await PC.after_pick(self.platform, who, prompt, match)
+            if not card.ok:
+                return await self._answer_reply(
+                    name, ch, msg, display, chat_on, original_text, card.words, "code_refused",
+                )
+            tid = self._append_exchange(name, msg, display, original_text, card.words) if chat_on else ""
+            sent = await self._send_card(ch, msg, card)
+            return {"channel": name, "status": "code_card", "thread_id": tid, "sent": sent,
+                    "prompt_id": card.prompt_id, "kind": card.kind}
+        if match == PC.NOT_NOW:
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text, PC.NOTHING_STARTED, "code_not_now",
+            )
+        reply, outcome = await PC.start_from_card(self.platform, who, prompt)
+        status = {"started": "code_started", "queued": "code_queued"}.get(outcome, "code_refused")
+        extra = ({"press_label": "Not started"} if status == "code_refused"
+                 else {"press_label": "Queued"} if status == "code_queued" else {})
+        return await self._answer_reply(
+            name, ch, msg, display, chat_on, original_text, reply, status, **extra,
         )
 
     def _comm_trust(self, channel: str) -> tuple[str | None, str]:

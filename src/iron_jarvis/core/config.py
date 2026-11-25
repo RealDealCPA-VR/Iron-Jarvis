@@ -522,6 +522,9 @@ def default_permissions() -> dict[str, str]:
         # newest check of a session is allowed.
         "build_checks_set": "ask",
         "coding_reply_check": "allow",
+        # Next leaps 12-a: coding work started from the phone — the tool only
+        # asks the sender on ONE card (Start, Not now); their Start queues it.
+        "code_start": "allow",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +

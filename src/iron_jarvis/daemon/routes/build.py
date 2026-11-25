@@ -3794,13 +3794,15 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         night_task = None
         if started_by != _night.BY_PERSON:
             night_task = await asyncio.to_thread(_night.running_task_for, platform.engine, thread_id)
-        if night_task is not None and started_by != _night.BY_NIGHT:
+        if night_task is not None and started_by not in _night.TASK_STARTERS:
             # v1.398.0 review: a night task's CARRY-ON (Resume when ready, a
             # move within a group, a reply cut off by a restart) starts only
             # inside the night window and only with time left on the TASK's
             # limit — never at 9 AM under the night's posture, never a fresh
-            # 90 minutes per turn.
-            if not _night.window_open(platform.config):
+            # 90 minutes per turn. Next leaps 12-a: a task the phone started
+            # runs now (its first turn is ``BY_PHONE``), so its carry-on may
+            # too (``may_run_now``), still inside its time limit.
+            if not _night.may_run_now(night_task, platform.config):
                 raise HTTPException(status_code=409, detail=_night.WINDOW_CLOSED)
             if _night.minutes_left(night_task, platform.config) < 1.0:
                 raise HTTPException(status_code=409, detail=_night.TIME_USED_UP)
@@ -4105,7 +4107,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             carried=started_by in (_night.BY_WAIT, _night.BY_RESTART),
             # Review 5: a night task's words are the person's own, queued for
             # tonight; only a fix of failing checks (CI) is in Iron Jarvis's.
-            night=started_by == _night.BY_NIGHT,
+            # Next leaps 12-a: and a phone's Start (its card's words).
+            night=started_by in _night.TASK_STARTERS,
         )
         evidence_token = _evidence.arm(
             platform.config.home, thread_id, turn_id, _shown_page,

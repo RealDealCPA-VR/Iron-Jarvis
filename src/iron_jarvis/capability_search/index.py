@@ -66,6 +66,10 @@ NOT_FOR_CHAT = frozenset({
     "worklist_add", "worklist_done", "worklist_next", "worklist_status",
     "blackboard_post", "blackboard_read", "message_agent", "consult",
     "capability_propose", "memory_propose", "secret_set",
+    # Next leaps 12-a: coding work from the phone — armed only in the phone's
+    # own chat turn by its door (``harness/phone_code.door_open``); anywhere
+    # else it refuses, so a lookup never offers it.
+    "code_start",
 })
 
 #: Tools that read and change nothing although they do not declare themselves

@@ -140,6 +140,11 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     # folder, with an Undo) and the newest check of a session (read only).
     "build_checks_set": "ask",
     "coding_reply_check": "allow",
+    # Next leaps 12-a (R2.5): coding work started from the phone. Allow: it
+    # writes no task; it asks the sender on ONE card and only their Start
+    # queues the work (``harness/phone_code``). Armed only in the phone's
+    # own chat turn.
+    "code_start": "allow",
     # v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections):
     # model servers, Iron-Proxy accounts and memory bases — each asks, each
     # has an Undo.

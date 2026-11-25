@@ -129,6 +129,14 @@ _EXPIRE_STATUSES = ("expired", "superseded")
 FILE_SEND_KIND = "file_send"
 FILE_SEND_OPTIONS = ["Send", "Keep it on the PC"]
 
+#: Next leaps 12-a (``harness/phone_code``): "Start coding work in website
+#: now? …" with Start and Not now (``ref_id`` JSON: the folder, its name, the
+#: exact words, when), and "Which website folder?" when two folders share a
+#: name (numbered; ``ref_id`` JSON: their paths, the words, when).
+CODE_START_KIND = "code_start"
+CODE_FOLDER_KIND = "code_folder"
+CODE_START_OPTIONS = ["Start", "Not now"]
+
 #: What a button carries: ``ij:p:<prompt id>:<n>`` answers ONE prompt (its
 #: own sender only); ``ij:a:<approval id>:<n>`` answers an approval through
 #: the presser's own open prompt for it (the notifier's alert is one message
@@ -188,6 +196,8 @@ def pressed_label(kind: str, answer: str) -> str:
         return "Denied by you" if APPROVAL_DECISIONS.get(a) == "deny" else "Approved by you"
     if kind == FILE_SEND_KIND:
         return "Kept on the PC" if a.startswith("keep") else "Sent"
+    if kind == CODE_START_KIND:
+        return "Not started" if a.startswith("not") else "Starting"
     return f"Answered by you: {_snippet(answer, 40)}"
 
 

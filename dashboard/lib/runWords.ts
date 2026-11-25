@@ -296,6 +296,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // 22-a (R1.9): Iron Jarvis's check after each Build › Code reply.
   build_checks_set: { did: "Switched tests after each Build › Code reply on or off in a folder", noun: "folder tests switch" },
   coding_reply_check: { did: "Looked up whether a coding reply's tests passed", noun: "test result lookup" },
+  // Next leaps 12-a: the phone's card before coding work starts.
+  code_start: { did: "Asked on your phone before starting coding work in a folder", noun: "coding work card" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

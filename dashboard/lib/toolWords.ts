@@ -187,6 +187,8 @@ const WORDS: Record<string, string> = {
   build_team_clear: "stop using a coding team in a folder",
   // 22-a (R1.9): Iron Jarvis's check after each Build › Code reply.
   build_checks_set: "turn tests after each Build › Code reply on or off in a folder",
+  // Next leaps 12-a: the phone's card before coding work starts.
+  code_start: "ask on your phone before starting coding work in a folder",
 };
 
 // The 15 built-in browser tools, by EXACT name (src/iron_jarvis/browser/
