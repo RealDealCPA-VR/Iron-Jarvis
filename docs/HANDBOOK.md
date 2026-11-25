@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.576.0 (2026-11-19).*
+holds itself to. Current as of v1.577.0 (2026-11-19).*
 
 ---
 
@@ -2043,6 +2043,39 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Big extensions work the way you set them (v1.577.0)
+
+An extension with dozens of tools, such as an accounting app, now works
+through chat the whole way: Jarvis reaches the tool a job needs, asks you only
+where you want to be asked, and can run several of the extension's calls at
+once. Open **Settings › Tools**, press **Edit** on the extension, and set
+**How Iron Jarvis uses it**. A change applies to the next use; nothing
+restarts.
+
+- **Who asks before its tools run:** **As set for the chat** (as before),
+  **Ask before every tool**, **Ask only before changes** (tools that only read
+  run without asking), or **The extension asks in its own window**, for an
+  extension that has its own approvals, so Iron Jarvis does not ask as well. A
+  tool that is new in a later version of the extension, and every tool of a
+  locked extension, still asks each time.
+- **Trust its new tools:** tools a later version adds work like the ones you
+  saw when you added it. A tool the safety check flagged still waits for you.
+- **Always include these tools:** the tools you pick are offered in every chat
+  the extension is part of.
+- **Start when first used:** after it has started once, the extension starts
+  only when a chat or task first needs it.
+
+In a chat, Jarvis can also look up more of an extension's tools when the job
+needs one it was not given, and a tool used in the chat's last answer is
+offered again in the next. A job in an extension gets as many steps as a
+document job, so it can submit something and then wait while a person approves
+it in the extension. What the extension says about its own tools reaches
+Jarvis as the extension's words, checked like any outside text, and Jarvis can
+read the extension's resources and prompts itself. An extension that did not
+start is tried again a few times in the background; one that cannot run on
+this computer (a Windows program while Iron Jarvis runs in a container) says
+so in plain words.
 
 ## Hand Jarvis a recording (v1.576.0)
 
