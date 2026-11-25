@@ -25,6 +25,7 @@ import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
 import { RehearsalReport } from "@/components/RehearsalReport";
 import { StackPlanCard } from "@/components/chat/StackPlanCard";
+import { RecordingCard } from "@/components/chat/RecordingCard";
 import type { StackScope } from "@/lib/stackPlan";
 import { RuleLines } from "@/components/RuleLines";
 import {
@@ -461,6 +462,10 @@ export function ConfigCards({
         ) : c.kind === "stack" ? (
           // v1.564.0 (idea 31-a): a sorting plan, confirmed here.
           <StackPlanCard key={`stack:${c.plan_id}`} card={c} onSettle={(n) => onSettle(i, n)} scope={stackScope} />
+        ) : c.kind === "recording" ? (
+          // Idea 33-a: a recording's transcript and checked notes; it reads
+          // its job again while it works and is on screen.
+          <RecordingCard key={`recording:${c.recording_id}`} card={c} onSettle={(n) => onSettle(i, n)} scope={stackScope} />
         ) : c.kind === "change" ? (
           <ChangeCard key={c.change_id} card={c} onSettle={(n) => onSettle(i, n)} />
         ) : (

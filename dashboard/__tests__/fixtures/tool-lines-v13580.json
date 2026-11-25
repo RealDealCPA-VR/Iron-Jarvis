@@ -812,6 +812,10 @@
       "ok": "ran a script over its tools",
       "failed": "tried a tool script and it failed"
     },
+    "transcribe_recording": {
+      "ok": "made a transcript and notes from a recording",
+      "failed": "tried a recording transcript and it failed"
+    },
     "web_action": {
       "ok": "acted on a web page",
       "failed": "tried a web page action and it failed"

@@ -190,6 +190,12 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Media you asked for wasn't checked after the restart",
     href: "/creative",
   },
+  // Idea 33-a: a recording being turned into text when Iron Jarvis stopped.
+  reconcile_recordings: {
+    label: "Recordings",
+    problem: "A recording you handed in wasn't started again after the restart",
+    href: "/chat",
+  },
   warm_opencode: {
     label: "OpenCode models",
     problem: "OpenCode's models weren't loaded",

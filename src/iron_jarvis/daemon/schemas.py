@@ -2425,3 +2425,15 @@ class StackReadMoreBody(BaseModel):
     provider: str = ""
     thread_id: str = ""
     local_only: bool | None = None
+
+
+class RecordingNotesBody(BaseModel):
+    """``POST /documents/recording/{id}/notes`` (idea 33-a): the user pressed
+    "Write the notes with <model>?" on a recording's card. ``provider`` and
+    ``model`` are the ones the card named; the chat's id and its Local only
+    are read at the press."""
+
+    provider: str = ""
+    model: str | None = None
+    thread_id: str = ""
+    local_only: bool = False

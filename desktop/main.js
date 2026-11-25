@@ -4724,6 +4724,7 @@ const TOOL_WORDS_BUILTIN = {
   tool_delete: "remove a custom tool",
   tool_list: "list the custom tools",
   tool_script: "run a script over its tools",
+  transcribe_recording: "make a transcript and notes from a recording",
   view_image: "read a file",
   web_action: "act on a web page",
   web_extract: "read part of a web page",

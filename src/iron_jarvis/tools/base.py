@@ -99,6 +99,12 @@ class ToolContext:
     #: other: nothing executes, one ``rehearsed`` ledger row says what it
     #: would have done (``tools/rehearsal.holds``).
     rehearsal_id: str = ""
+    #: Idea 33-a: the ``(provider, model)`` the chat turn uses, as both chat
+    #: lanes resolve it (the body's pick, else the project's default; ""
+    #: when the chat follows the default route). A recording's notes are
+    #: offered to THIS model when nothing on this PC or your network can
+    #: write them (D-33.1). None outside a chat turn.
+    chat_model: "tuple[str, str] | None" = None
 
 
 @dataclass

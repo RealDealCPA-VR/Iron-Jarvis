@@ -42,6 +42,8 @@ export const REPORT_KIND_WORDS: Readonly<Record<string, string>> = {
   night: "night task",
   paired_computer: "other computer",
   review: "night review",
+  // Idea 33-a: a recording's transcript and notes, made after the reply.
+  recording: "recording",
 };
 
 /** The kinds whose record holds where it reports, so Stop reporting works

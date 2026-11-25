@@ -3790,6 +3790,15 @@ def register(app: FastAPI, d) -> None:
                 media_homed = await jobs.home_turn(turn_id, tid)
             except Exception:  # noqa: BLE001 — the link itself already landed
                 log.warning("media: homing turn %s failed", turn_id, exc_info=True)
+        # Idea 33-a: a recording this turn handed in reports to the chat now
+        # named (one that already ended reports here).
+        try:
+            from ...documents import recording_jobs as _rec_jobs
+            from .recording import env_of as _rec_env
+
+            await _rec_jobs.home_turn(_rec_env(d), turn_id, tid)
+        except Exception:  # noqa: BLE001 — the link itself already landed
+            log.warning("recording: homing turn %s failed", turn_id, exc_info=True)
         return {"ok": True, "linked": linked, "media_homed": media_homed, "reports_linked": reports_linked}
 
     @app.get("/chat/turns/running")
@@ -5450,6 +5459,9 @@ async def chat_stream(
             task_scope=(_deliv.scope if _deliv is not None else None),
             # v1.549.0 (30-a) — lock-step: the readers record their figures here.
             source_turn=_fig_turn,
+            # Idea 33-a — lock-step: the chat's own model, which a recording's
+            # notes are offered to when nothing local can write them.
+            chat_model=(provider_choice, model_choice),
         )
         # v1.470.0: start the isolated script worker now when `tool_script`
         # is offered, so the model's first script does not wait for a

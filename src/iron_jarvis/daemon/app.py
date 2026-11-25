@@ -1495,6 +1495,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 log.exception("boot rehydration step reconcile_media_jobs failed")
             finally:
                 _boot_step("reconcile_media_jobs", _t)
+        # Idea 33-a: a recording the last process was turning into text is
+        # started again once (its own task, the worker in the background
+        # lane); boot never waits on it.
+        _t = time.perf_counter()
+        _boot_watch.step("reconcile_recordings")
+        try:
+            from ..documents import recording_jobs as _rec_jobs
+
+            await _rec_jobs.reconcile_at_boot(_rec_jobs.Env(
+                engine=platform.engine, event_bus=platform.event_bus, config=platform.config,
+                router_resolver=lambda: getattr(platform, "router", None),
+            ))
+            _tick("reconcile_recordings", True)
+        except Exception as exc:  # noqa: BLE001 — never block boot, but SAY so
+            _tick("reconcile_recordings", False, exc)
+            log.exception("boot rehydration step reconcile_recordings failed")
+        finally:
+            _boot_step("reconcile_recordings", _t)
         # AFTER session reconciliation by contract: a goal stranded mid-iteration
         # reads its session's honest FAILED/interrupted verdict (v1.208.0).
         _rehydrate_step("rehydrate_goals", platform.goal_engine.rehydrate)
@@ -2737,6 +2755,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.wait_for(_media_jobs_svc.drain(), timeout=5.0)
                 except Exception:  # noqa: BLE001 — shutdown never raises
                     pass
+            # Idea 33-a: a recording still being heard stops with the daemon
+            # (its worker's tree too); the next boot starts it again once.
+            try:
+                from ..documents import recording_jobs as _rec_jobs
+
+                _rec_jobs.cancel_all()
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                pass
             _dispatcher_stop.set()
             _curator_stop.set()
             _loop_watch.stop()
@@ -4429,6 +4455,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # same chosen speech service as dictation (``comm/voice_note``), so the
     # poller borrows the deps that hold them.
     inbound_poller.voice_deps = d
+    # Idea 33-a: a recording handed to a chat is heard the same way (the
+    # offline model, the speech service chosen for voice).
+    from ..documents import recording_jobs as _recording_jobs
+
+    _recording_jobs.lend_voice_deps(d)
 
     # THE WINDOW LADDER, handed to the agents package (v1.285.0): the panel's
     # per-speaker transcript budget reads the same pin → envelope → fleet →

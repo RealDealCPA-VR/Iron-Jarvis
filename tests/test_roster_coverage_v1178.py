@@ -356,6 +356,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # arms the plan (`autoselect.wants_stack`). An agent run has no card to
     # show it on. Pinned by tests/test_leap31a_boundaries.py and _apply.py.
     "stack_plan", "stack_apply",
+    # Idea 33-a: a recording handed to a CHAT: its card shows how far it is
+    # and asks the one yes the notes may need (D-33.1); chat arms it by the
+    # file's type (`chat_turn.recording_turn`). Recordings reaching agent
+    # work by themselves are 33-c. Pinned by tests/test_leap33a_*.py.
+    "transcribe_recording",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the
