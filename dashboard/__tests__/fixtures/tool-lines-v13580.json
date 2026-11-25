@@ -48,6 +48,10 @@
       "ok": "switched an app on or off",
       "failed": "tried an app switch and it failed"
     },
+    "app_tools_find": {
+      "ok": "looked up an app's tools",
+      "failed": "tried a tool look-up and it failed"
+    },
     "apply_changes": {
       "ok": "made a batch of file changes",
       "failed": "tried a batch of file changes and it failed"

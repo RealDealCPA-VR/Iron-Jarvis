@@ -428,6 +428,12 @@
       "desktop": "read something from one of your apps"
     },
     {
+      "tool": "app_tools_find",
+      "kind": "table",
+      "card": "look up more of an app's tools",
+      "desktop": "look up more of an app's tools"
+    },
+    {
       "tool": "multi_edit",
       "kind": "table",
       "card": "change a file",
