@@ -2079,7 +2079,9 @@ transcript.md** and **meeting notes.md**.
   being heard, or whose notes are being written, is stopped, and nothing
   more about it comes to the chat. The recording itself is never changed.
 - Handing the same recording again in the same folder makes nothing new: you
-  get the transcript and notes already made.
+  get the transcript and notes already made. While another chat's recording
+  is still being heard, the card here shows it, and its report goes to the
+  chat it was first handed to.
 
 **Who turns speech into text** is a setting: **Recordings: who turns speech
 into text** (Settings, Voice). The default uses your speech server when it is
@@ -2103,10 +2105,13 @@ it is on this PC, never copied; in a web browser a file over 20 MB cannot be
 attached. Two recordings are turned into text at a time; one handed in while
 two are being heard waits its turn. If Iron Jarvis restarts while a recording
 is being heard, it starts it again once by itself. From your phone, a
-recording of up to a few minutes is answered there. The card and its **Write
-the notes** question are only in Iron Jarvis on this PC: when the notes would
-go to a model in the cloud, the phone's reply says so, and handing the same
-recording to a chat in Iron Jarvis on this PC shows the card.
+recording of up to a few minutes is answered there. A longer one keeps going
+on this PC and its transcript is saved in the chat's folder; no message comes
+to the phone when it is done. The card and its **Write the notes** question
+are only in Iron Jarvis on this PC: when the notes would go to a model in the
+cloud, the phone's reply says so (also while the recording is still being
+heard), and handing the same recording to a chat in Iron Jarvis on this PC
+shows the card.
 
 ## Auto in chat: tools Jarvis looks up no longer ask every time (v1.575.0)
 

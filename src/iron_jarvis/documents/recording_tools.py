@@ -63,6 +63,29 @@ def _answers_the_phone() -> bool:
         return True
 
 
+def _chat_key(thread_id: Any, turn_id: Any) -> str:
+    """The chat a call belongs to: its saved chat, or (a new chat's first
+    turn, not linked yet) its turn."""
+    tid = str(thread_id or "")
+    return f"chat:{tid}" if tid else f"turn:{turn_id or ''}"
+
+
+async def phone_outlook(env: J.Env, state: "dict[str, Any]") -> "dict[str, Any]":
+    """For the phone's reply about a recording still being heard: who would
+    write its notes as things stand (:func:`recording_jobs.notes_outlook`,
+    the job's own reading), so the reply promises only what happens with no
+    press. Unsure: ``{}`` (the reply then promises only the transcript)."""
+    try:
+        choice, yes, local_only = await J.notes_outlook(env, state)
+        out: dict[str, Any] = {"choice": choice, "yes": yes}
+        if choice is None:
+            out["nobody"] = J.nobody_words(env.router(), J.chat_model_of(state), local_only=local_only,
+                                           pending=True)
+        return out
+    except Exception:  # noqa: BLE001 — never a failed reply over the words
+        return {}
+
+
 def find_earlier(home: Path, sha256: str, workspace: Path) -> "dict[str, Any] | None":
     """A job already made for these bytes in this folder that is running or
     finished with its transcript still there (not one that failed or was
@@ -105,8 +128,40 @@ def phone_notes_words(model_name: str, name: Any) -> str:
         "the notes yourself.")
 
 
-def result_words(state: "dict[str, Any]", *, finished: bool, phone: bool) -> str:
-    """What the model is told, from the job's own record."""
+def phone_pending_notes_words(outlook: "dict[str, Any]", name: Any) -> str:
+    """On the PHONE, for a recording still being heard: what happens to its
+    notes with no press, from :func:`recording_jobs.notes_outlook` as things
+    stand. Only notes written with no press are promised: the yes for a
+    cloud model is given on the recording's card, which only Iron Jarvis on
+    this PC shows."""
+    choice = outlook.get("choice") if isinstance(outlook.get("choice"), dict) else None
+    if choice and outlook.get("yes"):
+        if choice.get("local"):
+            return (f"The notes will be written there too, by {choice.get('name')}: the transcript does not leave "
+                    "this PC or your network.")
+        return (f"The notes will be written there too, by {choice.get('name')}: the user already said yes to "
+                "sending a recording's transcript there, in the chat it was handed to.")
+    if choice:
+        return (
+            f"The notes will not be written by themselves: no model on this PC or your network is set up, and "
+            f"writing them sends the transcript to {choice.get('name')}, which needs the user's yes on the "
+            "recording's card. This conversation cannot show that card, and nothing is sent without it. Tell "
+            f"the user: once the transcript is done, to have the notes written, hand {name} to a chat in Iron "
+            "Jarvis on this PC and press Write the notes on its card.")
+    if outlook.get("nobody"):
+        return str(outlook["nobody"])
+    # Not known: promise nothing about the notes.
+    return ("The notes are written there too only by a model on this PC or your network; otherwise they wait "
+            f"for the user's yes on the recording's card, which only Iron Jarvis on this PC shows (hand {name} "
+            "to a chat there and press Write the notes).")
+
+
+def result_words(state: "dict[str, Any]", *, finished: bool, phone: bool,
+                 outlook: "dict[str, Any] | None" = None, other_chat: bool = False) -> str:
+    """What the model is told, from the job's own record. ``outlook``: on the
+    phone, who would write the notes of a recording still being heard
+    (:func:`phone_outlook`). ``other_chat``: the job running is one another
+    chat started (its report goes there)."""
     card = J.card_of(state)
     name = state.get("source_name")
     tr = state.get("transcriber") or {}
@@ -117,9 +172,18 @@ def result_words(state: "dict[str, Any]", *, finished: bool, phone: bool) -> str
     if not finished:
         if phone:
             lines.append(
-                f"{name} is still being turned into text {where}. It keeps going on this PC; the transcript and "
-                f"notes will be saved in the chat's folder ({Path(str(state.get('workspace')))}) when they are "
-                "done. Tell the user that. Do not write a transcript or notes yourself.")
+                f"{name} is still being turned into text {where}. It keeps going on this PC; the transcript will "
+                f"be saved in the chat's folder ({Path(str(state.get('workspace')))}) when it is done. No message "
+                "comes to this conversation when it is.")
+            lines.append(phone_pending_notes_words(outlook or {}, name))
+            lines.append("Tell the user that. Do not write a transcript or notes yourself.")
+        elif other_chat:
+            lines.append(
+                f"{name} is still being turned into text {where} ({tr.get('who')}), for another chat that was "
+                "handed it first. The card under your reply shows how far it is and, when it is done, the "
+                "transcript and notes; the report of it goes to that other chat, not to this one. The files will "
+                f"be new files in the chat's folder ({state.get('transcript')} and {state.get('notes')}). Nothing "
+                "is written yet. Tell the user that; do not write a transcript or notes yourself.")
         else:
             lines.append(
                 f"Started turning {name} into text {where} ({tr.get('who')}). It keeps working after your reply: "
@@ -244,8 +308,12 @@ class TranscribeRecordingTool(Tool):
             if job is not None and not finished:
                 finished = await J.wait_inline(job, PHONE_WAIT_S if phone else J.INLINE_WAIT_S)
                 earlier = job.state
+            outlook = await phone_outlook(env, earlier) if phone and not finished else None
+            other = _chat_key(earlier.get("thread_id"), earlier.get("turn_id")) != _chat_key(
+                getattr(ctx, "thread_id", ""), _turn_of(ctx))
             words = ("This recording was already handed to this chat's folder, so nothing new was made. "
-                     + await asyncio.to_thread(lambda: result_words(earlier, finished=finished, phone=phone)))
+                     + await asyncio.to_thread(lambda: result_words(earlier, finished=finished, phone=phone,
+                                                                    outlook=outlook, other_chat=other)))
             return ToolResult(ok=True, output=words,
                               data={"recording": J.card_of(earlier), "recording_id": earlier["id"]})
         try:
@@ -273,8 +341,9 @@ class TranscribeRecordingTool(Tool):
             return ToolResult(ok=False, error=str(st.get("error") or "The recording could not be turned into text."))
         made = [str(st[k]) for k, w in (("transcript", "transcript_written"), ("notes", "notes_written"))
                 if finished and st.get(w)]
+        outlook = await phone_outlook(env, st) if phone and not finished else None
         # Off the loop: the words read the two files back.
-        words = await asyncio.to_thread(lambda: result_words(st, finished=finished, phone=phone))
+        words = await asyncio.to_thread(lambda: result_words(st, finished=finished, phone=phone, outlook=outlook))
         return ToolResult(
             ok=True,
             output=words,

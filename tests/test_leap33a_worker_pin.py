@@ -66,55 +66,132 @@ def test_the_job_starts_the_worker_through_procs_in_the_background_lane(tmp_path
     assert J._worker_argv() == [sys.executable, "audio-worker"]
 
 
+class _Workers:
+    """A ``procs.run`` whose workers run until the test releases them; counts
+    how many run at once."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self.release = threading.Event()
+        self.lock = threading.Lock()
+        self.running: list[str] = []
+        self.started: list[str] = []
+        self.most = 0
+
+    def run(self, argv, *, timeout, input=None, on_spawn=None, **kw):
+        with self.lock:
+            self.running.append(input.decode("ascii"))
+            self.started.append(input.decode("ascii"))
+            self.most = max(self.most, len(self.running))
+        assert self.release.wait(60), "the test never released the workers"
+        with self.lock:
+            self.running.pop()
+        return SimpleNamespace(timed_out=False, returncode=0, stdout=b'{"lines": []}')
+
+
+async def _until(cond, what: str, limit: float = 30.0) -> None:
+    """Yield to the loop until ``cond()`` (never a sleep the test measures)."""
+    import asyncio
+    import time
+
+    end = time.monotonic() + limit
+    while not cond():
+        assert time.monotonic() < end, f"never: {what}"
+        await asyncio.sleep(0.01)
+
+
 def test_at_most_two_recordings_are_worked_on_at_once_and_a_stopped_one_never_starts(monkeypatch):
     """Light on the PC: each worker holds the speech model in its own memory,
     so three recordings handed at once start two workers; the third waits its
-    turn (and its stall clock waits with it), and one stopped while it waits
-    starts nothing."""
-    import threading
+    turn (and its stall clock waits with it), one stopped while it waits
+    starts nothing, and the places go in the order the jobs asked."""
+    import asyncio
 
     from iron_jarvis.core import procs
 
-    release = threading.Event()
-    lock = threading.Lock()
-    running: list[str] = []
-    most = [0]
-    two_running = threading.Event()
-
-    def fake_run(argv, *, timeout, input=None, on_spawn=None, **kw):
-        with lock:
-            running.append(input.decode("ascii"))
-            most[0] = max(most[0], len(running))
-            if len(running) == 2:
-                two_running.set()
-        assert release.wait(30), "the test never released the workers"
-        with lock:
-            running.pop()
-        return SimpleNamespace(timed_out=False, returncode=0, stdout=b'{"lines": []}')
-
-    monkeypatch.setattr(procs, "run", fake_run)
+    w = _Workers()
+    monkeypatch.setattr(procs, "run", w.run)
     monkeypatch.setattr(J, "WAIT_POLL_S", 0.05)
-    jobs = [J.Job(state={"id": f"rec_{i:016x}"}, env=None) for i in range(4)]
-    outs: dict[int, object] = {}
-    threads = [threading.Thread(target=lambda i=i: outs.__setitem__(i, J._run_worker(jobs[i], {"n": i}, 10)))
-               for i in range(3)]
-    for t in threads:
-        t.start()
-    assert two_running.wait(30)
-    waiting = [j for j in jobs[:3] if j.waiting]
-    assert len(waiting) == 1, "the third waits for a free worker"
-    # A fourth, stopped (its Undo) while it waits: it starts nothing.
-    jobs[3].stopped = "undo"
-    fourth = threading.Thread(target=lambda: outs.__setitem__(3, J._run_worker(jobs[3], {"n": 3}, 10)))
-    fourth.start()
-    fourth.join(30)
-    assert outs[3] is None and not jobs[3].waiting
-    release.set()
-    for t in threads:
-        t.join(30)
-    assert most[0] == 2, f"{most[0]} workers ran at once"
-    assert all(outs[i] == {"lines": []} for i in range(3)), outs
+    jobs = [J.Job(state={"id": f"rec_{i:016x}"}, env=None) for i in range(5)]
+
+    async def _go():
+        tasks = [asyncio.ensure_future(J._work(jobs[i], {"n": i}, 10)) for i in range(3)]
+        try:
+            await _until(lambda: len(w.running) == 2 and jobs[2].waiting, "two running, the third waiting")
+            # A fourth asks, then is stopped (its Undo) while it waits: it starts nothing.
+            fourth = asyncio.ensure_future(J._work(jobs[3], {"n": 3}, 10))
+            fifth = asyncio.ensure_future(J._work(jobs[4], {"n": 4}, 10))
+            await _until(lambda: jobs[3].waiting and jobs[4].waiting, "the fourth and fifth waiting")
+            jobs[3].stopped = "undo"
+            assert await asyncio.wait_for(fourth, 10) is None
+            assert not jobs[3].waiting
+        finally:
+            w.release.set()
+        outs = await asyncio.wait_for(asyncio.gather(*tasks, fifth), 30)
+        # One more, cancelled while it waits (the daemon stopping), behind two
+        # held places: its place-to-be goes back too.
+        held = [await J._take_place(J.Job(state={"id": f"rec_{9 + i:016x}"}, env=None)) for i in range(2)]
+        late = asyncio.ensure_future(J._work(J.Job(state={"id": "rec_00000000000000aa"}, env=None), {"n": 9}, 10))
+        await _until(lambda: not late.done() and len(J._places()._waiters or ()) == 1, "the late one waiting")
+        late.cancel()
+        await asyncio.gather(late, return_exceptions=True)
+        for places in held:
+            places.release()
+        assert J._places()._value == J.MAX_WORKERS, "every place came back"
+        return outs
+
+    outs = asyncio.run(_go())
+    assert w.most == 2, f"{w.most} workers ran at once"
+    assert outs == [{"lines": []}] * 4, outs
+    assert '{"n": 3}' not in w.started, "the stopped one started a worker"
     assert not any(j.waiting for j in jobs)
+
+
+def test_recordings_waiting_for_a_worker_hold_no_thread_of_the_shared_pool(tmp_path, monkeypatch):
+    """A recording waiting for a place waits ON THE LOOP: more recordings than
+    the daemon's shared thread pool holds (``asyncio.to_thread``) leave that
+    pool free for everything else (saves, reads, other routes)."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    from iron_jarvis.core import procs
+    from iron_jarvis.documents import recording as R
+
+    w = _Workers()
+    monkeypatch.setattr(procs, "run", w.run)
+    monkeypatch.setattr(J, "WAIT_POLL_S", 0.05)
+    pool = 4
+    env = J.Env(engine=None, event_bus=None, config=SimpleNamespace(home=tmp_path / "home"))
+    tr = R.Transcriber(R.THIS_PC, "the offline speech model on this PC", model="C:/fake")
+    jobs = [J.Job(state={"id": f"rec_{i:016x}", "source": str(tmp_path / f"m{i}.m4a"),
+                         "source_name": f"m{i}.m4a"}, env=env, transcriber=tr) for i in range(pool + 2)]
+
+    async def _go():
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=pool))
+        # Started the way a job starts them (``_hear`` → ``_hear_here``).
+        tasks = [asyncio.ensure_future(J._hear_here(j, tr)) for j in jobs]
+
+        async def unrelated() -> str:
+            try:
+                return await asyncio.wait_for(asyncio.to_thread(lambda: "answered"), 5)
+            except asyncio.TimeoutError:
+                return "not answered within 5 s: the pool is full"
+
+        try:
+            await _until(lambda: len(w.running) == 2, "two workers running")
+            first = await unrelated()
+            assert first == "answered", "an unrelated to_thread call waited behind recordings waiting for a worker"
+            await _until(lambda: sum(j.waiting for j in jobs) == len(jobs) - 2, "the rest waiting on the loop")
+            again = await unrelated()
+            assert again == "answered", "with every other recording waiting, the pool is still free"
+        finally:
+            w.release.set()
+        return await asyncio.wait_for(asyncio.gather(*tasks), 60)
+
+    outs = asyncio.run(_go())
+    assert w.most == 2 and len(w.started) == len(jobs)
+    assert all(o is not None for o in outs), outs
 
 
 _PROBE = r"""

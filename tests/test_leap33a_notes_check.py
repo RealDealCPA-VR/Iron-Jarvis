@@ -366,6 +366,138 @@ def test_on_the_phone_the_notes_wait_for_the_yes_and_the_reply_says_where(tmp_pa
     assert J.load_state(job.env.home, job.id)["notes_written"] is True
 
 
+class _ToolRig:
+    """The real tool, its job held in the hearing step until the test lets it
+    go (so the reply is written while the recording is still being heard)."""
+
+    def __init__(self, tmp_path: Path, monkeypatch, *, phone: bool, choice: "dict | None") -> None:
+        from iron_jarvis.documents import recording_tools as RT
+
+        self.home = tmp_path / "home"
+        self.ws = tmp_path / "work"
+        self.ws.mkdir(parents=True, exist_ok=True)
+        self.clip = self.ws / "meeting.m4a"
+        self.clip.write_bytes(b"the bytes of a recording")
+        self.router = _Router("anthropic", {"anthropic"})
+        self.tool = RT.TranscribeRecordingTool(router_resolver=lambda: self.router)
+        self.open: "asyncio.Event | None" = None
+        tr = R.Transcriber(R.THIS_PC, "the offline speech model on this PC", model="C:/fake")
+
+        async def choose(env, *, local_only):
+            return tr
+
+        async def hearing(job):
+            await self.open.wait()
+            J.save_lines(self.home, job.id, LINES)
+            job.state.update({"status": J.STATUS_NOTES, "duration": 420.0, "heard_s": 420.0,
+                              "transcript_written": True})
+
+        self.sent = _reports(monkeypatch)
+        monkeypatch.setattr(RT, "_answers_the_phone", lambda: phone)
+        monkeypatch.setattr(RT, "PHONE_WAIT_S", 0.05)
+        monkeypatch.setattr(J, "INLINE_WAIT_S", 0.05)
+        monkeypatch.setattr(J, "_answers_the_phone", lambda: phone)
+        monkeypatch.setattr(J, "choose_now", choose)
+        monkeypatch.setattr(J, "_hear", hearing)
+        monkeypatch.setattr(J, "_LIVE", {})
+        monkeypatch.setattr(J, "notes_choice",
+                            lambda r, c, local_only, chat=None: dict(choice) if choice else None)
+
+    def ctx(self, thread_id: str, turn_id: str = "turn-1"):
+        from iron_jarvis.tools.base import ToolContext
+
+        return ToolContext(workspace=self.ws, session_id="chat", agent_run_id="chat",
+                           config=SimpleNamespace(home=self.home), event_bus=None, engine=None,
+                           thread_id=thread_id, turn_id=turn_id)
+
+    async def hand(self, thread_id: str = "thr_a", turn_id: str = "turn-1"):
+        if self.open is None:
+            self.open = asyncio.Event()
+        return await self.tool.execute({"path": str(self.clip)}, self.ctx(thread_id, turn_id))
+
+    async def finish(self, rid: str) -> None:
+        self.open.set()
+        await J.live(rid).task
+
+
+def test_on_the_phone_a_recording_still_heard_promises_only_what_happens_with_no_press(tmp_path, monkeypatch):
+    """The phone's reply about a recording not done within its wait: the
+    transcript is promised; the notes only when they are written with no
+    press. Notes for the cloud wait for a yes the phone cannot give, so the
+    reply says where it is given (and nothing reaches the phone by itself)."""
+    rig = _ToolRig(tmp_path, monkeypatch, phone=True, choice=CLOUD_CHOICE)
+
+    async def _go():
+        r = await rig.hand()
+        await rig.finish(r.data["recording_id"])
+        return r
+
+    r = asyncio.run(_go())
+    said = r.output
+    assert r.ok and r.data["recording"]["status"] == J.STATUS_HEARING, r.data
+    assert "the transcript and notes will be saved" not in said and "the transcript will be saved" in said
+    assert "will not be written by themselves" in said and "Claude" in said
+    assert "Iron Jarvis on this PC" in said and "Write the notes" in said
+    assert "No message comes to this conversation" in said
+    assert "card under your reply" not in said
+    after = J.load_state(rig.home, r.data["recording_id"])
+    assert after["status"] == J.STATUS_ASK and after["notes_written"] is False, "the job did wait for the yes"
+    assert rig.router.model.calls == []
+
+
+@pytest.mark.parametrize("case", ["local", "cloud_yes", "nobody", "unknown"])
+def test_the_phones_words_for_the_notes_follow_who_would_write_them(case):
+    from iron_jarvis.documents.recording_tools import result_words
+
+    tr = R.Transcriber(R.THIS_PC, "the offline speech model on this PC", model="C:/fake")
+    st = J.new_state(source=Path("meeting.m4a"), sha256="x", workspace=Path("work"), thread_id="thr_a",
+                     turn_id="t1", local_only=False, transcriber=tr, transcript=Path("a.md"), notes=Path("b.md"))
+    outlook = {
+        "local": {"choice": dict(LOCAL_CHOICE), "yes": True},
+        "cloud_yes": {"choice": dict(CLOUD_CHOICE), "yes": True},
+        "nobody": {"choice": None, "yes": False,
+                   "nobody": J.nobody_words(None, ("openai", "gpt-test"), local_only=False, pending=True)},
+        "unknown": {},
+    }[case]
+    said = result_words(st, finished=False, phone=True, outlook=outlook)
+    assert "the transcript will be saved" in said and "card under your reply" not in said
+    if case == "local":
+        assert "The notes will be written there too, by Ollama on this PC" in said
+    elif case == "cloud_yes":
+        assert "The notes will be written there too, by Claude" in said and "already said yes" in said
+    elif case == "nobody":
+        assert "only the transcript will be saved" in said and "the model this chat uses" in said
+        assert "The transcript is saved" not in said, "nothing is saved yet"
+    else:
+        assert "The notes will be written" not in said
+        assert "only by a model on this PC or your network" in said and "Write the notes" in said
+
+
+def test_the_same_recording_from_another_chat_says_where_the_report_goes(tmp_path, monkeypatch):
+    """A recording another chat is still having heard is that job: this
+    chat's card shows it, and its report goes to the chat that started it."""
+    rig = _ToolRig(tmp_path, monkeypatch, phone=False, choice=LOCAL_CHOICE)
+
+    async def _go():
+        first = await rig.hand("thr_a", "turn-a")
+        again = await rig.hand("thr_a", "turn-a2")
+        other = await rig.hand("thr_b", "turn-b")
+        new_chat = await rig.hand("", "turn-new")
+        rig.open.set()
+        await asyncio.wait_for(J.live(first.data["recording_id"]).task, 30)
+        return first, again, other, new_chat
+
+    first, again, other, new_chat = asyncio.run(_go())
+    assert first.ok and "come to this chat by themselves" in first.output
+    assert again.data["recording_id"] == first.data["recording_id"]
+    assert "come to this chat by themselves" in again.output, "the same chat: the report comes here"
+    for r in (other, new_chat):
+        assert r.data["recording_id"] == first.data["recording_id"], "the job already made"
+        assert "come to this chat by themselves" not in r.output
+        assert "goes to that other chat" in r.output and "card under your reply shows" in r.output
+    assert [tid for tid, _report in rig.sent] == ["thr_a"], "one report, to the chat that started it"
+
+
 # --------------------------------------------------------------------------- #
 # an Undo while the notes are written brings nothing home
 # --------------------------------------------------------------------------- #
