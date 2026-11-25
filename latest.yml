@@ -1,8 +1,8 @@
-version: 1.570.0
+version: 1.571.0
 files:
-  - url: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.570.0/Iron-Jarvis-Setup-1.570.0.exe
-    sha512: hQdMgEoi1aiEWsOQ9G7RpUtNzba+hOGYkifaaN59hrvG3qt9yWv5sjs5lbG6obGh+KXUpY05bO7CG1VInNiDDQ==
-    size: 318167216
-path: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.570.0/Iron-Jarvis-Setup-1.570.0.exe
-sha512: hQdMgEoi1aiEWsOQ9G7RpUtNzba+hOGYkifaaN59hrvG3qt9yWv5sjs5lbG6obGh+KXUpY05bO7CG1VInNiDDQ==
-releaseDate: '2026-11-24T18:45:47.181Z'
+  - url: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.571.0/Iron-Jarvis-Setup-1.571.0.exe
+    sha512: kb3Eywmhp2altmMut9yNk6NYzsNAxHkfXGnkepuKXZI+uv7GpTVjAE3LoKlOMeaZp/RASQopn4tK8VR536Y8VA==
+    size: 318165312
+path: https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/download/v1.571.0/Iron-Jarvis-Setup-1.571.0.exe
+sha512: kb3Eywmhp2altmMut9yNk6NYzsNAxHkfXGnkepuKXZI+uv7GpTVjAE3LoKlOMeaZp/RASQopn4tK8VR536Y8VA==
+releaseDate: '2026-11-25T07:21:53.199Z'
