@@ -2050,7 +2050,7 @@ The Activity page has a second tab, **Your day**, beside the **Timeline**
 (Everything › Activity, or Ctrl K and "your day"). It shows one day of every
 file, setting, key, record (a schedule, a workflow, a rule…) and memory note
 Iron Jarvis changed. Today opens first; **Previous day**, **Next day** and
-the date box move to another day.
+the date box move to another day, as far back as 1 January 2000.
 
 - **Can't be undone** comes first: what has no Undo that day, such as a
   message sent, commands run ("ran 37 commands") or a line typed into a
@@ -2078,7 +2078,11 @@ the date box move to another day.
   that was edited again since is left as it is and named ("Not put back:
   report.txt (it was changed again since…)"); the rest still go back.
 - A change whose before-copy is no longer on this PC says "Can't be undone:
-  no copy of how it was is kept any more" and offers no Undo.
+  no copy of how it was is kept any more" and offers no Undo. A change whose
+  earlier version could not be kept at all (rare) is under **Can't be
+  undone** with that reason. A save that failed part-way but still changed
+  the file is listed as the failure it was ("tried a file save and it
+  failed: report.txt"), with an Undo that puts the file back.
 - Iron Jarvis keeps what it changed for as long as the **Keep activity
   history** setting says (90 days unless you change it); a cleanup run by
   hand, or a shorter setting you had before, can have removed more. A day
@@ -2096,7 +2100,10 @@ already undone. "The 3 pm run" is the run that started nearest 3 pm that day
 (a helper's run counts as part of the run that started it); if none started
 within an hour and a half, the reply names that day's runs instead. Like every undo from chat, it
 asks every time, Enter never allows it, it is never asked on your phone, and
-it works only in a chat on the Chat page.
+it works only in a chat on the Chat page. The card never leaves a change
+out: a very long name is shortened in the middle, and if one card still
+could not name them all, there is no card, nothing is undone, and the reply
+says to undo them on Your day in parts.
 
 **Good to know.** The day is this PC's day. All chat replies are one group,
 "In chat", for now. "Undo everything from a run" includes the helpers that

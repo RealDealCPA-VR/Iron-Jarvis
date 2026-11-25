@@ -371,6 +371,108 @@ async def test_the_result_answers_every_change_the_card_named(tmp_path):
     assert (ws / "r0.txt").read_text(encoding="utf-8") == "old r0.txt\n"
 
 
+def _long_names(n: int) -> list[str]:
+    """*n* different relative paths of 79 characters, as a real folder of
+    notes reads (the review's probe used 77)."""
+    names = [f"Projects/2026/Garden redesign plans/Planting notes/{i:03d} planting notes draft.txt" for i in range(n)]
+    assert all(len(x) == 79 for x in names)
+    return names
+
+
+@pytest.mark.asyncio
+async def test_a_run_of_page_max_changes_with_long_names_names_every_one_on_its_card(tmp_path):
+    """Review (40-a, should): the card was cut at 8,000 characters, so a run
+    of 100 changes with long names lost the end of its list, and Allow then
+    undid changes the card never named (D-40.1). Now every change is named
+    on the ONE card, what cannot be undone first, and Allow puts back
+    exactly those."""
+    app, p = _app(tmp_path)
+    day = RD.today_local()
+    ws = tmp_path / "ws"
+    names = _long_names(RD.PAGE_MAX)
+    run = _run(p, "Tidy the garden plans", at=_local_utc(day, 15, 2), ws=ws)
+    ids = [await _write(p, ws, run, n, f"draft {i}\n") for i, n in enumerate(names)]
+    _stamp(p, ids, _local_utc(day, 15, 3))
+    _sent(p, run, "notify", _local_utc(day, 15, 30))
+    for s in range(3):
+        _sent(p, run, "shell", _local_utc(day, 15, 31, s))
+    targets = [r["target"] for r in H.list_changes(p.engine, hours=48, limit=RD.PAGE_MAX)[0]]
+    assert len(targets) == RD.PAGE_MAX and all(len(t) == 79 for t in targets), targets[:3]
+    p.router.stream = _calls_stream([(UNDO, {"run": "the 3 pm run"})])
+    seen: list = []
+    frames = await _drive_stream(app, _body("undo everything from the 3 pm run"), _approver(app, seen))
+    (card,) = seen
+    words = card.get("cost_note") or ""
+    assert words.startswith("Can't be undone"), words[:300]
+    assert "ran 3 commands" in words and "sent a notification" in words, words[:300]
+    assert f"Undo these {RD.PAGE_MAX} changes" in words
+    assert [t for t in targets if t not in words] == [], "every change the card undoes is named on it"
+    assert not words.endswith("…") and len(words) > 8000, len(words)
+    (fin,) = _finished(frames, UNDO)
+    out = _out(fin)
+    assert fin["ok"] is True and out.startswith(f"{RD.PAGE_MAX} files put back."), out[:300]
+    assert not any((ws / n).exists() for n in names), "each file the run made is gone again"
+
+
+@pytest.mark.asyncio
+async def test_a_card_that_cannot_name_every_change_is_never_shown_and_nothing_is_undone(tmp_path, monkeypatch):
+    """Review (40-a, should): a card is never cut. One longer than
+    ``CARD_CHARS`` is not shown at all: the reply says why, in words, and
+    nothing is undone (here the cap is lowered so 13 changes overflow it)."""
+    app, p, ws, run, ids, _m = await _three_pm(tmp_path, extra_run=False)
+    monkeypatch.setattr(RD, "CARD_CHARS", 200)
+    p.router.stream = _calls_stream([(UNDO, {"run": "the 3 pm run"})])
+    seen: list = []
+    frames = await _drive_stream(app, _body("undo everything from the 3 pm run"), _approver(app, seen))
+    assert seen == [], [s.get("cost_note") for s in seen]
+    (fin,) = _finished(frames, UNDO)
+    out = _out(fin)
+    assert fin["ok"] is False and out == RD.too_many_to_name(13), out
+    assert "nothing was undone" in out and "Activity › Your day" in out
+    assert all((ws / f"r{i}.txt").read_text(encoding="utf-8") == f"new {i}\n" for i in range(13))
+    with session_scope(p.engine) as db:
+        assert not list(db.exec(select(ToolInvocation).where(ToolInvocation.undone_at != None)))  # noqa: E711
+
+
+def test_the_card_fits_its_worst_case_whole():
+    """Review (40-a, should): ``CARD_CHARS`` is sized for the run path's
+    worst case, so a card that names every change is not refused for its
+    length: ``PAGE_MAX`` changes whose names are as long as a name gets
+    (120 characters, said in ``NAME_CHARS``), undone or "Not undone" under
+    every reason, more things that cannot be undone than the card lists,
+    each with the longest name and reason, and a run's name at its cap.
+    Two names alike at both ends stay two names."""
+    whys = [RD.SENT_WHY, RD.COMMAND_WHY, RD.KEEPS_NO_UNDO, RD.NO_COPY_TAKEN_WHY, *RD._WHY.values(), *RD._KIND_WHY.values()]
+    long_why = max(whys, key=len)
+    cannot = [{"what": f"used {'a connected app tool with a long name ' * 5}{i} (999 times)", "why": long_why}
+              for i in range(RD.CARD_CANNOT + 5)]
+    src = {"kind": "run", "name": "n" * 80, "started": "2026-11-25T15:02:00+00:00"}
+
+    def rows(start: int, n: int, why: str = "") -> list[dict]:
+        return [{"id": f"tool_{i}", "target": f"{i:03d}/" + "y" * 116, "what": "made 1 file", "why": why}
+                for i in range(start, start + n)]
+
+    other_whys = [H.NO_COPY_KEPT, "Iron Jarvis kept no way back for it", "Iron Jarvis kept no safe way back for it",
+                  "there is no such change"]
+    others = [r for k, w in enumerate(other_whys) for r in rows(1 + k * 25, 25 if k < 3 else 24, w)]
+    cases = {
+        "all undone": RD.card_words(rows(0, RD.PAGE_MAX), cannot, source=src, undone=0),
+        "mostly not": RD.card_words(rows(0, 1), cannot, source=src, other=others, undone=0),
+    }
+    for label, words in cases.items():
+        assert len(words) <= RD.CARD_CHARS, (label, len(words))
+        assert words.startswith("Can't be undone") and "; and 5 more." in words, label
+    for r in rows(0, RD.PAGE_MAX):
+        assert RD.short_name(r["target"]) in cases["all undone"], r["target"]
+    for r in others:
+        assert RD.short_name(r["target"]) in cases["mostly not"], r["target"]
+    a = "Projects/2026/Garden redesign plans/" + "a" * 40 + "/one/" + "z" * 60 + "/plan.txt"
+    b = a.replace("/one/", "/two/")
+    assert RD.short_name(a) == RD.short_name(b) and len(RD.short_name(a)) == RD.NAME_CHARS
+    assert RD.names_of([{"target": a}, {"target": b}]) == [RD.short_name(a), RD.short_name(b)]
+    assert RD.names_of([{"target": a}, {"target": a}]) == [f"{RD.short_name(a)} (2 changes)"]
+
+
 @pytest.mark.asyncio
 async def test_with_no_card_held_nothing_is_undone(tmp_path):
     """Fail closed: a many-at-once undo runs only the list ITS card named."""

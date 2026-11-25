@@ -27,6 +27,9 @@ export type ActivityView = typeof DAY_VIEW | typeof TIMELINE_VIEW;
 export const DAY_HREF = "/activity?view=day";
 /** The most changes one "Undo these" puts back (the daemon's own cap). */
 export const UNDO_MANY_MAX = 100;
+/** The first day the date box offers (the daemon's `records_day.FIRST_DAY`:
+ *  this PC's clock cannot place a day near 1970, 40-a review). */
+export const FIRST_DAY = "2000-01-01";
 /** A refresh after a change lands, while today is on screen (G7). */
 export const DAY_REFRESH_MS = 4000;
 /** The events that mean today's list may have changed. */
@@ -317,8 +320,9 @@ export function shiftDay(day: string, by: number): string {
   return dayOf(d);
 }
 
-export function isDay(v: string | null | undefined): v is string {
-  return !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+export function isDay(v: string | null | undefined, today: string = todayLocal()): v is string {
+  // 40-a review: a day the daemon can read, FIRST_DAY to today.
+  return !!v && /^\d{4}-\d{2}-\d{2}$/.test(v) && v >= FIRST_DAY && v <= today;
 }
 
 /** The tab (and day) an address asks for: `?view=day&date=2026-11-22`. */

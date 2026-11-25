@@ -97,7 +97,7 @@ vi.mock("@/components/motion", () => ({
 
 import ActivityPage from "@/app/activity/page";
 import { CANNOT_LINE, DayRewind, NOTHING_LINE } from "@/components/activity/DayRewind";
-import { DAY_REFRESH_MS, shiftDay, todayLocal, viewFromSearch } from "@/lib/dayChanges";
+import { DAY_REFRESH_MS, FIRST_DAY, shiftDay, todayLocal, viewFromSearch } from "@/lib/dayChanges";
 
 const DASH = join(__dirname, "..");
 const TODAY = todayLocal();
@@ -282,6 +282,24 @@ describe("the day", () => {
     fireEvent.click(screen.getByTestId("day-previous"));
     expect(onDate).toHaveBeenCalledWith(shiftDay(TODAY, -1));
     expect((screen.getByTestId("day-date") as HTMLInputElement).max).toBe(TODAY);
+  });
+
+  it("the date never goes before the first day the daemon can read (40-a review)", async () => {
+    // The daemon refuses a day before 2000-01-01 (this PC's clock cannot place
+    // 1970): the box, the buttons and the address all keep to it.
+    expect(FIRST_DAY).toBe("2000-01-01");
+    const onDate = vi.fn();
+    seedDay(FIRST_DAY);
+    render(<DayRewind date={FIRST_DAY} onDate={onDate} />);
+    await screen.findAllByTestId("day-group");
+    const box = screen.getByTestId("day-date") as HTMLInputElement;
+    expect(box.min).toBe(FIRST_DAY);
+    expect((screen.getByTestId("day-previous") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(box, { target: { value: "1970-01-01" } });
+    expect(onDate).not.toHaveBeenCalled();
+    expect(viewFromSearch("?view=day&date=1970-01-01").date).toBeNull();
+    expect(viewFromSearch(`?view=day&date=${shiftDay(TODAY, 1)}`).date).toBeNull();
+    expect(viewFromSearch(`?view=day&date=${FIRST_DAY}`).date).toBe(FIRST_DAY);
   });
 
   it("an empty day says so", async () => {

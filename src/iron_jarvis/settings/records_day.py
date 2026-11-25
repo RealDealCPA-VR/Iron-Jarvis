@@ -90,25 +90,37 @@ def today_local() -> date:
     return datetime.now().astimezone().date()
 
 
+#: The first day a person may ask for (the ledger's "since ever", ``_EVER``).
+#: 40-a review: this PC's clock cannot place a day near 1970 or year 9999
+#: (``astimezone`` raised OSError [Errno 22] on Windows), so a day is
+#: FIRST_DAY to today, and any other is refused in :data:`DAY_RULE`'s words.
+FIRST_DAY = date(2000, 1, 1)
+#: What a day may be, as a refusal says it.
+DAY_RULE = "a day from 1 January 2000 to today, as YYYY-MM-DD (or today, or yesterday)"
+
+
 def parse_day(value: Any) -> date | None:
     """A ``YYYY-MM-DD`` string (or a ``date``) as a date; "today" and
-    "yesterday" too; None for anything else. Pure."""
+    "yesterday" too; None for anything else, and for a day before
+    :data:`FIRST_DAY` or after today (40-a review). Pure but for the clock."""
     if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    text = str(value or "").strip().lower()
-    if text in ("", "today"):
-        return today_local() if text == "today" else None
-    if text == "yesterday":
-        return today_local() - timedelta(days=1)
-    m = _DATE_RX.match(text)
-    if not m:
-        return None
-    try:
-        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    except ValueError:
-        return None
+        day: date | None = value.date()
+    elif isinstance(value, date):
+        day = value
+    else:
+        text = str(value or "").strip().lower()
+        if text in ("", "today"):
+            return today_local() if text == "today" else None
+        if text == "yesterday":
+            return today_local() - timedelta(days=1)
+        m = _DATE_RX.match(text)
+        if not m:
+            return None
+        try:
+            day = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    return day if FIRST_DAY <= day <= today_local() else None
 
 
 def day_bounds(day: date) -> tuple[datetime, datetime]:
@@ -328,6 +340,9 @@ def _skip_tools() -> frozenset[str]:
 SENT_WHY = "it left this PC (a message sent)"
 COMMAND_WHY = "a command ran on this PC, and what it did has no Undo"
 KEEPS_NO_UNDO = "Iron Jarvis keeps no Undo for this kind of action"
+#: 40-a review: a change whose before-copy could not be taken (the
+#: registry's ``CAPTURE_FAILED_NOTE``, in the same words): it has no Undo.
+NO_COPY_TAKEN_WHY = "its earlier version could not be kept"
 
 #: Why each built-in that keeps no Undo cannot be undone (40-a review): an
 #: explicit table, never a guess from the tool's name — a terminal, a
@@ -414,47 +429,69 @@ def cannot_rows(
     PC or ran, and what Iron Jarvis keeps no way back for
     (``reversibility == "irreversible"``, ok, not a rehearsal, not an Undo,
     not a read or Iron Jarvis's own bookkeeping: :data:`NOT_LISTED`), each
-    with its true reason (:func:`cannot_why`), FOLDED by source and tool
-    ("ran 37 commands"), newest first: ``(rows, more)``. Names and plain
-    words only — never a call's arguments. Blocking; bounded
-    (``CANNOT_ROWS``)."""
+    with its true reason (:func:`cannot_why`), FOLDED by source, tool and
+    reason ("ran 37 commands"), newest first: ``(rows, more)``. 40-a review:
+    a change whose before-copy could not be taken (its ledger row carries
+    the registry's ``CAPTURE_FAILED_NOTE`` and there is no Undo row) is here
+    too, with :data:`NO_COPY_TAKEN_WHY`, so the day never leaves it off.
+    Names and plain words only — never a call's arguments. Blocking;
+    bounded (``CANNOT_ROWS``)."""
+    from sqlalchemy import exists
     from sqlmodel import select
 
     from ..agents.mission import fallback_line
-    from ..core.models import ToolInvocation
+    from ..core.models import ToolInvocation, UndoJournal
+    from ..tools.registry import CAPTURE_FAILED_NOTE
 
-    stmt = (
+    def _bounded(stmt: Any) -> Any:
+        stmt = stmt.where(ToolInvocation.created_at >= since)
+        if until is not None:
+            stmt = stmt.where(ToolInvocation.created_at < until)
+        if session_ids is not None:
+            stmt = stmt.where(ToolInvocation.session_id.in_(sorted(set(session_ids))))  # type: ignore[attr-defined]
+        return stmt.order_by(ToolInvocation.created_at.desc()).limit(CANNOT_ROWS + 1)  # type: ignore[attr-defined]
+
+    plain = _bounded(
         select(ToolInvocation)
         .where(ToolInvocation.ok == True)  # noqa: E712
         .where(ToolInvocation.undo_of == None)  # noqa: E711
         .where(ToolInvocation.rehearsed == False)  # noqa: E712
         .where(ToolInvocation.reversibility == Reversibility.IRREVERSIBLE.value)
         .where(ToolInvocation.tool.not_in(sorted(_skip_tools())))  # type: ignore[attr-defined]
-        .where(ToolInvocation.created_at >= since)
     )
-    if until is not None:
-        stmt = stmt.where(ToolInvocation.created_at < until)
-    if session_ids is not None:
-        stmt = stmt.where(ToolInvocation.session_id.in_(sorted(set(session_ids))))  # type: ignore[attr-defined]
-    rows = list(db.exec(stmt.order_by(ToolInvocation.created_at.desc()).limit(CANNOT_ROWS + 1)).all())  # type: ignore[attr-defined]
+    no_copy = _bounded(
+        select(ToolInvocation)
+        .where(ToolInvocation.ok == True)  # noqa: E712
+        .where(ToolInvocation.undo_of == None)  # noqa: E711
+        .where(ToolInvocation.rehearsed == False)  # noqa: E712
+        .where(ToolInvocation.reversibility == Reversibility.REVERSIBLE.value)
+        .where(ToolInvocation.output.contains(CAPTURE_FAILED_NOTE, autoescape=True))  # type: ignore[union-attr]
+        .where(~exists().where(UndoJournal.action_id == ToolInvocation.id))
+    )
+    lost = list(db.exec(no_copy).all())
+    lost_ids = {inv.id for inv in lost}
+    rows = sorted(
+        list(db.exec(plain).all()) + lost,
+        key=lambda inv: inv.created_at or datetime.min, reverse=True,
+    )
     more = len(rows) > CANNOT_ROWS
     rows = rows[:CANNOT_ROWS]
     local = H.local_only_rows(db, engine, rows)
-    folded: dict[tuple[str, str], dict[str, Any]] = {}
+    folded: dict[tuple[str, str, str], dict[str, Any]] = {}
     for inv in rows:  # newest first: the first of a fold is its newest
-        key = (str(inv.session_id or ""), str(inv.tool or ""))
+        why = NO_COPY_TAKEN_WHY if inv.id in lost_ids else cannot_why(str(inv.tool or ""))
+        key = (str(inv.session_id or ""), str(inv.tool or ""), why)
         row = folded.get(key)
         if row is None:
             did = fallback_line(str(inv.tool or ""), True)
             lt = _local(inv.created_at)
-            why = cannot_why(str(inv.tool or ""))
             folded[key] = {
                 "id": inv.id, "ids": [inv.id], "tool": inv.tool, "did": did,
                 "at": _iso(inv.created_at), "clock": clock(inv.created_at),
                 "hour": lt.hour if lt is not None else None,
                 "first_clock": clock(inv.created_at),
                 "session_id": key[0], "state": "cannot", "why": why,
-                "kind": "sent" if why == SENT_WHY else "ran",
+                "kind": "changed" if inv.id in lost_ids else ("sent" if why == SENT_WHY else "ran"),
                 "local_work": inv.id in local,
             }
         else:
@@ -579,9 +616,11 @@ def day_changes(
     first on the page. ``cleared`` (40-a review): when the day is wholly or
     partly older than the history keeps (*keep_days*, the "Keep activity
     history" setting, and the cleanup's own record), :func:`cleared_note`;
-    the page then never says nothing changed. Every name is kept (the
-    person's own screen); a caller that tells a model uses
-    :func:`for_model`. Blocking; bounded."""
+    the page then never says nothing changed. 40-a review: a call that
+    failed part-way but kept its Undo (v1.504.0: the failure changed the
+    file) is a change too, as in ``records_history.list_changes`` and the
+    run's own Revert. Every name is kept (the person's own screen); a
+    caller that tells a model uses :func:`for_model`. Blocking; bounded."""
     from sqlmodel import select
 
     from ..core.db import session_scope
@@ -593,7 +632,6 @@ def day_changes(
         stmt = (
             select(ToolInvocation, UndoJournal)
             .where(UndoJournal.action_id == ToolInvocation.id)
-            .where(ToolInvocation.ok == True)  # noqa: E712
             .where(ToolInvocation.undo_of == None)  # noqa: E711
             .where(ToolInvocation.created_at >= since)
             .where(ToolInvocation.created_at < until)
@@ -904,8 +942,23 @@ def _no_run_words(db: Any, engine: Any, runs: list[Any], day: date, head: str, r
 # many at once: the card's words and the result's
 # --------------------------------------------------------------------------
 
-#: The longest card sentence (every change is named, D-40.1).
-CARD_CHARS = 8000
+#: The longest name a card or a reply says (a longer one keeps its start
+#: and its end, :func:`short_name`).
+NAME_CHARS = 80
+#: The longest reason a card says (every reason in this module is shorter).
+WHY_CHARS = 120
+#: The most things that cannot be undone a card lists by name ("and 5 more").
+CARD_CANNOT = 20
+#: The longest card (D-40.1: every change named). The card is NEVER cut
+#: (40-a review: a cut list undid changes the card never named). Sized for
+#: the run path's worst case, at most about 13,200 characters: ``PAGE_MAX`` names
+#: of ``NAME_CHARS`` (undone or "Not undone", folded by reason),
+#: ``CARD_CANNOT`` things that cannot be undone with names and reasons at
+#: their caps, and the run's name (pinned by
+#: ``test_the_card_fits_its_worst_case_whole``). A card that would still be
+#: longer is not shown: the call is refused in :func:`too_many_to_name`'s
+#: words and nothing is undone.
+CARD_CHARS = 16_000
 
 _NOUNS = {"file": ("file", "files"), "setting": ("setting", "settings"), "record": ("record", "records"),
           "memory": ("memory note", "memory notes")}
@@ -916,10 +969,23 @@ def _noun(kind: str, n: int) -> str:
     return one if n == 1 else many
 
 
+def short_name(name: Any, cap: int = NAME_CHARS) -> str:
+    """*name* in at most *cap* characters: a longer one keeps its first
+    third and its end ("Projects/2026/…/014 planting notes.txt"), the end
+    being where a file's own name is. Pure."""
+    text = str(name or "")
+    if len(text) <= cap:
+        return text
+    head = cap // 3
+    return text[:head] + "…" + text[len(text) - (cap - head - 1):]
+
+
 def names_of(rows: list[dict[str, Any]], *, safe: bool = False) -> list[str]:
     """Each change by name, in order, a name repeated folded ("ledger.txt
-    (3 changes)"). ``safe``: the Local only names a model may not read are
-    said as what was done. Pure."""
+    (3 changes)"); a long name said in :data:`NAME_CHARS`
+    (:func:`short_name`). Names fold only when they are the SAME name, never
+    because their short forms match (40-a review). ``safe``: the Local only
+    names a model may not read are said as what was done. Pure."""
     seen: dict[str, int] = {}
     order: list[str] = []
     for r in rows:
@@ -927,12 +993,11 @@ def names_of(rows: list[dict[str, Any]], *, safe: bool = False) -> list[str]:
             name = str(r.get("what_safe") or r.get("what") or "")
         else:
             name = str(r.get("target") or "") or str(r.get("what") or "")
-        name = name[:80]
         if name not in seen:
             order.append(name)
             seen[name] = 0
         seen[name] += 1
-    return [f"{n} ({seen[n]} changes)" if seen[n] > 1 else n for n in order]
+    return [f"{short_name(n)} ({seen[n]} changes)" if seen[n] > 1 else short_name(n) for n in order]
 
 
 def card_words(
@@ -940,12 +1005,17 @@ def card_words(
     undone: int = 0, other: list[dict[str, Any]] | None = None,
 ) -> str:
     """The ONE card for many changes (D-40.1): what cannot be undone FIRST,
-    with why; then every change it will undo, by name; then what was already
-    undone or cannot be undone for another reason. Pure."""
+    with why; then every change it will undo, by name; then what cannot be
+    undone for another reason ("Not undone: a.txt, b.txt (why)." — one line
+    per reason) and how many were already undone. NEVER cut (40-a review):
+    a caller whose card is longer than :data:`CARD_CHARS` shows no card at
+    all and undoes nothing (:func:`too_many_to_name`). Pure."""
     parts: list[str] = []
     if cannot:
-        listed = "; ".join(f"{c.get('what')} ({c.get('why')})" for c in cannot[:20])
-        more = f"; and {len(cannot) - 20} more" if len(cannot) > 20 else ""
+        listed = "; ".join(
+            f"{short_name(c.get('what'))} ({short_name(c.get('why'), WHY_CHARS)})" for c in cannot[:CARD_CANNOT]
+        )
+        more = f"; and {len(cannot) - CARD_CANNOT} more" if len(cannot) > CARD_CANNOT else ""
         parts.append(f"Can't be undone, so they stay as they are: {listed}{more}.")
     n = len(can)
     src = source_words(source)
@@ -953,12 +1023,23 @@ def card_words(
         f"Undo {'this change' if n == 1 else f'these {n} changes'}{f' from {src}' if src else ''}: "
         + ", ".join(names_of(can)) + "."
     )
+    by_why: dict[str, list[dict[str, Any]]] = {}
     for r in other or []:
-        parts.append(f"Not undone: {r.get('target') or r.get('what')} ({r.get('why')}).")
+        by_why.setdefault(short_name(r.get("why") or "it could not be undone", WHY_CHARS), []).append(r)
+    for why, rows in by_why.items():
+        parts.append(f"Not undone: {', '.join(names_of(rows))} ({why}).")
     if undone:
         parts.append(f"{undone} {'was' if undone == 1 else 'were'} already undone.")
-    words = " ".join(parts)
-    return words if len(words) <= CARD_CHARS else words[: CARD_CHARS - 1].rstrip() + "…"
+    return " ".join(parts)
+
+
+def too_many_to_name(n: int) -> str:
+    """The refusal when one card cannot name every change (never a cut
+    card). Pure."""
+    return (
+        f"One card cannot name all {n} of these changes, so nothing was undone. Undo them on "
+        "Activity › Your day in parts, or ask for fewer at once."
+    )
 
 
 def plain_skip(detail: Any) -> str:
@@ -1320,8 +1401,12 @@ def before_after(platform: Any, action_id: str, *, current_setting: Callable[...
 
 
 __all__ = [
+    "CARD_CHARS",
     "CHAT_IDS_MAX",
     "DAY_HREF",
+    "DAY_RULE",
+    "FIRST_DAY",
+    "NO_COPY_TAKEN_WHY",
     "PAGE_MAX",
     "before_after",
     "cannot_rows",
@@ -1339,7 +1424,9 @@ __all__ = [
     "put_back_words",
     "resolve_run",
     "run_family",
+    "short_name",
     "source_words",
     "sources_for",
     "today_local",
+    "too_many_to_name",
 ]

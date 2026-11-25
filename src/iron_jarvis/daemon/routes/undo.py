@@ -534,7 +534,9 @@ def register(app: FastAPI, d) -> None:
 
         day = RD.parse_day(date) if str(date or "").strip() else RD.today_local()
         if day is None:
-            raise HTTPException(status_code=422, detail="date is a day as YYYY-MM-DD")
+            # 40-a review: a day this PC's clock cannot place (1970, year
+            # 9999) is refused here in words, never an OSError's.
+            raise HTTPException(status_code=422, detail=f"date is {RD.DAY_RULE}")
         cfg = d.platform.config
         return await asyncio.to_thread(
             RD.day_changes, d.platform.engine, day, home=cfg.home,

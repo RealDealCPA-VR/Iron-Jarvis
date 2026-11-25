@@ -354,6 +354,99 @@ def test_the_day_is_this_pcs_local_day():
     assert RD.parse_day("2026-02-30") is None and RD.parse_day("next week") is None
 
 
+@pytest.mark.asyncio
+async def test_a_day_this_pc_cannot_place_is_refused_in_plain_words(tmp_path):
+    """Review (40-a, a note): 1970-01-01 or 9999-12-31 made ``day_bounds``
+    raise OSError [Errno 22] on Windows, so the page read "This day could
+    not be read: …" and chat got the engine's words. A day is
+    ``FIRST_DAY`` (2000-01-01) to today; any other is refused in words, on
+    the page's route and in both chat tools, before a clock is asked."""
+    from datetime import date
+
+    from tests.test_chat_history_tools_v14350 import _ctx
+
+    tomorrow = (RD.today_local() + timedelta(days=1)).isoformat()
+    for text in ("1970-01-01", "0001-01-01", "1999-12-31", "9999-12-31", tomorrow):
+        assert RD.parse_day(text) is None, text
+    assert RD.parse_day(date(1970, 1, 1)) is None and RD.parse_day(datetime(9999, 12, 31)) is None
+    assert RD.parse_day("2000-01-01") == RD.FIRST_DAY == date(2000, 1, 1)
+    assert RD.day_bounds(RD.FIRST_DAY)[0] < RD.day_bounds(RD.today_local())[0]
+    app, p = _app(tmp_path)
+    client = TestClient(app)
+    ctx = _ctx(p, tmp_path)
+    for text in ("1970-01-01", "9999-12-31"):
+        r = client.get(f"/changes/day?date={text}")
+        assert r.status_code == 422 and r.json()["detail"] == f"date is {RD.DAY_RULE}", r.text
+        res = await p.registry.get("changes_list").execute({"date": text}, ctx)
+        assert res.ok is False and res.error == f"date is {RD.DAY_RULE}.", res.error
+        args = {"run": "the 3 pm run", "date": text}
+        undo = p.registry.get("change_undo")
+        check = await undo.spend_check(args, ctx)
+        assert check is not None and check.ask is False
+        res = await undo.execute(args, ctx)
+        assert res.ok is False and f"date is {RD.DAY_RULE}." in (res.error or ""), res.error
+        assert "Errno" not in (res.error or "")
+
+
+@pytest.mark.asyncio
+async def test_a_change_kept_without_its_earlier_version_and_a_failed_save_that_changed_a_file_are_on_the_day(
+    tmp_path, monkeypatch
+):
+    """Review (40-a, a note): two kinds of change were on no list, so a day
+    holding only one of them read "Iron Jarvis changed nothing on this day".
+    (1) A change whose before-copy could not be taken (the registry's
+    ``CAPTURE_FAILED_NOTE``, no Undo row) is under Can't be undone with that
+    reason. (2) A save that failed part-way and changed the file kept its
+    Undo (v1.504.0), so it is a change, said as the failure it was, with an
+    Undo that works (as the run's own Revert has it)."""
+    from iron_jarvis.tools.base import ToolResult
+    from iron_jarvis.tools.registry import CAPTURE_FAILED_NOTE
+    from tests.test_chat_history_tools_v14350 import _ctx
+
+    app, p = _app(tmp_path)
+    client = TestClient(app)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    tool = p.registry.get("write_file")
+
+    async def no_copy(args, ctx):
+        raise OSError("the before-copy store is full")
+
+    monkeypatch.setattr(tool, "capture_undo", no_copy)
+    (ws / "a.txt").write_text("before\n", encoding="utf-8")
+    lost = await _write(p, ws, "chat", "a.txt", "after\n")
+    monkeypatch.undo()
+    with session_scope(p.engine) as db:
+        assert CAPTURE_FAILED_NOTE in db.get(ToolInvocation, lost).output and db.get(UndoJournal, lost) is None
+    body = client.get("/changes/day?date=today").json()
+    assert body["groups"] == []
+    (row,) = body["cannot"]
+    assert row["ids"] == [lost] and row["why"] == RD.NO_COPY_TAKEN_WHY and row["what"] == "made 1 file", row
+    res = await p.registry.get("changes_list").execute({"date": "today"}, _ctx(p, tmp_path))
+    assert f"made 1 file ({RD.NO_COPY_TAKEN_WHY})" in res.output, res.output
+
+    async def half_save(args, ctx):
+        (ctx.workspace / args["path"]).write_text(args["content"][:3], encoding="utf-8")
+        return ToolResult(ok=False, error="the disk is full")
+
+    monkeypatch.setattr(tool, "execute", half_save)
+    (ws / "b.txt").write_text("the original\n", encoding="utf-8")
+    wctx = ToolContext(workspace=ws, session_id="chat", agent_run_id="r-chat", config=p.config,
+                       event_bus=p.event_bus, engine=p.engine)
+    res = await p.registry.invoke("write_file", {"path": "b.txt", "content": "the new text\n"}, wctx, p.permissions)
+    monkeypatch.undo()
+    assert res.ok is False and (ws / "b.txt").read_text(encoding="utf-8") == "the"
+    body = client.get("/changes/day?date=today").json()
+    (group,) = body["groups"]
+    (change,) = group["rows"]
+    assert change["target"] == "b.txt" and change["state"] == "can", change
+    assert change["what"] == "tried a file save and it failed: b.txt", change
+    assert [c["ids"] for c in body["cannot"]] == [[lost]]
+    r = client.post("/changes/undo", json={"action_ids": [change["id"]]}).json()
+    assert [x["id"] for x in r["reverted"]] == [change["id"]], r
+    assert (ws / "b.txt").read_text(encoding="utf-8") == "the original\n"
+
+
 def test_a_setting_whose_name_looks_like_a_secret_is_hidden():
     assert RD._value_words("smtp_password", "not-for-the-screen") == "hidden (it looks like a secret)"
     assert RD._value_words("chat_followups", True) == "on" and RD._value_words("x", None) == "not set"

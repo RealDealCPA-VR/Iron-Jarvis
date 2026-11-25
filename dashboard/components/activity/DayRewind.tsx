@@ -37,7 +37,9 @@ import {
   changeName,
   DAY_EVENT_TYPES,
   DAY_REFRESH_MS,
+  FIRST_DAY,
   hourWords,
+  isDay,
   readDay,
   shiftDay,
   todayLocal,
@@ -292,6 +294,7 @@ export function DayRewind({ date, onDate }: { date: string; onDate: (next: strin
             label="Previous day"
             testId="day-previous"
             icon={<ChevronLeft size={15} aria-hidden />}
+            disabled={date <= FIRST_DAY}
             onClick={() => onDate(shiftDay(date, -1))}
           />
           <label className="inline-flex items-center gap-1.5 text-[13px] text-zinc-300">
@@ -301,9 +304,11 @@ export function DayRewind({ date, onDate }: { date: string; onDate: (next: strin
               type="date"
               data-testid="day-date"
               value={date}
+              min={FIRST_DAY}
               max={today}
               onChange={(e) => {
-                if (/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) onDate(e.target.value);
+                // 40-a review: only a day the daemon can read (FIRST_DAY to today).
+                if (isDay(e.target.value, today)) onDate(e.target.value);
               }}
               className="rounded-md border border-white/10 bg-transparent px-2 py-1 text-[13px] text-zinc-200"
             />

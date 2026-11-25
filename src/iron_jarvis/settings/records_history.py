@@ -1162,7 +1162,10 @@ def change_row(
     now = now or datetime.now(timezone.utc)
     jkind = getattr(journal, "kind", "") if journal is not None else ""
     target = _target_words(jkind, getattr(journal, "pre_inline", None) if journal is not None else None)
-    did = fallback_line(str(inv.tool or ""), True)
+    # 40-a review: a call that failed part-way but kept its Undo (it changed
+    # the file) is said as the failure it was ("tried a file save and it
+    # failed: b.txt"), never as a save that worked.
+    did = fallback_line(str(inv.tool or ""), bool(inv.ok))
     target = _masked(target, 120) if target else ""
     what = f"{did}: {target}" if target else did
     if target and jkind in ("setting_restore", "secret_restore") and did.startswith("used "):
@@ -1240,8 +1243,10 @@ def list_changes(
     LOCAL day instead (``records_day.day_bounds``), ``session_ids`` narrows
     to those sources (a run and its helpers), ``home`` marks a row whose
     before-copy is gone as ``cannot``. A change that left this PC is not
-    here: ``records_day.cannot_rows`` lists those. Blocking; bounded
-    (``_SCAN_ROWS``)."""
+    here: ``records_day.cannot_rows`` lists those. 40-a review: a call that
+    failed but kept its Undo row is here too — v1.504.0 keeps that row only
+    when the failure CHANGED the target (``undo.settle_unfinished``), and
+    the run's own Revert puts it back. Blocking; bounded (``_SCAN_ROWS``)."""
     from datetime import timedelta
 
     from sqlmodel import select
@@ -1262,7 +1267,6 @@ def list_changes(
         stmt = (
             select(ToolInvocation, UndoJournal)
             .where(UndoJournal.action_id == ToolInvocation.id)
-            .where(ToolInvocation.ok == True)  # noqa: E712
             .where(ToolInvocation.undo_of == None)  # noqa: E711
             .where(ToolInvocation.created_at >= since)
         )
@@ -1435,7 +1439,7 @@ class ChangesListTool(Tool):
         if str(args.get("date") or "").strip():
             day = RD.parse_day(args.get("date"))
             if day is None:
-                return ToolResult(ok=False, error="date is a day as YYYY-MM-DD, or today, or yesterday.")
+                return ToolResult(ok=False, error=f"date is {RD.DAY_RULE}.")
         from ..providers import egress
 
         recall_local = egress.may_recall_local_only_chats()
@@ -1612,7 +1616,7 @@ class ChangeUndoTool(Tool):
         if ids not in (None, []) and run:
             return "Give action_ids or run, not both."
         if str(args.get("date") or "").strip() and RD.parse_day(args.get("date")) is None:
-            return "date is a day as YYYY-MM-DD, or today, or yesterday."
+            return f"date is {RD.DAY_RULE}."
         return ""
 
     async def _many_targets(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -1698,13 +1702,21 @@ class ChangeUndoTool(Tool):
             self._hold(key, {"many": True, "asked": False, "problem": "The changes could not be read just now."})
             return SpendCheck(ask=False)
         asked = not targets.get("problem") and bool(targets.get("can"))
+        words = ""
+        if asked:
+            words = RD.card_words(
+                targets["can"], targets["cannot"], source=targets.get("source"),
+                undone=int(targets.get("undone") or 0), other=targets.get("other"),
+            )
+            # 40-a review: the card is never cut. One that cannot name every
+            # change it would undo is not shown at all (D-40.1); the call is
+            # refused in words and nothing is undone.
+            if len(words) > RD.CARD_CHARS:
+                asked = False
+                targets = {**targets, "problem": RD.too_many_to_name(len(targets["can"]))}
         self._hold(key, {"many": True, "asked": asked, **targets})
         if not asked:
             return SpendCheck(ask=False)
-        words = RD.card_words(
-            targets["can"], targets["cannot"], source=targets.get("source"),
-            undone=int(targets.get("undone") or 0), other=targets.get("other"),
-        )
         return SpendCheck(ask=True, words=words, once_only=True, attended_only=True, reason=UNDO_REASON)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
