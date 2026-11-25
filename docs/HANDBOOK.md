@@ -2068,6 +2068,14 @@ Unchanged: Claude, Codex and Qwen models in **Chat › Code** keep the shell the
 had, plain chat and agents keep the Windows shell, and **Build › Code** is not
 touched. On Mac and Linux only the last two points apply.
 
+Measured on a local model (GLM) on Windows, 144 runs each way. The model
+needed 27% fewer steps and read 31% less text, and Linux-style commands that
+failed on the Windows shell went from 80 to 1. It passed 126 runs where it had
+passed 129. All of that difference was one task, which passed 6 times in 10
+when it was run again, against 5 in 6 before, so this benchmark cannot show a
+loss, and it cannot rule a small one out either. This is a lighter Iron
+Jarvis for a local model, not a higher-scoring one.
+
 ## A coding session is told to take care (v1.571.0)
 
 When Iron Jarvis itself writes code (**Chat › Code**), the instructions it gives
