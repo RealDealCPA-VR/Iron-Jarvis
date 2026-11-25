@@ -2077,7 +2077,14 @@ transcript.md** and **meeting notes.md**.
 - **Undo** (on the reply's list of changed files, or in Activity) removes
   both files, as long as you have not changed them since. A recording still
   being heard, or whose notes are being written, is stopped, and nothing
-  more about it comes to the chat. The recording itself is never changed.
+  more about it comes to the chat. If you have changed one of the files,
+  Undo removes nothing and the recording carries on. The recording itself
+  is never changed.
+- **Stop** on the reply while it waits for a recording stops the recording
+  too. A transcript already saved stays, and the chat says so in one
+  message; the notes are not written. If the reply ends without Stop (you
+  closed the page), the recording carries on and comes back to the chat
+  when it is done.
 - Handing the same recording again in the same folder makes nothing new: you
   get the transcript and notes already made. While another chat's recording
   is still being heard, the card here shows it, and its report goes to the

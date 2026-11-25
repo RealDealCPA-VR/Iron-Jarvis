@@ -11,6 +11,9 @@
   parent process without ``vosk`` or ``av`` loaded.
 * The tool is allow tier and REVERSIBLE (new files, one Undo), arms by the
   file's type in both lanes, and stays out of a turn with Auto tools off.
+* A Stop of the reply that waits for a recording kills its worker and ends
+  its record in words; a reply cut off with no Stop lets it carry on, and it
+  comes home once; the wait ends before the call's own deadline.
 """
 
 from __future__ import annotations
@@ -247,8 +250,10 @@ def test_a_recording_waiting_for_a_worker_is_never_stopped_as_a_stall(tmp_path, 
             # third look is the one after a whole look on the new time.
             with looks_lock:
                 looked = {j.id: looks.get(j.id, 0) for j in jobs[:2]}
-            await _until(lambda: reads[t3] >= seen + 2 and all(looks[k] >= n + 3 for k, n in looked.items()),
-                         "every watch looked after the long wait")
+            # Ends at once when the third is stopped, so the assert below names why.
+            await _until(lambda: third.stopped or (
+                reads[t3] >= seen + 2 and all(looks[k] >= n + 3 for k, n in looked.items())),
+                "every watch looked after the long wait")
             assert third.waiting and third.stopped == "", f"stopped while waiting: {third.stopped!r}"
             assert jobs[0].stopped == "" and jobs[1].stopped == "", "the two being heard moved on"
             # A place frees: the third's own worker starts, and its clocks
@@ -471,3 +476,346 @@ def test_finished_jobs_are_let_go_unless_a_new_chat_may_still_bring_them_home(mo
     kept = asyncio.run(_go())
     assert kept == ["rec_0000000000000003", "rec_0000000000000004", "rec_00000000000000fe",
                     "rec_00000000000000ff"], kept
+
+
+# --------------------------------------------------------------------------- #
+# the reply waiting for a recording is stopped, or cut off some other way
+# --------------------------------------------------------------------------- #
+#: What the worker hears (the real ``_hear_here`` reads it).
+_HEARD = {
+    "lines": [{"start": 0.5, "text": "good morning everyone"},
+              {"start": 70.2, "text": "we decided to move the launch to march"},
+              {"start": 95.0, "text": "i will send the revised plan on friday"},
+              {"start": 110.0, "text": "maria will check the numbers"}],
+    "seconds": 130.0, "duration": 130.0, "cut": False,
+}
+
+
+class _KillableWorker:
+    """A ``procs.run`` whose worker hears until the test lets it end
+    (``free``) or the job kills its tree (``procs.kill_tree``)."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self.proc = SimpleNamespace(pid=4242)
+        self.spawned = threading.Event()
+        self.end = threading.Event()
+        self.killed = False
+        #: A worker that does not end when its tree is killed (wedged).
+        self.deaf = False
+
+    def run(self, argv, *, timeout, input=None, on_spawn=None, **kw):
+        import json
+
+        if on_spawn is not None and on_spawn(self.proc):
+            self.kill_tree(self.proc)
+        self.spawned.set()
+        assert self.end.wait(60), "the worker was never let go nor killed"
+        if self.killed:
+            return SimpleNamespace(timed_out=False, returncode=1, stdout=b"")
+        return SimpleNamespace(timed_out=False, returncode=0, stdout=json.dumps(_HEARD).encode("ascii"))
+
+    def kill_tree(self, proc) -> None:
+        if proc is self.proc:
+            self.killed = True
+            if not self.deaf:
+                self.end.set()
+
+    def free(self) -> None:
+        self.end.set()
+
+
+class _HeldNotes:
+    """The notes model: answers only when the test lets it (``hold``)."""
+
+    def __init__(self) -> None:
+        from tests._fakes.recordings import NotesModel
+
+        self.model = NotesModel()
+        self.hold = False
+        self.asked = None
+        self.answer = None
+
+    async def complete(self, **kw):
+        self.asked.set()
+        if self.hold:
+            await self.answer.wait()
+        return await self.model.complete(**kw)
+
+
+class _StopRig:
+    """The real tool and the real hearing (``_hear_here``, ``_work``), the
+    worker a stand-in; the turn ``turn-stop`` of the chat ``thr_a``."""
+
+    def __init__(self, tmp_path: Path, monkeypatch) -> None:
+        from iron_jarvis.agents import chat_delivery
+        from iron_jarvis.core import procs
+        from iron_jarvis.documents import recording as R
+        from iron_jarvis.documents import recording_tools as RT
+        from tests._fakes.recordings import LOCAL_CHOICE
+
+        self.home, self.ws = tmp_path / "home", tmp_path / "work"
+        self.ws.mkdir(parents=True)
+        self.clip = self.ws / "meeting.m4a"
+        self.clip.write_bytes(b"the bytes of a recording")
+        self.worker = _KillableWorker()
+        self.notes = _HeldNotes()
+        self.sent: list = []
+        monkeypatch.setattr(chat_delivery, "report_to_chat",
+                            lambda platform, tid, report: self.sent.append((tid, report)) or {"ok": True})
+        monkeypatch.setattr(procs, "run", self.worker.run)
+        monkeypatch.setattr(procs, "kill_tree", self.worker.kill_tree)
+        monkeypatch.setattr(RT, "_answers_the_phone", lambda: False)
+        monkeypatch.setattr(J, "_answers_the_phone", lambda: False)
+        monkeypatch.setattr(J, "_LIVE", {})
+        monkeypatch.setattr(J, "POLL_S", 0.01)
+        monkeypatch.setattr(J, "INLINE_WAIT_S", 120.0)  # the reply is still waiting when it is stopped
+        monkeypatch.setattr(J, "notes_choice", lambda r, c, local_only, chat=None: dict(LOCAL_CHOICE))
+        tr = R.Transcriber(R.THIS_PC, "the offline speech model on this PC", model="C:/fake")
+
+        async def choose(env, *, local_only):
+            return tr
+
+        monkeypatch.setattr(J, "choose_now", choose)
+        router = SimpleNamespace(default_provider="ollama", manager=None, complete=self.notes.complete)
+        self.tool = RT.TranscribeRecordingTool(router_resolver=lambda: router)
+
+    def call(self):
+        import asyncio
+
+        from iron_jarvis.tools.base import ToolContext
+
+        self.notes.asked, self.notes.answer = asyncio.Event(), asyncio.Event()
+        ctx = ToolContext(workspace=self.ws, session_id="chat", agent_run_id="chat",
+                          config=SimpleNamespace(home=self.home), event_bus=None, engine=None,
+                          thread_id="thr_a", turn_id="turn-stop")
+        return asyncio.ensure_future(self.tool.execute({"path": str(self.clip)}, ctx))
+
+    async def cut_off(self, call, *, stop: bool) -> "J.Job":
+        """The reply is stopped (``stop``: the user pressed Stop, which marks
+        the turn and cancels it, as ``chat_turn``'s runner does) or cut off
+        with no Stop (the page went away): the call is cancelled."""
+        import asyncio
+
+        from iron_jarvis.core.turns import TURNS
+
+        job = next(iter(J._LIVE.values()))
+        if stop:
+            assert TURNS.stop("turn-stop", by="you")
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        return job
+
+    def files(self) -> list[str]:
+        return sorted(p.name for p in self.ws.iterdir())
+
+
+def _stop_run(rig: _StopRig, body):
+    import asyncio
+
+    from iron_jarvis.core.turns import TURNS
+
+    async def _go():
+        handle = TURNS.register("turn-stop")
+        try:
+            return await body()
+        finally:
+            TURNS.release("turn-stop", handle)
+            rig.worker.free()
+            if rig.notes.answer is not None:
+                rig.notes.answer.set()
+
+    return asyncio.run(_go())
+
+
+def test_a_stop_of_the_reply_stops_the_recording_and_kills_its_worker(tmp_path, monkeypatch):
+    """Stop pressed while the reply waits for a recording being heard: the
+    recording stops with it. Its worker's tree is killed, nothing is written,
+    its record ends in words (never still working: the next boot does not
+    start it again), and nothing more comes to the chat (the Stop is the
+    answer)."""
+    import asyncio
+
+    rig = _StopRig(tmp_path, monkeypatch)
+
+    async def body():
+        call = rig.call()
+        await _until(lambda: rig.worker.spawned.is_set() and J._LIVE, "the worker hearing")
+        job = await rig.cut_off(call, stop=True)
+        await _until(lambda: rig.worker.killed, "the worker killed by the Stop", limit=10)
+        await asyncio.wait_for(job.task, 30)
+        await _until(lambda: not J._BACKGROUND, "the stop settled")
+        return job
+
+    job = _stop_run(rig, body)
+    assert job.stopped == J.STOP_REPLY
+    disk = J.load_state(rig.home, job.id)
+    assert disk["status"] == J.STATUS_FAILED, disk["status"]
+    assert "stopped with the reply" in disk["error"] and "Nothing was saved" in disk["error"]
+    assert job.id not in [s["id"] for s in J._interrupted(rig.home)]
+    assert rig.files() == ["meeting.m4a"]
+    assert rig.sent == [], "nothing comes to the chat after the user's own Stop"
+
+
+def test_a_stopped_recording_that_does_not_end_is_cancelled_and_still_ends_in_words(tmp_path, monkeypatch):
+    """The worker does not end when its tree is killed (wedged): the stop
+    cancels the job after STOP_WAIT_S, and its record still ends in words,
+    never "hearing" for the next boot to start again."""
+    rig = _StopRig(tmp_path, monkeypatch)
+    rig.worker.deaf = True
+    monkeypatch.setattr(J, "STOP_WAIT_S", 0.05)
+
+    async def body():
+        call = rig.call()
+        await _until(lambda: rig.worker.spawned.is_set() and J._LIVE, "the worker hearing")
+        job = await rig.cut_off(call, stop=True)
+        await _until(lambda: job.done.is_set() and not J._BACKGROUND, "the stop settled", limit=10)
+        return job
+
+    job = _stop_run(rig, body)
+    assert rig.worker.killed
+    disk = J.load_state(rig.home, job.id)
+    assert disk["status"] == J.STATUS_FAILED, disk["status"]
+    assert "stopped with the reply" in disk["error"]
+    assert job.id not in [s["id"] for s in J._interrupted(rig.home)]
+    assert rig.files() == ["meeting.m4a"] and rig.sent == []
+
+
+def test_a_stop_while_the_notes_are_written_keeps_the_transcript_and_says_so_once(tmp_path, monkeypatch):
+    """Stop pressed while the notes are being written (the model slow to
+    answer): the notes are stopped, the transcript already written stays, and
+    the chat is told so in ONE report; the record is not left "notes" for the
+    next boot to start again."""
+    import asyncio
+
+    rig = _StopRig(tmp_path, monkeypatch)
+    rig.notes.hold = True
+    monkeypatch.setattr(J, "STOP_WAIT_S", 0.05)
+
+    async def body():
+        call = rig.call()
+        await _until(lambda: rig.worker.spawned.is_set(), "the worker hearing")
+        rig.worker.free()
+        await asyncio.wait_for(rig.notes.asked.wait(), 30)
+        job = await rig.cut_off(call, stop=True)
+        await _until(lambda: job.done.is_set(), "the notes stopped", limit=10)
+        await _until(lambda: not J._BACKGROUND, "the stop settled")
+        return job
+
+    job = _stop_run(rig, body)
+    assert rig.files() == ["meeting transcript.md", "meeting.m4a"]
+    disk = J.load_state(rig.home, job.id)
+    assert disk["status"] == J.STATUS_DONE and disk["transcript_written"] is True and not disk["notes_written"]
+    assert disk["notes_why"] == "The notes were not written: the reply was stopped. The transcript is saved."
+    assert job.id not in [s["id"] for s in J._interrupted(rig.home)]
+    assert len(rig.sent) == 1 and rig.sent[0][0] == "thr_a", rig.sent
+    words = rig.sent[0][1]["words"]
+    assert words.startswith("The transcript is ready") and "the reply was stopped" in words
+
+
+def test_a_stop_while_the_notes_model_is_chosen_asks_nothing(tmp_path, monkeypatch):
+    """Stop pressed while the job looks who would write the notes (a model in
+    the cloud, with no yes in this chat yet): it does not go on to wait for
+    the card's yes (no card shows: the reply was stopped); it ends with the
+    transcript saved, and says so once."""
+    import asyncio
+
+    from tests._fakes.recordings import CLOUD_CHOICE
+
+    rig = _StopRig(tmp_path, monkeypatch)
+    gate: dict = {}
+
+    async def outlook(env, state):
+        gate["looking"].set()
+        await gate["go"].wait()
+        return dict(CLOUD_CHOICE), False, False
+
+    monkeypatch.setattr(J, "notes_outlook", outlook)
+
+    async def body():
+        gate["looking"], gate["go"] = asyncio.Event(), asyncio.Event()
+        call = rig.call()
+        await _until(lambda: rig.worker.spawned.is_set(), "the worker hearing")
+        rig.worker.free()
+        await asyncio.wait_for(gate["looking"].wait(), 30)
+        job = await rig.cut_off(call, stop=True)
+        gate["go"].set()
+        await asyncio.wait_for(job.task, 30)
+        await _until(lambda: not J._BACKGROUND, "the stop settled")
+        return job
+
+    job = _stop_run(rig, body)
+    disk = J.load_state(rig.home, job.id)
+    assert disk["status"] == J.STATUS_DONE and not disk.get("offer"), (disk["status"], disk.get("offer"))
+    assert disk["notes_why"] == "The notes were not written: the reply was stopped. The transcript is saved."
+    assert rig.notes.model.calls == [], "nothing was sent for the notes"
+    assert len(rig.sent) == 1 and "card above" not in rig.sent[0][1]["words"], rig.sent
+
+
+def test_a_reply_cut_off_with_no_stop_lets_the_recording_carry_on_and_come_home_once(tmp_path, monkeypatch):
+    """The page went away (no Stop pressed) while the reply waited: no reply
+    carries the recording now, so it carries on and its end comes home to the
+    chat as ONE report, never silently."""
+    import asyncio
+
+    rig = _StopRig(tmp_path, monkeypatch)
+
+    async def body():
+        call = rig.call()
+        await _until(lambda: rig.worker.spawned.is_set() and J._LIVE, "the worker hearing")
+        job = await rig.cut_off(call, stop=False)
+        assert job.detached and not rig.worker.killed and not job.stopped
+        rig.worker.free()
+        await asyncio.wait_for(job.task, 30)
+        return job
+
+    job = _stop_run(rig, body)
+    assert job.state["status"] == J.STATUS_DONE and job.state["notes_written"] is True
+    assert rig.files() == ["meeting notes.md", "meeting transcript.md", "meeting.m4a"]
+    assert len(rig.sent) == 1 and rig.sent[0][0] == "thr_a", rig.sent
+    assert rig.sent[0][1]["words"].startswith("The transcript is ready")
+
+
+def test_the_reply_waits_only_until_just_before_the_calls_deadline_which_is_a_stop(tmp_path):
+    """The wait for a recording ends DEADLINE_MARGIN_S before the call's own
+    deadline (the phone's 8 minutes too), so the deadline does not cut a call
+    that waits; if it does cut one, its record says the call was stopped, so
+    the recording is stopped with it."""
+    import asyncio
+
+    from iron_jarvis.documents import recording_tools as RT
+    from iron_jarvis.tools import registry
+    from iron_jarvis.tools.base import ToolContext
+
+    ctx = ToolContext(workspace=tmp_path, session_id="chat", agent_run_id="chat",
+                      config=SimpleNamespace(home=tmp_path), event_bus=None, engine=None, turn_id="")
+
+    async def _go():
+        async with asyncio.timeout(100.0) as cm:
+            token = registry._DEADLINE_SCOPE.set(cm)
+            try:
+                waits = RT._wait_s(phone=True), RT._wait_s(phone=False)
+            finally:
+                registry._DEADLINE_SCOPE.reset(token)
+        pressed = None
+        try:
+            async with asyncio.timeout(0.01) as cm:
+                token = registry._DEADLINE_SCOPE.set(cm)
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    pressed = RT._stop_pressed(ctx)
+                    raise
+                finally:
+                    registry._DEADLINE_SCOPE.reset(token)
+        except TimeoutError:
+            pass
+        return waits, pressed, RT._wait_s(phone=True), RT._stop_pressed(ctx)
+
+    (phone, here), pressed, unbounded, no_cut = asyncio.run(_go())
+    assert 100.0 - RT.DEADLINE_MARGIN_S - 5 < phone <= 100.0 - RT.DEADLINE_MARGIN_S, phone
+    assert here == J.INLINE_WAIT_S
+    assert pressed is True, "the call's own deadline is a stop"
+    assert unbounded == RT.PHONE_WAIT_S and no_cut is False

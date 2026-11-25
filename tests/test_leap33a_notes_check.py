@@ -13,6 +13,8 @@ model the user's data may go to (D-33.1).
 * On the phone (no card there) the notes wait for that yes, and the reply
   says where it is given.
 * An Undo pressed while the notes are being written brings nothing home.
+* An Undo refused (a file changed since it was written) is decided BEFORE the
+  job is touched: the notes still come, and nothing says "taken back".
 """
 
 from __future__ import annotations
@@ -580,7 +582,8 @@ def _reports(monkeypatch) -> list:
 
 
 async def _undo_while_writing(job: J.Job, model: "_GatedModel") -> bool:
-    """The tool's ``revert`` stops the job first; the model answers after."""
+    """The tool's ``revert`` stops the job (its files unchanged); the model
+    answers after."""
     await model.asked.wait()
     stopping = asyncio.ensure_future(J.stop(job.id, "undo"))
     while not job.stopped:
@@ -633,6 +636,150 @@ def test_an_undo_while_a_restarted_job_writes_its_notes_reports_nothing(tmp_path
     assert stopped is True
     assert sent == []
     assert live.state["status"] == J.STATUS_UNDONE and live.state["notes_written"] is False
+
+
+def _written_transcript(job: J.Job) -> Path:
+    """The transcript as the job wrote it, with the hash it keeps."""
+    t = Path(job.state["transcript"])
+    t.write_text("[01:10] we decided to move the launch to march\n", encoding="utf-8")
+    job.state["hashes"] = {str(t): J.file_sha256(t)}
+    J.save_state(job.env.home, job.state)
+    return t
+
+
+async def _press_undo(job: J.Job, router: "_Router"):
+    """The real tool's ``revert`` for ``job`` (its ledger row's envelope)."""
+    from iron_jarvis.documents.recording_tools import TranscribeRecordingTool
+    from iron_jarvis.tools.base import ToolContext
+    from iron_jarvis.tools.undo import RevertConflict
+
+    tool = TranscribeRecordingTool(router_resolver=lambda: router)
+    ctx = ToolContext(workspace=Path(job.state["workspace"]), session_id="chat", agent_run_id="chat",
+                      config=SimpleNamespace(home=job.env.home), event_bus=None, engine=None)
+    undo = {"pre_inline": json.dumps({"paths": [], "mode": "raw", "sha256": {}, "recording_id": job.id})}
+    try:
+        return await tool.revert(undo, ctx)
+    except RevertConflict as exc:
+        return exc
+
+
+def test_an_undo_refused_while_the_notes_are_written_leaves_the_job_working(tmp_path, monkeypatch):
+    """A misheard word fixed in the transcript, then Undo: it is refused, and
+    that is decided BEFORE the job is touched. The notes are still written and
+    come home once; the card never says the files were taken back; the next
+    boot has nothing to start again."""
+    from iron_jarvis.tools.undo import RevertConflict
+
+    sent = _reports(monkeypatch)
+    model = _GatedModel()
+    router = _Router("ollama", {"ollama"}, model=model)
+    monkeypatch.setattr(J, "notes_choice", lambda r, c, local_only, chat=None: dict(LOCAL_CHOICE))
+    job = _heard(tmp_path, router=router)
+    Path(job.state["source"]).write_bytes(b"RIFF")
+    transcript = _written_transcript(job)
+
+    async def _go():
+        model.asked, model.answer_now = asyncio.Event(), asyncio.Event()
+        assert await J.reconcile_at_boot(job.env) == 1
+        live = J.live(job.id)
+        await model.asked.wait()
+        transcript.write_text("[01:10] we decided to move the launch to may\n", encoding="utf-8")
+        undoing = asyncio.ensure_future(_press_undo(live, router))
+        while not undoing.done() and not live.stopped:
+            await asyncio.sleep(0)  # a yield, not a wait
+        during = (live.stopped, J.card_of(live.state)["status"])
+        model.answer_now.set()
+        said = await undoing
+        await live.task
+        return live, said, during
+
+    live, said, during = asyncio.run(_go())
+    assert isinstance(said, RevertConflict) and "was changed after it was written" in str(said)
+    assert during == ("", J.STATUS_NOTES), f"the refused Undo touched the job: {during}"
+    st = live.state
+    assert st["status"] == J.STATUS_DONE and st["notes_written"] is True and Path(st["notes"]).is_file()
+    assert "may" in transcript.read_text(encoding="utf-8"), "the user's edit stays"
+    assert J.card_of(st)["status"] == J.STATUS_DONE
+    assert J.load_state(job.env.home, job.id)["status"] == J.STATUS_DONE
+    assert job.id not in [s["id"] for s in J._interrupted(job.env.home)]
+    assert len(sent) == 1 and sent[0][1]["words"].startswith("The transcript is ready")
+
+
+def test_a_file_changed_while_the_undo_stops_the_job_is_kept_and_said(tmp_path, monkeypatch):
+    """The other order: the files are unchanged when Undo is pressed, and the
+    transcript is edited in the moment the job is being stopped. The job was
+    stopped and nothing is removed; its record says what is true (the
+    transcript is saved, the notes were not written), never "undone" and
+    never still working: the next boot does not start the notes again."""
+    from iron_jarvis.tools.undo import RevertConflict
+
+    sent = _reports(monkeypatch)
+    model = _GatedModel()
+    router = _Router("ollama", {"ollama"}, model=model)
+    monkeypatch.setattr(J, "notes_choice", lambda r, c, local_only, chat=None: dict(LOCAL_CHOICE))
+    job = _heard(tmp_path, router=router)
+    Path(job.state["source"]).write_bytes(b"RIFF")
+    transcript = _written_transcript(job)
+    real_stop = J.stop
+
+    async def stop_while_edited(rid, why="undo"):
+        transcript.write_text("my own words now", encoding="utf-8")
+        model.answer_now.set()
+        return await real_stop(rid, why)
+
+    monkeypatch.setattr(J, "stop", stop_while_edited)
+
+    async def _go():
+        model.asked, model.answer_now = asyncio.Event(), asyncio.Event()
+        assert await J.reconcile_at_boot(job.env) == 1
+        live = J.live(job.id)
+        await model.asked.wait()
+        said = await _press_undo(live, router)
+        await live.task
+        return live, said
+
+    live, said = asyncio.run(_go())
+    assert isinstance(said, RevertConflict), said
+    assert transcript.read_text(encoding="utf-8") == "my own words now"
+    assert not Path(live.state["notes"]).exists(), "the Undo stopped the notes"
+    disk = J.load_state(job.env.home, job.id)
+    assert disk["status"] == J.STATUS_DONE and disk["transcript_written"] is True, disk["status"]
+    assert disk["notes_why"].startswith("The notes were not written") and "transcript is saved" in disk["notes_why"]
+    assert J.card_of(live.state)["status"] == J.STATUS_DONE
+    assert job.id not in [s["id"] for s in J._interrupted(job.env.home)]
+    assert sent == []
+
+
+def test_a_file_is_marked_written_only_once_its_hash_is_kept(tmp_path, monkeypatch):
+    """An Undo checks the files written so far while the job may be writing
+    one (it does not stop the job first any more): a file is marked written
+    only once its hash is kept, so that check never takes the job's own new
+    file for one the user changed."""
+    from iron_jarvis.documents.recording_tools import _check_unchanged
+
+    router = _Router("ollama", {"ollama"})
+    job = _heard(tmp_path, router=router)
+    job.state.update({"transcript_written": False, "hashes": {}})
+    ws = Path(job.state["workspace"])
+    real, busy, seen = J.file_sha256, [], []
+
+    def hashing(path):
+        if not busy:  # the Undo's check, at the moment the job hashes a file it wrote
+            busy.append(1)
+            try:
+                _check_unchanged(job.state, ws)
+                seen.append("unchanged")
+            except Exception as exc:  # noqa: BLE001
+                seen.append(f"refused: {exc}")
+            finally:
+                busy.clear()
+        return real(path)
+
+    monkeypatch.setattr(J, "file_sha256", hashing)
+    J._write_transcript(job, LINES)
+    asyncio.run(J.write_notes(job, dict(LOCAL_CHOICE), local_only=False))
+    assert job.state["transcript_written"] is True and job.state["notes_written"] is True
+    assert seen == ["unchanged", "unchanged"], seen
 
 
 def test_a_job_that_ends_normally_still_reports_once(tmp_path, monkeypatch):

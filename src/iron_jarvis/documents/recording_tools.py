@@ -13,8 +13,15 @@ again in the same folder is the job already made (no second pair of files).
 
 Its Undo stops a job still running (the worker's tree is killed) and removes
 the two files it wrote, each only while it still holds the bytes it was
-written with (a file edited since refuses the whole Undo), and drops the
-transcript's kept minutes.
+written with, and drops the transcript's kept minutes. A file edited since
+refuses the whole Undo, and that is checked BEFORE the job is touched: a
+refused Undo leaves it working (its notes still come).
+
+A call cancelled while it waits (or reads the job's end) leaves no job
+unaccounted for (``recording_jobs.reply_stopped``): the reply's Stop, or the
+call's own deadline, stops the job; anything else lets it carry on; either
+way its end comes home as its one report. The wait itself ends before the
+call's deadline (:data:`DEADLINE_MARGIN_S`).
 """
 
 from __future__ import annotations
@@ -254,6 +261,71 @@ def result_words(state: "dict[str, Any]", *, finished: bool, phone: bool,
     return "\n".join(lines)
 
 
+def _check_unchanged(state: "dict[str, Any] | None", ws: Path) -> "list[tuple[Path, str]]":
+    """The files the job has written in the chat's folder, as ``(path, the
+    key of its hash)``; raises ``RevertConflict`` when one holds other bytes
+    than it was written with (nothing is removed then). BLOCKING."""
+    from ..tools.undo import RevertConflict
+
+    if state is None:
+        return []
+    hashes = state.get("hashes") if isinstance(state.get("hashes"), dict) else {}
+    targets: list[tuple[Path, str]] = []
+    for key, flag in (("transcript", "transcript_written"), ("notes", "notes_written")):
+        if not (state.get(flag) and state.get(key)):
+            continue
+        p = Path(str(state[key]))
+        try:
+            rel = p.resolve().relative_to(ws.resolve()).as_posix()
+            targets.append((safe_path(ws, rel), str(p)))
+        except Exception:  # noqa: BLE001 — outside the folder: never touched
+            continue
+    for target, key in targets:
+        if target.exists() and J.file_sha256(target) != hashes.get(key):
+            raise RevertConflict(f"{target.name} was changed after it was written; nothing was removed")
+    return targets
+
+
+#: The reply's wait for a recording ends this long before the call's own
+#: deadline (``tool_deadline_left``), so the deadline never cuts a call that
+#: waits on a recording: its words are read after the wait.
+DEADLINE_MARGIN_S = 15.0
+
+
+def _wait_s(phone: bool) -> float:
+    want = PHONE_WAIT_S if phone else J.INLINE_WAIT_S
+    try:
+        from ..tools.registry import tool_deadline_left
+
+        left = tool_deadline_left()
+    except Exception:  # noqa: BLE001 — no deadline known: the wait stands
+        left = None
+    if left is not None:
+        want = min(want, max(0.0, left - DEADLINE_MARGIN_S))
+    return want
+
+
+def _stop_pressed(ctx: ToolContext) -> bool:
+    """Is the cancel now unwinding this call a STOP: the reply's Stop (its
+    turn is marked stopped) or the call's own deadline (whose record says the
+    call was stopped)? Anything else (the page went away, Iron Jarvis
+    closing) is not: the recording then carries on and comes home."""
+    try:
+        from ..tools.registry import tool_deadline_expired
+
+        if tool_deadline_expired():
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from ..core.turns import TURNS
+
+        handle = TURNS.handle(_turn_of(ctx))
+        return bool(handle is not None and handle.stopped)
+    except Exception:  # noqa: BLE001 — unsure: it carries on and comes home
+        return False
+
+
 class TranscribeRecordingTool(Tool):
     name = "transcribe_recording"
     reversibility = Reversibility.REVERSIBLE  # NEW files only; one Undo removes them
@@ -330,7 +402,8 @@ class TranscribeRecordingTool(Tool):
             job = J.live(str(earlier.get("id")))
             finished = earlier.get("status") not in J.RUNNING
             if job is not None and not finished:
-                finished = await J.wait_inline(job, PHONE_WAIT_S if phone else J.INLINE_WAIT_S)
+                # Another call's job: a cancel here leaves it to that call.
+                finished = await J.wait_inline(job, _wait_s(phone))
                 earlier = job.state
             other = _chat_key(earlier.get("thread_id"), earlier.get("turn_id")) != _chat_key(
                 getattr(ctx, "thread_id", ""), _turn_of(ctx))
@@ -359,15 +432,23 @@ class TranscribeRecordingTool(Tool):
                 "mode": "raw", "sha256": {}, "recording_id": state["id"],
             })
         job = J.start(env, state, tr)
-        finished = await J.wait_inline(job, PHONE_WAIT_S if phone else J.INLINE_WAIT_S)
-        st = job.state
-        if finished and st.get("status") == J.STATUS_FAILED:
-            return ToolResult(ok=False, error=str(st.get("error") or "The recording could not be turned into text."))
-        made = [str(st[k]) for k, w in (("transcript", "transcript_written"), ("notes", "notes_written"))
-                if finished and st.get(w)]
-        outlook = await pending_outlook(env, st) if not finished else None
-        # Off the loop: the words read the two files back.
-        words = await asyncio.to_thread(lambda: result_words(st, finished=finished, phone=phone, outlook=outlook))
+        try:
+            finished = await J.wait_inline(job, _wait_s(phone))
+            st = job.state
+            if finished and st.get("status") == J.STATUS_FAILED:
+                return ToolResult(ok=False,
+                                  error=str(st.get("error") or "The recording could not be turned into text."))
+            made = [str(st[k]) for k, w in (("transcript", "transcript_written"), ("notes", "notes_written"))
+                    if finished and st.get(w)]
+            outlook = await pending_outlook(env, st) if not finished else None
+            # Off the loop: the words read the two files back.
+            words = await asyncio.to_thread(
+                lambda: result_words(st, finished=finished, phone=phone, outlook=outlook))
+        except asyncio.CancelledError:
+            # No reply carries it now: a Stop stops it, anything else lets it
+            # carry on, and either way its end comes home (``reply_stopped``).
+            J.reply_stopped(job, pressed=_stop_pressed(ctx))
+            raise
         return ToolResult(
             ok=True,
             output=words,
@@ -376,9 +457,10 @@ class TranscribeRecordingTool(Tool):
         )
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        """Stop the job if it still runs, then remove the files it wrote, each
-        only while it holds the bytes it was written with (one edited since
-        refuses the whole Undo), and drop the transcript's kept minutes."""
+        """Check the files written so far FIRST (one edited since refuses the
+        whole Undo and leaves the job as it was: still working, its notes
+        still to come), then stop the job if it still runs, check again, and
+        remove the files it wrote, and drop the transcript's kept minutes."""
         from ..tools.undo import RevertConflict, read_envelope
 
         meta = read_envelope(undo)
@@ -386,30 +468,23 @@ class TranscribeRecordingTool(Tool):
         home = Path(ctx.config.home)
         if not R.valid_recording_id(rid):
             return ToolResult(ok=True, output="This call made no file, so there is nothing to take back.")
+        ws = Path(ctx.workspace)
+
+        async def _state_now() -> "dict[str, Any] | None":
+            state = await asyncio.to_thread(J.load_state, home, rid)
+            live = J.live(rid)
+            return live.state if live is not None else state
+
+        # BEFORE the stop: a refused Undo never stops the notes, and nothing
+        # says the files were taken back while they are still there.
+        await asyncio.to_thread(_check_unchanged, await _state_now(), ws)
         await J.stop(rid, "undo")
-        state = await asyncio.to_thread(J.load_state, home, rid)
-        live = J.live(rid)
-        if live is not None:
-            state = live.state
+        state = await _state_now()
 
         def _undo() -> "tuple[int, int, list[str]]":
-            ws = Path(ctx.workspace)
-            hashes = (state or {}).get("hashes") if isinstance((state or {}).get("hashes"), dict) else {}
-            written: list[Path] = []
-            if state is not None:
-                for key, flag in (("transcript", "transcript_written"), ("notes", "notes_written")):
-                    if state.get(flag) and state.get(key):
-                        written.append(Path(str(state[key])))
-            targets: list[tuple[Path, str]] = []
-            for p in written:
-                try:
-                    rel = p.resolve().relative_to(ws.resolve()).as_posix()
-                    targets.append((safe_path(ws, rel), str(p)))
-                except Exception:  # noqa: BLE001 — outside the folder: never touched
-                    continue
-            for target, key in targets:
-                if target.exists() and J.file_sha256(target) != hashes.get(key):
-                    raise RevertConflict(f"{target.name} was changed after it was written; nothing was removed")
+            # Again, now that nothing more is written: the notes may have been
+            # written, or a file edited, while the job was being stopped.
+            targets = _check_unchanged(state, ws)
             removed = gone = 0
             for target, _key in targets:
                 if target.exists():
@@ -430,7 +505,13 @@ class TranscribeRecordingTool(Tool):
                 J.save_state(home, state)
             return removed, gone, [t.name for t, _ in targets]
 
-        removed, gone, names = await asyncio.to_thread(_undo)
+        try:
+            removed, gone, names = await asyncio.to_thread(_undo)
+        except RevertConflict:
+            # Edited in the moment the job was being stopped: it was stopped
+            # and nothing was removed; its record says so (never "undone").
+            await asyncio.to_thread(J.undo_refused, home, state)
+            raise
         if not names and not removed:
             return ToolResult(ok=True, output="Stopped: no transcript or notes had been written yet.")
         words = f"Removed {removed} file(s) made from the recording ({', '.join(names)})"
@@ -443,4 +524,5 @@ def recording_tools(router_resolver: "Any | None" = None) -> "list[Tool]":
     return [TranscribeRecordingTool(router_resolver)]
 
 
-__all__ = ["PHONE_WAIT_S", "TranscribeRecordingTool", "find_earlier", "recording_tools", "result_words"]
+__all__ = ["DEADLINE_MARGIN_S", "PHONE_WAIT_S", "TranscribeRecordingTool", "find_earlier", "recording_tools",
+           "result_words"]

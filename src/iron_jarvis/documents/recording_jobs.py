@@ -90,6 +90,12 @@ STATUS_FAILED = "failed"
 STATUS_UNDONE = "undone"
 RUNNING = (STATUS_HEARING, STATUS_NOTES)
 
+#: Why a job was stopped when the reply waiting for it was STOPPED (the
+#: user's Stop, or the call's own deadline, whose record says the call was
+#: stopped): :func:`reply_stopped`. (``undo``: its Undo; ``stall`` /
+#: ``deadline``: the worker's own bounds; ``shutdown``: Iron Jarvis closing.)
+STOP_REPLY = "reply"
+
 #: The clock and the sleep a job waits with (tests inject both).
 _clock: Callable[[], float] = time.monotonic
 _sleep = asyncio.sleep
@@ -592,6 +598,8 @@ async def _run(job: Job) -> None:
         await _hear(job)
         if job.state.get("status") == STATUS_NOTES:
             await _notes(job)
+        if _end_stopped(job):
+            await _save(job)
     except asyncio.CancelledError:
         # The daemon is stopping: the state stays "hearing" or "notes", and
         # the next boot starts it again (MAX_ATTEMPTS).
@@ -627,7 +635,8 @@ def _fail(job: Job, words: str) -> None:
 
 def _undone(job: Job) -> bool:
     """Did the user's Undo stop this job? (``stop(rid, "undo")``, which the
-    tool's ``revert`` calls first, before it removes the files.)"""
+    tool's ``revert`` calls once the files written so far are found unchanged,
+    before it removes them.)"""
     return job.stopped == "undo" or job.state.get("status") == STATUS_UNDONE
 
 
@@ -636,6 +645,25 @@ def _set_status(job: Job, status: str) -> None:
     undone, whichever step was ending when the press came (the notes model
     answering, the notes file being written)."""
     job.state["status"] = STATUS_UNDONE if _undone(job) else status
+
+
+def _end_stopped(job: Job) -> bool:
+    """A job its REPLY's Stop stopped (:data:`STOP_REPLY`) that is still in a
+    working step ends HERE, in words, so its record never says it is still
+    working and the next boot does not start it again: a transcript already
+    written stays ("The transcript is saved"; the notes were not written),
+    otherwise nothing was saved. True when it ended here (the caller saves)."""
+    st = job.state
+    if job.stopped != STOP_REPLY or _undone(job) or st.get("status") not in RUNNING:
+        return False
+    if st.get("transcript_written"):
+        st["status"] = STATUS_DONE
+        st["offer"] = None
+        if not st.get("notes_written"):
+            st["notes_why"] = "The notes were not written: the reply was stopped. The transcript is saved."
+    else:
+        _fail(job, _stopped_words(job))
+    return True
 
 
 # -- hearing ------------------------------------------------------------------
@@ -796,6 +824,8 @@ def _stopped_words(job: Job) -> str:
     at = R.minutes_words(float(job.state.get("heard_s") or 0.0), float(job.state.get("total_s") or 0.0))
     if job.stopped == "undo":
         return f"Stopped: the transcript of {name} was undone."
+    if job.stopped == STOP_REPLY:
+        return f"Turning {name} into text was stopped with the reply, after {at}. Nothing was saved."
     if job.stopped == "deadline":
         return (f"The offline speech model took too long on {name} and was stopped after {at}. "
                 "Nothing was saved.")
@@ -967,9 +997,11 @@ def _write_transcript(job: Job, lines: "list[R.Line]") -> None:
     )
     save_lines(job.env.home, job.id, lines)
     target = write_new(Path(st["transcript"]), text)
+    # Its hash BEFORE the flag: an Undo checking the written files while this
+    # runs (``recording_tools.revert``) never sees a file written with no hash.
+    st.setdefault("hashes", {})[str(target)] = file_sha256(target)
     st["transcript"] = str(target)
     st["transcript_written"] = True
-    st.setdefault("hashes", {})[str(target)] = file_sha256(target)
     try:
         keep_minutes(job.env.engine, target, lines, thread_id=str(st.get("thread_id") or ""),
                      turn_id=str(st.get("turn_id") or ""), long=float(st.get("duration") or 0) >= 3600)
@@ -1005,10 +1037,12 @@ async def _notes(job: Job) -> None:
     """Who writes the notes, and the notes (D-33.1)."""
     env = job.env
     st = job.state
-    if _undone(job):
+    # A job stopped (its Undo, its reply's Stop) asks nothing and writes
+    # nothing: its end is said by the stop (``_end_stopped``, ``revert``).
+    if job.stopped or _undone(job):
         return
     choice, yes, local_only = await notes_outlook(env, st)
-    if _undone(job):
+    if job.stopped or _undone(job):
         return
     if choice is None:
         _set_status(job, STATUS_DONE)
@@ -1152,9 +1186,9 @@ async def write_notes(job: Job, choice: "dict[str, Any]", *, local_only: bool) -
 
     def _write() -> None:
         target = write_new(Path(st["notes"]), text)
+        st.setdefault("hashes", {})[str(target)] = file_sha256(target)  # before the flag (above)
         st["notes"] = str(target)
         st["notes_written"] = True
-        st.setdefault("hashes", {})[str(target)] = file_sha256(target)
 
     await asyncio.to_thread(_write)
     st["notes_by"] = str(choice.get("name") or "")
@@ -1295,6 +1329,9 @@ async def _report(job: Job) -> None:
     if _undone(job):
         return
     st = job.state
+    if job.stopped == STOP_REPLY and not st.get("transcript_written"):
+        # The user's Stop, before anything was saved: the Stop is the answer.
+        return
     tid = str(st.get("thread_id") or "")
     if not tid or _answers_the_phone():
         st["homed"] = False
@@ -1338,6 +1375,11 @@ async def home_turn(env: Env, turn_id: str, thread_id: str) -> int:
     return homed
 
 
+#: How long a stop waits for the job to end by itself before it cancels it
+#: (a notes call in flight is bounded only by ``NOTES_CALL_TIMEOUT_S``).
+STOP_WAIT_S = 10.0
+
+
 async def stop(rid: str, why: str = "undo") -> bool:
     """Stop a running job (its Undo): the worker's tree is killed and nothing
     more is sent or written."""
@@ -1345,12 +1387,81 @@ async def stop(rid: str, why: str = "undo") -> bool:
     if job is None or job.task is None or job.task.done():
         return False
     _stop_worker(job, why)
-    job.state["status"] = STATUS_UNDONE if why == "undo" else job.state.get("status")
+    if why == "undo":
+        job.state["status"] = STATUS_UNDONE
+    await _stopped(job)
+    return True
+
+
+async def _stopped(job: Job) -> None:
+    """Wait (bounded) for a stopped job to end by itself, else cancel it. A
+    cancelled job its reply stopped ends in words HERE (its own step did not
+    get to: ``_end_stopped``) and comes home as its one report; an undone
+    one's end is saved by its ``revert``."""
     try:
-        await asyncio.wait_for(asyncio.shield(job.done.wait()), timeout=10.0)
+        await asyncio.wait_for(asyncio.shield(job.done.wait()), timeout=STOP_WAIT_S)
+        return
     except asyncio.TimeoutError:
         job.task.cancel()
-    return True
+    if job.stopped != STOP_REPLY:
+        return
+    await asyncio.wait({job.task}, timeout=STOP_WAIT_S)
+    if _end_stopped(job):
+        await _save(job)
+        if job.detached:
+            await _report(job)
+
+
+#: Stops and reports started while a call's cancel unwinds (held so they run
+#: to their end).
+_BACKGROUND: "set[asyncio.Task]" = set()
+
+
+def _spawn(coro: Any) -> None:
+    task = asyncio.ensure_future(coro)
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+
+
+def reply_stopped(job: Job, *, pressed: bool) -> None:
+    """The call that started ``job`` was cancelled while it waited for it or
+    read its end: no reply carries it. Never silent: its end comes home as
+    its ONE report (it is DETACHED; one that had already ended reports now).
+    ``pressed``: a STOP (the user's Stop of the reply, or the call's own
+    deadline, whose record says it was stopped) also stops it, at once: the
+    worker's tree is killed and nothing more is sent or written. A transcript
+    already written stays, and the report says the notes were not written; a
+    recording stopped before that reports nothing (the Stop is the answer).
+    Anything else (the page went away, Iron Jarvis closing) lets it carry on.
+    NOT a coroutine: it runs while the cancel unwinds, where an await may be
+    cut again; the waiting runs in tasks of its own."""
+    if job.done.is_set():
+        if not job.detached:
+            job.detached = True
+            _spawn(_report(job))
+        return
+    job.detached = True
+    if pressed and job.task is not None and not job.task.done():
+        _stop_worker(job, STOP_REPLY)
+        _spawn(_stopped(job))
+
+
+def undo_refused(home: "str | Path", state: "dict[str, Any] | None") -> None:
+    """An Undo that stopped a job and THEN found a file it wrote changed since
+    (edited in the moment it was being stopped) removed nothing: the record
+    says what is true, never "undone" and never still working (the next boot
+    does not start it again): the transcript is saved, and the notes the Undo
+    stopped were not written. BLOCKING."""
+    if state is None or state.get("status") not in (*RUNNING, STATUS_UNDONE):
+        return
+    if not state.get("transcript_written"):
+        return
+    state["status"] = STATUS_DONE
+    state["offer"] = None
+    if not state.get("notes_written"):
+        state["notes_why"] = ("The notes were not written: an Undo stopped them, and then removed nothing because "
+                              "a file had been changed since it was written. The transcript is saved.")
+    save_state(home, state)
 
 
 async def reconcile_at_boot(env: Env) -> int:
@@ -1473,9 +1584,9 @@ def cancel_all() -> None:
 __all__ = [
     "Env", "INLINE_WAIT_S", "Job", "MAX_ATTEMPTS", "NotesError", "RECORDING_DAYS",
     "STALL_S", "STATUS_ASK", "STATUS_DONE", "STATUS_FAILED", "STATUS_HEARING", "STATUS_NOTES",
-    "STATUS_UNDONE", "cancel_all", "card_of", "chat_model_of", "choose_now", "consent_given", "home_turn",
-    "keep_consent", "keep_minutes", "lend_voice_deps", "live", "live_ids", "load_lines", "load_state",
+    "STATUS_UNDONE", "STOP_REPLY", "cancel_all", "card_of", "chat_model_of", "choose_now", "consent_given",
+    "home_turn", "keep_consent", "keep_minutes", "lend_voice_deps", "live", "live_ids", "load_lines", "load_state",
     "new_state", "nobody_words", "notes_after_yes", "notes_choice", "notes_outlook", "reconcile_at_boot",
-    "report_words",
-    "save_state", "start", "stop", "voice_deps", "wait_inline", "write_new", "write_notes",
+    "reply_stopped", "report_words",
+    "save_state", "start", "stop", "undo_refused", "voice_deps", "wait_inline", "write_new", "write_notes",
 ]
