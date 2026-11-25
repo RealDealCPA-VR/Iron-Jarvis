@@ -20,8 +20,11 @@ refused Undo leaves it working (its notes still come).
 A call cancelled while it waits (or reads the job's end) leaves no job
 unaccounted for (``recording_jobs.reply_stopped``): the reply's Stop, or the
 call's own deadline, stops the job; anything else lets it carry on; either
-way its end comes home as its one report. The wait itself ends before the
-call's deadline (:data:`DEADLINE_MARGIN_S`).
+way its end comes home as its one report. The call also WATCHES its turn's
+Stop itself (:func:`_wait_or_stop`): the stream lane, the Chat page's own,
+never cancels a plain tool that is running, so without it a Stop there did
+nothing. The wait itself ends before the call's deadline
+(:data:`DEADLINE_MARGIN_S`).
 """
 
 from __future__ import annotations
@@ -305,6 +308,52 @@ def _wait_s(phone: bool) -> float:
     return want
 
 
+def _turn_handle(ctx: ToolContext) -> Any:
+    """The running turn's handle (its Stop), or None (no named turn: the
+    phone, an agent's run)."""
+    try:
+        from ..core.turns import TURNS
+
+        return TURNS.handle(_turn_of(ctx))
+    except Exception:  # noqa: BLE001 — no handle: the wait is the plain one
+        return None
+
+
+async def _wait_or_stop(job: J.Job, timeout: float, handle: Any) -> "bool | None":
+    """:func:`recording_jobs.wait_inline` RACED against the reply's Stop (the
+    turn's ``wait_stopped``), so a Stop ends the wait at once in BOTH chat
+    lanes: the stream lane (the Chat page's) never cancels a plain tool that
+    is running (its stop route says so), the POST lane does. True / False:
+    the job ended / the wait ran out (it is DETACHED); None: the Stop came
+    first (the job is untouched here; the caller settles it)."""
+    if handle is None:
+        return await J.wait_inline(job, timeout)
+    waiting = asyncio.ensure_future(J.wait_inline(job, timeout))
+    stop = asyncio.ensure_future(handle.wait_stopped())
+    try:
+        await asyncio.wait({waiting, stop}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for fut in (stop, waiting):
+            if not fut.done():
+                fut.cancel()
+    if waiting.done() and not waiting.cancelled():
+        return waiting.result()
+    return None
+
+
+def stopped_words(state: "dict[str, Any]", *, finished: bool) -> str:
+    """What the call says when its reply was stopped while it waited for the
+    recording (or read its end): the ledger's words; no reply carries them."""
+    name = state.get("source_name")
+    if finished:
+        return (f"The reply was stopped just as {name} was done. What was saved stays in the chat's folder, and "
+                "its end comes to the chat as one message.")
+    if state.get("transcript_written"):
+        return (f"The reply was stopped, so writing the notes of {name} was stopped too. The transcript already "
+                "saved stays, and the chat is told so in one message.")
+    return f"The reply was stopped, so turning {name} into text was stopped too. Nothing more is written."
+
+
 def _stop_pressed(ctx: ToolContext) -> bool:
     """Is the cancel now unwinding this call a STOP: the reply's Stop (its
     turn is marked stopped) or the call's own deadline (whose record says the
@@ -432,23 +481,41 @@ class TranscribeRecordingTool(Tool):
                 "mode": "raw", "sha256": {}, "recording_id": state["id"],
             })
         job = J.start(env, state, tr)
+        handle = _turn_handle(ctx)
         try:
-            finished = await J.wait_inline(job, _wait_s(phone))
+            finished = await _wait_or_stop(job, _wait_s(phone), handle)
             st = job.state
-            if finished and st.get("status") == J.STATUS_FAILED:
+            # A job that ended FAILED (also in the moment its reply was
+            # stopped) saved nothing: the failure is the call's answer, and
+            # nothing is reported.
+            if (job.done.is_set() if finished is None else finished) and st.get("status") == J.STATUS_FAILED:
                 return ToolResult(ok=False,
                                   error=str(st.get("error") or "The recording could not be turned into text."))
-            made = [str(st[k]) for k, w in (("transcript", "transcript_written"), ("notes", "notes_written"))
-                    if finished and st.get(w)]
-            outlook = await pending_outlook(env, st) if not finished else None
-            # Off the loop: the words read the two files back.
-            words = await asyncio.to_thread(
-                lambda: result_words(st, finished=finished, phone=phone, outlook=outlook))
+            if finished is not None:
+                outlook = await pending_outlook(env, st) if not finished else None
+                # Off the loop: the words read the two files back.
+                words = await asyncio.to_thread(
+                    lambda: result_words(st, finished=finished, phone=phone, outlook=outlook))
         except asyncio.CancelledError:
             # No reply carries it now: a Stop stops it, anything else lets it
             # carry on, and either way its end comes home (``reply_stopped``).
             J.reply_stopped(job, pressed=_stop_pressed(ctx))
             raise
+        made = [str(st[k]) for k, w in (("transcript", "transcript_written"), ("notes", "notes_written"))
+                if st.get(w)]
+        if finished is None or (handle is not None and handle.stopped):
+            # The reply's Stop came while the call waited or read the job's
+            # end, and nothing cancelled the call (the stream lane): the call
+            # settles it itself, with no await. A job still working is
+            # stopped; one that ended in that moment comes home as its ONE
+            # report (the stopped reply draws no card, so none rides here).
+            # ok, naming what was made: the call keeps its Undo.
+            ended = job.done.is_set()
+            J.reply_stopped(job, pressed=True)
+            return ToolResult(ok=True, output=stopped_words(st, finished=ended),
+                              data={"recording_id": st["id"]}, created_paths=made or None)
+        if not finished:
+            made = []
         return ToolResult(
             ok=True,
             output=words,

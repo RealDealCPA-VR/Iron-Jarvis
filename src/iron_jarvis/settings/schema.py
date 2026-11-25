@@ -560,10 +560,11 @@ SETTINGS: tuple[SettingDef, ...] = (
       "is; OpenAI bills per minute. A Local only chat never sends a recording off your network.",
       tier="ask", section="Voice",
       options=(("same_as_voice", "This PC or your speech server on your network (default)"),
-               ("this_pc", "Only the offline model on this PC"),
+               ("this_pc", "Only the offline speech model on this PC"),
                ("voice_service", "The speech service chosen for voice")),
-      aliases=("recordings", "meeting recordings", "transcribe recordings", "transcript of a meeting",
-               "voice memos")),
+      # Not "voice memos": "use my voice memo app to record the meeting" is
+      # no request to change a setting (test_wave7_review_v14420).
+      aliases=("recordings", "meeting recordings", "transcribe recordings", "transcript of a meeting")),
     # ------------------------------------------------------------ connections
     S("iron_proxy_enabled", "Use several accounts", "connections", "bool",
       "Pick which of your signed-in Claude, Codex or Grok accounts each request uses. "

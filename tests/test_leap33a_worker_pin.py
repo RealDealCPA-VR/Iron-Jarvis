@@ -778,6 +778,205 @@ def test_a_reply_cut_off_with_no_stop_lets_the_recording_carry_on_and_come_home_
     assert rig.sent[0][1]["words"].startswith("The transcript is ready")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_the_chat_pages_stop_stops_the_recording_in_both_lanes(tmp_path, monkeypatch, lane):
+    """The Chat page's Stop (``POST /chat/turns/{id}/stop`` for its named
+    turn) while the reply waits for a recording being heard, through the REAL
+    lane. The stream lane (the Chat page's own) never cancels a plain tool
+    that is running, so the call watches the turn's Stop itself: in BOTH
+    lanes the worker's tree is killed, nothing is written, the record ends in
+    words (never "hearing" for the next boot), nothing comes to the chat (the
+    Stop is the answer), and the stream ends."""
+    import asyncio
+    import json
+
+    from iron_jarvis.agents import chat_delivery
+    from iron_jarvis.core import procs
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ChatThreadRecord
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.documents import recording as R
+    from iron_jarvis.documents import recording_tools as RT
+    from tests._fakes.recordings import LOCAL_CHOICE, Deps, NotesModel
+    from tests.test_chat_approvals_v1187 import _asgi_post, _drive_stream
+    from tests.test_script_power_lanes_v1473 import Model, _body, _call
+
+    app = create_app(str(tmp_path / "home"))
+    p = app.state.platform
+    worker = _KillableWorker()
+    sent: list = []
+    monkeypatch.setattr(procs, "run", worker.run)
+    monkeypatch.setattr(procs, "kill_tree", worker.kill_tree)
+    monkeypatch.setattr(chat_delivery, "report_to_chat",
+                        lambda platform, tid, report: sent.append((tid, report)) or {"ok": True})
+    monkeypatch.setattr(J, "_LIVE", {})
+    monkeypatch.setattr(J, "_DEPS", Deps(p, model="C:/fake/vosk-model"))
+    monkeypatch.setattr(J, "notes_choice", lambda r, c, local_only, chat=None: dict(LOCAL_CHOICE))
+    monkeypatch.setattr(J, "INLINE_WAIT_S", 120.0)  # the reply is still waiting when it is stopped
+    monkeypatch.setattr(J, "POLL_S", 0.01)
+    monkeypatch.setattr(J, "_answers_the_phone", lambda: False)
+    monkeypatch.setattr(RT, "_answers_the_phone", lambda: False)
+    ws = tmp_path / "work"
+    ws.mkdir()
+    clip = wav(ws / "meeting.wav", 130.0)
+    model, notes = Model([_call(1, "transcribe_recording", path=str(clip)), "Here is what was decided."]), NotesModel()
+
+    async def complete(**kw):
+        if kw.get("system") == R.NOTES_SYSTEM:
+            return await notes.complete(**kw)
+        return await model.complete(**kw)
+
+    p.router.complete = complete
+    p.router.stream = model.stream
+    with session_scope(p.engine) as db:
+        rec = ChatThreadRecord(title="Budget meeting", messages_json="[]")
+        db.add(rec)
+        db.commit()
+        db.refresh(rec)
+        tid = rec.id
+    body = _body(ws, "what did we decide?", attachments=[str(clip)], provider="openai", model="gpt-test",
+                 thread_id=tid)
+
+    async def no_cards(_data):
+        raise AssertionError("no card is asked for a recording")
+
+    drive = asyncio.ensure_future(
+        _drive_stream(app, body, no_cards) if lane == "stream" else _asgi_post(app, "/chat", body))
+    try:
+        await _until(lambda: worker.spawned.is_set() and J._LIVE, "the worker hearing", limit=60)
+        status, raw = await _asgi_post(app, f"/chat/turns/{body['turn_id']}/stop", {})
+        assert status == 200 and json.loads(raw).get("stopped") is True, raw
+        await _until(lambda: worker.killed, "the worker killed by the Stop", limit=10)
+        await asyncio.wait_for(asyncio.shield(drive), 30)
+    finally:
+        worker.free()
+        await asyncio.wait({drive}, timeout=60)
+    job = next(iter(J._LIVE.values()))
+    await asyncio.wait_for(job.task, 30)
+    await _until(lambda: not J._BACKGROUND, "the stop settled")
+    if lane == "stream":
+        assert not [d for ev, d in drive.result() if ev == "done"], "a stopped reply has no done frame"
+    assert job.stopped == J.STOP_REPLY
+    disk = J.load_state(p.config.home, job.id)
+    assert disk["status"] == J.STATUS_FAILED, disk["status"]
+    assert "stopped with the reply" in disk["error"] and "Nothing was saved" in disk["error"]
+    assert job.id not in [s["id"] for s in J._interrupted(p.config.home)]
+    assert sorted(x.name for x in ws.iterdir()) == ["meeting.wav"]
+    assert sent == [], "nothing comes to the chat after the user's own Stop"
+
+
+def test_a_stop_as_the_recording_ends_brings_it_home_as_one_report(tmp_path, monkeypatch):
+    """The reply's Stop lands in the moment the recording is done (the wait
+    has returned, the call reads its end). In the stream lane nothing cancels
+    the call and the stopped reply draws no card, so the call settles it
+    itself: the files stay, its end comes to the chat as ONE report, and the
+    call keeps its Undo (it names the files it made)."""
+    import asyncio
+
+    from iron_jarvis.core.turns import TURNS
+    from iron_jarvis.documents import recording_tools as RT
+
+    rig = _StopRig(tmp_path, monkeypatch)
+    real = RT.result_words
+
+    def stop_while_reading(state, **kw):
+        assert TURNS.stop("turn-stop", by="you")
+        return real(state, **kw)
+
+    monkeypatch.setattr(RT, "result_words", stop_while_reading)
+
+    async def body():
+        call = rig.call()
+        await _until(lambda: rig.worker.spawned.is_set() and J._LIVE, "the worker hearing")
+        job = next(iter(J._LIVE.values()))
+        rig.worker.free()
+        result = await asyncio.wait_for(call, 30)
+        await _until(lambda: not J._BACKGROUND, "the report sent")
+        return result, job
+
+    result, job = _stop_run(rig, body)
+    assert job.state["status"] == J.STATUS_DONE and job.state["notes_written"] is True
+    assert rig.files() == ["meeting notes.md", "meeting transcript.md", "meeting.m4a"]
+    assert len(rig.sent) == 1 and rig.sent[0][0] == "thr_a", rig.sent
+    assert rig.sent[0][1]["words"].startswith("The transcript is ready")
+    assert result.ok and sorted(Path(x).name for x in result.created_paths or []) == [
+        "meeting notes.md", "meeting transcript.md"]
+    assert "The reply was stopped" in result.output and "recording" not in (result.data or {})
+
+
+def test_a_stop_as_the_recording_fails_is_answered_by_the_failure_and_reports_nothing(tmp_path, monkeypatch):
+    """The Stop wins the race while the recording had just FAILED (nothing
+    saved): the failure is the call's answer and nothing comes to the chat
+    (a failure report after the user's own Stop would be news of nothing)."""
+    import asyncio
+
+    from iron_jarvis.core.turns import TURNS
+
+    rig = _StopRig(tmp_path, monkeypatch)
+
+    async def fails_at_once(job):
+        J._fail(job, "meeting.m4a could not be read. Nothing was saved.")
+
+    async def never_ends(job, timeout):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(J, "_hear", fails_at_once)
+    monkeypatch.setattr(J, "wait_inline", never_ends)  # the Stop is first, always
+
+    async def body():
+        assert TURNS.stop("turn-stop", by="you")
+        result = await asyncio.wait_for(rig.call(), 30)
+        await _until(lambda: not J._BACKGROUND, "the stop settled")
+        return result
+
+    result = _stop_run(rig, body)
+    assert not result.ok and "could not be read" in result.error, result
+    assert rig.sent == [] and rig.files() == ["meeting.m4a"]
+
+
+def test_a_stop_as_the_recording_ends_waiting_for_a_yes_promises_no_card(tmp_path, monkeypatch):
+    """The recording ended in that moment waiting for the card's yes (the
+    notes would go to a cloud model) and the reply was stopped: the stopped
+    reply draws no card, so the Stop ends the notes as it does for a job still
+    choosing who writes them. The transcript stays, nothing is sent, and the
+    one report never points at a card that is not there."""
+    import asyncio
+
+    from iron_jarvis.core.turns import TURNS
+    from iron_jarvis.documents import recording_tools as RT
+    from tests._fakes.recordings import CLOUD_CHOICE
+
+    rig = _StopRig(tmp_path, monkeypatch)
+    monkeypatch.setattr(J, "notes_choice", lambda r, c, local_only, chat=None: dict(CLOUD_CHOICE))
+    real = RT.result_words
+
+    def stop_while_reading(state, **kw):
+        assert TURNS.stop("turn-stop", by="you")
+        return real(state, **kw)
+
+    monkeypatch.setattr(RT, "result_words", stop_while_reading)
+
+    async def body():
+        call = rig.call()
+        await _until(lambda: rig.worker.spawned.is_set() and J._LIVE, "the worker hearing")
+        job = next(iter(J._LIVE.values()))
+        rig.worker.free()
+        result = await asyncio.wait_for(call, 30)
+        await _until(lambda: not J._BACKGROUND, "the report sent")
+        return result, job
+
+    result, job = _stop_run(rig, body)
+    disk = J.load_state(rig.home, job.id)
+    assert disk["status"] == J.STATUS_DONE and not disk.get("offer"), (disk["status"], disk.get("offer"))
+    assert disk["notes_why"] == "The notes were not written: the reply was stopped. The transcript is saved."
+    assert rig.notes.model.calls == [], "nothing was sent for the notes"
+    assert rig.files() == ["meeting transcript.md", "meeting.m4a"]
+    assert len(rig.sent) == 1 and "card above" not in rig.sent[0][1]["words"], rig.sent
+    assert "the reply was stopped" in rig.sent[0][1]["words"]
+    assert result.ok and [Path(x).name for x in result.created_paths or []] == ["meeting transcript.md"]
+
+
 def test_the_reply_waits_only_until_just_before_the_calls_deadline_which_is_a_stop(tmp_path):
     """The wait for a recording ends DEADLINE_MARGIN_S before the call's own
     deadline (the phone's 8 minutes too), so the deadline does not cut a call

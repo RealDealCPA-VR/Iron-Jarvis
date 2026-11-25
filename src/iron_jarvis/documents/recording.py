@@ -259,8 +259,8 @@ def choose_transcriber(
         if local_only and not _on_this_network(label, url):
             raise RecordingRefused(
                 f"This chat is Local only, so nothing was sent to {who}, which is chosen for recordings. "
-                "Choose \"Only the offline model on this PC\" for Recordings in Settings, or turn Local only "
-                "off for this chat."
+                "Choose \"Only the offline speech model on this PC\" for Recordings in Settings, or turn "
+                "Local only off for this chat."
             )
         return Transcriber(SPEECH_SERVER if _on_this_network(label, url) else VOICE_SERVICE, who,
                            label=label, url=url)

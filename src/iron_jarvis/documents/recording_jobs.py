@@ -1438,6 +1438,15 @@ def reply_stopped(job: Job, *, pressed: bool) -> None:
     if job.done.is_set():
         if not job.detached:
             job.detached = True
+            st = job.state
+            if pressed and st.get("status") == STATUS_ASK and not _answers_the_phone():
+                # It ended in that moment waiting for the card's yes, and the
+                # stopped reply draws no card: the Stop ends the notes, as for
+                # a job still choosing who writes them (``_end_stopped``); the
+                # report saves it.
+                st["status"] = STATUS_DONE
+                st["offer"] = None
+                st["notes_why"] = "The notes were not written: the reply was stopped. The transcript is saved."
             _spawn(_report(job))
         return
     job.detached = True

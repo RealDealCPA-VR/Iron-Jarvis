@@ -2080,11 +2080,13 @@ transcript.md** and **meeting notes.md**.
   more about it comes to the chat. If you have changed one of the files,
   Undo removes nothing and the recording carries on. The recording itself
   is never changed.
-- **Stop** on the reply while it waits for a recording stops the recording
-  too. A transcript already saved stays, and the chat says so in one
-  message; the notes are not written. If the reply ends without Stop (you
-  closed the page), the recording carries on and comes back to the chat
-  when it is done.
+- **Stop** on the reply while it waits for a recording it started stops the
+  recording too: nothing more is written. If nothing was saved yet, nothing
+  more about it comes to the chat. A transcript already saved stays, and the
+  chat says so in one message; the notes are not written. A recording that
+  was done just as you pressed Stop keeps its files, and they come to the
+  chat as one message. If the reply ends without Stop (you closed the page),
+  the recording carries on and comes back to the chat when it is done.
 - Handing the same recording again in the same folder makes nothing new: you
   get the transcript and notes already made. While another chat's recording
   is still being heard, the card here shows it, and its report goes to the
@@ -2092,20 +2094,20 @@ transcript.md** and **meeting notes.md**.
 
 **Who turns speech into text** is a setting: **Recordings: who turns speech
 into text** (Settings, Voice). The default uses your speech server when it is
-on your network, or else the offline model on this PC. **Only the offline
-model on this PC** never uses anything else. **The speech service chosen for
-voice** sends the recording to the service you picked for dictation wherever
-it is, a minute at a time (OpenAI bills per minute). Choosing OpenAI for
-dictation alone never sends a recording to it. If what you picked cannot be
-used (it is off your network in a Local only chat, or the offline model is
-missing), the reply says so by name and nothing is sent anywhere: Iron Jarvis
-never switches to another service on its own. You can ask in chat too:
-"keep my recordings on this PC".
+on your network, or else the offline speech model on this PC. **Only the
+offline speech model on this PC** never uses anything else. **The speech
+service chosen for voice** sends the recording to the service you picked for
+dictation wherever it is, a minute at a time (OpenAI bills per minute).
+Choosing OpenAI for dictation alone never sends a recording to it. If what
+you picked cannot be used (it is off your network in a Local only chat, or
+the offline speech model is missing), the reply says so by name and nothing
+is sent anywhere: Iron Jarvis never switches to another service on its own.
+You can ask in chat too: "keep my recordings on this PC".
 
-**Good to know.** The small offline model hears less well than a person and
-cannot tell voices apart, so who owes what is read from the words ("I will
-send the plan") and the card says so. Up to the first 2 hours of a recording
-are turned into text; a longer one says how much was. A rare file type that
+**Good to know.** The small offline speech model hears less well than a
+person and cannot tell voices apart, so who owes what is read from the
+words ("I will send the plan") and the card says so. Up to the first 2 hours
+of a recording are turned into text; a longer one says how much was. A rare file type that
 this PC cannot read is said by its type; saving it again as .m4a or .mp3
 helps. In the Iron Jarvis app a recording larger than 20 MB is read where
 it is on this PC, never copied; in a web browser a file over 20 MB cannot be
