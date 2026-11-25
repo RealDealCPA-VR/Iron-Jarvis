@@ -8391,7 +8391,9 @@ async def _build_harness(
     prov, mod = _harness_model(d.platform, provider, model)
     shell_words = ""
     bash_words = ""
-    from ..harness.command_env import bash_shell_description, build_shell_description, is_build_call
+    from ..harness.command_env import (
+        bash_shell_description, build_shell_description, helper_command_facts, is_build_call,
+    )
 
     build_call = bool(session_id) and is_build_call(session_id)
     # v1.386.0: a dialect whose command tool's model writes BASH (Claude
@@ -8401,8 +8403,20 @@ async def _build_harness(
     # other dialect does no extra work and keeps its words byte for byte.
     if _mode.speaks_bash(requested, prov, mod):
         bash_words = await asyncio.to_thread(bash_shell_description, build_call)
+    own_syntax = ""
+    start_note = ""
     if build_call and not bash_words:
-        shell_words = await asyncio.to_thread(build_shell_description)
+        if _mode.own_command_tools(requested, prov, mod):
+            # v1.572.0: a coding session's model on Jarvis's OWN tool names
+            # (glm and every unrecognised local model) writes bash on Windows
+            # when a Git for Windows bash is found, as its helpers have since
+            # v1.421.0: one source for the words and the shell that runs them
+            # (``helper_command_facts``). No bash, or another OS: the Build
+            # cmd words, byte for byte.
+            _own = await asyncio.to_thread(helper_command_facts)
+            shell_words, own_syntax, start_note = _own.shell_words, _own.syntax, _own.start_note
+        else:
+            shell_words = await asyncio.to_thread(build_shell_description)
     # v1.403.0 (THE CODING-SESSION TEAM, ``harness/team``): a Build session's
     # turn with a team (armed by ``routes/build.start_build_turn`` — never from
     # a client's body) runs its model as the team LEAD: no tool that changes a
@@ -8443,6 +8457,8 @@ async def _build_harness(
         library=library,
         shell_description=shell_words,
         bash_description=bash_words,
+        own_shell_syntax=own_syntax,
+        start_note=start_note,
         lead=_session_team is not None,
         # v1.434.0 (chat-first plan, Wave 2 group E): a coding-session turn
         # about one of the app's settings ("turn on read aloud" typed in

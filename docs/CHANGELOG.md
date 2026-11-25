@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.572.0
+
+**Local models waste fewer steps in a coding session.** A benchmark of a local model (GLM) in **Chat › Code** showed that no task was lost to a mistake with a tool, but about 6 in every 100 tool calls were spent on three avoidable ones.
+
 ## v1.571.0
 
 **A coding session is told to take care.** When Iron Jarvis itself writes code (**Chat › Code**), the instructions it gives the model said how to do a task, and little about how to behave in your project.
@@ -77,7 +81,3 @@
 ## v1.556.0
 
 **Pick up where you left off in a folder.** Start a new chat or a new coding session in a folder you have worked in before, and a short card under the folder chip says what happened there last time.
-
-## v1.555.0
-
-**Results come home to the chat that asked.** Something you set up from a chat now reports back into that same chat.

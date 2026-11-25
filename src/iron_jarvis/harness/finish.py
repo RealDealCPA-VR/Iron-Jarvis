@@ -1812,6 +1812,24 @@ def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tu
     return out
 
 
+def earlier_command_syntax(harness: Any, called_as: str, name: str) -> str:
+    """The shell language of a command an EARLIER part of this reply ran (a
+    carried-on reply's cut part, read back from the ledger as ``(tool, args,
+    called_as)``): the dialect tool's when the model called one (Claude Code's
+    ``Bash``), and, v1.572.0, the turn's OWN (``HarnessTurn.own_shell_syntax``
+    : bash for the generic tool set in a coding session on Windows) when the
+    model called ``shell`` / ``process_start`` under Jarvis's own name. ""
+    for anything else. Never raises."""
+    try:
+        if not called_as or called_as == name:
+            own = str(getattr(harness, "own_shell_syntax", "") or "")
+            return own if name in ("shell", "process_start") else ""
+        called_syntax = getattr(harness, "shell_syntax_called", None)
+        return str(called_syntax(called_as) or "") if called_syntax else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def helper_commands(engine: Any, session_id: str, mark: int) -> list[tuple[str, dict[str, Any], str, str]]:
     """v1.403.0 (the coding-session team): the ``shell`` commands this
     reply's HELPERS ran above ``mark``, in order — a team lead runs none, so
@@ -5350,18 +5368,14 @@ async def start(
         delete_name=delete_name, harness=harness, unjournaled=custom,
         platform=platform, team_review=team_review, team=team,
     )
-    called_syntax = getattr(harness, "shell_syntax_called", None)
 
-    def _syntax(called_as: str) -> str:
-        try:
-            return str(called_syntax(called_as) or "") if called_syntax and called_as else ""
-        except Exception:  # noqa: BLE001
-            return ""
+    def _syntax(called_as: str, name: str = "") -> str:
+        return earlier_command_syntax(harness, called_as, name)
 
     # Second review D2 (v1.513.0): the cut part's commands are kept WITH
     # their meta (place 0, no verdict): never "passed after the last change".
     for name, args, called in earlier:
-        check.keep_command(name, args, "", _syntax(called))
+        check.keep_command(name, args, "", _syntax(called, name))
     # The folder as this reply BEGAN (harness/folder_changes) — before any of
     # its tools runs, off the loop. A carry-on compares with the snapshot of
     # the reply it continues (the cut part changed the folder already).

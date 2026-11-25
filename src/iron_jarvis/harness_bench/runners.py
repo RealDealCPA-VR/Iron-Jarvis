@@ -1194,14 +1194,20 @@ class JarvisRunner:
         task's copy carries no harness layer; a refine probe's candidate
         layer when one is set), for the identity."""
         from ..daemon.chat_turn import _harness_model
-        from ..harness.command_env import bash_shell_description, build_shell_description
-        from ..harness.mode import build, speaks_bash
+        from ..harness.command_env import (
+            bash_shell_description, build_shell_description, helper_command_facts,
+        )
+        from ..harness.mode import build, own_command_tools, speaks_bash
 
         provider, model = _harness_model(self.platform, self.provider, self.model)
         # v1.386.0: a dialect whose command tool's model writes bash (Claude
         # Code's `Bash`) is shown what really runs it on Windows (Git for
         # Windows' bash, or cmd.exe) — exactly as a Build turn builds it.
         bash_words = bash_shell_description(True) if speaks_bash(self.dialect, provider, model) else ""
+        # v1.572.0: Jarvis's own tool names write bash there too (the same
+        # facts a Build turn builds: ``chat_turn``'s harness build).
+        own = helper_command_facts() if not bash_words and own_command_tools(
+            self.dialect, provider, model) else None
         return build(
             registry=self.platform.registry, permissions=self.platform.permissions,
             requested=self.dialect, provider=provider, model=model, stream=True,
@@ -1209,8 +1215,11 @@ class JarvisRunner:
             approval_mode=self.approval_mode, today="", layer=self._layer(),
             # v1.378.0: the turn runs as a Build session, so its shell is the
             # one a Build session's model is shown (the user's PATH).
-            shell_description="" if bash_words else build_shell_description(),
+            shell_description=(
+                "" if bash_words else own.shell_words if own is not None else build_shell_description()
+            ),
             bash_description=bash_words,
+            **({"own_shell_syntax": own.syntax, "start_note": own.start_note} if own is not None else {}),
             # v1.403.0: a team LEAD's turn shows the lead's tools (the team
             # runner with ``team = true``); False keeps the build as before.
             **({"lead": True} if self.lead_locked() else {}),
@@ -1361,7 +1370,9 @@ class JarvisRunner:
         from ..harness import dialects as harness_dialects
         from ..harness.command_env import bash_identity
 
-        return bash_identity() if harness_dialects.speaks_bash(turn.plan.dialect) else ""
+        if harness_dialects.speaks_bash(turn.plan.dialect) or getattr(turn, "own_shell_syntax", ""):
+            return bash_identity()
+        return ""
 
     async def run(self, task: Task, workspace: Path, rollout: Rollout, *, timeout_s: float) -> RunOutcome:
         """One task's turn, on this runner's path (v1.425.0): a real coding

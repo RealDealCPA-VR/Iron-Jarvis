@@ -148,6 +148,18 @@ NOTHING_CLOSE = (
     " holds now."
 )
 
+#: v1.572.0: ...and when that file is SHORT, the refusal shows all of it, so
+#: the next call is a copy instead of one more read (the benchmark: every
+#: such miss was followed by a read of a file this small, or by a guess).
+#: Past either bound the refusal says to read the file, as before.
+SHORT_FILE_LINES = 60
+SHORT_FILE_CHARS = 4000
+NOTHING_CLOSE_SHOWN = (
+    " No line of the file is close to it, so the file does not hold what you"
+    " expect. It is a short file; all of it, as it is now (copy the text to"
+    " replace from this, without the line numbers):"
+)
+
 
 def nearest_line_hint(text: str, old: str) -> str:
     """One short sentence naming the file's line most like ``old``'s first
@@ -301,6 +313,10 @@ def _not_found_message(text: str, old_n: str, where: str) -> str:
     # from memory, or the file had changed). "Copy the text exactly" is the
     # wrong advice for that: there is nothing to copy until the file is read
     # again.
+    if text.strip() and total <= SHORT_FILE_LINES and len(text) <= SHORT_FILE_CHARS:
+        # (a file that ends in a newline has no line after it to show)
+        last = total - 1 if text.endswith("\n") and total > 1 else total
+        return msg + NOTHING_CLOSE_SHOWN + "\n" + numbered_window(text, 1, last, before=0, after=0)
     return msg + NOTHING_CLOSE
 
 

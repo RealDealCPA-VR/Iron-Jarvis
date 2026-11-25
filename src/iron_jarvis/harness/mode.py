@@ -492,7 +492,7 @@ def _team_lead(spec: dict[str, Any], session_team: Any) -> dict[str, Any]:
 
 def model_specs(
     registry: Any, plan: ToolPlan, *, shell_description: str = "", bash_description: str = "",
-    team_first: tuple[str, ...] = (), session_team: Any = None,
+    team_first: tuple[str, ...] = (), session_team: Any = None, start_note: str = "",
 ) -> list[dict[str, Any]]:
     """What the model is shown: the dialect's tools, then the pass-through
     real tools as the registry describes them. ``shell_description``
@@ -547,6 +547,10 @@ def model_specs(
         for s in registry.specs(list(plan.passthrough)):
             if shell_description and s.get("name") == "shell":
                 s = {**s, "description": shell_description}
+            if start_note and s.get("name") == "process_start":
+                # v1.572.0: the turn's own command tools write bash; the
+                # program starter says it starts there too (a helper's words).
+                s = {**s, "description": str(s.get("description") or "") + start_note}
             if isinstance(s.get("description"), str):
                 s = {**s, "description": unreachable_cut(s["description"], reachable, registered)}
             # Part 3, Phase 3: Jarvis's OWN read_file, wherever a harness turn
@@ -1029,6 +1033,16 @@ class HarnessTurn:
         #: (Claude Code's ``Bash``) runs in on Windows (``command_env.
         #: bash_shell_description``); "" elsewhere.
         self.bash_description = ""
+        #: v1.572.0: the shell language of this turn's OWN command tools
+        #: (``shell`` / ``process_start`` called under Jarvis's own names, the
+        #: generic tool set): "bash" for a coding session on Windows with a
+        #: Git for Windows bash found, else "" (the platform's own shell).
+        #: Decided once per turn by ``command_env.helper_command_facts``, the
+        #: one source of the words (``shell_description``) and of this.
+        self.own_shell_syntax = ""
+        #: v1.572.0: what ``process_start``'s description gains then ("" =
+        #: nothing): that it starts in the same bash.
+        self.start_note = ""
         #: Part 3, Phase 3: the session folder's PROJECT MAP for this turn
         #: (``harness/project_map.MapResult``; None = no map — not a Build
         #: session's turn, or no folder). Per turn, like the date: rendered
@@ -1149,6 +1163,7 @@ class HarnessTurn:
         return model_specs(
             registry, self.plan, shell_description=self.shell_description,
             bash_description=self.bash_description,
+            start_note=self.start_note,
             # (only with a team SHOWN: the sentence points at its list)
             team_first=self.team_first if self.team_section else (),
             # v1.403.0: a coding session's team names its own workers.
@@ -1196,6 +1211,13 @@ class HarnessTurn:
                 and self.plan.dialect.lookup(call.name) is not None
             ):
                 self._picture_reads[call.id] = (str(serving[0] or ""), str(serving[1] or ""))
+            # v1.572.0: one of Jarvis's OWN file tools sent another coding
+            # tool's argument names (``new_string`` for ``new``): renamed
+            # here, before any check reads the call. (A dialect's own tool
+            # was translated into the real names just above: nothing to do.)
+            own = _dialects.own_arguments(t.real, t.args)
+            if own is not None:
+                t = _dialects.Translated(real=t.real, args=own, called_as=t.called_as)
             capped = self._read_window_capped(t)
             if capped is not None:
                 t = _dialects.Translated(real=t.real, args=capped, called_as=t.called_as)
@@ -1277,7 +1299,14 @@ class HarnessTurn:
         if marked:
             return marked
         tool = self._called_tool.get(cid)
-        return str(getattr(tool, "shell_syntax", "") or "") if tool is not None else ""
+        if tool is not None:
+            return str(getattr(tool, "shell_syntax", "") or "")
+        # v1.572.0: a command tool the model called under Jarvis's OWN name
+        # (no dialect tool stands in front of it) is in the turn's own shell
+        # language. A harness-made call (the finish check's) is marked above.
+        if self._called_as.get(cid, getattr(call, "name", "")) != getattr(call, "name", ""):
+            return ""
+        return str(getattr(self, "own_shell_syntax", "") or "")
 
     def shell_syntax_called(self, name: str) -> str:
         """The shell language of the dialect tool the model calls ``name``
@@ -1311,12 +1340,14 @@ class HarnessTurn:
                 out = dataclasses.replace(ctx, called_as=name)
             except Exception:  # noqa: BLE001 — a test double that is no dataclass
                 return ctx
-            syntax = self.shell_syntax_of(call)
-            if syntax:
-                try:
-                    out = dataclasses.replace(out, shell_syntax=syntax)
-                except Exception:  # noqa: BLE001 — an older context: its own shell
-                    pass
+        # v1.572.0: the language rides the context whether or not the name
+        # was translated (the turn's own ``shell`` writes bash too).
+        syntax = self.shell_syntax_of(call)
+        if syntax:
+            try:
+                out = dataclasses.replace(out, shell_syntax=syntax)
+            except Exception:  # noqa: BLE001 — an older context: its own shell
+                pass
         serving = self._picture_reads.get(cid)
         if serving is not None and getattr(call, "name", "") == "view_image":
             try:
@@ -1499,6 +1530,8 @@ def build(
     bash_description: str = "",
     lead: bool = False,
     asked: Iterable[str] = (),
+    own_shell_syntax: str = "",
+    start_note: str = "",
 ) -> HarnessTurn:
     """Plan the tools, compose the tree and render it. Pure apart from the
     registry / permission reads (no I/O): the project layer is read by the
@@ -1562,7 +1595,23 @@ def build(
     turn.shell_description = str(shell_description or "")
     # v1.386.0: what a bash-written command tool really runs in on Windows.
     turn.bash_description = str(bash_description or "")
+    # v1.572.0: the turn's own command tools write bash (a coding session on
+    # Windows with Git for Windows' bash, the generic tool set). Only a
+    # dialect that leaves them under their own names can carry it.
+    if _dialects.own_command_tools(dialect):
+        turn.own_shell_syntax = str(own_shell_syntax or "")
+        turn.start_note = str(start_note or "") if turn.own_shell_syntax else ""
     return turn
+
+
+def own_command_tools(requested: str, provider: str, model: str) -> bool:
+    """Will a turn with this dialect choice and serving pair call ``shell``
+    under Jarvis's own name (v1.572.0: the generic tool set)? Pure."""
+    try:
+        _family, dialect = _dialects.resolve(requested, provider, model)
+    except Exception:  # noqa: BLE001 — an unknown dialect is the build's error
+        return False
+    return _dialects.own_command_tools(dialect)
 
 
 def speaks_bash(requested: str, provider: str, model: str) -> bool:

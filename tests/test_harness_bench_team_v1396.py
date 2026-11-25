@@ -653,7 +653,14 @@ def test_the_configuration_key_and_fingerprint_formula_is_unchanged():
 
 def test_the_jarvis_runners_identity_is_unchanged_and_the_team_only_adds_to_it(world, tmp_path):
     plain = JarvisRunner(world.platform, provider="scripted", model="s").identity()
-    assert set(plain) == JARVIS_KEYS
+    # v1.572.0 (moved on purpose): Jarvis's own tool names write bash where a
+    # Git for Windows bash is found, and the identity then names that shell
+    # (as it has for the Claude tool set since v1.386.0); elsewhere the keys
+    # are exactly these.
+    from iron_jarvis.harness.command_env import helper_command_facts
+
+    own_bash = {"command_shell"} if helper_command_facts().syntax == "bash" else set()
+    assert set(plain) == JARVIS_KEYS | own_bash
     team = T.JarvisTeamRunner(world.platform, team=_spec(tmp_path))
     ident = team.identity()
     assert set(ident) - set(JarvisRunner(world.platform, provider=W.PLANNER[0], model=W.PLANNER[1]).identity()) == {

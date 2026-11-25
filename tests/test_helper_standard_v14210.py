@@ -181,9 +181,10 @@ async def test_a_build_sessions_helper_runs_its_commands_in_bash_and_is_told_so(
     assert "starts in Git for Windows' bash" in _spec(first, "process_start")["description"]
     assert "- OS: Windows; your shell and process_start commands run in Git for Windows' bash" in first["system"]
     assert "cmd.exe; no POSIX" not in first["system"]
-    # The LEAD (generic dialect) is untouched: its own shell words stay cmd's.
+    # MOVED ON PURPOSE (v1.572.0): the LEAD on Jarvis's own tool names is
+    # shown bash too (it was left on cmd while its helpers wrote bash).
     lead_shell = _spec(lead_calls(world)[0], "shell")["description"]
-    assert "Windows cmd.exe with" in lead_shell
+    assert "Git for Windows' bash" in lead_shell and "Windows cmd.exe with" not in lead_shell
 
 
 @needs_win

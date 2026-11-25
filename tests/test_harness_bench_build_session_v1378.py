@@ -34,7 +34,7 @@ import time
 import pytest
 
 from iron_jarvis.core import procs
-from iron_jarvis.harness.command_env import build_shell_description, is_build_call
+from iron_jarvis.harness.command_env import helper_command_facts, is_build_call
 from iron_jarvis.harness.mode import unreachable_cut
 from iron_jarvis.harness_bench.bench import run_bench
 from iron_jarvis.harness_bench.catalog import load_tasks
@@ -107,7 +107,10 @@ async def test_a_bench_turn_runs_as_a_build_session_with_the_model_held(tmp_path
     # ... and the model was shown the Build session's shell. v1.425.0 (moved
     # on purpose, Wave 5 C5): words naming a tool this turn cannot reach are
     # cut (`mode.unreachable_cut`), so the expected text is the same cut.
-    want = unreachable_cut(build_shell_description(), shown, platform.registry.names())
+    # v1.572.0 (moved on purpose): Jarvis's own tool names are shown the
+    # shell that really runs them: Git for Windows' bash where one is found,
+    # else the Build cmd words as before (``helper_command_facts``).
+    want = unreachable_cut(helper_command_facts().shell_words, shown, platform.registry.names())
     assert shell_words and shell_words[0] == want, shell_words[:1]
 
     # The model was held for every call of the turn, and the hold ends with it.
@@ -124,7 +127,9 @@ def test_the_identity_names_the_build_session_and_its_shell(tmp_path):
     shell = [s for s in specs if s["name"] == "shell"]
     # v1.425.0 (moved on purpose): the description as shown is cut of tools
     # this turn cannot reach (`mode.unreachable_cut`).
-    want = unreachable_cut(build_shell_description(), {s["name"] for s in specs}, platform.registry.names())
+    # v1.572.0 (moved on purpose): bash's words where a bash is found.
+    want = unreachable_cut(
+        helper_command_facts().shell_words, {s["name"] for s in specs}, platform.registry.names())
     assert shell and shell[0]["description"] == want
 
 
