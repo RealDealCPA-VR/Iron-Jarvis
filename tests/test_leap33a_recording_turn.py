@@ -42,7 +42,7 @@ def _rig(tmp_path: Path, monkeypatch, *, inline: float = 120.0):
     app = create_app(str(tmp_path / "home"))
     p = app.state.platform
     monkeypatch.setattr(J, "_DEPS", Deps(p, model="C:/fake/vosk-model"))
-    monkeypatch.setattr(J, "notes_choice", lambda r, c, local_only: dict(LOCAL_CHOICE))
+    monkeypatch.setattr(J, "notes_choice", lambda r, c, local_only, chat=None: dict(LOCAL_CHOICE))
     monkeypatch.setattr(J, "INLINE_WAIT_S", inline)
     notes = NotesModel()
     ws = tmp_path / "work"
@@ -60,6 +60,10 @@ async def test_a_recording_dropped_in_a_chat_becomes_a_transcript_and_checked_no
 
     app, p, ws, clip, notes = _rig(tmp_path, monkeypatch)
     model = Model([_call(1, "transcribe_recording", path=str(clip)), "Here is what was decided."])
+    # D-33.1: the chat's OWN model reaches the job from the turn, in both lanes.
+    chats: list = []
+    monkeypatch.setattr(J, "notes_choice",
+                        lambda r, c, local_only, chat=None: chats.append(chat) or dict(LOCAL_CHOICE))
 
     async def complete(**kw):
         if kw.get("system") == R.NOTES_SYSTEM:
@@ -67,7 +71,7 @@ async def test_a_recording_dropped_in_a_chat_becomes_a_transcript_and_checked_no
         return await model.complete(**kw)
 
     p.router.complete = complete
-    body = _body(ws, "what did we decide?", attachments=[str(clip)])
+    body = _body(ws, "what did we decide?", attachments=[str(clip)], provider="openai", model="gpt-test")
     if lane == "post":
         status, raw = await _asgi_post(app, "/chat", body)
         assert status == 200, raw
@@ -96,6 +100,7 @@ async def test_a_recording_dropped_in_a_chat_becomes_a_transcript_and_checked_no
     assert str(ws / "meeting transcript.md") in said and str(ws / "meeting notes.md") in said
     assert "1 decision, 1 thing you owe, 1 thing they owe" in said
     assert all(c["pin"] for c in notes.calls)
+    assert chats == [("openai", "gpt-test")], "the notes are chosen with the chat's own model"
 
 
 def _ctx(p, ws: Path, *, thread_id: str = "thr_rec", turn_id: str = "turn-rec") -> ToolContext:

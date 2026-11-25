@@ -45,6 +45,15 @@ def _turn_of(ctx: ToolContext) -> str:
     return str(getattr(turn, "turn_id", "") or getattr(ctx, "turn_id", "") or "")
 
 
+def _chat_model_of(ctx: ToolContext) -> "tuple[str, str] | None":
+    """The chat's own model, as the chat lane resolved it for this turn
+    (``ToolContext.chat_model``): the one a cloud notes offer names."""
+    raw = getattr(ctx, "chat_model", None)
+    if isinstance(raw, (list, tuple)) and len(raw) == 2 and str(raw[0] or "").strip():
+        return str(raw[0]).strip(), str(raw[1] or "").strip()
+    return None
+
+
 def _answers_the_phone() -> bool:
     try:
         from ..providers.failure_words import answers_the_phone
@@ -83,6 +92,19 @@ def find_earlier(home: Path, sha256: str, workspace: Path) -> "dict[str, Any] | 
     return best
 
 
+def phone_notes_words(model_name: str, name: Any) -> str:
+    """On the PHONE (no card there), why the notes wait, and what to do: the
+    yes is asked on the recording's card, which only Iron Jarvis on this PC
+    shows. The job keeps waiting for it, so handing the same recording to a
+    chat there shows the card (in the same folder nothing is heard again)."""
+    return (
+        f"The notes are not written yet: no model on this PC or your network is set up, and writing them "
+        f"sends the transcript to {model_name}, which needs the user's yes on the recording's card. This "
+        f"conversation cannot show that card, and nothing was sent. Tell the user: to have the notes written, "
+        f"hand {name} to a chat in Iron Jarvis on this PC and press Write the notes on its card. Do not write "
+        "the notes yourself.")
+
+
 def result_words(state: "dict[str, Any]", *, finished: bool, phone: bool) -> str:
     """What the model is told, from the job's own record."""
     card = J.card_of(state)
@@ -117,6 +139,8 @@ def result_words(state: "dict[str, Any]", *, finished: bool, phone: bool) -> str
             f"(its words were said near its time): {card['counts_words']}. "
             + (card["dropped_words"] + " " if card["dropped_words"] else "")
             + f"Saved as {card['notes']}.")
+    elif status == J.STATUS_ASK and card["offer"] and phone:
+        lines.append(phone_notes_words(card["offer"]["name"], name))
     elif status == J.STATUS_ASK and card["offer"]:
         lines.append(
             f"The notes are not written yet: no model on this PC or your network is set up, and writing them "
@@ -234,7 +258,8 @@ class TranscribeRecordingTool(Tool):
             return ToolResult(ok=False, error=f"No new file can be made in {workspace}: {exc}")
         state = J.new_state(source=path.resolve(), sha256=sha, workspace=workspace,
                             thread_id=getattr(ctx, "thread_id", "") or "", turn_id=_turn_of(ctx),
-                            local_only=local_only, transcriber=tr, transcript=transcript, notes=notes)
+                            local_only=local_only, transcriber=tr, transcript=transcript, notes=notes,
+                            chat_model=_chat_model_of(ctx))
         await asyncio.to_thread(J.save_state, env.home, state)
         if desc is not None:
             desc["pre_inline"] = json.dumps({

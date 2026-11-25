@@ -66,6 +66,57 @@ def test_the_job_starts_the_worker_through_procs_in_the_background_lane(tmp_path
     assert J._worker_argv() == [sys.executable, "audio-worker"]
 
 
+def test_at_most_two_recordings_are_worked_on_at_once_and_a_stopped_one_never_starts(monkeypatch):
+    """Light on the PC: each worker holds the speech model in its own memory,
+    so three recordings handed at once start two workers; the third waits its
+    turn (and its stall clock waits with it), and one stopped while it waits
+    starts nothing."""
+    import threading
+
+    from iron_jarvis.core import procs
+
+    release = threading.Event()
+    lock = threading.Lock()
+    running: list[str] = []
+    most = [0]
+    two_running = threading.Event()
+
+    def fake_run(argv, *, timeout, input=None, on_spawn=None, **kw):
+        with lock:
+            running.append(input.decode("ascii"))
+            most[0] = max(most[0], len(running))
+            if len(running) == 2:
+                two_running.set()
+        assert release.wait(30), "the test never released the workers"
+        with lock:
+            running.pop()
+        return SimpleNamespace(timed_out=False, returncode=0, stdout=b'{"lines": []}')
+
+    monkeypatch.setattr(procs, "run", fake_run)
+    monkeypatch.setattr(J, "WAIT_POLL_S", 0.05)
+    jobs = [J.Job(state={"id": f"rec_{i:016x}"}, env=None) for i in range(4)]
+    outs: dict[int, object] = {}
+    threads = [threading.Thread(target=lambda i=i: outs.__setitem__(i, J._run_worker(jobs[i], {"n": i}, 10)))
+               for i in range(3)]
+    for t in threads:
+        t.start()
+    assert two_running.wait(30)
+    waiting = [j for j in jobs[:3] if j.waiting]
+    assert len(waiting) == 1, "the third waits for a free worker"
+    # A fourth, stopped (its Undo) while it waits: it starts nothing.
+    jobs[3].stopped = "undo"
+    fourth = threading.Thread(target=lambda: outs.__setitem__(3, J._run_worker(jobs[3], {"n": 3}, 10)))
+    fourth.start()
+    fourth.join(30)
+    assert outs[3] is None and not jobs[3].waiting
+    release.set()
+    for t in threads:
+        t.join(30)
+    assert most[0] == 2, f"{most[0]} workers ran at once"
+    assert all(outs[i] == {"lines": []} for i in range(3)), outs
+    assert not any(j.waiting for j in jobs)
+
+
 _PROBE = r"""
 import asyncio, json, sys
 from pathlib import Path
@@ -143,3 +194,52 @@ def test_a_recording_arms_the_tool_by_its_type_outside_the_cap(tmp_path, monkeyp
     assert "transcribe_recording" in list(sel[0]) + list(sel[1])
     monkeypatch.setitem(d.platform.permissions._base, "transcribe_recording", "deny")  # "Never run"
     assert recording_turn(d, _body(attachments=[memo])) is False, "Never run stays never"
+
+
+def test_the_words_about_a_recording_name_no_tool_id():
+    """G8: the model repeats these to the user, so they use the screen's words
+    (the Auto tools switch), never the tool's id."""
+    from iron_jarvis.daemon.chat_turn import RECORDING_NOT_ARMED_NOTE
+
+    assert "transcribe_recording" not in RECORDING_NOT_ARMED_NOTE
+    assert "Auto tools" in RECORDING_NOT_ARMED_NOTE
+    assert "+ menu" not in RECORDING_NOT_ARMED_NOTE, "the + menu picks no tool"
+
+
+def test_finished_jobs_are_let_go_unless_a_new_chat_may_still_bring_them_home(monkeypatch):
+    """Nothing piles up in memory: a finished job is read from its state on
+    disk, and only one a new chat's link may still report (detached, no chat
+    yet) is kept, at most KEEP_FINISHED of them."""
+    import asyncio
+
+    monkeypatch.setattr(J, "_LIVE", {})
+    monkeypatch.setattr(J, "KEEP_FINISHED", 2)
+
+    async def _go():
+        async def nothing():
+            return None
+
+        def job(i: int, *, detached: bool, thread_id: str = "", homed: bool = False) -> J.Job:
+            j = J.Job(state={"id": f"rec_{i:016x}", "thread_id": thread_id, "homed": homed}, env=None)
+            j.detached = detached
+            j.task = asyncio.get_running_loop().create_task(nothing())
+            await_list.append(j.task)
+            return j
+
+        await_list: list = []
+        jobs = [job(0, detached=False), job(1, detached=True, thread_id="thr"), job(2, detached=True),
+                job(3, detached=True), job(4, detached=True), job(5, detached=True, homed=True)]
+        await asyncio.gather(*await_list)
+        for j in jobs:
+            J._LIVE[j.id] = j
+        running = J.Job(state={"id": "rec_00000000000000ff"}, env=None)
+        running.task = asyncio.get_running_loop().create_future()
+        J._LIVE[running.id] = running
+        new = J.Job(state={"id": "rec_00000000000000fe"}, env=None)
+        J._track(new)
+        running.task.cancel()
+        return sorted(J._LIVE)
+
+    kept = asyncio.run(_go())
+    assert kept == ["rec_0000000000000003", "rec_0000000000000004", "rec_00000000000000fe",
+                    "rec_00000000000000ff"], kept

@@ -226,9 +226,11 @@ export function RecordingCard({
                 <h4 className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">{KIND_HEADINGS[kind]}</h4>
                 <ul className="mt-0.5 space-y-0.5">
                   {card.items[kind].map((it, i) => (
-                    <li key={`${kind}-${i}`} className="flex min-w-0 flex-wrap gap-x-1.5 text-[13px] text-zinc-200">
+                    // The time stays beside its item; a long item wraps in its
+                    // own column (seen at 390 px: it used to drop below).
+                    <li key={`${kind}-${i}`} className="flex min-w-0 gap-x-1.5 text-[13px] text-zinc-200">
                       <span className="shrink-0 tabular-nums text-zinc-500">[{it.time}]</span>
-                      <span className="min-w-0 [overflow-wrap:anywhere]">{it.note}</span>
+                      <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{it.note}</span>
                     </li>
                   ))}
                 </ul>

@@ -17,9 +17,10 @@ One job per recording handed to a chat (``transcribe_recording``). It:
    over another) and keeps each line as a ``sourcemark`` of kind ``time``
    (``kept``: it stays when the chat is deleted);
 3. writes the notes (D-33.1): a model on this PC or your network when there
-   is one, with no question; otherwise the chat's model (the default), and
-   only after the user's yes on the card, once per chat
-   (:func:`consent_given`); never in a Local only chat. Each item is checked
+   is one, with no question; otherwise the chat's OWN model (the turn's
+   choice, kept with the job as ``chat_model``; the default when the chat
+   follows it), and only after the user's yes on the card, once per chat and
+   provider (:func:`consent_given`); never in a Local only chat. Each item is checked
    BY CODE against the record of what was heard (``recording.check_notes``)
    and ``<name> notes.md`` is written;
 4. comes home: the tool waits up to :data:`INLINE_WAIT_S` and, when the job
@@ -79,9 +80,6 @@ NOTES_CALL_TIMEOUT_S = 180.0
 MAX_ATTEMPTS = 1
 #: Job state is kept this many days.
 RECORDING_DAYS = 30
-#: A recording answered on the PHONE (no card there) is heard only up to
-#: this long: the reply waits for it.
-PHONE_MAX_S = 15 * 60
 
 STATUS_HEARING = "hearing"
 STATUS_NOTES = "notes"
@@ -288,19 +286,41 @@ def card_of(state: "dict[str, Any]") -> "dict[str, Any]":
 # --------------------------------------------------------------------------- #
 # the notes model (D-33.1)
 # --------------------------------------------------------------------------- #
-def notes_choice(router: Any, config: Any, *, local_only: bool) -> "dict[str, Any] | None":
-    """Who writes the notes. A model on this PC or your network first (the
-    extracting role's model when it is one, else the default, else the
-    first connected): ``local: True``, no question. None of those: under
-    Local only, None (nobody); otherwise the chat's model (the default, or
-    the first connected one when the default is Auto), ``local: False``,
-    which is used only after the user's yes. The demo model never writes
-    notes. BLOCKING (availability probes)."""
+def chat_model_of(state: "dict[str, Any]") -> "tuple[str, str | None] | None":
+    """The model the chat the recording was handed in uses (``(provider,
+    model)``, kept with the job from the turn's own choice), or None."""
+    raw = state.get("chat_model")
+    if isinstance(raw, (list, tuple)) and len(raw) == 2 and str(raw[0] or "").strip():
+        return str(raw[0]).strip(), (str(raw[1] or "").strip() or None)
+    return None
+
+
+def _named_chat_provider(chat: "tuple[str, str | None] | None") -> str:
+    """The chat's own provider when the chat NAMES one ("" for the default,
+    Auto, or the demo model: those follow the default route)."""
+    provider = str((chat or ("", None))[0] or "").strip()
+    return "" if provider.lower() in ("", "auto", "mock") else provider
+
+
+def notes_choice(router: Any, config: Any, *, local_only: bool,
+                 chat: "tuple[str, str | None] | None" = None) -> "dict[str, Any] | None":
+    """Who writes the notes (D-33.1). A model on this PC or your network first
+    (the extracting role's model when it is one, else the chat's own model,
+    else the default, else the first connected): ``local: True``, no
+    question. None of those: under Local only, None (nobody); otherwise THE
+    CHAT'S OWN MODEL, ``local: False``, used only after the user's yes on
+    the card. ``chat`` is the ``(provider, model)`` the chat named; a chat on
+    the default or on Auto uses the default (or, under Auto, the first
+    connected one, by name). A chat whose own model is not available gets
+    None, never another cloud model in its place. The demo model never
+    writes notes. BLOCKING (availability probes)."""
     from ..providers.egress import friendly_name, stays_on_this_network
 
     if router is None:
         return None
     manager = getattr(router, "manager", None)
+    named = _named_chat_provider(chat)
+    named_model = (chat[1] if chat else None) or None
     candidates: list[tuple[str, "str | None"]] = []
     try:
         from ..providers.roles import resolve_role
@@ -310,6 +330,8 @@ def notes_choice(router: Any, config: Any, *, local_only: bool) -> "dict[str, An
             candidates.append((str(llm.provider), llm.model or None))
     except Exception:  # noqa: BLE001 — no role: the default route
         pass
+    if named and named not in [c[0] for c in candidates]:
+        candidates.append((named, named_model))
     try:
         default = str(router.default_provider or "")
     except Exception:  # noqa: BLE001
@@ -318,9 +340,13 @@ def notes_choice(router: Any, config: Any, *, local_only: bool) -> "dict[str, An
         order = [default, *router._candidate_order()]  # noqa: SLF001
     except Exception:  # noqa: BLE001
         order = [default]
+    route: list[tuple[str, "str | None"]] = []
     for p in order:
-        if p and p not in ("mock", "auto") and p not in [c[0] for c in candidates]:
-            candidates.append((p, None))
+        if p and p not in ("mock", "auto") and p not in [c[0] for c in route]:
+            route.append((p, None))
+    for p, m in route:
+        if p not in [c[0] for c in candidates]:
+            candidates.append((p, m))
 
     def _up(provider: str) -> bool:
         try:
@@ -335,7 +361,9 @@ def notes_choice(router: Any, config: Any, *, local_only: bool) -> "dict[str, An
             return {"provider": provider, "model": model, "name": friendly_name(provider, manager), "local": True}
     if local_only:
         return None
-    for provider, model in candidates:
+    # The cloud: the chat's own model, and no other (D-33.1).
+    cloud = [(named, named_model)] if named else route
+    for provider, model in cloud:
         if provider in ("mock", "auto") or not _up(provider):
             continue
         return {"provider": provider, "model": model, "name": friendly_name(provider, manager), "local": False}
@@ -348,8 +376,10 @@ def _consent_path(home: "str | Path") -> Path:
 
 def consent_given(home: "str | Path", thread_id: str, provider: str) -> bool:
     """Did the user say yes, in THIS chat, to sending a recording's
-    transcript to ``provider`` for its notes? (Once per chat and model: a
-    yes for one model is not a yes for another.) BLOCKING."""
+    transcript to ``provider`` for its notes? (Once per chat and PROVIDER:
+    the yes is for the company the transcript goes to, so a yes for Claude
+    is not a yes for ChatGPT, and it holds for every Claude model in that
+    chat.) BLOCKING."""
     if not thread_id or not provider:
         return False
     try:
@@ -456,6 +486,9 @@ class Job:
     #: The worker process (for a stop); None between processes.
     proc: Any = None
     stopped: str = ""
+    #: Waiting for a free worker (:data:`MAX_WORKERS`): the stall and the
+    #: deadline count from when its own worker starts.
+    waiting: bool = False
 
     @property
     def id(self) -> str:
@@ -463,6 +496,26 @@ class Job:
 
 
 _LIVE: dict[str, Job] = {}
+#: Finished jobs are kept in memory only while a new chat's link may still
+#: bring their report home (:func:`home_turn`), and at most this many; the
+#: rest are read from their state on disk.
+KEEP_FINISHED = 50
+
+
+def _track(job: Job) -> None:
+    """Track ``job``, and let go of finished jobs that wait for nothing."""
+    waiting: list[str] = []
+    for rid, old in list(_LIVE.items()):
+        if old.task is None or not old.task.done():
+            continue
+        st = old.state
+        if old.detached and not st.get("homed") and not st.get("thread_id") and not _undone(old):
+            waiting.append(rid)
+        else:
+            _LIVE.pop(rid, None)
+    for rid in waiting[: max(0, len(waiting) - KEEP_FINISHED)]:
+        _LIVE.pop(rid, None)
+    _LIVE[job.id] = job
 
 
 def live(rid: str) -> "Job | None":
@@ -478,7 +531,9 @@ async def _save(job: Job) -> None:
 
 
 def new_state(*, source: Path, sha256: str, workspace: Path, thread_id: str, turn_id: str,
-              local_only: bool, transcriber: R.Transcriber, transcript: Path, notes: Path) -> "dict[str, Any]":
+              local_only: bool, transcriber: R.Transcriber, transcript: Path, notes: Path,
+              chat_model: "tuple[str, str] | None" = None) -> "dict[str, Any]":
+    chat = [str(chat_model[0] or ""), str(chat_model[1] or "")] if chat_model else None
     return {
         "id": R.new_recording_id(),
         "version": 1,
@@ -489,6 +544,9 @@ def new_state(*, source: Path, sha256: str, workspace: Path, thread_id: str, tur
         "workspace": str(workspace),
         "thread_id": str(thread_id or ""),
         "turn_id": str(turn_id or ""),
+        # The model the chat uses (the turn's own choice): the one a cloud
+        # notes offer names (D-33.1). None = the chat follows the default.
+        "chat_model": chat if chat and chat[0] else None,
         "local_only": local_only is True,
         "transcriber": transcriber.as_dict(),
         "status": STATUS_HEARING,
@@ -508,7 +566,7 @@ def new_state(*, source: Path, sha256: str, workspace: Path, thread_id: str, tur
 def start(env: Env, state: "dict[str, Any]", transcriber: R.Transcriber) -> Job:
     """Start the job's task on the running loop and track it."""
     job = Job(state=state, env=env, transcriber=transcriber)
-    _LIVE[job.id] = job
+    _track(job)
     job.task = asyncio.get_running_loop().create_task(_run(job), name=f"recording:{job.id}")
     return job
 
@@ -540,16 +598,22 @@ async def _run(job: Job) -> None:
         raise
     except Exception as exc:  # noqa: BLE001 — a job always ends in words
         log.warning("recording %s failed", job.id, exc_info=True)
-        job.state["status"] = STATUS_FAILED
-        job.state["error"] = job.state.get("error") or (
-            f"{job.state.get('source_name')} could not be turned into text ({type(exc).__name__}: "
-            f"{str(exc)[:200]}). Nothing was saved.")
+        why = f"{type(exc).__name__}: {str(exc)[:200]}"
+        if job.state.get("transcript_written"):
+            # The transcript is already a file in the chat's folder: only the
+            # notes failed (say, a disk or permission error on the notes file).
+            _set_status(job, STATUS_DONE)
+            job.state["notes_why"] = f"The notes were not written ({why}). The transcript is saved."
+        else:
+            _set_status(job, STATUS_FAILED)
+            job.state["error"] = job.state.get("error") or (
+                f"{job.state.get('source_name')} could not be turned into text ({why}). Nothing was saved.")
         try:
             await _save(job)
         except Exception:  # noqa: BLE001
             pass
     job.done.set()
-    if job.detached and job.state.get("status") != STATUS_UNDONE:
+    if job.detached:
         await _report(job)
 
 
@@ -560,6 +624,19 @@ def _fail(job: Job, words: str) -> None:
     job.state["error"] = words
 
 
+def _undone(job: Job) -> bool:
+    """Did the user's Undo stop this job? (``stop(rid, "undo")``, which the
+    tool's ``revert`` calls first, before it removes the files.)"""
+    return job.stopped == "undo" or job.state.get("status") == STATUS_UNDONE
+
+
+def _set_status(job: Job, status: str) -> None:
+    """Every step that ends sets its status HERE: a job its Undo stopped stays
+    undone, whichever step was ending when the press came (the notes model
+    answering, the notes file being written)."""
+    job.state["status"] = STATUS_UNDONE if _undone(job) else status
+
+
 # -- hearing ------------------------------------------------------------------
 def _worker_argv() -> list[str]:
     from ..comm.voice_note import _worker_argv as argv
@@ -567,9 +644,35 @@ def _worker_argv() -> list[str]:
     return argv()
 
 
+#: At most this many recordings are worked on at once: each worker holds the
+#: speech model in its own memory. The rest wait their turn (light on the PC).
+MAX_WORKERS = 2
+_WORKERS = threading.BoundedSemaphore(MAX_WORKERS)
+#: How often a waiting job looks whether it was stopped meanwhile.
+WAIT_POLL_S = 1.0
+
+
 def _run_worker(job: Job, request: dict, timeout: float) -> "dict | None":
-    """One request to a fresh worker, in the background lane; ``None`` on
-    any failure (a stall or a stop kills its tree). BLOCKING."""
+    """One request to a fresh worker, in the background lane, once one of the
+    :data:`MAX_WORKERS` places is free; ``None`` on any failure (a stall or
+    a stop kills its tree; a job stopped while it waits starts nothing).
+    BLOCKING."""
+    job.waiting = True
+    try:
+        while not _WORKERS.acquire(timeout=WAIT_POLL_S):
+            if job.stopped:
+                return None
+    finally:
+        job.waiting = False
+    try:
+        if job.stopped:
+            return None
+        return _run_worker_now(job, request, timeout)
+    finally:
+        _WORKERS.release()
+
+
+def _run_worker_now(job: Job, request: dict, timeout: float) -> "dict | None":
     from ..core import procs
 
     def _spawned(proc: Any) -> bool:
@@ -619,6 +722,11 @@ async def _watch(job: Job, fut: "asyncio.Future") -> None:
         if fut.done():
             return
         now = _clock()
+        if job.waiting:
+            # Its turn has not come (MAX_WORKERS): the stall and the deadline
+            # count from when its own worker starts.
+            started = last_move = now
+            continue
         got = await asyncio.to_thread(read_progress, home, job.id)
         if got is not None:
             heard, total = got
@@ -667,7 +775,9 @@ async def _hear(job: Job) -> None:
     job.state.update({"heard_s": heard, "duration": duration, "total_s": duration if duration else heard,
                       "cut": bool(cut), "words": R.word_count(lines), "lines": len(lines)})
     await asyncio.to_thread(_write_transcript, job, lines)
-    job.state["status"] = STATUS_NOTES
+    # An Undo pressed while the transcript was being written: undone, and no
+    # notes are written (``_run`` goes on to the notes only from "notes").
+    _set_status(job, STATUS_NOTES)
     await _save(job)
 
 
@@ -847,31 +957,54 @@ async def _notes(job: Job) -> None:
     """Who writes the notes, and the notes (D-33.1)."""
     env = job.env
     st = job.state
+    if _undone(job):
+        return
     router = env.router()
     local_only = await _local_only_now(job)
-    choice = await asyncio.to_thread(notes_choice, router, env.config, local_only=local_only)
+    chat = chat_model_of(st)
+    choice = await asyncio.to_thread(notes_choice, router, env.config, local_only=local_only, chat=chat)
+    if _undone(job):
+        return
     if choice is None:
-        st["status"] = STATUS_DONE
-        st["notes_why"] = (
-            "No model on this PC or your network can write the notes, and this chat is Local only, so the "
-            "transcript was not sent anywhere for them." if local_only else
-            "No model is set up to write the notes. The transcript is saved.")
+        _set_status(job, STATUS_DONE)
+        st["notes_why"] = nobody_words(router, chat, local_only=local_only)
         await _save(job)
         return
     if not choice.get("local"):
         if not await asyncio.to_thread(consent_given, env.home, str(st.get("thread_id") or ""),
                                        str(choice["provider"])):
-            if _answers_the_phone():
-                st["status"] = STATUS_DONE
-                st["notes_why"] = (f"Writing the notes would send the transcript to {choice['name']}, which is "
-                                   "asked on the recording's card in Iron Jarvis on this PC.")
-            else:
-                st["status"] = STATUS_ASK
+            # The yes is asked on the recording's card. The PHONE draws no
+            # card: the job still waits for the yes with its offer, so the
+            # same recording handed to a chat in Iron Jarvis on this PC shows
+            # the card (``find_earlier``), and the phone's reply says so
+            # (``recording_tools.result_words``).
+            _set_status(job, STATUS_ASK)
+            if not _undone(job):
                 st["offer"] = {"provider": choice["provider"], "model": choice.get("model"),
                                "name": choice["name"]}
             await _save(job)
             return
     await write_notes(job, choice, local_only=local_only)
+
+
+def nobody_words(router: Any, chat: "tuple[str, str | None] | None", *, local_only: bool) -> str:
+    """Why no model writes the notes, in words: Local only with nothing on
+    this PC or your network; the chat's own model (named) not answering; or
+    no model at all."""
+    if local_only:
+        return ("No model on this PC or your network can write the notes, and this chat is Local only, so the "
+                "transcript was not sent anywhere for them.")
+    provider = _named_chat_provider(chat)
+    if provider:
+        try:
+            from ..providers.egress import friendly_name
+
+            name = friendly_name(provider, getattr(router, "manager", None)) or provider
+        except Exception:  # noqa: BLE001
+            name = provider
+        return (f"{name}, the model this chat uses, is not available right now, so the notes were not written "
+                "and the transcript was not sent anywhere. The transcript is saved.")
+    return "No model is set up to write the notes. The transcript is saved."
 
 
 def _answers_the_phone() -> bool:
@@ -904,14 +1037,16 @@ async def write_notes(job: Job, choice: "dict[str, Any]", *, local_only: bool) -
     every item, and ``<name> notes.md`` is written."""
     env = job.env
     st = job.state
-    st["status"] = STATUS_NOTES
+    if _undone(job):
+        return
+    _set_status(job, STATUS_NOTES)
     st["offer"] = None
     st["notes_why"] = ""
     await _save(job)
     lines = await asyncio.to_thread(load_lines, env.home, job.id)
     duration = float(st.get("duration") or st.get("heard_s") or 0.0)
     if not lines:
-        st["status"] = STATUS_DONE
+        _set_status(job, STATUS_DONE)
         st["notes_why"] = "No words were heard in the recording, so there are no notes."
         await _save(job)
         return
@@ -920,13 +1055,15 @@ async def write_notes(job: Job, choice: "dict[str, Any]", *, local_only: bool) -
     raw: dict[str, list[dict[str, str]]] = {k: [] for k in R.KINDS}
     try:
         for n, part in enumerate(parts, start=1):
+            if job.stopped:
+                return  # an Undo: no further part of the transcript is sent
             prompt = R.notes_prompt(st["source_name"], part, long=duration >= 3600, part_no=n, parts=len(parts))
             answer = await _ask_notes_model(router, choice, prompt, local_only=local_only)
             got = R.parse_notes(answer)
             for k in R.KINDS:
                 raw[k].extend(got.get(k) or [])
     except NotesError as exc:
-        st["status"] = STATUS_DONE
+        _set_status(job, STATUS_DONE)
         st["notes_why"] = f"The notes were not written: {exc} The transcript is saved."
         await _save(job)
         return
@@ -949,7 +1086,7 @@ async def write_notes(job: Job, choice: "dict[str, Any]", *, local_only: bool) -
     st["counts"] = checked.counts()
     st["items"] = {k: [{"time": it["time"], "seconds": it["seconds"], "note": it["note"]}
                        for it in checked.items[k]] for k in R.KINDS}
-    st["status"] = STATUS_DONE
+    _set_status(job, STATUS_DONE)
     await _save(job)
 
 
@@ -979,7 +1116,8 @@ async def notes_after_yes(env: Env, rid: str, *, provider: str, model: Any, thre
             lo = bool(await asyncio.to_thread(thread_local_only, env.engine, tid))
         except Exception:  # noqa: BLE001
             lo = True
-    choice = await asyncio.to_thread(notes_choice, env.router(), env.config, local_only=lo)
+    router = env.router()
+    choice = await asyncio.to_thread(notes_choice, router, env.config, local_only=lo, chat=chat_model_of(state))
     if (choice is None or choice.get("provider") != provider or provider != offer.get("provider")
             or (choice.get("model") or None) != (offer.get("model") or None)
             or (model or None) != (offer.get("model") or None)):
@@ -990,7 +1128,8 @@ async def notes_after_yes(env: Env, rid: str, *, provider: str, model: Any, thre
             state["status"] = STATUS_DONE
             state["offer"] = None
             state["notes_why"] = ("This chat is Local only now, so the transcript was not sent anywhere for "
-                                  "the notes." if lo else "No model is set up to write the notes.")
+                                  "the notes." if lo else nobody_words(router, chat_model_of(state),
+                                                                        local_only=False))
         elif choice.get("local"):
             state["offer"] = None
         else:
@@ -998,7 +1137,7 @@ async def notes_after_yes(env: Env, rid: str, *, provider: str, model: Any, thre
         await asyncio.to_thread(save_state, env.home, state)
         if choice is not None and choice.get("local"):
             job = Job(state=state, env=env)
-            _LIVE[rid] = job
+            _track(job)
             job.detached = True
             job.task = asyncio.get_running_loop().create_task(_notes_task(job, choice, lo), name=f"notes:{rid}")
             return {"ok": True, "changed": True, "card": card_of(state)}
@@ -1009,7 +1148,7 @@ async def notes_after_yes(env: Env, rid: str, *, provider: str, model: Any, thre
         state["thread_id"] = tid
     job = Job(state=state, env=env)
     job.detached = True
-    _LIVE[rid] = job
+    _track(job)
     state["status"] = STATUS_NOTES
     state["offer"] = None
     await asyncio.to_thread(save_state, env.home, state)
@@ -1024,14 +1163,14 @@ async def _notes_task(job: Job, choice: "dict[str, Any]", local_only: bool) -> N
         job.done.set()
         raise
     except Exception as exc:  # noqa: BLE001
-        job.state["status"] = STATUS_DONE
+        _set_status(job, STATUS_DONE)
         job.state["notes_why"] = f"The notes were not written ({type(exc).__name__}). The transcript is saved."
         try:
             await _save(job)
         except Exception:  # noqa: BLE001
             pass
     job.done.set()
-    await _report(job)
+    await _report(job)  # nothing comes home for a job its Undo stopped (``_report``)
 
 
 # -- coming home ---------------------------------------------------------------
@@ -1074,7 +1213,12 @@ def report_words(state: "dict[str, Any]") -> str:
 async def _report(job: Job) -> None:
     """ONE report into the chat (idea 39's one writer); a chat not known yet
     (a new chat's first turn) is reported to when the page links it
-    (:func:`home_turn`)."""
+    (:func:`home_turn`). A job its Undo stopped reports NOTHING: the user
+    took it back, and the files a report would name are being removed. The
+    ONE check for every way a job ends (the hearing, the notes after the
+    card's yes, the notes of a job started again at boot)."""
+    if _undone(job):
+        return
     st = job.state
     tid = str(st.get("thread_id") or "")
     if not tid or _answers_the_phone():
@@ -1156,7 +1300,7 @@ async def reconcile_at_boot(env: Env) -> int:
             await _report(job)
             continue
         if st.get("status") == STATUS_NOTES and st.get("transcript_written"):
-            _LIVE[job.id] = job
+            _track(job)
             job.task = asyncio.get_running_loop().create_task(_notes_again(job), name=f"notes:{job.id}")
             started += 1
             continue
@@ -1171,7 +1315,7 @@ async def reconcile_at_boot(env: Env) -> int:
         st["status"] = STATUS_HEARING
         st["heard_s"] = 0.0
         job.transcriber = tr
-        _LIVE[job.id] = job
+        _track(job)
         job.task = asyncio.get_running_loop().create_task(_run(job), name=f"recording:{job.id}")
         started += 1
     return started
@@ -1184,11 +1328,11 @@ async def _notes_again(job: Job) -> None:
         job.done.set()
         raise
     except Exception:  # noqa: BLE001
-        job.state["status"] = STATUS_DONE
+        _set_status(job, STATUS_DONE)
         job.state["notes_why"] = "The notes were not written. The transcript is saved."
         await _save(job)
     job.done.set()
-    await _report(job)
+    await _report(job)  # nothing comes home for a job its Undo stopped (``_report``)
 
 
 def _interrupted(home: Path) -> "list[dict[str, Any]]":
@@ -1237,6 +1381,8 @@ def cancel_all() -> None:
     state stays as it was, so the next boot starts it again)."""
     for job in list(_LIVE.values()):
         if job.task is not None and not job.task.done():
+            # A job still waiting for a worker starts none (its thread ends).
+            job.stopped = job.stopped or "shutdown"
             proc = job.proc
             if proc is not None:
                 try:
@@ -1249,10 +1395,10 @@ def cancel_all() -> None:
 
 
 __all__ = [
-    "Env", "INLINE_WAIT_S", "Job", "MAX_ATTEMPTS", "NotesError", "PHONE_MAX_S", "RECORDING_DAYS",
+    "Env", "INLINE_WAIT_S", "Job", "MAX_ATTEMPTS", "NotesError", "RECORDING_DAYS",
     "STALL_S", "STATUS_ASK", "STATUS_DONE", "STATUS_FAILED", "STATUS_HEARING", "STATUS_NOTES",
-    "STATUS_UNDONE", "cancel_all", "card_of", "choose_now", "consent_given", "home_turn", "keep_consent",
-    "keep_minutes", "lend_voice_deps", "live", "live_ids", "load_lines", "load_state", "new_state",
-    "notes_after_yes", "notes_choice", "reconcile_at_boot", "report_words", "save_state", "start", "stop",
-    "voice_deps", "wait_inline", "write_new", "write_notes",
+    "STATUS_UNDONE", "cancel_all", "card_of", "chat_model_of", "choose_now", "consent_given", "home_turn",
+    "keep_consent", "keep_minutes", "lend_voice_deps", "live", "live_ids", "load_lines", "load_state",
+    "new_state", "nobody_words", "notes_after_yes", "notes_choice", "reconcile_at_boot", "report_words",
+    "save_state", "start", "stop", "voice_deps", "wait_inline", "write_new", "write_notes",
 ]

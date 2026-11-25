@@ -5887,9 +5887,12 @@ RECORDING_ARMED_NOTE = (
     "into a transcript with the time of each line and checked notes, on this PC; do not try to read it "
     "with read_document, and do not guess what was said."
 )
+#: In the screen's own words (G8): the switch is "Auto tools", and the step
+#: is "make a transcript and notes from a recording" (never the tool's id).
 RECORDING_NOT_ARMED_NOTE = (
-    "A recording: its words are not in this message, and turning it into text needs Auto tools on in this "
-    "chat (or transcribe_recording picked from the + menu). Tell the user that; do not guess what was said."
+    "A recording: its words are not in this message, and turning it into text needs the Auto tools switch "
+    "on in this chat, with making a transcript and notes from a recording allowed in Settings. Tell the "
+    "user that; do not guess what was said."
 )
 
 
@@ -14178,6 +14181,9 @@ async def run_chat_turn(
             project_id=(pid if resolved_proj is not None else None),
             # v1.549.0 (30-a) — lock-step: the readers record their figures here.
             source_turn=_fig_turn,
+            # Idea 33-a — lock-step: the chat's own model, which a recording's
+            # notes are offered to when nothing local can write them.
+            chat_model=(provider_choice, model_choice),
         )
         # v1.470.0 — lock-step with the stream lane: start the isolated script
         # worker now when `tool_script` is offered, so the model's first

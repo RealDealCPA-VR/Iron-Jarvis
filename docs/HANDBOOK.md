@@ -2067,14 +2067,17 @@ transcript.md** and **meeting notes.md**.
   says how many were (**2 items were left out: their words are not in the
   recording near the time given.**).
 - **Who writes the notes.** A model on this PC or your network, when you have
-  one, with no question. Otherwise the notes would go to your chat's model
-  in the cloud, so the card asks first, once in each chat: **Write the notes
-  with Claude? The transcript (812 words) is sent to it. Nothing has been
-  sent yet.** Only that press sends it, to that model only. In a Local only
+  one, with no question. Otherwise the notes would go to the model the chat
+  uses, in the cloud, so the card asks first, once in each chat for each
+  company: **Write the notes with Claude? The transcript (812 words) is sent
+  to it. Nothing has been sent yet.** Only that press sends it, to that model
+  only. If the chat's own model is not available, the notes are not written
+  and nothing is sent: no other model is used in its place. In a Local only
   chat the transcript never leaves this PC or your network.
 - **Undo** (on the reply's list of changed files, or in Activity) removes
   both files, as long as you have not changed them since. A recording still
-  being heard is stopped. The recording itself is never changed.
+  being heard, or whose notes are being written, is stopped, and nothing
+  more about it comes to the chat. The recording itself is never changed.
 - Handing the same recording again in the same folder makes nothing new: you
   get the transcript and notes already made.
 
@@ -2097,10 +2100,13 @@ are turned into text; a longer one says how much was. A rare file type that
 this PC cannot read is said by its type; saving it again as .m4a or .mp3
 helps. In the Iron Jarvis app a recording larger than 20 MB is read where
 it is on this PC, never copied; in a web browser a file over 20 MB cannot be
-attached. If Iron Jarvis restarts while a recording is
-being heard, it starts it again once by itself. From your phone, a recording
-of up to a few minutes is answered there; the card and the question about
-the notes are only in Iron Jarvis on this PC.
+attached. Two recordings are turned into text at a time; one handed in while
+two are being heard waits its turn. If Iron Jarvis restarts while a recording
+is being heard, it starts it again once by itself. From your phone, a
+recording of up to a few minutes is answered there. The card and its **Write
+the notes** question are only in Iron Jarvis on this PC: when the notes would
+go to a model in the cloud, the phone's reply says so, and handing the same
+recording to a chat in Iron Jarvis on this PC shows the card.
 
 ## Auto in chat: tools Jarvis looks up no longer ask every time (v1.575.0)
 
