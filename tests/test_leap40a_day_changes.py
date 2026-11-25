@@ -447,6 +447,44 @@ async def test_a_change_kept_without_its_earlier_version_and_a_failed_save_that_
     assert (ws / "b.txt").read_text(encoding="utf-8") == "the original\n"
 
 
+@pytest.mark.asyncio
+async def test_a_long_answer_keeps_its_cannot_be_undone_note_so_the_change_stays_on_the_day(tmp_path, monkeypatch):
+    """Review (40-a, a note): the registry adds ``CAPTURE_FAILED_NOTE`` at the
+    END of a call's answer, and the ledger keeps 4,000 characters of it. A
+    long answer whose before-copy could not be taken lost the note in the
+    cut, and that change was again on no list ("Iron Jarvis changed nothing
+    on this day"). The row keeps the note whatever the answer's length."""
+    from iron_jarvis.tools.base import ToolResult
+    from iron_jarvis.tools.registry import CAPTURE_FAILED_NOTE
+
+    app, p = _app(tmp_path)
+    client = TestClient(app)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    tool = p.registry.get("write_file")
+
+    async def no_copy(args, ctx):
+        raise OSError("the before-copy store is full")
+
+    async def long_answer(args, ctx):
+        (ctx.workspace / args["path"]).write_text(args["content"], encoding="utf-8")
+        return ToolResult(ok=True, output="Sheet1!C3 = 42\n" * 400)  # 6,000 characters
+
+    monkeypatch.setattr(tool, "capture_undo", no_copy)
+    monkeypatch.setattr(tool, "execute", long_answer)
+    (ws / "a.txt").write_text("before\n", encoding="utf-8")
+    lost = await _write(p, ws, "chat", "a.txt", "after\n")
+    monkeypatch.undo()
+    with session_scope(p.engine) as db:
+        kept = db.get(ToolInvocation, lost).output
+        assert len(kept) <= 4000 and kept.endswith(CAPTURE_FAILED_NOTE), kept[-120:]
+        assert kept.startswith("Sheet1!C3 = 42\n") and db.get(UndoJournal, lost) is None
+    body = client.get("/changes/day?date=today").json()
+    assert body["groups"] == []
+    (row,) = body["cannot"]
+    assert row["ids"] == [lost] and row["why"] == RD.NO_COPY_TAKEN_WHY, row
+
+
 def test_a_setting_whose_name_looks_like_a_secret_is_hidden():
     assert RD._value_words("smtp_password", "not-for-the-screen") == "hidden (it looks like a secret)"
     assert RD._value_words("chat_followups", True) == "on" and RD._value_words("x", None) == "not set"

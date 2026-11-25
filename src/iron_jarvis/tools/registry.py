@@ -448,6 +448,19 @@ class _AwakeDeadline:
 #: v1.504.0 (4.7): the line a successful change carries when its before-copy
 #: could not be taken (``capture_undo`` raised): there is no Undo for it.
 CAPTURE_FAILED_NOTE = "This change can't be undone: its earlier version could not be kept."
+#: How much of a call's answer its ledger row keeps.
+LEDGER_OUTPUT_CHARS = 4000
+
+
+def ledger_output(output: str) -> str:
+    """The answer as the ledger row keeps it: its first ``LEDGER_OUTPUT_CHARS``
+    characters, and ``CAPTURE_FAILED_NOTE`` when the cut would drop it
+    (40-a: Your day finds a change kept without its earlier version by that
+    note, so a long answer must not lose it)."""
+    kept = output[:LEDGER_OUTPUT_CHARS]
+    if CAPTURE_FAILED_NOTE in output and CAPTURE_FAILED_NOTE not in kept:
+        kept = output[: LEDGER_OUTPUT_CHARS - len(CAPTURE_FAILED_NOTE) - 1] + "\n" + CAPTURE_FAILED_NOTE
+    return kept
 
 
 def interrupted_note(safe: bool) -> str:
@@ -2437,7 +2450,7 @@ class ToolRegistry:
             args_json=dumps(safe_args),
             verdict=mode,
             ok=ok,
-            output=output[:4000],  # row_values makes it storable (v1.471.0)
+            output=ledger_output(output),  # row_values makes it storable (v1.471.0)
             reversibility=reversibility,
             confinement=confinement,
             grant_id=str(grant_id or ""),
