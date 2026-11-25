@@ -76,13 +76,86 @@ def test_the_card_names_the_folder_the_rules_the_limit_what_it_uses_and_the_exac
     assert ASK in lines and any(line.startswith("Start coding work in projA") for line in lines)
 
 
+class _Proxy:
+    """Iron-Proxy's CACHED accounts only: the card never calls it."""
+
+    enabled = True
+
+    def __init__(self, profiles, states):
+        self._cache = (profiles, states)
+
+    def cached_accounts(self):
+        return self._cache
+
+
+_RESET = (utcnow() + timedelta(hours=3)).isoformat()
+_LATER = (utcnow() + timedelta(hours=4)).isoformat()
+
+
+def _claude_account(pid: str, title: str, order: int) -> dict:
+    return {"id": pid, "provider": "anthropic", "title": title, "order": order, "lane": "cli"}
+
+
+def _at_limit() -> dict:
+    return {"status": "parked", "parkedUntil": _RESET, "parkedReason": {"kind": "quota-exhausted"}}
+
+
+def _used(pct: int) -> dict:
+    return {"status": "ready", "windows": [
+        {"kind": "5h", "usedPercent": pct, "windowMins": 300, "resetsAt": _LATER}]}
+
+
+def _accounts(platform, monkeypatch, states: dict) -> None:
+    """Two Claude accounts in Iron-Proxy's order: Work Max (the Default the
+    work is pinned to), then Home Pro."""
+    profiles = [_claude_account("c-work", "Work Max", 0), _claude_account("c-home", "Home Pro", 1)]
+    monkeypatch.setattr(platform, "iron_proxy",
+                        _Proxy([p for p in profiles if p["id"] in states], states), raising=False)
+
+
 def test_the_card_says_the_plan_and_how_much_of_its_window_is_used(platform, phone, monkeypatch):
     poll, fake, _repo = phone
     platform.config.default_provider, platform.config.default_model = "claude-cli", ""
-    monkeypatch.setattr(MT, "usage_for", lambda p, provider, account="": {
-        "account": "a1", "status": "ready", "percent": 42, "window_mins": 300})
+    _accounts(platform, monkeypatch, {"c-work": _used(42), "c-home": _used(10)})
     _card(platform, poll, fake)
     assert "Uses your Claude plan (42% of this 5-hour window used)." in fake.texts[-1]
+    assert "10%" not in fake.texts[-1]  # the Default's numbers, not another account's
+
+
+@pytest.mark.parametrize("case", ["only_one_at_limit", "default_at_limit", "group_takes_over",
+                                  "group_but_busy", "needs_sign_in"])
+def test_the_card_reads_the_account_the_work_runs_on_and_says_its_limit(platform, phone, monkeypatch, case):
+    """The work runs on the vendor's Default account (``routes/build.
+    _with_initial_account`` pins it, whatever its status), so the card reads
+    THAT account: at its limit it says so, with the reset time, never "usage
+    not known yet" and never another account's numbers; a group partner that
+    can serve now takes over instead of a wait."""
+    poll, fake, _repo = phone
+    platform.config.default_provider, platform.config.default_model = "claude-cli", ""
+    _accounts(platform, monkeypatch, {
+        "only_one_at_limit": {"c-work": _at_limit()},
+        "default_at_limit": {"c-work": _at_limit(), "c-home": _used(10)},
+        "group_takes_over": {"c-work": _at_limit(), "c-home": _used(10)},
+        # Busy (overloaded) is a wait, never a move (build_accounts.MOVE_KINDS).
+        "group_but_busy": {"c-work": {**_at_limit(), "parkedReason": {"kind": "overloaded"}},
+                           "c-home": _used(10)},
+        "needs_sign_in": {"c-work": {"status": "unauthenticated"}, "c-home": _used(10)},
+    }[case])
+    if case.startswith("group_"):
+        monkeypatch.setattr(platform.config, "account_groups", {"Mine": ["c-work", "c-home"]})
+    _card(platform, poll, fake)
+    when = MT._reset_words(_RESET)  # noqa: SLF001 — the app's own clock words
+    assert when
+    expected = {
+        "only_one_at_limit": f"Uses your Claude plan (at its usage limit until {when}; it waits for the reset).",
+        "default_at_limit": f"Uses your Claude plan (at its usage limit until {when}; it waits for the reset).",
+        "group_takes_over": "Uses your Claude plan (Work Max is at its usage limit now; Home Pro, in the same "
+                            "group, takes over).",
+        "group_but_busy": f"Uses your Claude plan (at its usage limit until {when}; it waits for the reset).",
+        "needs_sign_in": "Uses your Claude plan (its account needs to sign in again).",
+    }[case]
+    assert expected in fake.texts[-1], fake.texts[-1]
+    assert "10%" not in fake.texts[-1]
 
 
 @pytest.mark.parametrize("case", ["emergency", "not_a_repo", "pay", "local_only"])

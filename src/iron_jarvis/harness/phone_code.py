@@ -322,11 +322,26 @@ def uses_words(platform: Any, provider: str, model: str) -> str:
 
             vendor = BA.vendor_of(platform, provider)
             plan = f"your {_VENDOR_WORDS.get(vendor, vendor.title() or name)} plan"
-            usage = MT.usage_for(platform, provider)
+            # 12-a review: the account the work REALLY runs on — the vendor's
+            # Default, which a new session is pinned to whatever its status
+            # (``routes/build._with_initial_account``) — never the first
+            # account that could serve, whose numbers are not this work's.
+            svc = MT._svc(platform)  # noqa: SLF001 — the same cached service usage_for reads
+            own = BA.default_for(svc, vendor) if vendor in BA.VENDORS else None
+            if own is not None and own.get("status") == BA.LIMIT:
+                groups = getattr(getattr(platform, "config", None), "account_groups", None) or {}
+                partner = (BA.takeover(svc, groups, str(own.get("id") or ""))
+                           if own.get("limit_kind") in BA.MOVE_KINDS else None)
+                if partner is not None:
+                    return (f"Uses {plan} ({own.get('name') or 'its account'} is at its usage limit now; "
+                            f"{partner.get('name') or 'another account'}, in the same group, takes over).")
+                when = MT._reset_words(own.get("resets_at"))  # noqa: SLF001 — the planner's own clock words
+                return f"Uses {plan} (at its usage limit {f'until {when}' if when else 'now'}; it waits for the reset)."
+            if own is not None and own.get("status") == BA.NEEDS_SIGN_IN:
+                return f"Uses {plan} (its account needs to sign in again)."
+            usage = MT.usage_for(platform, provider, str(own.get("id") or "")) if own is not None else None
             if not usage:
                 return f"Uses {plan} (usage not known yet)."
-            if usage.get("status") == "limit":
-                return f"Uses {plan} (at its usage limit now; it waits for the reset)."
             pct = usage.get("percent")
             if isinstance(pct, int) and not isinstance(pct, bool):
                 adj = MT._window_adjective(usage.get("window_mins"))  # noqa: SLF001 — the planner's own words

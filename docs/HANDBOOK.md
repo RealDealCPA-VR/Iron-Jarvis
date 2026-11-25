@@ -2061,7 +2061,12 @@ used). What it will do: fix the broken contact form", with **Start** and
   you: your plan and how much of its window is used, a model on this PC or
   your network at no cost, or a model billed per use and what is left of
   your monthly pay-per-use limit. The usage figure is the one Iron Jarvis
-  already has; it never asks the vendor just to fill the card.
+  already has; it never asks the vendor just to fill the card. It is the
+  figure of the account the work runs on (your Default account for that
+  plan). When that account is at its usage limit, the card says so and when
+  it resets ("at its usage limit until 9:20 PM; it waits for the reset"), or
+  names the account in the same group that takes over; when it must sign in
+  again, the card says that too.
 - **Only folders you have used.** It starts work only in a folder you have
   worked in with Iron Jarvis: a coding session's folder (by the name the
   Coding sessions list shows, or the folder's own name), a project's folder,
