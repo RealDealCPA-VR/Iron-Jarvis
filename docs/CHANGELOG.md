@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.574.0
+
+**Your day: everything Iron Jarvis changed, and Undo for one or many.** The Activity page has a second tab, **Your day**, beside the **Timeline** (Everything › Activity, or Ctrl K and "your day").
+
 ## v1.573.0
 
 **Local models waste fewer steps in a coding session.** A benchmark of a local model (GLM) in **Chat › Code** showed that no task was lost to a mistake with a tool, but about 6 in every 100 tool calls were spent on three avoidable ones.
@@ -77,7 +81,3 @@
 ## v1.557.0
 
 **The `/` list in Build › Code works before a session starts.** Type `/` in Build › Code's start box (the box you see before any session is open) and the coding tool's own commands and skills are listed above the box, as they already were in an open session.
-
-## v1.556.0
-
-**Pick up where you left off in a folder.** Start a new chat or a new coding session in a folder you have worked in before, and a short card under the folder chip says what happened there last time.
