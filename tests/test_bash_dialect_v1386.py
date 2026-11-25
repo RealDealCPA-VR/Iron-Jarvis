@@ -280,14 +280,24 @@ def test_only_the_harness_ever_sets_the_shell_syntax():
     decision (``self._shell_syntax``, filled from ``command_env.
     helper_command_facts`` under ``HELPER_ORIGIN`` + ``is_build_call``;
     ``tests/test_helper_standard_v14210.py`` pins that), and the registry
-    RECORDS the context's value on the ledger row (it sets no context)."""
+    RECORDS the context's value on the ledger row (it sets no context).
+
+    MOVED ON PURPOSE (v1.573.0, the owner's yes to the benchmark's fix): a
+    coding session's model on Jarvis's OWN tool names writes bash too. The
+    chat lanes' one harness build hands the harness that decision
+    (``own_shell_syntax=``, from ``command_env.helper_command_facts``); the
+    harness's ``ctx_for`` is still the only code that puts a language on a
+    call's context (``tests/test_local_model_fit_v1573.py`` pins the rest)."""
     root = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis"
     writers = sorted(str(p.relative_to(root)) for p in root.rglob("*.py")
                      if "shell_syntax=" in p.read_text(encoding="utf-8"))
     assert writers == [
-        os.path.join("agents", "runtime.py"), os.path.join("harness", "dialects.py"),
+        os.path.join("agents", "runtime.py"), os.path.join("daemon", "chat_turn.py"),
+        os.path.join("harness", "dialects.py"),
         os.path.join("harness", "mode.py"), os.path.join("tools", "registry.py"),
     ], writers
+    lane = (root / "daemon" / "chat_turn.py").read_text(encoding="utf-8")
+    assert lane.count("shell_syntax=") == 1 and "own_shell_syntax=own_syntax," in lane
     mode = (root / "harness" / "mode.py").read_text(encoding="utf-8")
     assert mode.count("shell_syntax=") == 1 and "replace(out, shell_syntax=syntax)" in mode
     runtime = (root / "agents" / "runtime.py").read_text(encoding="utf-8")
@@ -782,7 +792,16 @@ async def test_plain_chat_and_an_unattended_runs_shell_keep_cmd(tmp_path, monkey
 
 
 @needs_win
-async def test_the_generic_dialects_shell_keeps_cmd(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize("bash_found", [True, False])
+async def test_the_generic_dialects_shell_keeps_cmd(app, tmp_path, monkeypatch, bash_found):
+    """MOVED ON PURPOSE (v1.573.0): a coding session's ``shell`` under
+    Jarvis's own name runs in Git for Windows' bash when one is found, as a
+    Claude lead's ``Bash`` and every helper's ``shell`` already do; with none
+    found it keeps cmd.exe exactly as before."""
+    if bash_found and BASH is None:
+        pytest.skip("Git for Windows' bash is not installed here")
+    if not bash_found:
+        monkeypatch.setattr(git_bash, "find", lambda *a, **k: None)
     seen = _record_runs(monkeypatch)
     work = tmp_path / "w"
     work.mkdir()
@@ -793,7 +812,10 @@ async def test_the_generic_dialects_shell_keeps_cmd(app, tmp_path, monkeypatch):
     status, raw = await open_turn(app, sid, {"text": "go", "turn_id": "generic-shell"}, timeout=60)
     assert status == 200
     (call,) = _of(seen, "echo generic-shell")
-    assert call["shell"] is True and call["argv"] == "echo generic-shell" and call["startupinfo"] is False
+    if bash_found:
+        assert call["shell"] is False and (call["env"] or {}).get(git_bash.COMMAND_VAR) == "echo generic-shell"
+    else:
+        assert call["shell"] is True and call["argv"] == "echo generic-shell" and call["startupinfo"] is False
 
 
 @needs_win

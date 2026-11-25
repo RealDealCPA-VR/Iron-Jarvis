@@ -1452,6 +1452,68 @@ def speaks_bash(dialect: Dialect) -> bool:
     return any(t.shell_syntax == "bash" for t in dialect.tools)
 
 
+#: v1.573.0: other coding tools' names for an argument of one of Jarvis's
+#: OWN file tools, as a model that learned them elsewhere sends them (the
+#: benchmark: glm called ``edit_file`` with ``new_string``). Renamed where a
+#: dialect's calls are translated (``HarnessTurn.translate_calls``), BEFORE
+#: any check reads the call, so the approval rules, the card and the tool all
+#: see the same arguments. Only these names, only on these tools.
+OWN_ARGUMENT_ALIASES: dict[str, dict[str, str]] = {
+    "read_file": {"file_path": "path"},
+    "write_file": {"file_path": "path"},
+    "edit_file": {"file_path": "path", "old_string": "old", "new_string": "new"},
+    "multi_edit": {"file_path": "path"},
+}
+#: ...and inside each of ``multi_edit``'s ``edits``.
+OWN_EDIT_ITEM_ALIASES: dict[str, str] = {"old_string": "old", "new_string": "new"}
+
+
+def _renamed(args: dict[str, Any], aliases: dict[str, str]) -> "dict[str, Any] | None":
+    """``args`` with each alias renamed to the tool's own name, or None when
+    nothing changes. An alias is renamed ONLY when the tool's own name is
+    absent: a call that sends both keeps both (the tool's own name wins and
+    the registry says what it got)."""
+    hits = [a for a in aliases if a in args and aliases[a] not in args]
+    if not hits:
+        return None
+    out = {k: v for k, v in args.items() if k not in hits}
+    for a in hits:
+        out[aliases[a]] = args[a]
+    return out
+
+
+def own_arguments(name: str, args: Any) -> "dict[str, Any] | None":
+    """A copy of a call's arguments in the tool's own names
+    (:data:`OWN_ARGUMENT_ALIASES`), or None when nothing changes (another
+    tool, arguments that are no object, no alias sent). Pure; never raises."""
+    aliases = OWN_ARGUMENT_ALIASES.get(str(name or ""))
+    if aliases is None or not isinstance(args, dict):
+        return None
+    out = _renamed(args, aliases)
+    if name == "multi_edit" and isinstance((out or args).get("edits"), list):
+        base = out if out is not None else args
+        edits = []
+        changed = False
+        for item in base["edits"]:
+            fixed = _renamed(item, OWN_EDIT_ITEM_ALIASES) if isinstance(item, dict) else None
+            changed = changed or fixed is not None
+            edits.append(fixed if fixed is not None else item)
+        if changed:
+            out = {**base, "edits": edits}
+    return out
+
+
+def own_command_tools(dialect: Dialect) -> bool:
+    """Does ``dialect`` leave the command tools under Jarvis's OWN names
+    (v1.573.0)? True when none of its tools reaches ``shell`` or
+    ``process_start`` (the generic tool set: glm and every unrecognised local
+    model), so the model calls ``shell`` itself. Such a turn of a coding
+    session writes bash on Windows when a Git for Windows bash is found
+    (``command_env.helper_command_facts``), as its helpers have since
+    v1.421.0."""
+    return not any(SHELL_TARGETS & set(t.targets) for t in dialect.tools)
+
+
 def resolve(requested: str, provider: str, model: str) -> tuple[str, Dialect]:
     """``(family, dialect)`` for a turn. ``requested`` is ``"auto"`` (the
     family's own dialect) or a dialect id that is forced (``"generic"``

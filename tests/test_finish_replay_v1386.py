@@ -156,6 +156,16 @@ async def _replay(tmp_path, name: str, finish_answer: list | None, monkeypatch):
     work = tmp_path / f"work-{name}"
     shutil.copytree(TASK / "repo", work)
     moves = _recorded_moves(name, work)
+    if RUNS[name]["harness"] == "generic":
+        # v1.573.0 (moved on purpose): Jarvis's own tool names now write bash
+        # where a Git for Windows bash is found. The glm run was RECORDED in
+        # cmd.exe, where two of its commands (a heredoc, a many-line
+        # `python -c`) failed and the model then made the change another way;
+        # in bash they run. The replay keeps the shell the run had, so every
+        # call still ends as it ended then.
+        from iron_jarvis.sandbox import git_bash
+
+        monkeypatch.setattr(git_bash, "find", lambda *a, **k: None)
     if finish_answer is None:
         monkeypatch.setattr(F, "start", _no_finish)
     else:

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.572.0 (2026-11-19).*
+holds itself to. Current as of v1.573.0 (2026-11-19).*
 
 ---
 
@@ -2043,6 +2043,38 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Local models waste fewer steps in a coding session (v1.573.0)
+
+A benchmark of a local model (GLM) in **Chat › Code** showed that no task was
+lost to a mistake with a tool, but about 6 in every 100 tool calls were spent
+on three avoidable ones. Each now has an answer.
+
+- **Its commands run in Git for Windows' bash.** A local model that uses Iron
+  Jarvis's own tool names tends to write Linux-style commands. On Windows
+  those went to the Windows shell and failed, and the model had to try again.
+  They now run in Git for Windows' bash, as Claude's commands and every
+  helper's commands already did, and the model is told so. Without Git for
+  Windows nothing changes.
+- **A missed edit shows a short file.** When a model tries to change text that
+  is nowhere in the file, the refusal used to say "read the file again". For a
+  short file (up to 60 lines) the refusal now shows the whole file, so the
+  next try is a copy and not a guess. Nothing is changed by a refused edit.
+- **Another tool's argument names are understood.** A model that learned to
+  edit files in another coding tool sometimes sends that tool's names for the
+  same things. The four file tools now accept them.
+
+Unchanged: Claude, Codex and Qwen models in **Chat › Code** keep the shell they
+had, plain chat and agents keep the Windows shell, and **Build › Code** is not
+touched. On Mac and Linux only the last two points apply.
+
+Measured on a local model (GLM) on Windows, 144 runs each way. The model
+needed 27% fewer steps and read 31% less text, and Linux-style commands that
+failed on the Windows shell went from 80 to 1. It passed 126 runs where it had
+passed 129. All of that difference was one task, which passed 6 times in 10
+when it was run again, against 5 in 6 before, so this benchmark cannot show a
+loss, and it cannot rule a small one out either. This is a lighter Iron
+Jarvis for a local model, not a higher-scoring one.
 
 ## A coding session is told to take care (v1.571.0)
 
