@@ -426,7 +426,16 @@ async def test_a_change_found_after_the_check_still_shows_its_forced_card(desk, 
     assert "agent_create" not in model.offered[1], "the check itself was offered a tool nobody brought"
     assert "agent_create" in model.offered[2], "the lookup the check asked for brought nothing"
     assert [c.get("tool") for c in cards] == ["agent_create"], cards
-    assert cards[0].get("once_only") is True and cards[0].get("once_reason") == "looked_up", cards[0]
+    if mode == "auto":
+        # MOVED ON PURPOSE (v1.575.0, the owner's yes): under Auto a
+        # looked-up tool is Auto's to judge. This one outlives the chat, so
+        # Auto's own rule keeps the card, with Auto's reason.
+        from iron_jarvis.core import auto_approve as A
+
+        assert cards[0].get("why") == A.ASK_RULES["standing"], cards[0]
+        assert cards[0].get("once_reason") != "looked_up", cards[0]
+    else:
+        assert cards[0].get("once_only") is True and cards[0].get("once_reason") == "looked_up", cards[0]
     assert cards[0].get("can_always") is False, cards[0]
     assert _agents(app) == before
     assert not [r for r in _rows(app, "agent_create") if r.ok]

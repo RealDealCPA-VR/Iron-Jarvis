@@ -257,11 +257,16 @@ def _write_steps(name: str):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("posture", ["yolo", "accept_edits", "auto", "approve_for_me", "always_ask"])
+@pytest.mark.parametrize("posture", ["yolo", "accept_edits", "approve_for_me", "always_ask"])
 async def test_the_card_shows_in_every_approval_setting(desk, posture):
-    """Don't ask, Accept edits and Auto each let an ordinary in-folder edit
-    through with no card. A tool the MODEL brought by looking it up is not
-    ordinary: its card shows whatever the setting, and Deny writes nothing."""
+    """Don't ask and Accept edits each let an ordinary in-folder edit through
+    with no card. A tool the MODEL brought by looking it up is not ordinary:
+    its card shows whatever the setting, and Deny writes nothing.
+
+    MOVED ON PURPOSE (v1.575.0, the owner's yes): AUTO left this list. Under
+    Auto a looked-up tool is judged by Auto's own rules and quick check
+    (``tests/test_auto_looked_up_v1575.py``); every other level keeps the
+    forced card."""
     app, ws = desk
     model = _write_steps("c.txt")
     _f, cards, _d = await _stream(

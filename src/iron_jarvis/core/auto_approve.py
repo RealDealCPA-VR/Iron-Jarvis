@@ -240,6 +240,35 @@ class Verdict:
         return self.kind == PASS
 
 
+def lookup_forces_card(mode: Any) -> bool:
+    """Does a tool a LOOKUP brought show its forced, once-only card under
+    this approval level? Every level but Auto (v1.575.0, the owner's yes).
+
+    The card (capability search, decision 1) stood in every level, Auto
+    included, so a plain chat under Auto still asked once per changing call:
+    most of a chat's tools now arrive by lookup. Under Auto such a tool is
+    judged like any other the default level would card: the rules pass a
+    read and an edit inside the folder, keep the card for anything that
+    sends, deletes, leaves the folder, acts for the person or outlives the
+    chat, and the quick check reads the rest against the person's own words.
+    Low trust still keeps every card (and nothing joins by lookup then).
+    "Don't ask" has neither rules nor a quick check, so there the card is
+    the only look the person gets, and it stays."""
+    return str(mode or "").strip().lower() != AUTO
+
+
+def lookup_judged(name: Any, looked_up: Any, mode: Any) -> bool:
+    """Is this call's tool one a lookup brought AND is the level Auto, so that
+    Auto judges the call whatever the tool's own tier (v1.575.0)? Only a tool
+    in ``looked_up`` (the lane's set of lookup-brought tools that change
+    something or reach outside this PC): a tool the person's own words
+    brought keeps its tier. Pure; never raises."""
+    try:
+        return str(name or "") in looked_up and not lookup_forces_card(mode)
+    except TypeError:
+        return False
+
+
 def eased(mode: Any) -> bool:
     return str(mode or "").strip().lower() in EASED_MODES
 

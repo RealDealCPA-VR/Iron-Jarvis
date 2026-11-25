@@ -39,7 +39,10 @@ describe("a card for a tool Jarvis looked up", () => {
     render(<ApprovalCard approval={ASK} scope="chat" />);
     const line = screen.getByTestId("approval-looked-up-once").textContent ?? "";
     expect(line).toMatch(/found this tool by looking it up/);
-    expect(line).toMatch(/whatever your approval setting/);
+    // v1.575.0 (moved on purpose): under Auto a looked-up tool follows Auto's own
+    // rules, so the card no longer claims it asks whatever the setting.
+    expect(line).toMatch(/unless approvals are set to Auto/);
+    expect(line).not.toMatch(/whatever your approval setting/);
     expect(screen.queryByTestId("approval-local-only")).toBeNull();
   });
 

@@ -582,7 +582,7 @@ export function ApprovalCard({
         // v1.479.0: a tool Jarvis brought by looking it up
         // (src/iron_jarvis/capability_search/join.py).
         <p data-testid="approval-looked-up-once" className="text-[11px] leading-relaxed text-zinc-400">
-          Jarvis found this tool by looking it up, so it asks every time, whatever your approval setting.
+          Jarvis found this tool by looking it up, so it asks every time, unless approvals are set to Auto.
         </p>
       ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "address" ? (
         // Fourth review PG1 / C-PG-2: a new place Iron Jarvis's things go

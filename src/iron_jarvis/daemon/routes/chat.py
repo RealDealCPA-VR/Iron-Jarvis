@@ -6993,6 +6993,9 @@ async def chat_stream(
                             and _c.name not in card_grants
                             and _cm is not PermissionMode.DENY
                         )
+                    if (_lookup_judged(_c.name) and _cm is not PermissionMode.DENY
+                            and _cp not in armed_grant and _c.name not in armed_grant):
+                        _asks = True  # v1.575.0: Auto's to judge, whatever its tier
                     if _asks and _tab_covered(_c):
                         _asks = False
                     if _asks and _grant_covers(d.platform, _grant_scopes, _c.name, _c.arguments):
@@ -7023,10 +7026,31 @@ async def chat_stream(
                     # the owner's decision 1: a change found by lookup always
                     # shows a card first) — the same forced card, in a turn
                     # that is no night task.
+                    # v1.575.0 (the owner's yes): not under AUTO, where the
+                    # rules and the quick check judge it like any other call
+                    # the default level would card (`_lookup_cards`). The
+                    # POST lane needs no twin: a found changer never joins
+                    # where nobody can be asked.
                     return (
                         (_night_turn is not None and _night_mod.asks_at_night(_name))
-                        or _name in _looked_up
+                        or _lookup_cards(_name)
                     )
+
+                def _lookup_cards(_name: str) -> bool:
+                    # A lookup-brought tool's FORCED card: every level but Auto.
+                    return _name in _looked_up and _auto.lookup_forces_card(approval_mode)
+
+                def _lookup_judged(_name: str) -> bool:
+                    # v1.575.0: under AUTO a lookup-brought tool is AUTO'S TO
+                    # JUDGE on every call, WHATEVER ITS OWN TIER. The join
+                    # gives it an "ask" rule, but `mode_for` reads an ask on
+                    # the read-only web tools as allow, and the forced card
+                    # was the only thing that looked at those: without this a
+                    # web tool the model looked up would run under Auto with
+                    # no rule and no quick check. So the call is a card
+                    # candidate here, and the pre-pass below decides it.
+                    # MIRROR NOTE: `_would_card` and the per-call branch.
+                    return _auto.lookup_judged(_name, _looked_up, approval_mode)
 
                 def _finish_needs_a_person(_c) -> bool:
                     # THE FINISH CHECK (part 3, Phase 2; review): the folder's
@@ -7093,7 +7117,7 @@ async def chat_stream(
                         _forced = (
                             "once_only" if (_c.name in _ONCE_ONLY or _spend_once(_c))
                             else "local_only" if _ask_first(_c)
-                            else "looked_up" if _c.name in _looked_up
+                            else "looked_up" if _lookup_cards(_c.name)
                             else "night" if _night_asks(_c.name)
                             else "priced" if (_sc0 is not None and _sc0.ask)
                             else ""
@@ -7320,6 +7344,12 @@ async def chat_stream(
                         _needs_card = _engine_asks
                     if _unarmed:
                         _needs_card = False
+                    elif (_lookup_judged(tc.name) and _mode is not PermissionMode.DENY
+                            and _perm_name not in armed_grant and tc.name not in armed_grant):
+                        # v1.575.0: under Auto a tool a lookup brought is
+                        # Auto's to judge whatever its own tier (the pre-pass
+                        # passed it, or it cards). MIRROR NOTE: `_would_card`.
+                        _needs_card = True
                     # LOCAL ONLY ASKS FIRST (v1.332.0, L3; see `_ask_first`
                     # above — MIRROR NOTE: `_would_card` reads it the same
                     # way). Whatever the posture decided, a reaching-out call

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.574.0 (2026-11-19).*
+holds itself to. Current as of v1.575.0 (2026-11-19).*
 
 ---
 
@@ -2043,6 +2043,34 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Auto in chat: tools Jarvis looks up no longer ask every time (v1.575.0)
+
+In a chat, Iron Jarvis looks up which of its tools fit your message and
+brings them into the reply. A tool brought that way used to show an approval
+card on every use, whatever your approval setting. So a chat set to **Auto**
+still asked once for each file it wrote and each web search it ran.
+
+Under **Auto** these tools now follow Auto's own rules, like every other tool:
+
+- **Runs without asking:** reading, and writing or editing a file inside the
+  chat's folder.
+- **Still asks:** anything that sends, deletes, edits outside the folder, acts
+  in your browser or on your desktop, changes one of your apps, or sets up
+  something that outlives the chat.
+- **Gets the quick check:** everything else, a web search or a web page
+  included. The check reads the call against what you asked for. If it cannot
+  say the call is routine, or does not answer in time, you get the card.
+
+A card that Auto keeps says Auto's reason for it. If you answer **Allow for
+this chat**, the rest of the chat does not ask about that tool again. The
+reply's own record still lists every call Auto let through and why.
+
+Unchanged: under **Ask first**, **Accept edits**, **Ask before every action**
+and **Don't ask**, a tool Jarvis looked up still shows its card every time.
+Don't ask has no rules and no quick check of its own, so there the card is
+the only look you get. A chat that has read something it does not trust still
+asks about everything, and a script still cannot call such a tool.
 
 ## Your day: everything Iron Jarvis changed, and Undo for one or many (v1.574.0)
 

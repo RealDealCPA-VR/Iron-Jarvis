@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.575.0
+
+**Auto in chat: tools Jarvis looks up no longer ask every time.** In a chat, Iron Jarvis looks up which of its tools fit your message and brings them into the reply.
+
 ## v1.574.0
 
 **Your day: everything Iron Jarvis changed, and Undo for one or many.** The Activity page has a second tab, **Your day**, beside the **Timeline** (Everything › Activity, or Ctrl K and "your day").
@@ -77,7 +81,3 @@
 ## v1.558.0
 
 **Photos, files and voice notes reach Jarvis from your phone.** Send Jarvis a photo of a page, a PDF, a spreadsheet or a voice note in Telegram, Slack or email, and it works on it the way it works on a file you drop into Chat on this PC.
-
-## v1.557.0
-
-**The `/` list in Build › Code works before a session starts.** Type `/` in Build › Code's start box (the box you see before any session is open) and the coding tool's own commands and skills are listed above the box, as they already were in an open session.

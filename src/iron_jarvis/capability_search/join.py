@@ -15,10 +15,14 @@ through the real chat lanes and the real ``registry.invoke``):
    "ask" override, the mechanism ``chat_turn.ask_first_overrides`` uses),
    whatever its own tier is, AND its name goes into the lane's ``found_asks``
    set, which the stream lane reads as a FORCED, ONCE-ONLY card: in every
-   approval setting (Don't ask, Accept edits and Auto included), past every
+   approval setting but Auto (Don't ask and Accept edits included), past every
    tab or standing grant, "Allow once" and "Deny" only (a wider answer is
    read as once), reason ``looked_up`` (a safety reason: Enter never allows
-   it). One thing lifts it, the user's own earlier answer: a tool they
+   it). UNDER AUTO (v1.575.0, the owner's yes: a chat set to Auto asked once
+   per changing call) the same set makes the tool Auto's to judge on every
+   call, whatever its own tier: the rules and the quick check decide, and a
+   card Auto keeps is Auto's own (``core/auto_approve.lookup_judged``). One
+   thing lifts it, the user's own earlier answer: a tool they
    already allowed for this chat (``body.granted_tools``), and never for a
    protected setting (``ALWAYS_CARD_TOOLS``). Where nobody can be asked (the
    POST lane: the phone, an API caller) such a tool does not join at all.
