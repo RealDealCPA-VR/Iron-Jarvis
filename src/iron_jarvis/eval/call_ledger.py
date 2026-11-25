@@ -493,6 +493,14 @@ def settle_open_calls(engine: Any) -> int:
                         select(ChatTurnRecord.thread_id).where(ChatTurnRecord.id == turn)
                     ).first() or "")
                 started = next((c.started_at for c in calls if c.started_at is not None), None)
+                # v1.572.0: the cache counts the kept calls carried. An open
+                # call stores 0 for "not reported", so a reply whose calls
+                # all say 0 keeps None (not known), never a made-up 0. The
+                # tools it was sent died with the reply: not known either.
+                read = sum(int(c.cache_read_input_tokens or 0) for c in calls)
+                wrote = sum(int(c.cache_creation_input_tokens or 0) for c in calls)
+                cache = ({"cache_read_input_tokens": read, "cache_creation_input_tokens": wrote}
+                         if read or wrote else {})
                 db.add(AgentRun(
                     session_id=last.session_id or "chat",
                     agent_type=AgentType.BUILDER,
@@ -507,6 +515,7 @@ def settle_open_calls(engine: Any) -> int:
                     created_at=started or calls[0].created_at,
                     finished_at=last.created_at,
                     thread_id=(thread[:80] or None),
+                    **cache,
                 ))
                 db.exec(delete(OpenModelCall).where(OpenModelCall.id.in_(ids)))  # type: ignore[union-attr]
                 db.commit()

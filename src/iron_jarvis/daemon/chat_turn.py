@@ -669,6 +669,49 @@ def _tool_spec_tokens(tools, ratio: "float | None" = None) -> int:
         return 0
 
 
+def note_tools_sent(tally, d, tools, provider: str, model: str) -> None:
+    """WHAT THE REPLY WAS SENT (v1.572.0): one model call of this reply went
+    out with *tools* as its tool definitions. The reply's tally keeps their
+    NAMES and their estimated size (:func:`_tool_spec_tokens`, the figure the
+    window is already priced with), and the reply's usage row saves both
+    (:func:`_sent_fields`). Called beside the ``tally.add`` of every call that
+    sends tool definitions, on BOTH lanes: MIRROR NOTE (lock-step)
+    ``run_chat_turn``'s round call, the stream lane's round call, and
+    :func:`look_first_call`. A call that sends none (the no-tools final answer, a
+    summary) is not noted. Names and a count only. Never raises."""
+    note = getattr(tally, "note_tools", None)
+    if not callable(note):
+        return
+    try:
+        specs = list(tools or ())
+        note(specs, _tool_spec_tokens(specs, _history_ratio(d, provider, model)))
+    except Exception:  # noqa: BLE001 — a record never breaks a reply
+        log.debug("could not note a reply's tool definitions", exc_info=True)
+
+
+def _sent_fields(tally) -> "dict[str, Any]":
+    """The usage row's "what the reply was sent" columns from a lane's tally
+    (v1.572.0). ONLY what is known: no cache figure reported means no cache
+    columns (they stay None, never a made-up 0), and tool names are saved
+    only when a call noted them (``[]`` is "sent none"). ``{}`` for no tally
+    or any fault."""
+    out: dict[str, Any] = {}
+    try:
+        if tally is None:
+            return out
+        if getattr(tally, "cache_known", False):
+            out["cache_read_input_tokens"] = max(0, int(tally.cache_read_input_tokens or 0))
+            out["cache_creation_input_tokens"] = max(
+                0, int(tally.cache_creation_input_tokens or 0))
+        if getattr(tally, "tools_known", False):
+            out["tools_sent_json"] = _json.dumps(list(tally.tools_sent), ensure_ascii=False)
+            out["tool_spec_tokens"] = max(0, int(tally.tool_spec_tokens or 0))
+    except Exception:  # noqa: BLE001 — accounting never breaks a reply
+        log.debug("could not read what a reply was sent", exc_info=True)
+        return {}
+    return out
+
+
 def _fit_turn_transcript(
     d, msgs, system: str, provider: str, model: str, *, head: int, tools=None,
 ):
@@ -7972,6 +8015,7 @@ async def look_first_call(
         took = _time.perf_counter() - started
         if tally is not None:
             tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), usage)
+            note_tools_sent(tally, d, tools, provider, model)  # v1.572.0
         used = (int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0))
         calls = list(response.tool_calls or [])
         looked = bool(calls) and all(str(getattr(c, "name", "")) == _cap_name for c in calls)
@@ -11659,7 +11703,7 @@ def _persist_chat_usage(
     started_at=None, cost_usd: float = 0.0, thread_id: str = "",
     tool_session: str = "", label: str = "",
     turn_id: str = "", pending: "list[asyncio.Future[Any]] | None" = None,
-    ledger: Any = None,
+    ledger: Any = None, tally: Any = None,
 ) -> "asyncio.Future[Any] | None":
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
@@ -11699,7 +11743,13 @@ def _persist_chat_usage(
     ``ledger`` (v1.529.0, owner decision 4; both lanes): the turn's
     ``eval.call_ledger.TurnLedger`` (its tally's). The row deletes the
     turn's open calls IN THE SAME transaction that inserts it, so a crash
-    between the two never counts the turn twice."""
+    between the two never counts the turn twice.
+
+    ``tally`` (v1.572.0; both lanes): the turn's ``UsageTally``. The row also
+    saves what the reply was SENT (:func:`_sent_fields`): the provider's
+    cache counts when it reported any, and the names and estimated size of
+    the tool definitions. Read HERE, before the write is handed to the worker
+    thread, so the row is the tally as it stood when the reply ended."""
     # Third plan CS6 (ONE place, both lanes): a NEW chat's first turn starts
     # with no chat id — the page names the chat a moment later
     # (``POST /chat/turns/{id}/thread``). The row takes the chat the turn
@@ -11723,6 +11773,7 @@ def _persist_chat_usage(
         "finished_at": _now(),
         **({"result": str(label)} if label else {}),
         **({"created_at": started_at} if started_at is not None else {}),
+        **_sent_fields(tally),
     }
     job = functools.partial(
         _write_chat_usage, d, fields,
@@ -14405,6 +14456,7 @@ async def run_chat_turn(
             tool_session=_tool_session,  # v1.367.0 (lock-step)
             turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
             ledger=_tally.ledger,  # v1.529.0 (lock-step)
+            tally=_tally,  # v1.572.0 (lock-step)
         )
 
     async def _billed_await(aw):
@@ -14486,6 +14538,9 @@ async def run_chat_turn(
             usage_in += int(_u.get("input_tokens", 0) or 0)
             usage_out += int(_u.get("output_tokens", 0) or 0)
             _tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), _u)
+            # v1.572.0: what this call was sent. MIRROR NOTE (lock-step):
+            # the stream lane's round call.
+            note_tools_sent(_tally, d, tool_specs, provider_choice, model_choice)
             completions += 1
             # v1.390.0 (the Timeline): the stream lane says each billed call
             # of a harness turn as a `model_call` frame here. This lane sends
@@ -15652,6 +15707,7 @@ async def run_chat_turn(
         tool_session=_tool_session,  # v1.367.0 (lock-step)
         turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
         ledger=_tally.ledger,  # v1.529.0 (lock-step)
+        tally=_tally,  # v1.572.0 (lock-step)
     )
     # Third plan CS8: written off the loop; the reply goes back once it is.
     await settle_usage_writes(_usage_pending, turn_id=_usage_turn)

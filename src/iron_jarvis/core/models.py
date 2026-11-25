@@ -295,6 +295,22 @@ class AgentRun(SQLModel, table=True):
     #: every chat's spend in one bucket. Additive (auto-reconciled); indexed
     #: through ``core.db._HOT_INDEXES``.
     thread_id: str | None = None
+    #: WHAT THE REPLY WAS SENT (v1.572.0), on a chat reply's row. All four are
+    #: None when not known: a row older than the columns, an agent run, a
+    #: provider that reported no cache figure. Never a made-up 0. Additive
+    #: (auto-reconciled).
+    #: The parts of ``input_tokens`` the provider served from / wrote to its
+    #: prompt cache, summed over the reply's model calls.
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    #: The NAMES of the tools whose definitions were sent with the reply's
+    #: model calls: a JSON list, in the order first sent; ``[]`` = sent none.
+    #: Names only, never a definition's text or a call's arguments.
+    tools_sent_json: str | None = None
+    #: Those definitions' size in tokens, summed over the calls that sent them
+    #: (comparable with ``input_tokens``). An ESTIMATE
+    #: (``chat_turn._tool_spec_tokens``), not a provider's count.
+    tool_spec_tokens: int | None = None
 
 
 class OpenModelCall(SQLModel, table=True):

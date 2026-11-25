@@ -6063,6 +6063,7 @@ async def chat_stream(
                 tool_session=_tool_session,  # v1.367.0 (lock-step)
                 turn_id=_usage_turn, pending=_usage_pending,  # CS8 (lock-step)
                 ledger=_tally.ledger,  # v1.529.0 (lock-step)
+                tally=_tally,  # v1.572.0 (lock-step)
             )
 
         # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office
@@ -6378,6 +6379,10 @@ async def chat_stream(
                 usage_in += int(_u.get("input_tokens", 0) or 0)
                 usage_out += int(_u.get("output_tokens", 0) or 0)
                 _tally.add(route_provider, route_model, _u)
+                # v1.572.0: what this call was sent. MIRROR NOTE (lock-step):
+                # chat_turn's round call.
+                _chat_turn.note_tools_sent(
+                    _tally, d, tool_specs, provider_choice, model_choice)
                 completions += 1
                 if _timeline:
                     # v1.390.0: the call just billed, as the Timeline draws it.

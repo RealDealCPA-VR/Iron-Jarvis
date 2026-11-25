@@ -138,6 +138,12 @@ CACHE_WRITE_1H_MULTIPLIER = 2.0
 #: Providers whose cache writes are 1-hour writes.
 ONE_HOUR_CACHE_PROVIDERS = frozenset({"claude-cli"})
 
+#: v1.572.0: the most tool NAMES one reply's usage row keeps, and the longest
+#: one (``UsageTally.note_tools``). A bound, not a budget: a reply is sent a
+#: few dozen at most.
+TOOLS_SENT_MAX = 300
+TOOL_NAME_MAX = 160
+
 
 def _match(provider: str, model: str) -> dict[str, float] | None:
     """Return the price entry for ``provider``/``model``, best-effort.
@@ -371,6 +377,12 @@ class UsageTally:
     some completion was priced (a native figure or a known price row), and
     ``list_price_equivalent: true`` only when a subscription served it. Only
     keys that are KNOWN — an unknown is absent, never a fabricated 0.
+
+    WHAT THE REPLY WAS SENT (v1.572.0): :meth:`note_tools` keeps the NAMES of
+    the tool definitions sent beside the reply's model calls and their summed
+    estimated size. Names and a count only, never a definition's text or an
+    argument. It is saved on the reply's usage row and is NOT part of
+    :meth:`as_dict` (the receipt the user reads is unchanged).
     """
 
     def __init__(self) -> None:
@@ -382,6 +394,32 @@ class UsageTally:
         self.cache_known = False
         self.cost_known = False
         self.list_price_equivalent = False
+        #: Tool names sent with this reply's model calls, in the order first
+        #: sent (a dict used as an ordered set).
+        self.tools_sent: dict[str, None] = {}
+        #: The definitions' estimated tokens, summed over the calls that sent
+        #: them (so it compares with ``input_tokens``, which is summed too).
+        self.tool_spec_tokens = 0
+        #: True once any call noted its tools: "sent none" is then a known
+        #: empty list, never confused with "not recorded".
+        self.tools_known = False
+
+    def note_tools(self, tools: Any, tokens: int = 0) -> None:
+        """One model call was sent *tools* (its tool definitions, or just
+        their names), which cost about *tokens*. Never raises."""
+        try:
+            self.tools_known = True
+            for tool in tools or ():
+                name = tool
+                if isinstance(tool, Mapping):
+                    fn = tool.get("function")
+                    name = tool.get("name") or (fn.get("name") if isinstance(fn, Mapping) else "")
+                name = str(name or "")[:TOOL_NAME_MAX]
+                if name and (name in self.tools_sent or len(self.tools_sent) < TOOLS_SENT_MAX):
+                    self.tools_sent[name] = None
+            self.tool_spec_tokens += max(0, int(tokens or 0))
+        except Exception:  # noqa: BLE001 — a record never breaks a reply
+            pass
 
     def add(self, provider: str, model: str, usage: Mapping | None) -> float:
         if not isinstance(usage, Mapping):
