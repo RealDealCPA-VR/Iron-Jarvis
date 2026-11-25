@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.571.0
+
+**A coding session is told to take care.** When Iron Jarvis itself writes code (**Chat › Code**), the instructions it gives the model said how to do a task, and little about how to behave in your project.
+
 ## v1.570.0
 
 **Auto reaches helpers and handed-off work.** Under **Auto**, the quick check that lets routine commands through worked only in a reply.
@@ -77,7 +81,3 @@
 ## v1.555.0
 
 **Results come home to the chat that asked.** Something you set up from a chat now reports back into that same chat.
-
-## v1.554.0
-
-**Agents and terminal help know what was done before.** An agent you give a job in a folder now starts knowing what was done there before, the way a chat in that folder already does: the pieces of earlier work on Iron Jarvis's own record (each chat, coding session or agent run there, how it ended and the files it wrote) and, for work in exactly that folder, its checked recap (Done, Decided, Open).

@@ -5,7 +5,7 @@ their work is judged against. A helper's system prompt was its definition's
 own words, the branch line and — for a team worker — the worker rules; it
 never saw the folder's instruction files (``AGENTS.md`` / ``CLAUDE.md``, which
 the LEAD gets through ``projects/folder_rules``), the folder's harness layer
-(its guardrails, and the four-rule floor learned the hard way — a model once
+(its guardrails, and the floor, four of its rules learned the hard way — a model once
 ended every Python program on the user's PC with ``taskkill /im``), the
 lessons the user accepted for this folder, or what the finish check and the
 reviewer would look for. Workers then broke rules nobody told them.

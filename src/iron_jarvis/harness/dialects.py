@@ -1410,6 +1410,15 @@ GENERIC = Dialect(
     tools=(),
     hides=frozenset(),
     prompt="Your tools: {tools}.",
+    # The working advice the other three tool sets already had, in Jarvis's
+    # own names (glm and every unrecognised local model speak this one). Each
+    # sentence only when the turn shows its tools (:func:`dialect_hints`).
+    hints=(
+        (("read_file", "edit_file"), (),
+         "Read a file with read_file before you change it with edit_file, and copy old exactly."),
+        (("glob", "grep"), (), "Find code with glob and grep rather than shell commands."),
+        (("plan_update",), (), "On multi-step work keep plan_update current."),
+    ),
     source="the tool registry's own specs",
 )
 

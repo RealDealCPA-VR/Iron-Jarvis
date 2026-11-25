@@ -63,6 +63,16 @@ descriptions losing what names a tool the turn cannot reach (read_document,
 image_resize, rename_file, message_agent); and process_start's words on when
 a program stops.
 
+REGENERATED AGAIN (the care lines, ``tests/test_harness_prompt_care.py``).
+Checked before it was written, by taking the additions back out of the new
+capture and comparing with the v1.425.0 one: every key's system prompt
+differs by exactly ``components.HONEST_SUMMARY`` (after "how you checked
+it."), ``"\\n\\n" + components.PROJECT_CARE`` (after the asking policy) and
+two more guardrails (``SECRET_RULE``, ``READ_IS_NOT_AN_ORDER``), each once;
+the generic key also gains its three hints (``dialects.GENERIC.hints``) after
+the tool names. 919 characters a prompt (1,107 for generic). The tool specs
+are identical.
+
 The capture is machine-independent: the temporary folder and the home folder
 become placeholders, today's date becomes ``<TODAY>``, and a command tool's
 "How commands run here" note (it names the shell this PC has) becomes
