@@ -73,6 +73,7 @@ import { PermissionsPanel } from "@/components/tools/PermissionsPanel";
 import { AddPack } from "@/components/tools/AddPack";
 import { mentionsNode } from "@/lib/addPackWords";
 import { EditPack, type EditSaved } from "@/components/tools/EditPack";
+import { ExtensionSettings, type ExtensionPolicy } from "@/components/tools/ExtensionSettings";
 import { PackSwitch } from "@/components/tools/PackSwitch";
 import {
   KEYS_KEPT_HINT,
@@ -2636,6 +2637,18 @@ export default function ToolsPage() {
                         row={s as unknown as Record<string, unknown>}
                         onSaved={(res) => onPackEdited(s.name, res)}
                         onCancel={() => setEditing(null)}
+                      />
+                    )}
+                    {/* v1.577.0: the extension's own settings (who asks,
+                        trust its new tools, tools always included, start
+                        when first used), beside its Edit form. */}
+                    {editing === s.name && (
+                      <ExtensionSettings
+                        key={`settings-${s.name}`}
+                        name={s.name}
+                        policy={(s as unknown as { policy?: ExtensionPolicy }).policy}
+                        toolNames={s.tool_names ?? []}
+                        locked={Boolean((s as unknown as { locked?: string }).locked)}
                       />
                     )}
 

@@ -65,6 +65,15 @@
     "last_attempt_at": null,
     "last_error": null,
     "name": "slack",
+    "policy": {
+      "approval": "",
+      "approval_words": "As set for the chat",
+      "lazy": false,
+      "pinned_tools": [],
+      "resource_chars": 20000,
+      "resource_timeout_s": 15.0,
+      "trust_all": false
+    },
     "quarantined": [],
     "reason": null,
     "secret_keys": [],

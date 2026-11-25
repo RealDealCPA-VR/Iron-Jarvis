@@ -1994,6 +1994,28 @@ class McpSettingsPatch(BaseModel):
     auto_approve: bool | None = None
 
 
+class McpPolicyBody(BaseModel):
+    """One app's own settings (v1.577.0, ``mcp.policy``). PARTIAL: an
+    omitted field keeps what is saved. Applied to the next call, no restart.
+
+    ``approval``: "" (as set for the chat), "ask" (before every tool),
+    "writes" (only before a tool that can change things) or "server" (the app
+    asks in its own window). ``trust_all``: tools a later version of the app
+    adds are not held back. ``pinned_tools``: the app's own tool names that
+    join every reply and run it is part of. ``resource_timeout_s`` /
+    ``resource_chars``: how long one resource read may take and how much of
+    it the model is shown (0 = the default)."""
+
+    approval: str | None = None
+    trust_all: bool | None = None
+    pinned_tools: list[str] | None = None
+    resource_timeout_s: float | None = None
+    resource_chars: int | None = None
+    #: Start the app on its first use instead of at Iron Jarvis's start (once
+    #: its tool list has been kept by one successful start).
+    lazy: bool | None = None
+
+
 class McpSuggestBody(BaseModel):
     description: str
     provider: str = ""

@@ -89,26 +89,6 @@ async def _await_until(pred, what: str) -> None:
         await asyncio.sleep(0.01)
 
 
-class _LockSpy:
-    """Wraps the transport's request lock and counts CONTENDED acquires (an
-    ``acquire(timeout=)`` that returned False): only a caller parked behind the
-    in-flight call ever sees one, so ``contended > 0`` is "the queued call is
-    spinning on the lock" — the state the cancel test asserts on."""
-
-    def __init__(self, real: threading.Lock) -> None:
-        self._real = real
-        self.contended = 0
-
-    def acquire(self, *a, **kw) -> bool:
-        ok = self._real.acquire(*a, **kw)
-        if not ok:
-            self.contended += 1
-        return ok
-
-    def release(self) -> None:
-        self._real.release()
-
-
 def _alive(pid: int) -> bool:
     try:
         proc = psutil.Process(pid)
@@ -325,28 +305,29 @@ def test_the_transport_floor_never_undercuts_the_registry_deadline(tmp_path, mon
 
 
 def test_a_cancelled_call_aborts_only_the_in_flight_request(monkeypatch):
-    """Cancel while one call is on the wire and another waits its turn: the
-    in-flight server is killed (the waiting caller's abort must not kill a
-    server it never owned), and the queued call never sends."""
+    """Cancel while two calls are on the wire of a WEDGED server (v1.577.0:
+    calls are multiplexed, so the second is in flight too, not queued): the
+    first cancel must not kill a server another call still waits on; the
+    last cancel — the server silent the whole time, nothing else in flight —
+    kills it, and the next call respawns it."""
     transport = _transport(request_timeout=None)
     client = MCPClient(transport, name="fake")
-    lock_spy = _LockSpy(transport._lock)
-    monkeypatch.setattr(transport, "_lock", lock_spy)
 
     async def main():
         await client.list_tools()
         hung = asyncio.create_task(client.call_tool("hang", {}))
-        # Wait for the state asserted below, never a proxy: the hung call OWNS
-        # the server (its cancel token is the in-flight one) ...
-        await _await_until(lambda: transport._inflight is not None, "the hung call to reach the wire")
+        # Wait for the state asserted below, never a proxy: the hung call is
+        # on the wire ...
+        await _await_until(lambda: transport.inflight_count() == 1, "the hung call to reach the wire")
         queued = asyncio.create_task(client.call_tool("echo", {"text": "queued"}))
-        # ... and the queued call is spinning on the lock behind it.
-        await _await_until(lambda: lock_spy.contended > 0, "the queued call to park on the lock")
+        # ... and so is the second one (the fixture never reads it: it is hung).
+        await _await_until(lambda: transport.inflight_count() == 2, "the second call to reach the wire")
         pid = transport.pid
         queued.cancel()
         with pytest.raises(asyncio.CancelledError):
             await queued
-        # Only the queued call gave up: the in-flight server is untouched.
+        # Only the second call gave up: the server another call waits on is untouched.
+        assert transport.inflight_count() == 1
         assert transport.pid == pid and _alive(pid)
         hung.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -450,11 +431,11 @@ def test_a_cancel_that_lands_while_the_server_is_spawning_does_not_wedge_the_pac
 
 
 def test_concurrent_calls_never_cross_wire(monkeypatch):
-    """Calls now arrive from worker threads; the lock keeps ids and the single
-    stdout reader in step: wire exchanges NEVER overlap (a sequential fake
-    server answering in order can hide an unlocked transport by luck, so the
-    structure is asserted, not just the answers), and each caller gets ITS
-    answer."""
+    """Calls arrive from worker threads and (v1.577.0) are MULTIPLEXED: many
+    exchanges may be on the wire at once, and the dispatcher hands each
+    caller ITS answer by id. (Before v1.577.0 this pinned ``peak == 1``, the
+    serialised transport; the overlap is now the point, pinned in
+    ``test_mcp_multiplex_v1577.py``.)"""
     real = StdioTransport._rpc
     guard = threading.Lock()
     state = {"active": 0, "peak": 0}
@@ -485,7 +466,7 @@ def test_concurrent_calls_never_cross_wire(monkeypatch):
     finally:
         transport.close()
     assert [r["content"][0]["text"] for r in results] == [f"n{i}" for i in range(6)]
-    assert state["peak"] == 1, f"{state['peak']} exchanges were on the wire at once"
+    assert state["peak"] >= 1, "the transport never exchanged anything"
     assert transport.spawn_count == 1
 
 

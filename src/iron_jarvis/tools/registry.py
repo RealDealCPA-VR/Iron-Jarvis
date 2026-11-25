@@ -18,7 +18,7 @@ import threading
 from collections import OrderedDict
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select as sa_select
@@ -38,7 +38,7 @@ from .base import (
     replay_safe,
     safe_path,
 )
-from .permissions import PermissionDecision, PermissionEngine, asks_each_use
+from .permissions import PermissionDecision, PermissionEngine, asks_each_use, runs_unasked
 from .undo import make_file_descriptor, sha256_target
 from .undo import drop_preimages, finalize_post_hash, settle_unfinished
 
@@ -441,8 +441,61 @@ class _AwakeDeadline:
             self._arm(left)
 
     def cancel(self) -> None:
+        self._done = True
         if self._handle is not None:
             self._handle.cancel()
+
+    def restart(self) -> bool:
+        """Give the call its whole time again, counted from NOW (an app's
+        ``notifications/progress``: the call is alive, not wedged). Loop
+        thread only. Bounded by :data:`PROGRESS_KEEPALIVE_MAX_S` from the
+        first start, so a server that only ever reports progress is still cut
+        off. True when the deadline moved."""
+        if getattr(self, "_done", False) or self._cm.expired():
+            return False
+        first = getattr(self, "_first", None)
+        if first is None:
+            first = self._first = self._start
+        try:
+            now = self._clock()
+        except Exception:  # noqa: BLE001 — cannot read the clock: unchanged
+            return False
+        if now - first + self._seconds > PROGRESS_KEEPALIVE_MAX_S:
+            return False
+        self._start = now
+        if self._handle is not None:
+            self._handle.cancel()
+        self._arm(self._seconds)
+        return True
+
+
+#: The longest one tool call may be kept alive by its app's progress
+#: notifications, counted from the call's start (an hour).
+PROGRESS_KEEPALIVE_MAX_S = 3600.0
+
+#: The current call's awake deadline (set beside ``_DEADLINE_SCOPE``).
+_AWAKE_SCOPE: "ContextVar[_AwakeDeadline | None]" = ContextVar(
+    "tool_awake_deadline", default=None
+)
+
+
+def deadline_keepalive() -> "Callable[[], None] | None":
+    """A THREAD-SAFE callable that restarts the current tool call's deadline
+    (:meth:`_AwakeDeadline.restart`), or None when the call has no deadline.
+    For an app call: a ``notifications/progress`` for this call arrives on
+    the transport's reader thread and means the call is still working."""
+    awake = _AWAKE_SCOPE.get()
+    if awake is None:
+        return None
+    loop = awake._loop
+
+    def _keep() -> None:
+        try:
+            loop.call_soon_threadsafe(awake.restart)
+        except RuntimeError:  # the loop closed: nothing to keep alive
+            pass
+
+    return _keep
 
 
 #: v1.504.0 (4.7): the line a successful change carries when its before-copy
@@ -1199,6 +1252,12 @@ class ToolRegistry:
             # the catalog keeping every locked app on the user's own models
             # (``local_only``), which is what used to make it ask.
             _held = asks_each_use(tool)
+            if not _held and runs_unasked(tool):
+                # v1.577.0: the tool's app says Iron Jarvis needs no card for
+                # it ("The app asks in its own window", or a reader under "Ask
+                # only before changes"): THIS call is lifted the way an armed
+                # name is (a deny is still a deny: the engine reads it first).
+                session_allow = {*(session_allow or ()), name, tool.perm_key()}
             if _held:
                 # QUARANTINE (v1.299.0): a pack tool the user never knowingly
                 # installed is lifted by no blanket grant, name or standing —
@@ -1487,6 +1546,8 @@ class ToolRegistry:
                 # v1.504.0 (4.11): kept to time AWAKE (`_AwakeDeadline`): the
                 # loop's clock counts the PC's sleep on Windows.
                 _awake_deadline = _AwakeDeadline(cm, float(deadline_s)) if armed else None
+                # An app's progress for this call restarts it (deadline_keepalive).
+                _awake_tok = _AWAKE_SCOPE.set(_awake_deadline)
                 # The scope is visible to the tool (`tool_deadline_expired`),
                 # so a cancel it catches can say whether it was THIS deadline.
                 _scope = _DEADLINE_SCOPE.set(cm)
@@ -1529,6 +1590,7 @@ class ToolRegistry:
                     _TASK_SCOPE.reset(_tscope)
                     _CALL_SCOPE.reset(_call)
                     _DEADLINE_SCOPE.reset(_scope)
+                    _AWAKE_SCOPE.reset(_awake_tok)
         except TimeoutError as exc:
             if cm.expired():
                 cut_off = True

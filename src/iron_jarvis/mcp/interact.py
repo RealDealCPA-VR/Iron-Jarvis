@@ -13,7 +13,11 @@ Who answers is decided by an :class:`InteractionScope`, set by the chat lane
 around ONE tool call (``with interaction_scope(ti.scope_for(tc.id)):``). The
 transports run on a WORKER THREAD (``MCPClient._request`` offloads them with
 ``asyncio.to_thread``, which copies the calling context), so the scope set on
-the loop is visible there through :data:`MCP_SCOPE`. With NO scope — every
+the loop is visible there through :data:`MCP_SCOPE`. Since v1.577.0 the stdio
+transport multiplexes calls: a pack's request or progress is run in a COPY of
+the context captured by the call it belongs to (its progress token; for a
+request, the oldest call in flight with a scope), on the transport's own
+threads, so the scope still reaches it. With NO scope — every
 surface but an attended stream turn — an elicitation is declined and a
 sampling request refused with ``-1`` at once: nobody is there to answer.
 

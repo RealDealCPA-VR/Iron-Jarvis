@@ -30,6 +30,7 @@ from ..schemas import (
     McpImportPreviewBody,
     McpServerBody,
     McpServerPatchBody,
+    McpPolicyBody,
     McpSettingsPatch,
     McpSuggestBody,
     PauseBody,
@@ -1105,6 +1106,104 @@ def _plain_validation_words(exc: BaseException) -> str:
     return text.splitlines()[0][:200] if text else "the extension could not be read"
 
 
+def _mcp_policy_describe(s: dict[str, Any]) -> dict[str, Any]:
+    from ...mcp.policy import describe
+
+    try:
+        return describe(s)
+    except Exception:  # noqa: BLE001 — a row is never lost over its settings
+        return {}
+
+
+#: v1.577.0: a LOCKED app (Microsoft 365) asks before each use; its own
+#: settings cannot say otherwise.
+LOCKED_POLICY = (
+    "This app is locked: Iron Jarvis asks before each use of it, and that cannot "
+    "be changed here."
+)
+
+
+def set_mcp_policy(d, name: str, body: "McpPolicyBody") -> dict[str, Any]:
+    """Save one app's own settings (``PUT /mcp/servers/{name}/policy``, and
+    chat through the same function). PARTIAL; validated; persisted; read LIVE
+    by every check (``mcp.policy`` is bound to the saved rows), so nothing is
+    restarted. Turning ``trust_all`` on releases the tools held back right
+    now (the manifest marks them trusted). 404 for an unknown app, 409 for a
+    locked app's approval or trust, 422 for an unknown mode."""
+    from ...mcp import policy as _policy
+
+    servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+    target = next((s for s in servers if isinstance(s, dict) and s.get("name") == name), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="no such server")
+    fields = set(body.model_fields_set)
+    if "approval" in fields and body.approval is not None:
+        raw = str(body.approval or "").strip().lower()
+        if raw not in _policy.APPROVAL_MODES:
+            raise HTTPException(
+                status_code=422,
+                detail="approval must be one of: " + ", ".join(repr(m) for m in _policy.APPROVAL_MODES),
+            )
+        if target.get("locked") and raw not in ("", _policy.APPROVAL_ASK):
+            raise HTTPException(status_code=409, detail=LOCKED_POLICY)
+        if raw:
+            target["approval"] = raw
+        else:
+            target.pop("approval", None)
+    if "trust_all" in fields and body.trust_all is not None:
+        if body.trust_all and target.get("locked"):
+            raise HTTPException(status_code=409, detail=LOCKED_POLICY)
+        if body.trust_all:
+            target["trust_all"] = True
+        else:
+            target.pop("trust_all", None)
+    if "pinned_tools" in fields and body.pinned_tools is not None:
+        pins = _policy.normalise_pins(body.pinned_tools)
+        if pins:
+            target["pinned_tools"] = pins
+        else:
+            target.pop("pinned_tools", None)
+    if "lazy" in fields and body.lazy is not None:
+        if body.lazy:
+            target["lazy"] = True
+        else:
+            target.pop("lazy", None)
+    for key in ("resource_timeout_s", "resource_chars"):
+        if key in fields:
+            value = getattr(body, key)
+            if value is None or float(value) <= 0:
+                target.pop(key, None)
+            else:
+                target[key] = value
+    d.platform.config.mcp_servers = servers
+    d._persist_config(["mcp_servers"])
+    released: list[str] = []
+    if _policy.policy_of(target).trust_all:
+        from ...mcp.tools import quarantine_registered
+
+        before = {
+            n.split("__", 2)[-1]
+            for n in d.platform.registry.mcp_names(name)
+            if getattr(d.platform.registry.get(n), "quarantined", False)
+        }
+        try:
+            held = set(quarantine_registered(d.platform.registry, d.platform.config.home).get(name, []))
+        except Exception:  # noqa: BLE001 — the setting is saved; the next load applies it
+            held = before
+        released = sorted(before - held)
+    loaded = {n.split("__", 2)[-1] for n in d.platform.registry.mcp_names(name)}
+    pins = list(_policy.policy_of(target).pinned)
+    return {
+        "name": name,
+        "policy": _policy.describe(target),
+        "released": released,
+        # A pin the app does not offer (a typo, or a tool of a later version)
+        # is kept and named, never silently dropped.
+        "unknown_pins": [p for p in pins if loaded and p not in loaded],
+        "note": "saved: it applies to the next call",
+    }
+
+
 def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
     """ONE configured pack as ``GET /mcp/servers`` lists it (v1.343.0, lane
     J: lifted out of the route so the PATCH answer is the same row). Key and
@@ -1204,6 +1303,9 @@ def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
         # `POST /mcp/servers/{name}/tools/{tool}/trust`.
         "tools": tool_rows,
         "quarantined": [t["name"] for t in tool_rows if t["quarantined"]],
+        # v1.577.0: the app's own settings (pins, who asks, trust, resource
+        # limits), normalised as the checks read them (`mcp.policy`).
+        "policy": _mcp_policy_describe(s),
         "last_error": status.get("last_error") if status else None,
         # v1.256.0 (R-02): the same raw text, plus what it MEANS and
         # what to do. Classified once on the load record so this row
@@ -5172,6 +5274,11 @@ def register(app: FastAPI, d) -> None:
                 {"enabled": sw.get("enabled"), "changed": sw.get("changed"), "reloaded": sw.get("reloaded")}
             )
         return answer
+
+    @app.put("/mcp/servers/{name}/policy")
+    def put_mcp_policy(name: str, body: McpPolicyBody) -> dict[str, Any]:
+        """One app's own settings (v1.577.0) — see :func:`set_mcp_policy`."""
+        return set_mcp_policy(d, name, body)
 
     @app.delete("/mcp/servers/{name}")
     def delete_mcp_server(name: str) -> dict[str, Any]:

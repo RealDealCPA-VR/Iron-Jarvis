@@ -62,7 +62,7 @@ from typing import Any
 #: (``secret_set``: a key never rides a tool argument in chat, so chat offers
 #: ``config_secret``'s secure card in its place).
 NOT_FOR_CHAT = frozenset({
-    "find_capability", "ask_user", "exit_plan_mode", "plan_update", "notebook",
+    "find_capability", "app_tools_find", "ask_user", "exit_plan_mode", "plan_update", "notebook",
     "worklist_add", "worklist_done", "worklist_next", "worklist_status",
     "blackboard_post", "blackboard_read", "message_agent", "consult",
     "capability_propose", "memory_propose", "secret_set",

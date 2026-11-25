@@ -158,6 +158,10 @@ def _forget_manifest(platform: Any, name: str) -> bool:
     try:
         from .manifest import PackManifest
 
+        # v1.577.0: its kept tool list goes too (``mcp/resilience``).
+        from .resilience import forget_specs
+
+        forget_specs(platform.config.home, name)
         path = PackManifest(platform.config.home).path(name)
         if path.is_file():
             path.unlink()

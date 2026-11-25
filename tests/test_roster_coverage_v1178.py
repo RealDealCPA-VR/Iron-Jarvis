@@ -367,6 +367,10 @@ _BROWSER_ACTING = frozenset({
     "browser_fill_form",
 })
 _OFF_ROSTER_OPEN = {
+    # v1.577.0: searches the tools of the apps already in a CHAT reply and
+    # brings what it finds into that reply (mcp/reach). An agent run that
+    # holds an app (`mcp:*`) already holds every one of its tools.
+    "app_tools_find",
     # Documents/media the acceptance job plausibly needs, on no definition:
     "convert_document",   # `_DOCUMENT_TOOLS` has read/write/extract_pdf, not this
     "batch_documents",    # whole-folder read without blowing the window

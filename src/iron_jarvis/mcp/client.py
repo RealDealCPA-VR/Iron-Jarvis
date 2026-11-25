@@ -19,6 +19,7 @@ JSON-RPC) and :class:`HttpTransport` (lazy ``httpx``, JSON or SSE body).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import json
 import os
@@ -26,12 +27,19 @@ import queue
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
 from types import EllipsisType
 from typing import Any, Callable
 
 from ..core.logging import get_logger
-from .interact import current_scope, handle_notification, plain_reply, serve_server_request
+from .interact import (
+    MCP_SCOPE,
+    current_scope,
+    handle_notification,
+    plain_reply,
+    serve_server_request,
+)
 
 log = get_logger("mcp")
 
@@ -118,6 +126,64 @@ _DEADLINE_GRACE_S = 5.0
 #: JSON-RPC "method not found" — the answer to a server→client request this
 #: client does not serve (v1.322.0).
 _METHOD_NOT_FOUND = -32601
+
+#: The most characters of a server's ``initialize`` ``instructions`` kept
+#: (v1.577.0): they are the server's own words about how to use its tools,
+#: and a server could send a book.
+SERVER_INSTRUCTIONS_MAX = 8000
+
+#: How often a stdio call waiting for its answer re-checks its cancel token
+#: and its deadline (v1.577.0). ``abort`` wakes it at once; this is only the
+#: backstop for a token set without an ``abort``.
+_WAIT_SLICE_S = 0.25
+
+#: Unread server notifications an :class:`MCPClient` holds for its listeners
+#: before it drops new ones (v1.577.0) — listeners run on their own thread,
+#: never on the transport's reader.
+_LISTENER_QUEUE_MAX = 256
+
+#: How long an idle listener thread waits for the next notification before it
+#: ends (a new one starts with the next notification).
+_LISTENER_IDLE_S = 5.0
+
+
+def _init_fields(result: Any) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """``(instructions, capabilities, serverInfo)`` from an ``initialize``
+    result, each the right type or empty; ``instructions`` cut to
+    :data:`SERVER_INSTRUCTIONS_MAX`."""
+    if not isinstance(result, dict):
+        return "", {}, {}
+    text = result.get("instructions")
+    text = text[:SERVER_INSTRUCTIONS_MAX] if isinstance(text, str) else ""
+    caps = result.get("capabilities")
+    info = result.get("serverInfo")
+    return (
+        text,
+        dict(caps) if isinstance(caps, dict) else {},
+        dict(info) if isinstance(info, dict) else {},
+    )
+
+
+def _progress_token(params: Any) -> str | None:
+    """The ``_meta.progressToken`` a request carries, as a string, or None."""
+    if not isinstance(params, dict):
+        return None
+    meta = params.get("_meta")
+    token = meta.get("progressToken") if isinstance(meta, dict) else None
+    if isinstance(token, bool) or not isinstance(token, (str, int)):
+        return None
+    return str(token)
+
+
+def _note_token(msg: Any) -> str | None:
+    """The progress token of a ``notifications/progress`` message, or None."""
+    if not isinstance(msg, dict) or msg.get("method") != "notifications/progress":
+        return None
+    params = msg.get("params")
+    token = params.get("progressToken") if isinstance(params, dict) else None
+    if isinstance(token, bool) or not isinstance(token, (str, int)):
+        return None
+    return str(token)
 
 
 # --------------------------------------------------------------------------- #
@@ -308,10 +374,20 @@ class MCPClient:
     "Daemon offline". Off the loop, ``registry.invoke``'s ``asyncio.timeout``
     deadline can actually fire; when it does (or the user cancels) the thread is
     still parked on the read, so a transport that exposes ``abort(token)`` is
-    told to give up: it kills its server, which wakes the thread, and the next
-    call restarts the server. Such a transport's ``request`` must accept the
-    keyword ``cancel=`` (a ``threading.Event``) — that token is how ``abort``
-    tells the in-flight call apart from one still waiting its turn.
+    told to give up on THAT call (v1.577.0: the stdio transport sends the
+    server ``notifications/cancelled`` and keeps it running while it is busy
+    with other calls or has answered anything since; it kills it only when it
+    has been silent the whole time and nothing else is in flight). Such a
+    transport's ``request`` must accept the keyword ``cancel=`` (a
+    ``threading.Event``) — that token is how ``abort`` finds the call.
+
+    v1.577.0: a transport that sets ``accepts_keepalive = True`` also takes
+    ``keepalive=`` — the registry's :func:`tools.registry.deadline_keepalive`
+    for the tool call in flight, which it calls whenever the server reports
+    progress on that call's ``progressToken``. Test doubles without the flag
+    are called exactly as before. :meth:`add_listener` hears the server's
+    notifications; :attr:`server_instructions` / :attr:`server_capabilities`
+    / :attr:`server_info` read its ``initialize`` answer.
     """
 
     def __init__(self, transport: Any, name: str = "server") -> None:
@@ -321,6 +397,11 @@ class MCPClient:
         #: on the next call, so ``mcp.tools.live_client`` never hands out a
         #: client that was closed (a replaced or discarded pack).
         self.closed = False
+        #: ``method -> [callback]`` (v1.577.0), see :meth:`add_listener`.
+        self._listeners: dict[str, list[Callable[[dict[str, Any]], Any]]] = {}
+        self._note_q: "queue.Queue[tuple[list, dict]]" = queue.Queue(_LISTENER_QUEUE_MAX)
+        self._note_lock = threading.Lock()
+        self._note_worker: threading.Thread | None = None
         # The transport answers the pack's own requests (v1.324.0) and the
         # card says WHICH app is asking: it needs the pack's name, which only
         # the client knows. Best-effort: a transport that takes no attribute
@@ -329,17 +410,104 @@ class MCPClient:
             transport.pack_name = name
         except Exception:  # noqa: BLE001 — __slots__, a read-only double
             pass
+        # v1.577.0: the transport hands every server notification here.
+        try:
+            transport.notification_sink = self._on_server_notification
+        except Exception:  # noqa: BLE001 — __slots__, a read-only double
+            pass
 
-    async def _request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    # -- server info (v1.577.0) ---------------------------------------------
+    @property
+    def server_instructions(self) -> str:
+        """The server's ``initialize`` ``instructions`` ("" when it sent none
+        or has not started yet), at most :data:`SERVER_INSTRUCTIONS_MAX`
+        characters. The server's words: DATA, never instructions to a model
+        without the usual fencing."""
+        text = getattr(self.transport, "server_instructions", "")
+        return text[:SERVER_INSTRUCTIONS_MAX] if isinstance(text, str) else ""
+
+    @property
+    def server_capabilities(self) -> dict[str, Any]:
+        """The ``capabilities`` the server declared in ``initialize`` ({} before
+        it started)."""
+        caps = getattr(self.transport, "server_capabilities", None)
+        return dict(caps) if isinstance(caps, dict) else {}
+
+    @property
+    def server_info(self) -> dict[str, Any]:
+        """The server's ``serverInfo`` (name / version) from ``initialize``."""
+        info = getattr(self.transport, "server_info", None)
+        return dict(info) if isinstance(info, dict) else {}
+
+    # -- notifications (v1.577.0) -------------------------------------------
+    def add_listener(self, method: str, callback: Callable[[dict[str, Any]], Any]) -> None:
+        """Call ``callback(message)`` for every server notification whose
+        ``method`` is ``method`` (``notifications/tools/list_changed`` …), from
+        either transport. Callbacks run in order on ONE listener thread of this
+        client — never on the transport's reader and never on the event loop —
+        and an exception in one is logged, never raised. A full queue
+        (:data:`_LISTENER_QUEUE_MAX`) drops the newest notification, logged."""
+        self._listeners.setdefault(str(method), []).append(callback)
+
+    def _on_server_notification(self, msg: dict[str, Any]) -> None:
+        """The transport's sink: queue the message for its listeners. Called on
+        the transport's reader thread, so it only enqueues."""
+        if not isinstance(msg, dict):
+            return
+        callbacks = self._listeners.get(str(msg.get("method", "")))
+        if not callbacks:
+            return
+        try:
+            self._note_q.put_nowait((list(callbacks), msg))
+        except queue.Full:
+            log.warning("extension %r: %d notifications wait for their listeners; "
+                        "dropped a %r", self.name, _LISTENER_QUEUE_MAX, msg.get("method"))
+            return
+        with self._note_lock:
+            if self._note_worker is None or not self._note_worker.is_alive():
+                self._note_worker = threading.Thread(
+                    target=self._run_listeners, name=f"mcp-listeners-{self.name}", daemon=True
+                )
+                self._note_worker.start()
+
+    def _run_listeners(self) -> None:
+        while True:
+            try:
+                callbacks, msg = self._note_q.get(timeout=_LISTENER_IDLE_S)
+            except queue.Empty:
+                with self._note_lock:
+                    if self._note_q.empty():
+                        self._note_worker = None
+                        return
+                continue
+            for callback in callbacks:
+                try:
+                    callback(msg)
+                except Exception as exc:  # noqa: BLE001 — a listener never breaks the pack
+                    log.warning("extension %r: a %r listener failed: %s",
+                                self.name, msg.get("method"), exc)
+
+    async def _request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        keepalive: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
         params = params or {}
         abort = getattr(self.transport, "abort", None)
+        # Only a transport that says it takes ``keepalive=`` is handed it: test
+        # doubles and older transports keep their exact call shape.
+        extra: dict[str, Any] = {}
+        if keepalive is not None and getattr(self.transport, "accepts_keepalive", False) is True:
+            extra["keepalive"] = keepalive
         if inspect.iscoroutinefunction(getattr(self.transport, "request", None)):
             result = await self.transport.request(method, params)
         elif callable(abort):
             cancel = threading.Event()
             try:
                 result = await asyncio.to_thread(
-                    self.transport.request, method, params, cancel=cancel
+                    self.transport.request, method, params, cancel=cancel, **extra
                 )
             except MCPServerStopped as exc:
                 # Name the extension: the transport only knows its command line
@@ -355,7 +523,7 @@ class MCPClient:
                     pass
                 raise
         else:
-            kw: dict[str, Any] = {}
+            kw: dict[str, Any] = dict(extra)
             # A transport that takes a per-call read timeout (HttpTransport)
             # is handed the one the registry deadline implies (v1.322.0).
             if getattr(self.transport, "accepts_call_timeout", False):
@@ -448,15 +616,28 @@ class MCPClient:
     ) -> dict[str, Any]:
         """Invoke a remote tool; return the raw MCP result ({content, isError}).
 
-        Inside an interaction scope (an attended stream turn, v1.324.0) the
-        call carries ``_meta.progressToken`` = the model's tool-call id, so
-        the pack's progress reaches that call's card. Without one it carries
-        none — nobody would see the progress."""
+        Every call carries ``_meta.progressToken`` (v1.577.0): inside an
+        interaction scope (an attended stream turn, v1.324.0) it is the
+        model's tool-call id, so the pack's progress reaches that call's card;
+        otherwise a fresh ``ij-<hex>`` token. Progress on that token restarts
+        the registry deadline of the tool call in flight
+        (``tools.registry.deadline_keepalive``): a long call that keeps
+        reporting progress is alive, not wedged."""
         params: dict[str, Any] = {"name": name, "arguments": arguments or {}}
         scope = current_scope()
         if scope is not None and scope.call_id:
-            params["_meta"] = {"progressToken": str(scope.call_id)}
-        return await self._request("tools/call", params)
+            token = str(scope.call_id)
+        else:
+            token = f"ij-{uuid.uuid4().hex}"
+        params["_meta"] = {"progressToken": token}
+        keep: Callable[[], None] | None = None
+        try:
+            from ..tools.registry import deadline_keepalive
+
+            keep = deadline_keepalive()
+        except Exception:  # noqa: BLE001 — a client outside the app (scripts, tests)
+            keep = None
+        return await self._request("tools/call", params, keepalive=keep)
 
     def stderr_tail(self) -> str:
         """The pack's last stderr lines, masked (v1.342.0) — what the load
@@ -506,8 +687,15 @@ class FakeTransport:
         *,
         raise_on: object = None,
         error: Exception | None = None,
+        instructions: str = "",
+        capabilities: dict[str, Any] | None = None,
+        server_info: dict[str, Any] | None = None,
     ) -> None:
         self.responses: dict[str, Any] = dict(responses or {})
+        #: What a real server's ``initialize`` would have said (v1.577.0).
+        self.server_instructions = instructions
+        self.server_capabilities: dict[str, Any] = dict(capabilities or {})
+        self.server_info: dict[str, Any] = dict(server_info or {})
         # raise_on may be a single method name, an iterable of names, or True (all).
         if raise_on is True:
             self.raise_on: object = True
@@ -585,6 +773,103 @@ class _StderrRing:
         return joined
 
 
+class _Waiter:
+    """One stdio request in flight (v1.577.0): the dispatcher hands it its
+    answer by id; the calling thread waits on ``done``.
+
+    ``state``: ``new`` (registered, not written) → ``written`` | ``abandoned``
+    (given up before the write: it is NEVER written); a written call may then
+    be ``given_up``. Changed only under ``lock``, and a write happens only
+    from ``new`` with the transport's write lock held, so a give-up and the
+    write can never cross."""
+
+    __slots__ = (
+        "rid", "method", "cancel", "keepalive", "ctx", "token", "done", "msg", "error",
+        "state", "lock", "rx_at_write", "serving", "paused", "pause_started",
+    )
+
+    def __init__(
+        self,
+        rid: int,
+        method: str,
+        cancel: threading.Event | None,
+        keepalive: Callable[[], None] | None,
+        ctx: contextvars.Context,
+        token: str | None,
+    ) -> None:
+        self.rid = rid
+        self.method = method
+        self.cancel = cancel
+        self.keepalive = keepalive
+        #: The calling thread's context (``asyncio.to_thread`` copied the
+        #: caller's): the interaction scope a pack's question or progress
+        #: for THIS call is answered in. Run only through ``ctx.copy()`` — a
+        #: Context cannot be entered by two threads at once.
+        self.ctx = ctx
+        self.token = token
+        self.done = threading.Event()
+        self.msg: dict[str, Any] | None = None
+        self.error: BaseException | None = None
+        self.state = "new"
+        self.lock = threading.Lock()
+        #: The connection's message count when this call was written: equal
+        #: at give-up time = the server was SILENT for the whole wait.
+        self.rx_at_write = 0
+        #: Server requests attributed to this call being answered right now
+        #: (the user may be filling a form): the transport floor waits.
+        self.serving = 0
+        self.paused = 0.0
+        self.pause_started = 0.0
+
+    def finish(self, msg: dict[str, Any] | None = None, error: BaseException | None = None) -> None:
+        self.msg, self.error = msg, error
+        self.done.set()
+
+    def has_scope(self) -> bool:
+        try:
+            return self.ctx.get(MCP_SCOPE) is not None
+        except Exception:  # noqa: BLE001 — never raises
+            return False
+
+    def paused_for(self, now: float) -> tuple[float, bool]:
+        """Seconds this call spent waiting on server requests, and whether
+        one is being answered now."""
+        with self.lock:
+            busy = self.serving > 0
+            return self.paused + (now - self.pause_started if busy else 0.0), busy
+
+
+class _Conn:
+    """One live stdio server process and the calls in flight on it (v1.577.0).
+    A respawn makes a NEW one, so a dead process's end-of-file fails only its
+    own calls, never the next server's."""
+
+    __slots__ = ("proc", "out", "ring", "err_reader", "pending", "lock", "dead", "rx")
+
+    def __init__(
+        self,
+        proc: subprocess.Popen,
+        out: "queue.Queue[str | None]",
+        ring: _StderrRing,
+        err_reader: threading.Thread | None,
+    ) -> None:
+        self.proc = proc
+        self.out = out
+        self.ring = ring
+        self.err_reader = err_reader
+        #: ``id -> waiter``, oldest first (dicts keep insertion order).
+        self.pending: dict[int, _Waiter] = {}
+        self.lock = threading.Lock()
+        #: Set when its stdout ended: nothing more can be answered on it.
+        self.dead = False
+        #: Every JSON message the server sent so far.
+        self.rx = 0
+
+    def written(self) -> list[_Waiter]:
+        with self.lock:
+            return [w for w in self.pending.values() if w.state == "written"]
+
+
 # --------------------------------------------------------------------------- #
 # StdioTransport — real subprocess, line-delimited JSON-RPC. Lazy spawn.
 # --------------------------------------------------------------------------- #
@@ -597,14 +882,32 @@ class StdioTransport:
     Hardened in v1.291.0 (io-02 / io-05 / io-06), all in this one class because
     they are one transport:
 
-    * **Calls arrive from worker threads** (``MCPClient`` offloads them), so a
-      ``threading.Lock`` serialises ``request``: request ids and the single
-      stdout reader must never interleave.
-    * **Every read has a deadline.** A reader thread drains stdout into a
-      ``queue.Queue`` (the shape ``repl/session.py`` uses) so the waiting side
-      is an interruptible ``Queue.get(timeout=...)`` rather than an
-      uncancellable ``readline()``. On expiry the server is KILLED — the thread
-      must not stay parked owning the pipe — and the next call respawns it.
+    * **Calls arrive from worker threads** (``MCPClient`` offloads them) and
+      are MULTIPLEXED (v1.577.0): many requests may be in flight on one server
+      at once — a 50-second ``wait_for_decision`` no longer blocks every other
+      call. One dispatcher thread per live server reads its messages and
+      routes them: an answer goes to the waiter with that id (an unknown or
+      late id is dropped); a server REQUEST is answered on a thread of its own
+      (it may wait for the user) inside the context of the call it most
+      plausibly belongs to (the oldest call in flight with an interaction
+      scope, else the oldest) and with that call's cancel token; a
+      notification is handled in the context of the call whose
+      ``progressToken`` it carries (whose registry deadline it also restarts,
+      through the ``keepalive`` the client passed) and handed to the client's
+      listeners. Writes to stdin are serialised by a write lock. Starting and
+      restarting the server stay serialised by ``_lock`` and only ever
+      replace a process that has DIED.
+    * **Every call has a deadline and a cancel.** A reader thread drains
+      stdout into a ``queue.Queue`` (the shape ``repl/session.py`` uses); the
+      waiting side waits on its own event, never on a ``readline()``. A call
+      given up — the caller's token set (Stop, the registry deadline: ``abort``)
+      or its own ``request_timeout`` — is released at once, its late answer
+      is dropped, and the server is told ``notifications/cancelled`` for it.
+      The server is KILLED (so nothing stays parked on a wedged pipe; the next
+      call respawns it) only when it has been SILENT since that call was
+      written — and, for a cancel, also nothing else is in flight. A server
+      that is busy with other calls, or answered anything meanwhile, keeps
+      running. A cancelled call that was not written yet is never written.
     * **The pipes are UTF-8.** MCP stdio is UTF-8 by spec and Node/Rust servers
       write raw UTF-8; ``text=True`` alone decodes with the locale codec
       (cp1252 on Windows), which crashes on five byte values and garbles the
@@ -613,7 +916,7 @@ class StdioTransport:
     * **A dead server is respawned on the next call**, never retried within
       the failed one. EOF on stdout, a broken pipe on stdin or a ``poll()``
       that reports an exit all mark the server gone and raise
-      :class:`MCPServerStopped` saying so.
+      :class:`MCPServerStopped` saying so — to EVERY call in flight on it.
     * **``close`` kills the process TREE**: ``npx``/``uvx`` are launchers whose
       real server is a grandchild (``cmd.exe`` → ``node``), and killing the
       launcher alone leaves the server holding the pipe. Windows: a
@@ -688,8 +991,32 @@ class StdioTransport:
         self._err_reader: threading.Thread | None = None
         #: Windows Job handle owning the server and everything it launched.
         self._job: int | None = None
+        #: The live server and its calls in flight (v1.577.0), swapped with
+        #: the fields above as one tuple.
+        self._conn: _Conn | None = None
         self._id = 0
+        #: Serialises STARTING the server (spawn, handshake, the direct-start
+        #: fallback); since v1.577.0 a request holds it only until its server
+        #: is up, never across its own wait.
         self._lock = threading.Lock()
+        #: Guards id allocation and ``_active``.
+        self._calls_lock = threading.Lock()
+        #: Serialises every write to the server's stdin (re-entrant: a call
+        #: holds it across its write-state change and its write).
+        self._write_lock = threading.RLock()
+        #: The cancel tokens of the ``request`` calls running now, oldest
+        #: first (``_inflight`` reads the newest).
+        self._active: list[threading.Event | None] = []
+        #: Per calling thread: the token / keepalive / server of the call it
+        #: is making (``_rpc`` keeps its old two-argument shape).
+        self._tls = threading.local()
+        #: The server's ``initialize`` answer (v1.577.0) — read by
+        #: ``MCPClient.server_instructions`` and friends.
+        self.server_instructions = ""
+        self.server_capabilities: dict[str, Any] = {}
+        self.server_info: dict[str, Any] = {}
+        #: Set by ``MCPClient``: every server notification is handed to it.
+        self.notification_sink: Callable[[dict[str, Any]], None] | None = None
         #: Guards the (proc, out, job, reader) swap in :meth:`close` so that
         #: exactly ONE closer receives the live tuple. ``abort`` (the cancelled
         #: caller's thread), the in-flight worker's own timeout/EOF path and a
@@ -698,14 +1025,14 @@ class StdioTransport:
         #: already-closed handle value that Windows may have recycled for
         #: ANOTHER Job (another pack's, a terminal pane's) — and kill that.
         self._state_lock = threading.Lock()
-        #: The ``cancel`` token of the request currently on the wire, so
-        #: :meth:`abort` kills only for the call that actually owns the server.
-        self._inflight: threading.Event | None = None
         #: How many times a server process was spawned (diagnostics + pins).
         self.spawn_count = 0
         #: The pack's name, set by ``MCPClient`` (v1.324.0): the card that
         #: shows a pack's question says which app is asking.
         self.pack_name: str | None = None
+
+    #: ``MCPClient`` hands this transport the registry deadline's keepalive.
+    accepts_keepalive = True
 
     # -- lifecycle ----------------------------------------------------------
     @property
@@ -713,6 +1040,19 @@ class StdioTransport:
         """The live server's pid, or ``None`` when no server is running."""
         proc = self._proc
         return proc.pid if proc is not None else None
+
+    @property
+    def _inflight(self) -> threading.Event | None:
+        """The cancel token of the newest ``request`` running now (starting
+        its server or waiting for its answer), or ``None``."""
+        with self._calls_lock:
+            return self._active[-1] if self._active else None
+
+    def inflight_count(self) -> int:
+        """How many requests are on the wire (written, not yet answered or
+        given up) to the live server."""
+        conn = self._conn
+        return len(conn.written()) if conn is not None else 0
 
     def _ensure_started(self, cancel: threading.Event | None = None) -> None:
         """Spawn the server (or respawn one that exited). Lock held.
@@ -728,14 +1068,19 @@ class StdioTransport:
         sees the live tuple and kills it, or this check sees the token (set
         before ``abort`` is called) and kills the tuple itself.
         """
-        if self._proc is not None:
-            if self._proc.poll() is None:
+        live = self._proc
+        if live is not None:
+            conn = self._conn
+            if live.poll() is None and not (conn is not None and conn.dead):
                 return
-            # The server exited on its own (crash, update, OOM). Forget it and
+            # The server exited on its own (crash, update, OOM) — or its
+            # stdout ended, so it can answer nothing more. Forget it and
             # start a fresh one — writing into the dead pipe raised
             # ``OSError(22)`` on every later call until the app restarted.
+            # (A respawn only ever replaces a DEAD server: calls in flight on
+            # a live one are never cut off by another call's start.)
             log.warning("mcp stdio server %s exited (code %s); restarting it",
-                        self.command, self._proc.returncode)
+                        self.command, live.returncode)
             # Through close(): the swap-first path, so an abort() landing during
             # this respawn can never kill the same tuple a second time.
             self.close()
@@ -832,9 +1177,19 @@ class StdioTransport:
             daemon=True,
         )
         reader.start()
+        conn = _Conn(proc, out, stderr_ring, err_reader)
+        # v1.577.0: ONE dispatcher per server routes everything it says (see
+        # the class docstring); it ends with the server's stdout.
+        threading.Thread(
+            target=self._dispatch,
+            args=(conn,),
+            name=f"mcp-dispatch-{proc.pid}",
+            daemon=True,
+        ).start()
         with self._state_lock:  # one atomic tuple, never half of one to a closer
             self._proc, self._out, self._job, self._reader = proc, out, job, reader
             self._stderr, self._err_reader = stderr_ring, err_reader
+            self._conn = conn
             cancelled = (cancel is not None and cancel.is_set()) or self._shut
         if cancelled:
             # The caller gave up during the spawn (abort() found nothing to
@@ -882,7 +1237,7 @@ class StdioTransport:
         ``request_timeout`` (a direct start, v1.415.0)."""
         self._read_cap = timeout
         try:
-            self._rpc(
+            result = self._rpc(
                 "initialize",
                 {
                     "protocolVersion": PROTOCOL_VERSION,
@@ -892,6 +1247,13 @@ class StdioTransport:
             )
         finally:
             self._read_cap = None
+        # v1.577.0: what the server said about itself (its instructions for
+        # using its tools, what it supports) is kept for the client.
+        (
+            self.server_instructions,
+            self.server_capabilities,
+            self.server_info,
+        ) = _init_fields(result)
         self._write({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
 
     def _direct_fell_back(
@@ -1094,11 +1456,22 @@ class StdioTransport:
         The swap is atomic under ``_state_lock``: whoever wins holds the only
         reference to the live tuple; every concurrent closer sees ``None`` and
         returns. The kill itself runs OUTSIDE the lock (it can block for
-        ``_KILL_GRACE_S`` on ``wait``/``join``).
+        ``_KILL_GRACE_S`` on ``wait``/``join``). Every call still in flight
+        on the killed server fails with :class:`MCPServerStopped` (its
+        dispatcher reads the end of the pipe).
         """
+        self._close_conn(None)
+
+    def _close_conn(self, expect: "_Conn | None") -> None:
+        """:meth:`close`, but when ``expect`` is given only if that server is
+        still the live one — a dead server's own paths (its end-of-file, a
+        broken pipe, a give-up) never kill the server that replaced it."""
         with self._state_lock:
+            if expect is not None and self._conn is not expect:
+                return
             proc, out, job, reader = self._proc, self._out, self._job, self._reader
             self._proc, self._out, self._job, self._reader = None, None, None, None
+            self._conn = None
             err_reader, self._err_reader = self._err_reader, None
             # ``_stderr`` is deliberately kept: the ring outlives the server
             # so ``stderr_tail`` can still say why it died.
@@ -1108,12 +1481,8 @@ class StdioTransport:
         self._close_stderr(proc, err_reader)
 
     # -- stderr (v1.342.0) --------------------------------------------------
-    def stderr_tail(self) -> str:
-        """The server's last stderr lines — the current server's, or the most
-        recent one's after it died — joined, MASKED (``detections.redact.
-        mask``) and cut to the last :data:`STDERR_TAIL_MAX` characters.
-        ``""`` when no server ever ran or it wrote nothing. Never raises."""
-        ring = self._stderr
+    @staticmethod
+    def _ring_text(ring: "_StderrRing | None") -> str:
         if ring is None:
             return ""
         try:
@@ -1121,16 +1490,27 @@ class StdioTransport:
         except Exception:  # noqa: BLE001 — a diagnostic never breaks a call
             return ""
 
-    def _tail_for_error(self) -> str:
+    def stderr_tail(self) -> str:
+        """The server's last stderr lines — the current server's, or the most
+        recent one's after it died — joined, MASKED (``detections.redact.
+        mask``) and cut to the last :data:`STDERR_TAIL_MAX` characters.
+        ``""`` when no server ever ran or it wrote nothing. Never raises."""
+        return self._ring_text(self._stderr)
+
+    def _tail_for_error(self, conn: "_Conn | None" = None) -> str:
         """The tail an :class:`MCPServerStopped` carries: lets the stderr
         reader drain a dead child's last lines (bounded by
         :data:`_STDERR_SETTLE_S`), then the masked tail cut to the last
         :data:`STDERR_ERROR_MAX` characters, newlines folded to ``" | "`` so
-        the error stays one readable line."""
-        err_reader = self._err_reader
+        the error stays one readable line. ``conn``: THAT server's ring (a
+        respawn may already have replaced it)."""
+        err_reader = conn.err_reader if conn is not None else self._err_reader
         if err_reader is not None and err_reader.is_alive():
             err_reader.join(timeout=_STDERR_SETTLE_S)
-        tail = self.stderr_tail()
+        if conn is None or conn.ring is self._stderr:
+            tail = self.stderr_tail()
+        else:
+            tail = self._ring_text(conn.ring)
         if not tail:
             return ""
         if len(tail) > STDERR_ERROR_MAX:
@@ -1149,82 +1529,158 @@ class StdioTransport:
             + SETTINGS_FIX_SENTENCE
         )
 
+    def _closed_error(self, conn: "_Conn | None") -> MCPServerStopped:
+        """The error for a call whose server's stdout ENDED: waits a moment
+        for the exit code (the pipe can close before the exit is reaped — it
+        is the one clue), reads the tail, forgets that server, and words it
+        exactly as the v1.342.0 EOF error."""
+        code = None
+        if conn is not None:
+            proc = conn.proc
+            try:
+                proc.wait(timeout=0.5)
+            except Exception:  # noqa: BLE001 — a launcher still winding down
+                pass
+            code = proc.returncode if proc.poll() is not None else None
+        tail = self._tail_for_error(conn) if conn is not None else ""
+        if conn is not None:
+            self._close_conn(conn)
+        return MCPServerStopped(
+            self._stopped_text(
+                "the MCP server closed the connection"
+                + (f" (exit code {code})" if code is not None else ""),
+                tail,
+            )
+        )
+
     def abort(self, cancel: threading.Event) -> None:
         """The caller of an in-flight request gave up (deadline / Cancel).
 
-        Only the call that owns the server is aborted by killing it: a call
-        still waiting for the lock just sees its token set and never sends.
-        One whose server is still SPAWNING (``_proc`` is ``None``, so this
-        ``close()`` is a no-op) is caught by the token re-check that
-        ``_ensure_started`` and ``request`` run before anything is written.
+        v1.577.0: only THAT call is given up (:meth:`_give_up`): it is
+        released, its late answer dropped, and the server is sent
+        ``notifications/cancelled`` for it. The server is killed only when it
+        has been silent since the call was written and nothing else is in
+        flight on it (a wedged server must not keep the pipe). A call not yet
+        written is never written; one whose server is still SPAWNING (no
+        waiter yet) is caught by the token re-checks ``_ensure_started`` and
+        ``request`` run before anything is written; a handshake in flight for
+        it is given up, which kills the half-started server.
         """
-        if self._inflight is cancel:
-            self.close()
+        conn = self._conn
+        if conn is None or cancel is None:
+            return
+        with conn.lock:
+            mine = [w for w in conn.pending.values() if w.cancel is cancel]
+        for waiter in mine:
+            self._give_up(conn, waiter, "cancel")
+
+    def _give_up(
+        self, conn: _Conn, waiter: _Waiter, kind: str, timeout: float | None = None
+    ) -> BaseException | None:
+        """Release ``waiter`` (``kind`` "cancel" or "timeout"), deciding whether
+        the server dies with it. Returns the error the waiter was finished
+        with, or ``None`` when it had already been answered or failed.
+        Idempotent: the first caller to take it out of ``pending`` decides."""
+        with conn.lock:
+            if conn.pending.get(waiter.rid) is not waiter:
+                return None
+            del conn.pending[waiter.rid]
+            others = any(w.state == "written" for w in conn.pending.values())
+            silent = conn.rx == waiter.rx_at_write
+        with waiter.lock:
+            written = waiter.state == "written"
+            waiter.state = "given_up" if written else "abandoned"
+        if not written:
+            err: BaseException = MCPError("the call was cancelled before it was sent")
+            waiter.finish(error=err)
+            return err
+        # The handshake is never left half-done; otherwise only a server that
+        # said NOTHING since this call was written is treated as wedged — and
+        # a user's cancel never takes other calls down with it.
+        kill = waiter.method == "initialize" or (
+            silent and (kind == "timeout" or not others)
+        )
+        if kill:
+            self._close_conn(conn)
+        else:
+            self._send_cancelled(
+                conn,
+                waiter.rid,
+                "the caller stopped waiting" if kind == "cancel" else "the request timed out",
+            )
+        if kind == "timeout":
+            secs = float(timeout) if timeout is not None else 0.0
+            if kill:
+                err = MCPServerStopped(
+                    f"the MCP server did not answer within {secs:g} s; "
+                    "it was stopped and will be restarted on the next call"
+                )
+            else:
+                err = MCPError(
+                    f"the MCP server did not answer within {secs:g} s; the call was "
+                    "cancelled (the server kept running: it was still sending messages)"
+                )
+        else:
+            err = MCPError("the call was cancelled")
+        waiter.finish(error=err)
+        return err
+
+    def _send_cancelled(self, conn: _Conn, rid: int, reason: str) -> None:
+        """Tell the server we gave up on request ``rid`` (the spec's
+        ``notifications/cancelled``). Best-effort: never raises."""
+        if conn.dead:
+            return
+        try:
+            self._write(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": {"requestId": rid, "reason": reason},
+                },
+                conn,
+            )
+        except Exception as exc:  # noqa: BLE001 — the server may be gone already
+            log.debug("could not tell %s request %s was cancelled: %s", self._pack(), rid, exc)
 
     # -- io -----------------------------------------------------------------
-    def _write(self, message: dict[str, Any]) -> None:
-        proc = self._proc
+    def _write(self, message: dict[str, Any], conn: "_Conn | None" = None) -> None:
+        if conn is None:
+            conn = self._conn
+        proc = conn.proc if conn is not None else self._proc
         assert proc is not None and proc.stdin is not None
+        data = json.dumps(message) + "\n"
         try:
-            proc.stdin.write(json.dumps(message) + "\n")
-            proc.stdin.flush()
+            with self._write_lock:
+                proc.stdin.write(data)
+                proc.stdin.flush()
         except (OSError, ValueError) as exc:  # BrokenPipe, EINVAL, closed file
             # The tail is read BEFORE close(): close forgets the reader, and
             # the child's last words are the one clue to why the pipe broke.
-            tail = self._tail_for_error()
-            self.close()
+            tail = self._tail_for_error(conn)
+            if conn is not None:
+                self._close_conn(conn)
+            else:
+                self.close()
             raise MCPServerStopped(
                 self._stopped_text(
                     f"the MCP server stopped ({type(exc).__name__}: {exc})", tail
                 )
             ) from exc
 
-    def _read(self, expected_id: int) -> dict[str, Any]:
-        proc, out = self._proc, self._out
-        assert proc is not None and out is not None
-        timeout = self.request_timeout
-        cap = self._read_cap
-        if cap is not None:
-            # A direct start's handshake (v1.415.0): tighter than the floor.
-            timeout = cap if timeout is None else min(float(timeout), float(cap))
-        deadline = None if timeout is None else time.monotonic() + float(timeout)
+    # -- the dispatcher (v1.577.0) -----------------------------------------
+    def _dispatch(self, conn: _Conn) -> None:
+        """Route everything one server says, until its stdout ends. Runs on
+        its own daemon thread; never raises; never blocks on a user (server
+        requests are answered on threads of their own)."""
+        out = conn.out
         while True:
-            remaining = None if deadline is None else deadline - time.monotonic()
-            if remaining is not None and remaining <= 0:
-                item: str | None = None
-                timed_out = True
-            else:
-                timed_out = False
-                try:
-                    item = out.get(timeout=remaining)
-                except queue.Empty:
-                    timed_out = True
-                    item = None
-            if timed_out:
-                # A wedged server: kill it so nothing stays parked on its pipe
-                # and the next call gets a fresh one.
-                self.close()
-                raise MCPServerStopped(
-                    f"the MCP server did not answer within {float(timeout):g} s; "
-                    "it was stopped and will be restarted on the next call"
-                )
+            try:
+                item = out.get()
+            except Exception:  # noqa: BLE001 — never raises
+                item = None
             if item is None:
-                # EOF: the pipe closed before the exit was reaped, so give the
-                # exit code a moment to land — it is the one clue in the error.
-                try:
-                    proc.wait(timeout=0.5)
-                except Exception:  # noqa: BLE001 — a launcher still winding down
-                    pass
-                code = proc.returncode if proc.poll() is not None else None
-                tail = self._tail_for_error()
-                self.close()
-                raise MCPServerStopped(
-                    self._stopped_text(
-                        "the MCP server closed the connection"
-                        + (f" (exit code {code})" if code is not None else ""),
-                        tail,
-                    )
-                )
+                self._on_eof(conn)
+                return
             line = item.strip()
             if not line:
                 continue
@@ -1232,37 +1688,220 @@ class StdioTransport:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue  # ignore non-JSON log noise on stdout
-            route = _route_message(msg, expected_id)
-            if route == _RESPONSE:
-                return msg
-            if route == _SERVER_REQUEST:
-                # v1.322.0: a server→client request (``ping``, ``roots/list``
-                # …) was DROPPED here, and a server that waits for its answer
-                # before finishing ours hung the call. Answer on the same
-                # pipe and keep reading for our own response. v1.324.0: the
-                # answer comes from ``interact`` — an elicitation or sampling
-                # request may wait for the USER, giving up when this call's
-                # own cancel token is set (Stop / the registry deadline).
-                started = time.monotonic()
-                reply = serve_server_request(self._pack(), msg, self._inflight)
-                if deadline is not None:
-                    # Time spent waiting on the user is not the server being
-                    # wedged: the transport floor does not run meanwhile.
-                    deadline += time.monotonic() - started
-                self._write(reply)
-            elif route == _NOTIFICATION:
-                handle_notification(self._pack(), msg)
-            # Answers to other ids are skipped.
+            for one in msg if isinstance(msg, list) else [msg]:
+                try:
+                    self._route(conn, one)
+                except Exception as exc:  # noqa: BLE001 — one bad message never stops routing
+                    log.debug("mcp %s: a message could not be routed: %s", self._pack(), exc)
+
+    def _route(self, conn: _Conn, msg: Any) -> None:
+        if not isinstance(msg, dict):
+            return
+        with conn.lock:
+            conn.rx += 1
+        if "method" in msg:
+            if msg.get("id") is not None:
+                # A server→client request (v1.322.0 / v1.324.0). Checked
+                # FIRST: a server's ids are its own and may collide with ours.
+                owner = self._owner_for_request(conn)
+                if owner is not None:
+                    # Counted HERE, before the thread starts, so the call's
+                    # transport floor can never fire in between.
+                    with owner.lock:
+                        owner.serving += 1
+                        if owner.serving == 1:
+                            owner.pause_started = time.monotonic()
+                threading.Thread(
+                    target=self._serve,
+                    args=(conn, msg, owner),
+                    name=f"mcp-serve-{conn.proc.pid}",
+                    daemon=True,
+                ).start()
+            else:
+                self._on_notification(conn, msg)
+            return
+        rid = msg.get("id")
+        if rid is None or isinstance(rid, bool) or not isinstance(rid, (int, str)):
+            return
+        with conn.lock:
+            waiter = conn.pending.pop(rid, None)
+            if waiter is None and isinstance(rid, str) and rid.isdigit():
+                waiter = conn.pending.pop(int(rid), None)
+        if waiter is None:
+            # The answer to a call that already gave up (or a foreign id).
+            log.debug("mcp %s: dropped an answer to unknown request %r", self._pack(), rid)
+            return
+        waiter.finish(msg=msg)
+
+    def _owner_for_request(self, conn: _Conn) -> _Waiter | None:
+        """The call a server request most plausibly belongs to: the oldest one
+        in flight whose caller has an interaction scope (someone can answer),
+        else the oldest one in flight, else none."""
+        live = conn.written()
+        for waiter in live:
+            if waiter.has_scope():
+                return waiter
+        return live[0] if live else None
+
+    def _serve(self, conn: _Conn, msg: dict[str, Any], owner: _Waiter | None) -> None:
+        """Answer one server request on its own thread, in the owning call's
+        context and with its cancel token, and write the reply. Never raises."""
+        try:
+            if owner is not None:
+                reply = owner.ctx.copy().run(
+                    serve_server_request, self._pack(), msg, owner.cancel
+                )
+            else:
+                # Nothing in flight: no one can answer (decline / refuse).
+                reply = contextvars.Context().run(serve_server_request, self._pack(), msg, None)
+        except Exception as exc:  # noqa: BLE001 — serve_server_request never raises
+            log.warning("mcp %s: could not answer its request: %s", self._pack(), exc)
+            reply = plain_reply(msg)
+        finally:
+            if owner is not None:
+                with owner.lock:
+                    owner.serving -= 1
+                    if owner.serving == 0:
+                        # Time spent waiting on the user is not the server
+                        # being wedged: the transport floor did not run.
+                        owner.paused += time.monotonic() - owner.pause_started
+        if conn.dead:
+            return
+        try:
+            self._write(reply, conn)
+        except Exception as exc:  # noqa: BLE001 — the server went away meanwhile
+            log.debug("mcp %s: its request's reply was not delivered: %s", self._pack(), exc)
+
+    def _on_notification(self, conn: _Conn, msg: dict[str, Any]) -> None:
+        """A server notification: progress goes to the call whose token it
+        carries (its card, its deadline); every notification goes to the
+        client's listeners. Never raises, never blocks for long."""
+        token = _note_token(msg)
+        owner: _Waiter | None = None
+        if token is not None:
+            with conn.lock:
+                for waiter in conn.pending.values():
+                    if waiter.token == token:
+                        owner = waiter
+                        break
+        try:
+            if owner is not None:
+                if owner.keepalive is not None:
+                    try:
+                        owner.keepalive()
+                    except Exception:  # noqa: BLE001 — the loop may be closed
+                        pass
+                owner.ctx.copy().run(handle_notification, self._pack(), msg)
+            else:
+                contextvars.Context().run(handle_notification, self._pack(), msg)
+        except Exception as exc:  # noqa: BLE001 — handle_notification never raises
+            log.debug("mcp %s: notification dropped: %s", self._pack(), exc)
+        sink = self.notification_sink
+        if callable(sink):
+            try:
+                sink(msg)
+            except Exception as exc:  # noqa: BLE001 — a sink never breaks routing
+                log.debug("mcp %s: notification sink failed: %s", self._pack(), exc)
+
+    def _on_eof(self, conn: _Conn) -> None:
+        """The server's stdout ended: EVERY call in flight on it fails with
+        :class:`MCPServerStopped` (the v1.342.0 words) and the server is
+        forgotten, so the next call respawns it. With nothing in flight the
+        server is left for ``_ensure_started``'s ``poll()`` to replace."""
+        with conn.lock:
+            conn.dead = True
+            waiters = list(conn.pending.values())
+            conn.pending.clear()
+        if not waiters:
+            return
+        first = self._closed_error(conn)
+        for i, waiter in enumerate(waiters):
+            waiter.finish(error=first if i == 0 else MCPServerStopped(str(first)))
 
     def _pack(self) -> str:
         """The pack's name for ``interact`` (the client sets it)."""
         return self.pack_name or "mcp"
 
     def _rpc(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
-        self._id += 1
-        rid = self._id
-        self._write(_envelope(rid, method, params))
-        return _extract_result(self._read(rid))
+        """One request on the wire and its answer. The calling thread's
+        token and keepalive come from ``request`` through ``_tls`` (so this
+        keeps the shape tests observe it by)."""
+        tls = self._tls
+        conn = getattr(tls, "conn", None) or self._conn
+        return self._call(
+            conn,
+            method,
+            params,
+            cancel=getattr(tls, "cancel", None),
+            keepalive=getattr(tls, "keepalive", None),
+            cap=self._read_cap if method == "initialize" else None,
+        )
+
+    def _call(
+        self,
+        conn: "_Conn | None",
+        method: str,
+        params: dict[str, Any] | None,
+        *,
+        cancel: threading.Event | None,
+        keepalive: Callable[[], None] | None,
+        cap: float | None,
+    ) -> dict[str, Any]:
+        if conn is None:
+            raise MCPServerStopped(self._stopped_text("the MCP server closed the connection", ""))
+        with self._calls_lock:
+            self._id += 1
+            rid = self._id
+        waiter = _Waiter(
+            rid, method, cancel, keepalive, contextvars.copy_context(), _progress_token(params)
+        )
+        with conn.lock:
+            dead = conn.dead
+            if not dead:
+                conn.pending[rid] = waiter
+        if dead:
+            raise self._closed_error(conn)
+        timeout = self.request_timeout
+        if cap is not None:
+            # A direct start's handshake (v1.415.0): tighter than the floor.
+            timeout = cap if timeout is None else min(float(timeout), float(cap))
+        with self._write_lock:
+            with waiter.lock:
+                go = waiter.state == "new" and not (cancel is not None and cancel.is_set())
+                waiter.state = "written" if go else "abandoned"
+            if not go:
+                # A cancelled request is NEVER written (it may have side effects).
+                with conn.lock:
+                    conn.pending.pop(rid, None)
+                raise MCPError("the call was cancelled before it was sent")
+            with conn.lock:
+                waiter.rx_at_write = conn.rx
+            try:
+                self._write(_envelope(rid, method, params), conn)
+            except BaseException:
+                with conn.lock:
+                    conn.pending.pop(rid, None)
+                raise
+        start = time.monotonic()
+        while not waiter.done.is_set():
+            wait = _WAIT_SLICE_S
+            if cancel is not None and cancel.is_set():
+                # Never a busy loop: a give-up that kills can take seconds
+                # before the waiter is finished, so wait a slice after it.
+                self._give_up(conn, waiter, "cancel")
+            elif timeout is not None:
+                now = time.monotonic()
+                paused, busy = waiter.paused_for(now)
+                remaining = start + float(timeout) + paused - now
+                if not busy:
+                    if remaining <= 0:
+                        self._give_up(conn, waiter, "timeout", timeout)
+                    else:
+                        wait = min(wait, remaining)
+            waiter.done.wait(wait)
+        if waiter.error is not None:
+            raise waiter.error
+        return _extract_result(waiter.msg or {})
 
     # -- transport interface ------------------------------------------------
     def request(
@@ -1271,29 +1910,56 @@ class StdioTransport:
         params: dict[str, Any] | None = None,
         *,
         cancel: threading.Event | None = None,
+        keepalive: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
-        # Wait for the lock in short slices so a caller that gave up while
-        # queued behind another call never sends its request at all.
-        while not self._lock.acquire(timeout=0.1):
-            if cancel is not None and cancel.is_set():
-                raise MCPError("the call was cancelled before it was sent")
+        """One JSON-RPC call; many may run at once (v1.577.0). ``cancel``:
+        the caller's token (see :meth:`abort`); ``keepalive``: called whenever
+        the server reports progress on this call's ``progressToken``."""
+        with self._calls_lock:
+            self._active.append(cancel)
         try:
-            if cancel is not None and cancel.is_set():
-                raise MCPError("the call was cancelled before it was sent")
-            self._inflight = cancel
-            self._shut = False  # a NEW call: a past shutdown() is over
-            self._ensure_started(cancel)
-            if cancel is not None and cancel.is_set():
-                # Cancelled during the spawn/handshake but after the spawn's
-                # own check: a cancelled request is never written (it may
-                # have side effects), and the server it owns goes with it,
-                # exactly as abort() would have done had it caught it live.
-                self.close()
-                raise MCPError("the call was cancelled before it was sent")
-            return self._rpc(method, params)
+            # Wait for the START lock in short slices so a caller that gave up
+            # while another call starts the server never sends at all.
+            while not self._lock.acquire(timeout=0.1):
+                if cancel is not None and cancel.is_set():
+                    raise MCPError("the call was cancelled before it was sent")
+            try:
+                if cancel is not None and cancel.is_set():
+                    raise MCPError("the call was cancelled before it was sent")
+                self._shut = False  # a NEW call: a past shutdown() is over
+                spawned_before = self.spawn_count
+                self._tls.cancel = cancel  # the handshake's call is this one's
+                try:
+                    self._ensure_started(cancel)
+                finally:
+                    self._tls.cancel = None
+                if cancel is not None and cancel.is_set():
+                    # Cancelled during the spawn/handshake but after the
+                    # spawn's own check: a cancelled request is never written
+                    # (it may have side effects), and a server THIS call
+                    # started goes with it, exactly as abort() would have
+                    # done had it caught it live — unless others use it now.
+                    conn = self._conn
+                    if self.spawn_count != spawned_before and (
+                        conn is None or not conn.written()
+                    ):
+                        self.close()
+                    raise MCPError("the call was cancelled before it was sent")
+                conn = self._conn
+            finally:
+                self._lock.release()
+            tls = self._tls
+            tls.cancel, tls.keepalive, tls.conn = cancel, keepalive, conn
+            try:
+                return self._rpc(method, params)
+            finally:
+                tls.cancel = tls.keepalive = tls.conn = None
         finally:
-            self._inflight = None
-            self._lock.release()
+            with self._calls_lock:
+                try:
+                    self._active.remove(cancel)
+                except ValueError:  # pragma: no cover — always added above
+                    pass
 
 
 # --------------------------------------------------------------------------- #
@@ -1328,10 +1994,21 @@ class HttpTransport:
       600 s deadline. CONNECTING stays bounded by ``connect_timeout``.
       There is no ``abort``: a cancelled call's worker thread is NOT
       interrupted, it unwinds when its read timeout (deadline + grace) lapses.
+
+    v1.577.0: calls run CONCURRENTLY — the lock covers only the one-time
+    handshake (which captures the session id) and id allocation; each
+    exchange is its own POST on the thread-safe ``httpx.Client``. The
+    ``initialize`` answer is kept (``server_instructions`` /
+    ``server_capabilities`` / ``server_info``); progress on a call's own
+    ``progressToken`` in its event stream calls that call's ``keepalive``;
+    every notification read is handed to ``notification_sink`` (the client's
+    listeners).
     """
 
     #: ``MCPClient`` passes the per-call read timeout to transports with this.
     accepts_call_timeout = True
+    #: ... and the registry deadline's keepalive (v1.577.0).
+    accepts_keepalive = True
 
     def __init__(
         self,
@@ -1368,6 +2045,12 @@ class HttpTransport:
         # against a real Obsidian-brain server.)
         self._session_id: "str | None" = None
         self._initialized = False
+        #: The server's ``initialize`` answer (v1.577.0).
+        self.server_instructions = ""
+        self.server_capabilities: dict[str, Any] = {}
+        self.server_info: dict[str, Any] = {}
+        #: Set by ``MCPClient``: every server notification is handed to it.
+        self.notification_sink: Callable[[dict[str, Any]], None] | None = None
 
     @property
     def label(self) -> str:
@@ -1532,17 +2215,32 @@ class HttpTransport:
         read: float | None,
         *,
         capture_session: bool = False,
+        keepalive: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """POST one request; return the JSON-RPC message that answers it."""
         rid = payload["id"]
         headers = self._base_headers()
         timeout = self._timeout(read)
+        token = _progress_token(payload.get("params"))
 
         def on_request(msg: dict[str, Any]) -> None:
             self._answer(client, msg)
 
         def on_notification(msg: dict[str, Any]) -> None:
             handle_notification(self._pack(), msg)
+            # v1.577.0: this call's progress keeps its deadline alive, and
+            # the client's listeners hear every notification.
+            if keepalive is not None and token is not None and _note_token(msg) == token:
+                try:
+                    keepalive()
+                except Exception:  # noqa: BLE001 — the loop may be closed
+                    pass
+            sink = self.notification_sink
+            if callable(sink):
+                try:
+                    sink(msg)
+                except Exception as exc:  # noqa: BLE001 — a sink never breaks a call
+                    log.debug("%s: notification sink failed: %s", self.label, exc)
 
         stream = getattr(client, "stream", None)
         if callable(stream):
@@ -1604,7 +2302,12 @@ class HttpTransport:
             },
         )
         msg = self._exchange(client, payload, read, capture_session=True)
-        _extract_result(msg)  # surface protocol errors
+        result = _extract_result(msg)  # surface protocol errors
+        (
+            self.server_instructions,
+            self.server_capabilities,
+            self.server_info,
+        ) = _init_fields(result)
         try:
             client.post(
                 self.url,
@@ -1622,9 +2325,12 @@ class HttpTransport:
         params: dict[str, Any] | None = None,
         *,
         timeout: float | None | EllipsisType = ...,
+        keepalive: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """One JSON-RPC call. ``timeout`` is this call's READ timeout
-        (``...`` = the transport default, ``None`` = unbounded)."""
+        (``...`` = the transport default, ``None`` = unbounded); ``keepalive``
+        is called on progress for this call's ``progressToken``. Calls run
+        concurrently; only the first one handshakes."""
         read = self.timeout if timeout is ... else timeout
         client = self._ensure_client()
         with self._lock:
@@ -1632,4 +2338,8 @@ class HttpTransport:
                 self._timed(lambda: self._handshake(client, read), read)
             self._id += 1
             payload = _envelope(self._id, method, params)
-        return _extract_result(self._timed(lambda: self._exchange(client, payload, read), read))
+        return _extract_result(
+            self._timed(
+                lambda: self._exchange(client, payload, read, keepalive=keepalive), read
+            )
+        )

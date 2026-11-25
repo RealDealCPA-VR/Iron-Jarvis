@@ -5325,6 +5325,16 @@ async def chat_stream(
         # bound applied before any of them is a bound that pass can step over.
         # Applied to `armed` BEFORE `overrides` is built below, because that
         # is the line where arming turns into granting.
+        # v1.577.0 (`mcp/reach.widen`): the reply's apps' PINNED tools, the
+        # app tools this chat's last reply USED, and the app-tool finder join
+        # at the tier their app already has (asking here where it is not
+        # granted). Before the ceiling and the low-trust / Local only filters
+        # below, which apply to them as to every name. MIRROR NOTE
+        # (lock-step): chat_turn.run_chat_turn (can_ask=False there).
+        armed, auto_armed, ask_armed = _chat_turn.widen_app_reach(
+            d, body, armed, auto_armed, ask_armed, can_ask=True,
+            low_trust=bool(_trust_state["low"]), tool_ceiling=tool_ceiling,
+        )
         if tool_ceiling is not None:
             armed = [t for t in armed if t in tool_ceiling]
             # `auto_armed` must stay a SUBSET of `armed` (the receipt reports
@@ -5485,6 +5495,12 @@ async def chat_stream(
             )
             if _skills_fit:
                 system += "\n\n" + _skills_fit
+        # v1.577.0: what each app of the reply said about its own tools when
+        # it started (MCP `instructions`), fenced and scanned, at the Tools
+        # seam like the skills above. MIRROR NOTE (lock-step): the other lane.
+        _app_notes = await asyncio.to_thread(_chat_turn.app_instructions, [*armed, *ask_armed])
+        if _app_notes:
+            system += _app_notes
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
@@ -5656,6 +5672,10 @@ async def chat_stream(
     system += _query_tail
     # Only the ALLOW entries are a grant (v1.298.0) — lock-step with chat_turn.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
+    # v1.577.0: an app tool whose app says Iron Jarvis needs no card for it
+    # (`mcp.policy.runs_unasked`) is granted like an armed name, in BOTH
+    # lanes (MIRROR NOTE, lock-step); the registry lifts it the same way.
+    armed_grant.update(_chat_turn.policy_unasked(d, armed, ask_armed))
     # v1.479.0 (capability search, Phase 2): the tools a LOOKUP brought into
     # this reply that change something or reach outside this PC
     # (`capability_search/join.join_found` fills it). Each is a FORCED,

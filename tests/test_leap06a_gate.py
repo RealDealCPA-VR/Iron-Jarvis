@@ -231,6 +231,7 @@ LETS_RUN: dict[str, str] = {
     "app_health": _SELF,
     "app_search": _LOOKUP,
     "app_status": _SELF,
+    "app_tools_find": "reads the names and descriptions of the tools already loaded for the extensions in the reply; calls none of them (v1.577.0)",
     "ask_user": "asks in a coding session and waits (refused anywhere else: no one to ask); changes nothing",
     "brain_read": _APP_READS,
     "brain_search": _APP_READS,

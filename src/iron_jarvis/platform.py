@@ -1583,6 +1583,11 @@ def build_platform(
 
     _repair_pack_names(config=config)
     _mcp_configs = [s for s in (getattr(config, "mcp_servers", None) or []) if isinstance(s, dict)]
+    # v1.577.0: each app's own settings (pins, who asks, trust, resource
+    # limits) are read LIVE from the saved rows, so a change needs no restart.
+    from .mcp import policy as _mcp_policy
+
+    _mcp_policy.bind(lambda _c=config: getattr(_c, "mcp_servers", None) or [])
     _mcp_deferred: list[dict] = []
     if defer_mcp and _mcp_configs:
         from .mcp.tools import mark_starting as _mcp_mark_starting
@@ -1673,6 +1678,12 @@ def build_platform(
 
     for tool in capability_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # v1.577.0: ``app_tools_find`` searches the tools of the apps already in
+    # a reply and brings what it finds into it (``mcp/reach``). Read-only;
+    # armed by the lanes only while an app in the reply has tools it lacks.
+    from .mcp.reach import finder_tool as _app_finder_tool
+
+    registry.register(_app_finder_tool(registry))
     # v1.506.0 (north-star plan 6.2): the Improvements page's suggestions from
     # chat — suggestion_list (reads) and suggestion_answer (asks; answers one
     # item through its own route). They read the daemon's deps through
@@ -1825,6 +1836,11 @@ def build_platform(
     from .core.approvals import ChatApprovals as _Approvals
 
     platform.approvals = _Approvals()
+    # v1.577.0: an app that says its tools changed is read again over its
+    # running connection (`mcp/resilience.refresh_pack_tools`).
+    from .mcp import resilience as _mcp_resilience
+
+    _mcp_resilience.bind(lambda _p=platform: _p)
     from .core.grants import GrantStore as _GrantStore
 
     platform.grants = _GrantStore(platform.engine, platform.event_bus)

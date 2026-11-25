@@ -205,10 +205,13 @@ def auto_approve_withheld_in_flight() -> bool:
     covers every pack through the one shared key). Reads and clears the
     in-flight tool, like :func:`quarantined_in_flight`."""
     tool = take_asking_about()
-    return bool(
-        tool is not None
-        and (getattr(tool, "quarantined", False) or getattr(tool, "locked", False))
-    )
+    if tool is None:
+        return False
+    # v1.577.0: nor a tool the app's own setting asks about before each use
+    # (``mcp.policy.policy_asks``), through the one predicate the gate reads.
+    from ..tools.permissions import asks_each_use
+
+    return bool(asks_each_use(tool))
 
 
 #: v1.428.0: why a tool kept on the user's own models was not run.
@@ -954,6 +957,52 @@ def _broken_package_in(raw: str) -> str | None:
     return None
 
 
+_WINDOWS_PATH_RX = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
+def runs_elsewhere(cfg: Any, *, os_name: "str | None" = None) -> "dict[str, str]":
+    """``{reason, fix}`` when an app's program (a stdio row's ``command``)
+    plainly belongs to another kind of computer than the one Iron Jarvis runs
+    on, else ``{}`` (v1.577.0). Read from the command's TEXT only: a Windows
+    path or a ``.exe`` / ``.cmd`` / ``.bat`` while Iron Jarvis runs off
+    Windows, or an absolute POSIX path while it runs on Windows. A command
+    that names neither (``npx``, ``python``) is never judged here."""
+    import os as _os
+
+    if not isinstance(cfg, dict):
+        return {}
+    kind = str(cfg.get("transport") or "stdio").lower() if isinstance(cfg.get("transport"), str) else "stdio"
+    if kind != "stdio":
+        return {}
+    command = str(cfg.get("command") or "").strip().strip('"')
+    if not command:
+        return {}
+    here = os_name or _os.name
+    low = command.lower()
+    windows_prog = bool(_WINDOWS_PATH_RX.match(command)) or low.endswith((".exe", ".cmd", ".bat"))
+    if here != "nt" and windows_prog:
+        return {
+            "reason": (
+                "its program is a Windows program, and Iron Jarvis is running on a computer "
+                "that is not Windows here (a container, a cloud host or another computer), "
+                "so it cannot start it: an app's program starts on the computer that runs Iron Jarvis"
+            ),
+            "fix": (
+                "run Iron Jarvis on the Windows PC where the app is installed, or connect the "
+                "app by its web address if it offers one"
+            ),
+        }
+    if here == "nt" and command.startswith("/") and not command.startswith("//"):
+        return {
+            "reason": (
+                "its program is a path on a Linux or Mac computer, and Iron Jarvis is running "
+                "on Windows here, so it cannot start it"
+            ),
+            "fix": "install the app on this PC and point the extension at it, or connect it by its web address",
+        }
+    return {}
+
+
 def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict[str, str]:
     """Turn a raw load exception into a sentence the user can act on (v1.256.0, R-02).
 
@@ -980,6 +1029,15 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
     command = str((cfg or {}).get("command") or "").strip()
     launcher = command.split()[0] if command else ""
     low = raw.lower()
+
+    # THE PROGRAM IS FOR ANOTHER KIND OF COMPUTER (v1.577.0). An app's
+    # program can only start on the computer that runs Iron Jarvis: a Windows
+    # desktop program (`C:\...\App.exe`) cannot start when Iron Jarvis runs
+    # in a container or a cloud host (Docker, Railway, Render), and a Linux
+    # path cannot start on Windows. Said before anything else: no key fixes it.
+    elsewhere = runs_elsewhere(cfg)
+    if elsewhere:
+        return elsewhere
 
     # THE PACKAGE DOES NOT EXIST (v1.350.1). npx / uvx could not find the
     # package the pack names, so the "server" that exited was the installer.
@@ -1469,6 +1527,18 @@ def apply_quarantine(server: str, tools: "list[Tool]", home: "str | Path") -> li
     pm = PackManifest(home)
     pm.record(server, [t.manifest_spec() for t in remote])
     held = pm.quarantined(server)
+    if held:
+        # v1.577.0: the user trusts this WHOLE app (its own setting
+        # ``trust_all``): a tool a later version added is trusted like the
+        # ones they saw when they connected it — never one whose words the
+        # scan flagged (that one waits for the user, tool by tool).
+        from .policy import policy as _policy
+
+        if _policy(server).trust_all:
+            flagged = {t.remote_name for t in remote if getattr(t, "description_flagged", False)}
+            for name in sorted(held - flagged):
+                pm.trust(server, name)
+            held = pm.quarantined(server)
     for t in remote:
         t.quarantined = t.remote_name in held
     return sorted(held)
@@ -1783,6 +1853,14 @@ def _load_one_server(
             _record_load(name, error=words, tools_loaded=0, cfg=cfg)
             forget_live_client(name)
         return []
+    # v1.577.0 (``mcp/resilience``): an app set to start on FIRST USE
+    # (``lazy``) whose tool list was kept is not started now: its tools are
+    # registered from the list and the program starts on the first call.
+    from . import resilience as _resilience
+
+    _kept = _resilience.load_specs(home, cfg) if (record and _resilience.is_lazy(cfg)) else None
+    if _kept:
+        return _register_kept(cfg, name, _kept, secret_resolver, home, error=None)
     try:
         client, specs = _connect_with_timeout(cfg, name, secret_resolver, timeout)
     except Exception as exc:  # skip the bad/hung server; keep booting
@@ -1815,6 +1893,27 @@ def _load_one_server(
         # Before the tool loop: a pack with ZERO tools may still serve
         # prompts and resources (v1.324.0).
         _set_live_client(name, client)
+        # v1.577.0: keep the list (start-on-first-use, ``mcp/resilience``)
+        # and follow the app's own "my tools changed" notice.
+        _resilience.save_specs(home, cfg, specs, getattr(client, "server_instructions", ""))
+        _resilience.watch(client, name)
+    return _wrap_specs(cfg, name, client, specs, record, home)
+
+
+def _wrap_specs(
+    cfg: dict[str, Any],
+    name: str,
+    client: Any,
+    specs: list[dict[str, Any]],
+    record: bool,
+    home: "str | Path | None",
+    *,
+    error: "str | None" = None,
+    stderr_tail: "str | None" = None,
+) -> list[Tool]:
+    """The pack's specs as tools, the hold-back applied and the load
+    recorded (lifted out of :func:`_load_one_server` in v1.577.0 so a kept
+    list registers the same way)."""
     tools: list[Tool] = []
     keep_local = bool(cfg.get("local_only"))
     app_name = _app_display_name(name) if keep_local else name
@@ -1844,14 +1943,45 @@ def _load_one_server(
         # first clue when its calls start failing later.
         _record_load(
             name,
-            error=None,
+            error=error,
             tools_loaded=len(tools),
             cfg=cfg,
             quarantined=held,
-            stderr_tail=client.stderr_tail() if hasattr(client, "stderr_tail") else "",
+            stderr_tail=(
+                stderr_tail if stderr_tail is not None
+                else (client.stderr_tail() if hasattr(client, "stderr_tail") else "")
+            ),
             launch=_launch_info(getattr(client, "transport", None)),
         )
     return tools
+
+
+def _register_kept(
+    cfg: dict[str, Any],
+    name: str,
+    specs: list[dict[str, Any]],
+    secret_resolver: SecretResolver | None,
+    home: "str | Path | None",
+    *,
+    error: "str | None",
+    stderr_tail: str = "",
+) -> list[Tool]:
+    """A ``lazy`` app's tools from its KEPT list, over a client whose server
+    starts on the first call (the transports start it on their first
+    request). *error*: why the start just failed (recorded as such), or None
+    when it was simply not started yet. Never raises: a transport that
+    cannot even be built registers nothing."""
+    from . import resilience as _resilience
+
+    try:
+        client = MCPClient(_build_transport(cfg, secret_resolver), name=name)
+    except Exception as exc:  # noqa: BLE001 — nothing to start it with
+        _record_load(name, error=error or f"{type(exc).__name__}: {exc}", tools_loaded=0, cfg=cfg)
+        forget_live_client(name)
+        return []
+    _set_live_client(name, client)
+    _resilience.watch(client, name)
+    return _wrap_specs(cfg, name, client, specs, True, home, error=error, stderr_tail=stderr_tail)
 
 
 def _app_display_name(server: str) -> str:

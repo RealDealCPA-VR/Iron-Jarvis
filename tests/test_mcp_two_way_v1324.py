@@ -610,9 +610,15 @@ async def test_the_scope_set_on_the_loop_is_seen_on_the_worker_thread(transport_
 
 
 async def test_without_a_scope_the_same_call_carries_no_token_and_is_declined():
+    # v1.577.0: every call carries a token (its progress keeps the registry
+    # deadline alive); without a scope it is a fresh ``ij-`` one, never a
+    # chat call id.
     transport = _StdioLike()
     result = await MCPClient(transport, name="billing").call_tool("lookup", {})
-    assert transport.calls[0] == ("tools/call", {"name": "lookup", "arguments": {}})
+    method, params = transport.calls[0]
+    token = params.pop("_meta")["progressToken"]
+    assert token.startswith("ij-") and len(token) > 3
+    assert (method, params) == ("tools/call", {"name": "lookup", "arguments": {}})
     assert json.loads(result["content"][0]["text"])["result"] == {"action": "decline"}
 
 
@@ -679,7 +685,7 @@ async def test_stdio_end_to_end_without_a_scope_declines_and_refuses():
     finally:
         transport.close()
     data = json.loads(result["content"][0]["text"])
-    assert data["token"] is None
+    assert data["token"].startswith("ij-")  # v1.577.0: always a token, never a call id
     assert data["elicitation"]["result"] == {"action": "decline"}
     assert data["sampling"]["error"]["code"] == -1
 

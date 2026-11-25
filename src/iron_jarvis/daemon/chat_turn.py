@@ -3497,13 +3497,23 @@ def join_found_tools(d: Any, body: Any, **kw: Any) -> list:
     tools chat could already bring). Returns the names that joined. Both
     lanes call it at the end of a tool round — MIRROR NOTE (lock-step).
     Never raises."""
+    joined: list = []
     try:
         from ..capability_search.join import join_found
 
-        return join_found(d, body, max_tools=_MAX_ARMED_TOOLS, **kw)
+        joined = list(join_found(d, body, max_tools=_MAX_ARMED_TOOLS, **kw) or [])
     except Exception:  # noqa: BLE001 — a join never fails a turn
         log.debug("capability join failed", exc_info=True)
-        return []
+    # v1.577.0: what `app_tools_find` found joins too (at the tier its app
+    # already has in this reply), and the app tools used so far are kept for
+    # the chat's next reply (`mcp/reach`). Same seam, so both lanes do it.
+    try:
+        from ..mcp.reach import join_app_tools
+
+        joined += join_app_tools(d, body, **kw)
+    except Exception:  # noqa: BLE001
+        log.debug("app tools join failed", exc_info=True)
+    return joined
 
 
 class RouteFirst:
@@ -5307,6 +5317,46 @@ def fix_action(exc: BaseException | None, *, provider: str = "") -> dict[str, st
     except Exception:  # noqa: BLE001 - a missing press is no reason to fail
         log.debug("fix action for a chat error failed", exc_info=True)
     return {}
+
+
+def widen_app_reach(d, body, armed, auto_armed, ask_armed, **kw) -> tuple:
+    """``mcp.reach.widen`` (v1.577.0): pins, the last reply's app tools and
+    the finder, at the tier each app already has. Both lanes call it before
+    the ceiling and the low-trust / Local only filters — MIRROR NOTE
+    (lock-step). Never raises."""
+    try:
+        from ..mcp.reach import widen
+
+        return widen(d, body, list(armed), list(auto_armed), list(ask_armed or []), **kw)
+    except Exception:  # noqa: BLE001 — arming stays as it was
+        log.debug("widening the apps' tools failed", exc_info=True)
+        return armed, auto_armed, ask_armed
+
+
+def app_instructions(names) -> str:
+    """``mcp.reach.instructions_block`` (v1.577.0): the apps' own words about
+    their tools, fenced and scanned. Both lanes add it at the Tools seam —
+    MIRROR NOTE (lock-step). Blocking (a scan); never raises."""
+    try:
+        from ..mcp.reach import instructions_block
+
+        return instructions_block(names)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def policy_unasked(d, *groups) -> "list[str]":
+    """The app tools among *groups* (lists of names) whose app says Iron
+    Jarvis needs no card for them (v1.577.0, ``mcp.policy.runs_unasked``).
+    Both lanes add them to the turn's grant. Never raises."""
+    try:
+        from ..mcp.policy import unasked_names
+
+        names = [n for g in groups for n in (g or ()) if str(n).startswith("mcp__")]
+        return unasked_names(d.platform.registry, names)
+    except Exception:  # noqa: BLE001 — nothing is granted that was not
+        log.debug("reading the apps' approval settings failed", exc_info=True)
+        return []
 
 
 def _pick_connector_tools(registry, names: "list[str]", text: str, limit: int) -> "list[str]":
@@ -7251,8 +7301,15 @@ def _reasoning_kw(body) -> dict[str, str]:
 
 def _is_office_turn(armed_names) -> bool:
     """Is a document-writing tool armed this turn? (v1.247.0) — the ONE
-    answer both chat lanes use (the stream lane passes armed + ask_armed)."""
-    return bool(_DOC_WRITING_TOOLS & set(armed_names or ()))
+    answer both chat lanes use (the stream lane passes armed + ask_armed).
+
+    v1.577.0: so is a turn that holds an EXTENSION's tools (``mcp__…``). A
+    job in an app is several steps by nature (find the record, check for a
+    duplicate, submit, wait while a person approves in the app) and ran out
+    of the plain 6 rounds after submitting, before it could read the
+    answer; it gets the office budget and ends in chat like a document turn."""
+    names = set(armed_names or ())
+    return bool(_DOC_WRITING_TOOLS & names) or any(str(n).startswith("mcp__") for n in names)
 
 
 #: v1.279.0: THE MEMORY BRIEF — only beside an armed ``remember_preference``
@@ -13992,6 +14049,13 @@ async def run_chat_turn(
         # Third fix plan (PG3 leftover): the names are `deny_names` — the
         # door's list AND the code tools (`CODE_DENY`), which are refused at
         # the call, so the model is not shown them and the receipt counts them.
+        # v1.577.0 (`mcp/reach.widen`): first the reply's apps' PINNED tools,
+        # the app tools this chat's last reply USED and the app-tool finder —
+        # granted ones only: this lane asks nobody. MIRROR NOTE (lock-step):
+        # routes/chat.py (can_ask=True there).
+        armed, auto_armed, _no_ask = widen_app_reach(
+            d, body, armed, auto_armed, [], can_ask=False, low_trust=bool(_trust_state["low"]),
+        )
         if _trust_state["low"]:
             _kept_now = deny_names(False)
             _trust_state["kept"] = [t for t in armed if t in _kept_now]
@@ -14145,6 +14209,12 @@ async def run_chat_turn(
             )
             if _skills_fit:
                 system += "\n\n" + _skills_fit
+        # v1.577.0: what each app of the reply said about its own tools when
+        # it started (MCP `instructions`), fenced and scanned, at the Tools
+        # seam like the skills above. MIRROR NOTE (lock-step): the other lane.
+        _app_notes = await asyncio.to_thread(app_instructions, list(armed))
+        if _app_notes:
+            system += _app_notes
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
@@ -14286,6 +14356,10 @@ async def run_chat_turn(
     # a deny before it reads the grant, but a grant list that names a denied
     # tool is a lie on the ledger). Full trust: identical to the old set.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
+    # v1.577.0: an app tool whose app says Iron Jarvis needs no card for it
+    # (`mcp.policy.runs_unasked`) is granted like an armed name, in BOTH
+    # lanes (MIRROR NOTE, lock-step); the registry lifts it the same way.
+    armed_grant.update(policy_unasked(d, armed))
     # v1.489.0: what Iron Jarvis looked up for this message joins the reply
     # (this lane cannot ask, so only readers join) and the model is told in
     # one section. MIRROR NOTE (lock-step): routes/chat.py.

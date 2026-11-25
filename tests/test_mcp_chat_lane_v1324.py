@@ -598,7 +598,8 @@ async def test_post_lane_has_no_scope_so_the_pack_is_declined_and_refused(tmp_pa
     assert out["tools_used"] == [TOOL]
     assert pack.scope_seen == [None]
     call = next(p for m, p in pack.calls if m == "tools/call")
-    assert "_meta" not in call
+    # v1.577.0: a fresh ``ij-`` token (for the deadline keepalive), never a call id.
+    assert call["_meta"]["progressToken"].startswith("ij-")
     assert pack.replies[0]["result"] == {"action": "decline"}
     assert pack.replies[1]["error"]["code"] == -1
     assert out["resources"] == []

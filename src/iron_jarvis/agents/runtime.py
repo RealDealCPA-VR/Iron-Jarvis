@@ -51,7 +51,7 @@ from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
 from ..tools.base import SpendCheck, ToolContext, spend_checks_for, spend_words_for
 from ..tools.builtins import is_own_source
-from ..tools.permissions import SAFE_HEADLESS_TOOLS, asks_each_use
+from ..tools.permissions import SAFE_HEADLESS_TOOLS, asks_each_use, runs_unasked
 from ..tools.rehearsal import holds as _rehearsal_holds
 from ..tools.rehearsal import rehearsal_of as _rehearsal_of
 from ..tools.reversible import call_reversible_flag
@@ -4072,6 +4072,11 @@ class AgentRuntime:
             if getattr(tool, "locked", False):
                 return perm
             return "" if tc.name in self._held_grants.get(session.id, ()) else perm
+        if mode is not PermissionMode.DENY and runs_unasked(tool):
+            # v1.577.0: the tool's app says Iron Jarvis needs no card for it
+            # (the app asks in its own window, or a reader under "Ask only
+            # before changes"); the registry lifts the ask the same way.
+            return ""
         if spend is not None and mode is not PermissionMode.DENY:
             # v1.346.0: the spend check decides — a priced call pauses in
             # every posture and past every grant; a free one never does.

@@ -1099,6 +1099,26 @@ def _resource_text(result: Any) -> str:
     return "\n\n".join(parts)
 
 
+def _prompt_text(result: Any) -> str:
+    """A filled-in prompt (``prompts/get``) as plain text: each message as
+    ``role: text`` (v1.577.0)."""
+    parts: list[str] = []
+    messages = result.get("messages") if isinstance(result, dict) else None
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        blocks = content if isinstance(content, list) else [content]
+        for b in blocks:
+            role = m.get("role") or "user"
+            if isinstance(b, dict) and isinstance(b.get("text"), str):
+                parts.append(f"{role}: {b['text']}")
+            elif isinstance(b, dict) and isinstance(b.get("resource"), dict) \
+                    and isinstance(b["resource"].get("text"), str):
+                parts.append(f"{role}: {b['resource']['text']}")
+    return "\n\n".join(parts)
+
+
 class McpListResourcesTool(Tool):
     name = "mcp_list_resources"
     description = (
@@ -1125,8 +1145,13 @@ class McpListResourcesTool(Tool):
             return ToolResult(ok=True, output="No connected apps are running.", data={"count": 0})
 
         async def _one(name: str, client: Any):
+            # v1.577.0: an app's own row may set its resource time limit.
+            from ..mcp.policy import resource_limits
+
+            list_s = resource_limits(name, RESOURCE_READ_TIMEOUT_S, RESOURCE_CHARS)[0]
+            list_s = max(list_s, RESOURCE_LIST_TIMEOUT_S)
             try:
-                rows = await asyncio.wait_for(client.list_resources(), RESOURCE_LIST_TIMEOUT_S)
+                rows = await asyncio.wait_for(client.list_resources(), list_s)
                 return name, rows, ""
             except asyncio.CancelledError:
                 raise
@@ -1138,7 +1163,34 @@ class McpListResourcesTool(Tool):
                     return name, [], ""
                 return name, None, f"{name} could not be reached"
 
+        async def _prompts(name: str, client: Any) -> list[str]:
+            # v1.577.0: an app's prompts are offered too (filled in through
+            # mcp_read_resource's `prompt`). Best effort, never fatal.
+            lister = getattr(client, "list_prompts", None)
+            if not callable(lister):
+                return []
+            try:
+                rows = await asyncio.wait_for(lister(), RESOURCE_LIST_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                return []
+            out = []
+            for r in rows or []:
+                if isinstance(r, dict) and isinstance(r.get("name"), str):
+                    args = ", ".join(
+                        str(a.get("name")) for a in (r.get("arguments") or [])
+                        if isinstance(a, dict) and a.get("name")
+                    )
+                    desc = " ".join(str(r.get("description") or "").split())[:200]
+                    out.append(
+                        f"{name}: prompt {r['name'][:200]}" + (f" ({args})" if args else "")
+                        + (f" — {desc}" if desc else "")
+                    )
+            return out
+
         results = await asyncio.gather(*(_one(n, clients[n]) for n in sorted(clients)))
+        prompt_rows = await asyncio.gather(*(_prompts(n, clients[n]) for n in sorted(clients)))
         lines: list[str] = []
         failed: list[str] = []
         total = 0
@@ -1160,7 +1212,10 @@ class McpListResourcesTool(Tool):
                 if mime:
                     line += f" ({mime})"
                 lines.append(line)
+        prompt_lines = [line for rows in prompt_rows for line in rows][:MAX_RESOURCE_ROWS]
         out = "\n".join(lines) if lines else "The running apps offer no resources."
+        if prompt_lines:
+            out += "\n\n" + "\n".join(prompt_lines)
         if total > len(lines):
             out += f"\n\n[{total - len(lines):,} more not shown — pass `server` to list one app]"
         if failed:
@@ -1172,8 +1227,9 @@ class McpReadResourceTool(Tool):
     name = "mcp_read_resource"
     description = (
         "Read one resource a connected app offers: `server` (the app's name) "
-        "and `uri` (from mcp_list_resources). The text comes back as data from "
-        "that app, cut to 20,000 characters."
+        "and `uri` (from mcp_list_resources). Or fill in one of its prompts: "
+        "`server`, `prompt` (its name) and `arguments`. The text comes back as "
+        "data from that app, cut to 20,000 characters (an app may set its own)."
     )
     reversibility = Reversibility.READONLY
     risk_class = RiskClass.READ
@@ -1181,33 +1237,52 @@ class McpReadResourceTool(Tool):
     returns_untrusted_content = True
     input_schema = {
         "type": "object",
-        "properties": {"server": {"type": "string"}, "uri": {"type": "string"}},
-        "required": ["server", "uri"],
+        "properties": {
+            "server": {"type": "string"},
+            "uri": {"type": "string"},
+            "prompt": {"type": "string", "description": "A prompt's name, instead of `uri`."},
+            "arguments": {"type": "object", "description": "The prompt's arguments."},
+        },
+        "required": ["server"],
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = str(args.get("server") or "").strip()
         uri = str(args.get("uri") or "").strip()
-        if not uri:
-            return ToolResult(ok=False, error="`uri` is required")
+        prompt = str(args.get("prompt") or "").strip()
+        if not uri and not prompt:
+            return ToolResult(ok=False, error="`uri` is required (or `prompt`, a prompt's name)")
         clients = _live_clients()
         client = clients.get(name)
         if client is None or not callable(getattr(client, "read_resource", None)):
             names = ", ".join(sorted(clients)) or "none"
             return ToolResult(ok=False, error=f"no connected app named {name!r} is running (running: {names})")
+        from ..mcp.policy import resource_limits
+
+        _list_s, read_s, cap = resource_limits(name, RESOURCE_READ_TIMEOUT_S, RESOURCE_CHARS)
+        what = uri or f"the prompt {prompt}"
         try:
-            result = await asyncio.wait_for(client.read_resource(uri), RESOURCE_READ_TIMEOUT_S)
+            if prompt and not uri:
+                raw_args = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
+                getter = getattr(client, "get_prompt", None)
+                if not callable(getter):
+                    return ToolResult(ok=False, error=f"{name} does not offer prompts")
+                result = await asyncio.wait_for(
+                    getter(prompt, {str(k): str(v) for k, v in raw_args.items()}), read_s
+                )
+            else:
+                result = await asyncio.wait_for(client.read_resource(uri), read_s)
         except asyncio.CancelledError:
             raise
         except (asyncio.TimeoutError, TimeoutError):
-            return ToolResult(ok=False, error=f"{name} took too long to send {uri}")
+            return ToolResult(ok=False, error=f"{name} took too long to send {what}")
         except Exception as exc:  # noqa: BLE001 — named, never a traceback
-            return ToolResult(ok=False, error=f"{name} could not send {uri}: {type(exc).__name__}")
-        text = _resource_text(result)
-        cut = len(text) > RESOURCE_CHARS
+            return ToolResult(ok=False, error=f"{name} could not send {what}: {type(exc).__name__}")
+        text = _prompt_text(result) if (prompt and not uri) else _resource_text(result)
+        cut = len(text) > cap
         if cut:
-            text = text[:RESOURCE_CHARS] + (
-                f"\n\n[cut: the first {RESOURCE_CHARS:,} of {len(text):,} characters were shown]"
+            text = text[:cap] + (
+                f"\n\n[cut: the first {cap:,} of {len(text):,} characters were shown]"
             )
         return ToolResult(
             ok=True,

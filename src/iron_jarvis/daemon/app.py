@@ -1220,6 +1220,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await platform.event_bus.publish(EventType.MCP_LOADED, summary)
             except Exception:  # noqa: BLE001 — the report never breaks the daemon
                 log.debug("mcp.loaded report failed", exc_info=True)
+            # v1.577.0 (`mcp/resilience`): a pack whose start failed is tried
+            # again in the background (10 s, 30 s, 90 s, 5 min), silently;
+            # cancelled with this task at shutdown.
+            try:
+                from ..mcp.resilience import failed_after_boot, retry_failed_packs
+
+                _again = failed_after_boot(summary)
+                if _again:
+                    await retry_failed_packs(platform, _again)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.debug("retrying the packs that did not start failed", exc_info=True)
 
         _mcp_task: asyncio.Task | None = None
         if _mcp_started is not None:

@@ -684,8 +684,13 @@ async def _read_one(d: Any, pack: str, uri: str, name: str) -> tuple[str, dict[s
     if client is None or not callable(getattr(client, "read_resource", None)):
         receipt["note"] = f"The app {pack} is not running, so {label} was not read."
         return "", receipt
+    # v1.577.0: the app's own row may set how long a read may take and how
+    # much of it the model is shown (`mcp.policy.resource_limits`).
+    from ..mcp.policy import resource_limits
+
+    _list_s, read_s, cap = resource_limits(pack, RESOURCE_READ_TIMEOUT_S, RESOURCE_CHARS)
     try:
-        result = await asyncio.wait_for(client.read_resource(uri), RESOURCE_READ_TIMEOUT_S)
+        result = await asyncio.wait_for(client.read_resource(uri), read_s)
     except asyncio.CancelledError:
         raise
     except (asyncio.TimeoutError, TimeoutError):
@@ -697,11 +702,11 @@ async def _read_one(d: Any, pack: str, uri: str, name: str) -> tuple[str, dict[s
         return "", receipt
     text = _resource_text(result)
     notes: list[str] = []
-    if len(text) > RESOURCE_CHARS:
+    if len(text) > cap:
         notes.append(
-            f"It was cut to the first {RESOURCE_CHARS:,} of {len(text):,} characters."
+            f"It was cut to the first {cap:,} of {len(text):,} characters."
         )
-        text = text[:RESOURCE_CHARS] + f"\n[... cut: the rest of {label} was not included]"
+        text = text[:cap] + f"\n[... cut: the rest of {label} was not included]"
     from ..core.promptguard import publish_blocked, scan_context
 
     scan = await asyncio.to_thread(

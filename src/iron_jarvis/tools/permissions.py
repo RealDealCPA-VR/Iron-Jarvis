@@ -160,9 +160,38 @@ def asks_each_use(tool: object) -> bool:
       lock ITSELF, never from "a locked app is also kept on your own models"
       (``local_only``), which the catalog ties to it today.
 
+    * (v1.577.0) a tool whose app's own setting says Iron Jarvis asks before
+      it (``mcp.policy.policy_asks``: "Ask before every tool", or "Ask only
+      before changes" for a tool that can change things).
+
     The one predicate the gate (``registry.invoke``) and every lane that cards
     or refuses such a tool read. Never raises: ``None`` is no tool."""
-    return bool(getattr(tool, "quarantined", False) or getattr(tool, "locked", False))
+    if getattr(tool, "quarantined", False) or getattr(tool, "locked", False):
+        return True
+    if tool is None or not getattr(tool, "remote_name", None):
+        return False
+    try:
+        from ..mcp.policy import policy_asks
+
+        return bool(policy_asks(tool))
+    except Exception:  # noqa: BLE001 — cannot tell: as before
+        return False
+
+
+def runs_unasked(tool: object) -> bool:
+    """Does *tool*'s app say Iron Jarvis needs no card for it (v1.577.0,
+    ``mcp.policy.runs_unasked``: "The app asks in its own window", or a
+    reading tool under "Ask only before changes")? Never a held-back or
+    LOCKED app's tool. Read by the gate (``registry.invoke``, which lifts the
+    ask for that call) and by every lane that would card it. Never raises."""
+    if tool is None or not getattr(tool, "remote_name", None):
+        return False
+    try:
+        from ..mcp.policy import runs_unasked as _runs_unasked
+
+        return bool(_runs_unasked(tool))
+    except Exception:  # noqa: BLE001 — cannot tell: it asks
+        return False
 
 
 @dataclass

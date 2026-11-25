@@ -68,6 +68,10 @@ def default_permissions() -> dict[str, str]:
         "plan_update": "allow",
         "mcp_list_resources": "allow",
         "mcp_read_resource": "allow",
+        # v1.577.0: searches the tools of the apps already in a reply (names
+        # and descriptions only, nothing is called); what it finds joins at
+        # the tier its app already has (mcp/reach).
+        "app_tools_find": "allow",
         # v1.421.0 (Wave 1, A4): read-only git for the team's reviewer
         # (harness/git_read): it runs no program, writes no file and reads
         # inside the folder only; armed for a review-only helper and nowhere
