@@ -67,7 +67,12 @@ def _recent(raw: str, now: datetime) -> list[datetime]:
             when = _aware(datetime.fromisoformat(str(it)))
         except (TypeError, ValueError):
             continue
-        if when is not None and timedelta(0) <= now - when < timedelta(hours=1):
+        # A start stamped AFTER ``now`` still counts (v1.576.1). Each caller
+        # takes its ``now`` before it waits for the gate's lock, so two signals
+        # of one burst can pass the gate in the other order than their stamps
+        # (and a clock can step back): dropping such a start forgot a start
+        # that was already counted, and a 13th got through a limit of 12.
+        if when is not None and now - when < timedelta(hours=1):
             out.append(when)
     return out
 

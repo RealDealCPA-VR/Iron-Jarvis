@@ -791,6 +791,28 @@ def test_thirty_signals_at_once_start_twelve_and_the_rest_are_held(desk):
     assert len(_bus_events(p, "reflex.paused")) == 1
 
 
+def test_starts_counted_out_of_their_stamps_order_all_count_toward_the_hour(desk):
+    """Each signal takes its time BEFORE it waits for the gate's lock, so two
+    signals of one burst can pass the gate in the other order than their
+    stamps. A start already counted must still be there for the one behind
+    it: the Linux release run 45687581501 (v1.576.0) saw 13 starts through a
+    limit of 12 in the burst test above, on its first attempt.
+
+    MUTATION (red): put ``timedelta(0) <=`` back in ``reflex/store._recent``
+    -> a start stamped after ``now`` is forgotten and all three pass."""
+    c, p, router = desk
+    rule = p.reflex.add(name="order", source="webhook", match="order", action="session",
+                        task_template="Note it", max_fires_per_hour=2)
+    later, between, first = (NOON + timedelta(milliseconds=ms) for ms in (2, 1, 0))
+    # They reach the gate newest stamp first.
+    assert p.reflex.start_gate(rule.id, now=later, reserve=True)["ok"] is True
+    assert p.reflex.start_gate(rule.id, now=between, reserve=True)["ok"] is True
+    third = p.reflex.start_gate(rule.id, now=first, reserve=True)
+    assert third["ok"] is False and third["tripped"] is True, third
+    row = p.reflex.get(rule.id)
+    assert len(json.loads(row.recent_starts_json)) == 2 and row.paused_at is not None
+
+
 def test_a_start_that_fails_is_not_counted_toward_the_hour(desk):
     """The gate counts a start as it passes; one that then fails gives its
     count back (a failed start is not a start).
