@@ -473,6 +473,61 @@ def test_the_phones_words_for_the_notes_follow_who_would_write_them(case):
         assert "only by a model on this PC or your network" in said and "Write the notes" in said
 
 
+def test_on_this_pc_a_recording_still_heard_promises_cloud_notes_only_after_the_cards_yes(tmp_path, monkeypatch):
+    """On this PC too, the reply about a recording not done within the wait
+    promises the notes coming by themselves only when they are written with
+    no press: notes that would go to the cloud are asked on the card first,
+    and the job does wait there for the press."""
+    rig = _ToolRig(tmp_path, monkeypatch, phone=False, choice=CLOUD_CHOICE)
+
+    async def _go():
+        r = await rig.hand()
+        await rig.finish(r.data["recording_id"])
+        return r
+
+    r = asyncio.run(_go())
+    said = r.output
+    assert r.ok and r.data["recording"]["status"] == J.STATUS_HEARING, r.data
+    assert "transcript and notes come to this chat by themselves" not in said
+    assert "the transcript comes to this chat by itself" in said and "keeps working after your reply" in said
+    assert "Claude" in said and "the card under your reply asks the user" in said
+    assert "Nothing is written yet" in said
+    after = J.load_state(rig.home, r.data["recording_id"])
+    assert after["status"] == J.STATUS_ASK and after["notes_written"] is False, "the job did wait for the yes"
+    assert rig.router.model.calls == []
+
+
+@pytest.mark.parametrize("case", ["local", "cloud_yes", "cloud_ask", "nobody", "unknown"])
+def test_this_pcs_words_for_the_notes_follow_who_would_write_them(case):
+    from iron_jarvis.documents.recording_tools import result_words
+
+    tr = R.Transcriber(R.THIS_PC, "the offline speech model on this PC", model="C:/fake")
+    st = J.new_state(source=Path("meeting.m4a"), sha256="x", workspace=Path("work"), thread_id="thr_a",
+                     turn_id="t1", local_only=False, transcriber=tr, transcript=Path("a.md"), notes=Path("b.md"))
+    outlook = {
+        "local": {"choice": dict(LOCAL_CHOICE), "yes": True},
+        "cloud_yes": {"choice": dict(CLOUD_CHOICE), "yes": True},
+        "cloud_ask": {"choice": dict(CLOUD_CHOICE), "yes": False},
+        "nobody": {"choice": None, "yes": False,
+                   "nobody": J.nobody_words(None, ("openai", "gpt-test"), local_only=False, pending=True)},
+        "unknown": {},
+    }[case]
+    said = result_words(st, finished=False, phone=False, outlook=outlook)
+    assert "keeps working after your reply" in said and "Nothing is written yet" in said
+    assert "No message comes to this conversation" not in said, "on this PC the report does come"
+    if case in ("local", "cloud_yes"):
+        assert "the transcript and notes come to this chat by themselves" in said
+    else:
+        assert "transcript and notes come to this chat by themselves" not in said
+        assert "the transcript comes to this chat by itself" in said
+    if case == "cloud_ask":
+        assert "Claude" in said and "the card under your reply asks the user" in said
+    elif case == "nobody":
+        assert "only the transcript will be saved" in said and "the model this chat uses" in said
+    elif case == "unknown":
+        assert "a model on this PC or your network" in said and "the card under your reply asks" in said
+
+
 def test_the_same_recording_from_another_chat_says_where_the_report_goes(tmp_path, monkeypatch):
     """A recording another chat is still having heard is that job: this
     chat's card shows it, and its report goes to the chat that started it."""

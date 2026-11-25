@@ -104,8 +104,9 @@ async def _until(cond, what: str, limit: float = 30.0) -> None:
 def test_at_most_two_recordings_are_worked_on_at_once_and_a_stopped_one_never_starts(monkeypatch):
     """Light on the PC: each worker holds the speech model in its own memory,
     so three recordings handed at once start two workers; the third waits its
-    turn (and its stall clock waits with it), one stopped while it waits
-    starts nothing, and the places go in the order the jobs asked."""
+    turn, one stopped while it waits starts nothing, and the places go in the
+    order the jobs asked. (Its stall and deadline clocks waiting with it:
+    :func:`test_a_recording_waiting_for_a_worker_is_never_stopped_as_a_stall`.)"""
     import asyncio
 
     from iron_jarvis.core import procs
@@ -146,6 +147,156 @@ def test_at_most_two_recordings_are_worked_on_at_once_and_a_stopped_one_never_st
     assert outs == [{"lines": []}] * 4, outs
     assert '{"n": 3}' not in w.started, "the stopped one started a worker"
     assert not any(j.waiting for j in jobs)
+
+
+class _HeldWorkers:
+    """A ``procs.run`` whose worker for each recording runs until the test
+    lets THAT one go (``free(rid)``)."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self.lock = threading.Lock()
+        self.gates: dict[str, "threading.Event"] = {}
+        self.running: set[str] = set()
+        self.started: list[str] = []
+
+    def gate(self, rid: str):
+        import threading
+
+        with self.lock:
+            return self.gates.setdefault(rid, threading.Event())
+
+    def free(self, rid: str) -> None:
+        self.gate(rid).set()
+
+    def run(self, argv, *, timeout, input=None, on_spawn=None, **kw):
+        import json
+
+        rid = Path(json.loads(input.decode("ascii"))["progress"]).name.split(".")[0]
+        with self.lock:
+            self.running.add(rid)
+            self.started.append(rid)
+        try:
+            assert self.gate(rid).wait(60), "the test never let the worker go"
+        finally:
+            with self.lock:
+                self.running.discard(rid)
+        return SimpleNamespace(timed_out=False, returncode=0, stdout=b'{"lines": [], "seconds": 1, "duration": 1}')
+
+
+def test_a_recording_waiting_for_a_worker_is_never_stopped_as_a_stall(tmp_path, monkeypatch):
+    """A recording handed in while two are being heard waits its turn, and
+    its stall and deadline clocks wait with it: however long the two take, it
+    is not stopped as "stopped making progress" (nor "took too long") before
+    its own worker has started, and once it starts both clocks count from
+    then. The two being heard, whose progress moves, are not stopped either."""
+    import asyncio
+    import threading
+
+    from iron_jarvis.core import procs
+    from iron_jarvis.documents import recording as R
+
+    w = _HeldWorkers()
+    monkeypatch.setattr(procs, "run", w.run)
+    monkeypatch.setattr(J, "WAIT_POLL_S", 0.01)
+    monkeypatch.setattr(J, "POLL_S", 0.01)
+    now = [1000.0]
+    reads: dict = {}
+
+    def clock() -> float:
+        task = asyncio.current_task()
+        reads[task] = reads.get(task, 0) + 1
+        return now[0]
+
+    monkeypatch.setattr(J, "_clock", clock)
+    env = J.Env(engine=None, event_bus=None, config=SimpleNamespace(home=tmp_path / "home"))
+    tr = R.Transcriber(R.THIS_PC, "the offline speech model on this PC", model="C:/fake")
+    jobs = [J.Job(state={"id": f"rec_{i:016x}", "source": str(tmp_path / f"m{i}.m4a"),
+                         "source_name": f"m{i}.m4a"}, env=env, transcriber=tr) for i in range(3)]
+    third = jobs[2]
+    # The progress each worker reports: the two being heard move on every
+    # look; the third's worker, once it runs, is still loading its model (no
+    # progress yet), as a real one does for up to WORKER_START_S.
+    looks: dict[str, int] = {}
+    looks_lock = threading.Lock()
+
+    def progress(home, rid):
+        with looks_lock:
+            looks[rid] = looks.get(rid, 0) + 1
+            if rid not in w.running or rid == third.id:
+                return None
+            return float(looks[rid]), 4.0 * R.MAX_AUDIO_S
+
+    monkeypatch.setattr(J, "read_progress", progress)
+
+    async def _go():
+        tasks = [asyncio.ensure_future(J._hear_here(j, tr)) for j in jobs[:2]]
+        try:
+            await _until(lambda: len(w.running) == 2, "two workers running")
+            tasks.append(asyncio.ensure_future(J._hear_here(third, tr)))
+            t3 = tasks[2]
+            await _until(lambda: third.waiting and reads.get(t3, 0) >= 3, "the third waiting, its watch looking")
+            # The two take a long time: past the stall (no progress for
+            # STALL_S after a start of WORKER_START_S) AND past the deadline
+            # of a recording whose length is not known yet.
+            now[0] += J.WORKER_START_S + R.MAX_AUDIO_S * J.RTF_CAP + J.DEADLINE_SLACK_S + 60.0
+            seen = reads[t3]
+            # A clock read after the step is checked before the next read;
+            # a look in flight at the step is the first one counted, so the
+            # third look is the one after a whole look on the new time.
+            with looks_lock:
+                looked = {j.id: looks.get(j.id, 0) for j in jobs[:2]}
+            await _until(lambda: reads[t3] >= seen + 2 and all(looks[k] >= n + 3 for k, n in looked.items()),
+                         "every watch looked after the long wait")
+            assert third.waiting and third.stopped == "", f"stopped while waiting: {third.stopped!r}"
+            assert jobs[0].stopped == "" and jobs[1].stopped == "", "the two being heard moved on"
+            # A place frees: the third's own worker starts, and its clocks
+            # count from then (its model is still loading: no progress yet).
+            w.free(jobs[0].id)
+            await _until(lambda: third.id in w.running and looks.get(third.id, 0) >= 2,
+                         "the third's worker running, its watch looking")
+            assert third.stopped == "", f"stopped as soon as its worker started: {third.stopped!r}"
+        finally:
+            for j in jobs:
+                w.free(j.id)
+        return await asyncio.wait_for(asyncio.gather(*tasks), 60)
+
+    outs = asyncio.run(_go())
+    assert all(o is not None for o in outs), [j.state.get("error") for j in jobs]
+    assert third.stopped == "" and "error" not in third.state, third.state
+    assert sorted(w.started[:2]) == [jobs[0].id, jobs[1].id] and w.started[2:] == [third.id], w.started
+
+
+def test_a_place_handed_to_a_job_stopped_in_the_same_wait_goes_back(monkeypatch):
+    """A job whose Undo lands while it waits, in the same wait in which a
+    running worker ends and its place is handed to it, starts nothing and
+    gives that place back: never a place lost for good (two such Undos would
+    leave every later recording waiting until a restart)."""
+    import asyncio
+
+    from iron_jarvis.core import procs
+
+    w = _Workers()
+    monkeypatch.setattr(procs, "run", w.run)
+    # One long wait: the stop is seen only when the place arrives in it.
+    monkeypatch.setattr(J, "WAIT_POLL_S", 60.0)
+    job = J.Job(state={"id": "rec_00000000000000bb"}, env=None)
+
+    async def _go():
+        held = [await J._take_place(J.Job(state={"id": f"rec_{20 + i:016x}"}, env=None)) for i in range(2)]
+        task = asyncio.ensure_future(J._work(job, {"n": 7}, 10))
+        await _until(lambda: job.waiting and len(J._places()._waiters or ()) == 1, "the job waiting for a place")
+        job.stopped = "undo"
+        held[0].release()  # a running worker ends: its place is handed to the waiting job
+        out = await asyncio.wait_for(task, 10)
+        held[1].release()
+        return out, J._places()._value
+
+    out, free = asyncio.run(_go())
+    assert out is None, "a stopped job starts no worker"
+    assert w.started == [], w.started
+    assert free == J.MAX_WORKERS, f"{free} of {J.MAX_WORKERS} places came back"
 
 
 def test_recordings_waiting_for_a_worker_hold_no_thread_of_the_shared_pool(tmp_path, monkeypatch):

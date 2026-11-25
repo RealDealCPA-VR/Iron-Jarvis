@@ -70,11 +70,12 @@ def _chat_key(thread_id: Any, turn_id: Any) -> str:
     return f"chat:{tid}" if tid else f"turn:{turn_id or ''}"
 
 
-async def phone_outlook(env: J.Env, state: "dict[str, Any]") -> "dict[str, Any]":
-    """For the phone's reply about a recording still being heard: who would
-    write its notes as things stand (:func:`recording_jobs.notes_outlook`,
-    the job's own reading), so the reply promises only what happens with no
-    press. Unsure: ``{}`` (the reply then promises only the transcript)."""
+async def pending_outlook(env: J.Env, state: "dict[str, Any]") -> "dict[str, Any]":
+    """For the reply about a recording still being heard (on the phone and on
+    this PC): who would write its notes as things stand
+    (:func:`recording_jobs.notes_outlook`, the job's own reading), so the
+    reply promises only what happens with no press. Unsure: ``{}`` (the reply
+    then promises only the transcript)."""
     try:
         choice, yes, local_only = await J.notes_outlook(env, state)
         out: dict[str, Any] = {"choice": choice, "yes": yes}
@@ -156,11 +157,36 @@ def phone_pending_notes_words(outlook: "dict[str, Any]", name: Any) -> str:
             "to a chat there and press Write the notes).")
 
 
+def pending_home_words(outlook: "dict[str, Any] | None", state: "dict[str, Any]") -> str:
+    """On THIS PC, for a recording still being heard: what comes to the chat
+    by itself, from :func:`recording_jobs.notes_outlook` as things stand. The
+    notes are promised only when they are written with no press; notes that
+    would go to a cloud model wait for the press on the card under the reply
+    (the job ends in ``ask``)."""
+    out = outlook or {}
+    transcript, notes = state.get("transcript"), state.get("notes")
+    choice = out.get("choice") if isinstance(out.get("choice"), dict) else None
+    if choice and out.get("yes"):
+        return ("the transcript and notes come to this chat by themselves when they are done, as new files in the "
+                f"chat's folder ({transcript} and {notes}).")
+    head = (f"the transcript comes to this chat by itself when it is done, as a new file in the chat's folder "
+            f"({transcript}).")
+    if choice:
+        return (f"{head} The notes are not written by themselves: no model on this PC or your network is set up, "
+                f"and writing them sends the transcript to {choice.get('name')}, so once the transcript is done "
+                "the card under your reply asks the user, and only their press sends it.")
+    if out.get("nobody"):
+        return f"{head} {out['nobody']}"
+    # Not known: promise nothing about the notes.
+    return (f"{head} The notes ({notes}) come with it only when a model on this PC or your network writes them; "
+            "otherwise the card under your reply asks the user first.")
+
+
 def result_words(state: "dict[str, Any]", *, finished: bool, phone: bool,
                  outlook: "dict[str, Any] | None" = None, other_chat: bool = False) -> str:
-    """What the model is told, from the job's own record. ``outlook``: on the
-    phone, who would write the notes of a recording still being heard
-    (:func:`phone_outlook`). ``other_chat``: the job running is one another
+    """What the model is told, from the job's own record. ``outlook``: who
+    would write the notes of a recording still being heard
+    (:func:`pending_outlook`). ``other_chat``: the job running is one another
     chat started (its report goes there)."""
     card = J.card_of(state)
     name = state.get("source_name")
@@ -187,10 +213,8 @@ def result_words(state: "dict[str, Any]", *, finished: bool, phone: bool,
         else:
             lines.append(
                 f"Started turning {name} into text {where} ({tr.get('who')}). It keeps working after your reply: "
-                "the card under your reply shows how far it is, and the transcript and notes come to this chat "
-                "by themselves when they are done, as new files in the chat's folder "
-                f"({state.get('transcript')} and {state.get('notes')}). Nothing is written yet. Tell the user "
-                "that; do not write a transcript or notes yourself.")
+                f"the card under your reply shows how far it is, and {pending_home_words(outlook, state)} Nothing "
+                "is written yet. Tell the user that; do not write a transcript or notes yourself.")
         return "\n".join(lines)
     lines.append(f"Turned {name} ({card['length_words']}) into text {where}: {card['words']} words, saved as "
                  f"{card['transcript']}.")
@@ -308,9 +332,9 @@ class TranscribeRecordingTool(Tool):
             if job is not None and not finished:
                 finished = await J.wait_inline(job, PHONE_WAIT_S if phone else J.INLINE_WAIT_S)
                 earlier = job.state
-            outlook = await phone_outlook(env, earlier) if phone and not finished else None
             other = _chat_key(earlier.get("thread_id"), earlier.get("turn_id")) != _chat_key(
                 getattr(ctx, "thread_id", ""), _turn_of(ctx))
+            outlook = await pending_outlook(env, earlier) if not finished and (phone or not other) else None
             words = ("This recording was already handed to this chat's folder, so nothing new was made. "
                      + await asyncio.to_thread(lambda: result_words(earlier, finished=finished, phone=phone,
                                                                     outlook=outlook, other_chat=other)))
@@ -341,7 +365,7 @@ class TranscribeRecordingTool(Tool):
             return ToolResult(ok=False, error=str(st.get("error") or "The recording could not be turned into text."))
         made = [str(st[k]) for k, w in (("transcript", "transcript_written"), ("notes", "notes_written"))
                 if finished and st.get(w)]
-        outlook = await phone_outlook(env, st) if phone and not finished else None
+        outlook = await pending_outlook(env, st) if not finished else None
         # Off the loop: the words read the two files back.
         words = await asyncio.to_thread(lambda: result_words(st, finished=finished, phone=phone, outlook=outlook))
         return ToolResult(
