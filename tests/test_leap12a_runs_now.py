@@ -223,6 +223,42 @@ async def test_emergency_stop_the_pay_limit_and_a_local_only_chat_are_refused_in
     assert N.list_tasks(platform.engine) == []
 
 
+async def test_a_phone_task_at_its_usage_limit_by_day_waits_and_a_night_task_is_stopped(tmp_path, monkeypatch):
+    """The card says "at its usage limit now; it waits for the reset": a
+    phone task whose account reached its limit keeps waiting by day (it runs
+    now, inside its own time limit). A night task in the same state at 15:00
+    is stopped, its record saying the window closed."""
+    from iron_jarvis.daemon.routes import build as build_routes
+
+    app = create_app(str(tmp_path / "home"))
+    d, engine = app.state.d, app.state.platform.engine
+    monkeypatch.setattr(N, "CLOCK", lambda: _local(15, 0))  # the night window (23:00-07:00) is closed
+
+    def waiting_task(folder: Path, *, phone: bool) -> tuple[str, str]:
+        folder.mkdir(parents=True)
+        row = S.create(engine, str(folder), "work", {})
+        task = N.add_task(engine, folder=str(folder), words="carry on", start_now=phone,
+                          asked_from="comm:tg" if phone else "")
+        N.mark_running(engine, task["id"])
+        N.set_session(engine, task["id"], thread_id=row.id)
+        S.update(engine, row.id, setup={"account": "acct-1", "account_wait": {
+            "account": "acct-1", "account_name": "Work", "resets_at": "", "armed_at": "x", "next_check_at": "",
+        }})
+        return task["id"], row.id
+
+    phone_id, phone_thread = waiting_task(tmp_path / "phone", phone=True)
+    night_id, night_thread = waiting_task(tmp_path / "night", phone=False)
+    settled = await night_routes.settle_running(d)
+    assert phone_id not in settled and night_id in settled
+    held = N.get_task(engine, phone_id)
+    assert held["state"] == N.RUNNING
+    assert build_routes._setup_of(S.get_row(engine, phone_thread)).get("account_wait"), "its wait was cleared"
+    stopped = N.get_task(engine, night_id)
+    assert stopped["state"] == N.STOPPED, stopped
+    assert stopped["notes"][0]["text"] == N.WAIT_WINDOW_CLOSED
+    assert "account_wait" not in build_routes._setup_of(S.get_row(engine, night_thread))
+
+
 async def test_a_phone_tasks_carry_on_may_run_by_day_and_a_night_tasks_may_not(tmp_path, monkeypatch):
     """Resume when ready, a restart's carry-on: a night task's carry-on starts
     only inside the window (``WINDOW_CLOSED``); one the phone started runs

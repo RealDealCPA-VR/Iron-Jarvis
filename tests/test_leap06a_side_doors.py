@@ -373,16 +373,20 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
         2, "that email's send_message on the same SMTP line, and run_compose's call of "
            "send_mail that leads to it: only from the Email page"),
     ("comm/inbound.py", "channel_send"): (
-        11, "replies to the person's own phone message (_dispatch, send_chunked, a phone-started "
+        12, "replies to the person's own phone message (_dispatch, send_chunked, a phone-started "
             "job's result) and the notices about one a restart lost or cut off: reached only from "
             "a message the phone sent, a run of origin comm:<channel>, or a remote agent's line "
             "coming home to a phone thread. A rehearsal's run is reflex:<rule> or "
             "schedule:<name>, it hands nothing to a remote agent (both hand-offs are held), and "
             "a rehearsal the phone asks for answers in that reply with its report's words "
             "(rehearsal_runs._report_words). 10-b: the files question with its buttons "
-            "(_ask_files_back), asked only after such a reply"),
+            "(_ask_files_back), asked only after such a reply. 12-a: the coding-work card or "
+            "folder pick with its buttons (_send_card), sent only from the phone's own /code "
+            "(_handle_code_command), the person's answer to such a card (_resolve_code_prompt) "
+            "or after the phone chat turn whose code_start asked it (_send_asked_cards; "
+            "code_start asks only the sender the poller proved, never a rehearsal's run)"),
     ("comm/inbound.py", "direct_send"): (
-        21, "the same replies through the poller's own send_chunked (counted once more where it "
+        30, "the same replies through the poller's own send_chunked (counted once more where it "
             "calls ch.send): each answers a message the phone sent (a command, a new thread, "
             "the rate limit, a refusal, an escalation, a job's start, an answer to a question, a "
             "remote agent's answer to the person's line, the sentence that the files a message "
@@ -391,7 +395,12 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
             "or on the person's Send (_files_back, _send_files_now twice, the line for what "
             "did not go twice, the files question without buttons twice) and a reply held "
             "under a press (_handle_press): the files a phone chat turn made are read off that "
-            "turn's own documents, never a rehearsal's held run"),
+            "turn's own documents, never a rehearsal's held run. 12-a: the coding-work card "
+            "without buttons (_send_card's send_chunked), its three callers (_handle_code_command "
+            "for the phone's own /code, _resolve_code_prompt for the person's answer to a card, "
+            "_send_asked_cards) and _send_asked_cards after each of the phone chat turn's five "
+            "endings: every one answers a message the phone sent, and code_start asks only the "
+            "sender the poller proved (phone_code.set_asking), never a rehearsal's run"),
     ("comm/inbound.py", "handed_off"): (
         1, "10-b: _send_files_now hands ch.send_files to a worker: the files back listed above, "
            "only after the answer to the person's own phone message or on their Send"),

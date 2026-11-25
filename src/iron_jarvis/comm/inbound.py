@@ -3279,14 +3279,31 @@ class InboundPoller:
             log.warning("inbound: a coding-work card could not be sent", exc_info=True)
             return False
 
+    def _card_still_open(self, card: Any) -> bool:
+        """False only when the card's question is KNOWN to be closed (a later
+        card of the same kind closed it); a read that finds nothing sends it
+        (a press on a closed one answers "That was already answered").
+        BLOCKING; never raises."""
+        prompt_id = str(getattr(card, "prompt_id", "") or "")
+        if not prompt_id or self.prompt_store is None:
+            return True
+        try:
+            rec = self.prompt_store.get(prompt_id)
+        except Exception:  # noqa: BLE001
+            return True
+        return rec is None or str(getattr(rec, "status", "open") or "open") == "open"
+
     async def _send_asked_cards(
         self, name: str, ch: Channel, msg: InboundMessage, who: Any, *, tid: str = "", display: str = "",
     ) -> int:
         """The cards the chat's ``code_start`` asked this turn, after the
-        reply: onto the phone chat on the PC, then to the phone. Returns how
-        many went."""
+        reply: onto the phone chat on the PC, then to the phone. A card a
+        later one closed in the same turn (one card to answer:
+        ``phone_code.propose``) is not sent. Returns how many went."""
         sent = 0
         for card in list(getattr(who, "cards", None) or []):
+            if not await asyncio.to_thread(self._card_still_open, card):
+                continue
             if tid:
                 self._safe_append(tid, "assistant", card.words, channel=name, sender_id=msg.sender_id,
                                   display=display)

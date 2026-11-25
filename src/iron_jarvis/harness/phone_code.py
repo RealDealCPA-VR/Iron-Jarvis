@@ -750,13 +750,39 @@ def _stopped_by_you(task: dict[str, Any]) -> bool:
                for n in task.get("notes") or [])
 
 
+def _onto_phone_chat(thread_store: Any, ch: Any, channel: str, sender: str, asked_in: str, words: str) -> str:
+    """The line onto the phone chat on the PC (:func:`deliver`): the chat that
+    asked (``report_json``'s ``thread_id``) while it still exists; else, only
+    while this destination's two-way CHAT is on, the sender's chat as the
+    poller resolves it (made on first contact, as a message would make it). A
+    command-only destination keeps no chat on the PC (the poller's
+    ``_answer_reply`` appends only with chat on), so this makes none. Returns
+    the chat's id, or "" when no chat heard it. Raises what the store raises."""
+    if asked_in:
+        try:
+            thread_store.append(asked_in, "assistant", words)
+            return asked_in
+        except ValueError:  # that chat was deleted on the PC: as below
+            pass
+    try:
+        chat_on = bool(ch.chat_enabled())
+    except Exception:  # noqa: BLE001 — a config quirk keeps no chat
+        chat_on = False
+    if not chat_on:
+        return ""
+    tid = thread_store.resolve(channel, sender, "").id
+    thread_store.append(tid, "assistant", words)
+    return tid
+
+
 def deliver(event: Any, *, notifier: Any, thread_store: Any, engine: Any, config: Any = None) -> dict[str, Any]:
     """The ``build.phone_code`` bus handler (``daemon/app`` registers it): the
     start or the ending of ONE phone task, read from its record, to the chat
     that asked — its destination still set up and two-way, the sender still
-    allowed (fail-closed, as the poller) — and onto that phone chat on the PC.
-    A task the user stopped themselves says nothing. BLOCKING (it sends);
-    never raises."""
+    allowed (fail-closed, as the poller) — and onto that phone chat on the PC
+    (:func:`_onto_phone_chat`: never a new chat for a command-only
+    destination). A task the user stopped themselves says nothing. BLOCKING
+    (it sends); never raises."""
     try:
         etype = event.get("type") if isinstance(event, dict) else getattr(event, "type", "")
         if etype != EVENT:
@@ -786,15 +812,14 @@ def deliver(event: Any, *, notifier: Any, thread_store: Any, engine: Any, config
         if ch is None:
             return {"ok": False, "why": "no such destination"}
         try:
-            if not (ch.has_credentials() and ch.is_authorized(sender)):
+            if not (ch.has_credentials() and ch.inbound_enabled() and ch.is_authorized(sender)):
                 return {"ok": False, "why": "not allowed"}
         except Exception:  # noqa: BLE001 — a config quirk sends nothing
             return {"ok": False, "why": "not allowed"}
         tid = ""
         if thread_store is not None:
             try:
-                tid = thread_store.resolve(channel, sender, "").id
-                thread_store.append(tid, "assistant", words)
+                tid = _onto_phone_chat(thread_store, ch, channel, sender, report.get("thread_id", ""), words)
             except Exception:  # noqa: BLE001 — the phone still hears it
                 log.warning("phone task %s: its line could not land on the phone chat", task_id, exc_info=True)
         from ..comm.prompts import _send_chunked_sync

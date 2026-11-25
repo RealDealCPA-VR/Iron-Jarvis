@@ -42,12 +42,12 @@ def _local(h: int, m: int = 0, day: int = 26) -> datetime:
 def _put(engine, tid: str, state: str, *, phone: bool = True, morning: dict | None = None,
          notes: list | None = None, night: str = "2026-10-26", **over) -> dict:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    over.setdefault("report_json", json.dumps(REPORT) if phone else "")
     row = N.NightTaskRecord(
         id=tid, folder="C:\\code\\website", words="fix the broken contact form", state=state, night=night,
         branch=f"ij/fix-the-broken-contact-for-{tid}", started_at=now, ended_at=now if state in N.ENDED else None,
         morning_json=json.dumps(morning or {}), notes_json=json.dumps(notes or []),
-        asked_from="comm:tg" if phone else "", report_json=json.dumps(REPORT) if phone else "",
-        start_now=phone, **over,
+        asked_from="comm:tg" if phone else "", start_now=phone, **over,
     )
     with session_scope(engine) as db:
         db.add(row)
@@ -143,6 +143,53 @@ def test_the_ending_reaches_the_chat_that_pressed_start_and_its_line_on_the_pc(p
     assert fake.texts == [f"Iron Jarvis: {PC.ending_words(task, REPORT)}"]
     tid = store.resolve("tg", str(ME), "").id
     assert [m["content"] for m in store.history_body(tid)][-1] == PC.ending_words(task, REPORT)
+
+
+def _chats(engine) -> list[str]:
+    from iron_jarvis.core.models import ChatThreadRecord
+    from sqlmodel import select
+
+    with session_scope(engine) as db:
+        return [r.id for r in db.exec(select(ChatThreadRecord)).all()]
+
+
+def test_a_command_only_destination_hears_it_and_no_chat_is_made_on_the_pc(platform):
+    # Two-way on, chat off: /code works there and answers on the phone only
+    # (the poller's _answer_reply keeps no chat with chat off). The sender has
+    # no chat on the PC, and the start and the ending make none.
+    fake = FakeTelegramBack([])
+    notifier = Notifier()
+    notifier.add_channel("tg", telegram_back(fake, chat_id=ME, chat_enabled=False))
+    store = CommThreadStore(platform.engine)
+    task = _put(platform.engine, "co", N.DONE, morning=DONE_FACTS, commit_sha="abc1234def5678")
+    for step in (PC.STEP_STARTED, PC.STEP_ENDED):
+        out = PC.deliver(_event("co", step), notifier=notifier, thread_store=store, engine=platform.engine)
+        assert out["ok"] is True and out["thread_id"] == ""
+    assert fake.texts[-1] == f"Iron Jarvis: {PC.ending_words(task, REPORT)}"
+    assert len(fake.texts) == 2
+    assert _chats(platform.engine) == []
+
+
+def test_the_line_lands_on_the_chat_that_asked_even_after_a_new_one(platform):
+    fake, notifier, store = _phone(platform)
+    asked_in = store.resolve("tg", str(ME), "").id
+    store.retire("tg", str(ME))  # "/new" on the phone: the next message makes a fresh chat
+    fresh = store.resolve("tg", str(ME), "").id
+    assert fresh != asked_in
+    _put(platform.engine, "ai", N.DONE, morning=DONE_FACTS,
+         report_json=json.dumps({**REPORT, "thread_id": asked_in}))
+    out = PC.deliver(_event("ai", PC.STEP_ENDED), notifier=notifier, thread_store=store, engine=platform.engine)
+    assert out["ok"] is True and out["thread_id"] == asked_in
+    assert [m["content"] for m in store.history_body(asked_in)][-1].startswith("Done in website")
+    assert store.history_body(fresh) == []
+
+
+def test_a_destination_no_longer_two_way_hears_nothing(platform):
+    fake, notifier, store = _phone(platform)
+    _put(platform.engine, "tw", N.DONE, morning=DONE_FACTS)
+    notifier.get("tg").config["inbound_enabled"] = False
+    out = PC.deliver(_event("tw", PC.STEP_ENDED), notifier=notifier, thread_store=store, engine=platform.engine)
+    assert out == {"ok": False, "why": "not allowed"} and fake.texts == []
 
 
 def test_a_task_you_stopped_yourself_says_nothing_and_a_sender_no_longer_allowed_hears_nothing(platform):

@@ -2095,6 +2095,9 @@ used). What it will do: fix the broken contact form", with **Start** and
   and only you can answer your own card; the first answer counts, and a
   second press reads **That was already answered**. A card waits an hour.
   `/help` lists `/code`.
+- **On Slack**, a message that starts with / may be taken by Slack as one of
+  its own commands. There, say it in plain words, or put a space before
+  `/code`.
 
 ## Big extensions work the way you set them (v1.577.0)
 

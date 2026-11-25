@@ -60,6 +60,31 @@ def test_a_typed_path_counts_only_when_it_is_a_used_folder(platform, tmp_path):
     assert PC.find_folder(engine, r"\\server\share\website") == []  # never resolved
 
 
+def test_a_typed_network_path_is_never_matched_even_when_it_is_a_used_folder(platform):
+    # A project whose root is a network share: typing that path finds nothing
+    # (a network spelling is never resolved nor matched).
+    share = r"\\server\share\site"
+    with session_scope(platform.engine) as db:
+        db.add(Project(name="Shared site", root=share))
+        db.commit()
+    assert [f["path"] for f in PC.used_folders(platform.engine)] == [share]
+    assert PC.find_folder(platform.engine, share) == []
+
+
+def test_a_request_longer_than_the_phone_can_start_is_refused_and_asks_nothing(platform, tmp_path):
+    used_repo(platform, tmp_path / "code" / "website")
+    used_repo(platform, tmp_path / "code" / "shop")
+    used_repo(platform, tmp_path / "clients" / "shop")
+    poll, _fake = rig(platform)
+    who = _who(platform, poll)
+    too_long = "x" * (PC.MAX_PHONE_WORDS + 1)
+    for folder in ("website", "shop"):  # one folder: the card; two of one name: the pick
+        card = asyncio.run(PC.from_words(platform, who, folder, too_long))
+        assert not card.ok and card.words == PC.TOO_LONG, folder
+    assert prompts(platform) == []
+    assert asyncio.run(PC.from_words(platform, who, "website", "x" * PC.MAX_PHONE_WORDS)).ok
+
+
 def test_project_roots_and_earlier_night_tasks_count_and_an_archived_project_does_not(platform, tmp_path):
     root = tmp_path / "clients" / "acme"
     root.mkdir(parents=True)

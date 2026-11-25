@@ -270,3 +270,32 @@ def test_the_chats_card_follows_the_reply_with_its_buttons_and_no_still_waiting_
     assert [b["text"] for b in card["reply_markup"]["inline_keyboard"][0]] == ["Start", "Not now"]
     assert PC.asking() is None  # the door's sender never outlives its turn
     assert tasks(platform) == []
+
+
+def test_two_cards_in_one_turn_send_only_the_one_still_open(platform, tmp_path):
+    used_repo(platform, tmp_path / "work" / "projA")
+    used_repo(platform, tmp_path / "work" / "projB")
+
+    async def turn(platform_, personas, body, **kw):
+        who = PC.asking()
+        for folder in ("projA", "projB"):  # the second closes the first: one card to answer
+            card = await PC.from_words(platform_, who, folder, "fix the broken contact form")
+            who.cards.append(card)
+        return {"reply": "It waits for your Start.", "provider": "mock", "model": "m", "tools_used": ["code_start"],
+                "escalate": False, "escalate_reason": "", "documents": []}
+
+    from tests._fakes.phone_back import FakeTelegramBack, telegram_back
+    from tests._fakes.phone_files import poller
+
+    fake = FakeTelegramBack([])
+    poll = poller(platform, telegram_back(fake, chat_id=ME), turn=turn)
+    tid = poll.thread_store.resolve("tg", str(ME), "Val").id
+    fake.updates = [text(next(_IDS), "fix the contact form in projA, no, projB")]
+    res = run(poll)
+    assert res[0]["status"] == "chat" and res[0]["cards"] == 1
+    cards = [str(s.get("text") or "") for s in fake.sent
+             if str(s.get("text") or "").startswith("Iron Jarvis: Start coding work in")]
+    assert len(cards) == 1 and cards[0].startswith("Iron Jarvis: Start coding work in projB"), cards
+    on_pc = [m["content"] for m in poll.thread_store.history_body(tid)]
+    assert not [c for c in on_pc if c.startswith("Start coding work in projA")], on_pc
+    assert [p.status for p in prompts(platform, CODE_START_KIND)].count("open") == 1
