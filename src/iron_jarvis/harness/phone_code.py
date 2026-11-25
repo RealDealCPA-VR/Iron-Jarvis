@@ -329,14 +329,22 @@ def uses_words(platform: Any, provider: str, model: str) -> str:
             svc = MT._svc(platform)  # noqa: SLF001 — the same cached service usage_for reads
             own = BA.default_for(svc, vendor) if vendor in BA.VENDORS else None
             if own is not None and own.get("status") == BA.LIMIT:
-                groups = getattr(getattr(platform, "config", None), "account_groups", None) or {}
+                cfg = getattr(platform, "config", None)
+                when = MT._reset_words(own.get("resets_at"))  # noqa: SLF001 — the planner's own clock words
+                at_limit = f"at its usage limit {f'until {when}' if when else 'now'}"
+                # 12-a review 3: "Carry on by itself after an account's limit"
+                # OFF arms neither a wait nor a move within the group
+                # (``routes/build.auto_wait``): the task ends at the limit.
+                if not bool(getattr(cfg, "build_auto_resume", True)):
+                    return (f"Uses {plan} ({at_limit}; it stops at the limit, because "
+                            "\"Carry on by itself after an account's limit\" is off).")
+                groups = getattr(cfg, "account_groups", None) or {}
                 partner = (BA.takeover(svc, groups, str(own.get("id") or ""))
                            if own.get("limit_kind") in BA.MOVE_KINDS else None)
                 if partner is not None:
                     return (f"Uses {plan} ({own.get('name') or 'its account'} is at its usage limit now; "
                             f"{partner.get('name') or 'another account'}, in the same group, takes over).")
-                when = MT._reset_words(own.get("resets_at"))  # noqa: SLF001 — the planner's own clock words
-                return f"Uses {plan} (at its usage limit {f'until {when}' if when else 'now'}; it waits for the reset)."
+                return f"Uses {plan} ({at_limit}; it waits for the reset)."
             if own is not None and own.get("status") == BA.NEEDS_SIGN_IN:
                 return f"Uses {plan} (its account needs to sign in again)."
             usage = MT.usage_for(platform, provider, str(own.get("id") or "")) if own is not None else None

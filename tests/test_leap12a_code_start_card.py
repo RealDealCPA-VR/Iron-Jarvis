@@ -158,6 +158,27 @@ def test_the_card_reads_the_account_the_work_runs_on_and_says_its_limit(platform
     assert "10%" not in fake.texts[-1]
 
 
+@pytest.mark.parametrize("case", ["only_one_at_limit", "group_takes_over"])
+def test_with_carry_on_by_itself_off_the_card_says_the_work_stops_at_the_limit(platform, phone, monkeypatch, case):
+    """12-a review 3: "Carry on by itself after an account's limit" OFF
+    (``build_auto_resume``) arms neither a wait nor a move within the group
+    (``routes/build.auto_wait``), so the task ends at the limit. The card says
+    that — never "it waits for the reset", never that a partner takes over."""
+    poll, fake, _repo = phone
+    platform.config.default_provider, platform.config.default_model = "claude-cli", ""
+    monkeypatch.setattr(platform.config, "build_auto_resume", False)
+    _accounts(platform, monkeypatch, {"c-work": _at_limit(), **({"c-home": _used(10)} if case != "only_one_at_limit"
+                                                                else {})})
+    if case == "group_takes_over":
+        monkeypatch.setattr(platform.config, "account_groups", {"Mine": ["c-work", "c-home"]})
+    _card(platform, poll, fake)
+    when = MT._reset_words(_RESET)  # noqa: SLF001 — the app's own clock words
+    said = fake.texts[-1]
+    assert (f"Uses your Claude plan (at its usage limit until {when}; it stops at the limit, because "
+            "\"Carry on by itself after an account's limit\" is off).") in said, said
+    assert "waits for the reset" not in said and "takes over" not in said and "Home Pro" not in said
+
+
 @pytest.mark.parametrize("case", ["emergency", "not_a_repo", "pay", "local_only"])
 def test_a_refused_check_shows_no_card_and_keeps_nothing(platform, tmp_path, case):
     used_repo(platform, tmp_path / "work" / "projA")

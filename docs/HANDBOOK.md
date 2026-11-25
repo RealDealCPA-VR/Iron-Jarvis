@@ -2066,7 +2066,9 @@ used). What it will do: fix the broken contact form", with **Start** and
   plan). When that account is at its usage limit, the card says so and when
   it resets ("at its usage limit until 9:20 PM; it waits for the reset"), or
   names the account in the same group that takes over; when it must sign in
-  again, the card says that too.
+  again, the card says that too. With **Carry on by itself after an
+  account's limit** turned off, nothing waits and nothing moves, so the card
+  says the work stops at the limit instead.
 - **Only folders you have used.** It starts work only in a folder you have
   worked in with Iron Jarvis: a coding session's folder (by the name the
   Coding sessions list shows, or the folder's own name), a project's folder,
