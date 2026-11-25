@@ -34,6 +34,7 @@ import {
   Gauge,
   ScanText,
   Keyboard,
+  CalendarDays,
   type LucideIcon,
 } from "lucide-react";
 import { EVERYTHING_TAB_EVENT, SURFACES } from "@/lib/surfaces";
@@ -189,6 +190,17 @@ const DEEP_LINK_ITEMS: PaletteRow[] = [
     aliases: ["schedule a task", "remind me", "every morning", "daily digest", "recurring task"],
     href: "/schedules?focus=add",
     icon: CalendarClock,
+  },
+  {
+    // Next leaps 40-a review: Activity's Your day tab, by its address. On
+    // the Activity entry these words opened the Timeline tab.
+    id: "deep:your-day",
+    kind: "page",
+    label: "Activity → Your day",
+    blurb: "Everything Iron Jarvis changed on one day, how it was before, and Undo for one or many.",
+    aliases: ["your day", "undo these", "rewind the day", "what changed today", "before and after"],
+    href: "/activity?view=day",
+    icon: CalendarDays,
   },
   {
     id: "deep:add-destination",

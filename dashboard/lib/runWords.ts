@@ -104,7 +104,7 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   assign_work: { did: "Queued a task for a teammate", noun: "queued task" },
   batch_documents: { did: "Worked through a folder of documents", noun: "document batch", nouns: "document batches" },
   capability_propose: { did: "Suggested a new ability for Iron Jarvis", noun: "ability suggestion" },
-  change_undo: { did: "Undid a change", noun: "undo" },
+  change_undo: { did: "Undid what it changed", noun: "undo" },
   changes_list: { did: "Listed its recent changes", noun: "change listing" },
   channel_connect: { did: "Connected a messaging channel", noun: "channel connection" },
   channel_toggle: { did: "Switched a messaging channel's listening", noun: "channel switch", nouns: "channel switches" },

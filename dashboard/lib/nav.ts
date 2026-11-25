@@ -184,12 +184,9 @@ export const NAV: NavSectionDef[] = [
         icon: History,
         // "history" answers here AND at /sessions on purpose: both are honest
         // answers to "show me what already happened".
-        // Next leaps 40-a: its Your day tab (?view=day) answers to the day's
-        // words too.
-        aliases: [
-          "log", "what happened", "audit", "timeline", "undo", "recent", "history",
-          "your day", "undo these", "rewind the day", "what changed today", "before and after",
-        ],
+        // Next leaps 40-a: its Your day tab answers to the day's words as
+        // its own row in Ctrl K ("deep:your-day", /activity?view=day).
+        aliases: ["log", "what happened", "audit", "timeline", "undo", "recent", "history"],
         blurb: "Every action, tool, and decision — replayable, newest first.",
       },
       {

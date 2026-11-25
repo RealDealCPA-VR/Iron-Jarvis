@@ -248,6 +248,35 @@ async def test_a_file_that_is_not_text_shows_its_size_and_time_only(tmp_path):
     assert item["text"] is False and "diff" not in item and item["before"]["size"] == 150
 
 
+@pytest.mark.asyncio
+async def test_cant_be_undone_says_true_reasons_and_leaves_out_reads_and_bookkeeping(tmp_path):
+    """Review (40-a): what stayed on this PC never reads "it left this PC" (a
+    line typed into a terminal or a running program), and a read, a status
+    check or Iron Jarvis's own team notes are no change at all, so they are
+    not under "Can't be undone" (the ledger calls an undeclared tool
+    irreversible). A connected app's tool is judged by its first word."""
+    app, p = _app(tmp_path)
+    day = RD.today_local()
+    run = _run(p, "Start the build", at=_local_utc(day, 10, 0), ws=tmp_path / "ws")
+    tools = ("pane_send", "process_write", "notify", "blackboard_read", "pixio_status",
+             "message_agent", "blackboard_post", "notebook", "assign_work")
+    for i, tool in enumerate(tools):
+        _sent(p, run, tool, _local_utc(day, 10, 5, i))
+    body = TestClient(app).get("/changes/day?date=today").json()
+    why = {c["tool"]: c["why"] for c in body["cannot"]}
+    assert set(why) == {"pane_send", "process_write", "notify"}, why
+    assert "typed into a terminal on this PC" in why["pane_send"], why
+    assert "on this PC" in why["process_write"], why
+    assert not any("left this PC" in why[t] for t in ("pane_send", "process_write")), why
+    assert why["notify"] == RD.SENT_WHY
+    kinds = {c["tool"]: c["kind"] for c in body["cannot"]}
+    assert kinds == {"pane_send": "ran", "process_write": "ran", "notify": "sent"}, kinds
+    assert RD.cannot_why("mcp__slack__send_message") == RD.SENT_WHY
+    assert RD.cannot_why("mcp__chat__postMessage") == RD.SENT_WHY
+    assert RD.cannot_why("mcp__gmail__search_messages") == RD.KEEPS_NO_UNDO
+    assert RD.cannot_why("shell") == RD.COMMAND_WHY
+
+
 def test_the_day_is_this_pcs_local_day():
     day = RD.parse_day("2026-03-08")
     start, end = RD.day_bounds(day)

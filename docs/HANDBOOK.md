@@ -2052,10 +2052,13 @@ file, setting, key, record (a schedule, a workflow, a rule…) and memory note
 Iron Jarvis changed. Today opens first; **Previous day**, **Next day** and
 the date box move to another day.
 
-- **Can't be undone** comes first: what left this PC or ran that day, such
-  as a message sent or commands run ("ran 37 commands"), with where it came
-  from and why there is no way back. These have no Undo, and the page never
-  offers one.
+- **Can't be undone** comes first: what has no Undo that day, such as a
+  message sent, commands run ("ran 37 commands") or a line typed into a
+  terminal, each with where it came from and its own reason (a message left
+  this PC; a terminal's line stayed on it, but what it did has no Undo). The
+  page never offers an Undo for these. Reading something, and Iron Jarvis's
+  own notes to its team, change nothing and are not listed here (the
+  Timeline still shows every step).
 - Then the changes, **grouped by where they came from**: a chat, an agent
   run (its task's first words, a link to its page), a schedule, a coding
   session, or a settings page, and inside each by the hour. Each row says
@@ -2083,9 +2086,10 @@ lists the day by where each change came from, with what cannot be undone,
 and a link to Your day. "Undo everything from the 3 pm run" (or "undo these
 changes" after a list) shows ONE card naming every change it will undo,
 what cannot be undone first; after you allow it the reply says "12 files put
-back" and names any it could not put back, with why. "The 3 pm run" is the
-run that started nearest 3 pm that day; if none started within an hour and a
-half, the reply names that day's runs instead. Like every undo from chat, it
+back" and names any it could not put back, with why, and how many were
+already undone. "The 3 pm run" is the run that started nearest 3 pm that day
+(a helper's run counts as part of the run that started it); if none started
+within an hour and a half, the reply names that day's runs instead. Like every undo from chat, it
 asks every time, Enter never allows it, it is never asked on your phone, and
 it works only in a chat on the Chat page.
 
@@ -2095,7 +2099,7 @@ run started. A run with more than 100 changes is undone on this page in
 parts, or with Revert on the run's own page. What Iron Jarvis is told about
 the day is names only, never a file's contents or a setting's value, and a
 change made in Local only work keeps its name out of a chat that is not
-Local only.
+Local only, and so does the run it came from ("a Local only run").
 
 ## Local models waste fewer steps in a coding session (v1.573.0)
 

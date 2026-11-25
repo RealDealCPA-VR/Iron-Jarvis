@@ -1035,7 +1035,7 @@ def local_only_rows(db: Any, engine: Any, invs: list[Any]) -> set[str]:
 
     from sqlmodel import select
 
-    from ..core.models import AgentRun, ChatTurnRecord, Session
+    from ..core.models import AgentRun, ChatTurnRecord
     from ..providers import egress
 
     rows = [i for i in invs if str(getattr(i, "session_id", "") or "") not in ("settings", "")]
@@ -1045,20 +1045,7 @@ def local_only_rows(db: Any, engine: Any, invs: list[Any]) -> set[str]:
     if local is None:
         return {i.id for i in rows}
     out: set[str] = set()
-    sess_ids = {
-        i.session_id for i in rows if i.session_id != "chat" and not str(i.session_id).startswith("build:")
-    }
-    local_sessions: set[str] = set()
-    if sess_ids:
-        for sid, opts in db.exec(select(Session.id, Session.options_json).where(Session.id.in_(sess_ids))):  # type: ignore[attr-defined]
-            try:
-                o = json.loads(opts or "{}")
-            except (TypeError, ValueError):
-                o = {}
-            if isinstance(o, dict) and (
-                o.get("local_only") is True or str(o.get("chat_thread_id") or "") in local
-            ):
-                local_sessions.add(sid)
+    local_sessions = local_only_sessions(db, engine, {i.session_id for i in rows}, local=local)
     windows: list[tuple[datetime, datetime]] = []
     chat_rows = [i for i in rows if i.session_id == "chat" and i.created_at is not None]
     if local and chat_rows:
@@ -1094,6 +1081,47 @@ def local_only_rows(db: Any, engine: Any, invs: list[Any]) -> set[str]:
                 out.add(i.id)
         elif sid in local_sessions:
             out.add(i.id)
+    return out
+
+
+_UNREAD: Any = object()
+
+
+def local_only_sessions(db: Any, engine: Any, session_ids: Any, *, local: Any = _UNREAD) -> set[str]:
+    """Which of *session_ids* are LOCAL ONLY sources (next leaps 40-a
+    review): an agent run or a schedule's run started Local only, or from a
+    Local only chat (its ``Session.options_json``), a coding session
+    (``build:<thread>``) whose chat is Local only. The test
+    :func:`local_only_rows` uses for a row; here for a source that may have
+    no rows at all ("the 1 pm run" with no change, a day's runs named when
+    no run started near the time asked). "chat" and "settings" are never a
+    Local only SOURCE (a chat row is judged by its own window above). When
+    the Local only chats cannot be read, every run and coding session counts
+    (fail closed). Blocking."""
+    from sqlmodel import select
+
+    from ..core.models import Session
+    from ..providers import egress
+
+    ids = {str(s or "") for s in (session_ids or [])} - {"", "chat", "settings"}
+    if not ids:
+        return set()
+    if local is _UNREAD:
+        local = egress.local_only_thread_ids(engine)
+    if local is None:
+        return set(ids)
+    out = {s for s in ids if s.startswith("build:") and s[len("build:"):] in local}
+    plain = sorted(s for s in ids if not s.startswith("build:"))
+    if plain:
+        for sid, opts in db.exec(select(Session.id, Session.options_json).where(Session.id.in_(plain))):  # type: ignore[attr-defined]
+            try:
+                o = json.loads(opts or "{}")
+            except (TypeError, ValueError):
+                o = {}
+            if isinstance(o, dict) and (
+                o.get("local_only") is True or str(o.get("chat_thread_id") or "") in local
+            ):
+                out.add(str(sid))
     return out
 
 
@@ -1187,12 +1215,9 @@ def _for_model(row: dict[str, Any], recall_local: bool) -> dict[str, Any]:
     turn that may not recall Local only chats."""
     if recall_local or not row.get("local_work"):
         return row
-    out = {**row, "what": row["what_safe"], "target": ""}
-    if isinstance(row.get("source"), dict):
-        # Next leaps 40-a: the run or chat it came from is named no more
-        # than the change itself is.
-        out["source"] = {**row["source"], "name": LOCAL_SOURCE_WORDS}
-    return out
+    # Where it came from is told through ``_safe_source`` (a row a turn is
+    # given carries no source of its own).
+    return {**row, "what": row["what_safe"], "target": ""}
 
 
 #: Next leaps 40-a: where a Local only change came from, as a turn that may
@@ -1308,6 +1333,9 @@ def _kind_arg(args: dict[str, Any]) -> str:
 #: Next leaps 40-a: what the history says of what has no Undo. They are
 #: listed now (``records_day.cannot_rows``), so the note says where.
 CANNOT_NOTE = "Commands Iron Jarvis ran and messages it sent have no Undo: they are listed under Can't be undone."
+#: 40-a review: true of every row under it (a command, a message, and what
+#: Iron Jarvis keeps no way back for); each row says its own reason.
+CANNOT_HEAD = "Can't be undone (each says why):"
 NONE_CANNOT_NOTE = "Commands Iron Jarvis ran and messages it sent have no Undo; there were none in this time."
 _STATE_WORDS = {"can": "can be undone", "undone": "already undone", "cannot": "cannot be undone"}
 
@@ -1325,9 +1353,12 @@ def _group_head(source: dict[str, Any] | None) -> str:
 
 
 def _safe_source(source: dict[str, Any] | None, rows: list[dict[str, Any]], recall_local: bool) -> dict[str, Any]:
-    """*source* as a turn is told it: named no more than its changes are."""
+    """*source* as a turn is told it: named no more than its changes are.
+    40-a review: decided by the source itself too (``sources_for`` marks a
+    Local only run or coding session ``local_only``), so a Local only run
+    with no change of its own is not named either."""
     src = dict(source or {})
-    if recall_local or not any(r.get("local_work") for r in rows):
+    if recall_local or not (src.get("local_only") or any(r.get("local_work") for r in rows)):
         return src
     return {**src, "kind": "other", "name": LOCAL_SOURCE_WORDS, "started": None}
 
@@ -1386,7 +1417,9 @@ class ChangesListTool(Tool):
         session_ids = None
         run_ref = str(args.get("run") or "").strip()
         if run_ref:
-            source, session_ids, problem = await asyncio.to_thread(RD.resolve_run, engine, run_ref, day)
+            source, session_ids, problem = await asyncio.to_thread(
+                RD.resolve_run, engine, run_ref, day, recall_local=recall_local
+            )
             if problem:
                 return ToolResult(ok=False, error=problem)
         listed = await asyncio.to_thread(
@@ -1434,7 +1467,7 @@ class ChangesListTool(Tool):
                     why = f" ({r['why']})" if r["state"] == "cannot" and r["why"] else ""
                     lines.append(f"- {head} — {r['what']} — {_STATE_WORDS[r['state']]}{why}")
         if cannot:
-            lines.append("Can't be undone (they left this PC or ran):")
+            lines.append(CANNOT_HEAD)
             for c in cannot:
                 src = _safe_source(listed["sources"].get(c["session_id"]), [c], recall_local)
                 where = "" if run_ref else RD.source_words(src)
@@ -1540,12 +1573,14 @@ class ChangeUndoTool(Tool):
         return ""
 
     async def _many_targets(self, args: dict[str, Any]) -> dict[str, Any]:
+        from ..providers import egress as _egress
         from . import records_day as RD
 
         ids = args.get("action_ids") if isinstance(args.get("action_ids"), list) else None
         return await asyncio.to_thread(
             RD.many_targets, self.platform.engine, home=self.platform.config.home,
             action_ids=ids, run=str(args.get("run") or "").strip(), day=RD.parse_day(args.get("date")),
+            recall_local=_egress.may_recall_local_only_chats(),
         )
 
     def _hold(self, key: str, target: dict[str, Any] | None) -> None:
@@ -1705,6 +1740,14 @@ class ChangeUndoTool(Tool):
         if not found or not isinstance(held, dict) or not held.get("many"):
             return ToolResult(ok=False, error="Nothing was undone: no card named these changes. Ask again.")
         recall_local = _egress.may_recall_local_only_chats()
+        # 40-a review: the card's "Not undone" rows (a before-copy gone, no
+        # such change) and how many were already undone are answered in the
+        # result too, so every change the card named is accounted for.
+        others = [{**r, "reason": r.get("why") or "it could not be undone"} for r in held.get("other") or []]
+        undone_before = int(held.get("undone") or 0)
+        already = (
+            f" {undone_before} {'was' if undone_before == 1 else 'were'} already undone." if undone_before else ""
+        )
         if not held.get("asked"):
             why = str(held.get("problem") or "")
             if not why:
@@ -1714,13 +1757,15 @@ class ChangeUndoTool(Tool):
                     if gone else "."
                 )
                 why = why if why.endswith(".") else why + "."
+                tails = RD.not_put_back_words(others, safe=not recall_local)
+                why += (f" {tails}" if tails else "") + already
             return ToolResult(ok=False, error=why)
         can = list(held.get("can") or [])
         by_id = {r["id"]: r for r in can}
         out = await undo_many(d, [r["id"] for r in can], pressed=False)
         reverted = [{**by_id.get(x["id"], {}), **x} for x in out["reverted"]]
         skipped = [{**by_id.get(x["id"], {}), **x} for x in out["skipped"]]
-        words = RD.put_back_words(reverted, skipped, safe=not recall_local)
+        words = RD.put_back_words(reverted, skipped + others, safe=not recall_local) + already
         gone = held.get("cannot") or []
         if gone:
             words += " Left as they are (they can't be undone): " + "; ".join(
@@ -1731,8 +1776,9 @@ class ChangeUndoTool(Tool):
             "skipped": [
                 {"id": x["id"], "what": _for_model(x, recall_local).get("target") or _for_model(x, recall_local).get("what"),
                  "reason": x.get("reason")}
-                for x in skipped
+                for x in skipped + others
             ],
+            "already_undone": undone_before,
             "put_back": len(reverted),
         }
         if not reverted:

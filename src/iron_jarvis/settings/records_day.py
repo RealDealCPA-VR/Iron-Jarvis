@@ -199,12 +199,16 @@ def _schedule_names(db: Any, sessions: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def sources_for(db: Any, session_ids: Any) -> dict[str, dict[str, Any]]:
-    """``{session_id: {kind, name, id, href, started}}`` — where each change
-    came from, in the page's words: a chat (all chat replies are one source
-    until replies are stamped, 40-b), a settings page, a coding session (its
-    title), an agent run (its task's first words) or a schedule's run (the
-    schedule's name). Names are masked. Blocking; never raises."""
+def sources_for(db: Any, session_ids: Any, *, engine: Any = None) -> dict[str, dict[str, Any]]:
+    """``{session_id: {kind, name, id, href, started, local_only}}`` — where
+    each change came from, in the page's words: a chat (all chat replies are
+    one source until replies are stamped, 40-b), a settings page, a coding
+    session (its title), an agent run (its task's first words) or a
+    schedule's run (the schedule's name). Names are masked. ``local_only``
+    (40-a review): a run or coding session of Local only work
+    (``records_history.local_only_sessions``, fail closed) — the person's
+    page names it, a turn that may not recall Local only work is not told
+    its name. Blocking; never raises."""
     from sqlmodel import select
 
     from ..core.models import ChatThreadRecord, Session
@@ -215,6 +219,11 @@ def sources_for(db: Any, session_ids: Any) -> dict[str, dict[str, Any]]:
     plain = [s for s in ids if s and s not in ("chat", "settings") and s not in build]
     titles: dict[str, str] = {}
     sessions: dict[str, Any] = {}
+    try:
+        local = H.local_only_sessions(db, engine if engine is not None else db.get_bind(), ids)
+    except Exception:  # noqa: BLE001 — unknown: every run and coding session counts (fail closed)
+        log.debug("your day: Local only sources unread", exc_info=True)
+        local = {s for s in ids if s not in ("", "chat", "settings")}
     try:
         if build:
             for tid, title in db.exec(
@@ -254,6 +263,7 @@ def sources_for(db: Any, session_ids: Any) -> dict[str, dict[str, Any]]:
                             "href": f"/sessions/{quote(sid, safe='')}", "started": started}
         else:
             out[sid] = {"kind": "other", "name": "Iron Jarvis itself", "id": sid, "href": "", "started": None}
+        out[sid]["local_only"] = sid in local
     return out
 
 
@@ -291,37 +301,96 @@ def _parse_iso(value: Any) -> datetime | None:
 # --------------------------------------------------------------------------
 
 
+#: Built-in calls that declare no Undo yet change nothing of the person's,
+#: kept out of "Can't be undone" (40-a review, G7): a read or a status check
+#: (the ledger calls an undeclared tool irreversible), and Iron Jarvis's own
+#: bookkeeping on this PC — its notebook, its team's notes and messages to
+#: one another, work handed to a teammate (the teammate's own calls are
+#: listed), a suggestion that waits for the person's yes, a look for models.
+#: The Timeline still shows every call.
+NOT_LISTED = frozenset({
+    "blackboard_read", "pixio_status", "provider_rescan",
+    "notebook", "blackboard_post", "message_agent", "assign_work",
+    "memory_propose", "capability_propose",
+})
+
+
 def _skip_tools() -> frozenset[str]:
     try:
         from ..tools import rehearsal as _r
 
-        return _NOT_A_CHANGE | _r.REHEARSAL_OWN_STATE | _r.REHEARSAL_HELPERS | frozenset(_r.REHEARSAL_READS)
+        return (_NOT_A_CHANGE | NOT_LISTED | _r.REHEARSAL_OWN_STATE | _r.REHEARSAL_HELPERS
+                | frozenset(_r.REHEARSAL_READS))
     except Exception:  # noqa: BLE001
-        return _NOT_A_CHANGE
+        return _NOT_A_CHANGE | NOT_LISTED
 
 
-_SENDS = ("send", "notify", "email", "message", "reply", "post", "slack", "telegram", "sms")
-_MADE_OUTSIDE = ("generate", "pixio", "media")
+SENT_WHY = "it left this PC (a message sent)"
+COMMAND_WHY = "a command ran on this PC, and what it did has no Undo"
+KEEPS_NO_UNDO = "Iron Jarvis keeps no Undo for this kind of action"
+
+#: Why each built-in that keeps no Undo cannot be undone (40-a review): an
+#: explicit table, never a guess from the tool's name — a terminal, a
+#: running program and a saved script stay on this PC.
+_WHY: dict[str, str] = {
+    "notify": SENT_WHY,
+    "pane_send": "it was typed into a terminal on this PC, and what it did has no Undo",
+    "process_write": "it was typed into a program running on this PC, and what it did has no Undo",
+    "code_run": "a saved script ran on this PC, and what it did has no Undo",
+    "generate_media": "it was made by a service outside this PC",
+    "pixio_generate": "it was made by a service outside this PC",
+    "pixio_upload": "it was sent to a service outside this PC",
+    "integration_test": "it reached a service outside this PC",
+    "delegate_remote": "it was sent to another computer",
+    "web_action": "it acted on a web page",
+}
+_KIND_WHY = {
+    "command": COMMAND_WHY,
+    "browser": "it acted in your browser",
+    "site": "it acted on a web page in its browser",
+    "service": "it reached a service outside this PC",
+}
+#: The verbs that send: an app tool whose name STARTS with one left this
+#: PC as a message ("send_message", "postMessage"; never "search_messages").
+_SEND_VERBS = frozenset({"send", "post", "reply", "notify", "publish", "forward", "email", "message", "dm", "tweet"})
+_WORD_RX = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+
+
+def _app_verb(tool: str) -> str:
+    """The first word of a connected app's tool name ("send" for
+    ``mcp__slack__send_message`` or ``mcp__x__sendMessage``); "" for a
+    built-in. Pure; linear."""
+    try:
+        from ..agents.mission import _app_tool_parts
+
+        parts = _app_tool_parts(str(tool or ""))
+    except Exception:  # noqa: BLE001
+        parts = None
+    if parts is None:
+        return ""
+    words = _WORD_RX.findall(parts[1][:200])
+    return words[0].lower() if words else ""
 
 
 def cannot_why(tool: str) -> str:
-    """Why a call that kept no Undo cannot be undone, in plain words. Pure."""
-    t = str(tool or "").lower()
+    """Why a call that kept no Undo cannot be undone, in plain words: the
+    built-in's own line (:data:`_WHY`), else by its kind (a command, the
+    browser, a web service), else a connected app's tool whose name starts
+    with a verb that sends; otherwise :data:`KEEPS_NO_UNDO`. Pure."""
+    name = str(tool or "")
+    if name in _WHY:
+        return _WHY[name]
     try:
         from ..agents.mission import _step_kind
 
-        kind = _step_kind(str(tool or ""))
+        kind = _step_kind(name)
     except Exception:  # noqa: BLE001
         kind = None
-    if kind == "command":
-        return "a command ran on this PC, and what it did has no Undo"
-    if any(w in t for w in _SENDS):
-        return "it left this PC (a message sent)"
-    if any(w in t for w in _MADE_OUTSIDE):
-        return "it was made by a service outside this PC"
-    if kind in ("browser", "site", "service"):
-        return "it acted outside this PC"
-    return "Iron Jarvis keeps no Undo for this kind of action"
+    if kind in _KIND_WHY:
+        return _KIND_WHY[kind]
+    if _app_verb(name) in _SEND_VERBS:
+        return SENT_WHY
+    return KEEPS_NO_UNDO
 
 
 _ONE_RX = re.compile(r"^(\w+) 1 ([\w ]{1,40})$")
@@ -341,11 +410,14 @@ def _times(did: str, n: int) -> str:
 def cannot_rows(
     db: Any, engine: Any, since: datetime, until: datetime | None, *, session_ids: Any = None
 ) -> tuple[list[dict[str, Any]], bool]:
-    """The calls of ``[since, until)`` that cannot be undone because they
-    left this PC or ran (``reversibility == "irreversible"``, ok, not a
-    rehearsal, not an Undo), FOLDED by source and tool ("ran 37 commands"),
-    newest first: ``(rows, more)``. Names and plain words only — never a
-    call's arguments. Blocking; bounded (``CANNOT_ROWS``)."""
+    """The calls of ``[since, until)`` that have no Undo — what left this
+    PC or ran, and what Iron Jarvis keeps no way back for
+    (``reversibility == "irreversible"``, ok, not a rehearsal, not an Undo,
+    not a read or Iron Jarvis's own bookkeeping: :data:`NOT_LISTED`), each
+    with its true reason (:func:`cannot_why`), FOLDED by source and tool
+    ("ran 37 commands"), newest first: ``(rows, more)``. Names and plain
+    words only — never a call's arguments. Blocking; bounded
+    (``CANNOT_ROWS``)."""
     from sqlmodel import select
 
     from ..agents.mission import fallback_line
@@ -357,17 +429,14 @@ def cannot_rows(
         .where(ToolInvocation.undo_of == None)  # noqa: E711
         .where(ToolInvocation.rehearsed == False)  # noqa: E712
         .where(ToolInvocation.reversibility == Reversibility.IRREVERSIBLE.value)
+        .where(ToolInvocation.tool.not_in(sorted(_skip_tools())))  # type: ignore[attr-defined]
         .where(ToolInvocation.created_at >= since)
     )
     if until is not None:
         stmt = stmt.where(ToolInvocation.created_at < until)
     if session_ids is not None:
         stmt = stmt.where(ToolInvocation.session_id.in_(sorted(set(session_ids))))  # type: ignore[attr-defined]
-    skip = _skip_tools()
-    rows = [
-        r for r in db.exec(stmt.order_by(ToolInvocation.created_at.desc()).limit(CANNOT_ROWS + 1)).all()  # type: ignore[attr-defined]
-        if str(r.tool or "") not in skip
-    ]
+    rows = list(db.exec(stmt.order_by(ToolInvocation.created_at.desc()).limit(CANNOT_ROWS + 1)).all())  # type: ignore[attr-defined]
     more = len(rows) > CANNOT_ROWS
     rows = rows[:CANNOT_ROWS]
     local = H.local_only_rows(db, engine, rows)
@@ -378,13 +447,14 @@ def cannot_rows(
         if row is None:
             did = fallback_line(str(inv.tool or ""), True)
             lt = _local(inv.created_at)
+            why = cannot_why(str(inv.tool or ""))
             folded[key] = {
                 "id": inv.id, "ids": [inv.id], "tool": inv.tool, "did": did,
                 "at": _iso(inv.created_at), "clock": clock(inv.created_at),
                 "hour": lt.hour if lt is not None else None,
                 "first_clock": clock(inv.created_at),
-                "session_id": key[0], "state": "cannot", "why": cannot_why(str(inv.tool or "")),
-                "kind": "sent" if any(w in str(inv.tool or "").lower() for w in _SENDS) else "ran",
+                "session_id": key[0], "state": "cannot", "why": why,
+                "kind": "sent" if why == SENT_WHY else "ran",
                 "local_work": inv.id in local,
             }
         else:
@@ -455,7 +525,7 @@ def day_changes(
             row["has_before_after"] = row["kind"] in ("file", "setting", "record", "memory")
             rows.append(row)
         cannot, more_cannot = cannot_rows(db, engine, since, until, session_ids=session_ids)
-        sources = sources_for(db, {r["session_id"] for r in rows} | {c["session_id"] for c in cannot})
+        sources = sources_for(db, {r["session_id"] for r in rows} | {c["session_id"] for c in cannot}, engine=engine)
     groups: dict[str, dict[str, Any]] = {}
     for row in rows:
         sid = row["session_id"]
@@ -507,14 +577,14 @@ def listing(
         r["hour"] = _hour_of(r)
     with session_scope(engine) as db:
         cannot, more = cannot_rows(db, engine, since, until, session_ids=session_ids)
-        sources = sources_for(db, {r["session_id"] for r in rows} | {c["session_id"] for c in cannot})
+        sources = sources_for(db, {r["session_id"] for r in rows} | {c["session_id"] for c in cannot}, engine=engine)
     return {"rows": rows, "total": total, "cannot": cannot[:20], "sources": sources,
             "more": bool(more or len(cannot) > 20 or total > len(rows))}
 
 
 def many_targets(
     engine: Any, *, home: Any = None, action_ids: list[str] | None = None, run: str = "",
-    day: date | None = None,
+    day: date | None = None, recall_local: bool = False,
 ) -> dict[str, Any]:
     """What ONE many-at-once card names (D-40.1): ``{source, can, cannot,
     other, undone, problem}`` — ``can`` newest first (the order they are put
@@ -522,13 +592,15 @@ def many_targets(
     change that cannot be undone for another reason (its copy is gone, no
     such change), ``undone`` how many were already undone. By ids, or every
     change of one run and its helpers (``run``: its id or "the 3 pm run").
-    Blocking; bounded (``PAGE_MAX`` for a run, ``CHAT_IDS_MAX`` by id)."""
+    ``problem`` is told to the model: with ``recall_local`` False a Local
+    only run's name stays out of it. Blocking; bounded (``PAGE_MAX`` for a
+    run, ``CHAT_IDS_MAX`` by id)."""
     from ..core.db import session_scope
 
     out: dict[str, Any] = {"source": None, "can": [], "cannot": [], "other": [], "undone": 0, "problem": ""}
     rows: list[dict[str, Any]] = []
     if run:
-        source, session_ids, problem = resolve_run(engine, run, day)
+        source, session_ids, problem = resolve_run(engine, run, day, recall_local=recall_local)
         if problem:
             out["problem"] = problem
             return out
@@ -614,12 +686,50 @@ def run_family(db: Any, session_id: str) -> list[str]:
     return family
 
 
-def resolve_run(engine: Any, ref: Any, day: date | None = None) -> tuple[dict[str, Any] | None, list[str], str]:
+def _named_runs(db: Any, rows: list[Any]) -> list[tuple[str, Any]]:
+    """The day's runs a person names by the time they started (40-a
+    review): a helper's run (``AgentRun.parent_id``) is part of its lead's
+    and never "the 3 pm run" itself, and a rehearsal changed nothing.
+    ``rows`` are ``(id, created_at, options_json)``. Blocking."""
+    from sqlmodel import select
+
+    from ..core.models import AgentRun
+
+    ids = [str(sid) for sid, _at, _o in rows]
+    helpers: set[str] = set()
+    if ids:
+        helpers = {
+            str(s) for s in db.exec(
+                select(AgentRun.session_id)
+                .where(AgentRun.session_id.in_(ids))  # type: ignore[attr-defined]
+                .where(AgentRun.parent_id != None)  # noqa: E711
+            ) if s
+        }
+    out: list[tuple[str, Any]] = []
+    for sid, at, opts in rows:
+        if str(sid) in helpers:
+            continue
+        try:
+            o = json.loads(opts or "{}")
+        except (TypeError, ValueError):
+            o = {}
+        if isinstance(o, dict) and o.get("rehearsal_id"):
+            continue
+        out.append((str(sid), at))
+    return out
+
+
+def resolve_run(
+    engine: Any, ref: Any, day: date | None = None, *, recall_local: bool = False
+) -> tuple[dict[str, Any] | None, list[str], str]:
     """``(source, session_ids, problem)`` for a run named by its id or by
     the time it started ("the 3 pm run": the run of *day*, default today,
-    that started nearest that time, within ``RUN_NEAR_MIN`` minutes).
-    ``session_ids`` is the run and its helpers. ``problem`` is the sentence
-    when there is no such run (naming the day's runs). Blocking."""
+    that started nearest that time, within ``RUN_NEAR_MIN`` minutes; never
+    a helper's run or a rehearsal). ``session_ids`` is the run and its
+    helpers. ``problem`` is the sentence when there is no such run (naming
+    the day's runs); it is told to a model, so with ``recall_local`` False
+    (the default: fail closed) a Local only run is "a Local only run",
+    never its name (40-a review). Blocking."""
     from sqlmodel import select
 
     from ..core.db import session_scope
@@ -630,22 +740,24 @@ def resolve_run(engine: Any, ref: Any, day: date | None = None) -> tuple[dict[st
         return None, [], "Say which run: its time (\"the 3 pm run\") or its id."
     with session_scope(engine) as db:
         if words.startswith("build:") or db.get(Session, words) is not None:
-            src = sources_for(db, [words]).get(words)
+            src = sources_for(db, [words], engine=engine).get(words)
             return src, (run_family(db, words) if not words.startswith("build:") else [words]), ""
         if words.lower() in ("chat", "settings"):
             return None, [], "That is not one run. Name a run by its time, or the changes by their ids."
         named = _time_named(words)
         day = day or today_local()
         since, until = day_bounds(day)
-        runs = db.exec(
-            select(Session.id, Session.created_at)
+        runs = _named_runs(db, db.exec(
+            select(Session.id, Session.created_at, Session.options_json)
             .where(Session.created_at >= since)
             .where(Session.created_at < until)
             .order_by(Session.created_at)  # type: ignore[arg-type]
             .limit(500)
-        ).all()
+        ).all())
         if named is None:
-            return None, [], _no_run_words(db, runs, day, "Say when it started (\"the 3 pm run\") or give its id.")
+            return None, [], _no_run_words(
+                db, engine, runs, day, "Say when it started (\"the 3 pm run\") or give its id.", recall_local
+            )
         want = datetime.combine(day, dtime(named[0], named[1])).astimezone()
         want_utc = want.astimezone(timezone.utc).replace(tzinfo=None)
         best, gap = None, None
@@ -657,17 +769,28 @@ def resolve_run(engine: Any, ref: Any, day: date | None = None) -> tuple[dict[st
             if gap is None or d < gap:
                 best, gap = sid, d
         if best is None or gap is None or gap > RUN_NEAR_MIN * 60:
-            return None, [], _no_run_words(db, runs, day, f"No run started near {clock(want)} on {day_words(day)}.")
-        src = sources_for(db, [best]).get(best)
+            return None, [], _no_run_words(
+                db, engine, runs, day, f"No run started near {clock(want)} on {day_words(day)}.", recall_local
+            )
+        src = sources_for(db, [best], engine=engine).get(best)
         return src, run_family(db, best), ""
 
 
-def _no_run_words(db: Any, runs: list[Any], day: date, head: str) -> str:
+#: A Local only run, as a turn that may not recall Local only work is told it.
+LOCAL_RUN_WORDS = "a Local only run"
+
+
+def _no_run_words(db: Any, engine: Any, runs: list[Any], day: date, head: str, recall_local: bool) -> str:
+    """*head*, then the day's runs by name and time (the last eight) — a
+    Local only run named only as :data:`LOCAL_RUN_WORDS` unless
+    *recall_local* (the sentence is told to a model). Blocking."""
     if not runs:
         return f"{head} No run started on {day_words(day)}."
-    srcs = sources_for(db, [sid for sid, _at in runs[-8:]])
+    srcs = sources_for(db, [sid for sid, _at in runs[-8:]], engine=engine)
     listed = ", ".join(
-        f"“{srcs[sid]['name']}” at {clock(at)}" for sid, at in runs[-8:] if sid in srcs
+        (f"{LOCAL_RUN_WORDS} at {clock(at)}" if srcs[sid].get("local_only") and not recall_local
+         else f"“{srcs[sid]['name']}” at {clock(at)}")
+        for sid, at in runs[-8:] if sid in srcs
     )
     return f"{head} Runs that day: {listed}."
 
@@ -761,11 +884,18 @@ def put_back_words(reverted: list[dict[str, Any]], skipped: list[dict[str, Any]]
         head = f"{n} {_noun(kind, n)} put back."
     else:
         head = f"{n} changes put back: " + ", ".join(f"{c} {_noun(k, c)}" for k, c in kinds.most_common()) + "."
+    tails = not_put_back_words(skipped, safe=safe)
+    return f"{head} {tails}" if tails else head
+
+
+def not_put_back_words(skipped: list[dict[str, Any]], *, safe: bool = False) -> str:
+    """"Not put back: report.txt (why)." for each of *skipped* ("" for
+    none). ``safe``: Local only names withheld. Pure."""
     tails = []
     for s in skipped:
         (name,) = names_of([s], safe=safe) or ["a change"]
         tails.append(f"Not put back: {name} ({s.get('reason') or 'it could not be undone'}).")
-    return " ".join([head, *tails])
+    return " ".join(tails)
 
 
 # --------------------------------------------------------------------------
@@ -1098,6 +1228,7 @@ __all__ = [
     "day_words",
     "for_model",
     "names_of",
+    "not_put_back_words",
     "parse_day",
     "plain_skip",
     "put_back_words",

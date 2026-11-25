@@ -48,7 +48,9 @@ async def _three_pm(tmp_path, *, extra_run: bool = True):
     run = _run(p, "Rename the client files", at=_local_utc(day, 15, 2), ws=ws)
     ids = [await _write(p, ws, run, f"r{i}.txt", f"new {i}\n") for i in range(13)]
     _stamp(p, ids, _local_utc(day, 15, 3))
-    _sent(p, run, "notify", _local_utc(day, 15, 20))
+    # An old row that kept a journal entry for a call that left this PC: it
+    # is still never a change (records_history.list_changes leaves it out).
+    _sent(p, run, "notify", _local_utc(day, 15, 20), journal=True)
     return app, p, ws, run, ids, morning
 
 
@@ -86,6 +88,12 @@ async def test_undo_everything_from_the_3_pm_run_puts_twelve_back_through_one_ca
 async def test_the_card_is_a_safety_card_enter_and_the_phone_never_allow_it(tmp_path):
     assert H.UNDO_REASON in stall.SAFETY_REASONS
     assert not stall.phone_may_ask(once_only=True, local_ask=False, priced=False)
+    from iron_jarvis.agents import mission
+
+    # Review (40-a): one card undoes one change or many, so its title and the
+    # ledger's line say neither ("wants to undo what it changed").
+    assert mission.ASK_WORDS[UNDO] == "undo what it changed"
+    assert mission.fallback_line(UNDO, True) == "undid what it changed"
     app, p, ws, run, ids, _m = await _three_pm(tmp_path)
     p.router.stream = _calls_stream([(UNDO, {"run": "the 3 pm run"})])
     seen: list = []
@@ -177,8 +185,13 @@ async def test_changes_list_by_date_lists_the_day_and_what_cannot_be_undone(tmp_
     assert "Commands Iron Jarvis ran" in out
     data = res.data
     assert data["date"] == RD.today_local().isoformat() and data["cannot"][0]["what"] == "sent a notification"
+    # Review (40-a): the sent message kept a journal entry, yet it is only
+    # ever under "Can't be undone", never one of the changes.
+    (sent,) = data["cannot"][0]["ids"]
+    assert sent not in {r["id"] for r in data["changes"]} and sent not in out.split("Can't be undone")[0]
     by_run = await p.registry.get("changes_list").execute({"run": "the 3 pm run"}, _ctx(p, tmp_path))
     assert "inbox.txt" not in by_run.output and "r0.txt" in by_run.output
+    assert sent not in {r["id"] for r in by_run.data["changes"]} and by_run.data["cannot"][0]["ids"] == [sent]
     with session_scope(p.engine) as db:
         assert not list(db.exec(select(ToolInvocation).where(ToolInvocation.undone_at != None)))  # noqa: E711
     assert json.dumps(data)  # plain data, names only
@@ -214,19 +227,106 @@ async def test_a_local_only_runs_names_stay_out_of_a_turn_that_may_not_recall_th
     app, p = _app(tmp_path)
     ws = tmp_path / "ws"
     ws.mkdir()
-    secret_run = _run(p, "Hartley garden plans", at=_local_utc(RD.today_local(), 15, 0), ws=ws,
+    day = RD.today_local()
+    secret_run = _run(p, "Hartley garden plans", at=_local_utc(day, 15, 0), ws=ws,
                       options={"local_only": True})
     await _write(p, ws, secret_run, "hartley-plans.txt", "x\n")
-    res = await p.registry.get("changes_list").execute({"date": "today"}, _ctx(p, tmp_path))
+    ctx = _ctx(p, tmp_path)
+    listing = p.registry.get("changes_list")
+    res = await listing.execute({"date": "today"}, ctx)
     assert res.ok, res.error
     assert "Hartley" not in res.output and "hartley-plans" not in res.output, res.output
     assert "Hartley" not in json.dumps(res.data) and "hartley-plans" not in json.dumps(res.data)
     assert "From Local only work:" in res.output
+    # Review (40-a): a Local only run with NO change of its own is not named
+    # either — not in the reply, not in data["source"].
+    _run(p, "Hartley pond survey", at=_local_utc(day, 13, 0), ws=ws, options={"local_only": True})
+    quiet = await listing.execute({"run": "the 1 pm run"}, ctx)
+    assert quiet.ok, quiet.error
+    assert "Hartley" not in quiet.output and "Hartley" not in json.dumps(quiet.data), (quiet.output, quiet.data)
+    assert quiet.data["source"]["name"] == H.LOCAL_SOURCE_WORDS
+    # Review (40-a): no run near the time asked, or no time given — the
+    # day's runs are named, a Local only run only as "a Local only run",
+    # in changes_list's refusal and in change_undo's alike.
+    _run(p, "Sort the inbox", at=_local_utc(day, 9, 0), ws=ws)
+    undo = p.registry.get(UNDO)
+    for args in ({"run": "the 11 pm run"}, {"run": "the morning run"}):
+        res = await listing.execute(args, ctx)
+        assert res.ok is False and "Hartley" not in (res.error or ""), res.error
+        assert "a Local only run at 3:00 pm" in res.error and "“Sort the inbox” at 9:00 am" in res.error, res.error
+        check = await undo.spend_check(args, ctx)
+        assert check is not None and check.ask is False
+        res = await undo.execute(args, ctx)
+        assert res.ok is False and "Hartley" not in (res.error or ""), res.error
+        assert "a Local only run at 3:00 pm" in res.error, res.error
     # The person's own page names it.
     from fastapi.testclient import TestClient
 
     page = TestClient(app).get("/changes/day?date=today").text
     assert "Hartley garden plans" in page and "hartley-plans.txt" in page
+
+
+@pytest.mark.asyncio
+async def test_the_3_pm_run_is_never_a_helpers_run_or_a_rehearsal(tmp_path):
+    """Review (40-a): "the 3:41 pm run" is the run a person started — never a
+    helper's run (it is part of its lead's), never a rehearsal (it changed
+    nothing) — even when one of them started nearer the time asked."""
+    from iron_jarvis.core.models import AgentRun
+
+    app, p = _app(tmp_path)
+    ws = tmp_path / "ws"
+    day = RD.today_local()
+    lead = _run(p, "Rename the client files", at=_local_utc(day, 15, 2), ws=ws)
+    helper = _run(p, "check the renamed files", at=_local_utc(day, 15, 40), ws=ws)
+    _run(p, "Rename the client files", at=_local_utc(day, 15, 41), ws=ws, options={"rehearsal_id": "rh_1"})
+    with session_scope(p.engine) as db:
+        db.add(AgentRun(id="run_lead", session_id=lead))
+        db.add(AgentRun(id="run_helper", session_id=helper, parent_id="run_lead"))
+        db.commit()
+    source, family, problem = RD.resolve_run(p.engine, "the 3:41 pm run")
+    assert problem == "" and source["id"] == lead, (source, problem)
+    assert family == [lead, helper]
+    _s, _f, words = RD.resolve_run(p.engine, "the run")
+    assert "at 3:02 pm" in words and "3:40" not in words and "3:41" not in words, words
+
+
+@pytest.mark.asyncio
+async def test_the_result_answers_every_change_the_card_named(tmp_path):
+    """Review (40-a): "The result says how many were put back and names each
+    that was not, with why" — a change whose before-copy is gone (the card's
+    "Not undone") and one already undone are in the reply too."""
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.core.models import UndoJournal
+
+    app, p = _app(tmp_path)
+    day = RD.today_local()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    for name in ("r0.txt", "r1.txt", "r2.txt"):
+        (ws / name).write_text(f"old {name}\n", encoding="utf-8")
+    (ws / "big.txt").write_text("x" * 20_000 + "\n", encoding="utf-8")
+    run = _run(p, "Rename the client files", at=_local_utc(day, 15, 2), ws=ws)
+    ids = [await _write(p, ws, run, n, f"new {n}\n") for n in ("r0.txt", "r1.txt", "r2.txt", "big.txt")]
+    _stamp(p, ids, _local_utc(day, 15, 3))
+    with session_scope(p.engine) as db:
+        ref = db.get(UndoJournal, ids[3]).pre_ref
+    assert ref, "a big before-copy is kept as a file under undo/"
+    (Path(p.config.home) / "undo" / ref).unlink()
+    assert TestClient(app).post("/changes/undo", json={"action_ids": [ids[2]]}).json()["reverted"]
+    p.router.stream = _calls_stream([(UNDO, {"run": "the 3 pm run"})])
+    seen: list = []
+    frames = await _drive_stream(app, _body("undo everything from the 3 pm run"), _approver(app, seen))
+    note = seen[0]["cost_note"]
+    assert "Undo these 2 changes" in note and "Not undone: big.txt" in note and "1 was already undone" in note, note
+    (fin,) = _finished(frames, UNDO)
+    out = _out(fin)
+    assert fin["ok"] is True and out.startswith("2 files put back."), out
+    assert f"Not put back: big.txt ({H.NO_COPY_KEPT})." in out, out
+    assert "1 was already undone." in out, out
+    assert (ws / "r0.txt").read_text(encoding="utf-8") == "old r0.txt\n"
 
 
 @pytest.mark.asyncio

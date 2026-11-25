@@ -185,7 +185,7 @@
       "failed": "tried a results check and it failed"
     },
     "change_undo": {
-      "ok": "undid a change",
+      "ok": "undid what it changed",
       "failed": "tried an undo and it failed"
     },
     "changes_list": {

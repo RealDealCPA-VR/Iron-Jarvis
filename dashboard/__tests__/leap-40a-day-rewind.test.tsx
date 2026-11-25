@@ -83,13 +83,20 @@ vi.mock("next/link", async () => {
       createElement("a", { href, ...rest }, children),
   };
 });
+// 40-a review: the page follows its address when a link inside the app
+// changes it (Next's router updates useSearchParams, with no popstate).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: () => {}, replace: () => {}, prefetch: () => {}, back: () => {} }),
+  usePathname: () => "/activity",
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
 vi.mock("@/components/motion", () => ({
   PageShell: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 import ActivityPage from "@/app/activity/page";
-import { DayRewind } from "@/components/activity/DayRewind";
+import { CANNOT_LINE, DayRewind } from "@/components/activity/DayRewind";
 import { DAY_REFRESH_MS, shiftDay, todayLocal, viewFromSearch } from "@/lib/dayChanges";
 
 const DASH = join(__dirname, "..");
@@ -172,6 +179,29 @@ describe("Your day is a tab on Activity", () => {
     expect(viewFromSearch("?view=day&date=2026-11-20")).toEqual({ view: "day", date: "2026-11-20" });
     expect(viewFromSearch("?view=day&date=nope").date).toBeNull();
   });
+
+  it("a link inside the app to ?view=day switches the tab, as Ctrl K \"your day\" does from the Timeline", async () => {
+    const { rerender } = render(<ActivityPage />);
+    await screen.findByTestId("timeline-feed");
+    // A router push: the address changes with no popstate and no new mount.
+    act(() => window.history.pushState(null, "", "/activity?view=day"));
+    rerender(<ActivityPage />);
+    await screen.findByTestId("day-rewind");
+    expect(screen.getByTestId("activity-view-day").getAttribute("aria-selected")).toBe("true");
+    // Ctrl K's own row for the tab opens it by its address; the Activity
+    // entry keeps its own words.
+    const palette = readFileSync(join(DASH, "components", "CommandPalette.tsx"), "utf-8");
+    const row = palette.slice(palette.indexOf('id: "deep:your-day"'));
+    expect(row.slice(0, 600)).toContain('href: "/activity?view=day"');
+    expect(row.slice(0, 600)).toContain('"your day"');
+    const nav = readFileSync(join(DASH, "lib", "nav.ts"), "utf-8");
+    expect(nav).not.toContain('"your day"');
+    // The tab's own address is written so Next's router follows it (with
+    // Next's state, its patched replaceState skips the router — seen live).
+    const page = readFileSync(join(DASH, "app", "activity", "page.tsx"), "utf-8");
+    expect(page).toContain('window.history.replaceState(null, "",');
+    expect(page).not.toContain("replaceState(window.history.state");
+  });
 });
 
 describe("the day", () => {
@@ -181,6 +211,9 @@ describe("the day", () => {
     expect(cannot.textContent).toContain("Can't be undone");
     expect(cannot.textContent).toContain("sent a notification");
     expect(cannot.textContent).toContain("it left this PC (a message sent)");
+    // 40-a review: the heading is true of every row (not all left this PC).
+    expect(cannot.textContent).toContain(CANNOT_LINE);
+    expect(CANNOT_LINE).not.toContain("left this PC");
     expect(within(cannot).queryByRole("checkbox")).toBeNull();
     const groups = screen.getAllByTestId("day-group");
     expect(cannot.compareDocumentPosition(groups[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

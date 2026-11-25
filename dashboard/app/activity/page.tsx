@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { History, Download, Undo2, Coins, CircleDollarSign, ListTree, CalendarDays } from "lucide-react";
 import { API_BASE, ijToken } from "@/lib/api";
 import { PageShell, Reveal } from "@/components/motion";
@@ -21,6 +22,26 @@ const ACTIVITY_VIEWS = [
   { value: DAY_VIEW, label: "Your day", icon: <CalendarDays size={13} aria-hidden /> },
 ] as const;
 
+/** 40-a review: a link INSIDE the app to this same page with another
+ *  address (Ctrl K "your day" while the Timeline is open) changes the
+ *  address without mounting the page again; this follows it. In its own
+ *  Suspense boundary, so the page itself stays static (useSearchParams). */
+function AddressFollower({ onAddress }: { onAddress: () => void }) {
+  const params = useSearchParams();
+  const key = params?.toString() ?? "";
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (seen.current === null) {
+      seen.current = key; // the first address is read by the page itself
+      return;
+    }
+    if (key === seen.current) return;
+    seen.current = key;
+    onAddress();
+  }, [key, onAddress]);
+  return null;
+}
+
 export default function ActivityPage() {
   const [stats, setStats] = useState<FeedStats | null>(null);
   // Next leaps 40-a: which tab and which day. The first frame is the
@@ -32,21 +53,21 @@ export default function ActivityPage() {
   // Neither tab's body is drawn until the address is read, so opening
   // `?view=day` never starts the Timeline's reads for nothing (G7).
   const [ready, setReady] = useState(false);
-  useEffect(() => {
-    const read = () => {
-      try {
-        const asked = viewFromSearch(window.location.search);
-        setView(asked.view ?? TIMELINE_VIEW);
-        if (asked.date) setDay(asked.date);
-      } catch {
-        /* no address */
-      }
-      setReady(true);
-    };
-    read();
-    window.addEventListener("popstate", read);
-    return () => window.removeEventListener("popstate", read);
+  const readAddress = useCallback(() => {
+    try {
+      const asked = viewFromSearch(window.location.search);
+      setView(asked.view ?? TIMELINE_VIEW);
+      if (asked.date) setDay(asked.date);
+    } catch {
+      /* no address */
+    }
+    setReady(true);
   }, []);
+  useEffect(() => {
+    readAddress();
+    window.addEventListener("popstate", readAddress);
+    return () => window.removeEventListener("popstate", readAddress);
+  }, [readAddress]);
   const writeAddress = useCallback((nextView: ActivityView, nextDay: string) => {
     try {
       const url = new URL(window.location.href);
@@ -58,7 +79,12 @@ export default function ActivityPage() {
         url.searchParams.delete("view");
         url.searchParams.delete("date");
       }
-      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+      // 40-a review: `null`, never `window.history.state`. Next's own state
+      // (`__NA`) makes its patched replaceState skip the router, so
+      // useSearchParams kept the OLD address and a later link to that same
+      // address (Ctrl K "your day" after picking Timeline) changed nothing.
+      // Given null, Next copies its state over and follows the address.
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
     } catch {
       /* the tab still changes */
     }
@@ -91,6 +117,9 @@ export default function ActivityPage() {
 
   return (
     <PageShell>
+      <Suspense fallback={null}>
+        <AddressFollower onAddress={readAddress} />
+      </Suspense>
       <Reveal>
         <PageHeader
           title="Activity"

@@ -4385,7 +4385,7 @@ const TOOL_WORDS = {
   reflex_delete: "remove a rule that acts on its own",
   config_undo: "undo your last change",
   // v1.435.0 (Wave 3 group I): mission.ASK_WORDS == lib/toolWords WORDS.
-  change_undo: "undo one of its changes",
+  change_undo: "undo what it changed",
   chat_local_only: "change Local only for this chat",
   model_server_add: "add a model server",
   model_server_default: "set the default model to one of a model server's",
@@ -4546,7 +4546,7 @@ const TOOL_WORDS_BUILTIN = {
   calculate: "work out the figures",
   capability_propose: "suggest a new ability for Iron Jarvis",
   change_results: "check the results of changes you accepted",
-  change_undo: "undo one of its changes",
+  change_undo: "undo what it changed",
   changes_list: "list its recent changes",
   channel_alerts: "choose which alerts a destination gets",
   channel_connect: "add a notification channel",

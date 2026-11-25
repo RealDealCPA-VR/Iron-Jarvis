@@ -359,8 +359,9 @@ ASK_WORDS: dict[str, str] = {
     "reflex_delete": "remove a rule that acts on its own",
     "config_undo": "undo your last change",
     # v1.435.0 (Wave 3 group I): the change history's undo, and Local only
-    # for a chat (its card shows when turning it OFF).
-    "change_undo": "undo one of its changes",
+    # for a chat (its card shows when turning it OFF). Next leaps 40-a
+    # review: one card may undo one change or many, so its words say neither.
+    "change_undo": "undo what it changed",
     "chat_local_only": "change Local only for this chat",
     # v1.438.0 (chat-first plan Wave 4 group B, settings.records_connections).
     "model_server_add": "add a model server",
@@ -519,7 +520,7 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "assign_work": ("queued a task for a teammate", "queued task"),
     "batch_documents": ("worked through a folder of documents", "document batch"),
     "capability_propose": ("suggested a new ability for Iron Jarvis", "ability suggestion"),
-    "change_undo": ("undid a change", "undo"),
+    "change_undo": ("undid what it changed", "undo"),
     "changes_list": ("listed its recent changes", "change listing"),
     "channel_connect": ("connected a messaging channel", "channel connection"),
     "channel_toggle": ("switched a messaging channel's listening", "channel switch"),

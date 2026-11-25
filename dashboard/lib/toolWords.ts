@@ -80,7 +80,7 @@ const WORDS: Record<string, string> = {
   config_undo: "undo your last change",
   // v1.435.0 (Wave 3 group I): the change history's undo, and Local only for
   // a chat (its card shows when turning it OFF).
-  change_undo: "undo one of its changes",
+  change_undo: "undo what it changed",
   chat_local_only: "change Local only for this chat",
   // v1.438.0 (chat-first plan Wave 4 group B, settings/records_connections).
   model_server_add: "add a model server",

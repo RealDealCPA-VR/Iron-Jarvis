@@ -7,8 +7,8 @@
  * after and Undo.
  *
  *  - A date picker (Previous day / the date / Next day); today by default.
- *  - "Can't be undone" first: what left this PC or ran (a message sent,
- *    commands run). It has no Undo and says why.
+ *  - "Can't be undone" first: what has no Undo (a message sent, commands
+ *    run, what Iron Jarvis keeps no way back for), each with its own why.
  *  - Then one section per place the changes came from (a chat, an agent run,
  *    a schedule, a coding session, a settings page), split by hour, newest
  *    first. Each row: what changed, when, Before and after, Undo (two
@@ -58,7 +58,9 @@ const SOURCE_WORDS: Record<DaySource["kind"], string> = {
 };
 
 export const NOTHING_LINE = "Iron Jarvis changed nothing on this day.";
-export const CANNOT_LINE = "These left this PC or ran, so there is no way back.";
+// 40-a review: true of every row under it; each row says its own reason
+// (a terminal's line stayed on this PC; a message sent left it).
+export const CANNOT_LINE = "There is no way back for these. Each says why.";
 
 function SourceHead({ source, count }: { source: DaySource; count: number }) {
   const kind = SOURCE_WORDS[source.kind];
