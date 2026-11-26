@@ -4,7 +4,7 @@
 
 ## v1.582.0
 
-**Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below).
+**See what is filling a chat.** When a chat gets long, a small meter under the message box shows how full it is. **Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below).
 
 ## v1.581.0
 
