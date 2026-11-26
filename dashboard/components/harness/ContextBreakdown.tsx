@@ -32,6 +32,7 @@ import {
   partPercent,
   swatchClass,
   aboutShare,
+  MORE_THAN_THE_ROOM,
   untilSummaryWords,
   usedOfWindow,
   type ContextList,
@@ -105,8 +106,11 @@ export function ContextBreakdown({
    *  (no fold: it is opened by the chat's fullness meter), one sentence for
    *  how full the chat is, and every size as a share of the chat's room
    *  ("about 12%"), never a count. Absent: a coding session's drop-down,
-   *  exactly as it was. */
-  plain?: { title: string; headline: string };
+   *  exactly as it was. `over`: the chat holds MORE than its room (the
+   *  daemon's decision), so each part is its share of everything the chat
+   *  holds (they add up to 100; never a share above 100), the room left
+   *  reads `none`, and a tools row's share of the room says so (`ofRoom`). */
+  plain?: { title: string; headline: string; over?: { none: string; ofRoom: string } };
   children?: ReactNode;
 }) {
   const [open, setOpen] = useState(true);
@@ -122,6 +126,17 @@ export function ContextBreakdown({
   const used = reading?.parts.filter((p) => p.kind !== "free") ?? [];
   const hasParts = !!reading && reading.parts.length > 0;
   const until = reading ? untilSummaryWords(reading) : null;
+  // A plain chat's shares (release 6). A part: of the room, or, for a chat
+  // that holds more than its room, of everything the chat holds.
+  const over = plain?.over ?? null;
+  const shareOf = reading ? (over ? reading.used : reading.window) : 0;
+  const partShare = (p: { tokens: number; kind: string }): string =>
+    over && p.kind === "free" ? over.none : aboutShare(p.tokens, shareOf);
+  // The tools are sent beside the chat: always a share of the room.
+  const roomShare = (tokens: number): string => {
+    const said = reading ? aboutShare(tokens, reading.window) : "";
+    return over && said && said !== MORE_THAN_THE_ROOM ? `${said}${over.ofRoom}` : said;
+  };
 
   return (
     <section data-testid={`session-rail-context`} data-prefix={prefix} className="space-y-1.5">
@@ -173,16 +188,20 @@ export function ContextBreakdown({
               <div
                 data-testid={`${prefix}-context-stack`}
                 role="img"
-                aria-label={`${reading.percent}% used: ${used.map((p) => `${p.label} ${partPercent(p.tokens, reading.window)}`).join(", ")}`}
+                aria-label={
+                  plain
+                    ? `${plain.headline} ${used.map((p) => `${p.label} ${partShare(p)}`).join(", ")}`
+                    : `${reading.percent}% used: ${used.map((p) => `${p.label} ${partPercent(p.tokens, reading.window)}`).join(", ")}`
+                }
                 className="flex h-2 overflow-hidden rounded-full bg-white/[0.08]"
               >
                 {used.map((p) => (
                   <div
                     key={p.key}
                     data-part={p.key}
-                    title={`${p.label}: ${plain ? aboutShare(p.tokens, reading.window) : formatTokens(p.tokens)}`}
+                    title={`${p.label}: ${plain ? partShare(p) : formatTokens(p.tokens)}`}
                     className={`h-full ${swatchClass(p.key, p.kind)}`}
-                    style={{ width: `${Math.max(0, Math.min(100, (p.tokens / reading.window) * 100))}%` }}
+                    style={{ width: `${Math.max(0, Math.min(100, (p.tokens / (plain && shareOf > 0 ? shareOf : reading.window)) * 100))}%` }}
                   />
                 ))}
               </div>
@@ -203,7 +222,7 @@ export function ContextBreakdown({
                     <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-sm ${swatchClass(p.key, p.kind)}`} />
                     <span className="min-w-0 flex-1 truncate text-zinc-300">{p.label}</span>
                     {plain ? (
-                      <span className="shrink-0 text-right tabular-nums text-zinc-400">{aboutShare(p.tokens, reading.window)}</span>
+                      <span className="shrink-0 text-right tabular-nums text-zinc-400">{partShare(p)}</span>
                     ) : (
                       <>
                     <span className="tabular-nums text-zinc-400">{formatTokens(p.tokens)}</span>
@@ -228,7 +247,7 @@ export function ContextBreakdown({
                       <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-sm border border-white/20" />
                       <span className="min-w-0 flex-1 truncate text-zinc-400">{e.label}</span>
                       {plain ? (
-                        <span className="shrink-0 text-right tabular-nums text-zinc-500">{aboutShare(e.tokens, reading.window)}</span>
+                        <span className="shrink-0 text-right tabular-nums text-zinc-500">{roomShare(e.tokens)}</span>
                       ) : (
                         <>
                       <span className="tabular-nums text-zinc-500">{formatTokens(e.tokens)}</span>
@@ -241,7 +260,7 @@ export function ContextBreakdown({
               </div>
             ) : null}
             {reading.lists.map((l) => (
-              <ListFold key={l.key} prefix={prefix} list={l} shareOf={plain ? reading.window : 0} />
+              <ListFold key={l.key} prefix={prefix} list={l} share={plain ? roomShare : undefined} />
             ))}
             {note ? (
               <p data-testid={`${prefix}-context-note`} className={QUIET}>
@@ -366,7 +385,7 @@ export function AutoCompactChoice({ prefix, onSaved }: { prefix: string; onSaved
   );
 }
 
-function ListFold({ prefix, list, shareOf = 0 }: { prefix: string; list: ContextList; shareOf?: number }) {
+function ListFold({ prefix, list, share }: { prefix: string; list: ContextList; share?: (tokens: number) => string }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   return (
@@ -389,7 +408,7 @@ function ListFold({ prefix, list, shareOf = 0 }: { prefix: string; list: Context
             {it.detail ? <span className="shrink-0 text-zinc-500">{it.detail}</span> : null}
             {it.tokens !== null ? (
               <span className="shrink-0 tabular-nums text-zinc-500">
-                {shareOf > 0 ? aboutShare(it.tokens, shareOf) : formatTokens(it.tokens)}
+                {share ? share(it.tokens) : formatTokens(it.tokens)}
               </span>
             ) : null}
           </li>

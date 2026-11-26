@@ -209,12 +209,20 @@ export function partPercent(tokens: number, window: number): string {
   return `${p.toFixed(1)}%`;
 }
 
-/** A part's share of the room in a PLAIN CHAT's words ("about 12%", "less
+/** A size bigger than the whole it is a share of: said in words, never as a
+ *  percent above 100 (the daemon's twin: context/filling.MORE_THAN_THE_ROOM). */
+export const MORE_THAN_THE_ROOM = "more than the room";
+
+/** A size as a share of `of` in a PLAIN CHAT's words ("about 12%", "less
  *  than 1%"): every size is an estimate, so it is never said as a count
- *  (the intelligence plan, release 6). */
-export function aboutShare(tokens: number, window: number): string {
-  if (window <= 0) return "";
-  const p = (tokens / window) * 100;
+ *  (the intelligence plan, release 6). `of` is the chat's room, or, for a
+ *  chat that holds more than its room, everything the chat holds (the
+ *  shares then add up to 100). Never a percent above 100. The daemon's twin
+ *  is context/filling._share: the chat's answer says the same words. */
+export function aboutShare(tokens: number, of: number): string {
+  if (of <= 0) return "";
+  const p = (tokens / of) * 100;
+  if (p > 100) return MORE_THAN_THE_ROOM;
   if (p > 0 && p < 1) return "less than 1%";
   return `about ${Math.round(p)}%`;
 }

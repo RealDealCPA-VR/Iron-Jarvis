@@ -65,12 +65,15 @@ def _pct(part: int, window: int) -> int:
     return max(0, min(100, int(round(100 * part / window)))) if window > 0 else 0
 
 
-def _message_tokens(messages: Iterable[Any]) -> int:
-    """``chat_turn._apply_compaction``'s own rule: content + 4 per message."""
+def _message_tokens(messages: Iterable[Any], ratio: "float | None" = None) -> int:
+    """``chat_turn._apply_compaction``'s own rule: content + 4 per message.
+    ``ratio``: the answering model's measured characters per token, where a
+    caller counts the instructions beside these messages with it (an agent
+    step, ``agents.run_facts.note_step``); None is the planner's default."""
     total = 0
     for m in messages or []:
         content = m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
-        total += estimate_tokens(content or "") + 4
+        total += estimate_tokens(content or "", ratio) + 4
     return total
 
 
@@ -242,6 +245,23 @@ MAX_ORIGINS = 24
 OTHER_EXTENSIONS = "other extensions"
 
 
+def over_room(record: Any) -> bool:
+    """True when a record's chat HOLDS MORE THAN THE ROOM the model has (its
+    saved percent is above 100, or its parts add up to more than the room).
+    ONE decision for the page's list and the chat's answer: in that state
+    neither says a share of the room for a part (it would be above 100);
+    both say each part's share of what the chat HOLDS, which adds up to 100.
+    False for a record with no room; never raises."""
+    try:
+        window = int(record.get("window") or 0)
+        if window <= 0:
+            return False
+        pct = record.get("percent")
+        return (pct is not None and int(pct) > 100) or int(record.get("used") or 0) > window
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def tool_origins(specs: Iterable[Any], ratio: "float | None" = None) -> "dict[str, Any] | None":
     """Where one model call's tool definitions came from, by SIZE and COUNT:
     ``{"builtin": [count, tokens], "extensions": {name: [count, tokens]}}``.
@@ -397,6 +417,10 @@ def chat_reading(record: Any, tool_names: Iterable[Any] = ()) -> "dict[str, Any]
             "percent": r["percent"] if r.get("percent") is not None else _pct(used, window),
             "parts": parts,
         }
+        if over_room(r):
+            # The chat holds more than the room: the page says each part's
+            # share of what the chat holds (never a share above 100).
+            out["over"] = True
         tools = r.get("tools") or {}
         builtin = tools.get("builtin") or [0, 0]
         ext = tools.get("extensions") or {}

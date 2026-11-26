@@ -16,6 +16,8 @@
  * fullness report.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -45,7 +47,14 @@ const H = vi.hoisted(() => {
       /** A GET that stays unanswered until the test lets it go. */
       held: {} as Record<string, (value: unknown) => void>,
     },
-    stream: { context: null as Record<string, unknown> | null },
+    stream: {
+      context: null as Record<string, unknown> | null,
+      /** True: a reply stays running until the test lets it end (`release`). */
+      hold: false,
+      release: null as null | (() => void),
+      streaming: false,
+      aborts: 0,
+    },
   };
 });
 
@@ -76,17 +85,32 @@ vi.mock("@/lib/useChatStream", () => ({
   StreamError: H.FakeStreamError,
   useLiveText: (s: { text?: string }) => s?.text ?? "",
   useChatStream: () => ({
-    streaming: false,
+    // Read when asked (the page's Stop reads it at the press), so a held
+    // reply is "streaming" for as long as the test holds it.
+    get streaming() {
+      return H.stream.streaming;
+    },
     text: "",
     tools: [],
     approval: null,
-    run: () =>
-      Promise.resolve({
+    run: () => {
+      const result = {
         reply: "Noted.",
         tools_used: [],
         ...(H.stream.context ? { context: H.stream.context } : {}),
-      }),
-    abort: () => {},
+      };
+      if (!H.stream.hold) return Promise.resolve(result);
+      H.stream.streaming = true;
+      return new Promise((resolve) => {
+        H.stream.release = () => {
+          H.stream.streaming = false;
+          resolve(result);
+        };
+      });
+    },
+    abort: () => {
+      H.stream.aborts += 1;
+    },
   }),
 }));
 vi.mock("@/lib/useEvents", () => ({ useEvents: () => ({ events: [], connected: false }) }));
@@ -126,17 +150,20 @@ vi.mock("@/components/project/ProjectSurfaces", () => ({
 import ChatPage from "@/app/chat/page";
 import { ChatFilling } from "@/components/chat/ChatFilling";
 import { ContextBreakdown } from "@/components/harness/ContextBreakdown";
-import { aboutShare, decodeBreakdown } from "@/lib/contextBreakdown";
+import { MORE_THAN_THE_ROOM, aboutShare, decodeBreakdown } from "@/lib/contextBreakdown";
 import {
   FILLING_ESTIMATE,
   FILLING_FAILED,
   FILLING_LOADING,
   FILLING_NONE,
   FILLING_TITLE,
+  OVER_SHARES,
   decodeChatFilling,
   fillingMeterLabel,
   fillingPath,
   leftOutWords,
+  overLeftWords,
+  overWords,
 } from "@/lib/chatFilling";
 
 /** The engine words a plain chat never shows. */
@@ -160,6 +187,10 @@ beforeEach(() => {
   H.api.gets.length = 0;
   H.api.held = {};
   H.stream.context = null;
+  H.stream.hold = false;
+  H.stream.release = null;
+  H.stream.streaming = false;
+  H.stream.aborts = 0;
   H.api.responses = {
     "/models": { models: [] },
     "/chat/personas": { personas: [] },
@@ -319,6 +350,107 @@ describe("the list, from the daemon's real answer", () => {
   });
 });
 
+/* ================================== a chat that holds more than its room */
+
+/** Every "N%" a piece of text says. */
+const percents = (text: string): number[] => Array.from(text.matchAll(/(\d+)\s*%/g)).map((m) => Number(m[1]));
+
+describe("a chat that holds more than its room: one record, one set of words", () => {
+  const said = fixture.said as Record<"filled" | "no_tools_safe_size" | "over_full", string[]>;
+
+  /** The list for one of the fixture's chats, every fold opened. */
+  async function list(name: "filled" | "no_tools_safe_size" | "over_full") {
+    H.api.responses[fillingPath("chat_x")] = fixture[name];
+    render(<ChatFilling threadId="chat_x" onClose={() => {}} />);
+    const panel = await screen.findByTestId("chat-filling");
+    await screen.findByTestId("chat-filling-context-parts");
+    for (const fold of panel.querySelectorAll<HTMLButtonElement>("[aria-expanded='false']")) fireEvent.click(fold);
+    return panel;
+  }
+
+  it("says so in place of a percent, each part as its share of what the chat holds, and the room left as none", async () => {
+    const panel = await list("over_full");
+    expect(screen.getByTestId("chat-filling-context-percent").textContent).toBe(
+      "This chat holds more than this model can read at once.",
+    );
+    const rows = Array.from(screen.getByTestId("chat-filling-context-parts").querySelectorAll("li")).map((li) => li.textContent);
+    expect(rows).toEqual([
+      "Your messages and the repliesabout 95%", // 8,000 of the 8,400 it holds (133% of its room)
+      "Iron Jarvis's own instructionsabout 5%",
+      "Room leftnone",
+    ]);
+    // The tools are sent beside the chat: their share is of the room, and says so.
+    expect(screen.getByTestId("chat-filling-context-extra").querySelector("li")?.textContent).toBe(
+      "Tools it was givenabout 12% of the room",
+    );
+    expect(Array.from(screen.getByTestId("chat-filling-context-list-tools").querySelectorAll("li")).map((li) => li.textContent)).toEqual([
+      "Iron Jarvis's own tools2 toolsabout 5% of the room",
+      "ledger12 toolsabout 7% of the room",
+    ]);
+    // Said once: the oldest messages are left out, with the saved count.
+    expect(screen.getByTestId("chat-filling-context-note").textContent).toBe(
+      `Iron Jarvis leaves the oldest messages out of each reply so it fits (at least 22 in the newest reply). ${OVER_SHARES} ${FILLING_ESTIMATE}`,
+    );
+    expect(overLeftWords(0)).toBe("Iron Jarvis leaves the oldest messages out of each reply so it fits.");
+    // No figure above 100 anywhere: on screen, in a hover, or for a screen reader.
+    const spoken = Array.from(panel.querySelectorAll("[title],[aria-label]"))
+      .map((n) => `${n.getAttribute("title") ?? ""} ${n.getAttribute("aria-label") ?? ""}`)
+      .join(" ");
+    for (const n of percents(`${panel.textContent ?? ""} ${spoken}`)) expect(n).toBeLessThanOrEqual(100);
+    expect(`${panel.textContent ?? ""} ${spoken}`).not.toMatch(/133|140|about 100%/);
+    // The bar is drawn on the same shares (it adds up to the whole bar).
+    const widths = Array.from(screen.getByTestId("chat-filling-context-stack").children).map((c) => parseFloat((c as HTMLElement).style.width));
+    expect(Math.round(widths.reduce((a, b) => a + b, 0))).toBe(100);
+    // The screen reader's bar label follows the same words.
+    expect(screen.getByTestId("chat-filling-context-stack").getAttribute("aria-label")).toBe(
+      "This chat holds more than this model can read at once. Your messages and the replies about 95%, Iron Jarvis's own instructions about 5%",
+    );
+  });
+
+  it.each(["filled", "no_tools_safe_size", "over_full"] as const)(
+    "the list and the chat's own answer say the same words for the same reply (%s)",
+    async (name) => {
+      const panel = await list(name);
+      const lines = said[name];
+      // The first line of the list is the answer's first line.
+      expect(screen.getByTestId("chat-filling-context-percent").textContent).toBe(lines[1]);
+      // Every row of the list is a line of the answer: the same name, the same share.
+      const rows = Array.from(screen.getByTestId("chat-filling-context-parts").querySelectorAll("li"));
+      const used = rows.filter((li) => li.getAttribute("data-part") !== "free");
+      expect(used.length).toBeGreaterThan(0);
+      for (const li of used) {
+        const [label, share] = [li.children[1].textContent, li.children[2].textContent];
+        expect(lines).toContain(`- ${label}: ${share}`);
+      }
+      const free = rows.find((li) => li.getAttribute("data-part") === "free") as HTMLElement;
+      if (name === "over_full") {
+        expect(lines).toContain(`- Room left: ${free.children[2].textContent}`);
+        // The sentence about the oldest messages, word for word, once in each.
+        const note = screen.getByTestId("chat-filling-context-note").textContent ?? "";
+        const line = lines.find((l) => l.includes("leaves the oldest messages out")) as string;
+        expect(note.startsWith(line.replace(/^- /, ""))).toBe(true);
+      }
+      // The tools' share, where the reply was given any.
+      const tools = screen.queryByTestId("chat-filling-context-extra")?.querySelector("li");
+      const toolLine = lines.find((l) => l.startsWith("- Tools it was given"));
+      expect(!!tools).toBe(!!toolLine);
+      if (tools && toolLine) expect(toolLine).toContain(`, ${tools.children[2].textContent}: `);
+      // And neither says a figure above 100.
+      for (const n of percents(`${panel.textContent ?? ""} ${lines.join(" ")}`)) expect(n).toBeLessThanOrEqual(100);
+    },
+  );
+
+  it("a chat inside its room keeps its percent and its shares of the room", async () => {
+    await list("filled");
+    expect(decodeChatFilling(fixture.filled)?.over).toBe(false);
+    expect(decodeChatFilling(fixture.over_full)?.over).toBe(true);
+    expect(screen.getByTestId("chat-filling-context-extra").querySelector("li")?.textContent).toBe("Tools it was givenabout 7%");
+    expect(screen.getByTestId("chat-filling-context-stack").getAttribute("aria-label")).toBe(
+      "This chat fills about 43% of what this model can read at once. Your messages and the replies about 30%, Files you attached about 8%, What Iron Jarvis remembered about 2%, Iron Jarvis's own instructions about 3%",
+    );
+  });
+});
+
 /* ============================================================== the decoder */
 
 describe("the decoder and the words", () => {
@@ -345,7 +477,9 @@ describe("the decoder and the words", () => {
   });
 
   it("an answer that is not found, or is junk, has no list", () => {
-    expect(decodeChatFilling(fixture.none)).toEqual({ found: false, reading: null, windowKnown: true, leftOut: 0 });
+    expect(decodeChatFilling(fixture.none)).toEqual({
+      found: false, reading: null, windowKnown: true, leftOut: 0, over: false,
+    });
     expect(decodeChatFilling(null)).toBeNull();
     expect(decodeChatFilling("nope")).toBeNull();
     expect(decodeChatFilling({ found: true, reading: { window: 0 } })?.found).toBe(false);
@@ -359,6 +493,15 @@ describe("the decoder and the words", () => {
     expect(leftOutWords(1)).toBe("At least 1 earlier message was left out of the last reply so it fits.");
     expect(leftOutWords(0)).toBe("");
     expect(fillingMeterLabel(60)).toBe("This chat is about 60% full. Press to see what is filling it.");
+    expect(fillingMeterLabel(100)).toBe("This chat is about 100% full. Press to see what is filling it.");
+    // Over its room: the list's own first words, never "about 100% full" or a percent above 100.
+    expect(fillingMeterLabel(162)).toBe(
+      "This chat holds more than this model can read at once. Press to see what is filling it.",
+    );
+    expect(fillingMeterLabel(162, false)).toBe(`${overWords(false)} Press to see what is filling it.`);
+    // A size bigger than what it is a share of is said in words, never as a percent above 100.
+    expect(aboutShare(162_000, 100_000)).toBe(MORE_THAN_THE_ROOM);
+    expect(aboutShare(100_000, 100_000)).toBe("about 100%");
     expect(fillingPath("a b/c")).toBe("/chat/threads/a%20b%2Fc/filling");
   });
 });
@@ -454,5 +597,183 @@ describe("the fullness meter in a plain chat opens the list", () => {
     fireEvent.click(await screen.findByTestId("chat-more-trigger"));
     await waitFor(() => expect(screen.getByTestId("chat-more-trigger").getAttribute("aria-expanded")).toBe("true"));
     expect(screen.queryByTestId("chat-more-filling")).toBeNull();
+  });
+
+  it("a chat over its room: the meter's name says so, never 'about 100% full'", async () => {
+    H.stream.context = { ...HALF, percent: 162 };
+    render(<ChatPage />);
+    await sendHello();
+    const meter = await screen.findByTestId("chat-fullness-meter");
+    expect(meter.getAttribute("aria-label")).toBe(
+      "This chat holds more than this model can read at once. Press to see what is filling it.",
+    );
+    expect(meter.getAttribute("title")).toBe("This chat holds more than this model can read at once.");
+    expect(`${meter.getAttribute("aria-label")} ${meter.getAttribute("title")}`).not.toMatch(/162|100/);
+  });
+});
+
+/* ============================================ one Escape, one thing closed */
+
+describe("Escape closes the list and nothing else", () => {
+  it("with a reply running and the message box focused: one Escape closes the list, the next stops the reply", async () => {
+    H.stream.context = HALF;
+    H.api.responses[fillingPath("t1")] = fixture.filled;
+    render(<ChatPage />);
+    await sendHello();
+    // A second reply, held running.
+    H.stream.hold = true;
+    const b = await box();
+    fireEvent.change(b, { target: { value: "and another" } });
+    fireEvent.keyDown(b, { key: "Enter" });
+    await waitFor(() => expect(H.stream.release).not.toBeNull());
+    // Opened from the meter (focus is on it, as after a real press), then the reader moves to the message box.
+    const meter = await screen.findByTestId("chat-fullness-meter");
+    meter.focus();
+    fireEvent.click(meter);
+    await screen.findByTestId("chat-filling-context-parts");
+    const busy = (await screen.findByPlaceholderText(/Steer Jarvis mid-turn/)) as HTMLTextAreaElement;
+    busy.focus();
+    expect(document.activeElement).toBe(busy);
+    const pulledBack = vi.spyOn(meter, "focus");
+
+    // One Escape: the list closes; the reply is not stopped and the box never sees the key.
+    const reached: string[] = [];
+    const boxSaw = (e: KeyboardEvent) => e.key === "Escape" && reached.push("box");
+    busy.addEventListener("keydown", boxSaw);
+    try {
+      const notPrevented = fireEvent.keyDown(busy, { key: "Escape" });
+      expect(notPrevented).toBe(false);
+    } finally {
+      busy.removeEventListener("keydown", boxSaw);
+    }
+    await waitFor(() => expect(screen.queryByTestId("chat-filling")).toBeNull());
+    expect(reached).toEqual([]);
+    expect(H.stream.aborts).toBe(0);
+    // The reader stays in the message box: focus is never pulled back to the meter, not even for a moment.
+    expect(pulledBack).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(busy);
+
+    // The next Escape is the message box's own: it stops the reply.
+    fireEvent.keyDown(busy, { key: "Escape" });
+    await waitFor(() => expect(H.stream.aborts).toBe(1));
+  });
+});
+
+describe("the chat kept behind the Code view", () => {
+  it("source: the list is closed and not drawn there (its Escape is a window key that chat never answers)", () => {
+    // The page's own precedent for this rule is a source pin
+    // (wave-d3-review-questions-v1450): the Code view is not mounted here.
+    const src = readFileSync(join(process.cwd(), "app/chat/page.tsx"), "utf8").replace(/\r\n/g, "\n");
+    expect(src.split("{fillingOpen && !surfaceHidden ? (").length).toBe(2);
+    expect(src).not.toMatch(/\{fillingOpen \? </);
+    const i = src.indexOf("const fillingReturnTarget = useCallback(");
+    expect(i).toBeGreaterThan(0);
+    expect(src.slice(i, i + 500)).toContain(
+      "useEffect(() => {\n    if (surfaceHidden) setFillingOpen(false);\n  }, [surfaceHidden]);",
+    );
+  });
+});
+
+/* ====================================== one corner, focus, and a fresh list */
+
+describe("the list and the conversation map share one corner", () => {
+  async function twoQuestions() {
+    H.stream.context = HALF;
+    H.api.responses[fillingPath("t1")] = fixture.filled;
+    render(<ChatPage />);
+    await sendHello();
+    const b = await box();
+    fireEvent.change(b, { target: { value: "hello again" } });
+    fireEvent.keyDown(b, { key: "Enter" });
+    await waitFor(() => expect((screen.getByTestId("open-conversation-map") as HTMLButtonElement).disabled).toBe(false));
+  }
+
+  it("opening one closes the other, from the meter, the map's button and the menu's row", async () => {
+    await twoQuestions();
+    const map = screen.getByTestId("open-conversation-map");
+    const meter = await screen.findByTestId("chat-fullness-meter");
+    fireEvent.click(map);
+    expect(await screen.findByTestId("conversation-map")).toBeTruthy();
+    // The meter opens the list: the map closes.
+    fireEvent.click(meter);
+    expect(await screen.findByTestId("chat-filling")).toBeTruthy();
+    expect(screen.queryByTestId("conversation-map")).toBeNull();
+    expect(map.getAttribute("aria-expanded")).toBe("false");
+    // The map's button opens the map: the list closes.
+    fireEvent.click(map);
+    expect(await screen.findByTestId("conversation-map")).toBeTruthy();
+    expect(screen.queryByTestId("chat-filling")).toBeNull();
+    expect(meter.getAttribute("aria-expanded")).toBe("false");
+    // The menu's row opens the list: the map closes.
+    fireEvent.click(screen.getByTestId("chat-more-trigger"));
+    fireEvent.click(await screen.findByTestId("chat-more-filling"));
+    expect(await screen.findByTestId("chat-filling")).toBeTruthy();
+    expect(screen.queryByTestId("conversation-map")).toBeNull();
+  });
+
+  it("focus moves into the list when it opens and back to the meter when it closes", async () => {
+    await twoQuestions();
+    const meter = await screen.findByTestId("chat-fullness-meter");
+    meter.focus();
+    fireEvent.click(meter);
+    const panel = await screen.findByTestId("chat-filling");
+    expect(document.activeElement).toBe(panel);
+    fireEvent.keyDown(panel, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("chat-filling")).toBeNull());
+    expect(document.activeElement).toBe(meter);
+    // Closed by its own Close press: back to the meter too.
+    fireEvent.click(meter);
+    const again = await screen.findByTestId("chat-filling");
+    const close = screen.getByTestId("chat-filling-close");
+    close.focus();
+    expect(again.contains(document.activeElement)).toBe(true);
+    fireEvent.click(close);
+    await waitFor(() => expect(screen.queryByTestId("chat-filling")).toBeNull());
+    expect(document.activeElement).toBe(meter);
+  });
+
+  it("opened from the chat's menu, focus goes back to the menu's button (its row is gone)", async () => {
+    await twoQuestions();
+    const trigger = screen.getByTestId("chat-more-trigger");
+    fireEvent.click(trigger);
+    const row = await screen.findByTestId("chat-more-filling");
+    row.focus();
+    fireEvent.click(row);
+    const panel = await screen.findByTestId("chat-filling");
+    expect(document.activeElement).toBe(panel);
+    fireEvent.click(screen.getByTestId("chat-filling-close"));
+    await waitFor(() => expect(screen.queryByTestId("chat-filling")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("a reply that ends while the list is open is read again, and the list stays on screen meanwhile", async () => {
+    H.stream.context = HALF;
+    H.api.responses[fillingPath("t1")] = fixture.filled;
+    render(<ChatPage />);
+    await sendHello();
+    fireEvent.click(await screen.findByTestId("chat-fullness-meter"));
+    await screen.findByTestId("chat-filling-context-parts");
+    expect(H.api.gets.filter((p) => p.includes("/filling"))).toEqual([fillingPath("t1")]);
+    expect(screen.getByTestId("chat-filling-context-percent").textContent).toContain("about 43%");
+
+    // The next reply: held running, then ended. Its record is another one.
+    H.stream.hold = true;
+    const b = await box();
+    fireEvent.change(b, { target: { value: "one more" } });
+    fireEvent.keyDown(b, { key: "Enter" });
+    await waitFor(() => expect(H.stream.release).not.toBeNull());
+    expect(H.api.gets.filter((p) => p.includes("/filling"))).toEqual([fillingPath("t1")]);
+    H.api.responses[fillingPath("t1")] = "HOLD";
+    H.stream.release?.();
+    await waitFor(() => expect(H.api.gets.filter((p) => p.includes("/filling")).length).toBe(2));
+    // While the new answer is on its way the list is still there: no "Reading…" under the reader.
+    expect(screen.getByTestId("chat-filling-context-percent").textContent).toContain("about 43%");
+    expect(screen.queryByTestId("chat-filling-context-none")).toBeNull();
+    H.api.held[fillingPath("t1")](fixture.over_full);
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-filling-context-percent").textContent).toBe(
+        "This chat holds more than this model can read at once.",
+      ),
+    );
   });
 });

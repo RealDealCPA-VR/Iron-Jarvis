@@ -515,6 +515,94 @@ async def test_the_router_times_a_completion_and_a_streams_final_frame_on_both_p
     assert facts.fields()["model_calls"] == 3
 
 
+async def test_a_stream_that_failed_and_was_tried_again_is_timed_from_its_own_start(clock, monkeypatch):
+    """The rule: the time a failed or retried call took is NOT the reply's
+    model time. A stream whose first try fails is tried again on the same
+    model: only the try that answered is timed, from its own start."""
+    import iron_jarvis.providers.router as router_mod
+    from iron_jarvis.core.events import EventBus
+    from iron_jarvis.providers.manager import ProviderManager
+    from iron_jarvis.providers.router import ModelRouter
+
+    tries: list[float] = []
+
+    class _Flaky(MockLLMAdapter):
+        async def stream(self, *, system, messages, tools, **kw):
+            tries.append(clock.t)
+            if len(tries) == 1:
+                clock.t += 40.0                       # the try that failed took 40 s
+                raise ConnectionError("the connection dropped")
+            clock.t += CALL_S
+            yield {"type": "final", "response": LLMResponse(text="ok", usage=dict(CACHED))}
+
+        async def complete(self, *, system, messages, tools, **kw):
+            clock.t += 9.0
+            raise ConnectionError("the connection dropped")
+
+    # The backoff between tries waits no time at all (and nothing here sleeps for real).
+    monkeypatch.setattr(router_mod.random, "uniform", lambda a, b: 0.0)
+    manager = ProviderManager()
+    manager.register("mock", lambda model=None: _Flaky())
+    router = ModelRouter(manager, "mock", EventBus())
+    router._clock = clock
+    adapter = manager.get("mock")
+
+    facts = reply_facts.begin()
+    frames = [f async for f in router._stream_one(
+        adapter, system="s", messages=[], tools=[], deadline=clock.t + 600, retry=True)]
+    assert len(tries) == 2 and frames[-1]["type"] == "final"
+    assert facts.fields() == {"model_calls": 1, "model_ms": int(CALL_S * 1000)}, "the failed try's 40 s was counted"
+    # A completion that fails is not timed at all.
+    with pytest.raises(ConnectionError):
+        await router._timed_complete(adapter, system="s", messages=[], tools=[])
+    assert facts.fields() == {"model_calls": 1, "model_ms": int(CALL_S * 1000)}
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_no_reuse_figure_reported_leaves_cache_input_out_of_the_record_never_zero(tmp_path, clock, lane):
+    """``cache_input`` is the input of the calls that REPORTED a reuse
+    figure: when none did it is absent from the record (never 0), and the
+    row's own counts are None. Both lanes."""
+    app = _app(tmp_path, clock)
+    _stand_in(app.state.platform, clock, [LLMResponse(text="Here is the report.",
+                                                      usage={"input_tokens": 900, "output_tokens": 20})])
+    _ask(app, lane, "t-nocache")
+    row = _row(app.state.platform.engine, "t-nocache")
+    record = json.loads(row.parts_json)
+    assert record["parts"]["messages"] > 0
+    assert "cache_input" not in record, record
+    assert row.cache_read_input_tokens is None and row.cache_creation_input_tokens is None
+    # The control: a provider that reported one is read against that input.
+    _stand_in(app.state.platform, clock)
+    _ask(app, lane, "t-cache")
+    assert json.loads(_row(app.state.platform.engine, "t-cache").parts_json)["cache_input"] == 900
+
+
+def test_a_record_names_at_most_24_extensions_and_sums_the_rest_under_one_name():
+    specs = [{"name": f"mcp__ext{i:02d}__do", "description": "x" * (40 * (i + 1))} for i in range(30)]
+    specs += [{"name": f"mcp__ext29__also{n}", "description": "y"} for n in range(2)]
+    specs.append({"name": "read_file", "description": "Read a file."})
+    got = B.tool_origins(specs)
+    ext = got["extensions"]
+    assert B.MAX_ORIGINS == 24 and len(ext) == B.MAX_ORIGINS + 1
+    assert B.OTHER_EXTENSIONS in ext
+    # The 24 biggest are named; the six smallest are summed, by count and by size.
+    named = sorted(k for k in ext if k != B.OTHER_EXTENSIONS)
+    assert named == [f"ext{i:02d}" for i in range(6, 30)]
+    whole = B.tool_origins([s for s in specs if s["name"] != "read_file"][:6])
+    assert ext[B.OTHER_EXTENSIONS] == [6, sum(v[1] for v in whole["extensions"].values())]
+    assert ext["ext29"][0] == 3
+    # Nothing is lost: every definition is in the count.
+    assert got["builtin"][0] + sum(v[0] for v in ext.values()) == len(specs)
+    # At the cap itself nothing is folded.
+    at_cap = B.tool_origins(specs[:24])
+    assert len(at_cap["extensions"]) == 24 and B.OTHER_EXTENSIONS not in at_cap["extensions"]
+    # The list the page draws reads it as one more row.
+    reading = B.chat_reading({"v": 1, "window": 1_000_000, "used": 10, "percent": 1, "parts": {"messages": 10},
+                              "tools": got})
+    assert B.OTHER_EXTENSIONS in [i["name"] for i in reading["lists"][0]["items"]]
+
+
 # --------------------------------------------------------------------------- #
 # The lanes stay in step (source pins)
 # --------------------------------------------------------------------------- #

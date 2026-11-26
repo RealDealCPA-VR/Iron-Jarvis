@@ -1125,6 +1125,14 @@ async def _complete(platform: Any, evidence: Evidence, prompt: str,
     return route, ""
 
 
+#: What the usage row of a reflection is called (the row's ``result``, in the
+#: user's words; the intelligence plan, release 6). The row is in the
+#: session's totals and is NOT one of its replies: a reader that numbers a
+#: chat's replies skips a labelled row (``scripts/measure_tool_definitions.py``;
+#: the twin is ``routes/followups.FOLLOWUPS_USAGE_LABEL``).
+REFLECT_USAGE_LABEL = "A look back at this coding session's work for a lesson"
+
+
 def _bill(platform: Any, route: Any, thread_id: str) -> None:
     """The reflection's usage on the session's own total (the follow-ups' way)."""
     try:
@@ -1143,7 +1151,7 @@ def _bill(platform: Any, route: Any, thread_id: str) -> None:
             SimpleNamespace(platform=platform), provider=provider, model=model,
             state=AgentState.COMPLETED, completions=1, usage_in=tally.input_tokens,
             usage_out=tally.output_tokens, cost_usd=tally.cost_usd, thread_id=thread_id,
-            cost_source=tally.cost_source,
+            cost_source=tally.cost_source, label=REFLECT_USAGE_LABEL,
         )
     except Exception:  # noqa: BLE001 — accounting never fails the reflection
         log.debug("Build library reflection usage not recorded", exc_info=True)

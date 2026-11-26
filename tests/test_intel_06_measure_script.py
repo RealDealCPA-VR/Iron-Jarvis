@@ -2,7 +2,7 @@
 prints, from the app's own records, what each reply used.
 
 For the last week (``--days``): tokens sent per reply by part, and the share
-the model server reused, by REPLY NUMBER in a chat (reply 1, 2, 3 ...
+the model reused, by REPLY NUMBER in a chat (reply 1, 2, 3 ...
 averaged over chats), with plain chat, coding sessions and agent runs apart,
 and the time to the first word where one was recorded.
 
@@ -17,6 +17,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -27,6 +28,9 @@ import pytest
 
 from iron_jarvis.core.db import open_db, session_scope
 from iron_jarvis.core.models import AgentRun, AgentState
+from iron_jarvis.daemon.chat_turn import SUMMARY_USAGE_LABEL
+from iron_jarvis.daemon.routes.followups import FOLLOWUPS_USAGE_LABEL
+from iron_jarvis.harness.library import REFLECT_USAGE_LABEL
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "measure_tool_definitions.py"
 NOW = datetime(2026, 11, 26, 12, 0, 0)
@@ -79,7 +83,7 @@ def filled(tmp_path) -> Path:
     path.parent.mkdir()
     engine = open_db(str(path))
     with session_scope(engine) as db:
-        # Chat A: three replies; the messages grow, the server reuses more each time.
+        # Chat A: three replies; the messages grow, the model reuses more each time.
         _row(db, thread="chat_a", hours_ago=30, record=_record(100, cache_input=6_000), cache_read=0,
              first_ms=1_000)
         _row(db, thread="chat_a", hours_ago=29, record=_record(900, files=4_000, cache_input=8_000),
@@ -168,7 +172,7 @@ def test_it_prints_tokens_by_part_and_the_share_reused_by_reply_number(filled, c
     assert _cell(head, r1, "reused") == "10.0%"            # (0 + 1,000) / (6,000 + 4,000)
     assert _cell(head, r1, "first_word_s") == "2.0"        # (1.0 + 3.0) / 2
 
-    # Reply 2: chats A, B and C; the server reuses more of a longer chat.
+    # Reply 2: chats A, B and C; the model reuses more of a longer chat.
     r2 = rows["2"]
     assert _cell(head, r2, "n") == "3"
     assert _cell(head, r2, "messages") == "833"            # (900 + 1,100 + 500) / 3
@@ -234,6 +238,95 @@ def test_the_older_form_still_prints_what_definitions_cost(filled, tmp_path, cap
     assert "each extension:" in out and "ledger" in out
     assert "What each reply used (Iron Jarvis's own records, last 7 days)" in out
     assert "Plain chat: 6 replies in 3 chats" in out
+
+
+# --------------------------------------------------------------------------- #
+# A reply number counts replies only
+# --------------------------------------------------------------------------- #
+def _db(tmp_path, name: str = "ironjarvis.db") -> Path:
+    path = tmp_path / name
+    open_db(str(path)).dispose()
+    return path
+
+
+def _fill(path: Path, rows) -> None:
+    engine = open_db(str(path))
+    with session_scope(engine) as db:
+        rows(db)
+        db.commit()
+    engine.dispose()
+
+
+def test_a_reply_number_skips_the_rows_a_chat_writes_that_are_not_replies(tmp_path, capsys):
+    """Follow-up suggestions and a coding session's look back for a lesson
+    write a usage row in the chat (it is in the chat's totals). With their
+    label they are not replies: three replies are numbered 1, 2, 3."""
+    assert FOLLOWUPS_USAGE_LABEL and REFLECT_USAGE_LABEL and SUMMARY_USAGE_LABEL
+    path = _db(tmp_path)
+
+    def rows(db):
+        _row(db, thread="chat_n", hours_ago=10, record=_record(100))
+        _row(db, thread="chat_n", hours_ago=9.9, record=None, label=FOLLOWUPS_USAGE_LABEL)
+        _row(db, thread="chat_n", hours_ago=9, record=_record(200))
+        _row(db, thread="chat_n", hours_ago=8.9, record=None, label=FOLLOWUPS_USAGE_LABEL)
+        _row(db, thread="chat_n", hours_ago=8.8, record=None, label=REFLECT_USAGE_LABEL)
+        _row(db, thread="chat_n", hours_ago=8.7, record=None, label=SUMMARY_USAGE_LABEL)
+        _row(db, thread="chat_n", hours_ago=8, record=_record(300))
+
+    _fill(path, rows)
+    code, out = _run(capsys, "--db", str(path), "--now", NOW_ARG)
+    assert code == 0 and "Plain chat: 3 replies in 1 chat" in out
+    head, table = _table(out, "Plain chat")
+    assert sorted(table) == ["1", "2", "3"]
+    assert [_cell(head, table[n], "messages") for n in ("1", "2", "3")] == ["100", "200", "300"]
+    assert all(_cell(head, table[n], "n") == "1" for n in table)
+    # Said in one line: rows of those two kinds from before this version have no label.
+    assert out.count(M.OLDER_LABELS) == 1
+    assert "written before this version have no label and still count as replies" in M.OLDER_LABELS
+
+
+def test_an_unlabelled_row_of_that_kind_from_an_older_version_still_counts_and_the_output_says_so(tmp_path,
+                                                                                                capsys):
+    path = _db(tmp_path)
+
+    def rows(db):
+        _row(db, thread="chat_o", hours_ago=10, record=_record(100))
+        _row(db, thread="chat_o", hours_ago=9.9, record=None)      # an older follow-ups row: no label
+        _row(db, thread="chat_o", hours_ago=9, record=_record(200))
+
+    _fill(path, rows)
+    _, out = _run(capsys, "--db", str(path), "--now", NOW_ARG)
+    head, table = _table(out, "Plain chat")
+    assert sorted(table) == ["1", "3"], "the unlabelled row took number 2"
+    assert M.OLDER_LABELS in out
+
+
+def test_a_record_of_a_shape_it_does_not_know_is_left_out_and_counted_never_read_as_zeros(tmp_path, capsys):
+    path = _db(tmp_path)
+
+    def rows(db):
+        _row(db, thread="chat_v", hours_ago=10, record=_record(100))
+        _row(db, thread="chat_v", hours_ago=9, record={**_record(999_000), "v": 2})    # a newer version's
+        _row(db, thread="chat_v", hours_ago=8, record=_record(300))
+        _row(db, thread="chat_w", hours_ago=7, record={"parts": {"messages": 5}})      # no version at all
+
+    _fill(path, rows)
+    code, out = _run(capsys, "--db", str(path), "--now", NOW_ARG)
+    assert code == 0 and "Plain chat: 2 replies in 1 chat" in out
+    head, table = _table(out, "Plain chat")
+    # The reply is still a reply of its chat (the third one is number 3); its record is not read.
+    assert sorted(table) == ["1", "3"]
+    assert "999,000" not in out
+    assert "2 records of a shape this script does not know (a newer version's, or damaged) are left out." in out
+    assert M.RECORD_VERSION == 1
+
+
+def test_only_records_it_does_not_know_says_nothing_yet_and_how_many_were_left_out(tmp_path, capsys):
+    path = _db(tmp_path)
+    _fill(path, lambda db: _row(db, thread="chat_v", hours_ago=3, record={**_record(100), "v": 7}))
+    code, out = _run(capsys, "--db", str(path), "--now", NOW_ARG)
+    assert code == 0 and M.NOTHING_YET.format(days=7) in out
+    assert "1 record of a shape this script does not know (a newer version's, or damaged) is left out." in out
 
 
 # --------------------------------------------------------------------------- #
@@ -318,6 +411,101 @@ def test_a_database_the_app_has_open_is_read_with_its_newest_rows(tmp_path, caps
         assert sorted(p.name for p in tmp_path.iterdir()) == siblings
     finally:
         engine.dispose()
+
+
+def test_a_database_whose_app_died_gets_no_side_file_and_the_output_says_what_is_not_counted(tmp_path, capsys):
+    """A non-empty write-ahead file with NO ``-shm`` beside it: the app
+    stopped before folding its newest changes in. A plain read-only open
+    would create a ``-shm`` file there. Nothing is created, nothing is
+    copied, and one line says the newest changes are not counted."""
+    live = tmp_path / "live" / "ironjarvis.db"
+    live.parent.mkdir()
+    open_db(str(live)).dispose()                      # the tables are in the main file
+    engine = open_db(str(live))
+    try:
+        with session_scope(engine) as db:
+            _row(db, thread="chat_old", hours_ago=30, record=_record(100))
+            db.commit()
+        engine.dispose()                              # folded into the main file
+        engine = open_db(str(live))
+        with session_scope(engine) as db:
+            _row(db, thread="chat_new", hours_ago=1, record=_record(700))
+            db.commit()
+        assert (live.parent / "ironjarvis.db-wal").stat().st_size > 0, "the newest row is in the write-ahead file"
+        # What a crash leaves: the main file and its write-ahead file, no -shm.
+        dead = tmp_path / "dead"
+        dead.mkdir()
+        shutil.copyfile(live, dead / "ironjarvis.db")
+        shutil.copyfile(str(live) + "-wal", dead / "ironjarvis.db-wal")
+    finally:
+        engine.dispose()
+    path = dead / "ironjarvis.db"
+    assert M.wal_state(str(path)) == "left_behind"
+    before = {p.name: _digest(p) for p in dead.iterdir()}
+    assert sorted(before) == ["ironjarvis.db", "ironjarvis.db-wal"]
+
+    code, out = _run(capsys, "--db", str(path), "--now", NOW_ARG, "--days", "30")
+    assert code == 0
+    assert {p.name: _digest(p) for p in dead.iterdir()} == before, "a file was created or changed beside it"
+    assert not list(dead.glob("*-shm")), "a side file was left beside the database"
+    assert out.splitlines()[0] == M.LEFT_BEHIND
+    assert "not counted" in M.LEFT_BEHIND
+    # The main file's reply is read; the one still in the write-ahead file is not.
+    assert "Plain chat: 1 reply in 1 chat" in out
+    head, table = _table(out, "Plain chat")
+    assert _cell(head, table["1"], "messages") == "100"
+
+
+def test_the_three_states_of_the_write_ahead_file(tmp_path):
+    path = tmp_path / "x.db"
+    path.write_bytes(b"")
+    assert M.wal_state(str(path)) == "closed"
+    (tmp_path / "x.db-wal").write_bytes(b"")
+    assert M.wal_state(str(path)) == "closed", "an empty write-ahead file holds nothing"
+    (tmp_path / "x.db-wal").write_bytes(b"frames")
+    assert M.wal_state(str(path)) == "left_behind"
+    (tmp_path / "x.db-shm").write_bytes(b"index")
+    assert M.wal_state(str(path)) == "in_use"
+
+
+def test_a_file_that_is_not_a_database_ends_in_one_sentence_and_a_non_zero_exit(tmp_path, capsys):
+    junk = tmp_path / "notes.db"
+    junk.write_text("this is not a database, it is a note " * 40, encoding="utf-8")
+    code = M.main(["--db", str(junk), "--now", NOW_ARG])
+    got = capsys.readouterr()
+    assert code != 0
+    assert got.err.strip() == M.NOT_A_DATABASE.format(path=str(junk))
+    assert "Traceback" not in got.err + got.out and got.out == ""
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["notes.db"]
+    # A real database that is not Iron Jarvis's (no table of replies and runs) says the same.
+    other = tmp_path / "other.db"
+    con = sqlite3.connect(str(other))
+    con.execute("create table notes (id integer primary key, body text)")
+    con.commit()
+    con.close()
+    code = M.main(["--db", str(other)])
+    got = capsys.readouterr()
+    assert code != 0 and got.err.strip() == M.NOT_A_DATABASE.format(path=str(other))
+
+
+def test_a_bad_now_ends_in_one_sentence_and_a_non_zero_exit(filled, capsys):
+    before = _digest(filled)
+    code = M.main(["--db", str(filled), "--now", "next tuesday"])
+    got = capsys.readouterr()
+    assert code != 0
+    assert got.err.strip() == M.BAD_NOW.format(value="next tuesday")
+    assert "Traceback" not in got.err and got.out == ""
+    assert _digest(filled) == before
+
+
+def test_run_as_a_program_a_bad_file_and_a_bad_time_leave_no_traceback(filled, tmp_path):
+    junk = tmp_path / "junk.db"
+    junk.write_bytes(b"\x00\x01 not a database " * 100)
+    for argv in (["--db", str(junk)], ["--db", str(filled), "--now", "soon"]):
+        done = subprocess.run([sys.executable, "-I", str(SCRIPT), *argv], capture_output=True, text=True,
+                              timeout=60, check=False)
+        assert done.returncode != 0, argv
+        assert "Traceback" not in done.stderr and len(done.stderr.strip().splitlines()) == 1, done.stderr
 
 
 def test_it_runs_alone_with_no_package_on_the_path(filled):

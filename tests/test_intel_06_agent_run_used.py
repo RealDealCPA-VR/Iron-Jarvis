@@ -17,6 +17,7 @@ injected clock (nothing here sleeps).
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,7 @@ from iron_jarvis.core.models import AgentRun, AgentType, SessionStatus
 from iron_jarvis.eval import call_ledger, reply_facts
 from iron_jarvis.profile import ProfileStore
 from iron_jarvis.providers.adapters.base import LLMAdapter, LLMResponse, ToolCall
+from tests.test_auto_approve_lanes_v14060 import env  # noqa: F401 — a fixture (its own platform and folder)
 from tests.test_intel_04_not_checked_on_the_result_line import PLAN, TASK, WRITE_CALL
 
 CACHED = {"input_tokens": 900, "output_tokens": 20,
@@ -292,6 +294,164 @@ async def test_a_measure_that_breaks_does_not_fail_the_run(platform, orchestrato
     assert len(steps) == 2 and all(s["model_ms"] == CALL_MS for s in steps)
 
 
+async def test_a_steps_measure_runs_off_the_event_loop_with_the_steps_own_save(platform, orchestrator, clock,
+                                                                              monkeypatch):
+    """``note_step`` estimates a whole step's prompt: it runs on a worker
+    thread (the one that makes the step's own save), never on the loop."""
+    loop_thread = threading.get_ident()
+    where: list[tuple[str, bool]] = []
+    real_note, real_save = run_facts.note_step, runtime_mod.AgentRuntime._save
+
+    def note(*a, **k):
+        where.append(("measure", threading.get_ident() == loop_thread))
+        return real_note(*a, **k)
+
+    def save(self, run):
+        where.append(("save", threading.get_ident() == loop_thread))
+        return real_save(self, run)
+
+    monkeypatch.setattr(run_facts, "note_step", note)
+    monkeypatch.setattr(runtime_mod.AgentRuntime, "_save", save)
+    row, steps, _, _ = await _run(platform, orchestrator, clock, [_write(CACHED), "Wrote hello.txt."])
+    measures = [on_loop for what, on_loop in where if what == "measure"]
+    assert measures == [False, False], "a step was measured on the event loop"
+    # One hop: each measure is followed at once by the step's own save, on the same worker.
+    for i, (what, _on_loop) in enumerate(where):
+        if what == "measure":
+            assert where[i + 1] == ("save", False), where
+    # And the numbers are the same as ever: on the row and on each step's event.
+    assert row.steps == 2 and json.loads(row.parts_json)["sent"]["steps"] == 2
+    assert [s["tools"] > 0 and s["model_ms"] == CALL_MS for s in steps] == [True, True]
+
+
+def _facts_for_a_run(run_id: str = "run-x"):
+    class Run:
+        id = run_id
+
+    facts = reply_facts.ReplyFacts()
+    facts.for_run = True
+    return Run(), facts
+
+
+def test_a_steps_instructions_and_messages_are_counted_with_the_same_ratio():
+    run, facts = _facts_for_a_run()
+    system = "You are a careful builder. " * 40
+    messages = [{"role": "user", "content": "please write the quarterly summary " * 30}]
+    plain = run_facts.note_step(run, facts, usage=PLAIN, tool_specs=[], system=system, messages=messages)
+    run2, facts2 = _facts_for_a_run()
+    measured = run_facts.note_step(run2, facts2, usage=PLAIN, tool_specs=[], system=system, messages=messages,
+                                   ratio=2.0)
+    # With the model's measured ratio BOTH sizes move, by the same rule.
+    assert measured["sent"]["system"] == estimate_tokens(system, 2.0) > plain["sent"]["system"]
+    assert measured["sent"]["messages"] == B._message_tokens(messages, 2.0) > plain["sent"]["messages"]
+    assert plain["sent"]["messages"] == B._message_tokens(messages)
+    assert measured["sent"]["messages"] == estimate_tokens(messages[0]["content"], 2.0) + 4
+
+
+def test_tools_are_measured_again_when_the_list_changes_within_a_run():
+    run, facts = _facts_for_a_run()
+    small = {"name": "read_file", "description": "Read a file."}
+    big = {"name": "mcp__ledger__post_entry", "description": "Post an entry to the ledger. " * 40}
+    specs = [small, {"name": "list_files", "description": "Look in a folder."}]
+    first = run_facts.note_step(run, facts, usage=PLAIN, tool_specs=specs, system="s", messages=[])
+    assert facts.run_state["origins"]["builtin"][0] == 2 and facts.run_state["origins"]["extensions"] == {}
+    # The SAME list object, changed in place to the same length (its id() does not change).
+    specs[0] = big
+    second = run_facts.note_step(run, facts, usage=PLAIN, tool_specs=specs, system="s", messages=[])
+    assert second["tools"] == 2 and second["tool_spec_tokens"] > first["tool_spec_tokens"]
+    assert facts.run_state["origins"]["extensions"]["ledger"][0] == 1, "the changed list was not measured again"
+    assert json.loads(run.tools_sent_json) == ["read_file", "list_files", "mcp__ledger__post_entry"]
+    # The same names again: not measured again (the size stands), and still summed per step.
+    third = run_facts.note_step(run, facts, usage=PLAIN, tool_specs=list(specs), system="s", messages=[])
+    assert third["tool_spec_tokens"] == second["tool_spec_tokens"]
+    assert facts.run_state["sent"]["tools"] == first["tool_spec_tokens"] + 2 * second["tool_spec_tokens"]
+    # A key never rests on where a list happens to live.
+    assert run_facts._tools_key(specs) == run_facts._tools_key(list(specs)) == (
+        2, ("mcp__ledger__post_entry", "list_files"))
+    assert run_facts._tools_key([{"type": "function", "function": {"name": "a"}}, "junk"]) == (2, ("a", ""))
+
+
+def test_no_text_of_a_part_is_held_once_the_first_step_has_measured_it(monkeypatch):
+    """The prompt's named part strings are kept only to be measured once:
+    after the first step the run's facts hold sizes, never text."""
+    run, facts = _facts_for_a_run()
+    parts = run_facts.PromptParts("ROLE")
+    prompt = "ROLE" + "\n\n" + MARK_MEMORY + " is what was remembered " * 20
+    parts.claim("memory", prompt)
+    run_facts.note_prompt(facts, parts, run)
+    assert MARK_MEMORY in repr(facts.pieces), "the strings are there to be measured"
+    run_facts.note_step(run, facts, usage=PLAIN, tool_specs=[], system=prompt,
+                        messages=[{"role": "user", "content": MARK_TASK}], window=50_000)
+    assert facts.pieces is None
+    assert facts.parts["parts"]["memory"] > 0, "it was measured before it was let go"
+    held = repr({k: v for k, v in vars(facts).items() if k != "_lock"})
+    for mark in MARKS:
+        assert mark not in held, mark
+    # A measure of the parts that breaks lets the strings go too (it is tried once).
+    def boom(*a, **k):
+        raise RuntimeError("the measure broke")
+
+    run2, facts2 = _facts_for_a_run("run-y")
+    run_facts.note_prompt(facts2, parts, run2)
+    with monkeypatch.context() as m:
+        m.setattr(B, "sent_record", boom)
+        run_facts.note_step(run2, facts2, usage=PLAIN, tool_specs=[], system=prompt, messages=[])
+    assert facts2.pieces is None and facts2.parts is None
+    # A run that ends before any step measured its prompt lets them go when it settles.
+    run3, facts3 = _facts_for_a_run("run-z")
+    run_facts.note_prompt(facts3, parts, run3)
+    assert facts3.pieces
+    run_facts.settle(run3, facts3)
+    assert facts3.pieces is None
+
+
+async def test_the_quick_checks_cache_counts_are_on_the_run(env, monkeypatch):  # noqa: F811 — the fixture
+    """Auto's quick check is a model call of the run: its tokens were
+    counted on the run, and so are the cache counts its provider reported."""
+    from iron_jarvis.agents.types import AgentDefinition
+    from iron_jarvis.core import auto_approve as A
+    from iron_jarvis.core.models import Session
+    from iron_jarvis.providers.router import RouteResult
+
+    answers = [
+        {"input_tokens": 50, "output_tokens": 1, "cache_read_input_tokens": 30, "cache_creation_input_tokens": 5},
+        {"input_tokens": 40, "output_tokens": 1},                      # this one reported no cache figure
+    ]
+
+    async def complete(**kw):
+        assert kw.get("system") == A.JUDGE_SYSTEM
+        return RouteResult(LLMResponse(text="allow", usage=answers.pop(0)), "anthropic", "claude-sonnet-4-5")
+
+    monkeypatch.setattr(env.platform.router, "complete", complete)
+    rt = runtime_mod.AgentRuntime(env.platform)
+    agent = AgentDefinition(type=AgentType.BUILDER, system_prompt="t", tools=["shell"])
+    session = Session(id="s-check", task="build the documentation site for the cart service",
+                      agent_type=AgentType.BUILDER, approval_mode="auto", origin="chat",
+                      workspace_path=str(env.ws))
+    run = AgentRun(id="r-check", session_id=session.id, agent_type=AgentType.BUILDER,
+                   provider="anthropic", model="claude-sonnet-4-5")
+    assert run.cache_read_input_tokens is None and run.cache_creation_input_tokens is None
+
+    first = ToolCall(id="c1", name="shell", arguments={"command": "npm run build"})
+    await rt._judge_step(session, run, [first], agent, set(), {}, {"shell"}, lambda c: False)
+    assert rt._auto_judged[session.id] == {id(first): A.JUDGE_RULE}, "the check did not run"
+    assert (run.input_tokens, run.cache_read_input_tokens, run.cache_creation_input_tokens) == (50, 30, 5)
+    # A judgement whose provider reported none adds its tokens and leaves the counts as they are.
+    second = ToolCall(id="c2", name="shell", arguments={"command": "npm run docs"})
+    await rt._judge_step(session, run, [second], agent, set(), {}, {"shell"}, lambda c: False)
+    assert answers == []
+    assert (run.input_tokens, run.cache_read_input_tokens, run.cache_creation_input_tokens) == (90, 30, 5)
+
+
+def test_the_first_note_of_a_replys_parts_stands():
+    facts = reply_facts.ReplyFacts()
+    began = {"v": 1, "parts": {"messages": 10}, "used": 10}
+    facts.note_parts(began)
+    facts.note_parts({"v": 1, "parts": {"messages": 999}, "used": 999})
+    facts.note_parts(None)
+    assert facts.parts is began
+
+
 def test_note_step_never_raises_and_says_nothing_it_could_not_measure():
     class Run:
         id = "run-x"
@@ -381,10 +541,15 @@ def test_settle_writes_only_on_the_run_the_facts_belong_to():
 def test_the_runtime_keeps_the_step_before_its_own_save_and_opens_the_facts_inside_the_counted_scope():
     src = Path(runtime_mod.__file__).read_text(encoding="utf-8").replace("\r\n", "\n")
     assert src.count("_call_ledger.counted_scope(), \\\n                        _reply_facts.scope():") == 1
-    step = src.index("_step_used = _run_facts.note_step(")
-    save = src.index("await asyncio.to_thread(self._save, run)", step)
+    # The step is measured and then saved in ONE hop off the loop, before its event.
+    helper = src.index("def _note_step_and_save(")
+    measure = src.index("used = _run_facts.note_step(run, facts, **step)", helper)
+    save = src.index("self._save(run)", measure)
+    assert helper < measure < save < src.index("return used", save)
+    assert src.count("_run_facts.note_step(") == 1, "the measure has one call site, on the worker thread"
+    step = src.index("_step_used = await asyncio.to_thread(\n                self._note_step_and_save, run, _facts,")
     event = src.index("EventType.LLM_COMPLETED,", step)
-    assert step < save < event, "the step is on the row before the step's own save, and on its event"
+    assert step < event, "the step is on the row before its event"
     assert src.count("**_step_used,") == 1
     router = (Path(runtime_mod.__file__).resolve().parents[1] / "providers" / "router.py").read_text(
         encoding="utf-8").replace("\r\n", "\n")

@@ -1618,6 +1618,17 @@ _PUBLISHED_FIGURE_RX = re.compile(
 )
 
 # highest-scoring tools fill the free slots. Weights are relative only.
+#: The subject of a question about a chat's ROOM (the `chat_fullness` rule
+#: below): this / the / my / our chat, conversation or thread, and NOT another
+#: thing with one of those words in its name ("the chat room at the venue",
+#: "the chat server", "the thread pool").
+_CHAT_FULL_SUBJECT = (
+    r"(?:this|the|my|our)\s+(?:chat|conversation|thread)\b"
+    r"(?!\s+(?:rooms?|servers?|apps?|queues?|windows?|lists?|logs?|history|groups?|channels?|bots?|box(?:es)?|"
+    r"widgets?|services?|platforms?|programs?|software|tools?|features?|pages?|tabs?|sidebars?|panels?|"
+    r"pits?|pools?|spools?|counts?)\b)"
+)
+
 _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # --- what the browser downloaded (v1.444.0) -----------------------------
     # "the file I just downloaded", "my downloads", "the PDF I downloaded from
@@ -2811,20 +2822,39 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # --- what is FILLING this chat (the intelligence plan, release 6) -------
     # "why is this chat getting full?", "what is filling this chat?", "what is
     # using up this conversation?", "how full is this chat?", "how much room
-    # is left in this chat?": a question about the chat's own size, which
-    # `chat_fullness` reads from Iron Jarvis's record. Narrow on purpose: the
-    # subject is this chat / conversation / thread ("my disk is getting full",
-    # "the inbox is full" and "fill in this form" arm nothing here).
+    # is left in this chat?", "is this chat running out of room?": a question
+    # about the chat's own ROOM, which `chat_fullness` reads from Iron
+    # Jarvis's record. Narrow on purpose (the held table is
+    # tests/test_intel_06_chat_fullness.py HELD_ARM / HELD_NOT):
+    # * the CHAT (conversation, thread) is the thing that is full or filling.
+    #   "Long" is not "full" ("why is my chat so long to load", "so long
+    #   winded"), and another thing with "chat" in its name is not the chat
+    #   (`_CHAT_FULL_SUBJECT`: "the chat room at the venue", "the chat server");
+    # * full OF something is not a question about room ("why is this chat
+    #   full of typos"), except the one asking that is: "what is this chat
+    #   full of"; "full screen" is not about room either;
+    # * "my disk is getting full", "the inbox is full" and "fill in this
+    #   form" arm nothing here.
     (
         re.compile(
-            r"\b(?:why|how\s+come)\s+(?:is|has)\s+(?:this|the|my)\s+(?:chat|conversation|thread)\s+"
-            r"(?:getting|gotten|got|become|becoming|so|already|almost|nearly|this)?\s*(?:so\s+)?(?:full|long|big|large)\b"
-            r"|\bwhat(?:'s|\s+is|\s+has\s+been)\s+(?:filling|using\s+up|taking\s+up|eating\s+up)\s+"
-            r"(?:(?:all\s+)?(?:the\s+)?(?:room|space)\s+in\s+)?(?:this|the|my)\s+(?:chat|conversation|thread)\b"
-            r"|\bhow\s+full\s+is\s+(?:this|the|my)\s+(?:chat|conversation|thread)\b"
-            r"|\bhow\s+much\s+(?:room|space)\s+is\s+(?:left|free|used)\s+in\s+(?:this|the|my)\s+"
-            r"(?:chat|conversation|thread)\b"
-            r"|\bwhat\s+is\s+(?:this|the|my)\s+(?:chat|conversation|thread)\s+(?:full|filled\s+up)\s+(?:of|with)\b",
+            # why is this chat (getting / so / almost ...) full | filling up
+            r"\b(?:why\s+(?:is|has|did)|how\s+come(?:\s+(?:is|has|did))?)\s+" + _CHAT_FULL_SUBJECT + r"\s+"
+            r"(?:(?:getting|gotten|got|become|becoming|so|that|already|almost|nearly|this)\s+){0,2}"
+            r"(?:full\b(?!\s+(?:of|screen)\b)|fill(?:s|ing|ed)?\s+up\b)"
+            # what is filling (up) / using up / taking up (the room in) this chat
+            r"|\bwhat(?:'s|\s+is|\s+has\s+been)\s+(?:filling(?:\s+up)?|using\s+up|taking\s+up|eating\s+up)\s+"
+            r"(?:(?:all\s+)?(?:the\s+)?(?:room|space)\s+in\s+)?" + _CHAT_FULL_SUBJECT +
+            # how full is this chat / is this chat (almost) full
+            r"|\bhow\s+full\s+is\s+" + _CHAT_FULL_SUBJECT +
+            r"|\bis\s+" + _CHAT_FULL_SUBJECT + r"\s+(?:(?:getting|almost|nearly|already|too)\s+)?full\b(?!\s+(?:of|screen)\b)"
+            # how much room is left in this chat
+            r"|\bhow\s+much\s+(?:room|space)\s+is\s+(?:left|free|used)\s+in\s+" + _CHAT_FULL_SUBJECT +
+            # this chat is running out of room
+            r"|" + _CHAT_FULL_SUBJECT + r"\s+(?:is\s+)?run(?:ning|s)?\s+out\s+of\s+(?:room|space)\b"
+            # what is this chat full of
+            r"|\bwhat\s+is\s+" + _CHAT_FULL_SUBJECT + r"\s+(?:full|filled\s+up)\s+(?:of|with)\b"
+            # the fullness of this chat
+            r"|\bfullness\s+of\s+" + _CHAT_FULL_SUBJECT,
             re.IGNORECASE,
         ),
         {"chat_fullness": 8},

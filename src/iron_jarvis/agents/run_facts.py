@@ -12,10 +12,15 @@ step's own event (``llm.completed``):
   adds the step to the run's columns and returns the step event's extra keys.
 
 Sizes and names only: never the text of any part, a file's content or a
-tool's arguments. The part strings are held in memory for the run, to be
-measured once, and are saved nowhere. Every size is an ESTIMATE
-(``context.budget.estimate_tokens``) unless the provider reported it (the
-cache counts). Nothing here raises into a run.
+tool's arguments. The part strings are held in memory only until the run's
+first step has measured them (``note_step`` lets them go there, and
+``settle`` lets go of any a run never measured); they are saved nowhere.
+Every size is an ESTIMATE (``context.budget.estimate_tokens``) unless the
+provider reported it (the cache counts). Nothing here raises into a run.
+
+``note_step`` estimates a whole step's prompt, so it is BLOCKING work: the
+runtime calls it on the worker thread that makes the step's own save
+(``AgentRuntime._note_step_and_save``), never on the event loop.
 """
 
 from __future__ import annotations
@@ -85,6 +90,9 @@ def settle(run: Any, facts: Any) -> None:
         record = _record_json(facts)
         if record is not None:
             run.parts_json = record
+        # A run that ended before a step measured its prompt (a split task
+        # that never reached its loop) lets its part strings go here.
+        facts.pieces = None
     except Exception:  # noqa: BLE001 — a record never breaks a run
         pass
 
@@ -150,12 +158,26 @@ def note_call(run: Any, usage: Any, facts: Any = None) -> "dict[str, int]":
         return {}
 
 
+def _tools_key(specs: "list[Any]") -> "tuple[Any, ...]":
+    """What tells one step's tool list from another's: how many, and their
+    NAMES in order. Never ``id()`` of the list: a list changed in place keeps
+    its id, and a freed list's id is handed to the next one."""
+    names = []
+    for spec in specs:
+        fn = spec.get("function") if isinstance(spec, Mapping) else None
+        names.append(str((spec.get("name") if isinstance(spec, Mapping) else "")
+                         or (fn.get("name") if isinstance(fn, Mapping) else "") or ""))
+    return (len(specs), tuple(names))
+
+
 def note_step(
     run: Any, facts: Any, *, usage: Any, tool_specs: Any, system: Any, messages: Any,
     window: Any = None, ratio: "float | None" = None, model_ms_before: float = 0.0,
 ) -> "dict[str, Any]":
-    """ONE STEP of an agent run answered. Adds it to the run's columns (saved
-    by the step's own ``_save``, so nothing extra is written or read) and
+    """ONE STEP of an agent run answered. BLOCKING (it estimates the whole
+    step's prompt): called on the worker thread that makes the step's own
+    save, never on the event loop. Adds the step to the run's columns (saved
+    by that same save, so nothing extra is written or read) and
     returns the extra keys for the step's ``llm.completed`` event:
 
     * ``cache_read_input_tokens`` / ``cache_creation_input_tokens``: only when
@@ -187,9 +209,10 @@ def note_step(
         out.update(note_call(run, usage, facts))
 
         # The tool definitions this step sent: measured again only when the
-        # list changed (it rarely does within a run).
+        # list changed (it rarely does within a run), told by the tools'
+        # names and how many there are.
         specs = list(tool_specs or ())
-        key = (len(specs), id(tool_specs))
+        key = _tools_key(specs)
         if state["tools_key"] != key:
             state["tools_key"] = key
             blob = json.dumps(specs, ensure_ascii=False, sort_keys=True, default=str) if specs else ""
@@ -204,9 +227,11 @@ def note_step(
         out["tools"] = len(specs)
         out["tool_spec_tokens"] = int(state["tools_tokens"])
 
-        # What this step sent, by size (estimates).
+        # What this step sent, by size (estimates): the instructions and the
+        # messages counted with the SAME ratio (the model's measured one
+        # where there is one), so the two can be added and compared.
         sys_tokens = estimate_tokens(system or "", ratio) if isinstance(system, str) else 0
-        msg_tokens = _message_tokens(messages or ())
+        msg_tokens = _message_tokens(messages or (), ratio)
         out["sent"] = {"system": sys_tokens, "messages": msg_tokens}
         summed = state["sent"]
         summed["system"] += sys_tokens
@@ -225,6 +250,10 @@ def note_step(
                 ))
             except Exception:  # noqa: BLE001 — not measured: absent
                 pass
+            finally:
+                # Measured (or not measurable): the part STRINGS are let go.
+                # Only sizes stay on the facts for the rest of the run.
+                facts.pieces = None
         run.parts_json = _record_json(facts)
 
         # The model's time (the router's seam added this step's call).

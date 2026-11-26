@@ -179,6 +179,9 @@ def test_the_call_is_billed_once_on_the_usage_ledger(tmp_path):
     with session_scope(client.app.state.platform.engine) as db:
         runs = [r for r in db.exec(select(AgentRun)) if r.session_id == "chat"]
     assert [(r.provider, r.input_tokens, r.output_tokens) for r in runs] == [("anthropic", 40, 12)]
+    # The intelligence plan, release 6: the row says what it was for, so a
+    # reader that numbers a chat's replies does not count it as one.
+    assert [r.result for r in runs] == [fu.FOLLOWUPS_USAGE_LABEL]
 
 
 # ------------------------------------------------------------- the answer
