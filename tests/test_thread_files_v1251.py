@@ -301,9 +301,7 @@ def test_a_carried_file_is_named_but_never_re_extracted(client, scene, route):
     # above is the carrying path's doing and not a broken fixture.
     seen2 = _record(scene.platform)
     _ask(client, route, scene, "what changed?", attachments=[scene.book.name])
-    # (Release 7: an attached file's own text is kept WITH its message, ahead
-    # of the once-only "# Attachments" lines: read the whole of what was sent.)
-    assert _INSIDE_THE_FILE in seen2[0], (
+    assert _INSIDE_THE_FILE in _section(seen2[0]), (
         "the control failed: an ATTACHED workbook stopped rendering its text, "
         "so the carried-file assertion above proves nothing"
     )

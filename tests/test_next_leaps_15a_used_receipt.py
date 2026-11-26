@@ -51,6 +51,7 @@ from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.workmap.clients import store as client_store
 from iron_jarvis.workmap.index import work_map
+from tests._fakes.sent import with_beside
 
 LANES = ("post", "stream")
 PREF = "Always give prices in euros"
@@ -81,11 +82,11 @@ def _scripted(platform, monkeypatch, final: str) -> dict:
     seen: dict = {"systems": []}
 
     async def fake_complete(*, system, messages, tools=None, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         return RouteResult(LLMResponse(text=final, usage={"input_tokens": 3, "output_tokens": 1}), "mock", "mock")
 
     async def fake_stream(*, system, messages, tools=None, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         resp = LLMResponse(text=final, usage={"input_tokens": 3, "output_tokens": 1})
         yield {"type": "text", "text": final}
         yield {"type": "final", "response": resp, "provider": "mock", "model": "mock"}

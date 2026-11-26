@@ -23,6 +23,8 @@ from iron_jarvis.context import prefix as P
 
 
 def _text(message: Any) -> tuple[str, str]:
+    if isinstance(message, str):  # a capture that kept only each message's content
+        return "user", message
     if isinstance(message, (tuple, list)) and len(message) == 2:
         return str(message[0]), str(message[1] or "")
     if isinstance(message, dict):
@@ -31,24 +33,22 @@ def _text(message: Any) -> tuple[str, str]:
 
 
 def beside(messages: Any) -> str:
-    """What Iron Jarvis placed beside the NEWEST user message: the text kept
-    with it (an attached file) and the once-only block. "" when there is none
-    (a coding session, an older lane)."""
+    """What Iron Jarvis placed beside the NEWEST user message: its once-only
+    block. "" when there is none (a coding session, an older lane)."""
+    # (The newest message that carries one: later in a reply Iron Jarvis may
+    # add notes of its own after it, in the user's place.)
     for message in reversed(list(messages or [])):
         role, text = _text(message)
-        if role != "user":
-            continue
-        starts = [i for i in (text.find("\n\n" + P.KEPT_TOP), text.find("\n\n" + P.ONCE_TOP)) if i >= 0]
-        return text[min(starts):] if starts else ""
+        at = text.find("\n\n" + P.ONCE_TOP) if role == "user" else -1
+        if at >= 0:
+            return text[at:]
     return ""
 
 
 def own_words(content: Any) -> str:
     """A user message's content WITHOUT what Iron Jarvis placed beside it:
     the person's own words, as they typed them."""
-    text = str(content or "")
-    starts = [i for i in (text.find("\n\n" + P.KEPT_TOP), text.find("\n\n" + P.ONCE_TOP)) if i >= 0]
-    return text[: min(starts)] if starts else text
+    return P.own_words(content)
 
 
 def with_beside(system: Any, messages: Any) -> str:

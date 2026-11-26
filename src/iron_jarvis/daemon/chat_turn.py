@@ -8218,11 +8218,16 @@ def look_first_kept_word(text: Any) -> bool:
 
 
 def _look_first_question(msgs: Any, head: int) -> str:
-    """The user's own message of this turn (``msgs[:head]`` ends on it)."""
+    """The user's own message of this turn (``msgs[:head]`` ends on it):
+    their OWN WORDS. Release 7: a plain chat reply's newest message carries a
+    once-only block beside those words (``context/prefix``); it is not part
+    of the question."""
     try:
+        from ..context.prefix import own_words
+
         for message in reversed(list(msgs[: max(0, int(head))])):
             if getattr(message, "role", "") == "user":
-                return str(getattr(message, "content", "") or "")
+                return own_words(getattr(message, "content", "") or "")
     except Exception:  # noqa: BLE001
         pass
     return ""
@@ -11734,14 +11739,15 @@ async def _prepare_attachments(
     # NEXT TO its own attachment instead of after every file block.
     parts: list[str] = []
     # Release 7 (``daemon/chat_prefix.AttachBlock``): each part's two halves,
-    # in step with ``parts``: the file's own text, which is KEPT with the
-    # message, and what is true for this reply only (the tools that can open
-    # or change it now, a note). A part with no file text is all "once".
+    # in step with ``parts``: the file's own text (data: it rides inside the
+    # fence) and Iron Jarvis's own lines about it for this reply (the tools
+    # that can open or change it now, a note). A part with no file text is
+    # all "once". Nothing of either is kept: both ride once.
     halves: list[tuple[str, str]] = []
 
-    def _add(part: str, *, kept: str = "", once: "str | None" = None) -> None:
+    def _add(part: str, *, files: str = "", once: "str | None" = None) -> None:
         parts.append(part)
-        halves.append((kept, part if once is None else once))
+        halves.append((files, part if once is None else once))
 
     def _file_line(name: str, live_line: str) -> str:
         return (f"\n\n## Attached file: {name}" + live_line) if live_line else ""
@@ -11919,7 +11925,7 @@ async def _prepare_attachments(
             if len(text) <= inline_budget:
                 head = f"\n\n## Attached file: {p.name}\n"
                 _own_text = head + (f"[{note}]\n{text}" if note else text)
-                _add(_own_text + live, kept=_own_text, once=_file_line(p.name, live))
+                _add(_own_text + live, files=_own_text, once=_file_line(p.name, live))
                 if _smap is not None:
                     await _record_attachment_marks(d, sources, text, _smap)
             else:
@@ -11938,7 +11944,7 @@ async def _prepare_attachments(
                     k=rag_k, char_budget=rag_budget, note=note,
                     shown_out=_shown if _smap is not None else None,
                 )
-                _add(_excerpts + live, kept=_excerpts, once=_file_line(p.name, live))
+                _add(_excerpts + live, files=_excerpts, once=_file_line(p.name, live))
                 if _smap is not None and len(_shown) == 2:
                     # Only the excerpts the model was given, in the text
                     # they were cut from.
@@ -12069,7 +12075,7 @@ async def _prepare_attachments(
     from .chat_prefix import AttachBlock
 
     return images, AttachBlock(
-        "".join(parts), kept="".join(k for k, _o in halves), once="".join(o for _k, o in halves),
+        "".join(parts), files="".join(f for f, _o in halves), once="".join(o for _f, o in halves),
     )
 
 
@@ -14165,8 +14171,9 @@ async def run_chat_turn(
 
     images, attach_block = await _prep.take("attachments")
     if attach_block:
-        # Release 7: a file's own text is KEPT with its message; the lines
-        # that are true for this reply only ride once. MIRROR NOTE (lock-step).
+        # Release 7: the files' own text is what was FOUND (inside the fence);
+        # Iron Jarvis's own lines about them are read last. It all rides ONCE,
+        # beside this message. MIRROR NOTE (lock-step).
         _attached = _stable.attached(attach_block)
         _query_tail += _attached
         _ctx_pieces.setdefault("attachments", []).append(str(_attached))
@@ -14302,9 +14309,6 @@ async def run_chat_turn(
     # at the ceiling. MIRROR NOTE (lock-step): stream copy in routes/chat.py.
     # v1.420.0 (C3.7): priced WITH the query tail (it is sent, last); a stored
     # summary the compaction adds joins the head.
-    # Release 7: the kept text of the chat's earlier messages is priced with
-    # the tail (it is sent, beside those messages). MIRROR NOTE (lock-step).
-    _query_tail = _stable.priced(_query_tail, body, _ctx_pieces)
     _system_before_compaction = system + _query_tail
     _ctx_system, _ctx_messages, context_report = await _apply_compaction(
         d, body, system + _query_tail, provider_choice, model_choice
@@ -14414,6 +14418,7 @@ async def run_chat_turn(
         # to send, never a permission). MIRROR NOTE (lock-step): routes/chat.py.
         armed, auto_armed = _stable.keep_auto(
             d, body, armed, auto_armed, _arm_ceiling, _MAX_ARMED_TOOLS,
+            provider=provider_choice,
         )
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed (the
         # runtime's arm_for_task rule; both failure shapes were empirically

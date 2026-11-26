@@ -98,6 +98,7 @@ LEFT_BEHIND = (
 )
 NOT_A_DATABASE = "What each reply used: {path} could not be read as an Iron Jarvis database."
 BAD_NOW = "--now must be a time like 2026-11-26T12:00:00, and {value!r} is not one."
+BAD_SPLIT = "--split must be a time like 2026-11-26T12:00:00, and {value!r} is not one."
 
 
 def tokens(specs) -> int:
@@ -227,7 +228,9 @@ def _table(title: str, unit: str, rows: list, max_number: int, out) -> None:
 
 def _collect(db: sqlite3.Connection, days: int, now: "datetime | None"):
     """Every reply and run with a record inside the window, numbered in its
-    chat: ``(chat, code, runs, unsaved)``. Shared by reports 1 and 3."""
+    chat: ``(chat, code, runs, unsaved, unknown)`` (*unknown*: records of a
+    shape this script does not know, left out and counted). Shared by reports
+    1 and 3: ONE reader, so a labelled row is never a reply in either."""
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     until = now.strftime("%Y-%m-%d %H:%M:%S.999999")
@@ -268,7 +271,15 @@ def _collect(db: sqlite3.Connection, days: int, now: "datetime | None"):
             "created": str(created).replace("T", " "),
         }
         (runs if not is_chat else code if record.get("kind") == "code" else chat).append(row)
-    return chat, code, runs, unsaved
+    return chat, code, runs, unsaved, unknown
+
+
+def _skipped(unknown: int) -> str:
+    """The one line for records of a shape this script does not know."""
+    return (
+        f"{unknown} record{'' if unknown == 1 else 's'} of a shape this script does not know (a newer "
+        f"version's, or damaged) {'is' if unknown == 1 else 'are'} left out."
+    ) if unknown else ""
 
 
 def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, max_number: int = 12,
@@ -280,12 +291,9 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
     if "parts_json" not in cols:
         print(OLD_DATABASE, file=out)
         return 0
-    chat, code, runs, unsaved = _collect(db, days, now)
+    chat, code, runs, unsaved, unknown = _collect(db, days, now)
     total = len(chat) + len(code) + len(runs)
-    skipped = (
-        f"{unknown} record{'' if unknown == 1 else 's'} of a shape this script does not know (a newer "
-        f"version's, or damaged) {'is' if unknown == 1 else 'are'} left out."
-    ) if unknown else ""
+    skipped = _skipped(unknown)
     if not total:
         print(NOTHING_YET.format(days=days), file=out)
         if skipped:
@@ -332,13 +340,17 @@ def sooner(db: sqlite3.Connection, split: datetime, days: int = 7, now: "datetim
     if "parts_json" not in cols:
         print(OLD_DATABASE, file=out)
         return 0
-    chat, _code, _runs, _unsaved = _collect(db, days, now)
+    chat, _code, _runs, _unsaved, unknown = _collect(db, days, now)
     if not chat:
         print(NOTHING_YET.format(days=days), file=out)
+        if unknown:
+            print(_skipped(unknown), file=out)
         return 0
     print("\"reused\" is the share of what was sent that the model server read from its saved copy, over "
-          "the replies whose provider reported one. The first reply of a chat has nothing to reuse: read "
-          "the line for the second and later replies.", file=out)
+          "the replies whose model server reported one. The first reply of a chat has nothing to reuse: "
+          "read the line for the second and later replies.", file=out)
+    if unknown:
+        print(_skipped(unknown), file=out)
     for label, part in (("before", [r for r in chat if r["created"] < at]),
                         ("from it on", [r for r in chat if r["created"] >= at])):
         later = [r for r in part if r["number"] >= 2]
@@ -482,6 +494,14 @@ def main(argv: "list[str] | None" = None) -> int:
         return 2
     if now is not None and now.tzinfo is not None:
         now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    # A bad --split ends here in one sentence, before anything is opened.
+    try:
+        split = datetime.fromisoformat(args.split) if args.split else None
+    except ValueError:
+        print(BAD_SPLIT.format(value=args.split), file=sys.stderr)
+        return 2
+    if split is not None and split.tzinfo is not None:
+        split = split.astimezone(timezone.utc).replace(tzinfo=None)
     left_behind = wal_state(db_path) == "left_behind"
     try:
         db = open_read_only(db_path)
@@ -500,10 +520,7 @@ def main(argv: "list[str] | None" = None) -> int:
             definitions(tools_json, db)
             print()
         used(db, days=max(1, args.days), now=now, max_number=max(1, args.max_replies))
-        if args.split:
-            split = datetime.fromisoformat(args.split)
-            if split.tzinfo is not None:
-                split = split.astimezone(timezone.utc).replace(tzinfo=None)
+        if split is not None:
             sooner(db, split, days=max(1, args.days), now=now, max_number=max(1, args.max_replies))
     except sqlite3.DatabaseError:
         print(NOT_A_DATABASE.format(path=db_path), file=sys.stderr)

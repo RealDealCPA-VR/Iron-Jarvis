@@ -30,6 +30,7 @@ from iron_jarvis.projects import recent_activity as RA
 from iron_jarvis.providers import egress
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
+from tests._fakes.sent import with_beside
 
 HEAD = "Recent activity in this project (newest first):"
 #: Short enough to fit a title line whole (80 chars) — a longer one would be
@@ -108,12 +109,12 @@ def _coding(scene, title, *, hours_ago=2.0, local_only=False) -> str:
 
 def _capture(platform, seen: list):
     async def fake_complete(*, provider=None, model=None, system, messages, tools=None, task_class=None, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, messages))
         return RouteResult(LLMResponse(text="Done."), "mock", "mock")
 
     async def fake_stream(*, provider=None, model=None, system, messages, tools=None, session_id=None,
                           task_class=None, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, messages))
         yield {"type": "text", "text": "Done."}
         yield {"type": "final", "response": LLMResponse(text="Done."), "provider": "mock", "model": "mock"}
 

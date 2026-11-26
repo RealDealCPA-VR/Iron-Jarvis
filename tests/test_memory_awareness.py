@@ -37,6 +37,7 @@ from iron_jarvis.ltm.brain import MarkdownBrainConnector
 from iron_jarvis.ltm.mcp_brain import McpBrainConnector
 from iron_jarvis.memory import index_block as index_block_mod
 from iron_jarvis.memory.index_block import memory_index_block
+from tests._fakes.sent import with_beside
 
 _HEADER = "# What I can remember"
 #: "when available" is load-bearing honesty — chat only arms `recall` when
@@ -462,7 +463,7 @@ def _spy_systems(platform, monkeypatch) -> list[str]:
         real_complete = adapter.complete
 
         async def spy(*, system, messages, tools):
-            systems.append(system)
+            systems.append(with_beside(system, messages))
             return await real_complete(system=system, messages=messages, tools=tools)
 
         adapter.complete = spy
@@ -533,7 +534,7 @@ def test_chat_turn_carries_awareness_and_grounding_together(tmp_path, monkeypatc
         async def fake_complete(
             *, provider=None, model=None, system, messages, tools, task_class
         ):
-            seen["system"] = system
+            seen["system"] = with_beside(system, messages)
             return RouteResult(LLMResponse(text="ok"), "mock", "mock")
 
         monkeypatch.setattr(p.router, "complete", fake_complete)

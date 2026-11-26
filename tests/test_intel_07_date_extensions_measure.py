@@ -247,6 +247,38 @@ def test_the_script_reads_reuse_and_the_first_word_before_and_after(two_weeks, c
     assert sorted(p.name for p in two_weeks.parent.iterdir()) == ["ironjarvis.db"], "it left a file beside it"
 
 
+def test_a_bad_split_ends_in_one_sentence_before_anything_is_opened(two_weeks, capsys):
+    before = _digest(two_weeks)
+    code = M.main(["--db", str(two_weeks), "--now", NOW_ARG, "--split", "next tuesday"])
+    out, err = capsys.readouterr()
+    assert code == 2 and out == ""
+    assert err.strip() == M.BAD_SPLIT.format(value="next tuesday") and "Traceback" not in err
+    assert _digest(two_weeks) == before
+    assert sorted(p.name for p in two_weeks.parent.iterdir()) == ["ironjarvis.db"]
+
+
+def test_the_split_report_keeps_the_scripts_own_rules(two_weeks, capsys):
+    """One reader for both reports: a labelled row is not a reply, and a
+    record of a shape the script does not know is left out and counted,
+    never read as zeros."""
+    engine = open_db(str(two_weeks))
+    with session_scope(engine) as db:
+        _row(db, thread="chat_after", hours_ago=2, record=_record(900, cache_input=6_000), cache_read=5_999,
+             first_ms=99_000, label="A summary of the conversation")
+        newer = _record(50, cache_input=6_000)
+        newer["v"] = 99
+        _row(db, thread="chat_after", hours_ago=1, record=newer, cache_read=1, first_ms=88_000)
+        db.commit()
+    engine.dispose()
+    code = M.main(["--db", str(two_weeks), "--now", NOW_ARG, "--split", "2026-11-25T12:00:00"])
+    out = capsys.readouterr().out
+    assert code == 0
+    report = out[out.index("Do replies start sooner"):]
+    assert "from it on: 4 replies in 1 chats" in report, "a labelled row or an unknown record was read as a reply"
+    assert "second and later replies (3): reused 92.5%, first word after 2.5 s" in report
+    assert report.count("1 record of a shape this script does not know") == 1
+
+
 def test_without_a_split_the_script_prints_what_it_always_did(two_weeks, capsys):
     M.main(["--db", str(two_weeks), "--now", NOW_ARG])
     assert "Do replies start sooner" not in capsys.readouterr().out

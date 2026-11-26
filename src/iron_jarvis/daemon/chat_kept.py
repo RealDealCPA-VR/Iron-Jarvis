@@ -1,25 +1,23 @@
-"""What a chat KEEPS between replies so its prefix stays the same (the
-intelligence plan, release 7; the contract is in ``context/prefix``).
+"""The tool NAMES a chat keeps between replies, so its tool list stays the
+same (the intelligence plan, release 7; the contract is in ``context/prefix``).
 
-One small table, ``chatkept``, two kinds of row, both tied to ONE chat:
+One small table, ``chatkept``, one row a chat: every tool name the chat has
+been sent, in the order first sent, and which of them its last reply was
+sent. The next reply keeps that order and puts a new tool at the end.
 
-* ``tools``: the NAMES of the tool definitions the chat has been sent, in the
-  order they were first sent, and which of them its last reply was sent. The
-  next reply keeps that order and puts a new tool at the end. Names only: never a definition, an argument or a result.
-  A name here is a definition to send, never a permission: every call is still
-  decided by the tool registry's gate, as before.
-* ``file``: the text of what was attached to one message of the chat, in the
-  very bytes the model was first sent, so the next replies send that message
-  again exactly as it was. This is the chat's own content (the file itself is
-  in the uploads folder already); it is kept only here, on this PC, bounded
-  (:data:`MAX_FILES` messages a chat, ``prefix.KEPT_MAX_CHARS`` each), and it
-  goes with its chat when the chat is deleted (``routes/chat.delete_thread``).
+NAMES ONLY. Never a definition, an argument, a result, a message or a file's
+text: nothing of what a person wrote or attached is written here (a test
+plants a marker in an attachment and finds it in no row). A name here is a
+definition to SEND, never a permission: every call is still decided by the
+tool registry's gate, as before.
 
-A NEW chat's first reply is sent before the chat has an id: its rows are
-written under the reply's turn id and given their chat when the page links
-the turn (``routes/chat.link_chat_turn`` -> :func:`home_turn`), like every
-other first-reply record. Rows that never got a chat are removed after
+A NEW chat's first reply is sent before the chat has an id: its row is
+written under the reply's turn id and given its chat when the page links the
+turn (``routes/chat.link_chat_turn`` -> :func:`home_turn`), like every other
+first-reply record. A row that never got a chat is removed after
 :data:`ORPHAN_DAYS` by the next write. A reply with neither id keeps nothing.
+The row goes with its chat when the chat is deleted
+(``routes/chat.delete_thread``).
 
 BLOCKING throughout: the lanes call it through ``asyncio.to_thread``. Nothing
 here raises into a reply, and nothing here publishes an event.
@@ -42,13 +40,8 @@ from ..core.ids import new_id, utcnow
 
 log = logging.getLogger(__name__)
 
-TOOLS = "tools"
-FILE = "file"
 #: A row whose turn never became a saved chat is removed this long after.
 ORPHAN_DAYS = 2
-#: Messages of one chat whose attached text is kept (a chat's Files rail
-#: holds up to 30 files); past it the oldest kept message's text goes.
-MAX_FILES = 30
 #: Tool names kept for a chat, and the longest name (the reply record's own
 #: bounds, ``eval/pricing``).
 MAX_TOOLS = 64
@@ -57,7 +50,7 @@ ID_MAX = 80
 
 
 class ChatKept(SQLModel, table=True):
-    """One thing a chat keeps between replies (see the module docstring)."""
+    """The tool names one chat keeps between replies."""
 
     __tablename__ = "chatkept"
 
@@ -65,12 +58,8 @@ class ChatKept(SQLModel, table=True):
     #: The saved chat ("" = not yet: :func:`home_turn`).
     thread_id: str = Field(default="", index=True)
     turn_id: str = Field(default="", index=True)
-    #: ``tools`` | ``file``
-    kind: str = Field(default="", index=True)
-    #: ``file``: the message's key inside its chat (``prefix.message_key``).
-    key: str = Field(default="", index=True)
-    #: ``tools``: a JSON list of names. ``file``: the kept block, as sent.
-    text: str = ""
+    #: JSON ``{"names": [...], "held": [...]}``: tool names, nothing else.
+    names_json: str = "{}"
     created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
@@ -82,8 +71,6 @@ class Kept:
     tools: "list[str]" = field(default_factory=list)
     #: The ones its LAST reply was sent.
     held: "set[str]" = field(default_factory=set)
-    #: A message's key -> the block kept with it.
-    files: "dict[str, str]" = field(default_factory=dict)
 
 
 _READY: set[int] = set()
@@ -99,7 +86,7 @@ def ensure_table(engine: Any) -> bool:
         _READY.add(key)
         return True
     except Exception:  # noqa: BLE001 — a kept list is never worth a failed reply
-        log.warning("the chat's kept record is unavailable", exc_info=True)
+        log.warning("the chat's kept tool names are unavailable", exc_info=True)
         return False
 
 
@@ -108,7 +95,7 @@ def _ids(thread_id: Any, turn_id: Any) -> "tuple[str, str]":
 
 
 def _owner(thread: str, turn: str) -> Any:
-    """The rows of one chat: its saved id, else the turn of its first reply."""
+    """The row of one chat: its saved id, else the turn of its first reply."""
     if thread:
         return ChatKept.thread_id == thread
     return (ChatKept.thread_id == "") & (ChatKept.turn_id == turn)
@@ -134,32 +121,23 @@ def load(engine: Any, thread_id: Any, turn_id: Any = "") -> Kept:
         return out
     try:
         with session_scope(engine) as db:
-            rows = list(db.exec(
-                select(ChatKept).where(_owner(thread, turn)).order_by(ChatKept.created_at)  # type: ignore[arg-type]
-            ))
-            for row in rows:
-                if row.kind == TOOLS:
-                    try:
-                        saved = json.loads(row.text or "{}")
-                    except ValueError:
-                        saved = {}
-                    saved = saved if isinstance(saved, dict) else {}
-                    names = saved.get("names")
-                    held = saved.get("held")
-                    out.tools = clean_names(names if isinstance(names, list) else [])
-                    out.held = set(clean_names(held if isinstance(held, list) else [])) & set(out.tools)
-                elif row.kind == FILE and row.key and row.text:
-                    out.files[row.key] = row.text
+            row = db.exec(
+                select(ChatKept).where(_owner(thread, turn)).order_by(ChatKept.created_at.desc())  # type: ignore[arg-type,attr-defined]
+            ).first()
+            if row is None:
+                return out
+            try:
+                saved = json.loads(row.names_json or "{}")
+            except ValueError:
+                saved = {}
+            saved = saved if isinstance(saved, dict) else {}
+            names, held = saved.get("names"), saved.get("held")
+            out.tools = clean_names(names if isinstance(names, list) else [])
+            out.held = set(clean_names(held if isinstance(held, list) else [])) & set(out.tools)
     except Exception:  # noqa: BLE001
-        log.warning("the chat's kept record could not be read", exc_info=True)
+        log.warning("the chat's kept tool names could not be read", exc_info=True)
         return Kept()
     return out
-
-
-def _sweep(conn: Any) -> None:
-    conn.execute(sa_delete(ChatKept).where(
-        ChatKept.thread_id == "", ChatKept.created_at < utcnow() - timedelta(days=ORPHAN_DAYS),
-    ))
 
 
 def save_tools(engine: Any, thread_id: Any, turn_id: Any, names: Iterable[Any], *,
@@ -172,66 +150,34 @@ def save_tools(engine: Any, thread_id: Any, turn_id: Any, names: Iterable[Any], 
         return False
     try:
         row = row_values(
-            ChatKept, id=new_id("kept"), thread_id=thread, turn_id=turn, kind=TOOLS, key="",
-            text=json.dumps(
+            ChatKept, id=new_id("kept"), thread_id=thread, turn_id=turn,
+            names_json=json.dumps(
                 {"names": clean_names(names), "held": clean_names(held)}, ensure_ascii=False,
             ),
         )
         with engine.begin() as conn:
-            conn.execute(sa_delete(ChatKept).where(_owner(thread, turn), ChatKept.kind == TOOLS))
+            conn.execute(sa_delete(ChatKept).where(_owner(thread, turn)))
             conn.execute(ChatKept.__table__.insert(), [row])
-            _sweep(conn)
+            conn.execute(sa_delete(ChatKept).where(
+                ChatKept.thread_id == "", ChatKept.created_at < utcnow() - timedelta(days=ORPHAN_DAYS),
+            ))
         return True
     except Exception:  # noqa: BLE001
         log.warning("the chat's tool names could not be kept", exc_info=True)
         return False
 
 
-def save_file(engine: Any, thread_id: Any, turn_id: Any, key: str, text: str) -> bool:
-    """The kept block of one message of the chat (replacing the one held for
-    that message). False when nothing identifies the chat, the block is
-    empty, or on any fault (never raises)."""
-    thread, turn = _ids(thread_id, turn_id)
-    key = str(key or "").strip()[:ID_MAX]
-    if not (thread or turn) or not key or not text or engine is None or not ensure_table(engine):
-        return False
-    try:
-        row = row_values(
-            ChatKept, id=new_id("kept"), thread_id=thread, turn_id=turn, kind=FILE, key=key, text=str(text),
-        )
-        with engine.begin() as conn:
-            conn.execute(sa_delete(ChatKept).where(
-                _owner(thread, turn), ChatKept.kind == FILE, ChatKept.key == key,
-            ))
-            conn.execute(ChatKept.__table__.insert(), [row])
-            held = list(conn.execute(
-                select(ChatKept.id).where(_owner(thread, turn), ChatKept.kind == FILE)  # type: ignore[arg-type]
-                .order_by(ChatKept.created_at.desc())  # type: ignore[attr-defined]
-            ))
-            extra = [r[0] for r in held[MAX_FILES:]]
-            if extra:
-                conn.execute(sa_delete(ChatKept).where(ChatKept.id.in_(extra)))  # type: ignore[attr-defined]
-            _sweep(conn)
-        return True
-    except Exception:  # noqa: BLE001
-        log.warning("a message's attached text could not be kept", exc_info=True)
-        return False
-
-
 def home_turn(engine: Any, turn_id: Any, thread_id: Any) -> int:
-    """Give the rows a new chat's first reply wrote their chat. Rows the chat
-    already holds stay (a chat is linked once). Never raises."""
+    """Give the row a new chat's first reply wrote its chat. A chat that
+    already holds a row keeps it (the turn's row is dropped). Never raises."""
     thread, turn = _ids(thread_id, turn_id)
     if not thread or not turn or engine is None or not ensure_table(engine):
         return 0
     try:
         with engine.begin() as conn:
-            if conn.execute(
-                select(ChatKept.id).where(ChatKept.thread_id == thread, ChatKept.kind == TOOLS).limit(1)
-            ).first() is not None:
-                conn.execute(sa_delete(ChatKept).where(
-                    ChatKept.thread_id == "", ChatKept.turn_id == turn, ChatKept.kind == TOOLS,
-                ))
+            if conn.execute(select(ChatKept.id).where(ChatKept.thread_id == thread).limit(1)).first() is not None:
+                conn.execute(sa_delete(ChatKept).where(ChatKept.thread_id == "", ChatKept.turn_id == turn))
+                return 0
             res = conn.execute(
                 sa_update(ChatKept)
                 .where(ChatKept.turn_id == turn, ChatKept.thread_id == "")
@@ -239,16 +185,16 @@ def home_turn(engine: Any, turn_id: Any, thread_id: Any) -> int:
             )
         return int(res.rowcount or 0)
     except Exception:  # noqa: BLE001
-        log.warning("a first reply's kept record could not be given its chat", exc_info=True)
+        log.warning("a first reply's kept tool names could not be given their chat", exc_info=True)
         return 0
 
 
 def drop_thread(db: Any, thread_id: Any) -> None:
-    """Remove a deleted chat's rows, inside the caller's transaction."""
+    """Remove a deleted chat's row, inside the caller's transaction."""
     db.exec(sa_delete(ChatKept).where(ChatKept.thread_id == str(thread_id or "")))
 
 
 __all__ = [
-    "FILE", "MAX_FILES", "MAX_TOOLS", "ORPHAN_DAYS", "TOOLS", "ChatKept", "Kept", "clean_names",
-    "drop_thread", "ensure_table", "home_turn", "load", "save_file", "save_tools",
+    "MAX_TOOLS", "ORPHAN_DAYS", "ChatKept", "Kept", "clean_names",
+    "drop_thread", "ensure_table", "home_turn", "load", "save_tools",
 ]

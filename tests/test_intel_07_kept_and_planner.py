@@ -1,7 +1,7 @@
 """The intelligence plan, release 7: the parts under the stable prefix.
 
-* what a chat keeps between replies (``daemon/chat_kept``): tool NAMES and the
-  text attached to a message, tied to one chat, bounded, gone with the chat;
+* what a chat keeps between replies (``daemon/chat_kept``): tool NAMES only,
+  tied to one chat, bounded, gone with the chat;
 * the tool list's order and which tools stay (``context/prefix``);
 * the history planner (``context/budget.plan_history``): what rides beside a
   message is counted with it, the tool definitions are counted before the
@@ -45,23 +45,22 @@ def engine(tmp_path):
 # --------------------------------------------------------------------------- #
 # What a chat keeps
 # --------------------------------------------------------------------------- #
-def test_a_chat_keeps_its_tool_names_in_order_and_the_text_of_a_message(engine):
+def test_a_chat_keeps_its_tool_names_in_order(engine):
     assert K.load(engine, "t1") == K.Kept()
     assert K.save_tools(engine, "t1", "", ["b_tool", "a_tool", "c_tool"], held=["a_tool", "c_tool"])
-    assert K.save_file(engine, "t1", "", "key-1", "KEPT ONE")
     got = K.load(engine, "t1")
     assert got.tools == ["b_tool", "a_tool", "c_tool"], "the order first sent, not sorted"
     assert got.held == {"a_tool", "c_tool"}
-    assert got.files == {"key-1": "KEPT ONE"}
-    # A save replaces what the chat held (one list, one text per message).
+    # A save replaces what the chat held (one row a chat).
     K.save_tools(engine, "t1", "", ["b_tool", "a_tool", "c_tool", "d_tool"], held=["d_tool"])
-    K.save_file(engine, "t1", "", "key-1", "KEPT AGAIN")
     got = K.load(engine, "t1")
-    assert got.tools[-1] == "d_tool" and got.held == {"d_tool"} and got.files == {"key-1": "KEPT AGAIN"}
+    assert got.tools[-1] == "d_tool" and got.held == {"d_tool"}
     with session_scope(engine) as db:
-        assert len(list(db.exec(select(K.ChatKept)))) == 2
+        assert len(list(db.exec(select(K.ChatKept)))) == 1
     # Another chat holds nothing of it.
     assert K.load(engine, "t2") == K.Kept()
+    # The table has no column that could hold a message's or a file's text.
+    assert set(K.ChatKept.__table__.columns.keys()) == {"id", "thread_id", "turn_id", "names_json", "created_at"}
 
 
 def test_only_names_are_kept_for_tools_and_they_are_bounded(engine):
@@ -71,51 +70,45 @@ def test_only_names_are_kept_for_tools_and_they_are_bounded(engine):
     assert len(got.tools) == K.MAX_TOOLS and all(len(n) <= K.MAX_NAME for n in got.tools)
     with session_scope(engine) as db:
         row = db.exec(select(K.ChatKept)).one()
-    saved = json.loads(row.text)
+    saved = json.loads(row.names_json)
     assert set(saved) == {"names", "held"} and all(isinstance(n, str) for n in saved["names"] + saved["held"])
 
 
 def test_nothing_is_kept_for_a_reply_nobody_can_find_again(engine):
     assert K.save_tools(engine, "", "", ["a_tool"]) is False
-    assert K.save_file(engine, "", "", "key", "text") is False
-    assert K.save_file(engine, "t1", "", "key", "") is False
     with session_scope(engine) as db:
         assert list(db.exec(select(K.ChatKept))) == []
     assert K.load(engine, "", "") == K.Kept()
 
 
-def test_a_first_replys_rows_get_their_chat_and_orphans_are_swept(engine):
+def test_a_first_replys_row_gets_its_chat_and_orphans_are_swept(engine):
     K.save_tools(engine, "", "turn-1", ["a_tool"], held=["a_tool"])
-    K.save_file(engine, "", "turn-1", "key-1", "FIRST MESSAGE'S FILE")
     assert K.load(engine, "t-new") == K.Kept()
-    assert K.home_turn(engine, "turn-1", "t-new") == 2
-    got = K.load(engine, "t-new")
-    assert got.tools == ["a_tool"] and got.files == {"key-1": "FIRST MESSAGE'S FILE"}
+    assert K.home_turn(engine, "turn-1", "t-new") == 1
+    assert K.load(engine, "t-new").tools == ["a_tool"]
     assert K.home_turn(engine, "turn-1", "t-other") == 0, "a turn is given its chat once"
-    # Rows whose turn never became a chat go with the next write, after their time.
-    K.save_file(engine, "", "turn-lost", "key-9", "NEVER LINKED")
+    # A chat that already holds a row keeps it: a second first-reply row is dropped.
+    K.save_tools(engine, "", "turn-2", ["z_tool"], held=["z_tool"])
+    assert K.home_turn(engine, "turn-2", "t-new") == 0 and K.load(engine, "t-new").tools == ["a_tool"]
+    with session_scope(engine) as db:
+        assert [r.turn_id for r in db.exec(select(K.ChatKept))] == ["turn-1"]
+    # A row whose turn never became a chat goes with the next write, after its time.
+    K.save_tools(engine, "", "turn-lost", ["q_tool"])
     with engine.begin() as conn:
         conn.execute(K.ChatKept.__table__.update().where(K.ChatKept.turn_id == "turn-lost")
                      .values(created_at=utcnow() - timedelta(days=K.ORPHAN_DAYS, minutes=1)))
     K.save_tools(engine, "t-new", "", ["a_tool", "b_tool"], held=["b_tool"])
     with session_scope(engine) as db:
-        turns = {r.turn_id for r in db.exec(select(K.ChatKept))}
-    assert "turn-lost" not in turns and K.load(engine, "t-new").files == {"key-1": "FIRST MESSAGE'S FILE"}
+        assert [r.thread_id for r in db.exec(select(K.ChatKept))] == ["t-new"]
 
 
-def test_a_chat_keeps_the_text_of_a_bounded_number_of_messages_and_a_delete_takes_it_all(engine):
-    for i in range(K.MAX_FILES + 3):
-        K.save_file(engine, "t1", "", f"key-{i}", f"text {i}")
-        with engine.begin() as conn:  # an injected age, oldest first (never a sleep)
-            conn.execute(K.ChatKept.__table__.update().where(K.ChatKept.key == f"key-{i}")
-                         .values(created_at=utcnow() - timedelta(minutes=K.MAX_FILES + 10 - i)))
-    files = K.load(engine, "t1").files
-    assert len(files) == K.MAX_FILES and "key-0" not in files and f"key-{K.MAX_FILES + 2}" in files
-    K.save_tools(engine, "t2", "", ["a_tool"])
+def test_a_deleted_chats_row_goes_and_no_other(engine):
+    K.save_tools(engine, "t1", "", ["a_tool"])
+    K.save_tools(engine, "t2", "", ["b_tool"])
     with session_scope(engine) as db:
         K.drop_thread(db, "t1")
         db.commit()
-    assert K.load(engine, "t1") == K.Kept() and K.load(engine, "t2").tools == ["a_tool"]
+    assert K.load(engine, "t1") == K.Kept() and K.load(engine, "t2").tools == ["b_tool"]
 
 
 # --------------------------------------------------------------------------- #
@@ -177,14 +170,9 @@ def test_the_readers_that_stay_are_autos_own_and_never_reach_the_internet(tmp_pa
         assert name not in CP.UNDECLARED_READERS
 
 
-def test_the_same_question_asked_twice_in_a_chat_has_two_keys():
-    msgs = [SimpleNamespace(role="user", content="summarize this"),
-            SimpleNamespace(role="assistant", content="First summary."),
-            SimpleNamespace(role="user", content="summarize this")]
-    keys = P.keys_of(msgs)
-    assert keys[1] == "" and keys[0] and keys[2] and keys[0] != keys[2]
-    assert keys == P.keys_of([{"role": m.role, "content": m.content} for m in msgs])
+def test_the_shared_prefix_is_counted_to_the_character():
     assert P.shared_prefix("abcdef", "abcxyz") == 3 and P.shared_prefix("abc", "abc") == 3 and P.shared_prefix("", "a") == 0
+    assert P.shared_prefix("abc", "abcd") == 3
 
 
 # --------------------------------------------------------------------------- #
@@ -362,26 +350,25 @@ def test_the_anthropic_adapter_marks_the_end_of_the_part_that_comes_back():
 
 @pytest.mark.parametrize("lane", ("/chat", "/chat/stream"))
 def test_the_lanes_hand_the_adapter_the_hint_on_the_newest_message_only(tmp_path, lane):
-    from tests.test_intel_07_stable_prefix import Chat, once_of
+    from tests.test_intel_07_stable_prefix import Chat
 
     chat = Chat(tmp_path / "home", lane)
     chat.say("hello there, good morning")
     call = chat.say("summarize the attached file please", attachments=["ledger.txt"])
-    text = call["messages"][-1][1]
     assert call["stable_chars"][:-1] == [0, 0]
-    assert call["stable_chars"][-1] == len(text) - len(once_of(call)) > len("summarize the attached file please")
+    # The part that comes back is the person's own words, with or without a file.
+    assert call["stable_chars"][-1] == len("summarize the attached file please")
 
 
 def test_a_coding_session_is_not_touched():
     turn = asyncio.run(CP.begin(SimpleNamespace(platform=None), SimpleNamespace(thread_id="t", turn_id=""), harness="auto"))
     assert turn.active is False
-    block = CP.AttachBlock("\n\n## Attached file: a.txt\nTEXT\n(LIVE)", kept="\n\n## Attached file: a.txt\nTEXT", once="(LIVE)")
+    block = CP.AttachBlock("\n\n## Attached file: a.txt\nTEXT\n(LIVE)", files="\n\n## Attached file: a.txt\nTEXT", once="(LIVE)")
     tail = P.own("\n\nRULES") + turn.attached(block)
     assert str(tail) == "\n\nRULES" + CP.ATTACH_HEAD + str(block), "the attachments section is the bytes it was"
-    assert turn.priced(tail, SimpleNamespace(messages=[]), {}) is tail
     assert turn.later("\n\nSKILLS") == "\n\nSKILLS", "it stays in the instructions"
     assert turn.keep_auto(None, None, ["a"], ["a"], None, 6) == (["a"], ["a"])
-    assert turn.kept_app_tools() == []
+    assert turn.kept_app_tools() == [] and turn.keep_conn(None, ["mcp__a__b"], 24) == ["mcp__a__b"]
     specs = _specs("b", "a")
     assert turn.settle(["b", "a"], ["a"], specs) == (["b", "a"], ["a"], specs)
     msgs, plan = [LLMMessage(role="user", content="q")], object()
@@ -390,12 +377,21 @@ def test_a_coding_session_is_not_touched():
     assert out == ("SYSTEM" + str(tail), msgs, plan), "the tail joins the instructions, as before"
 
 
-def test_too_much_attached_text_rides_once_as_before():
+def test_an_attached_files_text_is_what_was_found_and_the_lines_about_it_are_read_last():
+    from iron_jarvis.computeruse.safety import _FENCE_TOP
+
     turn = CP.StableTurn(active=True)
-    huge = CP.AttachBlock("X", kept="K" * (P.KEPT_MAX_CHARS + 1), once="(LIVE)")
-    assert turn.attached(huge).of(CP.KEEP) == "" and turn.attached(huge).of(P.FOUND) == CP.ATTACH_HEAD + "X"
-    small = CP.AttachBlock("whole", kept="\n\n## Attached file: a.txt\nTEXT", once="\n\n## Attached file: a.txt (LIVE)")
-    got = turn.attached(small)
-    assert got.of(CP.KEEP) == small.kept and got.of(P.OWN) == CP.ATTACH_HEAD + small.once and got.of(P.FOUND) == ""
+    block = CP.AttachBlock("whole", files="\n\n## Attached file: a.txt\nFILETEXT", once="\n\n## Attached file: a.txt (LIVE)")
+    got = turn.attached(block)
+    assert got.of(P.FOUND) == CP.ATTACH_HEAD + block.files and got.of(P.LAST) == block.once and got.of(P.OWN) == ""
+    rendered = P.once_block(got)
+    assert rendered.index(_FENCE_TOP) < rendered.index("FILETEXT") < rendered.index("[END UNTRUSTED CONTENT]") < rendered.index("(LIVE)")
+    # Only the conversation's earlier files, by name: Iron Jarvis's own lines, no fence needed.
+    named = turn.attached(CP.AttachBlock("carried", files="", once="\n\n## Files in this conversation\n- a.txt"))
+    assert named.of(P.LAST) == CP.ATTACH_HEAD + "\n\n## Files in this conversation\n- a.txt" and named.of(P.FOUND) == ""
     # A plain string (an older caller) is all information.
     assert turn.attached("plain").of(P.FOUND) == CP.ATTACH_HEAD + "plain"
+    # Every form is the same section for the planner and the reply's record: nothing is lost.
+    assert "FILETEXT" in str(got) and "(LIVE)" in str(got)
+
+

@@ -3805,10 +3805,10 @@ def register(app: FastAPI, d) -> None:
                     hold_local_only(d.platform.engine, tid, app_id)
 
             await asyncio.shield(asyncio.to_thread(_hold_all))
-        # Release 7: what the first reply kept for the chat (its tool
-        # names, the text attached to its first message) belongs to the
-        # chat now named. AFTER the Local only holds above are applied: a
-        # request cancelled at this await must lose no hold. Never raises.
+        # Release 7: the tool names the first reply kept for the chat belong
+        # to the chat now named. AFTER the Local only holds above are
+        # applied: a request cancelled at this await must lose no hold.
+        # Never raises.
         from .. import chat_kept as _kept
 
         await asyncio.to_thread(_kept.home_turn, d.platform.engine, turn_id, tid)
@@ -4893,8 +4893,9 @@ async def chat_stream(
         return
     images, attach_block = _attached
     if attach_block:
-        # Release 7: a file's own text is KEPT with its message; the lines
-        # that are true for this reply only ride once. MIRROR NOTE (lock-step).
+        # Release 7: the files' own text is what was FOUND (inside the fence);
+        # Iron Jarvis's own lines about them are read last. It all rides ONCE,
+        # beside this message. MIRROR NOTE (lock-step).
         _attached = _stable.attached(attach_block)
         _query_tail += _attached
         _ctx_pieces.setdefault("attachments", []).append(str(_attached))
@@ -5025,9 +5026,6 @@ async def chat_stream(
         return
     _summarizing = asyncio.Event()
     # v1.420.0 (C3.7): priced WITH the query tail (it is sent, last).
-    # Release 7: the kept text of the chat's earlier messages is priced with
-    # the tail (it is sent, beside those messages). MIRROR NOTE (lock-step).
-    _query_tail = _stable.priced(_query_tail, body, _ctx_pieces)
     _system_before_compaction = system + _query_tail
     _compaction = asyncio.ensure_future(_apply_compaction(
         d, body, system + _query_tail, provider_choice, model_choice,
@@ -5194,6 +5192,7 @@ async def chat_stream(
         # to send, never a permission). MIRROR NOTE (lock-step): chat_turn.
         armed, auto_armed = _stable.keep_auto(
             d, body, armed, auto_armed, _arm_ceiling, _chat_turn._MAX_ARMED_TOOLS,
+            provider=provider_choice,
         )
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed —
         # the gate is the MEASURED drop signal, and the number printed is

@@ -373,8 +373,8 @@ def plan_history(
     The intelligence plan, release 7 (each omitted = the plan it always made):
 
     * ``riders``: for each message (same order, same length), the text that
-      rides BESIDE it ("" for none): a kept file's text, the newest message's
-      added block. It is counted with its message, kept or left out WITH it,
+      rides BESIDE it ("" for none): today only the newest message's once-only
+      block. It is counted with its message, kept or left out WITH it,
       never cut (a rider is a fenced block: a cut one would have no end), and
       handed back on the kept message as ``"rider"`` (the key is absent for a
       message with none). The NEWEST message's rider is room held back first,

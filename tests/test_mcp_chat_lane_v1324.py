@@ -51,6 +51,7 @@ from iron_jarvis.mcp.tools import MCPRemoteTool
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
 from tests.test_chat_turn_stop_v1241 import _asgi_post, _drive_stream, _sse_frames
+from tests._fakes.sent import with_beside
 
 PACK = "fakepack"
 TOOL = f"mcp__{PACK}__ask"
@@ -634,7 +635,7 @@ async def test_resources_are_injected_in_the_stream_lane_with_a_receipt(tmp_path
     _stream_router(app, seen=seen)
     frames = await _run(app, _resource_body(), None)
     done = next(d for ev, d in frames if ev == "done")
-    assert NOTES in seen[0]["system"]
+    assert NOTES in with_beside(seen[0]["system"], seen[0]["messages"])
     rec = done["resources"]
     assert [(r["pack"], r["uri"], r["ok"]) for r in rec] == [
         (PACK, "file:///notes.txt", True),
@@ -653,7 +654,7 @@ async def test_resources_are_injected_in_the_post_lane_with_a_receipt(tmp_path, 
     systems: list[str] = []
 
     async def fake_complete(**kw):
-        systems.append(kw["system"])
+        systems.append(with_beside(kw["system"], kw.get("messages")))
         return RouteResult(LLMResponse(text="ok", usage={}), PROVIDER, MODEL)
 
     app.state.platform.router.complete = fake_complete
@@ -673,7 +674,7 @@ async def test_a_resource_is_promptguard_scanned_and_flagged_in_the_receipt(tmp_
     systems: list[str] = []
 
     async def fake_complete(**kw):
-        systems.append(kw["system"])
+        systems.append(with_beside(kw["system"], kw.get("messages")))
         return RouteResult(LLMResponse(text="ok", usage={}), PROVIDER, MODEL)
 
     app.state.platform.router.complete = fake_complete
@@ -697,7 +698,7 @@ async def test_a_long_resource_is_cut_and_says_so(tmp_path, monkeypatch):
     systems: list[str] = []
 
     async def fake_complete(**kw):
-        systems.append(kw["system"])
+        systems.append(with_beside(kw["system"], kw.get("messages")))
         return RouteResult(LLMResponse(text="ok", usage={}), PROVIDER, MODEL)
 
     app.state.platform.router.complete = fake_complete

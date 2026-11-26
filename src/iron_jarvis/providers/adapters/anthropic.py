@@ -161,8 +161,8 @@ def _stable_text_blocks(m: LLMMessage) -> "list[dict[str, Any]] | None":
     """The intelligence plan, release 7 (``context/prefix``): the newest user
     message of a plain chat reply as TWO text blocks, cut where the chat's next
     reply stops sending it again (``LLMMessage.stable_chars``): the person's
-    own words and the text kept with the message, with a cache breakpoint at
-    their end, then the once-only block. The next reply sends the first part
+    own words, with a cache breakpoint at their end, then the once-only
+    block. The next reply sends the first part
     again as that message's whole text, so the provider reads the conversation
     up to there from its saved copy; with one block, the once-only part (which
     is never sent again) would make every later reply miss it. None for a
