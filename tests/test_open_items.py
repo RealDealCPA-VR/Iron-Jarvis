@@ -773,6 +773,55 @@ def test_not_yet_holds_for_a_copy_of_the_line_a_later_conversation_lists(scene):
     assert shown["text"] == "Send recon_march.xlsx to Ann" and shown["maybe_done"] is None
 
 
+def test_not_yet_on_one_line_still_lets_the_same_piece_ask_about_another_line(scene):
+    """Review 13 of 04-b: a Not yet answers ONE line. The answers are shared
+    between the copies of that line (review 12), and no further: the same
+    later piece P still asks about a different line of the folder that its
+    recap says it finished."""
+    old = _chat(scene, "March close", H, hours_ago=6, started_hours_ago=7)
+    _keep(scene, old, "Open: Send recon_march.xlsx to Ann", "Open: Pay the Hartley invoice 4471")
+    p = _chat(scene, "April close", H, hours_ago=4, started_hours_ago=5)
+    _keep(scene, p, "Done: Sent recon_march.xlsx to Ann")
+    (send,) = _items(scene, text="Send recon_march.xlsx to Ann")
+    (pay,) = _items(scene, text="Pay the Hartley invoice 4471")
+    assert send.maybe_done_entry == f"chat:{p}" and pay.maybe_done_entry == ""
+    assert scene.client.post(f"/work-record/open-items/{send.id}/reopen").status_code == 200
+    # P goes on, and its recap now says it did the other line too.
+    _keep(scene, p, "Done: Sent recon_march.xlsx to Ann", "Done: Paid the Hartley invoice 4471")
+    (send,) = _items(scene, text="Send recon_march.xlsx to Ann")
+    (pay,) = _items(scene, text="Pay the Hartley invoice 4471")
+    assert send.status == OPEN_ITEM_OPEN and send.maybe_done_entry == ""  # answered: not asked again
+    assert pay.status == OPEN_ITEM_OPEN and pay.maybe_done_entry == f"chat:{p}"  # never answered: asked
+    asked = {i["text"]: i["maybe_done"] for i in _card(scene, H)["open"]}
+    assert asked["Send recon_march.xlsx to Ann"] is None
+    assert asked["Pay the Hartley invoice 4471"]["entry_id"] == f"chat:{p}"
+
+
+def test_not_yet_in_one_folder_answers_nothing_in_another(scene):
+    """Review 13 of 04-b: the shared answers stop at the folder. A line with
+    the same words in another client's folder that carries a Not yet for
+    piece P (written straight to its row here: no screen makes one, and the
+    read must not lean on that) does not silence P's question about this
+    folder's line."""
+    other = _chat(scene, "Smith close", S, hours_ago=6, started_hours_ago=7)
+    _keep(scene, other, "Open: Send recon_march.xlsx to Ann")
+    old = _chat(scene, "March close", H, hours_ago=6, started_hours_ago=7)
+    _keep(scene, old, "Open: Send recon_march.xlsx to Ann")
+    p = _chat(scene, "April close", H, hours_ago=4, started_hours_ago=5)
+    (theirs,) = _items(scene, entry_id=f"chat:{other}")
+    (ours,) = _items(scene, entry_id=f"chat:{old}")
+    assert theirs.text_key == ours.text_key and theirs.folder_key != ours.folder_key
+    with session_scope(scene.engine) as db:
+        row = db.get(WorkOpenItem, theirs.id)
+        row.maybe_declined = f"chat:{p}"
+        db.add(row)
+        db.commit()
+    _keep(scene, p, "Done: Sent recon_march.xlsx to Ann")
+    (ours,) = _items(scene, entry_id=f"chat:{old}")
+    assert ours.status == OPEN_ITEM_OPEN and ours.maybe_done_entry == f"chat:{p}"
+    assert _card(scene, H)["open"][0]["maybe_done"]["entry_id"] == f"chat:{p}"
+
+
 # --------------------------------------------------------------------------- #
 # what a turn is told
 # --------------------------------------------------------------------------- #
