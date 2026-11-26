@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.582.0 (2026-11-19).*
+holds itself to. Current as of v1.583.0 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,57 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## See what is filling a chat (v1.583.0)
+
+When a chat gets long, a small meter under the message box shows how full
+it is. You can now press that meter. It opens a short list called
+**What is filling this chat**:
+
+- **Your messages and the replies**
+- **Files you attached**
+- **What Iron Jarvis remembered** (about you and your work)
+- **Your project and folder**
+- **Iron Jarvis's own instructions**
+- **Tools it was given**: press it to see where they came from (Iron
+  Jarvis's own tools, in plain words, and each extension by name)
+
+Each line shows its share of the chat's room, for example "about 30%".
+The shares are estimates, so they always say "about". If earlier
+messages had to be left out of the last reply so it fits, the list says
+so, with a count ("at least 12").
+
+Coding sessions already had this list. Plain chats have it now, and it
+is the same list in everyday words.
+
+You can also ask in the chat: **Why is this chat getting full?** Iron
+Jarvis answers from its own record of that chat, and of no other chat.
+
+Good to know:
+
+- The meter appears once a chat is about half full, as before. In a
+  shorter chat, open the chat's "⋯" menu and choose **What is filling
+  this chat**, or ask the question.
+- Iron Jarvis keeps how big each part was, never what it said. There is
+  no text of your messages, files or memory in this record, and it stays
+  on this PC.
+- A chat can hold more than its model can read at once. The list then
+  says so in place of a percent, shows each line as its share of
+  everything the chat holds, shows **Room left** as "none", and says
+  that Iron Jarvis leaves the oldest messages out of each reply so it
+  fits. Asking in the chat gives the same words.
+- Only one of the list and the conversation map is open at a time, and
+  Escape closes the list without stopping a reply that is running.
+- The list comes with each reply from this version on. An older chat
+  shows it after its next reply, and so does a chat that has not been
+  saved yet.
+- Behind the list, Iron Jarvis now also notes, for every reply and every
+  task, how long the model took and how much of the chat the model
+  could reuse from the reply before. Nothing on screen changes
+  for that. It is what lets later versions show, with numbers from your
+  own app, that replies start sooner.
+
+There is nothing to set up, no new page, and no new notice.
 
 ## A step that could not be double-checked says so where you look first (v1.580.4)
 

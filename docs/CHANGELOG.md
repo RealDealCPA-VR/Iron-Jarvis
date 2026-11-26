@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.583.0
+
+**See what is filling a chat.** When a chat gets long, a small meter under the message box shows how full it is.
+
 ## v1.582.0
 
 **Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below).
@@ -77,7 +81,3 @@
 ## v1.565.1
 
 **Two changes at once in Build › Code wait for each other.** Two small fixes for moments when two things change the same session or the same files at once.
-
-## v1.565.0
-
-**Finished files come back to your phone, and approvals have buttons.** Ask Jarvis from Telegram, Slack or email to "turn this into a spreadsheet", and the answer arrives with the spreadsheet.
