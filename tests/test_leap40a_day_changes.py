@@ -57,15 +57,21 @@ def _run(p, task: str, *, at: datetime, origin: str = "user_task", options: dict
 
 
 async def _write(p, ws: Path, sid: str, path: str, content: str) -> str:
+    """The id of the write_file row THIS call made — never "the newest row",
+    which is an earlier one a test stamped later in the day whenever the
+    clock is before that stamp (CI's clock is UTC: 00:29 failed)."""
     ws.mkdir(parents=True, exist_ok=True)
     ctx = ToolContext(workspace=ws, session_id=sid, agent_run_id=f"r-{sid}", config=p.config,
                       event_bus=p.event_bus, engine=p.engine)
+    with session_scope(p.engine) as db:
+        before = set(db.exec(select(ToolInvocation.id).where(ToolInvocation.tool == "write_file")).all())
     res = await p.registry.invoke("write_file", {"path": path, "content": content}, ctx, p.permissions)
     assert res.ok, res.error
     with session_scope(p.engine) as db:
-        return db.exec(
-            select(ToolInvocation.id).where(ToolInvocation.tool == "write_file").order_by(ToolInvocation.created_at.desc())
-        ).first()
+        made = [i for i in db.exec(select(ToolInvocation.id).where(ToolInvocation.tool == "write_file")).all()
+                if i not in before]
+    assert len(made) == 1, made
+    return made[0]
 
 
 def _stamp(p, ids: list[str], at: datetime) -> None:

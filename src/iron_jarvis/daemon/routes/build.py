@@ -2175,6 +2175,20 @@ def _may_move(setup: dict[str, Any], limit: "dict[str, Any] | None" = None) -> b
     return not (isinstance(moves, int) and moves >= MAX_GROUP_MOVES)
 
 
+def may_move_in_group(platform: Any, setup: dict[str, Any]) -> bool:
+    """Does the wait loop look, on every pass, for another account of the
+    session's group to carry its reply on with (:func:`resume_due`'s own
+    test)? Its account is in one of the user's groups (read live) and a move
+    is allowed (:func:`_may_move`). Next leaps 12-a review 5: one rule, read
+    by ``routes/night.settle_running`` too — a phone task's wait the group
+    may still end is never stopped for a reset days away. Pure."""
+    from ...harness import build_accounts as BA
+
+    account = str(setup.get("account") or "")
+    groups = getattr(getattr(platform, "config", None), "account_groups", None) or {}
+    return bool(account) and _may_move(setup) and BA.group_of(groups, account) is not None
+
+
 async def _keep_account_limit(engine: Any, thread_id: str, turn_id: str,
                               limit: "dict[str, Any] | None", *, done: bool,
                               platform: Any = None, served_calls: bool = False) -> None:
@@ -4663,7 +4677,7 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
         account = str(setup.get("account") or "")
         due_at = _parse_iso(wait.get("next_check_at")) or _parse_iso(wait.get("resets_at")) or when
         due = due_at <= when
-        grouped = bool(account) and _may_move(setup) and BA.group_of(groups, account) is not None
+        grouped = may_move_in_group(platform, setup)
         # A grouped wait's limit not yet said on the bell (the group may have
         # been changed since it was armed) is looked at now, due or not.
         untold = bool(wait.get("group")) and not wait.get("told")

@@ -944,7 +944,8 @@ def _instant_utc(value: Any) -> "datetime | None":
     return _naive(moment)
 
 
-def wait_over(task: "dict[str, Any] | None", wait: Any, config: Any, now: Any = None) -> bool:
+def wait_over(task: "dict[str, Any] | None", wait: Any, config: Any, now: Any = None, *,
+              movable: bool = False) -> bool:
     """Has the account wait of a task the PHONE started run past its time
     limit, or will its account reset only after that (next leaps 12-a review
     4)? Its wait may last what was left of its time limit when the wait began
@@ -952,7 +953,13 @@ def wait_over(task: "dict[str, Any] | None", wait: Any, config: Any, now: Any = 
     night task's wait is bounded by the night window instead, and a phone
     task runs by day, so nothing else would end it: it held its slot and the
     PC awake until a weekly reset. False for every other task. Pure (``now``:
-    naive UTC, default the wall clock)."""
+    naive UTC, default the wall clock).
+
+    Review 5: ``movable`` — the wait loop still looks for another account of
+    the session's group to carry the work on with (``routes/build.
+    may_move_in_group``, the loop's own test), as the card says ("…, in the
+    same group, takes over"). A move needs no reset, so a reset after the
+    time limit ends nothing then: only the time limit itself does."""
     if not (task or {}).get("start_now"):
         return False
     wait = wait if isinstance(wait, dict) else {}
@@ -963,6 +970,8 @@ def wait_over(task: "dict[str, Any] | None", wait: Any, config: Any, now: Any = 
     at = _instant_utc(now) or _naive(utcnow())
     if at >= deadline:
         return True
+    if movable:
+        return False
     reset = _instant_utc(wait.get("resets_at")) if wait.get("resets_at") else None
     return reset is not None and reset > deadline
 #: The refusal of a night turn on a model billed per use with no room left

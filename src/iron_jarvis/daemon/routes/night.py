@@ -659,7 +659,7 @@ async def settle_running(d: Any) -> list[str]:
     from ...harness import branches as B
     from ...harness.main_env import find as find_main_env
     from ...harness.main_env import tests_line
-    from .build import _STARTING, _running_turn, _setup_of
+    from .build import _STARTING, _running_turn, _setup_of, may_move_in_group
 
     platform = d.platform
     engine = platform.engine
@@ -757,8 +757,12 @@ async def settle_running(d: Any) -> list[str]:
         # time limit when the wait began, and never for a reset that comes
         # after that (``N.wait_over``) — the night window bounds a night
         # task's wait; nothing else would end this one, and it held its slot
-        # and the PC awake until the reset, days for a weekly limit.
-        past = waiting and N.wait_over(task, setup.get("account_wait"), platform.config, now)
+        # and the PC awake until the reset, days for a weekly limit. Review
+        # 5: while the wait loop may still move it to another account of its
+        # group (the card: "…, in the same group, takes over"), only the time
+        # limit ends it — whichever loop looks first.
+        past = waiting and N.wait_over(task, setup.get("account_wait"), platform.config, now,
+                                       movable=may_move_in_group(platform, setup))
         if (not stopping and waiting and not past and N.may_run_now(task, platform.config)
                 and N.minutes_left(task, platform.config) >= 1.0):
             # Waiting on its account's reset (Resume when ready carries it

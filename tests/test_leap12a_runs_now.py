@@ -259,14 +259,20 @@ async def test_a_phone_task_at_its_usage_limit_by_day_waits_and_a_night_task_is_
     assert "account_wait" not in build_routes._setup_of(S.get_row(engine, night_thread))
 
 
-@pytest.mark.parametrize("case", ["reset_days_away", "waited_its_whole_limit", "reset_within_its_limit"])
+@pytest.mark.parametrize("case", ["reset_days_away", "waited_its_whole_limit", "reset_within_its_limit",
+                                  "grouped_reset_days_away", "grouped_waited_its_whole_limit"])
 async def test_a_phone_tasks_wait_on_its_account_never_outlasts_its_time_limit(tmp_path, monkeypatch, case):
     """12-a review 4: by day nothing else ends a phone task's account wait
     (the night window bounds a night task's), so it is bounded by what was
     left of its time limit when the wait began (``N.wait_over``). A reset
     days away, or a wait that has lasted that long, ends it STOPPED with
     ``WAIT_PAST_LIMIT`` at once — its slot given back and the PC no longer
-    held awake; a reset inside the limit keeps it waiting."""
+    held awake; a reset inside the limit keeps it waiting.
+
+    Review 5: an account in one of the user's GROUPS — the wait loop looks
+    for a partner to take over on every pass, and the card says one does — is
+    never stopped for a reset days away (a move needs no reset); its time
+    limit still ends the wait."""
     from datetime import timedelta
 
     from iron_jarvis.core.ids import utcnow
@@ -281,6 +287,9 @@ async def test_a_phone_tasks_wait_on_its_account_never_outlasts_its_time_limit(t
         "reset_days_away": (now, now + timedelta(days=3)),
         "waited_its_whole_limit": (now - timedelta(minutes=N.task_minutes(cfg) + 1), None),
         "reset_within_its_limit": (now, now + timedelta(minutes=30)),
+        "grouped_reset_days_away": (now, now + timedelta(days=3)),
+        "grouped_waited_its_whole_limit": (now - timedelta(minutes=N.task_minutes(cfg) + 1),
+                                           now + timedelta(days=3)),
     }[case]
     folder = tmp_path / "phone"
     folder.mkdir()
@@ -288,13 +297,18 @@ async def test_a_phone_tasks_wait_on_its_account_never_outlasts_its_time_limit(t
     task = N.add_task(engine, folder=str(folder), words="carry on", start_now=True, asked_from="comm:tg")
     N.mark_running(engine, task["id"])
     N.set_session(engine, task["id"], thread_id=row.id)
-    S.update(engine, row.id, setup={"account": "acct-1", "account_wait": build_routes.wait_record(
+    wait = build_routes.wait_record(
         {"account": "acct-1", "account_name": "Work"}, reset.isoformat() if reset else None) | {
-        "armed_at": armed.isoformat()}})
+        "armed_at": armed.isoformat()}
+    if case.startswith("grouped"):
+        # As ``routes/build.auto_wait`` arms it for an account with a partner.
+        monkeypatch.setattr(cfg, "account_groups", {"Team": ["acct-1", "acct-2"]})
+        wait |= {"auto": True, "group": "Team", "next_check_at": wait["armed_at"]}
+    S.update(engine, row.id, setup={"account": "acct-1", "account_wait": wait})
     assert N.awake_needed(engine, cfg, _local(15, 0)) is True  # it runs: the PC is held awake
     settled = await night_routes.settle_running(d)
     ended = N.get_task(engine, task["id"])
-    if case == "reset_within_its_limit":
+    if case in ("reset_within_its_limit", "grouped_reset_days_away"):
         assert settled == [] and ended["state"] == N.RUNNING
         assert build_routes._setup_of(S.get_row(engine, row.id)).get("account_wait")
         assert N.awake_needed(engine, cfg, _local(15, 0)) is True
@@ -325,6 +339,83 @@ def test_only_a_phone_tasks_wait_is_bounded_by_its_time_limit(tmp_path):
     assert N.wait_over({"start_now": True}, {"armed_at": now.isoformat(), "resets_at": ""}, cfg) is False
     # No start to count from: never an unbounded wait.
     assert N.wait_over({"start_now": True}, {"armed_at": "x"}, cfg) is True
+    # Review 5: a wait another account of the group may still end (a move
+    # needs no reset) ends only at the time limit.
+    assert N.wait_over({"start_now": True}, far, cfg, movable=True) is False
+    assert N.wait_over({"start_now": True}, long_ago, cfg, movable=True) is True
+    assert N.wait_over({"start_now": True}, {"armed_at": "x"}, cfg, movable=True) is True
+
+
+@pytest.fixture
+def proxy(tmp_path, monkeypatch):
+    """The fake Iron-Proxy of the account tests (its own data dir, no keys,
+    no homes); a limit parks an account for three days."""
+    from tests.test_build_accounts_v1368 import isolate, make_fake
+
+    steps = isolate(tmp_path, monkeypatch)
+    next(steps)
+    fake = make_fake(tmp_path)
+    fake.park_seconds = 3 * 86400.0
+    try:
+        yield fake
+    finally:
+        fake.stop()
+        next(steps, None)
+
+
+@pytest.mark.parametrize("first", ["night_loop", "wait_loop"])
+async def test_the_partner_the_card_names_takes_over_whichever_loop_looks_first(
+        tmp_path, monkeypatch, proxy, first):
+    """12-a review 5: the card says "Work Max is at its usage limit now;
+    Spare, in the same group, takes over", and that is what happens — with
+    Work Max's own reset three days away (past the task's time limit), and
+    whichever of the two loops a turn's end wakes reaches the session first:
+    the night loop holds the grouped wait (``N.wait_over`` with ``movable``),
+    and the wait loop moves the work to Spare (``routes/build.resume_due``).
+    Before, the night loop going first stopped the task with
+    ``WAIT_PAST_LIMIT`` and the phone heard "Stopped"."""
+    from iron_jarvis.daemon.routes import build as build_routes
+    from tests.test_build_account_turns_v1368 import _events, _finish
+    from tests.test_build_limits_v1393 import _limit
+    from tests.test_build_sessions_v1367 import setup_of
+
+    app = create_app(str(tmp_path / "home"))
+    d, platform = app.state.d, app.state.platform
+    engine = platform.engine
+    monkeypatch.setattr(N, "CLOCK", lambda: _local(15, 0))  # by day: the night window is closed
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "app.py").write_text("x = 1\n", encoding="utf-8")
+    # The work's turn meets Work Max's limit; its wait arms itself, grouped.
+    _beh, sid = await _limit(app, proxy, work, monkeypatch, moves=("LIMIT", "Carried on with Spare."),
+                             groups={"Work": ["c-work", "c-spare"]})
+    wait = setup_of(app, sid)["account_wait"]
+    assert wait["group"] == "Work" and wait["next_check_at"] == wait["armed_at"]
+    assert N.wait_over({"start_now": True}, wait, platform.config) is True, "its own reset is past the limit"
+    task = N.add_task(engine, folder=str(work), words="write the report", start_now=True, asked_from="comm:tg")
+    N.mark_running(engine, task["id"])
+    N.set_session(engine, task["id"], thread_id=sid)
+    # What the card says for these accounts.
+    await asyncio.to_thread(platform.iron_proxy.refresh_accounts)
+    said = await asyncio.to_thread(PC.uses_words, platform, "claude-cli", "claude-sonnet-4-5", PC.WHEN_NOW)
+    assert said == "Uses your Claude plan (Work Max is at its usage limit now; Spare, in the same group, takes over).", said
+
+    if first == "night_loop":
+        assert await night_routes.settle_running(d) == []
+        assert N.get_task(engine, task["id"])["state"] == N.RUNNING
+        assert setup_of(app, sid).get("account_wait"), "the wait the group ends was cleared"
+        assert await build_routes.resume_due(d) == [sid]
+    else:
+        assert await build_routes.resume_due(d) == [sid]
+        await night_routes.settle_running(d)  # the moved turn runs, or is already over
+        assert N.get_task(engine, task["id"])["state"] != N.STOPPED
+    event = _events(app, "build.resumed")[-1]
+    assert (event["moved_from"], event["account"], event["group"]) == ("c-work", "c-spare", "Work")
+    await _finish(app, event["turn_id"])
+    ended = await _ended(app, task["id"])
+    assert ended["state"] != N.STOPPED, ended["notes"]
+    assert N.WAIT_PAST_LIMIT not in [n.get("text") for n in ended["notes"]]
+    assert setup_of(app, sid)["account"] == "c-spare"
 
 
 async def test_a_phone_tasks_carry_on_may_run_by_day_and_a_night_tasks_may_not(tmp_path, monkeypatch):
