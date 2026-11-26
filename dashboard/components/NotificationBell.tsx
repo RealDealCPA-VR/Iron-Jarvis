@@ -98,6 +98,7 @@ import {
 // v1.355.0 (G32): a failing background task in the user's words, with the
 // page its fix lives on (dependency-free).
 import { STATUS_HREF, loopWords } from "@/lib/loopWords";
+import { uncheckedWords } from "@/lib/statusWords";
 import { EVERYTHING_TAB_EVENT } from "@/lib/surfaces";
 // v1.409.0: Build's Code view (a waiting Claude Code / Codex approval).
 import { announceBuildCodeLink, buildCodeHref, toolLabel } from "@/lib/buildApp";
@@ -388,6 +389,13 @@ export function isRehearsalRun(p: Record<string, unknown>): boolean {
   return p.outcome === "rehearsed" || p.rehearsal === true;
 }
 
+/** "finished" → "finished. 1 step could not be checked" when the run's
+ *  plan had a step nobody could check (the intelligence plan, release 4). */
+function uncheckedTail(words: string, count: unknown): string {
+  const extra = uncheckedWords(count).replace(/\.$/, "");
+  return extra ? `${words}. ${extra}` : words;
+}
+
 function runVerdict(p: Record<string, unknown>): {
   cancelled: boolean;
   ran: boolean;
@@ -481,7 +489,10 @@ function unattendedCompletion(
     : v.outcome === "needs_you"
       ? "needs you"
       : v.done
-        ? "finished"
+        ? // The intelligence plan, release 4: a step that was done but could
+          // not be checked is on the line (comm/notifier._run_words says the
+          // same on the phone). Still a quiet row.
+          uncheckedTail("finished", p.unchecked_steps)
         : v.outcome === "completed_with_failures"
           ? "finished, but part of it failed"
           : "finished. Check what it did";
@@ -629,7 +640,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     const title = !ran
       ? "Your objective could not be finished"
       : done
-        ? "Your objective is done"
+        ? uncheckedTail("Your objective is done", p.unchecked_steps)
         : outcome === "needs_you"
           ? "Your objective finished, but something needs you"
           : outcome === "completed_with_failures"

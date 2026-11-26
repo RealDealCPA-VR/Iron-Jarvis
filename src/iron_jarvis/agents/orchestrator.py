@@ -606,6 +606,14 @@ def _completion_payload(session: Session, **extra: Any) -> dict:
         # payload is unchanged): the bell and every notice stay quiet for it,
         # failed or stopped too (``comm/notifier.is_rehearsal_run``).
         **({"rehearsal": True} if _is_rehearsal(session) else {}),
+        # The intelligence plan, release 4: steps that were done but could
+        # not be checked (only then, so every other payload is unchanged):
+        # the bell's line says so instead of a plain "finished".
+        **(
+            {"unchecked_steps": int(session.unchecked_steps)}
+            if int(getattr(session, "unchecked_steps", None) or 0) > 0
+            else {}
+        ),
     }
 
 
@@ -2152,6 +2160,14 @@ class Orchestrator:
         # v1.503.0 (north-star 3.11): the origin decides whether an empty
         # ledger is "did nothing" (an unattended door) or a plain answer.
         outcome = derive_outcome(result, status, origin=getattr(session, "origin", None))
+        # The intelligence plan, release 4: how many of the run's plan steps
+        # were done but could not be checked, onto the ROW (every caller
+        # saves it with the verdict), so a list that reads only the row
+        # never shows a plain "Done" over them. None when there is none.
+        try:
+            session.unchecked_steps = int(result.get("plan_steps_unchecked") or 0) or None
+        except Exception:  # noqa: BLE001 — the count never costs the verdict
+            pass
         # v1.465.0: A CODING HELPER IS "PART FAILED" ONLY WHEN IT ENDED ON A
         # FAILED CHANGE. A helper works by running commands, and a command
         # that exits with an error (a test that fails before the fix, a search

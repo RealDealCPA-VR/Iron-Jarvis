@@ -328,29 +328,97 @@ def _rel(path: str, workspace: str) -> str:
         return path
 
 
+def _newest_plan(db, session_id: str) -> "tuple[list[Any], list[Any]]":
+    """``(plan steps, step results)`` of the session's NEWEST kept plan
+    (``RunPlan``, written step by step by ``agents/decompose.execute_plan``),
+    as the saved dicts. ``([], [])`` for a run with no plan. Raises when the
+    record cannot be read: each caller decides what that costs."""
+    from ..core.models import RunPlan
+
+    rows = [
+        r for r in db.exec(select(RunPlan).where(RunPlan.session_id == session_id)).all()
+        if (r.plan_json or "[]") != "[]"
+    ]
+    if not rows:
+        return [], []
+    newest = max(rows, key=lambda r: str(getattr(r, "updated_at", "") or ""))
+    plan = json.loads(newest.plan_json or "[]")
+    results = json.loads(newest.results_json or "[]")
+    return (plan if isinstance(plan, list) else []), (results if isinstance(results, list) else [])
+
+
 def _plan_steps_failed(db, session_id: str) -> int:
-    """How many steps of the session's NEWEST kept plan (``RunPlan``, written
-    step by step by ``agents/decompose.execute_plan``) were attempted and
+    """How many steps of the session's NEWEST kept plan were attempted and
     failed their check (v1.503.0, north-star 3.3). A step never attempted is
     not counted here: a run that left one ends FAILED itself (the runtime's
     rule). 0 for a run with no plan, or a record that cannot be read."""
     try:
-        from ..core.models import RunPlan
-
-        rows = [
-            r for r in db.exec(select(RunPlan).where(RunPlan.session_id == session_id)).all()
-            if (r.plan_json or "[]") != "[]"
-        ]
-        if not rows:
-            return 0
-        newest = max(rows, key=lambda r: str(getattr(r, "updated_at", "") or ""))
-        results = json.loads(newest.results_json or "[]")
+        _plan, results = _newest_plan(db, session_id)
         return sum(
             1 for r in results
             if isinstance(r, dict) and r.get("ok") is False and r.get("attempted", True) is not False
         )
     except Exception:  # noqa: BLE001 — a plan record never costs the result
         return 0
+
+
+#: A goal on the result card is one line of at most this many characters.
+_GOAL_CHARS = 200
+
+
+def _plan_steps_unchecked(db, session_id: str) -> list[dict[str, Any]]:
+    """The steps of the session's NEWEST kept plan that were DONE BUT COULD
+    NOT BE CHECKED (the intelligence plan, release 4): the check itself did
+    not run, so the step was let through (``decompose.step_unchecked``).
+    ``[{"step": 2, "goal": "…"}]`` in plan order (``step`` counts from 1, as
+    every screen numbers them). ``[]`` for a run with no plan, none such, or
+    a record that cannot be read."""
+    try:
+        from .decompose import step_unchecked
+
+        plan, results = _newest_plan(db, session_id)
+        out: list[dict[str, Any]] = []
+        for i, r in enumerate(results):
+            if not isinstance(r, dict) or not step_unchecked(r):
+                continue
+            goal = r.get("goal")
+            if not isinstance(goal, str) or not goal.strip():
+                step = plan[i] if i < len(plan) and isinstance(plan[i], dict) else {}
+                goal = step.get("goal") if isinstance(step.get("goal"), str) else ""
+            out.append({"step": i + 1, "goal": " ".join(str(goal).split())[:_GOAL_CHARS]})
+        return out
+    except Exception:  # noqa: BLE001 — a plan record never costs the result
+        return []
+
+
+def unchecked_words(count: Any) -> str:
+    """"1 step could not be checked." / "3 steps could not be checked.", or
+    "" for none: the words every reading of a run adds to its result line
+    (the result card's headline says the same, ``RunResultCard.
+    resultHeadline``). Pure; never raises."""
+    try:
+        n = int(count or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    return f"{n} step{'' if n == 1 else 's'} could not be checked."
+
+
+def result_line(result: Any) -> str:
+    """The first line a person reads about a finished run, from its record:
+    the badge word (:func:`run_ending`), and for a run that is "Done" with a
+    step nobody could check, "Done. 1 step could not be checked." — never a
+    plain "Done" over it (the intelligence plan, release 4). ``result`` is a
+    :func:`session_result` payload. Pure; never raises."""
+    try:
+        if not isinstance(result, dict) or not result.get("found"):
+            return ""
+        ending = run_ending(result.get("status"), result.get("outcome") or "")
+        extra = unchecked_words(result.get("plan_steps_unchecked")) if ending.ok else ""
+        return f"{ending.words}. {extra}" if extra else ending.words
+    except Exception:  # noqa: BLE001 — wording never breaks a caller
+        return ""
 
 
 def _with_team_documents(db, session_id: str, own: list[str]) -> list[str]:
@@ -748,6 +816,12 @@ def session_result(
             # 0 for every other) — a fact on the record, so the verdict and
             # every later reading of it agree.
             out["plan_steps_failed"] = _plan_steps_failed(db, session_id)
+            # The intelligence plan, release 4: the steps that were done but
+            # whose check did not run. A fact on the record too, so the
+            # result line never reads as a plain "Done" over them.
+            _unchecked = _plan_steps_unchecked(db, session_id)
+            out["plan_steps_unchecked"] = len(_unchecked)
+            out["unchecked_steps"] = _unchecked[:_LIST_CAP]
             # The stored verdict wins (it was derived at finalize with the
             # status the run actually ended in); a row from before the column
             # existed gets the same derivation live, so an old card is not

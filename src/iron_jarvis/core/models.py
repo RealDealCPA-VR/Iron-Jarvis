@@ -209,6 +209,16 @@ class Session(SQLModel, table=True):
     #: finalize, never from prose. Additive nullable column (auto-reconciled
     #: by ``core.db._reconcile_additive_columns`` on boot, like ``max_steps``).
     outcome: str | None = None
+    #: How many steps of this run's plan were DONE BUT COULD NOT BE CHECKED
+    #: (the intelligence plan, release 4): the check itself did not run (the
+    #: checking model failed, or its answer could not be read), so the step
+    #: was let through. The verdict above stays ``completed`` (the work was
+    #: done); this is what keeps the result line from reading as plain
+    #: "Done". None for a run with no such step (every run that made no
+    #: plan). Written at finalize from the run's kept plan
+    #: (``agents/outcome.session_result``), never from prose. Additive
+    #: nullable column (auto-reconciled on boot, like ``outcome``).
+    unchecked_steps: int | None = None
     #: v1.249.0 (R-02): set by the boot reconcile when a restart (an update, a
     #: crash) cut this run off mid-work; cleared when the user continues or
     #: dismisses it. The bell and the Overview offer Continue while it is set.

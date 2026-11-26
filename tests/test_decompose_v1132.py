@@ -438,7 +438,9 @@ async def test_unverified_step_surfaced_in_final_answer():
     ]
     final = await assemble(runtime, _bare_run(), _session_stub(provider="local-uv"), results)
     assert "Both steps completed." in final
-    assert "could NOT be independently verified" in final
+    # The intelligence plan, release 4 (moved on purpose): the note says
+    # "could not be checked", the words the result line and the record use.
+    assert "were done but could not be checked" in final
     assert "- step 2: draft the email" in final
     assert "- step 1" not in final
     # The assemble prompt itself marked the step honestly for the model too.

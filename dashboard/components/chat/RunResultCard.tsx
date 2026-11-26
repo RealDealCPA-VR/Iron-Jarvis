@@ -48,7 +48,7 @@ import { post, ApiError } from "@/lib/api";
 import type { SessionOutcome } from "@/lib/types";
 import { atStepLimit } from "@/lib/agentRun";
 import { runActionLines, stepFailedWords } from "@/lib/runWords";
-import { statusWords } from "@/lib/statusWords";
+import { statusWords, uncheckedWords } from "@/lib/statusWords";
 import { runActivity, RunActivityFold } from "@/components/chat/RunActivity";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { answeredModelName } from "@/lib/answeredModel";
@@ -85,6 +85,11 @@ export interface RunResult {
    *  failed. Absent on an older daemon; the headline then falls back to the
    *  pre-v1.227.0 wording. */
   outcome?: SessionOutcome | null;
+  /** The intelligence plan, release 4: how many steps of the run's plan
+   *  were done but could NOT be checked (the check itself did not run), and
+   *  which (`step` counts from 1). Absent on a run that made no plan. */
+  plan_steps_unchecked?: number;
+  unchecked_steps?: { step: number; goal: string }[];
   /** Asks for this session that resolved by TIMEOUT (v1.227.0). The measured
    *  case: 24 rename calls "completed" with every one of them never approved,
    *  and this card said "Task complete". */
@@ -155,7 +160,36 @@ export function resultHeadline(result: RunResult): string {
     return statusWords("completed", result.outcome).word;
   }
   if (!result.tools_used.length) return "Finished — but nothing ran";
-  return statusWords("completed").word;
+  // The intelligence plan, release 4: "Done. 1 step could not be checked."
+  // A step whose check did not run is never under a plain "Done".
+  const unchecked = uncheckedWords(result.plan_steps_unchecked);
+  const done = statusWords("completed").word;
+  return unchecked ? `${done}. ${unchecked}` : done;
+}
+
+/** True when the run is "Done" except for a plan step nobody could check
+ *  (the headline then carries the count, and the note below says which). */
+export function hasUncheckedSteps(result: RunResult): boolean {
+  return resultHeadline(result).endsWith(uncheckedWords(result.plan_steps_unchecked) || "\u0000");
+}
+
+/** The note under such a run: which step, why, and where to look. Plain
+ *  words; the step is named by its place and its goal. */
+export function uncheckedNote(result: Pick<RunResult, "plan_steps_unchecked" | "unchecked_steps">): string {
+  const steps = (result.unchecked_steps ?? []).filter(
+    (s) => s && typeof s.step === "number" && Number.isFinite(s.step),
+  );
+  const named = steps
+    .slice(0, 3)
+    .map((s) => (s.goal ? `step ${s.step} (${s.goal})` : `step ${s.step}`));
+  const total = Math.max(result.plan_steps_unchecked ?? 0, steps.length);
+  const more = total - named.length;
+  const which = named.length
+    ? `${named.join(", ")}${more > 0 ? ` and ${more} more` : ""}`
+    : total === 1
+      ? "one step"
+      : `${total} steps`;
+  return `Iron Jarvis did ${which} but could not double-check ${total === 1 ? "it" : "them"}: the check itself did not run. Open the run to see ${total === 1 ? "the step" : "the steps"}.`;
 }
 
 /** v1.358.0 (lane 8C): the note under a run that finished SHORT of the job,
@@ -392,6 +426,9 @@ export function RunResultCard({
     ((result.unanswered_asks ?? 0) > 0 ||
       result.outcome === "needs_you" ||
       result.outcome === "completed_with_failures");
+  // The intelligence plan, release 4: done, but a plan step could not be
+  // checked. Only when nothing above already says the run fell short.
+  const unchecked = !endedEarly && !short && hasUncheckedSteps(result);
 
   // v1.352.0 (G19): the run's work in words, counted per tool.
   const actions = runActionLines(result.tools_used, result.tools_failed);
@@ -468,6 +505,20 @@ export function RunResultCard({
           >
             <AlertTriangle size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
             <span className="min-w-0">{shortRunNote(result)}</span>
+          </p>
+        )}
+        {/* The intelligence plan, release 4: done, but a step of the plan
+            could not be checked. Said in words; it opens the run, where the
+            checklist marks the step. */}
+        {unchecked && (
+          <p
+            data-testid="run-result-unchecked"
+            className="flex min-w-0 items-start gap-2 text-[13px] leading-5 text-tone-warn"
+          >
+            <AlertTriangle size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
+            <a href={`/sessions/${result.session_id}`} className="min-w-0 hover:underline">
+              {uncheckedNote(result)}
+            </a>
           </p>
         )}
         <FileLine
@@ -592,7 +643,7 @@ export function RunResultCard({
               ? "text-tone-danger"
               : stopped
                 ? "text-zinc-500"
-                : short || atLimit
+                : short || atLimit || unchecked
                   ? "text-tone-warn"
                   : "text-tone-success"
           }`}
@@ -601,7 +652,7 @@ export function RunResultCard({
             <XCircle size={15} />
           ) : stopped ? (
             <CircleStop size={15} />
-          ) : short || atLimit ? (
+          ) : short || atLimit || unchecked ? (
             <AlertTriangle size={15} />
           ) : (
             <CheckCircle2 size={15} />
@@ -640,6 +691,16 @@ export function RunResultCard({
           <div className="rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-tone-warn">
             {shortRunNote(result)}
           </div>
+        )}
+        {/* The intelligence plan, release 4 (same note as the quiet form). */}
+        {unchecked && (
+          <a
+            href={`/sessions/${result.session_id}`}
+            data-testid="run-result-unchecked"
+            className="block rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-tone-warn hover:underline"
+          >
+            {uncheckedNote(result)}
+          </a>
         )}
 
         <Row

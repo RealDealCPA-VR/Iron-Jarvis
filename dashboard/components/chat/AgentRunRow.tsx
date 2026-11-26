@@ -58,6 +58,7 @@ import {
   liveRuns,
   runDurationMs,
   runEndWords,
+  uncheckedStepCount,
   type AgentRunStamp,
   type HandOffLike,
 } from "@/lib/agentRun";
@@ -161,10 +162,16 @@ export interface SettledRunParts {
  *  slate. A run stopped at its step limit reads amber, as the run's card
  *  headline does ("Stopped at its step limit", RunResultCard.runEnd). A
  *  stamp with an outcome and no status is a run that ended (completed). */
-export function verdictTone(run: Pick<AgentRunStamp, "status" | "outcome" | "stepLimit">): Tone {
+export function verdictTone(
+  run: Pick<AgentRunStamp, "status" | "outcome" | "stepLimit" | "uncheckedSteps" | "plan">,
+): Tone {
   if (run.status === "failed" && run.stepLimit) return "amber";
   const status = run.status ?? (run.outcome ? "completed" : null);
-  return statusWords(status, run.outcome ?? null).tone;
+  const tone = statusWords(status, run.outcome ?? null).tone;
+  // The intelligence plan, release 4: "1 step could not be checked" reads
+  // amber, never the green of a finish with nothing to say about it.
+  if (tone === "green" || status === null) return uncheckedStepCount(run) > 0 ? "amber" : tone;
+  return tone;
 }
 
 export function settledRunParts(name: string, run: AgentRunStamp): SettledRunParts {

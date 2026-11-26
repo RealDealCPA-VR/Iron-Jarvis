@@ -12,6 +12,7 @@
  *   ✓ ~~check the totals~~       done (struck through, muted)
  *   × send it                    failed (tone-danger)
  *   – file it                    not attempted (a dash)
+ *   ? check the totals           done, but could not be checked (tone-warn)
  *
  * Calm grey rows in WorkLine's type (13 px, zinc), no box, no border, no
  * shadow, nothing that moves: the running step is marked by its arrow and a
@@ -23,7 +24,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Check, Circle, Minus, X, type LucideIcon } from "lucide-react";
+import { ArrowRight, Check, Circle, CircleHelp, Minus, X, type LucideIcon } from "lucide-react";
 import { get } from "@/lib/api";
 import {
   foldPlanEvents,
@@ -48,6 +49,9 @@ const LOOK: Readonly<Record<PlanStepState, { icon: LucideIcon; iconTone: string;
   done: { icon: Check, iconTone: "text-zinc-500", textTone: "text-zinc-500 line-through decoration-zinc-600" },
   failed: { icon: X, iconTone: "text-tone-danger", textTone: "text-zinc-400" },
   skipped: { icon: Minus, iconTone: "text-zinc-600", textTone: "text-zinc-500" },
+  // The intelligence plan, release 4: done, but its check did not run. A
+  // question mark in the warn tone and no strike-through: never a plain tick.
+  unchecked: { icon: CircleHelp, iconTone: "text-tone-warn", textTone: "text-zinc-400" },
 };
 
 function PlanRow({ step }: { step: PlanStep }) {
@@ -69,6 +73,11 @@ function PlanRow({ step }: { step: PlanStep }) {
       <span data-testid="plan-step-goal" title={goal} className={`min-w-0 truncate ${look.textTone}`}>
         {goal}
       </span>
+      {step.state === "unchecked" ? (
+        <span data-testid="plan-step-unchecked" aria-hidden="true" className="shrink-0 text-[12px] text-tone-warn">
+          could not be checked
+        </span>
+      ) : null}
     </li>
   );
 }

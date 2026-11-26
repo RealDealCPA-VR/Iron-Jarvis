@@ -27,19 +27,25 @@
  * The payloads, from agents/decompose.py:
  *   plan.created        {run_id, steps: [goal, ...]}
  *   plan.step_started   {run_id, index, goal}              (index 0-based)
- *   plan.step_completed {run_id, index, ok, attempted?, attempts?}
- *                       (attempted: false ONLY on the budget-spent branch)
+ *   plan.step_completed {run_id, index, ok, attempted?, attempts?, checked?}
+ *                       (attempted: false ONLY on the budget-spent branch;
+ *                        checked: false ONLY on a step that was done but
+ *                        whose check did not run)
  */
 
 /** A step's state, the daemon's own vocabulary (GET /sessions/{id}/plan). */
-export type PlanStepState = "waiting" | "running" | "done" | "failed" | "skipped";
+export type PlanStepState = "waiting" | "running" | "done" | "failed" | "skipped" | "unchecked";
 
+/** `unchecked` (the intelligence plan, release 4): the step was done but its
+ *  check did not run (the checking model failed, or its answer could not be
+ *  read). Never drawn as a plain tick. */
 export const PLAN_STATES: readonly PlanStepState[] = Object.freeze([
   "waiting",
   "running",
   "done",
   "failed",
   "skipped",
+  "unchecked",
 ]);
 
 /** One row of the checklist. `index` is the step's place in the plan
@@ -183,7 +189,15 @@ export function foldPlanEvents(base: PlanView | null, events: readonly PlanEvent
     } else {
       // `attempted: false` is the budget-spent branch: that step never ran,
       // and "failed" would be a lie about it (stepLabel says the same).
-      state = p.attempted === false ? "skipped" : p.ok === false ? "failed" : "done";
+      // `checked: false`: done, but the check itself did not run. Not a tick.
+      state =
+        p.attempted === false
+          ? "skipped"
+          : p.ok === false
+            ? "failed"
+            : p.checked === false
+              ? "unchecked"
+              : "done";
     }
     view = { steps: upsert(view?.steps ?? [], { index, goal, state }), total: view?.total ?? null };
   }
@@ -281,22 +295,35 @@ export function settlePlan(view: PlanView | null | undefined, status: string): P
 
 /* ----------------------------------------------------------------- words */
 
-export function planCounts(view: PlanView): { done: number; failed: number; total: number | null } {
+export function planCounts(view: PlanView): {
+  done: number;
+  failed: number;
+  unchecked: number;
+  total: number | null;
+} {
   let done = 0;
   let failed = 0;
+  let unchecked = 0;
   for (const s of view.steps) {
     if (s.state === "done") done++;
     else if (s.state === "failed") failed++;
+    else if (s.state === "unchecked") {
+      // The work of the step was done; what is missing is its check.
+      done++;
+      unchecked++;
+    }
   }
-  return { done, failed, total: view.total };
+  return { done, failed, unchecked, total: view.total };
 }
 
-/** "2 of 4 done", "2 of 4 done, 1 failed", or "2 done" when the plan's size
- *  is not known. */
+/** "2 of 4 done", "2 of 4 done, 1 failed", "4 of 4 done, 1 could not be
+ *  checked", or "2 done" when the plan's size is not known. */
 export function planCountWords(view: PlanView): string {
-  const { done, failed, total } = planCounts(view);
-  const head = total !== null ? `${done} of ${total} done` : `${done} done`;
-  return failed > 0 ? `${head}, ${failed} failed` : head;
+  const { done, failed, unchecked, total } = planCounts(view);
+  let words = total !== null ? `${done} of ${total} done` : `${done} done`;
+  if (failed > 0) words += `, ${failed} failed`;
+  if (unchecked > 0) words += `, ${unchecked} could not be checked`;
+  return words;
 }
 
 /** The running step, or null. */
@@ -311,6 +338,7 @@ export const STATE_WORDS: Readonly<Record<PlanStepState, string>> = Object.freez
   done: "Done",
   failed: "Failed",
   skipped: "Not attempted",
+  unchecked: "Done, but could not be checked",
 });
 
 /** A goal-less step (seen only by its completion) is named by its place. */
@@ -328,7 +356,10 @@ export function stepGoalText(step: PlanStep): string {
  * against stepLabel's real output in plan-checklist-v1350.
  */
 export function isPlanProgressLine(line: string): boolean {
-  return /^Planned \d+ steps?$/.test(line) || /^Step \d+(?: of \d+)?(?::| done$| failed$| not attempted\b)/.test(line);
+  return (
+    /^Planned \d+ steps?$/.test(line) ||
+    /^Step \d+(?: of \d+)?(?::| done$| done, but could not be checked$| failed$| not attempted\b)/.test(line)
+  );
 }
 
 /** True for a run phase detail that says the run has a plan ("step 2 of 4:

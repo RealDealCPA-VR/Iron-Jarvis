@@ -150,6 +150,26 @@ export function statusWords(status: string | null | undefined, outcome?: string 
   return STATUS[s] ?? asItself(typeof status === "string" ? status.trim() : "");
 }
 
+/**
+ * "1 step could not be checked." / "3 steps could not be checked.", or "" for
+ * none (the intelligence plan, release 4). A run's plan step that was done
+ * but whose check did not run is let through; every reading of the run adds
+ * these words to its "Done" so the result line never reads as a plain pass.
+ * The daemon's own copy is agents/outcome.unchecked_words.
+ */
+export function uncheckedWords(count: unknown): string {
+  const n = typeof count === "number" && Number.isFinite(count) ? Math.floor(count) : 0;
+  if (n <= 0) return "";
+  return `${n} step${n === 1 ? "" : "s"} could not be checked.`;
+}
+
+/** The badge's shorter form of the same fact: "Done, 1 step not checked". */
+export function doneNotCheckedWords(count: unknown): StatusWords | null {
+  const n = typeof count === "number" && Number.isFinite(count) ? Math.floor(count) : 0;
+  if (n <= 0) return null;
+  return w(`${DONE.word}, ${n} step${n === 1 ? "" : "s"} not checked`, "amber");
+}
+
 /** The outcome words for a completed run, or null when it earned its "Done". */
 export function outcomeWords(outcome: string | null | undefined): StatusWords | null {
   return OUTCOME[norm(outcome)] ?? null;

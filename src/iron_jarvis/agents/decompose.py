@@ -1198,7 +1198,10 @@ async def execute_plan(
         # I/O and its own docstring requires async callers to hop through
         # to_thread. Awaited (not fire-and-forget) so the evidence has landed
         # by the time the run reports done.
-        if record_outcome is not None:
+        # A step whose CHECK did not run is evidence of nothing (the
+        # intelligence plan, release 4): it used to be written down as a
+        # pass for this model.
+        if record_outcome is not None and method != "unverified":
             try:
                 await asyncio.to_thread(record_outcome, bool(ok))
             except Exception:  # noqa: BLE001
@@ -1214,6 +1217,11 @@ async def execute_plan(
         # (a retried step there asserts payload EQUALITY without this key).
         if verify_all and retried:
             payload["attempts"] = 2
+        # "COULD NOT BE CHECKED" (the intelligence plan, release 4): one more
+        # ADDITIVE key, only on a step whose check did not run, so the live
+        # checklist marks that step as it finishes instead of ticking it.
+        if ok and method == "unverified":
+            payload["checked"] = False
         await p.event_bus.publish(
             EventType.PLAN_STEP_COMPLETED,
             payload,
@@ -1325,14 +1333,34 @@ async def assemble(
             f"- step {r.index + 1}: {r.goal} ({r.reason})" for r in failed
         )
     if unverified:
-        # A step that passed only because the VERIFIER was unavailable or
-        # unparseable must not read like a verified pass — say so plainly.
+        # A step that passed only because the CHECK itself did not run (the
+        # checking model failed, or its answer could not be read) must not
+        # read like a checked pass — say so plainly. The same fact is on the
+        # run's record and its result line (``agents/outcome``: the
+        # intelligence plan, release 4), in the same words.
         text += (
-            "\n\nNote — the following step(s) completed but could NOT be "
-            "independently verified (verifier unavailable):\n"
+            "\n\nNote — the following step(s) were done but could not be "
+            "checked (the check itself did not run):\n"
             + "\n".join(f"- step {r.index + 1}: {r.goal}" for r in unverified)
         )
     return text
+
+
+#: ``StepResult.verified`` for a step whose check did not run (the checking
+#: model failed, or its answer could not be read). The step is let through,
+#: and every reading of the run says "could not be checked" about it.
+NOT_CHECKED = "unverified"
+
+
+def step_unchecked(result: Any) -> bool:
+    """Is this step result (a :class:`StepResult` or its saved dict) one that
+    was done but could not be checked? Pure."""
+    get = result.get if isinstance(result, dict) else (lambda k, d=None: getattr(result, k, d))
+    return (
+        get("ok") is True
+        and get("attempted", True) is not False
+        and get("verified") == NOT_CHECKED
+    )
 
 
 def plan_not_done(results: "list[StepResult]") -> bool:

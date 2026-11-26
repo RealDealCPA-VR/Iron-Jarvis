@@ -74,6 +74,10 @@ export interface SessionView {
    *  `completed_with_failures` (a mutating call failed). Null/absent on rows
    *  finalised before the column existed and while the run is live. */
   outcome?: SessionOutcome | null;
+  /** How many steps of this run's plan were done but could NOT be checked
+   *  (the intelligence plan, release 4): the check itself did not run. Null
+   *  or absent for none. The badge then reads "Done, 1 step not checked". */
+  unchecked_steps?: number | null;
   /** The ask this run is PAUSED on right now (v1.227.0), or null. Answered
    *  through the same `POST /chat/approvals/{approval_id}` route chat uses. */
   waiting_on?: SessionWaitingOn | null;
