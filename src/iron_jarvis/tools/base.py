@@ -105,6 +105,13 @@ class ToolContext:
     #: offered to THIS model when nothing on this PC or your network can
     #: write them (D-33.1). None outside a chat turn.
     chat_model: "tuple[str, str] | None" = None
+    #: Next leaps 16-a: this call belongs to a reply on the dashboard's CHAT
+    #: PAGE, which can draw a card under the reply (the search-by-meaning
+    #: offer). Set only by the stream lane, for its own chat (session "chat",
+    #: the dashboard's route, not a Build pane); False for a Build pane, a
+    #: Build session, the sidebar, the POST lane and every agent run, which
+    #: draw no such card.
+    chat_page: bool = False
     #: An id of this context's own (the intelligence plan, release 1). Both
     #: chat lanes build ONE context per message, so for a chat call that names
     #: no chat and no turn (a script against the API) this is what its kept

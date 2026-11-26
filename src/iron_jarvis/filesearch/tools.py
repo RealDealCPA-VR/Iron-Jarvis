@@ -112,13 +112,13 @@ class FileSearchTool(Tool):
         if skipped:
             out = f"{out}\n\n{skipped}" if out else skipped
         # Next leaps 16-a: the FIRST time a by-meaning search matched words in
-        # a chat that can draw a card (the stream lane: session "chat", not
-        # cannot_ask), the offer is shown under this reply, once ever
-        # (memory/meaning.mark_offered). Never in an agent run or the POST
-        # lane, which draw no card: Improvements still holds the offer.
+        # a reply that can draw the card (``ctx.chat_page``: the stream lane,
+        # for the dashboard's chat page only), the offer is shown under this
+        # reply, once ever (memory/meaning.mark_offered). Never in a Build
+        # pane, a Build session, the sidebar, an agent run or the POST lane,
+        # which draw no card: Improvements still holds the offer.
         offer = False
-        if (mode == "semantic" and notes.words_only and getattr(ctx, "session_id", "") == "chat"
-                and not getattr(ctx, "cannot_ask", False)):
+        if mode == "semantic" and notes.words_only and getattr(ctx, "chat_page", False) is True:
             from types import SimpleNamespace
 
             from ..memory import meaning

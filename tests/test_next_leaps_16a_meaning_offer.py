@@ -161,11 +161,11 @@ def _semantic(s, query: str):
     return hits, notes
 
 
-def _ctx(s, *, cannot_ask: bool = False):
+def _ctx(s, *, cannot_ask: bool = False, chat_page: bool = False, session: str = "chat"):
     from iron_jarvis.tools.base import ToolContext
 
-    return ToolContext(workspace=s.tmp, session_id="chat", agent_run_id="chat", config=s.p.config,
-                       event_bus=s.p.event_bus, engine=s.p.engine, cannot_ask=cannot_ask)
+    return ToolContext(workspace=s.tmp, session_id=session, agent_run_id=session, config=s.p.config,
+                       event_bus=s.p.event_bus, engine=s.p.engine, cannot_ask=cannot_ask, chat_page=chat_page)
 
 
 # ---- never on without a Yes -------------------------------------------------
@@ -256,11 +256,30 @@ def test_a_server_off_this_network_is_never_offered_or_used(scene):
     assert "https://embed.example.com" not in s.asked  # not even asked what it has
     lan = next(c for c in view["candidates"] if c["server"] == "Studio PC")
     assert lan["where_words"] == "on Studio PC (your network)"
-    assert lan["cost_words"].endswith("Already on that computer, so nothing is added here.")
+    # Its memory figure is that computer's, said so, and never weighed
+    # against this PC's memory (D-16.1).
+    assert lan["cost_words"] == ("Uses about 300 MB of memory on that computer while it works. "
+                                 "Already on that computer, so nothing is added here.")
+    assert lan["negligible"] is False
+    small = {"works": True, "memory_bytes": 50 * MB, "memory_measured": True, "disk_added_bytes": 0, "unloads": True}
+    M.update(s.p.config.home, costs={**M.read(s.p.config.home)["costs"], lan["choice"]: small})
+    assert next(c for c in _view(s)["candidates"] if c["server"] == "Studio PC")["negligible"] is False
 
     res = _choose(s, M.choice_id(M.KIND_OPENAI, "text-embedding-3-small", "https://embed.example.com"))
     assert res.status_code == 400 and M.OFF_NETWORK in res.json()["detail"]
     assert M.state(s.p) == M.OFF and s.p.embedder.model == "mock"
+    # An address on this network that is none of the owner's model servers
+    # (one named in a document, say) is refused too, before any probe.
+    res = _choose(s, M.choice_id(M.KIND_OLLAMA, MODEL, "http://192.168.1.99:11434"))
+    assert res.status_code == 400 and M.NOT_A_SERVER in res.json()["detail"]
+    res = _choose(s, M.choice_id(M.KIND_OLLAMA, MODEL, "http://localhost:9999"))
+    assert res.status_code == 400 and M.NOT_A_SERVER in res.json()["detail"]
+    assert M.state(s.p) == M.OFF and s.p.embedder.model == "mock" and len(s.made) == 0
+    # Ollama on this PC is one server however its address is written (a
+    # choice set up before may say "localhost").
+    res = _choose(s, M.choice_id(M.KIND_OLLAMA, MODEL, "http://localhost:11434"))
+    assert res.status_code == 200, res.text
+    assert M.state(s.p) == M.ON and s.p.embedder.model == MODEL
 
 
 def test_a_local_only_turn_refuses_a_server_off_this_network():
@@ -396,13 +415,16 @@ async def test_a_by_meaning_search_that_matched_words_carries_the_offer_once(sce
     s = scene
     _files(s)
     tool = FileSearchTool(s.p.filesearch)
-    # The POST lane draws no card: it never uses the offer up.
-    res = await tool.execute({"query": "shipping", "mode": "semantic"}, _ctx(s, cannot_ask=True))
-    assert res.ok and res.data["words_only"] is True and res.data["meaning_offer"] is False
+    # The POST lane, a Build session and a Build pane draw no card: they
+    # never use the offer up (each lane's own flag: the lane tests below).
+    for ctx in (_ctx(s, cannot_ask=True), _ctx(s, session="build:chat_x"), _ctx(s)):
+        res = await tool.execute({"query": "shipping", "mode": "semantic"}, ctx)
+        assert res.ok and res.data["words_only"] is True and res.data["meaning_offer"] is False
+        assert "A card under this reply" not in res.output
     assert M.state(s.p) == M.OFF
-    first = await tool.execute({"query": "shipping", "mode": "semantic"}, _ctx(s))
+    first = await tool.execute({"query": "shipping", "mode": "semantic"}, _ctx(s, chat_page=True))
     assert first.data["meaning_offer"] is True and "A card under this reply offers" in first.output
-    again = await tool.execute({"query": "shipping", "mode": "semantic"}, _ctx(s))
+    again = await tool.execute({"query": "shipping", "mode": "semantic"}, _ctx(s, chat_page=True))
     assert again.data["meaning_offer"] is False and "A card under this reply" not in again.output
     # The frame carries it from the step's own result; every other frame is as before.
     assert tool_frame_data("file_search", first, True) == {"data": {"meaning_offer": True}}
@@ -459,11 +481,15 @@ def test_start_up_uses_the_choice_only_when_it_answers(tmp_path):
     # Answered: the file decides, and "auto" no longer turns anything on.
     M.update(home, value="")
     assert isinstance(M.boot_embedder(cfg, reachable=lambda _u: True).current(), MockEmbedder)
-    M.update(home, value=CHOICE)
+    M.update(home, value=CHOICE, knowledge_read={MODEL: "pk_ffffffffffff"})
     on = M.boot_embedder(cfg, reachable=lambda _u: True)
     assert isinstance(on.current(), OllamaEmbedder) and on.model == MODEL and on.held == ""
+    assert M.read(home)["knowledge_read"] == {MODEL: "pk_ffffffffffff"}  # its own walk goes on
     down = M.boot_embedder(cfg, reachable=lambda _u: False)
     assert isinstance(down.current(), MockEmbedder) and down.held == CHOICE
+    # The stand-in serves this session and writes knowledge rows a later
+    # session's model must read again: the walk starts over.
+    assert M.read(home)["knowledge_read"] == {}
     M.update(home, value=M.choice_id(M.KIND_OLLAMA, MODEL, "https://ollama.example.com"))
     far = M.boot_embedder(cfg, reachable=lambda _u: True)
     assert isinstance(far.current(), MockEmbedder)  # a choice off this network never loads
@@ -492,3 +518,265 @@ async def test_the_loop_is_paced_and_waits_while_a_reply_is_written(scene, monke
     # After the first pass (more rows waiting) the wait is short; then up to an hour, in steps.
     assert 30.0 in naps[2:3] and naps.count(60.0) >= 30
     assert ticks and all(ticks)
+
+
+# ---- review round 1 ---------------------------------------------------------
+def _live_calls(s, text: str) -> int:
+    """How many times the search model in use was asked to read *text*."""
+    base = M.switch_of(s.p).current()
+    return sum(1 for t in getattr(base, "calls", []) if t == text)
+
+
+def test_every_switch_starts_the_knowledge_walk_over(scene):
+    """Review 1: project knowledge vectors name no model, so the walk's
+    cursor holds only while ONE model was live. A note the stand-in wrote
+    while search by meaning was off (an id that sorts BEFORE the cursor) is
+    read again when it is turned on again; so is one read while a held model
+    was standing in."""
+    s = scene
+    mock = MockEmbedder()
+    home = s.p.config.home
+    with session_scope(s.p.engine) as db:
+        for n in range(3):
+            db.add(ProjectKnowledge(project_id="p1", name=f"n{n}", text=f"courier note {n}",
+                                    embedding_json=json.dumps(mock.embed(f"courier note {n}"))))
+        db.commit()
+    M.look(s.d)
+    assert _choose(s).status_code == 200
+    assert M.reread_pass(s.p) == {"read": 3, "more": False}
+    assert M.read(home)["knowledge_read"], "the walk keeps its cursor"
+    assert M.reread_pass(s.p) == {"read": 0, "more": False}  # walked once per model
+    # Off: the stand-in writes a note whose id sorts before every other.
+    assert s.client.post("/memory/meaning/off").status_code == 200
+    with session_scope(s.p.engine) as db:
+        db.add(ProjectKnowledge(id="pk_000000000000a", project_id="p1", name="new", text="parcel late",
+                                embedding_json=json.dumps(mock.embed("parcel late"))))
+        db.commit()
+    assert len(mock.embed("x")) != 8
+    assert _choose(s).status_code == 200  # on again, the same model
+    assert M.reread_pass(s.p) == {"read": 4, "more": False}
+    with session_scope(s.p.engine) as db:
+        vec = json.loads(db.get(ProjectKnowledge, "pk_000000000000a").embedding_json)
+    assert len(vec) == 8, "the stand-in's vector is still there"
+    # A model held at start: the stand-in served until it answers again.
+    M.update(home, knowledge_read={MODEL: "pk_ffffffffffff"})
+    M.switch_of(s.p).switch(MockEmbedder(), held=CHOICE)
+    assert M.reattach(s.d) is True
+    assert M.read(home)["knowledge_read"] == {}
+
+
+def test_the_offer_names_only_a_model_that_answered_here(scene):
+    """Review 2: the first model found does not answer its probe. One look
+    goes on to the next, so the offer names a model that answered, with its
+    measured cost; a cost is "being measured" only while a look runs."""
+    s = scene
+    small = "all-minilm:latest"
+    small_choice = M.choice_id(M.KIND_OLLAMA, small, WHERE)
+    s.models[WHERE].insert(0, {"id": small, "size_bytes": 46_000_000})
+    answers = {small: {"works": False, "why": "it answered 500", "memory_bytes": None}}
+
+    def probe(cand, headers, budget):
+        s.probes.append(cand["choice"])
+        return answers.get(cand["model"], {"works": True, "why": "", "memory_bytes": 300 * MB})
+
+    s.monkeypatch.setattr(M, "PROBE", probe)
+    # Bounded: one look measures at most LOOK_MEASURE_MAX models.
+    s.monkeypatch.setattr(M, "LOOK_MEASURE_MAX", 1)
+    M.look(s.d)
+    assert s.probes == [small_choice]
+    view = _view(s)
+    assert view["offer"] is False and view["best"] is None and _inbox_meaning(s) == []
+    assert [c["cost_words"] for c in view["candidates"]] == [
+        "It did not answer here: it answered 500.", M.COST_NOT_YET]
+    # The next look goes past the one that did not answer.
+    s.monkeypatch.setattr(M, "LOOK_MEASURE_MAX", 5)
+    M.look(s.d)
+    assert s.probes == [small_choice, CHOICE]
+    view = _view(s)
+    assert [c["model"] for c in view["candidates"]] == [small, MODEL]
+    assert view["offer"] is True and view["best"]["model"] == MODEL
+    measured = "Uses about 300 MB of memory while it works. Already on your disk."
+    assert view["best"]["cost_words"] == measured
+    (it,) = _inbox_meaning(s)
+    assert it["accept"]["body"] == {"choice": CHOICE} and it["evidence"][0] == measured
+    # One look with nothing known measures until one answers, in one go.
+    M.update(s.p.config.home, costs={})
+    s.probes.clear()
+    M.look(s.d)
+    assert s.probes == [small_choice, CHOICE] and _view(s)["best"]["model"] == MODEL
+    # A model found but not measured: never "being measured" unless a look runs.
+    M.update(s.p.config.home, costs={})
+    view = _view(s)
+    assert view["looking"] is False and view["offer"] is False
+    assert {c["cost_words"] for c in view["candidates"]} == {M.COST_NOT_YET}
+    M._LOOKING.set()
+    try:
+        assert {c["cost_words"] for c in _view(s)["candidates"]} == {M.COST_MEASURING}
+    finally:
+        M._LOOKING.clear()
+    # While a reply is written, the loop's look measures nothing.
+    s.probes.clear()
+    M.look(s.d, pause=lambda: True)
+    assert s.probes == []
+    s.monkeypatch.setattr(M, "replying", lambda: True)
+    M.update(s.p.config.home, looked_at_s=0)  # a daily look is due
+    assert M.one_pass(s.d)["looked"] is True and s.probes == []
+    s.monkeypatch.setattr(M, "replying", lambda: False)
+    # None answers: no offer.
+    answers[MODEL] = {"works": False, "why": "it answered 404", "memory_bytes": None}
+    M.look(s.d)
+    view = _view(s)
+    assert view["offer"] is False and view["best"] is None and _inbox_meaning(s) == []
+
+
+async def test_the_card_measures_a_model_the_look_did_not_list(scene):
+    """Review 2: chat names a model on the owner's server that the last look
+    did not list: the card still carries its MEASURED cost (never "being
+    measured" with no look running). One on none of the owner's servers gets
+    no cost card and is refused in words."""
+    from iron_jarvis.settings.tools import ConfigChangeTool
+
+    s = scene
+    M.look(s.d)
+    other = M.choice_id(M.KIND_OLLAMA, "mxbai-embed-large:latest", WHERE)
+    tool = ConfigChangeTool(s.p)
+    check = await tool.spend_check({"key": "meaning_search", "value": other}, _ctx(s))
+    assert check.ask is True
+    assert check.words == ("Turn on search by meaning with mxbai-embed-large:latest on this PC. "
+                           "Uses about 300 MB of memory while it works. Already on your disk.")
+    assert other in s.probes
+    stray = M.choice_id(M.KIND_OLLAMA, MODEL, "http://192.168.1.99:11434")
+    assert await tool.spend_check({"key": "meaning_search", "value": stray}, _ctx(s)) is None
+    nope = await tool.execute({"key": "meaning_search", "value": stray}, _ctx(s))
+    assert not nope.ok and M.NOT_A_SERVER in nope.error
+    assert M.state(s.p) == M.OFF and s.p.embedder.model == "mock"
+
+
+def test_the_reread_pass_stops_the_moment_a_reply_starts(scene, monkeypatch):
+    """Review 3: the pass is paused before EVERY row while a chat reply is
+    written (memory rows, then knowledge rows), says so, and goes on later
+    with nothing read twice."""
+    s = scene
+    mock = MockEmbedder()
+    texts = [f"memory {n} about a late parcel" for n in range(3)]
+    notes = [f"courier note {n}" for n in range(3)]
+    with session_scope(s.p.engine) as db:
+        for n, text in enumerate(texts):
+            db.add(MemoryRecord(layer="user", key=f"k{n}", text=text,
+                                embedding_json=encode_embedding(mock.embed(text), "mock")))
+        for n, text in enumerate(notes):
+            db.add(ProjectKnowledge(project_id="p1", name=f"n{n}", text=text,
+                                    embedding_json=json.dumps(mock.embed(text))))
+        db.commit()
+    M.look(s.d)
+    assert _choose(s).status_code == 200
+    checks = {"n": 0, "at": 0}
+
+    def replying() -> bool:
+        checks["n"] += 1
+        return checks["n"] == checks["at"]
+
+    monkeypatch.setattr(M, "replying", replying)
+    checks.update(n=0, at=2)  # a reply starts after the first memory row
+    assert M.reread_pass(s.p) == {"skipped": M.REPLY_PAUSE, "read": 1, "more": True}
+    checks.update(n=0, at=4)  # ... and after the first knowledge row
+    assert M.reread_pass(s.p) == {"skipped": M.REPLY_PAUSE, "read": 3, "more": True}
+    checks.update(n=0, at=0)  # no reply: the rest
+    assert M.reread_pass(s.p) == {"read": 2, "more": False}
+    assert [_live_calls(s, t) for t in texts + notes] == [1] * 6
+    with session_scope(s.p.engine) as db:
+        assert {decode_embedding(r.embedding_json)[1] for r in db.exec(select(MemoryRecord))} == {MODEL}
+        assert all(len(json.loads(r.embedding_json)) == 8 for r in db.exec(select(ProjectKnowledge)))
+
+
+def _search_rounds():
+    from iron_jarvis.providers.adapters.base import ToolCall
+
+    return [[ToolCall(id="c1", name="file_search", arguments={"query": "shipping", "mode": "semantic"})]]
+
+
+def _search_body(**extra) -> dict:
+    return {"messages": [{"role": "user", "content": "find the shipping complaint by meaning"}],
+            "tools": ["file_search"], "approval_mode": "yolo", **extra}
+
+
+def _offer_frames(frames) -> list[dict]:
+    return [d for e, d in frames if e == "tool_call" and d.get("name") == "file_search"
+            and d.get("status") == "finished" and (d.get("data") or {}).get("meaning_offer") is True]
+
+
+def _told(seen: dict) -> str:
+    """Everything the model was sent, as one string."""
+    return json.dumps([[str(getattr(m, "content", "")) for m in ms] for ms in seen["messages"]])
+
+
+def test_only_the_chat_page_uses_the_offer_up_on_the_real_lanes(scene):
+    """Review 4, through the real lanes: a Build pane's turn and the POST
+    lane draw no card, so a words-only search there never uses the offer up
+    and never tells the model a card is on screen; the main chat's does."""
+    from tests.test_wave3_chat_lanes_v1311 import _post_turn, _scripted_router
+
+    s = scene
+    _files(s)
+    for lane, extra in (("post", {}), ("stream", {"pane_id": "term_abc"})):
+        seen = _scripted_router(s.p, s.monkeypatch, _search_rounds(), "Here is what I found.")
+        _body, frames = _post_turn(s.client, lane, _search_body(**extra))
+        assert seen["n"] == 2, lane  # it really searched (two model rounds)
+        assert M.state(s.p) == M.OFF, lane
+        assert _offer_frames(frames) == [], lane
+        assert "matched words" in _told(seen) and "A card under this reply" not in _told(seen), lane
+    # The main chat page: the offer is used up once, on that step's frame.
+    main = _scripted_router(s.p, s.monkeypatch, _search_rounds(), "Here is what I found.")
+    _body, frames = _post_turn(s.client, "stream", _search_body())
+    assert M.state(s.p) == M.OFFERED and len(_offer_frames(frames)) == 1
+    assert "A card under this reply" in _told(main)
+
+
+async def test_a_build_session_turn_never_uses_the_offer_up(scene):
+    """Review 4: a Build session's turn runs in the stream lane under its own
+    session id and asks for the suggestion line, but draws no search-by-
+    meaning card: the offer stays unused."""
+    from iron_jarvis.daemon.chat_stream import stream_chat_turn
+    from iron_jarvis.daemon.schemas import ChatBody
+    from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
+    from tests.test_auto_approve_lanes_v14060 import _frames
+    from tests.test_wave3_chat_lanes_v1311 import _scripted_router
+
+    s = scene
+    _files(s)
+
+    async def turn(**kw) -> tuple[list, dict]:
+        seen = _scripted_router(s.p, s.monkeypatch, _search_rounds(), "Here is what I found.")
+        gen = await stream_chat_turn(s.p, BUILTIN_PERSONAS, ChatBody(**_search_body()), suggest_preferences=True,
+                                     **kw)
+        out = []
+        async for chunk in gen:
+            out.extend(_frames([chunk]))
+        return out, seen
+
+    frames, seen = await turn(session_id="build:chat_d0000000beef")
+    assert seen["n"] == 2 and "matched words" in _told(seen), frames[-4:]
+    assert M.state(s.p) == M.OFF and _offer_frames(frames) == []
+    # The same turn in the chat itself does use it (the flag is the lane's).
+    frames, seen = await turn()
+    assert M.state(s.p) == M.OFFERED and len(_offer_frames(frames)) == 1
+
+
+def test_a_held_model_is_never_called_off_in_the_search_note(scene):
+    """Review note: the chosen model did not answer at start (held), so the
+    stand-in serves. The step's note says search by meaning is ON and its
+    model did not answer, never that it is off."""
+    from iron_jarvis.filesearch.service import HELD_NOTE, WORD_ONLY_NOTE
+
+    s = scene
+    _files(s)
+    M.update(s.p.config.home, value=CHOICE)
+    M.switch_of(s.p).switch(MockEmbedder(), held=CHOICE)
+    _hits, notes = _semantic(s, "shipping")
+    assert notes.words_only is True and notes.held is True
+    assert HELD_NOTE in notes.note() and WORD_ONLY_NOTE not in notes.note()
+    assert "did not answer when Iron Jarvis started" in M.status_words(s.p)
+    M.switch_of(s.p).switch(MockEmbedder())
+    M.update(s.p.config.home, value="")
+    _hits, notes = _semantic(s, "shipping")
+    assert notes.held is False and WORD_ONLY_NOTE in notes.note()

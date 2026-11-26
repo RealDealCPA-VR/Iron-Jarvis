@@ -5496,6 +5496,13 @@ async def chat_stream(
             # Idea 33-a — lock-step: the chat's own model, which a recording's
             # notes are offered to when nothing local can write them.
             chat_model=(provider_choice, model_choice),
+            # Next leaps 16-a: only the dashboard's chat page draws a card
+            # under the reply (the search-by-meaning offer): its route asks
+            # for the suggestion line (`suggest_preferences`: never a Build
+            # pane, the sidebar or a harness attempt) in the chat itself (not a
+            # Build session). MIRROR NOTE: chat_turn.run_chat_turn leaves it
+            # False (the POST lane draws no card).
+            chat_page=bool(suggest_preferences) and _tool_session == "chat",
         )
         # v1.470.0: start the isolated script worker now when `tool_script`
         # is offered, so the model's first script does not wait for a

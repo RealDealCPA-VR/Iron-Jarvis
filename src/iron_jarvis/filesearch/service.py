@@ -83,6 +83,14 @@ WORD_ONLY_NOTE = (
     "the last resort is to install Ollama and run `ollama pull nomic-embed-text`.]"
 )
 
+#: 16-a: the words when search by meaning is ON but the search model chosen
+#: did not answer when Iron Jarvis started (the stand-in serves meanwhile).
+HELD_NOTE = (
+    "[Search by meaning is on, but its search model did not answer when Iron Jarvis started, so "
+    "this matched words, not meaning. Iron Jarvis tries it again by itself; Settings › Memory & you "
+    "› Search by meaning says how it stands.]"
+)
+
 #: Words for a "By meaning" search with no folder to look in.
 NO_MEANING_FOLDERS_NOTE = (
     "[By meaning searches only the folders the user added on the File Search page "
@@ -160,6 +168,9 @@ class SearchNotes:
     indexing: bool = False
     #: v1.445.0: the embedder is the offline word-hash one (no local model).
     words_only: bool = False
+    #: 16-a: ...because the search model chosen did not answer at start (the
+    #: setting is ON): the note says so, never "it is off".
+    held: bool = False
 
     def note(self) -> str:
         """The line(s) to append to a tool's output, or ``""`` when clean."""
@@ -185,7 +196,7 @@ class SearchNotes:
         if self.indexing:
             parts.append(INDEXING_NOTE)
         if self.words_only:
-            parts.append(WORD_ONLY_NOTE)
+            parts.append(HELD_NOTE if self.held else WORD_ONLY_NOTE)
         return "\n".join(parts)
 
 
@@ -363,6 +374,19 @@ class FileSearchService:
     def words_only(self) -> bool:
         """True when the embedder is the offline word-hash one (no local model)."""
         return self.embedder is not None and getattr(self.embedder, "model", "") == "mock"
+
+    def _held(self) -> bool:
+        """16-a: search by meaning is ON, but its search model did not answer
+        at start, so the stand-in serves (``SwitchableEmbedder.held``)."""
+        try:
+            from types import SimpleNamespace
+
+            from ..memory.meaning import switch_of
+
+            sw = switch_of(SimpleNamespace(embedder=self.embedder))
+            return bool(getattr(sw, "held", "")) if sw is not None else False
+        except Exception:  # noqa: BLE001
+            return False
 
     # -- root resolution ----------------------------------------------------
 
@@ -789,6 +813,7 @@ class FileSearchService:
             return []
         if notes is not None and self.words_only:
             notes.words_only = True
+            notes.held = self._held()
         if not self.meaning_roots:
             if notes is not None:
                 notes.no_meaning_folders = True

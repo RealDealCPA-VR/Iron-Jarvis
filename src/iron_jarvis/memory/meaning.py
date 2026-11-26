@@ -26,13 +26,17 @@ THE RULES (pinned in ``tests/test_next_leaps_16a_meaning_offer.py``):
 * **Only a model on this PC or the owner's own network is listed**
   (``providers/egress.private_host``): the text it searches would otherwise
   leave the network. Choosing one off this network is refused in words, and
-  the embedders refuse one under a Local only chat as a second line.
+  the embedders refuse one under a Local only chat as a second line. A
+  choice must also be on one of the owner's model servers or Ollama on this
+  PC (``fleet.library.targets``): an address named in a document never is.
 * **The cost is MEASURED, never guessed** (:func:`measure`): disk is what the
   server reports (nothing added when it is already installed); memory is one
   probe request, then the server's own figure for the loaded model (Ollama's
   ``/api/ps``). A server that reports nothing reads "not measured" and is
   never negligible. Off the event loop, bounded (:data:`MEASURE_S`), kept per
-  model.
+  model. The offer names only a model that ANSWERED its probe here (a look
+  goes on past one that did not), and a cost is "being measured" only while
+  a look runs.
 * **Not now is final** until the owner opens the setting: the offer is never
   shown again (Improvements, the card under a reply), while the plain row on
   File Search and in Settings still lets them choose.
@@ -40,7 +44,10 @@ THE RULES (pinned in ``tests/test_next_leaps_16a_meaning_offer.py``):
   ``SwitchableEmbedder`` and :func:`commit` swaps its base. Stored vectors name
   their model, so a row written by the old one is ranked by words until the
   re-read pass (:func:`reread_pass`, 200 rows a pass, paced by the daemon's
-  meaning loop) has read it again with the new one.
+  meaning loop, paused before every row while a chat reply is written) has
+  read it again with the new one. Project knowledge vectors name no model:
+  every change of the live model starts their walk over
+  (:func:`restart_knowledge_walk`).
 
 Everything that touches the network or the disk is BLOCKING: callers run it in
 a thread (routes are plain ``def``; the loop uses ``asyncio.to_thread``).
@@ -85,6 +92,10 @@ FIND_EVERY_S = 600.0
 FIND_DAILY_S = 86_400.0
 #: Most candidates kept.
 FOUND_MAX = 30
+#: Most models one look measures before it stops (each bounded by
+#: :data:`MEASURE_S`): it goes on past a model that did not answer, so the
+#: offer names one that did, but never walks a long list in one look.
+LOOK_MEASURE_MAX = 5
 #: Rows the re-read pass reads again per pass.
 REREAD_BATCH = 200
 
@@ -108,7 +119,17 @@ OFF_NETWORK = (
     "the text it searches would leave your network."
 )
 NOT_FOUND = "Iron Jarvis did not find a search model called {name} on this PC or your network."
+NOT_A_SERVER = (
+    "That search model is not on Ollama on this PC or a model server you added (Model servers), "
+    "so search by meaning did not use it."
+)
 NOT_MEASURED = "Not measured: models like this usually need about their file size in memory"
+#: The cost line of a model with no cost yet: "being measured" only while a
+#: look is really running.
+COST_MEASURING = "Its cost here is being measured."
+COST_NOT_YET = "Its cost here is not measured yet."
+#: Why a re-read pass stopped early (it carries on at the loop's next pass).
+REPLY_PAUSE = "a reply is being written"
 #: The last resort (the old note's terminal line, kept).
 TERMINAL_LINE = "ollama pull nomic-embed-text"
 
@@ -358,8 +379,27 @@ def boot_embedder(config: Any, engine: Any = None, *, http: Any = None, reachabl
         if provider == "auto" and url and not _private(str(url)):
             url = None  # "auto" never sends text off this network
         base = _build_base_embedder(provider, url, model, http=http, reachable=reachable)
+    if base is None or str(getattr(base, "model", "") or "") == "mock":
+        # The stand-in writes this session's project knowledge rows, so a
+        # later session's model must walk them all again.
+        restart_knowledge_walk(home)
     sw = SwitchableEmbedder(base if base is not None else MockEmbedder(), held=held)
     return CachingEmbedder(sw, engine) if engine is not None else sw
+
+
+def restart_knowledge_walk(home: Any) -> None:
+    """Project knowledge rows hold bare vectors (no model's name), so the
+    re-read pass walks them by id with one cursor per model. A cursor holds
+    only while ONE model was live: once another model (or the stand-in) was
+    live, a row it wrote may sort anywhere (ids are random), so every switch
+    of the live model drops the cursors and the next walk starts over.
+    Writes only when there is a cursor to drop. Never raises."""
+    try:
+        with _FILE_LOCK:
+            if read(home).get("knowledge_read"):
+                update(home, knowledge_read={})
+    except Exception:  # noqa: BLE001
+        log.warning("search by meaning: the knowledge walk could not be restarted", exc_info=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -524,20 +564,26 @@ def negligible(cost: "dict[str, Any] | None", total_ram: "int | None") -> bool:
     )
 
 
-def cost_words(cost: "dict[str, Any] | None", cand: "dict[str, Any] | None" = None) -> str:
+def cost_words(cost: "dict[str, Any] | None", cand: "dict[str, Any] | None" = None, *,
+               looking: "bool | None" = None) -> str:
     """The card's cost line: "Uses about 300 MB of memory while it works.
-    Already on your disk." """
+    Already on your disk." A model with no cost yet is "being measured" only
+    while a look really runs (``looking``; default: :data:`_LOOKING`), else
+    "not measured yet". A model on another computer says that its memory
+    figure is that computer's."""
     if not cost:
-        return "Its cost here is being measured."
+        busy = _LOOKING.is_set() if looking is None else looking
+        return COST_MEASURING if busy else COST_NOT_YET
     if not cost.get("works"):
         why = str(cost.get("why") or "").rstrip(".")
         return f"It did not answer here{': ' + why if why else ''}."
+    this_pc = bool((cand or {}).get("this_pc", True))
     if cost.get("memory_measured"):
-        memory = f"Uses about {_fmt(cost.get('memory_bytes'))} of memory while it works."
+        there = "" if this_pc else " on that computer"
+        memory = f"Uses about {_fmt(cost.get('memory_bytes'))} of memory{there} while it works."
     else:
         size = _fmt((cand or {}).get("size_bytes") or cost.get("disk_bytes"))
         memory = f"{NOT_MEASURED}{f' (about {size})' if size else ''}."
-    this_pc = bool((cand or {}).get("this_pc", True))
     disk = "Already on your disk." if this_pc else "Already on that computer, so nothing is added here."
     return f"{memory} {disk}"
 
@@ -559,23 +605,78 @@ _LOOK_LOCK = threading.Lock()
 _LOOKING = threading.Event()
 
 
+def _same_server(a: str, b: str) -> bool:
+    """Do two addresses name one server? The same root, or both on this PC
+    on the same port ("localhost" and "127.0.0.1" are one Ollama)."""
+    from urllib.parse import urlsplit
+
+    from ..fleet import library
+    from ..fleet.hardware import on_this_pc
+
+    ra, rb = library.server_root(a), library.server_root(b)
+    if not ra or not rb:
+        return False
+    if ra == rb:
+        return True
+    if not (on_this_pc(ra) and on_this_pc(rb)):
+        return False
+    ua, ub = (urlsplit(r if "://" in r else f"http://{r}") for r in (ra, rb))
+    return ua.scheme == ub.scheme and ua.port == ub.port and ua.path.rstrip("/") == ub.path.rstrip("/")
+
+
+def _target_for(d: Any, where: str) -> Any:
+    """The model server (``fleet.library.targets``: a saved one, or Ollama
+    on this PC) whose address is *where*'s, or None. Never raises."""
+    try:
+        for t in TARGETS(d):
+            if _same_server(str(getattr(t, "base_url", "") or ""), where):
+                return t
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _headers_for(d: Any, where: str) -> dict[str, str]:
+    t = _target_for(d, where)
+    if t is None:
+        return {}
     try:
         from ..fleet import library
 
-        root = library.server_root(where)
-        for t in TARGETS(d):
-            if library.server_root(str(getattr(t, "base_url", "") or "")) == root:
-                return library.auth_headers(d, t)
+        return library.auth_headers(d, t)
     except Exception:  # noqa: BLE001
-        pass
-    return {}
+        return {}
 
 
-def look(d: Any, *, every: bool = False, clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
-    """Find the search models, then measure the first that has no cost yet
-    (``every``: each one without a cost). Saved in the file. One look at a
-    time; a second caller gets the file as it is. Never raises."""
+def _candidate(d: Any, choice: str, data: "dict[str, Any] | None" = None) -> "dict[str, Any] | None":
+    """*choice* as a candidate: the one the last look found, else one built
+    from its model server (a model the look has not listed yet); None when
+    its address is none of the owner's servers."""
+    found = (data if data is not None else read(d.platform.config.home)).get("found") or []
+    for c in found:
+        if c.get("choice") == choice:
+            return c
+    parsed = parse_choice(choice)
+    if parsed is None:
+        return None
+    kind, model, where = parsed
+    t = _target_for(d, where)
+    if t is None:
+        return None
+    return {"choice": choice, "kind": kind, "model": model, "where": where,
+            "server": str(getattr(t, "label", "") or where), "this_pc": bool(getattr(t, "this_pc", False)),
+            "size_bytes": None}
+
+
+def look(d: Any, *, every: bool = False, clock: Callable[[], float] = time.monotonic,
+         pause: "Callable[[], bool] | None" = None) -> dict[str, Any]:
+    """Find the search models, then measure them in order until ONE answers
+    (at most :data:`LOOK_MEASURE_MAX` measures; one already measured that
+    works ends it at once), so the offer names a model that answered here;
+    ``every``: each one without a cost. ``pause`` (the meaning loop's
+    ``replying``) stops measuring while a reply is written. Saved in the
+    file. One look at a time; a second caller gets the file as it is. Never
+    raises."""
     home = d.platform.config.home
     if not _LOOK_LOCK.acquire(blocking=False):
         return read(home)
@@ -584,11 +685,18 @@ def look(d: Any, *, every: bool = False, clock: Callable[[], float] = time.monot
         found, problems = discover(d)
         data = read(home)
         costs = dict(data.get("costs") or {})
+        measured = 0
         for cand in found:
-            if cand["choice"] in costs and costs[cand["choice"]].get("works") is not None:
+            known = costs.get(cand["choice"])
+            if known is not None and known.get("works") is not None:
+                if known.get("works") and not every:
+                    break  # a model that answered: enough to offer
                 continue
+            if (pause is not None and pause()) or (not every and measured >= LOOK_MEASURE_MAX):
+                break
             costs[cand["choice"]] = measure(cand, headers=_headers_for(d, cand["where"]))
-            if not every:
+            measured += 1
+            if costs[cand["choice"]].get("works") and not every:
                 break
         keep = {c["choice"] for c in found} | {str(data.get("value") or ""), str(data.get("last_choice") or "")}
         costs = {k: v for k, v in costs.items() if k in keep}
@@ -630,14 +738,22 @@ class Prepared:
 def _resolve(d: Any, value: Any) -> Any:
     """Chat's and the press's words to one stored value: ``None``, ``""``
     ("off"), or a choice ("on" = the one chosen before, else the first that
-    works; a bare model name = the one found with that name)."""
+    answered here, else the first not measured yet; a bare model name = the
+    one found with that name). A choice must be on this network AND on one of
+    the owner's model servers (or Ollama on this PC): an address read from a
+    page or a document is never one (``ValueError`` with the words)."""
     if value is None:
         return None
     text = str(value).strip()
     low = text.lower()
     if low in ("", "off", "false", "no", "none", "not now"):
         return ""
-    if parse_choice(text) is not None:
+    parsed = parse_choice(text)
+    if parsed is not None:
+        if not _private(parsed[2]):
+            raise ValueError(OFF_NETWORK)
+        if _target_for(d, parsed[2]) is None:
+            raise ValueError(NOT_A_SERVER)
         return text
     data = read(d.platform.config.home)
     found = list(data.get("found") or [])
@@ -650,9 +766,15 @@ def _resolve(d: Any, value: Any) -> Any:
         if parse_choice(last) is not None:
             return last
         costs = data.get("costs") or {}
-        for c in found:
-            if (costs.get(c["choice"]) or {}).get("works") is not False:
-                return c["choice"]
+
+        def works(c: dict[str, Any]) -> "bool | None":
+            cost = costs.get(c["choice"])
+            return None if cost is None else bool(cost.get("works"))
+
+        for want in (True, None):
+            for c in found:
+                if works(c) is want:
+                    return c["choice"]
         raise ValueError(NONE_FOUND)
     from ..fleet.library import same_model
 
@@ -698,7 +820,9 @@ def commit(d: Any, prepared: Prepared, *, actor: str = "") -> None:
     value = prepared.value
     data = read(home)
     fields: dict[str, Any] = {"value": value, "answered_at": _now_iso() if value is not None else None,
-                              "how": "yes" if value else ""}
+                              "how": "yes" if value else "",
+                              # The live model changes: the knowledge walk starts over.
+                              "knowledge_read": {}}
     if value:
         fields["last_choice"] = value
     elif data.get("value"):
@@ -740,14 +864,20 @@ def card_check(platform: Any, value: Any) -> Any:
         return SpendCheck(ask=False, cost_note="search by meaning off")
     home = platform.config.home
     data = read(home)
-    cand = next((c for c in data.get("found") or [] if c.get("choice") == clean), None)
+    # A model the last look did not list (a choice named in full) is built
+    # from its own model server; one on none of the owner's servers was
+    # refused by ``_resolve`` above. Every card carries a MEASURED cost.
+    cand = _candidate(d, clean, data)
+    if cand is None:
+        return None
     cost = (data.get("costs") or {}).get(clean)
-    if cost is None and cand is not None:
+    if cost is None:
         cost = measure(cand, headers=_headers_for(d, cand["where"]))
         update(home, costs={**(read(home).get("costs") or {}), clean: cost})
-    server = str((cand or {}).get("server") or "")
-    words = f"Turn on search by meaning with {choice_words(clean, server)}. {cost_words(cost, cand)}"
-    return SpendCheck(ask=True, words=words, cost_note=cost_words(cost, cand))
+    server = str(cand.get("server") or "")
+    line = cost_words(cost, cand, looking=False)
+    words = f"Turn on search by meaning with {choice_words(clean, server)}. {line}"
+    return SpendCheck(ask=True, words=words, cost_note=line)
 
 
 def mark_offered(platform: Any) -> bool:
@@ -780,6 +910,8 @@ def reattach(d: Any) -> bool:
         prepared = prepare(d, held)
     except Exception:  # noqa: BLE001
         return False
+    # The stand-in served until now: the knowledge walk starts over.
+    restart_knowledge_walk(d.platform.config.home)
     sw.switch(prepared.base, held="")
     REREAD_WAKE.set()
     return True
@@ -813,16 +945,22 @@ def view(d: Any) -> dict[str, Any]:
     value = setting_value(platform)
     costs = data.get("costs") or {}
     ram = _total_ram()
+    looking = _LOOKING.is_set()
     cands = []
     for c in data.get("found") or []:
         cost = costs.get(c.get("choice"))
+        this_pc = bool(c.get("this_pc"))
         cands.append({
             "choice": c.get("choice"), "model": c.get("model"), "server": c.get("server"),
             "where_words": where_words(str(c.get("where") or ""), str(c.get("server") or "")),
-            "this_pc": bool(c.get("this_pc")), "cost": cost, "cost_words": cost_words(cost, c),
-            "negligible": negligible(cost, ram), "works": None if cost is None else bool(cost.get("works")),
+            "this_pc": this_pc, "cost": cost, "cost_words": cost_words(cost, c, looking=looking),
+            # D-16.1 is measured on THIS PC: another computer's memory figure
+            # is never weighed against this PC's memory.
+            "negligible": this_pc and negligible(cost, ram),
+            "works": None if cost is None else bool(cost.get("works")),
         })
-    best = next((c for c in cands if c["works"] is not False), None)
+    # The offer names only a model that ANSWERED here, with its measured cost.
+    best = next((c for c in cands if c["works"] is True), None)
     return {
         "state": st,
         "value": value,
@@ -830,11 +968,11 @@ def view(d: Any) -> dict[str, Any]:
         "words": status_words(platform, data),
         "on": bool(parse_choice(value)),
         "choice_words": choice_words(value),
-        # The offer: never answered, and a model to offer.
+        # The offer: never answered, and a model that answered its probe.
         "offer": st in (OFF, OFFERED) and best is not None,
         "best": best,
         "candidates": cands,
-        "looking": _LOOKING.is_set(),
+        "looking": looking,
         "looked_at": data.get("found_at") or "",
         "problems": list(data.get("found_problems") or [])[:6],
         "none_found": NONE_FOUND,
@@ -880,7 +1018,7 @@ def one_pass(d: Any) -> dict[str, Any]:
     if st == ON:
         out.update(reread_pass(platform))
     elif st in (OFF, OFFERED) and look_is_due(read(platform.config.home), FIND_DAILY_S):
-        look(d)
+        look(d, pause=replying)
         out["looked"] = True
     return out
 
@@ -936,12 +1074,18 @@ async def meaning_loop(
 REREAD_WAKE = threading.Event()
 
 
-def reread_pass(platform: Any, *, limit: int = REREAD_BATCH) -> dict[str, Any]:
+def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
+                pause: "Callable[[], bool] | None" = None) -> dict[str, Any]:
     """Read again, with the live search model, at most *limit* stored rows
     it did not write: memory rows whose vector names another model (or none),
     then project knowledge rows (bare vectors: walked once per model by a
-    cursor kept in the file). Only while search by meaning is on with a model
-    on this network (``skipped`` says why not). ``{done, read, more}``."""
+    cursor kept in the file, dropped whenever the live model changes:
+    :func:`restart_knowledge_walk`). Only while search by meaning is on with
+    a model on this network (``skipped`` says why not). Paused BEFORE EVERY
+    ROW while a chat reply is written (``pause``, default :func:`replying`):
+    the pass stops with ``more`` and goes on at the loop's next pass.
+    ``{read, more}`` (+ ``skipped``)."""
+    wait = pause if pause is not None else replying
     from sqlmodel import select
 
     from ..core.db import session_scope
@@ -975,6 +1119,8 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH) -> dict[str, Any]:
             .limit(limit + 1)
         ))
     for rid in ids[:limit]:
+        if wait():
+            return {"skipped": REPLY_PAUSE, "read": done, "more": True}
         with session_scope(platform.engine) as db:
             row = db.get(MemoryRecord, rid)
             text = str(getattr(row, "text", "") or "")
@@ -995,6 +1141,7 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH) -> dict[str, Any]:
         done += 1
     more = len(ids) > limit
     left = limit - done
+    paused = False
     if left > 0 and not more:
         data = read(platform.config.home)
         cursors = dict(data.get("knowledge_read") or {})
@@ -1006,6 +1153,9 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH) -> dict[str, Any]:
             krows = list(db.exec(stmt.limit(left + 1)))
         last = after
         for k in krows[:left]:
+            if wait():
+                more = paused = True
+                break
             text = (k.text or "")[:4000]
             if text.strip():
                 try:
@@ -1029,4 +1179,6 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH) -> dict[str, Any]:
         if last != after:
             cursors[model] = last
             update(platform.config.home, knowledge_read=cursors)
+    if paused:
+        return {"skipped": REPLY_PAUSE, "read": done, "more": True}
     return {"read": done, "more": more}

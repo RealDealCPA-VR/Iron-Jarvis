@@ -2179,7 +2179,8 @@ It matches words for now.**
   needs no card.
 - **Never off your network.** A model server outside this PC and your own
   network is never listed, and a Local only chat never sends text to one.
-  The text it searches stays where it is.
+  Only Ollama on this PC and the model servers you added are used. The text
+  it searches stays where it is.
 - **Nothing found?** The card and the row say so and point to **Get a
   model** (the model library on Model servers) and **Use a model server you
   run**; `ollama pull nomic-embed-text` in a terminal is the last resort.

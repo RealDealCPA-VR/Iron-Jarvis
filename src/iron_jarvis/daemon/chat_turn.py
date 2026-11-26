@@ -14405,6 +14405,8 @@ async def run_chat_turn(
             # v1.449.0 (G54): this lane draws no card, so the website risk
             # door refuses in plain words here (MIRROR NOTE: the stream lane
             # registers a resolver for its turn instead, routes/chat.py).
+            # 16-a: for the same reason `chat_page` stays False here (the
+            # stream lane sets it for the dashboard's chat page only).
             cannot_ask=True,
             # v1.481.0: the task's write rules (lock-step: routes/chat.py).
             task_scope=(_deliv.scope if _deliv is not None else None),
