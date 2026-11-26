@@ -594,14 +594,17 @@ def usage_by(
     now: datetime | None = None,
     keep: "Callable[[Who], bool | str] | None" = None,
     read: "_Read | None" = None,
+    all_rows: bool = False,
 ) -> dict[str, Any]:
     """The rows for ``group`` over the last ``days`` (see the module
     docstring). ``keep`` answers for each usage row's :class:`Who`: True or
     "" keeps it; False or a reason word drops it, counted in ``left_out``
     and ``left_out_by[reason]`` ("held" for False) and in no figure. A
     ``keep`` that raises drops the row. ``read`` is :func:`read_window`'s
-    answer for the same ``days`` and ``now`` (read again when None). Never
-    raises."""
+    answer for the same ``days`` and ``now`` (read again when None).
+    At most :data:`ROWS_MAX` rows are carried (the biggest first, the rest
+    summed in ``rest``); ``all_rows`` carries every one (the chat tool, which
+    looks a name up among them all and lists only a few). Never raises."""
     g = clean_group(group) or GROUP_FOLDER
     n = clamp_days(days)
     when = now or _now()
@@ -692,7 +695,7 @@ def usage_by(
     rows = [{"key": key, "label": label, "kind": kind, "folder": folder, **fig.view()}
             for (key, label, kind, folder), fig in ordered]
     out["rows_total"] = len(rows)
-    if len(rows) > ROWS_MAX:
+    if not all_rows and len(rows) > ROWS_MAX:
         rest = _Fig()
         for _rk, fig in ordered[ROWS_MAX:]:
             rest.add(fig)

@@ -45,6 +45,15 @@ export const FIRST_ROWS = 12;
 
 const VIEWS = USAGE_BY_GROUPS.map((g) => ({ value: g, label: GROUP_WORDS[g], icon: null }));
 
+/** The window the daemon answers for `days` (it clamps to 1..365). */
+function windowDays(days: number): number {
+  const n = Math.trunc(Number(days));
+  return Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 30;
+}
+
+/** An answer that is not a view this card can read: the hover detail only. */
+const UNREADABLE = { status: 200, message: "The answer was not one this card can read." };
+
 function Figure({ label, children, testId }: { label: string; children: ReactNode; testId: string }) {
   return (
     <div className="min-w-0" data-testid={testId}>
@@ -124,7 +133,11 @@ export function UsageBy({ days, refreshKey = 0 }: { days: number; refreshKey?: n
   const [all, setAll] = useState(false);
   const { data, error, loading, reload } = useApi<unknown>(`/usage/by?group=${group}&days=${days}`, [refreshKey]);
   const view = useMemo(() => decodeUsageBy(data), [data]);
-  const rows = view && view.group === group ? view.rows : [];
+  // useApi keeps the last path's answer while the next one loads: an answer
+  // for another grouping or window is NOT this one, so it is never read as
+  // "nothing used" (nor shown as this window's figures) while it is pending.
+  const stale = !view || view.group !== group || view.days !== windowDays(days);
+  const rows = !stale && view ? view.rows : [];
   const shown = all ? rows : rows.slice(0, FIRST_ROWS);
   const anyPlan = rows.some((r) => r.plan.tokens > 0);
 
@@ -151,12 +164,17 @@ export function UsageBy({ days, refreshKey = 0 }: { days: number; refreshKey?: n
       <div role="tabpanel" id={`usage-by-panel-${group}`} aria-labelledby={`usage-by-tab-${group}`}>
         {error ? (
           <LoadFailedLine thing="What it cost" error={error} onRetry={reload} testId="usage-by-failed" />
+        ) : stale ? (
+          loading ? (
+            <SkeletonRows rows={3} />
+          ) : (
+            // Answered, but not with this grouping's rows: never "nothing used".
+            <LoadFailedLine thing="What it cost" error={UNREADABLE} onRetry={reload} testId="usage-by-failed" />
+          )
         ) : view?.error ? (
           <p className="py-2 text-sm text-zinc-500" data-testid="usage-by-failed">
             {view.error}
           </p>
-        ) : loading && !view ? (
-          <SkeletonRows rows={3} />
         ) : rows.length === 0 ? (
           <Empty icon={<Layers size={24} />}>{EMPTY_WORDS}</Empty>
         ) : (

@@ -419,6 +419,8 @@ def test_a_name_that_reads_as_an_instruction_is_not_told(month):
     out = _ask_tool(month, {"group": "automation"}, words="what did my schedules cost?")
     assert "previous instructions" not in out.lower(), out
     assert "names could not be told here" in out
+    # Not named, but not "not counted" either: the In all line holds its use.
+    assert "“In all” still counts them" in out, out
 
 
 # Review of 46-a: a name that finds nothing never reads as a made-up
@@ -537,6 +539,80 @@ def test_the_phone_is_told_no_folder(month, monkeypatch):
         failure_words.reset_answers_the_phone(token)
     assert str(month.prices) not in out and str(month.hart) not in out, out
     assert "not named in an answer to the phone" in out
+
+
+# Review 2 of 46-a: the phone's own rule (decision D-13.2), and a name past
+# the Usage page's cut of ROWS_MAX rows.
+def _on_the_phone(month, args, **kw):
+    from iron_jarvis.providers import failure_words
+
+    token = failure_words.mark_answers_the_phone(True)
+    try:
+        return _ask_tool(month, args, **kw)
+    finally:
+        failure_words.reset_answers_the_phone(token)
+
+
+def test_the_phone_tells_a_clients_work_only_when_the_owners_message_names_it(month):
+    """In a client's own folder the wall lets that client's rows through
+    without the client being named; the phone does not: a client's work goes
+    to the phone only when the owner's own message named that client."""
+    words = "what did everything cost this month?"
+    pc = _ask_tool(month, {"group": "client"}, folder=str(month.hart), words=words)
+    assert "Hartleys: $1.50 pay per use (estimated)" in pc, pc  # the PC, in Hartleys' folder
+    phone = _on_the_phone(month, {"group": "client"}, folder=str(month.hart), words=words)
+    assert "Hartleys" not in phone and "$1.50" not in phone, phone
+    assert "Work for clients your message did not name was left out of this answer to the phone." in phone
+    assert "No client: $4.35 pay per use (measured)" in phone, phone  # nobody's work is still told
+    named = _on_the_phone(month, {"group": "client"}, folder=str(month.hart),
+                          words="what did Hartleys cost this month?")
+    assert "Hartleys: $1.50 pay per use (estimated)" in named, named
+
+
+def test_the_phone_never_tells_work_named_after_a_waiting_client(month, monkeypatch):
+    """A schedule named after a client still waiting for the owner's yes is
+    told on the PC (the owner's own turns never use waiting names) and never
+    to the phone, even when the message says the name."""
+    import dataclasses
+
+    from iron_jarvis.workmap.clients import names, store
+
+    real = store.load_map
+    jones = {"client_waiting_jones": ("Jones", names.signature("Jones"), ())}
+    monkeypatch.setattr(store, "load_map", lambda engine: dataclasses.replace(real(engine), waiting_names=jones))
+    sid = _session(month.engine, origin="schedule:Jones books", folder=month.prices)
+    _run(month.engine, sid, provider="anthropic", model="claude-sonnet-5", tin=10, tout=10, cost=0.40,
+         source="vendor")
+    words = "what did my schedules cost for Jones?"
+    pc = _ask_tool(month, {"group": "automation"}, words=words)
+    assert "Schedule “Jones books”: $0.40 pay per use (measured)" in pc, pc
+    phone = _on_the_phone(month, {"group": "automation"}, words=words)
+    assert "Jones books" not in phone and "$0.40" not in phone, phone
+    assert "left out of this answer to the phone" in phone, phone
+
+
+def test_a_name_past_the_usage_pages_cut_is_still_found(month, monkeypatch):
+    """The Usage page carries the biggest ROWS_MAX rows; the chat tool looks a
+    name up among EVERY row, so a small one is never said to be off the
+    record, and a kind's "In all" sums every row of that kind."""
+    monkeypatch.setattr(UB, "ROWS_MAX", 1)
+    page = _by(month, "automation")
+    assert len(page["rows"]) == 1 and page["rest"]["count"] == page["rows_total"] - 1  # the page's cut holds
+    # The nightly brief ran in Hartleys' folder, its helper in Smith's: the
+    # message names both, so the wall lets it through.
+    words = "what did the nightly brief for Hartleys and Smith cost?"
+    out = _ask_tool(month, {"group": "automation", "name": "nightly brief"}, words=words)
+    assert "Schedule “nightly brief”: $1.00 pay per use (estimated)" in out, out
+    assert "on record" not in out and "matches" not in out, out
+    # A name with no grouping, past the cut in every grouping it is looked for in.
+    anywhere = _ask_tool(month, {"name": "nightly brief"}, words=words)
+    assert "Schedule “nightly brief”: $1.00" in anywhere and "matches" not in anywhere, anywhere
+    e = month.engine
+    for name, usd in (("weekly report", 0.20), ("month end", 0.30)):
+        sid = _session(e, origin=f"schedule:{name}", folder=month.prices)
+        _run(e, sid, provider="anthropic", model="claude-sonnet-5", tin=10, tout=10, cost=usd, source="vendor")
+    kinds = _ask_tool(month, {"name": "my schedules"}, words="how much did my schedules for Hartleys and Smith cost")
+    assert "In all: $1.50 pay per use (estimated)" in kinds, kinds  # 1.00 + 0.20 + 0.30
 
 
 def test_the_tool_is_a_walled_read_for_chat_only():

@@ -1595,6 +1595,11 @@ How to use this file: read the contents list, then read only the entries your ch
   it is looked for by automation, then client, folder and agent (one
   `usage_by.read_window` for all); a name of kind words only ("my
   schedules") lists that kind; and with any row kept out the sentence says
-  nothing this chat may be told about matches, never "on record". Pins:
-  `tests/test_next_leaps_46a_usage_by.py`,
-  `tests/test_claude_live_v1427.py`, `dashboard/__tests__/usage-by.test.tsx`.
+  nothing this chat may be told about matches, never "on record". The tool
+  reads EVERY row (`usage_by(all_rows=True)`; the page's `ROWS_MAX` cut
+  would turn a small named row into a made-up negative) and masks only
+  the rows it names. The card treats an answer for another grouping or
+  window (useApi holds it while the next loads) as not loaded, never as
+  "Nothing used". Pins: `tests/test_next_leaps_46a_usage_by.py`,
+  `tests/test_claude_live_v1427.py`, `dashboard/__tests__/usage-by.test.tsx`,
+  `dashboard/__tests__/usage-by-pending.test.tsx`.

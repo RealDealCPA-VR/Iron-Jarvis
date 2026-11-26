@@ -61,6 +61,12 @@ TRUNCATED_NOTE = "(Counted from the newest 200,000 model calls in this window.)"
 PHONE_FOLDERS = (
     "Folders are not named in an answer to the phone; Usage in the app lists them."
 )
+#: Rows whose names could not be told (``workmap.block._safe``): not named,
+#: but their use is still in an "In all" line (no name is told by it).
+HELD_NOTE = "Some rows are not named because their names could not be told here."
+HELD_IN_ALL = (
+    "Some rows are not named because their names could not be told here; “In all” still counts them."
+)
 _GROUP_WORDS = {
     "folder": "by folder",
     "client": "by client",
@@ -392,58 +398,72 @@ def _report(platform: Any, engine: Any, turn: Any, group: str, days: int, name: 
     now = utcnow()
     window = UB.read_window(platform, days, now=now)
 
-    def tellable(data: dict[str, Any], g: str) -> tuple[list[tuple[str, dict[str, Any]]], int, int]:
-        """``(told, held, hidden)``: the rows this answer may name, the ones
-        whose names could not be told, and the folders the phone is not told."""
+    def of_kind(row: dict[str, Any]) -> bool:
+        key = str(row.get("key") or "")
+        return bool(key) and ("*" in kinds or key.partition(":")[0] in kinds)
+
+    def tellable(data: dict[str, Any], g: str) -> tuple[list[tuple[str, dict[str, Any]]], list[dict[str, Any]], int, int]:
+        """``(told, held, hidden, more)`` over EVERY row of the grouping
+        (``usage_by(all_rows=True)``: a small row past the Usage page's cut
+        is still found by its name, and a kind's "In all" sums all of it):
+        the rows the name or kind picked that this answer may name, the
+        picked rows whose names could not be told, the folders the phone is
+        not told, and, for a plain list, the rows past :data:`LIST_MAX`
+        (Usage in the app lists them; they are not read any further)."""
         told: list[tuple[str, dict[str, Any]]] = []
-        held = hidden = 0
+        held: list[dict[str, Any]] = []
+        hidden = more = 0
+        listing = not (name or kinds)
         for row in data.get("rows") or []:
             label = str(row.get("label") or "")
-            # Masked and scanned: a name that reads as an instruction is not told.
-            shown = _safe(label) if label else ""
-            if not shown:
-                held += 1
+            # Cheap first: only a row the name or the kind picks is read on.
+            if name and not matches(name, label):
+                continue
+            if kinds and not of_kind(row):
                 continue
             if phone and g == "folder" and row.get("key"):
                 hidden += 1
                 continue
+            if listing and len(told) >= LIST_MAX:
+                more += 1
+                continue
+            # Masked and scanned: a name that reads as an instruction is not told.
+            shown = _safe(label) if label else ""
+            if not shown:
+                held.append(row)
+                continue
+            if name and not matches(name, shown):
+                continue  # the name pointed at what the mask took out
             told.append((shown, row))
-        return told, held, hidden
-
-    def picked(told: list[tuple[str, dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
-        if name:
-            return [(lbl, r) for lbl, r in told if matches(name, lbl)]
-        if kinds:
-            return [(lbl, r) for lbl, r in told if r.get("key") and (
-                "*" in kinds or str(r.get("key") or "").partition(":")[0] in kinds)]
-        return told
+        return told, held, hidden, more
 
     searched: list[str] = []
     withheld = False
     #: What every grouping looked through kept out (said when none matched).
     kept_out: dict[str, int] = {}
     held_any = 0
-    chosen: "tuple[str, dict[str, Any], list, int] | None" = None
-    first: "tuple[str, dict[str, Any], list, int] | None" = None
+    chosen: "tuple[str, dict[str, Any], list, list, int] | None" = None
+    first: "tuple[str, dict[str, Any], list, list, int] | None" = None
     for g in order:
-        got = UB.usage_by(platform, g, days, now=now, keep=keep_for(g), read=window)
+        got = UB.usage_by(platform, g, days, now=now, keep=keep_for(g), read=window, all_rows=True)
         if got.get("error"):
             if g == group:
                 return ToolResult(ok=False, error=str(got["error"]), data={"door": HREF})
             continue  # a grouping looked through only for the name: skipped
         searched.append(g)
-        told_g, held_g, hidden_g = tellable(got, g)
-        withheld = withheld or bool(int(got.get("left_out") or 0) + held_g + hidden_g)
+        told_g, held_g, hidden_g, more_g = tellable(got, g)
+        withheld = withheld or bool(int(got.get("left_out") or 0) + len(held_g) + hidden_g)
         for why, n in (got.get("left_out_by") or {}).items():
             kept_out[why] = max(kept_out.get(why, 0), int(n or 0))
-        held_any = max(held_any, held_g)
-        here = (g, got, picked(told_g), held_g)
+        held_any = max(held_any, len(held_g))
+        here = (g, got, told_g, held_g, more_g)
         first = first or here
-        if here[2] or not (name or kinds):
+        if told_g or not (name or kinds):
             chosen = here
             break
     found = chosen is not None
-    group, data, told, held = chosen or first  # type: ignore[misc]
+    group, data, told, held_rows, more = chosen or first  # type: ignore[misc]
+    held = len(held_rows)
     if not found:
         # Nothing matched anywhere: what any grouping kept out is said.
         data = {**data, "left_out_by": kept_out}
@@ -464,11 +484,14 @@ def _report(platform: Any, engine: Any, turn: Any, group: str, days: int, name: 
                                       withheld=withheld, phone=phone))
     for lbl, r in told[:LIST_MAX]:
         lines.append("- " + row_sentence(lbl, r, asks=asks))
-    more = len(told) - LIST_MAX
+    more += max(0, len(told) - LIST_MAX)
     if more > 0:
-        lines.append(f"(and {more} more; Usage in the app lists them all)")
-    if not name and len(told) > 1:
-        totals = _sum_rows([r for _l, r in told]) if kinds else (data.get("totals") or {})
+        lines.append(f"(and {more:,} more; Usage in the app lists them all)")
+    in_all = not name and len(told) > 1
+    if in_all:
+        # A kind's "In all" is every row of that kind (the ones whose names
+        # could not be told too, as the totals of a plain list count them).
+        totals = _sum_rows([r for _l, r in told] + list(held_rows)) if kinds else (data.get("totals") or {})
         lines.append(row_sentence("In all", totals, asks=asks))
     if any(int((r.get("plan") or {}).get("tokens") or 0) > 0 for _l, r in told):
         lines.append(PLAN_NOTE)
@@ -478,7 +501,7 @@ def _report(platform: Any, engine: Any, turn: Any, group: str, days: int, name: 
     wall_ok = bool(getattr(turn, "ok", True))
     lines += left_out_sentences(data, in_client=in_client, wall_ok=wall_ok, phone=phone)
     if held:
-        lines.append("Some rows were left out because their names could not be told here.")
+        lines.append(HELD_IN_ALL if in_all else HELD_NOTE)
     if not rows and not data.get("left_out"):
         lines = [head, f"No model use is on record {when}."]
     out_rows = [

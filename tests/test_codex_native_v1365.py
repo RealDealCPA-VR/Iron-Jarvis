@@ -633,6 +633,10 @@ async def test_usage_is_priced_as_a_list_price_equivalent(tmp_path, monkeypatch)
         {"text": "hi"}]}])
     resp = await fake.adapter().complete(system="", messages=[_user()], tools=[])
     assert resp.usage["cost_usd"] == pytest.approx(1.25 + 1.0)
+    # Next leaps 46-a: the figure is the price table's, never OpenAI's own, so
+    # a usage row it lands on reads estimated, never measured.
+    assert resp.usage[pricing.PRICED_FROM_TABLE] is True
+    assert pricing.step_source("openai", "gpt-5.5", resp.usage) == pricing.SOURCE_TABLE
     assert pricing.is_list_price_equivalent("codex-cli", "gpt-5.5") is True
     assert pricing.recorded_cost("codex-cli", "gpt-5.5", 1000, 1000, 0) == 0.0  # an old row stays free
 
