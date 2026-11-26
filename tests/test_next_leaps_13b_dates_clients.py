@@ -454,6 +454,22 @@ async def test_a_clients_piece_opens_its_decisions_on_the_clients_page(march):
     assert row["paths"] == [BAKER + r"\payroll.xlsx"] and row["files"] == ["payroll.xlsx"]
 
 
+async def test_a_path_the_mask_would_change_never_reaches_the_screen(scene):
+    """Review round 2, finding 2: a file whose path holds a secret-shaped part
+    keeps its masked NAME, but its full path is never carried (not in
+    ``data.rows``, not in the step frame's rows); a clean path beside it is."""
+    secret = DOCS + r"\password=opensesame42 notes.xlsx"
+    clean = DOCS + r"\prices.xlsx"
+    _chat(scene, "Price list update", DOCS, at=_at(3, 10), docs=[secret, clean])
+    got = await _ask(scene, folder=DOCS, words="what did we do in March?", args=dict(MARCH))
+    row = next(r for r in got.data["rows"] if r["title"] == "Price list update")
+    assert row["paths"] == [clean], row["paths"]
+    assert "password=*** notes.xlsx" in row["files"] and "prices.xlsx" in row["files"]
+    drawn = next(r for r in WT.screen_rows(got) if r["title"] == "Price list update")
+    assert drawn["paths"] == [clean]
+    assert "opensesame42" not in json.dumps(got.data) and "opensesame42" not in json.dumps(WT.screen_rows(got))
+
+
 async def test_kinds_narrow_to_agent_runs(scene):
     _chat(scene, "A chat in March", DOCS, at=_at(3, 5))
     _run(scene, "Reconcile the March bank feed", DOCS, at=_at(3, 6))
@@ -516,6 +532,25 @@ def test_a_reply_written_home_keeps_its_rows():
     from iron_jarvis.daemon.chat_append import LINE_KEYS
 
     assert "workRows" in LINE_KEYS
+    # Review round 2, finding 1: a reply that FAILED or was STOPPED keeps its
+    # rows too (each of the three lines that write words home).
+    steps, words = frames[:3], frames[3]
+    failed = DT.reply_line("turn-1", [*steps, words, ("error", json.dumps({"message": "x"}))], "error")
+    assert failed["interrupted"] is True and failed["content"] == "Three pieces of work."
+    assert failed["workRows"] == [row]
+    kept = DT.reply_line("turn-1", [*steps, ("error", json.dumps({
+        "message": "x", "kept_note": "Kept the work so far.", "documents": [r"D:\Clients\Baker\a.xlsx"]}))], "error")
+    assert kept["content"] == "Kept the work so far." and kept["documents"] == [r"D:\Clients\Baker\a.xlsx"]
+    assert kept["workRows"] == [row]
+    for status in ("stopped", "interrupted"):
+        stopped = DT.reply_line("turn-1", [*steps, words], status)
+        assert stopped["interrupted"] is True and stopped["workRows"] == [row], status
+        # With no words written, still nothing (no empty bubble with rows).
+        assert DT.reply_line("turn-1", steps, status) is None, status
+    assert DT.reply_line("turn-1", [*steps, ("error", json.dumps({"message": "x"}))], "error") is None
+    # The same three lines without a work_history step: as before.
+    assert "workRows" not in DT.reply_line("turn-1", [words], "stopped")
+    assert "workRows" not in DT.reply_line("turn-1", [words], "error")
 
 
 # --------------------------------------------------------------------------- #

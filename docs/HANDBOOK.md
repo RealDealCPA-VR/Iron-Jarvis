@@ -2200,7 +2200,7 @@ This works for coding sessions in Chat › Code. The pull request a Build ›
 Code session opens (your own Claude Code or Codex) does not bring its
 comments here yet.
 
-## Ask about earlier work by date and by client, and open each piece (v1.579.0)
+## Ask about earlier work by date and by client, and open each piece (v1.580.0)
 
 Ask "what did we do for Baker in March?" in any chat and the answer comes
 from Iron Jarvis's own record of earlier work: "3 pieces of work in March
@@ -3886,7 +3886,7 @@ it too.
 
 - A question about a folder includes the folders under it.
 - A task from another computer cannot ask it.
-- Since v1.579.0 it also narrows by date ("in March") and by client, and
+- Since v1.580.0 it also narrows by date ("in March") and by client, and
   puts a row you can press under the reply for each piece (see "Ask about
   earlier work by date and by client, and open each piece").
 
