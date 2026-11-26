@@ -2150,6 +2150,38 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Which model does best on your code, in the model menu (v1.582.0)
+
+The model menu of a coding session now says, under each model, what became
+of its work in the folder you are in. One quiet line, for example **In this
+folder: kept 7 of 9, passed its checks 8 of 9**. It is there in Chat › Code
+and in Build › Code, when you start a session and inside one.
+
+- **What counts.** One piece is a reply that changed files, or one attempt
+  when you tried the work on several models. A piece is **kept** when you
+  commit it, merge it, open a pull request with it, or keep that attempt. It
+  is thrown away when you discard the session's copy of the folder, rewind it
+  with its files, or keep another attempt. **Passed its checks** is Iron
+  Jarvis's own test run after the reply, never the model's own words.
+- **Every figure has its count.** Under five decided pieces the line adds
+  **(too few to judge)**. Work you have neither kept nor thrown away yet is
+  said apart (**3 not decided yet**) and is never counted in an "of". A model
+  with nothing on record in this folder has no line at all.
+- **It chooses nothing.** The line only shows the numbers; you pick the
+  model, as before. There are no percentages and no "best" label.
+- **From the first day.** The record was filled once from the work already
+  on your PC: merged and discarded sessions, kept attempts, and the replies'
+  checks. Work committed before this version is not known as kept, so it
+  shows as not decided.
+- **From chat.** Ask *which model does best in this folder?* and Jarvis
+  answers from the same record, with the counts for each tool and model.
+  Folders a chat may not be told about are left out, as everywhere else.
+- **Good to know.** The menu reads the record once each time you open it.
+  In Build › Code a reply counts when the tool's own file steps changed
+  files; a change made only through a command counts once Iron Jarvis has
+  checked that reply. Reverting files from the Changes tab is not counted
+  yet.
+
 ## What you asked for that Iron Jarvis can't do yet (v1.587.0)
 
 When you ask for something Iron Jarvis has no feature for, it now keeps a

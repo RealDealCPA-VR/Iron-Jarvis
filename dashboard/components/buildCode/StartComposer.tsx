@@ -862,6 +862,7 @@ export function StartComposer({
               <ModelPicker
                 tools={tools}
                 value={{ tool: toolId, model, effort }}
+                recordFolder={folder}
                 onChange={(field, next) => {
                   if (field === "tool") chooseTool(next);
                   else if (field === "model") {

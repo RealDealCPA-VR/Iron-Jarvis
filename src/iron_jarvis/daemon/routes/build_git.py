@@ -169,6 +169,14 @@ def register(app: FastAPI, d: Any) -> None:
         merged = {**fresh, **{k: v for k, v in changes.items() if v is not None}}
         S.update(engine_of(), thread_id, setup={B.SETUP_KEY: merged})
 
+    def _settle(thread_id: str, verdict: str, how: str) -> None:
+        """Next leaps 28-a: the user's press settles every undecided reply of
+        the session in the folder's coding record. BLOCKING (the press's own
+        worker thread); never fails the press."""
+        from ...harness import scoreboard as SB
+
+        SB.settle_session(engine_of(), thread_id, verdict, how)
+
     def _busy(thread_id: str) -> "JSONResponse | None":
         if thread_id in _GIT_ACTING:
             return JSONResponse(status_code=409, content={"detail": GIT_BUSY})
@@ -211,6 +219,17 @@ def register(app: FastAPI, d: Any) -> None:
             if not ok:
                 return {**B.inspect_folder(""), "git": bool(B.git_path())}
         return B.inspect_folder(folder)
+
+    @app.get("/build/scoreboard")
+    def coding_record(folder: str = "") -> dict[str, Any]:
+        """Next leaps 28-a: the folder's coding record — per tool and model,
+        what became of its work here ``{kept, thrown, undecided, passed,
+        failed, samples, words}`` (``harness/scoreboard.summary``), read by
+        the model menus once per opening. A plain def: FastAPI's thread pool
+        (SQLite). A folder with nothing on record answers no rows."""
+        from ...harness import scoreboard as SB
+
+        return SB.summary(engine_of(), str(folder or "")[:4096])
 
     @app.post("/build/git/init")
     async def git_init(body: InitBody) -> Any:
@@ -269,6 +288,7 @@ def register(app: FastAPI, d: Any) -> None:
 
         def run() -> dict[str, Any]:
             done = B.commit(facts, body.message)
+            _settle(thread_id, "kept", "committed")
             return {**done, "status": B.status(facts)}
 
         return await _held(thread_id, run)
@@ -301,6 +321,7 @@ def register(app: FastAPI, d: Any) -> None:
             done = B.create_pr(facts, body.title, body.body)
             _record(thread_id, facts, pr_url=done["url"], pr_number=str(done["number"]),
                     pushed_at=utcnow().isoformat() if done.get("pushed") else None)
+            _settle(thread_id, "kept", "pull_request")
             return done
 
         return await _held(thread_id, run)
@@ -331,6 +352,7 @@ def register(app: FastAPI, d: Any) -> None:
             done = B.merge(facts)
             _record(thread_id, facts, merged_at=utcnow().isoformat(), merged_into=done["into"],
                     merge_commit=done["commit"])
+            _settle(thread_id, "kept", "merged")
             return {**done, "offer_remove": True}
 
         return await _held(thread_id, run)
@@ -350,6 +372,8 @@ def register(app: FastAPI, d: Any) -> None:
             S.end_session_programs(thread_id)
             done = B.remove_worktree(home, facts)
             _record(thread_id, facts, removed_at=utcnow().isoformat(), trash=done["trash"] or None)
+            # 28-a: what was not merged (or committed) before is thrown away.
+            _settle(thread_id, "thrown", "discarded")
             from .chat import set_thread_archived
 
             set_thread_archived(engine_of(), thread_id, True)

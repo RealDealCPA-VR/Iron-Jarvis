@@ -280,6 +280,9 @@ REMOTE_RUN_DENY: frozenset[str] = frozenset(
         # Next leaps 46-a: what this computer's folders, clients and
         # automations cost (their names would leave with the answer).
         "usage_report",
+        # Next leaps 28-a: this computer's folders and what became of their
+        # coding work (their names would leave with the answer).
+        "coding_record",
         "file_search",
     }
 )

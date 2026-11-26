@@ -283,6 +283,7 @@ _LATE_MODEL_MODULES = (
     "..fleet.pull_models",    # ModelDownload — a model downloaded from the library (next leaps 43-a)
     "..tools.rehearsal_store",  # RehearsalRecord — a rehearsal of a rule or a schedule (leap 06-a)
     "..capability_search.miss_models",  # CapabilityMiss + MissGroup — what you asked for that Iron Jarvis can't do yet (20-a)
+    "..harness.scoreboard",   # CodingOutcome — what became of each piece of coding work (leap 28-a)
 )
 
 

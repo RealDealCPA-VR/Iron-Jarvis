@@ -30,6 +30,11 @@
  * model panel floats beside its row (components/chat/FitPanel `float`), since
  * the scrolling list would clip it. The IJ harness's phone sheet keeps its
  * own place along the window's bottom.
+ *
+ * Next leaps 28-a (Chat › Code only, `recordFolder`): each model row carries
+ * one muted line from the folder's coding record (lib/scoreboard: "In this
+ * folder: kept 7 of 9, passed its checks 8 of 9"), read once per opening;
+ * nothing on record draws nothing. The chat's own menu never gets it.
  */
 
 import {
@@ -55,6 +60,7 @@ import { foldPlanRows, modelGroupName, providerDisplay } from "@/lib/onboarding"
 // v1.445.0 (ease-of-use review item 2): the menu's way out of the demo.
 import { CONNECT_A_MODEL_ROW, CONNECTIONS_HREF, NOT_CONNECTED_YET } from "@/lib/demoExit";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
+import { jarvisLine, useCodingRecord } from "@/lib/scoreboard";
 import {
   levelWords,
   reasoningChipLabel,
@@ -517,6 +523,7 @@ export function ModelMenu({
   companies,
   chatAccounts,
   onConnect,
+  recordFolder,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -554,8 +561,38 @@ export function ModelMenu({
    *  false lets the row's link go to Settings › Connections. Absent: no row
    *  (the IJ harness's menu, exactly as before). */
   onConnect?: () => boolean;
+  /** Next leaps 28-a (a coding session's menu only): the folder whose coding
+   *  record goes under each model row. Absent: no line, no read. */
+  recordFolder?: string | null;
 }) {
   const popRef = useRef<HTMLDivElement>(null);
+  // Next leaps 28-a: read once per opening (never while closed).
+  const record = useCodingRecord(recordFolder, open);
+  /** A model row's name — and, in a coding session's menu, the muted line
+   *  under it ("" on record = none). Without `recordFolder` the chat's own
+   *  markup, exactly as before. */
+  const nameCell = (title: string | undefined, text: string, value: string) => {
+    if (!recordFolder) {
+      return (
+        <span className="min-w-0 truncate" title={title}>
+          {text}
+        </span>
+      );
+    }
+    const said = jarvisLine(record, value);
+    return (
+      <span className="min-w-0">
+        <span className="block truncate" title={title}>
+          {text}
+        </span>
+        {said ? (
+          <span data-testid="model-record" className="block whitespace-normal break-words font-sans text-[11px] text-zinc-500">
+            {said}
+          </span>
+        ) : null}
+      </span>
+    );
+  };
   const [sub, setSub] = useState<string | null>(null);
   // v1.277.0: FIND A MODEL BY TYPING, AND THE LAST PICKS FIRST. The tree below
   // is 12 providers deep on the daily driver; a typed word lists every model
@@ -815,9 +852,7 @@ export function ModelMenu({
               on ? "text-accent-soft" : "text-zinc-300"
             }`}
           >
-            <span className="min-w-0 truncate" title={modelTitle(m, models)}>
-              {modelText(m, models)}
-            </span>
+            {nameCell(modelTitle(m, models), modelText(m, models), v)}
             <span className="ml-1.5 inline-flex shrink-0 items-center gap-1">
               <ModelRowChips m={m} />
             </span>
@@ -890,9 +925,7 @@ export function ModelMenu({
           on ? "text-accent-soft" : "text-zinc-300"
         }`}
       >
-        <span className="min-w-0 truncate" title={modelTitle(m.row, models)}>
-          {modelText(m.row, models)}
-        </span>
+        {nameCell(modelTitle(m.row, models), modelText(m.row, models), m.value)}
         <ModelRowChips m={m.row} />
         <span className="ml-auto flex min-w-0 shrink items-center gap-1 font-sans text-[10px] text-zinc-500">
           <span className="min-w-0 truncate">{m.group}</span>

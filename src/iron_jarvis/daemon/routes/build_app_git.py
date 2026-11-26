@@ -164,6 +164,14 @@ def register(app: FastAPI, d: Any) -> None:
             if live.claim == SG.CLAIM:
                 live.claim = ""
 
+    def _settle(service: S.HostedService, sid: str, verdict: str, how: str) -> None:
+        """Next leaps 28-a: the user's press settles every undecided reply of
+        the session in the folder's coding record. BLOCKING (the press's own
+        worker thread); never fails the press."""
+        from ...harness import scoreboard as SB
+
+        SB.settle_session(service.engine, sid, verdict, how)
+
     def _still_free(service: S.HostedService, row: Any) -> None:
         """Inside the locks, right before git writes: a reply may have started
         while this waited for them."""
@@ -250,8 +258,11 @@ def register(app: FastAPI, d: Any) -> None:
                 _still_free(service, row)
                 if facts is not None:
                     done = B.commit(facts, body.message)
+                    _settle(service, sid, "kept", "committed")
                     return {**done, "kind": "branch"}
-                return {**SG.folder_commit(folder, body.message, list(body.paths)), "kind": "folder"}
+                done = {**SG.folder_commit(folder, body.message, list(body.paths)), "kind": "folder"}
+                _settle(service, sid, "kept", "committed")
+                return done
 
             return await asyncio.to_thread(locked, sid, folder, go)
 
@@ -287,11 +298,13 @@ def register(app: FastAPI, d: Any) -> None:
                     store.merge_git(service.engine, sid, {
                         "pr_url": done["url"], "pr_number": str(done["number"]),
                         "pushed_at": utcnow().isoformat() if done.get("pushed") else None})
+                    _settle(service, sid, "kept", "pull_request")
                     return done
                 done = SG.folder_pr(folder, body.title, body.body)
                 store.merge_git(service.engine, sid, {
                     SG.DIRECT: "1", "branch": done["branch"], "pr_url": done["url"],
                     "pr_number": str(done["number"])})
+                _settle(service, sid, "kept", "pull_request")
                 return done
 
             return await asyncio.to_thread(locked, sid, folder, go)
@@ -315,6 +328,7 @@ def register(app: FastAPI, d: Any) -> None:
                 done = B.merge(facts)
                 store.merge_git(service.engine, sid, {
                     "merged_at": utcnow().isoformat(), "merged_into": done["into"], "merge_commit": done["commit"]})
+                _settle(service, sid, "kept", "merged")
                 return {**done, "offer_remove": True}
 
             return await asyncio.to_thread(locked, sid, row.folder or "", go)
@@ -349,6 +363,7 @@ def register(app: FastAPI, d: Any) -> None:
                 done = B.remove_worktree(home, facts)
                 store.merge_git(service.engine, sid, {"removed_at": utcnow().isoformat(),
                                                       "trash": done.get("trash") or None})
+                _settle(service, sid, "thrown", "discarded")
                 return done
 
             done = await asyncio.to_thread(locked, sid, row.folder or "", go)

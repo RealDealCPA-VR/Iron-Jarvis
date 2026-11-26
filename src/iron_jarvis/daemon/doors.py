@@ -150,6 +150,8 @@ _CATALOG: dict[str, dict[str, str]] = {
     "change_undo": {"href": "/activity?view=day", "label": "See your day on Activity"},
     # Next leaps 46-a: what everything cost is the Usage page's By switch.
     "usage_report": {"href": "/usage", "label": "Open Usage"},
+    # Next leaps 28-a: the coding record is in a coding session's model menu.
+    "coding_record": {"href": "/chat?view=code", "label": "Open Chat › Code"},
 }
 
 #: v1.506.0 (north-star plan 6.4): the record tools that MAKE a record and

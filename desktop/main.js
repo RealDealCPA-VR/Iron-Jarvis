@@ -4580,6 +4580,7 @@ const TOOL_WORDS_BUILTIN = {
   code_run: "run a saved script",
   code_search: "search its saved scripts",
   code_start: "ask on your phone before starting coding work in a folder",
+  coding_record: "look up how each model did in this folder",
   coding_reply_check: "look up whether a coding reply's tests passed",
   compare_documents: "compare documents",
   computer_use_status: "check the computer control settings",

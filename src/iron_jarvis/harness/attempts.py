@@ -2581,6 +2581,11 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
         out["note"] = " ".join(notes)
     if not saved:
         out["note"] = (out.get("note", "") + " " + KEEP_SAVE_FAILED).strip()
+    # Next leaps 28-a: the kept attempt is kept in the folder's coding record,
+    # every other one that changed files is thrown (never fails Keep).
+    from . import scoreboard as _SB
+
+    _SB.note_attempts(platform.engine, thread_id, turn_id, card, kept_id=attempt_id)
     return out
 
 
@@ -2721,6 +2726,13 @@ def discard(platform: Any, thread_id: str, turn_id: str) -> dict[str, Any]:
         out["note"] = " ".join(notes)
     if not saved:
         out["note"] = (out.get("note", "") + " The card could not be updated. Reload the session.").strip()
+    if moved and not card.get("kept"):
+        # Next leaps 28-a: the attempts let go are thrown in the folder's
+        # coding record (never fails Discard all).
+        from . import scoreboard as _SB
+
+        _SB.note_attempts(platform.engine, thread_id, turn_id, card,
+                          dropped=[str(it.get("id")) for it in moved])
     return out
 
 

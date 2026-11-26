@@ -3578,6 +3578,11 @@ class HostedService:
         from . import check_again as CA
 
         CA.after_turn(self, live, turn, done)
+        # Next leaps 28-a: a reply whose own file steps changed files is one
+        # piece of the folder's coding record (off the loop; never waits).
+        from ..harness import scoreboard as _SB
+
+        _SB.after_hosted_turn(self, live, turn, done)
         self._after_turn_queue(live, turn, done)  # v1.418.0 (C4.8)
         # v1.414.0: a long reply that ENDED is told to the bell and the tray
         # (never for a Stop or a cut-off, never beside an account's limit

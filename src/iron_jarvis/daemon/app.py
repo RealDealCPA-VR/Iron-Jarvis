@@ -2371,6 +2371,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _sweep_left_stores(platform.config.home, platform.engine)
         )
 
+        # Next leaps 28-a: the folder's coding record. Build › Code checks give
+        # their replies' verdicts (one listener per process, this daemon's
+        # engine), and ONCE per database the facts already on record fill it
+        # (off the loop; boot never waits; a failure is tried at the next start).
+        from ..harness import scoreboard as _scoreboard
+
+        _coding_record_off = _scoreboard.install(lambda: _app.state.d.platform.engine)
+        bg_tasks["coding_record"] = asyncio.create_task(_scoreboard.backfill_at_start(platform))
+
         # NIGHT SHIFT (v1.398.0, N1): the queued coding tasks start by
         # themselves inside the night window, each on its own branch, on THIS
         # loop (never a scheduler thread). Each pass reports ITS OWN outcome on
@@ -2702,6 +2711,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             yield
         finally:
             _remove_gc_watch(_gc_watch)  # v1.333.0: before the log closes
+            _coding_record_off()  # 28-a: this daemon's checks are no longer heard
             _live_rearm.clear()  # daemon going down — no more live re-arms
             # Stop the session-queue governor FIRST (v1.166.0): cancelling a
             # running session below fires its slot-free hook, which would

@@ -2543,6 +2543,18 @@ async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_R
             watch.reply_unsaved = True
             log.warning("the reply %s of build session %s could not be saved; it is put back at the next start",
                         turn_id, thread_id)
+        else:
+            # Next leaps 28-a: a reply that changed files is one piece of the
+            # folder's coding record (its finish check's verdict as
+            # ``checked``). Off the loop; a record never fails the reply.
+            mine = next((ln for ln in lines if isinstance(ln, dict) and ln.get("role") == "assistant"
+                         and ln.get("turnId") == turn_id), None)
+            if mine is not None:
+                from ...harness import scoreboard as _SB
+
+                if _SB.reply_changed(mine):
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(_SB.note_chat_reply, engine, thread_id, turn_id, mine)
     served = _turn_served(pin, status)
     if pin is not None and platform is not None and (watch.account_limit or served):
         # v1.393.0 review: a billed model call (or streamed words) this turn
@@ -5211,6 +5223,12 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
 
         _library.cancel_reflections(thread_id, plan.turns)
         dropped = await asyncio.to_thread(_library.forget_turns, platform.engine, thread_id, plan.turns)
+        # Next leaps 28-a: the rewound replies' work was thrown away (their
+        # files are back as they were): off the loop, never fails the rewind.
+        from ...harness import scoreboard as _SB
+
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(_SB.rewound, platform.engine, thread_id, list(plan.turns))
         bus = getattr(platform, "event_bus", None)
         if bus is not None:
             with contextlib.suppress(Exception):

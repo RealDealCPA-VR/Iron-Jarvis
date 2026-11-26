@@ -509,6 +509,9 @@ def default_permissions() -> dict[str, str]:
         # Next leaps 46-a (settings/records_usage): what everything cost, by
         # folder, client, automation or agent. Reads only, through the wall.
         "usage_report": "allow",
+        # Next leaps 28-a (settings/records_scoreboard): the folder's coding
+        # record, per tool and model. Reads only, through the wall.
+        "coding_record": "allow",
         "client_answer": "ask",
         "client_update": "ask",
         "client_preference_add": "ask",

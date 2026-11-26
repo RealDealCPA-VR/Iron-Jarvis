@@ -286,6 +286,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // that works may only list, or answer Not yet, so the words claim neither.
   open_item_close: { did: "Looked over this folder's open items", noun: "open item check" },
   open_item_reopen: { did: "Looked over this folder's open items", noun: "open item check" },
+  // Next leaps 28-a: the folder's coding record.
+  coding_record: { did: "Looked up how each model did in this folder", noun: "coding record" },
   client_list: { did: "Listed your clients", noun: "client list" },
   client_answer: { did: "Noted whether a name is one of your clients", noun: "client answer" },
   client_update: { did: "Changed one of your clients", noun: "client change" },

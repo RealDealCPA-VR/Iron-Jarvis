@@ -1096,6 +1096,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'see if you have a script for that',
         'look through your old code for a match',
     ),
+    'coding_record': (
+        'which AI model does best here',
+        'how often do I keep its code',
+        'which coding tool works best for this project',
+        "show each model's track record",
+        'how many changes did I keep from Codex',
+        "which model's work passed the tests",
+        'compare models on my code',
+        'is Claude Code better in this folder',
+    ),
     'coding_reply_check': (
         'did the tests pass last time',
         "did Codex's change break any tests",

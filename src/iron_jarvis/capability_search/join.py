@@ -129,6 +129,9 @@ OWN_PLACE = frozenset({
     # chat_turn.settings_ask_tools. Brought by a lookup they change something,
     # so they join behind a card (rule 1): the owner still decides.
     "open_item_close", "open_item_reopen",
+    # Next leaps 28-a: the folder's coding record (settings/records_scoreboard),
+    # armed by its words through records.record_tools_for.
+    "coding_record",
 })
 
 

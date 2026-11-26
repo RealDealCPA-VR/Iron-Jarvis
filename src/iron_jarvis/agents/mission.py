@@ -709,6 +709,8 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # words are true for every such call; the card's are in ASK_WORDS.
     "open_item_close": ("looked over this folder's open items", "open item check"),
     "open_item_reopen": ("looked over this folder's open items", "open item check"),
+    # Next leaps 28-a: the folder's coding record. Twin: lib/runWords.ts AGENT_TOOLS.
+    "coding_record": ("looked up how each model did in this folder", "coding record"),
     "client_list": ("listed your clients", "client list"),
     "client_answer": ("noted whether a name is one of your clients", "client answer"),
     "client_update": ("changed one of your clients", "client change"),

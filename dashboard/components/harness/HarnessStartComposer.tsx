@@ -795,6 +795,7 @@ export function HarnessStartComposer({
                 disabledTitle="Starting the session…"
                 localOnlyLine={localOnly ? START_LOCAL_ONLY_MENU_LINE : null}
                 companies={companies}
+                recordFolder={folder}
               />
             </div>
             <button

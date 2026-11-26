@@ -75,6 +75,7 @@ merged (``outside.json`` removed), so nothing that was rewound away comes back.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -1153,6 +1154,15 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
         from . import tool_switch as TS
 
         await asyncio.to_thread(TS.after_rewind, svc.home, row.id, str(row.harness), str(to or ""))
+        if restored is not None:
+            # Next leaps 28-a: the files went back too, so the rewound
+            # messages' work was thrown away (a rewind of the conversation
+            # alone leaves the work in the folder: still not decided).
+            from ..harness import scoreboard as _SB
+
+            gone = [str(e.get("turn") or "") for e in history[idx:] if e.get("type") == "user"]
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(_SB.rewound, svc.engine, row.id, gone)
     except Exception as exc:
         if restored is None:
             raise

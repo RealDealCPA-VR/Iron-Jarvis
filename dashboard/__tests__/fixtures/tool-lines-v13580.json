@@ -280,6 +280,10 @@
       "ok": "asked on your phone before starting coding work in a folder",
       "failed": "tried a coding work card and it failed"
     },
+    "coding_record": {
+      "ok": "looked up how each model did in this folder",
+      "failed": "tried a coding record and it failed"
+    },
     "coding_reply_check": {
       "ok": "looked up whether a coding reply's tests passed",
       "failed": "tried a test result lookup and it failed"

@@ -2773,6 +2773,7 @@ function SessionPane({
               <ModelPicker
                 tools={pickerTools}
                 value={{ tool: session.tool, model: session.model, effort: session.effort }}
+                recordFolder={session.noFolder ? null : session.checkout || session.git?.checkout || session.folder}
                 onChange={onPick}
                 lockTool={!canSwitch}
                 toolAsks={canSwitch}

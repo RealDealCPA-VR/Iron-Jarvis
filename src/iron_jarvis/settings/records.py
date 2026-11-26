@@ -681,6 +681,11 @@ def record_tools_for(
     out = list(dict.fromkeys(
         out + _hist().history_tools_for(t) + _rb().build_tools_for(t) + _self().self_tools_for(t)
     ))
+    # Next leaps 28-a: "which model does best in this folder?" reads the
+    # folder's coding record (a reader: a question keeps it).
+    from .records_scoreboard import scoreboard_tools_for
+
+    out += [n for n in scoreboard_tools_for(t) if n not in out]
     # v1.438.0 (Wave 4 group B): model servers, accounts, memory bases
     # (settings/records_connections) — writers only, so a question drops them.
     from .records_connections import connections_tools_for, without_addresses
@@ -4529,6 +4534,8 @@ def record_tools(platform: Any) -> list[Tool]:
         *_library_tools(platform),
         # Next leaps 46-a: what everything cost (reads, through the wall).
         *_usage_tools(platform),
+        # Next leaps 28-a: the folder's coding record (reads, through the wall).
+        *_scoreboard_tools(platform),
     ]
 
 
@@ -4542,6 +4549,12 @@ def _usage_tools(platform: Any) -> list[Tool]:
     from .records_usage import usage_tools
 
     return usage_tools(platform)
+
+
+def _scoreboard_tools(platform: Any) -> list[Tool]:
+    from .records_scoreboard import scoreboard_tools
+
+    return scoreboard_tools(platform)
 
 
 def _peer_tools(platform: Any) -> list[Tool]:

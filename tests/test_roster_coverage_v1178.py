@@ -389,6 +389,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # workmap/open_item_tools.open_item_tools_for). An agent run reports;
     # it never clears the owner's list. Pinned by tests/test_open_items.py.
     "open_item_close", "open_item_reopen",
+    # Next leaps 28-a: the folder's coding record, asked in chat, where the
+    # owner is present and the turn's client wall decides what may be named;
+    # chat arms it (settings.records_scoreboard.scoreboard_tools_for). Pinned
+    # by tests/test_scoreboard_words.py.
+    "coding_record",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

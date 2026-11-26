@@ -26,6 +26,10 @@
  * - `onOpen` lets the page read the tools' lists again (the page decides how
  *   often).
  * - Ctrl+Shift+M opens it (`shortcut`), arrows move, Enter picks, Esc closes.
+ * - Next leaps 28-a: with `recordFolder`, each model row carries one muted
+ *   line from the folder's coding record (lib/scoreboard: "In this folder:
+ *   kept 7 of 9, passed its checks 8 of 9"), read once per opening; nothing
+ *   on record draws nothing. It only shows the numbers: nothing is picked.
  *
  * Test ids, from `testId` (the prefix): the chip `chipTestId` (else
  * `<p>-tool`), the panel `<p>-tool-menu`, a tool `<p>-tool-<id>` (+
@@ -50,6 +54,7 @@ import {
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Code2, Search } from "lucide-react";
 import { effortsFor, modelGroups, toolUnavailable, type CodingTool } from "@/lib/buildApp";
+import { recordLine, useCodingRecord } from "@/lib/scoreboard";
 import {
   MENU_EDGE_PX,
   appTopLimit,
@@ -227,6 +232,7 @@ export function ModelPicker({
   footer,
   onClose,
   control,
+  recordFolder,
 }: {
   tools: readonly CodingTool[] | null;
   value: PickerChoice;
@@ -274,6 +280,9 @@ export function ModelPicker({
   onClose?: () => void;
   /** v1.545.0: lets the page open the panel on its tool list, or close it. */
   control?: MutableRefObject<PickerControl | null>;
+  /** Next leaps 28-a: the folder whose coding record goes under each model
+   *  row (the folder the user picked; a branch session's too). */
+  recordFolder?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [browse, setBrowse] = useState(value.tool);
@@ -287,6 +296,8 @@ export function ModelPicker({
   const footerRef = useRef<HTMLDivElement | null>(null);
   const id = useId();
   const [place, setPlace] = useState<ModelMenuPlacement | null>(null);
+  // Next leaps 28-a: read once per opening (never while closed).
+  const record = useCodingRecord(recordFolder, open);
 
   const tool = useMemo(() => tools?.find((t) => t.id === value.tool) ?? null, [tools, value.tool]);
   const shownId = lockTool ? value.tool : browse || value.tool;
@@ -698,6 +709,7 @@ export function ModelPicker({
                   const chosen = picked && r.id === current;
                   const held = defaultHeld(r);
                   const groupHead = r.group && (i === 0 || rows[i - 1].group !== r.group);
+                  const said = shown ? recordLine(record, shown.id, r.id, "", (m) => aliasTarget(shown, m)) : "";
                   return (
                     <div key={`${r.group ?? ""}:${r.id || "default"}`}>
                       {groupHead ? <p className="px-2.5 pb-0.5 pt-1.5 text-[11px] text-zinc-500">{r.group}</p> : null}
@@ -717,7 +729,19 @@ export function ModelPicker({
                         className={`${ROW} ${i === active ? "bg-white/[0.06]" : ""} ${chosen ? "text-zinc-100" : "text-zinc-300"}`}
                       >
                         <span className="mt-0.5 w-3.5 shrink-0">{chosen ? <Check size={13} aria-hidden="true" /> : null}</span>
-                        <span className="min-w-0 truncate">{r.label}</span>
+                        {said ? (
+                          <span className="min-w-0">
+                            <span className="block truncate">{r.label}</span>
+                            <span
+                              data-testid={`${testId}-model-record-${r.id || "default"}`}
+                              className="block break-words text-[11px] text-zinc-500"
+                            >
+                              {said}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="min-w-0 truncate">{r.label}</span>
+                        )}
                         {r.kept ? <span className="ml-auto shrink-0 text-[11px] text-zinc-500">not in the list</span> : null}
                       </button>
                     </div>

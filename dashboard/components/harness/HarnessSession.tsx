@@ -4469,6 +4469,7 @@ export function HarnessSession({
                   trigger={trigger}
                   onPick={(v, account) => void pickModel(v, account)}
                   companies={companies}
+                  recordFolder={view.noFolder ? null : view.git?.checkout || view.folder}
                 />
                 {busy ? (
                   <button
