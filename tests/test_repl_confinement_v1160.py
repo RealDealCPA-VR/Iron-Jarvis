@@ -629,10 +629,21 @@ def test_disposing_a_session_kills_every_folder_it_worked_in(platform, tmp_path)
     second.mkdir()
 
     async def body():
-        await cell(platform, _ctx(platform, first, "chat"), "x = 1")
-        await cell(platform, _ctx(platform, second, "chat"), "y = 2")
+        # v1.578.2 (moved on purpose): a chat's namespaces are filed under the
+        # CHAT (`tools/registry.values_key`), never the shared id "chat", so
+        # the session whose folders are disposed here is the chat itself.
+        from iron_jarvis.tools.registry import values_key
+
+        one = _ctx(platform, first, "chat")
+        two = _ctx(platform, second, "chat")
+        one.thread_id = two.thread_id = "chat_two_folders"
+        await cell(platform, one, "x = 1")
+        await cell(platform, two, "y = 2")
         assert len(platform.repl) == 2, platform.repl.describe()
-        assert await platform.repl.dispose("chat") is True
+        assert values_key(one) == values_key(two) == "chat:chat_two_folders"
+        assert await platform.repl.dispose("chat") is False, "nothing is filed under the shared id"
+        assert len(platform.repl) == 2
+        assert await platform.repl.dispose(values_key(one)) is True
         assert len(platform.repl) == 0, platform.repl.describe()
 
     run(platform, body)
