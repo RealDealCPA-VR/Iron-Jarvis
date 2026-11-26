@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.580.4
+
+**A step that could not be double-checked says so where you look first.** When Iron Jarvis splits a larger task into steps, it checks each step before moving on.
+
 ## v1.580.3
 
 **A workflow made in chat is checked like one made on the page.** A workflow that cannot work is now refused when it is saved, whichever way you made it.
@@ -77,7 +81,3 @@
 ## v1.563.0
 
 **Quick Ask: the answer appears right there.** Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows the key that is live, if another app holds that one), type your question, and press Enter.
-
-## v1.562.0
-
-**Rehearse a rule or a schedule before it runs for real.** A rule or a schedule can now run once as a **rehearsal**.

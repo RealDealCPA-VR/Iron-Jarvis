@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.580.3 (2026-11-19).*
+holds itself to. Current as of v1.580.4 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,35 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## A step that could not be double-checked says so where you look first (v1.580.4)
+
+When Iron Jarvis splits a larger task into steps, it checks each step
+before moving on. Sometimes the check itself cannot run: the model doing
+the checking fails, or its answer cannot be read. The step is then let
+through, because failing good work over a broken check would be worse. The
+run's write-up always said so at the end. The first things you look at did
+not: they read as a plain finish.
+
+Now they say it:
+
+- **The result line.** Under the reply, the run reads **Done. 1 step could
+  not be checked.** and a line below names the step. Press it to open the
+  run.
+- **The list of steps.** On the run's page and in the chat, that step has
+  its own mark and the words **could not be checked** beside it, instead of
+  a tick. The count reads "4 of 4 done, 1 could not be checked".
+- **Lists and the bell.** The status reads **Done, 1 step not checked**
+  in the list of runs, on the board and on an objective's screen, and a schedule's or an objective's line
+  in the bell and on your phone reads "finished. 1 step could not be
+  checked".
+
+Nothing changes for a run where every step was checked: it still reads
+**Done**. A run that needs you, partly failed, failed or was stopped keeps
+those words, because they matter more.
+
+There is nothing to set up, and no new notice: the bell row is as quiet as
+any finished run's.
 
 ## A workflow made in chat is checked like one made on the page (v1.580.3)
 
