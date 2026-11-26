@@ -314,7 +314,11 @@ class ReplTool(Tool):
                 ),
             )
 
-        session_id = str(getattr(ctx, "session_id", "") or "")
+        # A chat's namespace is the CHAT's own, never one shared by every
+        # chat in the folder (`registry.values_key`); a run's is its id.
+        from .registry import values_key
+
+        session_id = values_key(ctx)
         workspace = Path(getattr(ctx, "workspace", ".") or ".")
 
         try:

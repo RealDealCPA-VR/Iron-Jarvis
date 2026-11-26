@@ -10,7 +10,7 @@ import asyncio
 import os
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -105,6 +105,15 @@ class ToolContext:
     #: offered to THIS model when nothing on this PC or your network can
     #: write them (D-33.1). None outside a chat turn.
     chat_model: "tuple[str, str] | None" = None
+    #: An id of this context's own (the intelligence plan, release 1). Both
+    #: chat lanes build ONE context per message, so for a chat call that names
+    #: no chat and no turn (a script against the API) this is what its kept
+    #: values are filed under (``tools/registry.values_key``): they last for
+    #: that message and no other message finds them. ``dataclasses.replace``
+    #: copies it, so a per-call copy of the context shares the same place.
+    own_id: str = field(
+        default_factory=lambda: os.urandom(8).hex(), compare=False, repr=False
+    )
 
 
 @dataclass

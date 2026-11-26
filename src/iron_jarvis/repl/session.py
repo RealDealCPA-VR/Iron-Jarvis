@@ -1091,6 +1091,10 @@ def namespace_key(
     in a project comes back to the same namespace, and two projects never see
     each other's variables. The idle sweeper and ``MAX_SESSIONS`` still bound
     the total, so the cost of the extra keys is reclaimed automatically.
+
+    The folder is NOT what keeps two chats apart: callers pass a chat's own
+    name here, never the bare "chat" (``tools/registry.values_key``,
+    ``tools/tool_script.worker_key``).
     """
     try:
         folder = os.path.normcase(os.path.realpath(os.fspath(workspace)))
@@ -1331,22 +1335,24 @@ class ReplRegistry:
         return bool(sessions)
 
     async def rekey(self, old: str, new: str) -> int:
-        """Hand every ISOLATED namespace of session *old* to session *new*
-        (v1.471.0) and return how many moved. A new chat's first message runs
-        its scripts under the turn's id (the chat has no id yet); once the
-        chat is saved, its later messages run under the chat's id, and the
-        first message's variables were silently gone. A namespace *new*
-        already has is kept (the old one is left to the idle sweep). The
-        process, its variables and a script still running are untouched:
+        """Hand every namespace of session *old* to session *new* (v1.471.0)
+        and return how many moved. A new chat's first message runs its
+        scripts under the turn's id (the chat has no id yet); once the chat
+        is saved, its later messages run under the chat's id, and the first
+        message's variables were silently gone. A chat's kept values are
+        filed under the chat too (``tools/registry.values_key``), so the
+        `repl` tool's namespace moves with the script worker's. A namespace
+        *new* already has is kept (the old one is left to the idle sweep).
+        The process, its variables and a script still running are untouched:
         only the name it is found by changes."""
         if not old or not new or old == new:
             return 0
         moved = 0
         async with self._lock:
             for key, session in list(self._sessions.items()):
-                if session.session_id != old or not session.isolated:
+                if session.session_id != old:
                     continue
-                target = namespace_key(new, session.workspace, True)
+                target = namespace_key(new, session.workspace, session.isolated)
                 if target in self._sessions:
                     continue
                 self._sessions.pop(key, None)
