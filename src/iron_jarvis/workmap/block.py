@@ -69,8 +69,10 @@ worked out BEFORE "In this folder" (its room kept first, at most
 ``open_items.ITEMS_CHARS``), so an item from long ago is always told; the
 item the owner picked (``chosen``, the chat body's ``pick_up_item``) is told
 wherever it is, marked. :data:`PICK_ITEM_SENTENCE` (an item's own Continue)
-is taken out of ``query`` like :data:`CONTINUE_SENTENCE`. With no open items
-the block is byte for byte what it was.
+is taken out of ``query`` like :data:`CONTINUE_SENTENCE`. An item told is a
+recap line of its piece, so the reply's ``used`` list (``memory.used``, 15-a)
+names that piece as a ``recap`` whose words are the items told, once, however
+old the piece is. With no open items the block is byte for byte what it was.
 """
 
 from __future__ import annotations
@@ -429,26 +431,42 @@ def here_part(engine: Any, folder: str, here_rows: list[dict[str, Any]], now: da
 
 
 def open_part(reader: Any, folder: str, now: datetime, *, listed: bool = True,
-              exclude_refs: "tuple[str, ...] | list[str]" = (), chosen: str = "") -> tuple[list[str], int]:
+              exclude_refs: "tuple[str, ...] | list[str]" = (),
+              chosen: str = "") -> "tuple[list[str], int, list[tuple[dict[str, Any], list[str]]]]":
     """THE "Still open in this folder" PART (next leaps 04-b): ``(lines,
-    chars used)`` from ``open_items.told`` (exactly the folder, each item's
-    work asked again through ``reader`` and walled, the turn's own
-    conversations left out) and ``open_items.block_part`` (oldest first, at
-    most ``TOLD_MAX``, the owner's pick marked). Nothing on the phone (a
-    phone reader is told no item: ``open_items.told``), for a turn with no
-    folder, or where the folder's part is another block's (a project:
-    ``listed`` False). Never raises: the record is extra."""
+    chars used, pieces told)`` from ``open_items.told`` (exactly the folder,
+    each item's work asked again through ``reader`` and walled, the turn's
+    own conversations left out) and ``open_items.block_part`` (oldest first,
+    at most ``TOLD_MAX``, the owner's pick marked). ``pieces told``: each
+    piece of work whose items the part ACTUALLY told, with those items'
+    words, in the order told (for the reply's ``used`` list, 15-a). Nothing
+    on the phone (a phone reader is told no item: ``open_items.told``), for
+    a turn with no folder, or where the folder's part is another block's (a
+    project: ``listed`` False). Never raises: the record is extra."""
     if not listed or not str(folder or "").strip():
-        return [], 0
+        return [], 0, []
     from . import open_items
 
     try:
         got = open_items.told(reader, folder, exclude_refs=exclude_refs, now=now)
-        lines, used, _ids = open_items.block_part(got.open, now, chosen=str(chosen or "").strip())
-        return lines, used
+        lines, used, ids = open_items.block_part(got.open, now, chosen=str(chosen or "").strip())
+        by_id = {it["id"]: it for it in got.open}
+        pieces: list[tuple[dict[str, Any], list[str]]] = []
+        at: dict[str, int] = {}
+        for item_id in ids:
+            it = by_id.get(item_id)
+            row = got.rows.get(it["entry_id"]) if it is not None else None
+            if row is None:
+                continue
+            if it["entry_id"] in at:
+                pieces[at[it["entry_id"]]][1].append(it["text"])
+            else:
+                at[it["entry_id"]] = len(pieces)
+                pieces.append((row, [it["text"]]))
+        return lines, used, pieces
     except Exception:  # noqa: BLE001
         log.debug("work record: the open items could not be read", exc_info=True)
-        return [], 0
+        return [], 0, []
 
 
 #: Rows a turn's own refresh may rebuild (``lookup.TURN_REBUILD``).
@@ -629,9 +647,9 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         # place this part is worked out (the pick-up card reads it too).
         # Next leaps 04-b: the folder's open items first (their room is kept,
         # so an item from long ago is always told), the same way on the card.
-        items_lines, items_used = open_part(reader, folder, now,
-                                            listed=bool(folder and list_folder),
-                                            exclude_refs=[exclude_ref, *skip], chosen=chosen)
+        items_lines, items_used, items_told = open_part(reader, folder, now,
+                                                        listed=bool(folder and list_folder),
+                                                        exclude_refs=[exclude_ref, *skip], chosen=chosen)
         told_here, n_groups = here_part(engine, folder, here_rows, now, phone=phone,
                                         room=BLOCK_CHARS - items_used)
         here = [t["line"] for t in told_here]
@@ -646,6 +664,19 @@ def work_block(platform: Any, *, folder: str = "", query: str = "", exclude_ref:
         told_rows: list[tuple[dict[str, Any], bool]] = [
             (t["row"], bool(t["recap"])) for t in told_here
         ]
+        # An open item told in "Still open" is a recap line of its piece
+        # (04-b): that piece is a ``recap`` whose words are the items told,
+        # once, however old (a piece told above too gains them).
+        at = {r.get("id"): n for n, (r, _w) in enumerate(told_rows)}
+        for row, texts in items_told:
+            n = at.get(row.get("id"))
+            if n is None:
+                at[row.get("id")] = len(told_rows)
+                told_rows.append(({**row, "recap": list(texts)}, True))
+                continue
+            above, with_recap = told_rows[n]
+            shown = list(above.get("recap") or []) if with_recap else []
+            told_rows[n] = ({**above, "recap": [*shown, *texts]}, True)
         if here:
             lines.append(HERE_LEAD)
             lines += here

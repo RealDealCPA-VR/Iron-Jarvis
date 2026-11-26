@@ -14,7 +14,7 @@ the text, at the point they put it there, through :func:`note`:
   each snippet line told (a file, a note, a memory entry, a lesson, a past
   run, a past chat, project knowledge);
 * ``workmap.block.work_block``: each piece of work told, a ``recap`` when its
-  recap lines were told under it;
+  recap lines were told under it or its open items in "Still open" (04-b);
 * ``workmap.clients.block.client_block_or_raise``: each of the client's
   preferences told;
 * ``projects.knowledge.ground``: each knowledge item told;

@@ -730,6 +730,42 @@ def test_an_item_from_eight_pieces_ago_is_on_the_card_and_in_the_block_until_clo
     assert _texts(_card(scene, H)["closed_lately"]) == ["Ask the bank for the missing statement"]
 
 
+def test_the_from_memory_list_names_the_piece_of_every_open_item_the_block_tells(scene):
+    """Next leaps 15-a's ``used`` list (``memory.used``) is what the reply was
+    GIVEN. An open item the block tells is its piece's recap line, so its
+    piece is listed as a ``recap`` whose words are the item's: the From
+    memory box lists it, and opens for a reply that quotes it (D-15.1), even
+    when the piece is older than the newest six and in no other part. A
+    piece told twice (its recap under it and its item in "Still open") is
+    one entry."""
+    from iron_jarvis.memory import used as U
+
+    oldest = _chat(scene, "Bank reconciliation", H, hours_ago=100)
+    _keep(scene, oldest, "Open: Ask the bank for the missing statement")
+    for i in range(8):
+        _chat(scene, f"Later piece {i}", H, hours_ago=90 - i * 10)
+    scene.wm.refresh(force=True)
+    told, items = U.run_collecting(lambda: B.work_block(scene.platform, folder=H, query=CONTINUE))
+    assert "1. Ask the bank for the missing statement" in told
+    assert "Bank reconciliation" not in told.split("Still open in this folder")[0]  # in no other part
+    mine = [i for i in items if i["id"] == f"chat:{oldest}"]
+    assert [i["kind"] for i in mine] == ["recap"]
+    # The reply shares no word with the piece's title: only the item's words shape it.
+    used = U.finish(items, reply="First, ask for the missing statement.", question=CONTINUE)
+    (bank,) = [i for i in used if i["id"] == f"chat:{oldest}"]
+    assert bank["label"] == "Bank reconciliation" and bank["shaped"] is True
+    assert bank["href"]
+    # The newest piece, its recap told under it AND its item told in "Still
+    # open": one entry, a recap.
+    new = _chat(scene, "Fee letter", H, hours_ago=1)
+    _keep(scene, new, "Done: Drafted the letter", "Open: Post the fee letter")
+    scene.wm.refresh(force=True)
+    told, items = U.run_collecting(lambda: B.work_block(scene.platform, folder=H, query=CONTINUE))
+    assert "  Open: Post the fee letter" in told and ". Post the fee letter" in told
+    assert [i["kind"] for i in items if i["id"] == f"chat:{new}"] == ["recap"]
+    assert [i["kind"] for i in items if i["id"] == f"chat:{oldest}"] == ["recap"]
+
+
 def test_exactly_that_folder_and_never_another_clients_item(scene):
     _keep(scene, _chat(scene, "Hartleys here", H), "Open: Hartleys item")
     _keep(scene, _chat(scene, "Under it", H + r"\2026"), "Open: item under it")
