@@ -452,10 +452,16 @@ def test_a_local_only_runs_words_reach_only_a_local_only_run(desk):
     assert ctx2["local_only"] == "1"
 
 
-def test_a_local_only_runs_words_never_go_to_a_remote_agent(desk, monkeypatch):
-    """MUTATION (red): drop ``context = _kept_here(rule, context)`` in
+def test_a_local_only_tasks_end_is_never_handed_to_a_remote_agent(desk, monkeypatch):
+    """Review 2: a remote agent's work cannot be Local only, so a Local only
+    task's end is not handed to one AT ALL: not what the run said (``detail``),
+    and not what the task does either (a schedule's own task words, ``does``,
+    which a blank template puts in "That task does: …").
+
+    MUTATION (red): drop the ``local_only_hand_off_words`` refusal in
     ``ReflexRouter.execute`` -> the remote agent is handed the Local only
-    run's words."""
+    schedule's task words (the run's own words are still dropped by
+    ``_kept_here``)."""
     from iron_jarvis.agents import remote as remote_mod
 
     c, p, router, loop = desk
@@ -474,23 +480,156 @@ def test_a_local_only_runs_words_never_go_to_a_remote_agent(desk, monkeypatch):
 
     monkeypatch.setattr(remote_mod, "RemoteAgentRegistry", _Registry)
     router._launch = lambda coro, _sid: asyncio.get_event_loop().create_task(coro)
-    p.reflex.add(name="Hand it on", source="run_ended", match="", action="remote_agent", target="Desk",
-                 task_template="Why: {what} {outcome} {detail}", start={"what": "any", "name": "", "outcome": "any"})
+    rule = p.reflex.add(name="Hand it on", source="run_ended", match="", action="remote_agent", target="Desk",
+                        task_template="", start={"what": "any", "name": "", "outcome": "any"})
 
     async def _go(ctx):
         out = await starts.hub_for(router).signal("run_ended", ctx)
-        for _ in range(3):
+        for _ in range(5):
             await asyncio.sleep(0)
         return out
 
-    local = starts.ending_of_session(p.engine, _session(p, summary="CLIENT-WORDS", options='{"local_only": true}'))
+    sched = p.scheduler.add_task("Nightly report", "0 2 * * *", kind="task",
+                                 payload={"task": "Summarize CLIENT-TASK-WORDS for the return"})
+    sid = _session(p, origin="schedule:Nightly report", summary="CLIENT-RUN-WORDS", options='{"local_only": true}')
+    local = starts.ending_of_schedule(sched, "error", "The run failed: CLIENT-RUN-WORDS", sid, engine=p.engine)
+    assert local["local_only"] == "1" and "CLIENT-TASK-WORDS" in local["does"], local
     (fired,) = asyncio.run(_go(local))
-    assert fired["ok"] is True and sent, fired
-    assert "CLIENT-WORDS" not in sent[-1] and "Failed" in sent[-1], sent
-    # A run that was not Local only still hands its words on, fenced.
-    other = starts.ending_of_session(p.engine, _session(p, summary="PLAIN-WORDS"))
-    asyncio.run(_go(other))
-    assert "PLAIN-WORDS" in sent[-1]
+    words = "The task that ended was Local only, so it was not handed to the remote agent “Desk”."
+    assert fired["ok"] is False and fired["error"] == words, fired
+    assert sent == [], sent
+    row = p.reflex.get(rule.id)
+    assert (row.last_error, row.fire_count) == (words, 0)
+    # A Local only agent run's end: the same.
+    agent_end = starts.ending_of_session(p.engine, _session(p, summary="CLIENT-WORDS", options='{"local_only": true}'))
+    (fired,) = asyncio.run(_go(agent_end))
+    assert fired["ok"] is False and sent == [], (fired, sent)
+    # A rehearsal says the same, and records nothing as "would have gone".
+    assert asyncio.run(router.rehearse(row, local, rehearsal="rehearsal-l02")) == {"ok": False, "error": words}
+    # The card says so.
+    assert starts.describe(row)["limits_words"].endswith(
+        "When the task that ended was Local only, it is not handed on."
+    )
+    # A task that was not Local only is still handed on: what it does, and
+    # what its run said, fenced.
+    plain_sched = p.scheduler.add_task("Morning report", "0 6 * * *", kind="task",
+                                       payload={"task": "Write PLAIN-TASK-WORDS"})
+    plain = starts.ending_of_schedule(
+        plain_sched, "error", "The run failed: PLAIN-WORDS",
+        _session(p, origin="schedule:Morning report"), engine=p.engine,
+    )
+    (fired,) = asyncio.run(_go(plain))
+    assert fired["ok"] is True and len(sent) == 1, (fired, sent)
+    assert "PLAIN-TASK-WORDS" in sent[-1] and "PLAIN-WORDS" in sent[-1].partition("as data")[2], sent
+    assert p.reflex.get(rule.id).fire_count == 1
+
+
+class _StopHere(Exception):
+    pass
+
+
+def _scope_of_step_runs(router, monkeypatch) -> list[bool]:
+    """Every run a workflow's step creates from now on records whether it was
+    created inside a Local only scope (the orchestrator makes such a run Local
+    only), and stops there."""
+    from iron_jarvis.providers import egress
+
+    seen: list[bool] = []
+
+    async def _create(*_a, **_k):
+        seen.append(egress.current_scope().on)
+        raise _StopHere("the step's run is not needed past its creation")
+
+    monkeypatch.setattr(router.orch, "create_session", _create)
+    return seen
+
+
+def _run_launched(coro) -> None:
+    try:
+        asyncio.run(coro)
+    except _StopHere:
+        pass
+
+
+def test_a_workflow_a_local_only_tasks_end_starts_runs_local_only(desk, monkeypatch):
+    """Review 2: the card's Limits line ("When the task that ended was Local
+    only, so is the work it starts") holds for a rule that runs a workflow.
+
+    MUTATION (red): launch ``work`` instead of ``_kept_local(work, True)`` in
+    ``ReflexRouter._run_workflow`` -> the workflow's step creates its run
+    outside Local only."""
+    c, p, router, loop = desk
+    _saved_workflow(p, "Look into it", [{"name": "Look", "kind": "agent", "agent": "builder", "task": "Look"}])
+    p.reflex.add(name="Run the check", source="run_ended", match="", action="workflow", target="Look into it",
+                 task_template="", start={"what": "agent", "name": "", "outcome": "any"})
+    launched: list = []
+    router._launch = lambda coro, _sid: launched.append(coro)
+    local = starts.ending_of_session(p.engine, _session(p, summary="CLIENT-WORDS", options='{"local_only": true}'))
+    plain = starts.ending_of_session(p.engine, _session(p, summary="PLAIN-WORDS"))
+    for ctx in (local, plain):
+        (fired,) = asyncio.run(starts.hub_for(router).signal("run_ended", ctx))
+        assert fired["ok"] is True and fired["kind"] == "workflow", fired
+    assert len(launched) == 2
+    seen = _scope_of_step_runs(router, monkeypatch)
+    for coro in launched:
+        _run_launched(coro)
+    assert seen == [True, False], seen
+
+
+def test_try_once_more_of_a_local_only_workflow_runs_local_only(desk, monkeypatch):
+    """Review 2 (the guard no test held): the second try of a Local only
+    workflow is a new run record with no chat of its own, so only the scope
+    it is launched in keeps its steps on this PC.
+
+    MUTATION (red): launch ``work`` instead of ``_kept_local(work, True)`` in
+    ``ReflexRouter._workflow_once_more`` -> the second try's step creates its
+    run outside Local only."""
+    from iron_jarvis.workflows.models import WorkflowRunRecord
+
+    c, p, router, loop = desk
+    _saved_workflow(p, "Month end", [{"name": "Post", "kind": "agent", "agent": "builder", "task": "Post it"}])
+    rule = _again_rule(p, "Again here", {"what": "workflow", "what_name": "Month end", "again": True})
+    launched: list = []
+    router._launch = lambda coro, sid: launched.append((str(sid), coro))
+    for local_only in (True, False):
+        ctx = starts.ending_of_workflow(p.engine, {
+            "workflow": "Month end", "status": "failed", "run_id": _workflow_run(p, "Month end"),
+            **({"local_only": True} if local_only else {}),
+        })
+        assert ctx["local_only"] == ("1" if local_only else "")
+        (fired,) = asyncio.run(starts.hub_for(router).signal("run_ended", ctx))
+        assert fired["again"] == "Runs the workflow “Month end” once more.", fired
+    with session_scope(p.engine) as db:
+        again = {r.id for r in db.exec(
+            select(WorkflowRunRecord).where(WorkflowRunRecord.started_by == f"rule:run_ended:{rule.id}")
+        )}
+    assert len(again) == 2
+    seconds = [coro for sid, coro in launched if sid in again]  # in launch order: Local only first
+    for sid, coro in launched:
+        if sid not in again:
+            coro.close()  # the rule's own runs
+    seen = _scope_of_step_runs(router, monkeypatch)
+    for coro in seconds:
+        _run_launched(coro)
+    assert seen == [True, False], seen
+
+
+def test_a_local_only_failed_workflows_own_reason_stays_out_of_the_rules_context(desk):
+    """Review 2 (the guard no test held): a Local only workflow that failed
+    with no failed step does not put the engine's own reason (which can carry
+    the run's words) in the rule's context.
+
+    MUTATION (red): use ``said`` whatever ``local_only`` is in
+    ``starts.ending_of_workflow`` -> the Local only run's reason words reach
+    the rule's context."""
+    c, p, router, loop = desk
+    payload = {"workflow": "Month end", "status": "failed", "reason": "Stopped on CLIENT-REASON-WORDS"}
+    local = starts.ending_of_workflow(p.engine, {**payload, "run_id": _workflow_run(p, "Month end"),
+                                                 "local_only": True})
+    assert (local["local_only"], local["reason"]) == ("1", "The run did not finish."), local
+    assert "CLIENT-REASON-WORDS" not in str(local)
+    plain = starts.ending_of_workflow(p.engine, {**payload, "run_id": _workflow_run(p, "Month end")})
+    assert plain["reason"] == "Stopped on CLIENT-REASON-WORDS", plain
 
 
 def test_a_workflow_or_a_schedule_with_a_local_only_or_careful_run_says_so(desk):
@@ -725,3 +864,119 @@ def test_try_once_more_runs_a_failed_workflow_once_named_by_the_rule(desk):
     # A rule without it runs nothing again.
     plain = _again_rule(p, "Why only", {"what": "workflow", "what_name": "Month end"})
     assert "once more" not in starts.describe(plain)["does_words"]
+
+
+# --------------------------------------------------------------------------- #
+# Review 2: a rule for a workflow, or for your agent, hears it fail under its
+# schedule (the fire is still ONE signal).
+# --------------------------------------------------------------------------- #
+
+
+def test_a_scheduled_workflow_that_fails_starts_the_rule_that_names_that_workflow_once(desk, monkeypatch, tmp_path):
+    """MUTATION (red): drop ``ended_workflow`` from ``starts.ending_of_schedule``,
+    or the ``what in ran`` branch of ``ReflexStore.matching_run_ended`` -> the
+    rule for the workflow “check” never starts when “check” fails under its
+    schedule, though its card says it will."""
+    c, p, router, loop = desk
+    named = _ended_rule(p, "Workflow watch", what="workflow", target="check", outcome="any")
+    any_flow = _ended_rule(p, "Any workflow", what="workflow", target="", outcome="any")
+    by_task = _ended_rule(p, "By task name", what="any", target="check", outcome="any")
+    sched_rule = _ended_rule(p, "Schedule watch", what="schedule", target="Nightly check", outcome="any")
+    _saved_workflow(p, "Month end", [{"name": "Post", "kind": "agent", "agent": "builder", "task": "Post it"}])
+    other = _ended_rule(p, "Other workflow", what="workflow", target="Month end", outcome="any")
+    agent_rule = _ended_rule(p, "Any agent", what="agent", target="", outcome="any")
+    _saved_workflow(p, "check", [{"name": "Check", "kind": "tool", "tool": "read_file",
+                                  "args": {"path": str(tmp_path / "no-such-report.txt")}}])
+    p.scheduler.add_task("Nightly check", "0 2 * * *", kind="workflow", payload={"workflow": "check"})
+    assert starts.describe(named)["when_words"].startswith("When the workflow “check” fails")
+    real = starts.schedule_ended_signal(lambda: starts.hub_for(router), lambda: loop)
+    futs: list = []
+    p.schedule_ended = lambda *a: futs.append(real(*a)) or futs[-1]
+    hub_futs: list = []
+    monkeypatch.setattr(starts, "_signal_hub",
+                        lambda *a, _real=starts._signal_hub: hub_futs.append(_real(*a)) or hub_futs[-1])
+    p.event_bus.add_handler(_handler(router, loop))  # the run's own end: quiet inside the fire
+    asyncio.run(p.scheduler.run_now("Nightly check"))
+    assert p.scheduler.get("Nightly check").last_status == "error"
+    (fired,) = _wait(futs, 1)
+    assert sorted(f["rule_id"] for f in fired) == sorted([named.id, any_flow.id, by_task.id, sched_rule.id]), fired
+    assert len(hub_futs) == 1, "one signal per fire"
+    counts = [p.reflex.get(r.id).fire_count for r in (named, any_flow, by_task, sched_rule, other, agent_rule)]
+    assert counts == [1, 1, 1, 1, 0, 0], counts
+    # The rule's work is told which task ended: the schedule, from its row.
+    (run,) = _rule_runs(p, "Workflow watch")
+    assert "the schedule “Nightly check”" in run.task, run.task
+
+
+def test_a_schedule_whose_run_was_your_agent_starts_the_rule_for_that_agent(desk):
+    """MUTATION (red): drop ``ended_agent`` from ``starts.ending_of_schedule``
+    -> a rule for your agent “Bookkeeper” never starts when its scheduled run
+    fails."""
+    c, p, router, loop = desk
+    mine = _ended_rule(p, "Agent watch", what="agent", target="Bookkeeper", outcome="any")
+    other = _ended_rule(p, "Other agent", what="agent", target="Writer", outcome="any")
+    sched = p.scheduler.add_task("Nightly books", "0 2 * * *", kind="task", payload={"task": "Do the books"})
+    sid = _session(p, origin="schedule:Nightly books", agent_name="custom:Bookkeeper")
+    ctx = starts.ending_of_schedule(sched, "error", "The run failed.", sid, engine=p.engine)
+    assert (ctx["ended_kind"], ctx["ended_agent"], ctx["ended_workflow"]) == ("schedule", "Bookkeeper", ""), ctx
+    fired = asyncio.run(starts.hub_for(router).signal("run_ended", ctx))
+    assert [f["rule_id"] for f in fired] == [mine.id], fired
+    assert p.reflex.get(other.id).fire_count == 0
+    # A fire whose run was not one of your agents names none.
+    plain = starts.ending_of_schedule(sched, "error", "x", _session(p, origin="schedule:Nightly books"), engine=p.engine)
+    assert plain["ended_agent"] == ""
+
+
+def test_try_once_more_on_a_workflow_rule_heard_through_a_schedule_runs_that_workflow(desk):
+    """MUTATION (red): drop the ``ended_workflow`` turn in
+    ``ReflexRouter._once_more`` -> the card says it runs the workflow “Month
+    end” once more, and it runs the schedule instead."""
+    from iron_jarvis.workflows.models import WorkflowRunRecord
+
+    c, p, router, loop = desk
+    _saved_workflow(p, "Month end", [{"name": "Post", "kind": "agent", "agent": "builder", "task": "Post it"}])
+    rule = _again_rule(p, "Again", {"what": "workflow", "what_name": "Month end", "again": True})
+    sched = p.scheduler.add_task("Month close", "0 3 * * *", kind="workflow", payload={"workflow": "Month end"})
+    ctx = starts.ending_of_schedule(sched, "error", "x", "", _workflow_run(p, "Month end"), engine=p.engine)
+    assert ctx["ended_workflow"] == "Month end", ctx
+    (fired,) = asyncio.run(starts.hub_for(router).signal("run_ended", ctx))
+    assert fired["again"] == "Runs the workflow “Month end” once more.", fired
+    with session_scope(p.engine) as db:
+        again = list(db.exec(
+            select(WorkflowRunRecord).where(WorkflowRunRecord.started_by == f"rule:run_ended:{rule.id}")
+        ))
+    assert [r.workflow_name for r in again] == ["Month end"]
+
+
+def test_try_once_more_does_not_run_a_schedule_still_running_and_the_row_says_so(desk):
+    """Review 2 (note): the fire that ended is still running after the wait.
+
+    MUTATION (red): ignore ``wait_until_idle``'s answer in
+    ``ReflexRouter._schedule_once_more`` -> Run now is called (it would stamp
+    the schedule's row "Skipped: already running" over its "Failed"), and the
+    rule's row still says it ran the schedule once more."""
+    from iron_jarvis.reflex.router import ONCE_MORE_WAIT_S
+
+    c, p, router, loop = desk
+    p.scheduler.add_task("Nightly report", "0 2 * * *", kind="task", payload={"task": "x"})
+    rule = _again_rule(p, "Why and again", {"what": "schedule", "what_name": "Nightly report", "again": True})
+    p.reflex.mark_result(rule.id, ok=True, detail="Started an agent run. Runs the schedule “Nightly report” once more.")
+    asked: list = []
+    ran: list = []
+
+    class _Busy:
+        def wait_until_idle(self, name, timeout):
+            asked.append((name, timeout))
+            return False
+
+        async def run_now(self, name):
+            ran.append(name)
+
+    asyncio.run(router._schedule_once_more(_Busy(), "Nightly report", rule, False))
+    assert asked == [("Nightly report", ONCE_MORE_WAIT_S)] and ran == [], (asked, ran)
+    row = p.reflex.get(rule.id)
+    assert row.last_result == (
+        "Started an agent run. The schedule “Nightly report” was still running 15 minutes later, "
+        "so it was not run once more."
+    ), row.last_result
+    assert row.fire_count == 1, "saying it did not run is not a fire"

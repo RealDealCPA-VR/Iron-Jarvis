@@ -333,8 +333,9 @@ export const NAV: NavSectionDef[] = [
           "reflexes", "when this then that", "auto react", "if this", "triggers", "automation", "automations",
           "when a task fails", "what runs on its own",
         ],
-        blurb:
-          "When a file lands in a folder, a download finishes, a message arrives, a webhook fires or another task fails, start work automatically. Your schedules are listed here too.",
+        // One line, at most 120 characters (nav.test.ts): a result row is one
+        // line tall.
+        blurb: "When a file lands, a download finishes, a message arrives or another task fails, start work. Schedules are here too.",
       },
       {
         href: "/self-dev",

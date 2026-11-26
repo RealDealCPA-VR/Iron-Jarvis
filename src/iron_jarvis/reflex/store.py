@@ -428,13 +428,22 @@ class ReflexStore:
         (a ``reflex/router.run_ended_context``): its kind (``what``; a
         ``rule`` rule hears any run a rule started, named by that rule), its
         name (``name``, "" = any of that kind; one line, case ignored) and
-        how it ended (``outcome``; ``any`` = any way it fell short). The loop
-        guards are the router's (``on_run_ended``)."""
+        how it ended (``outcome``; ``any`` = any way it fell short). Review 2:
+        a schedule's fire also names what it ran (``ended_workflow``, the
+        custom agent ``ended_agent``), so a rule for that workflow or agent
+        hears the fire too, from its ONE signal. The loop guards are the
+        router's (``on_run_ended``)."""
         kind = str(ending.get("ended_kind") or "")
         name = _flat(ending.get("ended_name"))
         by_rule = str(ending.get("by_rule_id") or "")
         by_name = _flat(ending.get("by_rule_name"))
         verdict = str(ending.get("ended_verdict") or "")
+        # What the ended task ran, by kind: its own kind and name first.
+        ran = {kind: name} if kind in ("workflow", "agent") else {}
+        if kind == "schedule":
+            for key, of in (("workflow", "ended_workflow"), ("agent", "ended_agent")):
+                if _flat(ending.get(of)):
+                    ran[key] = _flat(ending.get(of))
         out: list[ReflexRule] = []
         for r in self.list(source="run_ended"):
             if not r.enabled:
@@ -448,12 +457,33 @@ class ReflexStore:
                 if not by_rule or (want and want != by_name):
                     continue
             elif what == "any":
-                if want and want not in {name, by_name}:
+                if want and want not in {name, by_name, *ran.values()}:
+                    continue
+            elif what in ran:
+                if want and want != ran[what]:
                     continue
             elif what != kind or (want and want != name):
                 continue
             out.append(r)
         return out
+
+    def amend_result(self, rule_id: str, said: str, now_says: str) -> None:
+        """Review 2 (05-b): change what the row's last start says, after the
+        fact, without counting a fire: ``said`` (a part of ``last_result``)
+        becomes ``now_says``, or ``now_says`` is added when ``said`` is not
+        there. Unknown ids are a no-op."""
+        with _GATE_LOCK, session_scope(self.engine) as db:
+            row = db.get(ReflexRule, rule_id)
+            if row is None:
+                return
+            last = str(row.last_result or "")
+            if said and said in last:
+                text = last.replace(said, now_says)
+            else:
+                text = " ".join(x for x in (last, now_says) if x)
+            row.last_result = text[:500] or None
+            db.add(row)
+            db.commit()
 
     def matching_comm(self, text: str) -> list[ReflexRule]:
         """Enabled comm rules matching ``text`` (thin alias over :meth:`matching`,

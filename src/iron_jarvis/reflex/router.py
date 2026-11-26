@@ -245,6 +245,8 @@ def run_ended_context(
     careful: bool = False,
     local_only: bool = False,
     does: str = "",
+    ended_workflow: str = "",
+    ended_agent: str = "",
 ) -> dict[str, str]:
     """Leap 05-b: the context of ONE run that ended short (a schedule's
     recorded outcome, a workflow's run, a rule's run, an agent run), for the
@@ -259,7 +261,10 @@ def run_ended_context(
     work runs Local only, and what the run said never goes where a Local
     only run could not (:meth:`ReflexRouter.execute`). ``does``: what the
     task does, from its own record (a schedule's task words, the workflow it
-    runs)."""
+    runs). ``ended_workflow`` / ``ended_agent`` (review 2): what a SCHEDULE's
+    fire ran, from the fire's own records — the workflow its run was of, the
+    custom agent its run was — so a rule for that workflow or agent hears
+    it too (the fire is still ONE signal, ``ReflexStore.matching_run_ended``)."""
     what = ended_what_words(kind, name)
     word = ENDED_VERDICT_WORDS.get(str(verdict or ""), "Failed")
     return {
@@ -278,6 +283,8 @@ def run_ended_context(
         "careful": "1" if careful else "",
         "local_only": "1" if local_only else "",
         "does": " ".join(str(does or "").split())[:200],
+        "ended_workflow": " ".join(str(ended_workflow or "").split())[:200],
+        "ended_agent": " ".join(str(ended_agent or "").split())[:200],
         # What a keyword (and a rehearsal's sample) reads: the task's name.
         "text": " ".join(str(name or "").split())[:500],
         "body": "",
@@ -515,6 +522,11 @@ class ReflexRouter:
                 trust = self._signal_trust(rule, attended=False, context=context)
                 return await self._run_session(rule, context, trust=trust, rehearsal=rehearsal)
             if rule.action == "remote_agent":
+                # Review 2: as the real fire would, a Local only task's end
+                # is not handed on (nothing is recorded as "would have gone").
+                refused = local_only_hand_off_words(rule, context)
+                if refused:
+                    return {"ok": False, "error": refused}
                 agent = " ".join(str(rule.target or "").split()) or "a remote agent"
                 # The row is the rehearsal's own (no run exists to hold it).
                 await _off_loop(functools.partial(
@@ -593,7 +605,15 @@ class ReflexRouter:
                 # workflow's steps (a session rule's run is Local only itself,
                 # ``_run_session``).
                 context = _kept_here(rule, context)
-                if rule.action == "workflow":
+                # Review 2: a remote agent's work cannot be Local only, so a
+                # Local only task's end is not handed to one at all (its
+                # name, what it does and how it ended included); the row
+                # says why.
+                refused = local_only_hand_off_words(rule, context)
+                if refused:
+                    result = {"ok": False, "error": refused}
+                    reason = _lower_first(refused.rstrip("."))
+                elif rule.action == "workflow":
                     result = await self._run_workflow(rule, context, **trust_kw)
                 elif rule.action == "remote_agent":
                     result = self._run_remote(rule, context)
@@ -798,7 +818,13 @@ class ReflexRouter:
             if not collides
             else None
         )
-        self._launch(engine.run_record(run, wf, outputs=outputs), run.id)
+        work = engine.run_record(run, wf, outputs=outputs)
+        # Leap 05-b (review 2): the task that ended was Local only, so the
+        # workflow this rule starts runs Local only too (every run its steps
+        # create is, ``orchestrator.create_session``), as the card's Limits
+        # line says.
+        local = rule.source == "run_ended" and bool(str((context or {}).get("local_only") or ""))
+        self._launch(_kept_local(work, True) if local else work, run.id)
         return {"ok": True, "kind": "workflow", "workflow": wf.name, "run_id": run.id}
 
     def _run_remote(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
@@ -944,6 +970,12 @@ class ReflexRouter:
                 return ""
             kind = str(context.get("ended_kind") or "")
             name = " ".join(str(context.get("ended_name") or "").split())
+            ran = " ".join(str(context.get("ended_workflow") or "").split())
+            if kind == "schedule" and ran and rule.decoded_start().get("what") == "workflow":
+                # Review 2: a rule for a WORKFLOW heard it fail inside a
+                # schedule's fire; its card says it runs that workflow once
+                # more, so that is what runs (named by this rule).
+                kind, name = "workflow", ran
             if kind not in ("schedule", "workflow") or not name:
                 return ""
             local_only = bool(str(context.get("local_only") or ""))
@@ -953,7 +985,7 @@ class ReflexRouter:
             if scheduler is None or await _off_loop(functools.partial(scheduler.get, name)) is None:
                 return f"The schedule “{name}” is no longer there, so it was not run once more."
             self._launch(self._schedule_once_more(scheduler, name, rule, local_only), f"reflex-again-{rule.id}")
-            return f"Runs the schedule “{name}” once more."
+            return once_more_schedule_words(name)
         except Exception:  # noqa: BLE001 — the rule's own start stands
             log.warning("rule %r: the task could not be run once more", rule.name, exc_info=True)
             return "The task could not be run once more."
@@ -975,10 +1007,23 @@ class ReflexRouter:
     async def _schedule_once_more(self, scheduler: Any, name: str, rule: ReflexRule, local_only: bool) -> Any:
         """The schedule's second try: after the fire that ended lets go of it
         (its delivery and report finish after the signal), one Run now whose
-        ONE signal names this rule."""
+        ONE signal names this rule. Review 2: when that fire is still running
+        after :data:`ONCE_MORE_WAIT_S`, nothing runs (a Run now would only
+        stamp the schedule's row "Skipped: already running" over its
+        "Failed"), and the rule's row says so."""
         from ..triggers import starts as _starts
 
-        await _off_loop(functools.partial(scheduler.wait_until_idle, name, ONCE_MORE_WAIT_S))
+        if not await _off_loop(functools.partial(scheduler.wait_until_idle, name, ONCE_MORE_WAIT_S)):
+            store = getattr(self, "store", None)
+            if store is not None:
+                try:
+                    await _off_loop(functools.partial(
+                        store.amend_result, rule.id, once_more_schedule_words(name),
+                        once_more_still_running_words(name),
+                    ))
+                except Exception:  # noqa: BLE001 — the row keeps its first words
+                    log.warning("rule %r: could not say the second try did not run", rule.name, exc_info=True)
+            return None
         token = _starts.once_more_by(rule)
         try:
             return await _kept_local(scheduler.run_now(name), local_only)
@@ -1093,9 +1138,11 @@ ONCE_MORE_WAIT_S = 900.0
 
 def _kept_here(rule: ReflexRule, context: dict[str, str]) -> dict[str, str]:
     """Leap 05-b (review): the context a rule's action gets. When the task
-    that ended was Local only, an action that cannot itself run Local only
-    (a remote agent, a workflow's steps) is not given what that task said
-    (``detail``). A session rule keeps it: its run is Local only. Pure."""
+    that ended was Local only, an action other than a session is not given
+    what that task said (``detail``): a workflow runs Local only, but a step
+    of it can send a message. A remote agent is handed nothing at all
+    (review 2, :func:`local_only_hand_off_words`). A session rule keeps it:
+    its run is Local only. Pure."""
     if (
         str(getattr(rule, "source", "") or "") == "run_ended"
         and str((context or {}).get("local_only") or "")
@@ -1103,6 +1150,39 @@ def _kept_here(rule: ReflexRule, context: dict[str, str]) -> dict[str, str]:
     ):
         return {**context, "detail": ""}
     return context
+
+
+def local_only_hand_off_words(rule: ReflexRule, context: dict[str, str]) -> str:
+    """Leap 05-b (review 2): the row's words when a ``run_ended`` rule would
+    hand a Local only task's end to a REMOTE AGENT, else "". A remote agent
+    runs on another computer, so its work can never be Local only: nothing of
+    that task (its name, what it does, how it ended, what it said) is handed
+    on. Pure."""
+    if (
+        str(getattr(rule, "source", "") or "") != "run_ended"
+        or str(getattr(rule, "action", "") or "") != "remote_agent"
+        or not str((context or {}).get("local_only") or "")
+    ):
+        return ""
+    agent = _short(str(getattr(rule, "target", "") or ""))[:80]
+    which = f"the remote agent “{agent}”" if agent else "a remote agent"
+    return f"The task that ended was Local only, so it was not handed to {which}."
+
+
+def once_more_schedule_words(name: str) -> str:
+    """What "try once more" says it does for a schedule (the row's words)."""
+    return f"Runs the schedule “{name}” once more."
+
+
+def once_more_still_running_words(name: str) -> str:
+    """Review 2: the row's words when the fire that ended was still running
+    after :data:`ONCE_MORE_WAIT_S`, so the second try did not run."""
+    minutes = int(ONCE_MORE_WAIT_S // 60)
+    return f"The schedule “{name}” was still running {minutes} minutes later, so it was not run once more."
+
+
+def _lower_first(text: str) -> str:
+    return text[:1].lower() + text[1:] if text else text
 
 
 async def _kept_local(coro: Any, local_only: bool) -> Any:

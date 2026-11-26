@@ -2274,15 +2274,20 @@ carefully too.
 
 **Local only stays local.** If the task that ended was Local only, the
 rule's work is Local only too (if its model is not on this PC, it does not
-start, and the rule's row says why). What that task said is never handed to
-a remote agent or to a workflow's steps.
+start, and the rule's row says why), and so is a workflow the rule runs.
+What that task said is never given to a workflow's steps. A rule that hands
+work to a remote agent hands nothing on for such a task, not even its name:
+a remote agent works on another computer. Its row says "The task that ended
+was Local only, so it was not handed to the remote agent …", and its card's
+Limits line says so.
 
 **Try once more.** For one of your schedules or a workflow, the rule can also
 run that task once more: say "try once more" in chat, or tick **Run it once
 more** on the Rules page. The card's Do line says so ("Then it runs the
 schedule “Nightly report” once more."). The second try starts after the first
 has finished, as a fire of that schedule (or a run of that workflow) that the
-rule started.
+rule started. If the first is still running 15 minutes later, the second try
+does not run, and the rule's row says so.
 
 **It never goes round in circles.** The work a rule like this does never
 starts it, or any rule like it, again: if "try once more" fails too, nothing
@@ -2291,9 +2296,12 @@ at most 12 times an hour, then pauses itself and tells you once a day.
 
 **A schedule is heard once a fire.** When a schedule runs a workflow or an
 agent, the schedule's own result is what a rule hears, once per fire, as the
-Schedules row says it. A workflow that stops to wait for your answer ended
-needing you. If you answer a schedule's waiting workflow and it then fails,
-the rule hears that once too, as the Schedules row then says it.
+Schedules row says it. A rule for that workflow, or for that agent of yours,
+hears the same fire too: "When the workflow “Month end” fails" starts when
+Month end fails under its schedule, once, and so does a rule for the
+schedule. A workflow that stops to wait for your answer ended needing you. If
+you answer a schedule's waiting workflow and it then fails, the rule hears
+that once too, as the Schedules row then says it.
 
 **Everything that runs by itself, in one place.** The Rules page lists your
 rules by what starts them, and under them, **At a time**, your schedules, each

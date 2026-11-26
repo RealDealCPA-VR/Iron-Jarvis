@@ -870,6 +870,7 @@ def _workflow_run_facts(engine: Any, run_id: str) -> dict[str, Any]:
         except (TypeError, ValueError):
             sessions = []
         return {
+            "workflow": str(getattr(rec, "workflow_name", "") or ""),
             "started_by": str(rec.started_by or ""),
             "outputs": outputs if isinstance(outputs, dict) else {},
             "sessions": [str(s) for s in sessions if s] if isinstance(sessions, list) else [],
@@ -981,6 +982,7 @@ def ending_of_schedule(
     sid = str(session_id or "")
     rid = str(run_id or "")
     local_only = careful = False
+    ran_workflow = ran_agent = ""
     if engine is not None:
         try:
             facts = _workflow_run_facts(engine, rid) if rid else {}
@@ -988,6 +990,12 @@ def ending_of_schedule(
             s_local, s_careful = _posture_of_runs(engine, [sid])
             local_only = wf_local or s_local or _chat_local_only(engine, getattr(task, "chat_thread_id", ""))
             careful = wf_careful or s_careful
+            # Review 2: what this fire RAN, from its own records — the
+            # workflow its run was of (only when it ran one), the custom
+            # agent its run was — so a rule for that workflow or agent hears
+            # this fire too (still one signal).
+            ran_workflow = str(facts.get("workflow") or "") if facts else ""
+            ran_agent = _custom_agent_of(engine, sid)
         except Exception:  # noqa: BLE001 — unreadable: read as Local only, careful
             log.warning("the runs of schedule %r could not be read", getattr(task, "name", ""), exc_info=True)
             local_only = careful = True
@@ -1000,7 +1008,24 @@ def ending_of_schedule(
         by_rule_id=str(by.get("id") or ""), by_rule_name=str(by.get("name") or ""),
         by_rule_source=str(by.get("source") or ""),
         careful=careful, local_only=local_only, does=_schedule_does(task),
+        ended_workflow=ran_workflow, ended_agent=ran_agent,
     )
+
+
+def _custom_agent_of(engine: Any, session_id: str) -> str:
+    """The custom agent a run was (``Session.agent_name`` ``custom:<name>``),
+    "" for any other run. BLOCKING (one row read); raises on a fault (the
+    caller reads the fire's runs in one guarded step)."""
+    sid = str(session_id or "").strip()
+    if not sid or sid == "chat" or engine is None:
+        return ""
+    from ..core.db import session_scope
+    from ..core.models import Session
+
+    with session_scope(engine) as db:
+        row = db.get(Session, sid)
+        agent = str(getattr(row, "agent_name", "") or "") if row is not None else ""
+    return agent.split(":", 1)[1].strip() if agent.startswith("custom:") else ""
 
 
 def _someone_listens(hub: Any) -> bool:
@@ -1377,9 +1402,13 @@ def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
     if source == "run_ended":
         # Leap 05-b: the loop guard, said where the rule is read; and (review)
         # what a Local only task said stays on this PC.
+        limits += " The work it does never starts it, or a rule like it, again."
+        # Review 2: a remote agent's work cannot be Local only, so such a
+        # task is not handed on (``router.local_only_hand_off_words``).
         limits += (
-            " The work it does never starts it, or a rule like it, again."
-            " When the task that ended was Local only, so is the work it starts."
+            " When the task that ended was Local only, it is not handed on."
+            if action == "remote_agent"
+            else " When the task that ended was Local only, so is the work it starts."
         )
     if careful is None:
         from ..reflex.router import OUTSIDE_SOURCES, watches_downloads
