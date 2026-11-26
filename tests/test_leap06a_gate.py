@@ -323,6 +323,10 @@ LETS_RUN: dict[str, str] = {
     "pixio_models": "lists media models; generates nothing and spends nothing",
     "pixio_params": "lists one media model's settings; generates nothing and spends nothing",
     "plan_update": "a coding session's own step list; changes nothing outside it",
+    "pr_comments_list": (
+        "reads Iron Jarvis's own record of a pull request's review comments (26-a); never calls "
+        "GitHub and writes nothing (pr_comments_quiet is a write, so it is held)"
+    ),
     "preference_list": _MEMORY,
     "process_read": "reads a program that process_start started, and a rehearsal holds that",
     "read_document": _DOCS,
