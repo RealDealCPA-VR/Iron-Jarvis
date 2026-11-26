@@ -766,6 +766,36 @@ def test_the_from_memory_list_names_the_piece_of_every_open_item_the_block_tells
     assert [i["kind"] for i in items if i["id"] == f"chat:{oldest}"] == ["recap"]
 
 
+def test_a_piece_told_above_without_its_recap_gains_the_words_of_its_open_item(scene):
+    """The common case of the test above (review 9 of 04-b): a conversation
+    the owner carried on after its recap was kept is told under "In this
+    folder" by its title alone (the recap was written for an earlier state
+    of it, so no recap line is told under it until the next recap pass),
+    while its open item is still told in "Still open". The From memory list
+    names it once, as a ``recap`` whose words are the item's, so a reply
+    that quotes only the item is shaped by it (D-15.1)."""
+    from iron_jarvis.memory import used as U
+
+    tid = _chat(scene, "Fee letter", H, hours_ago=1)
+    _keep(scene, tid, "Done: Drafted the letter", "Open: Post the signed engagement copy")
+    with session_scope(scene.engine) as db:  # carried on after the recap was kept
+        rec = db.get(ChatThreadRecord, tid)
+        rec.updated_at = rec.updated_at + timedelta(minutes=30)
+        db.add(rec)
+        db.commit()
+    scene.wm.refresh(force=True)
+    told, items = U.run_collecting(lambda: B.work_block(scene.platform, folder=H, query=CONTINUE))
+    above, lead, below = told.partition("Still open in this folder")
+    assert lead and "Fee letter" in above and "Drafted the letter" not in told
+    assert "  Open: Post the signed engagement copy" not in told
+    assert ". Post the signed engagement copy" in below
+    assert [i["kind"] for i in items if i["id"] == f"chat:{tid}"] == ["recap"]
+    # The reply shares no word with the piece's title: only the item's words shape it.
+    used = U.finish(items, reply="First, post the signed engagement copy.", question=CONTINUE)
+    (fee,) = [i for i in used if i["id"] == f"chat:{tid}"]
+    assert fee["label"] == "Fee letter" and fee["shaped"] is True
+
+
 def test_exactly_that_folder_and_never_another_clients_item(scene):
     _keep(scene, _chat(scene, "Hartleys here", H), "Open: Hartleys item")
     _keep(scene, _chat(scene, "Under it", H + r"\2026"), "Open: item under it")
