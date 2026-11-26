@@ -193,8 +193,9 @@ class WorkOpenItem(SQLModel, table=True):
     #: settle this item (``open_items.may_be_done``). It only asks "Mark it
     #: done?" (D-04.3); it never closes anything.
     maybe_done_entry: str = ""
-    #: The piece of work the owner answered "Not yet" for: it never asks
-    #: about that one again.
+    #: Every piece of work the owner answered "Not yet" for, one entry id
+    #: per line, newest last (``open_items.declined``): it never asks about
+    #: any of them again.
     maybe_declined: str = ""
     #: The owner reopened it: from then on only the owner (or a chat the
     #: owner asks) closes it; a rewritten recap no longer settles it.

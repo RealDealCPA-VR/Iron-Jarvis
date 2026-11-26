@@ -121,6 +121,9 @@ TOLD_MAX = 6
 ITEMS_CHARS = 1500
 #: Recaps carried forward by one :func:`backfill` call, at most.
 BACKFILL_BATCH = 400
+#: Later pieces of work one item remembers a "Not yet" for, at most (newest
+#: kept): a year of weekly work.
+DECLINED_KEEP = 52
 
 #: What the owner may close an item AS.
 CLOSE_AS = {"done": OPEN_ITEM_DONE, "dropped": OPEN_ITEM_DROPPED}
@@ -483,7 +486,7 @@ def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None"
             .limit(OPEN_READ)
         )
         for it in others:
-            if it.maybe_done_entry or it.maybe_declined == entry_id:
+            if it.maybe_done_entry or entry_id in declined(it):
                 continue
             opened = _naive(it.opened_at)
             if opened is not None and opened > when:
@@ -735,6 +738,21 @@ def _same_answer(it: WorkOpenItem, twins: list[WorkOpenItem]) -> list[WorkOpenIt
     return [*owners, *copies]
 
 
+def declined(it: WorkOpenItem) -> list[str]:
+    """The pieces of work (entry ids, oldest first) the owner answered "Not
+    yet" for about this item: :func:`sync` never asks about them again
+    (review 11 of 04-b). A row written when only one was kept reads as that
+    one. Pure."""
+    return [e for e in str(it.maybe_declined or "").split("\n") if e]
+
+
+def _decline(it: WorkOpenItem, entry_id: str) -> None:
+    """Remember one more "Not yet" (newest last, :data:`DECLINED_KEEP` at
+    most), never in place of the earlier ones."""
+    keep = [e for e in declined(it) if e != entry_id]
+    it.maybe_declined = "\n".join([*keep, str(entry_id)][-DECLINED_KEEP:])
+
+
 def reopen(engine: Any, item_id: str) -> "dict[str, Any] | None":
     """Put a closed item back on the open list (Reopen), for good, with the
     copies in other conversations of the folder that the SAME answer closed
@@ -753,7 +771,7 @@ def reopen(engine: Any, item_id: str) -> "dict[str, Any] | None":
         if it.status == OPEN_ITEM_OPEN:
             for row in [it, *(t for t in twins if t.status == OPEN_ITEM_OPEN)]:
                 if row.maybe_done_entry:
-                    row.maybe_declined = row.maybe_done_entry
+                    _decline(row, row.maybe_done_entry)
                     row.maybe_done_entry = ""
                 row.updated_at = now
                 db.add(row)

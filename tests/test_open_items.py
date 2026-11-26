@@ -707,6 +707,33 @@ def test_a_later_done_line_only_asks_and_never_closes(scene):
     assert _card(scene, H)["open"][0]["maybe_done"] is None
 
 
+def test_not_yet_is_kept_for_every_later_piece_it_answered(scene):
+    """Review 11 of 04-b (north star 1, G6; the Handbook's "After Not yet it
+    does not ask again about that same later work"): the owner answers Not
+    yet about later piece P, then about later piece Q. When P's recap, then
+    Q's, is kept again with the same Done line, the item asks about neither:
+    every piece answered Not yet is remembered, not only the last one."""
+    old = _chat(scene, "March close", H, hours_ago=5)
+    _keep(scene, old, "Open: Send recon_march.xlsx to Ann")
+    p = _chat(scene, "April close", H, hours_ago=3)
+    _keep(scene, p, "Done: Sent recon_march.xlsx to Ann")
+    (item,) = _items(scene)
+    assert item.maybe_done_entry == f"chat:{p}"
+    assert scene.client.post(f"/work-record/open-items/{item.id}/reopen").status_code == 200
+    q = _chat(scene, "May close", H, hours_ago=1)
+    _keep(scene, q, "Done: Sent recon_march.xlsx to Ann again")
+    (item,) = _items(scene)
+    assert item.maybe_done_entry == f"chat:{q}"
+    assert scene.client.post(f"/work-record/open-items/{item.id}/reopen").status_code == 200
+    _keep(scene, p, "Done: Sent recon_march.xlsx to Ann", "Decided: Keep the March file")
+    (after,) = _items(scene)
+    assert after.maybe_done_entry == ""
+    _keep(scene, q, "Done: Sent recon_march.xlsx to Ann again", "Decided: Keep the May file")
+    (after,) = _items(scene)
+    assert after.status == OPEN_ITEM_OPEN and after.maybe_done_entry == ""
+    assert _card(scene, H)["open"][0]["maybe_done"] is None
+
+
 # --------------------------------------------------------------------------- #
 # what a turn is told
 # --------------------------------------------------------------------------- #
