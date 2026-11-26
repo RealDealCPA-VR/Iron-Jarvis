@@ -51,7 +51,12 @@ Pinned here, through the REAL lanes (only the model is scripted):
   the backup and other-computer lines, which also answer a question or say
   how, only when the reply itself says it cannot (both lanes and a run);
   "I cannot …" is a refusal; the low-trust, escalation and Continue-text
-  gates are each the only reason a reply that says it cannot keeps nothing.
+  gates are each the only reason a reply that says it cannot keeps nothing;
+* review round 6: the voice, chat and builder-limit lines say how the user
+  gets it and their rules hold on questions ("How do I rename this chat?"):
+  answered, asked twice, once per lane, they keep nothing; a rename refused
+  in the reply's own words is still kept; every line is read against a
+  request AND a question its rule holds on (``NOT_OFFERED_READ``).
 """
 
 from __future__ import annotations
@@ -456,6 +461,24 @@ PAIR_SAID = ("Pair the two computers in Settings › Connections › Your other 
 DESKTOP_IN_WORDS = "The browser add-on clicks in web pages; in desktop programs the clicking is yours."
 #: Review round 5 (should): refusals written with "cannot".
 CANNOT_SAID = ("I cannot send faxes from here.", "Iron Jarvis cannot send a fax.")
+#: Review round 6 (blocking): questions the voice, chat and builder-limit
+#: lines' own rules hold on, each answered in words (the lines say how the
+#: user does it). ``(query, (stream ask, post ask), reply)``; on the real
+#: index each lookup's line 1 is that "Not offered" line.
+LINE_QUESTIONS = (
+    ("voice_press", "dictate a message / microphone dictation / voice input",
+     ("Can I use the microphone to dictate a message?", "Can I use the mic to dictate instead of typing?"),
+     "Yes: press the microphone button in the message box and speak; it types what you say."),
+    ("chat_items", "rename a chat / rename conversation / chat title",
+     ("How do I rename this chat?", "How can I rename this chat?"),
+     "Open the chat's menu in the chat list and choose Rename."),
+    ("builtin_agent_limit", "builder agent monthly limit / agent budget / spending cap",
+     ("Does the builder agent have a monthly limit?", "Does my builder agent have a spending limit?"),
+     "No: the built-in agents have no monthly limit of their own; only an agent you made can have one."),
+)
+#: …and the control: a request to rename, refused in the reply's own words.
+RENAME_ASKS = ("Rename this chat to Taxes 2026", "Rename this chat to Budget 2027")
+RENAME_REFUSED = "I can't rename chats from inside a reply: use its ⋯ menu."
 
 
 def _kind_on_the_real_index(app, query: str, words: str):
@@ -550,6 +573,36 @@ async def test_a_not_offered_line_that_says_how_or_answers_the_question_keeps_no
     ask, query, said = BACKUP_CHANGE
     await _turn(app, ws, "post", ask, _lookup_then_say(query, said))
     assert [(r["kind"], r["entry_id"]) for r in _misses(app)][2:] == [("not_offered", "jarvis_backup")], _misses(app)
+
+
+@pytest.mark.asyncio
+async def test_a_question_a_line_answers_keeps_nothing_in_either_lane(desk):
+    """Review round 6 (blocking): the voice, chat and builder-limit lines'
+    rules also hold on a question about a feature Iron Jarvis has ("Can I use
+    the microphone to dictate?", "How do I rename this chat?") or a yes/no
+    question ("Does the builder agent have a monthly limit?"), and those
+    lines say how the user gets it. Each asked twice, once per lane, and
+    answered: no row, no item. The controls: a request to rename refused in
+    the reply's own words is still kept, in each lane; the desktop request
+    is still kept on its line alone."""
+    from iron_jarvis.capability_search import misses as M
+
+    app, ws = desk
+    for entry, query, asks, said in LINE_QUESTIONS:
+        for lane, ask in zip(("stream", "post"), asks):
+            assert M.not_offered_holds(entry, ask), ("the control: the line's own rule holds", ask)
+            model = _lookup_then_say(query, said)
+            await _turn(app, ws, lane, ask, model)
+            first = model.tool_texts[1][-1].splitlines()[1]
+            assert first.startswith("1. Not offered: "), ("the control: line 1", lane, ask, first[:200])
+    assert _misses(app) == []
+    assert await _missing_items(app) == []
+    for lane, ask in zip(("stream", "post"), RENAME_ASKS):
+        await _turn(app, ws, lane, ask, _lookup_then_say(LINE_QUESTIONS[1][1], RENAME_REFUSED))
+    assert [(r["kind"], r["entry_id"]) for r in _misses(app)] == [("not_offered", "chat_items")] * 2, _misses(app)
+    assert [i["title"] for i in await _missing_items(app)] == ["Asked 2 times, no tool: rename a chat"]
+    await _turn(app, ws, "post", MOUSE_ASKS[0], _lookup_then_say(DESKTOP_QUERY, DESKTOP_IN_WORDS))
+    assert [(r["kind"], r["entry_id"]) for r in _misses(app)][2:] == [("not_offered", "desktop_control")]
 
 
 @pytest.mark.asyncio
@@ -799,24 +852,32 @@ def test_a_lookup_read_from_part_of_the_list_says_nothing_is_missing():
 
 
 #: Review round 5 (blocking): every "Not offered" line, read against what its
-#: own rule holds on (an ask it holds on, the lookup's words): "cannot" (the
-#: line says Iron Jarvis cannot do it), "does" (it names the tool that does
-#: it) or "reply" (it also answers a question or says how: kept only when the
-#: reply itself says it cannot).
+#: own rule holds on (asks it holds on, requests AND questions, review round
+#: 6; the lookup's words): "cannot" (the line says Iron Jarvis cannot do it
+#: and gives no way to get it, so every ask is about a thing it cannot do),
+#: "does" (it names the tool that does it) or "reply" (it also answers a
+#: question or says how the user gets it: kept only when the reply itself
+#: says it cannot).
 NOT_OFFERED_READ = {
-    "desktop_control": ("cannot", MOUSE_ASKS[0], DESKTOP_QUERY),
-    "full_access_default": ("cannot", "Make full access the default for my website folder",
+    "desktop_control": ("cannot", (MOUSE_ASKS[0], "Can you move my mouse to the start button?",
+                                   "Is desktop automation something you can do?"), DESKTOP_QUERY),
+    "full_access_default": ("cannot", ("Make full access the default for my website folder",
+                                       "Can I make full access the default for this folder?"),
                             "default full access for a folder / folder default approval level / always full access"),
-    "builtin_agent_limit": ("cannot", "Set a monthly spending limit for my builder agent",
-                            "monthly limit for builder agent / agent budget / spending cap"),
-    "voice_press": ("cannot", "Turn on voice chat so I can talk to you",
-                    "turn on voice chat / talk by voice / hands-free voice mode"),
-    "internet_calls_in": ("cannot", "Let Zapier start a task in Iron Jarvis",
+    "internet_calls_in": ("cannot", ("Let Zapier start a task in Iron Jarvis",
+                                     "How do I get Zapier to trigger a run here?"),
                           "Zapier starts a task / incoming webhook from a web service / external trigger"),
-    "chat_items": ("cannot", "Rename this chat to Taxes 2026", "rename a chat / rename conversation / chat title"),
-    "watcher_suggests": ("does", WATCH_ASKS[0], WATCH_QUERY),
-    "jarvis_backup": ("reply", BACKUP_ASKS[0], BACKUP_QUERY),
-    "another_computer": ("reply", PAIR_ASKS[0], PAIR_QUERY),
+    # Review round 6: each of these says how the user gets it (make an agent
+    # of their own with a limit; the microphone button and Voice chat; the
+    # chat's own menu), and its rule holds on the question too.
+    "builtin_agent_limit": ("reply", ("Set a monthly spending limit for my builder agent", LINE_QUESTIONS[2][2][0]),
+                            "monthly limit for builder agent / agent budget / spending cap"),
+    "voice_press": ("reply", ("Turn on voice chat so I can talk to you", *LINE_QUESTIONS[0][2]),
+                    "turn on voice chat / talk by voice / hands-free voice mode"),
+    "chat_items": ("reply", (RENAME_ASKS[0], *LINE_QUESTIONS[1][2]), "rename a chat / rename conversation / chat title"),
+    "watcher_suggests": ("does", (WATCH_ASKS[0],), WATCH_QUERY),
+    "jarvis_backup": ("reply", (BACKUP_ASKS[0], BACKUP_CHANGE[0]), BACKUP_QUERY),
+    "another_computer": ("reply", (PAIR_ASKS[0],), PAIR_QUERY),
 }
 
 
@@ -827,23 +888,24 @@ def test_each_not_offered_line_counts_only_when_it_says_iron_jarvis_cannot_do_it
     lines = {item.id: " ".join(item.line.split()) for item in NOT_OFFERED}
     assert M.NOT_OFFERED_CANNOT | M.NOT_OFFERED_DOES <= set(lines), "every id named is a line"
     assert not M.NOT_OFFERED_CANNOT & M.NOT_OFFERED_DOES
-    for entry, (read, ask, query) in NOT_OFFERED_READ.items():
+    for entry, (read, asks, query) in NOT_OFFERED_READ.items():
         if entry not in lines:
             continue  # a line taken out later
-        assert M.not_offered_holds(entry, ask), ("the control: its own rule holds", entry, ask)
-        answer = {"query": query, "reason": "", "first": {"kind": "not_offered", "id": entry}, "partial": False,
-                  "unknown": [], "unknown_parts": [[], [], []]}
-        found = M.miss_of(answer, words=ask)
-        refusal = f"I can't {M._index.first_part(query)} here."
-        if read == "does":
-            assert "reflex_create" in lines[entry], lines[entry][:200]
-            assert entry in M.NOT_OFFERED_DOES and found is None, (entry, found)
-            continue
-        assert found == ("not_offered", entry, []), (entry, found)
-        in_words = M.reply_counts("not_offered", "Here is how.", [], query, entry_id=entry)
-        assert in_words is (read == "cannot"), (entry, "a reply in words")
         assert (entry in M.NOT_OFFERED_CANNOT) is (read == "cannot"), entry
-        assert M.reply_counts("not_offered", refusal, [], query, entry_id=entry), (entry, refusal)
+        refusal = f"I can't {M._index.first_part(query)} here."
+        for ask in asks:
+            assert M.not_offered_holds(entry, ask), ("the control: its own rule holds", entry, ask)
+            answer = {"query": query, "reason": "", "first": {"kind": "not_offered", "id": entry},
+                      "partial": False, "unknown": [], "unknown_parts": [[], [], []]}
+            found = M.miss_of(answer, words=ask)
+            if read == "does":
+                assert "reflex_create" in lines[entry], lines[entry][:200]
+                assert entry in M.NOT_OFFERED_DOES and found is None, (entry, found)
+                continue
+            assert found == ("not_offered", entry, []), (entry, ask, found)
+            in_words = M.reply_counts("not_offered", "Here is how.", [], query, entry_id=entry)
+            assert in_words is (read == "cannot"), (entry, ask, "a reply in words")
+            assert M.reply_counts("not_offered", refusal, [], query, entry_id=entry), (entry, refusal)
 
 
 @pytest.mark.asyncio

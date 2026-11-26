@@ -2163,9 +2163,10 @@ you work.
   do, like controlling the desktop, and the reply then changed nothing. A
   request it can do another way (a rule for new files in a folder, tasks
   handed to your other computer) is not kept, and neither is a question it
-  answered ("how often do the backups run?"), unless the reply itself said
-  it could not do what you asked. Or Iron Jarvis looked the request up and
-  found nothing for it, or only other things, none of which mention what
+  answered ("how often do the backups run?", "how do I rename this chat?"),
+  unless the reply itself said it could not do what you asked. Or Iron
+  Jarvis looked the request up and found nothing for it, or only other
+  things, none of which mention what
   you asked for by name (like "fax"): then it counts only when the reply
   itself said it could not do what you asked ("I can't send faxes", "I
   cannot send faxes"), and not when the reply went on to use or try one of

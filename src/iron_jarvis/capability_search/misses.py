@@ -22,7 +22,9 @@ lanes; an agent run's from its ledger, :func:`keep_run_miss`): the LAST lookup
   review round 5: the line about new files names ``reflex_create``, which
   does it, so it is judged by the next rule; the backup line and the
   other-computer line also answer a question or say how, so they count only
-  when the reply itself says it cannot, :func:`reply_counts`), or
+  when the reply itself says it cannot, :func:`reply_counts`; review round 6:
+  so do the voice, chat and builder-limit lines, whose rules also hold on
+  "How do I rename this chat?" and the like), or
 * the request was NAMED by words no entry of the list knows: EVERY way the
   lookup named it (two or more) has such a word that is not a name (a word
   written with a capital mid-sentence, by the owner or the lookup:
@@ -266,12 +268,15 @@ def _named_by_unknown(answer: dict[str, Any], names: frozenset[str]) -> bool:
 
 
 #: The "Not offered" lines (``daemon/page_doors.NOT_OFFERED``) that say Iron
-#: Jarvis CANNOT do whatever their own rule holds on (20-a review round 5):
-#: such a line is the record that the request is one it cannot do yet.
-NOT_OFFERED_CANNOT = frozenset({
-    "desktop_control", "full_access_default", "builtin_agent_limit", "voice_press", "internet_calls_in",
-    "chat_items",
-})
+#: Jarvis CANNOT do whatever their own rule holds on, and give no way to get
+#: it (20-a review round 5): such a line is the record that the request is
+#: one it cannot do yet. Review round 6: not the voice line, the chat line or
+#: the builder-limit line: each says how the USER gets it (the microphone
+#: button and Voice chat; the chat's own menu; an agent of their own with a
+#: limit), and its rule also holds on a question about it ("Can I use the
+#: microphone to dictate?", "How do I rename this chat?", "Does the builder
+#: agent have a monthly limit?"), which the reply answers.
+NOT_OFFERED_CANNOT = frozenset({"desktop_control", "full_access_default", "internet_calls_in"})
 #: The lines that name the tool that DOES what their rule holds on
 #: ("watcher_suggests": a rule for new files, ``reflex_create``): never a miss
 #: of this kind; such a lookup is judged as any other list (:func:`miss_of`).
@@ -279,8 +284,9 @@ NOT_OFFERED_DOES = frozenset({"watcher_suggests"})
 #: Every other line ("jarvis_backup": its rule also holds on a question the
 #: line answers, "how often do your backups run?", and on a backup made now;
 #: "another_computer": also on handing tasks to another computer, which
-#: pairing does; and any line added later) counts only when the reply itself
-#: says it could not do the request, as for ``nothing`` (:func:`reply_counts`).
+#: pairing does; the voice, chat and builder-limit lines, review round 6; and
+#: any line added later) counts only when the reply itself says it could not
+#: do the request, as for ``nothing`` (:func:`reply_counts`).
 
 
 def not_offered_holds(entry_id: Any, words: Any) -> bool:
@@ -509,7 +515,8 @@ def reply_counts(kind: str, reply: Any, unknown: Iterable[str], query: Any = "",
     itself (:func:`miss_of` kept it only when that line's own rule holds on
     the owner's words); any other line, as ``nothing`` (review round 5: the
     backup line answers "how often do your backups run?", the other-computer
-    line says how to hand tasks to it)."""
+    line says how to hand tasks to it; review round 6: the chat line answers
+    "How do I rename this chat?")."""
     if kind == KIND_NOT_OFFERED and str(entry_id or "") in NOT_OFFERED_CANNOT:
         return True
     wanted = [str(w) for w in unknown or () if str(w or "").strip()]
