@@ -233,7 +233,9 @@ def load_plan(engine: Any, run_id: str) -> tuple[list[Any], list[Any]] | None:
 # --- the plan as a live checklist (v1.350.0) --------------------------------
 
 #: A plan step's state on the checklist (``GET /sessions/{id}/plan``).
-STEP_STATES = ("waiting", "running", "done", "failed", "skipped")
+#: ``unchecked`` (the intelligence plan, release 4): the step was done but
+#: its check did not run, so it is never drawn as a plain ``done``.
+STEP_STATES = ("waiting", "running", "done", "failed", "skipped", "unchecked")
 
 #: Session statuses that mean "still going" (queued counts: it will run).
 _LIVE_SESSION = ("active", "queued")
@@ -334,9 +336,10 @@ def latest_plan(engine: Any, session_id: str) -> dict[str, Any] | None:
 def plan_checklist(stored: dict[str, Any], *, awaiting_approval: bool = False) -> list[dict[str, str]]:
     """``[{goal, state}]`` for a :func:`latest_plan` answer. Pure.
 
-    A step with a result is ``done`` (it passed), ``failed`` (it ran and did
-    not), or ``skipped`` (never attempted: the budget ran out, or the user
-    declined the plan). A step without one, while the run is LIVE, is
+    A step with a result is ``done`` (it passed), ``unchecked`` (it was done
+    but its check did not run: ``decompose.step_unchecked``), ``failed`` (it
+    ran and did not pass), or ``skipped`` (never attempted: the budget ran
+    out, or the user declined the plan). A step without one, while the run is LIVE, is
     ``running`` (the first such step) or ``waiting`` — every one of them
     ``waiting`` while the plan itself awaits the user's Approve. Once the run
     is over they are ``skipped``, except the step a FAILED run was cut off in,
@@ -355,7 +358,9 @@ def plan_checklist(stored: dict[str, Any], *, awaiting_approval: bool = False) -
             if r.get("attempted", True) is False:
                 state = "skipped"
             elif r.get("ok") is True:
-                state = "done"
+                from .decompose import step_unchecked
+
+                state = "unchecked" if step_unchecked(r) else "done"
             else:
                 state = "failed"
         elif live:

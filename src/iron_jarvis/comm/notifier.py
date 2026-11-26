@@ -334,7 +334,12 @@ def _run_words(payload: dict) -> str:
     if outcome == "needs_you":
         return "needs you"
     if outcome == "completed":
-        return "finished"
+        # The intelligence plan, release 4: a step that was done but could
+        # not be checked is said on the line, never a plain "finished".
+        from ..agents.outcome import unchecked_words
+
+        extra = unchecked_words(payload.get("unchecked_steps"))
+        return f"finished. {extra.rstrip('.')}" if extra else "finished"
     if outcome == "completed_with_failures":
         return "finished, but part of it failed"
     if outcome == "did_nothing":
@@ -356,7 +361,10 @@ def _session_line(payload: dict) -> str:
         elif not ran:
             title = "Your objective could not be finished"
         elif outcome == "completed":
-            title = "Your objective is done"
+            from ..agents.outcome import unchecked_words
+
+            extra = unchecked_words(payload.get("unchecked_steps"))
+            title = f"Your objective is done. {extra.rstrip('.')}" if extra else "Your objective is done"
         elif outcome == "needs_you":
             title = "Your objective finished, but something needs you"
         elif outcome == "completed_with_failures":

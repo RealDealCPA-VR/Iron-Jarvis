@@ -26,6 +26,7 @@ import { normalizeIso } from "@/lib/format";
 import { ROLE_NOUNS } from "@/lib/modelTeam";
 import { rowName } from "@/lib/runWords";
 import { readSavedPlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
+import { uncheckedWords } from "@/lib/statusWords";
 
 /** v1.352.0 (G16/G19): how a run ENDED, as the session row says it. */
 export type AgentRunStatus = "completed" | "failed" | "cancelled";
@@ -81,6 +82,10 @@ export interface AgentRunStamp {
   /** The run ended at its step limit (a failed run whose summary says so):
    *  "· hit its step limit", never a bare "failed". */
   stepLimit?: true;
+  /** The intelligence plan, release 4: how many steps of the run's plan were
+   *  done but could not be checked (the ledger's `plan_steps_unchecked`).
+   *  Only when at least one: "· 1 step could not be checked". */
+  uncheckedSteps?: number;
   /** The provider and model that SERVED the run (the session row's pair). */
   provider?: string;
   model?: string;
@@ -238,6 +243,8 @@ export interface RunEndFacts {
   /** The receipt's who (agent_name, else agent_type) and where. */
   agent?: unknown;
   onThisNetwork?: unknown;
+  /** The ledger's count of plan steps that could not be checked. */
+  uncheckedSteps?: unknown;
 }
 
 /** A roster name fit to keep ("builder", "custom:researcher",
@@ -254,6 +261,8 @@ function endFields(f: RunEndFacts | null | undefined): Partial<AgentRunStamp> {
   const outcome = oneOf(f.outcome, OUTCOMES);
   if (outcome && outcome !== "completed") out.outcome = outcome;
   if (status === "failed" && atStepLimit(f.summary)) out.stepLimit = true;
+  const unchecked = countOrNull(f.uncheckedSteps);
+  if (unchecked !== null && unchecked > 0 && unchecked <= 1000) out.uncheckedSteps = unchecked;
   const provider = line(f.provider, 80);
   if (provider) out.provider = provider;
   const model = line(f.model, 160);
@@ -325,6 +334,7 @@ export function readAgentRun(m: unknown): AgentRunStamp | null {
     toolsUsed: r.tools,
     agent: r.agent,
     onThisNetwork: r.onThisNetwork,
+    uncheckedSteps: r.uncheckedSteps,
   });
   if (r.stepLimit === true && end.status === "failed") end.stepLimit = true;
   return {
@@ -401,6 +411,8 @@ export interface RunResultLike {
   agent_name?: unknown;
   agent_type?: unknown;
   on_this_network?: unknown;
+  /** Plan steps that were done but could not be checked (release 4). */
+  plan_steps_unchecked?: unknown;
 }
 
 /** finalize's one call (both of its paths, the composed reply and the
@@ -445,6 +457,7 @@ export function settleHandOff<M extends HandOffLike>(
         // v1.352.0 integrate: who ran it and where (the receipt read).
         agent: result?.agent_name || result?.agent_type,
         onThisNetwork: result?.on_this_network,
+        uncheckedSteps: result?.plan_steps_unchecked,
       },
     }),
   );
@@ -508,12 +521,25 @@ export function handOffSentence(
  * "stopped", "failed", "hit its step limit", "needs you", "part failed", or
  * null for a clean finish (and for every stamp from before this release).
  */
-export function runEndWords(run: Pick<AgentRunStamp, "status" | "outcome" | "stepLimit">): string | null {
+export function runEndWords(
+  run: Pick<AgentRunStamp, "status" | "outcome" | "stepLimit" | "uncheckedSteps" | "plan">,
+): string | null {
   if (run.status === "cancelled") return "stopped";
   if (run.status === "failed") return run.stepLimit ? "hit its step limit" : "failed";
   if (run.outcome === "needs_you") return "needs you";
   if (run.outcome === "completed_with_failures") return "part failed";
-  return null;
+  // The intelligence plan, release 4: a clean finish EXCEPT that a step of
+  // the plan could not be checked is never said as a plain finish.
+  const unchecked = uncheckedStepCount(run);
+  return unchecked > 0 ? uncheckedWords(unchecked).replace(/\.$/, "") : null;
+}
+
+/** How many plan steps of a finished run could not be checked: the ledger's
+ *  count when the stamp holds it, else the steps its saved checklist marks
+ *  (a stamp made while the result read failed still has its plan). */
+export function uncheckedStepCount(run: Pick<AgentRunStamp, "uncheckedSteps" | "plan">): number {
+  if (typeof run.uncheckedSteps === "number" && run.uncheckedSteps > 0) return run.uncheckedSteps;
+  return (run.plan?.steps ?? []).filter((s) => s.state === "unchecked").length;
 }
 
 /** How a roster name reads in a sentence (moved here from the chat page in

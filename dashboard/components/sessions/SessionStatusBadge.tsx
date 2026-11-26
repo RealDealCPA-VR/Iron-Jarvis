@@ -22,7 +22,7 @@
 
 import { Badge, type BadgeVariant, type Tone } from "@/components/ui";
 import type { SessionOutcome, SessionWaitingOn } from "@/lib/types";
-import { outcomeWords, statusWords, type StatusWords } from "@/lib/statusWords";
+import { doneNotCheckedWords, outcomeWords, statusWords, uncheckedWords, type StatusWords } from "@/lib/statusWords";
 
 export interface OutcomeSource {
   status: string;
@@ -31,6 +31,9 @@ export interface OutcomeSource {
   /** v1.354.0 (G20): set by the boot reconcile when a restart cut the run
    *  off; cleared once it is continued or dismissed. */
   interrupted_at?: string | null;
+  /** The intelligence plan, release 4: steps of the run's plan that were
+   *  done but could not be checked (`Session.unchecked_steps`). */
+  unchecked_steps?: number | null;
 }
 
 /** v1.354.0 (G20): "Interrupted" for a run a RESTART cut off (an update or a
@@ -56,6 +59,17 @@ export function interruptedLabel(session: OutcomeSource): string | null {
 export function outcomeLabel(session: OutcomeSource): string | null {
   if ((session.status ?? "").toLowerCase() !== "completed") return null;
   return outcomeWords(session.outcome)?.word ?? null;
+}
+
+/** The intelligence plan, release 4: "Done, 1 step not checked" for a run
+ *  that completed with nothing short about it EXCEPT that a step of its plan
+ *  could not be checked (the check itself did not run), else null. A run
+ *  that needs the user or partly failed already says the more important
+ *  thing, so this never replaces those words. */
+export function uncheckedChip(session: OutcomeSource): StatusWords | null {
+  if ((session.status ?? "").toLowerCase() !== "completed") return null;
+  if (outcomeWords(session.outcome)) return null;
+  return doneNotCheckedWords(session.unchecked_steps);
 }
 
 /** v1.352.0 (G17): a run the user (or Emergency stop) STOPPED, in the one
@@ -115,6 +129,18 @@ export function SessionStatusBadge({
     return (
       <span data-testid="session-outcome-chip" className="contents">
         <Badge value={label} tone="amber" keepCase variant={variant} />
+      </span>
+    );
+  }
+  const unchecked = uncheckedChip(session);
+  if (unchecked) {
+    return (
+      <span
+        data-testid="session-unchecked-chip"
+        className="contents"
+        title={uncheckedWords(session.unchecked_steps)}
+      >
+        <Badge value={unchecked.word} tone={unchecked.tone} keepCase variant={variant} />
       </span>
     );
   }

@@ -16,9 +16,10 @@
  *   plan.created        {run_id, steps: [goal, ...]}
  *   plan.step_started   {run_id, index, goal}            (index 0-based)
  *   plan.step_completed {run_id, index, ok}              (+ attempted: false
- *                        ONLY on the budget-spent branch; there is NO
- *                        verification field in the payload, so no verified
- *                        wording is invented here)
+ *                        ONLY on the budget-spent branch; + checked: false
+ *                        ONLY on a step that was done but whose check did
+ *                        not run; no other checking fact is in the payload,
+ *                        so no "checked" wording is invented here)
  *   envelope.adapted    {provider, model, adaptations: [...], source}
  * A malformed plan payload falls back to the existing generic "Working…" —
  * a hostile or half-built event must never blank the progress line or throw.
@@ -184,9 +185,11 @@ export function stepLabel(e: IJEvent): string | null {
       if (p.attempted === false) {
         return `${phrase} not attempted (step budget spent)`;
       }
-      // The payload carries ok, nothing more — no verification fact exists
-      // here, so none is claimed.
-      return p.ok === false ? `${phrase} failed` : `${phrase} done`;
+      if (p.ok === false) return `${phrase} failed`;
+      // `checked: false` (the intelligence plan, release 4) is decompose's
+      // additive key for a step that was done but whose check did not run.
+      // No other checking fact is in the payload, so none is claimed.
+      return p.checked === false ? `${phrase} done, but could not be checked` : `${phrase} done`;
     }
     case "envelope.adapted": {
       // Quiet phrasing: the loop bent itself to fit the model; say so in one
