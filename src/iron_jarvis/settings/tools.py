@@ -372,12 +372,20 @@ class ConfigListTool(Tool):
             for s in schema.SECRETS
             if not words or any(word in " ".join([s.name, s.label, *s.aliases]).lower() for word in words)
         ]
+        meaning_line = ""
+        if any(r["key"] == "meaning_search" for r in rows):
+            # Next leaps 16-a: the search models found and what each costs
+            # here, so chat can name and price them (one small file read).
+            from ..memory.meaning import chat_line
+
+            meaning_line = await asyncio.to_thread(chat_line, self.platform)
         lines = [
             f"{r['label']} ({r['key']}) = {_show(r['value'])} → {r['tool']}"
             + _what_it_does(r["key"])
             + (ACCOUNT_GROUPS_HOW if r["key"] == "account_groups" else "")
             + (THEME_COLORS_HOW if r["key"] == "device.theme_colors" else "")
             + (_model_choices(self.platform) if r["key"] == "default_model" else "")
+            + (meaning_line if r["key"] == "meaning_search" else "")
             + (_still_asks_note() if r["key"] == "permissions.{tool}" else "")
             for r in rows
         ]
@@ -516,7 +524,8 @@ class _ConfigChangeBase(Tool):
     user_details_lead = "Pick the one you want."
     user_details_note = (
         "When it is NOT clear which value the user wants for a setting with fixed choices "
-        "(config_list names them) or for default_model, call this with the key and WITHOUT "
+        "(config_list names them), for default_model or for meaning_search (which search model), "
+        "call this with the key and WITHOUT "
         "`value` (do not list the choices in words, and never guess): the user picks one "
         "on a card."
     )
@@ -543,6 +552,13 @@ class _ConfigChangeBase(Tool):
                 (f"{prov}{PICKED_SEP}{mid}", _model_choice_name(prov, mid, label))
                 for prov, mid, label in _model_rows(self.platform)[:MODEL_CHOICES_MAX]
             ]
+        elif d.key == "meaning_search":
+            # Next leaps 16-a: the search models the last look found (never
+            # one that did not answer), each with what it costs here, then
+            # Off. The choice's own card measures it before it switches.
+            from ..memory.meaning import chat_choices
+
+            choices = chat_choices(self.platform)
         else:
             choices = [(str(v), str(label or v)) for v, label in (d.options or ()) if isinstance(v, str) and v]
         if len(choices) < 2:

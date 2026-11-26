@@ -40,9 +40,10 @@ export const LOOKING = "Looking for search models on this PC and your network…
 export const LAST_RESORT = "Or, as a last resort, in a terminal:";
 export const NOT_NOW_SAID = "Not now. Iron Jarvis won't offer it again; Settings › Memory & you can turn it on.";
 export const DID_NOT_WORK = "That did not work. Try again.";
-/** Re-reads while a look runs (only while the view is on screen). */
+/** Re-reads while a look runs, or while the open list has a model not
+ *  measured yet (only while the view is on screen): about a minute. */
 export const LOOK_REREAD_MS = 3000;
-export const LOOK_REREADS_MAX = 10;
+export const LOOK_REREADS_MAX = 20;
 
 export type MeaningState = "off" | "offered" | "on" | "declined";
 

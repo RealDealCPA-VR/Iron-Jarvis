@@ -21,8 +21,10 @@ THE RULES (pinned in ``tests/test_next_leaps_16a_meaning_offer.py``):
 * **It never moves to ``on`` except by the owner's Yes** (the writer, from a
   press or a chat card). An install that already used Ollama's search model
   before this version keeps it ("set up before", read from the live model, never
-  written here). 16-a always asks: :func:`negligible` (D-16.1) is measured and
-  shown, and skipping the question is 16-b's, with its own notice.
+  written here) until the owner ANSWERS (:func:`answered`): an offer that was
+  only shown, in a session whose start-up probe Ollama missed, never ends it.
+  16-a always asks: :func:`negligible` (D-16.1) is measured and shown, and
+  skipping the question is 16-b's, with its own notice.
 * **Only a model on this PC or the owner's own network is listed**
   (``providers/egress.private_host``): the text it searches would otherwise
   leave the network. Choosing one off this network is refused in words, and
@@ -45,7 +47,10 @@ THE RULES (pinned in ``tests/test_next_leaps_16a_meaning_offer.py``):
   their model, so a row written by the old one is ranked by words until the
   re-read pass (:func:`reread_pass`, 200 rows a pass, paced by the daemon's
   meaning loop, paused before every row while a chat reply is written) has
-  read it again with the new one. Project knowledge vectors name no model:
+  read it again with the new one. A row the model refuses while it still
+  answers is stepped past (never one row blocking every other); a model that
+  does not answer at all ends the pass until the loop's next idle look.
+  Project knowledge vectors name no model:
   every change of the live model starts their walk over
   (:func:`restart_knowledge_walk`).
 
@@ -96,8 +101,24 @@ FOUND_MAX = 30
 #: :data:`MEASURE_S`): it goes on past a model that did not answer, so the
 #: offer names one that did, but never walks a long list in one look.
 LOOK_MEASURE_MAX = 5
+#: Most models one look measures while the list ("Use another model") is
+#: open (``every``): the list reads again and the next look measures the rest.
+LOOK_EVERY_MAX = 8
+#: A model that did not answer is measured again after this long (a busy or
+#: restarting server is not "did not answer" for good).
+RETRY_FAILED_S = FIND_EVERY_S
+#: A look the open list asks for, at most this often (its re-reads never
+#: start one look after another).
+LIST_FIND_EVERY_S = 30.0
 #: Rows the re-read pass reads again per pass.
 REREAD_BATCH = 200
+#: The most text of one row the re-read pass sends (project knowledge was
+#: always clipped so; a memory row now is too).
+REREAD_TEXT_MAX = 4000
+#: Rows the live model refused (while it still answered) are stepped past and
+#: kept here per model, at most this many, so the next pass never starts on
+#: them again.
+REREAD_FAILED_MAX = 1000
 
 #: D-16.1, measured on this PC: memory while it works at most 150 MB and at
 #: most 2% of this PC's memory, added disk at most 100 MB, and it unloads when
@@ -130,12 +151,38 @@ COST_MEASURING = "Its cost here is being measured."
 COST_NOT_YET = "Its cost here is not measured yet."
 #: Why a re-read pass stopped early (it carries on at the loop's next pass).
 REPLY_PAUSE = "a reply is being written"
+#: Why a re-read pass stopped: the model itself did not answer (the loop's
+#: next idle look tries again).
+NO_ANSWER = "the search model did not answer"
+#: Why a probe failed, in plain words (G8: never an exception's name, an HTTP
+#: code or a transport error on screen; the detail goes to the log).
+WHY_NO_ANSWER = "it did not answer"
+WHY_REFUSED = "it refused the request"
+WHY_UNUSABLE = "its answer could not be used"
 #: The last resort (the old note's terminal line, kept).
 TERMINAL_LINE = "ollama pull nomic-embed-text"
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def plain_why(detail: Any) -> str:
+    """An embedder's or a probe's failure in plain words: :data:`WHY_REFUSED`
+    (the server answered, but with an error), :data:`WHY_UNUSABLE` (an answer
+    it could not read), else :data:`WHY_NO_ANSWER`. A Local only refusal is
+    already plain words and is kept. The detail itself is for the log."""
+    text = str(detail or "").strip()
+    low = text.lower()
+    if "local only" in low:
+        return text.rstrip(".")
+    if "request failed" in low or "did not answer" in low:
+        return WHY_NO_ANSWER
+    if "http " in low or "answered" in low or "returned" in low:
+        return WHY_REFUSED
+    if any(w in low for w in ("vector", "json", "could not read", "not numbers", "missing")):
+        return WHY_UNUSABLE
+    return WHY_NO_ANSWER
 
 
 def _fmt(n: Any) -> str:
@@ -254,10 +301,20 @@ def update(home: Any, **fields: Any) -> dict[str, Any]:
         return data
 
 
+def answered(data: dict[str, Any]) -> bool:
+    """Has the owner ANSWERED (Yes with a model, Not now, or turned off)?
+    Until then an install's earlier set-up (Ollama's search model found at
+    start) still counts, also once the offer was shown: a session whose
+    start-up probe Ollama missed shows the offer, and the next start must
+    still find the model it used before. ``None`` (never answered, and what
+    an Undo of the first answer puts back) is not an answer."""
+    return data.get("value") is not None
+
+
 def answered_or_asked(data: dict[str, Any]) -> bool:
-    """Has the owner answered, or been offered once? Until then an install's
-    earlier set-up (Ollama's search model found at start) still counts."""
-    return "value" in data or bool(data.get("asked_at"))
+    """Has the owner answered, or been offered once? (The card under a reply
+    is drawn once, ever.)"""
+    return answered(data) or bool(data.get("asked_at"))
 
 
 def state_of(data: dict[str, Any]) -> str:
@@ -299,11 +356,13 @@ def setting_value(platform: Any) -> Any:
     """The setting as the writer reads it (``None`` | ``""`` | a choice)."""
     cfg = getattr(platform, "config", None)
     data = read(getattr(cfg, "home", "."))
-    if answered_or_asked(data):
+    if answered(data):
         return data.get("value")
     live = _live_choice(platform)
     if live:
-        return live  # set up before this version: Ollama's model at start
+        # Set up before this version: Ollama's model at start (also once the
+        # offer was shown; only an answer ends it).
+        return live
     if str(getattr(cfg, "embedder_provider", "auto") or "auto") == "mock":
         return ""  # the owner pinned words-only in config.toml
     return None
@@ -336,13 +395,16 @@ def boot_embedder(config: Any, engine: Any = None, *, http: Any = None, reachabl
     ``SwitchableEmbedder`` (inside the persistent cache when ``engine`` is
     given) over the model the owner chose, or the stand-in.
 
-    * Answered or asked (the file says so): the chosen model when it answers
-      a short probe (:data:`BOOT_PROBE_S`), else the stand-in with the choice
-      HELD (the meaning loop tries it again, with the server's key, and the
-      row says it did not answer). A choice off this network never loads.
-    * Never answered: the earlier behaviour (``embeddings.build_embedder``'s
-      probe of Ollama's model), except that "auto" never uses a server off
-      this network. Nothing is written."""
+    * Answered (:func:`answered`): the chosen model when it answers a short
+      probe (:data:`BOOT_PROBE_S`), else the stand-in with the choice HELD
+      (the meaning loop tries it again, with the server's key, and the row
+      says it did not answer). A choice off this network never loads; only
+      an Ollama choice is probed here (another server's key is never read at
+      start, so it is held and ``reattach`` tries it).
+    * Never answered (also once the offer was only shown): the earlier
+      behaviour (``embeddings.build_embedder``'s probe of Ollama's model),
+      except that "auto" never uses a server off this network. Nothing is
+      written."""
     from .embeddings import (
         CachingEmbedder,
         MockEmbedder,
@@ -355,7 +417,7 @@ def boot_embedder(config: Any, engine: Any = None, *, http: Any = None, reachabl
     data = read(home)
     base: Any = None
     held = ""
-    if answered_or_asked(data):
+    if answered(data):
         parsed = parse_choice(data.get("value"))
         if parsed is not None:
             kind, model, where = parsed
@@ -489,10 +551,11 @@ def _probe(cand: dict[str, Any], headers: dict[str, str], budget_s: float) -> di
             r = c.post(f"{root}/api/embeddings", headers=headers,
                        json={"model": cand["model"], "prompt": PROBE_TEXT, "keep_alive": PROBE_KEEP_ALIVE})
             if r.status_code != 200:
-                return {"works": False, "why": f"it answered {r.status_code}", "memory_bytes": None}
+                log.info("search by meaning: %s answered %s to its probe", cand["model"], r.status_code)
+                return {"works": False, "why": WHY_REFUSED, "memory_bytes": None}
             vec = (r.json() or {}).get("embedding")
             if not isinstance(vec, list) or not vec:
-                return {"works": False, "why": "it sent no vector", "memory_bytes": None}
+                return {"works": False, "why": WHY_UNUSABLE, "memory_bytes": None}
             ps = c.get(f"{root}/api/ps", headers=headers, timeout=left())
             mem = None
             if ps.status_code == 200:
@@ -508,7 +571,8 @@ def _probe(cand: dict[str, Any], headers: dict[str, str], budget_s: float) -> di
     try:
         vec = OpenAICompatEmbedder(root, cand["model"], headers=headers, timeout=left()).embed(PROBE_TEXT)
     except EmbedderError as exc:
-        return {"works": False, "why": str(exc), "memory_bytes": None}
+        log.info("search by meaning: %s did not pass its probe: %s", cand["model"], exc)
+        return {"works": False, "why": plain_why(exc), "memory_bytes": None}
     return {"works": True, "why": "", "memory_bytes": None, "dim": len(vec)}
 
 
@@ -526,12 +590,16 @@ def measure(cand: dict[str, Any], *, headers: "dict[str, str] | None" = None,
     try:
         got = fn(cand, dict(headers or {}), MEASURE_S) or {}
     except Exception as exc:  # noqa: BLE001
-        got = {"works": False, "why": f"it did not answer ({type(exc).__name__})", "memory_bytes": None}
+        # The detail is for the log; the screen says it in plain words (G8).
+        log.info("search by meaning: measuring %s failed: %s: %s", cand.get("model"), type(exc).__name__, exc)
+        got = {"works": False, "why": WHY_NO_ANSWER, "memory_bytes": None}
     mem = got.get("memory_bytes")
     measured = isinstance(mem, int) and not isinstance(mem, bool) and mem > 0
     return {
         "works": bool(got.get("works")),
         "why": str(got.get("why") or "")[:200],
+        # When, for :data:`RETRY_FAILED_S` (a failure is tried again later).
+        "measured_s": time.time(),
         "memory_bytes": mem if measured else None,
         "memory_measured": measured,
         # Listed from what the server has installed: nothing is added to disk.
@@ -576,7 +644,9 @@ def cost_words(cost: "dict[str, Any] | None", cand: "dict[str, Any] | None" = No
         return COST_MEASURING if busy else COST_NOT_YET
     if not cost.get("works"):
         why = str(cost.get("why") or "").rstrip(".")
-        return f"It did not answer here{': ' + why if why else ''}."
+        if not why or why == WHY_NO_ANSWER:
+            return "It did not answer here."
+        return f"It could not be used here: {why}."
     this_pc = bool((cand or {}).get("this_pc", True))
     if cost.get("memory_measured"):
         there = "" if this_pc else " on that computer"
@@ -668,31 +738,33 @@ def _candidate(d: Any, choice: str, data: "dict[str, Any] | None" = None) -> "di
             "size_bytes": None}
 
 
-def look(d: Any, *, every: bool = False, clock: Callable[[], float] = time.monotonic,
-         pause: "Callable[[], bool] | None" = None) -> dict[str, Any]:
-    """Find the search models, then measure them in order until ONE answers
-    (at most :data:`LOOK_MEASURE_MAX` measures; one already measured that
-    works ends it at once), so the offer names a model that answered here;
-    ``every``: each one without a cost. ``pause`` (the meaning loop's
-    ``replying``) stops measuring while a reply is written. Saved in the
-    file. One look at a time; a second caller gets the file as it is. Never
-    raises."""
+def _needs_measure(known: "dict[str, Any] | None") -> bool:
+    """No cost yet, or a "did not answer" older than :data:`RETRY_FAILED_S`
+    (a busy or restarting server is tried again, never written off for
+    good). A model that answered keeps its cost."""
+    if known is None or known.get("works") is None:
+        return True
+    if known.get("works"):
+        return False
+    at = known.get("measured_s")
+    return not isinstance(at, (int, float)) or time.time() - float(at) >= RETRY_FAILED_S
+
+
+def _look(d: Any, *, every: bool, measure_any: bool, pause: "Callable[[], bool] | None") -> dict[str, Any]:
     home = d.platform.config.home
-    if not _LOOK_LOCK.acquire(blocking=False):
-        return read(home)
-    _LOOKING.set()
     try:
         found, problems = discover(d)
         data = read(home)
         costs = dict(data.get("costs") or {})
         measured = 0
-        for cand in found:
+        most = LOOK_EVERY_MAX if every else LOOK_MEASURE_MAX
+        for cand in found if measure_any else ():
             known = costs.get(cand["choice"])
-            if known is not None and known.get("works") is not None:
-                if known.get("works") and not every:
+            if not _needs_measure(known):
+                if known.get("works") and not every:  # type: ignore[union-attr]
                     break  # a model that answered: enough to offer
                 continue
-            if (pause is not None and pause()) or (not every and measured >= LOOK_MEASURE_MAX):
+            if (pause is not None and pause()) or measured >= most:
                 break
             costs[cand["choice"]] = measure(cand, headers=_headers_for(d, cand["where"]))
             measured += 1
@@ -705,23 +777,80 @@ def look(d: Any, *, every: bool = False, clock: Callable[[], float] = time.monot
     except Exception:  # noqa: BLE001
         log.warning("search by meaning: the look for search models failed", exc_info=True)
         return read(home)
+
+
+def look(d: Any, *, every: bool = False, measure_any: bool = True,
+         clock: Callable[[], float] = time.monotonic,
+         pause: "Callable[[], bool] | None" = None) -> dict[str, Any]:
+    """Find the search models, then measure them in order until ONE answers
+    (at most :data:`LOOK_MEASURE_MAX` measures; one already measured that
+    works ends it at once), so the offer names a model that answered here;
+    ``every`` (the list is open): each one without a cost, at most
+    :data:`LOOK_EVERY_MAX` a look; ``measure_any`` False: find only. A
+    "did not answer" is measured again after :data:`RETRY_FAILED_S`.
+    ``pause`` (``replying``) stops measuring while a reply is written. Saved
+    in the file. One look at a time; a second caller gets the file as it
+    is. Never raises."""
+    home = d.platform.config.home
+    if not _LOOK_LOCK.acquire(blocking=False):
+        return read(home)
+    _LOOKING.set()
+    try:
+        return _look(d, every=every, measure_any=measure_any, pause=pause)
     finally:
         _LOOKING.clear()
         _LOOK_LOCK.release()
 
 
-def look_soon(d: Any, *, every: bool = False) -> bool:
-    """:func:`look` on its own thread; False when one is already running."""
-    if _LOOKING.is_set():
+def look_soon(d: Any, *, every: bool = False, measure_any: bool = True) -> bool:
+    """:func:`look` on its own thread, paused while a reply is written; False
+    when one is already running. The look is marked running BEFORE this
+    returns, so the view read right after says ``looking`` (the page then
+    reads again)."""
+    if not _LOOK_LOCK.acquire(blocking=False):
         return False
-    threading.Thread(target=look, args=(d,), kwargs={"every": every},
-                     name="meaning-search-look", daemon=True).start()
+    _LOOKING.set()
+
+    def run() -> None:
+        try:
+            _look(d, every=every, measure_any=measure_any, pause=replying)
+        finally:
+            _LOOKING.clear()
+            _LOOK_LOCK.release()
+
+    try:
+        threading.Thread(target=run, name="meaning-search-look", daemon=True).start()
+    except Exception:  # noqa: BLE001 — no thread: no look, never a stuck flag
+        _LOOKING.clear()
+        _LOOK_LOCK.release()
+        return False
     return True
 
 
 def look_is_due(data: dict[str, Any], every_s: float) -> bool:
     at = data.get("looked_at_s")
     return not isinstance(at, (int, float)) or time.time() - float(at) >= every_s
+
+
+def page_look(d: Any, *, every: bool = False) -> bool:
+    """The look a page's read asks for (``GET /memory/meaning``; ``every``:
+    the model list is open). The row's look runs at most every
+    :data:`FIND_EVERY_S`; the open list's whenever a model found has no cost
+    yet, else at most every :data:`LIST_FIND_EVERY_S` (its re-reads never
+    start one look after another). Light on the PC (G7): with search by
+    meaning on, or after Not now, the row shows no offer, so its look only
+    finds; it measures only while the list is open. True when a look
+    started."""
+    data = read(d.platform.config.home)
+    costs = data.get("costs") or {}
+    if every:
+        unmeasured = any(_needs_measure(costs.get(c.get("choice"))) for c in data.get("found") or [])
+        if not (unmeasured or look_is_due(data, LIST_FIND_EVERY_S)):
+            return False
+        return look_soon(d, every=True)
+    if not look_is_due(data, FIND_EVERY_S):
+        return False
+    return look_soon(d, measure_any=state(d.platform) in (OFF, OFFERED))
 
 
 # --------------------------------------------------------------------------- #
@@ -803,9 +932,16 @@ def prepare(d: Any, value: Any, *, restoring: bool = False) -> Prepared:
         if not vec:
             raise EmbedderError("it sent no vector")
     except EmbedderError as exc:
+        # The detail (a transport error, an HTTP code) is for the log; the
+        # owner reads plain words (G8).
+        log.info("search by meaning: %s did not pass its probe: %s", model, exc)
+        why = plain_why(exc)
+        if why == WHY_NO_ANSWER:
+            raise ValueError(
+                f"{model} did not answer {where_words(where)}, so search by meaning was not changed."
+            ) from None
         raise ValueError(
-            f"{model} did not answer {where_words(where)} ({str(exc).rstrip('.')}), so search by meaning "
-            "was not changed."
+            f"{model} could not be used {where_words(where)} ({why}), so search by meaning was not changed."
         ) from None
     return Prepared(clean, base)
 
@@ -821,8 +957,9 @@ def commit(d: Any, prepared: Prepared, *, actor: str = "") -> None:
     data = read(home)
     fields: dict[str, Any] = {"value": value, "answered_at": _now_iso() if value is not None else None,
                               "how": "yes" if value else "",
-                              # The live model changes: the knowledge walk starts over.
-                              "knowledge_read": {}}
+                              # The live model changes: the knowledge walk starts over,
+                              # and every row is tried again by the model chosen now.
+                              "knowledge_read": {}, "reread_failed": {}}
     if value:
         fields["last_choice"] = value
     elif data.get("value"):
@@ -964,7 +1101,7 @@ def view(d: Any) -> dict[str, Any]:
     return {
         "state": st,
         "value": value,
-        "how": "set up before" if (value and not answered_or_asked(data)) else str(data.get("how") or ""),
+        "how": "set up before" if (value and not answered(data)) else str(data.get("how") or ""),
         "words": status_words(platform, data),
         "on": bool(parse_choice(value)),
         "choice_words": choice_words(value),
@@ -978,6 +1115,66 @@ def view(d: Any) -> dict[str, Any]:
         "none_found": NONE_FOUND,
         "terminal_line": TERMINAL_LINE,
     }
+
+
+#: Most search models chat's list and pick card name.
+CHAT_CHOICES_MAX = 12
+#: The pick card's way to turn it off (``_resolve`` reads "off").
+CHAT_OFF = ("off", "Off: searches match words")
+NOT_LOOKED_YET = (
+    "Iron Jarvis has not looked for search models yet; config_change with value \"on\" looks now "
+    "and asks with what it costs here."
+)
+
+
+def _chat_rows(platform: Any) -> "tuple[list[dict[str, Any]], dict[str, Any]]":
+    data = read(platform.config.home)
+    costs = data.get("costs") or {}
+    rows = []
+    for c in (data.get("found") or [])[:CHAT_CHOICES_MAX]:
+        cost = costs.get(c.get("choice"))
+        where = where_words(str(c.get("where") or ""), str(c.get("server") or ""))
+        rows.append({
+            "choice": str(c.get("choice") or ""),
+            "words": f"{c.get('model')} {where}: {cost_words(cost, c, looking=False)}",
+            "works": None if cost is None else bool(cost.get("works")),
+        })
+    return rows, data
+
+
+def chat_choices(platform: Any) -> list[tuple[str, str]]:
+    """Chat's pick card for ``meaning_search`` with no value ("switch the
+    search model"): ``(value, words)`` of every search model found that can
+    be chosen (never one that did not answer), each with what it costs here,
+    then Off. Fewer than two: no card. Reads the file only (no look, no
+    probe; the choice's own card measures it). BLOCKING (one small read);
+    never raises."""
+    try:
+        rows, _data = _chat_rows(platform)
+    except Exception:  # noqa: BLE001
+        return []
+    out = [(r["choice"], r["words"]) for r in rows if r["choice"] and r["works"] is not False]
+    return out + [CHAT_OFF] if out else []
+
+
+def chat_line(platform: Any) -> str:
+    """``config_list``'s line for ``meaning_search``: every search model
+    found, what each costs here, and the value that chooses it, so chat can
+    name and price the options (G9). Reads the file only. BLOCKING (one
+    small read); never raises; "" when it cannot be read."""
+    try:
+        rows, data = _chat_rows(platform)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not data.get("found_at"):
+        return " " + NOT_LOOKED_YET
+    if not rows:
+        return " " + NONE_FOUND
+    shown = "; ".join(f"{r['words']} (value: {r['choice']})" for r in rows)
+    return (
+        " Search models found on this PC or your network, with what each costs here (set meaning_search "
+        f"to a value; \"off\" turns it off): {shown}"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1074,6 +1271,22 @@ async def meaning_loop(
 REREAD_WAKE = threading.Event()
 
 
+
+
+def _model_answers(sw: Any, model: str) -> "bool | None":
+    """Does the live search model still answer? One probe with
+    :data:`PROBE_TEXT` (fixed words, never the owner's), straight to the
+    server, never the cache. None when the live model is no longer *model*.
+    Never raises."""
+    base = sw.current() if sw is not None else None
+    if base is None or str(getattr(base, "model", "") or "") != model:
+        return None
+    try:
+        return bool(base.embed(PROBE_TEXT))
+    except Exception:  # noqa: BLE001 — not answering
+        return False
+
+
 def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
                 pause: "Callable[[], bool] | None" = None) -> dict[str, Any]:
     """Read again, with the live search model, at most *limit* stored rows
@@ -1084,7 +1297,15 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
     a model on this network (``skipped`` says why not). Paused BEFORE EVERY
     ROW while a chat reply is written (``pause``, default :func:`replying`):
     the pass stops with ``more`` and goes on at the loop's next pass.
-    ``{read, more}`` (+ ``skipped``)."""
+
+    Each row's text is clipped to :data:`REREAD_TEXT_MAX`. A row the model
+    refuses while it still answers :data:`PROBE_TEXT` is STEPPED PAST (a
+    memory row is kept in the file's ``reread_failed`` for that model, so no
+    later pass starts on it again; a knowledge row's cursor moves past it):
+    one row never keeps every older row matched by words. A model that does
+    not answer at all ends the pass (:data:`NO_ANSWER`, no ``more``: the
+    loop's next idle look tries again, never a request every 30 s).
+    ``{read, more}`` (+ ``skipped``, + ``failed``: rows stepped past)."""
     wait = pause if pause is not None else replying
     from sqlmodel import select
 
@@ -1104,47 +1325,75 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
         return {"skipped": "not on this network", "read": 0, "more": False}
     from sqlalchemy import not_
 
-    done = 0
-    more = False
+    home = platform.config.home
+    failed_all = dict(read(home).get("reread_failed") or {})
+    failed = [str(i) for i in failed_all.get(model) or []]
+    skip = set(failed)
+    newly: list[str] = []
+    done = refused = 0
+
+    def finish(res: dict[str, Any]) -> dict[str, Any]:
+        if newly:
+            failed_all[model] = (failed + newly)[-REREAD_FAILED_MAX:]
+            update(home, reread_failed=failed_all)
+        if refused:
+            res["failed"] = refused
+        return res
+
+    def model_gone(answers: "bool | None") -> "dict[str, Any] | None":
+        """The pass's end when the model changed or does not answer."""
+        if answers is None:
+            return {"skipped": "the search model changed", "more": True}
+        if not answers:
+            return {"skipped": NO_ANSWER, "more": False}
+        return None
+
     # A row this model wrote starts with its tag (``encode_embedding``), so
     # the rows to read again are found by that prefix: ids only, newest
-    # first, never every row's vector in memory.
+    # first, never every row's vector in memory; the rows this model refused
+    # are left out.
     tag = '{"model": ' + json.dumps(model)
     with session_scope(platform.engine) as db:
-        ids = list(db.exec(
+        ids = [i for i in db.exec(
             select(MemoryRecord.id)
             .where(not_(MemoryRecord.embedding_json.startswith(tag)))  # type: ignore[union-attr]
             .where(MemoryRecord.text != "")
             .order_by(MemoryRecord.created_at.desc())
-            .limit(limit + 1)
-        ))
+            .limit(limit + 1 + len(skip))
+        ) if i not in skip]
     for rid in ids[:limit]:
         if wait():
-            return {"skipped": REPLY_PAUSE, "read": done, "more": True}
+            return finish({"skipped": REPLY_PAUSE, "read": done, "more": True})
         with session_scope(platform.engine) as db:
             row = db.get(MemoryRecord, rid)
-            text = str(getattr(row, "text", "") or "")
+            full = str(getattr(row, "text", "") or "")
+        text = full[:REREAD_TEXT_MAX]
         if row is None or not text.strip() or decode_embedding(row.embedding_json)[1] == model:
             continue
         try:
             vec, made_by = embed_with_model(emb, text)
         except EmbedderError:
-            return {"skipped": "the search model did not answer", "read": done, "more": True}
+            gone = model_gone(_model_answers(sw, model))
+            if gone is not None:
+                return finish({"read": done, **gone})
+            newly.append(rid)  # refused, while the model answers: step past it
+            refused += 1
+            continue
         if made_by != model:
-            return {"skipped": "the search model changed", "read": done, "more": True}
+            return finish({"skipped": "the search model changed", "read": done, "more": True})
         with session_scope(platform.engine) as db:
             live = db.get(MemoryRecord, rid)
-            if live is not None and live.text == text:
+            if live is not None and live.text == full:
                 live.embedding_json = encode_embedding(vec, made_by)
                 db.add(live)
                 db.commit()
         done += 1
     more = len(ids) > limit
-    left = limit - done
+    left = limit - done - refused
     paused = False
+    stop: "dict[str, Any] | None" = None
     if left > 0 and not more:
-        data = read(platform.config.home)
-        cursors = dict(data.get("knowledge_read") or {})
+        cursors = dict(read(home).get("knowledge_read") or {})
         after = str(cursors.get(model) or "")
         with session_scope(platform.engine) as db:
             stmt = select(ProjectKnowledge).order_by(ProjectKnowledge.id)
@@ -1156,13 +1405,18 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
             if wait():
                 more = paused = True
                 break
-            text = (k.text or "")[:4000]
+            text = (k.text or "")[:REREAD_TEXT_MAX]
             if text.strip():
                 try:
                     vec, made_by = embed_with_model(emb, text)
                 except EmbedderError:
-                    more = True
-                    break
+                    stop = model_gone(_model_answers(sw, model))
+                    if stop is not None:
+                        more = bool(stop["more"])
+                        break
+                    refused += 1  # refused, while the model answers: the cursor moves past it
+                    last = k.id
+                    continue
                 if made_by != model:
                     more = True
                     break
@@ -1178,7 +1432,9 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
             more = len(krows) > left
         if last != after:
             cursors[model] = last
-            update(platform.config.home, knowledge_read=cursors)
+            update(home, knowledge_read=cursors)
     if paused:
-        return {"skipped": REPLY_PAUSE, "read": done, "more": True}
-    return {"read": done, "more": more}
+        return finish({"skipped": REPLY_PAUSE, "read": done, "more": True})
+    if stop is not None:
+        return finish({"read": done, **stop})
+    return finish({"read": done, "more": more})

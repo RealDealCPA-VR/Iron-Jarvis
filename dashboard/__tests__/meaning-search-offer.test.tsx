@@ -189,8 +189,8 @@ function wire(over: Record<string, unknown> = {}) {
   };
 }
 
-function frameCard(data: Record<string, unknown> | undefined, name = "file_search"): ToolCard {
-  const ev = sseEventFrom("tool_call", { id: "c1", name, status: "finished", ok: true, output: "…", ...(data ? { data } : {}) });
+function frameCard(data: Record<string, unknown> | undefined, name = "file_search", ok = true): ToolCard {
+  const ev = sseEventFrom("tool_call", { id: "c1", name, status: "finished", ok, output: "…", ...(data ? { data } : {}) });
   return upsertTool([], ev as Parameters<typeof upsertTool>[1])[0];
 }
 
@@ -256,6 +256,12 @@ describe("the daemon's answer, read as untrusted input", () => {
     expect(extractMeaningOffer([frameCard({ meaning_offer: true }, "read_file")])).toBe(false);
     expect(extractMeaningOffer([frameCard(undefined)])).toBe(false);
     expect(frameCard({ meaning_offer: true }).meaningOffer).toBe(true);
+    // Its own checks (review note): a step that failed, is still running, or
+    // is another tool's never carries it, whatever its card says.
+    expect(extractMeaningOffer([frameCard({ meaning_offer: true }, "file_search", false)])).toBe(false);
+    expect(extractMeaningOffer([{ name: "file_search", status: "running", ok: true, meaningOffer: true }])).toBe(false);
+    expect(extractMeaningOffer([{ name: "read_file", status: "done", ok: true, meaningOffer: true }])).toBe(false);
+    expect(extractMeaningOffer([{ name: "file_search", status: "done", ok: true, meaningOffer: true }])).toBe(true);
   });
 });
 
@@ -313,6 +319,56 @@ describe("the card under the reply", () => {
     fireEvent.click(await screen.findByTestId("meaning-offer-another"));
     await waitFor(() => expect(screen.getAllByTestId("meaning-use")).toHaveLength(2));
     expect(screen.getAllByTestId("meaning-use")[1]).toBeDisabled();
+  });
+
+  it("a model whose cost is not measured yet waits for its measure, and the list reads again until it has one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const measuring = candidate({
+      choice: LAN, model: "mxbai-embed-large", server: "Studio PC", where_words: "on Studio PC (your network)",
+      this_pc: false, works: null, cost_words: "Its cost here is being measured.",
+    });
+    let measured = false;
+    H.api.getResponses["/memory/meaning"] = () =>
+      wire({
+        candidates: [
+          candidate(),
+          measured
+            ? { ...measuring, works: true, cost_words: "Uses about 700 MB of memory on that computer while it works." }
+            : measuring,
+        ],
+      });
+    H.api.postResponses["/memory/meaning/choose"] = { ok: true, note: "Search by meaning: on." };
+    render(<MeaningSearchOffer />);
+    fireEvent.click(await screen.findByTestId("meaning-offer-another"));
+    await waitFor(() => expect(screen.getAllByTestId("meaning-use")).toHaveLength(2));
+    const use = () => screen.getAllByTestId("meaning-use")[1];
+    expect(use()).toBeDisabled(); // no Yes with no cost on screen (G10)
+    expect(within(screen.getAllByTestId("meaning-model")[1]).getByTestId("meaning-cost")).toHaveTextContent(
+      "Its cost here is being measured.",
+    );
+    fireEvent.click(use());
+    expect(H.api.posts).toEqual([]);
+    const listReads = () => H.api.gets.filter((p) => p === "/memory/meaning?all=1").length;
+    const before = listReads();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3100);
+    });
+    expect(listReads()).toBe(before + 1); // not looking, but a cost is missing: it reads again
+    measured = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3100);
+    });
+    await waitFor(() => expect(use()).not.toBeDisabled());
+    expect(within(screen.getAllByTestId("meaning-model")[1]).getByTestId("meaning-cost")).toHaveTextContent(
+      "Uses about 700 MB of memory on that computer while it works.",
+    );
+    const settled = listReads();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(listReads()).toBe(settled); // every cost measured: no more reads
+    fireEvent.click(use());
+    await waitFor(() => expect(H.api.posts).toEqual([{ path: "/memory/meaning/choose", body: { choice: LAN } }]));
   });
 
   it("a refused press shows the route's own words", async () => {

@@ -17,7 +17,9 @@
  * Every press goes to the setting's own routes, which go through the
  * settings writer (one ledger row with Undo); the daemon probes the model
  * before it switches. Reads: once when shown, again while a look for models
- * is running (at most LOOK_REREADS_MAX times), never on a clock otherwise.
+ * is running or the open list has a model not measured yet (at most
+ * LOOK_REREADS_MAX times), never on a clock otherwise. "Use this one" is
+ * only for a model whose probe answered here, so its cost was on screen.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -85,13 +87,16 @@ function useMeaning(all: boolean) {
   }, [load]);
 
   useEffect(() => {
-    if (!view?.looking || rereads.current >= LOOK_REREADS_MAX) return;
+    // Again while a look runs, and while the open list still has a model
+    // whose cost is not measured (its read starts the look that measures it).
+    if (!view || !(view.looking || (all && view.candidates.some((c) => c.works === null)))) return;
+    if (rereads.current >= LOOK_REREADS_MAX) return;
     const t = setTimeout(() => {
       rereads.current += 1;
       void load();
     }, LOOK_REREAD_MS);
     return () => clearTimeout(t);
-  }, [view, load]);
+  }, [view, load, all]);
 
   return { view, setView, failed, load };
 }
@@ -158,7 +163,9 @@ function ModelList({
             <button
               type="button"
               data-testid="meaning-use"
-              disabled={busy || c.works === false}
+              // Only a model whose probe answered here, with its cost on
+              // screen (G10): one not measured yet waits for its measure.
+              disabled={busy || c.works !== true}
               onClick={() => onChoose(c)}
               className={QUIET}
             >

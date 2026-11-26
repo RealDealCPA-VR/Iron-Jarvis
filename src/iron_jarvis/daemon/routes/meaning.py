@@ -4,10 +4,12 @@
 * ``GET /memory/meaning`` -> ``memory.meaning.view``: the state, the status
   line, the offer (never answered and a model to offer), every search model
   found on this PC or the owner's network with what it costs here, and
-  whether a look is running. Reading it starts a look on its own thread when
-  the last one is older than ``FIND_EVERY_S`` (the page re-reads while
-  ``looking``, only while it is on screen). ``?all=1`` measures every model
-  found, not only the first ("Use another model").
+  whether a look is running. Reading it starts a look on its own thread
+  (``meaning.page_look``) when the last one is older than ``FIND_EVERY_S``
+  (the page re-reads while ``looking``, only while it is on screen).
+  ``?all=1`` (the model list is open, "Use another model") measures every
+  model found that has no cost yet, a few a look; the list re-reads until
+  each has one, and only a model that answered can be chosen there.
 * ``POST /memory/meaning/choose {choice}`` -> turn it on with that model (or
   "on": the one chosen before, else the first that works), through THE
   settings writer: one probe of the model first, one ledger row with Undo.
@@ -46,9 +48,7 @@ def register(app: FastAPI, d: Any) -> None:
 
     @app.get("/memory/meaning")
     def meaning_view(all: int = 0) -> dict[str, Any]:  # noqa: A002 — the query's own name
-        data = meaning.read(d.platform.config.home)
-        if all or meaning.look_is_due(data, meaning.FIND_EVERY_S):
-            meaning.look_soon(d, every=bool(all))
+        meaning.page_look(d, every=bool(all))
         return meaning.view(d)
 
     @app.post("/memory/meaning/choose")

@@ -49,8 +49,12 @@ export default defineConfig({
       // developer's own OpenCode config, which points at their real model
       // gateway (it asked that gateway /model/info with no key at every
       // start). An empty folder inside the fresh home: nothing to read.
+      // OLLAMA_HOST (next leaps 16-a): a closed port, so the scratch
+      // daemon's look for search models never asks the developer's own
+      // Ollama what it has, nor loads a search model into it.
       env: {
         DOCKER_HOST: "tcp://127.0.0.1:1",
+        OLLAMA_HOST: "http://127.0.0.1:1",
         IRONJARVIS_OPENCODE_CONFIG_DIR: "e2e/.home/no-opencode-config",
         IRONJARVIS_BACKGROUNDS_BASE: `http://127.0.0.1:${BG}`,
       },

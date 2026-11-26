@@ -49,6 +49,8 @@ WHERE = "http://127.0.0.1:11434"
 MODEL = "nomic-embed-text:latest"
 CHOICE = M.choice_id(M.KIND_OLLAMA, MODEL, WHERE)
 MB = 1024 * 1024
+#: The real one, before the scene fixture records the looks a page asks for.
+REAL_LOOK_SOON = M.look_soon
 
 
 class Meaningful:
@@ -118,14 +120,16 @@ def scene(tmp_path, monkeypatch):
         return {"works": True, "why": "", "memory_bytes": memory["bytes"]}
 
     monkeypatch.setattr(M, "PROBE", probe)
-    # The GET's own look runs here, never on a stray thread mid-test.
-    monkeypatch.setattr(M, "look_soon", lambda _d, every=False: False)
+    # The GET's own look runs here, never on a stray thread mid-test: the
+    # looks a page asked for are recorded.
+    looks: list[dict] = []
+    monkeypatch.setattr(M, "look_soon", lambda _d, **kw: looks.append(kw) or False)
     from iron_jarvis.daemon.routes.settings import config_writer
 
     config_writer(d)
     return SimpleNamespace(app=app, d=d, p=app.state.platform, client=TestClient(app), targets=targets,
                            models=models, asked=asked, probes=probes, memory=memory, made=made, tmp=tmp_path,
-                           monkeypatch=monkeypatch)
+                           monkeypatch=monkeypatch, looks=looks)
 
 
 def _view(s) -> dict:
@@ -222,7 +226,8 @@ def test_the_cost_is_measured_and_a_missing_figure_is_never_negligible(scene):
         raise TimeoutError()
 
     bad = M.measure({"choice": "x", "kind": "ollama", "model": "m", "where": WHERE}, probe=boom)
-    assert bad["works"] is False and "TimeoutError" in bad["why"]
+    assert bad["works"] is False and bad["why"] == M.WHY_NO_ANSWER  # plain words, never "TimeoutError"
+    assert M.cost_words(bad) == "It did not answer here."
     assert M.negligible(bad, 64 * 1024 * MB) is False
 
 
@@ -337,9 +342,23 @@ def test_a_model_that_does_not_answer_is_refused_in_words_and_nothing_changes(sc
     s.monkeypatch.setattr(M, "build_base", lambda *a, **k: Broken())
     res = _choose(s)
     assert res.status_code == 400
-    assert f"{MODEL} did not answer on this PC" in res.json()["detail"]
+    assert f"{MODEL} did not answer on this PC, so search by meaning was not changed." in res.json()["detail"]
     assert M.state(s.p) == M.OFF and s.p.embedder.model == "mock"
     assert "value" not in M.read(s.p.config.home)
+    # Review note: plain words on screen, never a transport error or a code.
+    for detail, said in (
+        ("ollama embeddings request failed: [WinError 10061] No connection could be made", "did not answer"),
+        ("ollama embeddings returned HTTP 500", "could not be used on this PC (it refused the request)"),
+        ("ollama embeddings: missing/empty 'embedding'", "could not be used on this PC (its answer could not be used)"),
+    ):
+        class Says(Broken):
+            def embed(self, text, _detail=detail):
+                raise EmbedderError(_detail)
+
+        s.monkeypatch.setattr(M, "build_base", lambda *a, **k: Says())
+        words = _choose(s).json()["detail"]
+        assert said in words, words
+        assert not re.search(r"WinError|HTTP|500|embedding'|ollama embeddings", words), words
 
 
 def test_undo_puts_it_back_and_not_now_is_final(scene):
@@ -493,6 +512,47 @@ def test_start_up_uses_the_choice_only_when_it_answers(tmp_path):
     M.update(home, value=M.choice_id(M.KIND_OLLAMA, MODEL, "https://ollama.example.com"))
     far = M.boot_embedder(cfg, reachable=lambda _u: True)
     assert isinstance(far.current(), MockEmbedder)  # a choice off this network never loads
+    # Review note: a model server that is not Ollama needs its key, which
+    # start-up never reads: it is HELD (reattach tries it), never loaded bare.
+    lan = M.choice_id(M.KIND_OPENAI, "text-embedding-nomic-embed-text-v1.5", "http://192.168.1.40:1234")
+    M.update(home, value=lan)
+    keyed = M.boot_embedder(cfg, reachable=lambda _u: True)
+    assert isinstance(keyed.current(), MockEmbedder) and keyed.held == lan
+
+
+def _boot_platform(cfg, reachable: bool):
+    emb = M.boot_embedder(cfg, reachable=lambda _u: reachable)
+    return SimpleNamespace(config=cfg, embedder=emb)
+
+
+def test_set_up_before_survives_a_slow_start_and_the_offer(tmp_path):
+    """Review 2, finding 1: an install whose Ollama search model worked
+    before this version. One start, Ollama has not answered the 2 s probe
+    yet, and a by-meaning search shows the offer (``asked_at``). Only an
+    ANSWER ends the earlier set-up: the next start that Ollama answers is on
+    again, as it was, for someone who did nothing differently."""
+    home = tmp_path / "h"
+    cfg = SimpleNamespace(home=home, embedder_provider="auto", embedder_model="nomic-embed-text",
+                          ollama_base_url="http://127.0.0.1:11434")
+    legacy = M.choice_id(M.KIND_OLLAMA, "nomic-embed-text", "http://127.0.0.1:11434")
+    up = _boot_platform(cfg, True)
+    assert M.state(up) == M.ON and M.setting_value(up) == legacy
+    down = _boot_platform(cfg, False)
+    assert M.state(down) == M.OFF
+    assert M.mark_offered(down) is True and M.state(down) == M.OFFERED
+    again = _boot_platform(cfg, True)
+    assert isinstance(again.embedder.current(), OllamaEmbedder)
+    assert M.state(again) == M.ON and M.setting_value(again) == legacy
+    view = M.view(SimpleNamespace(platform=again))
+    assert view["how"] == "set up before" and view["offer"] is False
+    assert M.mark_offered(again) is False  # the card is drawn once, ever
+    # An Undo of a first answer puts "never answered" back: still set up before.
+    M.update(home, value=None)
+    assert isinstance(_boot_platform(cfg, True).embedder.current(), OllamaEmbedder)
+    # An ANSWER ends it: Not now (or turned off) stays off at every start.
+    M.update(home, value="")
+    declined = _boot_platform(cfg, True)
+    assert isinstance(declined.embedder.current(), MockEmbedder) and M.state(declined) == M.DECLINED
 
 
 # ---- the loop's pacing ------------------------------------------------------
@@ -573,7 +633,7 @@ def test_the_offer_names_only_a_model_that_answered_here(scene):
     small = "all-minilm:latest"
     small_choice = M.choice_id(M.KIND_OLLAMA, small, WHERE)
     s.models[WHERE].insert(0, {"id": small, "size_bytes": 46_000_000})
-    answers = {small: {"works": False, "why": "it answered 500", "memory_bytes": None}}
+    answers = {small: {"works": False, "why": M.WHY_REFUSED, "memory_bytes": None}}
 
     def probe(cand, headers, budget):
         s.probes.append(cand["choice"])
@@ -587,7 +647,7 @@ def test_the_offer_names_only_a_model_that_answered_here(scene):
     view = _view(s)
     assert view["offer"] is False and view["best"] is None and _inbox_meaning(s) == []
     assert [c["cost_words"] for c in view["candidates"]] == [
-        "It did not answer here: it answered 500.", M.COST_NOT_YET]
+        "It could not be used here: it refused the request.", M.COST_NOT_YET]
     # The next look goes past the one that did not answer.
     s.monkeypatch.setattr(M, "LOOK_MEASURE_MAX", 5)
     M.look(s.d)
@@ -623,7 +683,7 @@ def test_the_offer_names_only_a_model_that_answered_here(scene):
     assert M.one_pass(s.d)["looked"] is True and s.probes == []
     s.monkeypatch.setattr(M, "replying", lambda: False)
     # None answers: no offer.
-    answers[MODEL] = {"works": False, "why": "it answered 404", "memory_bytes": None}
+    answers[MODEL] = {"works": False, "why": M.WHY_REFUSED, "memory_bytes": None}
     M.look(s.d)
     view = _view(s)
     assert view["offer"] is False and view["best"] is None and _inbox_meaning(s) == []
@@ -687,6 +747,73 @@ def test_the_reread_pass_stops_the_moment_a_reply_starts(scene, monkeypatch):
     with session_scope(s.p.engine) as db:
         assert {decode_embedding(r.embedding_json)[1] for r in db.exec(select(MemoryRecord))} == {MODEL}
         assert all(len(json.loads(r.embedding_json)) == 8 for r in db.exec(select(ProjectKnowledge)))
+
+
+class Picky(Meaningful):
+    """A search model that refuses some texts (an error, as a server that
+    refuses over-long input does) while it still answers others."""
+
+    def __init__(self, *a, refuse=lambda _t: False, **kw):
+        super().__init__(*a, **kw)
+        self.refuse = refuse
+
+    def embed(self, text: str) -> list[float]:
+        if self.refuse(text):
+            self.calls.append(text)
+            raise EmbedderError("the search model's server answered HTTP 500")
+        return super().embed(text)
+
+
+def test_a_row_the_model_refuses_is_stepped_past_never_blocking_the_rest(scene):
+    """Review 2, finding 2: the newest memory row is one the model refuses.
+    The pass steps past it (the model still answers its probe), reads every
+    other row, then the project knowledge rows, and no later pass starts on
+    it again. Text is clipped as knowledge text always was, so an over-long
+    row is read. A model that does not answer at all ends the pass with no
+    ``more`` (the loop's idle look tries again: never a request every 30 s)."""
+    s = scene
+    mock = MockEmbedder()
+    from datetime import timedelta
+
+    from iron_jarvis.core.ids import utcnow
+
+    now = utcnow()
+    long_text = "a late parcel " + "x" * 5000  # over 4000 characters: clipped, then read
+    rows = [(f"short {n} about a late parcel", now - timedelta(minutes=10 + n)) for n in range(5)]
+    rows += [("poison: refused", now), (long_text, now - timedelta(minutes=1))]
+    with session_scope(s.p.engine) as db:
+        for n, (text, at) in enumerate(rows):
+            db.add(MemoryRecord(layer="user", key=f"k{n}", text=text, created_at=at,
+                                embedding_json=encode_embedding(mock.embed(text), "mock")))
+        for n in range(2):
+            db.add(ProjectKnowledge(id=f"pk_00000000000{n}", project_id="p1", name=f"n{n}",
+                                    text=("poison note" if n == 0 else "courier note"),
+                                    embedding_json=json.dumps(mock.embed("courier note"))))
+        db.commit()
+    picky = Picky(refuse=lambda t: "poison" in t or len(t) > M.REREAD_TEXT_MAX)
+    s.monkeypatch.setattr(M, "build_base", lambda *a, **k: picky)
+    M.look(s.d)
+    assert _choose(s).status_code == 200
+    first = M.reread_pass(s.p)
+    assert first == {"read": 7, "more": False, "failed": 2}, first  # 6 memory rows + 1 note; 2 stepped past
+    assert sum(1 for t in picky.calls if t.startswith("poison")) == 2
+    assert M.read(s.p.config.home)["knowledge_read"][MODEL] == "pk_000000000001"
+    picky.calls.clear()
+    assert M.reread_pass(s.p) == {"read": 0, "more": False}  # never starts on them again
+    assert not any(t.startswith("poison") for t in picky.calls)
+    with session_scope(s.p.engine) as db:
+        made = {r.text[:20]: decode_embedding(r.embedding_json)[1] for r in db.exec(select(MemoryRecord))}
+    assert made.pop("poison: refused") == "mock" and set(made.values()) == {MODEL}
+    # A choice made again tries every row once more.
+    assert M.read(s.p.config.home)["reread_failed"][MODEL]
+    assert s.client.post("/memory/meaning/off").status_code == 200
+    assert M.read(s.p.config.home)["reread_failed"] == {}
+    # The model does not answer at all (its probe neither): the pass ends,
+    # with nothing recorded as refused and no ``more``.
+    assert _choose(s).status_code == 200
+    picky.refuse = lambda _t: True
+    assert M.reread_pass(s.p) == {"skipped": M.NO_ANSWER, "read": 0, "more": False}
+    assert M.read(s.p.config.home)["reread_failed"] == {}
 
 
 def _search_rounds():
@@ -780,3 +907,140 @@ def test_a_held_model_is_never_called_off_in_the_search_note(scene):
     M.update(s.p.config.home, value="")
     _hits, notes = _semantic(s, "shipping")
     assert notes.held is False and WORD_ONLY_NOTE in notes.note()
+
+
+# ---- review round 2 ---------------------------------------------------------
+BIG = "mxbai-embed-large:latest"
+BIG_CHOICE = M.choice_id(M.KIND_OLLAMA, BIG, WHERE)
+
+
+def test_the_open_list_measures_every_model_and_the_row_stays_light(scene):
+    """Review 2, finding 3 and note 7: a model the list shows with no cost
+    yet is measured by the open list's own read (the page's re-read starts
+    that look), a few a look, and a "did not answer" is tried again later.
+    The row of someone who said Not now, or whose search by meaning is on,
+    only finds: it never loads a model to measure it."""
+    s = scene
+    snow = M.choice_id(M.KIND_OLLAMA, "snowflake-arctic-embed:latest", WHERE)
+    s.models[WHERE].append({"id": BIG, "size_bytes": 670_000_000})
+    s.models[WHERE].append({"id": "snowflake-arctic-embed:latest", "size_bytes": 800_000_000})
+    M.look(s.d)
+    assert s.probes == [CHOICE]  # the first that answers ends the row's look
+    view = _view(s)
+    assert [c["works"] for c in view["candidates"]] == [True, None, None]
+    assert s.looks == []  # looked just now: the row asks for nothing
+    # The list is open (?all=1) and a cost is missing: its read starts a look
+    # that measures every model, a few a look.
+    assert s.client.get("/memory/meaning?all=1").status_code == 200
+    assert s.looks == [{"every": True}]
+    s.monkeypatch.setattr(M, "LOOK_EVERY_MAX", 1)
+    s.probes.clear()
+    M.look(s.d, every=True)
+    assert s.probes == [BIG_CHOICE]
+    s.looks.clear()
+    s.client.get("/memory/meaning?all=1")
+    assert s.looks == [{"every": True}]  # one still has no cost: the next read measures it
+    M.look(s.d, every=True)
+    assert s.probes == [BIG_CHOICE, snow]
+    s.looks.clear()
+    s.client.get("/memory/meaning?all=1")
+    assert s.looks == []  # every cost measured, looked just now: no look after look
+    # A model that did not answer is measured again after a while.
+    costs = M.read(s.p.config.home)["costs"]
+    costs[BIG_CHOICE] = {**costs[BIG_CHOICE], "works": False, "why": M.WHY_NO_ANSWER,
+                         "measured_s": 0}
+    M.update(s.p.config.home, costs=costs)
+    s.client.get("/memory/meaning?all=1")
+    assert s.looks == [{"every": True}]
+    s.probes.clear()
+    M.look(s.d, every=True)
+    assert s.probes == [BIG_CHOICE] and _view(s)["candidates"][1]["works"] is True
+    # The row's look when it is due: it measures while the offer is open...
+    s.looks.clear()
+    M.update(s.p.config.home, looked_at_s=0)
+    _view(s)
+    assert s.looks == [{"measure_any": True}]
+    # ...and only finds after Not now (or while it is on).
+    assert s.client.post("/memory/meaning/decline").status_code == 200
+    M.update(s.p.config.home, looked_at_s=0, costs={})
+    s.looks.clear()
+    _view(s)
+    assert s.looks == [{"measure_any": False}]
+    s.probes.clear()
+    M.look(s.d, measure_any=False)
+    assert s.probes == [] and len(M.read(s.p.config.home)["found"]) == 3
+
+
+def test_a_look_started_from_a_page_is_running_before_the_page_reads(scene):
+    """Review 2, finding 3: the look a read starts is marked running BEFORE
+    the read answers, so the page knows to read again; a second read while
+    it runs starts none; it waits while a reply is written."""
+    s = scene
+    gate = __import__("threading").Event()
+    seen: list[dict] = []
+
+    def slow_look(_d, **kw):
+        seen.append(kw)
+        gate.wait(10)
+        return {}
+
+    s.monkeypatch.setattr(M, "_look", slow_look)
+    try:
+        assert REAL_LOOK_SOON(s.d, every=True) is True
+        assert M._LOOKING.is_set()
+        assert REAL_LOOK_SOON(s.d) is False
+    finally:
+        gate.set()
+    # The look's thread lets go of the lock only after it clears the flag.
+    assert M._LOOK_LOCK.acquire(timeout=10)
+    M._LOOK_LOCK.release()
+    assert not M._LOOKING.is_set()
+    assert seen == [{"every": True, "measure_any": True, "pause": M.replying}]
+
+
+def test_a_scratch_e2e_daemon_never_reaches_this_pcs_ollama():
+    """Review 2, finding 4: the e2e scratch daemon's look for search models
+    must never ask the developer's own Ollama (CLAUDE.md: tests never reach
+    the owner's live services): its OLLAMA_HOST is a closed port."""
+    from pathlib import Path
+
+    config = (Path(__file__).resolve().parents[1] / "dashboard" / "playwright.config.ts").read_text(
+        encoding="utf-8").replace("\r\n", "\n")
+    serve = config[config.index("ironjarvis serve"):]
+    serve = serve[: serve.index("next dev")]
+    assert 'OLLAMA_HOST: "http://127.0.0.1:1"' in serve
+
+
+async def test_chat_lists_and_prices_the_search_models_found(scene):
+    """Review 2, finding 5 (G9): "switch the search model" in chat. The
+    settings list names every search model found, what each costs here and
+    the value that chooses it; config_change with no value puts them on a
+    pick card (never one that did not answer), with Off."""
+    from iron_jarvis.settings.tools import ConfigChangeTool, ConfigListTool
+
+    s = scene
+    s.models[WHERE].append({"id": BIG, "size_bytes": 670_000_000})
+    s.models[WHERE].append({"id": "all-minilm:latest", "size_bytes": 900_000_000})
+    tool = ConfigChangeTool(s.p)
+    # Before any look: no card, and the list says how to go on.
+    assert tool.missing_details({"key": "meaning_search"}) == {}
+    listed = await ConfigListTool(s.p).execute({"query": "search model"}, _ctx(s))
+    assert "meaning_search" in listed.output and M.NOT_LOOKED_YET in listed.output
+    M.look(s.d)
+    costs = M.read(s.p.config.home)["costs"]
+    minilm = M.choice_id(M.KIND_OLLAMA, "all-minilm:latest", WHERE)
+    costs[minilm] = {"works": False, "why": M.WHY_NO_ANSWER, "measured_s": 9e12}
+    M.update(s.p.config.home, costs=costs)
+    listed = await ConfigListTool(s.p).execute({"query": "search model"}, _ctx(s))
+    line = next(x for x in listed.output.splitlines() if "(meaning_search)" in x)
+    assert (f"{MODEL} on this PC: Uses about 300 MB of memory while it works. Already on your disk. "
+            f"(value: {CHOICE})") in line
+    assert f"{BIG} on this PC: {M.COST_NOT_YET} (value: {BIG_CHOICE})" in line
+    assert "all-minilm:latest on this PC: It did not answer here." in line
+    card = tool.missing_details({"key": "meaning_search"})["value"]
+    assert card["enum"] == [CHOICE, BIG_CHOICE, "off"]
+    assert card["enumNames"][0] == f"{MODEL} on this PC: Uses about 300 MB of memory while it works. Already on your disk."
+    assert card["enumNames"][-1] == M.CHAT_OFF[1]
+    # The pick is a value the setting's own card then measures and asks for.
+    check = await tool.spend_check({"key": "meaning_search", "value": BIG_CHOICE}, _ctx(s))
+    assert check.ask is True and BIG_CHOICE in s.probes

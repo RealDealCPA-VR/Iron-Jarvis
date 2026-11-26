@@ -2169,14 +2169,16 @@ It matches words for now.**
   guess.
 - **Turn it on, Not now, Use another model.** Turn it on takes effect at
   once, with no restart. Not now is final: it is not offered again.
-  Use another model lists every search model found, each with its cost.
+  Use another model lists every search model found, each with its cost; a
+  model whose cost is still being measured can be chosen once it is.
 - **One row, everywhere else.** Settings › Memory & you › **Search by
   meaning** and the File Search page show the same plain row: how it stands
   ("Search by meaning: on, with nomic-embed-text on this PC."), **Choose a
   search model** (or **Use another model**) and **Turn off**. Every change
   is in Settings' list of changes, with Undo. In chat, "turn on search by
-  meaning" asks on a card that shows the same cost line; turning it off
-  needs no card.
+  meaning" asks on a card that shows the same cost line; asked to switch
+  the search model, chat lists the models found, each with its cost, to
+  pick from; turning it off needs no card.
 - **Never off your network.** A model server outside this PC and your own
   network is never listed, and a Local only chat never sends text to one.
   Only Ollama on this PC and the model servers you added are used. The text
@@ -2189,7 +2191,10 @@ It matches words for now.**
   again with the new search model, 200 at a time in the background, never
   while a reply is being written.
 - **Already set up?** If Ollama's search model was already working for you
-  before this version, it stays on as it was.
+  before this version, it stays on as it was, also after a start where
+  Ollama was slow to answer. Until you answer, a PC where Ollama is connected
+  and its search model is already downloaded counts as set up the same way;
+  Not now or Turn off keeps it off from then on.
 
 ## "When another task fails", and everything that runs by itself in one place (v1.585.0)
 
