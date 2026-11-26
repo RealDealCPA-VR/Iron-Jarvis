@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import quote
@@ -632,12 +633,24 @@ def wants_item(row: Any, *, stopped: bool = False, self_dev_on: bool = True) -> 
 
 
 #: Next leaps 20-a: what a missing item says (the owner's words are shown
-#: only here, D-20.1).
-MISSING_WHY = (
-    "Each time, Iron Jarvis looked for a feature for it and found none. Your words are kept on this PC only, "
-    "with anything that looks like a password or key hidden, and removed after 90 days."
+#: only here, D-20.1). 20-a review: what each KIND of ask's record shows,
+#: one sentence each, never "found none" over a lookup that listed lines.
+MISSING_FOUND = {
+    "nothing": ("Iron Jarvis looked for a feature for it and found none", "it found none"),
+    "not_offered": (
+        "Iron Jarvis looked for a feature for it and found it among the things it does not offer",
+        "it found it among the things it does not offer",
+    ),
+    "unknown": (
+        "Iron Jarvis looked for a feature for it, and nothing it had mentioned {words}",
+        "nothing it had mentioned {words}",
+    ),
+}
+MISSING_KEPT = (
+    "Your words are kept on this PC only, with anything that looks like a password or key hidden, and removed "
+    "after 90 days."
 )
-MISSING_KEEP = "Keep as a note for the next version"
+MISSING_KEEP ="Keep as a note for the next version"
 MISSING_KEEP_NOTE = "Keeps it on this PC as a note for the next version of Iron Jarvis. Nothing is sent anywhere."
 MISSING_DECLINE = "Not needed"
 MISSING_DECLINE_NOTE = "Iron Jarvis won't list this again."
@@ -646,6 +659,28 @@ MISSING_NO_WORDS = "(your words were not kept)"
 #: What chat is told in place of a request said only in Local only chats,
 #: in a turn that does not stay on this network (``inbox/tools``).
 MISSING_LOCAL_ONLY = "a request made in a Local only chat (its words are on the Improvements page)"
+
+
+def missing_why(view: dict[str, Any]) -> str:
+    """What the record of a missing item's asks shows, kind by kind
+    (:data:`MISSING_FOUND`): "Each time, …" when every ask is of one kind
+    and all of them are still kept; else how many times each was found."""
+    asks = [a for a in (view.get("asks") or []) if isinstance(a, dict)]
+    kinds = Counter(str(a.get("kind") or "") for a in asks if str(a.get("kind") or "") in MISSING_FOUND)
+    said = [str(w) for w in (view.get("unknown_said") or []) if str(w or "").strip()]
+    words = " or ".join(f"“{w}”" for w in said[:3]) or "the words you asked with"
+    count = int(view.get("count") or 0)
+    if not kinds:
+        return MISSING_KEPT
+    if len(kinds) == 1 and sum(kinds.values()) == count:
+        lead = "Each time, " + MISSING_FOUND[next(iter(kinds))][0].format(words=words) + "."
+    else:
+        parts = [f"{_plural(n, 'time')} {MISSING_FOUND[k][1].format(words=words)}"
+                 for k in MISSING_FOUND if (n := kinds.get(k, 0))]
+        rest = count - sum(kinds.values())
+        tail = f"; the record of the {_plural(rest, 'earlier time')} was removed after 90 days" if rest > 0 else ""
+        lead = "Iron Jarvis looked for a feature for it: " + ", ".join(parts) + tail + "."
+    return f"{lead} {MISSING_KEPT}"
 
 
 def missing_item(view: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
@@ -684,7 +719,7 @@ def missing_item(view: dict[str, Any], *, now: datetime | None = None) -> dict[s
         extra.update(local_only=True, chat_title=head + MISSING_LOCAL_ONLY)
     return item(
         KIND_MISSING, gid, title=head + title,
-        why=MISSING_WHY, evidence=lines, created_at=view.get("last_at"),
+        why=missing_why(view), evidence=lines, created_at=view.get("last_at"),
         accept=action(MISSING_KEEP, f"/capability/misses/{_seg(gid)}/note", note=MISSING_KEEP_NOTE),
         decline=action(MISSING_DECLINE, f"/capability/misses/{_seg(gid)}/decline", note=MISSING_DECLINE_NOTE),
         extra=extra,
@@ -1043,6 +1078,6 @@ __all__ = [
     "DETAIL_CHARS", "GOALS_MAX", "KINDS", "LABELS", "OPEN_LABEL", "PER_KIND", "RESULTS_KIND", "SOURCES", "Read",
     "action", "change_results",
     "client_item", "client_view", "coach_item", "collect", "detail_diff", "detail_text", "folder_label", "item",
-    "library_item", "memory_effect", "missing_item", "night_reasons",
+    "library_item", "memory_effect", "missing_item", "missing_why", "night_reasons",
     "memory_item", "preference_item", "skill_item", "tool_item", "unasked_item", "wants_item",
 ]

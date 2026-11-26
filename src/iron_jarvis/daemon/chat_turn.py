@@ -5094,8 +5094,9 @@ async def keep_lookup_miss(d, body, ctx, *, tools_used: Any, trust_state: dict[s
     has for the request (``capability_search/misses.miss_of``, read from the
     turn's own record ``join.FOUND.last_answer``) and no call after it changed
     or created something (``misses.done_another_way``: for a request named by
-    a word no entry knows, no successful call after it at all), ONE miss is
-    kept, the owner's words masked. Never at
+    a word no entry knows, no call after it at all, whatever became of it:
+    ``join.FOUND.tried_after``), ONE miss is kept, the owner's words masked
+    (their names are never the words no entry knows). Never at
     low trust (the request may be an injected one; a phone's or another
     computer's turn starts low), never for a reply handed to an agent, never
     without the owner's own words. Off the loop, bounded by
@@ -5108,19 +5109,22 @@ async def keep_lookup_miss(d, body, ctx, *, tools_used: Any, trust_state: dict[s
         from ..capability_search import join as _cj
         from ..capability_search import misses as _misses
 
-        answer = _cj.FOUND.last_answer(_cj.turn_key(ctx))
-        found = _misses.miss_of(answer)
+        key = _cj.turn_key(ctx)
+        answer = _cj.FOUND.last_answer(key)
+        words = _owner_words_of_turn(body)
+        if not words:
+            return None
+        found = _misses.miss_of(answer, words=words)
         if found is None:
             return None
         kind, entry_id, unknown = found
-        # ``tools_used`` holds only the calls that RAN. For ``unknown`` any of
-        # them after the lookup is the request done (a listed line fitted);
-        # for the other two, one that changed or created something.
+        # ``tools_used`` holds only the calls that RAN; ``tried_after`` every
+        # call made after the last lookup. For ``unknown`` any of them is a
+        # listed line the reply took to fit; for the other two, a call that
+        # RAN and changed or created something.
         after = _misses.calls_after_last_lookup(list(tools_used or ()))
-        if _misses.done_another_way(kind, after, getattr(d.platform, "registry", None)):
-            return None
-        words = _owner_words_of_turn(body)
-        if not words:
+        if _misses.done_another_way(kind, after, getattr(d.platform, "registry", None),
+                                    tried=_cj.FOUND.tried_after(key)):
             return None
         from ..providers import egress
         from ..providers.failure_words import current_surface

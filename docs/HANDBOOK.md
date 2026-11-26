@@ -2160,12 +2160,15 @@ words for each time. You do nothing for it: it is kept from your chats as
 you work.
 
 - **When it counts.** Iron Jarvis looked the request up and found nothing
-  for it (or only things it does not offer, like controlling the desktop),
+  for it (or only things it does not offer, like controlling the desktop,
+  or only things that never mention what you asked for by name, like "fax"),
   and the reply then changed nothing. A request it did another way is not
-  kept: when the reply went on to use something the lookup listed, even
-  just to work out a figure or search the web, it counts as done. Neither
-  is one made while a reply was reading something flagged as unsafe, one
-  from another computer, or a task an agent was given by a rule. A request
+  kept: when the reply went on to use or try something the lookup listed,
+  even just to work out a figure or search the web, it counts as done. A
+  request is never kept for a name in it (a person's or a company's) or
+  because it was written in another language. Neither is one made while a
+  reply was reading something flagged as unsafe, one from another computer,
+  a schedule's repeat, or a task an agent was given by a rule. A request
   from your phone, Slack or email is not kept while **Work started by your
   messages** is on Low trust (the usual setting); on Full trust it is
   kept like one typed here.

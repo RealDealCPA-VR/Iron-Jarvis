@@ -764,6 +764,21 @@ def reconcile_interrupted_tool_calls(engine: Any) -> int:
     return recorded
 
 
+def _note_turn_call(ctx: Any, name: str) -> None:
+    """Next leaps 20-a review: a call the model MADE in a turn, whatever
+    became of it (run, failed, refused, declined on its card), noted for the
+    turn's end once a lookup of that turn has answered
+    (``capability_search/join.FOUND.note_call``). In memory; never raises."""
+    try:
+        if not str(getattr(ctx, "turn_id", "") or "").strip():
+            return
+        from ..capability_search.join import FOUND, turn_key
+
+        FOUND.note_call(turn_key(ctx), name)
+    except Exception:  # noqa: BLE001 — a note only; the call goes on
+        pass
+
+
 def risk_value(tool: "Tool | None") -> str | None:
     """The ``risk_class`` string that rides a ``tool.executed`` /
     ``tool.denied`` payload (v1.237.0, D12/D24, plan §8.1 and §10.4).
@@ -1136,6 +1151,8 @@ class ToolRegistry:
         rehearsal_would: str = "",
     ) -> ToolResult:
         tool = self._tools.get(name)
+        # Next leaps 20-a review: every call made, for the turn's end.
+        _note_turn_call(ctx, name)
         if tool is None:
             # An unknown name is still a call the model MADE (v1.228.0, RT6):
             # it used to return before the ledger, so a run whose model kept

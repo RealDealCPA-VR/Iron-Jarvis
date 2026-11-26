@@ -181,6 +181,8 @@ MAX_KEYS = 256
 MAX_PAGES = 8
 #: Next leaps 20-a: the answers kept per turn (only the last one is read).
 MAX_ANSWERS = 8
+#: The calls kept that were made after a turn's last lookup (one says it).
+MAX_TRIED = 16
 
 
 def turn_key(ctx: Any) -> str:
@@ -249,9 +251,35 @@ class _Found:
         if not key or not isinstance(answer, dict):
             return
         with self._lock:
-            got = self._entry(key).setdefault("answers", [])
+            entry = self._entry(key)
+            got = entry.setdefault("answers", [])
             got.append(dict(answer))
             del got[:-MAX_ANSWERS]
+            # The calls made after THIS lookup start again (20-a review).
+            entry["tried"] = []
+
+    def note_call(self, key: str, name: Any) -> None:
+        """20-a review: one call the model MADE in this turn (run, failed,
+        refused or declined on its card; ``tools/registry.invoke``), kept
+        only once a lookup of the turn has answered: the calls after the
+        LAST lookup, at most :data:`MAX_TRIED`. Never makes an entry."""
+        if not key:
+            return
+        with self._lock:
+            entry = self._by.get(key)
+            if not entry or not entry.get("answers"):
+                return
+            got = entry.setdefault("tried", [])
+            if len(got) < MAX_TRIED:
+                got.append(str(name or ""))
+
+    def tried_after(self, key: str) -> list[str]:
+        """The calls made after this turn's last lookup (as noted)."""
+        if not key:
+            return []
+        with self._lock:
+            entry = self._by.get(key)
+            return list((entry or {}).get("tried") or [])
 
     def last_answer(self, key: str) -> "dict[str, Any] | None":
         """The answer of this turn's LAST lookup, or None (no lookup, no id)."""

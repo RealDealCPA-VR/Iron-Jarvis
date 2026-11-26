@@ -2252,10 +2252,13 @@ class AgentRuntime:
         Only for a task that IS the owner's own words (``RunStory.words``:
         never a child, a reflex, autonomy, a teammate, a task started inside a
         chat turn, or another computer's task), never at low trust or after it
-        read flagged content. Off the loop, bounded; never raises."""
+        read flagged content, never for a schedule's fire (20-a review: the
+        same words each time it fires are one ask, not a new one each day).
+        Off the loop, bounded; never raises."""
         try:
             words = str(getattr(story, "words", "") or "")
-            if not words.strip() or run_is_remote(session):
+            origin = str(getattr(session, "origin", "") or "")
+            if not words.strip() or run_is_remote(session) or origin == "schedule" or origin.startswith("schedule:"):
                 return
             if self._effective_trust(session) == TRUST_LOW or self._has_read_flagged(session):
                 return

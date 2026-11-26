@@ -14,13 +14,21 @@ Pinned here, through the REAL lanes (only the model is scripted):
 
 * a lookup that answered nothing, whose reply made no change, keeps ONE miss
   in each lane; so does one whose first line was "Not offered", and one whose
-  request is named by a word no entry of the list knows (the lookup has no
-  relevance floor: "send a fax" answers five unrelated lines);
+  request is NAMED by words no entry of the list knows, in every way the
+  lookup named it (the lookup has no relevance floor: "send a fax" answers
+  five unrelated lines);
 * none for a lookup that failed, one with no search words, one read from part
   of the list (both lanes and a run), a low-trust turn, a turn that then made
-  the change, and, for a word no entry knows, a turn that then used a listed
-  tool, even one that only reads (both lanes and a run);
-* three fax asks in different words make ONE group, "book a flight" another;
+  the change, and, for words no entry knows, a turn that then used or TRIED a
+  listed tool, even one that only reads, failed or was declined (both lanes
+  and a run);
+* review round 2: none for doable requests done in words ("calculate a
+  mortgage payment"), for a name in every way of naming the request, for a
+  request in another language; a run from another computer or a schedule's
+  fire keeps none; each kind says what its record shows; a Local only chat's
+  miss is marked so by the lane itself;
+* three fax asks in different words make ONE group, "book a flight" another,
+  and a word no entry knows that two requests share alone joins nothing;
 * a secret in the message is masked before it is stored;
 * listed only with 2 or more misses in 30 days; rows past 90 days are removed
   and the group's count is kept (D-20.1);
@@ -66,9 +74,11 @@ FAX_QUERIES = (
 FAX_ASKS = (
     "Can you fax this form to my accountant?",
     "I need the signed letter sent by fax to the bank",
-    "please fax the 1040 copy to the office",
+    "please fax the signed lease to the office",
 )
-FLIGHT_QUERY = "book a flight / reserve airline tickets / travel booking"
+#: Every way it is named holds a word no entry knows (review round 2:
+#: "travel booking" would name it in words the list knows).
+FLIGHT_QUERY = "book a flight / airline tickets / flight reservation"
 DESKTOP_QUERY = "control the desktop mouse / click in desktop programs / desktop automation"
 
 #: Built from pieces at run time: no literal here is shaped like a credential.
@@ -243,8 +253,10 @@ async def test_a_change_made_before_the_lookup_does_not_hide_the_miss(desk):
     assert [r["kind"] for r in _misses(app)] == ["nothing"]
 
 
-#: A request named by a word no entry knows ("mortgag") whose lookup lists a
-#: tool that does it, ``calculate``, which only reads.
+#: A request with a word no entry knows ("mortgag") in its first way, whose
+#: lookup lists a tool that does it, ``calculate``, which only reads. Its
+#: other ways name it in words the list knows ("payment math"): it is not a
+#: request nothing in Iron Jarvis is about (review round 2, probe A).
 MORTGAGE_QUERY = "calculate a mortgage payment / loan calculator / payment math"
 MORTGAGE_ASK = "What is the monthly payment on a 300k mortgage at 6% over 30 years?"
 
@@ -256,6 +268,13 @@ def _ran_ok(app, tool: str) -> int:
         ).bindparams(t=tool)).one()[0])
 
 
+def _ran_failed(app, tool: str) -> int:
+    with session_scope(app.state.platform.engine) as db:
+        return int(db.exec(sql(
+            "SELECT count(*) FROM toolinvocation WHERE tool = :t AND ok = 0"
+        ).bindparams(t=tool)).one()[0])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lane", ["stream", "post"])
 async def test_a_listed_tool_that_then_ran_is_the_request_done_even_one_that_only_reads(desk, lane):
@@ -264,18 +283,137 @@ async def test_a_listed_tool_that_then_ran_is_the_request_done_even_one_that_onl
     used: no miss, never "found none" over a request it did."""
     app, ws = desk
     model = Model([
-        _call(1, NAME, query=MORTGAGE_QUERY),
-        _call(2, "calculate", expressions=["=ROUND(PMT(6%/12,360,-300000),2)"]),
-        "The monthly payment is 1,798.65.",
+        _call(1, NAME, query=FAX_QUERIES[0]),
+        _call(2, "list_folder", path="."),
+        "The form is not in this folder.",
     ])
-    await _turn(app, ws, lane, MORTGAGE_ASK, model)
+    await _turn(app, ws, lane, FAX_ASKS[0], model, tools=["list_folder"])
     said = model.tool_texts[1][-1]
-    assert said.startswith("What Iron Jarvis has for") and "tool calculate" in said, said[:300]
-    assert _ran_ok(app, "calculate") == 1, "the control: the listed tool ran"
+    assert said.startswith("What Iron Jarvis has for") and "tool list_folder" in said, said[:600]
+    assert _ran_ok(app, "list_folder") == 1, "the control: the listed tool ran"
     assert _misses(app) == []
     # The control: the same lookup with nothing after it IS a miss of this kind.
-    await _turn(app, ws, lane, MORTGAGE_ASK, _lookup_then_say(MORTGAGE_QUERY))
+    await _turn(app, ws, lane, FAX_ASKS[0], _lookup_then_say(FAX_QUERIES[0]))
     assert [r["kind"] for r in _misses(app)] == ["unknown"], _misses(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_call_tried_after_the_lookup_that_failed_keeps_no_unknown_miss(desk, lane):
+    """Review round 2: a reply that took a listed line to fit and tried it
+    (the call failed, or its card was declined) did not find "nothing" for
+    the request. ``tools_used`` holds only the calls that RAN, so the turn's
+    end reads every call MADE after the lookup (``join.FOUND.tried_after``,
+    noted by ``tools/registry.invoke``)."""
+    app, ws = desk
+    model = Model([
+        _call(1, NAME, query=FAX_QUERIES[0]),
+        _call(2, "read_document", path="no-such-form.pdf"),
+        "That form is not in the folder.",
+    ])
+    await _turn(app, ws, lane, FAX_ASKS[0], model, tools=["read_document"])
+    assert _ran_failed(app, "read_document") == 1, "the control: the call was made and failed"
+    assert _misses(app) == []
+
+
+#: Every way names it by words no entry knows ("dvd" is in capitals, so not
+#: a name); its lookup's first line is ``write_file``, which joins the reply
+#: and asks on a card.
+DVD_ASK = "Burn these photos to a DVD"
+DVD_QUERY = "burn files to a DVD / write an optical disc / disc burning"
+
+
+@pytest.mark.asyncio
+async def test_a_call_whose_card_was_declined_keeps_no_unknown_miss(desk):
+    app, ws = desk
+    model = Model([
+        _call(1, NAME, query=DVD_QUERY),
+        _call(2, "write_file", path="photos.txt", content="the photos"),
+        "You declined, so nothing was saved.",
+    ])
+    _frames, cards, _done = await _stream(app, _body(ws, DVD_ASK), model, decision="deny")
+    assert "tool write_file" in model.tool_texts[1][-1], model.tool_texts[1][-1][:400]
+    assert [c.get("tool") for c in cards] == ["write_file"], ("the control: a card was shown", cards)
+    assert not (ws / "photos.txt").exists(), "the control: it was declined"
+    assert _misses(app) == []
+    # The control: the same lookup with nothing tried after it is a miss.
+    await _turn(app, ws, "stream", DVD_ASK, _lookup_then_say(DVD_QUERY))
+    assert [r["kind"] for r in _misses(app)] == ["unknown"], _misses(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_doable_request_done_in_words_is_not_kept(desk, lane):
+    """Review round 2, probe A: the lookup's first line was the tool for it,
+    and the reply gave the figure in words. A word no entry knows in the
+    request's first way ("mortgag") is not enough: its other ways name it in
+    words Iron Jarvis knows."""
+    app, ws = desk
+    for _ in range(2):
+        model = _lookup_then_say(MORTGAGE_QUERY, "The monthly payment is about 1,798.65.")
+        await _turn(app, ws, lane, MORTGAGE_ASK, model)
+        said = model.tool_texts[1][-1]
+        assert said.startswith("What Iron Jarvis has for") and "tool calculate" in said, said[:300]
+    assert _misses(app) == []
+    assert await _missing_items(app) == []
+
+
+#: Review round 2, probe D: two doable requests that name one person, the
+#: name in EVERY way the lookup named them (the tool asks it to leave names
+#: out; a model may not), done in words or answered with a question.
+MARIA = (
+    ("stream", "Draft a short reply to Maria saying I'll send the report Friday",
+     "write a reply to Maria / message for Maria / answer Maria"),
+    ("post", "Remind me to call Maria tomorrow", "remind me about Maria / Maria reminder / note about Maria"),
+)
+
+
+@pytest.mark.asyncio
+async def test_two_doable_requests_naming_one_person_keep_no_item_in_either_lane(desk):
+    app, ws = desk
+    for lane, ask, query in MARIA:
+        model = _lookup_then_say(query, "Here is a draft: Hi Maria, ..." if lane == "stream" else "What time?")
+        await _turn(app, ws, lane, ask, model)
+        assert model.tool_texts[1][-1].startswith("What Iron Jarvis has for"), "the control: lines came back"
+    assert _misses(app) == []
+    assert await _missing_items(app) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_request_in_another_language_keeps_no_unknown_miss(desk, lane):
+    """Review round 2: the list is in English, so a query in another language
+    knows few of its words whatever it asks for."""
+    app, ws = desk
+    model = _lookup_then_say("enviar un correo / mandar un mensaje / escribir correo", "¿A quién se lo envío?")
+    await _turn(app, ws, lane, "Envía un correo a Juan", model)
+    assert model.tool_texts[1][-1].startswith("What Iron Jarvis has for"), "the control: lines came back"
+    assert _misses(app) == []
+
+
+def test_names_and_other_languages_are_told_apart_from_the_request():
+    from iron_jarvis.capability_search import misses as M
+
+    names = M.name_words("Draft a short reply to Maria saying I'll send the PDF on Friday. Acme wants it")
+    assert {"maria", "friday"} <= names, names
+    assert not names & {"draft", "pdf", "acm", "send"}, "a sentence's first word and a word in capitals are kept"
+    assert M.name_words("send a fax / Fax machine") == frozenset(), "each way's first word is not a name"
+    assert M.other_language("crear una hoja de cálculo / nueva hoja / tabla")
+    assert M.other_language("resumir el documento / leer documento / resumen")
+    assert not M.other_language("send a fax / fax a document / fax machine")
+    assert not M.other_language("order a pizza for delivery / food delivery order / restaurant takeout")
+
+
+def test_two_requests_that_share_only_a_word_no_entry_knows_are_not_one_group():
+    """Review round 2 (c): the words no entry knows join two misses only when
+    their other search words share one too."""
+    from iron_jarvis.capability_search import misses as M
+
+    got = M.same_request(M.search_words("receive a fax / incoming fax / fax inbox"), {"fax"},
+                         M.search_words("send a fax / fax a document / fax machine"), {"fax"})
+    assert got == 0, got
+    fax = [M.search_words(q) for q in FAX_QUERIES]
+    assert M.same_request(fax[0], {"fax"}, fax[1], {"fax"}) >= M.SAME_AT, "the control: three fax asks join"
 
 
 def _part_unreadable(monkeypatch, platform=None) -> None:
@@ -311,13 +449,20 @@ def test_a_lookup_read_from_part_of_the_list_says_nothing_is_missing():
     from iron_jarvis.capability_search import misses as M
 
     base = {"query": DESKTOP_QUERY, "reason": "", "first": {"kind": "not_offered", "id": "desktop_control"},
-            "partial": False, "unknown": ["fax"]}
+            "partial": False, "unknown": ["fax"], "unknown_parts": [["fax"], ["fax"], ["fax"]]}
     assert M.miss_of(base) == ("not_offered", "desktop_control", ["fax"])
     assert M.miss_of({**base, "partial": True}) is None
     assert M.miss_of({**base, "reason": "failed"}) is None
     assert M.miss_of({**base, "reason": "no_search_words"}) is None
-    assert M.miss_of({**base, "first": {"kind": "tool", "id": "write_file"}}) == ("unknown", "", ["fax"])
-    assert M.miss_of({**base, "first": {"kind": "tool", "id": "write_file"}, "unknown": []}) is None
+    listed = {**base, "first": {"kind": "tool", "id": "write_file"}}
+    assert M.miss_of(listed) == ("unknown", "", ["fax"])
+    assert M.miss_of({**listed, "unknown": []}) is None
+    # Review round 2: every way of naming it must hold a word no entry knows,
+    # two ways at least, and a name is never one.
+    assert M.miss_of({**listed, "unknown_parts": [["fax"], ["fax"], []]}) is None
+    assert M.miss_of({**listed, "unknown_parts": [["fax"]]}) is None
+    assert M.miss_of({**listed, "unknown_parts": [["fax"], ["fax"], ["maria"]]}, words="Fax it to Maria") is None
+    assert M.miss_of({**listed, "unknown": ["maria"]}, words="Fax it to Maria") is None
     assert M.miss_of({**base, "query": "it / this"}) is None
     assert M.miss_of(None) is None
 
@@ -407,6 +552,11 @@ async def test_three_fax_asks_in_different_words_make_one_group_and_show_on_impr
     items = await _missing_items(app)
     assert [i["title"] for i in items] == ["Asked 3 times, no tool: send a fax"], items
     item = items[0]
+    # Review round 2 (d): what the record shows for this kind, never "found
+    # none" over a lookup that listed lines.
+    assert item["why"].startswith(
+        "Each time, Iron Jarvis looked for a feature for it, and nothing it had mentioned “fax”."), item["why"]
+    assert "found none" not in item["why"], item["why"]
     lines = item["evidence"]
     assert len(lines) == 3, lines
     for ask, line in zip(FAX_ASKS, lines):
@@ -441,6 +591,36 @@ def test_three_fax_requests_in_a_seeded_month_show_three_dates(desk):
     lines = items[0]["evidence"]
     for at, line in zip(days, lines):
         assert line.startswith(day_words(at, now) + ": "), (day_words(at, now), lines)
+
+
+def test_each_kind_says_what_its_record_shows(desk):
+    """Review round 2 (d): one honest sentence per kind of ask."""
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.capability_search import misses as M
+
+    C = importlib.import_module("iron_jarvis.inbox.collect")
+    app, _ws = desk
+    engine = app.state.platform.engine
+    for ask in ("fax it", "fax it again"):
+        M.keep(engine, words=ask, query=NOTHING_QUERY, kind="nothing", unknown=["fax"])
+    for ask in ("move my mouse", "click the start button"):
+        M.keep(engine, words=ask, query=DESKTOP_QUERY, kind="not_offered", entry_id="desktop_control")
+    why = {i["title"]: i["why"] for i in TestClient(app).get("/improvements").json()["items"]
+           if i["kind"] == "missing"}
+    assert why["Asked 2 times, no tool: fax"].startswith(
+        "Each time, Iron Jarvis looked for a feature for it and found none."), why
+    desk_why = why["Asked 2 times, no tool: control the desktop mouse"]
+    assert desk_why.startswith(
+        "Each time, Iron Jarvis looked for a feature for it and found it among the things it does not offer."), why
+    # Asks of more than one kind, and one whose record is gone (past 90 days).
+    mixed = C.missing_why({"count": 4, "unknown_said": ["fax"], "asks": [
+        {"kind": "nothing"}, {"kind": "nothing"}, {"kind": "unknown"}]})
+    assert mixed.startswith(
+        "Iron Jarvis looked for a feature for it: 2 times it found none, 1 time nothing it had mentioned “fax”; "
+        "the record of the 1 earlier time was removed after 90 days."), mixed
 
 
 def test_a_secret_in_the_message_is_masked_before_it_is_stored(desk):
@@ -694,6 +874,7 @@ def _agent_run(tmp_path, task: str, *, script=None, tools=(NAME,), **session_kw)
     _agent_run.ran = ran  # type: ignore[attr-defined]
     _agent_run.lookup_said = [str(r[1] or "") for r in ran_rows if r[0] == NAME]  # type: ignore[attr-defined]
     _agent_run.entry_ids = [r[3] for r in rows]  # type: ignore[attr-defined]
+    _agent_run.platform = p  # type: ignore[attr-defined]
     return [tuple(r[:3]) for r in rows], ran.count(NAME)
 
 
@@ -712,6 +893,25 @@ def test_an_agent_run_whose_task_is_not_the_owners_words_keeps_none(tmp_path):
 def test_an_agent_run_at_low_trust_keeps_none(tmp_path):
     rows, looked = _agent_run(tmp_path, "Please fax the signed form to my accountant", trust="low")
     assert looked == 1, "the control: the run looked it up"
+    assert rows == [], rows
+
+
+@pytest.mark.parametrize("origin", ["remote:desk-pc", "schedule:s1"])
+def test_an_agent_run_from_another_computer_or_a_schedule_keeps_none(tmp_path, origin):
+    """Review round 2: a task from another computer is never the owner's ask
+    here (the lookup is not even its to use); a schedule fires the same words
+    each time, which is not a new ask each day."""
+    task = "Please fax the signed form to my accountant"
+    # A schedule's fire tells its run the prompt the owner saved on it.
+    extra = {"options": {"story_words": task}} if origin.startswith("schedule:") else {}
+    rows, looked = _agent_run(tmp_path, task, origin=origin, **extra)
+    if origin.startswith("remote:"):
+        assert looked == 0, "the control: a task from another computer cannot use the lookup"
+        with session_scope(_agent_run.platform.engine) as db:
+            tried = db.exec(sql("SELECT count(*) FROM toolinvocation WHERE tool = :t").bindparams(t=NAME)).one()[0]
+        assert tried == 1, "the control: it tried, and was refused"
+    else:
+        assert looked == 1, "the control: the run looked it up"
     assert rows == [], rows
 
 
@@ -750,18 +950,34 @@ def test_an_agent_runs_lookup_read_from_part_of_the_list_keeps_none(tmp_path, mo
     assert rows == [], rows
 
 
-@pytest.mark.parametrize("then_calculate", [False, True])
-def test_an_agent_run_that_used_a_listed_tool_keeps_no_unknown_miss(tmp_path, then_calculate):
-    script = [_call(1, NAME, query=MORTGAGE_QUERY)]
-    if then_calculate:
-        script.append(_call(2, "calculate", expressions=["=ROUND(PMT(6%/12,360,-300000),2)"]))
-    script.append("The monthly payment is 1,798.65.")
-    rows, looked = _agent_run(tmp_path, MORTGAGE_ASK, script=script, tools=(NAME, "calculate"))
+@pytest.mark.parametrize("then", ["nothing", "calculate", "failed"])
+def test_an_agent_run_that_used_a_listed_tool_keeps_no_unknown_miss(tmp_path, then):
+    script = [_call(1, NAME, query=FAX_QUERIES[0])]
+    if then == "calculate":
+        script.append(_call(2, "calculate", expressions=["=2+2"]))
+    elif then == "failed":
+        # Review round 2: a call tried after the lookup, even one that failed.
+        script.append(_call(2, "read_document", path="no-such-form.pdf"))
+    script.append("Done.")
+    rows, looked = _agent_run(tmp_path, FAX_ASKS[0], script=script, tools=(NAME, "calculate", "read_document"))
     assert looked == 1, "the control: the run looked it up"
-    if not then_calculate:
-        assert rows == [(MORTGAGE_ASK, "unknown", "run")], ("the control: with nothing after it, a miss", rows)
+    if then == "nothing":
+        assert rows == [(FAX_ASKS[0], "unknown", "run")], ("the control: with nothing after it, a miss", rows)
         return
-    assert _agent_run.ran == [NAME, "calculate"], ("the control: the listed tool ran", _agent_run.ran)
+    if then == "calculate":
+        assert _agent_run.ran == [NAME, "calculate"], ("the control: the listed tool ran", _agent_run.ran)
+    else:
+        assert _agent_run.ran == [NAME], ("the control: the call failed", _agent_run.ran)
+    assert rows == [], rows
+
+
+def test_an_agent_run_whose_request_is_done_in_words_keeps_none(tmp_path):
+    """Review round 2, probe A in a run: "payment math" names it in words the
+    list knows."""
+    rows, looked = _agent_run(tmp_path, MORTGAGE_ASK, script=[
+        _call(1, NAME, query=MORTGAGE_QUERY), "The monthly payment is 1,798.65.",
+    ], tools=(NAME, "calculate"))
+    assert looked == 1, "the control: the run looked it up"
     assert rows == [], rows
 
 
@@ -810,3 +1026,30 @@ def test_a_request_said_only_in_local_only_chats_is_named_only_to_a_turn_that_st
     # The same words asked outside Local only say them anyway.
     M.keep(p.engine, words="fax it", query=FAX_QUERIES[0], kind="unknown", unknown=["fax"], surface="chat")
     assert "Asked 3 times, no tool: send a fax" in listed(withheld=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_miss_in_a_local_only_chat_is_kept_as_one_in_each_lane(desk, lane):
+    """Review round 2: the Local only protection above depends on the LANE
+    storing ``local_only`` from the turn's own scope. Two asks sent with Local
+    only on keep rows marked so, and chat outside a Local only turn is told
+    the neutral line, never the request."""
+    import importlib
+
+    from iron_jarvis.inbox import tools as IT
+    from iron_jarvis.tools.base import ToolContext
+
+    C = importlib.import_module("iron_jarvis.inbox.collect")
+    app, ws = desk
+    for ask, query in zip(FAX_ASKS[:2], FAX_QUERIES[:2]):
+        await _turn(app, ws, lane, ask, _lookup_then_say(query), local_only=True)
+    rows = _misses(app)
+    assert [(r["kind"], bool(r["local_only"])) for r in rows] == [("unknown", True)] * 2, rows
+    p = app.state.platform
+    ctx = ToolContext(workspace=ws, session_id="chat", agent_run_id="chat", config=p.config,
+                      event_bus=p.event_bus, engine=p.engine)
+    got = await IT.SuggestionListTool(p).execute({}, ctx)
+    assert got.ok, got.error
+    assert "send a fax" not in got.output, got.output
+    assert "Asked 2 times, no tool: " + C.MISSING_LOCAL_ONLY in got.output, got.output

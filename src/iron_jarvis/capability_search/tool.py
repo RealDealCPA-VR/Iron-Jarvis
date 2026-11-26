@@ -260,14 +260,17 @@ def answer(platform: Any, query: Any, limit: Any = 5) -> tuple[str, dict[str, An
         # knows (a miss is kept from them, ``misses.miss_of``). Data only:
         # the answer's text is unchanged.
         data["unknown"] = idx.unknown_words(_index.first_part(query))
+        # 20-a review: each way the query named the request, with its words
+        # no entry knows (a request is named by such a word only when EVERY
+        # way names it so, ``misses.miss_of``).
+        data["unknown_parts"] = [idx.unknown_words(part) for part in _index.parts(query)]
+        foreign = idx.foreign(query)
         found = [entry for _score, entry in idx.search(query, _index.MAX_RESULTS)]
         found = [entry for entry in found if not _not_needed(entry)]
         # v1.479.0: a tool a lookup can bring before one nothing in chat brings.
         from .join import usable_first
 
         found = usable_first(found)[: _index.clamp(limit)]
-        known, total = idx.known_words(query)
-        foreign = total >= 2 and known * 2 < total
         missing = ""
         if idx.unreadable:
             missing = (
@@ -371,7 +374,8 @@ def answer_record(data: Any) -> dict[str, Any]:
     """What one lookup answered, as a turn's end reads it (next leaps 20-a):
     its query, ``reason`` (``nothing``, ``failed``, ``no_search_words`` or
     "" for a list), its FIRST line's kind and id, whether part of the list
-    could not be read, and the request's words no entry knows."""
+    could not be read, and the request's words no entry knows (its first way
+    of naming it, and each way)."""
     got = data if isinstance(data, dict) else {}
     matches = [m for m in (got.get("matches") or []) if isinstance(m, dict)]
     first = matches[0] if matches else None
@@ -381,6 +385,8 @@ def answer_record(data: Any) -> dict[str, Any]:
         "first": {"kind": str(first.get("kind") or ""), "id": str(first.get("id") or "")} if first else None,
         "partial": bool(got.get("partial")),
         "unknown": [str(w) for w in (got.get("unknown") or [])],
+        "unknown_parts": [[str(w) for w in part] for part in (got.get("unknown_parts") or [])
+                          if isinstance(part, list)],
     }
 
 

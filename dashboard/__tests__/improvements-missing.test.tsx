@@ -64,7 +64,7 @@ const GID = "missgroup_0a1b2c3d4e5f";
 const LINES = [
   "3 November: “Can you fax this form to my accountant?”",
   "12 November: “I need the signed letter sent by fax to the bank”",
-  "20 November: “please fax the 1040 copy to the office”",
+  "20 November: “please fax the signed lease to the office”",
 ];
 
 function missing(extra: Record<string, unknown> = {}) {
@@ -74,7 +74,7 @@ function missing(extra: Record<string, unknown> = {}) {
     ref: GID,
     title: "Asked 3 times, no tool: send a fax",
     about: "",
-    why: "Each time, Iron Jarvis looked for a feature for it and found none.",
+    why: "Each time, Iron Jarvis looked for a feature for it, and nothing it had mentioned “fax”.",
     evidence: LINES,
     created_at: "2026-11-20T10:00:00",
     detail: null,

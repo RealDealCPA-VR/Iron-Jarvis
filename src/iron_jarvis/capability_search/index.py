@@ -181,6 +181,17 @@ def first_part(query: Any) -> str:
     return _PARTS.split(text, maxsplit=1)[0].strip()
 
 
+#: The ways one query names its request that are read, at most (20-a).
+PARTS_MAX = 6
+
+
+def parts(query: Any) -> list[str]:
+    """Every way *query* names its request (split at " / "), the empty ones
+    left out, at most :data:`PARTS_MAX` (next leaps 20-a)."""
+    text = " ".join(str(query or "")[:QUERY_CHARS].split())
+    return [p.strip() for p in _PARTS.split(text) if p.strip()][:PARTS_MAX]
+
+
 def _one_line(text: Any, cap: int) -> str:
     return " ".join(str(text or "").split())[:cap]
 
@@ -386,6 +397,12 @@ class CapabilityIndex:
         language knows few of its own words."""
         words = list(dict.fromkeys(tokens(str(query or "")[:QUERY_CHARS])))
         return sum(1 for w in words if w in self._idf), len(words)
+
+    def foreign(self, query: Any) -> bool:
+        """Fewer than half of *query*'s search words (two or more) are in the
+        list: likely another language (the answer then says so)."""
+        known, total = self.known_words(query)
+        return total >= 2 and known * 2 < total
 
     def unknown_words(self, text: Any) -> list[str]:
         """The search words of *text* that appear in NO entry of the list, in

@@ -14,17 +14,24 @@ lanes; an agent run's from its ledger, :func:`keep_run_miss`): the LAST lookup
 
 * answered nothing (``NOTHING_FOUND``), or
 * its first line was "Not offered", or
-* the request was named by a word no entry of the list knows ("fax" in "send
-  a fax"). MEASURED on the real index: the lookup has no relevance floor, so
-  "send a fax / fax a document / fax machine" answers five lines, none about
-  faxing; on a set of 20 things Iron Jarvis cannot do and 30 it can, written
-  for this before the rule, a word no entry knows was in the request's first
-  part for 14 of the 20 and for 1 of the 30 ("translate a document");
+* the request was NAMED by words no entry of the list knows: EVERY way the
+  lookup named it (two or more) has such a word that is not a name (a word
+  written with a capital mid-sentence, by the owner or the lookup:
+  :func:`name_words`), and the query is not in another language
+  (:func:`other_language`). MEASURED on the real index: the lookup has no
+  relevance floor, so "send a fax / fax a document / fax machine" answers
+  five lines, none about faxing, and "fax" is in all three ways. Review
+  round 2, on a fresh set written before this rule (20 things Iron Jarvis
+  cannot do, 30 it can, names, companies and three other languages among
+  them): the first rule (a word no entry knows in the first way) kept 16 of
+  the 20 and 11 of the 30; this one keeps 10 of the 20 and 0 of the 30, and
+  0 of the reviewer's 13 doable requests;
 
 and the reply then made no successful call that changes or creates something
-(for ``unknown``, whose lookup listed lines, no successful call at all other
-than a lookup: a line that fitted and was used, even one that only reads, is
-the request done; :func:`done_another_way`). NEVER a miss: a lookup that
+(for ``unknown``, whose lookup listed lines, no call at all after it, whatever
+became of it, other than a lookup: a line the reply took to fit, even one
+that only reads, failed or was declined, is not "nothing for it";
+:func:`done_another_way`). NEVER a miss: a lookup that
 failed (``LOOKUP_FAILED``), one with no search words (``TOO_GENERAL``), one
 read from part of the list (``partial``), a low-trust turn (the request may
 be an injected one), a task from another computer, an agent run whose task
@@ -46,9 +53,10 @@ GROUPING IS DETERMINISTIC, no model (:func:`same_request`): a new miss joins
 the group one of whose misses (or whose key, for a group whose rows are gone)
 shares half or more of its words (the templates' Jaccard rule, on the search
 words of all three ways the lookup named the request), or half or more of the
-words no entry knows. Measured: three fax lookups in different words share at
-most 2 of 7 search words pairwise but all have "fax" as their unknown word;
-"book a flight" shares neither. A miss that fits a group the owner already
+words no entry knows when their other search words share one too (names are
+never among them). Measured: three fax lookups in different words share at
+most 2 of 7 search words pairwise but all have "fax" as their unknown word
+and "send" besides; "book a flight" shares neither. A miss that fits a group the owner already
 answered joins it and is not listed again ("Not needed" is not asked again,
 as the client and preference answers are not; a kept note gathers its later
 asks for 20-c).
@@ -61,6 +69,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -157,22 +166,92 @@ def same_request(words_a: Iterable[str], unknown_a: Iterable[str],
                  words_b: Iterable[str], unknown_b: Iterable[str]) -> Fraction:
     """How surely two misses ask for the same thing: the larger of the two
     shares (all their search words; the words no entry knows) that reaches
-    :data:`SAME_AT`, else 0."""
+    :data:`SAME_AT`, else 0. The words no entry knows join two misses only
+    when their OTHER search words share one too (review: a word they share
+    alone, a name above all, is not the same request)."""
     best = Fraction(0)
     share = jaccard(words_a, words_b)
     if share >= SAME_AT:
         best = share
     ua, ub = set(unknown_a), set(unknown_b)
-    if ua and ub:
+    if ua and ub and (set(words_a) - ua) & (set(words_b) - ub):
         share = jaccard(ua, ub)
         if share >= SAME_AT and share > best:
             best = share
     return best
 
 
-def miss_of(answer: Any) -> "tuple[str, str, list[str]] | None":
+#: A word of the owner's (or the lookup's) written with a capital letter
+#: and a small one, not at the start of a sentence: a name ("Maria",
+#: "Acme"). A word all in capitals ("PDF", "DVD") is not one.
+_RAW_WORD = re.compile(r"[^\s/]+")
+_SENTENCE_END = re.compile(r"[.!?:;\"“”(\[]$")
+
+
+def name_words(*texts: Any) -> frozenset[str]:
+    """The search words of the names in *texts* (next leaps 20-a review): a
+    word that starts with a capital letter, has a small one, and is not the
+    first of its sentence (or of one way the lookup named the request). A
+    name is the owner's detail, never the thing asked for: it never makes
+    a request one Iron Jarvis has no feature for, nor joins two requests."""
+    out: set[str] = set()
+    for text in texts:
+        for part in _index.parts(str(text or "")[:MASK_CHARS]) or [""]:
+            start = True
+            for raw in _RAW_WORD.findall(part):
+                word = raw.strip("\"'“”‘’()[]{}<>,.!?:;")
+                if word and not start and word[0].isupper() and any(c.islower() for c in word):
+                    out.update(_index.tokens(word))
+                start = bool(_SENTENCE_END.search(raw))
+    return frozenset(out)
+
+
+#: Common small words of Spanish, French, German, Italian and Portuguese that
+#: are not English words a request is written with: one in a query says it
+#: is not in English (the list is), whatever its other words matched.
+_OTHER_LANGUAGE_WORDS = frozenset(
+    "el los las un una unos unas del y para con por que es en al lo mi mis su sus como pero este esta "
+    "le les des du et pour avec sur dans une mon mes ce cette je vous nous aux "
+    "der das und mit ein eine einen dem zu von ist nicht ich mein meine bitte auf "
+    "il di che gli della uno sono mio questo os um uma em da dos das com meu minha".split()
+)
+
+
+def other_language(query: Any) -> bool:
+    """Does *query* read as another language than English? A letter outside
+    English ("cálculo", "kürzen", "écrire") or one of
+    :data:`_OTHER_LANGUAGE_WORDS` ("una", "des", "und").
+    Measured (20-a review): the lookup's own test, "fewer than half the
+    words known", is true for most real requests Iron Jarvis has nothing
+    for ("order a pizza for delivery / food delivery order / restaurant
+    takeout" knows 1 of 6), so it cannot tell a language from a gap."""
+    text = str(query or "")[:QUERY_CHARS]
+    if any(ch.isalpha() and not ch.isascii() for ch in text):
+        return True
+    return any(w in _OTHER_LANGUAGE_WORDS for w in re.findall(r"[a-z]+", text.lower()))
+
+
+def _named_by_unknown(answer: dict[str, Any], names: frozenset[str]) -> bool:
+    """Was the request NAMED by words no entry of the list knows? Only when
+    every way the lookup named it (two or more) has such a word that is not
+    a name, and the query does not read as another language (the list is in
+    English: a Spanish query knows none of its words, :func:`other_language`).
+    Measured: "send a fax / fax a document / fax machine" has "fax" in all
+    three; "calculate a mortgage payment / loan calculator / payment math"
+    can be named in words the list knows, so it is not a request nothing in
+    Iron Jarvis is about."""
+    if other_language(answer.get("query")):
+        return False
+    parts = [p for p in (answer.get("unknown_parts") or []) if isinstance(p, list)]
+    if len(parts) < 2:
+        return False
+    return all(any(str(w) and str(w) not in names for w in part) for part in parts)
+
+
+def miss_of(answer: Any, *, words: Any = "") -> "tuple[str, str, list[str]] | None":
     """``(kind, entry_id, unknown words)`` when one lookup's answer
-    (``tool.answer_record``) is a miss, else None. Pure."""
+    (``tool.answer_record``) is a miss, else None. *words*: the owner's own
+    words of the turn (their names are never unknown words). Pure."""
     if not isinstance(answer, dict):
         return None
     reason = str(answer.get("reason") or "")
@@ -180,15 +259,31 @@ def miss_of(answer: Any) -> "tuple[str, str, list[str]] | None":
         return None
     if not _index.has_search_words(answer.get("query")):
         return None
-    unknown = [str(w) for w in (answer.get("unknown") or []) if str(w or "").strip()]
+    names = name_words(answer.get("query"), words)
+    unknown = [str(w) for w in (answer.get("unknown") or []) if str(w or "").strip() and str(w) not in names]
     if reason == "nothing":
         return KIND_NOTHING, "", unknown
     first = answer.get("first") if isinstance(answer.get("first"), dict) else {}
     if str(first.get("kind") or "") == "not_offered":
         return KIND_NOT_OFFERED, str(first.get("id") or ""), unknown
-    if unknown:
+    if unknown and _named_by_unknown(answer, names):
         return KIND_UNKNOWN, "", unknown
     return None
+
+
+def said_unknown(query: Any, unknown: Any, cap: int = 3) -> list[str]:
+    """The owner-readable words behind *unknown* (search words, stemmed):
+    the words of the query's first part whose search word is one of them,
+    lower-cased, each once, at most *cap* ("fax", never "fax" stemmed)."""
+    wanted = set(_words_of(unknown) if isinstance(unknown, str) else (str(w) for w in unknown or ()))
+    out: list[str] = []
+    for raw in _RAW_WORD.findall(_index.first_part(query)):
+        word = raw.strip("\"'“”‘’()[]{}<>,.!?:;").lower()
+        if word and word not in out and set(_index.tokens(word)) & wanted:
+            out.append(word)
+        if len(out) >= cap:
+            break
+    return out
 
 
 def changed_something(names: Iterable[str], registry: Any) -> bool:
@@ -210,19 +305,20 @@ def changed_something(names: Iterable[str], registry: Any) -> bool:
     return False
 
 
-def done_another_way(kind: str, names: Iterable[str], registry: Any) -> bool:
+def done_another_way(kind: str, names: Iterable[str], registry: Any, *, tried: Iterable[str] = ()) -> bool:
     """Was the request done another way? *names*: the calls that RAN
-    (successfully) after the reply's last lookup.
+    (successfully) after the reply's last lookup; *tried*: every call the
+    model MADE after it (run, failed, refused or declined on its card).
 
     * ``unknown``: the lookup DID list lines (it has no relevance floor), so
-      ANY successful call after it, another lookup aside, means one of them
-      fitted and was used, even one that only reads ("calculate a mortgage
-      payment" answers ``calculate``, which then ran): never a miss.
+      ANY call after it, another lookup aside, means the reply took one of
+      them to fit, even one that only reads, failed or was declined
+      ("calculate a mortgage payment" answers ``calculate``): never a miss.
     * ``nothing`` / ``not_offered`` (the plan's rule): a call that changes or
       creates something (:func:`changed_something`). A read alone (the form
       read before "I can't fax it") is not doing the request."""
     if kind == KIND_UNKNOWN:
-        return any(str(n or "") and str(n) != LOOKUP for n in names)
+        return any(str(n or "") and str(n) != LOOKUP for n in (*names, *tried))
     return changed_something(names, registry)
 
 
@@ -416,7 +512,14 @@ def waiting(engine: Any, *, now: Any = None) -> tuple[list[dict[str, Any]], int]
     out = []
     for g in shown:
         mine = asks.get(g.id, [])
+        said: list[str] = []
+        for m in mine:
+            if m.kind == KIND_UNKNOWN:
+                said += [w for w in said_unknown(m.query, m.unknown) if w not in said]
         out.append({
+            # 20-a review: the words of its asks that nothing Iron Jarvis has
+            # mentions, as the owner reads them (the page's why says them).
+            "unknown_said": said[:3],
             "id": g.id, "title": g.title, "count": int(g.count or 0),
             # The title's words were said only in Local only chats: chat names
             # them only to a turn that stays on this network (inbox/tools).
@@ -479,7 +582,8 @@ def answer_from_ledger(output: Any, args_json: Any, platform: Any = None) -> dic
     except (TypeError, ValueError):
         args = {}
     query = " ".join(str((args or {}).get("query") or "").split())[:QUERY_CHARS]
-    record: dict[str, Any] = {"query": query, "reason": "", "first": None, "partial": False, "unknown": []}
+    record: dict[str, Any] = {"query": query, "reason": "", "first": None, "partial": False, "unknown": [],
+                              "unknown_parts": []}
     if text.startswith(_tool.LOOKUP_FAILED):
         record["reason"] = "failed"
         return record
@@ -504,9 +608,11 @@ def answer_from_ledger(output: Any, args_json: Any, platform: Any = None) -> dic
         record["first"] = {"kind": "", "id": ""}
     try:
         if platform is not None and query:
-            record["unknown"] = _index.index_for(platform).unknown_words(_index.first_part(query))
+            idx = _index.index_for(platform)
+            record["unknown"] = idx.unknown_words(_index.first_part(query))
+            record["unknown_parts"] = [idx.unknown_words(part) for part in _index.parts(query)]
     except Exception:  # noqa: BLE001 — no unknown words: only nothing / not offered count
-        record["unknown"] = []
+        record.update(unknown=[], unknown_parts=[])
     return record
 
 
@@ -515,8 +621,8 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
     """An agent run's miss, from its OWN ledger: its last successful lookup,
     and the calls after it (a successful one that changes something, read
     from the row's own ``reversibility``, means it was done another way; a
-    rehearsal's row changed nothing; for ``unknown``, ANY successful call
-    after it, as :func:`done_another_way`). The caller checks whose words
+    rehearsal's row changed nothing; for ``unknown``, ANY call after it,
+    ok or not, as :func:`done_another_way`). The caller checks whose words
     the task is, the run's trust and where it came from. Returns the group's id, or
     None. BLOCKING; RAISES."""
     from sqlalchemy import text
@@ -536,18 +642,19 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
     if last < 0:
         return None
     record = answer_from_ledger(rows[last].output, rows[last].args_json, platform)
-    found = miss_of(record)
+    found = miss_of(record, words=words)
     if found is None:
         return None
     kind, entry_id, unknown = found
     for row in rows[last + 1:]:
-        if not row.ok or row.tool == LOOKUP:
+        if row.tool == LOOKUP:
             continue
         if kind == KIND_UNKNOWN:
-            # The lookup listed lines: a successful call after it (one that
-            # only reads, a rehearsal) is a line that fitted (done_another_way).
+            # The lookup listed lines: a call after it, even one that only
+            # reads, failed or was refused, is a line the run took to fit
+            # (``done_another_way``).
             return None
-        if getattr(row, "rehearsed", False):
+        if not row.ok or getattr(row, "rehearsed", False):
             continue
         if str(row.reversibility or "") != "readonly" and row.tool not in _index.READS_ONLY:
             return None
