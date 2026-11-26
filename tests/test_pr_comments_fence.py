@@ -18,11 +18,16 @@ Pinned:
 * Set aside has its Undo through the route the card calls: Bring back makes
   a comment set aside, or answered with no change, new again;
 * only a NEW comment is answered: a press from a window whose card is older
-  than a Set aside (or an answer) starts nothing and says so.
+  than a Set aside (or an answer) starts nothing and says so;
+* the card's read settles an ended reply first: read the moment the page
+  stops following it (or drops it at its error frame), it never says "Being
+  answered" of comments the reply has finished with; a reply still working
+  is never settled.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 from pathlib import Path
@@ -38,7 +43,7 @@ from iron_jarvis.harness import sessions as S
 from iron_jarvis.providers.adapters.base import ToolCall
 from tests.pr_comments_fakes import KEYISH, PR_URL, install, line_comment, review
 from tests.test_build_git_v1375 import git, make_repo, new_branch_session, no_real_gh
-from tests.test_build_sessions_v1367 import Script, asgi, messages_of, setup_of, until, wire
+from tests.test_build_sessions_v1367 import Script, asgi, messages_of, setup_of, turn_log, until, wire
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 
@@ -266,6 +271,93 @@ async def test_an_answer_still_starting_is_never_settled(app, tmp_path, monkeypa
     assert rows[cid]["state"] == PC.UNCHANGED and rows[cid]["turn_id"] == got["turn_id"]
 
 
+async def test_the_card_read_as_the_reply_ends_says_what_became_of_each(app, tmp_path, monkeypatch):
+    """The card reads its comments the moment the page stops following the
+    Answer these reply. The followers are told before the turn's record is
+    written, and the turn's own settling runs only after that write: the read
+    itself settles an ended reply first. Read before it, the card said "Being
+    answered" of a comment the reply had finished with, its tick and Set aside
+    stayed disabled, and nothing read the card again."""
+    from iron_jarvis.daemon import durable_turns as DT
+
+    install(tmp_path, monkeypatch)
+    sid, _wt = await _session(app, tmp_path, [{**line_comment(91), "_kind": "line"}])
+    cid = f"{sid}:c91"
+    written = asyncio.Event()
+    real_persist = DT.TurnLog.persist_now
+
+    async def slow_persist(self, engine):
+        # The record's last write is slow (a long reply, a busy disk).
+        await written.wait()
+        await real_persist(self, engine)
+
+    monkeypatch.setattr(DT.TurnLog, "persist_now", slow_persist)
+    wire(app, Script(["Read it."]))
+    lg = None
+    try:
+        status, got = await asgi(app, "POST", f"/build/sessions/{sid}/pr-comments/answer", {"ids": [cid]})
+        assert status == 200, got
+        lg = turn_log(app, got["turn_id"])
+        assert lg is not None
+        async for _chunk in lg.follow():  # the page's follow, to its end
+            pass
+        assert not lg.task.done(), "the turn's own settling could have run before the read"
+        status, view = await asgi(app, "GET", f"/build/sessions/{sid}/pr-comments")
+        assert status == 200
+        assert [(c["id"], c["state"]) for c in view["comments"]] == [(cid, PC.UNCHANGED)], (
+            "the read right after the reply ended still says it is being answered")
+    finally:
+        written.set()
+    assert await until(lambda: lg is None or lg.task.done(), 30.0)
+    assert PC.get_rows(app.state.platform.engine, sid, [cid])[0]["state"] == PC.UNCHANGED
+
+
+async def test_a_reply_whose_end_is_said_is_settled_and_one_still_working_is_not(app, tmp_path, monkeypatch):
+    """The page drops a reply at its error frame and reads the card at once,
+    before the turn's log has closed. A turn whose last frame is its end has
+    its reply line on the session already (it is written before that frame
+    goes out), so a read then settles it from the record. A turn still
+    working is never settled, whoever reads."""
+    from iron_jarvis.daemon.durable_turns import sse
+    from iron_jarvis.daemon.routes.chat import _turn_logs
+
+    install(tmp_path, monkeypatch)
+    sid, _wt = await _session(app, tmp_path, [
+        {**line_comment(n, created=f"2026-11-20T10:0{i}:00Z"), "_kind": "line"} for i, n in enumerate((95, 96, 97))])
+    engine = app.state.platform.engine
+    logs = _turn_logs(app.state.d)
+    cases = (
+        ("bt_working", f"{sid}:c95", ("phase", {"phase": "thinking"}), None, PC.ANSWERING),
+        ("bt_done", f"{sid}:c96", ("done", {"reply": "Read it."}), {}, PC.UNCHANGED),
+        ("bt_failed", f"{sid}:c97", ("error", {"detail": "The model is down."}), {"error": "The model is down."},
+         PC.NEW),
+    )
+    for turn, cid, (event, data), end, want in cases:
+        assert PC.set_state(engine, sid, [cid], PC.ANSWERING, turn_id=turn) == [cid]
+        lines = [{"role": "user", "content": PC.answer_text(1), "turnId": turn}]
+        if end is not None:  # the end is written BEFORE it is said (build.recorded_turn)
+            lines.append({"role": "assistant", "content": "", "turnId": turn, **end})
+        S.append_lines(engine, sid, lines)
+        closed = asyncio.Event()
+
+        async def frames(event=event, data=data, closed=closed):
+            yield sse(event, data)
+            await closed.wait()  # the log has not closed yet
+
+        lg = logs.start(turn, sid, frames())
+        lg.surface = "build"
+        try:
+            assert await until(lambda: lg.last_event() == event, 10.0)
+            assert _running_turn(app.state.d, sid) == turn
+            status, view = await asgi(app, "GET", f"/build/sessions/{sid}/pr-comments")
+            assert status == 200
+            states = {c["id"]: c["state"] for c in view["comments"]}
+            assert states[cid] == want, (turn, states)
+        finally:
+            closed.set()
+        assert await until(lambda: lg.task.done(), 10.0)
+
+
 async def test_set_aside_and_bring_back_through_the_route(app, tmp_path, monkeypatch):
     """Set aside has an Undo the card reaches: ``aside: false`` (Bring back)
     makes a comment set aside, or one answered with no change to its file,
@@ -304,8 +396,15 @@ async def test_set_aside_and_bring_back_through_the_route(app, tmp_path, monkeyp
     assert status == 200 and got["changed"] is False and state(e) == (PC.ANSWERING, "bt_now")
     status, got = await asgi(app, "POST", f"{route}/{sid}:c999/set-aside", {"aside": False})
     assert status == 404
-    # The view the card reads shows each comment where it now is.
-    status, view = await asgi(app, "GET", route)
+    # The view the card reads shows each comment where it now is (``e``'s
+    # press is still starting its turn: the read leaves it being answered).
+    from iron_jarvis.daemon.routes import ci_watch as W
+
+    W._ANSWER_STARTING.add("bt_now")
+    try:
+        status, view = await asgi(app, "GET", route)
+    finally:
+        W._ANSWER_STARTING.discard("bt_now")
     assert status == 200
     assert {x["id"]: x["state"] for x in view["comments"]} == {
         a: PC.NEW, b: PC.NEW, c: PC.ANSWERED, e: PC.ANSWERING}

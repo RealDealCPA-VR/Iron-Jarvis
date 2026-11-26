@@ -1256,7 +1256,7 @@ async def _read_comments(d: Any, thread_id: str, title: str, facts: dict[str, st
 
 async def _settle_answer(d: Any, thread_id: str, turn_id: str, facts: "dict[str, str] | None" = None) -> None:
     """An Answer these turn ended: each of its comments is settled FROM THE
-    RECORD (``pr_comments.judge``). A turn still running waits. Never
+    RECORD (``pr_comments.judge``). A turn still working waits. Never
     raises."""
     from ...harness import night as N
     from .build import _running_turn, _setup_of
@@ -1264,8 +1264,13 @@ async def _settle_answer(d: Any, thread_id: str, turn_id: str, facts: "dict[str,
     engine = d.platform.engine
     try:
         # Still starting (between the press's claim and the turn being
-        # listed), or running: there is no reply to settle from yet.
-        if turn_id in _ANSWER_STARTING or _running_turn(d, thread_id) == turn_id:
+        # listed), or running: there is no reply to settle from yet. A turn
+        # whose END is already said is settled now (:func:`_end_said`): a
+        # page drops a reply at its error frame, before its log has closed,
+        # and reads the card at once.
+        if turn_id in _ANSWER_STARTING:
+            return
+        if _running_turn(d, thread_id) == turn_id and not _end_said(d, turn_id):
             return
         row = await asyncio.to_thread(S.get_row, engine, thread_id)
         if row is None:
@@ -1279,6 +1284,17 @@ async def _settle_answer(d: Any, thread_id: str, turn_id: str, facts: "dict[str,
         await asyncio.to_thread(PC.judge, engine, thread_id, turn_id, root, ended=ended)
     except Exception:  # noqa: BLE001 — the next pass settles it
         log.warning("settling the answered review comments of %s failed", thread_id, exc_info=True)
+
+
+def _end_said(d: Any, turn_id: str) -> bool:
+    """The turn's last frame is its end (``done`` / ``error``). Its reply
+    line is on the session already (``build.recorded_turn`` writes the end
+    BEFORE it passes that frame on); only the log's own closing is left."""
+    from .build import _TERMINAL_EVENTS
+    from .chat import _turn_logs
+
+    lg = _turn_logs(d).get(turn_id)
+    return lg is not None and lg.last_event() in _TERMINAL_EVENTS
 
 
 async def _settle_answers(d: Any, thread_id: str, facts: dict[str, str]) -> None:
@@ -1340,10 +1356,19 @@ def _register_comments(app: FastAPI, d: Any) -> None:
     @app.get("/build/sessions/{thread_id}/pr-comments")
     async def pr_comments_view(thread_id: str) -> dict[str, Any]:
         """The review comments Iron Jarvis read from the session's pull
-        request, oldest first, and how the reading stands. No GitHub call."""
+        request, oldest first, and how the reading stands. No GitHub call.
+
+        An Answer these reply that has ended is settled FIRST, from the
+        record. The card reads the moment the page stops following the
+        reply, and the turn's own settling runs only after its record is
+        written: read before it, the card said "Being answered" of comments
+        the reply had finished with."""
         row, facts = await _session(thread_id)
         engine = d.platform.engine
         pr_url = str(facts.get("pr_url") or "")
+        if pr_url:
+            with contextlib.suppress(Exception):  # the read still answers; the next pass settles it
+                await _settle_answers(d, thread_id, facts)
         rows = await asyncio.to_thread(PC.listing, engine, thread_id, pr_url) if pr_url else []
         rec = await asyncio.to_thread(CI.get, engine, thread_id) if pr_url else None
         root = str(facts.get("worktree") or getattr(row, "folder", "") or "")
