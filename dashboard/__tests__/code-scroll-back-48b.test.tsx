@@ -13,7 +13,8 @@
  *    stays where it was on screen;
  *  - the earlier lines are read-only: no Rewind, Branch or Try again on them
  *    (the live ones keep theirs);
- *  - the top says "Start of this chat", or "Earlier messages were not kept
+ *  - the top says "Start of this session" (a coding session names itself;
+ *    a chat's says "Start of this chat"), or "Earlier messages were not kept
  *    before this version" when the daemon says the first kept line may not
  *    be the session's first (`start_kept`);
  *  - a failed read says so and offers Try again, never an empty top;
@@ -308,18 +309,58 @@ describe("scroll back in a coding session (48-b)", () => {
     expect(screen.getAllByTestId("harness-branch-question").length).toBeGreaterThan(0);
   });
 
-  it("says 'Start of this chat' once the first line is loaded", async () => {
+  it("an earlier line asks nothing: no client question and no preference suggestion on it", async () => {
+    const older = 2;
+    const ask = { id: "client_ab12cd34ef56", name: "Hartleys", folders: 2, work: 9 };
+    const offer = { id: "s1", text: "Always use the firm letterhead", count: 2, quotes: [], since: "" };
+    const live = Array.from({ length: LIVE }, (_, i) => line(older + i));
+    // The newest live reply carries a client question: the live lines keep it.
+    live[LIVE - 1] = { ...live[LIVE - 1], clientQuestion: ask };
+    api.gets[`/build/sessions/${sid}`] = view(sid, older, live);
+    api.older = (before, limit) => {
+      const start = Math.max(0, before - limit);
+      const messages = [line(0), { ...line(1), clientQuestion: ask }].slice(start, before);
+      return { id: sid, total: older, offset: 0, first_seq: start, start_kept: true, messages };
+    };
+    render(session(sid));
+    await screen.findByText(`reply ${older + LIVE - 1}`, undefined, LONG);
+    expect(screen.getAllByTestId("client-question")).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("older-more"));
+    await screen.findByText("reply 1", undefined, LONG);
+    const block = screen.getByTestId("harness-older");
+    expect(within(block).queryByTestId("client-question")).toBeNull();
+    expect(screen.getAllByTestId("client-question")).toHaveLength(1);
+    // A suggestion on an earlier line is not offered either.
+    cleanup();
+    api.older = (before, limit) => {
+      const start = Math.max(0, before - limit);
+      const messages = [line(0), { ...line(1), suggestion: offer, clientQuestion: ask }].slice(start, before);
+      return { id: sid, total: older, offset: 0, first_seq: start, start_kept: true, messages };
+    };
+    render(session(sid));
+    await screen.findByText(`reply ${older + LIVE - 1}`, undefined, LONG);
+    fireEvent.click(screen.getByTestId("older-more"));
+    await screen.findByText("reply 1", undefined, LONG);
+    const again = screen.getByTestId("harness-older");
+    expect(within(again).queryByTestId("pref-suggestion")).toBeNull();
+    expect(within(again).queryByTestId("client-question")).toBeNull();
+  });
+
+  it("says 'Start of this session' once the first line is loaded", async () => {
     await openLongSession(60);
     scrollToTop();
     reachTop();
     await screen.findByText("question 10", undefined, LONG);
     reachTop();
     await screen.findByText("question 0", undefined, LONG);
-    expect(await screen.findByTestId("older-start", undefined, LONG)).toHaveTextContent("Start of this chat");
+    const top = await screen.findByTestId("older-start", undefined, LONG);
+    // One word per thing: the top of a coding session is not a chat's.
+    expect(top).toHaveTextContent("Start of this session");
+    expect(top).not.toHaveTextContent("Start of this chat");
     expect(screen.queryByTestId("older-more")).toBeNull();
   });
 
-  it("never says 'Start of this chat' over a session whose first lines may not have been kept", async () => {
+  it("never says 'Start of this session' over a session whose first lines may not have been kept", async () => {
     await openLongSession(30, false);
     fireEvent.click(screen.getByTestId("older-more"));
     await screen.findByText("question 0", undefined, LONG);
@@ -392,6 +433,61 @@ describe("scroll back in a coding session (48-b)", () => {
       .map((b) => b.textContent);
     // Every question from 250 on, each once, in order: no gap, no double.
     expect(words).toEqual(Array.from({ length: 27 + LIVE / 2 }, (_, k) => `question ${250 + 2 * k}`));
+  });
+
+  it("a view read before the last and answered late keeps what the reader scrolled back to", async () => {
+    // Two reads were in flight and answered in the wrong order: the later
+    // answer is the older view, whose live lines start where they did
+    // before the newer view moved four of them. A session's count never
+    // goes down, so its earlier lines held before that point stay.
+    const { rerender } = await openLongSession();
+    scrollToTop();
+    reachTop();
+    await screen.findByText("question 250", undefined, LONG);
+    const reread = (k: number) =>
+      rerender(
+        <HarnessSession
+          key={sid}
+          threadId={sid}
+          terminal={terminal}
+          listRunning={false}
+          onChanged={() => {}}
+          onGone={() => {}}
+          rereadRequest={k}
+        />,
+      );
+    // The newer view: four lines left the live ones.
+    api.gets[`/build/sessions/${sid}`] = view(sid, 304, Array.from({ length: LIVE }, (_, i) => line(304 + i)));
+    serveOlder(sid, 304);
+    reread(1);
+    await screen.findByText(`reply ${304 + LIVE - 1}`, undefined, LONG);
+    await screen.findByText("question 302", undefined, LONG);
+    // Then the older view lands: its live lines start at 300 again.
+    api.got.length = 0;
+    api.gets[`/build/sessions/${sid}`] = view(sid, 300, Array.from({ length: LIVE }, (_, i) => line(300 + i)));
+    reread(2);
+    await waitFor(() => expect(screen.queryByText(`reply ${304 + LIVE - 1}`)).toBeNull(), LONG);
+    // What the reader scrolled back to is still there, each line once, in order.
+    expect(screen.getByText("question 250")).toBeTruthy();
+    const words = within(transcript())
+      .getAllByTestId("harness-user-bubble")
+      .map((b) => b.textContent);
+    expect(words).toEqual(Array.from({ length: 25 + LIVE / 2 }, (_, k) => `question ${250 + 2 * k}`));
+    expect(olderReads()).toEqual([]);
+    // The newer view again: just the four in between are read back.
+    api.gets[`/build/sessions/${sid}`] = view(sid, 304, Array.from({ length: LIVE }, (_, i) => line(304 + i)));
+    reread(3);
+    await waitFor(() => expect(olderReads()).toEqual([`/chat/threads/${sid}/older?before=304&limit=4`]), LONG);
+    await screen.findByText(`reply ${304 + LIVE - 1}`, undefined, LONG);
+    await waitFor(
+      () =>
+        expect(
+          within(transcript())
+            .getAllByTestId("harness-user-bubble")
+            .map((b) => b.textContent),
+        ).toEqual(Array.from({ length: 27 + LIVE / 2 }, (_, k) => `question ${250 + 2 * k}`)),
+      LONG,
+    );
   });
 
   it("a read that fails after the session started over marks nothing", async () => {

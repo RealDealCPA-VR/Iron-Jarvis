@@ -47,7 +47,7 @@ const REACH_MARGIN = "400px 0px 0px 0px";
 
 const COLUMN = "mx-auto w-full max-w-[760px]";
 
-function DayLine({ at }: { at?: string }) {
+function DayLine({ at, column = COLUMN }: { at?: string; column?: string }) {
   const label = chatDay(at);
   if (!label) return null;
   return (
@@ -55,7 +55,7 @@ function DayLine({ at }: { at?: string }) {
       data-testid="older-day"
       role="separator"
       aria-label={label}
-      className={`${COLUMN} flex items-center gap-3 text-[11px] text-zinc-500`}
+      className={`${column} flex items-center gap-3 text-[11px] text-zinc-500`}
     >
       <span aria-hidden className="h-px min-w-0 flex-1 bg-white/[0.06]" />
       <span className="shrink-0">{label}</span>
@@ -84,6 +84,13 @@ export interface OlderMessagesProps<M extends { at?: string }> {
   onRetryGap?: () => void;
   /** One row, read-only (the page's own row component). */
   renderRow: (message: M, seq: number) => ReactNode;
+  /** 48-b: what the top says once every earlier message is held and the
+   *  first is the very first (a chat's "Start of this chat"; a coding
+   *  session and an old round-table name themselves). */
+  startText?: string;
+  /** 48-b: the column each line sits in (a chat's reading column; a page
+   *  whose rows fill their card passes its own). */
+  column?: string;
 }
 
 function OlderMessagesImpl<M extends { at?: string }>({
@@ -95,6 +102,8 @@ function OlderMessagesImpl<M extends { at?: string }>({
   onLoad,
   onRetryGap,
   renderRow,
+  startText = OLDER_WORDS.start,
+  column = COLUMN,
 }: OlderMessagesProps<M>) {
   const topRef = useRef<HTMLDivElement>(null);
   const reachRef = useRef(onReach);
@@ -134,7 +143,7 @@ function OlderMessagesImpl<M extends { at?: string }>({
   return (
     <div className="contents" data-testid="older-messages">
       {more ? (
-        <div ref={topRef} data-testid="older-top" className={`${COLUMN} flex justify-center`}>
+        <div ref={topRef} data-testid="older-top" className={`${column} flex justify-center`}>
           {state.failed ? (
             <div
               data-testid="older-failed"
@@ -169,8 +178,8 @@ function OlderMessagesImpl<M extends { at?: string }>({
           )}
         </div>
       ) : atStartOfChat(state) ? (
-        <div data-testid="older-start" className={`${COLUMN} text-center text-[12px] text-zinc-500`}>
-          {startWords(state)}
+        <div data-testid="older-start" className={`${column} text-center text-[12px] text-zinc-500`}>
+          {startWords(state, startText)}
         </div>
       ) : null}
       {rows.map((r, i) => {
@@ -178,10 +187,10 @@ function OlderMessagesImpl<M extends { at?: string }>({
         const newDay = day !== "" && (i === 0 || day !== dayKey(rows[i - 1].message.at));
         return (
           <Fragment key={`older-${r.seq}`}>
-            {newDay && <DayLine at={r.message.at} />}
+            {newDay && <DayLine at={r.message.at} column={column} />}
             {/* A row that draws nothing (a hidden Continue turn) keeps no box,
                 like the live rows. */}
-            <div data-older-seq={r.seq} className={`${COLUMN} empty:hidden has-[[data-handoff-hidden]]:hidden`}>
+            <div data-older-seq={r.seq} className={`${column} empty:hidden has-[[data-handoff-hidden]]:hidden`}>
               {renderRow(r.message, r.seq)}
             </div>
           </Fragment>
@@ -191,7 +200,7 @@ function OlderMessagesImpl<M extends { at?: string }>({
         <div
           data-testid="older-gap-failed"
           role="status"
-          className={`${COLUMN} flex flex-wrap items-center justify-center gap-x-2 text-center text-[12px] text-tone-warn`}
+          className={`${column} flex flex-wrap items-center justify-center gap-x-2 text-center text-[12px] text-tone-warn`}
         >
           <span>{OLDER_WORDS.failed}</span>
           <button
@@ -203,7 +212,7 @@ function OlderMessagesImpl<M extends { at?: string }>({
           </button>
         </div>
       ) : (
-        joinDay && <DayLine at={firstLiveAt} />
+        joinDay && <DayLine at={firstLiveAt} column={column} />
       )}
     </div>
   );

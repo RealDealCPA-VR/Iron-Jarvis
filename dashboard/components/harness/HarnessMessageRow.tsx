@@ -635,7 +635,8 @@ function HarnessMessageRowImpl({
             preference suggestion goes first. The line keeps its answer;
             the daemon writes a coding session's lines. */}
         {(() => {
-          if (readOnly || decodeSuggestion(m.suggestion)) return null;
+          if (readOnly) return null;
+          if (decodeSuggestion(m.suggestion)) return null;
           const cq = decodeClientQuestion((m as unknown as { clientQuestion?: unknown }).clientQuestion);
           return cq && cq.state !== "gone" ? <ClientQuestion key={cq.id} question={cq} /> : null;
         })()}

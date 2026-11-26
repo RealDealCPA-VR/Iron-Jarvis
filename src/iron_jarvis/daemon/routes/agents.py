@@ -4743,10 +4743,57 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/agents/threads/{thread_id}")
     def get_agent_thread(thread_id: str) -> dict[str, Any]:
+        from ...core.db import CONVERSATION_WRITE_LOCK
+        from ..chat_append import older_count
+
+        # 48-b (additive, LAST): ``older`` is how many of the room's messages
+        # left its live 400 and are kept (GET .../older reads them). Read with
+        # the room under the conversation write lock, as a chat's is, so the
+        # two describe the same save: the page takes ``older`` as where
+        # ``messages[0]`` sits. A sync route: the wait runs off the loop.
+        with CONVERSATION_WRITE_LOCK:
+            rec = _threads().get(thread_id)
+            older = older_count(d.platform.engine, rec.id) if rec is not None else 0
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        return {**_thread_view(rec), "older": older}
+
+    @app.get("/agents/threads/{thread_id}/older")
+    def get_agent_thread_older(
+        thread_id: str, offset: int = 0, limit: int = 200, before: int | None = None,
+    ) -> dict[str, Any]:
+        """A room's OLDER messages, oldest first (48-b): the ones that left
+        its live 400 (``messages``) and were kept instead of deleted. The
+        same answer as ``GET /chat/threads/{id}/older``: ``total``,
+        ``first_seq`` (0 = the room's first message), ``before`` for the
+        ``limit`` just before a position, and ``start_kept`` — whether
+        position 0 is the room's VERY first message (a room made before this
+        PC started keeping them may have lost its first ones then)."""
+        import json as _json
+
+        from ...agents.threads import _MAX_MESSAGES as _ROOM_LIVE_MAX
+        from ..chat_append import older_count, older_window, read_older, start_kept_of
+
         rec = _threads().get(thread_id)
         if rec is None:
             raise HTTPException(status_code=404, detail="no such thread")
-        return _thread_view(rec)
+        engine = d.platform.engine
+        total = older_count(engine, thread_id)
+        start, count = older_window(offset=offset, limit=limit, before=before, total=total)
+        live = 0
+        if total <= 0:  # only then does the live count decide (see start_kept)
+            try:
+                live = len(_json.loads(rec.messages_json or "[]"))
+            except (TypeError, ValueError):  # unreadable: counted as full
+                live = _ROOM_LIVE_MAX
+        return {
+            "id": thread_id,
+            "total": total,
+            "offset": max(0, int(offset or 0)),
+            "first_seq": start,
+            "start_kept": start_kept_of(engine, rec, total, live, room=True, cap=_ROOM_LIVE_MAX),
+            "messages": read_older(engine, thread_id, offset=start, limit=count) if count > 0 else [],
+        }
 
     # Custom (agent/user-authored) reusable tools.
     @app.get("/tools/custom")

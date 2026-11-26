@@ -38,6 +38,10 @@ export const OLDER_WORDS = {
   failed: "Could not load earlier messages.",
   retry: "Try again",
   start: "Start of this chat",
+  /** 48-b: the same top in a coding session (Chat › Code) ... */
+  sessionStart: "Start of this session",
+  /** ... and on an old round-table's page, which names itself a conversation. */
+  roomStart: "Start of this conversation",
   notKept: "Earlier messages were not kept before this version",
 } as const;
 
@@ -108,14 +112,21 @@ export function atStartOfChat<M>(s: OlderState<M>): boolean {
  *  of this chat" only when the daemon says the first kept message is the
  *  chat's very first; otherwise that earlier ones were not kept (a chat
  *  that passed 200 messages before v1.499.4 lost its first ones then). */
-export function startWords<M>(s: OlderState<M>): string {
-  return s.startKept ? OLDER_WORDS.start : OLDER_WORDS.notKept;
+export function startWords<M>(s: OlderState<M>, start: string = OLDER_WORDS.start): string {
+  return s.startKept ? start : OLDER_WORDS.notKept;
 }
 
 /** The read for the `limit` messages just before position `before`. */
 export function olderPagePath(threadId: string, before: number, limit: number = OLDER_PAGE_SIZE): string {
   const n = Math.max(1, Math.min(Math.floor(limit), OLDER_READ_MAX));
   return `/chat/threads/${encodeURIComponent(threadId)}/older?before=${Math.max(0, Math.floor(before))}&limit=${n}`;
+}
+
+/** 48-b: the same read for a round-table (`GET /agents/threads/{id}/older`,
+ *  the same answer as a chat's). */
+export function roomOlderPagePath(roomId: string, before: number, limit: number = OLDER_PAGE_SIZE): string {
+  const n = Math.max(1, Math.min(Math.floor(limit), OLDER_READ_MAX));
+  return `/agents/threads/${encodeURIComponent(roomId)}/older?before=${Math.max(0, Math.floor(before))}&limit=${n}`;
 }
 
 export interface OlderPage<M> {
@@ -132,17 +143,22 @@ export interface OlderPage<M> {
 /** The daemon's answer to `GET /chat/threads/{id}/older?before=`, or null
  *  when it is not one (no `first_seq`: a daemon that does not know `before`
  *  answered from the first message, which is not the page asked for). Only
- *  objects with a role are kept as messages. */
-export function decodeOlderPage<M>(raw: unknown): OlderPage<M> | null {
+ *  objects with a role are kept as messages, or (48-b) what `isMessage`
+ *  says is one (a round-table's own messages name `who`, not a role). */
+export function decodeOlderPage<M>(
+  raw: unknown,
+  isMessage: (m: object) => boolean = hasRole,
+): OlderPage<M> | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as { first_seq?: unknown; total?: unknown; messages?: unknown; start_kept?: unknown };
   const firstSeq = olderCount(r.first_seq);
   if (firstSeq === null || !Array.isArray(r.messages)) return null;
-  const messages = r.messages.filter(
-    (m): m is M =>
-      !!m && typeof m === "object" && typeof (m as { role?: unknown }).role === "string",
-  );
+  const messages = r.messages.filter((m): m is M => !!m && typeof m === "object" && isMessage(m));
   return { firstSeq, total: olderCount(r.total) ?? 0, messages, startKept: r.start_kept === true };
+}
+
+function hasRole(m: object): boolean {
+  return typeof (m as { role?: unknown }).role === "string";
 }
 
 function rowsOf<M>(page: OlderPage<M>): OlderRow<M>[] {
@@ -194,6 +210,32 @@ export function withTotal<M>(s: OlderState<M>, threadId: string, total: unknown)
   if (s.threadId !== threadId || n < s.total) return olderStart(threadId, n);
   if (n === s.total) return s;
   return { ...s, total: n, gapFailed: false };
+}
+
+/**
+ * 48-b: the page took a view whose live list starts EARLIER, at `total`,
+ * where the count can only grow (a coding session's: its older lines are
+ * only added, or deleted with it). That view was read before the one the
+ * state follows and answered late, and the rows from `total` on are its own
+ * live ones again. So the rows held before `total` stay (what the reader
+ * scrolled back to is not dropped) and the ones from `total` on go (nothing
+ * shows twice); the next view whose count grew fetches them back as the
+ * rows in between (`gapToFill`). A count that is not lower changes nothing.
+ */
+export function keepBefore<M>(s: OlderState<M>, total: unknown): OlderState<M> {
+  const n = olderCount(total);
+  if (n === null || n >= s.total) return s;
+  const rows = s.rows.filter((r) => r.seq < n);
+  return {
+    ...s,
+    total: n,
+    rows,
+    loadedFrom: rows.length ? Math.min(s.loadedFrom, n) : n,
+    heldTo: rows.length ? Math.min(s.heldTo, n) : n,
+    loading: false,
+    failed: false,
+    gapFailed: false,
+  };
 }
 
 /** The rows still to fetch between the held rows and the live ones, or

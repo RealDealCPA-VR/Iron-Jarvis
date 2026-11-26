@@ -330,6 +330,8 @@ import {
   gapRetry,
   gapToFill,
   hasEarlier,
+  keepBefore,
+  OLDER_WORDS,
   olderCount,
   olderFailed,
   olderLoading,
@@ -2996,13 +2998,25 @@ export function HarnessSession({
    *  (`older`, read with them). The first one starts the state; a later one
    *  whose count grew fetches just the lines that left the live ones, so no
    *  gap opens and nothing shows twice. A view with no count (an older Iron
-   *  Jarvis, or one read while the session went) changes nothing. */
+   *  Jarvis, or one read while the session went) changes nothing. A
+   *  session's count never goes down, so a lower one is a view read before
+   *  the last and answered late (two reads in flight): the earlier lines
+   *  held before it stay, the ones it shows live again go (`keepBefore`),
+   *  and a read on its way lands nowhere. */
   function takeOlderTotal(total: unknown) {
     const n = olderCount(total);
     if (n === null) return;
     const cur = olderRef.current;
-    if (cur.threadId !== threadId || n < cur.total) {
+    if (cur.threadId !== threadId) {
       resetOlder(n);
+      return;
+    }
+    if (n < cur.total) {
+      olderGenRef.current += 1;
+      olderFillingRef.current = false;
+      olderPlaceRef.current = null;
+      setOlder(keepBefore(cur, n));
+      fillOlderGap();
       return;
     }
     const next = withTotal(cur, threadId, n);
@@ -3880,6 +3894,7 @@ export function HarnessSession({
                 onLoad={olderPress}
                 onRetryGap={olderRetryGap}
                 renderRow={renderOlderRow}
+                startText={OLDER_WORDS.sessionStart}
               />
             </div>
           ) : null}

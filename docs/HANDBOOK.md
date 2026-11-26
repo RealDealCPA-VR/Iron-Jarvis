@@ -2150,39 +2150,44 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Phone chats and coding sessions keep every message too (v1.581.0)
+## Phone chats, coding sessions and round-tables keep every message too (v1.581.0)
 
-Phone chats and coding sessions no longer lose their oldest messages, and you
-can scroll back to them. Until now a phone chat (Telegram, Slack, email and
-the rest) kept only its newest 200 messages and a coding session (Chat ›
-Code) its newest 200 lines: anything older was deleted as new ones came in.
-From this version they are kept, the way a long chat's have been since
-v1.499.4.
+Phone chats, coding sessions and round-tables no longer lose their oldest
+messages, and you can scroll back to them. Until now a phone chat (Telegram,
+Slack, email and the rest) kept only its newest 200 messages, a coding
+session (Chat › Code) its newest 200 lines and a round-table its newest 400
+messages: anything older was deleted as new ones came in. From this version
+they are kept, the way a long chat's have been since v1.499.4.
 
 **How it works.** Nothing to set up. Open a long phone chat in Chat, or a
 long coding session in Chat › Code, and scroll up: at the top there is the
 same quiet **Earlier messages** line a long chat has. Scroll up to it and the
 50 before load in place, and what you were reading stays where it was. Keep
-scrolling to go further back, to **Start of this chat**. In a session too
-short to scroll, press the line instead.
+scrolling to go further back, to **Start of this chat** (in a coding
+session, **Start of this session**). In a session too short to scroll, press
+the line instead.
+
+A long round-table's page (where a history search result on a round-table
+opens, and where the bell leads for an agent's message that has no chat) has
+the same line at its top. That page opens at its first live message, so
+press the line: the 50 before load above, and pressing again goes further
+back, to **Start of this conversation**.
 
 **Good to know.**
 
 - What was deleted before this version cannot be brought back. At the top of
-  a long phone chat or coding session started before this version, the line
-  reads "Earlier messages were not kept before this version" instead of
-  **Start of this chat**.
+  a long phone chat, coding session or round-table started before this
+  version, the line reads "Earlier messages were not kept before this
+  version" instead.
 - A session opens as fast as before: opening it reads nothing earlier.
 - Earlier lines of a coding session can be read and copied. You cannot
   rewind to them, branch from them or try them again; Undo and the other
   buttons stay on the newer lines.
 - Rewinding a coding session leaves its earlier lines as they are.
-- Deleting a phone chat or a coding session deletes its earlier messages
-  too.
-- History search finds a phone chat's earlier messages. Coding sessions stay
-  out of Chat's history search, as before.
-- Round-tables keep everything too. What their agents say also reaches the
-  chat it was asked from, so you read it there.
+- Deleting a phone chat, a coding session or a round-table deletes its
+  earlier messages too.
+- History search finds a phone chat's and a round-table's earlier messages.
+  Coding sessions stay out of Chat's history search, as before.
 - The model answering is sent what it was before: the newest messages that
   fit. Keeping more uses a little more disk.
 

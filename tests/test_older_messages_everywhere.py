@@ -326,6 +326,167 @@ async def test_a_remote_seat_shown_the_room_itself_is_told_of_its_older_rows(tmp
     assert threads.older_by_who(room.id) == {"user": 3, "remote:desk": 3}
 
 
+def _long_room(engine, lines: int = 420):
+    threads = AgentThreads(engine)
+    room = threads.create("Planning", [{"key": "builtin:critic", "source": "builtin", "name": "critic", "role": "critic"}])
+    said = []
+    for i in range(lines):
+        entry = {"who": "user" if i % 2 == 0 else "builtin:critic", "content": f"round line {i}", "at": "2026-11-20T10:00:00+00:00"}
+        said.append(entry)
+        threads._append(room.id, [entry])
+    return threads, room, said
+
+
+def test_a_long_round_table_is_read_back_from_its_own_page(tmp_path):
+    """The old room page (``/agents?thread=<id>``, where a history hit on a
+    round-table opens) reads ``GET /agents/threads/{id}``: it says where the
+    live messages start (``older``), and ``GET /agents/threads/{id}/older``
+    pages the ones before, as a chat's are paged."""
+    with TestClient(create_app(str(tmp_path))) as client:
+        engine = client.app.state.platform.engine
+        threads, room, said = _long_room(engine)
+        body = client.get(f"/agents/threads/{room.id}").json()
+        assert body["older"] == 20 and body["messages"][0]["content"] == "round line 20"
+        assert body["message_count"] == 400
+        page = client.get(f"/agents/threads/{room.id}/older?before=20&limit=50").json()
+        assert page["total"] == 20 and page["first_seq"] == 0
+        assert page["messages"] == said[:20]
+        assert page["start_kept"] is True  # made since this PC started keeping them
+        mid = client.get(f"/agents/threads/{room.id}/older?before=15&limit=5").json()
+        assert mid["first_seq"] == 10 and _words(mid["messages"]) == [f"round line {i}" for i in range(10, 15)]
+        # A room made before then may have lost its first messages: not claimed.
+        since = core_db.older_kept_since(engine)
+        with session_scope(engine) as db:
+            rec = db.get(AgentThreadRecord, room.id)
+            rec.created_at = (since - timedelta(seconds=1)).replace(tzinfo=None)
+            db.add(rec)
+            db.commit()
+        assert client.get(f"/agents/threads/{room.id}/older?before=0").json()["start_kept"] is False
+        # A room under its own 400 with nothing older never lost one, however old.
+        _t, short, _s = _long_room(engine, 300)
+        with session_scope(engine) as db:
+            rec = db.get(AgentThreadRecord, short.id)
+            rec.created_at = (since - timedelta(days=3)).replace(tzinfo=None)
+            db.add(rec)
+            db.commit()
+        assert client.get(f"/agents/threads/{short.id}").json()["older"] == 0
+        assert client.get(f"/agents/threads/{short.id}/older?before=0").json()["start_kept"] is True
+        # No such room: 404, as the room itself answers.
+        assert client.get("/agents/threads/athr_none/older?before=0").status_code == 404
+        # A chat's own read never answers for a room.
+        assert client.get(f"/chat/threads/{room.id}/older?before=20").status_code == 404
+
+
+def test_the_room_view_counts_older_messages_with_the_messages_it_shows(tmp_path, monkeypatch):
+    """The room page takes ``older`` as where ``messages[0]`` sits: both are
+    read under the conversation lock, so no round can move one between."""
+    import threading
+
+    from iron_jarvis.core.db import CONVERSATION_WRITE_LOCK
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        engine = client.app.state.platform.engine
+        _threads, room, _said = _long_room(engine, 406)
+        seen: list[bool] = []
+        real = CA.older_count
+
+        def counting(eng, thread_id):
+            got: list[bool] = []
+
+            def probe():
+                ok = CONVERSATION_WRITE_LOCK.acquire(blocking=False)
+                if ok:
+                    CONVERSATION_WRITE_LOCK.release()
+                got.append(ok)
+
+            t = threading.Thread(target=probe)
+            t.start()
+            t.join()
+            seen.append(got[0])
+            return real(eng, thread_id)
+
+        monkeypatch.setattr(CA, "older_count", counting)
+        body = client.get(f"/agents/threads/{room.id}").json()
+        assert body["older"] == 6 and body["messages"][0]["content"] == "round line 6"
+        assert seen and not any(seen), "the count was read while a writer could save"
+
+
+async def test_a_rounds_writes_run_off_the_loop(tmp_path, monkeypatch):
+    """A room's append is a locked write that, past its 400, also moves the
+    oldest messages: a round runs each one in a worker, never on the loop."""
+    import threading
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents.remote import RemoteAgentRegistry
+    from iron_jarvis.agents.threads import clean_participants
+
+    monkeypatch.delenv("IRONJARVIS_TOKEN", raising=False)
+    app = create_app(str(tmp_path))
+    platform = app.state.platform
+    RemoteAgentRegistry(platform.engine).upsert("desk", "http://192.168.1.20:8787/task", "http-task")
+
+    async def fake_run(self, record, task, secret_get, **kw):
+        return {"ok": True, "result": "noted"}
+
+    monkeypatch.setattr(RemoteAgentRegistry, "run", fake_run)
+    threads = AgentThreads(platform.engine)
+    room = threads.create("room", clean_participants([{"source": "remote", "name": "desk", "role": "participant"}]))
+    loop_thread = threading.get_ident()
+    ran_on: list[int] = []
+    real = AgentThreads._append
+
+    def spy(self, thread_id, entries):
+        ran_on.append(threading.get_ident())
+        return real(self, thread_id, entries)
+
+    monkeypatch.setattr(AgentThreads, "_append", spy)
+    await threads.run_round(room.id, "@desk go on", SimpleNamespace(platform=platform), directed=["desk"])
+    assert len(ran_on) >= 2, ran_on  # the user's line and the remote's answer
+    assert loop_thread not in ran_on
+
+
+# --------------------------------------------------------------------------- #
+# A branch and a resumed wait
+# --------------------------------------------------------------------------- #
+def test_a_branch_and_a_resumed_wait_keep_what_leaves_the_window(tmp_path):
+    """The two other writes that put lines on a coding session: a branch
+    (``create_with_lines``, an origin's lines up to the message) and the
+    question a "Resume when ready" wait sends (``take_wait``). What leaves
+    the live window moves to the older lines there too, in order."""
+    from iron_jarvis.core.db import init_db, make_engine
+
+    engine = make_engine(str(tmp_path / "t.db"))
+    init_db(engine)
+    lines: list[dict] = []
+    for n in range(110):
+        lines += _turn(n)
+    branch = S.create_with_lines(engine, str(tmp_path), "Branch", {}, lines)
+    live = S._messages(S.get_row(engine, branch.id))
+    older = CA.read_older(engine, branch.id, limit=1000)
+    assert len(older) == 20 and len(live) == 200
+    assert _words(older + live) == _words(lines)
+
+    session = S.create(engine, str(tmp_path))
+    for n in range(100):
+        S.append_lines(engine, session.id, _turn(n))
+    assert CA.older_count(engine, session.id) == 0  # exactly 200 live
+    armed = "2026-11-20T10:00:00+00:00"
+    with session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, session.id)
+        setup = json.loads(row.setup_json or "{}")
+        setup.update({"account": "acct", "account_wait": {"armed_at": armed, "account": "acct"}})
+        row.setup_json = json.dumps(setup)
+        db.add(row)
+        db.commit()
+    question = {"role": "user", "content": "question 100", "turnId": "turn100"}
+    assert S.take_wait(engine, session.id, armed, "acct", lines=[question]) is True
+    # One line past 200: the oldest whole turn moved, the question is live.
+    assert _words(CA.read_older(engine, session.id)) == ["question 0", "reply 0.0"]
+    live = S._messages(S.get_row(engine, session.id))
+    assert len(live) == 199 and live[-1]["content"] == "question 100"
+    engine.dispose()
+
+
 # --------------------------------------------------------------------------- #
 # Where the start is claimed
 # --------------------------------------------------------------------------- #

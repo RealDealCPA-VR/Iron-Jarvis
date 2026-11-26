@@ -1680,7 +1680,9 @@ class AgentThreads:
             }
             messages.append(user_entry)
             new_entries.append(user_entry)
-            count = self._append(thread_id, [user_entry])
+            # 48-b: a room's append is a locked write that, past its 400, also
+            # moves the oldest to its older messages: off the loop.
+            count = await asyncio.to_thread(self._append, thread_id, [user_entry])
             await self._publish_updated(thread_id, "user", count, d)
 
         speakers = (
@@ -1777,7 +1779,7 @@ class AgentThreads:
                     skipped.append(p["key"])
                     messages.append(entry)
                     new_entries.append(entry)
-                    count = self._append(thread_id, [entry])
+                    count = await asyncio.to_thread(self._append, thread_id, [entry])
                     await self._publish_updated(thread_id, p["key"], count, d)
                     continue
             # LOCAL ONLY (v1.332.0): in a local-only chat a seat whose model
@@ -1790,7 +1792,7 @@ class AgentThreads:
                 entry["sat_out"] = "local_only"
                 messages.append(entry)
                 new_entries.append(entry)
-                count = self._append(thread_id, [entry])
+                count = await asyncio.to_thread(self._append, thread_id, [entry])
                 await self._publish_updated(thread_id, p["key"], count, d)
                 continue
             try:
@@ -1854,7 +1856,7 @@ class AgentThreads:
             spoke.append(p["key"])
             messages.append(entry)
             new_entries.append(entry)
-            count = self._append(thread_id, [entry])
+            count = await asyncio.to_thread(self._append, thread_id, [entry])
             await self._publish_updated(thread_id, p["key"], count, d)
 
         out: dict[str, Any] = {"entries": new_entries, "spoke": spoke, "skipped": skipped}

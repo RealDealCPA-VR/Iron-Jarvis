@@ -313,7 +313,7 @@ CHAT_OLDER_KEPT_SINCE = datetime(2026, 11, 15, 17, 2, 5, tzinfo=timezone.utc)
 
 def start_kept(created_at: Any, older: int, live: int = 0, *,
                since: "datetime | None" = CHAT_OLDER_KEPT_SINCE,
-               short_proves: bool = True) -> bool:
+               short_proves: bool = True, cap: int = MAX_MESSAGES) -> bool:
     """Is a chat's first kept message (position 0) its VERY first one (48-a)?
 
     The chat page says "Start of this chat" only when this is True. A chat
@@ -330,10 +330,11 @@ def start_kept(created_at: Any, older: int, live: int = 0, *,
     48-b: ``since`` None is "not known" (only the short rule can claim the
     start), and ``short_proves`` False for a conversation whose live window
     can shrink without growing first (a coding session's is cut at a turn
-    start, and a rewind cuts it), where fewer than the cap proves nothing.
+    start, and a rewind cuts it), where fewer than the cap proves nothing;
+    ``cap`` is the conversation's own live cap (a round-table's is 400).
     Pure; never raises."""
     try:
-        if short_proves and int(older or 0) <= 0 and int(live or 0) < MAX_MESSAGES:
+        if short_proves and int(older or 0) <= 0 and int(live or 0) < int(cap or MAX_MESSAGES):
             return True
         if not isinstance(created_at, datetime) or not isinstance(since, datetime):
             return False
@@ -343,20 +344,28 @@ def start_kept(created_at: Any, older: int, live: int = 0, *,
         return False
 
 
-def start_kept_of(engine: Any, record: Any, older: int, live: int = 0) -> bool:
+def start_kept_of(engine: Any, record: Any, older: int, live: int = 0, *,
+                  room: bool = False, cap: int = MAX_MESSAGES) -> bool:
     """:func:`start_kept` for the conversation ``record`` (48-b), with the
     ``since`` of its kind. A chat started keeping with v1.499.4
-    (:data:`CHAT_OLDER_KEPT_SINCE`). A phone chat (``owner == "daemon"``) and
-    a coding session (``surface == "build"``) were cut at their caps until
-    48-b, so theirs is when this database was first opened by a version that
-    keeps them (``core.db.older_kept_since``; missing or unreadable: "not
-    known"). A coding session's live lines are cut at a turn start and by a
-    rewind, so fewer than the cap proves nothing there. BLOCKING (one read
-    for those two kinds); never raises."""
+    (:data:`CHAT_OLDER_KEPT_SINCE`). A phone chat (``owner == "daemon"``), a
+    coding session (``surface == "build"``) and a round-table (``room``, an
+    ``AgentThreadRecord``) were cut at their caps until 48-b, so theirs is
+    when this database was first opened by a version that keeps them
+    (``core.db.older_kept_since``; missing or unreadable: "not known"). A
+    coding session's live lines are cut at a turn start and by a rewind, so
+    fewer than the cap proves nothing there. A room's live messages only
+    ever grow, so one under its own ``cap`` with nothing older lost nothing.
+    BLOCKING (one read for those three kinds); never raises."""
     try:
         from ..core.db import older_kept_since
         from ..core.models import is_build_thread
 
+        if room:
+            return start_kept(
+                getattr(record, "created_at", None), older, live,
+                since=older_kept_since(engine), cap=cap,
+            )
         build = is_build_thread(record)
         if not build and (getattr(record, "owner", "user") or "user") != "daemon":
             return start_kept(getattr(record, "created_at", None), older, live)
