@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.578.1 (2026-11-19).*
+holds itself to. Current as of v1.579.0 (2026-11-19).*
 
 ---
 
@@ -2044,6 +2044,69 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Review comments arrive in the coding session (v1.579.0)
+
+When people comment on a pull request a coding session (Chat › Code) opened,
+their comments now come to that session. You no longer copy them from GitHub
+into the chat.
+
+- **Where you see them.** A line in the session: "3 review comments from sam
+  arrived." Under the newest such line, every comment still to answer, with
+  who wrote it, where (a file and a line, or the whole pull request) and its
+  words. In the **Changes** tab (Branch) each one sits under its line, marked
+  **from GitHub**. A comment on a line that has changed since is listed after
+  the file's lines.
+- **Answer these.** One press starts a reply in the session that works on the
+  comments you ticked: it changes the code where a comment is right, and says
+  which ones it changed nothing for. Comments from the repository's owner,
+  members and collaborators are ticked for you. A comment from someone outside
+  the repository, or from a bot, is shown unticked and says so: tick it if you
+  want it answered. **Set aside** puts one away; it then waits in a folded
+  line under the card ("Set aside (1)"), where **Bring back** puts it back.
+  A comment answered with no change to its file waits there too, and Bring
+  back offers it to Answer these again. One press answers up to 20
+  comments; when more are waiting, the oldest 20 are ticked and the card says
+  how many wait for the next press.
+- **Nothing is sent to GitHub.** Iron Jarvis does not commit, push or reply
+  there. Pushing and replying stay yours.
+- **What "answered" means.** A comment reads **Answered** only when the reply
+  really changed the file it is on (a comment on the whole pull request: when
+  the reply changed any file), read from Iron Jarvis's own record of the
+  reply's changes, never from the reply's words; otherwise it reads
+  **Answered with no change to this file**. A reply you stop gives its
+  comments back to answer again. In a session set to **Plan**, the reply
+  only writes a plan, so its comments read Answered with no change to this
+  file even when the plan you approve then changes those files.
+- **Safe with strangers' words.** What people write on GitHub reaches the model
+  as information, never as instructions. A comment that looks like an
+  instruction to the AI starts the reply at low trust, so it cannot do anything
+  risky.
+- **Quiet.** Iron Jarvis reads the comments with your own GitHub sign-in (the
+  `gh` program): first five minutes after it sees the pull request, then less
+  often when nothing changes, up to once an hour, and it stops when the pull
+  request is merged or closed. It also stops after 30 days with no new
+  comment and no push of the branch from Iron Jarvis, and the session says
+  so; pushing the branch from the Changes tab starts reading again. It reads
+  them even when **Fix my pull
+  requests' failing checks** is off in Settings: that switch is about the
+  checks only. The bell says it at most once a day per pull
+  request. **Stop telling me about comments here** on the comments turns off
+  the bell row for that pull request (new comments still arrive in the
+  session, where you answer them); **Tell me again** turns it back on.
+  Nothing is read while Emergency stop is on, or while a reply is being
+  written in the session. If GitHub cannot be reached five times in a row
+  (no internet for a while, or GitHub is down), the session says so once and
+  Iron Jarvis tries again a day later, then once a day until it works.
+  Deleting the session deletes the comments Iron Jarvis kept for it.
+- **From chat.** "What did the reviewers say on my pull request?" answers
+  from what Iron Jarvis keeps (for a Local only session, what they wrote is
+  told only in that session or in a chat that is Local only). "Stop telling
+  me about comments here" asks first and can be undone.
+
+This works for coding sessions in Chat › Code. The pull request a Build ›
+Code session opens (your own Claude Code or Codex) does not bring its
+comments here yet.
+
 ## Start coding work from your phone (v1.578.0)
 
 Text Iron Jarvis from Telegram, Slack or email: "in the website folder, fix
@@ -2876,66 +2939,6 @@ as it was.
 - Not yet: a rule or a schedule that starts a **workflow** or a **goal**
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.
-## Review comments arrive in the coding session (v1.562.0)
-
-When people comment on a pull request a coding session (Chat › Code) opened,
-their comments now come to that session. You no longer copy them from GitHub
-into the chat.
-
-- **Where you see them.** A line in the session: "3 review comments from sam
-  arrived." Under the newest such line, every comment still to answer, with
-  who wrote it, where (a file and a line, or the whole pull request) and its
-  words. In the **Changes** tab (Branch) each one sits under its line, marked
-  **from GitHub**. A comment on a line that has changed since is listed after
-  the file's lines.
-- **Answer these.** One press starts a reply in the session that works on the
-  comments you ticked: it changes the code where a comment is right, and says
-  which ones it changed nothing for. Comments from the repository's owner,
-  members and collaborators are ticked for you. A comment from someone outside
-  the repository, or from a bot, is shown unticked and says so: tick it if you
-  want it answered. **Set aside** puts one away; it then waits in a folded
-  line under the card ("Set aside (1)"), where **Bring back** puts it back.
-  A comment answered with no change to its file waits there too, and Bring
-  back offers it to Answer these again. One press answers up to 20
-  comments; when more are waiting, the oldest 20 are ticked and the card says
-  how many wait for the next press.
-- **Nothing is sent to GitHub.** Iron Jarvis does not commit, push or reply
-  there. Pushing and replying stay yours.
-- **What "answered" means.** A comment reads **Answered** only when the reply
-  really changed the file it is on (a comment on the whole pull request: when
-  the reply changed any file), read from Iron Jarvis's own record of the
-  reply's changes, never from the reply's words; otherwise it reads
-  **Answered with no change to this file**. A reply you stop gives its
-  comments back to answer again.
-- **Safe with strangers' words.** What people write on GitHub reaches the model
-  as information, never as instructions. A comment that looks like an
-  instruction to the AI starts the reply at low trust, so it cannot do anything
-  risky.
-- **Quiet.** Iron Jarvis reads the comments with your own GitHub sign-in (the
-  `gh` program): first five minutes after it sees the pull request, then less
-  often when nothing changes, up to once an hour, and it stops when the pull
-  request is merged or closed. It also stops after 30 days with no new
-  comment and no push of the branch from Iron Jarvis, and the session says
-  so; pushing the branch from the Changes tab starts reading again. It reads
-  them even when **Fix my pull
-  requests' failing checks** is off in Settings: that switch is about the
-  checks only. The bell says it at most once a day per pull
-  request. **Stop telling me about comments here** on the comments turns off
-  the bell row for that pull request (new comments still arrive in the
-  session, where you answer them); **Tell me again** turns it back on.
-  Nothing is read while Emergency stop is on, or while a reply is being
-  written in the session. If GitHub cannot be reached five times in a row
-  (no internet for a while, or GitHub is down), the session says so once and
-  Iron Jarvis tries again a day later, then once a day until it works.
-  Deleting the session deletes the comments Iron Jarvis kept for it.
-- **From chat.** "What did the reviewers say on my pull request?" answers
-  from what Iron Jarvis keeps (for a Local only session, what they wrote is
-  told only in that session or in a chat that is Local only). "Stop telling
-  me about comments here" asks first and can be undone.
-
-This works for coding sessions in Chat › Code. The pull request a Build ›
-Code session opens (your own Claude Code or Codex) does not bring its
-comments here yet.
 
 ## Commit and Open a pull request in Build › Code (v1.561.0)
 
