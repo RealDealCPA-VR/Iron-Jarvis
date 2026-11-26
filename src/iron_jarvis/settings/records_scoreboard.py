@@ -220,6 +220,9 @@ def report(platform: Any, turn: Any, named: str, thread_id: str, *, phone: bool,
         if not _may_tell(engine, turn, cmap, key, asked):
             held += 1
             continue
+        # The user's own commits keep a folder session's work first (the
+        # menu's own read, ``scoreboard.keep_own_commits``).
+        SB.keep_own_commits(engine, key)
         rows, local = _rows_for(engine, key, withhold=withhold)
         local_held += local
         rows = [r for r in rows if r.get("words")][:ROWS_MAX]

@@ -108,7 +108,10 @@ def test_the_nightly_tests_rows_are_never_read_with_the_real_work(engine):
     assert SB.settle_session(engine, "s2", SB.KEPT, SB.HOW_MERGED) == 0
 
 
-def test_one_piece_is_one_row_and_a_verdict_is_never_rewritten_by_a_note(engine):
+def test_one_piece_is_one_row_and_a_verdict_is_never_rewritten_by_a_note(engine, monkeypatch):
+    # The folder counts as a repository, so only the verdict rule keeps the
+    # rewind below from throwing the kept piece away.
+    monkeypatch.setattr(SB, "has_git", lambda folder: True)
     assert SB.note(engine, session_id="s1", ref="s1:t1", folder=FOLDER, surface=SB.SURFACE_TOOL, tool="codex")
     assert not SB.note(engine, session_id="s1", ref="s1:t1", folder=FOLDER, surface=SB.SURFACE_TOOL, tool="codex",
                        checked=SB.CHECK_PASSED, verdict=SB.THROWN, how=SB.HOW_DISCARDED)

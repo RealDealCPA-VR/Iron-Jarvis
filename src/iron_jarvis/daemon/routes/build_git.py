@@ -226,10 +226,14 @@ def register(app: FastAPI, d: Any) -> None:
         what became of its work here ``{kept, thrown, undecided, passed,
         failed, samples, words}`` (``harness/scoreboard.summary``), read by
         the model menus once per opening. A plain def: FastAPI's thread pool
-        (SQLite). A folder with nothing on record answers no rows."""
+        (SQLite, and the git reads of ``keep_own_commits``: a Chat › Code
+        session in the folder directly is decided by the user's own commit).
+        A folder with nothing on record answers no rows."""
         from ...harness import scoreboard as SB
 
-        return SB.summary(engine_of(), str(folder or "")[:4096])
+        where = str(folder or "")[:4096]
+        SB.keep_own_commits(engine_of(), where)
+        return SB.summary(engine_of(), where)
 
     @app.post("/build/git/init")
     async def git_init(body: InitBody) -> Any:

@@ -3947,6 +3947,11 @@ class HostedService:
         # the turn runs, and a running turn refuses a switch.
         self._same_tool(live, row)
         turn = HostedTurn(turn_id, sid)
+        # Next leaps 28-a: the tool and model this message is sent to: its
+        # check, which can end after a switch, is credited to them.
+        from ..harness import scoreboard as _SB
+
+        _SB.sent_to(sid, turn_id, row.harness, row.model)
         turn.started_mono = self.clock()
         # v1.422.0 review: a turn Iron Jarvis started BY ITSELF (a carry-on) is
         # one Emergency stop stops (``carry_on.stop_unattended_turns``).

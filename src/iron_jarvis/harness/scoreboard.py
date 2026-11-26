@@ -32,6 +32,13 @@ user's OWN press. The seams that already write each fact settle the rows:
 * Deleting a session on its own branch moves its copy of the folder to the
   trash (the Discard path, both views): its undecided replies are thrown
   (``discarded``).
+* A Chat › Code session that works in the folder DIRECTLY (the default since
+  v1.452.0) has no Commit of Iron Jarvis's: the user's OWN commit in the
+  folder keeps its replies (``committed``, :func:`keep_own_commits`, read
+  when the menu opens and by chat's ``coding_record``).
+* In a folder that is not a git repository nothing can ever be kept, so a
+  rewind decides nothing there either (:func:`has_git`): a figure that could
+  only ever count throw-aways is never shown.
 
 A reply still sitting uncommitted is "not decided": it is counted apart
 ("3 not decided yet") and NEVER in an "of N".
@@ -63,8 +70,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
-from datetime import datetime
+from collections import OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -272,11 +281,31 @@ def settle_session(engine: Any, session_id: str, verdict: str, how: str) -> int:
         return 0
 
 
+def has_git(folder: Any) -> bool:
+    """Can work in ``folder`` ever be KEPT? Only in a git repository (git on
+    PATH and a ``.git`` in the folder or above it, read by name: no
+    subprocess). Elsewhere no Commit, merge, pull request or kept attempt
+    exists, so the record decides nothing there (:func:`rewound`). Never
+    raises."""
+    where = str(folder or "").strip()
+    if not where:
+        return False
+    try:
+        from . import branches as B
+
+        return B.git_path() is not None and B._inside_a_repo(Path(where))  # noqa: SLF001
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def rewound(engine: Any, session_id: str, turn_ids: Iterable[str], *, undo_key: str = "") -> int:
     """A rewind put these replies' files back: each one's UNDECIDED row is
     thrown (``rewound``). ``undo_key``: the Build › Code rewind's own
     before-rewind stamp, kept on each row it threw so :func:`unrewound` can
-    take exactly that rewind back. BLOCKING; never raises."""
+    take exactly that rewind back. A row of a folder that is not a git
+    repository is left not decided (:func:`has_git`: there nothing can be
+    kept, so a rewind alone would only ever count throw-aways). BLOCKING;
+    never raises."""
     refs = [reply_ref(str(session_id), str(t)) for t in turn_ids or () if str(t or "").strip()]
     if engine is None or not session_id or not refs:
         return 0
@@ -285,6 +314,11 @@ def rewound(engine: Any, session_id: str, turn_ids: Iterable[str], *, undo_key: 
             rows = db.exec(select(CodingOutcome).where(
                 col(CodingOutcome.ref).in_(refs), CodingOutcome.verdict == "",
             )).all()
+            keepable: dict[str, bool] = {}
+            for row in rows:
+                if row.folder not in keepable:
+                    keepable[row.folder] = has_git(row.folder)
+            rows = [r for r in rows if keepable[r.folder]]
             now = utcnow()
             for row in rows:
                 row.verdict, row.how, row.decided_at = THROWN, HOW_REWOUND, now
@@ -447,6 +481,237 @@ def note_attempts(engine: Any, thread_id: str, turn_id: str, card: dict[str, Any
 
 
 # --------------------------------------------------------------------------- #
+# Chat › Code in the folder directly: the user's own commit keeps the work
+# --------------------------------------------------------------------------- #
+
+#: Bounds of one read: the newest undecided replies looked at, the files
+#: named across them (a reply whose files do not all fit waits for a later
+#: read) and the commits read back.
+OWN_COMMIT_ROWS_MAX = 60
+OWN_COMMIT_PATHS_MAX = 120
+OWN_COMMIT_LOG_MAX = 300
+#: Ledger rows read for the "did the coding model commit?" guard.
+OWN_COMMIT_CALLS_MAX = 500
+
+
+def _naive(value: Any) -> "datetime | None":
+    if not isinstance(value, datetime):
+        return None
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
+def _documents_by_turn(row: Any) -> dict[str, list[str]]:
+    """``{turn id: the ABSOLUTE paths its reply line names}`` (``documents``:
+    the files the reply's own file tools made or changed, both lanes'
+    ``made_docs``). A reply that changed files only through a command names
+    none. Pure."""
+    from . import sessions as S
+
+    out: dict[str, list[str]] = {}
+    for m in S._messages(row):  # noqa: SLF001
+        if m.get("role") != "assistant" or not m.get("turnId"):
+            continue
+        docs = [str(p) for p in m.get("documents") or [] if isinstance(p, str) and p.strip()]
+        if docs:
+            out.setdefault(str(m["turnId"]), []).extend(docs)
+    return out
+
+
+def _model_commit_times(engine: Any, thread_id: str, since: datetime) -> list[datetime]:
+    """When the session's coding model (or one of its helpers) ran something
+    that may have committed, at or after ``since``: a call that is neither
+    read-only nor a journaled file write and whose arguments name ``commit``
+    (a command, code, a program). A commit made by the model is not the
+    user's press. BLOCKING."""
+    from ..core.models import ToolInvocation
+    from . import sessions as S
+    from .rewind import _helper_names
+
+    session = S.SESSION_PREFIX + str(thread_id)
+    with session_scope(engine) as db:
+        helpers = list(_helper_names(db, session, since))
+        got = db.exec(
+            select(ToolInvocation.created_at, ToolInvocation.reversibility)
+            .where(col(ToolInvocation.session_id).in_([session, *helpers]))
+            .where(ToolInvocation.created_at >= since)
+            .where(col(ToolInvocation.args_json).contains("commit"))
+            .limit(OWN_COMMIT_CALLS_MAX)
+        ).all()
+    out = []
+    for at, rev in got:
+        when = _naive(at)
+        if when is not None and str(rev or "").lower() not in ("readonly", "reversible"):
+            out.append(when)
+    return out
+
+
+def _path_key(rel: str) -> str:
+    return os.path.normcase(str(rel)).replace("\\", "/")
+
+
+def _committed_refs(where: str, wanted: list[tuple[str, datetime, list[str]]]) -> list[str]:
+    """Of ``wanted`` (ref, the reply's end, its absolute paths), the refs
+    whose every file INSIDE the repository has nothing uncommitted now and
+    was changed by a commit on the current branch made at or after the
+    reply ended. Three git reads (optional locks off), each bounded.
+    BLOCKING."""
+    from . import branches as B
+
+    top_r = B._g(["rev-parse", "--show-toplevel"], where, reads=True)  # noqa: SLF001
+    if not top_r.ok or not top_r.out.strip():
+        return []
+    top = top_r.out.strip()
+    rels_of: dict[str, list[str]] = {}
+    specs: dict[str, str] = {}
+    for ref, _at, paths in wanted:
+        rels: list[str] = []
+        for p in paths:
+            try:
+                rel = os.path.relpath(p, top).replace("\\", "/")
+            except ValueError:
+                continue  # another drive: outside the repository
+            if rel.startswith("../") or rel == ".." or os.path.isabs(rel):
+                continue  # outside the repository: no commit decides it
+            rels.append(rel)
+        new = [r for r in rels if _path_key(r) not in specs]
+        if not rels or len(specs) + len(new) > OWN_COMMIT_PATHS_MAX:
+            continue  # nothing to read, or a later read (the bound)
+        for r in new:
+            specs[_path_key(r)] = r
+        rels_of[ref] = [_path_key(r) for r in rels]
+    if not rels_of:
+        return []
+    pathspecs = [f":(literal){r}" for r in specs.values()]
+    st = B._g(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", *pathspecs], top,  # noqa: SLF001
+              reads=True)
+    if not st.ok:
+        return []
+    dirty: set[str] = set()
+    parts = st.out.split("\0")
+    i = 0
+    while i < len(parts):
+        entry = parts[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        dirty.add(_path_key(entry[3:]))
+        if entry[:1] in ("R", "C") and i < len(parts):
+            dirty.add(_path_key(parts[i]))  # the rename's old name
+            i += 1
+    lg =B._g(["log", "--no-renames", "--name-only", "--format=%x1e%ct", "-n", str(OWN_COMMIT_LOG_MAX),  # noqa: SLF001
+               "HEAD", "--", *pathspecs], top, reads=True)
+    if not lg.ok:
+        return []
+    newest: dict[str, int] = {}
+    for rec in lg.out.split("\x1e"):
+        lines = [ln.strip() for ln in rec.strip("\n").splitlines()]
+        if not lines or not lines[0]:
+            continue
+        try:
+            at = int(lines[0])
+        except ValueError:
+            continue
+        for name in lines[1:]:
+            if name:
+                key = _path_key(name)
+                newest[key] = max(newest.get(key, at), at)
+    out = []
+    for ref, at, _paths in wanted:
+        keys = rels_of.get(ref)
+        if not keys:
+            continue
+        floor = int(at.replace(tzinfo=timezone.utc).timestamp())
+        if all(k not in dirty and newest.get(k, -1) >= floor for k in keys):
+            out.append(ref)
+    return out
+
+
+def keep_own_commits(engine: Any, folder: str) -> int:
+    """A Chat › Code session that works in the folder DIRECTLY (no branch of
+    its own: the default since v1.452.0) has no Commit, pull request, Merge
+    or Discard of Iron Jarvis's, so the user's OWN commit decides its work.
+    Each undecided reply row of such a session in ``folder`` is KEPT
+    (``committed``) when every file its reply line names (inside the
+    repository) has nothing uncommitted now AND was changed by a commit on
+    the folder's current branch made at or after that reply ended.
+
+    Never kept by it: a reply that names no file (it changed files only
+    through a command), a reply of a session with a reply RUNNING now, a reply
+    after which the session's coding model or a helper ran something naming
+    ``commit`` (that commit may be the model's, not the user's press), a night
+    task's reply (Iron Jarvis's own night commit), a session on its own branch
+    (its own presses decide), a folder that is not a git repository. All of
+    those stay not decided. Read when the model menu opens
+    (``GET /build/scoreboard``) and by chat's ``coding_record``, before the
+    counts. BLOCKING (git reads); never raises."""
+    key = folder_key(folder)
+    if engine is None or not key:
+        return 0
+    try:
+        with session_scope(engine) as db:
+            got = db.exec(
+                select(CodingOutcome.ref, CodingOutcome.session_id, CodingOutcome.created_at)
+                .where(CodingOutcome.folder_key == key, CodingOutcome.surface == SURFACE_CODE,
+                       CodingOutcome.unit == UNIT_REPLY, CodingOutcome.verdict == "",
+                       CodingOutcome.source != SOURCE_REPLAY)
+                .order_by(col(CodingOutcome.created_at).desc()).limit(OWN_COMMIT_ROWS_MAX)
+            ).all()
+        if not got:
+            return 0
+        from ..core.turns import TURNS
+        from . import sessions as S
+
+        running = TURNS.thread_states()
+        by_session: dict[str, list[tuple[str, datetime]]] = {}
+        for ref, sid, at in got:
+            when = _naive(at)
+            if when is not None and str(sid) not in running:
+                by_session.setdefault(str(sid), []).append((str(ref), when))
+        candidates: list[tuple[str, datetime, list[str]]] = []
+        sessions: list[str] = []
+        where = ""
+        for sid, refs in by_session.items():
+            row = _chat_row(engine, sid)
+            if row is None or S.git_of(row) is not None:
+                continue  # gone, or on its own branch (its presses decide)
+            here = S.folder_of(row)
+            if folder_key(here) != key or not has_git(here):
+                continue
+            sessions.append(sid)
+            docs = _documents_by_turn(row)
+            for ref, at in refs:
+                paths = docs.get(ref[len(sid) + 1:]) or []
+                if paths:
+                    candidates.append((ref, at, paths))
+            where = where or here
+        if not candidates:
+            return 0
+        # Every folder session's model is asked: a `git commit -a` run by one
+        # session's model commits another session's work too.
+        since = min(at for _r, at, _p in candidates)
+        model_commits = [t for sid in sessions for t in _model_commit_times(engine, sid, since)]
+        wanted = [c for c in candidates if not any(t >= c[1] for t in model_commits)]
+        if not wanted:
+            return 0
+        kept = _committed_refs(where, wanted)
+        if not kept:
+            return 0
+        with _LOCK, session_scope(engine) as db:
+            rows = db.exec(select(CodingOutcome).where(
+                col(CodingOutcome.ref).in_(kept), CodingOutcome.verdict == "",
+            )).all()
+            now = utcnow()
+            for row in rows:
+                row.verdict, row.how, row.decided_at = KEPT, HOW_COMMITTED, now
+                db.add(row)
+            db.commit()
+            return len(rows)
+    except Exception:  # noqa: BLE001 — a record never breaks the menu
+        log.warning("the coding record could not read the commits in %s", key, exc_info=True)
+        return 0
+
+
+# --------------------------------------------------------------------------- #
 # Build › Code seams
 # --------------------------------------------------------------------------- #
 
@@ -455,6 +720,41 @@ def _hosted_row(engine: Any, sid: str) -> Any:
     from ..hosted import store
 
     return store.get(engine, sid)
+
+
+#: Build › Code: the tool and model each message was SENT to, by
+#: ``(session, turn)`` (``hosted/service._start_turn_in``, where the session
+#: row is in hand). Iron Jarvis's check of a reply ends up to
+#: ``proof.TIMEOUT_S`` after it, and a tool or model switched meanwhile must
+#: not take that reply's credit. A running reply refuses a tool switch, so
+#: this is also the tool at the reply's end. In this process only (a check
+#: never outlives it, ``proof.stop_all``); bounded, the oldest goes first.
+WRITERS_MAX = 512
+_WRITERS: "OrderedDict[tuple[str, str], tuple[str, str]]" = OrderedDict()
+_WRITERS_LOCK = threading.Lock()
+
+
+def sent_to(sid: str, turn_id: str, tool: Any, model: Any) -> None:
+    """A Build › Code message was sent to ``tool`` / ``model`` ("" = the
+    tool's own default). Never raises; never waits."""
+    try:
+        k = (str(sid or ""), str(turn_id or ""))
+        if not k[0] or not k[1]:
+            return
+        with _WRITERS_LOCK:
+            _WRITERS[k] = (str(tool or ""), str(model or ""))
+            _WRITERS.move_to_end(k)
+            while len(_WRITERS) > WRITERS_MAX:
+                _WRITERS.popitem(last=False)
+    except Exception:  # noqa: BLE001 — a record never breaks a send
+        log.debug("the coding record could not keep a message's tool", exc_info=True)
+
+
+def writer_of(sid: str, turn_id: str) -> "tuple[str, str] | None":
+    """The tool and model the message ``turn_id`` was sent to, or None when
+    this process did not send it (a reply rejoined after a restart)."""
+    with _WRITERS_LOCK:
+        return _WRITERS.get((str(sid or ""), str(turn_id or "")))
 
 
 def hosted_changed(events: list[dict[str, Any]], folder: str) -> bool:
@@ -485,9 +785,10 @@ def note_hosted_reply(engine: Any, sid: str, turn_id: str, *, checked: str = "",
                       tool: "str | None" = None, model: "str | None" = None) -> bool:
     """A Build › Code reply that changed files is one piece (its tool and the
     model the session chose: "" is the tool's own default). ``tool`` /
-    ``model``: the backfill's own reading of an older message (the tool its
-    user event names); else the session's, which at a reply's end is the
-    tool and model that wrote it. BLOCKING; never raises."""
+    ``model``: the tool and model the message was sent to (:func:`writer_of`),
+    or the backfill's own reading of an older message (the tool its user
+    event names); else the session's as they are now. BLOCKING; never
+    raises."""
     try:
         row = _hosted_row(engine, sid)
         if row is None or not turn_id or getattr(row, "handed_from", None):
@@ -512,7 +813,10 @@ def note_hosted_turn(engine: Any, sid: str, turn_id: str, events: list[dict[str,
         row = _hosted_row(engine, sid)
         if row is None or not hosted_changed(events, str(getattr(row, "folder", "") or "")):
             return False
-        return note_hosted_reply(engine, sid, turn_id)
+        writer = writer_of(sid, turn_id)
+        if writer is None:
+            return note_hosted_reply(engine, sid, turn_id)
+        return note_hosted_reply(engine, sid, turn_id, tool=writer[0], model=writer[1])
     except Exception:  # noqa: BLE001 — a record never breaks a reply
         log.warning("the coding record could not read Build › Code reply %s", turn_id, exc_info=True)
         return False
@@ -554,11 +858,37 @@ def on_proof(engine: Any, sid: str, turn_id: str, record: dict[str, Any]) -> boo
     """``hosted/proof.after_reply``'s listener: the folder's tests Iron Jarvis
     ran after a Build › Code reply give that reply's ``checked`` (a check
     runs only after a reply that changed files, read from git, so a reply the
-    tool's own steps missed is noted here). BLOCKING; never raises."""
+    tool's own steps missed is noted here). The piece is the tool's and
+    model's the message was SENT to (:func:`writer_of`), never the session's
+    when the check ends: a switch while the tests ran takes no credit. A
+    message this process did not send (rejoined after a restart) only gives
+    its ``checked`` to a row its own file steps wrote. BLOCKING; never
+    raises."""
     got = _checked((record or {}).get("tests"))
     if not got:
         return False
-    return note_hosted_reply(engine, sid, turn_id, checked=got)
+    writer = writer_of(sid, turn_id)
+    if writer is None:
+        return _fill_checked(engine, reply_ref(str(sid), str(turn_id)), got)
+    return note_hosted_reply(engine, sid, turn_id, checked=got, tool=writer[0], model=writer[1])
+
+
+def _fill_checked(engine: Any, ref: str, checked: str) -> bool:
+    """An EXISTING row's missing ``checked``; no row is made. BLOCKING; never
+    raises."""
+    if engine is None or not ref or checked not in (CHECK_PASSED, CHECK_FAILED):
+        return False
+    try:
+        with _LOCK, session_scope(engine) as db:
+            row = db.exec(select(CodingOutcome).where(CodingOutcome.ref == ref)).first()
+            if row is not None and not row.checked:
+                row.checked = checked
+                db.add(row)
+                db.commit()
+        return False
+    except Exception:  # noqa: BLE001
+        log.warning("the coding record could not note the check of %s", ref, exc_info=True)
+        return False
 
 
 _ENGINE_OF: "Callable[[], Any] | None" = None
@@ -894,7 +1224,8 @@ __all__ = [
     "HOW_COMMITTED", "HOW_DISCARDED", "HOW_MERGED", "HOW_PULL_REQUEST", "HOW_REWOUND", "KEPT",
     "MIN_SAMPLES", "SOURCE_BACKFILL", "SOURCE_REPLAY", "SOURCE_WORK", "SURFACE_CODE", "SURFACE_TOOL",
     "THROWN", "TOOL_JARVIS", "TOO_FEW", "after_hosted_turn", "backfill", "backfill_at_start", "folder_key",
-    "folders", "install", "note", "note_attempts", "note_chat_reply", "note_hosted_reply", "note_hosted_turn",
-    "on_proof",
-    "reply_changed", "rewound", "settle_session", "spellings", "summary", "unrewound", "words",
+    "folders", "has_git", "install", "keep_own_commits", "note", "note_attempts", "note_chat_reply",
+    "note_hosted_reply", "note_hosted_turn", "on_proof",
+    "reply_changed", "rewound", "sent_to", "settle_session", "spellings", "summary", "unrewound", "words",
+    "writer_of",
 ]

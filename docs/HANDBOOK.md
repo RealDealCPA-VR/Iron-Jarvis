@@ -2165,6 +2165,16 @@ and in Build › Code, when you start a session and inside one.
   files, or keep another attempt; **Undo rewind** puts it back as not decided.
   **Passed its checks** is Iron
   Jarvis's own test run after the reply, never the model's own words.
+- **A Chat › Code session in your folder directly** (the usual way, with
+  **Work on a new branch** off) has no Commit button of its own. There your
+  own commit keeps a reply: once every file the reply changed is committed,
+  after the reply, with nothing of those files left uncommitted. Iron Jarvis
+  looks when you open the menu. A reply stays not decided when it changed
+  files only through a command, or when Iron Jarvis's coding model ran a
+  commit itself after it (that commit may be the model's, not yours).
+- **In a folder that is not a git repository** nothing can be kept, so
+  nothing is decided there either, a rewind included: its work shows only
+  as not decided.
 - **Every figure has its count.** Under five decided pieces the line adds
   **(too few to judge)**. Work you have neither kept nor thrown away yet is
   said apart (**3 not decided yet**) and is never counted in an "of". A model
@@ -2181,8 +2191,9 @@ and in Build › Code, when you start a session and inside one.
 - **Good to know.** The menu reads the record once each time you open it.
   In Build › Code a reply counts when the tool's own file steps changed
   files; a change made only through a command counts once Iron Jarvis has
-  checked that reply. Reverting files from the Changes tab is not counted
-  yet.
+  checked that reply. A reply counts for the tool and model you sent the
+  message to, even when you switch while its check still runs. Reverting
+  files from the Changes tab is not counted yet.
 
 ## What you asked for that Iron Jarvis can't do yet (v1.587.0)
 
