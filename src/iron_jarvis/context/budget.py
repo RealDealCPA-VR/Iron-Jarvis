@@ -297,36 +297,39 @@ def build_recap(dropped: list[Any], *, max_chars: int = 900) -> str:
     )
 
 
-#: The intelligence plan, release 7: when a plain chat's history has to shed
-#: messages, where it starts is moved to the next multiple of this many
-#: messages (counted from the first message the planner was handed), so the
-#: start stays where it is for several replies instead of moving with every
-#: one. A start that moves changes the first byte a model server can no longer
-#: reuse, and it then reads the whole chat again. See :func:`_coarse_cut`.
+#: The intelligence plan, release 7: when a plain chat's history leaves older
+#: messages out (the room ran out, or the count cap below was reached), where
+#: it starts is moved to the next multiple of this many messages (counted
+#: from the first message the planner was handed), so the start stays where
+#: it is for several replies instead of moving with every one. A start that
+#: moves changes the first byte a model server can no longer reuse, and it
+#: then reads the whole chat again. See :func:`_coarse_cut`.
 CUT_STEP = 8
+#: THE PRICE of that, and its bound: moving the start up leaves out a few more
+#: messages than fitting requires. They may cost at most this share of the
+#: room the history has (in tokens). When a whole step would cost more, half
+#: a step is tried, then a quarter, then the start stays where fitting put it.
+COARSE_SHARE = 0.10
 
 
-def _coarse_cut(first_kept: int, total: int, step: int) -> int:
-    """Where a shedding history starts: *first_kept* (the index of the first
-    message that fits, of *total*) moved UP to the next multiple of *step*,
-    so it holds still while the chat grows by a message or two a reply.
-
-    Moving it up leaves out a few more messages than the room demands, so it
-    is bounded: never more than half of the messages that fit, and the two
-    newest always stay. When the whole step would cost more than that, half
-    the step is tried, then half again (down to 2); when even that is too
-    much the start stays exactly where the room put it. ``step`` < 2 = off."""
-    fits = total - first_kept
+def _coarse_cut(first_kept: int, costs: "list[int]", step: int, allowance: float) -> int:
+    """How many MORE of the kept messages to leave out so the history starts
+    on a multiple of *step*: *first_kept* is the index (in the whole chat) of
+    the first message that fits, *costs* the token cost of each kept message
+    in order, *allowance* the most tokens the extra messages may cost
+    (:data:`COARSE_SHARE` of the history's room). The two newest messages
+    always stay. Tries the step, then half of it, down to 2; 0 when none is
+    within the allowance (or the start is already on a step). ``step`` < 2 =
+    off."""
     s = int(step or 0)
     while s >= 2:
-        want = -(-first_kept // s) * s
-        extra = want - first_kept
+        extra = -first_kept % s
         if extra == 0:
-            return first_kept
-        if extra <= fits // 2 and fits - extra >= 2:
-            return want
+            return 0
+        if len(costs) - extra >= 2 and sum(costs[:extra]) <= allowance:
+            return extra
         s //= 2
-    return first_kept
+    return 0
 
 
 #: Upper bound on messages considered, whatever the window says.
@@ -383,8 +386,10 @@ def plan_history(
     * ``fixed_tokens``: what the TOOL DEFINITIONS sent beside the reply cost.
       They are counted before the history is chosen, so a chat with a large
       tool list sheds history here instead of overflowing afterwards.
-    * ``step``: :data:`CUT_STEP`; where a shedding history starts is moved to
-      a multiple of it (:func:`_coarse_cut`), so it does not move every reply.
+    * ``step``: :data:`CUT_STEP`; where a history that leaves older messages
+      out starts is moved to a multiple of it (:func:`_coarse_cut`), so it does
+      not move every reply. It gives up at most :data:`COARSE_SHARE` of the
+      history's room beyond what fitting requires.
     """
     win = int(window or DEFAULT_WINDOW)
     if win <= 0:
@@ -510,11 +515,14 @@ def plan_history(
         used += cost
     kept.reverse()
 
-    # Release 7: a history that sheds messages starts at a multiple of
-    # ``step``, so its start does not move with every reply.
-    if step and len(kept) < len(prepared) and not plan.clipped_last:
+    # Release 7: a history that leaves older messages out (the room, or the
+    # count cap) starts at a multiple of ``step``, so its start does not move
+    # with every reply; within :data:`COARSE_SHARE` of its room.
+    if step and (len(kept) < len(prepared) or older) and not plan.clipped_last:
         first = len(older) + len(prepared) - len(kept)
-        extra = _coarse_cut(first, len(messages), step) - first
+        extra = _coarse_cut(
+            first, [_cost(m) for m in kept], step, max(0, plan.history_budget) * COARSE_SHARE,
+        )
         if extra > 0:
             used -= sum(_cost(m) for m in kept[:extra])
             kept = kept[extra:]

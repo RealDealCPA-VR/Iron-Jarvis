@@ -228,46 +228,103 @@ def test_the_tool_list_is_counted_before_the_history_is_chosen():
     assert B.estimate_tokens("S" * 2_000) + 2_500 + unpriced > window - B.output_reserve(window)
 
 
-def _starts(step: int, replies: int = 14) -> list[str]:
-    """The first message sent on each reply of a chat that grows by a
-    question and an answer a reply, on a model that holds about 20 messages."""
+def _starts(step: int, *, first: int, window: int, size: int = 400, replies: int = 16) -> list[int]:
+    """The index of the first message sent on each reply of a chat that grows
+    by a question and an answer a reply."""
     out = []
     for n in range(replies):
-        msgs = _chat(41 + 2 * n)
-        plan = B.plan_history(msgs, window=4_300, step=step)
+        msgs = _chat(first + 2 * n, size=size)
+        plan = B.plan_history(msgs, window=window, step=step)
         assert plan.messages[-1]["content"] == msgs[-1]["content"], "the newest message is always sent"
-        out.append(plan.messages[0]["content"].split(" ")[0])
+        out.append(int(plan.messages[0]["content"].split(" ")[0][1:]))
     return out
 
 
-def test_a_history_that_sheds_messages_starts_in_the_same_place_for_several_replies():
-    moving = _starts(step=0)
-    coarse = _starts(step=B.CUT_STEP)
-    assert len(set(moving)) == len(moving), "before: the start moved with every reply"
-    # (Two messages a reply, a step of eight: it moves every fourth reply.)
-    assert len(set(coarse)) <= len(coarse) // 4 + 2, f"the start moved too often: {coarse}"
-    # It only ever moves forward, by whole steps, and holds for several replies in a row.
-    at = [int(s[1:]) for s in coarse]
-    assert at == sorted(at) and all(a % B.CUT_STEP == 0 for a in at)
-    runs = [sum(1 for x in at if x == v) for v in dict.fromkeys(at)]
-    assert max(runs) == B.CUT_STEP // 2
-    # And a chat that fits is not touched by it.
+@pytest.mark.parametrize("first", [58, 60, 62, 120, 200, 204])
+def test_a_chat_at_the_count_cap_starts_in_the_same_place_for_several_replies(first):
+    """Past sixty messages the planner sends the newest sixty, whatever the
+    room: before, the start moved with every reply from the 60th message on."""
+    moving = _starts(step=0, first=first, window=200_000)
+    coarse = _starts(step=B.CUT_STEP, first=first, window=200_000)
+    capped = [a for a in moving if a > 0]
+    assert len(set(capped)) == len(capped) >= 14, "before: the start moved with every reply"
+    left_out = [a for a in coarse if a > 0]
+    assert all(a % B.CUT_STEP == 0 for a in left_out), coarse
+    assert coarse == sorted(coarse)
+    runs = [sum(1 for x in left_out if x == v) for v in dict.fromkeys(left_out)]
+    assert max(runs) == B.CUT_STEP // 2, f"two messages a reply, a step of eight: it holds four replies ({coarse})"
+    assert len(set(left_out)) <= len(left_out) // 4 + 2
+    # Never fewer than the count cap minus one step.
+    for n, start in enumerate(coarse):
+        assert first + 2 * n - start >= B.MAX_MESSAGES - B.CUT_STEP
+
+
+def test_a_chat_that_fits_is_not_touched_by_the_step():
     small = _chat(7)
     assert B.plan_history(small, window=32_000, step=B.CUT_STEP).messages == B.plan_history(small, window=32_000).messages
 
 
-def test_the_coarse_start_never_costs_more_than_half_of_what_fits():
-    assert B._coarse_cut(16, 40, 8) == 16, "already on a step"
-    assert B._coarse_cut(17, 41, 8) == 24
-    assert B._coarse_cut(37, 41, 8) == 38, "8 and 4 would leave too little: the smallest step that keeps half"
-    assert B._coarse_cut(39, 41, 8) == 39, "two messages fit: both stay"
-    assert B._coarse_cut(13, 41, 0) == 13 and B._coarse_cut(13, 41, 1) == 13, "off"
-    for first in range(0, 60):
-        for total in range(first + 1, first + 30):
-            cut = B._coarse_cut(first, total, B.CUT_STEP)
-            fits = total - first
-            assert first <= cut <= total - min(2, fits), (first, total, cut)
-            assert cut - first <= fits // 2, (first, total, cut)
+#: The reviewer's table: (window, characters a message). A chat that grows
+#: from 41 to 139 messages, 4,000 characters of instructions, 600 tokens of
+#: tool definitions, a rider beside the newest message.
+TABLE = ((8_000, 400), (8_000, 1_500), (16_000, 3_000), (32_000, 3_000), (131_072, 11_500))
+
+
+def _table_row(window: int, size: int) -> "tuple[float, float, int, int]":
+    """``(average share, worst share, moves, replies)`` of the history sent
+    with the step against what fits without it."""
+    shares, starts = [], []
+    for n in range(41, 141, 2):
+        msgs = _chat(n, size=size)
+        riders = [""] * (n - 1) + ["R" * 600]
+        kw = dict(window=window, system_text="S" * 4_000, riders=riders, fixed_tokens=600)
+        plain, stepped = B.plan_history(msgs, **kw), B.plan_history(msgs, step=B.CUT_STEP, **kw)
+        fits = sum(B.estimate_tokens(m["content"]) for m in plain.messages)
+        sent = sum(B.estimate_tokens(m["content"]) for m in stepped.messages)
+        assert stepped.messages[-1]["content"] == msgs[-1]["content"]
+        shares.append(sent / fits)
+        starts.append(n - len(stepped.messages))
+    moves = sum(1 for a, b in zip(starts, starts[1:]) if a != b)
+    return sum(shares) / len(shares), min(shares), moves, len(shares)
+
+
+@pytest.mark.parametrize("window,size", TABLE)
+def test_the_step_gives_up_at_most_a_tenth_of_what_fits(window, size):
+    average, worst, moves, replies = _table_row(window, size)
+    # The bound is a tenth of the history's ROOM, so against what fits (which
+    # is never more than the room) the history sent is at least nine tenths,
+    # less the one message the comparison rounds by.
+    assert worst >= 0.90 - 1.0 / max(1, (window * 3.6 * 0.6) // size), (window, size, worst)
+    assert average >= 0.93, (window, size, average)
+    assert moves <= replies - 1
+
+
+def test_where_the_bound_allows_the_start_holds_for_several_replies():
+    # Many small messages in a big room: a whole step is cheap, the start holds four replies.
+    _avg, _worst, moves, replies = _table_row(32_000, 400)
+    assert moves <= replies // 4 + 2, moves
+    # A few large messages in a small room: a step would cost too much, so
+    # the start moves as fitting demands (nothing is given up for it).
+    average, worst, _moves, _replies = _table_row(8_000, 1_500)
+    assert worst >= 0.80 and average >= 0.93
+
+
+def test_the_coarse_start_stays_within_its_allowance():
+    costs = [100] * 12
+    assert B._coarse_cut(16, costs, 8, 1_000) == 0, "already on a step"
+    assert B._coarse_cut(17, costs, 8, 1_000) == 7
+    assert B._coarse_cut(17, costs, 8, 699) == 3, "a whole step costs too much: half a step"
+    assert B._coarse_cut(17, costs, 8, 299) == 1, "then a quarter"
+    assert B._coarse_cut(17, costs, 8, 99) == 0, "then the start stays where fitting put it"
+    assert B._coarse_cut(18, costs, 8, 150) == 0, "on a quarter step already, and no more is affordable"
+    assert B._coarse_cut(17, [100, 100, 100], 8, 10_000) == 1, "the two newest always stay"
+    assert B._coarse_cut(17, [100, 100], 8, 10_000) == 0
+    assert B._coarse_cut(13, costs, 0, 10_000) == 0 and B._coarse_cut(13, costs, 1, 10_000) == 0, "off"
+    for first in range(0, 40):
+        for allowance in (0, 150, 350, 750, 5_000):
+            extra = B._coarse_cut(first, costs, B.CUT_STEP, allowance)
+            assert 0 <= extra <= len(costs) - 2 and sum(costs[:extra]) <= allowance
+            assert extra == 0 or (first + extra) % 2 == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -310,9 +367,10 @@ def test_a_long_chat_with_a_tool_list_still_fits_and_says_how_much_it_left_out(t
     # The planner made room for the tools itself: the count the reply reports
     # is exactly what was left out, not a floor under it.
     assert report["dropped"] == len(history) - len(sent["messages"]) > 0, report
-    # The start is on a step, so the next reply starts in the same place.
+    # The start is on a step (a whole, a half or a quarter of one: whatever a
+    # tenth of this small model's room affords), so it does not move with every reply.
     first = sent["messages"][0][1]
-    assert first.startswith("question ") and (history.index({"role": "user", "content": first})) % B.CUT_STEP == 0
+    assert first.startswith("question ") and (history.index({"role": "user", "content": first})) % 2 == 0
 
 
 # --------------------------------------------------------------------------- #
