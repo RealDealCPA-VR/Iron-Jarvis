@@ -602,6 +602,18 @@
       "desktop": "download a model into your model server"
     },
     {
+      "tool": "open_item_close",
+      "kind": "table",
+      "card": "close an open item",
+      "desktop": "close an open item"
+    },
+    {
+      "tool": "open_item_reopen",
+      "kind": "table",
+      "card": "reopen an open item",
+      "desktop": "reopen an open item"
+    },
+    {
       "tool": "client_answer",
       "kind": "table",
       "card": "say whether a name is one of your clients",

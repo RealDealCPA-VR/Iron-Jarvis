@@ -1056,6 +1056,44 @@ def test_a_call_that_closes_or_reopens_nothing_is_never_worded_as_a_close_or_a_r
     assert mission.card_words(open_item_tools.REOPEN_NAME) == "reopen an open item"
 
 
+def test_a_not_yet_answer_is_never_told_as_a_close_or_a_reopen(scene):
+    """Review 7 of 04-b (north star 1): a Not yet, the card's own press or the
+    chat's on an item that is still open, closes and reopens nothing, yet it
+    publishes ``work.open_item_changed {status: open}``. The words that event
+    reads on the Activity page (lib/eventWords.ts, pinned equal to
+    notifier.EVENT_WORDS) and on a phone (notifier.format_event) are true for
+    every publish, so they never say the item was closed or reopened."""
+    import re
+    from pathlib import Path
+
+    from iron_jarvis.comm import notifier
+    from iron_jarvis.core.events import Event
+
+    pairs = {True: ("Send recon_march.xlsx to Ann", "Sent recon_march.xlsx to Ann"),
+             False: ("Send payroll_q3.pdf to Bo", "Sent payroll_q3.pdf to Bo")}
+    for card, (todo, did) in pairs.items():
+        old = _chat(scene, f"Close {todo}", H, hours_ago=5)
+        _keep(scene, old, f"Open: {todo}")
+        _keep(scene, _chat(scene, f"Later {did}", H, hours_ago=1), f"Done: {did}")
+        (asked,) = _items(scene, entry_id=f"chat:{old}")
+        assert asked.maybe_done_entry
+        if card:
+            assert scene.client.post(f"/work-record/open-items/{asked.id}/reopen").status_code == 200
+        else:
+            _close, reopen = open_item_tools.open_item_tools(scene.platform)
+            assert _run(reopen, {"item": asked.id}, scene, H).ok
+        (after,) = _items(scene, entry_id=f"chat:{old}")
+        assert after.status == OPEN_ITEM_OPEN and after.maybe_declined
+        etype, payload = scene.bus.events[-1]
+        assert (etype, payload) == ("work.open_item_changed", {"id": asked.id, "status": OPEN_ITEM_OPEN})
+        line = notifier.format_event(Event(type=etype, payload=payload))
+        assert line.startswith("Iron Jarvis: An open item"), line
+        assert not re.search(r"\b(?:re)?(?:open|clos)ed\b", line, re.IGNORECASE), (card, line)
+    words = notifier.EVENT_WORDS["work.open_item_changed"]
+    ts = (Path(__file__).resolve().parents[1] / "dashboard" / "lib" / "eventWords.ts").read_text(encoding="utf-8")
+    assert f'  "work.open_item_changed": "{words}",' in ts.replace("\r\n", "\n")
+
+
 def test_chat_finds_and_closes_an_item_the_block_only_counts(scene):
     """G9 (review 3 of 04-b): an item past the six the block numbers is on the
     card, so the owner may name it in chat. ``open_item_close`` with no id

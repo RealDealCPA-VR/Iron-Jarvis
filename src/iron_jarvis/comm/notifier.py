@@ -211,7 +211,8 @@ EVENT_WORDS: dict[str, str] = {
     "chat.thread_updated": "A chat was updated",
     "report.arrived": "A report arrived in an archived chat",
     "report.chat_gone": "The chat a report went to is gone",
-    "work.open_item_changed": "An open item was closed or reopened",
+    # Next leaps 04-b: a Not yet also publishes it, and closes nothing.
+    "work.open_item_changed": "An open item changed",
     "build.account_limit": "A coding session hit its account's limit",
     "build.resumed": "A coding session carried on",
     "build.rewound": "A coding session was rewound",

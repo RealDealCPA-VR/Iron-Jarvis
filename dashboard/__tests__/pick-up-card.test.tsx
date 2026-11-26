@@ -167,6 +167,7 @@ import { WorkByFolder } from "@/components/memory/WorkByFolder";
 import { FORGET_CONFIRM, WORK_FOLDERS_PATH, WORK_FORGET_PATH, workEntriesPath } from "@/lib/workRecord";
 import { builtinStepWords, stepCounts, stepPhrase, stepPhraseText } from "@/lib/stepWords";
 import { toolStepLine } from "@/lib/runWords";
+import { eventHeadline, rowHeadline } from "@/lib/eventWords";
 
 const BOOKS = "C:\\Work\\Books";
 const LEDGERS = "C:\\Work\\Ledgers";
@@ -1120,6 +1121,20 @@ describe("open items that stay until they are done (04-b)", () => {
       ];
       expect(said.length).toBe(6);
       for (const words of said) expect(words).not.toMatch(claims);
+    }
+  });
+
+  it("the Activity row of a Not yet never says the item was closed or reopened", () => {
+    // Review 7 of 04-b (north star 1): a Not yet publishes
+    // work.open_item_changed {status: open} and closes nothing.
+    const payload = { id: ITEM, status: "open" };
+    const said = [
+      eventHeadline("work.open_item_changed", payload),
+      rowHeadline({ type: "work.open_item_changed", summary: "", payload }),
+    ];
+    for (const words of said) {
+      expect(words.startsWith("An open item")).toBe(true);
+      expect(words).not.toMatch(/\b(?:re)?(?:open|clos)ed\b/i);
     }
   });
 

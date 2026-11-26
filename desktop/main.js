@@ -4442,6 +4442,10 @@ const TOOL_WORDS = {
   // Next leaps 43-a: a model downloaded into a model server (lib/toolWords.ts,
   // pinned equal).
   model_download: "download a model into your model server",
+  // Next leaps 04-b: what a call of each may do (lib/toolWords.ts, pinned
+  // equal).
+  open_item_close: "close an open item",
+  open_item_reopen: "reopen an open item",
   // v1.499.0: your clients from chat (the card's own words, pinned equal).
   client_answer: "say whether a name is one of your clients",
   client_update: "change one of your clients",
