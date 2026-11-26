@@ -36,6 +36,13 @@ The review's third round:
   have made, never while a reply runs;
 * a rewind in a folder that is not a git repository decides nothing (there
   nothing can ever be kept).
+
+The review's fourth round:
+* the model's-commit guard asks every Chat › Code session of the folder from
+  the ledger: one with no reply on record, its helper, one with a reply
+  running, one whose row is gone; another folder's session does not count;
+* in a rehearsal ``coding_record`` reads through the real registry and marks
+  nothing kept.
 """
 
 from __future__ import annotations
@@ -494,6 +501,121 @@ async def test_chats_coding_record_reads_the_users_own_commit_like_the_menu(app,
     commit_at(repo, base + 10, "a")
     got = RS.report(app.state.platform, None, str(repo), "", phone=False, withhold=False)
     assert "kept 1 of 1 (too few to judge)" in got.output, got.output
+    assert rows_of(app, sid) == {f"{sid}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
+
+
+def ledger_call(app, session_id: str, when: int, *, command: str = "git add -A && git commit -m wip",
+                reversibility: str = "irreversible") -> str:
+    """One ledger row of a model's call (what the registry writes), dated
+    ``when``."""
+    with session_scope(app.state.platform.engine) as db:
+        row = ToolInvocation(
+            session_id=session_id, agent_run_id="run", tool="shell", args_json=json.dumps({"command": command}),
+            reversibility=reversibility,
+            created_at=datetime.fromtimestamp(when, tz=timezone.utc).replace(tzinfo=None))
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+def drop_calls(app) -> None:
+    with session_scope(app.state.platform.engine) as db:
+        for row in db.exec(select(ToolInvocation)).all():
+            db.delete(row)
+        db.commit()
+
+
+async def test_a_commit_by_any_folder_sessions_model_keeps_nothing_after_it(app, repo, tmp_path, monkeypatch):
+    """The guard asks EVERY Chat › Code session of the folder, read from the
+    ledger, not only the sessions with a reply waiting to be decided: a
+    session with no reply on record (a fresh one asked "commit my changes"),
+    a helper of it, one with a reply running now, one whose row is gone. A
+    session of ANOTHER folder, and a read-only call that names commit, keep
+    nothing from being decided (the control)."""
+    from iron_jarvis.core.models import Session
+    from iron_jarvis.core.turns import TURNS
+
+    base = int(time.time()) - 3600
+    a = await folder_session(app, repo, [("t1", "a.py", base)])
+    b = await folder_session(app, repo, [("t2", "b.py", base + 2)])
+    status, made = await asgi(app, "POST", "/build/sessions", {"folder": str(repo), "branch": False})
+    assert status == 201, made
+    fresh = made["id"]
+    assert rows_of(app, fresh) == {}
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    status, made = await asgi(app, "POST", "/build/sessions", {"folder": str(elsewhere), "branch": False})
+    assert status == 201, made
+    away = made["id"]
+    engine = app.state.platform.engine
+    with session_scope(engine) as db:
+        db.add(Session(id="helper_28a", task="help", options_json=json.dumps({"build_session": fresh})))
+        db.add(Session(id="plain_28a", task="help", options_json=json.dumps({"build_session": away})))
+        db.commit()
+    for name in ("a.py", "b.py"):
+        (repo / name).write_text(f"{name[0]} = 1\n", encoding="utf-8")
+    commit_at(repo, base + 10, "a and b")  # after t1 and t2
+    undecided = {f"{a}:t1": ("", "")}
+
+    # (a) the fresh session's model committed after t1, and it has no row.
+    ledger_call(app, HS.SESSION_PREFIX + fresh, base + 5)
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == undecided
+    # A helper of that session.
+    drop_calls(app)
+    ledger_call(app, "helper_28a", base + 5)
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == undecided
+    # A session whose row is gone: its folder can no longer be read.
+    drop_calls(app)
+    ledger_call(app, HS.SESSION_PREFIX + "gone_28a", base + 5)
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == undecided
+    # (b) session b's model committed, and b has a reply running now.
+    drop_calls(app)
+    ledger_call(app, HS.SESSION_PREFIX + b, base + 5)
+    with monkeypatch.context() as m:
+        m.setattr(TURNS, "thread_states", lambda: {b: {"running": True, "waiting": False}})
+        assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == undecided and rows_of(app, b) == {f"{b}:t2": ("", "")}
+
+    # The control: another folder's session (and its helper) committed, and a
+    # folder session only READ the log. Both replies are kept, once.
+    drop_calls(app)
+    ledger_call(app, HS.SESSION_PREFIX + away, base + 5)
+    ledger_call(app, "plain_28a", base + 6)
+    ledger_call(app, HS.SESSION_PREFIX + fresh, base + 7, command="git log --grep commit", reversibility="readonly")
+    assert SB.keep_own_commits(engine, str(repo)) == 2
+    assert rows_of(app, a) == {f"{a}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
+    assert rows_of(app, b) == {f"{b}:t2": (SB.KEPT, SB.HOW_COMMITTED)}
+
+
+async def test_a_rehearsal_reads_the_coding_record_and_marks_nothing_kept(app, repo, tmp_path):
+    """``coding_record`` is one a rehearsal lets run (leap 06-a, LETS_RUN): it
+    reads the record through the REAL registry, and the user's own commit is
+    written into the record only by a real call, never inside a rehearsal."""
+    from iron_jarvis.tools.base import ToolContext
+    from iron_jarvis.tools.permissions import PermissionEngine
+
+    platform = app.state.platform
+    base = int(time.time()) - 3600
+    sid = await folder_session(app, repo, [("t1", "a.py", base)])
+    (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
+    commit_at(repo, base + 10, "a")
+    perms = PermissionEngine(platform.config.permissions)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    def ctx(rehearsal: str) -> ToolContext:
+        return ToolContext(workspace=ws, session_id="s-28a", agent_run_id="r-28a", config=platform.config,
+                           event_bus=platform.event_bus, engine=platform.engine, rehearsal_id=rehearsal)
+
+    got = await platform.registry.invoke("coding_record", {"folder": str(repo)}, ctx("reh_28a"), perms)
+    assert got.ok, got.error
+    assert "1 not decided yet" in got.output and "kept" not in got.output.split("Folder", 1)[-1], got.output
+    assert rows_of(app, sid) == {f"{sid}:t1": ("", "")}
+    got = await platform.registry.invoke("coding_record", {"folder": str(repo)}, ctx(""), perms)
+    assert got.ok and "kept 1 of 1 (too few to judge)" in got.output, got.output
     assert rows_of(app, sid) == {f"{sid}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
 
 

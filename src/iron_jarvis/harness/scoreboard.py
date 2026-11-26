@@ -490,7 +490,8 @@ def note_attempts(engine: Any, thread_id: str, turn_id: str, card: dict[str, Any
 OWN_COMMIT_ROWS_MAX = 60
 OWN_COMMIT_PATHS_MAX = 120
 OWN_COMMIT_LOG_MAX = 300
-#: Ledger rows read for the "did the coding model commit?" guard.
+#: Sessions read from the ledger for the "did a coding model commit?" guard
+#: (more decide nothing).
 OWN_COMMIT_CALLS_MAX = 500
 
 
@@ -517,32 +518,80 @@ def _documents_by_turn(row: Any) -> dict[str, list[str]]:
     return out
 
 
-def _model_commit_times(engine: Any, thread_id: str, since: datetime) -> list[datetime]:
-    """When the session's coding model (or one of its helpers) ran something
-    that may have committed, at or after ``since``: a call that is neither
-    read-only nor a journaled file write and whose arguments name ``commit``
-    (a command, code, a program). A commit made by the model is not the
-    user's press. BLOCKING."""
-    from ..core.models import ToolInvocation
-    from . import sessions as S
-    from .rewind import _helper_names
+def _when(value: Any) -> "datetime | None":
+    """A ledger time read back through an aggregate (a datetime, or SQLite's
+    text of one), naive UTC; else None."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return _naive(value)
 
-    session = S.SESSION_PREFIX + str(thread_id)
+
+def _folder_model_commit_at(engine: Any, key: str, since: datetime) -> "datetime | None":
+    """The newest time, at or after ``since``, that Iron Jarvis's coding model
+    (or one of its helpers) of ANY Chat › Code session of the folder ``key``
+    ran something that may have committed: a call that is neither read-only
+    nor a journaled file write and whose arguments name ``commit`` (a command,
+    code, a program). A commit made by a model is not the user's press, and a
+    ``git commit -a`` run by one session's model commits every session's work
+    in the folder.
+
+    The ledger is read first, so EVERY session of the folder is asked: one
+    with no reply of its own on record (a fresh session asked "commit my
+    changes"), one with a reply running now, one on its own branch (a merge
+    brings its commits). A session whose row is gone is counted (its folder
+    can no longer be read). More sessions than one read holds
+    (:data:`OWN_COMMIT_CALLS_MAX`) count as a commit after every reply:
+    nothing is decided rather than something wrongly. None when no model
+    committed. BLOCKING."""
+    from sqlalchemy import case, func
+
+    from ..core.models import Session, ToolInvocation
+    from . import sessions as S
+    from .helpers import BUILD_SESSION_OPTION, build_thread_of
+
+    rev = func.lower(func.coalesce(ToolInvocation.reversibility, ""))
     with session_scope(engine) as db:
-        helpers = list(_helper_names(db, session, since))
         got = db.exec(
-            select(ToolInvocation.created_at, ToolInvocation.reversibility)
-            .where(col(ToolInvocation.session_id).in_([session, *helpers]))
+            select(ToolInvocation.session_id, func.max(ToolInvocation.created_at))
             .where(ToolInvocation.created_at >= since)
             .where(col(ToolInvocation.args_json).contains("commit"))
-            .limit(OWN_COMMIT_CALLS_MAX)
+            .where(rev.not_in(("readonly", "reversible")))
+            .group_by(ToolInvocation.session_id)
+            .limit(OWN_COMMIT_CALLS_MAX + 1)
         ).all()
-    out = []
-    for at, rev in got:
-        when = _naive(at)
-        if when is not None and str(rev or "").lower() not in ("readonly", "reversible"):
-            out.append(when)
-    return out
+        if len(got) > OWN_COMMIT_CALLS_MAX:
+            return datetime.max
+        latest: dict[str, datetime] = {}
+        others: dict[str, datetime] = {}
+        for sid, at in got:
+            when = _when(at) or since
+            thread = build_thread_of(sid)
+            if thread:
+                latest[thread] = max(latest.get(thread, when), when)
+            else:
+                others[str(sid)] = when
+        if others:
+            # A helper's run carries the thread it works for
+            # (``options["build_session"]``, as ``rewind._helper_names``).
+            options = case((func.json_valid(Session.options_json) == 1, Session.options_json), else_="{}")
+            for hid, thread in db.exec(
+                select(Session.id, func.json_extract(options, f"$.{BUILD_SESSION_OPTION}"))
+                .where(col(Session.id).in_(list(others)))
+            ).all():
+                thread = str(thread or "").strip()
+                if thread:
+                    when = others[str(hid)]
+                    latest[thread] = max(latest.get(thread, when), when)
+    newest: "datetime | None" = None
+    for thread, when in latest.items():
+        row = _chat_row(engine, thread)
+        if row is not None and key not in (folder_key(S.folder_of(row)), folder_key(S.checkout_of(row))):
+            continue  # a session of another folder
+        newest = when if newest is None or when > newest else newest
+    return newest
 
 
 def _path_key(rel: str) -> str:
@@ -637,8 +686,9 @@ def keep_own_commits(engine: Any, folder: str) -> int:
 
     Never kept by it: a reply that names no file (it changed files only
     through a command), a reply of a session with a reply RUNNING now, a reply
-    after which the session's coding model or a helper ran something naming
-    ``commit`` (that commit may be the model's, not the user's press), a night
+    after which the coding model or a helper of ANY Chat › Code session of
+    the folder ran something naming ``commit`` (that commit may be the
+    model's, not the user's press: :func:`_folder_model_commit_at`), a night
     task's reply (Iron Jarvis's own night commit), a session on its own branch
     (its own presses decide), a folder that is not a git repository. All of
     those stay not decided. Read when the model menu opens
@@ -668,7 +718,6 @@ def keep_own_commits(engine: Any, folder: str) -> int:
             if when is not None and str(sid) not in running:
                 by_session.setdefault(str(sid), []).append((str(ref), when))
         candidates: list[tuple[str, datetime, list[str]]] = []
-        sessions: list[str] = []
         where = ""
         for sid, refs in by_session.items():
             row = _chat_row(engine, sid)
@@ -677,7 +726,6 @@ def keep_own_commits(engine: Any, folder: str) -> int:
             here = S.folder_of(row)
             if folder_key(here) != key or not has_git(here):
                 continue
-            sessions.append(sid)
             docs = _documents_by_turn(row)
             for ref, at in refs:
                 paths = docs.get(ref[len(sid) + 1:]) or []
@@ -686,11 +734,13 @@ def keep_own_commits(engine: Any, folder: str) -> int:
             where = where or here
         if not candidates:
             return 0
-        # Every folder session's model is asked: a `git commit -a` run by one
-        # session's model commits another session's work too.
+        # Every folder session's model is asked, read from the ledger and not
+        # from the candidates: a `git commit -a` run by one session's model
+        # commits another session's work too, and that session may have no
+        # reply on record or a reply running now.
         since = min(at for _r, at, _p in candidates)
-        model_commits = [t for sid in sessions for t in _model_commit_times(engine, sid, since)]
-        wanted = [c for c in candidates if not any(t >= c[1] for t in model_commits)]
+        model_commit = _folder_model_commit_at(engine, key, since)
+        wanted = [c for c in candidates if model_commit is None or model_commit < c[1]]
         if not wanted:
             return 0
         kept = _committed_refs(where, wanted)

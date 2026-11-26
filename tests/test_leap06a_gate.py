@@ -257,6 +257,10 @@ LETS_RUN: dict[str, str] = {
     "code_handoff_list": "lists the coding tools and this session's helpers; starts none",
     "code_load": "reads a saved script's source; runs nothing",
     "code_search": "searches saved scripts; runs nothing",
+    "coding_record": (
+        "reads Iron Jarvis's own coding record of a folder, through the client wall (28-a); in a "
+        "rehearsal it marks nothing kept from the user's own commits and changes nothing"
+    ),
     "coding_reply_check": (
         "reads Iron Jarvis's own record of a Build › Code reply's test check and the folder's "
         "check setting (22-a); runs no test and writes nothing"

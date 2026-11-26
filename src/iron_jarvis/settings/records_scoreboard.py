@@ -22,10 +22,14 @@ figure unless the turn itself stays on this network
 names no folder. Refused to a task from another computer
 (``core/trust.REMOTE_RUN_DENY``).
 
-Read-only (permission ``allow``), armed by the message's own words
-(:func:`scoreboard_tools_for`, read by ``records.record_tools_for`` for both
-chat lanes). Folder and model names are data, not instructions
-(``returns_untrusted_content``). The read is SQLite: off the event loop.
+Read-only for the user's files (permission ``allow``). Before the counts it
+lets the user's own commits keep a folder session's replies (the menu's own
+read, ``scoreboard.keep_own_commits``: bounded git reads, a verdict written
+in Iron Jarvis's own record); a REHEARSAL skips that and only reads. Armed
+by the message's own words (:func:`scoreboard_tools_for`, read by
+``records.record_tools_for`` for both chat lanes). Folder and model names
+are data, not instructions (``returns_untrusted_content``). The read is
+SQLite and git: off the event loop.
 """
 
 from __future__ import annotations
@@ -115,13 +119,18 @@ class CodingRecordTool(Tool):
         from ..workmap.clients import wall
         from ..workmap.lookup import withhold_local_only
 
+        from ..tools import rehearsal as _rehearsal
+
         named = str((args or {}).get("folder") or "").strip().strip("\"'")[:4096]
         phone = answers_the_phone()
         withhold = True if phone else withhold_local_only()
         turn = wall.current()
+        # A rehearsal really reads and changes nothing: the user's own commits
+        # are not written into the record from inside one (leap 06-a).
+        rehearsing = bool(str(getattr(ctx, "rehearsal_id", "") or "").strip() or _rehearsal.current())
         return await asyncio.to_thread(
             report, self.platform, turn, named, str(getattr(ctx, "thread_id", "") or ""),
-            phone=phone, withhold=withhold,
+            phone=phone, withhold=withhold, settle=not rehearsing,
         )
 
 
@@ -202,8 +211,12 @@ def _may_tell(engine: Any, turn: Any, cmap: Any, key: str, asked: str) -> bool:
     return all(wall.may_tell(turn, cmap, folder=f) for f in {key, *named, *kept})
 
 
-def report(platform: Any, turn: Any, named: str, thread_id: str, *, phone: bool, withhold: bool) -> ToolResult:
-    """The answer (BLOCKING: the record and the client map)."""
+def report(platform: Any, turn: Any, named: str, thread_id: str, *, phone: bool, withhold: bool,
+           settle: bool = True) -> ToolResult:
+    """The answer (BLOCKING: the record and the client map). ``settle``: the
+    user's own commits first keep a folder session's replies
+    (``scoreboard.keep_own_commits``, bounded git reads); False in a
+    rehearsal, which only reads."""
     from ..harness import scoreboard as SB
     from ..workmap.lookup import _load_map
 
@@ -221,8 +234,10 @@ def report(platform: Any, turn: Any, named: str, thread_id: str, *, phone: bool,
             held += 1
             continue
         # The user's own commits keep a folder session's work first (the
-        # menu's own read, ``scoreboard.keep_own_commits``).
-        SB.keep_own_commits(engine, key)
+        # menu's own read, ``scoreboard.keep_own_commits``); never in a
+        # rehearsal.
+        if settle:
+            SB.keep_own_commits(engine, key)
         rows, local = _rows_for(engine, key, withhold=withhold)
         local_held += local
         rows = [r for r in rows if r.get("words")][:ROWS_MAX]

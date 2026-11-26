@@ -2167,11 +2167,15 @@ and in Build › Code, when you start a session and inside one.
   Jarvis's own test run after the reply, never the model's own words.
 - **A Chat › Code session in your folder directly** (the usual way, with
   **Work on a new branch** off) has no Commit button of its own. There your
-  own commit keeps a reply: once every file the reply changed is committed,
-  after the reply, with nothing of those files left uncommitted. Iron Jarvis
-  looks when you open the menu. A reply stays not decided when it changed
-  files only through a command, or when Iron Jarvis's coding model ran a
-  commit itself after it (that commit may be the model's, not yours).
+  own commit keeps a reply: once every file the reply wrote or edited itself
+  is committed, after the reply, with nothing of those files left
+  uncommitted. Iron Jarvis looks when you open the menu. It looks at whole
+  files, not at what is in them: a change you undid by hand counts as kept
+  once a later commit holds that file, and a file the reply changed through
+  a command is not looked at. A reply stays not decided when it changed
+  files only through a command, or when Iron Jarvis's coding model, in any
+  session of that folder, ran a commit itself after it (that commit may be
+  the model's, not yours).
 - **In a folder that is not a git repository** nothing can be kept, so
   nothing is decided there either, a rewind included: its work shows only
   as not decided.
