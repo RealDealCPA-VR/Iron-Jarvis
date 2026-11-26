@@ -4167,6 +4167,25 @@ def step_detail(name: str, safe_args: object, content: object) -> dict[str, str]
         return {"input": "", "output": ""}
 
 
+def tool_frame_data(name: str, result: object, ran: bool) -> dict[str, object]:
+    """Next leaps 13-b: ``{"data": {"rows": [...]}}`` for the FINISHED frame
+    of a ``work_history`` call that ran, so the chat draws its rows under
+    the reply (``WorkHistoryRow.tsx``) from the tool's own result
+    (``workmap.tools.screen_rows``), never from the model's words; ``{}``
+    for every other step (their frames are byte-identical). MIRROR NOTE:
+    the POST lane (``run_chat_turn``) sends no frames, so it has no rows,
+    as it has no ``detail`` (its response keys are pinned). Never raises."""
+    if name != "work_history" or not ran:
+        return {}
+    try:
+        from ..workmap.tools import screen_rows
+
+        rows = screen_rows(result)
+        return {"data": {"rows": rows}} if rows else {}
+    except Exception:  # noqa: BLE001 — a display must never fail the turn
+        return {}
+
+
 def cap_prior_tool_results(entries: list[dict[str, Any]], platform: Any = None) -> list[dict[str, Any]]:
     """The list an escalation carries: *entries* through the ONE normaliser
     the runtime renders with (``agents/runtime.normalize_prior_tool_results``
@@ -15517,6 +15536,10 @@ async def run_chat_turn(
                         # stream loop carries the same append — edit both or
                         # neither.
                         door_entries.append(door_for(tc.name, result))
+                        # Next leaps 13-b: the stream lane's finished frame of
+                        # a work_history step carries its rows
+                        # (tool_frame_data); this lane sends no frames, as
+                        # with `detail` (MIRROR NOTE: intentionally absent).
                         # v1.359.0 (G41): app_connect answered for its app
                         # (this lane never cards). MIRROR NOTE (lock-step).
                         connect_offered.append(offered_app(tc.name, tc.arguments))

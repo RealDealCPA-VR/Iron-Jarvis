@@ -5,7 +5,8 @@
 //
 //   token     {"text":"…"}
 //   tool_call {"id","name","status":"started"|"finished","ok"?,"args"?,"output"?,
-//              "detail"?: {"input","output"}}  (detail: finished frames, v1.349.0)
+//              "detail"?: {"input","output"}}  (detail: finished frames, v1.349.0;
+//              a finished work_history frame also "data": {"rows"}, 13-b)
 //   approval  {"id","call_id","tool","args"?,"timeout_s"?}   (v1.187.0)
 //   approval_resolved {"id","call_id","tool","decision"}     (v1.187.0)
 //   meta      {"provider","model"}
@@ -67,6 +68,7 @@ import { decodeMemoryUsed, decodeUsedMore, type MemoryUsedItem } from "./memoryU
 import { stepTarget } from "./workTarget";
 import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
 import { onceReasonOf, type OnceReason } from "./onceReason";
+import { WORK_HISTORY_TOOL, decodeWorkRows, type WorkHistoryRowData } from "./workHistory";
 
 // v1.324.0: type-only re-exports (they erase — a mock of this module with a
 // fixed export list is unaffected). The runtime helpers live in mcpInteract.
@@ -111,6 +113,10 @@ export type SSEEvent =
       detail?: StepDetail;
       /** v1.390.0: a step Iron Jarvis ran itself (decoded since v1.417.0). */
       check?: "finish";
+      /** Next leaps 13-b: a finished `work_history` step's rows (its
+       *  `data.rows`, lib/workHistory), drawn under the reply. Absent on
+       *  every other step. */
+      workRows?: WorkHistoryRowData[];
     }
   | {
       /** The turn is PAUSED on a tool that needs the user's approval
@@ -362,6 +368,9 @@ export interface ToolCard {
    *  the ONLY part of a call a step saves. `args` and `output` above stay
    *  on this screen. */
   detail?: StepDetail;
+  /** Next leaps 13-b: a finished `work_history` step's rows (lib/workHistory),
+   *  which the page saves on the reply as `workRows`. */
+  workRows?: WorkHistoryRowData[];
 }
 
 /** One tool step of a finished turn, in call order (v1.323.0): the receipt
@@ -713,6 +722,12 @@ export function sseEventFrom(
       if (ev.status === "finished") {
         const detail = cleanStepDetail(data.detail);
         if (detail) ev.detail = detail;
+        // Next leaps 13-b: the rows a work_history step found, read as
+        // untrusted input (whitelisted, app addresses only).
+        if (ev.name === WORK_HISTORY_TOOL && data.data && typeof data.data === "object") {
+          const rows = decodeWorkRows((data.data as { rows?: unknown }).rows);
+          if (rows.length) ev.workRows = rows;
+        }
       }
       if (data.check === "finish") ev.check = "finish";
       return ev;
@@ -1338,6 +1353,7 @@ export function upsertTool(
   if (ev.args !== undefined) patch.args = ev.args;
   if (ev.output !== undefined) patch.output = ev.output;
   if (ev.detail !== undefined) patch.detail = ev.detail;
+  if (ev.workRows !== undefined) patch.workRows = ev.workRows;
   if (finished) patch.endedAt = now;
   else patch.startedAt = now;
   const idx = prev.findIndex((t) => t.id === patch.id);

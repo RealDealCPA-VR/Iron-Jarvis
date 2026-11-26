@@ -14,7 +14,8 @@ One row that cannot be built or stored never stops the others: it is skipped
 until its source changes.
 
 READING. Folder reads are SQL over the whole table; :meth:`WorkMap.matching`
-looks at the newest :data:`LIGHT_MAX` rows. Everything here is BLOCKING
+looks at the newest :data:`LIGHT_MAX` rows; :meth:`WorkMap.between` (next
+leaps 13-b) is one read by date on the indexed ``updated_at``. Everything here is BLOCKING
 (SQLite) and is called off the event loop.
 """
 
@@ -344,6 +345,48 @@ class WorkMap:
             )
             rows = [_row(e) for e in db.exec(stmt)]
         return rows, total
+
+    def between(self, after: "datetime | None" = None, before: "datetime | None" = None,
+                folder_keys: "list[str] | tuple[str, ...] | None" = None,
+                kinds: "list[str] | tuple[str, ...] | frozenset[str] | None" = None,
+                limit: int = LIGHT_MAX) -> list[dict[str, Any]]:
+        """The work on record last worked on between ``after`` and ``before``
+        (both INCLUSIVE, naive UTC like ``updated_at``; None = open), newest
+        first, at most ``limit`` rows (next leaps 13-b). ``folder_keys``:
+        only work in these folders and under them (each a folder or a folder
+        key, normalised as :meth:`for_folder` does; an empty list reads
+        nothing), None = anywhere. ``kinds``: only these kinds of work. ONE
+        read on the indexed ``updated_at``."""
+        W = WorkEntry
+        conds: list[Any] = []
+        if isinstance(after, datetime):
+            conds.append(W.updated_at >= after)
+        if isinstance(before, datetime):
+            conds.append(W.updated_at <= before)
+        if kinds is not None:
+            wanted = sorted({str(k) for k in kinds if str(k or "").strip()})
+            if not wanted:
+                return []
+            conds.append(W.kind.in_(wanted))  # type: ignore[attr-defined]
+        if folder_keys is not None:
+            places: list[Any] = []
+            for f in folder_keys:
+                base = keys.folder_key(keys.home_folder(f))
+                if not base:
+                    continue
+                prefix = base if base.endswith("/") else base + "/"
+                places += [W.folder_key == base,
+                           W.folder_key.startswith(prefix, autoescape=True)]  # type: ignore[attr-defined]
+            if not places:
+                return []
+            conds.append(or_(*places))
+        with session_scope(self.engine) as db:
+            stmt = (
+                select(W).where(*conds)
+                .order_by(W.updated_at.desc(), W.id)  # type: ignore[attr-defined]
+                .limit(max(0, int(limit)))
+            )
+            return [_row(e) for e in db.exec(stmt)]
 
     def matching(self, query: str, *, limit: int = 3, skip_folder: str = "",
                  exclude_ref: str = "") -> list[dict[str, Any]]:

@@ -623,6 +623,8 @@ import {
   extractWebSources,
   type ChatSource,
 } from "@/components/chat/SourcesRow";
+import { WorkHistoryRow } from "@/components/chat/WorkHistoryRow";
+import { decodeWorkRows, extractWorkRows, type WorkHistoryRowData } from "@/lib/workHistory";
 
 /* v1.258.0 (S-03): six panels the chat route used to download before first
  * paint. Every one renders only behind a state gate that is false on open —
@@ -843,6 +845,10 @@ interface ChatMessage {
   /** Web sources the reply's web tool calls actually surfaced (assistant
    *  messages) — rendered as a compact domain-chip row under the bubble. */
   sources?: ChatSource[];
+  /** Next leaps 13-b: the pieces of earlier work the reply's work_history
+   *  step found (its own result, lib/workHistory), drawn as rows under the
+   *  bubble. Decoded again on every read (saved with the chat). */
+  workRows?: WorkHistoryRowData[];
   /** The provider that ACTUALLY answered when it differs from the one the
    *  user explicitly picked (capability reroute / failover) — an honesty chip
    *  so a local-model turn silently served by a CLI is never invisible.
@@ -3929,6 +3935,11 @@ const MessageRow = memo(function MessageRow({
       )}
       {/* URLs the turn's web tools actually returned */}
       {m.sources && m.sources.length > 0 && <SourcesRow sources={m.sources} />}
+      {/* Next leaps 13-b: the pieces of earlier work the turn's work_history
+          step found, from its own result. Pressing a row opens it; Files
+          and Decisions are quiet links. */}
+      <WorkHistoryRow rows={decodeWorkRows(m.workRows)} onOpenFile={h.openDocument} />
+
       {/* Crystallize nudge (v1.120.0): agent turns are by definition
           multi-step — offer to keep the process. */}
       {m.fromSession && isLast && !busy && threadId && (
@@ -9958,6 +9969,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         turnOnConnectors(appConnectIds(streamToolsRef.current));
         // Sources the turn's web tools ACTUALLY returned (never prose links).
         const sources = extractWebSources(streamToolsRef.current);
+        // Next leaps 13-b: the earlier work its work_history steps found.
+        const workRows = extractWorkRows(streamToolsRef.current);
         const finalReply = (reply ?? "").trim() || "(no response)";
         const via = servedByOther(servedBy);
         // Accountability fields (v1.165.0): stored PER MESSAGE so the receipt
@@ -10076,6 +10089,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             turnId,
             ...(toolsUsed.length ? { toolsUsed } : {}),
             ...(sources.length ? { sources } : {}),
+            ...(workRows.length ? { workRows } : {}),
             ...(via ? { viaProvider: via } : {}),
             ...receipt,
           },
@@ -10097,6 +10111,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               // provenance must survive the draft exit like any other turn.
               ...(toolsUsed.length ? { toolsUsed } : {}),
               ...(sources.length ? { sources } : {}),
+              ...(workRows.length ? { workRows } : {}),
               ...(via ? { viaProvider: via } : {}),
               ...receipt,
             },
@@ -10216,6 +10231,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           followLocalOnly(localOnlyFromTools(streamToolsRef.current));
           const partial = (se?.partial ?? "").trim();
           const sources = extractWebSources(streamToolsRef.current);
+          const workRows = extractWorkRows(streamToolsRef.current); // 13-b
           // v1.510.0 (second review, L4): a turn that failed AFTER its steps
           // ran keeps them — the failed reply carries its step cards, the
           // steps that ran and the files they made or changed (the files
@@ -10242,6 +10258,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     content: partial || keptNote,
                     ...(partial ? { interrupted: true } : {}),
                     ...(sources.length ? { sources } : {}),
+                    ...(workRows.length ? { workRows } : {}),
                     // v1.378.0 review: the rest was declined (typed fix_kind).
                     ...(isRefusal(failureFacts(e)) ? { refused: true } : {}),
                     ...(keptWork ?? {}),
@@ -11831,6 +11848,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // exactly when Stop lands.
       const partial = (stream.textStore?.get() ?? stream.text).trim();
       const sources = extractWebSources(toolsAtStop);
+      const workRows = extractWorkRows(toolsAtStop); // 13-b
       // Third plan G19 (CS4): the line is written once the daemon has said
       // what became of the reply. It stopped it (or keeps the Stop for a
       // reply it had not started yet: `pending`) → "Stopped." as before. It
@@ -11858,6 +11876,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             content: partial || "Stopped.",
             ...(partial ? { interrupted: true } : {}),
             ...(partial && sources.length ? { sources } : {}),
+            ...(partial && workRows.length ? { workRows } : {}),
             // Third plan point 1: the stopped reply is this turn's — the daemon
             // writes no second one for it.
             ...(stopId ? { turnId: stopId } : {}),

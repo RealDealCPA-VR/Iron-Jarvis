@@ -411,6 +411,28 @@ def _frame_data(data: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+#: Next leaps 13-b: the rows a reply written home carries, at most (the
+#: page's own cap, ``lib/workHistory`` ``WORK_ROWS_MAX``).
+WORK_ROWS_MAX = 20
+
+
+def _work_rows_from(data: dict[str, Any], into: list[dict[str, Any]]) -> None:
+    """The rows of one FINISHED ``work_history`` step frame that ran
+    (``chat_turn.tool_frame_data``), appended to ``into`` once per piece.
+    The page decodes them again when it reads the chat. Never raises."""
+    try:
+        if data.get("name") != "work_history" or data.get("status") != "finished" or not data.get("ok"):
+            return
+        rows = (data.get("data") or {}).get("rows") if isinstance(data.get("data"), dict) else None
+        seen = {str(r.get("id") or "") for r in into}
+        for r in rows if isinstance(rows, list) else []:
+            if isinstance(r, dict) and str(r.get("id") or "") and str(r["id"]) not in seen:
+                seen.add(str(r["id"]))
+                into.append(r)
+    except Exception:  # noqa: BLE001 — the rows are extra
+        return
+
+
 def reply_line(turn_id: str, frames: Any, status: str, *,
                handed_to: "str | None" = None) -> "dict[str, Any] | None":
     """The chat line a turn's stored frames make (third plan G6): what the
@@ -437,6 +459,7 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
         acc = ""
         done: "dict[str, Any] | None" = None
         err: "dict[str, Any] | None" = None
+        work_rows: list[dict[str, Any]] = []
         for frame in frames if isinstance(frames, list) else []:
             if not (isinstance(frame, (list, tuple)) and len(frame) == 2):
                 continue
@@ -453,6 +476,12 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
                 done = _frame_data(data)
             elif event == "error":
                 err = _frame_data(data)
+            elif event == "tool_call":
+                _work_rows_from(_frame_data(data), work_rows)
+        # Next leaps 13-b: the rows a work_history step carried, as the page
+        # saves them under the reply (only when there are some: every other
+        # line is as before).
+        rows_extra: dict[str, Any] = {"workRows": work_rows[:WORK_ROWS_MAX]} if work_rows else {}
         base: dict[str, Any] = {"role": "assistant", "turnId": turn_id, "savedBy": "daemon"}
         partial = acc.strip()
         if status == "done":
@@ -473,10 +502,10 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
                 more = (done or {}).get("used_more")
                 if isinstance(more, int) and not isinstance(more, bool) and more > 0:
                     line["usedMore"] = more
-            return line
+            return {**line, **rows_extra}
         if status == "error":
             if partial:
-                return {**base, "content": partial, "interrupted": True}
+                return {**base, "content": partial, "interrupted": True, **rows_extra}
             kept = str((err or {}).get("kept_note") or "").strip()
             if not kept:
                 return None
@@ -484,9 +513,9 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
             docs = (err or {}).get("documents")
             if isinstance(docs, list) and docs:
                 line["documents"] = [d for d in docs if d]
-            return line
+            return {**line, **rows_extra}
         if status in ("stopped", "interrupted") and partial:
-            return {**base, "content": partial, "interrupted": True}
+            return {**base, "content": partial, "interrupted": True, **rows_extra}
         return None
     except Exception:  # noqa: BLE001 — nothing written rather than a guess
         log.warning("could not read turn %s's reply", turn_id, exc_info=True)

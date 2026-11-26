@@ -13,7 +13,9 @@ in chat: Iron Jarvis's own chats are already in the work record.
 * ``work_search`` answers from the work record exactly the lines a chat in
   that folder would be told, with the wall of an asker that is not the owner
   (``block.work_block(outside=True)``): work for a client is never told to
-  another app. What it returns is fenced as data.
+  another app. What it returns is fenced as data. Next leaps 13-b: with
+  ``after`` / ``before`` (ISO days) it lists that range through the one
+  reader with the same wall (:func:`dated_lines`, ``lookup(outside=True)``).
 
 Both work the same way in Iron Jarvis's ledger as any call: the registry's
 gate, a ledger row, a ``tool.executed`` event.
@@ -146,12 +148,16 @@ class WorkSearchTool(_ConnectorTool):
         "properties": {
             "query": {"type": "string", "description": "A few words naming the work (a name, a topic)."},
             "folder": {"type": "string", "description": "An absolute folder path to list the work done there."},
+            # Next leaps 13-b: the same dates as work_history, ISO only.
+            "after": {"type": "string", "description": "Optional first day, an ISO date (e.g. \"2026-03-01\"), inclusive."},
+            "before": {"type": "string", "description": "Optional last day, an ISO date (e.g. \"2026-03-31\"), inclusive."},
         },
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from . import reported
         from .block import work_block
+        from .tools import read_filters
 
         if not reported.app_of_session(getattr(ctx, "session_id", "")):
             return ToolResult(ok=False, error=NOT_AN_APP)
@@ -159,13 +165,26 @@ class WorkSearchTool(_ConnectorTool):
 
         query = " ".join(str((args or {}).get("query") or "").split())[:300]
         folder = str((args or {}).get("folder") or "").strip()[:1000]
+        # Next leaps 13-b: dates go through the ONE reader with the wall of
+        # another app (``outside=True``), unchanged: no client's work.
+        filters = read_filters(dict(args or {}), with_kinds=False)
+        if isinstance(filters, ToolResult):
+            return filters
+        after, before, _kinds, period = filters
         # v1.530.0: what runs in Iron Jarvis now, first, on every call.
         running = await asyncio.to_thread(running_block, self.platform)
         parts = [LOOKUP_LEAD]
         if running:
             parts.append(running)
         found = False
-        if query or folder:
+        if after is not None or before is not None:
+            text = await asyncio.to_thread(
+                dated_lines, self.platform, folder=folder, query=query, after=after, before=before,
+                period=period,
+            )
+            found = bool(text)
+            parts.append(text if found else LOOKUP_EMPTY)
+        elif query or folder:
             text = await asyncio.to_thread(
                 work_block, self.platform, folder=folder, query=query, list_folder=bool(folder), outside=True
             )
@@ -174,8 +193,39 @@ class WorkSearchTool(_ConnectorTool):
         return ToolResult(ok=True, output="\n".join(parts), data={"found": found})
 
 
+def dated_lines(platform: Any, *, folder: str, query: str, after: Any, before: Any, period: str) -> str:
+    """``work_search`` with dates (next leaps 13-b): the work in that range
+    through ``lookup.lookup(outside=True)`` (the wall of another app: no
+    client's work of any kind, no Local only work, no recap), one dated line
+    each, under one line that says the range. "" when nothing may be told.
+    BLOCKING; never raises."""
+    from datetime import datetime, timezone
+
+    from .block import _safe, entry_line
+    from .lookup import lookup
+    from .tools import status_of
+
+    try:
+        found = lookup(platform, folder=folder, query=query, outside=True, after=after, before=before)
+        if found.unreadable or not found.rows:
+            return ""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        lines = [line for line in (
+            _safe(entry_line(r, now, with_folder=True, times=int(r.get("times") or 1), dated=True,
+                             status=status_of(r)))
+            for r in found.rows) if line]
+        if not lines:
+            return ""
+        return "\n".join([f"Earlier work {period}:" if period else "Earlier work:", *lines])
+    except Exception:  # noqa: BLE001 — the record is extra
+        return ""
+
+
 def connector_tools(platform: Any) -> list[Tool]:
     return [ChatRecordTool(platform), WorkSearchTool(platform)]
 
 
-__all__ = ["TOOL_SEARCH", "TOOL_NAMES", "TOOL_RECORD", "ChatRecordTool", "WorkSearchTool", "connector_tools"]
+__all__ = [
+    "TOOL_SEARCH", "TOOL_NAMES", "TOOL_RECORD", "ChatRecordTool", "WorkSearchTool", "connector_tools",
+    "dated_lines",
+]

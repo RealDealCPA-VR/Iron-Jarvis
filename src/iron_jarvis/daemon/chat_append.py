@@ -127,6 +127,9 @@ LINE_KEYS: tuple[str, ...] = (
     "used",
     "usedShown",
     "usedMore",
+    # Next leaps 13-b: the rows a work_history step carried, drawn under the
+    # reply (``durable_turns.reply_line`` from the step's frame).
+    "workRows",
 )
 
 #: Idea 39 (39-a): how many replaced report keys a folded line keeps.

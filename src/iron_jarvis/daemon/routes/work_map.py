@@ -29,6 +29,9 @@
   (``workmap/pickup.py``): ``{folder, name, client, last, done, decided,
   open, pieces, recap_pending, full, in_project, words}``. 503 when the
   record cannot be read.
+* Next leaps 13-b: ``GET /work-record/piece?id=`` → ``{id, folder, name}``:
+  where one piece of work is, for the Memory page's ``?work=<id>`` (the
+  Decisions link under a chat reply's rows). 404 when it is not on record.
 * v1.499.0: each ``/work-record/folders`` row also carries ``client:
   {id, name} | null``, the confirmed client whose folder it is (computed
   here from ``workmap/clients/store.load_map``; the dashboard never works
@@ -54,6 +57,8 @@ UNREADABLE = "Your work record could not be read right now. Try again in a momen
 NO_FOLDER = "Say which folder to forget."
 TOO_WIDE = "That is the top of a drive. Pick a folder inside it to forget."
 NOT_FORGOTTEN = "That folder was not forgotten."
+#: Next leaps 13-b (``GET /work-record/piece``).
+PIECE_GONE = "That piece of work is not on record any more."
 
 
 class FolderBody(BaseModel):
@@ -257,6 +262,31 @@ def register(app: FastAPI, d) -> None:
             "entries": entries,
             "total": total,
         }
+
+    @app.get("/work-record/piece")
+    def work_piece(id: str = "") -> dict[str, Any]:  # noqa: A002 — the query word
+        """Next leaps 13-b: where ONE piece of work is on record, for the
+        Memory page's ``?work=<id>`` (the row under a chat reply's
+        Decisions): ``{id, folder, name}``, by the piece's id so no folder is
+        ever in a page's address. 404 in words when it is not on record (any
+        more); 503 when the record cannot be read."""
+        from ...core.db import session_scope
+        from ...workmap import keys
+        from ...workmap.models import WorkEntry
+
+        wanted = str(id or "").strip()[:400]
+        if not wanted:
+            raise HTTPException(status_code=400, detail="Say which piece of work to show.")
+        wm = _map(d)
+        try:
+            with session_scope(wm.engine) as db:
+                row = db.get(WorkEntry, wanted)
+                folder = str(row.folder or "") if row is not None else None
+        except Exception as exc:  # noqa: BLE001 — said, never "not on record"
+            raise HTTPException(status_code=503, detail=UNREADABLE) from exc
+        if folder is None:
+            raise HTTPException(status_code=404, detail=PIECE_GONE)
+        return {"id": wanted, "folder": folder, "name": keys.folder_name(folder)}
 
     @app.get("/work-record/pick-up")
     def work_pick_up(folder: str = "", local: bool = False, chat_code: bool = False) -> dict[str, Any]:

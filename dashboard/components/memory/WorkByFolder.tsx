@@ -69,6 +69,14 @@ import {
   type WorkFolder,
   type WorkItem,
 } from "@/lib/workRecord";
+import {
+  PIECE_GONE_WORDS,
+  PIECE_UNREAD_WORDS,
+  decodePiece,
+  focusedWorkId,
+  sameFolder,
+  workPiecePath,
+} from "@/lib/workHistory";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { ConfirmButton } from "@/components/ui";
 
@@ -210,6 +218,38 @@ export function WorkByFolder() {
     [making, read],
   );
 
+  // Next leaps 13-b: a chat reply's Decisions opens /memory?work=<id>. The
+  // piece's folder is asked for once (by the piece's id: no folder in the
+  // address), then opened here when the list has it, and the piece is
+  // brought into view.
+  const [focus, setFocus] = useState<{ id: string; folder: string } | null>(null);
+  const focusedOnce = useRef(false);
+  useEffect(() => {
+    const id = typeof window === "undefined" ? "" : focusedWorkId(window.location.search);
+    if (!id) return;
+    Promise.resolve()
+      .then(() => get<unknown>(workPiecePath(id)))
+      .then((raw) => {
+        if (!alive.current) return;
+        const folder = decodePiece(raw);
+        if (folder) setFocus({ id, folder });
+        else setNote({ words: PIECE_GONE_WORDS, failed: false });
+      })
+      .catch((e: unknown) => {
+        if (!alive.current) return;
+        const failure = failureOf(e);
+        setNote({ words: failure.status === 404 ? PIECE_GONE_WORDS : PIECE_UNREAD_WORDS, failed: failure.status !== 404 });
+      });
+  }, []);
+  useEffect(() => {
+    if (!focus || focusedOnce.current || !folders) return;
+    const f = folders.find((x) => sameFolder(x.folder, focus.folder));
+    if (!f) return;
+    focusedOnce.current = true;
+    setOpen(f.folder);
+    if (workRef.current[f.folder]?.state !== "loading") readFolder(f.folder);
+  }, [focus, folders, readFolder]);
+
   const remember = useCallback(
     async (f: ForgottenFolder) => {
       try {
@@ -322,7 +362,7 @@ export function WorkByFolder() {
                           onRetry={() => readFolder(f.folder)}
                         />
                       ) : (
-                        <FolderWorkList entries={mine.entries} total={mine.total} />
+                        <FolderWorkList entries={mine.entries} total={mine.total} focusId={focus?.id} />
                       )}
                       <div className="pt-2">
                         <ConfirmButton
@@ -379,13 +419,23 @@ export function WorkByFolder() {
 /** One piece of work, as the work record shows it (v1.499.0: shared with the
  *  client page, which lists a client's work the same way). Render it inside
  *  a `<ul>`. */
-export function EntryRow({ entry: e }: { entry: WorkItem }) {
+export function EntryRow({ entry: e, focused = false }: { entry: WorkItem; focused?: boolean }) {
   // Said only when the work did not simply finish.
   const ended =
     e.outcome === "failed" || e.outcome === "cancelled" ? statusWords(e.outcome) : outcomeWords(e.outcome);
   const files = filesWords(e);
+  // Next leaps 13-b: the piece a chat reply's Decisions opened, brought into view once.
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView?.({ block: "center" });
+  }, [focused]);
   return (
-    <li data-testid="work-item">
+    <li
+      ref={ref}
+      data-testid="work-item"
+      data-focused={focused ? "true" : undefined}
+      className={focused ? "rounded border-l-2 border-accent/60 pl-2" : undefined}
+    >
       <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
         {e.link ? (
           <Link href={e.link} className="text-zinc-100 underline-offset-2 hover:underline">
@@ -422,7 +472,7 @@ export function EntryRow({ entry: e }: { entry: WorkItem }) {
   );
 }
 
-function FolderWorkList({ entries, total }: { entries: WorkItem[]; total: number }) {
+function FolderWorkList({ entries, total, focusId }: { entries: WorkItem[]; total: number; focusId?: string }) {
   if (entries.length === 0) {
     return <p className="py-1 text-sm text-zinc-500">Nothing on record in this folder any more.</p>;
   }
@@ -430,7 +480,7 @@ function FolderWorkList({ entries, total }: { entries: WorkItem[]; total: number
     <>
       <ul className="space-y-2">
         {entries.map((e) => (
-          <EntryRow key={e.id} entry={e} />
+          <EntryRow key={e.id} entry={e} focused={Boolean(focusId) && e.id === focusId} />
         ))}
       </ul>
       {total > entries.length && (

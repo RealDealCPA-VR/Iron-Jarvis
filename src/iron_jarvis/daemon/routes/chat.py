@@ -8565,6 +8565,11 @@ async def chat_stream(
                             # v1.390.0 (Timeline): a harness turn's step says
                             # its own run time; every other frame unchanged.
                             **_own(_i),
+                            # Next leaps 13-b: a work_history step carries its
+                            # rows (the tool's own result) for the row under
+                            # the reply; every other frame unchanged. MIRROR
+                            # NOTE: the POST lane sends no frames (as detail).
+                            **_chat_turn.tool_frame_data(tc.name, result, ran),
                         })
                         if _finish is not None:
                             # THE FINISH CHECK (part 3, Phase 2) — lock-step

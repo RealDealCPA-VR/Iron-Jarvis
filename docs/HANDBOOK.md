@@ -2200,6 +2200,46 @@ This works for coding sessions in Chat › Code. The pull request a Build ›
 Code session opens (your own Claude Code or Codex) does not bring its
 comments here yet.
 
+## Ask about earlier work by date and by client, and open each piece (v1.579.0)
+
+Ask "what did we do for Baker in March?" in any chat and the answer comes
+from Iron Jarvis's own record of earlier work: "3 pieces of work in March
+2026, for Baker". Under the reply, each piece is a row with its kind, its
+day and how it stands. Press a row to open that chat, coding session or
+agent run. Two quiet links sit beside it: **Files** opens its file in the
+panel beside the chat (with several, a short list to pick from), and
+**Decisions** opens where its checked recap is read: the client's page, or
+**Memory › Your work, by folder** at that piece.
+
+Nothing to turn on: the words of your message are enough.
+
+- **By date.** "in March", "last week", "since Monday": Jarvis turns your
+  words into days, your own days on this PC's clock. A piece counts by the
+  day it was last worked on. With a date and no folder, it looks in every
+  folder it may tell this chat about, not only this chat's own.
+- **By client.** A client's work is listed only when your own message names
+  that client, or when the chat is in that client's folder. When only
+  Jarvis's own words name a client, nothing is listed and it asks you to
+  name the client yourself; it says the same for a name that is not one of
+  your clients, so nothing tells which names are clients. In another
+  client's chat, naming a client still lists none of that client's work,
+  and the answer counts what it left out without saying whose.
+- **How each piece stands:** finished, failed, stopped, needs you, part
+  failed, or still open (its checked recap has an Open line). Where the
+  recap itself may not be told in this chat (work in another folder), the
+  row still says still open, and Decisions opens the place to read it.
+- **From the record, never from the reply's words.** The rows and their
+  links are the ones the lookup found. A chat you open again shows them
+  again, also when the reply finished while the window was closed.
+- **On your phone**, what comes from the record keeps to titles, days and
+  how each ended, as before, with no rows to press.
+- **Other apps** (Claude desktop, Codex) can ask Iron Jarvis's work search
+  for a range of days too; they are still told no client's work.
+
+Good to know: Decisions shows only for a piece with a checked recap. The
+Memory page finds the piece by its own id, so the page's address never
+holds a folder.
+
 ## Start coding work from your phone (v1.578.0)
 
 Text Iron Jarvis from Telegram, Slack or email: "in the website folder, fix
@@ -3842,8 +3882,9 @@ it too.
 
 - A question about a folder includes the folders under it.
 - A task from another computer cannot ask it.
-- It does not yet narrow by date ("in March") or put buttons under the reply
-  to open each piece; those are planned.
+- Since v1.579.0 it also narrows by date ("in March") and by client, and
+  puts a row you can press under the reply for each piece (see "Ask about
+  earlier work by date and by client, and open each piece").
 
 ## A task from another computer brings as much of its chat as fits (v1.546.2)
 
