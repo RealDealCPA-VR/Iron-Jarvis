@@ -170,26 +170,35 @@ def older_count_in(db: Any, thread_id: str) -> int:
 _COUNT_PAGE = 500
 
 
-def older_by_who(engine: Any, thread_id: str, who_of: Any) -> dict[str, int]:
+def older_by_who(engine: Any, thread_id: str, who_of: Any,
+                 before: "int | None" = None) -> dict[str, int]:
     """How many of a conversation's older messages each speaker said (48-b),
     as ``who_of(message)`` names them (None or "": not counted) — the
     left-out count a remote seat is told (build-out R0.1: every row the
     sender does not pass is counted, and older messages are never passed).
-    BLOCKING: read a page at a time, in the order they were kept. On a fault
-    what was counted so far, logged."""
+    ``before`` (48-b review): only the older messages below that position —
+    the ones that were already older when the caller read the live messages
+    it passes, so one that moved since (and was passed) is never also
+    counted. BLOCKING: read a page at a time, in the order they were kept.
+    On a fault what was counted so far, logged."""
     out: dict[str, int] = {}
     try:
         from sqlmodel import select
 
         if not thread_id or not ensure_older_table(engine):
             return out
+        if before is not None and int(before) <= 0:
+            return out
         last = 0
         while True:
+            where = [ChatOlderMessage.thread_id == thread_id, ChatOlderMessage.id > last]
+            if before is not None:
+                where.append(ChatOlderMessage.seq < int(before))
             with session_scope(engine) as db:
                 page = list(
                     db.exec(
                         select(ChatOlderMessage.id, ChatOlderMessage.message_json)
-                        .where(ChatOlderMessage.thread_id == thread_id, ChatOlderMessage.id > last)
+                        .where(*where)
                         .order_by(ChatOlderMessage.id)
                         .limit(_COUNT_PAGE)
                     ).all()

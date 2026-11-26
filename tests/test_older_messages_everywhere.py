@@ -148,6 +148,69 @@ def test_a_remote_seat_is_told_of_the_phone_chats_older_rows_too(tmp_path):
     engine.dispose()
 
 
+async def test_the_phone_lane_reads_its_window_off_the_loop(tmp_path, monkeypatch):
+    """48-b review: ``history_window`` now reads every older message of the
+    phone chat (to count them) before its live rows, for each phone message
+    addressed to a remote: the phone lane runs it in a worker, never on the
+    loop (CLAUDE.md: nothing blocking runs on the event loop)."""
+    import threading
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents.remote import RemoteAgentRegistry
+    from iron_jarvis.comm.inbound import InboundPoller
+
+    monkeypatch.delenv("IRONJARVIS_TOKEN", raising=False)
+    app = create_app(str(tmp_path))
+    platform = app.state.platform
+    RemoteAgentRegistry(platform.engine).upsert("desk", "http://192.168.1.20:8787/task", "http-task")
+    asked: list[dict] = []
+
+    async def fake_run(self, record, task, secret_get, **kw):
+        asked.append(kw)
+        return {"ok": True, "result": "noted"}
+
+    async def jarvis_turn(platform_, personas, body):
+        return {"reply": "Jarvis here.", "escalate": False}
+
+    monkeypatch.setattr(RemoteAgentRegistry, "run", fake_run)
+    store = CommThreadStore(platform.engine, event_bus=platform.event_bus)
+    poller = InboundPoller(
+        platform.notifier, SimpleNamespace(), platform.engine, event_bus=platform.event_bus,
+        thread_store=store, chat_turn=jarvis_turn, personas={}, platform=platform,
+    )
+
+    class _Phone:
+        reflex_source = "comm"
+        inbound_enabled = True
+        chat_enabled = True
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        def is_authorized(self, sender_id):
+            return True
+
+        def send(self, message, **kw):
+            self.sent.append(message)
+            return {"ok": True}
+
+    loop_thread = threading.get_ident()
+    ran_on: list[int] = []
+    real = CommThreadStore.history_window
+
+    def spy(self, thread_id, limit=60):
+        ran_on.append(threading.get_ident())
+        return real(self, thread_id, limit=limit)
+
+    monkeypatch.setattr(CommThreadStore, "history_window", spy)
+    said = SimpleNamespace(sender_id="u1", reply_to="u1", text="@desk hello", is_bot=False, sender_name="Val")
+    out = await poller._handle_chat("telegram", _Phone(), said, "@desk hello", "Val")
+    assert out["status"] == "remote_chat", out
+    assert asked, "the remote was never asked"
+    assert ran_on, "the phone lane never read its window"
+    assert loop_thread not in ran_on, "the phone chat's window was read on the event loop"
+
+
 # --------------------------------------------------------------------------- #
 # Coding sessions
 # --------------------------------------------------------------------------- #
@@ -257,42 +320,66 @@ def test_deleting_a_coding_session_deletes_its_older_lines(tmp_path):
         assert CA.older_count(engine, row.id) == 0
 
 
-def test_the_session_view_counts_older_lines_with_the_lines_it_shows(tmp_path, monkeypatch):
-    """The Code view takes ``older`` as where ``messages[0]`` sits, like the
-    chat page: a turn that moved lines between the two reads would show one
-    twice or miss one at the join. Both are read under the conversation
-    lock, so no writer can save between them."""
+def _lock_held() -> bool:
+    """Whether the conversation write lock is held right now: another thread
+    tries to take it (an RLock lets its own holder take it again)."""
     import threading
 
     from iron_jarvis.core.db import CONVERSATION_WRITE_LOCK
 
+    got: list[bool] = []
+
+    def probe():
+        ok = CONVERSATION_WRITE_LOCK.acquire(blocking=False)
+        if ok:
+            CONVERSATION_WRITE_LOCK.release()
+        got.append(ok)
+
+    t = threading.Thread(target=probe)
+    t.start()
+    t.join()
+    return not got[0]
+
+
+def _assert_read_as_one(events: list[tuple[str, bool]]) -> None:
+    """Every count was read under the lock, straight after the conversation
+    it describes was read under the SAME hold (48-b review: a copy read
+    before the lock, with a count read in it, passes a count-only check)."""
+    counts = [i for i, (what, _held) in enumerate(events) if what == "count"]
+    assert counts, events
+    for i in counts:
+        assert events[i][1], f"the count was read while a writer could save: {events}"
+        assert i > 0 and events[i - 1] == ("row", True), (
+            f"the conversation shown was not read with its count, under the lock: {events}"
+        )
+
+
+def test_the_session_view_counts_older_lines_with_the_lines_it_shows(tmp_path, monkeypatch):
+    """The Code view takes ``older`` as where ``messages[0]`` sits, like the
+    chat page: a turn that moved lines between the two reads would show one
+    twice or miss one at the join. Both are read under the conversation
+    lock, so no writer can save between them: the count AND the row."""
     with TestClient(create_app(str(tmp_path))) as client:
         engine = client.app.state.platform.engine
         row = S.create(engine, str(tmp_path))
         for n in range(103):
             S.append_lines(engine, row.id, _turn(n))
-        seen: list[bool] = []
-        real = CA.older_count
+        events: list[tuple[str, bool]] = []
+        real_count, real_row = CA.older_count, S.get_row
 
         def counting(eng, thread_id):
-            got: list[bool] = []
+            events.append(("count", _lock_held()))
+            return real_count(eng, thread_id)
 
-            def probe():
-                ok = CONVERSATION_WRITE_LOCK.acquire(blocking=False)
-                if ok:
-                    CONVERSATION_WRITE_LOCK.release()
-                got.append(ok)
-
-            t = threading.Thread(target=probe)
-            t.start()
-            t.join()
-            seen.append(got[0])
-            return real(eng, thread_id)
+        def reading(eng, thread_id):
+            events.append(("row", _lock_held()))
+            return real_row(eng, thread_id)
 
         monkeypatch.setattr(CA, "older_count", counting)
+        monkeypatch.setattr(S, "get_row", reading)
         view = client.get(f"/build/sessions/{row.id}").json()
         assert view["older"] == 6 and view["messages"][0]["content"] == "question 3"
-        assert seen and not any(seen), "the count was read while a writer could save"
+        _assert_read_as_one(events)
 
 
 # --------------------------------------------------------------------------- #
@@ -351,12 +438,61 @@ async def test_a_remote_seat_shown_the_room_itself_is_told_of_its_older_rows(tmp
             entry["pending"] = True  # Iron Jarvis's note about the remote, not words to count
         threads._append(room.id, [entry])
     await threads.run_round(room.id, "@desk go on", SimpleNamespace(platform=platform), directed=["desk"])
-    # When the remote spoke: 405 + the round's own line, so 6 had moved, one
-    # of them a pending note.
-    assert seen and seen[-1].get("history_earlier") == 5
+    # When the round read the room, 5 of its 405 were older (r0-r4, one of
+    # them a pending note): those 4 were left out. The round's own line then
+    # moved r5 too, but r5 was in the 400 the remote was passed: never also
+    # counted (48-b review; R0.1: never more than were left out).
+    assert seen, "the remote was never called"
+    rows = seen[-1].get("history") or []
+    assert rows and rows[0]["content"] == "r5"
+    assert seen[-1].get("history_earlier") == 4
     # Its answer moved one more.
     assert CA.older_count(platform.engine, room.id) == 7
     assert threads.older_by_who(room.id) == {"user": 3, "remote:desk": 3}
+    # Bounded by a position: only the older messages below it.
+    assert threads.older_by_who(room.id, 5) == {"user": 2, "remote:desk": 2}
+    assert threads.older_by_who(room.id, 0) == {}
+
+
+async def test_a_remote_seat_after_a_local_one_is_told_only_what_it_was_not_passed(tmp_path, monkeypatch):
+    """A local seat that speaks before the remote moves one more of the
+    room's oldest messages to its older ones; that message was in the room
+    the round read, so it is passed to the remote and never also counted."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents.remote import RemoteAgentRegistry
+    from iron_jarvis.agents.threads import clean_participants
+
+    monkeypatch.delenv("IRONJARVIS_TOKEN", raising=False)
+    app = create_app(str(tmp_path))
+    platform = app.state.platform
+    RemoteAgentRegistry(platform.engine).upsert("desk", "http://192.168.1.20:8787/task", "http-task")
+    seen: list[dict] = []
+
+    async def fake_run(self, record, task, secret_get, **kw):
+        seen.append(kw)
+        return {"ok": True, "result": "noted"}
+
+    async def fake_local(self, seat, others, transcript, d, **kw):
+        return "the critic's words"
+
+    monkeypatch.setattr(RemoteAgentRegistry, "run", fake_run)
+    monkeypatch.setattr(AgentThreads, "_speak_local", fake_local)
+    threads = AgentThreads(platform.engine)
+    room = threads.create("room", clean_participants([
+        {"source": "builtin", "name": "critic", "role": "critic"},
+        {"source": "remote", "name": "desk", "role": "participant"},
+    ]))
+    for i in range(403):
+        threads._append(room.id, [{"who": "user" if i % 2 == 0 else "remote:desk", "content": f"r{i}"}])
+    assert CA.older_count(platform.engine, room.id) == 3
+    out = await threads.run_round(room.id, "@critic @desk go on", SimpleNamespace(platform=platform))
+    assert out["spoke"] == ["builtin:critic", "remote:desk"]
+    # The user's line moved r3 and the critic's answer r4 before the remote
+    # spoke; both were in the room the round read, so both were passed.
+    passed = [r["content"] for r in seen[-1].get("history") or []]
+    assert passed[:2] == ["r3", "r4"]
+    assert seen[-1].get("history_earlier") == 3  # r0, r1, r2: never passed
 
 
 def _long_room(engine, lines: int = 420):
@@ -412,36 +548,27 @@ def test_a_long_round_table_is_read_back_from_its_own_page(tmp_path):
 
 def test_the_room_view_counts_older_messages_with_the_messages_it_shows(tmp_path, monkeypatch):
     """The room page takes ``older`` as where ``messages[0]`` sits: both are
-    read under the conversation lock, so no round can move one between."""
-    import threading
-
-    from iron_jarvis.core.db import CONVERSATION_WRITE_LOCK
-
+    read under the conversation lock, so no round can move one between: the
+    count AND the room."""
     with TestClient(create_app(str(tmp_path))) as client:
         engine = client.app.state.platform.engine
         _threads, room, _said = _long_room(engine, 406)
-        seen: list[bool] = []
-        real = CA.older_count
+        events: list[tuple[str, bool]] = []
+        real_count, real_get = CA.older_count, AgentThreads.get
 
         def counting(eng, thread_id):
-            got: list[bool] = []
+            events.append(("count", _lock_held()))
+            return real_count(eng, thread_id)
 
-            def probe():
-                ok = CONVERSATION_WRITE_LOCK.acquire(blocking=False)
-                if ok:
-                    CONVERSATION_WRITE_LOCK.release()
-                got.append(ok)
-
-            t = threading.Thread(target=probe)
-            t.start()
-            t.join()
-            seen.append(got[0])
-            return real(eng, thread_id)
+        def reading(self, thread_id):
+            events.append(("row", _lock_held()))
+            return real_get(self, thread_id)
 
         monkeypatch.setattr(CA, "older_count", counting)
+        monkeypatch.setattr(AgentThreads, "get", reading)
         body = client.get(f"/agents/threads/{room.id}").json()
         assert body["older"] == 6 and body["messages"][0]["content"] == "round line 6"
-        assert seen and not any(seen), "the count was read while a writer could save"
+        _assert_read_as_one(events)
 
 
 async def test_a_rounds_writes_run_off_the_loop(tmp_path, monkeypatch):

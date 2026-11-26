@@ -2912,8 +2912,9 @@ export function HarnessSession({
   // components/chat/OlderMessages). They are NEVER part of `view.messages`:
   // their own state, drawn above the live lines, read-only. Opening a session
   // reads nothing older; a page is read only once the reader has left the
-  // bottom (or presses the line). The first view taken starts the state
-  // (`older` = where its live lines start); a later one whose count grew
+  // bottom (or presses the line). The first view taken from the daemon starts
+  // the state over at its count (`older` = where its live lines start; the
+  // cached view's count may be a night old); a later one whose count grew
   // fetches just the lines in between (they were on screen as live ones).
   const [older, setOlderState] = useState<OlderState<BuildMessage>>(() => {
     const n = olderCount(viewFor<BuildSessionView>(threadId)?.older);
@@ -2932,6 +2933,8 @@ export function HarnessSession({
   const olderBlockRef = useRef<HTMLDivElement | null>(null);
   // The reach of the line, for the scroll handler (set below).
   const olderReachRef = useRef<() => void>(() => {});
+  // No view from the daemon taken yet since this opening (see takeOlderTotal).
+  const olderFirstTakeRef = useRef(true);
 
   // ------------------------------------------------------------- render
   // Keep the newest line in view — the TRANSCRIPT scrolls, never the page (a
@@ -3007,8 +3010,20 @@ export function HarnessSession({
     const n = olderCount(total);
     if (n === null) return;
     const cur = olderRef.current;
+    const first = olderFirstTakeRef.current;
+    olderFirstTakeRef.current = false;
     if (cur.threadId !== threadId) {
       resetOlder(n);
+      return;
+    }
+    // 48-b review: the FIRST view this opening takes from the daemon is the
+    // session as it is now. The count the state started from is the cached
+    // view's (the last one drawn, maybe a night of turns ago); with nothing
+    // held there is nothing to join, so it starts over at the fresh count,
+    // as the chat page's openThread does: opening reads nothing earlier.
+    // Views taken after it keep the fill (their lines were on screen).
+    if (first && cur.rows.length === 0) {
+      if (n !== cur.total) resetOlder(n);
       return;
     }
     if (n < cur.total) {

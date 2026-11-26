@@ -7,7 +7,8 @@
  * (`harness/sessions._with_lines`); `GET /build/sessions/{id}` says how many
  * (`older`). The Code view (components/harness/HarnessSession):
  *  - opening a session with 300 older lines makes ONE session read and NO
- *    older read, and a quiet "Earlier messages" line sits at the top;
+ *    older read, and a quiet "Earlier messages" line sits at the top; so
+ *    does coming back to one whose lines moved while it was closed;
  *  - once the reader has scrolled up, reaching the line loads the 50 before
  *    (`/chat/threads/{id}/older?before=`), and the line the reader was on
  *    stays where it was on screen;
@@ -85,7 +86,10 @@ vi.mock("react-markdown", () => ({ default: ({ children }: { children?: string }
 vi.mock("remark-gfm", () => ({ default: () => {} }));
 
 import { HarnessSession } from "@/components/harness/HarnessSession";
+import { HarnessMessageRow } from "@/components/harness/HarnessMessageRow";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
+import type { BuildMessage } from "@/lib/buildSessions";
+import { EMPTY_ROSTER } from "@/lib/sessionTeam";
 
 const terminal: SessionTerminalApi = { find: () => null, open: async () => null, render: () => <div />, close: () => {} };
 
@@ -267,6 +271,31 @@ describe("scroll back in a coding session (48-b)", () => {
     expect(olderReads()).toEqual([]);
   });
 
+  it("coming back to a session whose lines moved while away reads nothing earlier as it opens", async () => {
+    // The Code view remounts a session each time it opens (keyed by its
+    // id): it starts from the view drawn last time (the turn cache), whose
+    // count is old. The daemon's view now says 20 more lines moved (a night
+    // of turns): opening still reads nothing earlier and draws none of them.
+    const { unmount } = await openLongSession(300);
+    unmount();
+    const live = Array.from({ length: LIVE }, (_, i) => line(320 + i));
+    api.gets[`/build/sessions/${sid}`] = view(sid, 320, live);
+    serveOlder(sid, 320);
+    api.got.length = 0;
+    render(session(sid));
+    await screen.findByText(`reply ${320 + LIVE - 1}`, undefined, LONG);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(sessionReads(sid)).toHaveLength(1);
+    expect(olderReads()).toEqual([]);
+    expect(screen.getByTestId("harness-older").querySelectorAll("[data-older-seq]")).toHaveLength(0);
+    expect(screen.getByTestId("older-more")).toHaveTextContent("Earlier messages");
+    // Scrolling back starts where the live lines start NOW.
+    scrollToTop();
+    await reachTop();
+    await screen.findByText("question 270", undefined, LONG);
+    expect(olderReads()).toEqual([`/chat/threads/${sid}/older?before=320&limit=50`]);
+  });
+
   it("a session that keeps nothing older draws no earlier block at all", async () => {
     api.gets[`/build/sessions/${sid}`] = view(sid, 0, [line(0), line(1)]);
     render(session(sid));
@@ -356,6 +385,115 @@ describe("scroll back in a coding session (48-b)", () => {
     const again = screen.getByTestId("harness-older");
     expect(within(again).queryByTestId("pref-suggestion")).toBeNull();
     expect(within(again).queryByTestId("client-question")).toBeNull();
+  });
+
+  it("an earlier line offers no Keep and no Undo; the live ones keep theirs", async () => {
+    // 48-b review: the attempts card's Keep and a written file's Undo are
+    // left out on an earlier line too (the Handbook: "Undo and the other
+    // buttons stay on the newer lines").
+    const older = 2;
+    const FILE = "C:\\work\\shop\\cart.py";
+    const git = (name: string) => ({
+      repo: "C:\\work\\shop", main: "C:\\work\\shop", checkout: "C:\\work\\shop",
+      worktree: `C:\\work\\shop.ij-worktrees\\${name}`, branch: `ij/${name}`,
+      base: "ij/session-ab12", base_commit: "abc123", name,
+    });
+    const card = {
+      task: "fix the cart", base: "ij/session-ab12", base_commit: "abc123", adopt: false,
+      items: [
+        { id: "try1", label: "GPT-5.5 (Codex)", provider: "codex-cli", model: "gpt-5.5", cost: "plan",
+          branch: "ij/try-codex-1a2b", state: "done", why: "finished", words: "Finished", steps: 3, ms: 42_000,
+          files: ["cart.py"], usage: { input_tokens: 1200, output_tokens: 300 }, git: git("try-codex-1a2b") },
+        { id: "try2", label: "glm-local", provider: "ollama", model: "glm-local", cost: "free",
+          branch: "ij/try-glm-3c4d", state: "done", why: "finished", words: "Finished", steps: 3, ms: 31_000,
+          files: ["cart.py"], usage: { input_tokens: 900, output_tokens: 210 }, git: git("try-glm-3c4d") },
+      ],
+    };
+    const worked = (m: Line) => ({ ...m, documents: [FILE], attempts: card });
+    const live = Array.from({ length: LIVE }, (_, i) => line(older + i));
+    live[LIVE - 1] = worked(live[LIVE - 1]);
+    api.gets[`/build/sessions/${sid}`] = view(sid, older, live);
+    api.gets[`/undo?session_id=build%3A${sid}`] = {
+      actions: [{ action_id: "u1", kind: "file_restore", path: "cart.py", workspace: "C:\\work\\shop", undoable: true }],
+    };
+    api.older = (before, limit) => {
+      const start = Math.max(0, before - limit);
+      const messages = [line(0), worked(line(1))].slice(start, before);
+      return { id: sid, total: older, offset: 0, first_seq: start, start_kept: true, messages };
+    };
+    render(session(sid));
+    await screen.findByText(`reply ${older + LIVE - 1}`, undefined, LONG);
+    // The live reply keeps Keep.
+    await waitFor(() => expect(screen.getAllByTestId("attempt-keep").length).toBeGreaterThan(0), LONG);
+    const liveKeeps = screen.getAllByTestId("attempt-keep").length;
+    fireEvent.click(screen.getByTestId("older-more"));
+    await screen.findByText("reply 1", undefined, LONG);
+    const block = screen.getByTestId("harness-older");
+    expect(within(block).getAllByTestId("attempts-card")).toHaveLength(1);
+    expect(within(block).queryAllByTestId("attempt-keep")).toHaveLength(0);
+    expect(screen.getAllByTestId("attempt-keep")).toHaveLength(liveKeeps);
+    // Every fold opened: the earlier line names its file, with no Undo.
+    for (const b of within(block).queryAllByRole("button", { expanded: false })) fireEvent.click(b);
+    await waitFor(() => expect(within(block).getAllByTestId("turn-doc").length).toBeGreaterThan(0), LONG);
+    expect(within(block).queryByRole("button", { name: /Undo the write to cart\.py/ })).toBeNull();
+    // The live reply's receipt keeps its Undo (the journal matched the file).
+    const liveReplies = within(transcript()).getAllByTestId("harness-reply").filter((r) => !block.contains(r));
+    const newest = liveReplies[liveReplies.length - 1];
+    for (const b of within(newest).queryAllByRole("button", { expanded: false })) fireEvent.click(b);
+    expect(await within(newest).findByRole("button", { name: /Undo the write to cart\.py/ }, LONG)).toBeTruthy();
+  });
+
+  it("an earlier line of review comments carries no card and no Answer these", async () => {
+    // The row itself: even handed the card, an earlier line leaves it out.
+    const m = {
+      role: "assistant", content: "1 review comment arrived on this session's pull request.",
+      at: "2026-11-22T09:30:00", prComments: { ids: ["s1:c1"], n: 1, authors: ["sam"] },
+    } as unknown as BuildMessage;
+    api.gets["/build/sessions/s1/pr-comments"] = {
+      pr_url: "https://github.com/acme/shop/pull/7",
+      comments: [{
+        id: "s1:c1", kind: "line", author: "sam", author_kind: "member", ticked: true, path: "app.py",
+        abs: "C:\\work\\shop\\app.py", line: 2, start_line: 0, side: "new", outdated: false, body: "Words of sam.",
+        quote: "+y = 3", url: "", state: "new", answer_files: [], place: "app.py, line 2",
+        github_created_at: "2026-11-20T10:00:00Z",
+      }],
+      quiet: false, done: "", max_answer: 20,
+    };
+    const none = () => {};
+    const row = (readOnly: boolean) => (
+      <HarnessMessageRow
+        readOnly={readOnly}
+        prCard
+        m={m}
+        index={3}
+        threadId="s1"
+        sessionId="build:s1"
+        archived={false}
+        busy={false}
+        isPending={false}
+        branching={null}
+        newest={false}
+        carriedOn={false}
+        canRewind={false}
+        prevUserAt={undefined}
+        teamRoster={EMPTY_ROSTER}
+        models={[]}
+        health={null as never}
+        provider="mock"
+        undoFor={() => null}
+        onUndo={async () => {}}
+        h={{ onRewound: none, onBranch: none, onAttemptKept: none, onKeepGoing: none, onRetry: none,
+             onOpenRewind: none, onOpenDocument: none, onAnswerComments: none }}
+      />
+    );
+    const { rerender } = render(row(true));
+    expect(await screen.findByTestId("pr-comments-line")).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("pr-comments-answer")).toBeNull();
+    expect(api.got.filter((p) => p.endsWith("/pr-comments"))).toEqual([]);
+    // The same line, live, carries the card with its Answer these.
+    rerender(row(false));
+    expect(await screen.findByTestId("pr-comments-answer", undefined, LONG)).toBeTruthy();
   });
 
   it("says 'Start of this session' once the first line is loaded", async () => {

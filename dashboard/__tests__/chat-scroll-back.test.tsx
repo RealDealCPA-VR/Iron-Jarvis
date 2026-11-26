@@ -210,13 +210,26 @@ class FakeIO {
     return [];
   }
 }
-function reachTop() {
+/** The observers watching the "Earlier messages" line now on screen. */
+function topWatchers(): { o: FakeIO; el: Element }[] {
+  const out: { o: FakeIO; el: Element }[] = [];
+  for (const o of observers) {
+    for (const el of o.targets) {
+      if (el.isConnected && el.closest('[data-testid="older-top"]')) out.push({ o, el });
+    }
+  }
+  return out;
+}
+/** The line came into view. OlderMessages attaches its observer in an
+ *  effect, which can run after the text a test waited for is on screen (a
+ *  busy PC): wait for one to watch the line now on screen, THEN tell it, so
+ *  a reach is never lost (and a "reads nothing" check checks something).
+ *  48-b review: the same wait as code-scroll-back-48b's. */
+async function reachTop() {
+  await waitFor(() => expect(topWatchers().length).toBeGreaterThan(0), { timeout: 10_000 });
   act(() => {
-    for (const o of [...observers]) {
-      for (const el of [...o.targets]) {
-        if (!el.isConnected || !el.closest('[data-testid="older-top"]')) continue;
-        o.cb([{ target: el, isIntersecting: true } as unknown as IntersectionObserverEntry], o as unknown as IntersectionObserver);
-      }
+    for (const { o, el } of topWatchers()) {
+      o.cb([{ target: el, isIntersecting: true } as unknown as IntersectionObserverEntry], o as unknown as IntersectionObserver);
     }
   });
 }
@@ -306,7 +319,7 @@ describe("scroll back in a chat (48-a)", () => {
     await openLongChat();
     expect(await screen.findByTestId("older-more")).toHaveTextContent("Earlier messages");
     // Seen at once, before anything scrolled: still nothing older is read.
-    reachTop();
+    await reachTop();
     await act(async () => {});
     expect(threadReads()).toHaveLength(1);
     expect(olderReads()).toHaveLength(0);
@@ -320,7 +333,7 @@ describe("scroll back in a chat (48-a)", () => {
     // The row at the top of the screen before the load: the first live one.
     const firstLive = document.querySelector('[data-msg-index="0"]') as Element;
     expect(firstLive.getBoundingClientRect().top).toBe(0);
-    reachTop();
+    await reachTop();
     expect(await screen.findByText("older 4999")).toBeInTheDocument();
     expect(olderReads()).toEqual(["/chat/threads/t7/older?before=5000&limit=50"]);
     const rows = Array.from(document.querySelectorAll("[data-older-seq]"));
@@ -342,7 +355,7 @@ describe("scroll back in a chat (48-a)", () => {
     await openLongChat();
     await screen.findByTestId("older-more");
     scrollToTop();
-    reachTop();
+    await reachTop();
     await screen.findByText("older 4999");
     const box = await screen.findByPlaceholderText(/Message Iron Jarvis/);
     fireEvent.change(box, { target: { value: "a new question" } });
@@ -369,11 +382,11 @@ describe("scroll back in a chat (48-a)", () => {
     await openLongChat(60);
     await screen.findByTestId("older-more");
     scrollToTop();
-    reachTop();
+    await reachTop();
     await screen.findByText("older 10");
     expect(screen.queryByText("older 9")).toBeNull();
     expect(screen.queryByTestId("older-start")).toBeNull();
-    reachTop();
+    await reachTop();
     await screen.findByText("older 0");
     expect(olderReads()).toEqual([
       "/chat/threads/t7/older?before=60&limit=50",
@@ -382,9 +395,9 @@ describe("scroll back in a chat (48-a)", () => {
     expect(screen.getByTestId("older-start")).toHaveTextContent("Start of this chat");
     expect(screen.queryByTestId("older-more")).toBeNull();
     expect(document.querySelectorAll("[data-older-seq]")).toHaveLength(60);
-    // Nothing more is asked at the start.
-    reachTop();
+    // Nothing more is asked at the start: there is no line left to reach.
     await act(async () => {});
+    expect(topWatchers()).toHaveLength(0);
     expect(olderReads()).toHaveLength(2);
   });
 
@@ -410,7 +423,7 @@ describe("scroll back in a chat (48-a)", () => {
     await screen.findByTestId("older-more");
     // The chat is only a little taller than the window: the line is in view
     // at once, while the reader follows the newest message (ignored then).
-    reachTop();
+    await reachTop();
     await act(async () => {});
     expect(olderReads()).toHaveLength(0);
     // The reader scrolls up; the line's view does not change, so no new
@@ -427,12 +440,12 @@ describe("scroll back in a chat (48-a)", () => {
     const serve = H.api.older;
     H.api.older = (before, limit) => (fail ? new H.FakeApiError("down", 503) : serve!(before, limit));
     scrollToTop();
-    reachTop();
+    await reachTop();
     const failed = await screen.findByTestId("older-failed");
     expect(failed).toHaveTextContent("Could not load earlier messages.");
     expect(document.querySelectorAll("[data-older-seq]")).toHaveLength(0);
     // Reaching the top again does not hammer a failing read; the press does.
-    reachTop();
+    await reachTop();
     await act(async () => {});
     expect(olderReads()).toHaveLength(1);
     fail = false;
@@ -672,9 +685,9 @@ describe("scroll back in a phone chat (48-b)", () => {
     // Opening it read nothing older.
     expect(olderReads()).toHaveLength(0);
     scrollToTop();
-    reachTop();
+    await reachTop();
     await screen.findByText("older 10");
-    reachTop();
+    await reachTop();
     await screen.findByText("older 0");
     expect(olderReads()).toEqual([
       "/chat/threads/t7/older?before=60&limit=50",

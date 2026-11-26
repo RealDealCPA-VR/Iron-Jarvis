@@ -1643,7 +1643,14 @@ class AgentThreads:
         Provider failures become honest error entries; the round always
         completes.
         """
-        rec = self.get(thread_id)
+        #: 48-b review: a round shown the room itself (``chat_history`` None)
+        #: reads the room with how many of its messages were older then, as
+        #: one (off the loop: a locked read); a remote seat is told of those.
+        older_at = 0
+        if chat_history is None:
+            rec, older_at = await asyncio.to_thread(self._get_with_older, thread_id)
+        else:
+            rec = self.get(thread_id)
         if rec is None:
             raise KeyError(thread_id)
         participants = json.loads(rec.participants_json or "[]")
@@ -1814,9 +1821,13 @@ class AgentThreads:
                     else:
                         # 48-b: the room's own older messages (kept beyond
                         # its live 400) are never passed either: counted,
-                        # once a round, off the loop (a read of them).
+                        # once a round, off the loop (a read of them). Only
+                        # the ones older when the round read the room: one
+                        # this round's appends moved since is in ``prior``.
                         if room_older is None:
-                            room_older = await asyncio.to_thread(self.older_by_who, thread_id)
+                            room_older = await asyncio.to_thread(
+                                self.older_by_who, thread_id, older_at
+                            )
                         earlier = self._earlier_for(room_older, keep if restricted else None)
                     reply, extra = await self._speak_remote(
                         p,
@@ -2101,10 +2112,11 @@ class AgentThreads:
                 )
         return rows
 
-    def older_by_who(self, thread_id: str) -> dict[str, int]:
+    def older_by_who(self, thread_id: str, before: int | None = None) -> dict[str, int]:
         """The room's OLDER messages a remote seat would have been shown,
         counted by who said them (48-b): the rows :meth:`remote_history`
-        keeps (words; never a pending or not-reported note). BLOCKING."""
+        keeps (words; never a pending or not-reported note). ``before``: only
+        those below that position (see :meth:`_get_with_older`). BLOCKING."""
         def _who(e: dict[str, Any]) -> str | None:
             if not str(e.get("content") or "").strip():
                 return None
@@ -2112,7 +2124,19 @@ class AgentThreads:
                 return None
             return str(e.get("who") or "user")
 
-        return _older.older_by_who(self.engine, thread_id, _who)
+        return _older.older_by_who(self.engine, thread_id, _who, before=before)
+
+    def _get_with_older(self, thread_id: str) -> tuple[AgentThreadRecord | None, int]:
+        """The room and how many of its messages are older (where its live
+        ``messages[0]`` sits), read as ONE under the conversation write lock,
+        as ``GET /agents/threads/{id}`` reads them (48-b review). A round
+        passes a remote seat the live messages it read here; the round's own
+        appends then move the oldest of them to the older messages, so only
+        the older ones below this position were never passed. BLOCKING."""
+        with _APPEND_LOCK:
+            rec = self.get(thread_id)
+            older = _older.older_count(self.engine, thread_id) if rec is not None else 0
+        return rec, older
 
     @staticmethod
     def _earlier_for(earlier: dict[str, int] | None, keep: tuple[str, ...] | None) -> int:
