@@ -4147,6 +4147,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
         )
         wf_desc = str(wf.get("description") or description)[:200]
 
+        # The intelligence plan, release 3: these steps were written by a
+        # model, and this route saves them. The one check every door that
+        # saves makes (``workflows/checks.step_problem``) is made here too,
+        # so a step that cannot work is said now and nothing is saved.
+        from ..workflows.checks import step_problem
+
+        problem = step_problem(steps, platform)
+        if problem:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"the workflow the model wrote has a step that cannot work ({problem}); "
+                    "nothing was saved. Try again, or describe the steps one per line"
+                ),
+            )
         store.save(wf_name, steps, description=wf_desc)
         return {
             "name": wf_name,

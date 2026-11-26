@@ -2490,6 +2490,16 @@ class WorkflowUpdateTool(_RecordTool):
             return ToolResult(ok=False, error=f"There is no workflow called {name!r}.")
         if new_name and not _NAME.match(new_name):
             return ToolResult(ok=False, error="A workflow name starts with a letter and is at most 80 characters.")
+        # The SAME check the Workflows page and `workflow_create` make before
+        # they save, refused in the same words (the intelligence plan,
+        # release 3), and made BEFORE anything changes: a rename is not done
+        # either when the new steps cannot work.
+        if isinstance(args.get("steps"), list):
+            from ..workflows.checks import step_problem
+
+            problem = await asyncio.to_thread(step_problem, args["steps"], self.platform)
+            if problem:
+                return ToolResult(ok=False, error=problem, data={"refused": "step_check", "saved": False})
         store = _wf_store(self.platform)
         try:
             if new_name and new_name != name:
