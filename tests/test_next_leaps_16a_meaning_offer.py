@@ -506,18 +506,27 @@ def test_start_up_uses_the_choice_only_when_it_answers(tmp_path):
     assert M.read(home)["knowledge_read"] == {MODEL: "pk_ffffffffffff"}  # its own walk goes on
     down = M.boot_embedder(cfg, reachable=lambda _u: False)
     assert isinstance(down.current(), MockEmbedder) and down.held == CHOICE
-    # The stand-in serves this session and writes knowledge rows a later
-    # session's model must read again: the walk starts over.
-    assert M.read(home)["knowledge_read"] == {}
+    assert down.held_why == M.HELD_NO_ANSWER  # its probe really failed
+    # Review 3: a start alone never restarts the knowledge walk (only a row
+    # the stand-in really writes does: test_a_model_server_held_at_start_...).
+    assert M.read(home)["knowledge_read"] == {MODEL: "pk_ffffffffffff"}
     M.update(home, value=M.choice_id(M.KIND_OLLAMA, MODEL, "https://ollama.example.com"))
     far = M.boot_embedder(cfg, reachable=lambda _u: True)
     assert isinstance(far.current(), MockEmbedder)  # a choice off this network never loads
+    assert far.held_why == M.HELD_UNUSABLE
     # Review note: a model server that is not Ollama needs its key, which
-    # start-up never reads: it is HELD (reattach tries it), never loaded bare.
+    # start-up never reads: it is HELD (reattach tries it), never loaded bare,
+    # and review 3: held as NOT TRIED YET, never "did not answer".
     lan = M.choice_id(M.KIND_OPENAI, "text-embedding-nomic-embed-text-v1.5", "http://192.168.1.40:1234")
     M.update(home, value=lan)
-    keyed = M.boot_embedder(cfg, reachable=lambda _u: True)
+    keyed = M.boot_embedder(cfg, reachable=lambda _u: pytest.fail("only an Ollama choice is probed at start"))
     assert isinstance(keyed.current(), MockEmbedder) and keyed.held == lan
+    assert keyed.held_why == M.HELD_WAITING
+    words = M.status_words(SimpleNamespace(config=cfg, embedder=keyed))
+    assert words == ("Search by meaning: on, with text-embedding-nomic-embed-text-v1.5 on 192.168.1.40 "
+                     "(your network). Iron Jarvis connects to it shortly after it starts, and matches "
+                     "words until then.")
+    assert "did not answer" not in words
 
 
 def _boot_platform(cfg, reachable: bool):
@@ -618,11 +627,13 @@ def test_every_switch_starts_the_knowledge_walk_over(scene):
     with session_scope(s.p.engine) as db:
         vec = json.loads(db.get(ProjectKnowledge, "pk_000000000000a").embedding_json)
     assert len(vec) == 8, "the stand-in's vector is still there"
-    # A model held at start: the stand-in served until it answers again.
+    # Review 3: a model held at start comes back. The stand-in wrote no
+    # knowledge row meanwhile, so the walk goes on where it was (a row it
+    # does write starts it over: test_a_model_server_held_at_start_...).
     M.update(home, knowledge_read={MODEL: "pk_ffffffffffff"})
     M.switch_of(s.p).switch(MockEmbedder(), held=CHOICE)
     assert M.reattach(s.d) is True
-    assert M.read(home)["knowledge_read"] == {}
+    assert M.read(home)["knowledge_read"] == {MODEL: "pk_ffffffffffff"}
 
 
 def test_the_offer_names_only_a_model_that_answered_here(scene):
@@ -900,9 +911,10 @@ def test_a_held_model_is_never_called_off_in_the_search_note(scene):
     M.update(s.p.config.home, value=CHOICE)
     M.switch_of(s.p).switch(MockEmbedder(), held=CHOICE)
     _hits, notes = _semantic(s, "shipping")
-    assert notes.words_only is True and notes.held is True
+    assert notes.words_only is True and notes.held is True and notes.held_why == M.HELD_NO_ANSWER
     assert HELD_NOTE in notes.note() and WORD_ONLY_NOTE not in notes.note()
-    assert "did not answer when Iron Jarvis started" in M.status_words(s.p)
+    assert M.status_words(s.p) == (f"Search by meaning is on, but {MODEL} did not answer, so it matches "
+                                   "words for now. Iron Jarvis tries it again by itself.")
     M.switch_of(s.p).switch(MockEmbedder())
     M.update(s.p.config.home, value="")
     _hits, notes = _semantic(s, "shipping")
@@ -1044,3 +1056,171 @@ async def test_chat_lists_and_prices_the_search_models_found(scene):
     # The pick is a value the setting's own card then measures and asks for.
     check = await tool.spend_check({"key": "meaning_search", "value": BIG_CHOICE}, _ctx(s))
     assert check.ask is True and BIG_CHOICE in s.probes
+
+
+# ---- review round 3 ---------------------------------------------------------
+LAN_WHERE = "http://192.168.1.40:1234"
+LAN_MODEL = "text-embedding-nomic-embed-text-v1.5"
+LAN = M.choice_id(M.KIND_OPENAI, LAN_MODEL, LAN_WHERE)
+
+
+class Refusing(Meaningful):
+    """A model server that answers, but with an error (HTTP 500)."""
+
+    def embed(self, text: str) -> list[float]:
+        raise EmbedderError("the search model's server answered HTTP 500")
+
+
+async def test_a_model_server_held_at_start_is_tried_at_once_and_called_what_it_is(scene):
+    """Review 3, finding 1: a choice on a model server that is not Ollama is
+    not probed at start (its key is read by the meaning loop). It is held as
+    NOT TRIED YET: the row and File Search's step note say it connects
+    shortly, never that it "did not answer" (nothing was asked). The loop
+    tries it as its FIRST step, before its 120 s wait. A try that really
+    fails says so in its own words. A start, and a held model that comes
+    back, keep the knowledge walk's cursors; a knowledge row the stand-in
+    writes (an add, an edit) starts the walk over, one the model writes
+    does not."""
+    from iron_jarvis.filesearch.service import HELD_NOTE, HELD_UNUSABLE_NOTE, HELD_WAITING_NOTE
+    from iron_jarvis.projects.knowledge import add_knowledge
+
+    s = scene
+    s.targets.append(SimpleNamespace(id="lms", label="LM Studio", kind="openai", base_url=LAN_WHERE,
+                                     this_pc=False, listed=()))
+    home = s.p.config.home
+    cursor = {LAN_MODEL: "pk_ffffffffffff"}
+    M.update(home, value=LAN, knowledge_read=dict(cursor))
+    # A start, as the platform builds it: held, not tried, and the walk kept.
+    booted = M.boot_embedder(s.p.config)
+    assert booted.held == LAN and booted.held_why == M.HELD_WAITING
+    assert M.read(home)["knowledge_read"] == cursor
+    M.switch_of(s.p).switch(booted.current(), held=booted.held, held_why=booted.held_why)
+    words = _view(s)["words"]
+    assert "connects to it shortly after it starts" in words and "did not answer" not in words
+    _files(s)
+    _hits, notes = _semantic(s, "shipping")
+    assert notes.held_why == M.HELD_WAITING and HELD_WAITING_NOTE in notes.note()
+    assert "did not answer" not in notes.note()
+    # A knowledge row the stand-in writes while it serves: the walk starts over.
+    rec = add_knowledge(s.p, "p1", "note", "a courier note")
+    assert M.read(home)["knowledge_read"] == {}
+    M.update(home, knowledge_read=dict(cursor))
+    res = s.client.patch(f"/projects/p1/knowledge/{rec.id}", json={"text": "a parcel note"})
+    assert res.status_code == 200, res.text
+    assert M.read(home)["knowledge_read"] == {}  # an edit the stand-in embedded: the same
+    M.update(home, knowledge_read=dict(cursor))
+    # The loop's first step tries it, BEFORE its first wait.
+    naps: list[tuple[float, str]] = []
+
+    async def nap(sec):
+        naps.append((sec, M.switch_of(s.p).model))
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await M.meaning_loop(s.d, lambda ok, exc: None, sleep=nap, first_s=120.0)
+    assert naps == [(120.0, LAN_MODEL)]
+    assert not M.held_now(s.d) and _view(s)["words"] == (
+        f"Search by meaning: on, with {LAN_MODEL} on 192.168.1.40 (your network).")
+    assert M.read(home)["knowledge_read"] == cursor  # it came back: no row was written meanwhile
+    add_knowledge(s.p, "p1", "note 2", "a delivery note")  # the model writes this one
+    assert M.read(home)["knowledge_read"] == cursor
+
+    class ComesBack(MockEmbedder):
+        """The stand-in, with the held model coming back mid-embed."""
+
+        def embed(self, text):
+            out = super().embed(text)
+            M.switch_of(s.p).switch(Meaningful(LAN_MODEL, LAN_WHERE))
+            return out
+
+    M.switch_of(s.p).switch(ComesBack(), held=LAN, held_why=M.HELD_WAITING)
+    add_knowledge(s.p, "p1", "note 3", "a late note")  # the stand-in wrote it, then the model came back
+    assert s.p.embedder.model == LAN_MODEL and M.read(home)["knowledge_read"] == {}
+    M.update(home, knowledge_read=dict(cursor))
+    # A try that really fails: "did not answer" now, or "could not be used".
+    for base, why, note in ((Broken(), M.HELD_NO_ANSWER, HELD_NOTE),
+                            (Refusing(LAN_MODEL, LAN_WHERE), M.HELD_UNUSABLE, HELD_UNUSABLE_NOTE)):
+        M.switch_of(s.p).switch(MockEmbedder(), held=LAN, held_why=M.HELD_WAITING)
+        s.monkeypatch.setattr(M, "build_base", lambda *a, _b=base, **k: _b)
+        assert M.reattach(s.d) is False
+        assert M.held_why(s.p) == why
+        words = M.status_words(s.p)
+        assert ("did not answer" in words) is (why == M.HELD_NO_ANSWER)
+        assert ("could not be used" in words) is (why == M.HELD_UNUSABLE)
+        _hits, notes = _semantic(s, "shipping")
+        assert note in notes.note() and HELD_WAITING_NOTE not in notes.note()
+    # A try's reason is recorded only for the model still held.
+    assert M.switch_of(s.p).tried(CHOICE, M.HELD_NO_ANSWER) is False
+    assert M.held_why(s.p) == M.HELD_UNUSABLE
+    # Nothing held: the loop's first wait comes first, with no try.
+    M.switch_of(s.p).switch(Meaningful(LAN_MODEL, LAN_WHERE))
+    tries: list[int] = []
+    s.monkeypatch.setattr(M, "reattach", lambda _d: tries.append(1) or False)
+    naps.clear()
+    with pytest.raises(asyncio.CancelledError):
+        await M.meaning_loop(s.d, lambda ok, exc: None, sleep=nap, first_s=120.0)
+    assert tries == [] and naps == [(120.0, LAN_MODEL)]
+
+
+def test_a_full_refused_list_waits_the_idle_hour_and_drops_nothing(scene):
+    """Review 3, note 2: once the model refused REREAD_FAILED_MAX rows, a
+    newly refused memory row ends that pass's memory rows with no ``more``
+    (the loop waits its idle hour, never every 30 s), the kept ids are never
+    dropped (a dropped one came back and was refused again, every pass), and
+    the knowledge rows still go on."""
+    s = scene
+    mock = MockEmbedder()
+    from datetime import timedelta
+
+    from iron_jarvis.core.ids import utcnow
+
+    now = utcnow()
+    with session_scope(s.p.engine) as db:
+        for n in range(5):
+            text = f"poison {n}"
+            db.add(MemoryRecord(id=f"mem_poison{n}", layer="user", key=f"k{n}", text=text,
+                                created_at=now - timedelta(minutes=n),
+                                embedding_json=encode_embedding(mock.embed(text), "mock")))
+        db.add(ProjectKnowledge(id="pk_000000000001", project_id="p1", name="n", text="courier note",
+                                embedding_json=json.dumps(mock.embed("courier note"))))
+        db.commit()
+    picky = Picky(refuse=lambda t: t.startswith("poison"))
+    s.monkeypatch.setattr(M, "build_base", lambda *a, **k: picky)
+    s.monkeypatch.setattr(M, "REREAD_FAILED_MAX", 2)
+    M.look(s.d)
+    assert _choose(s).status_code == 200
+    kept = ["mem_poison0", "mem_poison1"]
+    assert M.reread_pass(s.p, limit=2) == {"read": 0, "more": True, "failed": 2}
+    assert M.read(s.p.config.home)["reread_failed"][MODEL] == kept
+    for _ in range(3):
+        picky.calls.clear()
+        got = M.reread_pass(s.p, limit=2)
+        assert got["more"] is False and got.get("refused_full") is True, got
+        assert M.read(s.p.config.home)["reread_failed"][MODEL] == kept  # nothing dropped
+        assert sum(1 for t in picky.calls if t.startswith("poison")) == 1  # one refused row a pass
+    with session_scope(s.p.engine) as db:
+        assert len(json.loads(db.get(ProjectKnowledge, "pk_000000000001").embedding_json)) == 8
+
+
+def test_a_memory_figure_not_measured_is_never_negligible():
+    """Review 3, note 3: the D-16.1 contract 16-b acts on. A memory figure
+    that is there but was not MEASURED here is never negligible."""
+    cost = {"works": True, "memory_bytes": 50 * MB, "memory_measured": False, "disk_added_bytes": 0,
+            "unloads": True}
+    assert M.negligible(cost, 64 * 1024 * MB) is False
+    assert M.negligible({**cost, "memory_measured": True}, 64 * 1024 * MB) is True
+
+
+def test_chat_s_pick_card_reads_no_file(scene):
+    """Review 3, note 6: the pick card is built inside the tool registry's
+    argument check, which may run on the event loop, so it reads the copy
+    kept at the file's last write, never the file."""
+    from iron_jarvis.settings.tools import ConfigChangeTool
+
+    s = scene
+    s.models[WHERE].append({"id": BIG, "size_bytes": 670_000_000})
+    M.look(s.d)
+    tool = ConfigChangeTool(s.p)
+    s.monkeypatch.setattr(M, "read", lambda *_a, **_k: pytest.fail("the file was read"))
+    card = tool.missing_details({"key": "meaning_search"})["value"]
+    assert card["enum"] == [CHOICE, BIG_CHOICE, "off"]

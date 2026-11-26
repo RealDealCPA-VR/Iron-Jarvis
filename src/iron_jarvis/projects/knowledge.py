@@ -53,6 +53,34 @@ def _embed(embedder, text: str) -> list[float]:
         return []
 
 
+def _stand_in(embedder) -> bool:
+    return str(getattr(embedder, "model", "") or "") == "mock"
+
+
+def _embed_stored(embedder, text: str) -> tuple[list[float], bool]:
+    """``(vector, by the stand-in)`` for a knowledge row being STORED (an add
+    or an edit; never a query). Next leaps 16-a: the pass that reads
+    knowledge rows again with the chosen search model walks them by one
+    cursor per model, and a row the stand-in that matches words writes may
+    sort before it, so once such a row is committed the caller calls
+    :func:`_stored_by_stand_in`. The name is read before and after the
+    embed, so a switch in between still counts."""
+    before = _stand_in(embedder)
+    vec = _embed(embedder, text)
+    return vec, before or _stand_in(embedder)
+
+
+def _stored_by_stand_in(platform) -> None:
+    """A knowledge row the stand-in embedded was committed: the re-read walk
+    starts over (``memory/meaning.restart_knowledge_walk``). Never raises."""
+    try:
+        from ..memory.meaning import restart_knowledge_walk
+
+        restart_knowledge_walk(platform.config.home)
+    except Exception:  # noqa: BLE001 — the row is still stored
+        log.warning("project knowledge: the re-read walk could not be restarted", exc_info=True)
+
+
 def _cosine(u: list[float], v: list[float]) -> float:
     if not u or not v or len(u) != len(v):
         return 0.0
@@ -88,7 +116,7 @@ def add_knowledge(
     text = (text or "").strip()
     if not text:
         raise ValueError("knowledge text is empty")
-    embedder = getattr(platform, "embedder", None)
+    vec, by_stand_in = _embed_stored(getattr(platform, "embedder", None), text)
     rec = ProjectKnowledge(
         project_id=project_id,
         name=(name or "untitled").strip()[:200],
@@ -101,12 +129,14 @@ def add_knowledge(
         # MemoryRecord now is) has to land in the SAME change as those two, or a
         # tagged row silently scores 0.0 in the fabric. Dimension is intrinsic to
         # the vector, and dimension is what ground() checks.
-        embedding_json=json.dumps(_embed(embedder, text)),
+        embedding_json=json.dumps(vec),
     )
     with session_scope(platform.engine) as db:
         db.add(rec)
         db.commit()
         db.refresh(rec)
+    if by_stand_in:
+        _stored_by_stand_in(platform)
     return rec
 
 

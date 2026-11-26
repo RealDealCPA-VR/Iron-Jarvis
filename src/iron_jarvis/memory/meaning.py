@@ -48,11 +48,17 @@ THE RULES (pinned in ``tests/test_next_leaps_16a_meaning_offer.py``):
   re-read pass (:func:`reread_pass`, 200 rows a pass, paced by the daemon's
   meaning loop, paused before every row while a chat reply is written) has
   read it again with the new one. A row the model refuses while it still
-  answers is stepped past (never one row blocking every other); a model that
-  does not answer at all ends the pass until the loop's next idle look.
-  Project knowledge vectors name no model:
-  every change of the live model starts their walk over
-  (:func:`restart_knowledge_walk`).
+  answers is stepped past (never one row blocking every other; once
+  :data:`REREAD_FAILED_MAX` are kept, the memory rows wait the idle hour); a
+  model that does not answer at all ends the pass until the loop's next idle
+  look. Project knowledge vectors name no model: every change of the live
+  model, and every knowledge row the stand-in WRITES, starts their walk over
+  (:func:`restart_knowledge_walk`); a start alone never does.
+* **A held choice says why** (``SwitchableEmbedder.held_why``): a model
+  server that is not Ollama is not tried at start (its key is read by the
+  meaning loop, which tries it as its FIRST step): "connects shortly after
+  it starts", never "did not answer"; that is kept for a probe that really
+  failed (:data:`HELD_WAITING`, :data:`HELD_NO_ANSWER`, :data:`HELD_UNUSABLE`).
 
 Everything that touches the network or the disk is BLOCKING: callers run it in
 a thread (routes are plain ``def``; the loop uses ``asyncio.to_thread``).
@@ -119,6 +125,16 @@ REREAD_TEXT_MAX = 4000
 #: kept here per model, at most this many, so the next pass never starts on
 #: them again.
 REREAD_FAILED_MAX = 1000
+
+#: Why a chosen model is HELD (the stand-in serves meanwhile), so the words
+#: say what really happened: not tried yet (a model server that is not
+#: Ollama: the meaning loop tries it, with its key, as its first step) ...
+HELD_WAITING = "waiting"
+#: ... a probe asked it and it did not answer ...
+HELD_NO_ANSWER = "no answer"
+#: ... or it answered but could not be used (or is none of the owner's
+#: servers any more, or is off this network).
+HELD_UNUSABLE = "unusable"
 
 #: D-16.1, measured on this PC: memory while it works at most 150 MB and at
 #: most 2% of this PC's memory, added disk at most 100 MB, and it unloads when
@@ -256,10 +272,18 @@ def _private(where: str) -> bool:
 # the file
 # --------------------------------------------------------------------------- #
 _FILE_LOCK = threading.RLock()
+#: What the file held at its last read or write, per home (only this daemon
+#: writes it), so a reader that may run ON the event loop (chat's pick card,
+#: from the tool registry's argument check) reads no file: :func:`read_kept`.
+_KEPT: dict[str, str] = {}
 
 
 def _path(home: Any) -> Path:
     return Path(home) / STATE_FILE
+
+
+def _kept_key(home: Any) -> str:
+    return os.path.abspath(str(home))  # no disk access
 
 
 def read(home: Any) -> dict[str, Any]:
@@ -267,23 +291,42 @@ def read(home: Any) -> dict[str, Any]:
     (an unreadable file is never ``on``). Never raises."""
     try:
         with _FILE_LOCK:
-            raw = json.loads(_path(home).read_text(encoding="utf-8"))
+            text = _path(home).read_text(encoding="utf-8")
+            raw = json.loads(text)
+            _KEPT[_kept_key(home)] = text if isinstance(raw, dict) else "{}"
         return raw if isinstance(raw, dict) else {}
     except FileNotFoundError:
+        _KEPT[_kept_key(home)] = "{}"
         return {}
     except Exception:  # noqa: BLE001
         log.warning("search by meaning: %s could not be read", STATE_FILE, exc_info=True)
         return {}
 
 
+def read_kept(home: Any) -> dict[str, Any]:
+    """:func:`read` with no file access once the file was read or written in
+    this daemon (start-up reads it: :func:`boot_embedder`). For a reader that
+    may run on the event loop. Never raises."""
+    text = _KEPT.get(_kept_key(home))
+    if text is None:
+        return read(home)
+    try:
+        raw = json.loads(text)
+    except Exception:  # noqa: BLE001
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
 def _write(home: Any, data: dict[str, Any]) -> None:
     """Atomic: a temporary file beside it, then a replace."""
     path = _path(home)
     tmp = path.with_suffix(".json.tmp")
+    text = json.dumps(data, indent=1, sort_keys=True)
     with _FILE_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, path)
+        _KEPT[_kept_key(home)] = text
 
 
 def update(home: Any, **fields: Any) -> dict[str, Any]:
@@ -395,16 +438,21 @@ def boot_embedder(config: Any, engine: Any = None, *, http: Any = None, reachabl
     ``SwitchableEmbedder`` (inside the persistent cache when ``engine`` is
     given) over the model the owner chose, or the stand-in.
 
-    * Answered (:func:`answered`): the chosen model when it answers a short
+    * Answered (:func:`answered`): an Ollama choice when it answers a short
       probe (:data:`BOOT_PROBE_S`), else the stand-in with the choice HELD
-      (the meaning loop tries it again, with the server's key, and the row
-      says it did not answer). A choice off this network never loads; only
-      an Ollama choice is probed here (another server's key is never read at
-      start, so it is held and ``reattach`` tries it).
+      (:data:`HELD_NO_ANSWER`: the probe really failed). A model server that
+      is not Ollama is not probed here (its key is never read at start): it
+      is held as :data:`HELD_WAITING` (not tried yet) and the meaning loop
+      tries it, with its key, as its FIRST step (:func:`reattach`), so the
+      row says it connects shortly, never that it did not answer. A choice
+      off this network never loads (:data:`HELD_UNUSABLE`).
     * Never answered (also once the offer was only shown): the earlier
       behaviour (``embeddings.build_embedder``'s probe of Ollama's model),
       except that "auto" never uses a server off this network. Nothing is
-      written."""
+      written.
+
+    A start never restarts the project knowledge walk: only a knowledge row
+    the stand-in really writes does (``projects/knowledge``)."""
     from .embeddings import (
         CachingEmbedder,
         MockEmbedder,
@@ -416,13 +464,15 @@ def boot_embedder(config: Any, engine: Any = None, *, http: Any = None, reachabl
     home = getattr(config, "home", ".")
     data = read(home)
     base: Any = None
-    held = ""
+    held = why = ""
     if answered(data):
         parsed = parse_choice(data.get("value"))
         if parsed is not None:
             kind, model, where = parsed
-            ok = False
-            if _private(where) and kind == KIND_OLLAMA:
+            value = str(data.get("value") or "")
+            if not _private(where):
+                held, why = value, HELD_UNUSABLE
+            elif kind == KIND_OLLAMA:
                 try:
                     ok = (
                         bool(reachable(where)) if reachable is not None
@@ -430,10 +480,12 @@ def boot_embedder(config: Any, engine: Any = None, *, http: Any = None, reachabl
                     )
                 except Exception:  # noqa: BLE001
                     ok = False
-            if ok:
-                base = build_base(kind, model, where, http=http)
+                if ok:
+                    base = build_base(kind, model, where, http=http)
+                else:
+                    held, why = value, HELD_NO_ANSWER
             else:
-                held = str(data.get("value") or "")
+                held, why = value, HELD_WAITING
     else:
         provider = str(getattr(config, "embedder_provider", "auto") or "auto")
         url = getattr(config, "ollama_base_url", None)
@@ -441,21 +493,34 @@ def boot_embedder(config: Any, engine: Any = None, *, http: Any = None, reachabl
         if provider == "auto" and url and not _private(str(url)):
             url = None  # "auto" never sends text off this network
         base = _build_base_embedder(provider, url, model, http=http, reachable=reachable)
-    if base is None or str(getattr(base, "model", "") or "") == "mock":
-        # The stand-in writes this session's project knowledge rows, so a
-        # later session's model must walk them all again.
-        restart_knowledge_walk(home)
-    sw = SwitchableEmbedder(base if base is not None else MockEmbedder(), held=held)
+    sw = SwitchableEmbedder(base if base is not None else MockEmbedder(), held=held, held_why=why)
     return CachingEmbedder(sw, engine) if engine is not None else sw
+
+
+def held_why(platform_or_switch: Any) -> str:
+    """Why the chosen model is held ("" when none is): one of
+    :data:`HELD_WAITING`, :data:`HELD_NO_ANSWER`, :data:`HELD_UNUSABLE`. A
+    hold that names no reason was a failed probe. Never raises."""
+    sw = platform_or_switch
+    if not callable(getattr(sw, "switch", None)):
+        sw = switch_of(platform_or_switch)
+    if sw is None or not str(getattr(sw, "held", "") or ""):
+        return ""
+    why = str(getattr(sw, "held_why", "") or "")
+    return why if why in (HELD_WAITING, HELD_NO_ANSWER, HELD_UNUSABLE) else HELD_NO_ANSWER
 
 
 def restart_knowledge_walk(home: Any) -> None:
     """Project knowledge rows hold bare vectors (no model's name), so the
     re-read pass walks them by id with one cursor per model. A cursor holds
-    only while ONE model was live: once another model (or the stand-in) was
-    live, a row it wrote may sort anywhere (ids are random), so every switch
-    of the live model drops the cursors and the next walk starts over.
-    Writes only when there is a cursor to drop. Never raises."""
+    only while ONE model wrote the rows: a row another model (or the
+    stand-in) wrote may sort anywhere (ids are random), so every switch of
+    the live model (:func:`commit`) and every knowledge row the stand-in
+    WRITES (``projects/knowledge._embed_stored``, an add or an edit) drops
+    the cursors and the next walk starts over. A start, or a held model
+    that comes back (:func:`reattach`), keeps them: no row was written that
+    the cursor does not cover. Writes only when there is a cursor to drop.
+    Never raises."""
     try:
         with _FILE_LOCK:
             if read(home).get("knowledge_read"):
@@ -1035,23 +1100,46 @@ def mark_offered(platform: Any) -> bool:
         return False
 
 
+def _why_not_used(exc: BaseException) -> str:
+    """A failed :func:`prepare` as a hold's reason: it did not answer, or it
+    could not be used (it refused, or it is none of the owner's servers)."""
+    text = str(exc) if isinstance(exc, ValueError) else ""
+    if not text or "did not answer" in text:
+        return HELD_NO_ANSWER
+    return HELD_UNUSABLE
+
+
 def reattach(d: Any) -> bool:
-    """A chosen model that did not answer at start (or a server that needs
-    its key, which start-up does not read): try it again and switch to it
-    when it answers. True when it switched. BLOCKING; never raises."""
+    """A chosen model held at start (an Ollama one that did not answer, or a
+    model server that is not Ollama, not tried yet: start-up reads no key):
+    try it now, with its server's key, and switch to it when it answers. A
+    try that fails records why (:meth:`SwitchableEmbedder.tried`), so the row
+    says what really happened. The knowledge walk keeps its cursors: only a
+    knowledge row the stand-in wrote meanwhile restarted it. True when it
+    switched. BLOCKING; never raises."""
     sw = switch_of(d.platform)
     held = str(getattr(sw, "held", "") or "")
     if sw is None or not held or setting_value(d.platform) != held:
         return False
     try:
         prepared = prepare(d, held)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        tried = getattr(sw, "tried", None)
+        if callable(tried):
+            tried(held, _why_not_used(exc))
         return False
-    # The stand-in served until now: the knowledge walk starts over.
-    restart_knowledge_walk(d.platform.config.home)
     sw.switch(prepared.base, held="")
     REREAD_WAKE.set()
     return True
+
+
+def held_now(d: Any) -> bool:
+    """Is a chosen model held (the stand-in serving for it)? Never raises."""
+    try:
+        sw = switch_of(d.platform)
+        return bool(sw is not None and str(getattr(sw, "held", "") or ""))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -1065,8 +1153,16 @@ def status_words(platform: Any, data: "dict[str, Any] | None" = None) -> str:
     sw = switch_of(platform)
     model = parsed[1]
     if sw is not None and str(getattr(sw, "held", "") or "") == value:
-        return (f"Search by meaning is on, but {model} did not answer when Iron Jarvis started, "
-                "so it matches words for now.")
+        why = held_why(sw)
+        if why == HELD_WAITING:
+            # Not tried yet: never "did not answer" (nothing was asked).
+            return (f"Search by meaning: on, with {choice_words(value)}. Iron Jarvis connects to it "
+                    "shortly after it starts, and matches words until then.")
+        if why == HELD_UNUSABLE:
+            return (f"Search by meaning is on, but {model} could not be used, so it matches words for now. "
+                    "Iron Jarvis tries it again by itself.")
+        return (f"Search by meaning is on, but {model} did not answer, so it matches words for now. "
+                "Iron Jarvis tries it again by itself.")
     return f"Search by meaning: on, with {choice_words(value)}."
 
 
@@ -1127,8 +1223,8 @@ NOT_LOOKED_YET = (
 )
 
 
-def _chat_rows(platform: Any) -> "tuple[list[dict[str, Any]], dict[str, Any]]":
-    data = read(platform.config.home)
+def _chat_rows(platform: Any, *, kept: bool = False) -> "tuple[list[dict[str, Any]], dict[str, Any]]":
+    data = (read_kept if kept else read)(platform.config.home)
     costs = data.get("costs") or {}
     rows = []
     for c in (data.get("found") or [])[:CHAT_CHOICES_MAX]:
@@ -1146,11 +1242,12 @@ def chat_choices(platform: Any) -> list[tuple[str, str]]:
     """Chat's pick card for ``meaning_search`` with no value ("switch the
     search model"): ``(value, words)`` of every search model found that can
     be chosen (never one that did not answer), each with what it costs here,
-    then Off. Fewer than two: no card. Reads the file only (no look, no
-    probe; the choice's own card measures it). BLOCKING (one small read);
-    never raises."""
+    then Off. Fewer than two: no card. No look, no probe (the choice's own
+    card measures it), and no file read: the tool registry's argument check
+    may call it ON the event loop, so it reads the copy kept at the file's
+    last read or write (:func:`read_kept`). Never raises."""
     try:
-        rows, _data = _chat_rows(platform)
+        rows, _data = _chat_rows(platform, kept=True)
     except Exception:  # noqa: BLE001
         return []
     out = [(r["choice"], r["words"]) for r in rows if r["choice"] and r["works"] is not False]
@@ -1234,10 +1331,24 @@ async def meaning_loop(
     rows still wait, else up to ``idle_s`` (a switch on wakes it at the next
     ``step_s``). Paused while a chat reply is written. Off the loop
     (``asyncio.to_thread``); one fault is reported on its health row and the
-    loop goes on. Never raises (but cancellation)."""
+    loop goes on. Never raises (but cancellation).
+
+    A chosen model held at start is tried at ONCE, before the first wait
+    (:func:`reattach`: one bounded probe with fixed words): a model server
+    that is not Ollama is never left matching words, and saying so, for the
+    first ``first_s``."""
     import asyncio
 
     nap = sleep or asyncio.sleep
+    if held_now(d):
+        try:
+            await asyncio.to_thread(reattach, d)
+            tick(True, None)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never kills the daemon
+            log.warning("search by meaning: the first try of the chosen model failed", exc_info=True)
+            tick(False, exc)
     await nap(first_s)
     while True:
         wait_s = idle_s
@@ -1271,8 +1382,6 @@ async def meaning_loop(
 REREAD_WAKE = threading.Event()
 
 
-
-
 def _model_answers(sw: Any, model: str) -> "bool | None":
     """Does the live search model still answer? One probe with
     :data:`PROBE_TEXT` (fixed words, never the owner's), straight to the
@@ -1292,8 +1401,8 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
     """Read again, with the live search model, at most *limit* stored rows
     it did not write: memory rows whose vector names another model (or none),
     then project knowledge rows (bare vectors: walked once per model by a
-    cursor kept in the file, dropped whenever the live model changes:
-    :func:`restart_knowledge_walk`). Only while search by meaning is on with
+    cursor kept in the file, dropped whenever the live model changes or the
+    stand-in writes a knowledge row: :func:`restart_knowledge_walk`). Only while search by meaning is on with
     a model on this network (``skipped`` says why not). Paused BEFORE EVERY
     ROW while a chat reply is written (``pause``, default :func:`replying`):
     the pass stops with ``more`` and goes on at the loop's next pass.
@@ -1302,10 +1411,15 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
     refuses while it still answers :data:`PROBE_TEXT` is STEPPED PAST (a
     memory row is kept in the file's ``reread_failed`` for that model, so no
     later pass starts on it again; a knowledge row's cursor moves past it):
-    one row never keeps every older row matched by words. A model that does
-    not answer at all ends the pass (:data:`NO_ANSWER`, no ``more``: the
-    loop's next idle look tries again, never a request every 30 s).
-    ``{read, more}`` (+ ``skipped``, + ``failed``: rows stepped past)."""
+    one row never keeps every older row matched by words. At most
+    :data:`REREAD_FAILED_MAX` are kept, never one dropped: once the list is
+    full, a newly refused memory row ends the memory rows of that pass with
+    no ``more`` of their own (``refused_full``; the knowledge rows still go
+    on), so the loop waits its idle hour instead of coming back every 30 s
+    to rows it keeps dropping and refusing. A model that does not answer at
+    all ends the pass (:data:`NO_ANSWER`, no ``more``: the loop's next idle
+    look tries again, never a request every 30 s). ``{read, more}`` (+
+    ``skipped``, + ``failed``: rows stepped past, + ``refused_full``)."""
     wait = pause if pause is not None else replying
     from sqlmodel import select
 
@@ -1331,13 +1445,19 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
     skip = set(failed)
     newly: list[str] = []
     done = refused = 0
+    #: The kept list of refused rows is full (this pass).
+    list_full = False
 
     def finish(res: dict[str, Any]) -> dict[str, Any]:
         if newly:
-            failed_all[model] = (failed + newly)[-REREAD_FAILED_MAX:]
+            # Never past the cap, and never one dropped: a dropped id would
+            # come back into the next query and be refused again, every pass.
+            failed_all[model] = (failed + newly)[:REREAD_FAILED_MAX]
             update(home, reread_failed=failed_all)
         if refused:
             res["failed"] = refused
+        if list_full:
+            res["refused_full"] = True
         return res
 
     def model_gone(answers: "bool | None") -> "dict[str, Any] | None":
@@ -1376,8 +1496,14 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
             gone = model_gone(_model_answers(sw, model))
             if gone is not None:
                 return finish({"read": done, **gone})
-            newly.append(rid)  # refused, while the model answers: step past it
             refused += 1
+            if len(failed) + len(newly) >= REREAD_FAILED_MAX:
+                # The kept list is full: the memory rows wait the idle hour
+                # (one refused row and one probe an hour, never every 30 s);
+                # the knowledge rows still go on below.
+                list_full = True
+                break
+            newly.append(rid)  # refused, while the model answers: step past it
             continue
         if made_by != model:
             return finish({"skipped": "the search model changed", "read": done, "more": True})
@@ -1388,7 +1514,10 @@ def reread_pass(platform: Any, *, limit: int = REREAD_BATCH,
                 db.add(live)
                 db.commit()
         done += 1
-    more = len(ids) > limit
+    # A full refused list ends the memory rows for this pass with no ``more``
+    # of their own (the loop then waits its idle hour, unless knowledge rows
+    # still wait).
+    more = len(ids) > limit and not list_full
     left = limit - done - refused
     paused = False
     stop: "dict[str, Any] | None" = None

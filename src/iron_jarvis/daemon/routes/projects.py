@@ -656,8 +656,9 @@ def register(app: FastAPI, d) -> None:
         import json
 
         from ...core.models import ProjectKnowledge
-        from ...projects.knowledge import _embed
+        from ...projects.knowledge import _embed_stored, _stored_by_stand_in
 
+        by_stand_in = False
         with session_scope(d.platform.engine) as db:
             rec = db.get(ProjectKnowledge, knowledge_id)
             if rec is None or rec.project_id != project_id:
@@ -669,13 +670,16 @@ def register(app: FastAPI, d) -> None:
                 if not new_text:
                     raise HTTPException(status_code=400, detail="knowledge text is empty")
                 if new_text != rec.text:
-                    embedder = getattr(d.platform, "embedder", None)
+                    vec, by_stand_in = _embed_stored(getattr(d.platform, "embedder", None), new_text)
                     rec.text = new_text
                     rec.size = len(new_text)
-                    rec.embedding_json = json.dumps(_embed(embedder, new_text))
+                    rec.embedding_json = json.dumps(vec)
             db.add(rec)
             db.commit()
             db.refresh(rec)
+            if by_stand_in:
+                # 16-a: the stand-in wrote this vector: the re-read walk starts over.
+                _stored_by_stand_in(d.platform)
             return {
                 "id": rec.id,
                 "name": rec.name,

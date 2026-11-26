@@ -83,12 +83,26 @@ WORD_ONLY_NOTE = (
     "the last resort is to install Ollama and run `ollama pull nomic-embed-text`.]"
 )
 
-#: 16-a: the words when search by meaning is ON but the search model chosen
-#: did not answer when Iron Jarvis started (the stand-in serves meanwhile).
+#: 16-a: the words when search by meaning is ON but a probe of the search
+#: model chosen really failed: it did not answer (the stand-in serves
+#: meanwhile) ...
 HELD_NOTE = (
-    "[Search by meaning is on, but its search model did not answer when Iron Jarvis started, so "
-    "this matched words, not meaning. Iron Jarvis tries it again by itself; Settings › Memory & you "
-    "› Search by meaning says how it stands.]"
+    "[Search by meaning is on, but its search model did not answer, so this matched words, not "
+    "meaning. Iron Jarvis tries it again by itself; Settings › Memory & you › Search by meaning says "
+    "how it stands.]"
+)
+#: ... or it answered but could not be used ...
+HELD_UNUSABLE_NOTE = (
+    "[Search by meaning is on, but its search model could not be used, so this matched words, not "
+    "meaning. Iron Jarvis tries it again by itself; Settings › Memory & you › Search by meaning says "
+    "how it stands.]"
+)
+#: ... or it was not tried yet: a model server that is not Ollama is
+#: connected by the meaning loop as it starts (never "did not answer").
+HELD_WAITING_NOTE = (
+    "[Search by meaning is on, and Iron Jarvis connects to its search model shortly after it "
+    "starts; until then searches match words, so this matched words, not meaning. The same search "
+    "a moment later searches by meaning.]"
 )
 
 #: Words for a "By meaning" search with no folder to look in.
@@ -168,9 +182,12 @@ class SearchNotes:
     indexing: bool = False
     #: v1.445.0: the embedder is the offline word-hash one (no local model).
     words_only: bool = False
-    #: 16-a: ...because the search model chosen did not answer at start (the
-    #: setting is ON): the note says so, never "it is off".
+    #: 16-a: ...because the search model chosen is held (the setting is ON):
+    #: the note says so, never "it is off" ...
     held: bool = False
+    #: ... and why (``memory/meaning.held_why``): not tried yet, did not
+    #: answer, could not be used.
+    held_why: str = ""
 
     def note(self) -> str:
         """The line(s) to append to a tool's output, or ``""`` when clean."""
@@ -196,7 +213,14 @@ class SearchNotes:
         if self.indexing:
             parts.append(INDEXING_NOTE)
         if self.words_only:
-            parts.append(HELD_NOTE if self.held else WORD_ONLY_NOTE)
+            if not self.held:
+                parts.append(WORD_ONLY_NOTE)
+            elif self.held_why == "waiting":
+                parts.append(HELD_WAITING_NOTE)
+            elif self.held_why == "unusable":
+                parts.append(HELD_UNUSABLE_NOTE)
+            else:
+                parts.append(HELD_NOTE)
         return "\n".join(parts)
 
 
@@ -375,18 +399,18 @@ class FileSearchService:
         """True when the embedder is the offline word-hash one (no local model)."""
         return self.embedder is not None and getattr(self.embedder, "model", "") == "mock"
 
-    def _held(self) -> bool:
-        """16-a: search by meaning is ON, but its search model did not answer
-        at start, so the stand-in serves (``SwitchableEmbedder.held``)."""
+    def _held_why(self) -> str:
+        """16-a: search by meaning is ON, but its search model is held, so the
+        stand-in serves (``SwitchableEmbedder.held``): why, or "" when none is
+        (``memory/meaning.held_why``)."""
         try:
             from types import SimpleNamespace
 
-            from ..memory.meaning import switch_of
+            from ..memory.meaning import held_why
 
-            sw = switch_of(SimpleNamespace(embedder=self.embedder))
-            return bool(getattr(sw, "held", "")) if sw is not None else False
+            return held_why(SimpleNamespace(embedder=self.embedder))
         except Exception:  # noqa: BLE001
-            return False
+            return ""
 
     # -- root resolution ----------------------------------------------------
 
@@ -813,7 +837,8 @@ class FileSearchService:
             return []
         if notes is not None and self.words_only:
             notes.words_only = True
-            notes.held = self._held()
+            notes.held_why = self._held_why()
+            notes.held = bool(notes.held_why)
         if not self.meaning_roots:
             if notes is not None:
                 notes.no_meaning_folders = True

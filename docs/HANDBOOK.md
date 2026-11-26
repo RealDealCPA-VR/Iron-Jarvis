@@ -2181,8 +2181,16 @@ It matches words for now.**
   pick from; turning it off needs no card.
 - **Never off your network.** A model server outside this PC and your own
   network is never listed, and a Local only chat never sends text to one.
-  Only Ollama on this PC and the model servers you added are used. The text
-  it searches stays where it is.
+  Only Ollama on this PC and the model servers you added are used. Ollama
+  on this PC is looked at once it is installed, also before you connect it
+  for answers: asking what it costs loads its search model for about a
+  minute, with fixed words, never your text. The text it searches stays
+  where it is.
+- **After a start.** A search model on a model server you added (not
+  Ollama) is connected a moment after Iron Jarvis starts; until then the
+  row says "Iron Jarvis connects to it shortly after it starts" and
+  searches match words. If a search model does not answer, the row says so
+  and Iron Jarvis tries it again by itself.
 - **Nothing found?** The card and the row say so and point to **Get a
   model** (the model library on Model servers) and **Use a model server you
   run**; `ollama pull nomic-embed-text` in a terminal is the last resort.

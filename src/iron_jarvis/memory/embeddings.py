@@ -247,25 +247,40 @@ class SwitchableEmbedder:
 
     ``where`` is the address the current base sends text to ("" for the
     stand-in, which sends nothing); ``held`` is the model the owner chose when
-    the base is the stand-in because that model did not answer at start."""
+    the base is the stand-in because that model is not in use yet, and
+    ``held_why`` says why (``memory/meaning``: not tried yet, did not answer,
+    could not be used; "" with nothing held), so the words never claim a
+    probe that was not made."""
 
-    def __init__(self, base: Embedder, *, held: str = "") -> None:
+    def __init__(self, base: Embedder, *, held: str = "", held_why: str = "") -> None:
         import threading
 
         self._lock = threading.Lock()
         self._base: Embedder = base
         self.held = held
+        self.held_why = held_why if held else ""
 
     def current(self) -> Embedder:
         with self._lock:
             return self._base
 
-    def switch(self, base: Embedder, *, held: str = "") -> Embedder:
+    def switch(self, base: Embedder, *, held: str = "", held_why: str = "") -> Embedder:
         """Make *base* the one every consumer uses; returns the old one."""
         with self._lock:
             old, self._base = self._base, base
             self.held = held
+            self.held_why = held_why if held else ""
         return old
+
+    def tried(self, held: str, why: str) -> bool:
+        """The held model *held* was tried and is still not in use: record
+        *why*. Only while that same model is held (a switch made meanwhile
+        wins). True when it was recorded."""
+        with self._lock:
+            if not held or self.held != held:
+                return False
+            self.held_why = why
+            return True
 
     @property
     def model(self) -> str:
