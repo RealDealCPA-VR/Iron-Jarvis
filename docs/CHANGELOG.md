@@ -20,7 +20,7 @@
 
 ## v1.579.0
 
-**Review comments arrive in the coding session.** When people comment on a pull request a coding session (Chat › Code) opened, their comments now come to that session.
+**Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below). **Review comments arrive in the coding session.** When people comment on a pull request a coding session (Chat › Code) opened, their comments now come to that session.
 
 ## v1.578.0
 

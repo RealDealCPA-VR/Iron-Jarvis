@@ -2099,6 +2099,64 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Open items stay until they are done (v1.579.0)
+
+The card a new chat or coding session shows for a folder you have worked in
+now keeps every **open item** of that folder, however old, until it is done
+(the card itself is in "Pick up where you left off in a folder" below). An
+open item is a "Still open" line from the checked recap of earlier work there
+("Ask the bank for the missing statement"). It no longer drops off when six
+newer pieces of work come along.
+
+**On the card.**
+
+- **Still open** lists the folder's open items, oldest first: the first
+  three, then **Show N more**.
+- Each item has one press, **Continue**, in a new chat: it starts the chat on
+  that item ("Continue with the open item I picked in this folder."), and
+  the reply is told which item you picked.
+- The **⋯** menu beside each item holds **Done** and **No longer needed**.
+- When later work in the same folder seems to have done an item, the card
+  asks: **This may be done. Mark it done?** with **Mark it done** and **Not
+  yet**. It never closes anything on its own. After Not yet it does not ask
+  again about that same later work.
+- **Closed lately** (folded until you press it) lists what was closed in the
+  last 14 days: what you marked Done or No longer needed, and what was
+  settled in the work it came from (when a chat's newer recap no longer lists
+  the item). Each has **Reopen** in its ⋯ menu. An item you reopened stays
+  open until you close it again.
+
+**In chat.** A chat in the folder is told the folder's open items (the oldest
+six, and how many more there are). Say "the bank one is done", "that is no
+longer needed" or "reopen the bank item" and the chat closes or reopens it.
+An item past the first six is found by your words ("the payroll one is
+done"): the chat looks it up in the folder's list first. It only changes an
+item of the chat's own folder, and only when you say so: if later work only
+seems to have done one, it asks you first.
+
+**Good to know.**
+
+- Only items of exactly that folder are shown or told, as with the rest of
+  the card. Local only work's items only in a Local only chat. Another
+  client's items never. Work you delete, or a folder you forget, takes its
+  items with it; the items of archived work are not shown.
+- An open item stays when its conversation goes on: it closes when you close
+  it, or when that conversation's next recap no longer lists it. A new line
+  that names another month, person or figure ("the April deposit" after "the
+  March deposit") is always its own item, never taken for the earlier one.
+- Something you closed is never told to a chat as still open, even where the
+  earlier work's summary still lists it.
+- The same line in two chats here (a chat started with Continue often
+  repeats it) is one item, and Done closes it in both. A chat you start
+  after you closed an item, whose recap lists the same words again (next
+  week's payroll, say), is new work: the item is open until you close it.
+- Continue on an item names the new chat after the work that item came from.
+- In Chat › Code and in Build › Code the card shows the items with their ⋯
+  menu, but an item has no Continue of its own there: use the card's
+  Continue, or say which item in your first message.
+- Your answers are kept by Iron Jarvis on this PC. Nothing is sent anywhere
+  and no model is asked.
+
 ## What everything cost, by folder, client, automation and agent (v1.580.0)
 
 Usage has a new card, **What it cost**, with a **By** switch: **Folder**,
@@ -3080,64 +3138,6 @@ as it was.
 - Not yet: a rule or a schedule that starts a **workflow** or a **goal**
   says it cannot be rehearsed yet, and nothing runs. Steps after a change
   that was not made are worked out without it, so the real run can differ.
-
-## Open items stay until they are done (v1.562.0)
-
-The card a new chat or coding session shows for a folder you have worked in
-now keeps every **open item** of that folder, however old, until it is done
-(the card itself is in "Pick up where you left off in a folder" below). An
-open item is a "Still open" line from the checked recap of earlier work there
-("Ask the bank for the missing statement"). It no longer drops off when six
-newer pieces of work come along.
-
-**On the card.**
-
-- **Still open** lists the folder's open items, oldest first: the first
-  three, then **Show N more**.
-- Each item has one press, **Continue**, in a new chat: it starts the chat on
-  that item ("Continue with the open item I picked in this folder."), and
-  the reply is told which item you picked.
-- The **⋯** menu beside each item holds **Done** and **No longer needed**.
-- When later work in the same folder seems to have done an item, the card
-  asks: **This may be done. Mark it done?** with **Mark it done** and **Not
-  yet**. It never closes anything on its own. After Not yet it does not ask
-  again about that same later work.
-- **Closed lately** (folded until you press it) lists what was closed in the
-  last 14 days: what you marked Done or No longer needed, and what was
-  settled in the work it came from (when a chat's newer recap no longer lists
-  the item). Each has **Reopen** in its ⋯ menu. An item you reopened stays
-  open until you close it again.
-
-**In chat.** A chat in the folder is told the folder's open items (the oldest
-six, and how many more there are). Say "the bank one is done", "that is no
-longer needed" or "reopen the bank item" and the chat closes or reopens it.
-An item past the first six is found by your words ("the payroll one is
-done"): the chat looks it up in the folder's list first. It only changes an
-item of the chat's own folder, and only when you say so: if later work only
-seems to have done one, it asks you first.
-
-**Good to know.**
-
-- Only items of exactly that folder are shown or told, as with the rest of
-  the card. Local only work's items only in a Local only chat. Another
-  client's items never. Work you delete, or a folder you forget, takes its
-  items with it; the items of archived work are not shown.
-- An open item stays when its conversation goes on: it closes when you close
-  it, or when that conversation's next recap no longer lists it. A new line
-  that names another month, person or figure ("the April deposit" after "the
-  March deposit") is always its own item, never taken for the earlier one.
-- Something you closed is never told to a chat as still open, even where the
-  earlier work's summary still lists it.
-- The same line in two chats here (a chat started with Continue often
-  repeats it) is one item, and Done closes it in both. A chat you start
-  after you closed an item, whose recap lists the same words again (next
-  week's payroll, say), is new work: the item is open until you close it.
-- Continue on an item names the new chat after the work that item came from.
-- In Chat › Code and in Build › Code the card shows the items with their ⋯
-  menu, but an item has no Continue of its own there: use the card's
-  Continue, or say which item in your first message.
-- Your answers are kept by Iron Jarvis on this PC. Nothing is sent anywhere
-  and no model is asked.
 
 ## Commit and Open a pull request in Build › Code (v1.561.0)
 
