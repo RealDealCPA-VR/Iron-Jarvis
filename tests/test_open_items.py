@@ -758,12 +758,19 @@ def test_the_from_memory_list_names_the_piece_of_every_open_item_the_block_tells
     # The newest piece, its recap told under it AND its item told in "Still
     # open": one entry, a recap.
     new = _chat(scene, "Fee letter", H, hours_ago=1)
-    _keep(scene, new, "Done: Drafted the letter", "Open: Post the fee letter")
+    _keep(scene, new, "Done: Reconciled the escrow ledger", "Open: Post the fee letter")
     scene.wm.refresh(force=True)
     told, items = U.run_collecting(lambda: B.work_block(scene.platform, folder=H, query=CONTINUE))
     assert "  Open: Post the fee letter" in told and ". Post the fee letter" in told
+    assert "Reconciled the escrow ledger" in told.split("Still open in this folder")[0]
     assert [i["kind"] for i in items if i["id"] == f"chat:{new}"] == ["recap"]
     assert [i["kind"] for i in items if i["id"] == f"chat:{oldest}"] == ["recap"]
+    # Its words are ALL its recap lines told, not only its item's (review 10):
+    # a reply that builds on the Done line alone (no word of the title or the
+    # Open line) is shaped by it.
+    used = U.finish(items, reply="I reconciled the escrow ledger already.", question=CONTINUE)
+    (fee,) = [i for i in used if i["id"] == f"chat:{new}"]
+    assert fee["label"] == "Fee letter" and fee["shaped"] is True
 
 
 def test_a_piece_told_above_without_its_recap_gains_the_words_of_its_open_item(scene):
