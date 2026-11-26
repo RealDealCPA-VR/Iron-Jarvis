@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.586.0
+
+**Search by meaning, offered with what it costs here.** **Search by meaning** finds notes, files and memories by what they are about, not only by their words: "the angry email about shipping" finds the message that says "customer furious, parcel late".
+
 ## v1.585.0
 
 **"When another task fails", and everything that runs by itself in one place.** Say it once in chat, such as "if the nightly report fails, tell me why and try once more", and Iron Jarvis makes **one rule** that starts when that task falls short.
@@ -12,7 +16,7 @@
 
 ## v1.583.0
 
-**See what is filling a chat.** When a chat gets long, a small meter under the message box shows how full it is. **Search by meaning, offered with what it costs here.** **Search by meaning** finds notes, files and memories by what they are about, not only by their words: "the angry email about shipping" finds the message that says "customer furious, parcel late".
+**See what is filling a chat.** When a chat gets long, a small meter under the message box shows how full it is.
 
 ## v1.582.0
 
@@ -77,7 +81,3 @@
 ## v1.568.0
 
 **Say "when this happens, do that" once: a folder or a download can start a rule.** Say one sentence in chat, such as "when a PDF lands in Intake, read it and file it by sender", and Iron Jarvis makes **one rule**.
-
-## v1.567.0
-
-**See what memory gave a reply, and fix a preference.** When a chat reply was given things Iron Jarvis remembers (your preferences, a client's preferences, earlier work in the folder and its recap, notes, earlier chats and agent runs, files, project knowledge), the reply says so.
