@@ -4,7 +4,7 @@
 
 ## v1.581.0
 
-**Ask about earlier work by date and by client, and open each piece.** Ask "what did we do for Baker in March?" in any chat and the answer comes from Iron Jarvis's own record of earlier work: "3 pieces of work in March 2026, for Baker".
+**Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below). **Ask about earlier work by date and by client, and open each piece.** Ask "what did we do for Baker in March?" in any chat and the answer comes from Iron Jarvis's own record of earlier work: "3 pieces of work in March 2026, for Baker".
 
 ## v1.580.4
 
@@ -20,7 +20,7 @@
 
 ## v1.579.0
 
-**Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below). **Review comments arrive in the coding session.** When people comment on a pull request a coding session (Chat › Code) opened, their comments now come to that session.
+**Review comments arrive in the coding session.** When people comment on a pull request a coding session (Chat › Code) opened, their comments now come to that session.
 
 ## v1.578.0
 

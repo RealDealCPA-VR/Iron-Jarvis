@@ -2099,7 +2099,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Open items stay until they are done (v1.579.0)
+## Open items stay until they are done (v1.581.0)
 
 The card a new chat or coding session shows for a folder you have worked in
 now keeps every **open item** of that folder, however old, until it is done
