@@ -682,6 +682,8 @@ def register(app: FastAPI, d) -> None:
                     "waiting": r.id in waiting,
                     "status": r.status.value,
                     "outcome": getattr(r, "outcome", None) or None,
+                    # Release 4 of the intelligence plan (see _session_view).
+                    "unchecked_steps": int(getattr(r, "unchecked_steps", None) or 0) or None,
                     "project_id": r.project_id,
                     "created_at": r.created_at.isoformat(),
                     "finished_at": r.finished_at.isoformat() if r.finished_at else None,

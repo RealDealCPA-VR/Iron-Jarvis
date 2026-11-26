@@ -23,7 +23,7 @@ import { StatusDot, ConfirmButton, LoaderInline } from "@/components/ui";
 import AgentFace, { moodForStatus } from "@/components/agents/AgentFace";
 import OriginChip from "@/components/sessions/OriginChip";
 import TrustChip from "@/components/TrustChip";
-import { outcomeLabel, stoppedChip, waitingLabel } from "@/components/sessions/SessionStatusBadge";
+import { outcomeLabel, stoppedChip, uncheckedChip, waitingLabel } from "@/components/sessions/SessionStatusBadge";
 import { Badge, MockChip } from "@/components/ui";
 import { providerDisplay } from "@/lib/onboarding";
 import { timeAgo } from "@/lib/format";
@@ -131,6 +131,9 @@ export function CardInner({
   // Failed lane with real failures, so its card says "Stopped" in the one
   // status table's slate — the slate dot alone did not say it.
   const stopped = stoppedChip(session);
+  // The intelligence plan, release 4: a card in the Done lane whose run had a
+  // plan step nobody could check says so ("Done, 1 step not checked").
+  const unchecked = uncheckedChip(session);
   const reviewable = lane === "review" && !waiting;
   const agentName = agentDisplayName(session.agent_type, session.origin);
   return (
@@ -214,6 +217,11 @@ export function CardInner({
         {!waiting && outcome && (
           <span data-testid="session-outcome-chip" className="contents">
             <Badge value={outcome} tone="amber" keepCase variant="calm" />
+          </span>
+        )}
+        {!waiting && !outcome && unchecked && (
+          <span data-testid="session-unchecked-chip" className="contents">
+            <Badge value={unchecked.word} tone={unchecked.tone} keepCase variant="calm" />
           </span>
         )}
         {!waiting && !outcome && stopped && (

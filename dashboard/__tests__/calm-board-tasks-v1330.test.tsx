@@ -320,7 +320,8 @@ describe("source guard: the board and the project Tasks stay calm", () => {
     // own grey Stopped lane now, and Failed holds real failures only.
     expect(count("components/kanban/KanbanBoard.tsx", "ConfirmButton")).toBe(3); // Clear completed / failed / stopped
     // v1.352.0 (G17, updated on purpose): + the stopped card's "Stopped" chip.
-    expect(count("components/kanban/SessionCard.tsx", "Badge")).toBe(3); // waiting / outcome / stopped
+    // The intelligence plan, release 4 (updated on purpose): + "Done, 1 step not checked".
+    expect(count("components/kanban/SessionCard.tsx", "Badge")).toBe(4); // waiting / outcome / unchecked / stopped
     expect(count("components/kanban/SessionCard.tsx", "ConfirmButton")).toBe(1); // Dismiss
     expect(count("components/project/ProjectTasks.tsx", "Badge")).toBe(1); // unknown
   });

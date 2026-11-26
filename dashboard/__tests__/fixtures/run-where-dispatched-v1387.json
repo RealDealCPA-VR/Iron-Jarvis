@@ -26,6 +26,7 @@
         "told": [],
         "trust": "full",
         "trust_reason": "",
+        "unchecked_steps": null,
         "waiting_on": null,
         "workspace_path": ""
       },
@@ -120,6 +121,7 @@
         "told": [],
         "trust": "full",
         "trust_reason": "",
+        "unchecked_steps": null,
         "waiting_on": null,
         "workspace_path": ""
       },
