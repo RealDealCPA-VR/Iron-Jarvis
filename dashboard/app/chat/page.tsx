@@ -302,7 +302,7 @@ import { HomeLine } from "@/components/chat/HomeLine";
 import { ChatMoreMenu } from "@/components/chat/ChatMoreMenu";
 import { ChatUsageLine } from "@/components/chat/ChatUsageLine";
 import { ChatFilling } from "@/components/chat/ChatFilling";
-import { FILLING_TITLE, fillingMeterLabel } from "@/lib/chatFilling";
+import { FILLING_TITLE, fillingMeterLabel, overWords } from "@/lib/chatFilling";
 import { ProjectDrawer } from "@/components/chat/ProjectDrawer";
 import { ChatFolderChip } from "@/components/chat/ChatFolderChip";
 import { FolderChip, useFolderPicker } from "@/components/folders/FolderChip";
@@ -1331,7 +1331,10 @@ function ContextMeter({
     <button
       type="button"
       data-testid="chat-fullness-meter"
-      aria-label={fillingMeterLabel(pct)}
+      // The daemon's own figure, not the capped one: a chat that holds more
+      // than its room is named in the list's first words (lib/chatFilling),
+      // never as "about 100% full".
+      aria-label={fillingMeterLabel(raw, windowKnownOf(usage))}
       aria-haspopup="dialog"
       aria-expanded={fillingOpen}
       onClick={onPress}
@@ -1343,7 +1346,9 @@ function ContextMeter({
       title={
         trimmed
           ? trimmedWords(usage.dropped, windowKnownOf(usage))
-          : fillWords("chat", pct, windowKnownOf(usage))
+          : raw > 100
+            ? overWords(windowKnownOf(usage))
+            : fillWords("chat", pct, windowKnownOf(usage))
       }
     >
       <span className="relative inline-block h-1 w-8 overflow-hidden rounded-full bg-white/10">
@@ -5248,6 +5253,15 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // (the fullness gauge and the "⋯" menu's row both open the one list).
   const [fillingOpen, setFillingOpen] = useState(false);
   const closeFilling = useCallback(() => setFillingOpen(false), []);
+  // Where focus goes back when what opened the list is gone: the "⋯" button
+  // (its row unmounts as the list opens). The gauge is its own way back.
+  const fillingReturnRef = useRef<HTMLElement | null>(null);
+  const fillingReturnTarget = useCallback(() => fillingReturnRef.current, []);
+  // Behind the Code view the list goes away with the chat: its Escape is a
+  // window key, and the chat kept there never answers one (v1.450.0, AN).
+  useEffect(() => {
+    if (surfaceHidden) setFillingOpen(false);
+  }, [surfaceHidden]);
   // Compaction (v1.153.0). `compactDismissedAt` remembers the fill level the
   // user waved away, so "not now" at 72% stays quiet until the conversation
   // grows meaningfully — and does NOT silence the offer again at 88%.
@@ -12763,7 +12777,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   type="button"
                   data-testid="chat-more-filling"
                   onClick={() => {
+                    fillingReturnRef.current = menuTrigger();
                     closeMenu();
+                    // One small panel in that corner at a time: the list
+                    // and the conversation map share it.
+                    setMapOpen(false);
                     setFillingOpen(true);
                   }}
                   className={menuRow}
@@ -16508,7 +16526,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     <button
                       type="button"
                       data-testid="open-conversation-map"
-                      onClick={() => setMapOpen((v) => !v)}
+                      onClick={() => {
+                        // The map and "What is filling this chat" share
+                        // one corner: opening one closes the other.
+                        setFillingOpen(false);
+                        setMapOpen((v) => !v);
+                      }}
                       disabled={messages.filter((x) => x.role === "user" && !x.continuation).length < 2}
                       aria-expanded={mapOpen}
                       aria-label="Conversation map"
@@ -16535,11 +16558,24 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     <ContextMeter
                       usage={contextUsage}
                       fillingOpen={fillingOpen}
-                      onPress={() => setFillingOpen((v) => !v)}
+                      onPress={() => {
+                        fillingReturnRef.current = null;
+                        setMapOpen(false);
+                        setFillingOpen((v) => !v);
+                      }}
                     />
                     {/* The one list both doors open (the gauge, and the "⋯"
-                        menu's row): a fixed panel, placed like the map's. */}
-                    {fillingOpen ? <ChatFilling threadId={threadId} onClose={closeFilling} /> : null}
+                        menu's row): a fixed panel in the map's corner, so
+                        only one of the two is ever open. Read again when a
+                        reply ends while it is open. */}
+                    {fillingOpen && !surfaceHidden ? (
+                      <ChatFilling
+                        threadId={threadId}
+                        onClose={closeFilling}
+                        replyRunning={busy}
+                        returnFocusTo={fillingReturnTarget}
+                      />
+                    ) : null}
                     {/* Redesign S9 (Q7): a detected model, one tap — never picked
                         silently. Silent once a real model answers, and absent
                         while the empty state's connect doors make the same offer

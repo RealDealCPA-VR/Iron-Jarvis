@@ -112,9 +112,106 @@
     "window_known": false,
     "left_out": 0
   },
+  "over_full": {
+    "thread_id": "chat_big",
+    "found": true,
+    "reading": {
+      "source": "app",
+      "used": 8400,
+      "window": 6000,
+      "percent": 140,
+      "parts": [
+        {
+          "key": "messages",
+          "label": "Your messages and the replies",
+          "tokens": 8000,
+          "kind": "used"
+        },
+        {
+          "key": "system",
+          "label": "Iron Jarvis's own instructions",
+          "tokens": 400,
+          "kind": "used"
+        },
+        {
+          "key": "free",
+          "label": "Room left",
+          "tokens": 0,
+          "kind": "free"
+        }
+      ],
+      "over": true,
+      "extra": [
+        {
+          "key": "tools",
+          "label": "Tools it was given",
+          "tokens": 720
+        }
+      ],
+      "lists": [
+        {
+          "key": "tools",
+          "label": "Where they came from",
+          "count": 2,
+          "items": [
+            {
+              "name": "Iron Jarvis's own tools",
+              "detail": "2 tools",
+              "tokens": 300
+            },
+            {
+              "name": "ledger",
+              "detail": "12 tools",
+              "tokens": 420
+            }
+          ]
+        }
+      ],
+      "tool_names": [
+        "read_file",
+        "list_files"
+      ]
+    },
+    "at": "2026-11-20T09:07:00",
+    "window_known": true,
+    "left_out": 22
+  },
   "none": {
     "thread_id": "chat_new",
     "found": false,
     "reading": null
+  },
+  "said": {
+    "filled": [
+      "What is filling this chat (Iron Jarvis's own record of the newest reply):",
+      "This chat fills about 43% of what this model can read at once.",
+      "- Your messages and the replies: about 30%",
+      "- Files you attached: about 8%",
+      "- What Iron Jarvis remembered: about 2%",
+      "- Iron Jarvis's own instructions: about 3%",
+      "- At least 3 earlier messages were left out of the reply so it fits.",
+      "- Tools it was given, sent with each message and not counted in that figure: 17 tools, about 7%: Iron Jarvis's own tools (2), the ledger extension (12), the mail extension (3).",
+      "- The model reused about 62% of what was sent.",
+      "Every size is an estimate. A long chat gets full mostly from its messages and attached files; starting a new chat, or summarizing the earlier messages, makes room."
+    ],
+    "no_tools_safe_size": [
+      "What is filling this chat (Iron Jarvis's own record of the newest reply):",
+      "This chat fills about 52% of what Iron Jarvis sends this model at once. This model's own limit is not known, so a safe size is used.",
+      "- Your messages and the replies: about 50%",
+      "- Iron Jarvis's own instructions: about 1%",
+      "- The model reused about 39% of what was sent.",
+      "Every size is an estimate. A long chat gets full mostly from its messages and attached files; starting a new chat, or summarizing the earlier messages, makes room."
+    ],
+    "over_full": [
+      "What is filling this chat (Iron Jarvis's own record of the newest reply):",
+      "This chat holds more than this model can read at once.",
+      "- Your messages and the replies: about 95%",
+      "- Iron Jarvis's own instructions: about 5%",
+      "- Room left: none",
+      "- Iron Jarvis leaves the oldest messages out of each reply so it fits (at least 22 in the newest reply). Each share here is of everything this chat holds.",
+      "- Tools it was given, sent with each message and not counted in that figure: 14 tools, about 12% of the room: Iron Jarvis's own tools (2), the ledger extension (12).",
+      "- The model reused about 39% of what was sent.",
+      "Every size is an estimate. A long chat gets full mostly from its messages and attached files; starting a new chat, or summarizing the earlier messages, makes room."
+    ]
   }
 }

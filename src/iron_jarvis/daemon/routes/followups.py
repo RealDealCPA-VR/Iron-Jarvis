@@ -227,6 +227,15 @@ def _who(provider: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+#: What the usage row of a follow-up suggestions call is called (the row's
+#: ``result``, in the user's words; the intelligence plan, release 6). Like a
+#: conversation summary's row (``chat_turn.SUMMARY_USAGE_LABEL``), it is in
+#: the chat's totals and is NOT one of the chat's replies: a reader that
+#: numbers a chat's replies skips a labelled row
+#: (``scripts/measure_tool_definitions.py``). Nothing in the app reads it.
+FOLLOWUPS_USAGE_LABEL = "Follow-up questions suggested for this chat"
+
+
 def register(app: FastAPI, d) -> None:
     """Attach ``POST /chat/followups``; ``d`` is the create_app deps object."""
 
@@ -252,6 +261,7 @@ def register(app: FastAPI, d) -> None:
                 cost_usd=tally.cost_usd,
                 cost_source=tally.cost_source,
                 thread_id=thread_id,
+                label=FOLLOWUPS_USAGE_LABEL,
             )
         except Exception:  # noqa: BLE001 — accounting must never fail the answer
             log.debug("follow-up usage not recorded", exc_info=True)

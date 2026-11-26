@@ -1,7 +1,8 @@
 """What each reply used, read from the app's own records.
 
-Read-only: it opens the database in read-only mode, calls no model and changes
-nothing. Run it on a COPY when the app is running.
+Read-only: it opens the database in read-only mode, calls no model, changes
+nothing and never leaves a file beside the database. Run it on a COPY when
+the app is running.
 
     python -I scripts/measure_tool_definitions.py                  # the dev home
     python -I scripts/measure_tool_definitions.py --root <home>    # <home>/ironjarvis.db
@@ -12,16 +13,27 @@ TWO REPORTS.
 
 1. What each reply used (the intelligence plan, release 6). Since that
    release every chat reply and every agent run saves, on its own row, the
-   size of each part of what it was sent, how much the model server reused,
-   and how long the model took. This prints, for the last 7 days (``--days``):
+   size of each part of what it was sent, how much the model reused, and how
+   long the model took. This prints, for the last 7 days (``--days``):
    tokens sent per reply by part, and the share reused, by REPLY NUMBER in a
    chat (reply 1, 2, 3 ... averaged over chats), for plain chat, coding
    sessions and agent runs apart, with the time to the first word where a
-   reply recorded one. "sent" is the provider's own count for the whole reply;
+   reply recorded one. "sent" is the model's own count for the whole reply;
    every size by part is an ESTIMATE (about 3.6 characters a token) of what
-   the reply was sent when it began, never a provider's count. Something not
-   recorded prints as "-" and a share the provider did not report as
+   the reply was sent when it began, never the model's count. Something not
+   recorded prints as "-" and a share the model did not report as
    "not reported": never 0.
+
+   A REPLY is a chat's usage row with no label. The rows a chat also writes
+   for something that is not a reply (a summary of earlier messages, a step's
+   own model calls, follow-up suggestions, a coding session's look back for a
+   lesson) carry a label and are skipped. Follow-up suggestions and the look
+   back were given their label in the version that added this report: rows
+   of those two kinds written by an older version have none and still count
+   as replies (the report says so).
+
+   A record of a shape this script does not know (a newer version's, or a
+   damaged one) is left out and counted, never read as zeros.
 
 2. What tool definitions cost per reply (docs/EXTENSIONS-PLAN-2026-11-24.md,
    E0), only when ``tools.json`` (the body of ``GET /tools`` from the running
@@ -60,6 +72,22 @@ OLD_DATABASE = (
     "Nothing yet: this database was written by an older version, which did not save what a reply used."
 )
 NOT_REPORTED = "not reported"
+#: The record's shape this script reads (``context/breakdown.RECORD_VERSION``):
+#: a record of any other version is skipped and counted, as the app's own
+#: reader skips it (``decode_record``).
+RECORD_VERSION = 1
+OLDER_LABELS = (
+    "A chat's rows for follow-up suggestions and for a coding session's look back for a lesson are "
+    "skipped by their label; rows of those two kinds written before this version have no label and "
+    "still count as replies."
+)
+LEFT_BEHIND = (
+    "This database's app stopped before folding its newest changes into the main file (there is a "
+    "-wal file beside it and nothing has it open). Those changes are not counted here; nothing is "
+    "written beside the database."
+)
+NOT_A_DATABASE = "What each reply used: {path} could not be read as an Iron Jarvis database."
+BAD_NOW = "--now must be a time like 2026-11-26T12:00:00, and {value!r} is not one."
 
 
 def tokens(specs) -> int:
@@ -69,18 +97,34 @@ def tokens(specs) -> int:
     return int(len(blob) / RATIO) + 1
 
 
-def open_read_only(db_path: str) -> sqlite3.Connection:
-    """The database, READ-ONLY: nothing here can write to it.
-
-    A copy, or the database of an app that is closed, has no write-ahead file
-    beside it: it is opened ``immutable``, which also creates NO side file
-    (a plain read-only open of this kind of database leaves ``-wal`` and
-    ``-shm`` files next to it). A database the app has open has those files
-    already, and its newest rows are in them: it is opened read-only the
-    plain way, so they are read too."""
+def wal_state(db_path: str) -> str:
+    """How the database's write-ahead file stands: ``closed`` (none, or an
+    empty one: a copy, or an app that closed), ``in_use`` (a ``-wal`` WITH its
+    ``-shm``: an app has it open) or ``left_behind`` (a non-empty ``-wal`` and
+    NO ``-shm``: its app stopped before folding its newest changes in)."""
     path = os.path.abspath(db_path)
     wal = path + "-wal"
-    in_use = os.path.exists(wal) and os.path.getsize(wal) > 0
+    if not (os.path.exists(wal) and os.path.getsize(wal) > 0):
+        return "closed"
+    return "in_use" if os.path.exists(path + "-shm") else "left_behind"
+
+
+def open_read_only(db_path: str) -> sqlite3.Connection:
+    """The database, READ-ONLY: nothing here can write to it, and NO file is
+    ever created beside it.
+
+    A copy, or the database of an app that is closed, has no write-ahead file
+    beside it: it is opened ``immutable``, which creates no side file (a
+    plain read-only open of this kind of database leaves ``-wal`` and
+    ``-shm`` files next to it). A database the app has open has both files
+    already, and its newest rows are in them: it is opened read-only the
+    plain way, so they are read too. A database whose app died
+    (:func:`wal_state` ``left_behind``) would get a ``-shm`` file from a plain
+    open: it is opened ``immutable`` too, which reads the main file only
+    (the caller says the newest changes are not counted). Never a copy: the
+    database may be large."""
+    path = os.path.abspath(db_path)
+    in_use = wal_state(path) == "in_use"
     uri = "file:" + path.replace("\\", "/") + ("?mode=ro" if in_use else "?mode=ro&immutable=1")
     return sqlite3.connect(uri, uri=True, timeout=5)
 
@@ -131,9 +175,9 @@ def _secs(values) -> str:
 
 
 def _reused(rows) -> str:
-    """The share of what was sent that the model server reused, over the
-    replies whose provider reported a figure (read against the input of the
-    calls that reported one)."""
+    """The share of what was sent that the model reused, over the replies
+    whose provider reported a figure (read against the input of the calls
+    that reported one)."""
     read = against = 0
     for r in rows:
         if r["cache_read"] is None:
@@ -186,20 +230,21 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
     # Every reply of a chat is numbered in order, whenever it was written, so
     # "reply 9" is the ninth reply of its chat even when the first eight are
     # older than the window. A chat reply's own row has no label
-    # (``result``); a summary's row and a step's own row (a picture looked at
-    # for a step) have one, and are not replies.
+    # (``result``); a summary's row, a step's own row (a picture looked at
+    # for a step), follow-up suggestions and a coding session's look back
+    # for a lesson have one, and are not replies.
     all_rows = db.execute(
         "select session_id, thread_id, created_at, input_tokens, steps, cache_read_input_tokens, "
         "parts_json, model_ms, model_calls, first_word_ms, coalesce(result, '') from agentrun "
         "order by created_at, id"
     ).fetchall()
     numbers: dict = collections.Counter()
-    chat, code, runs, unsaved = [], [], [], 0
+    chat, code, runs, unsaved, unknown = [], [], [], 0, 0
     for sid, thread, created, inp, steps, cache_read, parts_json, model_ms, calls, first_ms, label in all_rows:
         is_chat = sid == "chat"
         inside = cutoff <= str(created).replace("T", " ") <= until
         if is_chat and label:
-            continue  # a summary's row: not a reply
+            continue  # a labelled row (a summary, follow-up suggestions ...): not a reply
         if is_chat and not thread:
             if parts_json and inside:
                 unsaved += 1
@@ -209,6 +254,9 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
         if not parts_json or not inside:
             continue
         record = _record(parts_json)
+        if record.get("v") != RECORD_VERSION:
+            unknown += 1  # a shape this script does not know: never read as zeros
+            continue
         row = {
             "group": group, "number": numbers[group], "input": int(inp or 0),
             "calls": calls if calls is not None else (int(steps or 0) or None),
@@ -216,12 +264,20 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
         }
         (runs if not is_chat else code if record.get("kind") == "code" else chat).append(row)
     total = len(chat) + len(code) + len(runs)
+    skipped = (
+        f"{unknown} record{'' if unknown == 1 else 's'} of a shape this script does not know (a newer "
+        f"version's, or damaged) {'is' if unknown == 1 else 'are'} left out."
+    ) if unknown else ""
     if not total:
         print(NOTHING_YET.format(days=days), file=out)
+        if skipped:
+            print(skipped, file=out)
         return 0
-    print("\"sent\" is the provider's own count of what was sent for the whole reply (all its model calls). "
+    print("\"sent\" is the model's own count of what was sent for the whole reply (all its model calls). "
           "The columns by part are ESTIMATES of what the reply was sent when it began; \"tools\" is one "
           "call's tool definitions. \"-\" = not recorded.", file=out)
+    if chat or code:
+        print(OLDER_LABELS, file=out)
     if chat:
         _table("Plain chat", "reply", chat, max_number, out)
     if code:
@@ -239,6 +295,8 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
     if unsaved:
         print(f"\n{unsaved} repl{'y' if unsaved == 1 else 'ies'} of chats that were never saved "
               f"{'is' if unsaved == 1 else 'are'} left out (no chat to number them in).", file=out)
+    if skipped:
+        print(("" if unsaved else "\n") + skipped, file=out)
     return total
 
 
@@ -352,15 +410,34 @@ def main(argv: "list[str] | None" = None) -> int:
     if not os.path.isfile(db_path):
         print(f"What each reply used: there is no database at {db_path}. Nothing yet.")
         return 0
-    now = datetime.fromisoformat(args.now) if args.now else None
+    try:
+        now = datetime.fromisoformat(args.now) if args.now else None
+    except ValueError:
+        print(BAD_NOW.format(value=args.now), file=sys.stderr)
+        return 2
     if now is not None and now.tzinfo is not None:
         now = now.astimezone(timezone.utc).replace(tzinfo=None)
-    db = open_read_only(db_path)
+    left_behind = wal_state(db_path) == "left_behind"
     try:
+        db = open_read_only(db_path)
+    except sqlite3.Error:
+        print(NOT_A_DATABASE.format(path=db_path), file=sys.stderr)
+        return 2
+    try:
+        # The first read: a file that is not a database, or one with no
+        # table of replies and runs, ends here in one sentence.
+        if not db.execute("pragma table_info(agentrun)").fetchall():
+            print(NOT_A_DATABASE.format(path=db_path), file=sys.stderr)
+            return 2
+        if left_behind:
+            print(LEFT_BEHIND)
         if tools_json:
             definitions(tools_json, db)
             print()
         used(db, days=max(1, args.days), now=now, max_number=max(1, args.max_replies))
+    except sqlite3.DatabaseError:
+        print(NOT_A_DATABASE.format(path=db_path), file=sys.stderr)
+        return 2
     finally:
         db.close()
     return 0

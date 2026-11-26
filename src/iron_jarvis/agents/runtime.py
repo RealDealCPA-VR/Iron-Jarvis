@@ -1252,6 +1252,14 @@ _ROSTER_WRITERS: frozenset[str] = _WRITE_TIER | {
 }
 
 
+#: Tools that answer about the CHAT they are asked in (the intelligence plan,
+#: release 6: ``chat_fullness``, "why is this chat getting full?"). Chat arms
+#: them by its words; a run's TASK WORDS never do (a hand-off's task can be
+#: that very question, and the tool would describe the run's own prompt as
+#: "this chat"). A definition's roster is still consent and is never cut.
+_CHAT_ONLY_AUTO: frozenset[str] = frozenset({"chat_fullness"})
+
+
 def arm_for_task(
     platform,
     task: str,
@@ -1331,7 +1339,7 @@ def arm_for_task(
     # empty is a deliberate zero.
     if not roster or cap <= 0:
         return roster
-    skip = set(roster)
+    skip = set(roster) | _CHAT_ONLY_AUTO
     if not (skip & _ROSTER_WRITERS):
         # TIER GATE. MEASURED on the reviewer roster (13 read-only tools, no
         # writer of any kind): "review the draft report and save a corrected
@@ -2596,6 +2604,16 @@ class AgentRuntime:
         with session_scope(self.p.engine) as db:
             db.merge(run)
             db.commit()
+
+    def _note_step_and_save(self, run: AgentRun, facts: Any, **step: Any) -> "dict[str, Any]":
+        """BLOCKING (a worker thread; the intelligence plan, release 6): what
+        one step used (``run_facts.note_step``, which estimates the whole
+        step's prompt) and then the step's own save, in ONE hop off the event
+        loop. Returns the extra keys of the step's ``llm.completed`` event.
+        The measure never raises; the save raises as it always did."""
+        used = _run_facts.note_step(run, facts, **step)
+        self._save(run)
+        return used
 
     def _project_context(self, session: Session) -> str:
         """The context-spine block for a project-tagged session: the project's
@@ -5529,12 +5547,9 @@ class AgentRuntime:
             # provider's cache counts, the tools sent (names on the row, a
             # count here), estimated sizes and the model's time, added to the
             # run's own columns BEFORE the save below (no extra write) and
-            # said on the step's event. Sizes and names only.
-            _step_used = _run_facts.note_step(
-                run, _facts, usage=usage, tool_specs=tool_specs, system=step_system,
-                messages=step_messages, window=_step_window, ratio=_step_ratio,
-                model_ms_before=_ms_before,
-            )
+            # said on the step's event. Sizes and names only. It estimates
+            # the whole step's prompt, so it runs on the save's own worker
+            # thread (``_note_step_and_save``), never on the event loop.
             # Persist the step count BEFORE the tools run (v1.174.0). It used to
             # be saved only at the END of a step, so for the whole of step N the
             # stored record still said N-1 — and anything reading the ledger
@@ -5542,7 +5557,11 @@ class AgentRuntime:
             # dashboard) quoted a step that had already passed. One extra merge
             # per step buys a number that is true while the step is happening.
             # v1.226.0: the most frequent write in the app — off the loop.
-            await asyncio.to_thread(self._save, run)
+            _step_used = await asyncio.to_thread(
+                self._note_step_and_save, run, _facts, usage=usage, tool_specs=tool_specs,
+                system=step_system, messages=step_messages, window=_step_window,
+                ratio=_step_ratio, model_ms_before=_ms_before,
+            )
             # TX-01 audit: one persisted event PER LLM call so every token is
             # individually replayable on the timeline (the per-run aggregate lives
             # on AgentRun). Best-effort — never let telemetry break a run.

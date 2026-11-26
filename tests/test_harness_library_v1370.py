@@ -177,6 +177,9 @@ async def test_a_turn_that_did_real_work_gets_one_ledger_checked_lesson(app, wor
     with session_scope(app.state.platform.engine) as db:
         runs = [r for r in db.exec(select(AgentRun)).all() if r.thread_id == sid]
     assert len(runs) == 2  # the turn + the reflection
+    # The intelligence plan, release 6: the reflection's row says what it was
+    # for (the turn's own row has no label: it is the reply).
+    assert [r.result for r in runs if r.result] == [L.REFLECT_USAGE_LABEL]
 
 
 async def test_the_turns_end_schedules_it_by_itself_and_the_bell_hears(app, work, monkeypatch):
