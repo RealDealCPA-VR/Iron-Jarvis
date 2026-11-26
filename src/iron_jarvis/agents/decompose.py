@@ -742,9 +742,14 @@ async def plan_task(
     ):
         return bulk_plan(cap)
     plan_system = _plan_system(cap)
+    # Release 7 of the intelligence plan: the plan is made knowing today's
+    # date (``core/today``, the one helper), like every step it plans.
+    from ..core.today import today_block
+
     user = (
         f"Task:\n{session.task}\n\n"
         f"Available tools: {', '.join(agent_def.tools)}"
+        + today_block()
     )
     messages = [LLMMessage(role="user", content=user)]
     try:

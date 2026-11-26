@@ -898,7 +898,13 @@ def join_found(
                 s for s in tool_specs
                 if isinstance(s, dict) and str(s.get("name") or "") not in known
             ]
-            tool_specs[:] = registry.specs([*armed, *(asks_list or ())]) + extras
+            # Release 7: the order the reply was already sending them in; a
+            # tool that joins goes at the END (``context/prefix``).
+            from ..context.prefix import order_specs as _order, spec_name as _name
+
+            tool_specs[:] = _order(
+                registry.specs([*armed, *(asks_list or ())]) + extras, [_name(s) for s in tool_specs],
+            )
         _say(msgs, _note(joined, asks, skipped, capped, already,
                          asks_itself=_asks_itself(registry, [*already, *joined])))
         # Names only (never a query or an argument): which lookups brought

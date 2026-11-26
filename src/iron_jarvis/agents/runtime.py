@@ -3785,10 +3785,18 @@ class AgentRuntime:
         # ``self._shell_syntax``); every other run: the words byte for byte.
         try:
             _os_line = host_os_line(bash=self._shell_syntax.get(session.id) == "bash")
+            # Release 7 of the intelligence plan: today's date, said the way
+            # a coding session says it (``core/today``, the one helper). Once
+            # per run: a run that crosses midnight keeps the date it began on.
+            from ..core.today import today_line as _today_line
+
+            _day = _today_line()
+            _day_line = f"- {_day}\n" if _day else ""
             if is_direct_workspace(self.p.config, session.workspace_path):
                 system_prompt += (
                     "\n\n# Environment\n"
                     f"- OS: {_os_line}\n"
+                    f"{_day_line}"
                     f"- The user's real home directory: {Path.home()}\n"
                     "- Your file tools (read_file/write_file/list_files) operate "
                     f"directly in the project folder at {workspace} — these ARE "
@@ -3802,6 +3810,7 @@ class AgentRuntime:
                 system_prompt += (
                     "\n\n# Environment\n"
                     f"- OS: {_os_line}\n"
+                    f"{_day_line}"
                     f"- The user's real home directory: {Path.home()}\n"
                     "- Your file tools (read_file/write_file/list_files) operate in a "
                     "SCRATCH workspace — it is NOT where the user's files live.\n"

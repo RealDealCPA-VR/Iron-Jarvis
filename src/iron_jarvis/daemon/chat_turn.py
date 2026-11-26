@@ -598,8 +598,16 @@ def _reserve_kw(d, provider: str, model: str, window: "int | None") -> dict:
     return {"reserve": n} if n is not None else {}
 
 
-def _plan_context(d, body, system: str, provider: str, model: str, messages=None):
+def _plan_context(
+    d, body, system: str, provider: str, model: str, messages=None, *,
+    riders=None, fixed_tokens: int = 0, step: int = 0,
+):
     """Budget this turn's history against the answering model's window.
+
+    ``riders`` / ``fixed_tokens`` / ``step`` (release 7, ``context/prefix``):
+    what rides beside each message, the tool definitions' size, and the
+    coarse start of a shedding history. Passed only by ``chat_prefix``'s
+    final plan; omitted, the call is the one it always was.
 
     Shared by both chat lanes so they can never disagree about what fits. The
     window comes from the SAME resolver the attachment budgets use
@@ -638,6 +646,10 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
             # passed ONLY then (every other provider: the classic reserve,
             # and a planner double that predates the knob sees its old call).
             **_reserve_kw(d, provider, model, _win),
+            # Release 7: passed ONLY by the final plan of a plain chat reply.
+            **({"riders": list(riders)} if riders is not None else {}),
+            **({"fixed_tokens": int(fixed_tokens)} if fixed_tokens else {}),
+            **({"step": int(step)} if step else {}),
         )
     except Exception:  # noqa: BLE001 — degrade to the pre-v1.146.0 behaviour
         log.warning("context planning failed; using the fixed slice", exc_info=True)
@@ -652,6 +664,18 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
                 for m in items[-30:]
             ]
         )
+
+
+def _keep_spec_order(before, after) -> list:
+    """Release 7: tool definitions rebuilt in the middle of a reply (a tool a
+    lookup found joins) keep the order the reply was already sending them in;
+    a tool that joins goes at the END. Never raises."""
+    try:
+        from ..context.prefix import order_specs, spec_name
+
+        return order_specs(after, [spec_name(s) for s in before or ()])
+    except Exception:  # noqa: BLE001 — the rebuilt list as it came
+        return list(after or ())
 
 
 def _tool_spec_tokens(tools, ratio: "float | None" = None) -> int:
@@ -3576,7 +3600,7 @@ def offer_script_tool(
         overrides[key] = "allow"
         armed_grant.add("tool_script")
         armed_grant.add(key)
-        tool_specs[:] = registry.specs([*armed, *(ask_armed or ())]) + extras
+        tool_specs[:] = _keep_spec_order(tool_specs, registry.specs([*armed, *(ask_armed or ())]) + extras)
         note = SCRIPT_OFFER_NOTE.format(tool=best, n=counts[best])
         for message in reversed(msgs):
             if getattr(message, "role", "") == "tool":
@@ -4036,7 +4060,7 @@ def offer_file_tool(
         overrides[pkey] = "allow"
         armed_grant.add(KEPT_FILE_TOOL)
         armed_grant.add(pkey)
-        tool_specs[:] = registry.specs([*armed, *(ask_armed or ())]) + extras
+        tool_specs[:] = _keep_spec_order(tool_specs, registry.specs([*armed, *(ask_armed or ())]) + extras)
         said = False
         for message in reversed(msgs):
             if getattr(message, "role", "") != "tool":
@@ -11709,6 +11733,18 @@ async def _prepare_attachments(
     # Parts, not one growing string, so an unseen-image note can be spliced back
     # NEXT TO its own attachment instead of after every file block.
     parts: list[str] = []
+    # Release 7 (``daemon/chat_prefix.AttachBlock``): each part's two halves,
+    # in step with ``parts``: the file's own text, which is KEPT with the
+    # message, and what is true for this reply only (the tools that can open
+    # or change it now, a note). A part with no file text is all "once".
+    halves: list[tuple[str, str]] = []
+
+    def _add(part: str, *, kept: str = "", once: "str | None" = None) -> None:
+        parts.append(part)
+        halves.append((kept, part if once is None else once))
+
+    def _file_line(name: str, live_line: str) -> str:
+        return (f"\n\n## Attached file: {name}" + live_line) if live_line else ""
     # (slot, display name, PATH). The path rides along for C-05: an image the
     # answering model cannot see can still be read on THIS PC, and that needs
     # the file, not just its name.
@@ -11791,7 +11827,7 @@ async def _prepare_attachments(
         if _is_recording(p):
             # Idea 33-a: a recording's words are not text any reader can
             # give; the tool that hears it is named (or why it cannot run).
-            parts.append(
+            _add(
                 f"\n\n## Attached recording: {p.name}\nPath: {p}\n("
                 + (RECORDING_ARMED_NOTE if _hearing else RECORDING_NOT_ARMED_NOTE) + ")"
             )
@@ -11811,13 +11847,13 @@ async def _prepare_attachments(
                     "media_type": _ATTACH_IMAGE_TYPES[suffix],
                 })
                 image_slots.append((len(parts), p.name, p))
-                parts.append("")  # filled below iff the images go unseen
+                _add("")  # filled below iff the images go unseen
             else:
                 # Too large to send to vision — be HONEST rather than answering
                 # blind on an image the user thinks was seen (>8 MB is dropped
                 # by every vision API's inline-image cap).
                 _mb = size / (1024 * 1024)
-                parts.append(
+                _add(
                     f"\n\n## Attached image: {p.name}\n(NOT analyzed — {_mb:.0f} MB "
                     "exceeds the 8 MB inline-image limit; ask the user to resize "
                     "it or describe what they want from it.)"
@@ -11882,9 +11918,8 @@ async def _prepare_attachments(
                     sources.took([])  # read, but its places could not be told
             if len(text) <= inline_budget:
                 head = f"\n\n## Attached file: {p.name}\n"
-                parts.append(
-                    head + (f"[{note}]\n{text}" if note else text) + live
-                )
+                _own_text = head + (f"[{note}]\n{text}" if note else text)
+                _add(_own_text + live, kept=_own_text, once=_file_line(p.name, live))
                 if _smap is not None:
                     await _record_attachment_marks(d, sources, text, _smap)
             else:
@@ -11896,13 +11931,14 @@ async def _prepare_attachments(
                 # embedder, network) work — on the loop it froze every
                 # request in the app while the chat said nothing.
                 _shown: list = []
-                parts.append(await asyncio.to_thread(
+                _excerpts = await asyncio.to_thread(
                     rag_block,
                     p.name, text, query,
                     getattr(d.platform, "embedder", None),
                     k=rag_k, char_budget=rag_budget, note=note,
                     shown_out=_shown if _smap is not None else None,
-                ) + live)
+                )
+                _add(_excerpts + live, kept=_excerpts, once=_file_line(p.name, live))
                 if _smap is not None and len(_shown) == 2:
                     # Only the excerpts the model was given, in the text
                     # they were cut from.
@@ -11916,7 +11952,7 @@ async def _prepare_attachments(
             # a workbook openpyxl choked on is exactly what excel_profile
             # exists for — so the handoff is most valuable in this branch, not
             # least. `rendered=False`: there is no text above it to disclaim.
-            parts.append(
+            _add(
                 f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
                 + live_file_line(
                     p,
@@ -11960,10 +11996,12 @@ async def _prepare_attachments(
                         f"\n\n## Attached image: {name}\n"
                         f"[{_local_ocr.note_for(read)}]\n{read.text}"
                     )
+                    halves[slot] = (parts[slot], "")  # the picture's words are its text
                 else:
                     parts[slot] = (
                         f"\n\n## Attached image: {name}\n(NOT analyzed — {blind}.)"
                     )
+                    halves[slot] = ("", parts[slot])
             # A PICTURE STAYS ON THIS NETWORK (v1.502.0, D1): the model
             # chosen cannot see, and the only ones that could run off this
             # network. A picture read HERE takes the turn as its text and no
@@ -12022,13 +12060,17 @@ async def _prepare_attachments(
                     change=_may_change(p.suffix.lower()),
                 )
             )
-        parts.append(
+        _add(
             "\n\n## Files in this conversation (already given to you earlier)\n"
             "Use these when the request says \"it\", \"that\" or names one of "
             "them; their contents are earlier in this conversation."
             + "".join(lines)
         )
-    return images, "".join(parts)
+    from .chat_prefix import AttachBlock
+
+    return images, AttachBlock(
+        "".join(parts), kept="".join(k for k, _o in halves), once="".join(o for _k, o in halves),
+    )
 
 
 #: How many of the conversation's EARLIER files one turn may name (v1.251.0,
@@ -12441,7 +12483,13 @@ class _Grounding:
         and the apps the message names. The lanes join it LAST, after the
         tool list, with the attachments and the "/" skill (before the planner
         still prices it)."""
-        return self.project_query + self.work + self.fabric + self.connector + self.apps
+        # Release 7 (``context/prefix``): what was FOUND for the question is
+        # data (it rides inside the fence beside the message); the apps
+        # section is Iron Jarvis's own account of what is connected.
+        from ..context.prefix import found as _found
+        from ..context.prefix import own as _own
+
+        return _found(self.project_query + self.work + self.fabric + self.connector) + _own(self.apps)
 
     def after_skill(self) -> str:
         # The packs note rides the shared join (v1.311.0 review), so both
@@ -13794,6 +13842,17 @@ async def run_chat_turn(
     # checked before anything runs. MIRROR NOTE (lock-step): stream_chat_turn.
     _tool_session = turn_session_id(session_id)
     plan_mode = turn_plan_mode(plan_mode, harness)
+    # THE CHAT'S STABLE PREFIX (the intelligence plan, release 7,
+    # ``daemon/chat_prefix``): what this chat keeps between replies, read
+    # once here. Inactive for a coding session (every call below then hands
+    # back what it was given). MIRROR NOTE (lock-step): routes/chat.py.
+    from ..context.prefix import last as _tail_last
+    from ..context.prefix import own as _tail_own
+    from .chat_prefix import begin as _stable_begin
+
+    _stable = await _stable_begin(
+        d, body, harness=harness, low_trust=normalize_trust(trust) == TRUST_LOW,
+    )
     # An unknown "/" skill is refused HERE, before any work starts (v1.433.0,
     # C1: it was checked after the grounding, the memory-profile search and
     # the harness build — each paid for, each a turn that never ran). The
@@ -13921,7 +13980,7 @@ async def run_chat_turn(
     # stable head before it reads from a provider's prompt cache again. The
     # planner and the compaction still price ``system + _query_tail``.
     # MIRROR NOTE (lock-step): routes/chat.py keeps the same tail.
-    _query_tail = _brain.block
+    _query_tail = _tail_own(_brain.block)  # release 7: Iron Jarvis's own words (lock-step)
     # v1.326.0: this join also carries the project folder's AGENTS.md /
     # CLAUDE.md sections (right after the project block, before the planner).
     # MIRROR NOTE (lock-step): routes/chat.py joins the same object.
@@ -13931,8 +13990,10 @@ async def run_chat_turn(
     # Jarvis does not offer, is said to the model in one plain line ("" when
     # the message names none — byte-identical). MIRROR NOTE (lock-step):
     # routes/chat.py adds the same block at the same seam.
-    _query_tail += page_steps_block(body, platform)
-    conn_tools = _grounding.conn_tools
+    _query_tail += _tail_own(page_steps_block(body, platform))
+    # Release 7: the switched-on extensions' tools this chat was already sent
+    # stay, in their order (``keep_conn``). MIRROR NOTE (lock-step).
+    conn_tools = _stable.keep_conn(d, _grounding.conn_tools, _MAX_CONNECTOR_TOOLS)
 
     # Routing choice (hoisted above attachments): an explicit body choice
     # always wins; else the project's default. Needed here so attachment
@@ -14104,10 +14165,11 @@ async def run_chat_turn(
 
     images, attach_block = await _prep.take("attachments")
     if attach_block:
-        _query_tail += "\n\n# Attachments (provided by the user this turn)" + attach_block
-        _ctx_pieces.setdefault("attachments", []).append(
-            "\n\n# Attachments (provided by the user this turn)" + attach_block
-        )
+        # Release 7: a file's own text is KEPT with its message; the lines
+        # that are true for this reply only ride once. MIRROR NOTE (lock-step).
+        _attached = _stable.attached(attach_block)
+        _query_tail += _attached
+        _ctx_pieces.setdefault("attachments", []).append(str(_attached))
     # THE PAGE THE USER IS ASKING ABOUT (v1.325.0): "Ask Jarvis about this
     # page" sends the dashboard page's text with ONE message; it is read here,
     # at the attachments seam, under an attachment's policy (scanned, fenced,
@@ -14115,7 +14177,7 @@ async def run_chat_turn(
     # routes/chat.py's stream lane calls the same helper at the same seam.
     if _prep.has("page"):
         _page = await _prep.take("page")
-        _query_tail += _page
+        _query_tail += _tail_own(_page)  # release 7: it carries its own fence (lock-step)
         _ctx_pieces.setdefault("attachments", []).append(_page)
     # RESOURCES FROM THE USER'S APPS (v1.324.0): what the user picked with "@"
     # from a pack rides THIS message like an attachment — read off the loop
@@ -14138,7 +14200,7 @@ async def run_chat_turn(
     _refs_block, thread_refs_receipt = (
         await _prep.take("refs") if _prep.has("refs") else ("", [])
     )
-    _query_tail += _refs_block
+    _query_tail += _tail_own(_refs_block)  # release 7: it carries its own fence (lock-step)
     if _refs_block:
         _ctx_pieces.setdefault("attachments", []).append(_refs_block)
 
@@ -14168,7 +14230,7 @@ async def run_chat_turn(
             "FOLLOW this playbook for this request.\n"
             + _playbook
         )
-        _query_tail += _skill_text
+        _query_tail += _tail_last(_skill_text)  # release 7: read last (lock-step)
         _ctx_pieces.setdefault("skills", []).append(_skill_text)
 
     # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0): who could
@@ -14240,6 +14302,9 @@ async def run_chat_turn(
     # at the ceiling. MIRROR NOTE (lock-step): stream copy in routes/chat.py.
     # v1.420.0 (C3.7): priced WITH the query tail (it is sent, last); a stored
     # summary the compaction adds joins the head.
+    # Release 7: the kept text of the chat's earlier messages is priced with
+    # the tail (it is sent, beside those messages). MIRROR NOTE (lock-step).
+    _query_tail = _stable.priced(_query_tail, body, _ctx_pieces)
     _system_before_compaction = system + _query_tail
     _ctx_system, _ctx_messages, context_report = await _apply_compaction(
         d, body, system + _query_tail, provider_choice, model_choice
@@ -14345,6 +14410,11 @@ async def run_chat_turn(
         # v1.473.0 — lock-step: the skills this message fits.
         _skills_offered = list(getattr(_selection, "skills", ()) or ())
         _arm_ceiling = getattr(_selection, "ceiling", None)
+        # Release 7: the readers this chat already holds stay (a definition
+        # to send, never a permission). MIRROR NOTE (lock-step): routes/chat.py.
+        armed, auto_armed = _stable.keep_auto(
+            d, body, armed, auto_armed, _arm_ceiling, _MAX_ARMED_TOOLS,
+        )
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed (the
         # runtime's arm_for_task rule; both failure shapes were empirically
         # reproduced in the Wave-B review): a plain "hello" under a cap drops
@@ -14395,6 +14465,7 @@ async def run_chat_turn(
         # routes/chat.py (can_ask=True there).
         armed, auto_armed, _no_ask = widen_app_reach(
             d, body, armed, auto_armed, [], can_ask=False, low_trust=bool(_trust_state["low"]),
+            kept=_stable.kept_app_tools(),  # release 7 (lock-step)
         )
         if _trust_state["low"]:
             _kept_now = deny_names(False)
@@ -14423,6 +14494,9 @@ async def run_chat_turn(
             _ESCALATE_SPEC,
             _WORKFLOW_DRAFT_SPEC,
         ]
+        # Release 7: the chat's kept order (a tool it already sent keeps its
+        # place, a new one goes at the END). MIRROR NOTE (lock-step).
+        armed, auto_armed, tool_specs = _stable.settle(armed, auto_armed, tool_specs)
     tools_used: list[str] = []          # ONLY tools that actually executed
     remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
     config_cards: list[dict[str, Any]] = []  # redesign S3/S4: settings changed / credentials asked
@@ -14553,7 +14627,9 @@ async def run_chat_turn(
                 skills_offer_block, d.platform, _skills_offered, armed
             )
             if _skills_fit:
-                system += "\n\n" + _skills_fit
+                # Release 7: it follows THIS message's words, so it rides
+                # beside the message (``later``). MIRROR NOTE (lock-step).
+                system += _stable.later("\n\n" + _skills_fit)
         # v1.577.0: what each app of the reply said about its own tools when
         # it started (MCP `instructions`), fenced and scanned, at the Tools
         # seam like the skills above. MIRROR NOTE (lock-step): the other lane.
@@ -14655,7 +14731,9 @@ async def run_chat_turn(
             # lane in routes/chat.py carries this same call. v1.167.0 shipped
             # the PDF sentence to this lane ONLY and the dashboard — which
             # STREAMS — went a whole wave without it.
-            + _write_directive(body, armed)
+            # Release 7: this message's own directive rides beside the
+            # message, still last (``later``). MIRROR NOTE (lock-step).
+            + _stable.later(_write_directive(body, armed))
         )
         if _harness is None:
             system += _tools_block
@@ -14683,8 +14761,10 @@ async def run_chat_turn(
         system += "\n\n" + LOW_TRUST_PROMPT
     # v1.420.0 (C3.7): the query-dependent sections go LAST — after the tool
     # list and everything else that stays the same from one message to the
-    # next. MIRROR NOTE (lock-step): routes/chat.py joins it at the same seam.
-    system += _query_tail
+    # next. Release 7: for a plain chat reply they no longer join the system
+    # prompt at all (``_stable.place`` below puts them beside the newest
+    # message, after the conversation); a coding session's join there.
+    # MIRROR NOTE (lock-step): routes/chat.py places it at the same seam.
     # Arming a tool in the chat UI is an EXPLICIT, interactive per-turn grant,
     # so ALSO pass the armed set as session_allow. The deny-floor refuses to
     # raise a host-touching tool (e.g. mcp_call, base "ask") via
@@ -14719,7 +14799,16 @@ async def run_chat_turn(
             **trust_causes(_trust_state), can_ask=False,
         )
         if _routed_section:
-            system += "\n\n" + _routed_section
+            system += _stable.later("\n\n" + _routed_section)  # release 7 (lock-step)
+    # THE STABLE PREFIX (release 7): the system prompt is final and the tool
+    # definitions are known, so the history is planned once more with the
+    # tools counted, and what changes with this message is placed beside it.
+    # MIRROR NOTE (lock-step): routes/chat.py calls it at the same seam.
+    system, msgs, plan = await _stable.place(
+        d, body, system=system, tail=_query_tail, plan=plan, msgs=msgs, images=images,
+        tool_specs=tool_specs, provider=provider_choice, model=model_choice,
+        ctx_messages=_ctx_messages,
+    )
     # ACCEPT EDITS / AUTO (v1.406.0 part 2, core/auto_approve): this lane
     # cannot show a card, so under either posture it runs only what the RULES
     # pass and refuses the rest in words — never the model judge (it must not

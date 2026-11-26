@@ -284,6 +284,7 @@ _LATE_MODEL_MODULES = (
     "..tools.rehearsal_store",  # RehearsalRecord — a rehearsal of a rule or a schedule (leap 06-a)
     "..capability_search.miss_models",  # CapabilityMiss + MissGroup — what you asked for that Iron Jarvis can't do yet (20-a)
     "..harness.scoreboard",   # CodingOutcome — what became of each piece of coding work (leap 28-a)
+    "..daemon.chat_kept",     # ChatKept — what a chat keeps between replies (intelligence plan, release 7)
 )
 
 

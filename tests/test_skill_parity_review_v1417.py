@@ -43,6 +43,7 @@ from iron_jarvis.skills.loader import load_skill
 from tests.test_skill_parity_v1417 import (  # noqa: F401
     ACCT, INJ, ORG, OTHER, _ctx, home, mkskill, plat, write,
 )
+from tests._fakes.sent import with_beside
 
 
 def _junction(link: Path, target: Path) -> bool:
@@ -155,7 +156,7 @@ async def test_a_long_slash_skill_is_cut_to_a_small_models_window_in_both_lanes(
         else:
             async for _ in await stream_chat_turn(platform, BUILTIN_PERSONAS, b):
                 pass
-        system = model.calls[0]["system"]
+        system = with_beside(model.calls[0]["system"], model.calls[0]["messages"])
         part = system.split("# Skill invoked by the user: huge", 1)[1]
         assert "HEAD " in part and "TAIL-MARK-HUGE" not in part, lane
         assert len(part) < 9_000, (lane, len(part))
@@ -209,6 +210,6 @@ async def test_a_long_message_is_not_copied_whole_into_the_system_prompt(plat, m
         else:
             async for _ in await stream_chat_turn(platform, BUILTIN_PERSONAS, b):
                 pass
-        part = model.calls[0]["system"].split("# Skill invoked by the user: plain", 1)[1]
+        part = with_beside(model.calls[0]["system"], model.calls[0]["messages"]).split("# Skill invoked by the user: plain", 1)[1]
         assert "No placeholders here." in part and "ARGUMENTS: START-OF-PASTE" in part, lane
         assert "END-OF-PASTE" not in part and len(part) < 9_000, (lane, len(part))

@@ -159,6 +159,7 @@ def widen(
     can_ask: bool,
     low_trust: bool = False,
     tool_ceiling: Any = None,
+    kept: Iterable[str] = (),
 ) -> "tuple[list, list, list]":
     """``(armed, auto_armed, ask_armed)`` with the reply's apps' PINS, the
     app tools the chat's previous reply USED, and (when an app in the reply
@@ -196,6 +197,15 @@ def widen(
                 _add(name)
         for name in RECENT.get(thread_of(body)):
             _add(name)
+        # Release 7 (``daemon/chat_prefix``): an app tool the chat's last
+        # reply was SENT stays in the next one (saved with the chat, so a
+        # restart keeps it), only while its app is part of THIS reply and at
+        # the tier that app has in it (``_add`` -> ``_tier``): a removed app,
+        # one switched off for the chat or one that lost its approval brings
+        # nothing.
+        for name in _app_names(kept):
+            if server_of(name) in apps:
+                _add(name)
         # THE FINDER: only while an app of the reply has tools it does not
         # hold, and only where the reply can take what it finds.
         reach = {server_of(n) for n in (*new_armed, *new_ask) if server_of(n)}
@@ -574,7 +584,13 @@ def join_app_tools(
                 s for s in tool_specs
                 if isinstance(s, dict) and str(s.get("name") or "") not in known
             ]
-            tool_specs[:] = registry.specs([*armed, *(asks_list or ())]) + extras
+            # Release 7: the order the reply was already sending them in; a
+            # tool that joins goes at the END (``context/prefix``).
+            from ..context.prefix import order_specs as _order, spec_name as _name
+
+            tool_specs[:] = _order(
+                registry.specs([*armed, *(asks_list or ())]) + extras, [_name(s) for s in tool_specs],
+            )
         note = ""
         if joined:
             note = JOINED_NOTE.format(names=", ".join(f"`{n}`" for n in joined))

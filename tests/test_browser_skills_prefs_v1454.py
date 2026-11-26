@@ -45,6 +45,7 @@ from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.settings import schema
 from tests._fakes.panel_harness import RealApp
+from tests._fakes.sent import own_words, with_beside
 
 ROOT = Path(__file__).resolve().parents[1]
 ADDON = ROOT / "extensions" / "chrome" / "src"
@@ -133,8 +134,8 @@ def test_a_picked_skill_reaches_the_lane_and_is_applied_like_the_chat_pages(tmp_
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text="the form on this page", skill="pii-redaction")
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the skill turn never finished")
-        assert SKILL_HEAD in seen[0]["system"], "the skill's playbook never reached the model"
-        assert "FOLLOW this playbook" in seen[0]["system"]
+        assert SKILL_HEAD in with_beside(seen[0]["system"], seen[0]["messages"]), "the skill's playbook never reached the model"
+        assert "FOLLOW this playbook" in with_beside(seen[0]["system"], seen[0]["messages"])
 
 
 def test_without_a_skill_no_playbook_rides(tmp_path, monkeypatch):
@@ -143,7 +144,7 @@ def test_without_a_skill_no_playbook_rides(tmp_path, monkeypatch):
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text="the form on this page")
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
-        assert "# Skill invoked by the user" not in seen[0]["system"]
+        assert "# Skill invoked by the user" not in with_beside(seen[0]["system"], seen[0]["messages"])
 
 
 def test_a_skill_picked_alone_is_the_chat_pages_own_words(tmp_path, monkeypatch):
@@ -154,8 +155,10 @@ def test_a_skill_picked_alone_is_the_chat_pages_own_words(tmp_path, monkeypatch)
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the skill-alone turn never finished")
         last = seen[0]["messages"][-1]
         content = getattr(last, "content", None) or last.get("content")
-        assert content == SKILL_ALONE.format(name="pii-redaction")
-        assert SKILL_HEAD in seen[0]["system"]
+        # (Release 7: what Iron Jarvis found rides beside the message; the
+        # person's own words are still exactly the chat page's.)
+        assert own_words(content) == SKILL_ALONE.format(name="pii-redaction")
+        assert SKILL_HEAD in with_beside(seen[0]["system"], seen[0]["messages"])
 
 
 def test_an_unknown_skill_is_refused_before_anything_is_spent(tmp_path, monkeypatch):
@@ -228,7 +231,7 @@ def test_the_sidebar_turn_carries_the_preference(tmp_path, monkeypatch):
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text="what does this page say?")
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
-        system = seen[0]["system"]
+        system = with_beside(seen[0]["system"], seen[0]["messages"])
         assert chat_turn.BROWSING_PREFERENCES_HEAD in system
         assert "Answer concisely, only what I need to know" in system
 
@@ -239,7 +242,7 @@ def test_empty_leaves_the_sidebar_prompt_unchanged(tmp_path, monkeypatch):
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text="what does this page say?")
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
-        assert "How the user wants you to work on web pages" not in seen[0]["system"]
+        assert "How the user wants you to work on web pages" not in with_beside(seen[0]["system"], seen[0]["messages"])
 
 
 def _post_lane_system(tmp_path, monkeypatch, *, tools: list[str], prefs: str) -> str:
@@ -250,7 +253,7 @@ def _post_lane_system(tmp_path, monkeypatch, *, tools: list[str], prefs: str) ->
     seen: dict[str, str] = {}
 
     async def fake_complete(*args: Any, **kw: Any):
-        seen["system"] = kw.get("system") or ""
+        seen["system"] = with_beside(kw.get("system") or "", kw.get("messages"))
         return RouteResult(LLMResponse(text="ok"), "mock", "mock")
 
     monkeypatch.setattr(platform.router, "complete", fake_complete)

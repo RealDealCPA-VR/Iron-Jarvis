@@ -297,6 +297,38 @@ def build_recap(dropped: list[Any], *, max_chars: int = 900) -> str:
     )
 
 
+#: The intelligence plan, release 7: when a plain chat's history has to shed
+#: messages, where it starts is moved to the next multiple of this many
+#: messages (counted from the first message the planner was handed), so the
+#: start stays where it is for several replies instead of moving with every
+#: one. A start that moves changes the first byte a model server can no longer
+#: reuse, and it then reads the whole chat again. See :func:`_coarse_cut`.
+CUT_STEP = 8
+
+
+def _coarse_cut(first_kept: int, total: int, step: int) -> int:
+    """Where a shedding history starts: *first_kept* (the index of the first
+    message that fits, of *total*) moved UP to the next multiple of *step*,
+    so it holds still while the chat grows by a message or two a reply.
+
+    Moving it up leaves out a few more messages than the room demands, so it
+    is bounded: never more than half of the messages that fit, and the two
+    newest always stay. When the whole step would cost more than that, half
+    the step is tried, then half again (down to 2); when even that is too
+    much the start stays exactly where the room put it. ``step`` < 2 = off."""
+    fits = total - first_kept
+    s = int(step or 0)
+    while s >= 2:
+        want = -(-first_kept // s) * s
+        extra = want - first_kept
+        if extra == 0:
+            return first_kept
+        if extra <= fits // 2 and fits - extra >= 2:
+            return want
+        s //= 2
+    return first_kept
+
+
 #: Upper bound on messages considered, whatever the window says.
 #:
 #: This used to be 30 and it used to be the ONLY limit — a count standing in for
@@ -317,6 +349,9 @@ def plan_history(
     max_messages: int = MAX_MESSAGES,
     chars_per_token: float | None = None,
     reserve: int | None = None,
+    riders: "list[str] | None" = None,
+    fixed_tokens: int = 0,
+    step: int = 0,
 ) -> HistoryPlan:
     """Choose the messages for one turn against a real token budget.
 
@@ -334,6 +369,22 @@ def plan_history(
     (``providers.reply_budget.reserve_for``), so the planner and the adapter
     agree on what the answer gets. ``None`` = :func:`output_reserve`, the
     long-standing answer (byte-identical for every other provider).
+
+    The intelligence plan, release 7 (each omitted = the plan it always made):
+
+    * ``riders``: for each message (same order, same length), the text that
+      rides BESIDE it ("" for none): a kept file's text, the newest message's
+      added block. It is counted with its message, kept or left out WITH it,
+      never cut (a rider is a fenced block: a cut one would have no end), and
+      handed back on the kept message as ``"rider"`` (the key is absent for a
+      message with none). The NEWEST message's rider is room held back first,
+      like the instructions (it is where that text rode before this release):
+      it is always sent, whatever happens to the message it rides beside.
+    * ``fixed_tokens``: what the TOOL DEFINITIONS sent beside the reply cost.
+      They are counted before the history is chosen, so a chat with a large
+      tool list sheds history here instead of overflowing afterwards.
+    * ``step``: :data:`CUT_STEP`; where a shedding history starts is moved to
+      a multiple of it (:func:`_coarse_cut`), so it does not move every reply.
     """
     win = int(window or DEFAULT_WINDOW)
     if win <= 0:
@@ -358,14 +409,20 @@ def plan_history(
 
     system_tokens = _est(system_text)
     reserve = output_reserve(win) if reserve is None else int(reserve)
-    budget = win - system_tokens - reserve
+    budget = win - system_tokens - reserve - max(0, int(fixed_tokens or 0))
+    # What rides beside each message, by position ("" for none).
+    beside = [str(r or "") for r in (riders or ())][: len(messages)]
+    beside += [""] * (len(messages) - len(beside))
+    # The newest message's rider is held back first: it is always sent.
+    newest_rider = beside[-1] if beside else ""
+    budget -= _est(newest_rider) if newest_rider else 0
 
     plan = HistoryPlan(window=win, history_budget=max(0, budget))
     # Raw demand, measured BEFORE any cap or trim: what this conversation would
     # cost if nothing were given up.
     plan.raw_tokens = system_tokens + sum(
         _est(_content_of(m)) + 4 for m in messages
-    )
+    ) + sum(_est(r) for r in beside if r)
     if not messages:
         plan.used_tokens = system_tokens
         return plan
@@ -374,6 +431,7 @@ def plan_history(
     # not make a 400-message replay a good idea.
     recent = list(messages)[-max_messages:]
     older = list(messages)[: max(0, len(messages) - len(recent))]
+    beside_recent = beside[len(older):len(messages)]
 
     # Step 2: stale tool output goes first — it is the biggest, least-referenced
     # thing in a transcript, and losing it costs less than losing a user turn.
@@ -389,7 +447,19 @@ def plan_history(
             {"role": role if role in ("user", "assistant", "tool") else "user",
              "content": content}
         )
+        if beside_recent[i]:
+            prepared[-1]["rider"] = beside_recent[i]
     plan.tools_trimmed = tools_trimmed
+    newest = prepared[-1] if prepared else None
+
+    def _cost(m: dict) -> int:
+        # (The newest message's rider was held back above.)
+        return _est(m["content"]) + 4 + (_est(m["rider"]) if m.get("rider") and m is not newest else 0)
+
+    def _with_rider(clipped: dict) -> dict:
+        if newest_rider:
+            clipped["rider"] = newest_rider
+        return clipped
 
     if budget <= 0:
         # The system prompt alone has eaten the window. Nothing sane fits; keep
@@ -397,7 +467,7 @@ def plan_history(
         # and tell the caller the model is too small for this conversation.
         last = prepared[-1] if prepared else {"role": "user", "content": ""}
         keep = max(MIN_LAST_MESSAGE_CHARS, 0)
-        plan.messages = [{"role": last["role"], "content": last["content"][:keep]}]
+        plan.messages = [_with_rider({"role": last["role"], "content": last["content"][:keep]})]
         plan.clipped_last = len(last["content"]) > keep
         plan.dropped = len(messages) - 1
         plan.recap = build_recap(list(older) + list(recent[:-1]))
@@ -408,7 +478,7 @@ def plan_history(
     # Does it all fit as-is? Answer this FIRST: it is the overwhelmingly common
     # case, it keeps the untouched path exactly untouched, and it decides
     # whether the recap reserve below has to be charged at all.
-    full_cost = sum(_est(m["content"]) + 4 for m in prepared)
+    full_cost = sum(_cost(m) for m in prepared)
     fits_whole = full_cost <= budget and not older
     if not fits_whole:
         budget -= RECAP_RESERVE  # the recap rides in the system prompt
@@ -417,7 +487,7 @@ def plan_history(
     kept: list[dict[str, str]] = []
     used = 0
     for m in reversed(prepared):
-        cost = _est(m["content"]) + 4  # role/format overhead
+        cost = _cost(m)  # role/format overhead, and what rides beside it
         if used + cost > budget and kept:
             break
         if used + cost > budget and not kept:
@@ -431,7 +501,7 @@ def plan_history(
                 int(budget * effective_chars_per_token(cpt)),
             )
             clipped = m["content"][:room_chars]
-            kept.append({"role": m["role"], "content": clipped})
+            kept.append(_with_rider({"role": m["role"], "content": clipped}))
             plan.clipped_last = len(m["content"]) > len(clipped)
             plan.suggest_larger = True
             used += _est(clipped) + 4
@@ -440,11 +510,20 @@ def plan_history(
         used += cost
     kept.reverse()
 
+    # Release 7: a history that sheds messages starts at a multiple of
+    # ``step``, so its start does not move with every reply.
+    if step and len(kept) < len(prepared) and not plan.clipped_last:
+        first = len(older) + len(prepared) - len(kept)
+        extra = _coarse_cut(first, len(messages), step) - first
+        if extra > 0:
+            used -= sum(_cost(m) for m in kept[:extra])
+            kept = kept[extra:]
+
     dropped_msgs = list(older) + list(recent[: len(prepared) - len(kept)])
     plan.messages = kept
     plan.dropped = len(dropped_msgs)
     plan.recap = build_recap(dropped_msgs)
-    plan.used_tokens = system_tokens + used + _est(plan.recap)
+    plan.used_tokens = system_tokens + used + _est(plan.recap) + (_est(newest_rider) if newest_rider else 0)
     # A conversation that had to shed turns fits better on a bigger model — say
     # so once, not on every trim of a stale tool result.
     if plan.dropped:

@@ -132,7 +132,10 @@ def _assert_fitted(sent: list[dict]) -> None:
     for n, snap in enumerate(sent):
         msgs = snap["msgs"]
         # The user's question is always there, whole.
-        assert any(m["role"] == "user" and m["content"] == QUESTION for m in msgs), f"round {n} lost the question"
+        # (Release 7: beside the question rides the once-only block.)
+        assert any(m["role"] == "user" and m["content"].startswith(QUESTION + "\n\n[") for m in msgs), (
+            f"round {n} lost the question"
+        )
         # Every tool_use has ALL its results right after it, and no result is orphaned.
         for i, m in enumerate(msgs):
             if m["calls"]:
@@ -224,7 +227,7 @@ def test_the_final_answer_completion_is_fitted_in_both_lanes(tmp_path, monkeypat
         snap = _nudged_turn(tmp_path / lane, monkeypatch, lane)
         msgs = snap["msgs"]
         assert _cost(snap) <= budget, f"{lane}: the nudge sent {_cost(snap)} tokens"
-        assert any(m["role"] == "user" and m["content"] == QUESTION for m in msgs), lane
+        assert any(m["role"] == "user" and m["content"].startswith(QUESTION + "\n\n[") for m in msgs), lane
         assert any(m["content"] == _TOOL_TRIMMED for m in msgs), f"{lane}: nothing trimmed"
         # The newest round's result is intact just before the nudge itself.
         assert msgs[-2]["role"] == "tool" and msgs[-2]["content"] == BIG, lane

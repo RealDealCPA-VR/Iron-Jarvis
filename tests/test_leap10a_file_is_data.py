@@ -20,6 +20,7 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from tests._fakes.phone_files import FakeTelegram, document, telegram
+from tests._fakes.sent import own_words, with_beside
 
 pytestmark = pytest.mark.usefixtures("no_network")
 
@@ -44,7 +45,7 @@ def test_a_pdf_that_gives_orders_reaches_the_model_as_an_attachment(tmp_path, mo
     seen: dict[str, list] = {"systems": [], "messages": []}
 
     async def fake_complete(*, system, messages, tools, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         seen["messages"].append(messages)
         return RouteResult(LLMResponse(text="The rent is 1,450 a month.", tool_calls=[],
                                        usage={"input_tokens": 3, "output_tokens": 2}), "mock", "mock")
@@ -73,7 +74,9 @@ def test_a_pdf_that_gives_orders_reaches_the_model_as_an_attachment(tmp_path, mo
     assert POISON not in system  # the prompt guard blocked the order
     # ...and the user's own words are the caption alone.
     users = [m for m in seen["messages"][0] if getattr(m, "role", "") == "user"]
-    assert users and str(users[-1].content).strip() == "what is the rent?"
+    # (Release 7: the file's text rides beside the message, fenced; the
+    # person's own words are still the caption alone.)
+    assert users and own_words(users[-1].content).strip() == "what is the rent?"
     for msgs in seen["messages"]:
         for m in msgs:
             assert POISON not in str(getattr(m, "content", ""))

@@ -208,23 +208,36 @@ def test_the_system_prompt_is_byte_identical_to_the_serial_order(tmp_path, monke
     """The steps FINISHED in reverse order, yet each section sits where the
     serial turn put it, with the same joins."""
     _probe, system, ws = _turn(tmp_path, monkeypatch, lane)
-    expected = (
+    # Release 7 (moved on purpose): these sections ride beside the newest
+    # message, each in its FIXED place whatever order the steps finished in:
+    # the sections that carry their own fence (the page, the pointed-to
+    # chats), then what was found inside the one fence (the attachment, the
+    # apps' resources), then the skill, last.
+    # (``system`` here is the system prompt and then what rides beside the
+    # message: the shared scripted router reads both, ``tests/_fakes/sent``.)
+    from iron_jarvis.context import prefix as _prefix
+
+    beside_at = system.index(_prefix.ONCE_TOP)
+    placed, system = system[beside_at:], system[:beside_at]
+    own = "PAGE-1\n\nREFS-1"
+    found = (
         "\n\n# Attachments (provided by the user this turn)" + "\n\nATT-1"
-        + "\n\nPAGE-1"
         + "\n\n# Resources from the user's apps (attached this turn)" + "\n\nRES-1"
-        + "\n\nREFS-1"
-        + "\n\n# Skill invoked by the user: prep-skill\n"
+        + "\n---\n[END UNTRUSTED CONTENT]"
+    )
+    last = (
+        "# Skill invoked by the user: prep-skill\n"
         "FOLLOW this playbook for this request.\n" + "SKILL-1"
     )
-    assert expected in system, f"{lane}: prep sections out of order:\n{system[-900:]!r}"
+    assert own in placed and found in placed and last in placed, f"{lane}: a prep section is missing:\n{placed!r}"
+    assert placed.index(own) < placed.index(found) < placed.index(last), f"{lane}: prep sections out of order:\n{placed!r}"
+    assert not any(mark in system for mark in ("ATT-1", "PAGE-1", "RES-1", "REFS-1", "SKILL-1"))
     ws_block = chat_turn._workspace_grounding_block(str(ws), (ws, False))
     assert ws_block and ws_block in system
     # v1.420.0 (C3.7, moved on purpose): the bound folder's block is part of
-    # the STABLE head; the attachments … skill sections are query-dependent
-    # and now come LAST (before: the folder followed the skill).
-    assert system.index(ws_block) < system.index(expected), (
-        "the bound folder's block must stay in the stable head, before the query tail"
-    )
+    # the STABLE head. Release 7: it is in the system prompt (checked just
+    # above, ``system`` being cut to it), and the attachments … skill
+    # sections are not: they ride beside the message.
 
 
 def test_both_lanes_send_the_same_prompt(tmp_path, monkeypatch):

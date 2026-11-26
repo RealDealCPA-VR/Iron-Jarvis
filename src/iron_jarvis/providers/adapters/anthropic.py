@@ -157,6 +157,33 @@ _CLI_CARRIER = "claude_cli_native"
 _FOREIGN_CARRIERS = frozenset({_CLI_CARRIER, "gemini_native"})
 
 
+def _stable_text_blocks(m: LLMMessage) -> "list[dict[str, Any]] | None":
+    """The intelligence plan, release 7 (``context/prefix``): the newest user
+    message of a plain chat reply as TWO text blocks, cut where the chat's next
+    reply stops sending it again (``LLMMessage.stable_chars``): the person's
+    own words and the text kept with the message, with a cache breakpoint at
+    their end, then the once-only block. The next reply sends the first part
+    again as that message's whole text, so the provider reads the conversation
+    up to there from its saved copy; with one block, the once-only part (which
+    is never sent again) would make every later reply miss it. None for a
+    message with no such cut, or one either side of which is blank (the
+    Messages API refuses an empty text block)."""
+    try:
+        cut = int(getattr(m, "stable_chars", 0) or 0)
+        text = m.content or ""
+        if m.role != "user" or cut <= 0 or cut >= len(text):
+            return None
+        head, rest = text[:cut], text[cut:]
+        if not head.strip() or not rest.strip():
+            return None
+        return [
+            {"type": "text", "text": head, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": rest},
+        ]
+    except Exception:  # noqa: BLE001 — the message goes whole
+        return None
+
+
 def _own_blocks(m: LLMMessage) -> list[dict[str, Any]]:
     """The raw blocks THIS adapter may replay: everything except the
     claude-cli carrier (v1.300.0). A conversation that moves from claude-cli
@@ -333,7 +360,7 @@ class AnthropicAdapter(LLMAdapter):
                 # IJ harness both allow it) has no words, and the Messages API
                 # refuses an empty text block ("text content blocks must be
                 # non-empty") — the picture goes by itself.
-                img_blocks: list[dict[str, Any]] = (
+                img_blocks: list[dict[str, Any]] = _stable_text_blocks(m) or (
                     [{"type": "text", "text": m.content}] if (m.content or "").strip() else []
                 )
                 for img in m.images:
@@ -348,6 +375,10 @@ class AnthropicAdapter(LLMAdapter):
                         }
                     )
                 out.append({"role": "user", "content": img_blocks})
+            elif _stable_text_blocks(m) is not None:
+                # Release 7: the part of the newest message that comes back,
+                # marked, then the once-only block (see the helper).
+                out.append({"role": "user", "content": _stable_text_blocks(m)})
             else:
                 out.append({"role": m.role, "content": m.content})
         return out

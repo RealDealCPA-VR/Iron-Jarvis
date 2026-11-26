@@ -342,10 +342,12 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
     from ...core.db import search_index
     from ...core.models import ChatThreadRecord, is_build_thread
     from ...documents import source_store as _marks
+    from .. import chat_kept as _kept
     from ..chat_append import drop_older, ensure_older_table
 
     older_ok = ensure_older_table(engine)  # outside the transaction
     marks_ok = _marks.ensure_table(engine)  # outside the transaction
+    kept_ok = _kept.ensure_table(engine)  # outside the transaction
     with _THREAD_SAVE_LOCK, session_scope(engine) as db:
         r = db.get(ChatThreadRecord, thread_id)
         if r is None:
@@ -359,6 +361,10 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         # (not the kept ones), in this same transaction.
         if marks_ok:
             _marks.drop_thread(db, thread_id)
+        # Release 7: and what the chat kept between replies (its tool names
+        # and the text attached to its messages), in this same transaction.
+        if kept_ok:
+            _kept.drop_thread(db, thread_id)
         # Third plan CS7: and its turn records (each reply's text, thinking,
         # tool inputs and results), in this same transaction.
         _durable.drop_thread_records(db, thread_id)
@@ -3799,6 +3805,13 @@ def register(app: FastAPI, d) -> None:
                     hold_local_only(d.platform.engine, tid, app_id)
 
             await asyncio.shield(asyncio.to_thread(_hold_all))
+        # Release 7: what the first reply kept for the chat (its tool
+        # names, the text attached to its first message) belongs to the
+        # chat now named. AFTER the Local only holds above are applied: a
+        # request cancelled at this await must lose no hold. Never raises.
+        from .. import chat_kept as _kept
+
+        await asyncio.to_thread(_kept.home_turn, d.platform.engine, turn_id, tid)
         # v1.435.0 (D3): a new chat's first turn that switched Local only on
         # or off from chat (`chat_local_only`) applies it to the chat now named.
         from ...providers.egress import set_thread_local_only, take_pending_local_only
@@ -4442,6 +4455,17 @@ async def chat_stream(
     # v1.367.0: the same for the Build session's knobs.
     _tool_session = _chat_turn.turn_session_id(session_id)
     plan_mode = _chat_turn.turn_plan_mode(plan_mode, harness)
+    # THE CHAT'S STABLE PREFIX (the intelligence plan, release 7,
+    # ``daemon/chat_prefix``): what this chat keeps between replies, read
+    # once here. Inactive for a coding session (every call below then hands
+    # back what it was given). MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+    from ...context.prefix import last as _tail_last
+    from ...context.prefix import own as _tail_own
+    from ..chat_prefix import begin as _stable_begin
+
+    _stable = await _stable_begin(
+        d, body, harness=harness, low_trust=normalize_trust(trust) == TRUST_LOW,
+    )
     # v1.392.0 (the long-jobs plan's Phase 3): a CODING SESSION's turn — the
     # one caller that hands the lane a reply record (`routes/build.
     # start_build_turn`) — gets Stop the step, the phone for a card nobody
@@ -4674,7 +4698,7 @@ async def chat_stream(
     # v1.420.0 (C3.7, PROMPT ORDER FOR THE CACHE) — the lock-step copy of
     # chat_turn's: the query-dependent sections are kept in ``_query_tail``
     # and joined LAST (after the tool list), priced with the rest.
-    _query_tail = _brain.block
+    _query_tail = _tail_own(_brain.block)  # release 7: Iron Jarvis's own words (lock-step)
     # v1.326.0: this join also carries the project folder's AGENTS.md /
     # CLAUDE.md sections (right after the project block). MIRROR NOTE
     # (lock-step): chat_turn.run_chat_turn joins the same object.
@@ -4682,7 +4706,7 @@ async def chat_stream(
     _query_tail += _grounding.query()
     # v1.436.0 (Wave 5, B3): the lock-step copy of chat_turn's page-step and
     # "not offered" lines ("" when the message names none — byte-identical).
-    _query_tail += _chat_turn.page_steps_block(body, platform)
+    _query_tail += _tail_own(_chat_turn.page_steps_block(body, platform))
     # v1.506.0 (north-star plan 6.10): a turn cut to the browser's tools (the
     # sidebar's ceiling) is told so in one fixed line: what the sidebar does,
     # and that anything else is done in the Iron Jarvis window. Stable text,
@@ -4694,7 +4718,9 @@ async def chat_stream(
         from ...browser.panel import CEILING_LINE as _CEILING_LINE
 
         system += "\n\n" + _CEILING_LINE
-    conn_tools = _grounding.conn_tools
+    # Release 7: the switched-on extensions' tools this chat was already sent
+    # stay, in their order (``keep_conn``). MIRROR NOTE (lock-step).
+    conn_tools = _stable.keep_conn(d, _grounding.conn_tools, _chat_turn._MAX_CONNECTOR_TOOLS)
 
     # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
     # scale to the model that will actually answer.
@@ -4867,10 +4893,11 @@ async def chat_stream(
         return
     images, attach_block = _attached
     if attach_block:
-        _query_tail += "\n\n# Attachments (provided by the user this turn)" + attach_block
-        _ctx_pieces.setdefault("attachments", []).append(
-            "\n\n# Attachments (provided by the user this turn)" + attach_block
-        )
+        # Release 7: a file's own text is KEPT with its message; the lines
+        # that are true for this reply only ride once. MIRROR NOTE (lock-step).
+        _attached = _stable.attached(attach_block)
+        _query_tail += _attached
+        _ctx_pieces.setdefault("attachments", []).append(str(_attached))
     # THE PAGE THE USER IS ASKING ABOUT (v1.325.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, under an
     # attachment's policy, raced against Stop like the attachments.
@@ -4878,7 +4905,7 @@ async def chat_stream(
         _page = await _prep_step(_prep.take("page"))
         if _page is _PREP_STOPPED:
             return
-        _query_tail += _page
+        _query_tail += _tail_own(_page)  # release 7: it carries its own fence (lock-step)
         _ctx_pieces.setdefault("attachments", []).append(_page)
     # RESOURCES FROM THE USER'S APPS (v1.324.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
@@ -4901,7 +4928,7 @@ async def chat_stream(
         if _refs is _PREP_STOPPED:
             return
         _refs_block, thread_refs_receipt = _refs
-        _query_tail += _refs_block
+        _query_tail += _tail_own(_refs_block)  # release 7: it carries its own fence (lock-step)
         _ctx_pieces.setdefault("attachments", []).append(_refs_block)
 
     if (body.skill or "").strip():
@@ -4932,7 +4959,7 @@ async def chat_stream(
             "FOLLOW this playbook for this request.\n"
             + _playbook
         )
-        _query_tail += _skill_text
+        _query_tail += _tail_last(_skill_text)  # release 7: read last (lock-step)
         _ctx_pieces.setdefault("skills", []).append(_skill_text)
 
     # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0), computed in
@@ -4998,6 +5025,9 @@ async def chat_stream(
         return
     _summarizing = asyncio.Event()
     # v1.420.0 (C3.7): priced WITH the query tail (it is sent, last).
+    # Release 7: the kept text of the chat's earlier messages is priced with
+    # the tail (it is sent, beside those messages). MIRROR NOTE (lock-step).
+    _query_tail = _stable.priced(_query_tail, body, _ctx_pieces)
     _system_before_compaction = system + _query_tail
     _compaction = asyncio.ensure_future(_apply_compaction(
         d, body, system + _query_tail, provider_choice, model_choice,
@@ -5160,6 +5190,11 @@ async def chat_stream(
         # v1.473.0: the skills this message fits (for the Tools seam below).
         _skills_offered = list(getattr(_selection, "skills", ()) or ())
         _arm_ceiling = getattr(_selection, "ceiling", None)
+        # Release 7: the readers this chat already holds stay (a definition
+        # to send, never a permission). MIRROR NOTE (lock-step): chat_turn.
+        armed, auto_armed = _stable.keep_auto(
+            d, body, armed, auto_armed, _arm_ceiling, _chat_turn._MAX_ARMED_TOOLS,
+        )
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed —
         # the gate is the MEASURED drop signal, and the number printed is
         # the ceiling that actually bit (lock-step twin of chat_turn's
@@ -5389,6 +5424,7 @@ async def chat_stream(
         armed, auto_armed, ask_armed = _chat_turn.widen_app_reach(
             d, body, armed, auto_armed, ask_armed, can_ask=True,
             low_trust=bool(_trust_state["low"]), tool_ceiling=tool_ceiling,
+            kept=_stable.kept_app_tools(),  # release 7 (lock-step)
         )
         if tool_ceiling is not None:
             armed = [t for t in armed if t in tool_ceiling]
@@ -5435,6 +5471,11 @@ async def chat_stream(
             if (armed or ask_armed)
             else []
         ) + _exit_specs
+        # Release 7: the chat's kept order (a tool it already sent keeps its
+        # place, a new one goes at the END). MIRROR NOTE (lock-step).
+        armed, auto_armed, tool_specs, ask_armed = _stable.settle(
+            armed, auto_armed, tool_specs, ask_armed,
+        )
     # THE POSTURE (v1.188.0): how the mid-turn ask behaves this turn.
     # Resolved ONCE, for BOTH branches above (a text-only pick still runs
     # the loop, and the loop reads it), so the prompt sentence below and
@@ -5559,7 +5600,9 @@ async def chat_stream(
                 {*armed, *ask_armed},
             )
             if _skills_fit:
-                system += "\n\n" + _skills_fit
+                # Release 7: it follows THIS message's words, so it rides
+                # beside the message (``later``). MIRROR NOTE (lock-step).
+                system += _stable.later("\n\n" + _skills_fit)
         # v1.577.0: what each app of the reply said about its own tools when
         # it started (MCP `instructions`), fenced and scanned, at the Tools
         # seam like the skills above. MIRROR NOTE (lock-step): the other lane.
@@ -5699,7 +5742,9 @@ async def chat_stream(
             # here: a local model read nine documents and wrote nothing.
             # A directive that reached only the non-stream lane would have
             # fixed the report without fixing the user's experience of it.
-            + _write_directive(body, armed)
+            # Release 7: this message's own directive rides beside the
+            # message, still last (``later``). MIRROR NOTE (lock-step).
+            + _stable.later(_write_directive(body, armed))
         )
         if _harness is None:
             system += _tools_block
@@ -5732,9 +5777,11 @@ async def chat_stream(
     if _trust_state["low"]:
         overrides.update(low_trust_overrides(overrides))
         system += "\n\n" + LOW_TRUST_PROMPT
-    # v1.420.0 (C3.7): the query-dependent sections LAST — the lock-step copy
-    # of chat_turn's join at the same seam.
-    system += _query_tail
+    # v1.420.0 (C3.7): the query-dependent sections LAST. Release 7: for a
+    # plain chat reply they no longer join the system prompt at all
+    # (``_stable.place`` below puts them beside the newest message, after the
+    # conversation); a coding session's join there. The lock-step copy of
+    # chat_turn's seam.
     # Only the ALLOW entries are a grant (v1.298.0) — lock-step with chat_turn.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
     # v1.577.0: an app tool whose app says Iron Jarvis needs no card for it
@@ -5767,7 +5814,16 @@ async def chat_stream(
             found_asks=_looked_up,
         )
         if _routed_section:
-            system += "\n\n" + _routed_section
+            system += _stable.later("\n\n" + _routed_section)  # release 7 (lock-step)
+    # THE STABLE PREFIX (release 7): the system prompt is final and the tool
+    # definitions are known, so the history is planned once more with the
+    # tools counted, and what changes with this message is placed beside it.
+    # MIRROR NOTE (lock-step): chat_turn.run_chat_turn calls it at the same seam.
+    system, msgs, plan = await _stable.place(
+        d, body, system=system, tail=_query_tail, plan=plan, msgs=msgs, images=images,
+        tool_specs=tool_specs, provider=provider_choice, model=model_choice,
+        ctx_messages=_ctx_messages,
+    )
     # CONVERSATION GRANTS (v1.312.0) — "Allow for this conversation", sent by
     # the page on every turn (`body.granted_tools`). Honoured ONLY for a tool
     # this turn armed or ask-armed by another path, through the ONE helper

@@ -62,6 +62,7 @@ from iron_jarvis.documents.attachment_rag import (
 from iron_jarvis.documents.ocr import looks_scanned_pdf
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
+from tests._fakes.sent import with_beside
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon"
 
@@ -902,7 +903,7 @@ def _ocr_router(platform, monkeypatch, seen: dict):
             return await vision.complete(
                 system=system, messages=messages, tools=tools, task_class=task_class
             )
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         return RouteResult(LLMResponse(text="ok"), "mock", "mock")
 
     monkeypatch.setattr(platform.router, "complete", fake_complete)
@@ -932,7 +933,7 @@ def test_chat_stream_reads_a_scanned_attachment(client, tmp_path, monkeypatch):
 
     async def fake_stream(*, provider=None, model=None, system, messages, tools,
                           session_id=None, task_class=None):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         yield {"type": "text", "text": "ok"}
         yield {"type": "final", "response": LLMResponse(text="ok"),
                "provider": "mock", "model": "mock"}
@@ -965,7 +966,7 @@ def test_post_chat_never_ships_mock_ocr_text(client, tmp_path, monkeypatch):
 
     async def fake_complete(*, system, messages, tools, provider=None, model=None,
                             task_class=None, **kw):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         return RouteResult(LLMResponse(text="Wages: $1,000,000"), "mock", "mock")
 
     monkeypatch.setattr(platform.router, "complete", fake_complete)

@@ -39,6 +39,7 @@ from iron_jarvis.settings import records
 from iron_jarvis.settings.records import record_tools_for
 from iron_jarvis.tools.autoselect import select_auto_tools
 from tests.test_chat_approvals_v1187 import _asgi_post, _drive_stream
+from tests._fakes.sent import with_beside
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "argv_mcp_server_v13510.py")
 TOKEN = "ghp_LANE4A0123456789abcdefNEVERSHOWN"
@@ -77,12 +78,12 @@ def _scripted(platform, monkeypatch, calls: list[tuple[str, dict]], final: str =
         return LLMResponse(text=final, tool_calls=[])
 
     async def fake_complete(*, system, messages, tools, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         seen["tools"].append(_tool_names(tools))
         return RouteResult(_next(), "mock", "mock")
 
     async def fake_stream(*, system, messages, tools, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         seen["tools"].append(_tool_names(tools))
         resp = _next()
         if resp.text:

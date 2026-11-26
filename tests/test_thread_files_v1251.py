@@ -82,6 +82,7 @@ from iron_jarvis.daemon.schemas import ChatBody
 from iron_jarvis.documents.attachment_rag import _CHANGE_UNARMED
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
+from tests._fakes.sent import with_beside
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon"
 
@@ -142,13 +143,13 @@ def _record(platform, calls: "list | None" = None) -> list[str]:
     seen: list[str] = []
 
     async def _complete(*, system="", tools=None, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, kw.get("messages")))
         if calls is not None:
             calls.append([t.get("name") for t in (tools or [])])
         return RouteResult(LLMResponse(text="ok"), "mock", "mock")
 
     async def _stream(*, system="", tools=None, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, kw.get("messages")))
         if calls is not None:
             calls.append([t.get("name") for t in (tools or [])])
         yield {"type": "text", "text": "ok"}
@@ -300,7 +301,9 @@ def test_a_carried_file_is_named_but_never_re_extracted(client, scene, route):
     # above is the carrying path's doing and not a broken fixture.
     seen2 = _record(scene.platform)
     _ask(client, route, scene, "what changed?", attachments=[scene.book.name])
-    assert _INSIDE_THE_FILE in _section(seen2[0]), (
+    # (Release 7: an attached file's own text is kept WITH its message, ahead
+    # of the once-only "# Attachments" lines: read the whole of what was sent.)
+    assert _INSIDE_THE_FILE in seen2[0], (
         "the control failed: an ATTACHED workbook stopped rendering its text, "
         "so the carried-file assertion above proves nothing"
     )

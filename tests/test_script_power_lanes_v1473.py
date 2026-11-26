@@ -35,6 +35,7 @@ from iron_jarvis.skills.offer import OFFER_HEAD
 from iron_jarvis.tools import script_values as SV
 from iron_jarvis.tools.base import ToolContext
 from tests.test_chat_approvals_v1187 import _asgi_post, _drive_stream
+from tests._fakes.sent import with_beside
 
 pytestmark = pytest.mark.timeout(300)
 
@@ -70,7 +71,7 @@ class Model:
 
     def _see(self, system, messages, tools) -> None:
         self.offered.append(_names(tools))
-        self.systems.append(str(system or ""))
+        self.systems.append(with_beside(system, messages))
         self.tool_texts.append([c for r, c in map(_text_of, messages or []) if r == "tool"])
         self.specs.append({str(t.get("name")): t for t in (tools or []) if isinstance(t, dict)})
 
