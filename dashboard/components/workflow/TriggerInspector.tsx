@@ -7,6 +7,8 @@
 
 import Link from "next/link";
 import { CalendarClock, Play, SlidersHorizontal, Webhook, X } from "lucide-react";
+import { useApi } from "@/lib/useApi";
+import { RUNS_IT_NOW, decodeStarts } from "@/lib/reflexRules";
 import { WF_ICON_GHOST, WF_POPOVER } from "./calm";
 
 // v1.329.0 (calm chat wave 9, K3): the three answers are quiet rows that
@@ -46,6 +48,13 @@ export function TriggerInspector({
   onClose: () => void;
 }) {
   const name = workflowName.trim();
+  // Leap 05-b: what already runs this saved workflow (its schedules and the
+  // rules that run it), read once while this inspector is open.
+  const already = useApi<unknown>(saved && name ? `/starts?workflow=${encodeURIComponent(name)}` : null, [
+    saved,
+    name,
+  ]);
+  const rows = decodeStarts(already.data);
   return (
     <div className={`${WF_POPOVER} absolute right-3 top-3 z-20 flex w-[300px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden`}>
       <header className="flex items-center justify-between gap-3 border-b hairline px-4 py-2.5">
@@ -99,6 +108,27 @@ export function TriggerInspector({
             </p>
           </div>
         </MaybeLink>
+
+        {rows.length > 0 && (
+          <div className="px-3 pb-1 pt-2" data-testid="trigger-runs-it-now">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">{RUNS_IT_NOW}</div>
+            <ul className="mt-1 space-y-1">
+              {rows.map((row) => (
+                <li key={row.id} className="min-w-0">
+                  <Link
+                    href={row.href}
+                    className="block min-w-0 break-words text-[12px] leading-snug text-zinc-300 hover:text-zinc-100"
+                  >
+                    <span className="font-medium">
+                      {row.store === "schedule" ? "Schedule" : "Rule"} “{row.name}”
+                    </span>
+                    {row.enabled ? "" : " (off)"}: {row.when_words}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {!saved && (
           <p className="px-3 pb-1 pt-1 text-[12px] leading-snug text-tone-warn">

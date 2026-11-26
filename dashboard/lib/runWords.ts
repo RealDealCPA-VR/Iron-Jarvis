@@ -162,6 +162,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   schedule_list: { did: "Listed your schedules", noun: "schedule listing" },
   // Leap 06-a. Twin: mission._RUN_TOOL_WORDS.
   rehearse: { did: "Rehearsed a rule or a schedule", noun: "rehearsal" },
+  // Leap 05-b. Twin: agents/mission.py _RUN_TOOL_WORDS.
+  start_list: { did: "Listed what runs on its own", noun: "list of what runs on its own" },
   goal_update: { did: "Updated a goal", noun: "goal update" },
   grant_revoke: { did: "Took back an always-allow", noun: "always-allow removal" },
   integration_list: { did: "Listed your web services", noun: "service listing" },

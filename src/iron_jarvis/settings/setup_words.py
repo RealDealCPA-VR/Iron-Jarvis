@@ -304,6 +304,53 @@ def download_finishes(text: str) -> bool:
     )
 
 
+#: Leap 05-b: ANOTHER TASK falling short, said as a standing request — "If the
+#: nightly report fails, tell me why and try once more", "When my Month end
+#: workflow fails, text me", "Whenever a schedule needs me, ping me". A
+#: ``run_ended`` rule's start (``reflex_create``). The clause names a task
+#: (a schedule, a report, a workflow, a run, a rule, an agent, something
+#: nightly...): "if it fails, skip it" inside a one-off request names none.
+#: Every repeat is bounded (linear).
+_ENDED_TASK = (
+    r"(?:schedules?|reports?|workflows?|tasks?|jobs?|runs?|backups?|syncs?|rules?|agents?|digests?"
+    r"|imports?|exports?|automations?|nightly|daily|weekly|monthly|hourly)"
+)
+_FALLS_SHORT = (
+    r"(?:fails?|failed|breaks?|errors?\s+out|goes\s+wrong|(?:does|did)(?:n['’]t|\s+not)\s+(?:finish|work)"
+    r"|crash(?:es|ed)?|falls?\s+short|needs\s+(?:me|you|my\s+ok))"
+)
+TASK_FALLS_SHORT = re.compile(
+    r"\b(?:if|when|whenever|every\s+time|each\s+time|any\s*time)\b" + _IN_CLAUSE + r"{0,60}?\b" + _ENDED_TASK
+    + r"\b" + _IN_CLAUSE + r"{0,40}?\b" + _FALLS_SHORT + r"\b",
+    re.IGNORECASE,
+)
+
+
+def another_task_fails(text: str) -> bool:
+    """Another task (a schedule, a workflow, a rule's or an agent's run)
+    falling short, said as a standing request (leap 05-b)."""
+    return any(TASK_FALLS_SHORT.search(s) is not None for s in _SENTENCE_KEEPING_SITES.findall(str(text or "")))
+
+
+#: Leap 05-b: "what runs on its own here?" — the one list of everything that
+#: starts by itself (``start_list``): "What runs automatically?", "Show me all
+#: my automations", "What runs my Month end workflow?".
+RUNS_ON_ITS_OWN = re.compile(
+    r"\bwhat\b" + _IN_CLAUSE + r"{0,30}?\b(?:runs?|happens?|starts?|fires?|kicks?\s+off|goes)\b" + _IN_CLAUSE
+    + r"{0,30}?\b(?:on\s+(?:its|their)\s+own|by\s+(?:itself|themselves)|automatically|unattended|without\s+me)\b"
+    r"|\b(?:list|show|see|tell\s+me)\b" + _IN_CLAUSE + r"{0,20}?\b(?:my|all|every|the)\b" + _IN_CLAUSE
+    + r"{0,20}?\b(?:automations|rules\s+and\s+schedules|schedules\s+and\s+rules)\b"
+    r"|\bwhat\b" + _IN_CLAUSE + r"{0,20}?\b(?:runs|starts|kicks\s+off)\s+(?:my|the|our)\b" + _IN_CLAUSE
+    + r"{0,40}?\bworkflow\b",
+    re.IGNORECASE,
+)
+
+
+def runs_on_its_own(text: str) -> bool:
+    """A question (or a request) for what runs on its own (leap 05-b)."""
+    return RUNS_ON_ITS_OWN.search(str(text or "")) is not None
+
+
 # --------------------------------------------------------------------------- #
 # "Set a monthly spending limit for my builder agent."
 # --------------------------------------------------------------------------- #

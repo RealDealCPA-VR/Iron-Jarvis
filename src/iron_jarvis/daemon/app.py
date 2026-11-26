@@ -3105,6 +3105,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _current_hub, _current_loop, mark_seen=platform.sentinels.mark_rule_seen,
         )
     platform.event_bus.add_handler(_starts.download_handler(_current_hub, _current_loop))
+    # Leap 05-b: "when another task fails". A run or a workflow that ended
+    # short, and a schedule's fire once its row records how it went, each
+    # send ONE run_ended signal to the hub on the daemon's loop.
+    platform.event_bus.add_handler(_starts.run_ended_handler(_current_hub, _current_loop))
+    platform.schedule_ended = _starts.schedule_ended_signal(_current_hub, _current_loop)
     app.state.command_interpreter = command_interpreter
     # v1.136.0 messaging surfaces: reachable for tests + diagnostics (the
     # routes go through ``d``; TestClient callers only have app.state).

@@ -327,8 +327,14 @@ export const NAV: NavSectionDef[] = [
         icon: Zap,
         // Leap 05-a (D-05.1): the one place for "when this happens, do that";
         // "automation" finds it.
-        aliases: ["reflexes", "when this then that", "auto react", "if this", "triggers", "automation", "automations"],
-        blurb: "When a file lands in a folder, a download finishes, a message arrives or a webhook fires, start work automatically.",
+        // Leap 05-b: every way work starts by itself is listed here, your
+        // schedules too, and "when another task fails" is one of them.
+        aliases: [
+          "reflexes", "when this then that", "auto react", "if this", "triggers", "automation", "automations",
+          "when a task fails", "what runs on its own",
+        ],
+        blurb:
+          "When a file lands in a folder, a download finishes, a message arrives, a webhook fires or another task fails, start work automatically. Your schedules are listed here too.",
       },
       {
         href: "/self-dev",

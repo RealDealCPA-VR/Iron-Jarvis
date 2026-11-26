@@ -26,6 +26,12 @@ starts a folder or a download makes:
 What a signal says is data, never instructions: the router fences the
 outside words (``reflex/router._FENCED_KEYS``) and outside sources start
 their work at low trust (``reflex/router.OUTSIDE_SOURCES``).
+
+Leap 05-b: another task that ended short starts a ``run_ended`` rule (ONE
+signal per run: :func:`run_ended_handler` for a workflow's or an agent's run,
+:func:`schedule_ended_signal` for a schedule's fire; the loop guards are the
+router's ``on_run_ended``), and :func:`list_starts` is the one list of every
+way work starts by itself (``GET /starts``, chat's ``start_list``).
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -42,8 +49,9 @@ log = get_logger("triggers.starts")
 
 #: Every kind of start (the plan's list). ``phone`` is stored on a rule as
 #: ``comm`` (its wire value, :data:`WIRE_SOURCE`). ``schedule`` starts come
-#: from the scheduler's clock and ``run_ended`` from a run's end (05-b); the
-#: hub carries them for waiters and the one list of starts.
+#: from the scheduler's clock (the hub carries them for waiters and the one
+#: list of starts); ``run_ended`` from another task that ended short (05-b:
+#: :func:`run_ended_handler` and :func:`schedule_ended_signal`).
 START_KINDS: tuple[str, ...] = (
     "schedule", "webhook", "email", "calendar", "phone", "slack", "file", "download", "run_ended",
 )
@@ -139,8 +147,11 @@ class StartHub:
                 return await r.on_email(sender=f.get("sender", ""), subject=f.get("subject", ""), body=f.get("body", ""))
             if kind == "phone":
                 return await r.on_comm(str(f.get("text") or ""))
-        if kind in ("schedule", "run_ended"):
-            return []  # no rule hears these yet (05-b adds run_ended)
+        if kind == "run_ended":
+            # Leap 05-b: another task ended short (``run_ended_context``).
+            return await r.on_run_ended(dict(context or {}))
+        if kind == "schedule":
+            return []  # a schedule starts at a time, through the scheduler: no rule hears it
         return await r.on_signal(wire_source(kind), dict(context or {}))
 
     @staticmethod
@@ -605,6 +616,438 @@ def download_handler(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
     return _on_event
 
 
+# --- "when another task fails" (leap 05-b) ----------------------------------
+#
+# ONE signal per run that ended short. A schedule's fire speaks for every run
+# it ran (its recorded outcome, :func:`schedule_ended_signal`): the bus
+# handler stays quiet inside a schedule fire. A workflow's run speaks for its
+# steps (a step's own session is never a second signal). A rule's run and an
+# agent run speak for themselves. The verdict and the one-line reason come
+# from the record (``agents/outcome.run_ending``, a workflow's status, a
+# schedule's row), never from the model's closing words; what the run SAID is
+# carried as ``detail`` and fenced in the rule's task.
+
+
+def rule_started_by(rule: Any) -> str:
+    """What a run a rule started carries as ``WorkflowRunRecord.started_by``:
+    ``rule:<source>:<id>`` ("" for the phone's ``/run``, a ``manual:`` rule
+    that is not stored)."""
+    if str(getattr(rule, "name", "") or "").startswith("manual:"):
+        return ""
+    return f"rule:{getattr(rule, 'source', '') or ''}:{getattr(rule, 'id', '') or ''}"
+
+
+def parse_started_by(value: Any) -> tuple[str, str]:
+    """``(source, rule id)`` from a ``started_by`` :func:`rule_started_by`
+    wrote; ``("", "")`` for anything else (a person's run, a schedule's)."""
+    parts = str(value or "").split(":", 2)
+    if len(parts) == 3 and parts[0] == "rule" and parts[2]:
+        return parts[1], parts[2]
+    return "", ""
+
+
+#: ``agents/outcome.run_ending``'s badge word -> a run's verdict.
+_VERDICT_OF_WORD = {
+    "Failed": "failed",
+    "Part failed": "part_failed",
+    "Needs you": "needs_you",
+    "Did nothing": "did_nothing",
+}
+#: A schedule's recorded status (``scheduling/run_outcome``) -> a verdict. A
+#: fire that was done, skipped, missed or stopped starts nothing.
+_VERDICT_OF_SCHEDULE = {
+    "error": "failed",
+    "partial": "part_failed",
+    "needs_you": "needs_you",
+    "did_nothing": "did_nothing",
+}
+#: A workflow run's ending status -> a verdict.
+_VERDICT_OF_WORKFLOW = {
+    "failed": "failed",
+    "completed_with_failures": "part_failed",
+}
+
+
+def _reason_for(verdict: str) -> str:
+    """The ledger's one sentence for a verdict (the Schedules row's words,
+    ``scheduling/run_outcome``)."""
+    try:
+        from ..scheduling.run_outcome import DID_NOTHING_LEAD, NEEDS_YOU_LEAD, PARTIAL_LEAD
+    except Exception:  # noqa: BLE001
+        DID_NOTHING_LEAD = NEEDS_YOU_LEAD = PARTIAL_LEAD = ""
+    return {
+        "failed": "The run did not finish.",
+        "part_failed": PARTIAL_LEAD,
+        "needs_you": NEEDS_YOU_LEAD,
+        "did_nothing": DID_NOTHING_LEAD,
+    }.get(verdict, "")
+
+
+def _rule_name(engine: Any, rule_id: str) -> tuple[str, str]:
+    """``(name, source)`` of a stored rule, ``("", "")`` when it is gone."""
+    if not rule_id or engine is None:
+        return "", ""
+    try:
+        from ..reflex.store import ReflexStore
+
+        rule = ReflexStore(engine).get(rule_id)
+    except Exception:  # noqa: BLE001
+        return "", ""
+    if rule is None:
+        return "", ""
+    return str(rule.name or ""), str(rule.source or "")
+
+
+def ending_of_session(engine: Any, session_id: str, payload: dict | None = None) -> dict | None:
+    """The ``run_ended`` context of a finished agent run, or None when it
+    starts nothing: it was done, or stopped; it is a REHEARSAL; it is a
+    workflow's step (the workflow speaks); it is chat's shared turn row.
+    BLOCKING (one row read, plus the rule that started it); never raises."""
+    sid = str(session_id or "").strip()
+    data = dict(payload or {})
+    if not sid or sid == "chat" or data.get("rehearsal"):
+        return None
+    try:
+        from ..agents.outcome import run_ending
+        from ..core.db import session_scope
+        from ..core.models import Session
+        from ..scheduling.knobs import session_options
+        from ..tools.rehearsal import rehearsal_of
+
+        with session_scope(engine) as db:
+            row = db.get(Session, sid)
+            if row is None:
+                return None
+            if rehearsal_of(row):
+                return None
+            ending = run_ending(row)
+            verdict = _VERDICT_OF_WORD.get(ending.words, "")
+            if ending.ok or not verdict:
+                return None  # done, or stopped by a person or Emergency stop
+            origin = str(row.origin or "")
+            door, _, rest = origin.partition(":")
+            opts = session_options(row) or {}
+            summary = str(row.summary or "")
+            trust = str(row.trust or "")
+            agent = str(row.agent_name or "")
+        if door == "workflow":
+            return None  # a workflow's step: its workflow's ending speaks for it
+        # A helper another run handed work to (``delegate``, ``spawn_agent``,
+        # a mission's teammate): its root run's ending speaks for it, as a
+        # step's workflow does. Children never inherit run options, so a
+        # helper of a run_ended rule's run would otherwise read as a fresh
+        # agent run and could start that rule again.
+        from ..agents.team import mission_root
+
+        root = mission_root(engine, sid)
+        if root is not None and str(getattr(root, "id", "") or "") != sid:
+            return None
+        from ..reflex.router import RULE_OPTION, RULE_SOURCE_OPTION, run_ended_context
+
+        rid = str(opts.get(RULE_OPTION) or "") if isinstance(opts, dict) else ""
+        rule_name, rule_source = _rule_name(engine, rid)
+        rule_source = str((opts.get(RULE_SOURCE_OPTION) if isinstance(opts, dict) else "") or rule_source)
+        if door == "reflex" or rid:
+            name = rule_name or (rest if door == "reflex" else "")
+            return run_ended_context(
+                kind="rule", name=name, verdict=verdict, reason=ending.reason, detail=summary,
+                href=f"/sessions/{sid}", run_id=sid, by_rule_id=rid, by_rule_name=name,
+                by_rule_source=rule_source, careful=trust == "low",
+            )
+        if door == "schedule":
+            # Outside a schedule's fire (a person's rerun keeps the origin):
+            # the run speaks for its schedule.
+            return run_ended_context(
+                kind="schedule", name=rest, verdict=verdict, reason=ending.reason, detail=summary,
+                href=f"/sessions/{sid}", run_id=sid, careful=trust == "low",
+            )
+        name = agent.split(":", 1)[1] if agent.startswith("custom:") else ""
+        return run_ended_context(
+            kind="agent", name=name, verdict=verdict, reason=ending.reason, detail=summary,
+            href=f"/sessions/{sid}", run_id=sid, careful=trust == "low",
+        )
+    except Exception:  # noqa: BLE001 — a reading never breaks a run's end
+        log.warning("the end of run %s could not be read for the rules", sid, exc_info=True)
+        return None
+
+
+def ending_of_workflow(engine: Any, payload: dict | None) -> dict | None:
+    """The ``run_ended`` context of a finished WORKFLOW run
+    (``workflow.completed``), or None when it was done or stopped. Its reason
+    names the step that stopped it, or the steps it went on past, by name
+    (code, from the run's own record); its ``detail`` is that step's words.
+    BLOCKING (one row read); never raises."""
+    data = dict(payload or {})
+    status = str(data.get("status") or "")
+    verdict = _VERDICT_OF_WORKFLOW.get(status, "")
+    if not verdict:
+        return None
+    name = str(data.get("workflow") or "")
+    run_id = str(data.get("run_id") or "")
+    try:
+        started_by, outputs = "", {}
+        if run_id and engine is not None:
+            from ..core.db import session_scope
+            from ..workflows.models import WorkflowRunRecord
+
+            with session_scope(engine) as db:
+                rec = db.get(WorkflowRunRecord, run_id)
+                if rec is not None:
+                    started_by = str(rec.started_by or "")
+                    try:
+                        outputs = json.loads(rec.outputs_json or "{}")
+                    except (TypeError, ValueError):
+                        outputs = {}
+        outputs = outputs if isinstance(outputs, dict) else {}
+        failed = [
+            (str(step), out) for step, out in outputs.items()
+            if isinstance(out, dict) and out.get("status") == "failed" and step != "Trigger"
+        ]
+        steps = [" ".join(s.split())[:60] for s, _o in failed][:5]
+        if verdict == "failed":
+            reason = (f"It stopped at its step “{steps[-1]}”." if steps
+                      else " ".join(str(data.get("reason") or "").split())[:200] or "The run did not finish.")
+        else:
+            reason = (
+                "Some of its steps failed: " + ", ".join(f"“{s}”" for s in steps) + "."
+                if steps else _reason_for("part_failed")
+            )
+        detail = "\n".join(str(o.get("summary") or "")[:600] for _s, o in failed[-2:] if o.get("summary"))
+        source, rid = parse_started_by(started_by)
+        rule_name, _src = _rule_name(engine, rid)
+        from ..reflex.router import OUTSIDE_SOURCES, run_ended_context
+
+        trigger = outputs.get("Trigger") if isinstance(outputs.get("Trigger"), dict) else {}
+        careful = source in OUTSIDE_SOURCES or str((trigger or {}).get("trust") or "") == "low"
+        return run_ended_context(
+            kind="workflow", name=name, verdict=verdict, reason=reason, detail=detail,
+            href="/workflows", run_id=run_id, by_rule_id=rid, by_rule_name=rule_name,
+            by_rule_source=source, careful=careful,
+        )
+    except Exception:  # noqa: BLE001 — a reading never breaks a run's end
+        log.warning("the end of workflow run %s could not be read for the rules", run_id, exc_info=True)
+        return None
+
+
+def ending_of_schedule(task: Any, status: str, detail: str = "", session_id: str = "") -> dict | None:
+    """The ``run_ended`` context of ONE schedule fire, from what its row now
+    records (``platform._record_outcome``), or None when the fire was done,
+    skipped, missed or stopped. Pure."""
+    verdict = _VERDICT_OF_SCHEDULE.get(str(status or ""), "")
+    if not verdict or task is None:
+        return None
+    from ..reflex.router import run_ended_context
+
+    sid = str(session_id or "")
+    return run_ended_context(
+        kind="schedule", name=str(getattr(task, "name", "") or ""), verdict=verdict,
+        reason=_reason_for(verdict), detail=str(detail or ""),
+        href=f"/sessions/{sid}" if sid else "/schedules", run_id=sid or str(getattr(task, "id", "") or ""),
+    )
+
+
+def _someone_listens(hub: Any) -> bool:
+    """Is there an enabled ``run_ended`` rule, or a waiter on these signals?
+    Read before anything else, so a PC with no such rule does no work at a
+    run's end (one indexed read). Never raises (a fault reads True)."""
+    if any(want in ("*", "run_ended") for want, _fn in list(getattr(hub, "_waiters", []) or [])):
+        return True
+    store = getattr(getattr(hub, "router", None), "store", None)
+    if store is None:
+        return False
+    try:
+        return any(r.enabled for r in store.list(source="run_ended"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _signal_hub(hub: Any, loop: Any, ctx: dict) -> Any:
+    """Send one ``run_ended`` signal to the daemon's loop (never waited
+    for). Returns the future (tests wait on it). Sent from a FRESH context:
+    the caller's (a schedule's fire, a bus handler's copy of a run's) would
+    ride into the rule's run, which is not part of that fire (its end would
+    read as inside it)."""
+    import contextvars
+
+    return contextvars.Context().run(asyncio.run_coroutine_threadsafe, hub.signal("run_ended", ctx), loop)
+
+
+def run_ended_handler(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
+    """An event-bus handler (a sync one: the bus runs it off the loop):
+    ``session.completed`` and ``workflow.completed`` that ended SHORT send one
+    ``run_ended`` signal to the hub on the daemon's loop (sent, not waited
+    for). Quiet inside a schedule's fire (the schedule's recorded outcome is
+    that fire's one signal) and when no rule or waiter listens. One signal
+    per run (a repeat of the same end starts nothing again). Never raises."""
+    import threading
+
+    from ..core.events import EventType
+
+    seen: list[tuple[str, str]] = []
+    lock = threading.Lock()
+
+    def _on_event(event: Any) -> None:
+        try:
+            etype = getattr(event, "type", "")
+            if etype not in (EventType.SESSION_COMPLETED, EventType.WORKFLOW_COMPLETED):
+                return
+            from ..comm.notifier import in_schedule_fire
+
+            if in_schedule_fire():
+                return
+            hub, loop = get_hub(), get_loop()
+            if hub is None or loop is None or not _someone_listens(hub):
+                return
+            engine = getattr(getattr(getattr(hub, "router", None), "store", None), "engine", None)
+            payload = dict(getattr(event, "payload", None) or {})
+            if etype == EventType.SESSION_COMPLETED:
+                ctx = ending_of_session(engine, str(getattr(event, "session_id", "") or ""), payload)
+            else:
+                ctx = ending_of_workflow(engine, payload)
+            if not ctx:
+                return
+            key = (str(ctx.get("ended_kind") or ""), str(ctx.get("run_id") or ""))
+            with lock:
+                if key[1] and key in seen:
+                    return
+                seen.append(key)
+                del seen[:-500]
+            _signal_hub(hub, loop, ctx)
+        except Exception:  # noqa: BLE001 — a bus handler runs beside every other one
+            log.warning("a run's end could not reach the rules", exc_info=True)
+
+    return _on_event
+
+
+def schedule_ended_signal(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
+    """The hook a schedule's fire calls once its row records how it went
+    (``platform._run_scheduled``): a fire that ended short sends ONE
+    ``run_ended`` signal to the hub on the daemon's loop (sent, not waited
+    for; a schedule fires on the scheduler's own thread). Returns the future,
+    or None. BLOCKING (one indexed read); never raises."""
+
+    def _ended(task: Any, status: str, detail: str = "", session_id: str = "") -> Any:
+        try:
+            ctx = ending_of_schedule(task, status, detail, session_id)
+            if not ctx:
+                return None
+            hub, loop = get_hub(), get_loop()
+            if hub is None or loop is None or not _someone_listens(hub):
+                return None
+            return _signal_hub(hub, loop, ctx)
+        except Exception:  # noqa: BLE001 — the row is the record either way
+            log.warning("a schedule's end could not reach the rules", exc_info=True)
+            return None
+
+    return _ended
+
+
+# --- every start in one place (leap 05-b) -------------------------------------
+
+#: A schedule's recorded status, in the words every badge says.
+_SCHEDULE_LAST = {
+    "ok": "Done",
+    "error": "Failed",
+    "needs_you": "Needs you",
+    "partial": "Part failed",
+    "did_nothing": "Did nothing",
+    "skipped": "Skipped",
+    "missed": "Missed",
+    "cancelled": "Stopped",
+}
+
+
+def _schedule_last_words(rec: Any) -> str:
+    status = str(getattr(rec, "last_status", "") or "")
+    if not status:
+        return "Not run yet."
+    word = _SCHEDULE_LAST.get(status, status.replace("_", " ").capitalize())
+    detail = _q(getattr(rec, "last_detail", "") or "", 160)
+    return f"Last run: {word}" + (f". {detail}" if detail else ".")
+
+
+def _rule_last_words(rule: Any) -> str:
+    if getattr(rule, "paused_at", None):
+        return _q(getattr(rule, "paused_reason", "") or "Paused.", 160)
+    err = _q(getattr(rule, "last_error", "") or "", 160)
+    if err:
+        return f"Last time it could not start: {err}"
+    done = _q(getattr(rule, "last_result", "") or "", 160)
+    if done:
+        return f"Last time: {done}"
+    return "Has not run yet."
+
+
+def _schedule_workflow(rec: Any) -> str:
+    if str(getattr(rec, "kind", "") or "") != "workflow":
+        return ""
+    try:
+        payload = rec.decoded_payload()
+    except Exception:  # noqa: BLE001
+        return ""
+    return " ".join(str(payload.get("workflow") or payload.get("name") or "").split())
+
+
+def list_starts(platform: Any, *, workflow: str | None = None) -> list[dict[str, Any]]:
+    """Leap 05-b: every way work starts on its own here, ONE list built from
+    the stored objects themselves (no table of its own): each schedule
+    (``ScheduledTaskRecord``, it starts at a time) and each rule
+    (``ReflexRule``). Rows: ``{id, kind, name, when_words, does_words,
+    enabled, last_words, href, store}``; ``id`` loads from ``store``'s own
+    table. ``workflow``: only what runs that saved workflow. BLOCKING."""
+    want = " ".join(str(workflow or "").split()).casefold()
+    rows: list[dict[str, Any]] = []
+    scheduler = getattr(platform, "scheduler", None)
+    if scheduler is not None:
+        from ..scheduling.tools import _does_words, when_words
+
+        try:
+            schedules = list(scheduler.list())
+        except Exception:  # noqa: BLE001 — unreadable: the rules still list
+            log.warning("the schedules could not be read for the list of starts", exc_info=True)
+            schedules = []
+        for rec in schedules:
+            if want and _schedule_workflow(rec).casefold() != want:
+                continue
+            does = _does_words(rec)
+            # The time in words; the stored cron line stays on Schedules.
+            when = re.sub(r"\s*\(cron [^)]*\)$", "", when_words(rec)).strip()
+            rows.append({
+                "id": rec.id,
+                "kind": "schedule",
+                "name": rec.name,
+                "when_words": (when[:1].upper() + when[1:] + ".") if when else "",
+                "does_words": (does[:1].upper() + does[1:] + ("" if does.endswith(".") else ".")) if does else "",
+                "enabled": bool(rec.enabled),
+                "last_words": _schedule_last_words(rec),
+                "href": "/schedules",
+                "store": "schedule",
+            })
+    reflex = getattr(platform, "reflex", None)
+    if reflex is not None:
+        try:
+            rules = list(reflex.list())
+        except Exception:  # noqa: BLE001
+            log.warning("the rules could not be read for the list of starts", exc_info=True)
+            rules = []
+        for rule in rules:
+            if want and not (rule.action == "workflow" and " ".join(str(rule.target or "").split()).casefold() == want):
+                continue
+            words = describe_for(platform, rule)
+            rows.append({
+                "id": rule.id,
+                "kind": kind_of(str(rule.source or "")),
+                "name": rule.name,
+                "when_words": words.get("when_words", ""),
+                "does_words": words.get("does_words", ""),
+                "enabled": bool(rule.enabled) and getattr(rule, "paused_at", None) is None,
+                "last_words": _rule_last_words(rule),
+                "href": f"/reflex?rule={rule.id}",
+                "store": "rule",
+            })
+    return rows
+
+
 # --- the card: When, Do, Where it works, Limits ------------------------------
 
 
@@ -616,6 +1059,41 @@ def _q(text: Any, cap: int = 80) -> str:
 def _folder_name(path: str) -> str:
     p = str(path or "").rstrip("\\/")
     return Path(p).name or p
+
+
+#: Leap 05-b: how the task must have ended, in words (``start_json.outcome``).
+_OUTCOME_VERB = {
+    "failed": "fails",
+    "part_failed": "finishes with part of it failed",
+    "needs_you": "ends needing you",
+    "any": "fails or falls short (part failed, needs you, or did nothing)",
+}
+#: Which task, when no name is given (``start_json.what``).
+_ANY_OF_KIND = {
+    "schedule": "any of your schedules",
+    "workflow": "any workflow",
+    "rule": "a run of any rule",
+    "agent": "any agent run",
+    "any": "any other task",
+}
+
+
+def run_ended_when_words(start: dict) -> str:
+    """The When line of a ``run_ended`` rule: "When the schedule “Nightly
+    report” fails." Pure."""
+    from ..reflex.models import RUN_ENDED_DEFAULT_OUTCOME
+    from ..reflex.router import ended_what_words
+
+    what = str((start or {}).get("what") or "any")
+    name = str((start or {}).get("name") or "").strip()
+    outcome = str((start or {}).get("outcome") or RUN_ENDED_DEFAULT_OUTCOME)
+    if what == "any":
+        which = f"the task “{_q(name, 60)}”" if name else _ANY_OF_KIND["any"]
+    elif what == "rule":
+        which = f"a run of the rule “{_q(name, 60)}”" if name else _ANY_OF_KIND["rule"]
+    else:
+        which = ended_what_words(what, name) if name else _ANY_OF_KIND.get(what, "another task")
+    return f"When {which} {_OUTCOME_VERB.get(outcome, 'fails')}."
 
 
 def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
@@ -647,6 +1125,8 @@ def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
         if match:
             when += f" and its name has “{match}”"
         when += "."
+    elif source == "run_ended":
+        when = run_ended_when_words(start)
     elif source == "webhook":
         when = f"When the webhook “{match or '?'}” is called."
     elif source == "email":
@@ -682,6 +1162,9 @@ def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
 
     limit = int(getattr(rule, "max_fires_per_hour", 0) or 12)
     limits = f"Starts at most {limit} times an hour, then pauses and tells you. Anything risky asks you first."
+    if source == "run_ended":
+        # Leap 05-b: the loop guard, said where the rule is read.
+        limits += " The work it does never starts it, or a rule like it, again."
     if careful is None:
         from ..reflex.router import OUTSIDE_SOURCES, watches_downloads
 

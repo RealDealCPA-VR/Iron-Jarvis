@@ -94,6 +94,9 @@ OWN_PLACE = frozenset({
     "config_secret", "calculate", "rename_file", "changes_list", "change_undo",
     "preference_list", "skill_create", "skill_update", "skill_load", "skill_search",
     "goal_list", "workflow_list", "schedule_list",
+    # Leap 05-b: armed by the record words ("what runs on its own here?", a
+    # task that fails said as a standing request).
+    "start_list",
     # v1.479.0: armed beside a tool the reply already has, or by a run verb
     # (`autoselect.wants_excel_trace` / `wants_excel_reconcile`, the Guide's
     # reader, `records._runs_a_named_workflow`).

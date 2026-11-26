@@ -1799,6 +1799,11 @@ class ReflexRuleBody(BaseModel):
     agent_name: str | None = None
     workspace_root: str | None = None
     max_fires_per_hour: int | None = None
+    #: Leap 05-b: a "when another task fails" rule (``source`` run_ended):
+    #: which kind of task, its name ("" = any of that kind) and how it ended.
+    what: str | None = None
+    what_name: str | None = None
+    outcome: str | None = None
 
 
 class ReflexToggleBody(BaseModel):
@@ -1830,6 +1835,10 @@ class ReflexToggleBody(BaseModel):
     agent_name: str | None = None
     workspace_root: str | None = None
     max_fires_per_hour: int | None = None
+    #: Leap 05-b (omitted = keep, given = replace).
+    what: str | None = None
+    what_name: str | None = None
+    outcome: str | None = None
 
 
 class RehearsalBody(BaseModel):

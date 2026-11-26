@@ -2848,6 +2848,21 @@ def build_platform(
             return detail
         raise ValueError(f"unknown schedule kind {task.kind!r}")
 
+    async def _tell_rules_it_ended(task, status: str, detail: str, session_id: str) -> None:
+        """Leap 05-b: once the row records how this fire went, a fire that
+        ended short starts the "when another task fails" rules that name it
+        (``platform.schedule_ended``, set by the daemon:
+        ``triggers/starts.schedule_ended_signal``; off the loop, sent to the
+        daemon's own loop, never waited for). Its runs' own ends are quiet
+        inside the fire, so this is the fire's ONE signal. Never raises."""
+        hook = getattr(platform, "schedule_ended", None)
+        if hook is None:
+            return
+        try:
+            await asyncio.to_thread(hook, task, status, detail, session_id or "")
+        except Exception:  # noqa: BLE001 — the row is the record either way
+            _log.warning("schedule %r: its end could not reach the rules", task.name, exc_info=True)
+
     def _run_scheduled(task):
         async def _fire():
             payload = json.loads(task.payload_json or "{}")
@@ -2943,6 +2958,7 @@ def build_platform(
                         pass
                 detail = _run_outcome.failure_detail(reason)
                 _record_outcome(task.name, "error", detail, fired["session_id"])
+                await _tell_rules_it_ended(task, "error", detail, fired["session_id"])
                 _deliver_outcome(
                     task, payload, "error", detail, bell_says=_bell_says(fired, "error")
                 )
@@ -2950,6 +2966,7 @@ def build_platform(
                 return
             status = _run_outcome.fire_status(fired.get("outcome"))
             _record_outcome(task.name, status, detail, fired["session_id"])
+            await _tell_rules_it_ended(task, status, detail, fired["session_id"])
             if status != _run_outcome.STATUS_CANCELLED:
                 _deliver_outcome(
                     task, payload, status, detail, bell_says=_bell_says(fired, status),
@@ -3179,11 +3196,15 @@ def build_platform(
     # Leap 06-a: "rehearse it" from chat (it changes nothing; allow).
     from .tools.rehearsal_runs import rehearsal_tools
 
+    # Leap 05-b: "what runs on its own here?" from chat (it only reads).
+    from .triggers.tools import start_tools
+
     for tool in (
         *schedule_tools(platform),
         *webhook_tools(platform),
         *workflow_tools(platform),
         *rehearsal_tools(platform),
+        *start_tools(platform),
     ):
         platform.registry.register(tool)
     # v1.170.0: workflow_list is READ-ONLY (same tier as tool_list), but the
@@ -3203,6 +3224,9 @@ def build_platform(
     # already occupies the key and setdefault leaves it alone.
     platform.permissions._base.setdefault("workflow_list", "allow")
     platform.config.permissions.setdefault("workflow_list", "allow")
+    # Leap 05-b: start_list only reads (both copies, the same reason).
+    platform.permissions._base.setdefault("start_list", "allow")
+    platform.config.permissions.setdefault("start_list", "allow")
 
     # THE IRON JARVIS GUIDE (v1.224.0): the built-in expert's tools — the
     # reference (guide_search/guide_read) and the user's own things in this

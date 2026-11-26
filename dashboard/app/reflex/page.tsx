@@ -21,6 +21,8 @@ import {
   FolderInput,
   Download as DownloadIcon,
   PauseCircle,
+  TriangleAlert,
+  Clock,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, patch, del, ApiError } from "@/lib/api";
@@ -59,6 +61,13 @@ import {
   sourceOffHref,
   sourceOffWords,
   triggersOf,
+  AT_A_TIME,
+  AT_A_TIME_WORDS,
+  ENDED_OUTCOME_CHOICES,
+  ENDED_WHAT_CHOICES,
+  decodeStarts,
+  type EndedOutcome,
+  type EndedWhat,
   type ReflexAction,
   type ReflexSource,
   type TriggersStatus,
@@ -92,8 +101,17 @@ interface ReflexRule {
   last_href?: string | null;
   /** Leap 06-a: when Keep it was pressed on a rehearsal of this rule. */
   rehearsed_at?: string | null;
-  /** Leap 05-a: what a file rule watches / a download rule hears. */
-  start?: { path?: string; glob?: string; match_site?: string; per_file?: boolean };
+  /** Leap 05-a: what a file rule watches / a download rule hears; 05-b:
+   *  which task a "when another task fails" rule listens for. */
+  start?: {
+    path?: string;
+    glob?: string;
+    match_site?: string;
+    per_file?: boolean;
+    what?: EndedWhat;
+    name?: string;
+    outcome?: EndedOutcome;
+  };
   agent_name?: string;
   workspace_root?: string;
   max_fires_per_hour?: number;
@@ -142,7 +160,7 @@ const ACTION_LABEL: Record<ReflexAction, string> = {
 /*  grouping, and per-rule badge. Mirrors reflex/models.py::REFLEX_SOURCES.     */
 /* -------------------------------------------------------------------------- */
 
-const SOURCE_ORDER: ReflexSource[] = ["file", "download", "webhook", "comm", "email", "calendar", "slack"];
+const SOURCE_ORDER: ReflexSource[] = ["file", "download", "run_ended", "webhook", "comm", "email", "calendar", "slack"];
 
 interface SourceMeta {
   option: string; // dropdown label
@@ -235,6 +253,18 @@ const SOURCE_META: Record<ReflexSource, SourceMeta> = {
     matchHint: "Blank = every download (from the site below, if you name one).",
     matchPlaceholder: "invoice",
   },
+  // Leap 05-b: another task that fails can start a rule.
+  run_ended: {
+    option: "Another task fails",
+    section: "When another task fails",
+    badge: "another task",
+    tone: "amber",
+    icon: TriangleAlert,
+    iconClass: "text-amber-300",
+    matchLabel: "Which task",
+    matchHint: "",
+    matchPlaceholder: "Nightly report",
+  },
 };
 
 // GET /triggers is read through lib/reflexRules (v1.449.0): the Triggers card
@@ -305,6 +335,8 @@ function RuleSentence({ r }: { r: ReflexRule }) {
     trigger = <>When a new file lands in {chip(r.start?.path || "?")}</>;
   } else if (r.source === "download") {
     trigger = <>When a download finishes{r.start?.match_site ? <> from {chip(r.start.match_site)}</> : null}</>;
+  } else if (r.source === "run_ended") {
+    trigger = r.start?.name ? <>When {chip(r.start.name)} fails</> : <>When another task fails</>;
   } else {
     trigger = kw ? <>When a message contains {chip(kw)}</> : <>When any message arrives</>;
   }
@@ -399,6 +431,14 @@ export default function ReflexPage() {
   const [site, setSite] = useState("");
   const [worksIn, setWorksIn] = useState("");
   const [perHour, setPerHour] = useState("");
+  // Leap 05-b: which task a "when another task fails" rule listens for.
+  const [endedWhat, setEndedWhat] = useState<EndedWhat>("schedule");
+  const [endedName, setEndedName] = useState("");
+  const [endedOutcome, setEndedOutcome] = useState<EndedOutcome>("failed");
+  // Leap 05-b: every start in one place — your schedules, listed under the
+  // rules (one read when the page opens; Schedules is where they change).
+  const startsApi = useApi<unknown>("/starts");
+  const schedules = decodeStarts(startsApi.data).filter((row) => row.store === "schedule");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formOk, setFormOk] = useState<string | null>(null);
@@ -482,7 +522,7 @@ export default function ReflexPage() {
   function pickSource(v: ReflexSource) {
     setSource(v);
     setMatch(""); // slug vs. keyword don't transfer between sources
-    if (v === "file" || v === "download") setAction("session");
+    if (v === "file" || v === "download" || v === "run_ended") setAction("session");
   }
   function pickAction(v: ReflexAction) {
     setAction(v);
@@ -507,6 +547,9 @@ export default function ReflexPage() {
     setSite("");
     setWorksIn("");
     setPerHour("");
+    setEndedWhat("schedule");
+    setEndedName("");
+    setEndedOutcome("failed");
     setEveryday(true);
     setSource("comm");
     setAction(EVERYDAY_ACTION);
@@ -529,6 +572,9 @@ export default function ReflexPage() {
     setSite(r.start?.match_site ?? "");
     setWorksIn(r.workspace_root ?? "");
     setPerHour(r.max_fires_per_hour ? String(r.max_fires_per_hour) : "");
+    setEndedWhat(r.start?.what ?? "schedule");
+    setEndedName(r.start?.name ?? "");
+    setEndedOutcome(r.start?.outcome ?? "failed");
     setFormError(null);
     setFormOk(null);
     setOpen(true);
@@ -558,13 +604,15 @@ export default function ReflexPage() {
       const fields = {
         name: name.trim(),
         source,
-        match: source === "file" ? "" : match.trim(),
+        match: source === "file" || source === "run_ended" ? "" : match.trim(),
         action,
         target: targetNeeded ? target.trim() : "",
         task_template: templateShown ? taskTemplate : "",
         // Leap 05-a: where it starts, where it works, how often.
         ...(source === "file" ? { path: folderPath.trim(), glob: glob.trim() } : {}),
         ...(source === "download" ? { match_site: site.trim() } : {}),
+        // Leap 05-b: which task, and how it must have ended.
+        ...(source === "run_ended" ? { what: endedWhat, what_name: endedName.trim(), outcome: endedOutcome } : {}),
         ...(action === "session" ? { workspace_root: worksIn.trim() } : {}),
         ...(Number.isFinite(limit) && limit > 0 ? { max_fires_per_hour: limit } : {}),
       };
@@ -597,6 +645,7 @@ export default function ReflexPage() {
         setSite("");
         setWorksIn("");
         setPerHour("");
+        setEndedName("");
       }
       reload();
     } catch (err) {
@@ -948,7 +997,7 @@ export default function ReflexPage() {
       <Reveal>
         <PageHeader
           title="Rules"
-          subtitle="When a file lands in a folder, a download finishes, a message arrives or a webhook fires, run a workflow, a remote agent, or Jarvis on this PC, automatically."
+          subtitle="When a file lands in a folder, a download finishes, a message arrives, a webhook fires or another task fails, run a workflow, a remote agent, or Jarvis on this PC, automatically. Your schedules are listed here too."
           actions={
             <button
               type="button"
@@ -1029,7 +1078,22 @@ export default function ReflexPage() {
                   <label htmlFor={`${fid}-match`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
                     {SOURCE_META[source].matchLabel}
                   </label>
-                  {source === "file" ? (
+                  {source === "run_ended" ? (
+                    <select
+                      id={`${fid}-match`}
+                      aria-label="Which task"
+                      value={endedWhat}
+                      onChange={(e) => setEndedWhat(e.target.value as EndedWhat)}
+                      className="field"
+                      data-testid="reflex-ended-what"
+                    >
+                      {ENDED_WHAT_CHOICES.map((c) => (
+                        <option key={c.value} value={c.value}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : source === "file" ? (
                     <>
                       <input
                         id={`${fid}-match`}
@@ -1110,6 +1174,46 @@ export default function ReflexPage() {
                     placeholder="*.pdf"
                     className="field font-mono"
                   />
+                </div>
+              )}
+              {/* Leap 05-b: which one, by name, and how it must have ended. */}
+              {source === "run_ended" && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor={`${fid}-ended-name`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
+                      Its name (optional)
+                    </label>
+                    <input
+                      id={`${fid}-ended-name`}
+                      value={endedName}
+                      onChange={(e) => setEndedName(e.target.value)}
+                      placeholder={SOURCE_META.run_ended.matchPlaceholder}
+                      className="field"
+                      data-testid="reflex-ended-name"
+                    />
+                    <div className="mt-1 text-[11px] text-zinc-600">Blank = any of that kind.</div>
+                  </div>
+                  <div>
+                    <label htmlFor={`${fid}-ended-outcome`} className="mb-1.5 block text-[12px] font-medium text-zinc-400">
+                      When it
+                    </label>
+                    <select
+                      id={`${fid}-ended-outcome`}
+                      value={endedOutcome}
+                      onChange={(e) => setEndedOutcome(e.target.value as EndedOutcome)}
+                      className="field"
+                      data-testid="reflex-ended-outcome"
+                    >
+                      {ENDED_OUTCOME_CHOICES.map((c) => (
+                        <option key={c.value} value={c.value}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="mt-1 text-[11px] text-zinc-600">
+                      The work this rule does never starts it, or a rule like it, again.
+                    </div>
+                  </div>
                 </div>
               )}
               {source === "download" && (
@@ -1248,7 +1352,15 @@ export default function ReflexPage() {
                     className="field font-mono"
                   />
                   <div className="mt-1 text-[11px] text-zinc-600">
-                    {source === "file" || source === "download" ? (
+                    {source === "run_ended" ? (
+                      <>
+                        Placeholders <code className="font-mono text-accent-soft">{"{what}"}</code> /{" "}
+                        <code className="font-mono text-accent-soft">{"{outcome}"}</code> /{" "}
+                        <code className="font-mono text-accent-soft">{"{reason}"}</code> /{" "}
+                        <code className="font-mono text-accent-soft">{"{detail}"}</code> are filled from the
+                        task that ended (what it said comes in as data). Blank = find out why and say so.
+                      </>
+                    ) : source === "file" || source === "download" ? (
                       <>
                         Placeholders <code className="font-mono text-accent-soft">{"{file}"}</code> /{" "}
                         <code className="font-mono text-accent-soft">{"{path}"}</code> /{" "}
@@ -1447,6 +1559,37 @@ export default function ReflexPage() {
           )}
         </Card>
       </Reveal>
+
+      {/* Leap 05-b: every start in one place — your schedules start at a
+          time; each row opens Schedules, where it is changed. */}
+      {schedules.length > 0 && (
+        <Reveal>
+          <Card title={`${AT_A_TIME} · ${schedules.length}`} icon={<Clock size={15} />}>
+            <p className="mb-3 text-[12px] text-zinc-500">{AT_A_TIME_WORDS}</p>
+            <div className="space-y-2" data-testid="reflex-at-a-time">
+              {schedules.map((row) => (
+                <Link
+                  key={row.id}
+                  href={row.href}
+                  data-testid={`reflex-schedule-${row.id}`}
+                  className="block min-w-0 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 transition-colors hover:bg-white/[0.04]"
+                >
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="min-w-0 break-words font-medium text-zinc-100">{row.name}</span>
+                    {!row.enabled && <Badge value="off" tone="slate" />}
+                  </div>
+                  <div className="mt-1 min-w-0 break-words text-[12px] text-zinc-300">
+                    {row.when_words} {row.does_words}
+                  </div>
+                  {row.last_words && (
+                    <div className="mt-1 min-w-0 break-words text-[11px] text-zinc-500">{row.last_words}</div>
+                  )}
+                </Link>
+              ))}
+            </div>
+          </Card>
+        </Reveal>
+      )}
 
       <Reveal>
         <div id="reflex-triggers">

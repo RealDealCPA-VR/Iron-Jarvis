@@ -589,7 +589,15 @@ class WorkflowEngine:
             steps_json=dumps(steps_meta),
             session_ids_json="[]",
             outputs_json=dumps(seeded) if seeded else "{}",
-            started_by=STARTED_BY_PERSON if started_by == STARTED_BY_PERSON else "",
+            # Leap 05-b: a run a RULE started names it ("rule:<source>:<id>",
+            # ``triggers/starts.rule_started_by``), so its end never starts
+            # that rule again and a run_ended rule's run starts no other.
+            # Only the person's mark admits a run under Emergency stop.
+            started_by=(
+                STARTED_BY_PERSON if started_by == STARTED_BY_PERSON
+                else started_by[:120] if str(started_by or "").startswith("rule:")
+                else ""
+            ),
             # Idea 39 (39-a): run from a chat, its end is reported there.
             chat_thread_id=str(chat_thread_id or "").strip(),
         )

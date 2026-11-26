@@ -217,7 +217,13 @@ async def test_goal_drop_marks_it_abandoned_and_undo_gives_its_status_back(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_reflex_create_asks_and_undo_removes_the_rule(tmp_path):
+async def test_reflex_create_asks_and_undo_removes_the_rule(tmp_path, monkeypatch):
+    # Leap 05-b: an email rule is made only while a mailbox listens (else it
+    # is refused with the Notifications door: test_leap05b_not_ready_words).
+    from iron_jarvis.triggers import readiness
+
+    monkeypatch.setattr(readiness, "email_status",
+                        lambda _p: {"enabled": True, "credentialed": True, "channels": ["mail"]})
     app = _app(
         tmp_path,
         [("reflex_create", {"name": "1099 intake", "source": "email", "match": "1099", "action": "session", "task_template": "file {text}"})],

@@ -7,6 +7,8 @@ the executing router is stashed on ``app.state.reflex_router`` by ``create_app``
 Leap 05-a: a rule may start when a new file lands in a folder (``source``
 ``file``: ``path``, ``glob``; the rule's own watcher is made, changed and
 removed with it) or when a download finishes (``download``: ``match_site``).
+Leap 05-b: or when another task ends short (``run_ended``: ``what``,
+``what_name``, ``outcome``).
 Each row carries its card's four lines (``when_words``, ``does_words``,
 ``where_words``, ``limits_words``, composed by ``triggers/starts.describe``),
 where it reports (``reports_to``), its folder watcher, and its pause
@@ -63,6 +65,10 @@ def _start_args(body: Any, rule: Any = None) -> dict[str, Any]:
         out["per_file"] = False
     if body.workspace_root is not None:
         out["folder"] = body.workspace_root
+    # Leap 05-b: a "when another task fails" rule's task and outcome.
+    for key, stored in (("what", "what"), ("what_name", "name"), ("outcome", "outcome")):
+        value = getattr(body, key, None)
+        out[key] = value if value is not None else current.get(stored, "")
     return out
 
 
@@ -77,7 +83,9 @@ def register(app: FastAPI, d) -> None:
         row.update(_starts.describe_for(d.platform, rule))
         row["reports_to"] = _cd.reports_to_view(rule.chat_thread_id, titles)
         start = rule.decoded_start()
-        row["start"] = {k: start[k] for k in ("path", "glob", "match_site", "per_file") if k in start}
+        row["start"] = {
+            k: start[k] for k in ("path", "glob", "match_site", "per_file", "what", "name", "outcome") if k in start
+        }
         w = watchers.get(rule.id)
         row["watcher"] = {"name": w.name, "last_error": w.last_error} if w is not None else None
         for key in ("recent_starts_json", "start_json"):
@@ -184,7 +192,8 @@ def register(app: FastAPI, d) -> None:
                 str(merged["source"]), str(merged["match"]), str(merged["action"]), str(merged["target"]),
             )
         touches_start = "source" in edits or any(
-            getattr(body, k) is not None for k in ("path", "glob", "match_site", "workspace_root")
+            getattr(body, k) is not None
+            for k in ("path", "glob", "match_site", "workspace_root", "what", "what_name", "outcome")
         )
         if touches_start:
             start, root, problem = _records.rule_start_from_args(

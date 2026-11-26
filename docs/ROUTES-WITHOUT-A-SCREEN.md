@@ -58,6 +58,7 @@ are routes the check counts as called that have no caller.
 | GET | `/mcp` | KEEP | Iron Jarvis's MCP server: the CLIs in Build terminals and the Code view's tools call it (by hand: the check counts a placeholder address as a caller). |
 | POST | `/mcp` | KEEP | The same MCP server (by hand, as above). |
 | DELETE | `/mcp` | KEEP | The same MCP server: ends an MCP session (by hand, as above). |
+| GET | `/starts/kinds` | KEEP | Leap 05-b: which kinds of signal can start a rule now, with the words and the page that sets each up (`triggers/readiness.kinds`) and `GET /triggers`' three readings. Chat's `reflex_create` and `start_list` read the same table in the daemon; the Rules page's rows read `GET /triggers`. For a script or another app asking what is set up. |
 | POST | `/comm/slack/events/{name}` | KEEP | Slack calls it (Events API). |
 | POST | `/agents/remote/{name}/inbound` | KEEP | A remote agent calls it to message back (token-checked). |
 | POST | `/peers/pair` | KEEP | Another computer running Iron Jarvis calls it to pair, with the six-digit code this one shows (v1.497.0; checked by the code). |

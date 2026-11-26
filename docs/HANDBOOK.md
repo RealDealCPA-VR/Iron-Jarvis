@@ -2249,6 +2249,50 @@ seems to have done one, it asks you first.
 - Your answers are kept by Iron Jarvis on this PC. Nothing is sent anywhere
   and no model is asked.
 
+## "When another task fails", and everything that runs by itself in one place
+
+Say it once in chat, such as "if the nightly report fails, tell me why and
+try once more", and Iron Jarvis makes **one rule** that starts when that task
+falls short. Its card says **When** ("When the schedule “Nightly report”
+fails."), **Do**, **Where it works** and **Limits**, with **Undo**, like any
+rule.
+
+**Which tasks.** One of your schedules, a workflow, a rule's run, an agent
+run, or any other task, by name or any of that kind. **How it ended:** it
+failed, it finished with part of it failed, it ended needing you, or any of
+those (or it did nothing). A task that was done, or that you stopped, starts
+nothing. On the Rules page, pick **Another task fails** under **Another kind
+of rule**.
+
+**What the rule is told.** Which task ended and how come from Iron Jarvis's
+own record, never from what a model said about itself. What the run itself
+said (its last words, the step that stopped it) is given to the rule's work
+as data, never as instructions. If the run that ended worked carefully (it
+read an email or a web page), the rule's work starts carefully too.
+
+**It never goes round in circles.** The work a rule like this does never
+starts it, or any rule like it, again: if "try once more" fails too, nothing
+more starts by itself, and the rule's row says how it went. It still starts
+at most 12 times an hour, then pauses itself and tells you once a day.
+
+**A schedule is heard once a fire.** When a schedule runs a workflow or an
+agent, the schedule's own result is what a rule hears, once per fire, as the
+Schedules row says it.
+
+**Everything that runs by itself, in one place.** The Rules page lists your
+rules by what starts them, and under them, **At a time**, your schedules, each
+with what it does and how it last went (press one to change it on
+Schedules). On a workflow's canvas, the first box (**When should this
+run?**) lists under **Runs it now** the schedules and rules that already run
+it. In chat, "what runs on its
+own here?" gets the same list.
+
+**Not set up yet.** Asking for a rule started by email while no mailbox
+listens, by a calendar event while your calendar is not read, or by Slack or
+your phone while nothing listens there, gets a plain answer and a button to
+the page that sets it up (Notifications, or the calendar under Triggers on
+Rules). Nothing is made that could never start.
+
 ## What everything cost, by folder, client, automation and agent (v1.580.0)
 
 Usage has a new card, **What it cost**, with a **By** switch: **Folder**,

@@ -816,6 +816,10 @@
       "ok": "made a plan to sort a scan",
       "failed": "tried a sorting plan and it failed"
     },
+    "start_list": {
+      "ok": "listed what runs on its own",
+      "failed": "tried a list of what runs on its own and it failed"
+    },
     "suggestion_answer": {
       "ok": "answered a suggestion",
       "failed": "tried a suggestion answer and it failed"

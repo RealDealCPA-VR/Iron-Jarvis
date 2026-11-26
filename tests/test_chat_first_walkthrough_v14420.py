@@ -40,7 +40,8 @@ that starts any program but git or this Python (a real CLI) fails.
 SCORE (v1.442.0, every row pinned): 23 done, 1 door, 6 honest. At v1.432.0
 the review counted 2 done. Request 18 takes two messages, as in the app: the
 workflow card (a draft ends that turn; its Save posts the workflow) and then
-the rule plus the email destination.
+the email destination; the rule that would start the workflow is refused
+with the Notifications door until that destination listens (leap 05-b).
 
 Request 10's pull request is made in a LATER turn with the GitHub app's own
 tools; this row pins the connect (the secure card) only.
@@ -377,8 +378,13 @@ def _l_client_replies(app, ctx, done):
 
     p = app.state.platform
     assert WorkflowStore(p.engine).get("client-reply-drafts") is not None
-    rules = [r for r in p.reflex.list() if getattr(r, "target", "") == "client-reply-drafts"]
-    assert rules and rules[0].source == "email" and rules[0].action == "workflow"
+    # Leap 05-b (moved on purpose): a rule started by email is made only
+    # while a mailbox listens. The new destination cannot listen until its
+    # Allowed senders list is set on the Notifications page (chat cannot fill
+    # it), so the rule is refused in words with the door to that page, and
+    # nothing is made that could never start.
+    assert [r for r in p.reflex.list() if getattr(r, "target", "") == "client-reply-drafts"] == []
+    assert {"href": "/channels", "label": "Open Notifications in Settings"} in (done.get("doors") or [])
     assert _channels(p)["mail"]["type"] == "email"
     assert p.secrets.get("channel_mail_token") == "mail-app-password-v14420"
 
@@ -593,7 +599,7 @@ ROWS: list[Row] = [
     Row(18, "Create a workflow that drafts a reply to every new email from a client.", "done",
         plan=[
             Call("reflex_create", {"name": "Client emails", "source": "email", "match": "",
-                                   "action": "workflow", "target": "client-reply-drafts"}),
+                                   "action": "workflow", "target": "client-reply-drafts"}, ok=False),
             Call("channel_connect", {"name": "mail", "type": "email", "host": "smtp.example.com",
                                      "from_addr": "me@example.com", "to_addr": "me@example.com"}),
         ],

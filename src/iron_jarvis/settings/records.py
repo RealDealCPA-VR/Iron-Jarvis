@@ -598,7 +598,7 @@ _POLITE_REQUEST = re.compile(
 )
 #: The record tools a question may still arm: they only READ (leap 06-a: a
 #: rehearsal changes nothing — "what would my morning schedule do?").
-_RECORD_READERS = frozenset({"goal_list", "schedule_list", "rehearse"})
+_RECORD_READERS = frozenset({"goal_list", "schedule_list", "rehearse", "start_list"})
 
 
 #: v1.448.0 (Wave A, A1 review): "Have my coding sessions run with a
@@ -820,8 +820,15 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
     # A rule on mail FROM someone with an order after it ("When I get an email
     # from the IRS, forward it to my phone", item 23) is a rule too, and so
     # (leap 05-a) is a file landing in a folder or a download finishing.
-    if _REFLEX_WORDS.search(t) or W.every_new_arrival(t) or W.mail_from_rule(t) or file_rule:
+    # Leap 05-b: another task failing ("if the nightly report fails, tell me
+    # why and try once more") is a rule's start too; its readers find the
+    # task's name (start_list lists schedules and rules, schedule_list the
+    # schedules).
+    task_fails = W.another_task_fails(t)
+    if _REFLEX_WORDS.search(t) or W.every_new_arrival(t) or W.mail_from_rule(t) or file_rule or task_fails:
         out += ["reflex_create", "reflex_update", "reflex_delete"]
+    if task_fails or W.runs_on_its_own(t):
+        out += ["start_list"]
     if _GRANT_WORDS.search(t):
         out += ["grant_revoke"]
     if _UNDO_WORDS.search(t):
@@ -1997,8 +2004,9 @@ def _describe_reflex(r: dict[str, Any] | None) -> str | None:
         # Leap 05-a (review): a rule that paused itself says so on the card.
         base = _describe_reflex({**r, "paused_reason": None}) or ""
         return f"{base} (paused itself)"
-    if r.get("source") in ("file", "download"):
-        # Leap 05-a: the card's own first line (its When, in words).
+    if r.get("source") in ("file", "download", "run_ended"):
+        # Leap 05-a: the card's own first line (its When, in words); 05-b
+        # too: "When the schedule “Nightly report” fails".
         from ..reflex.models import ReflexRule
         from ..triggers.starts import describe
 
@@ -3837,7 +3845,15 @@ class ReflexCreateTool(_ReflexTool):
         "Intake, read it and file it by sender\"): `source` file, `path` the Intake folder, `glob` "
         "*.pdf, `action` session, `task_template` what to do with each file. (\"when an email from "
         "the tax office arrives, file it in the Tax folder\"): `source` email, `match` a word that "
-        "marks those messages, `action` session. Optional: `agent` (a custom agent that does the "
+        "marks those messages, `action` session. `run_ended` (another task ended short: `what` "
+        "schedule, workflow, rule, agent or any; `what_name` its name, as start_list or "
+        "schedule_list shows it, empty = any of that kind; `outcome` failed (the default), "
+        "part_failed, needs_you, or any = any way it fell short). (\"if the nightly report fails, "
+        "tell me why and try once more\"): `source` run_ended, `what` schedule, `what_name` the "
+        "schedule's name, `action` session, `task_template` what to do ({what}, {outcome}, {reason} "
+        "and, as data, {detail}, what the run said, are filled in). An email, calendar, Slack or "
+        "phone rule is refused, with the page that sets it up, while nothing listens there yet. "
+        "Optional: `agent` (a custom agent that does the "
         "work), `folder` (where the work runs), `max_fires_per_hour` (1-120, default 12: then the "
         "rule pauses and says so). Made in a chat, each run reports in that chat. The user approves "
         "on a card that says When, Do, Where it works and Limits; Undo removes the rule and its "
@@ -3847,7 +3863,9 @@ class ReflexCreateTool(_ReflexTool):
         "type": "object",
         "properties": {
             "name": {"type": "string"},
-            "source": {"type": "string", "enum": ["webhook", "comm", "email", "calendar", "slack", "file", "download"]},
+            "source": {"type": "string", "enum": [
+                "webhook", "comm", "email", "calendar", "slack", "file", "download", "run_ended",
+            ]},
             "match": {"type": "string"},
             "action": {"type": "string", "enum": ["workflow", "remote_agent", "session"]},
             "target": {"type": "string"},
@@ -3858,6 +3876,9 @@ class ReflexCreateTool(_ReflexTool):
             "glob": {"type": "string"},
             "per_file": {"type": "boolean"},
             "match_site": {"type": "string"},
+            "what": {"type": "string", "enum": ["schedule", "workflow", "rule", "agent", "any"]},
+            "what_name": {"type": "string"},
+            "outcome": {"type": "string", "enum": ["failed", "part_failed", "needs_you", "any"]},
             "agent": {"type": "string"},
             "folder": {"type": "string"},
             "max_fires_per_hour": {"type": "integer", "minimum": 1, "maximum": 120},
@@ -3904,6 +3925,14 @@ class ReflexCreateTool(_ReflexTool):
         problem = validate_reflex(source, match, action, target)
         if problem:
             return ToolResult(ok=False, error=problem)
+        # Leap 05-b: a rule whose signal cannot reach it yet (no mailbox that
+        # listens, no calendar link) is refused in words, with the page that
+        # sets it up (``daemon/doors.failure_door_for``). Nothing is made.
+        from ..triggers.readiness import not_ready
+
+        words, door = await asyncio.to_thread(not_ready, self.platform, source)
+        if words:
+            return ToolResult(ok=False, error=words, data={"door": door} if door else None)
         start, root, problem = await asyncio.to_thread(rule_start_from_args, self.platform, source, args)
         if problem:
             return ToolResult(ok=False, error=problem)
@@ -4011,7 +4040,42 @@ def rule_start_from_args(platform: Any, source: str, args: dict[str, Any]) -> tu
         site = str(args.get("match_site") or "").strip()
         if site:
             start = {"match_site": site[:200]}
+    elif source == "run_ended":
+        start, problem = run_ended_start(platform, args)
+        if problem:
+            return {}, "", problem
     return start, root, ""
+
+
+def run_ended_start(platform: Any, args: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Leap 05-b: ``(start, problem)`` of a "when another task fails" rule:
+    ``{what, name, outcome}``. A named schedule, workflow or rule must exist
+    (said in words, never guessed); an agent's name is the custom agent's,
+    as its runs carry it. BLOCKING (store reads)."""
+    from ..reflex.models import RUN_ENDED_DEFAULT_OUTCOME, RUN_ENDED_OUTCOMES, RUN_ENDED_WHATS
+
+    what = str(args.get("what") or "any").strip().lower()
+    if what not in RUN_ENDED_WHATS:
+        return {}, f"`what` must be one of {', '.join(RUN_ENDED_WHATS)}."
+    outcome = str(args.get("outcome") or RUN_ENDED_DEFAULT_OUTCOME).strip().lower()
+    if outcome not in RUN_ENDED_OUTCOMES:
+        return {}, f"`outcome` must be one of {', '.join(RUN_ENDED_OUTCOMES)}."
+    name = " ".join(str(args.get("what_name") or "").split())[:120]
+    if name.lower().startswith("custom:"):
+        name = name.split(":", 1)[1].strip()
+    if name and what == "schedule" and getattr(platform, "scheduler", None) is not None:
+        if platform.scheduler.get(name) is None:
+            names = [r.name for r in platform.scheduler.list()][:8]
+            return {}, (f"There is no schedule called “{name}”."
+                        + (f" Your schedules: {', '.join(names)}." if names else " You have no schedules yet."))
+    if name and what == "workflow":
+        from ..workflows.store import WorkflowStore
+
+        if WorkflowStore(platform.engine).get(name) is None:
+            return {}, f"There is no saved workflow called “{name}”."
+    if name and what == "rule" and not resolve_reflex(platform, name):
+        return {}, f"There is no rule called “{name}”."
+    return {"what": what, "name": name, "outcome": outcome}, ""
 
 
 def rule_agent_problem(platform: Any, agent: str) -> str:
@@ -4033,8 +4097,10 @@ class ReflexUpdateTool(_ReflexTool):
         "Change a rule (`rule` = its id or exact name): turn it on or off with `enabled` (on also "
         "resumes a rule that paused itself), ground it in a project with `project_id` (\"\" clears "
         "it), or change what it does (`task_template`, `agent`, `folder` where the work runs), how "
-        "often it may start (`max_fires_per_hour`, 1-120), a file rule's folder (`path`, `glob`) or "
-        "a download rule's site (`match_site`). The user approves on a card; the change has an Undo."
+        "often it may start (`max_fires_per_hour`, 1-120), a file rule's folder (`path`, `glob`), "
+        "a download rule's site (`match_site`), or which task a \"when another task fails\" rule "
+        "listens for (`what`, `what_name`, `outcome`). The user approves on a card; the change has "
+        "an Undo."
     )
     input_schema = {
         "type": "object",
@@ -4049,6 +4115,9 @@ class ReflexUpdateTool(_ReflexTool):
             "path": {"type": "string"},
             "glob": {"type": "string"},
             "match_site": {"type": "string"},
+            "what": {"type": "string", "enum": ["schedule", "workflow", "rule", "agent", "any"]},
+            "what_name": {"type": "string"},
+            "outcome": {"type": "string", "enum": ["failed", "part_failed", "needs_you", "any"]},
         },
         "required": ["rule"],
     }
@@ -4067,7 +4136,7 @@ class ReflexUpdateTool(_ReflexTool):
             return ToolResult(
                 ok=False,
                 error="Say what to change: enabled, project_id, task_template, agent, folder, "
-                "max_fires_per_hour, path, glob or match_site.",
+                "max_fires_per_hour, path, glob, match_site, what, what_name or outcome.",
             )
         # PATCH /reflex/rules/{id}'s three intents: omitted = unchanged,
         # "" = clear the grounding, a value = re-ground.
@@ -4147,6 +4216,20 @@ def rule_edits_from_args(platform: Any, before: dict[str, Any], args: dict[str, 
     if source == "download" and isinstance(args.get("match_site"), str):
         site = args["match_site"].strip()
         edits["start_json"] = {"match_site": site[:200]} if site else {}
+    if source == "run_ended" and any(isinstance(args.get(k), str) for k in ("what", "what_name", "outcome")):
+        # Leap 05-b: which task it listens for, and how it must have ended.
+        from ..reflex.models import ReflexRule
+
+        current = ReflexRule(start_json=str(before.get("start_json") or "")).decoded_start()
+        merged = {
+            "what": args["what"] if isinstance(args.get("what"), str) else current.get("what", ""),
+            "what_name": args["what_name"] if isinstance(args.get("what_name"), str) else current.get("name", ""),
+            "outcome": args["outcome"] if isinstance(args.get("outcome"), str) else current.get("outcome", ""),
+        }
+        start, problem = run_ended_start(platform, merged)
+        if problem:
+            return {}, problem
+        edits["start_json"] = start
     return edits, ""
 
 

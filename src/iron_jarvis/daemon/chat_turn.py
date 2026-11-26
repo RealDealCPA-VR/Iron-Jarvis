@@ -5091,6 +5091,7 @@ _READS_ONLY_TOOLS: frozenset[str] = frozenset({
     "image_info", "view_image", "extract_pdf", "excel_read", "excel_query", "excel_profile", "excel_trace",
     "excel_formula_check", "excel_live_look", "compare_documents", "pdf_form_fields", "redact_scan",
     "find_capability", "config_list", "schedule_list", "workflow_list", "goal_list", "night_task_list",
+    "start_list",
     "list_agents", "changes_list", "history_search", "work_history", "skill_search", "brain_read",
     "brain_search", "chat_fullness",
     "blackboard_read", "mcp_list_resources", "mcp_read_resource", "integration_list", "tool_list",

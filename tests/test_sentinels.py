@@ -25,7 +25,6 @@ from iron_jarvis.sentinels.service import SentinelService
 from iron_jarvis.sentinels.tools import SentinelAddTool, sentinel_tools
 from iron_jarvis.sentinels.watcher import default_scanner, diff_state
 from iron_jarvis.tools.base import ToolContext
-from iron_jarvis.workflows.triggers import TriggerSpec, register_trigger
 
 
 @pytest.fixture
@@ -246,34 +245,26 @@ def test_add_backlog_is_suggest_only_and_dedupes(platform):
     assert intent.add_backlog(title="  ", task="x") is None
 
 
-# -- 7. file trigger wiring --------------------------------------------------
+# -- 7. the old trigger handler table is retired (leap 05-b) ----------------
 
 
-def test_file_trigger_registers_a_sentinel(platform):
-    spec = TriggerSpec(
-        kind="file",
-        name="csv_watch",
-        workflow="ingest",
-        extra={"path": "/data", "glob": "*.csv", "task": "ingest new csvs"},
-    )
-    rec = register_trigger(spec, lambda: None, sentinels=platform.sentinels)
-    assert rec.name == "csv_watch"
-    got = platform.sentinels.get("csv_watch")
-    assert got is not None
-    assert got.decoded_config() == {"path": "/data", "glob": "*.csv"}
-    assert got.task == "ingest new csvs"
+def test_the_old_trigger_stubs_are_retired_and_a_folder_starts_work_through_a_rule():
+    """Leap 05-b: ``workflows/triggers``' handler table (``register_trigger``,
+    its ``file`` handler that made a suggest-only watcher, the stubs that
+    raised "not implemented" for webhook / email / calendar / api, and the
+    unused ``CronScheduler``) is gone: nothing in the app called it. A folder
+    starts work through a rule (``reflex_create`` source ``file``, its own
+    watcher) and every kind goes through the one start hub."""
+    from iron_jarvis import workflows
+    from iron_jarvis.workflows import triggers as T
 
-
-def test_file_trigger_requires_a_sentinel_service():
-    spec = TriggerSpec(kind="file", name="t", workflow="w", extra={"path": "/x"})
-    with pytest.raises(ValueError):
-        register_trigger(spec, lambda: None)  # no sentinels -> clear error
-
-
-def test_file_trigger_requires_a_path(platform):
-    spec = TriggerSpec(kind="file", name="t", workflow="w", extra={})
-    with pytest.raises(ValueError):
-        register_trigger(spec, lambda: None, sentinels=platform.sentinels)
+    for name in ("register_trigger", "file_trigger", "TRIGGER_HANDLERS", "manual_handler",
+                 "webhook_handler", "email_handler", "calendar_handler", "api_handler", "CronScheduler"):
+        assert not hasattr(T, name), name
+    assert "CronScheduler" not in workflows.__all__
+    # What stays: reading a [[triggers]] block and checking a cron line.
+    assert T.parse_triggers({"triggers": [{"name": "n", "schedule": "0 8 * * *", "workflow": "w"}]})[0].kind == "cron"
+    assert T.validate_cron("0 8 * * *") and not T.validate_cron("nope")
 
 
 # -- 8. agent tool -----------------------------------------------------------

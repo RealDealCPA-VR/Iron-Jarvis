@@ -4735,6 +4735,7 @@ const TOOL_WORDS_BUILTIN = {
   spawn_agent: "start a helper agent",
   stack_apply: "save the documents sorted from a scan",
   stack_plan: "make a plan to sort a scan",
+  start_list: "list what runs on its own",
   suggestion_answer: "answer a suggestion on the Improvements page",
   suggestion_list: "list the waiting suggestions",
   tool_create: "make a new tool",

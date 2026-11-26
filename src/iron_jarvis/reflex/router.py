@@ -48,6 +48,10 @@ _TEMPLATE_KEYS = (
     "body", "text", "slug", "sender", "from", "subject", "title", "start", "channel",
     # Leap 05-a: a file or a download that started the rule.
     "path", "file", "folder", "site",
+    # Leap 05-b: another task that ended short — which one (in words, "the
+    # schedule “Nightly report”"), how it ended ("Failed"), why in one line
+    # (from the ledger), and what the run itself said (fenced: data).
+    "what", "outcome", "reason", "detail",
 )
 
 
@@ -59,7 +63,11 @@ _TEMPLATE_KEYS = (
 #: the files it sends), so ``{file}``, ``{path}`` (which ends in the name) and
 #: ``{site}`` (a download's address) are fenced too; ``{folder}`` is the
 #: folder the user chose, put in on one line (:func:`_short`).
-_FENCED_KEYS = frozenset({"body", "text", "subject", "title", "file", "path", "site"})
+#: Leap 05-b: ``{detail}`` is what the run that ended SAID (its summary, its
+#: failed step's words): a model's words, or outside words it read, so it is
+#: fenced; ``{what}``, ``{outcome}`` and ``{reason}`` are composed by code from
+#: the record and go in on one line.
+_FENCED_KEYS = frozenset({"body", "text", "subject", "title", "file", "path", "site", "detail"})
 
 _PLACEHOLDER = _re.compile(r"\{(" + "|".join(_TEMPLATE_KEYS) + r")\}")
 #: A fence marker written INSIDE outside text would close the fence early.
@@ -187,6 +195,83 @@ def download_context(*, local_path: str, site: str) -> dict[str, str]:
         "folder": os.path.dirname(path)[:500],
         "site": str(site or "")[:300],
         "text": name[:500],
+        "body": "",
+        "slug": "",
+    }
+
+
+#: Leap 05-b: the kinds of task a run that ended can be, in words for a
+#: card, a run's task and a rule's ``{what}``.
+ENDED_KIND_WORDS: dict[str, str] = {
+    "schedule": "the schedule",
+    "workflow": "the workflow",
+    "rule": "the run of the rule",
+    "agent": "the agent run",
+}
+#: The verdicts a run that ended short carries (``ended_verdict``), and the
+#: badge word each one is (``agents/outcome``'s words, every surface's).
+ENDED_VERDICT_WORDS: dict[str, str] = {
+    "failed": "Failed",
+    "part_failed": "Part failed",
+    "needs_you": "Needs you",
+    "did_nothing": "Did nothing",
+}
+
+
+def ended_what_words(kind: str, name: str) -> str:
+    """"the schedule “Nightly report”" — which task ended, in words (the
+    name is one line, defanged). Never raises."""
+    lead = ENDED_KIND_WORDS.get(str(kind or ""), "a task")
+    flat = _short(str(name or ""))[:80]
+    if not flat:
+        return {"agent": "an agent run", "rule": "a rule's run"}.get(str(kind or ""), lead)
+    if kind == "agent":
+        return f"the run of your agent “{flat}”"
+    return f"{lead} “{flat}”"
+
+
+def run_ended_context(
+    *,
+    kind: str,
+    name: str,
+    verdict: str,
+    reason: str,
+    detail: str = "",
+    href: str = "",
+    run_id: str = "",
+    by_rule_id: str = "",
+    by_rule_name: str = "",
+    by_rule_source: str = "",
+    careful: bool = False,
+) -> dict[str, str]:
+    """Leap 05-b: the context of ONE run that ended short (a schedule's
+    recorded outcome, a workflow's run, a rule's run, an agent run), for the
+    ``run_ended`` rules that hear it. ``verdict`` is the ledger's
+    (``failed`` | ``part_failed`` | ``needs_you`` | ``did_nothing``), never the
+    model's words; ``reason`` is one line composed by code from the record;
+    ``detail`` is what the run itself said (fenced in a task). ``by_rule_*``:
+    the rule that started that run, if one did (a rule never starts itself
+    again, and a run a ``run_ended`` rule started starts no other: the chain
+    is one deep). ``careful``: that run started carefully, so the rule's work
+    does too."""
+    what = ended_what_words(kind, name)
+    word = ENDED_VERDICT_WORDS.get(str(verdict or ""), "Failed")
+    return {
+        "ended_kind": str(kind or "")[:20],
+        "ended_name": " ".join(str(name or "").split())[:200],
+        "ended_verdict": str(verdict or "")[:20],
+        "what": what[:300],
+        "outcome": word,
+        "reason": " ".join(str(reason or "").split())[:300],
+        "detail": str(detail or "")[:1500],
+        "href": str(href or "")[:300],
+        "run_id": str(run_id or "")[:100],
+        "by_rule_id": str(by_rule_id or "")[:100],
+        "by_rule_name": " ".join(str(by_rule_name or "").split())[:200],
+        "by_rule_source": str(by_rule_source or "")[:20],
+        "careful": "1" if careful else "",
+        # What a keyword (and a rehearsal's sample) reads: the task's name.
+        "text": " ".join(str(name or "").split())[:500],
         "body": "",
         "slug": "",
     }
@@ -359,6 +444,26 @@ class ReflexRouter:
         self._remember(rules, ctx)
         return [await self.execute(r, ctx) for r in rules]
 
+    async def on_run_ended(self, context: dict[str, str]) -> list[dict[str, Any]]:
+        """Leap 05-b: another task ended short (``run_ended_context``) — fire
+        every enabled ``run_ended`` rule that listens for it. Two loop guards,
+        read here so every caller has them: a run that a ``run_ended`` rule
+        started starts no rule of this kind (the chain is ONE deep), and a
+        run a rule started never starts that same rule. The hourly limit
+        holds as for any start. Never raises."""
+        ctx = context or {}
+        if str(ctx.get("by_rule_source") or "") == "run_ended":
+            return []
+        mine = str(ctx.get("by_rule_id") or "")
+        try:
+            rules = await _off_loop(self.store.matching_run_ended, dict(ctx))
+        except Exception:  # noqa: BLE001 — unreadable: nothing starts
+            log.warning("the rules for a task that ended could not be read", exc_info=True)
+            return []
+        rules = [r for r in rules if r.id != mine]
+        self._remember(rules, ctx)
+        return [await self.execute(r, ctx) for r in rules]
+
     async def start(self, action: str, *, target: str = "", task: str = "") -> dict[str, Any]:
         """Fire an action MANUALLY (e.g. a ``/run`` command) without a stored
         rule — same execution path, no persistence."""
@@ -470,7 +575,7 @@ class ReflexRouter:
             try:
                 # v1.502.0 (north-star 2.8): the posture the work starts at.
                 # Passed only when low, so a full fire calls exactly as before.
-                trust = self._signal_trust(rule, attended=attended)
+                trust = self._signal_trust(rule, attended=attended, context=context)
                 trust_kw = {"trust": trust} if trust else {}
                 if rule.action == "workflow":
                     result = await self._run_workflow(rule, context, **trust_kw)
@@ -589,16 +694,26 @@ class ReflexRouter:
         except Exception:  # noqa: BLE001 — the bus must never block a reflex
             pass
 
-    def _signal_trust(self, rule: ReflexRule, *, attended: bool) -> dict[str, str]:
+    def _signal_trust(
+        self, rule: ReflexRule, *, attended: bool, context: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         """``{"trust": "low", "trust_reason": …}`` for work a rule fired by an
         OUTSIDE signal starts (:data:`OUTSIDE_SOURCES`), else ``{}``. A fire a
         person is watching (the Reflex page's Test press) and an owner who set
-        ``comm_trust`` to "full" keep full trust. Never raises."""
+        ``comm_trust`` to "full" keep full trust. Leap 05-b: a ``run_ended``
+        rule's work starts carefully when the run that ended did (its words
+        reach the rule's task as data). Never raises."""
         label = OUTSIDE_SOURCES.get(str(getattr(rule, "source", "") or ""))
         if not label and watches_downloads(rule):
             # Leap 05-a (review, D-05.2): what lands in a Downloads folder
             # came from websites, like a download rule's file.
             label = DOWNLOADS_FOLDER_LABEL
+        if (
+            not label
+            and str(getattr(rule, "source", "") or "") == "run_ended"
+            and str((context or {}).get("careful") or "")
+        ):
+            label = CAREFUL_RUN_LABEL
         if attended or not label:
             return {}
         cfg = getattr(self.p, "config", None)
@@ -630,7 +745,11 @@ class ReflexRouter:
         engine = WorkflowEngine(self.p, self.orch)
         # Persists the run record now — off the loop (v1.505.0, north-star
         # 5.4), and awaited, so the record exists before its run is launched.
-        run = await _off_loop(engine.create_record, wf)
+        # Leap 05-b: the record names the rule that started it (its end never
+        # starts that rule again; a run_ended rule's run starts no other).
+        from ..triggers.starts import rule_started_by
+
+        run = await _off_loop(functools.partial(engine.create_record, wf, started_by=rule_started_by(rule)))
         # v1.122.0: the signal's payload used to be DROPPED for workflow
         # actions. It now rides the run as a synthetic "Trigger" output, so any
         # step can reference {{Trigger}} in its task/args/message — the webhook
@@ -746,6 +865,10 @@ class ReflexRouter:
             # the RULE (``runtime.grant_scopes`` reads it off the run's own
             # row, never from anything the model wrote).
             options[RULE_OPTION] = rule.id
+            # Leap 05-b: and what kind of rule it is, so the run's own end
+            # never starts another "when another task fails" rule after a
+            # rule of that kind started it (the chain is one deep).
+            options[RULE_SOURCE_OPTION] = str(rule.source or "")
             # Idea 39: a rule made in a chat reports each run there (and a
             # Local only chat's rule runs Local only).
             options.update(await _off_loop(functools.partial(rule_report_options, self.p, rule)))
@@ -875,6 +998,11 @@ CANNOT_START_WORDS = "it could not start its action"
 #: which ``runtime.grant_scopes`` turns into the ``rule`` scope of a standing
 #: OK ("Always for this rule").
 RULE_OPTION = "rule_id"
+#: Leap 05-b: the run option naming the SOURCE of the rule that started a
+#: run (``run_ended`` stops a chain at one).
+RULE_SOURCE_OPTION = "rule_source"
+#: Leap 05-b: why a ``run_ended`` rule's work starts carefully.
+CAREFUL_RUN_LABEL = "the end of a task that ran carefully"
 
 
 def rule_report_options(platform: Any, rule: ReflexRule) -> dict[str, Any]:
@@ -1007,6 +1135,25 @@ def _text_of(body: Any) -> str:
 
 
 def _default_task(rule: ReflexRule, context: dict[str, str]) -> str:
+    if rule.source == "run_ended" and context.get("ended_kind"):
+        # Leap 05-b: which task ended and how come from the record (one
+        # line each); what the run itself said goes in fenced, as data.
+        what = _short(context.get("what") or "a task")
+        lead = (
+            f"{what[:1].upper()}{what[1:]} ended: {_short(context.get('outcome') or 'Failed')}. "
+            f"{_short(context.get('reason') or '')}".strip()
+        )
+        where = _short(context.get("href") or "")
+        out = (
+            f"{lead} It started the rule '{_short(rule.name)}'. Find out why it fell short "
+            "and say so in plain words."
+        )
+        if where:
+            out += f" Its record is at {where} in Iron Jarvis."
+        detail = context.get("detail") or ""
+        if detail:
+            out += f" What the run itself said, as data:\n\n{_fenced(detail)}"
+        return out
     if rule.source in ("file", "download") and context.get("path"):
         # Leap 05-a: the file's name was chosen by whoever made it, so its
         # location goes in fenced, as data.

@@ -1,7 +1,7 @@
 // Rules (Reflex) — the words and readings the Rules page shares (v1.449.0,
 // Wave D item 34). Pure: no React, no fetch.
 
-export type ReflexSource = "webhook" | "comm" | "email" | "calendar" | "slack" | "file" | "download";
+export type ReflexSource = "webhook" | "comm" | "email" | "calendar" | "slack" | "file" | "download" | "run_ended";
 export type ReflexAction = "workflow" | "remote_agent" | "session";
 
 /** The everyday rule: a message arrives (from one of these) → an agent does a
@@ -94,4 +94,85 @@ export function pausedWords(r: { paused_at?: string | null; paused_reason?: stri
 export function startsRuleWords(name?: string | null): string {
   const n = typeof name === "string" ? name.trim() : "";
   return n ? `Starts the rule ${n}` : "Starts a rule";
+}
+
+/* ---- Leap 05-b: "when another task fails", and every start in one place -- */
+
+/** Which kind of task a "when another task fails" rule listens for. */
+export type EndedWhat = "schedule" | "workflow" | "rule" | "agent" | "any";
+/** How that task must have ended. */
+export type EndedOutcome = "failed" | "part_failed" | "needs_you" | "any";
+
+/** The form's choices, in the words the page shows. Never "start" as a noun
+ *  (the master plan's calm note for R2.9). */
+export const ENDED_WHAT_CHOICES: readonly { value: EndedWhat; label: string }[] = [
+  { value: "schedule", label: "One of your schedules" },
+  { value: "workflow", label: "A workflow" },
+  { value: "rule", label: "A rule's run" },
+  { value: "agent", label: "An agent run" },
+  { value: "any", label: "Any other task" },
+];
+export const ENDED_OUTCOME_CHOICES: readonly { value: EndedOutcome; label: string }[] = [
+  { value: "failed", label: "Fails" },
+  { value: "part_failed", label: "Finishes with part of it failed" },
+  { value: "needs_you", label: "Ends needing you" },
+  { value: "any", label: "Falls short in any way" },
+];
+
+/** The Rules page's second section: what runs at a time (your schedules). */
+export const AT_A_TIME = "At a time";
+/** Under its heading. */
+export const AT_A_TIME_WORDS = "Your schedules. Each one opens on Schedules, where it is changed.";
+/** The canvas trigger node's list of what already runs a workflow. */
+export const RUNS_IT_NOW = "Runs it now";
+
+/** One row of GET /starts: a schedule or a rule, read from its own store. */
+export interface StartRow {
+  id: string;
+  kind: string;
+  name: string;
+  when_words: string;
+  does_words: string;
+  enabled: boolean;
+  last_words: string;
+  href: string;
+  store: "schedule" | "rule";
+}
+
+function text(v: unknown, cap = 300): string {
+  return typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, cap) : "";
+}
+
+/** An address the page may open: one of the app's own pages only. */
+function ownHref(v: unknown): string {
+  return typeof v === "string" && v.startsWith("/") && !v.startsWith("//") ? v : "";
+}
+
+/** GET /starts, decoded: a row with no id or name, or an address that is not
+ *  one of the app's own pages, is dropped; 200 at most. */
+export function decodeStarts(data: unknown): StartRow[] {
+  const raw = data && typeof data === "object" ? (data as { starts?: unknown }).starts : null;
+  if (!Array.isArray(raw)) return [];
+  const out: StartRow[] = [];
+  for (const r of raw.slice(0, 200)) {
+    if (!r || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    const id = text(o.id, 100);
+    const name = text(o.name, 120);
+    const href = ownHref(o.href);
+    const store = o.store === "schedule" ? "schedule" : o.store === "rule" ? "rule" : null;
+    if (!id || !name || !href || !store) continue;
+    out.push({
+      id,
+      kind: text(o.kind, 20),
+      name,
+      when_words: text(o.when_words),
+      does_words: text(o.does_words),
+      enabled: o.enabled !== false,
+      last_words: text(o.last_words),
+      href,
+      store,
+    });
+  }
+  return out;
 }

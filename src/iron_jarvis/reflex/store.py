@@ -20,7 +20,7 @@ from sqlmodel import select
 from ..core.db import session_scope
 from ..core.ids import utcnow
 from ..core.logging import get_logger
-from .models import MAX_FIRES_PER_HOUR, ReflexRule
+from .models import MAX_FIRES_PER_HOUR, RUN_ENDED_DEFAULT_OUTCOME, ReflexRule
 
 log = get_logger("reflex.store")
 
@@ -423,10 +423,58 @@ class ReflexStore:
                 out.append(r)
         return out
 
+    def matching_run_ended(self, ending: dict[str, Any]) -> list[ReflexRule]:
+        """Leap 05-b: enabled ``run_ended`` rules that listen for ``ending``
+        (a ``reflex/router.run_ended_context``): its kind (``what``; a
+        ``rule`` rule hears any run a rule started, named by that rule), its
+        name (``name``, "" = any of that kind; one line, case ignored) and
+        how it ended (``outcome``; ``any`` = any way it fell short). The loop
+        guards are the router's (``on_run_ended``)."""
+        kind = str(ending.get("ended_kind") or "")
+        name = _flat(ending.get("ended_name"))
+        by_rule = str(ending.get("by_rule_id") or "")
+        by_name = _flat(ending.get("by_rule_name"))
+        verdict = str(ending.get("ended_verdict") or "")
+        out: list[ReflexRule] = []
+        for r in self.list(source="run_ended"):
+            if not r.enabled:
+                continue
+            start = r.decoded_start()
+            if not outcome_matches(str(start.get("outcome") or RUN_ENDED_DEFAULT_OUTCOME), verdict):
+                continue
+            what = str(start.get("what") or "any")
+            want = _flat(start.get("name"))
+            if what == "rule":
+                if not by_rule or (want and want != by_name):
+                    continue
+            elif what == "any":
+                if want and want not in {name, by_name}:
+                    continue
+            elif what != kind or (want and want != name):
+                continue
+            out.append(r)
+        return out
+
     def matching_comm(self, text: str) -> list[ReflexRule]:
         """Enabled comm rules matching ``text`` (thin alias over :meth:`matching`,
         kept for the existing callers)."""
         return self.matching("comm", text)
+
+
+#: Leap 05-b: the verdicts ``any`` covers (every way a task falls short).
+SHORT_VERDICTS = ("failed", "part_failed", "needs_you", "did_nothing")
+
+
+def outcome_matches(want: str, verdict: str) -> bool:
+    """Does a run that ended with ``verdict`` meet a rule's ``outcome``?
+    ``any`` is any way it fell short; a task that was done never does."""
+    if verdict not in SHORT_VERDICTS:
+        return False
+    return want == "any" or want == verdict
+
+
+def _flat(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
 
 
 def _limit(value: Any) -> int:

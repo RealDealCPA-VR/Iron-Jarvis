@@ -166,11 +166,11 @@ function runs.
 | `ltm` | memory | 16 | **7**: brain, connectors, daemon, memory, platform, providers, settings | core, documents, tools | detections, mcp, providers |
 | `memory` | memory | 19 | **7**: agents, daemon, inbox, learning, platform, projects, workmap | computeruse, core, ltm, search, tools | detections, learning, profile, providers, workmap |
 | `profile` | memory | 8 | **7**: agents, core, daemon, learning, memory, platform, settings | core | detections, iron_proxy, learning, terminals |
+| `triggers` | automations | 6 | **7**: comm, daemon, guide, platform, reflex, settings, webhooks | core, tools | agents, browser, comm, reflex, scheduling, workflows |
 | `connectors` | connections | 7 | **6**: daemon, mcp, onboarding, settings, terminals, tools | core, mcp | daemon, detections, ltm, providers, tools |
 | `goals` | automations | 5 | **6**: agents, daemon, eval, inbox, platform, settings | core | agents, eval, providers, tools, workflows |
 | `motivation` | automations | 4 | **6**: daemon, improve, improvement, inbox, platform, settings | agents, core, tools | providers, settings |
 | `personas` | memory | 5 | **6**: agents, daemon, guide, harness_bench, platform, settings | core | none |
-| `triggers` | automations | 4 | **6**: comm, daemon, guide, reflex, settings, webhooks | core | browser, reflex, tools |
 | `capability_search` | chat | 6 | **5**: daemon, guide, mcp, platform, tools | tools | agents, context, core, daemon, providers, settings |
 | `coach` | agents | 5 | **5**: agents, daemon, improve, inbox, platform | agents, core, detections, improvement, learning | iron_proxy, providers, tools |
 | `history` | tools | 5 | **5**: daemon, hosted, learning, settings, workmap | none | providers |
@@ -194,7 +194,7 @@ function runs.
 | `integrations` | connections | 7 | **3**: daemon, platform, settings | core, tools | detections, webhooks |
 | `media` | documents | 10 | **3**: daemon, platform, tools | core, detections, providers | creative, daemon |
 | `peers` | messaging | 7 | **3**: agents, daemon, settings | core, daemon | agents, comm, detections |
-| `platform` | daemon | 1 | **3**: daemon, harness_bench, mcpserver | agents, artifacts, assignments, blackboard, browser, codelab, comm, computeruse, connections, core, documents, eval, filesearch, improvement, integrations, learning, ltm, mcp, memory, motivation, personas, providers, reflex, sandbox, scheduling, search, secrets, sentinels, skills, templates, terminals, tools, webhooks, workflows, worklist | brain, capability, capability_search, coach, daemon, fleet, goals, guide, harness, hosted, inbox, iron_proxy, mcpserver, media, profile, repl, settings, workmap |
+| `platform` | daemon | 1 | **3**: daemon, harness_bench, mcpserver | agents, artifacts, assignments, blackboard, browser, codelab, comm, computeruse, connections, core, documents, eval, filesearch, improvement, integrations, learning, ltm, mcp, memory, motivation, personas, providers, reflex, sandbox, scheduling, search, secrets, sentinels, skills, templates, terminals, tools, webhooks, workflows, worklist | brain, capability, capability_search, coach, daemon, fleet, goals, guide, harness, hosted, inbox, iron_proxy, mcpserver, media, profile, repl, settings, triggers, workmap |
 | `repl` | context | 3 | **3**: daemon, platform, tools | none | core, sandbox |
 | `voice` | chat | 1 | **3**: daemon, documents, onboarding | none | none |
 | `worklist` | agents | 4 | **3**: agents, daemon, platform | blackboard, core, tools | agents |
@@ -358,6 +358,7 @@ path assembled from pieces, so search before you delete a route.
 | `/shutdown` | `daemon/routes/system.py` | components/settings |
 | `/skills` | `daemon/routes/agents.py`, `daemon/routes/skill_learning.py`, `daemon/routes/skills_curator.py` | app/chat, app/creative, app/skills, app/terminals, components, components/harness, components/settings, components/skills, lib |
 | `/sources` | `daemon/routes/documents.py` | components |
+| `/starts` | `daemon/routes/triggers.py` | app/reflex, components/workflow |
 | `/system` | `daemon/routes/system.py` | none |
 | `/team` | `daemon/routes/fix_request.py`, `daemon/routes/team.py` | components/settings, components/team, lib |
 | `/templates` | `daemon/routes/skill_bundles.py`, `daemon/routes/workflows.py` | app/skills, app/templates, components, components/templates, lib |

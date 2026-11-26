@@ -549,6 +549,8 @@ def default_permissions() -> dict[str, str]:
         "goal_list": "allow",
         # v1.486.0: listing the scheduled tasks only reads.
         "schedule_list": "allow",
+        # Leap 05-b: listing what runs on its own (schedules and rules) only reads.
+        "start_list": "allow",
         # Leap 06-a: a rehearsal of a rule or a schedule changes nothing.
         "rehearse": "allow",
         # Sentinels: registering an always-on watcher is local + reversible and

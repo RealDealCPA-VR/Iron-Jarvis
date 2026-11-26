@@ -341,6 +341,7 @@ LETS_RUN: dict[str, str] = {
     "rehearse": "refuses inside a rehearsal: a rehearsal cannot start another one",
     "run_doctor": _SELF,
     "schedule_list": _RECORDS,
+    "start_list": _RECORDS,
     "secret_list": _RECORDS,
     "skill_load": "reads a skill's instructions; runs nothing",
     "skill_search": "searches the skills; runs nothing",

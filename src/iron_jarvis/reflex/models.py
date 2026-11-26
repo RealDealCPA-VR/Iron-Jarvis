@@ -21,13 +21,24 @@ from ..core.ids import new_id, utcnow
 #: event coming due, or a Slack message can each fire a rule. Every source still
 #: runs the SAME gated action path — a remote signal gets no more power than a
 #: local one.
-REFLEX_SOURCES = ("webhook", "comm", "email", "calendar", "slack", "file", "download")
+REFLEX_SOURCES = ("webhook", "comm", "email", "calendar", "slack", "file", "download", "run_ended")
 #: What firing does.
 REFLEX_ACTIONS = ("workflow", "remote_agent", "session")
 
 #: Leap 05-a (D-05.3): how many times one rule may start in an hour before it
 #: pauses itself and says so (once a day per rule).
 MAX_FIRES_PER_HOUR = 12
+
+#: Leap 05-b: what kind of task a ``run_ended`` rule listens to
+#: (``start_json.what``): one of your schedules, a workflow, a rule's run, an
+#: agent run, or any of them.
+RUN_ENDED_WHATS = ("schedule", "workflow", "rule", "agent", "any")
+#: How that task must have ended (``start_json.outcome``). ``any`` is any way
+#: it fell short: failed, part failed, needs you, or did nothing. A task that
+#: was done, or that a person stopped, starts nothing.
+RUN_ENDED_OUTCOMES = ("failed", "part_failed", "needs_you", "any")
+#: Left out, a rule listens for a task that FAILED.
+RUN_ENDED_DEFAULT_OUTCOME = "failed"
 
 
 class ReflexRule(SQLModel, table=True):
@@ -80,7 +91,10 @@ class ReflexRule(SQLModel, table=True):
     #: Leap 05-a: what the start needs beyond ``match``, by source (JSON):
     #: ``{"path", "glob", "per_file"}`` for ``file`` (the folder it watches;
     #: its watcher is a ``rule``-mode SentinelRecord naming this rule) and
-    #: ``{"match_site"}`` for ``download``. "" for every other source.
+    #: ``{"match_site"}`` for ``download``. Leap 05-b: ``{"what", "name",
+    #: "outcome"}`` for ``run_ended`` (another task ended short: which kind,
+    #: its name or "" for any of that kind, and how it ended). "" for every
+    #: other source.
     start_json: str = ""
     #: The custom agent (its roster name) the work is done by; "" keeps the
     #: supervisor, as before. Resolved at fire time the way a schedule's is

@@ -328,6 +328,26 @@ def failure_door_for(tool_name: str, args: Any, result: Any) -> dict[str, str] |
             if isinstance(data, dict) and data.get("door") == "/improvements":
                 return {"href": "/improvements", "label": "Open Improvements"}
             return None
+        if name == "reflex_create":
+            # Leap 05-b: a rule whose signal is not set up yet (no mailbox
+            # that listens, no calendar link) is refused with the page that
+            # sets it up. The door is the readiness table's own, by the
+            # rule's source; the tool's data only marks the refusal.
+            from ..triggers.readiness import NOT_READY
+
+            data = getattr(result, "data", None)
+            marked = data.get("door") if isinstance(data, dict) else None
+            if not isinstance(marked, dict):
+                return None
+            href = str(marked.get("href") or "")
+            source = str(args.get("source") or "") if isinstance(args, dict) else ""
+            own = NOT_READY.get(source)
+            if own is not None and own[1]["href"] == href:
+                return dict(own[1])
+            for _words, door in NOT_READY.values():
+                if door["href"] == href:
+                    return dict(door)
+            return None
         if name.startswith("browser_"):
             data = getattr(result, "data", None)
             code = str(data.get("code") or "") if isinstance(data, dict) else ""

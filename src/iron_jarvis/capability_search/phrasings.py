@@ -4245,6 +4245,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'name and file each document in this scan',
         'pull apart the statements in this PDF',
     ),
+    'start_list': (
+        'what runs on its own here',
+        'show me everything that runs automatically',
+        'list my rules and schedules',
+        'what happens without me asking',
+        'what kicks off my month end workflow',
+        'which automations do I have',
+        'what is set to run by itself',
+        'show all my automatic tasks',
+    ),
     'start_with_windows': (
         'Open the assistant when Windows starts',
         'Launch it automatically when I log in',

@@ -474,10 +474,11 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
         1, "a rule's REAL fire to a remote agent; a rehearsal goes through ReflexRouter.rehearse "
            "(SIDE_DOORS remote_agent) and never here"),
     ("reflex/router.py", "tool_execute"): (
-        5, "the router's own execute, not a tool's: a rule's REAL fire from a webhook, a signal, "
-           "the phone's /run, a new file in a watched folder or a finished download (on_webhook, "
-           "on_signal, start, and leap 05-a's on_file and on_download); a rehearsal goes through "
-           "ReflexRouter.rehearse to _run_session and never calls it"),
+        6, "the router's own execute, not a tool's: a rule's REAL fire from a webhook, a signal, "
+           "the phone's /run, a new file in a watched folder, a finished download or another task "
+           "that ended short (on_webhook, on_signal, start, leap 05-a's on_file and on_download, "
+           "leap 05-b's on_run_ended); a rehearsal goes through ReflexRouter.rehearse to "
+           "_run_session and never calls it"),
     ("triggers/calendar.py", "http_client"): (
         1, "the calendar feed's own poll, which reads the person's calendar to fire its rules; "
            "a rehearsal starts from a made-up sample event (tools/rehearsal_runs) and never polls"),

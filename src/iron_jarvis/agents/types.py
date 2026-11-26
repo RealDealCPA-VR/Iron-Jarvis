@@ -69,6 +69,9 @@ _SELF_SERVICE_TOOLS = [
     "schedule_create",
     # v1.486.0: an agent that makes a schedule can see the ones there are.
     "schedule_list",
+    # Leap 05-b: ... and everything that runs on its own (schedules and rules),
+    # read only: a "when another task fails" rule's run can name the task.
+    "start_list",
     "webhook_add",
     "workflow_create",
     # v1.172.0: an agent that can AUTHOR a workflow must be able to SEE the

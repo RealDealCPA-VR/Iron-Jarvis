@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 #: The vault key that holds the (secret) calendar ICS URL. Kept in the encrypted
 #: vault — NOT in config.toml — and never returned in any response body.
-_CALENDAR_ICS_SECRET = "calendar_ics_url"
+from ...triggers.readiness import CALENDAR_ICS_SECRET as _CALENDAR_ICS_SECRET  # noqa: E402
 
 
 class CalendarTriggerBody(BaseModel):
@@ -43,63 +43,18 @@ class CalendarTriggerBody(BaseModel):
 def register(app: FastAPI, d) -> None:
     """Attach the /triggers routes to *app*; ``d`` is the create_app deps object."""
 
-    def _email_status() -> dict[str, Any]:
-        """Email trigger readiness: any comm channel whose ``reflex_source`` is
-        ``"email"`` that has opted into inbound AND resolves its credentials.
+    # Leap 05-b: the three readings moved to ``triggers/readiness`` word for
+    # word (``GET /starts/kinds`` and chat's ``reflex_create`` read them too).
+    from ...triggers import readiness as _readiness
 
-        Email triggers ride the EXISTING per-channel comm inbound toggle (there is
-        no global email flag) — so "enabled" here means an email-source channel has
-        ``inbound_enabled`` on, and "credentialed" means it also has_credentials()."""
-        names: list[str] = []
-        enabled = False
-        credentialed = False
-        notifier = getattr(d.platform, "notifier", None)
-        if notifier is not None:
-            for name in notifier.channels():
-                ch = notifier.get(name)
-                if ch is None or getattr(ch, "reflex_source", "comm") != "email":
-                    continue
-                names.append(name)
-                if _safe_bool(ch, "inbound_enabled"):
-                    enabled = True
-                    if _safe_bool(ch, "has_credentials"):
-                        credentialed = True
-        return {"enabled": enabled, "credentialed": credentialed, "channels": names}
+    def _email_status() -> dict[str, Any]:
+        return _readiness.email_status(d.platform)
 
     def _slack_status() -> dict[str, Any]:
-        """Slack trigger readiness: any configured Slack channel. Slack triggers
-        ride the existing Slack channel/socket path — "enabled" means a Slack
-        channel exists at all, "credentialed" means one can receive (a bot token
-        that resolves)."""
-        names: list[str] = []
-        credentialed = False
-        notifier = getattr(d.platform, "notifier", None)
-        if notifier is not None:
-            for name in notifier.channels():
-                ch = notifier.get(name)
-                if ch is None:
-                    continue
-                if getattr(ch, "reflex_source", "") == "slack" or getattr(ch, "name", "") == "slack":
-                    names.append(name)
-                    if _safe_bool(ch, "has_credentials"):
-                        credentialed = True
-        return {"enabled": bool(names), "credentialed": credentialed, "channels": names}
+        return _readiness.slack_status(d.platform)
 
     def _calendar_status() -> dict[str, Any]:
-        """Calendar trigger readiness. ``has_url`` reports PRESENCE only — the raw
-        ICS URL is a vault secret and is NEVER returned."""
-        cfg = d.platform.config
-        has_url = False
-        try:
-            has_url = bool(d.platform.secrets.get(_CALENDAR_ICS_SECRET))
-        except Exception:  # noqa: BLE001 — status must never raise
-            has_url = False
-        return {
-            "enabled": bool(getattr(cfg, "calendar_trigger_enabled", False)),
-            "has_url": has_url,
-            "lead_minutes": int(getattr(cfg, "calendar_lead_minutes", 15)),
-            "tick_seconds": int(getattr(cfg, "calendar_tick_seconds", 300)),
-        }
+        return _readiness.calendar_status(d.platform)
 
     def _status() -> dict[str, Any]:
         return {
@@ -116,6 +71,27 @@ def register(app: FastAPI, d) -> None:
         whether each is enabled + credentialed. Read-only, never raises, never
         leaks a secret (the calendar ICS URL is reported only as ``has_url``)."""
         return _status()
+
+    @app.get("/starts")
+    def list_starts(workflow: str | None = None) -> dict[str, Any]:
+        """Leap 05-b: every way work starts on its own here, in ONE list: your
+        schedules (they start at a time) and your rules (something happens).
+        Each row is its stored object, read from its own store (no table of
+        its own): ``{id, kind, name, when_words, does_words, enabled,
+        last_words, href, store}``. ``?workflow=<name>``: only what runs that
+        saved workflow (its canvas's trigger node reads it). A plain ``def``
+        (FastAPI runs it off the loop)."""
+        from ...triggers import starts as _starts
+
+        return {"starts": _starts.list_starts(d.platform, workflow=workflow)}
+
+    @app.get("/starts/kinds")
+    def start_kinds() -> dict[str, Any]:
+        """Leap 05-b: can each kind of signal start a rule now? ``{kind:
+        {ready, words, door}}`` — the plain words and the page that sets it up
+        when it cannot (``triggers/readiness``), with ``GET /triggers``'s three
+        readings folded in under ``triggers``. Never returns a secret."""
+        return {"kinds": _readiness.kinds(d.platform), **_status()}
 
     @app.post("/triggers/calendar")
     def set_calendar_trigger(body: CalendarTriggerBody) -> dict[str, Any]:
