@@ -121,6 +121,78 @@ def test_start_list_answers_from_the_one_list_and_the_question_arms_it(desk, tmp
     assert only.output.startswith("2 things run the workflow “Month end”:")
 
 
+def test_start_list_never_says_what_a_run_said_to_a_turn_that_is_not_local_only(desk, tmp_path):
+    """Review 4: a schedule's last run words (``last_detail``, the run's own
+    words) may be a Local only run's, so ``start_list`` says only how the run
+    went to a turn that may not be handed a Local only chat's text (a cloud
+    chat, an agent run, a message sent with the one-time OK); a Local only
+    turn hears them, and the local page keeps them.
+
+    MUTATION (red): in ``StartListTool.execute`` pass ``details=True`` (or
+    drop ``if detail`` in ``starts._schedule_last_words``) -> the words reach
+    the cloud turn's output and data."""
+    import json
+
+    from iron_jarvis.core.models import ChatThreadRecord, Session
+    from iron_jarvis.providers import egress
+
+    c, p = desk
+    with session_scope(p.engine) as db:
+        db.add(ChatThreadRecord(id="thread-l02-review4", setup_json=json.dumps({"local_only": True})))
+        run = Session(task="t", options_json=json.dumps({"local_only": True}))
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = run.id
+    chat_sched = p.scheduler.add_task("Client review", "0 9 * * *", kind="task",
+                                      payload={"task": "Review the client file"},
+                                      chat_thread_id="thread-l02-review4")
+    run_sched = p.scheduler.add_task("Evening check", "0 18 * * *", kind="task", payload={"task": "Check"})
+    with session_scope(p.engine) as db:
+        for sid, status, said, session_id in (
+            (chat_sched.id, "ok", "I reviewed PROBE-CHAT-WORDS and found the basis missing.", ""),
+            (run_sched.id, "error", "The run stopped at PROBE-RUN-WORDS.", run_id),
+        ):
+            rec = db.get(ScheduledTaskRecord, sid)
+            rec.last_status, rec.last_detail, rec.last_session_id = status, said, session_id
+            db.add(rec)
+        db.commit()
+    ctx = ToolContext(workspace=tmp_path, session_id="chat", agent_run_id="chat",
+                      config=p.config, event_bus=p.event_bus, engine=p.engine)
+
+    def ask() -> tuple[str, str]:
+        r = asyncio.run(p.registry.invoke("start_list", {}, ctx, p.permissions))
+        assert r.ok, r.error
+        return r.output, json.dumps(r.data)
+
+    probes = ("PROBE-CHAT-WORDS", "PROBE-RUN-WORDS")
+    # A cloud turn (no Local only scope), and a Local only chat's message sent
+    # with the one-time OK for a cloud model: how it went, never what it said.
+    for scope in (None, ("on", "Anthropic")):
+        if scope is None:
+            out, data = ask()
+        else:
+            with egress.local_only_scope(True, scope[1]):
+                out, data = ask()
+        for probe in probes:
+            assert probe not in out and probe not in data, (scope, out)
+        assert "- Schedule “Client review”: Every day at 9:00 AM. Does: Review the client file. Last run: Done." in out
+        assert "Last run: Failed." in out
+        assert "What each schedule's last run said is on the Schedules page." in out
+    # A Local only turn may hear its own PC's words.
+    with egress.local_only_scope(True):
+        out, data = ask()
+    for probe in probes:
+        assert probe in out and probe in data, out
+    assert "is on the Schedules page" not in out
+    # The local page keeps them.
+    page = c.get("/starts").text
+    assert all(probe in page for probe in probes)
+    # schedule_list never said them either.
+    listed = asyncio.run(p.registry.invoke("schedule_list", {}, ctx, p.permissions))
+    assert listed.ok and not any(probe in listed.output for probe in probes)
+
+
 def test_a_failing_task_said_in_chat_arms_the_rule_and_its_readers():
     from iron_jarvis.settings import records as R
 

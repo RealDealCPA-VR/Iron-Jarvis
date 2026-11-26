@@ -53,11 +53,16 @@ class StartListTool(Tool):
         self.platform = platform
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from ..providers.egress import may_recall_local_only_chats
         from . import readiness
         from .starts import list_starts
 
         workflow = " ".join(str(args.get("workflow") or "").split()) or None
-        rows = await asyncio.to_thread(list_starts, self.platform, workflow=workflow)
+        # Review 4: what a schedule's last run SAID (its own words) may be a
+        # Local only run's, so only a turn that may be handed a Local only
+        # chat's text hears it; any other turn hears how the run went.
+        details = may_recall_local_only_chats()
+        rows = await asyncio.to_thread(list_starts, self.platform, workflow=workflow, details=details)
         kinds = await asyncio.to_thread(readiness.kinds, self.platform)
         lines: list[str] = []
         for row in rows[:LIST_MAX]:
@@ -81,6 +86,8 @@ class StartListTool(Tool):
         out = head + ("\n" + "\n".join(lines) if lines else "")
         if len(rows) > LIST_MAX:
             out += f"\n…and {len(rows) - LIST_MAX} more, on the Rules and Schedules pages."
+        if not details and any(r["store"] == "schedule" and r["last_words"] != "Not run yet." for r in rows):
+            out += "\nWhat each schedule's last run said is on the Schedules page."
         if not_set_up and not workflow:
             out += "\nNot set up yet, so no rule can hear it: " + "; ".join(not_set_up) + "."
         return ToolResult(

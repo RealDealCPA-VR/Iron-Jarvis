@@ -1190,13 +1190,16 @@ _SCHEDULE_LAST = {
 }
 
 
-def _schedule_last_words(rec: Any) -> str:
+def _schedule_last_words(rec: Any, *, detail: bool = True) -> str:
+    """How a schedule's last run went. ``detail=False`` (review 4): the
+    badge word only, never what the run said (``last_detail``, the run's own
+    words, which may be a Local only run's)."""
     status = str(getattr(rec, "last_status", "") or "")
     if not status:
         return "Not run yet."
     word = _SCHEDULE_LAST.get(status, status.replace("_", " ").capitalize())
-    detail = _q(getattr(rec, "last_detail", "") or "", 160)
-    return f"Last run: {word}" + (f". {detail}" if detail else ".")
+    said = _q(getattr(rec, "last_detail", "") or "", 160) if detail else ""
+    return f"Last run: {word}" + (f". {said}" if said else ".")
 
 
 def _rule_last_words(rule: Any) -> str:
@@ -1221,13 +1224,19 @@ def _schedule_workflow(rec: Any) -> str:
     return " ".join(str(payload.get("workflow") or payload.get("name") or "").split())
 
 
-def list_starts(platform: Any, *, workflow: str | None = None) -> list[dict[str, Any]]:
+def list_starts(
+    platform: Any, *, workflow: str | None = None, details: bool = True,
+) -> list[dict[str, Any]]:
     """Leap 05-b: every way work starts on its own here, ONE list built from
     the stored objects themselves (no table of its own): each schedule
     (``ScheduledTaskRecord``, it starts at a time) and each rule
     (``ReflexRule``). Rows: ``{id, kind, name, when_words, does_words,
     enabled, last_words, href, store}``; ``id`` loads from ``store``'s own
-    table. ``workflow``: only what runs that saved workflow. BLOCKING."""
+    table. ``workflow``: only what runs that saved workflow. ``details=False``
+    (review 4): a schedule's ``last_words`` say only how its last run went,
+    never what that run said — for a model's turn that may not be handed a
+    Local only chat's text (``start_list``); the local page keeps them.
+    BLOCKING."""
     want = " ".join(str(workflow or "").split()).casefold()
     rows: list[dict[str, Any]] = []
     scheduler = getattr(platform, "scheduler", None)
@@ -1254,7 +1263,7 @@ def list_starts(platform: Any, *, workflow: str | None = None) -> list[dict[str,
                 "when_words": (when[:1].upper() + when[1:] + ".") if when else "",
                 "does_words": (does[:1].upper() + does[1:] + ("" if does.endswith(".") else ".")) if does else "",
                 "enabled": bool(rec.enabled),
-                "last_words": _schedule_last_words(rec),
+                "last_words": _schedule_last_words(rec, detail=details),
                 "href": "/schedules",
                 "store": "schedule",
             })

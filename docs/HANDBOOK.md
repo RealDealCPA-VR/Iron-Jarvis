@@ -2309,13 +2309,17 @@ with what it does and how it last went (press one to change it on
 Schedules). On a workflow's canvas, the first box (**When should this
 run?**) lists under **Runs it now** the schedules and rules that already run
 it. In chat, "what runs on its
-own here?" gets the same list.
+own here?" gets the same list. A chat that is not Local only hears how each
+schedule last went, but not what that run said (it may be a Local only run's
+words): the Schedules page shows that.
 
-**Not set up yet.** Asking for a rule started by email while no mailbox
-listens, by a calendar event while your calendar is not read, or by Slack or
-your phone while nothing listens there, gets a plain answer and a button to
-the page that sets it up (Notifications, or the calendar under Triggers on
-Rules). Nothing is made that could never start.
+**Not set up yet.** Asking in chat for a rule started by email while no
+mailbox listens, by a calendar event while your calendar is not read, or by
+Slack or your phone while nothing listens there, gets a plain answer and a
+button to the page that sets it up (Notifications, or the calendar under
+Triggers on Rules). Nothing is made from chat that could never start. On the
+Rules page you can still add one yourself; an email, Slack or calendar rule's
+row then says what to turn on.
 
 ## What everything cost, by folder, client, automation and agent (v1.580.0)
 
