@@ -283,3 +283,79 @@ async def test_the_write_up_says_could_not_be_checked_even_when_the_model_leaves
     assert "Both steps completed." in final
     assert "were done but could not be checked" in final
     assert "- step 2: draft the email" in final and "- step 1" not in final
+
+
+# --------------------------------------------------------------------------- #
+# Review follow-ups: every place that SERVES the run carries the count.
+# --------------------------------------------------------------------------- #
+def _finished_row(platform, *, unchecked, origin=None, summary="all done"):
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import Session
+
+    s = Session(
+        task="split task", status=SessionStatus.COMPLETED, outcome="completed",
+        unchecked_steps=unchecked, origin=origin, summary=summary,
+    )
+    sid = s.id
+    with session_scope(platform.engine) as db:
+        db.add(s)
+        db.commit()
+    return sid
+
+
+def test_the_session_rows_the_dashboard_is_served_carry_the_count(tmp_path):
+    """The badge reads the SERVED row (``daemon/app._session_view``), which is
+    built key by key: a count that is only on the database row never reaches
+    a screen."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        platform = client.app.state.platform
+        one = _finished_row(platform, unchecked=1)
+        none = _finished_row(platform, unchecked=None)
+
+        assert client.get(f"/sessions/{one}").json()["session"]["unchecked_steps"] == 1
+        assert client.get(f"/sessions/{none}").json()["session"]["unchecked_steps"] is None
+        listed = client.get("/sessions").json()
+        rows = {r["id"]: r for r in (listed["sessions"] if isinstance(listed, dict) else listed)}
+        assert rows[one]["unchecked_steps"] == 1 and rows[none]["unchecked_steps"] is None
+
+
+def test_the_objectives_rail_and_the_mission_screen_carry_the_count(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.agents.team import MISSION_ORIGIN
+    from iron_jarvis.daemon.app import create_app
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        platform = client.app.state.platform
+        sid = _finished_row(platform, unchecked=2, origin=MISSION_ORIGIN)
+        rail = {m["id"]: m for m in client.get("/missions").json()["missions"]}
+        assert rail[sid]["unchecked_steps"] == 2
+        screen = client.get(f"/sessions/{sid}/mission").json()
+        assert screen["session"]["unchecked_steps"] == 2
+
+
+def test_the_report_a_run_writes_into_its_chat_says_the_result_line(platform):
+    from iron_jarvis.agents.chat_delivery import report_line_for_session
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import Session
+
+    source = {"kind": "schedule", "name": "Monday report", "id": "sch_1", "href": "/schedules"}
+    sid = _finished_row(platform, unchecked=1)
+    with session_scope(platform.engine) as db:
+        row = db.get(Session, sid)
+    receipt = {"found": True, "status": "completed", "outcome": "completed", "plan_steps_unchecked": 1}
+    line = report_line_for_session(row, receipt, source)
+    assert line["reportFrom"]["outcome"] == "Done. 1 step could not be checked."
+
+    clean = report_line_for_session(row, {**receipt, "plan_steps_unchecked": 0}, source)
+    assert clean["reportFrom"]["outcome"] == "Done"
+    # A run that fell short keeps its own word.
+    short = report_line_for_session(
+        Session(id=sid, task="t", status=SessionStatus.COMPLETED, outcome="needs_you", summary="x"),
+        {**receipt, "outcome": "needs_you"}, source,
+    )
+    assert short["reportFrom"]["outcome"] == "Needs you"

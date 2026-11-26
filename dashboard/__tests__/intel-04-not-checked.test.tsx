@@ -56,6 +56,8 @@ import {
 } from "@/lib/planChecklist";
 import { doneNotCheckedWords, uncheckedWords } from "@/lib/statusWords";
 import type { IJEvent } from "@/lib/types";
+import { decodeMission, decodeMissions, missionHeadline, missionHeadlineWarn, missionRowWords } from "@/lib/mission";
+import { liveEventWords } from "@/components/sessions/runPageWords";
 
 afterEach(cleanup);
 
@@ -299,5 +301,49 @@ describe("the bell's line", () => {
     expect(
       toActivity(completed({ status: "completed", outcome: "completed", origin: "job:mission", summary: "x" }))?.title,
     ).toBe("Your objective is done");
+  });
+});
+
+describe("the other first-look screens (review follow-up)", () => {
+  /** GET /sessions/{id}/mission, the fields the headline reads. */
+  const mission = (session: Record<string, unknown>) =>
+    decodeMission({
+      found: true,
+      session: { id: "sess_m1", task: "t", objective: "t", status: "completed", outcome: "completed", ...session },
+      coordinator: {}, members: [], activity: [],
+    });
+
+  it("the mission screen's headline says it, in the warn tone", () => {
+    const v = mission({ unchecked_steps: 1 });
+    expect(v).not.toBeNull();
+    expect(missionHeadline(v!)).toBe("Done. 1 step could not be checked.");
+    expect(missionHeadlineWarn(v!)).toBe(true);
+    const clean = mission({ unchecked_steps: null });
+    expect(missionHeadline(clean!)).toBe("Done");
+    expect(missionHeadlineWarn(clean!)).toBe(false);
+    // Junk in the field is no count.
+    expect(missionHeadline(mission({ unchecked_steps: "2" })!)).toBe("Done");
+  });
+
+  it("the objectives rail's row says it", () => {
+    const rows = decodeMissions({
+      missions: [
+        { id: "a", objective: "x", waiting: false, status: "completed", outcome: "completed", unchecked_steps: 2 },
+        { id: "b", objective: "y", waiting: false, status: "completed", outcome: "completed" },
+        { id: "c", objective: "z", waiting: false, status: "completed", outcome: "needs_you", unchecked_steps: 2 },
+      ],
+    });
+    expect(missionRowWords(rows[0])).toEqual({ word: "Done, 2 steps not checked", tone: "amber" });
+    expect(missionRowWords(rows[1]).word).toBe("Done");
+    expect(missionRowWords(rows[2]).word).toBe("Needs you");
+  });
+
+  it("the run page's timeline line says it", () => {
+    const ended = (payload: Record<string, unknown>) =>
+      liveEventWords({ id: "e9", ts: "2026-11-26T10:02:00Z", type: "session.completed", session_id: "s1", payload } as IJEvent).detail;
+    expect(ended({ status: "completed", outcome: "completed", unchecked_steps: 1 })).toBe("Done. 1 step could not be checked.");
+    expect(ended({ status: "completed", outcome: "completed" })).toBe("Done");
+    expect(ended({ status: "completed", outcome: "needs_you", unchecked_steps: 1 })).toBe("Needs you");
+    expect(ended({ status: "failed", unchecked_steps: 1 })).toBe("Failed");
   });
 });

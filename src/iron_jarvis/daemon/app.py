@@ -430,6 +430,11 @@ def _session_view(session, d=None) -> dict[str, Any]:
     return {
         "id": session.id,
         "outcome": getattr(session, "outcome", None) or None,
+        # The intelligence plan, release 4: steps of the run's plan that were
+        # done but could not be checked (``Session.unchecked_steps``; None
+        # for none). The status badge reads it beside the verdict, so a row
+        # served without it would read as a plain "Done".
+        "unchecked_steps": int(getattr(session, "unchecked_steps", None) or 0) or None,
         "waiting_on": waiting_on,
         # v1.298.0: the TRUST posture, on every row every route serves
         # (routes/sessions._session_row used to add these alone).

@@ -595,9 +595,14 @@ def report_line_for_session(
     """A source's report, written by the run it started (a schedule's fire):
     the verdict from the LEDGER (``outcome.run_ending``), never the model's
     closing words; the run's summary as the body; the run's receipt. Pure."""
-    from .outcome import run_ending
+    from .outcome import result_line, run_ending
 
     ending = run_ending(session)
+    # The intelligence plan, release 4: the badge word is the run's RESULT
+    # LINE ("Done. 1 step could not be checked." when a plan step's check did
+    # not run), read from the same receipt; the bare word when there is no
+    # receipt to read.
+    said = (result_line(result) if isinstance(result, dict) else "") or ending.words
     sid = str(getattr(session, "id", "") or "")
     summary = str(getattr(session, "summary", "") or "").strip()
     report = {
@@ -606,7 +611,7 @@ def report_line_for_session(
         "id": source.get("id"),
         "href": source.get("href"),
         "run_id": sid,
-        "outcome": ending.words,
+        "outcome": said if ending.ok else ending.words,
         "reason": "" if ending.ok else ending.reason,
         "words": summary,
         "key": f"run:{sid}" if sid else "",

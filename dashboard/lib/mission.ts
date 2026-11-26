@@ -10,7 +10,7 @@
 // honest empty value, never as a guess. Progress in particular keeps the
 // daemon's `pct: null` — "no count behind this bar" — instead of inventing one.
 
-import { statusWords, type StatusWords } from "@/lib/statusWords";
+import { doneNotCheckedWords, outcomeWords, statusWords, uncheckedWords, type StatusWords } from "@/lib/statusWords";
 import { secondsText } from "@/lib/durationWords";
 
 export type MemberStatus =
@@ -98,6 +98,9 @@ export interface MissionView {
     objective: string;
     status: string;
     outcome: string | null;
+    /** The intelligence plan, release 4: plan steps that were done but could
+     *  not be checked (null or absent for none). */
+    unchecked_steps?: number | null;
     project_id: string | null;
     created_at: string | null;
     finished_at: string | null;
@@ -125,9 +128,16 @@ export interface MissionRow {
   /** v1.309.0: the mission or one of its teammates is parked on an ask. */
   waiting: boolean;
   outcome: string | null;
+  /** Release 4 of the intelligence plan; absent on an older row. */
+  unchecked_steps?: number | null;
   project_id: string | null;
   created_at: string | null;
   finished_at: string | null;
+}
+
+/** A positive whole count of unchecked plan steps, else null. */
+export function uncheckedCount(v: unknown): number | null {
+  return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
 }
 
 export const MISSION_TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -226,6 +236,7 @@ export function decodeMission(raw: unknown): MissionView | null {
       objective: str(s.objective) || str(s.task),
       status: str(s.status),
       outcome: strOrNull(s.outcome),
+      unchecked_steps: uncheckedCount(s.unchecked_steps),
       project_id: strOrNull(s.project_id),
       created_at: strOrNull(s.created_at),
       finished_at: strOrNull(s.finished_at),
@@ -273,6 +284,7 @@ export function decodeMissions(raw: unknown): MissionRow[] {
       status: str(o.status),
       waiting: o.waiting === true,
       outcome: strOrNull(o.outcome),
+      unchecked_steps: uncheckedCount(o.unchecked_steps),
       project_id: strOrNull(o.project_id),
       created_at: strOrNull(o.created_at),
       finished_at: strOrNull(o.finished_at),
@@ -394,16 +406,26 @@ export function missionFinish(v: MissionView): "done" | "needs_you" | "part_fail
  * carries the ledger verdict only; a mission's worklist failures are folded
  * into that verdict when it finishes — orchestrator `_settle_finished_run`.)
  */
-export function missionRowWords(r: Pick<MissionRow, "status" | "outcome" | "waiting">): StatusWords {
+export function missionRowWords(
+  r: Pick<MissionRow, "status" | "outcome" | "waiting" | "unchecked_steps">,
+): StatusWords {
   if (r.waiting && (r.status === "active" || r.status === "queued")) return statusWords("waiting_you");
-  return statusWords(r.status, r.outcome);
+  const words = statusWords(r.status, r.outcome);
+  // The intelligence plan, release 4: "Done, 1 step not checked", never a
+  // plain "Done" over a plan step nobody could check.
+  if (r.status === "completed" && !outcomeWords(r.outcome)) {
+    return doneNotCheckedWords(uncheckedCount(r.unchecked_steps)) ?? words;
+  }
+  return words;
 }
 
 /** v1.351.0 (G09): the headline's tone. A finish that fell short or needs
  *  the user reads in the warn token, matching the bell's warning mark. */
 export function missionHeadlineWarn(v: MissionView): boolean {
   const f = missionFinish(v);
-  return f === "needs_you" || f === "part_failed";
+  if (f === "needs_you" || f === "part_failed") return true;
+  // The intelligence plan, release 4: done, but a step could not be checked.
+  return f === "done" && uncheckedCount(v.session.unchecked_steps) !== null;
 }
 
 /** v1.449.0 (plan 0h.5 item 17): how long the mission took, in the app's
@@ -438,7 +460,11 @@ export function missionHeadline(v: MissionView): string {
     const f = missionFinish(v);
     if (f === "needs_you") return NEEDS_YOU_HEADLINE;
     if (f === "part_failed") return PART_FAILED_HEADLINE;
-    return statusWords("completed").word;
+    // The intelligence plan, release 4: the bell's own sentence for the
+    // same run ("Your objective is done. 1 step could not be checked").
+    const done = statusWords("completed").word;
+    const unchecked = uncheckedWords(v.session.unchecked_steps);
+    return unchecked ? `${done}. ${unchecked}` : done;
   }
   if (st === "failed") return statusWords("failed").word;
   if (st === "cancelled") return statusWords("cancelled").word;

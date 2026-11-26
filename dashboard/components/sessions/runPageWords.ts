@@ -22,7 +22,7 @@ import { stepLabel } from "@/components/chat/stepLabel";
 import { replyWhere, type ReplyWhere } from "@/components/chat/TurnReceipt";
 import { humanSummary } from "@/lib/eventWords";
 import { stepPhrase, stepPhraseText } from "@/lib/stepWords";
-import { statusWords } from "@/lib/statusWords";
+import { statusWords, uncheckedWords } from "@/lib/statusWords";
 import { isOwnServerSlot, isServerAlias, modelRowName, providerDisplay } from "@/lib/onboarding";
 import { endpointLabel, type RanOnRow } from "@/lib/ranOnWords";
 import { normalizeIso } from "@/lib/format";
@@ -267,9 +267,13 @@ export function liveEventWords(e: IJEvent): { label: string; detail: string } {
     }
     case "session.completed": {
       const status = str(p.status);
+      const word = status ? statusWords(status, str(p.outcome) || null).word : "";
+      // The intelligence plan, release 4: the event carries `unchecked_steps`
+      // only for a run that is done except for a step nobody could check.
+      const unchecked = word === statusWords("completed").word ? uncheckedWords(p.unchecked_steps) : "";
       return {
         label: humanSummary(e.type),
-        detail: status ? statusWords(status, str(p.outcome) || null).word : "",
+        detail: unchecked ? `${word}. ${unchecked}` : word,
       };
     }
     case "provider.routed":

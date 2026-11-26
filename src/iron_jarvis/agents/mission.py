@@ -2107,6 +2107,10 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             "objective": display_objective(root),
             "status": root.status.value,
             "outcome": getattr(root, "outcome", None) or None,
+            # The intelligence plan, release 4: plan steps that were done but
+            # could not be checked (None for none), so the headline is never
+            # a plain "Done" over them.
+            "unchecked_steps": int(getattr(root, "unchecked_steps", None) or 0) or None,
             "agent_type": root.agent_type.value,
             "project_id": root.project_id,
             "provider": root.provider,
