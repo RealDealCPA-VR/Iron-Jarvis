@@ -2,9 +2,13 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.582.0
+
+**Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below).
+
 ## v1.581.0
 
-**Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below). **Ask about earlier work by date and by client, and open each piece.** Ask "what did we do for Baker in March?" in any chat and the answer comes from Iron Jarvis's own record of earlier work: "3 pieces of work in March 2026, for Baker".
+**Ask about earlier work by date and by client, and open each piece.** Ask "what did we do for Baker in March?" in any chat and the answer comes from Iron Jarvis's own record of earlier work: "3 pieces of work in March 2026, for Baker".
 
 ## v1.580.4
 
@@ -77,7 +81,3 @@
 ## v1.565.0
 
 **Finished files come back to your phone, and approvals have buttons.** Ask Jarvis from Telegram, Slack or email to "turn this into a spreadsheet", and the answer arrives with the spreadsheet.
-
-## v1.564.0
-
-**Sort a scanned pile into its documents.** One PDF that holds a whole scanned pile becomes separate, named documents in their folders, after you check the plan.
