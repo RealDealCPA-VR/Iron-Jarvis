@@ -43,6 +43,15 @@ The review's fourth round:
   running, one whose row is gone; another folder's session does not count;
 * in a rehearsal ``coding_record`` reads through the real registry and marks
   nothing kept.
+
+The review's fifth round:
+* a commit call still RUNNING (its intent row, no ledger row yet) in any
+  folder session, a helper of one or a session with a reply running keeps
+  nothing; a session on its own branch of the folder is asked too;
+* the guard's reads are bounded: more sessions than one read holds decide
+  nothing, a ledger longer than one read decides nothing before the rows read,
+  and every ledger read is an index range on ``created_at``, never a walk of
+  the whole table.
 """
 
 from __future__ import annotations
@@ -52,6 +61,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -571,6 +581,15 @@ async def test_a_commit_by_any_folder_sessions_model_keeps_nothing_after_it(app,
     ledger_call(app, HS.SESSION_PREFIX + "gone_28a", base + 5)
     assert SB.keep_own_commits(engine, str(repo)) == 0
     assert rows_of(app, a) == undecided
+    # A session on its OWN BRANCH of this repository: it works in a worktree
+    # beside the folder, and the folder is its checkout (a merge brings its
+    # commits here).
+    drop_calls(app)
+    view = await new_branch_session(app, repo, branch=True)
+    assert view.get("git") and Path(view["git"]["worktree"]) != repo, view
+    ledger_call(app, HS.SESSION_PREFIX + view["id"], base + 5)
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == undecided
     # (b) session b's model committed, and b has a reply running now.
     drop_calls(app)
     ledger_call(app, HS.SESSION_PREFIX + b, base + 5)
@@ -588,6 +607,194 @@ async def test_a_commit_by_any_folder_sessions_model_keeps_nothing_after_it(app,
     assert SB.keep_own_commits(engine, str(repo)) == 2
     assert rows_of(app, a) == {f"{a}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
     assert rows_of(app, b) == {f"{b}:t2": (SB.KEPT, SB.HOW_COMMITTED)}
+
+
+def intent_call(app, session_id: str, *, command: str = "git add -A && git commit -m wip && pytest -q",
+                reversibility: str = "irreversible") -> str:
+    """A call the registry has STARTED and not finished: its intent row
+    (``registry.invoke`` writes it just before ``execute``), no ledger row
+    yet."""
+    from iron_jarvis.core.models import ToolIntent
+
+    with session_scope(app.state.platform.engine) as db:
+        row = ToolIntent(id=f"tool_28a_{uuid.uuid4().hex[:12]}", session_id=session_id, agent_run_id="run",
+                         tool="shell", args_json=json.dumps({"command": command}), reversibility=reversibility)
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+def drop_intents(app) -> None:
+    from iron_jarvis.core.models import ToolIntent
+
+    with session_scope(app.state.platform.engine) as db:
+        for row in db.exec(select(ToolIntent)).all():
+            db.delete(row)
+        db.commit()
+
+
+async def test_a_commit_still_running_in_any_folder_session_keeps_nothing(app, repo, tmp_path, monkeypatch):
+    """A model's call that has STARTED and not finished (``git commit -am x &&
+    pytest``, a commit and a push, a long hook) has no ledger row yet, and its
+    commit may already be in the folder: while it runs, nothing is decided. A
+    fresh folder session's call, a helper's, and one of a session with a
+    reply running now. The control: another folder's running commit (and its
+    helper's), and a read-only call that names commit, decide nothing."""
+    from iron_jarvis.core.models import Session
+    from iron_jarvis.core.turns import TURNS
+
+    base = int(time.time()) - 3600
+    a = await folder_session(app, repo, [("t1", "a.py", base)])
+    b = await folder_session(app, repo, [("t2", "b.py", base + 2)])
+    status, made = await asgi(app, "POST", "/build/sessions", {"folder": str(repo), "branch": False})
+    assert status == 201, made
+    fresh = made["id"]
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    status, made = await asgi(app, "POST", "/build/sessions", {"folder": str(elsewhere), "branch": False})
+    assert status == 201, made
+    away = made["id"]
+    engine = app.state.platform.engine
+    with session_scope(engine) as db:
+        db.add(Session(id="helper_28a_run", task="help", options_json=json.dumps({"build_session": fresh})))
+        db.add(Session(id="plain_28a_run", task="help", options_json=json.dumps({"build_session": away})))
+        db.commit()
+    for name in ("a.py", "b.py"):
+        (repo / name).write_text(f"{name[0]} = 1\n", encoding="utf-8")
+    commit_at(repo, base + 10, "a and b")  # after t1 and t2
+    undecided = {f"{a}:t1": ("", "")}
+
+    # The fresh session's call is running (it has no reply on record).
+    intent_call(app, HS.SESSION_PREFIX + fresh)
+    with monkeypatch.context() as m:
+        m.setattr(TURNS, "thread_states", lambda: {fresh: {"running": True, "waiting": False}})
+        assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == undecided
+    # A helper of it.
+    drop_intents(app)
+    intent_call(app, "helper_28a_run")
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == undecided
+    # Session b, with a reply running now.
+    drop_intents(app)
+    intent_call(app, HS.SESSION_PREFIX + b)
+    with monkeypatch.context() as m:
+        m.setattr(TURNS, "thread_states", lambda: {b: {"running": True, "waiting": False}})
+        assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == undecided and rows_of(app, b) == {f"{b}:t2": ("", "")}
+
+    # The control.
+    drop_intents(app)
+    intent_call(app, HS.SESSION_PREFIX + away)
+    intent_call(app, "plain_28a_run")
+    intent_call(app, HS.SESSION_PREFIX + fresh, command="git log --grep commit", reversibility="readonly")
+    assert SB.keep_own_commits(engine, str(repo)) == 2
+    assert rows_of(app, a) == {f"{a}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
+    assert rows_of(app, b) == {f"{b}:t2": (SB.KEPT, SB.HOW_COMMITTED)}
+
+
+async def test_more_sessions_than_one_read_holds_decide_nothing(app, repo, tmp_path, monkeypatch):
+    """Two sessions of ANOTHER folder ran a commit (finished, then running):
+    each alone decides nothing here, but with room for one session in a read
+    the guard cannot see whose they are, so nothing is decided rather than
+    something wrongly."""
+    base = int(time.time()) - 3600
+    a = await folder_session(app, repo, [("t1", "a.py", base)])
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    away = []
+    for _ in range(2):
+        status, made = await asgi(app, "POST", "/build/sessions", {"folder": str(elsewhere), "branch": False})
+        assert status == 201, made
+        away.append(made["id"])
+    (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
+    commit_at(repo, base + 10, "a")
+    engine = app.state.platform.engine
+    monkeypatch.setattr(SB, "OWN_COMMIT_CALLS_MAX", 1)
+    for n, sid in enumerate(away):
+        ledger_call(app, HS.SESSION_PREFIX + sid, base + 5 + n)
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == {f"{a}:t1": ("", "")}
+    drop_calls(app)
+    for sid in away:
+        intent_call(app, HS.SESSION_PREFIX + sid)
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == {f"{a}:t1": ("", "")}
+    # The control: room for both, and both are another folder's.
+    for n, sid in enumerate(away):
+        ledger_call(app, HS.SESSION_PREFIX + sid, base + 5 + n)
+    monkeypatch.setattr(SB, "OWN_COMMIT_CALLS_MAX", 2)
+    assert SB.keep_own_commits(engine, str(repo)) == 1
+    assert rows_of(app, a) == {f"{a}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
+
+
+async def test_a_ledger_too_long_for_one_read_decides_nothing_before_the_rows_read(app, repo, monkeypatch):
+    """One read takes the newest :data:`OWN_COMMIT_LEDGER_MAX` ledger rows
+    since the oldest reply waiting; a reply that ended before the rows read
+    is not decided by that read (a model's commit may be among the rows not
+    read). Read whole, the same reply is kept."""
+    base = int(time.time()) - 3600
+    a = await folder_session(app, repo, [("t1", "a.py", base)])
+    (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
+    commit_at(repo, base + 10, "a")
+    engine = app.state.platform.engine
+    drop_calls(app)
+    model_commit = ledger_call(app, HS.SESSION_PREFIX + a, base + 1)
+    for n in range(4):
+        ledger_call(app, HS.SESSION_PREFIX + a, base + 2 + n, command="pytest -q")
+    monkeypatch.setattr(SB, "OWN_COMMIT_LEDGER_MAX", 3)
+    # The model's commit is older than the three rows read.
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == {f"{a}:t1": ("", "")}
+    with session_scope(engine) as db:
+        db.delete(db.get(ToolInvocation, model_commit))
+        db.commit()
+    # No commit at all now, but t1 ended before the rows read.
+    assert SB.keep_own_commits(engine, str(repo)) == 0
+    assert rows_of(app, a) == {f"{a}:t1": ("", "")}
+    monkeypatch.setattr(SB, "OWN_COMMIT_LEDGER_MAX", 4)
+    assert SB.keep_own_commits(engine, str(repo)) == 1
+    assert rows_of(app, a) == {f"{a}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
+
+
+def test_the_guard_reads_the_ledger_through_its_time_index_never_the_whole_table(app, tmp_path, monkeypatch):
+    """Every read of the ledger the guard makes is an index range on
+    ``created_at``, never a walk of the whole table (the ledger keeps 90
+    days), and the read that opens the rows themselves starts no further back
+    than the newest :data:`OWN_COMMIT_LEDGER_MAX` rows. Read from the SQL the
+    guard really sends, through SQLite's own plan."""
+    from sqlalchemy import event
+
+    engine = app.state.platform.engine
+    now = int(time.time())
+    at = [now - 60 + n for n in range(3)]
+    for n, when in enumerate(at):
+        ledger_call(app, HS.SESSION_PREFIX + f"gone_28a_{n}", when)
+    ledger_call(app, HS.SESSION_PREFIX + "gone_28a_x", now - 30, command="pytest -q")
+    monkeypatch.setattr(SB, "OWN_COMMIT_LEDGER_MAX", 2)
+    seen: list[tuple[str, object]] = []
+
+    def grab(conn, cursor, statement, parameters, context, executemany):
+        if "toolinvocation" in statement.lower():
+            seen.append((statement, parameters))
+
+    event.listen(engine, "before_cursor_execute", grab)
+    try:
+        since = datetime.fromtimestamp(now - 3600, tz=timezone.utc).replace(tzinfo=None)
+        assert SB._folder_model_commit_at(engine, SB.folder_key(str(tmp_path)), since) is not None
+    finally:
+        event.remove(engine, "before_cursor_execute", grab)
+    assert seen
+    with engine.connect() as conn:
+        for statement, params in seen:
+            plan = " | ".join(str(r[-1]) for r in conn.exec_driver_sql("EXPLAIN QUERY PLAN " + statement, params))
+            assert "SCAN toolinvocation" not in plan, plan
+            assert "ix_toolinvocation_created_at" in plan, plan
+    # The newest two rows are now-30 and at[2]; the edge is at[1].
+    edge = datetime.fromtimestamp(at[1], tz=timezone.utc).replace(tzinfo=None)
+    (rows_read,) = [params for statement, params in seen if "args_json" in statement]
+    times = [datetime.fromisoformat(p) for p in rows_read if isinstance(p, str) and p[:4].isdigit() and p[4:5] == "-"]
+    assert times == [edge], (rows_read, edge)
 
 
 async def test_a_rehearsal_reads_the_coding_record_and_marks_nothing_kept(app, repo, tmp_path):

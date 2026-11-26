@@ -2174,8 +2174,10 @@ and in Build › Code, when you start a session and inside one.
   once a later commit holds that file, and a file the reply changed through
   a command is not looked at. A reply stays not decided when it changed
   files only through a command, or when Iron Jarvis's coding model, in any
-  session of that folder, ran a commit itself after it (that commit may be
-  the model's, not yours).
+  session of that folder, ran a commit itself after it or is running one
+  as you open the menu (that commit may be the model's, not yours). Each
+  look reads back over the newest 5,000 steps Iron Jarvis took on this PC;
+  a reply from before them stays not decided.
 - **In a folder that is not a git repository** nothing can be kept, so
   nothing is decided there either, a rewind included: its work shows only
   as not decided.
