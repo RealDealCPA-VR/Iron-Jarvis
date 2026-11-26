@@ -21,20 +21,26 @@ lanes; an agent run's from its ledger, :func:`keep_run_miss`): the LAST lookup
   for this before the rule, a word no entry knows was in the request's first
   part for 14 of the 20 and for 1 of the 30 ("translate a document");
 
-and the reply then made no successful call that changes or creates something.
-NEVER a miss: a lookup that failed (``LOOKUP_FAILED``), one with no search
-words (``TOO_GENERAL``), one read from part of the list (``partial``), a
-low-trust turn (the request may be an injected one), a task from another
-computer, an agent run whose task is not the owner's own words.
+and the reply then made no successful call that changes or creates something
+(for ``unknown``, whose lookup listed lines, no successful call at all other
+than a lookup: a line that fitted and was used, even one that only reads, is
+the request done; :func:`done_another_way`). NEVER a miss: a lookup that
+failed (``LOOKUP_FAILED``), one with no search words (``TOO_GENERAL``), one
+read from part of the list (``partial``), a low-trust turn (the request may
+be an injected one), a task from another computer, an agent run whose task
+is not the owner's own words.
 
 WHAT IS KEPT (D-20.1, settled: yes, on this PC only, secrets masked, removed
 after 90 days, shown only on Improvements): the owner's message masked with
 ``failure_words.mask_failure_text`` (strict: a mask that faults keeps no
 words) and cut to :data:`WORDS_CHARS`, the lookup's own words (masked the
 same way), the kind, the "Not offered" line's id, the words no entry knows,
-the chat, the surface, Local only. Rows older than :data:`KEEP_DAYS` are
-removed (:func:`prune`, on every keep and once a day) and the group's
-``count`` is kept. Nothing is sent anywhere; no model is called.
+the chat, the surface, Local only (a group whose title was said only in
+Local only chats is named to chat only in a turn that stays on this network:
+``inbox/tools``, ``egress.may_recall_local_only_chats``). Rows older than
+:data:`KEEP_DAYS` are removed (:func:`prune`, on every keep and once a day)
+and the group's ``count`` is kept. Nothing is sent anywhere; no model is
+called.
 
 GROUPING IS DETERMINISTIC, no model (:func:`same_request`): a new miss joins
 the group one of whose misses (or whose key, for a group whose rows are gone)
@@ -204,6 +210,22 @@ def changed_something(names: Iterable[str], registry: Any) -> bool:
     return False
 
 
+def done_another_way(kind: str, names: Iterable[str], registry: Any) -> bool:
+    """Was the request done another way? *names*: the calls that RAN
+    (successfully) after the reply's last lookup.
+
+    * ``unknown``: the lookup DID list lines (it has no relevance floor), so
+      ANY successful call after it, another lookup aside, means one of them
+      fitted and was used, even one that only reads ("calculate a mortgage
+      payment" answers ``calculate``, which then ran): never a miss.
+    * ``nothing`` / ``not_offered`` (the plan's rule): a call that changes or
+      creates something (:func:`changed_something`). A read alone (the form
+      read before "I can't fax it") is not doing the request."""
+    if kind == KIND_UNKNOWN:
+        return any(str(n or "") and str(n) != LOOKUP for n in names)
+    return changed_something(names, registry)
+
+
 def calls_after_last_lookup(names: Iterable[str]) -> list[str]:
     """The calls that ran after the reply's last lookup (all of them when no
     lookup is among them: the safe reading)."""
@@ -240,19 +262,23 @@ def title_of(query: Any) -> str:
 # --------------------------------------------------------------------------- #
 # keeping
 # --------------------------------------------------------------------------- #
-def _pick_title(rows: list[tuple[Any, str, str]]) -> tuple[str, str, str]:
-    """``(title, query, unknown)`` of the group's most common request (its
-    first part, case-folded); a tie goes to the earliest. *rows*: ``(at,
-    query, unknown)``."""
+def _pick_title(rows: list[tuple[Any, str, str, bool]]) -> tuple[str, str, str, bool]:
+    """``(title, query, unknown, local_only)`` of the group's most common
+    request (its first part, case-folded); a tie goes to the earliest.
+    ``local_only``: every ask with those words was made in a Local only chat
+    (an ask outside one with the same words says them anyway). *rows*:
+    ``(at, query, unknown, local_only)``."""
     ordered = sorted(rows, key=lambda r: (naive(r[0]) or datetime.min))
-    counts = Counter(title_of(q).casefold() for _at, q, _u in ordered if title_of(q))
+    counts = Counter(title_of(r[1]).casefold() for r in ordered if title_of(r[1]))
     if not counts:
-        return "", "", ""
+        return "", "", "", False
     top = max(counts.values())
-    for _at, query, unknown in ordered:
-        if counts.get(title_of(query).casefold()) == top:
-            return title_of(query), query, unknown
-    return "", "", ""
+    for _at, query, unknown, _local in ordered:
+        folded = title_of(query).casefold()
+        if counts.get(folded) == top:
+            local = all(bool(r[3]) for r in ordered if title_of(r[1]).casefold() == folded)
+            return title_of(query), query, unknown, local
+    return "", "", "", False
 
 
 def keep(engine: Any, *, words: Any, query: Any, kind: str, entry_id: str = "",
@@ -281,21 +307,21 @@ def keep(engine: Any, *, words: Any, query: Any, kind: str, entry_id: str = "",
                 select(MissGroup).order_by(MissGroup.last_at.desc()).limit(GROUPS_SCAN)
             ))
             ids = [g.id for g in groups]
-            members: dict[str, list[tuple[Any, str, str]]] = {}
+            members: dict[str, list[tuple[Any, str, str, bool]]] = {}
             if ids:
                 rows = db.exec(
                     select(CapabilityMiss.group_id, CapabilityMiss.created_at, CapabilityMiss.query,
-                           CapabilityMiss.unknown)
+                           CapabilityMiss.unknown, CapabilityMiss.local_only)
                     .where(CapabilityMiss.group_id.in_(ids))  # type: ignore[attr-defined]
                     .order_by(CapabilityMiss.created_at.desc()).limit(MEMBERS_SCAN)
                 ).all()
-                for gid, created, q, u in rows:
-                    members.setdefault(str(gid), []).append((created, str(q or ""), str(u or "")))
+                for gid, created, q, u, lo in rows:
+                    members.setdefault(str(gid), []).append((created, str(q or ""), str(u or ""), bool(lo)))
             best: "MissGroup | None" = None
             best_share = Fraction(0)
             for group in groups:
                 share = same_request(mine_words, mine_unknown, _words_of(group.key), _words_of(group.unknown))
-                for _created, q, u in members.get(group.id, ()):
+                for _created, q, u, _lo in members.get(group.id, ()):
                     share = max(share, same_request(mine_words, mine_unknown, search_words(q), _words_of(u)))
                 if share > best_share:  # ties keep the newest group (the list is newest first)
                     best, best_share = group, share
@@ -314,10 +340,11 @@ def keep(engine: Any, *, words: Any, query: Any, kind: str, entry_id: str = "",
             first_at, last_at = naive(group.first_at), naive(group.last_at)
             group.first_at = min(first_at, at) if first_at else at
             group.last_at = max(last_at, at) if last_at else at
-            title, title_query, title_unknown = _pick_title(
-                [*members.get(group.id, ()), (at, kept_query, unknown_text)]
+            title, title_query, title_unknown, title_local = _pick_title(
+                [*members.get(group.id, ()), (at, kept_query, unknown_text, bool(local_only))]
             )
             group.title = title or title_of(kept_query)
+            group.title_local_only = title_local if title else bool(local_only)
             group.key = " ".join(sorted(search_words(title_query or kept_query)))
             group.unknown = title_unknown if title_query else unknown_text
             db.add(group)
@@ -391,6 +418,9 @@ def waiting(engine: Any, *, now: Any = None) -> tuple[list[dict[str, Any]], int]
         mine = asks.get(g.id, [])
         out.append({
             "id": g.id, "title": g.title, "count": int(g.count or 0),
+            # The title's words were said only in Local only chats: chat names
+            # them only to a turn that stays on this network (inbox/tools).
+            "local_only": bool(g.title_local_only),
             "first_at": naive(g.first_at), "last_at": naive(g.last_at),
             "kinds": sorted({m.kind for m in mine}),
             "asks": [{"at": naive(m.created_at), "words": m.words, "kind": m.kind} for m in mine],
@@ -485,8 +515,9 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
     """An agent run's miss, from its OWN ledger: its last successful lookup,
     and the calls after it (a successful one that changes something, read
     from the row's own ``reversibility``, means it was done another way; a
-    rehearsal's row changed nothing). The caller checks whose words the task
-    is, the run's trust and where it came from. Returns the group's id, or
+    rehearsal's row changed nothing; for ``unknown``, ANY successful call
+    after it, as :func:`done_another_way`). The caller checks whose words
+    the task is, the run's trust and where it came from. Returns the group's id, or
     None. BLOCKING; RAISES."""
     from sqlalchemy import text
     from sqlmodel import select
@@ -504,22 +535,29 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
     last = next((i for i in range(len(rows) - 1, -1, -1) if rows[i].tool == LOOKUP and rows[i].ok), -1)
     if last < 0:
         return None
-    for row in rows[last + 1:]:
-        if not row.ok or getattr(row, "rehearsed", False) or row.tool == LOOKUP:
-            continue
-        if str(row.reversibility or "") != "readonly" and row.tool not in _index.READS_ONLY:
-            return None
     record = answer_from_ledger(rows[last].output, rows[last].args_json, platform)
     found = miss_of(record)
     if found is None:
         return None
     kind, entry_id, unknown = found
+    for row in rows[last + 1:]:
+        if not row.ok or row.tool == LOOKUP:
+            continue
+        if kind == KIND_UNKNOWN:
+            # The lookup listed lines: a successful call after it (one that
+            # only reads, a rehearsal) is a line that fitted (done_another_way).
+            return None
+        if getattr(row, "rehearsed", False):
+            continue
+        if str(row.reversibility or "") != "readonly" and row.tool not in _index.READS_ONLY:
+            return None
     return keep(engine, words=words, query=record["query"], kind=kind, entry_id=entry_id, unknown=unknown,
                 thread_id=str(session_id), surface="run", local_only=local_only, now=now)
 
 
 __all__ = [
     "ASKS_SHOWN", "KEEP_DAYS", "LIST_AT", "LIST_DAYS", "LIST_MAX", "WORDS_CHARS", "AlreadyAnswered", "NotFound",
-    "answer", "answer_from_ledger", "calls_after_last_lookup", "changed_something", "clean_words", "keep",
+    "answer", "answer_from_ledger", "calls_after_last_lookup", "changed_something", "clean_words",
+    "done_another_way", "keep",
     "keep_run_miss", "miss_of", "prune", "same_request", "search_words", "waiting",
 ]

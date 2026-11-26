@@ -64,6 +64,9 @@ class MissGroup(SQLModel, table=True):
       capability index's own ``tokens``); ``unknown``: that query's words no
       entry knows. A group whose rows were all removed is still found by them.
     * ``title``: the most common query's first part ("send a fax").
+    * ``title_local_only``: that title was written only in Local only chats
+      (no ask outside one used the same words), so chat names it only to a
+      turn that itself stays on this network (``inbox/tools``).
     * ``count``: every miss the group ever had (kept when old rows go).
     * ``status``: :data:`STATUSES`; ``decided_at``: when the owner answered.
     * ``extensions_json``: 20-b's extensions that can do it (``[]`` here).
@@ -75,6 +78,7 @@ class MissGroup(SQLModel, table=True):
     key: str = ""
     unknown: str = ""
     title: str = ""
+    title_local_only: bool = False
     count: int = 0
     first_at: datetime = Field(default_factory=utcnow)
     last_at: datetime = Field(default_factory=utcnow, index=True)

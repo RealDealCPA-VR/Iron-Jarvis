@@ -224,7 +224,7 @@ function ImprovementCard({
       data-kind={item.kind}
       className="space-y-2 rounded-2xl bg-white/[0.04] px-4 py-3"
     >
-      <p className="text-[14px] leading-snug text-zinc-100">{item.title}</p>
+      <p className="text-[14px] leading-snug text-zinc-100 [overflow-wrap:anywhere]">{item.title}</p>
       {night ? (
         <p data-testid="improvement-night-why" className="text-[12px] text-zinc-400">
           {night}
@@ -232,7 +232,9 @@ function ImprovementCard({
       ) : null}
       {item.why ? <p className="text-[13px] leading-relaxed text-zinc-300">{item.why}</p> : null}
       {item.evidence.length ? (
-        <ul data-testid="improvement-evidence" className="space-y-0.5 text-[12px] text-zinc-400">
+        // Evidence can be the owner's own words (20-a): a path or a link is
+        // one long word, so it wraps anywhere rather than widen the page.
+        <ul data-testid="improvement-evidence" className="space-y-0.5 text-[12px] text-zinc-400 [overflow-wrap:anywhere]">
           {item.evidence.map((line, i) => (
             <li key={i}>{line}</li>
           ))}

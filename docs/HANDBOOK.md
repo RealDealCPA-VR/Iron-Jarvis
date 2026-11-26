@@ -2161,10 +2161,14 @@ you work.
 
 - **When it counts.** Iron Jarvis looked the request up and found nothing
   for it (or only things it does not offer, like controlling the desktop),
-  and the reply then changed nothing. A request it found another way to do
-  is not kept, and neither is one made while a reply was reading something
-  flagged as unsafe, one from your phone or another computer, or a task an
-  agent was given by a rule.
+  and the reply then changed nothing. A request it did another way is not
+  kept: when the reply went on to use something the lookup listed, even
+  just to work out a figure or search the web, it counts as done. Neither
+  is one made while a reply was reading something flagged as unsafe, one
+  from another computer, or a task an agent was given by a rule. A request
+  from your phone, Slack or email is not kept while **Work started by your
+  messages** is on Low trust (the usual setting); on Full trust it is
+  kept like one typed here.
 - **The same request in other words** is one line: "fax this to my
   accountant", "send the letter by fax" and "can you fax the form" are
   counted together; "book a flight" is a line of its own.
@@ -2177,7 +2181,10 @@ you work.
   that looks like a password or a key hidden, shown only on Improvements,
   and removed after 90 days (the count stays).
 - **From chat.** Ask "what have I asked for that you couldn't do?": the
-  answer lists each one with how many times and when, never your words.
+  answer lists each one with how many times and when, never your words. A
+  request you made only in **Local only** chats is named only in a Local
+  only chat; anywhere else the answer says "a request made in a Local only
+  chat" and the page has the rest.
 
 ## Search by meaning, offered with what it costs here (v1.586.0)
 

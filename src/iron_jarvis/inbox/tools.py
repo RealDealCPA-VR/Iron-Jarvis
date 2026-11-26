@@ -77,8 +77,28 @@ def _read(platform: Any) -> "dict[str, Any] | None":
     return collect(d)
 
 
+def chat_title(it: dict[str, Any]) -> str:
+    """The item's title as THIS turn's model may be told it. 20-a: a request
+    whose words were said only in Local only chats (``extra.chat_title``) is
+    named only to a turn that itself stays on this network
+    (``egress.may_recall_local_only_chats``, the work record's rule); any
+    other turn, and an unsure one, gets the neutral line."""
+    title = str(it.get("title") or "")
+    extra = it.get("extra") if isinstance(it.get("extra"), dict) else {}
+    if not extra.get("local_only"):
+        return title
+    try:
+        from ..providers.egress import may_recall_local_only_chats
+
+        if may_recall_local_only_chats():
+            return title
+    except Exception:  # noqa: BLE001 — unsure: the words stay home (fail closed)
+        pass
+    return str(extra.get("chat_title") or "a request made in a Local only chat")
+
+
 def _line(n: int, it: dict[str, Any], label: str) -> str:
-    bits = [f"{n}. [{it.get('id')}] {label}: {it.get('title') or ''}"]
+    bits = [f"{n}. [{it.get('id')}] {label}: {chat_title(it)}"]
     if it.get("about"):
         bits.append(f"(about {it['about']})")
     asked = (it.get("extra") or {}).get("asked") if it.get("kind") == "missing" else None
@@ -153,7 +173,7 @@ class SuggestionListTool(Tool):
                 lines.append(f"(The other {len(results) - LIST_RESULTS_MAX} are on the Improvements page; "
                              f"{RESULTS} lists them all.)")
         rows = [
-            {"id": it.get("id"), "kind": it.get("kind"), "title": it.get("title")}
+            {"id": it.get("id"), "kind": it.get("kind"), "title": chat_title(it)}
             for it in items[:LIST_MAX]
         ]
         return ToolResult(ok=True, output="\n".join(lines), data={"suggestions": rows, "total": got.get("total", 0)})
@@ -301,7 +321,7 @@ class SuggestionAnswerTool(Tool):
         from ..daemon.routes.improvements import answer_through_route
 
         status, detail = await answer_through_route(d, method, path, press.get("body") or {})
-        title = str(it.get("title") or sid)
+        title = chat_title(it) or sid
         if not 200 <= status < 300:
             return ToolResult(ok=False, error=f"Not done: {detail or 'the answer was refused'}", data={"door": HREF})
         word = str(press.get("label") or answer.title())

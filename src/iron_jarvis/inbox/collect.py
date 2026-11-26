@@ -643,6 +643,9 @@ MISSING_DECLINE = "Not needed"
 MISSING_DECLINE_NOTE = "Iron Jarvis won't list this again."
 #: An ask whose words could not be kept safely (the mask could not run).
 MISSING_NO_WORDS = "(your words were not kept)"
+#: What chat is told in place of a request said only in Local only chats,
+#: in a turn that does not stay on this network (``inbox/tools``).
+MISSING_LOCAL_ONLY = "a request made in a Local only chat (its words are on the Improvements page)"
 
 
 def missing_item(view: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
@@ -673,12 +676,18 @@ def missing_item(view: dict[str, Any], *, now: datetime | None = None) -> dict[s
         first = day_words(view.get("first_at"), moment)
         lines.append(f"And {_plural(earlier, 'earlier time')}" + (f", the first on {first}." if first else "."))
     dates = [day_words(a.get("at"), moment) for a in asks[-10:]]
+    head = f"Asked {_plural(count, 'time')}, no tool: "
+    extra: dict[str, Any] = {"count": count, "asked": [d for d in dates if d], "kinds": list(view.get("kinds") or [])}
+    if view.get("local_only"):
+        # Its words were said only in Local only chats: chat outside one is
+        # told this line instead of the title (``inbox/tools``).
+        extra.update(local_only=True, chat_title=head + MISSING_LOCAL_ONLY)
     return item(
-        KIND_MISSING, gid, title=f"Asked {_plural(count, 'time')}, no tool: {title}",
+        KIND_MISSING, gid, title=head + title,
         why=MISSING_WHY, evidence=lines, created_at=view.get("last_at"),
         accept=action(MISSING_KEEP, f"/capability/misses/{_seg(gid)}/note", note=MISSING_KEEP_NOTE),
         decline=action(MISSING_DECLINE, f"/capability/misses/{_seg(gid)}/decline", note=MISSING_DECLINE_NOTE),
-        extra={"count": count, "asked": [d for d in dates if d], "kinds": list(view.get("kinds") or [])},
+        extra=extra,
     )
 
 

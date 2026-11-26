@@ -16,8 +16,10 @@ Pinned here, through the REAL lanes (only the model is scripted):
   in each lane; so does one whose first line was "Not offered", and one whose
   request is named by a word no entry of the list knows (the lookup has no
   relevance floor: "send a fax" answers five unrelated lines);
-* none for a lookup that failed, one with no search words, a low-trust turn,
-  a turn that then made the change;
+* none for a lookup that failed, one with no search words, one read from part
+  of the list (both lanes and a run), a low-trust turn, a turn that then made
+  the change, and, for a word no entry knows, a turn that then used a listed
+  tool, even one that only reads (both lanes and a run);
 * three fax asks in different words make ONE group, "book a flight" another;
 * a secret in the message is masked before it is stored;
 * listed only with 2 or more misses in 30 days; rows past 90 days are removed
@@ -26,7 +28,10 @@ Pinned here, through the REAL lanes (only the model is scripted):
 * chat: "what have I asked for that you couldn't do?" arms suggestion_list,
   which lists the group WITHOUT the owner's words (D-20.1: shown only on
   Improvements);
-* an agent run keeps a miss only when its task is the owner's own words.
+* a request said only in Local only chats is named to chat only in a turn
+  that stays on this network;
+* an agent run keeps a miss only when its task is the owner's own words, and
+  reads "Not offered" from its own ledger.
 """
 
 from __future__ import annotations
@@ -236,6 +241,70 @@ async def test_a_change_made_before_the_lookup_does_not_hide_the_miss(desk):
     await _turn(app, ws, "stream", "write a file called a.txt with the word one, then fax it", model)
     assert (ws / "a.txt").exists(), "the control: the change ran first"
     assert [r["kind"] for r in _misses(app)] == ["nothing"]
+
+
+#: A request named by a word no entry knows ("mortgag") whose lookup lists a
+#: tool that does it, ``calculate``, which only reads.
+MORTGAGE_QUERY = "calculate a mortgage payment / loan calculator / payment math"
+MORTGAGE_ASK = "What is the monthly payment on a 300k mortgage at 6% over 30 years?"
+
+
+def _ran_ok(app, tool: str) -> int:
+    with session_scope(app.state.platform.engine) as db:
+        return int(db.exec(sql(
+            "SELECT count(*) FROM toolinvocation WHERE tool = :t AND ok = 1"
+        ).bindparams(t=tool)).one()[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_listed_tool_that_then_ran_is_the_request_done_even_one_that_only_reads(desk, lane):
+    """Review finding: kind ``unknown`` means the lookup DID list lines, so a
+    successful call after it (``calculate``, which only reads) is one of them
+    used: no miss, never "found none" over a request it did."""
+    app, ws = desk
+    model = Model([
+        _call(1, NAME, query=MORTGAGE_QUERY),
+        _call(2, "calculate", expressions=["=ROUND(PMT(6%/12,360,-300000),2)"]),
+        "The monthly payment is 1,798.65.",
+    ])
+    await _turn(app, ws, lane, MORTGAGE_ASK, model)
+    said = model.tool_texts[1][-1]
+    assert said.startswith("What Iron Jarvis has for") and "tool calculate" in said, said[:300]
+    assert _ran_ok(app, "calculate") == 1, "the control: the listed tool ran"
+    assert _misses(app) == []
+    # The control: the same lookup with nothing after it IS a miss of this kind.
+    await _turn(app, ws, lane, MORTGAGE_ASK, _lookup_then_say(MORTGAGE_QUERY))
+    assert [r["kind"] for r in _misses(app)] == ["unknown"], _misses(app)
+
+
+def _part_unreadable(monkeypatch, platform=None) -> None:
+    """One part of the list cannot be read: the index is built without the
+    everyday phrasings and names them as unreadable (``index.build``)."""
+    from iron_jarvis.capability_search import index as IX
+
+    def broken(_entries):
+        raise RuntimeError("the phrasings could not be read")
+
+    monkeypatch.setattr(IX, "with_phrasings", broken)
+    if platform is not None:
+        monkeypatch.setattr(platform, "_capability_index", None, raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_lookup_read_from_part_of_the_list_keeps_no_miss_in_either_lane(desk, monkeypatch, lane):
+    """The part that could not be read may be the one that holds the feature:
+    such an answer says nothing about what is missing (``tool.answer`` marks
+    it ``partial``)."""
+    app, ws = desk
+    _part_unreadable(monkeypatch, app.state.platform)
+    model = _lookup_then_say(FAX_QUERIES[0])
+    await _turn(app, ws, lane, FAX_ASKS[0], model)
+    said = model.tool_texts[1][-1]
+    assert said.startswith("What Iron Jarvis has for"), "the control: the lookup listed lines"
+    assert "could not be read just now, so this answer may be missing some" in said, said[-600:]
+    assert _misses(app) == []
 
 
 def test_a_lookup_read_from_part_of_the_list_says_nothing_is_missing():
@@ -613,16 +682,19 @@ def _agent_run(tmp_path, task: str, *, script=None, tools=(NAME,), **session_kw)
     s = asyncio.run(go())
     with session_scope(p.engine) as db:
         try:
-            rows = db.exec(sql("SELECT words, kind, surface FROM capabilitymiss")).all()
+            rows = db.exec(sql("SELECT words, kind, surface, entry_id FROM capabilitymiss")).all()
         except Exception as exc:  # noqa: BLE001
             if "no such table" not in str(exc):
                 raise
             rows = []
-        ran = [r[0] for r in db.exec(sql(
-            "SELECT tool FROM toolinvocation WHERE session_id = :s AND ok = 1 ORDER BY created_at, rowid"
-        ).bindparams(s=s.id)).all()]
+        ran_rows = db.exec(sql(
+            "SELECT tool, output FROM toolinvocation WHERE session_id = :s AND ok = 1 ORDER BY created_at, rowid"
+        ).bindparams(s=s.id)).all()
+    ran = [r[0] for r in ran_rows]
     _agent_run.ran = ran  # type: ignore[attr-defined]
-    return [tuple(r) for r in rows], ran.count(NAME)
+    _agent_run.lookup_said = [str(r[1] or "") for r in ran_rows if r[0] == NAME]  # type: ignore[attr-defined]
+    _agent_run.entry_ids = [r[3] for r in rows]  # type: ignore[attr-defined]
+    return [tuple(r[:3]) for r in rows], ran.count(NAME)
 
 
 def test_an_agent_run_the_owner_asked_for_keeps_its_miss(tmp_path):
@@ -654,3 +726,87 @@ def test_an_agent_run_that_then_made_the_change_keeps_none(tmp_path):
     assert looked == 1, "the control: the run looked it up"
     assert _agent_run.ran == [NAME, "write_file"], ("the control: the change ran", _agent_run.ran)
     assert rows == [], rows
+
+
+def test_an_agent_runs_not_offered_first_line_is_read_from_its_ledger(tmp_path):
+    rows, looked = _agent_run(tmp_path, "Move my mouse to the start button and click it", script=[
+        _call(1, NAME, query=DESKTOP_QUERY), "Iron Jarvis cannot control the desktop.",
+    ])
+    assert looked == 1, "the control: the run looked it up"
+    assert _agent_run.lookup_said[0].splitlines()[1].startswith("1. Not offered:"), _agent_run.lookup_said
+    assert rows == [("Move my mouse to the start button and click it", "not_offered", "run")], rows
+    assert _agent_run.entry_ids == ["desktop_control"], _agent_run.entry_ids
+
+
+def test_an_agent_runs_lookup_read_from_part_of_the_list_keeps_none(tmp_path, monkeypatch):
+    _part_unreadable(monkeypatch)
+    rows, looked = _agent_run(tmp_path, FAX_ASKS[0], script=[
+        _call(1, NAME, query=FAX_QUERIES[0]), "There is no feature for faxing.",
+    ])
+    assert looked == 1, "the control: the run looked it up"
+    said = _agent_run.lookup_said[0]
+    assert said.startswith("What Iron Jarvis has for"), said[:200]
+    assert "could not be read just now, so this answer may be missing some" in said, said[-600:]
+    assert rows == [], rows
+
+
+@pytest.mark.parametrize("then_calculate", [False, True])
+def test_an_agent_run_that_used_a_listed_tool_keeps_no_unknown_miss(tmp_path, then_calculate):
+    script = [_call(1, NAME, query=MORTGAGE_QUERY)]
+    if then_calculate:
+        script.append(_call(2, "calculate", expressions=["=ROUND(PMT(6%/12,360,-300000),2)"]))
+    script.append("The monthly payment is 1,798.65.")
+    rows, looked = _agent_run(tmp_path, MORTGAGE_ASK, script=script, tools=(NAME, "calculate"))
+    assert looked == 1, "the control: the run looked it up"
+    if not then_calculate:
+        assert rows == [(MORTGAGE_ASK, "unknown", "run")], ("the control: with nothing after it, a miss", rows)
+        return
+    assert _agent_run.ran == [NAME, "calculate"], ("the control: the listed tool ran", _agent_run.ran)
+    assert rows == [], rows
+
+
+# --------------------------------------------------------------------------- #
+# Local only
+# --------------------------------------------------------------------------- #
+def test_a_request_said_only_in_local_only_chats_is_named_only_to_a_turn_that_stays_home(desk):
+    """Review finding: suggestion_list's output goes to whatever model the
+    current chat uses. A group whose title was written only in Local only
+    chats is named to a turn that itself stays on this network, and to no
+    other (the work record's rule, ``egress.may_recall_local_only_chats``)."""
+    import importlib
+
+    from iron_jarvis.capability_search import misses as M
+    from iron_jarvis.inbox import tools as IT
+    from iron_jarvis.providers import egress
+    from iron_jarvis.tools.base import ToolContext
+
+    C = importlib.import_module("iron_jarvis.inbox.collect")
+    app, ws = desk
+    p = app.state.platform
+    for ask, query in zip(FAX_ASKS[:2], FAX_QUERIES[:2]):
+        M.keep(p.engine, words=ask, query=query, kind="unknown", unknown=["fax"], surface="chat", local_only=True)
+    ctx = ToolContext(workspace=ws, session_id="chat", agent_run_id="chat", config=p.config,
+                      event_bus=p.event_bus, engine=p.engine)
+
+    def listed(*, withheld: bool) -> str:
+        got = asyncio.run(IT.SuggestionListTool(p).execute({}, ctx))
+        assert got.ok, got.error
+        # Its data rows too (they travel with the result).
+        titles = [str(r.get("title")) for r in got.data["suggestions"]]
+        assert any("send a fax" in t for t in titles) is not withheld, titles
+        return got.output
+
+    # The page is the owner's own: it shows the request as it was asked.
+    page = [i for i in C.collect(app.state.d)["items"] if i["kind"] == "missing"]
+    assert [i["title"] for i in page] == ["Asked 2 times, no tool: send a fax"], page
+    out = listed(withheld=True)
+    assert "send a fax" not in out, out
+    assert "Asked 2 times, no tool: " + C.MISSING_LOCAL_ONLY in out, out
+    with egress.local_only_scope(True):
+        assert "Asked 2 times, no tool: send a fax" in listed(withheld=False)
+    with egress.local_only_scope(True, "anthropic"):
+        out = listed(withheld=True)
+        assert "send a fax" not in out, "a message sent off this network once is not a turn that stays home"
+    # The same words asked outside Local only say them anyway.
+    M.keep(p.engine, words="fax it", query=FAX_QUERIES[0], kind="unknown", unknown=["fax"], surface="chat")
+    assert "Asked 3 times, no tool: send a fax" in listed(withheld=False)

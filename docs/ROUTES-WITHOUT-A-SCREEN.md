@@ -75,6 +75,8 @@ are routes the check counts as called that have no caller.
 | POST | `/browser/recordings` | KEEP | v1.458.0: save a task recorded in the browser as a skill, for a script. The add-on saves the same way through its panel socket (`record_save`), which ends in the same function (`browser/recording.save_and_publish`). |
 | GET | `/media/jobs/{job_id}` | KEEP | Headless read of one media job (as above). |
 | GET | `/agents/{name}/face` | KEEP | One agent's face override; the pages read all of them from `GET /agents/faces`, and `PUT`/`DELETE` of this path have screens (by hand). |
+| POST | `/capability/misses/{group_id}/note` | KEEP | Next leaps 20-a: "Keep as a note for the next version" on a thing you asked for that Iron Jarvis can't do yet. Pressed from its Improvements item, and by chat's `suggestion_answer`, through the path the daemon writes into the item (`inbox/collect.missing_item`; the page checks it against `lib/improvements.DECISION_PATHS`), so no client holds the path as a literal. |
+| POST | `/capability/misses/{group_id}/decline` | KEEP | Next leaps 20-a: "Not needed" on the same item, pressed the same way (as above). |
 | DELETE | `/goals/{goal_id}` | KEEP (group D) | Deleting a goal from Chat: group D is giving it a button on the Autonomy page (by hand: `GET` of the path is called). |
 | POST | `/iron-proxy/accounts/{account_id}/signout` | KEEP (group D) | Signing an Iron-Proxy account out: group D is reconnecting it on the Connections card. |
 | GET | `/build/sessions/{thread_id}/ci` | KEEP (group D) | A coding session's pull-request watch: group D is showing it in the session's views. |

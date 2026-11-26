@@ -126,6 +126,20 @@ describe("things you asked for that Iron Jarvis can't do yet", () => {
     expect(within(group).queryByTestId("improvement-home")).toBeNull();
   });
 
+  it("a long path in your words wraps instead of widening the page", async () => {
+    const long = `20 November: “fax C:\\Users\\someone\\Documents\\${"VeryLongFolderName".repeat(12)}\\form.pdf”`;
+    H.inbox = inbox([missing({ evidence: [long] })]);
+    render(<ImprovementsInbox />);
+    const group = await screen.findByTestId("improvements-group-missing");
+    const list = within(group).getByTestId("improvement-evidence");
+    expect(list.textContent).toBe(long);
+    // jsdom draws nothing, so the class that makes one long word wrap is read.
+    expect(list.className).toContain("[overflow-wrap:anywhere]");
+    expect(within(group).getByText("Asked 3 times, no tool: send a fax").className).toContain(
+      "[overflow-wrap:anywhere]",
+    );
+  });
+
   it("keep as a note presses its own route and says nothing was sent", async () => {
     H.inbox = inbox([missing()]);
     render(<ImprovementsInbox />);
