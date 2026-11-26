@@ -334,8 +334,10 @@ export const NAV: NavSectionDef[] = [
           "when a task fails", "what runs on its own",
         ],
         // One line, at most 120 characters (nav.test.ts): a result row is one
-        // line tall.
-        blurb: "When a file lands, a download finishes, a message arrives or another task fails, start work. Schedules are here too.",
+        // line tall. "file lands in a folder" is pinned by
+        // leap-05a-rule-card.test.tsx; "another task fails" by
+        // leap-05b-starts-on-rules.test.tsx.
+        blurb: "When a file lands in a folder, a download finishes, a message arrives or another task fails, start work. Schedules too.",
       },
       {
         href: "/self-dev",

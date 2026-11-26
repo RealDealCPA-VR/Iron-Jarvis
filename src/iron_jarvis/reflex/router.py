@@ -601,8 +601,10 @@ class ReflexRouter:
                 trust = self._signal_trust(rule, attended=attended, context=context)
                 trust_kw = {"trust": trust} if trust else {}
                 # Leap 05-b (review): what a Local only task said never goes
-                # where its run could not — a remote agent's computer, a
-                # workflow's steps (a session rule's run is Local only itself,
+                # where its run could not. Review 3: a BACKSTOP today — a
+                # remote agent is refused below, and a workflow rule's Trigger
+                # reads only ``text`` — for a later action that reads
+                # ``detail`` (a session rule's run is Local only itself,
                 # ``_run_session``).
                 context = _kept_here(rule, context)
                 # Review 2: a remote agent's work cannot be Local only, so a
@@ -1139,10 +1141,12 @@ ONCE_MORE_WAIT_S = 900.0
 def _kept_here(rule: ReflexRule, context: dict[str, str]) -> dict[str, str]:
     """Leap 05-b (review): the context a rule's action gets. When the task
     that ended was Local only, an action other than a session is not given
-    what that task said (``detail``): a workflow runs Local only, but a step
-    of it can send a message. A remote agent is handed nothing at all
+    what that task said (``detail``). A remote agent is handed nothing at all
     (review 2, :func:`local_only_hand_off_words`). A session rule keeps it:
-    its run is Local only. Pure."""
+    its run is Local only. Review 3: no action reads ``detail`` past this
+    today (a workflow rule's ``Trigger`` output is ``text``, the task's
+    name), so this is a BACKSTOP for a later one that does — a workflow runs
+    Local only, but a step of it can send a message. Pure."""
     if (
         str(getattr(rule, "source", "") or "") == "run_ended"
         and str((context or {}).get("local_only") or "")

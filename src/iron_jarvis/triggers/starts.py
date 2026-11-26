@@ -676,21 +676,19 @@ def _posture_of_runs(engine: Any, session_ids: Any) -> tuple[bool, bool]:
     """``(local_only, careful)`` of a task's runs: any of them made Local
     only (``options.local_only``), any of them worked at low trust (it read
     an email or a web page, ``agents/runtime._lower_trust``). BLOCKING (one
-    indexed read, at most 50 rows); a fault reads ``(False, False)``."""
+    indexed read, at most 50 rows). RAISES on a read fault (review 3): a
+    busy database must not make a Local only run look plain, so the caller
+    reads a fault as Local only and careful."""
     ids = [str(s) for s in (session_ids or []) if str(s or "").strip() and str(s) != "chat"][:50]
     if not ids or engine is None:
         return False, False
-    try:
-        from sqlmodel import select
+    from sqlmodel import select
 
-        from ..core.db import session_scope
-        from ..core.models import Session
+    from ..core.db import session_scope
+    from ..core.models import Session
 
-        with session_scope(engine) as db:
-            rows = list(db.exec(select(Session.options_json, Session.trust).where(Session.id.in_(ids))))
-    except Exception:  # noqa: BLE001
-        log.warning("the runs of a task that ended could not be read", exc_info=True)
-        return False, False
+    with session_scope(engine) as db:
+        rows = list(db.exec(select(Session.options_json, Session.trust).where(Session.id.in_(ids))))
     local_only = careful = False
     for raw, trust in rows:
         try:
@@ -703,17 +701,23 @@ def _posture_of_runs(engine: Any, session_ids: Any) -> tuple[bool, bool]:
 
 
 def _chat_local_only(engine: Any, thread_id: Any) -> bool:
-    """Is the saved chat a task was set up from switched to Local only?
-    BLOCKING; never raises."""
-    tid = str(thread_id or "").strip()
+    """Is the saved chat a task was set up from switched to Local only? A
+    chat that is gone is not. BLOCKING (one row read). RAISES on a read
+    fault (review 3), as :func:`_posture_of_runs` does: the same read as
+    ``egress.thread_local_only``, which answers False on a fault (right for
+    a chat turn, whose own request then decides; wrong here)."""
+    tid = str(thread_id or "").strip()[:80]
     if not tid or engine is None:
         return False
-    try:
-        from ..providers.egress import thread_local_only
+    from sqlmodel import select
 
-        return bool(thread_local_only(engine, tid))
-    except Exception:  # noqa: BLE001
-        return False
+    from ..core.db import session_scope
+    from ..core.models import ChatThreadRecord
+    from ..providers.egress import setup_says_local_only
+
+    with session_scope(engine) as db:
+        setup = db.exec(select(ChatThreadRecord.setup_json).where(ChatThreadRecord.id == tid)).first()
+    return bool(setup_says_local_only(setup))
 
 
 #: ``agents/outcome.run_ending``'s badge word -> a run's verdict.
@@ -884,7 +888,8 @@ def _workflow_posture(engine: Any, facts: dict[str, Any], payload: dict | None =
     its end was published for Local only work (the bus's stamp), the chat it
     was set up from is Local only, or any of its steps ran Local only;
     careful when any step worked at low trust or the signal that started it
-    came from outside (its ``Trigger`` output's posture). BLOCKING."""
+    came from outside (its ``Trigger`` output's posture). BLOCKING; RAISES on
+    a read fault (the caller reads it as Local only and careful)."""
     outputs = facts.get("outputs") or {}
     steps = [str(o.get("session_id") or "") for o in outputs.values() if isinstance(o, dict)]
     local_only, careful = _posture_of_runs(
@@ -919,7 +924,11 @@ def ending_of_workflow(engine: Any, payload: dict | None) -> dict | None:
             if isinstance(out, dict) and out.get("status") == "failed" and step != "Trigger"
         ]
         steps = [" ".join(s.split())[:60] for s, _o in failed][:5]
-        local_only, careful = _workflow_posture(engine, facts, data)
+        try:
+            local_only, careful = _workflow_posture(engine, facts, data)
+        except Exception:  # noqa: BLE001 — unreadable: read as Local only, careful (review 3)
+            log.warning("the runs of workflow run %s could not be read: read as Local only", run_id, exc_info=True)
+            local_only = careful = True
         if verdict == "needs_you":
             asks = " ".join(str(data.get("step") or "").split())[:60]
             reason = (f"It is waiting for your answer at its step “{asks}”." if asks
@@ -984,21 +993,28 @@ def ending_of_schedule(
     local_only = careful = False
     ran_workflow = ran_agent = ""
     if engine is not None:
+        facts: dict[str, Any] = {}
         try:
             facts = _workflow_run_facts(engine, rid) if rid else {}
             wf_local, wf_careful = _workflow_posture(engine, facts) if facts else (False, False)
             s_local, s_careful = _posture_of_runs(engine, [sid])
             local_only = wf_local or s_local or _chat_local_only(engine, getattr(task, "chat_thread_id", ""))
             careful = wf_careful or s_careful
+        except Exception:  # noqa: BLE001 — unreadable: read as Local only, careful
+            # Review 3: every read above raises on a fault (none answers
+            # "not Local only" for a busy database), so this branch is real.
+            log.warning("the runs of schedule %r could not be read", getattr(task, "name", ""), exc_info=True)
+            local_only = careful = True
+        try:
             # Review 2: what this fire RAN, from its own records — the
             # workflow its run was of (only when it ran one), the custom
             # agent its run was — so a rule for that workflow or agent hears
-            # this fire too (still one signal).
-            ran_workflow = str(facts.get("workflow") or "") if facts else ""
+            # this fire too (still one signal). Read apart from the posture
+            # (review 3), so a fault there still names the workflow.
+            ran_workflow = str(facts.get("workflow") or "")
             ran_agent = _custom_agent_of(engine, sid)
-        except Exception:  # noqa: BLE001 — unreadable: read as Local only, careful
-            log.warning("the runs of schedule %r could not be read", getattr(task, "name", ""), exc_info=True)
-            local_only = careful = True
+        except Exception:  # noqa: BLE001
+            log.warning("what schedule %r ran could not be read", getattr(task, "name", ""), exc_info=True)
     by = _ONCE_MORE_BY.get() or {}
     return run_ended_context(
         kind="schedule", name=str(getattr(task, "name", "") or ""), verdict=verdict,

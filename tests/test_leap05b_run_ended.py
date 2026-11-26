@@ -662,6 +662,127 @@ def test_a_workflow_or_a_schedule_with_a_local_only_or_careful_run_says_so(desk)
     assert run.trust == "low"
 
 
+def _fail_one_read_in(monkeypatch, reader: str) -> list[str]:
+    """The FIRST database read that ``reader`` (a function of ``starts``)
+    makes from now on fails as a busy database does ("database is locked",
+    which clears by the next read); every other read works. Returns the
+    readers whose read failed."""
+    import sys
+
+    from sqlalchemy.exc import OperationalError
+
+    from iron_jarvis.core import db as db_mod
+
+    real = db_mod.session_scope
+    failed: list[str] = []
+
+    def _scope(engine):
+        if not failed and sys._getframe(1).f_code.co_name == reader:
+            failed.append(reader)
+            raise OperationalError("SELECT", {}, Exception("database is locked"))
+        return real(engine)
+
+    monkeypatch.setattr(db_mod, "session_scope", _scope)
+    return failed
+
+
+def test_an_end_whose_runs_cannot_be_read_is_read_as_local_only_and_careful(desk, monkeypatch):
+    """Review 3: ONE failed read (a busy database) of what says a task's end
+    was Local only — a schedule fire's own run, the chat it was set up from,
+    a workflow's step runs — reads that end as Local only and careful, never
+    as plain: a remote agent is handed nothing of it. The same end, every
+    read working, is plain and handed on (the probe is not vacuous).
+
+    MUTATION (red): let ``starts._posture_of_runs`` catch its own read fault
+    and answer ``(False, False)``, or ``starts._chat_local_only`` answer False
+    on a fault -> the fire reads plain and the remote agent is handed the
+    schedule's task words and its run's words."""
+    from iron_jarvis.agents import remote as remote_mod
+
+    c, p, router, loop = desk
+    sent: list[str] = []
+
+    class _Registry:
+        def __init__(self, _engine):
+            pass
+
+        def get(self, name):
+            return SimpleNamespace(name=name)
+
+        async def run(self, record, task, _secret):
+            sent.append(task)
+            return {"ok": True}
+
+    monkeypatch.setattr(remote_mod, "RemoteAgentRegistry", _Registry)
+    router._launch = lambda coro, _sid: asyncio.get_event_loop().create_task(coro)
+    p.reflex.add(name="Hand it on", source="run_ended", match="", action="remote_agent", target="Desk",
+                 task_template="", start={"what": "any", "name": "", "outcome": "any"})
+    refused = "The task that ended was Local only, so it was not handed to the remote agent “Desk”."
+
+    async def _go(ctx):
+        out = await starts.hub_for(router).signal("run_ended", ctx)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return out
+
+    # A schedule fire whose Local only run cannot be read.
+    sched = p.scheduler.add_task("Nightly report", "0 2 * * *", kind="task",
+                                 payload={"task": "Summarize PROBE-TASK-WORDS for the return"})
+    sid = _session(p, origin="schedule:Nightly report", summary="PROBE-RUN-WORDS", options='{"local_only": true}')
+    failed = _fail_one_read_in(monkeypatch, "_posture_of_runs")
+    ctx = starts.ending_of_schedule(sched, "error", "The run failed: PROBE-RUN-WORDS", sid, engine=p.engine)
+    assert failed == ["_posture_of_runs"], failed
+    assert (ctx["local_only"], ctx["careful"]) == ("1", "1"), ctx
+    (fired,) = asyncio.run(_go(ctx))
+    assert (fired["ok"], fired["error"]) == (False, refused), fired
+    # A schedule set up from a chat that cannot be read.
+    chat_sched = p.scheduler.add_task("Morning report", "0 6 * * *", kind="task",
+                                      payload={"task": "Write CHAT-TASK-WORDS"}, chat_thread_id="thread-l02")
+    morning = _session(p, origin="schedule:Morning report")
+    failed = _fail_one_read_in(monkeypatch, "_chat_local_only")
+    ctx = starts.ending_of_schedule(chat_sched, "error", "The run failed: CHAT-RUN-WORDS", morning, engine=p.engine)
+    assert failed == ["_chat_local_only"], failed
+    assert (ctx["local_only"], ctx["careful"]) == ("1", "1"), ctx
+    (fired,) = asyncio.run(_go(ctx))
+    assert (fired["ok"], fired["error"]) == (False, refused), fired
+    # A workflow whose step runs cannot be read: still heard (never None),
+    # Local only and careful, and its engine's own reason stays out.
+    step = _session(p, origin="workflow:Month end", summary="PROBE-STEP-WORDS", options='{"local_only": true}')
+    run_id = _workflow_run(p, "Month end", outputs={"Post": {"status": "failed", "summary": "PROBE-STEP-WORDS",
+                                                             "session_id": step}})
+    failed = _fail_one_read_in(monkeypatch, "_posture_of_runs")
+    end = starts.ending_of_workflow(p.engine, {"workflow": "Month end", "status": "failed", "run_id": run_id})
+    assert failed == ["_posture_of_runs"], failed
+    assert end is not None and (end["local_only"], end["careful"]) == ("1", "1"), end
+    (fired,) = asyncio.run(_go(end))
+    assert (fired["ok"], fired["error"]) == (False, refused), fired
+    # ... and a workflow schedule's fire, whose run's steps cannot be read,
+    # still names the workflow it ran (a rule for that workflow hears it).
+    wf_sched = p.scheduler.add_task("Month close", "0 3 * * *", kind="workflow", payload={"workflow": "Month end"})
+    failed = _fail_one_read_in(monkeypatch, "_posture_of_runs")
+    fire = starts.ending_of_schedule(wf_sched, "error", "x", "", run_id, engine=p.engine)
+    assert failed == ["_posture_of_runs"], failed
+    assert (fire["local_only"], fire["careful"], fire["ended_workflow"]) == ("1", "1", "Month end"), fire
+    assert sent == [], sent
+    # Every read working: a schedule set up from a Local only chat reads
+    # Local only (the chat read finds the right row) ...
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    with session_scope(p.engine) as db:
+        db.add(ChatThreadRecord(id="thread-l02-local", setup_json='{"local_only": true}'))
+        db.commit()
+    local_sched = p.scheduler.add_task("Evening report", "0 18 * * *", kind="task",
+                                       payload={"task": "Write LOCAL-CHAT-WORDS"}, chat_thread_id="thread-l02-local")
+    local = starts.ending_of_schedule(local_sched, "error", "x", _session(p, origin="schedule:Evening report"),
+                                      engine=p.engine)
+    assert (local["local_only"], local["careful"]) == ("1", ""), local
+    # ... and a plain fire of the chat schedule is handed on.
+    plain = starts.ending_of_schedule(chat_sched, "error", "The run failed: CHAT-RUN-WORDS", morning, engine=p.engine)
+    assert (plain["local_only"], plain["careful"]) == ("", ""), plain
+    (fired,) = asyncio.run(_go(plain))
+    assert fired["ok"] is True and len(sent) == 1 and "CHAT-TASK-WORDS" in sent[0], (fired, sent)
+
+
 def test_a_workflow_that_parks_is_heard_as_needing_you_once(desk, monkeypatch):
     """MUTATION (red): drop ``WORKFLOW_WAITING`` from ``run_ended_handler``
     -> a rule for a workflow that ends needing you never starts."""

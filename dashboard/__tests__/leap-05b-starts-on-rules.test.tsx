@@ -86,6 +86,7 @@ import {
   RUNS_IT_NOW,
   decodeStarts,
 } from "@/lib/reflexRules";
+import { NAV_ENTRIES } from "@/lib/nav";
 
 afterEach(() => {
   cleanup();
@@ -277,5 +278,15 @@ describe("the words", () => {
     for (const w of words) {
       expect(w).not.toMatch(/\bstarts?\b/i);
     }
+  });
+
+  it("search finds Rules for a task that fails, and its line keeps the 05-a words", () => {
+    // Review 3: the line shortened in review 2 dropped "in a folder", which
+    // the 05-a pin reads (leap-05a-rule-card.test.tsx); both are held here.
+    const rules = NAV_ENTRIES.find((i) => i.href === "/reflex");
+    expect(rules?.aliases).toContain("when a task fails");
+    expect(rules?.blurb).toMatch(/another task fails/);
+    expect(rules?.blurb).toMatch(/file lands in a folder/);
+    expect(rules?.blurb).toMatch(/Schedules/);
   });
 });
