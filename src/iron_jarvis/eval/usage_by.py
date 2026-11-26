@@ -246,8 +246,8 @@ def _bare_thread(value: Any) -> str:
 
 
 def _agent_words(name: str) -> str:
-    """The roster name as the eye reads it: ``custom:tax-reader`` ->
-    "tax-reader", ``remote:hermes`` -> "hermes", ``builder`` -> "Builder"."""
+    """The roster name as the eye reads it: ``custom:doc-reader`` ->
+    "doc-reader", ``remote:hermes`` -> "hermes", ``builder`` -> "Builder"."""
     n = str(name or "").strip()
     if not n:
         return ""

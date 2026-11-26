@@ -834,7 +834,7 @@
     },
     "usage_report": {
       "ok": "looked up what your work cost",
-      "failed": "tried an usage report and it failed"
+      "failed": "tried a cost lookup and it failed"
     },
     "web_action": {
       "ok": "acted on a web page",

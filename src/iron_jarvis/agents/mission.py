@@ -692,7 +692,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "model_library": ("looked at which models fit this PC", "model library"),
     "model_download": ("started downloading a model", "model download"),
     # Next leaps 46-a: what everything cost. Twin: lib/runWords.ts AGENT_TOOLS.
-    "usage_report": ("looked up what your work cost", "usage report"),
+    # "cost lookup", not "usage report": the article rule reads a leading u
+    # as a vowel and would say "tried an usage report".
+    "usage_report": ("looked up what your work cost", "cost lookup"),
     "client_list": ("listed your clients", "client list"),
     "client_answer": ("noted whether a name is one of your clients", "client answer"),
     "client_update": ("changed one of your clients", "client change"),

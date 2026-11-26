@@ -2044,7 +2044,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## What everything cost, by folder, client, automation and agent (v1.564.0)
+## What everything cost, by folder, client, automation and agent (v1.579.0)
 
 Usage has a new card, **What it cost**, with a **By** switch: **Folder**,
 **Client**, **Automation** and **Agent**. It reads the same record as the
