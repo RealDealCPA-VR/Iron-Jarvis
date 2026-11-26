@@ -141,6 +141,17 @@ class WorkflowCreateTool(Tool):
         if not name:
             return ToolResult(ok=False, error="name is required")
         steps = args.get("steps") or []
+        # The SAME check the Workflows page makes before it saves, refused in
+        # the SAME words (the intelligence plan, release 3): a workflow made
+        # in chat that cannot work is refused now, with the reason, instead
+        # of failing at its turn. Nothing is saved.
+        from .checks import step_problem
+
+        problem = step_problem(steps, self.platform)
+        if problem:
+            return ToolResult(
+                ok=False, error=problem, data={"refused": "step_check", "saved": False}
+            )
         requested = str(args.get("project") or "").strip()
         if requested:
             pid, err = self._resolve_project(requested)

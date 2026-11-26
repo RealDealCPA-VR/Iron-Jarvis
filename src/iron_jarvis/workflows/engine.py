@@ -1391,7 +1391,18 @@ class WorkflowEngine:
             },
         )
 
-        if step.kind == "ask":
+        # A VALUE NOTHING GAVE (the intelligence plan, release 3): a name in
+        # this step that matches no step that has run, no input and no signal
+        # used to be filled in as an empty text without a word, and the step
+        # ran on it. The step now stops BEFORE it runs and says which name
+        # (``checks.missing_values``); its own ``on_failure`` then decides
+        # what the run does, as for any failed step. Never retried: the
+        # second try would find the same nothing.
+        from .checks import missing_values, no_value_words
+
+        absent = missing_values(step, outputs)
+
+        if step.kind == "ask" and not absent:
             question = render_template(
                 step.message or step.task, outputs
             ).strip() or f"Continue past “{step.name}”?"
@@ -1399,6 +1410,14 @@ class WorkflowEngine:
 
         attempts = 2 if step.on_failure == "retry" else 1
         out: dict = {}
+        if absent:
+            attempts = 0
+            out = {
+                "status": "failed",
+                "summary": no_value_words(absent),
+                "kind": step.kind,
+                "no_value_for": absent,
+            }
         for attempt in range(attempts):
             if step.kind == "tool":
                 out = await self._run_tool_step(
