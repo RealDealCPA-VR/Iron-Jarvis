@@ -11,6 +11,8 @@
  *  - the workflow canvas's trigger node lists what already runs a SAVED
  *    workflow (GET /starts?workflow=<name>), and reads nothing for an unsaved
  *    one;
+ *  - review: "Run it once more" is offered for a schedule or a workflow and
+ *    rides the POST (`again`);
  *  - the new words never use "start" as a noun.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -79,6 +81,8 @@ import {
   AT_A_TIME_WORDS,
   ENDED_OUTCOME_CHOICES,
   ENDED_WHAT_CHOICES,
+  ONCE_MORE_LABEL,
+  ONCE_MORE_WORDS,
   RUNS_IT_NOW,
   decodeStarts,
 } from "@/lib/reflexRules";
@@ -210,6 +214,27 @@ describe("a rule for when another task fails", () => {
     });
   });
 
+  it("offers Run it once more for a schedule or a workflow only, and sends it", async () => {
+    mountRules([], []);
+    fireEvent.click((await screen.findAllByText("Add rule"))[0]);
+    fireEvent.click(screen.getByTestId("reflex-shape-other"));
+    const source = screen.getByLabelText("Signal source") as HTMLSelectElement;
+    fireEvent.change(source, { target: { value: "run_ended" } });
+    const what = screen.getByTestId("reflex-ended-what") as HTMLSelectElement;
+    // An agent run has no record to run again from: no box.
+    fireEvent.change(what, { target: { value: "agent" } });
+    expect(screen.queryByTestId("reflex-ended-again")).toBeNull();
+    fireEvent.change(what, { target: { value: "schedule" } });
+    const again = screen.getByTestId("reflex-ended-again") as HTMLInputElement;
+    expect(again.closest("label")?.textContent).toContain(ONCE_MORE_LABEL);
+    expect(again.checked).toBe(false);
+    fireEvent.click(again);
+    fireEvent.change(screen.getByTestId("reflex-ended-name"), { target: { value: "Nightly report" } });
+    fireEvent.submit(source.closest("form")!);
+    await waitFor(() => expect(api.posts).toHaveLength(1));
+    expect(api.posts[0].body).toMatchObject({ what: "schedule", what_name: "Nightly report", again: true });
+  });
+
   it("its row is in its own section with the four lines", async () => {
     mountRules([rule()], []);
     const lines = await screen.findByTestId("reflex-lines-reflex_9");
@@ -246,7 +271,7 @@ describe("the canvas's trigger node", () => {
 describe("the words", () => {
   it("never use start as a noun", () => {
     const words = [
-      AT_A_TIME, AT_A_TIME_WORDS, RUNS_IT_NOW,
+      AT_A_TIME, AT_A_TIME_WORDS, RUNS_IT_NOW, ONCE_MORE_LABEL, ONCE_MORE_WORDS,
       ...ENDED_WHAT_CHOICES.map((c) => c.label), ...ENDED_OUTCOME_CHOICES.map((c) => c.label),
     ];
     for (const w of words) {

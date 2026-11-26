@@ -1804,6 +1804,9 @@ class ReflexRuleBody(BaseModel):
     what: str | None = None
     what_name: str | None = None
     outcome: str | None = None
+    #: ... and whether it runs that schedule or workflow once more ("try
+    #: once more").
+    again: bool | None = None
 
 
 class ReflexToggleBody(BaseModel):
@@ -1839,6 +1842,7 @@ class ReflexToggleBody(BaseModel):
     what: str | None = None
     what_name: str | None = None
     outcome: str | None = None
+    again: bool | None = None
 
 
 class RehearsalBody(BaseModel):

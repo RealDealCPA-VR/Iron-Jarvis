@@ -69,6 +69,9 @@ def _start_args(body: Any, rule: Any = None) -> dict[str, Any]:
     for key, stored in (("what", "what"), ("what_name", "name"), ("outcome", "outcome")):
         value = getattr(body, key, None)
         out[key] = value if value is not None else current.get(stored, "")
+    # Review: and whether it runs that task once more ("try once more").
+    again = getattr(body, "again", None)
+    out["again"] = again if again is not None else current.get("again") is True
     return out
 
 
@@ -84,7 +87,9 @@ def register(app: FastAPI, d) -> None:
         row["reports_to"] = _cd.reports_to_view(rule.chat_thread_id, titles)
         start = rule.decoded_start()
         row["start"] = {
-            k: start[k] for k in ("path", "glob", "match_site", "per_file", "what", "name", "outcome") if k in start
+            k: start[k]
+            for k in ("path", "glob", "match_site", "per_file", "what", "name", "outcome", "again")
+            if k in start
         }
         w = watchers.get(rule.id)
         row["watcher"] = {"name": w.name, "last_error": w.last_error} if w is not None else None
@@ -193,7 +198,7 @@ def register(app: FastAPI, d) -> None:
             )
         touches_start = "source" in edits or any(
             getattr(body, k) is not None
-            for k in ("path", "glob", "match_site", "workspace_root", "what", "what_name", "outcome")
+            for k in ("path", "glob", "match_site", "workspace_root", "what", "what_name", "outcome", "again")
         )
         if touches_start:
             start, root, problem = _records.rule_start_from_args(

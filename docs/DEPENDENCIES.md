@@ -166,7 +166,7 @@ function runs.
 | `ltm` | memory | 16 | **7**: brain, connectors, daemon, memory, platform, providers, settings | core, documents, tools | detections, mcp, providers |
 | `memory` | memory | 19 | **7**: agents, daemon, inbox, learning, platform, projects, workmap | computeruse, core, ltm, search, tools | detections, learning, profile, providers, workmap |
 | `profile` | memory | 8 | **7**: agents, core, daemon, learning, memory, platform, settings | core | detections, iron_proxy, learning, terminals |
-| `triggers` | automations | 6 | **7**: comm, daemon, guide, platform, reflex, settings, webhooks | core, tools | agents, browser, comm, reflex, scheduling, workflows |
+| `triggers` | automations | 6 | **7**: comm, daemon, guide, platform, reflex, settings, webhooks | core, tools | agents, browser, comm, providers, reflex, scheduling, workflows |
 | `connectors` | connections | 7 | **6**: daemon, mcp, onboarding, settings, terminals, tools | core, mcp | daemon, detections, ltm, providers, tools |
 | `goals` | automations | 5 | **6**: agents, daemon, eval, inbox, platform, settings | core | agents, eval, providers, tools, workflows |
 | `motivation` | automations | 4 | **6**: daemon, improve, improvement, inbox, platform, settings | agents, core, tools | providers, settings |

@@ -646,6 +646,76 @@ def parse_started_by(value: Any) -> tuple[str, str]:
     return "", ""
 
 
+#: Leap 05-b (review): the rule whose "try once more" is running a schedule's
+#: fire again (``reflex/router._once_more``). Set around that fire only, so
+#: the fire's ONE signal (:func:`schedule_ended_signal`) names the rule and
+#: the router's one-deep guard holds: if the second try fails too, nothing
+#: more starts.
+import contextvars as _contextvars  # noqa: E402
+
+_ONCE_MORE_BY: "_contextvars.ContextVar[dict[str, str] | None]" = _contextvars.ContextVar(
+    "ij_once_more_by", default=None
+)
+
+
+def once_more_by(rule: Any) -> "_contextvars.Token":
+    """Mark what runs next in this context as ``rule``'s "once more" (pair
+    with :func:`once_more_done`)."""
+    return _ONCE_MORE_BY.set({
+        "id": str(getattr(rule, "id", "") or ""),
+        "name": str(getattr(rule, "name", "") or ""),
+        "source": str(getattr(rule, "source", "") or ""),
+    })
+
+
+def once_more_done(token: "_contextvars.Token") -> None:
+    _ONCE_MORE_BY.reset(token)
+
+
+def _posture_of_runs(engine: Any, session_ids: Any) -> tuple[bool, bool]:
+    """``(local_only, careful)`` of a task's runs: any of them made Local
+    only (``options.local_only``), any of them worked at low trust (it read
+    an email or a web page, ``agents/runtime._lower_trust``). BLOCKING (one
+    indexed read, at most 50 rows); a fault reads ``(False, False)``."""
+    ids = [str(s) for s in (session_ids or []) if str(s or "").strip() and str(s) != "chat"][:50]
+    if not ids or engine is None:
+        return False, False
+    try:
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import Session
+
+        with session_scope(engine) as db:
+            rows = list(db.exec(select(Session.options_json, Session.trust).where(Session.id.in_(ids))))
+    except Exception:  # noqa: BLE001
+        log.warning("the runs of a task that ended could not be read", exc_info=True)
+        return False, False
+    local_only = careful = False
+    for raw, trust in rows:
+        try:
+            opts = json.loads(raw) if isinstance(raw, str) and raw else {}
+        except (TypeError, ValueError):
+            opts = {}
+        local_only = local_only or (isinstance(opts, dict) and opts.get("local_only") is True)
+        careful = careful or str(trust or "") == "low"
+    return local_only, careful
+
+
+def _chat_local_only(engine: Any, thread_id: Any) -> bool:
+    """Is the saved chat a task was set up from switched to Local only?
+    BLOCKING; never raises."""
+    tid = str(thread_id or "").strip()
+    if not tid or engine is None:
+        return False
+    try:
+        from ..providers.egress import thread_local_only
+
+        return bool(thread_local_only(engine, tid))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 #: ``agents/outcome.run_ending``'s badge word -> a run's verdict.
 _VERDICT_OF_WORD = {
     "Failed": "failed",
@@ -661,10 +731,12 @@ _VERDICT_OF_SCHEDULE = {
     "needs_you": "needs_you",
     "did_nothing": "did_nothing",
 }
-#: A workflow run's ending status -> a verdict.
+#: A workflow run's ending status -> a verdict. ``waiting`` (review): a run
+#: that PARKED on its question (``workflow.waiting``) ended needing you.
 _VERDICT_OF_WORKFLOW = {
     "failed": "failed",
     "completed_with_failures": "part_failed",
+    "waiting": "needs_you",
 }
 
 
@@ -730,6 +802,11 @@ def ending_of_session(engine: Any, session_id: str, payload: dict | None = None)
             summary = str(row.summary or "")
             trust = str(row.trust or "")
             agent = str(row.agent_name or "")
+        # Review: a Local only run's words stay on this PC — the rule's work
+        # is told so (``local_only``) and the router keeps them here.
+        local_only = data.get("local_only") is True or (
+            isinstance(opts, dict) and opts.get("local_only") is True
+        )
         if door == "workflow":
             return None  # a workflow's step: its workflow's ending speaks for it
         # A helper another run handed work to (``delegate``, ``spawn_agent``,
@@ -752,31 +829,80 @@ def ending_of_session(engine: Any, session_id: str, payload: dict | None = None)
             return run_ended_context(
                 kind="rule", name=name, verdict=verdict, reason=ending.reason, detail=summary,
                 href=f"/sessions/{sid}", run_id=sid, by_rule_id=rid, by_rule_name=name,
-                by_rule_source=rule_source, careful=trust == "low",
+                by_rule_source=rule_source, careful=trust == "low", local_only=local_only,
             )
         if door == "schedule":
             # Outside a schedule's fire (a person's rerun keeps the origin):
             # the run speaks for its schedule.
             return run_ended_context(
                 kind="schedule", name=rest, verdict=verdict, reason=ending.reason, detail=summary,
-                href=f"/sessions/{sid}", run_id=sid, careful=trust == "low",
+                href=f"/sessions/{sid}", run_id=sid, careful=trust == "low", local_only=local_only,
             )
         name = agent.split(":", 1)[1] if agent.startswith("custom:") else ""
         return run_ended_context(
             kind="agent", name=name, verdict=verdict, reason=ending.reason, detail=summary,
-            href=f"/sessions/{sid}", run_id=sid, careful=trust == "low",
+            href=f"/sessions/{sid}", run_id=sid, careful=trust == "low", local_only=local_only,
         )
     except Exception:  # noqa: BLE001 — a reading never breaks a run's end
         log.warning("the end of run %s could not be read for the rules", sid, exc_info=True)
         return None
 
 
+def _workflow_run_facts(engine: Any, run_id: str) -> dict[str, Any]:
+    """What a workflow run's record says for its end: ``started_by``, its
+    step ``outputs``, its ``sessions`` and its ``chat`` (the chat it was set
+    up from). BLOCKING (one row read); ``{}`` when it is gone."""
+    if not run_id or engine is None:
+        return {}
+    from ..core.db import session_scope
+    from ..workflows.models import WorkflowRunRecord
+
+    with session_scope(engine) as db:
+        rec = db.get(WorkflowRunRecord, run_id)
+        if rec is None:
+            return {}
+        try:
+            outputs = json.loads(rec.outputs_json or "{}")
+        except (TypeError, ValueError):
+            outputs = {}
+        try:
+            sessions = json.loads(rec.session_ids_json or "[]")
+        except (TypeError, ValueError):
+            sessions = []
+        return {
+            "started_by": str(rec.started_by or ""),
+            "outputs": outputs if isinstance(outputs, dict) else {},
+            "sessions": [str(s) for s in sessions if s] if isinstance(sessions, list) else [],
+            "chat": str(getattr(rec, "chat_thread_id", "") or ""),
+            "current": str(rec.current_session_id or ""),
+        }
+
+
+def _workflow_posture(engine: Any, facts: dict[str, Any], payload: dict | None = None) -> tuple[bool, bool]:
+    """``(local_only, careful)`` of a workflow run (review): Local only when
+    its end was published for Local only work (the bus's stamp), the chat it
+    was set up from is Local only, or any of its steps ran Local only;
+    careful when any step worked at low trust or the signal that started it
+    came from outside (its ``Trigger`` output's posture). BLOCKING."""
+    outputs = facts.get("outputs") or {}
+    steps = [str(o.get("session_id") or "") for o in outputs.values() if isinstance(o, dict)]
+    local_only, careful = _posture_of_runs(
+        engine, list(facts.get("sessions") or []) + steps + [str(facts.get("current") or "")]
+    )
+    local_only = local_only or (payload or {}).get("local_only") is True or _chat_local_only(engine, facts.get("chat"))
+    trigger = outputs.get("Trigger") if isinstance(outputs.get("Trigger"), dict) else {}
+    careful = careful or str((trigger or {}).get("trust") or "") == "low"
+    return local_only, careful
+
+
 def ending_of_workflow(engine: Any, payload: dict | None) -> dict | None:
     """The ``run_ended`` context of a finished WORKFLOW run
-    (``workflow.completed``), or None when it was done or stopped. Its reason
-    names the step that stopped it, or the steps it went on past, by name
-    (code, from the run's own record); its ``detail`` is that step's words.
-    BLOCKING (one row read); never raises."""
+    (``workflow.completed``), or of one that PARKED on its question
+    (``workflow.waiting``, status ``waiting``: it ended needing you), or None
+    when it was done or stopped. Its reason names the step that stopped it,
+    the steps it went on past, or the step that waits, by name (code, from
+    the run's own record); its ``detail`` is that step's words (or the
+    question it asks). BLOCKING (one row read); never raises."""
     data = dict(payload or {})
     status = str(data.get("status") or "")
     verdict = _VERDICT_OF_WORKFLOW.get(status, "")
@@ -785,64 +911,95 @@ def ending_of_workflow(engine: Any, payload: dict | None) -> dict | None:
     name = str(data.get("workflow") or "")
     run_id = str(data.get("run_id") or "")
     try:
-        started_by, outputs = "", {}
-        if run_id and engine is not None:
-            from ..core.db import session_scope
-            from ..workflows.models import WorkflowRunRecord
-
-            with session_scope(engine) as db:
-                rec = db.get(WorkflowRunRecord, run_id)
-                if rec is not None:
-                    started_by = str(rec.started_by or "")
-                    try:
-                        outputs = json.loads(rec.outputs_json or "{}")
-                    except (TypeError, ValueError):
-                        outputs = {}
-        outputs = outputs if isinstance(outputs, dict) else {}
+        facts = _workflow_run_facts(engine, run_id)
+        outputs = facts.get("outputs") or {}
         failed = [
             (str(step), out) for step, out in outputs.items()
             if isinstance(out, dict) and out.get("status") == "failed" and step != "Trigger"
         ]
         steps = [" ".join(s.split())[:60] for s, _o in failed][:5]
-        if verdict == "failed":
+        local_only, careful = _workflow_posture(engine, facts, data)
+        if verdict == "needs_you":
+            asks = " ".join(str(data.get("step") or "").split())[:60]
+            reason = (f"It is waiting for your answer at its step “{asks}”." if asks
+                      else _reason_for("needs_you"))
+            detail = str(data.get("question") or "")[:600]
+        elif verdict == "failed":
+            said = " ".join(str(data.get("reason") or "").split())[:200]
             reason = (f"It stopped at its step “{steps[-1]}”." if steps
-                      else " ".join(str(data.get("reason") or "").split())[:200] or "The run did not finish.")
+                      else ("" if local_only else said) or "The run did not finish.")
+            detail = "\n".join(str(o.get("summary") or "")[:600] for _s, o in failed[-2:] if o.get("summary"))
         else:
             reason = (
                 "Some of its steps failed: " + ", ".join(f"“{s}”" for s in steps) + "."
                 if steps else _reason_for("part_failed")
             )
-        detail = "\n".join(str(o.get("summary") or "")[:600] for _s, o in failed[-2:] if o.get("summary"))
-        source, rid = parse_started_by(started_by)
+            detail = "\n".join(str(o.get("summary") or "")[:600] for _s, o in failed[-2:] if o.get("summary"))
+        source, rid = parse_started_by(facts.get("started_by"))
         rule_name, _src = _rule_name(engine, rid)
         from ..reflex.router import OUTSIDE_SOURCES, run_ended_context
 
-        trigger = outputs.get("Trigger") if isinstance(outputs.get("Trigger"), dict) else {}
-        careful = source in OUTSIDE_SOURCES or str((trigger or {}).get("trust") or "") == "low"
         return run_ended_context(
             kind="workflow", name=name, verdict=verdict, reason=reason, detail=detail,
             href="/workflows", run_id=run_id, by_rule_id=rid, by_rule_name=rule_name,
-            by_rule_source=source, careful=careful,
+            by_rule_source=source, careful=careful or source in OUTSIDE_SOURCES, local_only=local_only,
         )
     except Exception:  # noqa: BLE001 — a reading never breaks a run's end
         log.warning("the end of workflow run %s could not be read for the rules", run_id, exc_info=True)
         return None
 
 
-def ending_of_schedule(task: Any, status: str, detail: str = "", session_id: str = "") -> dict | None:
+def _schedule_does(task: Any) -> str:
+    """What a schedule does, in one line from its own record (a task's
+    words, the workflow it runs): the rule's work is told it."""
+    try:
+        from ..scheduling.tools import _does_words
+
+        flow = _schedule_workflow(task)
+        does = f"runs the workflow “{flow}”" if flow else _does_words(task)
+    except Exception:  # noqa: BLE001
+        return ""
+    return " ".join(str(does or "").split())[:200]
+
+
+def ending_of_schedule(
+    task: Any, status: str, detail: str = "", session_id: str = "", run_id: str = "", engine: Any = None,
+) -> dict | None:
     """The ``run_ended`` context of ONE schedule fire, from what its row now
     records (``platform._record_outcome``), or None when the fire was done,
-    skipped, missed or stopped. Pure."""
+    skipped, missed or stopped. With ``engine`` (review), the fire's own runs
+    are read: its session (``session_id``) and the workflow run it ran
+    (``run_id``) — any of them Local only, or working at low trust, makes the
+    rule's work Local only, or careful, too; so does a schedule set up from a
+    Local only chat. A fire that a rule's "try once more" ran
+    (:func:`once_more_by`) names that rule. BLOCKING with an engine."""
     verdict = _VERDICT_OF_SCHEDULE.get(str(status or ""), "")
     if not verdict or task is None:
         return None
     from ..reflex.router import run_ended_context
 
     sid = str(session_id or "")
+    rid = str(run_id or "")
+    local_only = careful = False
+    if engine is not None:
+        try:
+            facts = _workflow_run_facts(engine, rid) if rid else {}
+            wf_local, wf_careful = _workflow_posture(engine, facts) if facts else (False, False)
+            s_local, s_careful = _posture_of_runs(engine, [sid])
+            local_only = wf_local or s_local or _chat_local_only(engine, getattr(task, "chat_thread_id", ""))
+            careful = wf_careful or s_careful
+        except Exception:  # noqa: BLE001 — unreadable: read as Local only, careful
+            log.warning("the runs of schedule %r could not be read", getattr(task, "name", ""), exc_info=True)
+            local_only = careful = True
+    by = _ONCE_MORE_BY.get() or {}
     return run_ended_context(
         kind="schedule", name=str(getattr(task, "name", "") or ""), verdict=verdict,
         reason=_reason_for(verdict), detail=str(detail or ""),
-        href=f"/sessions/{sid}" if sid else "/schedules", run_id=sid or str(getattr(task, "id", "") or ""),
+        href=f"/sessions/{sid}" if sid else "/schedules",
+        run_id=sid or rid or str(getattr(task, "id", "") or ""),
+        by_rule_id=str(by.get("id") or ""), by_rule_name=str(by.get("name") or ""),
+        by_rule_source=str(by.get("source") or ""),
+        careful=careful, local_only=local_only, does=_schedule_does(task),
     )
 
 
@@ -872,24 +1029,47 @@ def _signal_hub(hub: Any, loop: Any, ctx: dict) -> Any:
     return contextvars.Context().run(asyncio.run_coroutine_threadsafe, hub.signal("run_ended", ctx), loop)
 
 
+#: The workflow event a run that PARKED on its question publishes
+#: (``workflows/engine``): it ended needing you (review).
+WORKFLOW_WAITING = "workflow.waiting"
+
+
+def _schedule_speaks_for(hub: Any, run_id: str) -> bool:
+    """Is ``run_id`` a workflow run a schedule's fire parked (review)? Then
+    that schedule's row speaks for it — its fire's "Needs you", and the
+    settled row when it finishes (``platform._settle_parked_workflow``) —
+    and the run's own end is quiet: one signal per fire. Never raises."""
+    if not run_id:
+        return False
+    platform = getattr(getattr(hub, "router", None), "p", None)
+    parked = getattr(platform, "parked_runs", None)
+    try:
+        return bool(parked is not None and parked.speaks_for(run_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run_ended_handler(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
     """An event-bus handler (a sync one: the bus runs it off the loop):
-    ``session.completed`` and ``workflow.completed`` that ended SHORT send one
+    ``session.completed`` and ``workflow.completed`` that ended SHORT, and a
+    workflow that parked on its question (``workflow.waiting``), send one
     ``run_ended`` signal to the hub on the daemon's loop (sent, not waited
     for). Quiet inside a schedule's fire (the schedule's recorded outcome is
-    that fire's one signal) and when no rule or waiter listens. One signal
-    per run (a repeat of the same end starts nothing again). Never raises."""
+    that fire's one signal), for a run a schedule's fire parked (its row
+    speaks for it), and when no rule or waiter listens. One signal per run
+    and verdict (a repeat of the same end starts nothing again). Never
+    raises."""
     import threading
 
     from ..core.events import EventType
 
-    seen: list[tuple[str, str]] = []
+    seen: list[tuple[str, str, str]] = []
     lock = threading.Lock()
 
     def _on_event(event: Any) -> None:
         try:
             etype = getattr(event, "type", "")
-            if etype not in (EventType.SESSION_COMPLETED, EventType.WORKFLOW_COMPLETED):
+            if etype not in (EventType.SESSION_COMPLETED, EventType.WORKFLOW_COMPLETED, WORKFLOW_WAITING):
                 return
             from ..comm.notifier import in_schedule_fire
 
@@ -903,10 +1083,16 @@ def run_ended_handler(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
             if etype == EventType.SESSION_COMPLETED:
                 ctx = ending_of_session(engine, str(getattr(event, "session_id", "") or ""), payload)
             else:
+                if _schedule_speaks_for(hub, str(payload.get("run_id") or "")):
+                    return
+                if etype == WORKFLOW_WAITING:
+                    payload["status"] = "waiting"
                 ctx = ending_of_workflow(engine, payload)
             if not ctx:
                 return
-            key = (str(ctx.get("ended_kind") or ""), str(ctx.get("run_id") or ""))
+            key = (
+                str(ctx.get("ended_kind") or ""), str(ctx.get("run_id") or ""), str(ctx.get("ended_verdict") or ""),
+            )
             with lock:
                 if key[1] and key in seen:
                     return
@@ -921,18 +1107,24 @@ def run_ended_handler(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
 
 def schedule_ended_signal(get_hub: Callable[[], Any], get_loop: Callable[[], Any]):
     """The hook a schedule's fire calls once its row records how it went
-    (``platform._run_scheduled``): a fire that ended short sends ONE
-    ``run_ended`` signal to the hub on the daemon's loop (sent, not waited
-    for; a schedule fires on the scheduler's own thread). Returns the future,
-    or None. BLOCKING (one indexed read); never raises."""
+    (``platform._run_scheduled``, and ``platform._settle_parked_workflow``
+    when a fire that parked settles short): a fire that ended short sends
+    ONE ``run_ended`` signal to the hub on the daemon's loop (sent, not
+    waited for; a schedule fires on the scheduler's own thread). ``run_id``:
+    the workflow run the fire ran, when it ran one. Returns the future, or
+    None. BLOCKING (a few indexed reads, only while a rule listens); never
+    raises."""
 
-    def _ended(task: Any, status: str, detail: str = "", session_id: str = "") -> Any:
+    def _ended(task: Any, status: str, detail: str = "", session_id: str = "", run_id: str = "") -> Any:
         try:
-            ctx = ending_of_schedule(task, status, detail, session_id)
-            if not ctx:
+            if str(status or "") not in _VERDICT_OF_SCHEDULE or task is None:
                 return None
             hub, loop = get_hub(), get_loop()
             if hub is None or loop is None or not _someone_listens(hub):
+                return None
+            engine = getattr(getattr(getattr(hub, "router", None), "store", None), "engine", None)
+            ctx = ending_of_schedule(task, status, detail, session_id, run_id, engine=engine)
+            if not ctx:
                 return None
             return _signal_hub(hub, loop, ctx)
         except Exception:  # noqa: BLE001 — the row is the record either way
@@ -1009,7 +1201,9 @@ def list_starts(platform: Any, *, workflow: str | None = None) -> list[dict[str,
         for rec in schedules:
             if want and _schedule_workflow(rec).casefold() != want:
                 continue
-            does = _does_words(rec)
+            # Review: a workflow schedule names its workflow (the schedule
+            # list's words read only ``payload.name``: "Runs a workflow.").
+            does = _schedule_does(rec) or _does_words(rec)
             # The time in words; the stored cron line stays on Schedules.
             when = re.sub(r"\s*\(cron [^)]*\)$", "", when_words(rec)).strip()
             rows.append({
@@ -1076,6 +1270,21 @@ _ANY_OF_KIND = {
     "agent": "any agent run",
     "any": "any other task",
 }
+
+
+#: Leap 05-b (review): the kinds of task "try once more" can run again (a
+#: rule's run and an agent run have no record to start again from).
+ONCE_MORE_WHATS = ("schedule", "workflow")
+
+
+def once_more_words(start: dict) -> str:
+    """The Do line's second step of a rule with ``again``: "Then it runs the
+    schedule “Nightly report” once more." Pure."""
+    what = str((start or {}).get("what") or "")
+    name = str((start or {}).get("name") or "").strip()
+    noun = {"schedule": "schedule", "workflow": "workflow"}.get(what, "task")
+    which = f"the {noun} “{_q(name, 60)}”" if name else f"that {noun}"
+    return f"Then it runs {which} once more."
 
 
 def run_ended_when_words(start: dict) -> str:
@@ -1151,6 +1360,9 @@ def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
         does = f"{who} does: {task}" if task else f"{who} decides what to do with it."
     if not does.endswith((".", "?", "!", "…")):
         does += "."
+    if source == "run_ended" and start.get("again") is True:
+        # Review: "try once more" is the rule's own second step, by code.
+        does += " " + once_more_words(start)
 
     root = str(getattr(rule, "workspace_root", "") or "").strip()
     if root:
@@ -1163,8 +1375,12 @@ def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
     limit = int(getattr(rule, "max_fires_per_hour", 0) or 12)
     limits = f"Starts at most {limit} times an hour, then pauses and tells you. Anything risky asks you first."
     if source == "run_ended":
-        # Leap 05-b: the loop guard, said where the rule is read.
-        limits += " The work it does never starts it, or a rule like it, again."
+        # Leap 05-b: the loop guard, said where the rule is read; and (review)
+        # what a Local only task said stays on this PC.
+        limits += (
+            " The work it does never starts it, or a rule like it, again."
+            " When the task that ended was Local only, so is the work it starts."
+        )
     if careful is None:
         from ..reflex.router import OUTSIDE_SOURCES, watches_downloads
 

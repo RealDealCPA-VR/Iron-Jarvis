@@ -2264,11 +2264,25 @@ those (or it did nothing). A task that was done, or that you stopped, starts
 nothing. On the Rules page, pick **Another task fails** under **Another kind
 of rule**.
 
-**What the rule is told.** Which task ended and how come from Iron Jarvis's
-own record, never from what a model said about itself. What the run itself
-said (its last words, the step that stopped it) is given to the rule's work
-as data, never as instructions. If the run that ended worked carefully (it
-read an email or a web page), the rule's work starts carefully too.
+**What the rule is told.** Which task ended and how, and what that task does,
+come from Iron Jarvis's own record, never from what a model said about
+itself. What the run itself said (its last words, the step that stopped it,
+the question it waits on) is given to the rule's work as data, never as
+instructions. If the run that ended worked carefully (it, or one of a
+workflow's steps, read an email or a web page), the rule's work starts
+carefully too.
+
+**Local only stays local.** If the task that ended was Local only, the
+rule's work is Local only too (if its model is not on this PC, it does not
+start, and the rule's row says why). What that task said is never handed to
+a remote agent or to a workflow's steps.
+
+**Try once more.** For one of your schedules or a workflow, the rule can also
+run that task once more: say "try once more" in chat, or tick **Run it once
+more** on the Rules page. The card's Do line says so ("Then it runs the
+schedule “Nightly report” once more."). The second try starts after the first
+has finished, as a fire of that schedule (or a run of that workflow) that the
+rule started.
 
 **It never goes round in circles.** The work a rule like this does never
 starts it, or any rule like it, again: if "try once more" fails too, nothing
@@ -2277,7 +2291,9 @@ at most 12 times an hour, then pauses itself and tells you once a day.
 
 **A schedule is heard once a fire.** When a schedule runs a workflow or an
 agent, the schedule's own result is what a rule hears, once per fire, as the
-Schedules row says it.
+Schedules row says it. A workflow that stops to wait for your answer ended
+needing you. If you answer a schedule's waiting workflow and it then fails,
+the rule hears that once too, as the Schedules row then says it.
 
 **Everything that runs by itself, in one place.** The Rules page lists your
 rules by what starts them, and under them, **At a time**, your schedules, each

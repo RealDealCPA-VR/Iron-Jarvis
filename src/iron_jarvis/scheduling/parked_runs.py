@@ -41,6 +41,10 @@ class ParkedRuns:
         self._path = Path(home) / FILE_NAME if home else None
         self._lock = threading.Lock()
         self._memory: dict[str, dict[str, str]] = {}
+        #: Leap 05-b (review): runs settled since the daemon started, newest
+        #: last (bounded), so the handler that reads the SAME end after
+        #: :meth:`settle` knows a schedule spoke for it.
+        self._settled: dict[str, None] = {}
 
     def _read(self) -> dict[str, dict[str, str]]:
         if self._path is None:
@@ -99,4 +103,21 @@ class ParkedRuns:
                 return None
             ref = data.pop(hit).get("ref") or ""
             self._write(data)
+            self._settled[run_id] = None
+            while len(self._settled) > 500:
+                self._settled.pop(next(iter(self._settled)))
             return hit, ref
+
+    def speaks_for(self, run_id: str) -> bool:
+        """Leap 05-b (review): is ``run_id`` a run a schedule's fire parked
+        (still waiting, or settled since the daemon started)? Then that
+        schedule's row is its one signal to the rules. Never raises."""
+        if not run_id:
+            return False
+        try:
+            with self._lock:
+                if run_id in self._settled:
+                    return True
+                return any(v.get("run_id") == run_id for v in self._read().values())
+        except Exception:  # noqa: BLE001
+            return False

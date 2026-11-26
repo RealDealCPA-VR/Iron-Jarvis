@@ -180,6 +180,9 @@ class Scheduler:
         # running (AE11). APScheduler's max_instances only counts its own.
         self._inflight: set[str] = set()
         self._inflight_lock = threading.Lock()
+        # Leap 05-b (review): told when a fire lets go of its name, so a
+        # rule's "try once more" waits for the fire that ended (no polling).
+        self._inflight_freed = threading.Condition(self._inflight_lock)
         # APScheduler's two silent outcomes — an overlap skipped and a fire
         # missed past its grace — used to be a WARNING in its own logger; the
         # listener writes them on the row the user reads.
@@ -647,6 +650,23 @@ class Scheduler:
     def _release_inflight(self, name: str) -> None:
         with self._inflight_lock:
             self._inflight.discard(name)
+            self._inflight_freed.notify_all()
+
+    def wait_until_idle(self, name: str, timeout: float) -> bool:
+        """Block until no fire of ``name`` is in flight, at most ``timeout``
+        seconds (leap 05-b: a rule's "try once more" starts after the fire
+        that ended has finished its delivery). True when it is free.
+        BLOCKING: callers on an event loop hop off it."""
+        import time as _time
+
+        deadline = _time.monotonic() + max(0.0, float(timeout or 0))
+        with self._inflight_freed:
+            while name in self._inflight:
+                left = deadline - _time.monotonic()
+                if left <= 0:
+                    return False
+                self._inflight_freed.wait(left)
+            return True
 
     def _mark_ran(self, name: str) -> ScheduledTaskRecord | None:
         """Record that ``name`` just ran: stamp last_run + recompute next_run."""

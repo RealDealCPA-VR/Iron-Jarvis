@@ -3851,7 +3851,9 @@ class ReflexCreateTool(_ReflexTool):
         "part_failed, needs_you, or any = any way it fell short). (\"if the nightly report fails, "
         "tell me why and try once more\"): `source` run_ended, `what` schedule, `what_name` the "
         "schedule's name, `action` session, `task_template` what to do ({what}, {outcome}, {reason} "
-        "and, as data, {detail}, what the run said, are filled in). An email, calendar, Slack or "
+        "and, as data, {detail}, what the run said, are filled in), `again` true (\"try once "
+        "more\": that schedule or workflow runs once more; if it fails again, nothing more "
+        "starts). An email, calendar, Slack or "
         "phone rule is refused, with the page that sets it up, while nothing listens there yet. "
         "Optional: `agent` (a custom agent that does the "
         "work), `folder` (where the work runs), `max_fires_per_hour` (1-120, default 12: then the "
@@ -3879,6 +3881,7 @@ class ReflexCreateTool(_ReflexTool):
             "what": {"type": "string", "enum": ["schedule", "workflow", "rule", "agent", "any"]},
             "what_name": {"type": "string"},
             "outcome": {"type": "string", "enum": ["failed", "part_failed", "needs_you", "any"]},
+            "again": {"type": "boolean"},
             "agent": {"type": "string"},
             "folder": {"type": "string"},
             "max_fires_per_hour": {"type": "integer", "minimum": 1, "maximum": 120},
@@ -4075,7 +4078,19 @@ def run_ended_start(platform: Any, args: dict[str, Any]) -> tuple[dict[str, Any]
             return {}, f"There is no saved workflow called “{name}”."
     if name and what == "rule" and not resolve_reflex(platform, name):
         return {}, f"There is no rule called “{name}”."
-    return {"what": what, "name": name, "outcome": outcome}, ""
+    start: dict[str, Any] = {"what": what, "name": name, "outcome": outcome}
+    # Review: "try once more" runs that schedule or workflow again, once (the
+    # router's ``_once_more``). A rule's run or an agent run has no record to
+    # start again from, so it is refused in words, never pretended.
+    again = args.get("again")
+    if again is True or (isinstance(again, str) and again.strip().lower() == "true"):
+        from ..triggers.starts import ONCE_MORE_WHATS
+
+        if what not in ONCE_MORE_WHATS:
+            return {}, ("Only a schedule or a workflow can be run once more. A rule's run, an agent "
+                        "run or any other task cannot, so pick the schedule or the workflow.")
+        start["again"] = True
+    return start, ""
 
 
 def rule_agent_problem(platform: Any, agent: str) -> str:
@@ -4099,8 +4114,8 @@ class ReflexUpdateTool(_ReflexTool):
         "it), or change what it does (`task_template`, `agent`, `folder` where the work runs), how "
         "often it may start (`max_fires_per_hour`, 1-120), a file rule's folder (`path`, `glob`), "
         "a download rule's site (`match_site`), or which task a \"when another task fails\" rule "
-        "listens for (`what`, `what_name`, `outcome`). The user approves on a card; the change has "
-        "an Undo."
+        "listens for (`what`, `what_name`, `outcome`) and whether it runs that task once more "
+        "(`again`). The user approves on a card; the change has an Undo."
     )
     input_schema = {
         "type": "object",
@@ -4118,6 +4133,7 @@ class ReflexUpdateTool(_ReflexTool):
             "what": {"type": "string", "enum": ["schedule", "workflow", "rule", "agent", "any"]},
             "what_name": {"type": "string"},
             "outcome": {"type": "string", "enum": ["failed", "part_failed", "needs_you", "any"]},
+            "again": {"type": "boolean"},
         },
         "required": ["rule"],
     }
@@ -4136,7 +4152,7 @@ class ReflexUpdateTool(_ReflexTool):
             return ToolResult(
                 ok=False,
                 error="Say what to change: enabled, project_id, task_template, agent, folder, "
-                "max_fires_per_hour, path, glob, match_site, what, what_name or outcome.",
+                "max_fires_per_hour, path, glob, match_site, what, what_name, outcome or again.",
             )
         # PATCH /reflex/rules/{id}'s three intents: omitted = unchanged,
         # "" = clear the grounding, a value = re-ground.
@@ -4216,8 +4232,12 @@ def rule_edits_from_args(platform: Any, before: dict[str, Any], args: dict[str, 
     if source == "download" and isinstance(args.get("match_site"), str):
         site = args["match_site"].strip()
         edits["start_json"] = {"match_site": site[:200]} if site else {}
-    if source == "run_ended" and any(isinstance(args.get(k), str) for k in ("what", "what_name", "outcome")):
-        # Leap 05-b: which task it listens for, and how it must have ended.
+    if source == "run_ended" and (
+        any(isinstance(args.get(k), str) for k in ("what", "what_name", "outcome"))
+        or isinstance(args.get("again"), bool)
+    ):
+        # Leap 05-b: which task it listens for, how it must have ended, and
+        # (review) whether it runs that task once more.
         from ..reflex.models import ReflexRule
 
         current = ReflexRule(start_json=str(before.get("start_json") or "")).decoded_start()
@@ -4225,6 +4245,7 @@ def rule_edits_from_args(platform: Any, before: dict[str, Any], args: dict[str, 
             "what": args["what"] if isinstance(args.get("what"), str) else current.get("what", ""),
             "what_name": args["what_name"] if isinstance(args.get("what_name"), str) else current.get("name", ""),
             "outcome": args["outcome"] if isinstance(args.get("outcome"), str) else current.get("outcome", ""),
+            "again": args["again"] if isinstance(args.get("again"), bool) else current.get("again") is True,
         }
         start, problem = run_ended_start(platform, merged)
         if problem:

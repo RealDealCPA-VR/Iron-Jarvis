@@ -2067,9 +2067,30 @@ def build_platform(
             return
         name, ref = hit
         words = _run_outcome.workflow_answered(data.get("status"), ref or data.get("workflow"))
-        if words is not None:
-            _restamp_parked(name, *words)
+        if words is not None and _restamp_parked(name, *words):
+            # Leap 05-b (review): a parked fire that settled SHORT ("Failed",
+            # "Part failed" after the answer) is that fire's signal to the
+            # "when another task fails" rules, as the row now says it; the
+            # run's own end is quiet (``triggers/starts._schedule_speaks_for``).
+            _tell_rules_a_parked_fire_ended(name, *words, str(data.get("run_id") or ""))
 
+    def _tell_rules_a_parked_fire_ended(name: str, status: str, detail: str, run_id: str) -> None:
+        hook = getattr(platform, "schedule_ended", None)
+        scheduler = getattr(platform, "scheduler", None)
+        if hook is None or scheduler is None or status not in (
+            _run_outcome.STATUS_ERROR, _run_outcome.STATUS_PARTIAL,
+        ):
+            return
+        try:
+            task = scheduler.get(name)
+            if task is not None:
+                hook(task, status, detail, "", run_id)
+        except Exception:  # noqa: BLE001 — the row is the record either way
+            _log.warning("schedule %r: its settled end could not reach the rules", name, exc_info=True)
+
+    # Leap 05-b (review): which workflow runs a schedule's fire parked, read
+    # by the "when another task fails" handler (the schedule speaks for them).
+    platform.parked_runs = _parked_runs
     event_bus.add_handler(_settle_parked_workflow)
 
     def _settle_stopped_waiting(run_id: str, *, by_emergency_stop: bool = False) -> bool:
@@ -2695,6 +2716,9 @@ def build_platform(
             if inspect.isawaitable(result):
                 result = await result
             ref = payload.get("workflow") or payload.get("name") or "inline"
+            # Leap 05-b (review): the run this fire ran, for the rules that
+            # hear its end (its steps' posture: Local only, careful).
+            fired["workflow_run"] = str(getattr(result, "id", "") or "")
             # The run RECORD is the truth (v1.121.0): a gated workflow that
             # parked is not "done", and a failed run is not a success — the
             # old blind "ran" stamped ok the instant either happened.
@@ -2848,18 +2872,23 @@ def build_platform(
             return detail
         raise ValueError(f"unknown schedule kind {task.kind!r}")
 
-    async def _tell_rules_it_ended(task, status: str, detail: str, session_id: str) -> None:
+    async def _tell_rules_it_ended(task, status: str, detail: str, fired: dict) -> None:
         """Leap 05-b: once the row records how this fire went, a fire that
         ended short starts the "when another task fails" rules that name it
         (``platform.schedule_ended``, set by the daemon:
         ``triggers/starts.schedule_ended_signal``; off the loop, sent to the
         daemon's own loop, never waited for). Its runs' own ends are quiet
-        inside the fire, so this is the fire's ONE signal. Never raises."""
+        inside the fire, so this is the fire's ONE signal. The fire's session
+        and the workflow run it ran go with it (review: their posture, Local
+        only and careful, is the rule's work's too). Never raises."""
         hook = getattr(platform, "schedule_ended", None)
         if hook is None:
             return
         try:
-            await asyncio.to_thread(hook, task, status, detail, session_id or "")
+            await asyncio.to_thread(
+                hook, task, status, detail, str(fired.get("session_id") or ""),
+                str(fired.get("workflow_run") or ""),
+            )
         except Exception:  # noqa: BLE001 — the row is the record either way
             _log.warning("schedule %r: its end could not reach the rules", task.name, exc_info=True)
 
@@ -2958,7 +2987,7 @@ def build_platform(
                         pass
                 detail = _run_outcome.failure_detail(reason)
                 _record_outcome(task.name, "error", detail, fired["session_id"])
-                await _tell_rules_it_ended(task, "error", detail, fired["session_id"])
+                await _tell_rules_it_ended(task, "error", detail, fired)
                 _deliver_outcome(
                     task, payload, "error", detail, bell_says=_bell_says(fired, "error")
                 )
@@ -2966,7 +2995,7 @@ def build_platform(
                 return
             status = _run_outcome.fire_status(fired.get("outcome"))
             _record_outcome(task.name, status, detail, fired["session_id"])
-            await _tell_rules_it_ended(task, status, detail, fired["session_id"])
+            await _tell_rules_it_ended(task, status, detail, fired)
             if status != _run_outcome.STATUS_CANCELLED:
                 _deliver_outcome(
                     task, payload, status, detail, bell_says=_bell_says(fired, status),

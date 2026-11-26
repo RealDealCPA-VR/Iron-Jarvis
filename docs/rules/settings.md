@@ -13,10 +13,10 @@ How to use this file: read the contents list, then read only the entries your ch
 - L208: **Wave 3 of the chat-first plan: projects, agents, apps, destinations, goals from Chat, Local only and Undo from chat** (v1.435.0)
 - L305: **Wave 4 of the chat-first plan: the night shift, a folder's coding setup, model servers, accounts, memory bases, preferences, personas, answer language and the desktop's start settings, from chat** (v1.438.0)
 - L387: **Wave 7 of the chat-first plan: the 30 setup requests are a TEST, each driven through the real stream lane; every gap they showed is closed or said in true words** (v1.442.0)
-- L493: **Wave A of the readiness plan: chat configures everything** (v1.448.0)
-- L572: **Chat sets an agent's job card; `config_list` names the models; a held lookup match is named** (v1.485.0)
-- L599: **The Undo press is the consent; web search and web fetch are never "Ask first"** (v1.520.0)
-- L613: **"Sending outside this PC" lists every live outside place from the store its own page writes, by host only, and names a store it could not read** (v1.541.0)
+- L496: **Wave A of the readiness plan: chat configures everything** (v1.448.0)
+- L575: **Chat sets an agent's job card; `config_list` names the models; a held lookup match is named** (v1.485.0)
+- L602: **The Undo press is the consent; web search and web fetch are never "Ask first"** (v1.520.0)
+- L616: **"Sending outside this PC" lists every live outside place from the store its own page writes, by host only, and names a store it could not read** (v1.541.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -404,12 +404,15 @@ How to use this file: read the contents list, then read only the entries your ch
     guards: `_no_real_programs` (any child but git or this Python fails the
     test, naming it — row 29 had run the owner's real `grok models`) and
     `_no_lingering_profile_share` (row 25 had left the process-wide share ON
-    for the real `~/.claude`). Score: 23 done, 1 door (#11 the browser
-    add-on), 6 honest (#13 another computer, #17 a watcher suggests, #19 a
-    built-in agent's limit, #22 the desktop, #23 talking = the mic, #26 an
-    internet service calling in); v1.432.0 was 2 done. Request 18 is two
-    messages, as in the app: the `workflow_draft` exit ends a turn (its card's
-    Save posts `/workflows`), then the rule + email destination.
+    for the real `~/.claude`). Score: 22 done, 2 door (#11 the browser
+    add-on; #18 since leap 05-b: the email rule is refused with the
+    Notifications door until the new destination listens), 6 honest (#13
+    another computer, #17 a watcher suggests, #19 a built-in agent's limit,
+    #22 the desktop, #23 talking = the mic, #26 an internet service calling
+    in); v1.432.0 was 2 done. Request 18 is two messages, as in the app: the
+    `workflow_draft` exit ends a turn (its card's Save posts `/workflows`),
+    then the rule (refused, with the door) + email destination. A door row
+    with chat steps (`_in_chat`) runs the done rows' end-to-end check.
   - GAPS CLOSED (`settings/setup_words.py` is the ONE place for the new
     request shapes, read by `records`, `trigger` and `page_doors`):
     "…send it to my phone" arms `channel_connect`/`channel_toggle`; Slack

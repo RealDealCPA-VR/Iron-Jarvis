@@ -63,6 +63,8 @@ def test_each_rows_id_loads_from_its_own_store(desk):
     by = {r["id"]: r for r in rows}
     assert by[nightly.id]["when_words"] == "Every day at 2:00 AM."
     assert by[nightly.id]["does_words"] == "Does: Write the report."
+    # Review: a workflow schedule's row names its workflow.
+    assert by[month.id]["does_words"] == "Runs the workflow “Month end”."
     assert by[nightly.id]["last_words"] == "Not run yet." and by[nightly.id]["href"] == "/schedules"
     assert by[why.id]["kind"] == "run_ended" and by[why.id]["href"] == f"/reflex?rule={why.id}"
     assert by[why.id]["when_words"] == (

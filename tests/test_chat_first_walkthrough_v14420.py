@@ -23,7 +23,10 @@ lane and pins its verdict (Part B, "What done means"):
   Slack developer app) may remain as a door in the same reply, and every door's
   href is a real dashboard place today.
 * **door** — an Iron Jarvis step truly needs a page: the reply's doors hold
-  that exact page and it exists.
+  that exact page and it exists. A door row may still make its other steps
+  in chat (request 18: the workflow and the destination land in chat, the
+  rule waits for the Notifications page); those steps are checked as a done
+  row's are.
 * **honest** — the app does not offer it: the turn's system prompt carries the
   ``daemon/page_doors`` "not offered" line and no writer that would pretend is
   armed.
@@ -37,11 +40,12 @@ in-memory stand-in, Notion is never called, an MCP app is a local child, and
 another program's config is a fixture under a scratch APPDATA, and a row
 that starts any program but git or this Python (a real CLI) fails.
 
-SCORE (v1.442.0, every row pinned): 23 done, 1 door, 6 honest. At v1.432.0
-the review counted 2 done. Request 18 takes two messages, as in the app: the
-workflow card (a draft ends that turn; its Save posts the workflow) and then
-the email destination; the rule that would start the workflow is refused
-with the Notifications door until that destination listens (leap 05-b).
+SCORE (every row pinned; leap 05-b): 22 done, 2 door, 6 honest. v1.442.0
+counted 23 done and 1 door; at v1.432.0 the review counted 2 done. Request
+18 takes two messages, as in the app: the workflow card (a draft ends that
+turn; its Save posts the workflow) and then the email destination; the rule
+that would start the workflow is refused with the Notifications door until
+that destination listens (leap 05-b), so request 18 is a door now.
 
 Request 10's pull request is made in a LATER turn with the GitHub app's own
 tools; this row pins the connect (the secure card) only.
@@ -596,7 +600,10 @@ ROWS: list[Row] = [
         honest_id="watcher_suggests",
         may_arm=frozenset({"sentinel_add", "sentinel_update", "sentinel_delete",
                            "reflex_create", "reflex_update", "reflex_delete"}) | SETTINGS),
-    Row(18, "Create a workflow that drafts a reply to every new email from a client.", "done",
+    # Leap 05-b (review): the rule is refused until the new destination
+    # listens (its Allowed senders are set on Notifications, which chat
+    # cannot fill), so the job is not finished in chat: a door.
+    Row(18, "Create a workflow that drafts a reply to every new email from a client.", "door",
         plan=[
             Call("reflex_create", {"name": "Client emails", "source": "email", "match": "",
                                    "action": "workflow", "target": "client-reply-drafts"}, ok=False),
@@ -604,6 +611,7 @@ ROWS: list[Row] = [
                                      "from_addr": "me@example.com", "to_addr": "me@example.com"}),
         ],
         secrets={"channel.mail": "mail-app-password-v14420"},
+        doors=[{"href": "/channels", "label": "Open Notifications in Settings"}],
         lands=_l_client_replies),
     Row(19, "Set a monthly spending limit for my builder agent.", "honest",
         honest_id="builtin_agent_limit",
@@ -648,6 +656,12 @@ ROWS: list[Row] = [
 ]
 
 BEFORE: dict[int, Callable] = {18: _before_client_replies, 28: _before_changes}
+#: Rows whose Iron Jarvis steps are made in chat: every done row, and a door
+#: row that makes its other steps before the page it needs (request 18).
+def _in_chat(r: "Row") -> bool:
+    return r.verdict == "done" or (r.verdict == "door" and bool(r.plan))
+
+
 GROUPS = {"done": "done", "door": "door", "honest": "honest", "door_or_honest": "honest"}
 
 
@@ -832,7 +846,7 @@ def _lanes(d, text: str) -> set[str]:
 # =========================================================================== #
 # 1. Offered by the arming functions (the cheap check, every done row)
 # =========================================================================== #
-@pytest.mark.parametrize("row", _params([r for r in ROWS if r.verdict == "done"], arming=True))
+@pytest.mark.parametrize("row", _params([r for r in ROWS if _in_chat(r)], arming=True))
 def test_a_done_rows_tools_are_offered_by_the_arming_functions(d, row):
     offered = _lanes(d, row.text)
     missing = sorted({c.tool for c in row.plan} - offered)
@@ -895,8 +909,10 @@ def _doors_are_real(done: dict) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("row", _params([r for r in ROWS if r.verdict == "done"]))
+@pytest.mark.parametrize("row", _params([r for r in ROWS if _in_chat(r)]))
 async def test_a_done_row_finishes_in_chat_and_the_change_lands(row, tmp_path, monkeypatch):
+    """Every done row, and a door row's steps made in chat (request 18: its
+    door is checked here too, ``row.doors``)."""
     app, ctx, done, model = await _run(row, tmp_path, monkeypatch)
     try:
         assert model.missing == [], (
@@ -936,7 +952,7 @@ async def test_a_done_row_finishes_in_chat_and_the_change_lands(row, tmp_path, m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("row", _params([r for r in ROWS if r.verdict == "door"]))
+@pytest.mark.parametrize("row", _params([r for r in ROWS if r.verdict == "door" and not r.plan]))
 async def test_a_door_row_carries_the_exact_page(row, tmp_path, monkeypatch):
     _app, _ctx, done, model = await _run(row, tmp_path, monkeypatch)
     assert model.called == []
@@ -981,9 +997,9 @@ def test_the_table_is_the_thirty_requests_with_their_target_verdicts():
             assert r.plan, r.n
         if r.verdict == "door":
             assert r.doors, r.n
-    assert counts == {"done": 23, "door": 1, "honest": 6}
+    assert counts == {"done": 22, "door": 2, "honest": 6}
     doc = __doc__ or ""
-    assert "SCORE (v1.442.0, every row pinned): 23 done, 1 door, 6 honest." in doc
+    assert "SCORE (every row pinned; leap 05-b): 22 done, 2 door, 6 honest." in doc
     waiting = sorted(r.n for r in ROWS if r.waits)
     assert waiting == []
     assert ", ".join(str(n) for n in waiting) in " ".join(doc.split())
@@ -1008,4 +1024,4 @@ def test_the_score_table(capsys):
     out = capsys.readouterr().out
     with capsys.disabled():  # shown with `pytest -s`
         print("\n" + out)
-    assert "pinned today: 23 done, 1 door, 6 honest; 0 wait" in out
+    assert "pinned today: 22 done, 2 door, 6 honest; 0 wait" in out

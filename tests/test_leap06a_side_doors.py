@@ -486,6 +486,10 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
         9, "the pre-run script (run_pre_run_script: the sandbox's four imports, the policy, the "
            "isolation check, the manager, the native check and the run): _dispatch_scheduled "
            "runs it only outside a rehearsal (SIDE_DOORS pre_run_script)"),
+    ("scheduling/service.py", "direct_send"): (
+        1, "not a send: Scheduler._release_inflight wakes the threads waiting on a threading."
+           "Condition (notify_all), so a rule's \"try once more\" (leap 05-b review, "
+           "wait_until_idle) starts after the fire that ended; nothing leaves this PC"),
     ("webhooks/outbound.py", "http_post"): (
         1, "an outgoing webhook: skips every event of a rehearsal's run (SIDE_DOORS outbound_webhook)"),
     ("workflows/engine.py", "chat_post"): (

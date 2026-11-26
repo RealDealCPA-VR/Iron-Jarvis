@@ -67,6 +67,9 @@ import {
   ENDED_WHAT_CHOICES,
   decodeStarts,
   type EndedOutcome,
+  canRunOnceMore,
+  ONCE_MORE_LABEL,
+  ONCE_MORE_WORDS,
   type EndedWhat,
   type ReflexAction,
   type ReflexSource,
@@ -111,6 +114,7 @@ interface ReflexRule {
     what?: EndedWhat;
     name?: string;
     outcome?: EndedOutcome;
+    again?: boolean;
   };
   agent_name?: string;
   workspace_root?: string;
@@ -435,6 +439,9 @@ export default function ReflexPage() {
   const [endedWhat, setEndedWhat] = useState<EndedWhat>("schedule");
   const [endedName, setEndedName] = useState("");
   const [endedOutcome, setEndedOutcome] = useState<EndedOutcome>("failed");
+  // Review: "try once more" (a schedule or a workflow only).
+  const [endedAgain, setEndedAgain] = useState(false);
+  const againShown = canRunOnceMore(endedWhat);
   // Leap 05-b: every start in one place — your schedules, listed under the
   // rules (one read when the page opens; Schedules is where they change).
   const startsApi = useApi<unknown>("/starts");
@@ -550,6 +557,7 @@ export default function ReflexPage() {
     setEndedWhat("schedule");
     setEndedName("");
     setEndedOutcome("failed");
+    setEndedAgain(false);
     setEveryday(true);
     setSource("comm");
     setAction(EVERYDAY_ACTION);
@@ -575,6 +583,7 @@ export default function ReflexPage() {
     setEndedWhat(r.start?.what ?? "schedule");
     setEndedName(r.start?.name ?? "");
     setEndedOutcome(r.start?.outcome ?? "failed");
+    setEndedAgain(r.start?.again === true);
     setFormError(null);
     setFormOk(null);
     setOpen(true);
@@ -612,7 +621,9 @@ export default function ReflexPage() {
         ...(source === "file" ? { path: folderPath.trim(), glob: glob.trim() } : {}),
         ...(source === "download" ? { match_site: site.trim() } : {}),
         // Leap 05-b: which task, and how it must have ended.
-        ...(source === "run_ended" ? { what: endedWhat, what_name: endedName.trim(), outcome: endedOutcome } : {}),
+        ...(source === "run_ended"
+          ? { what: endedWhat, what_name: endedName.trim(), outcome: endedOutcome, again: againShown && endedAgain }
+          : {}),
         ...(action === "session" ? { workspace_root: worksIn.trim() } : {}),
         ...(Number.isFinite(limit) && limit > 0 ? { max_fires_per_hour: limit } : {}),
       };
@@ -646,6 +657,7 @@ export default function ReflexPage() {
         setWorksIn("");
         setPerHour("");
         setEndedName("");
+        setEndedAgain(false);
       }
       reload();
     } catch (err) {
@@ -1214,6 +1226,21 @@ export default function ReflexPage() {
                       The work this rule does never starts it, or a rule like it, again.
                     </div>
                   </div>
+                  {againShown && (
+                    <label className="flex cursor-pointer items-start gap-2 text-sm text-zinc-300 sm:col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={endedAgain}
+                        onChange={(e) => setEndedAgain(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/20 bg-transparent accent-cyan-500"
+                        data-testid="reflex-ended-again"
+                      />
+                      <span className="min-w-0 break-words">
+                        {ONCE_MORE_LABEL}
+                        <span className="block text-[11px] text-zinc-600">{ONCE_MORE_WORDS}</span>
+                      </span>
+                    </label>
+                  )}
                 </div>
               )}
               {source === "download" && (

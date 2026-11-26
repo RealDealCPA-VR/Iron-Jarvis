@@ -93,8 +93,9 @@ class ReflexRule(SQLModel, table=True):
     #: its watcher is a ``rule``-mode SentinelRecord naming this rule) and
     #: ``{"match_site"}`` for ``download``. Leap 05-b: ``{"what", "name",
     #: "outcome"}`` for ``run_ended`` (another task ended short: which kind,
-    #: its name or "" for any of that kind, and how it ended). "" for every
-    #: other source.
+    #: its name or "" for any of that kind, and how it ended), with
+    #: ``"again": true`` when it also runs that schedule or workflow once
+    #: more. "" for every other source.
     start_json: str = ""
     #: The custom agent (its roster name) the work is done by; "" keeps the
     #: supervisor, as before. Resolved at fire time the way a schedule's is

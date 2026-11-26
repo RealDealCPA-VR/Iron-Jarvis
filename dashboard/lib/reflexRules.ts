@@ -119,6 +119,14 @@ export const ENDED_OUTCOME_CHOICES: readonly { value: EndedOutcome; label: strin
   { value: "any", label: "Falls short in any way" },
 ];
 
+/** Review: "try once more" — a schedule or a workflow runs once more. */
+export const ONCE_MORE_LABEL = "Run it once more";
+export const ONCE_MORE_WORDS = "Once, after the rule's own work. If it falls short again, nothing more is tried.";
+/** Only a schedule or a workflow has a record to run again from. */
+export function canRunOnceMore(what: EndedWhat): boolean {
+  return what === "schedule" || what === "workflow";
+}
+
 /** The Rules page's second section: what runs at a time (your schedules). */
 export const AT_A_TIME = "At a time";
 /** Under its heading. */
