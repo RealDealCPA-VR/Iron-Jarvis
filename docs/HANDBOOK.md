@@ -2275,7 +2275,10 @@ carefully too.
 **Local only stays local.** If the task that ended was Local only, the
 rule's work is Local only too (if its model is not on this PC, it does not
 start, and the rule's row says why), and so is a workflow the rule runs.
-What that task said is never given to a workflow's steps. A rule that hands
+What that task said is never given to a workflow's steps. If the rule was
+made in a chat that is not Local only, its report there says how the work
+went and links to it, but not what it found: "It ran Local only, so what it
+found stays with its run on this PC." A rule that hands
 work to a remote agent hands nothing on for such a task, not even its name:
 a remote agent works on another computer. Its row says "The task that ended
 was Local only, so it was not handed to the remote agent …", and its card's

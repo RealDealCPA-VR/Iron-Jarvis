@@ -143,7 +143,9 @@ def content_for_session(session: Any) -> str:
     return summary or FAILED_SENTENCE
 
 
-def line_for_session(session: Any, result: Any, who: str, *, now: Any = None) -> dict[str, Any]:
+def line_for_session(
+    session: Any, result: Any, who: str, *, now: Any = None, chat_local_only: bool = False,
+) -> dict[str, Any]:
     """The ONE chat line a finished session leaves in the chat it was asked
     in — the page's ``finalize()`` message shape under the daemon's keys
     (see the module doc). ``result`` is ``session_result``'s dict (or None /
@@ -156,7 +158,7 @@ def line_for_session(session: Any, result: Any, who: str, *, now: Any = None) ->
     """
     source = report_from_of(session)
     if source is not None:
-        return report_line_for_session(session, result, source, now=now)
+        return report_line_for_session(session, result, source, now=now, chat_local_only=chat_local_only)
     line: dict[str, Any] = {
         "role": "assistant",
         "content": content_for_session(session),
@@ -265,7 +267,14 @@ def deliver_session_line(
             log.exception("ledger read failed before chat delivery for %s", getattr(session, "id", ""))
             result = None
         who = participant_key_for(session)
-        line = line_for_session(session, result, who)
+        chat_local_only = False
+        if source is not None and source.get(REPORT_WORDS_HOME):
+            # Leap 05-b (review 5): read NOW, as a night task's report does; a
+            # read that fails is False, so the words stay home.
+            from ..providers.egress import thread_local_only
+
+            chat_local_only = thread_local_only(engine, thread_id)
+        line = line_for_session(session, result, who, chat_local_only=chat_local_only)
         if source is not None:
             # Idea 39 (39-a, review): Stop reporting pressed while this run was
             # going (or the record pointed at another chat since) holds its
@@ -426,6 +435,37 @@ REPORT_OPTION = "report_from"
 #: ``report_from.by``: the SOURCE writes the report itself after the run (a
 #: goal, after its checks), so the run's own ending writes nothing.
 REPORT_BY_SOURCE = "source"
+
+#: Leap 05-b (review 5): ``report_from.words_home`` on a run whose words must
+#: stay on this PC unless the chat it reports to is Local only (a "when another
+#: task fails" rule's run for a Local only task, ``ReflexRouter._run_session``).
+#: Its report into any other chat keeps the badge, the reason and the link to
+#: the run, and says :data:`LOCAL_ONLY_RUN_WORDS` instead of what the run said;
+#: its receipt keeps no words (:func:`receipt_kept_home`), as a Local only night
+#: task's report does (``harness/night.LOCAL_ONLY_REPORT_WORDS``).
+REPORT_WORDS_HOME = "words_home"
+LOCAL_ONLY_RUN_WORDS = "It ran Local only, so what it found stays with its run on this PC."
+
+#: What a kept-home receipt keeps: the card's verdict, counts and tool names,
+#: and ``session_id`` (the card's link to the run). Every field that holds
+#: words the run read or wrote (its task, summary, files, documents, errors,
+#: the goals of its steps, its activity, the trust reason) is left empty.
+_KEPT_HOME_FIELDS: tuple[str, ...] = (
+    "found", "session_id", "status", "outcome", "steps", "duration_s", "provider", "model",
+    "agent_name", "agent_type", "trust", "unanswered_asks", "plan_steps_unchecked",
+    "plan_steps_failed", "on_this_network", "reached_a_model", "rehearsal", "tools_used", "tools_failed",
+)
+
+
+def receipt_kept_home(result: Any) -> Any:
+    """``result`` (a run's receipt) with none of the run's words, for a chat
+    that is not Local only (:data:`REPORT_WORDS_HOME`). Pure."""
+    if not isinstance(result, dict):
+        return result
+    out = {k: result[k] for k in _KEPT_HOME_FIELDS if k in result}
+    out.update(task="", summary="", files_created=[], files_changed=[], errors=[], revertable=0)
+    return out
+
 
 #: Kinds that pace themselves and are never folded to one line a day (a
 #: watcher writes at most once an hour, D-39.3).
@@ -590,13 +630,16 @@ def report_line(report: dict[str, Any], *, now: Any = None) -> "dict[str, Any] |
 
 
 def report_line_for_session(
-    session: Any, result: Any, source: dict[str, Any], *, now: Any = None
+    session: Any, result: Any, source: dict[str, Any], *, now: Any = None, chat_local_only: bool = False,
 ) -> dict[str, Any]:
     """A source's report, written by the run it started (a schedule's fire):
     the verdict from the LEDGER (``outcome.run_ending``), never the model's
-    closing words; the run's summary as the body; the run's receipt. Pure."""
+    closing words; the run's summary as the body; the run's receipt. A source
+    marked :data:`REPORT_WORDS_HOME` keeps the run's words out unless
+    ``chat_local_only`` (the chat it reports to is Local only). Pure."""
     from .outcome import result_line, run_ending
 
+    home = bool(source.get(REPORT_WORDS_HOME)) and not chat_local_only
     ending = run_ending(session)
     # The intelligence plan, release 4: the badge word is the run's RESULT
     # LINE ("Done. 1 step could not be checked." when a plan step's check did
@@ -613,9 +656,9 @@ def report_line_for_session(
         "run_id": sid,
         "outcome": said if ending.ok else ending.words,
         "reason": "" if ending.ok else ending.reason,
-        "words": summary,
+        "words": LOCAL_ONLY_RUN_WORDS if home else summary,
         "key": f"run:{sid}" if sid else "",
-        "receipt": result,
+        "receipt": receipt_kept_home(result) if home else result,
     }
     line = report_line(report, now=now) or {"role": "assistant", "content": content_for_session(session)}
     if sid:

@@ -930,6 +930,13 @@ class ReflexRouter:
             # words are in this task, so this run is Local only too (refused
             # by name, at create_session, when its model leaves this network).
             options["local_only"] = True
+            # Review 5: and its report keeps those words home unless the chat
+            # it reports to is Local only (read when it reports).
+            from ..agents import chat_delivery as _cd
+
+            report = options.get(_cd.REPORT_OPTION)
+            if isinstance(report, dict):
+                options[_cd.REPORT_OPTION] = {**report, _cd.REPORT_WORDS_HOME: True}
         extra: dict[str, Any] = {}
         root = str(getattr(rule, "workspace_root", "") or "").strip()
         if root:

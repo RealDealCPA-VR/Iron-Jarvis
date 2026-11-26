@@ -1101,3 +1101,122 @@ def test_try_once_more_does_not_run_a_schedule_still_running_and_the_row_says_so
         "so it was not run once more."
     ), row.last_result
     assert row.fire_count == 1, "saying it did not run is not a fire"
+
+
+# --------------------------------------------------------------------------- #
+# Review 5: a Local only task's words stay out of a chat that is not Local only.
+# --------------------------------------------------------------------------- #
+
+
+def _chat_thread(p, tid: str, *, local_only: bool, archived: bool = False) -> None:
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    with session_scope(p.engine) as db:
+        db.add(ChatThreadRecord(id=tid, title="Chat", messages_json="[]",
+                                setup_json='{"local_only": true}' if local_only else "{}",
+                                archived_at=NOON if archived else None))
+        db.commit()
+
+
+def _chat_lines(p, tid: str) -> list[dict]:
+    import json
+
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    with session_scope(p.engine) as db:
+        return json.loads(db.get(ChatThreadRecord, tid).messages_json or "[]")
+
+
+def _rule_run_ends(p, name: str, summary: str) -> Session:
+    """The rule's one run, ended Failed with ``summary`` (its launch was closed)."""
+    (run,) = _rule_runs(p, name)
+    with session_scope(p.engine) as db:
+        row = db.get(Session, run.id)
+        row.status = SessionStatus.FAILED
+        row.summary = summary
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+
+
+def test_a_local_only_tasks_words_never_reach_a_chat_that_is_not_local_only(desk):
+    """Review 5: a "when another task fails" rule made in an ordinary chat
+    reports its run there. The task that ended was Local only, so the report
+    keeps the badge, the reason and the link to the run, says it ran Local
+    only, and neither its words, its receipt, its documents nor the bell's
+    notice holds what the task or the run said (the night task's precedent).
+    The same rule made in a Local only chat is told the words.
+
+    MUTATION (red): drop the ``REPORT_WORDS_HOME`` mark in
+    ``ReflexRouter._run_session``; or make ``home`` False in
+    ``chat_delivery.report_line_for_session``; or answer ``chat_local_only``
+    True in ``deliver_session_line`` -> the PROBE words reach the plain chat.
+    Keep ``result`` instead of ``receipt_kept_home(result)`` -> they reach it
+    through the receipt."""
+    import json
+
+    from iron_jarvis.agents import chat_delivery as cd
+
+    c, p, router, loop = desk
+    plain, local = "thread-l02-plain-r5", "thread-l02-local-r5"
+    _chat_thread(p, plain, local_only=False, archived=True)
+    _chat_thread(p, local, local_only=True)
+    sched = p.scheduler.add_task("Client review", "0 2 * * *", kind="task",
+                                 payload={"task": "Review the basis worksheet"}, chat_thread_id=local)
+    _ended_rule(p, "Tell me why", target="Client review", chat_thread_id=plain)
+    _ended_rule(p, "Tell me why here", target="Client review", chat_thread_id=local)
+    ctx = starts.ending_of_schedule(sched, "error", "The run stopped at PROBE-LOCAL-DETAIL.", engine=p.engine)
+    assert ctx["local_only"] == "1", ctx
+    fired = asyncio.run(starts.hub_for(router).signal("run_ended", ctx))
+    assert len(fired) == 2 and all(f["ok"] for f in fired), fired
+    told: list[str] = []
+
+    async def _publish(etype, payload=None, *a, **kw):
+        told.append(f"{getattr(etype, 'value', etype)} {json.dumps(payload, default=str)}")
+
+    bus = SimpleNamespace(publish=_publish)
+    words = "It failed because PROBE-RUN-WORDS: the client's basis worksheet is missing."
+    for name in ("Tell me why", "Tell me why here"):
+        run = _rule_run_ends(p, name, words)
+        assert session_options(run).get("local_only") is True
+        assert "PROBE-LOCAL-DETAIL" in run.task, "the rule's run is told what the task said"
+        out = cd.deliver_session_line(p.engine, run, event_bus=bus)
+        assert out.get("ok") and out.get("appended") == 1, out
+
+    # The plain chat: the badge, the reason and the link to the run; fixed
+    # words; no words of the task or the run anywhere in the chat or a notice.
+    (line,) = _chat_lines(p, plain)
+    (plain_run,) = _rule_runs(p, "Tell me why")
+    assert "PROBE" not in json.dumps(line), line
+    assert line["content"] == (
+        "From your rule “Tell me why”. The run did not finish.\n\n" + cd.LOCAL_ONLY_RUN_WORDS
+    ), line["content"]
+    assert line["reportFrom"]["outcome"] == "Failed" and line["reportFrom"]["runId"] == plain_run.id
+    assert line["sessionId"] == plain_run.id
+    assert line["receipt"]["found"] is True and line["receipt"]["session_id"] == plain_run.id
+    assert "documents" not in line
+    assert any("report.arrived" in t for t in told), told
+    assert not [t for t in told if "PROBE" in t], told
+    # The Local only chat is told what the run found.
+    (here,) = _chat_lines(p, local)
+    assert words in here["content"] and "PROBE-LOCAL-DETAIL" in here["receipt"]["task"], here
+
+    # The receipt's documents and every field with words stay home too.
+    receipt = {
+        "found": True, "session_id": "s-r5", "status": "completed", "task": "PROBE-TASK",
+        "summary": "PROBE-SUMMARY", "documents": ["C:/work/PROBE-basis.xlsx"],
+        "files_created": ["PROBE-basis.xlsx"], "files_changed": ["PROBE-notes.md"],
+        "errors": [{"tool": "fs_write", "error": "PROBE-ERROR"}], "trust": "low", "trust_reason": "PROBE",
+        "unchecked_steps": [{"step": 1, "goal": "PROBE-GOAL"}], "activity": [{"text": "PROBE-ACT"}],
+        "route_note": "PROBE-ROUTE", "tools_used": [{"tool": "fs_write", "count": 1}], "revertable": 2,
+    }
+    done = SimpleNamespace(id="s-r5", status=SessionStatus.COMPLETED, outcome=None, summary="PROBE-SUMMARY")
+    source = {"kind": "rule", "name": "Tell me why", "id": "r5", "href": "/reflex", cd.REPORT_WORDS_HOME: True}
+    kept = cd.report_line_for_session(done, receipt, source)
+    assert "PROBE" not in json.dumps(kept) and "documents" not in kept, kept
+    assert kept["receipt"]["trust"] == "low" and kept["receipt"]["tools_used"] == receipt["tools_used"]
+    told_here = cd.report_line_for_session(done, receipt, source, chat_local_only=True)
+    assert told_here["documents"] == ["C:/work/PROBE-basis.xlsx"] and "PROBE-SUMMARY" in told_here["content"]
+    unmarked = cd.report_line_for_session(done, receipt, {k: v for k, v in source.items() if k != cd.REPORT_WORDS_HOME})
+    assert unmarked["receipt"] is receipt, "a report not marked is unchanged"
