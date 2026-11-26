@@ -595,8 +595,8 @@ def test_an_agent_runs_task_words_never_arm_it(platform):
         armed = arm_for_task(platform, task, ["read_file"])
         assert F.TOOL_NAME not in armed, armed
     # The control: the same path still arms what a run may use from its words
-    # (release 5's lookup of checks, which reads the run it runs in).
-    assert "checks_list" in arm_for_task(platform, "what did you check in this chat?", ["read_file"])
+    # (the read-only list of saved workflows).
+    assert "workflow_list" in arm_for_task(platform, "what workflows do I have saved?", ["read_file"])
     # A definition that lists it by name keeps it: a roster is consent.
     assert arm_for_task(platform, "Why is this chat getting full?", ["read_file", F.TOOL_NAME]) == [
         "read_file", F.TOOL_NAME]
