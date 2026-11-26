@@ -554,6 +554,135 @@ def test_settling_a_run_twice_says_each_file_once_and_never_raises(platform, tmp
     assert T.run_payload(object(), "s") is None
 
 
+def _sheet(path: Path, rows) -> Path:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    for r in rows:
+        wb.active.append(r)
+    wb.save(path)
+    return path
+
+
+def test_a_run_that_carried_on_and_put_its_file_right_leaves_no_finding_behind(platform, tmp_path):
+    """Run 1 leaves a total that is worth a look; the run carries on and
+    takes the Total row out (the file is now right). The card showed the old
+    finding for ever: only the same check of the same file was replaced, and
+    a file with no total writes no totals row at all."""
+    p = _sheet(tmp_path / "budget.xlsx", [["Item", "Amount"], ["Rent", 100], ["Food", 200], ["Fun", 300], ["Total", 650]])
+    assert T.settle_run(platform.engine, "ses_1", [str(p)], thread_id="th_1") == 3
+    assert T.run_payload(platform.engine, "ses_1", [str(p)])["line"] == (
+        "Checked by Iron Jarvis: the spreadsheet opens, no error cells. "
+        "Worth a look: B5 says 650 and the cells above it add up to 600.")
+    _sheet(p, [["Item", "Amount"], ["Rent", 100], ["Food", 200], ["Fun", 300]])
+    assert T.settle_run(platform.engine, "ses_1", [str(p)], thread_id="th_1") == 2
+    after = T.run_payload(platform.engine, "ses_1", [str(p)])
+    assert after["line"] == "Checked by Iron Jarvis: the spreadsheet opens, no error cells." and after["tone"] == "quiet"
+    assert [(r.check, r.result) for r in _rows(platform.engine, session_id="ses_1")] == [
+        (R.FILE_OPENS, R.PASSED), (R.SHEET_ERRORS, R.PASSED)]
+
+
+def test_a_file_the_run_removed_is_not_on_its_card_and_a_file_it_made_since_is(platform, tmp_path):
+    """Run 1 makes old.xlsx (it holds an error value); run 2 deletes it and
+    makes new.xlsx. The card names new.xlsx only."""
+    old = _sheet(tmp_path / "old.xlsx", [["a", "#DIV/0!"]])
+    T.settle_run(platform.engine, "ses_2", [str(old)])
+    assert "Problem in the spreadsheet: B1 holds #DIV/0!" in T.run_payload(platform.engine, "ses_2", [str(old)])["line"]
+    old.unlink()
+    new = _sheet(tmp_path / "new.xlsx", [["Item", "Amount"], ["a", 1]])
+    # The run's files as its journal lists them: the one it removed is still named there.
+    T.settle_run(platform.engine, "ses_2", [str(old), str(new)])
+    card = T.run_payload(platform.engine, "ses_2", [str(old), str(new)])
+    assert card["line"] == "Checked by Iron Jarvis: the spreadsheet opens, no error cells." and card["tone"] == "quiet"
+    assert {c["label"] for c in card["checks"]} == {"new.xlsx"}
+    assert {r.file for r in _rows(platform.engine, session_id="ses_2")} == {"new.xlsx"}
+    # A file removed AFTER it was settled is not on the card either (the card speaks of files that are there) ...
+    new.unlink()
+    assert T.run_payload(platform.engine, "ses_2", [str(old), str(new)]) is None
+    # ... and a file that is no longer one of the run's files is not shown.
+    kept = _sheet(tmp_path / "kept.xlsx", [["a", "#REF!"]])
+    other = _sheet(tmp_path / "other.xlsx", [["Item", "Amount"], ["a", 1]])
+    T.settle_run(platform.engine, "ses_3", [str(kept), str(other)])
+    only = T.run_payload(platform.engine, "ses_3", [str(other)])
+    assert only["tone"] == "quiet" and {c["label"] for c in only["checks"]} == {"other.xlsx"}
+    # A run whose files are all gone settles to nothing, and says nothing.
+    kept.unlink()
+    other.unlink()
+    assert T.settle_run(platform.engine, "ses_3", [str(kept), str(other)]) == 0
+    assert _rows(platform.engine, session_id="ses_3") == []
+
+
+def test_a_card_with_more_files_than_are_checked_says_the_rest_once_and_by_name(platform, tmp_path):
+    """Eight files, six checked. The card said it twice: "2 more files were
+    not checked" from the check, and the two names from the card."""
+    many = []
+    for i in range(8):
+        path = tmp_path / f"f{i}.md"
+        path.write_text("hello\n", encoding="utf-8")
+        many.append(str(path))
+    T.settle_run(platform.engine, "ses_many", many)
+    stored = [r.detail for r in _rows(platform.engine, session_id="ses_many") if not r.file]
+    assert stored == ["2 more files were not checked: only the first 6 are"]
+    card = T.run_payload(platform.engine, "ses_many", many)
+    assert card["line"] == (
+        "Checked by Iron Jarvis: f0.md opens, has text; f1.md opens, has text; f2.md opens, has text; and 3 more files. "
+        "Not checked: the other files (2 other files on this card were not checked here: f6.md, f7.md).")
+    assert [c["said"] for c in card["checks"] if c["result"] == "not_checked"] == [
+        "2 other files on this card were not checked here: f6.md, f7.md"]
+    assert card["line"].count("not checked") == 1
+    # With no list to name them from, the check's own count is what is said (once).
+    bare = T.run_payload(platform.engine, "ses_many")
+    assert [c["said"] for c in bare["checks"] if c["result"] == "not_checked"] == [
+        "2 more files were not checked: only the first 6 are"]
+    # Every file gone from disk: the cap's own row is about no file that is left, so the card has no line.
+    for path in many:
+        Path(path).unlink()
+    assert T.run_payload(platform.engine, "ses_many", many) is None
+
+
+async def test_a_finished_runs_files_get_the_longer_look_and_a_replys_the_short_one(platform, tmp_path, monkeypatch):
+    """A reply waits on its check, so its files get 1.8 s. A finished run's
+    files are checked when the run is settled, with nobody waiting: 4 s."""
+    made = tmp_path / "notes.md"
+    made.write_text("hello\n", encoding="utf-8")
+    seen: list[float] = []
+    real = content.check_files
+
+    def spy(paths, reply="", **kw):
+        seen.append(kw.get("deadline_s", content.DEADLINE_S))
+        return real(paths, reply, **kw)
+
+    monkeypatch.setattr(content, "check_files", spy)
+    assert T.settle_run(platform.engine, "ses_deadline", [str(made)]) == 2
+    assert seen == [content.RUN_DEADLINE_S] == [4.0]
+    await T.checked_for_turn(platform, turn_id="turn_deadline", made_docs=[str(made)])
+    assert seen[-1] == content.DEADLINE_S == 1.8
+
+
+async def test_the_lines_read_back_and_the_homing_of_its_rows_run_off_the_event_loop(platform, tmp_path, monkeypatch):
+    """The write is pinned off the loop; so are the two other database
+    calls of a reply's check: the read back the line is built from, and the
+    homing of a new chat's rows."""
+    import threading
+
+    from iron_jarvis.providers import egress
+
+    made = tmp_path / "notes.md"
+    made.write_text("hello\n", encoding="utf-8")
+    loop_thread = threading.get_ident()
+    where: dict[str, list[bool]] = {"for_turn": [], "home_turn": []}
+    real_read, real_home = R.for_turn, R.home_turn
+    monkeypatch.setattr(R, "for_turn", lambda *a, **kw: (where["for_turn"].append(threading.get_ident() == loop_thread),
+                                                          real_read(*a, **kw))[1])
+    monkeypatch.setattr(R, "home_turn", lambda *a, **kw: (where["home_turn"].append(threading.get_ident() == loop_thread),
+                                                           real_home(*a, **kw))[1])
+    egress.link_turn_holds("turn_offloop", "thread_offloop")     # the page linked this turn to its chat
+    got = await T.checked_for_turn(platform, turn_id="turn_offloop", made_docs=[str(made)])
+    assert got is not None and got["line"].startswith("Checked by Iron Jarvis:")
+    assert where == {"for_turn": [False], "home_turn": [False]}, f"a database call ran on the event loop: {where}"
+    assert {r.thread_id for r in _rows(platform.engine, turn_id="turn_offloop")} == {"thread_offloop"}
+
+
 # --------------------------------------------------------------------------- #
 # S7: a reply never waits on the record longer than its cap
 # --------------------------------------------------------------------------- #
@@ -618,10 +747,13 @@ async def test_a_reply_never_waits_on_the_record_while_another_writer_holds_the_
 
 
 def test_the_whole_of_a_file_replys_check_is_inside_one_cap():
-    """The files' own wait is what is left of the cap after the record's
-    share: the two never add up to more than the cap."""
-    assert T.TURN_CAP_S == content.HARD_WAIT_S == 6.0 and T.RECORD_WAIT_S == 1.0
-    assert content.DEADLINE_S < T.TURN_CAP_S - T.RECORD_WAIT_S, "the files' deadline leaves the record no time"
+    """Three seconds for all of it (it was six): the files' own wait is what
+    is left of the cap after the record's share, and the deadline the files
+    look at themselves ends before that wait does."""
+    assert T.TURN_CAP_S == 3.0 and T.RECORD_WAIT_S == 1.0
+    assert content.HARD_WAIT_S == T.TURN_CAP_S - T.RECORD_WAIT_S == 2.0
+    assert content.DEADLINE_S < content.HARD_WAIT_S, "the files' own deadline ends after their caller gave up"
+    assert content.RUN_DEADLINE_S == 4.0, "a finished run's files (nobody waits on a reply) lost their longer look"
 
 
 async def test_the_files_get_what_is_left_of_the_cap_after_the_records_share(platform, tmp_path, monkeypatch):
@@ -636,9 +768,9 @@ async def test_the_files_get_what_is_left_of_the_cap_after_the_records_share(pla
 
     monkeypatch.setattr(content, "check_made_files", watched)
     got = await T.checked_for_turn(platform, turn_id="turn_cap", made_docs=[str(made)])
-    assert got is not None and asked == [T.TURN_CAP_S - T.RECORD_WAIT_S]
-    await T.checked_for_turn(platform, turn_id="turn_cap2", made_docs=[str(made)], cap_s=3.0, record_wait_s=0.5)
-    assert asked[-1] == 2.5
+    assert got is not None and asked == [T.TURN_CAP_S - T.RECORD_WAIT_S] == [2.0]
+    await T.checked_for_turn(platform, turn_id="turn_cap2", made_docs=[str(made)], cap_s=1.5, record_wait_s=0.5)
+    assert asked[-1] == 1.0
 
 
 async def test_each_kind_of_reply_is_given_its_own_cap(platform, tmp_path, monkeypatch):
@@ -664,7 +796,7 @@ async def test_each_kind_of_reply_is_given_its_own_cap(platform, tmp_path, monke
     assert waits == [T.RECORD_WAIT_S] == [1.0]
     del waits[:]
     assert await T.checked_for_turn(platform, turn_id="turn_b", made_docs=[str(made)], until=until) is not None
-    assert waits == [T.TURN_CAP_S, T.TURN_CAP_S - T.RECORD_WAIT_S] == [6.0, 5.0]
+    assert waits == [T.TURN_CAP_S, T.TURN_CAP_S - T.RECORD_WAIT_S] == [3.0, 2.0]
     del waits[:]
     await T.note_finish(platform, {"tests": "passed"}, turn_id="turn_c", session_id="build_y")
     assert waits == [T.RECORD_WAIT_S]
@@ -774,13 +906,40 @@ def test_a_team_leads_line_says_which_files_on_its_card_were_not_checked(tmp_pat
 
 
 def test_files_no_check_covers_are_named_and_counted(tmp_path):
-    rows = [{"check": R.FILE_OPENS, "file": "a.xlsx (in 2023)", "result": R.PASSED, "detail": "opens", "by": "rule"}]
+    def row(file, folder=""):
+        return {"check": R.FILE_OPENS, "file": file, "folder": folder, "result": R.PASSED, "detail": "opens", "by": "rule"}
+
+    rows = [row("a.xlsx", "2023")]
     assert T.not_covered(rows, ["/w/2023/a.xlsx"]) is None
     assert T.not_covered(rows, []) is None and T.not_covered(rows, None) is None
-    extra = T.not_covered(rows, ["/w/a.xlsx", "C:\\w\\b.docx", "/w/c.pdf", "/w/d.md", "/w/e.txt", "/w/b.docx"])
+    extra = T.not_covered(rows, ["/w/2023/a.xlsx", "C:\\w\\b.docx", "/w/c.pdf", "/w/d.md", "/w/e.txt", "/w/b.docx"])
     assert (extra["check"], extra["result"], extra["file"], extra["by"]) == (R.FILE_OPENS, R.NOT_CHECKED, "", "rule")
     assert extra["detail"] == "4 other files on this card were not checked here: b.docx, c.pdf, d.md and 1 more"
     assert "/" not in extra["detail"] and "\\" not in extra["detail"], "a folder reached the line"
+
+
+def test_a_card_is_matched_to_its_checks_by_where_each_file_is_never_by_a_bare_name(tmp_path):
+    """A checked file told apart by its folder covers only the document in
+    THAT folder; one that was not told apart covers one document of its
+    name. A helper's file of the same name, in another folder, is said."""
+    def row(file, folder=""):
+        return {"check": R.FILE_OPENS, "file": file, "folder": folder, "result": R.PASSED, "detail": "opens", "by": "rule"}
+
+    told = [row("a.xlsx", "2023")]
+    assert T.not_covered(told, ["/w/2024/a.xlsx"])["detail"] == (
+        "1 other file on this card was not checked here: a.xlsx"), "a file in another folder read as covered"
+    assert T.not_covered(told, ["/w/2023/a.xlsx", "/w/2024/a.xlsx"])["detail"].startswith("1 other file")
+    plain = [row("notes.md")]
+    assert T.not_covered(plain, ["/lead/notes.md"]) is None
+    assert T.not_covered(plain, ["/lead/notes.md", "/worker/notes.md"])["detail"] == (
+        "1 other file on this card was not checked here: notes.md"), "the lead's check covered the worker's file too"
+    # A name that really holds " (in " is a name: nothing is taken off it.
+    odd = [row("Budget (in USD).xlsx")]
+    assert T.not_covered(odd, ["/w/Budget (in USD).xlsx"]) is None
+    assert T.not_covered(odd, ["/w/Budget.xlsx"])["detail"].endswith("not checked here: Budget.xlsx")
+    # Two that names_for could only number are still each a file of their own.
+    twins = [row("s.xlsx", "x"), row("s.xlsx", "another folder, 2")]
+    assert T.not_covered(twins, ["/a/x/s.xlsx", "/b/x/s.xlsx"]) is None
 
 
 # --------------------------------------------------------------------------- #

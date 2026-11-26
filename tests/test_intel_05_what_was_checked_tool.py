@@ -31,7 +31,7 @@ from tests.test_wave3_chat_lanes_v1311 import _post_turn, _scripted_router
 
 SHEET = [
     Check(R.FILE_OPENS, R.PASSED, "opens", file="summary.xlsx"),
-    Check(R.SHEET_ERRORS, R.FAILED, "Summary!C7 holds #DIV/0!", file="summary.xlsx"),
+    Check(R.SHEET_ERRORS, R.FAILED, "C7 on Summary holds #DIV/0!", file="summary.xlsx"),
     Check(R.SHEET_TOTALS, R.PASSED, "2 totals add up", file="summary.xlsx"),
     Check(R.CLAIMS, R.PASSED, "what it says matches what it did"),
 ]
@@ -67,7 +67,7 @@ async def test_it_answers_from_the_record_for_the_chat_it_was_asked_in(platform,
     res = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_mine", turn_id="turn_9"))
     assert res.ok, res.error
     assert "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up." in res.output
-    assert "- summary.xlsx: Summary!C7 holds #DIV/0! (Problem, by rule)" in res.output
+    assert "- summary.xlsx: C7 on Summary holds #DIV/0! (Problem, by rule)" in res.output
     assert "- The reply: what it says matches what it did (Checked, by rule)" in res.output
     assert "payroll-private" not in res.output, "another chat's check was read"
     assert [c["label"] for c in res.data["checks"]][0] == "summary.xlsx"
@@ -77,6 +77,32 @@ async def test_it_answers_from_the_record_for_the_chat_it_was_asked_in(platform,
     assert "payroll-private.xlsx: it is empty" in theirs.output and "summary.xlsx" not in theirs.output
     # It reads; it never writes or checks again.
     assert _count(platform.engine) == before
+
+
+async def test_what_is_worth_a_look_is_answered_in_its_own_words_never_as_a_problem(platform, tmp_path):
+    """"Did you check the totals?": what Iron Jarvis added up itself and
+    found different is said as worth a look, with both figures, between the
+    problems and what was not checked."""
+    R.write(platform.engine, [
+        Check(R.FILE_OPENS, R.PASSED, "opens", file="summary.xlsx"),
+        Check(R.SHEET_TOTALS, R.NOT_CHECKED, "1 total could not be worked out by rule: C9 is a formula", file="summary.xlsx"),
+        Check(R.SHEET_TOTALS, R.FAILED, "B4 says 650 and the cells above it add up to 600", file="summary.xlsx"),
+        Check(R.SHEET_ERRORS, R.FAILED, "C7 holds #DIV/0!", file="summary.xlsx"),
+    ], thread_id="chat_look", turn_id="turn_look")
+    res = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_look"))
+    assert res.ok, res.error
+    lines = res.output.splitlines()
+    assert lines[1].endswith(
+        "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: C7 holds #DIV/0!. "
+        "Worth a look: B4 says 650 and the cells above it add up to 600. "
+        "Not checked: the spreadsheet (1 total could not be worked out by rule: C9 is a formula).")
+    assert lines[2:6] == [
+        "- summary.xlsx: C7 holds #DIV/0! (Problem, by rule)",
+        "- summary.xlsx: B4 says 650 and the cells above it add up to 600 (Worth a look, by rule)",
+        "- summary.xlsx: 1 total could not be worked out by rule: C9 is a formula (Not checked, by rule)",
+        "- summary.xlsx: opens (Checked, by rule)",
+    ]
+    assert [c["result"] for c in res.data["checks"]] == ["failed", "look", "not_checked", "passed"]
 
 
 async def test_a_chat_with_no_checks_says_so_and_an_unsaved_chat_reads_only_its_own_reply(platform, tmp_path):
@@ -259,6 +285,6 @@ def test_asked_in_a_chat_the_model_is_handed_that_chats_checks(tmp_path, monkeyp
         assert body["auto_armed"] == [CT.TOOL_NAME], body.get("auto_armed")
         assert CT.TOOL_NAME in body["tools_used"], body.get("reply")
         given = "\n".join(str(getattr(m, "content", "")) for m in seen["messages"][-1])
-        assert "Summary!C7 holds #DIV/0!" in given and "payroll-private" not in given
+        assert "C7 on Summary holds #DIV/0!" in given and "payroll-private" not in given
         # A question about the checks made no file: no line under this reply.
         assert "checked" not in body

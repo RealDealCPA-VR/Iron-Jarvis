@@ -3809,7 +3809,11 @@ def register(app: FastAPI, d) -> None:
         # new chat's first reply belongs to the chat now named (never raises).
         # AFTER the link is readable (`link_turn_holds` above: a reply still
         # writing its rows reads it, `checks/turn._chat_of`), so no row lands
-        # between this homing and the link and is left with no chat.
+        # between this homing and the link and is left with no chat. And
+        # AFTER the Local-only holds are written: `link_turn_holds` hands the
+        # turn's pending holds over ONCE, so nothing may be awaited between
+        # taking them and writing them (a request cancelled at this homing
+        # would otherwise lose a hold: a privacy setting, for a line of text).
         from ...checks import record as _checks
 
         await asyncio.to_thread(_checks.home_turn, d.platform.engine, turn_id, tid)

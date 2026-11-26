@@ -8,13 +8,20 @@ place, and a reply that made a spreadsheet said nothing about what the file
 holds.
 
 * :mod:`.record` is the one table (``checkrecord``): one row per check, who
-  it belongs to, its result (``passed`` | ``failed`` | ``not_checked``), a
-  plain sentence, and who checked (``rule`` or a model's name). It also
-  builds, from those rows alone, the line a person reads ("Checked by Iron
-  Jarvis: the spreadsheet opens, no error cells, 3 totals add up.").
+  it belongs to, its result (``passed`` | ``failed`` | ``look`` |
+  ``not_checked``), a plain sentence, and who checked (``rule`` or a model's
+  name). It also builds, from those rows alone, the line a person reads
+  ("Checked by Iron Jarvis: the spreadsheet opens, no error cells, 3 totals
+  add up.").
 * :mod:`.content` checks what a made file SAYS, by rule and with no model:
-  a spreadsheet has no error cells and its totals add up, a document is not
-  empty, a PDF has the pages the reply says it has.
+  a spreadsheet's error cells and totals, a document's text, a PDF's pages.
+
+WHICH WORD A FINDING GETS is fixed by what kind of knowledge it is. "Problem"
+(``failed``) is only what the file itself holds or is: it does not open, a
+document is empty, a cell's saved value is an error. "Worth a look"
+(``look``) is what Iron Jarvis worked out itself and found different (its own
+adding up of a total, a formula it worked out, a page count read from the
+reply): figures, no verdict, never a problem.
 * :mod:`.existing` turns the answers of the checks the app already made (the
   check-again loop, the required files, a coding reply's tests and review, a
   workflow step's expectation, a split task's step check) into rows. Each of

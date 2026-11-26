@@ -1217,6 +1217,12 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
     if name == "DATE":
         need(3)
         y, m, d = int(_as_num(args[0])), int(_as_num(args[1])), int(_as_num(args[2]))
+        if y < 0 or y > 9999:
+            # Excel answers #NUM! here. Adding 1900 to a negative year gave a
+            # date before the calendar starts, as a clean number (the checks
+            # of a made file read that as "no error"). Said as "cannot be
+            # worked out", never as a value.
+            raise FormulaError("DATE: that year is outside the dates a spreadsheet holds")
         year, month = _add_months(_dt.datetime(y if y >= 1900 else y + 1900, 1, 1), m - 1)
         try:
             return to_serial(_dt.datetime(year, month, 1) + _dt.timedelta(days=d - 1))

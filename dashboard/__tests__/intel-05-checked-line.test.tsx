@@ -135,13 +135,27 @@ vi.mock("next/link", () => ({
 import ChatPage from "@/app/chat/page";
 import { CheckedLine } from "@/components/chat/CheckedLine";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
-import { CHECKED_CLOSE, CHECKED_LIST_MAX, CHECKED_OPEN, checkedForSave, decodeChecked } from "@/lib/checked";
+import {
+  CHECKED_CLOSE,
+  CHECKED_LIST_MAX,
+  CHECKED_OPEN,
+  checkedForSave,
+  decodeChecked,
+  isWarnResult,
+  seenText,
+} from "@/lib/checked";
 import FIXTURE from "./fixtures/intel-05-checked.json";
 
 const GOOD = FIXTURE.good;
 const BAD = FIXTURE.bad;
 const MANY = FIXTURE.many;
 const NOT_CHECKED = FIXTURE.not_checked;
+/** A total Iron Jarvis added up itself and found different: "worth a look". */
+const LOOK = FIXTURE.look;
+/** A problem the file holds AND something worth a look, with what was not checked. */
+const BOTH = FIXTURE.both;
+/** The same spoiled payload the daemon's own cleaning is tested on, and what it must become. */
+const UNSEEN = FIXTURE.unseen;
 
 const CHAT_GETS = () => ({
   "/models": { models: [] },
@@ -220,8 +234,47 @@ describe("the daemon's `checked`, decoded by whitelist", () => {
     expect(long.checks).toHaveLength(CHECKED_LIST_MAX);
   });
 
+  it("keeps worth a look as its own result, never folded into a problem or a pass", () => {
+    const mark = decodeChecked(LOOK)!;
+    expect(mark.tone).toBe("warn");
+    expect(mark.checks[0]).toEqual({
+      label: "summary.xlsx",
+      said: "B4 on Summary says 650 and the cells above it add up to 600",
+      result: "look",
+      resultWords: "Worth a look",
+      who: "by rule",
+    });
+    expect(mark.checks.filter((c) => c.result === "failed")).toHaveLength(0);
+    expect(decodeChecked(BOTH)!.checks.map((c) => c.result)).toEqual(["failed", "look", "not_checked", "passed"]);
+    expect([isWarnResult("failed"), isWarnResult("look"), isWarnResult("not_checked"), isWarnResult("passed")]).toEqual(
+      [true, true, false, false],
+    );
+  });
+
+  it("strips the characters nobody sees from every text, as the daemon does (the same inputs)", () => {
+    const mark = decodeChecked(UNSEEN.raw)!;
+    const clean = UNSEEN.clean;
+    expect(mark.line).toBe(clean.line);
+    expect(mark.moreWords).toBe(clean.more_words);
+    expect(mark.checks.map((c) => [c.label, c.said, c.result, c.resultWords, c.who])).toEqual(
+      clean.checks.map((c) => [c.label, c.said, c.result, c.result_words, c.who]),
+    );
+    // The fixture's raw side really carries them (NUL, ESC, the right-to-left override, an isolate).
+    const raw = UNSEEN.raw.line as string;
+    for (const code of [0x00, 0x1b, 0x202e, 0x2066]) {
+      expect(raw.includes(String.fromCharCode(code))).toBe(true);
+      expect(mark.line.includes(String.fromCharCode(code))).toBe(false);
+    }
+    const every = [mark.line, mark.moreWords, ...mark.checks.flatMap((c) => [c.label, c.said, c.resultWords, c.who])];
+    for (const text of every) {
+      expect(seenText(text)).toBe(text);
+      expect(/[\u0000-\u001f]/.test(text)).toBe(false);
+    }
+    expect(seenText("a" + String.fromCharCode(0x202e) + "b\tc\r\nd")).toBe("ab c d");
+  });
+
   it("what the page saves on the reply decodes back to the same mark (a reopened chat)", () => {
-    for (const raw of [GOOD, BAD, MANY, NOT_CHECKED]) {
+    for (const raw of [GOOD, BAD, LOOK, BOTH, MANY, NOT_CHECKED]) {
       const mark = decodeChecked(raw)!;
       const saved = checkedForSave(mark);
       expect(saved).toEqual(raw);
@@ -273,13 +326,45 @@ describe("the line", () => {
     const line = screen.getByTestId("checked-line");
     expect(line.getAttribute("data-tone")).toBe("warn");
     expect(line.className).toContain("text-tone-warn");
-    expect(screen.getByTestId("checked-line-words").textContent).toContain("Summary!C7 holds #DIV/0!");
+    expect(screen.getByTestId("checked-line-words").textContent).toContain("C7 on Summary holds #DIV/0!");
     fireEvent.click(screen.getByTestId("checked-line-press"));
     const rows = screen.getAllByTestId("checked-item");
     expect(rows[0].getAttribute("data-result")).toBe("failed");
-    expect(rows[0].textContent).toBe("summary.xlsx: Summary!C7 holds #DIV/0! (Problem, by rule)");
+    expect(rows[0].textContent).toBe("summary.xlsx: C7 on Summary holds #DIV/0! (Problem, by rule)");
     expect(rows[1].getAttribute("data-result")).toBe("not_checked");
     expect(rows.at(-1)!.textContent).toBe("Step 2: it passed its check (Checked, by Claude Sonnet 4.5)");
+  });
+
+  it("worth a look reads in the warning colour under its own word, after a problem and before not checked", () => {
+    const { unmount } = render(<CheckedLine mark={decodeChecked(LOOK)} />);
+    const line = screen.getByTestId("checked-line");
+    expect(line.getAttribute("data-tone")).toBe("warn");
+    expect(line.className).toContain("text-tone-warn");
+    expect(screen.getByTestId("checked-line-words").textContent).toBe(
+      "Checked by Iron Jarvis: the spreadsheet opens, no error cells. " +
+        "Worth a look: B4 on Summary says 650 and the cells above it add up to 600.",
+    );
+    expect(screen.getByTestId("checked-line-words").textContent).not.toContain("Problem");
+    fireEvent.click(screen.getByTestId("checked-line-press"));
+    let rows = screen.getAllByTestId("checked-item");
+    expect(rows[0].getAttribute("data-result")).toBe("look");
+    expect(rows[0].textContent).toBe(
+      "summary.xlsx: B4 on Summary says 650 and the cells above it add up to 600 (Worth a look, by rule)",
+    );
+    expect(rows[0].querySelector("span span")!.className).toContain("text-tone-warn");
+    expect(rows[0].querySelector("svg")!.getAttribute("class")).toContain("text-tone-warn");
+    expect(rows.map((r) => r.textContent).join(" ")).not.toContain("Problem");
+    // What passed beside it stays quiet.
+    expect(rows[1].getAttribute("data-result")).toBe("passed");
+    expect(rows[1].querySelector("span span")!.className).not.toContain("text-tone-warn");
+    unmount();
+    render(<CheckedLine mark={decodeChecked(BOTH)} />);
+    fireEvent.click(screen.getByTestId("checked-line-press"));
+    rows = screen.getAllByTestId("checked-item");
+    expect(rows.map((r) => r.getAttribute("data-result"))).toEqual(["failed", "look", "not_checked", "passed"]);
+    expect(rows[0].textContent).toBe("summary.xlsx: C7 on Summary holds #DIV/0! (Problem, by rule)");
+    expect(rows[1].textContent).toBe("summary.xlsx: D3 on Summary works out to #DIV/0! (Worth a look, by rule)");
+    expect(rows[2].querySelector("span span")!.className).not.toContain("text-tone-warn");
   });
 
   it("what could not be checked is said quietly, and a long list says how many more", () => {
@@ -441,13 +526,22 @@ describe("a task's result", () => {
     expect(screen.getByTestId("checked-line-words").textContent).toBe(BAD.line);
     fireEvent.click(screen.getByTestId("checked-line-press"));
     expect(screen.getAllByTestId("checked-item")[0].textContent).toBe(
-      "summary.xlsx: Summary!C7 holds #DIV/0! (Problem, by rule)",
+      "summary.xlsx: C7 on Summary holds #DIV/0! (Problem, by rule)",
     );
     unmount();
     // The quiet form under a run's settled row draws it too.
     const quiet = render(<RunResultCard result={{ ...RESULT, checked: GOOD }} withRow />);
     expect(screen.getByTestId("checked-line-words").textContent).toBe(GOOD.line);
     quiet.unmount();
+    // Worth a look, on a task's card: the daemon's line, the warning colour, its own word in the list.
+    for (const withRow of [false, true]) {
+      const card = render(<RunResultCard result={{ ...RESULT, checked: LOOK }} withRow={withRow} />);
+      expect(screen.getByTestId("checked-line-words").textContent).toBe(LOOK.line);
+      expect(screen.getByTestId("checked-line").getAttribute("data-tone")).toBe("warn");
+      fireEvent.click(screen.getByTestId("checked-line-press"));
+      expect(screen.getAllByTestId("checked-item")[0].textContent).toContain("(Worth a look, by rule)");
+      card.unmount();
+    }
     render(<RunResultCard result={RESULT} />);
     expect(screen.queryByTestId("checked-line")).toBeNull();
     cleanup();

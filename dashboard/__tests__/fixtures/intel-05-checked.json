@@ -37,19 +37,19 @@
     "more_words": ""
   },
   "bad": {
-    "line": "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up. Problem in the spreadsheet: Summary!C7 holds #DIV/0!. Not checked: the spreadsheet (1 total could not be worked out by rule: Summary!D9 is worked out by a formula this check cannot follow).",
+    "line": "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up. Problem in the spreadsheet: C7 on Summary holds #DIV/0!. Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on Summary is worked out by a formula this check cannot follow).",
     "tone": "warn",
     "checks": [
       {
         "label": "summary.xlsx",
-        "said": "Summary!C7 holds #DIV/0!",
+        "said": "C7 on Summary holds #DIV/0!",
         "result": "failed",
         "result_words": "Problem",
         "who": "by rule"
       },
       {
         "label": "summary.xlsx",
-        "said": "1 total could not be worked out by rule: Summary!D9 is worked out by a formula this check cannot follow",
+        "said": "1 total could not be worked out by rule: D9 on Summary is worked out by a formula this check cannot follow",
         "result": "not_checked",
         "result_words": "Not checked",
         "who": "by rule"
@@ -74,6 +74,78 @@
         "result": "passed",
         "result_words": "Checked",
         "who": "by Claude Sonnet 4.5"
+      }
+    ],
+    "more": 0,
+    "more_words": ""
+  },
+  "look": {
+    "line": "Checked by Iron Jarvis: the spreadsheet opens, no error cells. Worth a look: B4 on Summary says 650 and the cells above it add up to 600.",
+    "tone": "warn",
+    "checks": [
+      {
+        "label": "summary.xlsx",
+        "said": "B4 on Summary says 650 and the cells above it add up to 600",
+        "result": "look",
+        "result_words": "Worth a look",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "no error cells",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "The reply",
+        "said": "what it says matches what it did",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      }
+    ],
+    "more": 0,
+    "more_words": ""
+  },
+  "both": {
+    "line": "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: C7 on Summary holds #DIV/0!. Worth a look: D3 on Summary works out to #DIV/0!. Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on Summary is a formula).",
+    "tone": "warn",
+    "checks": [
+      {
+        "label": "summary.xlsx",
+        "said": "C7 on Summary holds #DIV/0!",
+        "result": "failed",
+        "result_words": "Problem",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "D3 on Summary works out to #DIV/0!",
+        "result": "look",
+        "result_words": "Worth a look",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "1 total could not be worked out by rule: D9 on Summary is a formula",
+        "result": "not_checked",
+        "result_words": "Not checked",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
       }
     ],
     "more": 0,
@@ -311,5 +383,37 @@
     ],
     "more": 0,
     "more_words": ""
+  },
+  "unseen": {
+    "raw": {
+      "line": "\u202eCheck\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069ed by Iron Jarvis: the spreadsheet opens.\u0000\t\n\u001b[31m",
+      "tone": "warn",
+      "checks": [
+        {
+          "label": "\u202esumma\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069ry.xlsx\u0000\t\n\u001b[31m",
+          "said": "\u202eB4 sa\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069ys 650 and the cells above it add up to 600\u0000\t\n\u001b[31m",
+          "result": "look",
+          "result_words": "\u202eWorth\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069 a look\u0000\t\n\u001b[31m",
+          "who": "\u202eby ru\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069le\u0000\t\n\u001b[31m"
+        }
+      ],
+      "more": 2,
+      "more_words": "\u202eand 2\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069 more checks\u0000\t\n\u001b[31m"
+    },
+    "clean": {
+      "line": "Checked by Iron Jarvis: the spreadsheet opens. [31m",
+      "tone": "warn",
+      "checks": [
+        {
+          "label": "summary.xlsx [31m",
+          "said": "B4 says 650 and the cells above it add up to 600 [31m",
+          "result": "look",
+          "result_words": "Worth a look [31m",
+          "who": "by rule [31m"
+        }
+      ],
+      "more": 2,
+      "more_words": "and 2 more checks [31m"
+    }
   }
 }

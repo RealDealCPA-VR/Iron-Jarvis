@@ -31,8 +31,12 @@ calls AFTER it has made the link readable here).
 
 AN AGENT RUN's files are checked when the run is settled
 (``Orchestrator._settle_finished_run``, already off the event loop):
-:func:`settle_run`. Its result's receipt reads the line from the record
-(:func:`run_payload`).
+:func:`settle_run`. Each settle says what the run's files hold AFRESH: the
+checks of its files from an earlier settle are replaced, so a finding about
+a file the run has since put right, removed or dropped does not stay
+behind. Its result's receipt reads the line from the record
+(:func:`run_payload`), for the files the card lists and that are still on
+disk.
 
 Nothing here sends the model back, calls a model, publishes an event or
 raises.
@@ -42,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from typing import Any, Callable, Iterable
@@ -52,7 +57,7 @@ log = logging.getLogger(__name__)
 
 #: One file reply's whole check takes this long at most: its files, the
 #: write to the record and the read back of its line.
-TURN_CAP_S = content.HARD_WAIT_S
+TURN_CAP_S = 3.0
 #: The record's share of that (the write, the read back). A reply that made
 #: no file waits this long at most on its one row.
 RECORD_WAIT_S = 1.0
@@ -200,16 +205,60 @@ def settle_run(engine: Any, session_id: str, documents: "Iterable[Any] | None", 
                reply: str = "", clock: Callable[[], float] = time.monotonic) -> int:
     """BLOCKING. A finished run's made files (read from its undo journal by
     ``outcome.session_result``: ``documents``), checked by rule and written
-    under the run's session. Returns the rows written; never raises."""
+    under the run's session, IN PLACE OF the checks of its files an earlier
+    settle wrote (``record.write(replace_content=True)``): a run that
+    carried on and put a file right, removed it or made another says what
+    its files hold NOW, with nothing left over. Returns the rows written;
+    never raises."""
     try:
         docs = [str(p) for p in (documents or ()) if p]
-        if not docs or not str(session_id or ""):
+        if not str(session_id or ""):
             return 0
-        rows = content.check_files(docs, str(reply or ""), clock=clock)
-        return record.write(engine, rows, session_id=str(session_id), thread_id=str(thread_id or ""))
+        rows = content.check_files(docs, str(reply or ""), clock=clock,
+                                   deadline_s=content.RUN_DEADLINE_S) if docs else []
+        return record.write(engine, rows, session_id=str(session_id), thread_id=str(thread_id or ""),
+                            replace_content=True)
     except Exception:  # noqa: BLE001 — a record is never worth a failed finalize
         log.debug("a run's made files could not be checked", exc_info=True)
         return 0
+
+
+def _row_key(row: "dict[str, Any]") -> "tuple[str, str]":
+    return str(row.get("file") or "").lower(), str(row.get("folder") or "").lower()
+
+
+def _match(rows: "list[dict[str, Any]]", documents: "Iterable[Any] | None") -> "tuple[dict[tuple[str, str], str], list[str]]":
+    """Which checked file is which listed document. ``({(file, folder) of a
+    checked file: its document's path}, the documents no check covers)``.
+    A document is matched by its PATH's own name and its folder's name: a
+    checked file told apart by its folder matches only the document in that
+    folder; one that was not told apart matches ONE document of its name, so
+    a second file of that name (a helper's, in another folder) is not read
+    as covered."""
+    keys = list(dict.fromkeys(_row_key(r) for r in rows
+                              if r.get("check") in record.CONTENT_CHECKS and r.get("file")))
+    free = set(keys)
+    took: dict[tuple[str, str], str] = {}
+    missing: list[str] = []
+    for doc in dict.fromkeys(str(d) for d in (documents or ()) if d):
+        name = record.file_name(doc).lower()
+        parent = record.file_name(doc.replace("\\", "/").rstrip("/").rpartition("/")[0]).lower()
+        pick = next((k for k in ((name, parent), (name, "")) if k in free), None)
+        if pick is None:
+            pick = next((k for k in keys if k in free and k[0] == name and k[1].startswith("another folder")), None)
+        if pick is None:
+            missing.append(doc)
+            continue
+        free.discard(pick)
+        took[pick] = doc
+    return took, missing
+
+
+def _on_disk(path: str) -> bool:
+    try:
+        return os.path.exists(path)
+    except OSError:
+        return False
 
 
 def not_covered(rows: "list[dict[str, Any]]", documents: "Iterable[Any] | None") -> "dict[str, Any] | None":
@@ -218,34 +267,55 @@ def not_covered(rows: "list[dict[str, Any]]", documents: "Iterable[Any] | None")
     than :data:`content.MAX_FILES`). ONE ``not_checked`` row that says so,
     by name, so the line and its list never read as if they covered them;
     None when every listed file has a check. Worked out at the read, from
-    the record's rows and the card's own list: it is not stored."""
-    covered = {record.own_name(r.get("file")).lower() for r in rows
-               if r.get("check") in record.CONTENT_CHECKS and r.get("file")}
-    names = list(dict.fromkeys(record.file_name(d) for d in (documents or ()) if d))
-    missing = [n for n in names if n and n.lower() not in covered]
-    if not missing:
+    the record's rows and the card's own list (:func:`_match`: by the
+    document's path, never by a bare name alone): it is not stored."""
+    _took, missing = _match(rows, documents)
+    names = list(dict.fromkeys(record.file_name(d) for d in missing))
+    if not names:
         return None
-    n = len(missing)
-    shown = ", ".join(missing[:record.MAX_LINE_FILES])
+    n = len(names)
+    shown = ", ".join(names[:record.MAX_LINE_FILES])
     rest = n - min(n, record.MAX_LINE_FILES)
     return {
-        "check": record.FILE_OPENS, "file": "", "result": record.NOT_CHECKED, "by": record.BY_RULE,
+        "check": record.FILE_OPENS, "file": "", "folder": "", "result": record.NOT_CHECKED, "by": record.BY_RULE,
         "detail": (f"{n:,} other file{'' if n == 1 else 's'} on this card {'was' if n == 1 else 'were'} not checked "
                    f"here: {shown}" + (f" and {rest:,} more" if rest > 0 else "")),
     }
 
 
+def _is_leftover(row: "dict[str, Any]") -> bool:
+    """The row a check of more files than its cap writes ("2 more files were
+    not checked: only the first 6 are"): about no file by name."""
+    return (row.get("check") == record.FILE_OPENS and not row.get("file")
+            and row.get("result") == record.NOT_CHECKED)
+
+
 def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" = None) -> "dict[str, Any] | None":
     """BLOCKING. The line of a run's result, from the record; None when the
     record holds no check of a file the run made. *documents* is the list
-    the result card shows: a file on it that no check of this run covers is
-    said as not checked (:func:`not_covered`)."""
+    the result card shows:
+
+    * a check of a file that is no longer on that list, or no longer on
+      disk, is not shown (the card speaks of the files it lists);
+    * a file on it that no check of this run covers is said as not checked,
+      ONCE and by name (:func:`not_covered`; the cap's own "2 more files"
+      row gives way to it)."""
     try:
         rows = record.for_session(engine, session_id)
-        if not record.has_content(rows):
+        docs = [str(d) for d in (documents or ()) if d]
+        listed = bool(docs)
+        if listed:
+            took, _missing = _match(rows, docs)
+            shown = {key for key, path in took.items() if _on_disk(path)}
+            rows = [r for r in rows if r.get("check") not in record.CONTENT_CHECKS or not r.get("file")
+                    or _row_key(r) in shown]
+            docs = [d for d in docs if _on_disk(d)]
+        if not record.has_content([r for r in rows if r.get("file")] if listed else rows):
             return None
-        extra = not_covered(rows, documents)
-        return record.payload(rows + [extra] if extra is not None else rows)
+        extra = not_covered(rows, docs)
+        if extra is not None:
+            rows = [r for r in rows if not _is_leftover(r)] + [extra]
+        return record.payload(rows)
     except Exception:  # noqa: BLE001
         log.debug("a run's checks could not be read", exc_info=True)
         return None

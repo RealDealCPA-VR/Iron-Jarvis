@@ -16,7 +16,9 @@ what falls out silently in the middle of a reply.
 
 The answer is words built from the record's rows (the same line the page
 shows, then each check with its result and who checked), handed to the model
-as data.
+as data. Each check is said under the record's own word for it: "Problem"
+for what a file itself holds, "Worth a look" for what Iron Jarvis worked out
+itself and found different (never as a problem), "Not checked", "Checked".
 """
 
 from __future__ import annotations

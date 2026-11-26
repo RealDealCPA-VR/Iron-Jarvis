@@ -1,29 +1,39 @@
 """What a made file SAYS, checked by rule (no model call, ever).
 
 The app already checked that a required file exists, is not empty and opens
-(``deliverables/check.check_file``, reused here). Nothing looked inside it: a
-sheet full of ``#DIV/0!`` or a grand total that is not the sum of its rows
-went out under "Done". These are the checks of the content, each a fact about
-the file:
+(``deliverables/check.check_file``, reused here for everything but a
+workbook). Nothing looked inside it: a sheet full of ``#DIV/0!`` or a grand
+total that is not the sum of its rows went out under "Done". These are the
+checks of the content.
 
-* **it opens** (``file_opens``): on disk, not empty, and its kind loads;
-* **a spreadsheet has no error cells** (``sheet_no_error_cells``): no cell
-  holds one of Excel's error values (``documents/lint._XL_ERRORS``), written
-  as a value or saved as a formula's last result, and no formula with NO
-  saved result works out to one (:func:`_work_out`: the app's own evaluator,
-  ``documents/excel_formula``, over the cells already read). "no error
-  cells" is said ONLY when every filled cell holds a value or a formula that
-  was worked out without an error; a formula that could not be worked out
-  makes the check ``not_checked`` with the count;
-* **a spreadsheet's totals add up** (``sheet_totals``): see :func:`_totals`.
-  A WRONG total is said only in one unambiguous shape (:func:`_clean`); a
-  mismatch in any other shape is ``not_checked``;
+WHICH OUTCOME A CHECK MAY USE is fixed by what kind of knowledge it is
+(``checks/record``): ``failed`` ("Problem") only for what the file itself
+holds or is; ``look`` ("Worth a look") for what Iron Jarvis worked out by its
+own arithmetic or read out of prose, said as plain figures with no verdict.
+
+* **it opens** (``file_opens``): on disk, not empty, and its kind loads.
+  ``failed`` when it does not open, and when a DOCUMENT kind is empty; an
+  empty file of any other kind (``__init__.py``, ``.gitkeep``) says nothing.
+* **a spreadsheet has no error cells** (``sheet_no_error_cells``):
+  - a cell whose SAVED value is an error (a value, or a formula's saved
+    result) is ``failed``: "C7 on Summary holds #DIV/0!";
+  - a formula with NO saved result is worked out by the app's own evaluator
+    (:func:`_work_out`, ``documents/excel_formula`` over the cells already
+    read). One that comes to ``#DIV/0!``, ``#REF!``, ``#N/A`` or ``#NUM!`` is
+    ``look``: "D3 on Summary works out to #DIV/0!". One that comes to
+    ``#VALUE!`` (the evaluator is stricter than Excel about text in a cell)
+    or that cannot be worked out is ``not_checked``, with the count;
+  - a formula that names a newer function without the prefix Excel stores it
+    with is ``look``: "A2 on Summary may show #NAME? when opened in Excel";
+  - "no error cells" is said ONLY when none of the above happened.
+* **a spreadsheet's totals** (``sheet_totals``): see :func:`_totals`. A total
+  is NEVER ``failed``. A typed total that differs from a clean list above it
+  and that nothing else explains is ``look``, with both figures.
 * **a text or Word document is not empty of text** (``document_not_empty``;
-  a Word file through ``documents/lint.lint_docx``);
+  a Word file through ``documents/lint.lint_docx``).
 * **a PDF's pages** (``pdf_pages``): how many it has, and, only when the
-  reply states a count for that file in one of four plain forms and says
-  nothing about changing pages (:func:`stated_pages`), whether it is that
-  many.
+  reply states a count for that file plainly (:func:`stated_pages`), whether
+  it is that many. A different count is ``look``, never ``failed``.
 
 RULES OF THE HOUSE. A check never raises: one that breaks is ``not_checked``
 with a plain reason, never ``passed``. Only the files the caller hands over
@@ -35,19 +45,21 @@ text first (``tools/base._network_spelling``).
 
 BOUNDED. At most :data:`MAX_FILES` files a reply, a file over
 :data:`MAX_BYTES` (or a package that unpacks past :data:`MAX_UNPACKED_BYTES`)
-is not opened by any reader here, a workbook's first :data:`MAX_CELLS` filled
-cells are read (by its real cells, never by the size its sheets declare; at
-most :data:`MAX_VISITED` cells are stepped over), at most :data:`MAX_WORKED`
-formulas are worked out (each reading at most :data:`MAX_FORMULA_READS`
-cells), and the whole reply's checks share :data:`DEADLINE_S`, looked at
-between files AND inside a file (every row of the cell walk, every formula,
-every total): what is left when it runs out is ``not_checked``. BLOCKING:
-:func:`check_made_files` is the hop off the event loop, and it waits
-:data:`HARD_WAIT_S` at most.
+is not opened by any reader here, a workbook is loaded ONCE (:func:`_load`:
+the same walk answers "does it open", gives the cells as written and the
+saved result of each formula) and its first :data:`MAX_CELLS` filled cells
+are read, at most :data:`MAX_WORKED` formulas are worked out (each reading
+at most :data:`MAX_FORMULA_READS` cells), and the whole reply's checks share
+:data:`DEADLINE_S`, looked at between files AND inside a file (every row of
+the cell walk, every formula, every total): what is left when it runs out is
+``not_checked``. BLOCKING: :func:`check_made_files` is the hop off the event
+loop, and it waits :data:`HARD_WAIT_S` at most.
 
 A FILE'S NAME is all a check keeps of where it is. Two made files with the
-same name in two folders are told apart by the folder's own name beside it
-("summary.xlsx (in 2023)": ``record.apart``), never by a path.
+same name in two folders are told apart by the folder's own name, kept in
+its own field (``Check.folder``; shown "summary.xlsx (in 2023)"), never by a
+path. A CELL is named in plain words: "B4 on Summary", or "B4" alone in a
+workbook of one sheet.
 
 WORDS. Everything a check says can reach the line under a reply: plain
 words only, never an exception's name or a package part's path
@@ -58,15 +70,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import re
 import time
 import zipfile
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
+from itertools import product as _signs
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .record import (
-    DOC_TEXT, FAILED, FILE_OPENS, NOT_CHECKED, PASSED, PDF_PAGES, SHEET_ERRORS, SHEET_TOTALS, Check, apart,
+    DOC_TEXT, FAILED, FILE_OPENS, LOOK, NOT_CHECKED, PASSED, PDF_PAGES, SHEET_ERRORS, SHEET_TOTALS, Check,
     file_name, open_words,
 )
 
@@ -80,13 +95,14 @@ MAX_BYTES = 8 * 1024 * 1024
 MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 #: A workbook's filled cells read at most.
 MAX_CELLS = 200_000
-#: ... and the cells stepped over on the way (the blanks between two
-#: far-apart cells of one row count here).
-MAX_VISITED = 2_000_000
-#: One reply's content checks share this long.
-DEADLINE_S = 4.0
-#: The caller waits this long at most for the worker thread.
-HARD_WAIT_S = DEADLINE_S + 2.0
+#: One REPLY's content checks share this long, and its caller waits
+#: :data:`HARD_WAIT_S` at most for the worker thread (``checks/turn`` holds
+#: the reply's whole check, the record included, inside 3 s).
+DEADLINE_S = 1.8
+HARD_WAIT_S = 2.0
+#: A finished RUN's files are checked when the run is settled, off the loop,
+#: with nobody waiting on a reply: they get longer.
+RUN_DEADLINE_S = 4.0
 #: Cells one SUM may add, total labels one workbook may hold, cells named.
 MAX_SUM_CELLS = 20_000
 MAX_TOTALS = 200
@@ -105,17 +121,37 @@ _SHEET_EXTS = frozenset({".xlsx", ".xlsm"})
 _PACKAGE_EXTS = frozenset({".xlsx", ".xlsm", ".docx", ".pptx", ".odt", ".ods"})
 _TEXT_EXTS = frozenset({".txt", ".md", ".markdown", ".rtf", ".html", ".htm", ".csv", ".tsv"})
 _HTML_EXTS = frozenset({".html", ".htm"})
+#: The DOCUMENT kinds: only for these is "it is empty" or "it has no text" a
+#: problem. An empty ``__init__.py`` or ``.gitkeep``, and a web page that is
+#: only a picture, are what they are meant to be: they get no row at all.
+_DOC_EXTS = _SHEET_EXTS | frozenset({
+    ".xls", ".ods", ".docx", ".doc", ".odt", ".rtf", ".pdf", ".pptx", ".txt", ".md", ".markdown", ".csv", ".tsv",
+})
 
 
 def _plural(n: int, one: str, many: str = "") -> str:
     return f"{n:,} {one if n == 1 else (many or one + 's')}"
 
 
-def _num(value: float) -> str:
-    """A number as a person reads it: 1,250 or 1,250.40."""
+def _fmt(value: float, places: int) -> str:
     if abs(value - round(value)) < 1e-9:
         return f"{int(round(value)):,}"
-    return f"{value:,.2f}"
+    return f"{value:,.{places}f}"
+
+
+def _num(value: float) -> str:
+    """A number as a person reads it: 1,250 or 1,250.40."""
+    return _fmt(value, 2)
+
+
+def _figures(a: float, b: float) -> "tuple[str, str]":
+    """Two figures as a person reads them, with enough decimal places to
+    tell them apart: two unequal figures never print the same."""
+    for places in (2, 3, 4, 5, 6):
+        said = _fmt(a, places), _fmt(b, places)
+        if said[0] != said[1] or a == b:
+            return said
+    return repr(float(a)), repr(float(b))
 
 
 def _size_words(size: int) -> str:
@@ -150,6 +186,10 @@ class _OutOfTime(Exception):
     formulas, the totals): what was not reached is ``not_checked``."""
 
 
+class _DoesNotOpen(Exception):
+    """The workbook does not open; ``str(exc)`` is the plain reason."""
+
+
 def _never_late() -> bool:
     return False
 
@@ -170,8 +210,17 @@ _TOTAL_WORDS = _SUBTOTAL_WORDS | frozenset({
 #: word ("Year 1" is a column of amounts, "Tax year" is not).
 _NOT_ADDED_RX = re.compile(
     r"%|\b(?:percent(?:age)?|pct|rates?|prices?|avg|average|mean|median|margins?|ratio|share|unit|per|hourly"
-    r"|balance|running|cumulative)\b"
+    r"|each|ytd|balance|running|cumulative)\b"
     r"|(?:\b(?:no|nos|number|num|id|ref|reference|code|year|yr|date)\b\.?|#)\s*$",
+    re.IGNORECASE,
+)
+#: A ROW whose own label says it is taken away, or is a figure about the
+#: list and not one of its amounts: a total over such a row is not the plain
+#: sum of the rows, so a difference is not judged.
+_ROW_WORDS_RX = re.compile(
+    r"\b(?:discounts?|less|minus|deposits?|paid|payments?|refunds?|credits?|expenses?|costs?|withheld"
+    r"|withholding|deductions?|rebates?|returns?|allowances?|opening|closing|count|largest|smallest|highest"
+    r"|lowest|maximum|minimum|max|min)\b",
     re.IGNORECASE,
 )
 #: Text that is a number someone typed as text ("200", "$1,200", "(45.10)").
@@ -185,10 +234,19 @@ _REF_RX = re.compile(_REF.format(n=""))
 _SUM_RX = re.compile(r"^=\s*SUM\s*\((?P<args>[^()]*)\)\s*$", re.IGNORECASE)
 _PLUS_RX = re.compile(r"^=\s*(?P<args>[^()=*/^&<>-]+)$")
 #: How far up a total looks for its column's heading.
-_SCAN_ROWS = 5_000
+_SCAN_ROWS = 60_000
+#: A total that may take rows away is tried with every choice of signs over
+#: at most this many rows.
+_SIGN_ROWS = 12
+#: The errors a worked-out formula is said to come to. ``#VALUE!`` is not
+#: one of them: the app's evaluator is stricter than Excel about text in a
+#: cell it reads (a dash, a date typed as text), so that one is "not checked".
+_LOOK_CODES = frozenset({"#DIV/0!", "#REF!", "#N/A", "#NUM!"})
 
 NOT_ONE_LIST = "the rows above it could not be read as one list"
 UNDER_TOTALS = "sits under other totals, and this check cannot tell which cells it adds"
+ANOTHER_WAY = "may be worked out another way than adding the rows above it"
+ROUNDER = "is written rounder than the rows above it, so it was not added up"
 
 
 def _col_number(letters: str) -> int:
@@ -276,17 +334,41 @@ def _one_sum_range(formula: Any) -> "tuple[str, int, int, int, int] | None":
 
 
 class _Book:
-    """A workbook's filled cells as written (``formulas``), as last saved by
-    a spreadsheet program (``values``: None where nothing was saved) and, for
-    a formula with no saved result, as the app's own evaluator worked it out
-    (``worked``)."""
+    """A workbook's filled cells as written (``formulas``: a value, or a
+    formula's own text), the result a spreadsheet program last SAVED for each
+    formula (``values``: formula cells only; absent where nothing was saved)
+    and, for a formula with no saved result, what the app's own evaluator
+    worked out (``worked``). ``spaces`` are the cells that hold only blank
+    space (text to a formula, nothing to a reader); ``sheets`` every sheet's
+    name."""
 
     def __init__(self) -> None:
         self.formulas: dict[str, dict[tuple[int, int], Any]] = {}
         self.values: dict[str, dict[tuple[int, int], Any]] = {}
         self.worked: dict[str, dict[tuple[int, int], Any]] = {}
         self.percent: set[tuple[str, int, int]] = set()
+        self.spaces: set[tuple[str, int, int]] = set()
+        self.sheets: list[str] = []
         self.cut = False
+        self._label_cols: dict[str, dict[int, int]] = {}
+
+    def total_row(self, sheet: str, row: int, before: int) -> bool:
+        """Is *row* itself a total row: does a total word sit in it, left of
+        column *before*? (Each sheet's labels are found once.)"""
+        cols = self._label_cols.get(sheet)
+        if cols is None:
+            cols = {}
+            for (r, c), v in self.formulas.get(sheet, {}).items():
+                if c < cols.get(r, 1 << 30) and _is_label(v):
+                    cols[r] = c
+            self._label_cols[sheet] = cols
+        return cols.get(row, 1 << 30) < before
+
+    def place(self, sheet: str, row: int, col: int) -> str:
+        """A cell in plain words: "B4 on Summary", or "B4" alone when the
+        workbook has one sheet. Never "Summary!B4"."""
+        cell = f"{_col_letters(col)}{row}"
+        return cell if len(self.sheets or self.formulas) <= 1 else f"{cell} on {sheet}"
 
     def number(self, sheet: str, row: int, col: int, depth: int = 0) -> "float | None":
         """A cell as a number to add: a number is itself, a blank or a word
@@ -340,61 +422,183 @@ def _errors() -> "frozenset[str]":
 
 
 def _load(path: Path, late: Callable[[], bool] = _never_late) -> _Book:
-    """Read a workbook twice, read-only and cell-capped: as written, and as
-    last saved (formula results). The deadline (*late*) is looked at on every
-    row of the walk: a long sheet stops there (:class:`_OutOfTime`), never at
-    the end of the file. BLOCKING."""
+    """Open a workbook and read it, ONCE: the same load answers "does it
+    open" (:class:`_DoesNotOpen` with the plain reason when it does not),
+    gives every filled cell as written and each formula's saved result. The
+    deadline (*late*) is looked at on every row of the walk: a long sheet
+    stops there (:class:`_OutOfTime`), never at the end of the file.
+    BLOCKING."""
     from openpyxl import load_workbook
 
-    book = _Book()
-    for data_only, target in ((False, book.formulas), (True, book.values)):
-        wb = load_workbook(str(path), read_only=True, data_only=data_only)
+    try:
+        if not zipfile.is_zipfile(path):
+            raise _DoesNotOpen(open_words("not a valid Office file"))
+        with zipfile.ZipFile(path) as zf:
+            if "xl/workbook.xml" not in set(zf.namelist()):
+                raise _DoesNotOpen(open_words("its package has no workbook"))
+        wb = load_workbook(str(path), read_only=True, data_only=False)
+    except _DoesNotOpen:
+        raise
+    except Exception as exc:  # noqa: BLE001 — "does not open" is the answer, in plain words
+        log.debug("a made workbook does not open", exc_info=True)
+        raise _DoesNotOpen(open_words("")) from exc
+    try:
+        if not wb.sheetnames:
+            raise _DoesNotOpen(open_words("the workbook has no sheets"))
         try:
-            seen = visited = 0
-            for ws in wb.worksheets:
-                cells = target.setdefault(ws.title, {})
-                # A sheet may DECLARE any size ("A1:XFD1048576"); read as
-                # declared, every row is padded out to it. Its real cells
-                # are read instead, and the padding between two far-apart
-                # cells of one row is counted against its own cap.
-                try:
-                    ws.reset_dimensions()
-                except Exception:  # noqa: BLE001 — an older reader: the caps below still hold
-                    pass
-                for row in ws.iter_rows():
-                    if late():
-                        raise _OutOfTime()
-                    visited += len(row)
-                    if visited > MAX_VISITED:
-                        book.cut = True
-                        break
-                    for cell in row:
-                        v = cell.value
-                        if v is None or (isinstance(v, str) and not v.strip()):
-                            continue
-                        r, c = getattr(cell, "row", None), getattr(cell, "column", None)
-                        if not isinstance(r, int) or not isinstance(c, int):
-                            continue
-                        cells[(r, c)] = v
-                        seen += 1
-                        if not data_only and _is_number(v):
-                            try:
-                                if "%" in str(cell.number_format or ""):
-                                    book.percent.add((ws.title, r, c))
-                            except Exception:  # noqa: BLE001 — a format is a hint only
-                                pass
-                    if seen >= MAX_CELLS:
-                        book.cut = True
-                        break
-                if book.cut:
+            return _read_once(wb, late)
+        except (ImportError, AttributeError, TypeError):
+            # The one-pass read leans on the library's own cell parser. If a
+            # later version moves it, read the slower way (two passes): the
+            # answers are the same.
+            log.debug("the one-pass read of a workbook is unavailable: reading it twice", exc_info=True)
+            return _read_twice(wb, path, late)
+    finally:
+        wb.close()
+
+
+def _saved_result(element: Any, value_tag: str, cast_number: Any) -> Any:
+    """The result a spreadsheet program saved for a formula cell (its
+    ``<v>``): a number, an error's text, a word, True/False; None for none."""
+    raw = element.findtext(value_tag, None) or None
+    if raw is None:
+        return None
+    kind = element.get("t", "n")
+    if kind == "n":
+        return cast_number(raw)
+    if kind == "b":
+        return bool(int(raw))
+    return raw
+
+
+def _keep(book: _Book, sheet: str, cells: dict, row: int, col: int, value: Any) -> bool:
+    """Put one cell in the book as written. False for a cell that holds
+    nothing (a blank, or only blank space, which is noted apart)."""
+    if value is None:
+        return False
+    if isinstance(value, str) and not value.strip():
+        if value:
+            book.spaces.add((sheet, row, col))
+        return False
+    cells[(row, col)] = value
+    return True
+
+
+def _read_once(wb: Any, late: Callable[[], bool]) -> _Book:
+    """Every sheet's real cells in ONE pass over the file: the library's own
+    cell parser, asked for the formula AND, beside it, the saved result."""
+    from openpyxl.styles.numbers import BUILTIN_FORMATS
+    from openpyxl.worksheet._reader import VALUE_TAG, WorkSheetParser, _cast_number
+
+    class _Both(WorkSheetParser):
+        def parse_cell(self, element: Any) -> dict:
+            cell = super().parse_cell(element)
+            if cell["data_type"] == "f":
+                cell["saved"] = _saved_result(element, VALUE_TAG, _cast_number)
+            return cell
+
+    formats: dict[int, bool] = {}
+
+    def is_percent(style_id: int) -> bool:
+        if style_id not in formats:
+            try:
+                fmt_id = wb._cell_styles[style_id].numFmtId
+                fmt = BUILTIN_FORMATS.get(fmt_id, "General") if fmt_id < 164 else wb._number_formats[fmt_id - 164]
+                formats[style_id] = "%" in str(fmt or "")
+            except Exception:  # noqa: BLE001 — a format is a hint only
+                formats[style_id] = False
+        return formats[style_id]
+
+    book = _Book()
+    book.sheets = list(wb.sheetnames)
+    seen = 0
+    for ws in wb.worksheets:
+        cells = book.formulas.setdefault(ws.title, {})
+        saved = book.values.setdefault(ws.title, {})
+        with ws._get_source() as src:
+            parser = _Both(src, ws._shared_strings, data_only=False, epoch=wb.epoch,
+                           date_formats=wb._date_formats, timedelta_formats=wb._timedelta_formats)
+            for _row_number, row in parser.parse():
+                if late():
+                    raise _OutOfTime()
+                for cell in row:
+                    v, r, c = cell["value"], cell["row"], cell["column"]
+                    if not _keep(book, ws.title, cells, r, c, v):
+                        continue
+                    seen += 1
+                    if cell["data_type"] == "f":
+                        if cell.get("saved") is not None:
+                            saved[(r, c)] = cell["saved"]
+                    elif _is_number(v) and cell["style_id"] and is_percent(cell["style_id"]):
+                        book.percent.add((ws.title, r, c))
+                if seen >= MAX_CELLS:
+                    book.cut = True
                     break
-        finally:
-            wb.close()
+        if book.cut:
+            break
     return book
 
 
-def _place(sheet: str, row: int, col: int) -> str:
-    return f"{sheet}!{_col_letters(col)}{row}"
+def _read_twice(wb: Any, path: Path, late: Callable[[], bool]) -> _Book:
+    """The same book by the library's public reader: the cells as written
+    from *wb*, the saved results from a second, values-only load."""
+    from openpyxl import load_workbook
+
+    book = _Book()
+    book.sheets = list(wb.sheetnames)
+    seen = 0
+    for ws in wb.worksheets:
+        cells = book.formulas.setdefault(ws.title, {})
+        book.values.setdefault(ws.title, {})
+        try:
+            ws.reset_dimensions()   # its real cells, never the size it declares
+        except Exception:  # noqa: BLE001
+            pass
+        for row in ws.iter_rows():
+            if late():
+                raise _OutOfTime()
+            for cell in row:
+                r, c = getattr(cell, "row", None), getattr(cell, "column", None)
+                if not isinstance(r, int) or not isinstance(c, int):
+                    continue
+                v = cell.value
+                if not _keep(book, ws.title, cells, r, c, v):
+                    continue
+                seen += 1
+                if _is_number(v):
+                    try:
+                        if "%" in str(cell.number_format or ""):
+                            book.percent.add((ws.title, r, c))
+                    except Exception:  # noqa: BLE001 — a format is a hint only
+                        pass
+            if seen >= MAX_CELLS:
+                book.cut = True
+                break
+        if book.cut:
+            break
+    kept = load_workbook(str(path), read_only=True, data_only=True)
+    try:
+        for ws in kept.worksheets:
+            want = {k for k, v in book.formulas.get(ws.title, {}).items() if not _is_number(v) and (
+                _is_formula(v) or not isinstance(v, (str, bool)))}
+            if not want:
+                continue
+            last = max(r for r, _c in want)
+            try:
+                ws.reset_dimensions()
+            except Exception:  # noqa: BLE001
+                pass
+            for row in ws.iter_rows(max_row=last):
+                if late():
+                    raise _OutOfTime()
+                for cell in row:
+                    key = (getattr(cell, "row", None), getattr(cell, "column", None))
+                    if key in want and cell.value is not None and not (
+                            isinstance(cell.value, str) and not cell.value.strip()):
+                        book.values[ws.title][key] = cell.value
+    finally:
+        kept.close()
+    return book
 
 
 def _grid(book: _Book, late: Callable[[], bool]) -> Any:
@@ -419,7 +623,17 @@ def _grid(book: _Book, late: Callable[[], bool]) -> Any:
             return name
 
         def saved(self, sheet: str, col: int, row: int) -> Any:
-            return book.values.get(self.canon(sheet), {}).get((row, col))
+            name = self.canon(sheet)
+            v = book.formulas.get(name, {}).get((row, col))
+            if v is None:
+                # A cell that holds only blank space is TEXT to a formula
+                # (arithmetic over it is an error in Excel), never an empty cell.
+                return " " if (name, row, col) in book.spaces else None
+            if isinstance(v, (int, float, bool)) or (isinstance(v, str) and not v.startswith("=")):
+                return v
+            if isinstance(v, str) or hasattr(v, "ref"):
+                return book.values.get(name, {}).get((row, col))
+            return v
 
         def formula(self, sheet: str, col: int, row: int) -> "str | None":
             v = book.formulas.get(self.canon(sheet), {}).get((row, col))
@@ -455,23 +669,67 @@ def _grid(book: _Book, late: Callable[[], bool]) -> Any:
     return _BookGrid()
 
 
+def _plain_new_function(formula: str) -> bool:
+    """Does this formula name a newer function (CONCAT, IFNA, DAYS, XLOOKUP,
+    MAXIFS ...) WITHOUT the prefix Excel stores it with? Written plainly into
+    a file, Excel opens such a cell as ``#NAME?``. The app's own writer adds
+    the prefix (``excel_formula.for_file``); this is that function's own
+    table and pattern, read without its side doors."""
+    if "(" not in formula:
+        return False
+    from ..documents.excel_formula import _FOR_FILE_RX, _PREFIXED
+
+    for m in _FOR_FILE_RX.finditer(formula):
+        name = m.group(1)
+        if name and name.upper() in _PREFIXED:
+            return True
+    return False
+
+
 def _work_out(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[list[tuple[str, int, int, str]], int]":
-    """Every formula cell with NO saved result, worked out by the app's own
-    evaluator (the one the writer warns with). Returns ``(the ones whose
-    result is an error, as (sheet, row, col, error); how many could not be
-    worked out)``. A result that was worked out is kept in ``book.worked``.
+    """What Iron Jarvis works out about the formulas itself. Returns
+    ``(findings worth a look, as (sheet, row, col, words); how many formulas
+    could not be worked out)``:
+
+    * a formula that names a newer function without Excel's prefix:
+      "may show #NAME? when opened in Excel" (whatever result was saved);
+    * a formula with NO saved result, worked out by the app's own evaluator:
+      one that comes to an error of :data:`_LOOK_CODES` "works out to
+      #DIV/0!"; one that comes to ``#VALUE!`` or any other error, or that the
+      evaluator cannot do, counts as not worked out. A result that was
+      worked out is kept in ``book.worked``.
+
     Bounded: at most :data:`MAX_WORKED` formulas, while the deadline lasts;
-    the rest count as not worked out. Never raises."""
-    todo = [
+    the rest count as not worked out. Raises only :class:`_OutOfTime`, when
+    the deadline runs out while the function names are still being looked
+    at (nothing can then be said about the formulas at all)."""
+    every = [
         (sheet, row, col)
         for sheet, cells in book.formulas.items()
-        for (row, col), v in sorted(cells.items())
-        if (_is_formula(v) or not isinstance(v, (str, int, float, bool)) and hasattr(v, "ref"))
-        and book.values.get(sheet, {}).get((row, col)) is None
+        for (row, col), v in sorted(cells.items(), key=lambda item: item[0])
+        if _is_formula(v) or (not isinstance(v, (str, int, float, bool)) and hasattr(v, "ref"))
     ]
-    if not todo:
+    if not every:
         return [], 0
-    errors: list[tuple[str, int, int, str]] = []
+    todo = [k for k in every if book.values.get(k[0], {}).get((k[1], k[2])) is None]
+    found: list[tuple[str, int, int, str]] = []
+    named: set[tuple[str, int, int]] = set()
+    try:
+        for sheet, row, col in every:
+            if late():
+                raise _OutOfTime()
+            v = book.formulas[sheet][(row, col)]
+            if isinstance(v, str) and _plain_new_function(v):
+                named.add((sheet, row, col))
+                found.append((sheet, row, col, "may show #NAME? when opened in Excel"))
+    except _OutOfTime:
+        raise
+    except Exception:  # noqa: BLE001 — the table could not be read: nothing is called clean
+        log.debug("a workbook's function names could not be looked at", exc_info=True)
+        return found, max(1, len(todo))
+    todo = [k for k in todo if k not in named]
+    if not todo:
+        return found, 0
     unworked = 0
     try:
         from ..documents.excel_formula import ExcelError
@@ -479,7 +737,7 @@ def _work_out(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[lis
         grid = _grid(book, late)
     except Exception:  # noqa: BLE001 — no evaluator: nothing was worked out
         log.debug("the formula evaluator could not be set up", exc_info=True)
-        return [], len(todo)
+        return found, len(todo)
     for i, (sheet, row, col) in enumerate(todo):
         if i >= MAX_WORKED or late():
             unworked += len(todo) - i
@@ -492,55 +750,132 @@ def _work_out(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[lis
         try:
             got = grid.get(sheet, col, row)
         except ExcelError as exc:
-            errors.append((sheet, row, col, str(exc.code)))
+            code = str(exc.code)
+            if code in _LOOK_CODES:
+                found.append((sheet, row, col, f"works out to {code}"))
+            else:
+                unworked += 1   # #VALUE! and the like: the evaluator is stricter than Excel here
             continue
         except Exception:  # noqa: BLE001 — a formula this evaluator cannot do
             unworked += 1
             continue
         book.worked.setdefault(sheet, {})[(row, col)] = 0.0 if got is None else got
-    return errors, unworked
+    return found, unworked
 
 
-def _error_cells(book: _Book, worked: "Iterable[tuple[str, int, int, str]]" = ()) -> list[str]:
-    """Every cell that holds an Excel error ("Summary!C7 holds #DIV/0!": a
-    value, or a formula's saved result), and every formula with no saved
-    result that works out to one ("Summary!D3 works out to #DIV/0!")."""
-    errors = _errors()
+def _in_order(book: _Book, found: "Iterable[tuple[str, int, int, str]]") -> list[str]:
     order = {name: i for i, name in enumerate(book.formulas)}
-    found: list[tuple[int, int, int, str]] = []
+    return [f"{book.place(sheet, row, col)} {words}"
+            for sheet, row, col, words in sorted(found, key=lambda f: (order.get(f[0], 0), f[1], f[2]))]
+
+
+def _error_cells(book: _Book) -> list[str]:
+    """Every cell whose SAVED value is an Excel error ("C7 on Summary holds
+    #DIV/0!"): written as a value, or saved as a formula's result. What the
+    file itself holds, and nothing Iron Jarvis worked out."""
+    errors = _errors()
+    found: list[tuple[str, int, int, str]] = []
     for sheet, cells in book.formulas.items():
         saved = book.values.get(sheet, {})
-        for (row, col) in cells:
-            v = cells[(row, col)]
+        for (row, col), v in cells.items():
             shown = v.strip() if isinstance(v, str) and v.strip() in errors else None
-            if shown is None and _is_formula(v):
+            if shown is None and (_is_formula(v) or not isinstance(v, (str, int, float, bool))):
                 got = saved.get((row, col))
                 shown = got.strip() if isinstance(got, str) and got.strip() in errors else None
             if shown is not None:
-                found.append((order[sheet], row, col, f"{_place(sheet, row, col)} holds {shown}"))
-    for sheet, row, col, code in worked:
-        found.append((order.get(sheet, 0), row, col, f"{_place(sheet, row, col)} works out to {code}"))
-    return [words for _s, _r, _c, words in sorted(found)]
+                found.append((sheet, row, col, f"holds {shown}"))
+    return _in_order(book, found)
+
+
+def _decimals(value: float) -> int:
+    """How many decimal places a number was written with (6 at most)."""
+    text = repr(float(value))
+    if "e" in text or "E" in text:
+        return 6
+    return min(6, len(text.partition(".")[2].rstrip("0")))
 
 
 def _same(total: float, added: float) -> bool:
-    """Is a written total the sum of its cells? Equal to the cent, or equal
-    once the sum is rounded the way the total was written (a total of 100
-    over cells that add up to 100.4 is a rounded total, not a wrong one)."""
-    if abs(total - added) <= 0.005:
+    """Is a written total the sum of its cells? Equal (to the cent, or to
+    the last place the total was written with), or the sum sits at an EXACT
+    half of the total's last place and the total is it rounded either way
+    (12.5 + 8 is 21 to one hand and 20 to another: both add up). A total
+    that matches only after any other rounding is not "the same": see
+    :func:`_rounder`."""
+    d = _decimals(total)
+    if abs(total - added) <= 0.5 * 10 ** -max(2, d) + 1e-9:
         return True
-    text = repr(float(total))
-    decimals = min(6, len(text.partition(".")[2].rstrip("0"))) if "e" not in text else 6
-    return abs(round(added, decimals) - total) <= 10 ** -(decimals + 3) + 1e-9
+    scaled = added * 10 ** d
+    low = math.floor(scaled + 1e-9)
+    if abs(scaled - low - 0.5) <= 1e-6:
+        at = total * 10 ** d
+        return abs(at - low) <= 1e-6 or abs(at - low - 1) <= 1e-6
+    return False
 
 
-def _row_is_total(cells: dict[tuple[int, int], Any], row: int, before: int) -> bool:
-    return any(_is_label(cells.get((row, c))) for c in range(1, before))
+def _rounder(total: float, vals: "list[float]") -> bool:
+    """Is the total written COARSER than its rows and equal to them only
+    after rounding (600.20 + 634.29 under a total of 1,234; three rows of
+    33.335 under 100.02)? Such a total is neither "adds up" nor "worth a
+    look": it is not judged."""
+    # Rows no finer than the total need no test of their own: their sum is a
+    # whole number of the total's last place, so it is the total or at least
+    # one such place away from it, and rounding each row changes nothing.
+    # (Its one caller hands over a clean list: two rows or more.)
+    d = _decimals(total)
+    if abs(total - sum(vals)) <= 0.5 * 10 ** -d + 1e-9:
+        return True
+    step = Decimal(1).scaleb(-d)
+    try:
+        for mode in (ROUND_HALF_UP, ROUND_HALF_EVEN):
+            each = sum(Decimal(repr(float(v))).quantize(step, rounding=mode) for v in vals)
+            if abs(float(each) - total) <= 1e-9:
+                return True
+    except ArithmeticError:
+        return False
+    return False
+
+
+def _explained(total: float, vals: "list[float]") -> bool:
+    """Does a plain OTHER reading of the rows (top row first) give the total?
+    Then it is not a sum that went wrong, and it is not judged:
+
+    * the sum without the top row (a second heading row of numbers, a count
+      above the list);
+    * the product of the rows (quantity times price, months times payment);
+    * some rows taken away (income less expenses, a deposit paid): any
+      choice of signs, over at most :data:`_SIGN_ROWS` rows;
+    * a figure that lies between the smallest and the largest of rows that
+      all have one sign (an average, the last or a running value, the
+      largest, a rank);
+    * how many rows there are."""
+    n = len(vals)
+    if n < 1:
+        return False
+    if _same(total, float(n)):
+        return True
+    if n >= 2 and _same(total, sum(vals[1:])):
+        return True
+    if n >= 2:
+        try:
+            if _same(total, math.prod(vals)):
+                return True
+        except OverflowError:
+            pass
+    if (all(v >= 0 for v in vals) or all(v <= 0 for v in vals)) and min(vals) - 1e-9 <= total <= max(vals) + 1e-9:
+        return True
+    if 2 <= n <= _SIGN_ROWS:
+        for signs in _signs((1.0, -1.0), repeat=n):
+            if all(s > 0 for s in signs):
+                continue
+            if _same(total, sum(s * v for s, v in zip(signs, vals))):
+                return True
+    return False
 
 
 def _totals(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[int, list[str], list[str]]":
-    """``(how many totals add up, the wrong ones, the ones that could not be
-    worked out)``, each of the last two in plain words.
+    """``(how many totals add up, the ones worth a look, the ones that could
+    not be worked out)``, each of the last two in plain words.
 
     A TOTAL is a number or a formula beside a cell that is, WHOLE, a total
     word (:data:`_TOTAL_WORDS`). A figure beside "Total revenue" or a payee
@@ -549,12 +884,15 @@ def _totals(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[int, 
     * the label sits at the START of a row (numbers to its right, as far as
       the next label of that row): :func:`_row_total` judges each.
     * the label HEADS a column (numbers below it): :func:`_column_total`
-      judges the column as one total; it is never ``failed``.
+      judges the column as one total.
 
-    A WRONG total needs an unambiguous shape (:func:`_clean`); a mismatch in
-    any other shape is ``not_checked`` with the reason, never ``failed``."""
+    A total is NEVER "wrong" (``failed``): Iron Jarvis added it up itself,
+    and that is not the same as the file being wrong. A typed total that
+    differs from a clean list (:func:`_clean`) and that no other plain
+    reading explains (:func:`_other_reading`) is "worth a look", with both
+    figures; every other difference is ``not_checked`` with the reason."""
     good = 0
-    wrong: list[str] = []
+    look: list[str] = []
     unknown: list[str] = []
     seen_labels = 0
     for sheet, cells in book.formulas.items():
@@ -567,8 +905,8 @@ def _totals(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[int, 
                 raise _OutOfTime()
             seen_labels += 1
             if seen_labels > MAX_TOTALS:
-                unknown.append(f"{_place(sheet, row, col)} and the totals after it were not read")
-                return good, wrong, unknown
+                unknown.append(f"{book.place(sheet, row, col)} and the totals after it were not read")
+                return good, look, unknown
             right: list[int] = []
             for c in sorted(c for c in by_row.get(row, ()) if c > col):
                 x = cells.get((row, c))
@@ -580,14 +918,14 @@ def _totals(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[int, 
                 for n, c in enumerate(right):
                     if n and late():        # a wide total row: each figure looks up its own column
                         raise _OutOfTime()
-                    verdict = _row_total(book, sheet, cells, saved, row, c, col)
+                    verdict = _row_total(book, sheet, cells, saved, row, c, col, by_row)
                     if verdict is None:
                         continue
                     kind, words = verdict
                     if kind == PASSED:
                         good += 1
-                    elif kind == FAILED:
-                        wrong.append(words)
+                    elif kind == LOOK:
+                        look.append(words)
                     else:
                         unknown.append(words)
                 continue
@@ -599,7 +937,7 @@ def _totals(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[int, 
                 good += 1
             else:
                 unknown.append(words)
-    return good, wrong, unknown
+    return good, look, unknown
 
 
 def _above(cells: dict, row: int, col: int) -> "tuple[list[tuple[int, Any]], str, int]":
@@ -622,8 +960,8 @@ def _above(cells: dict, row: int, col: int) -> "tuple[list[tuple[int, Any]], str
 def _near(above: "list[tuple[int, Any]]") -> "tuple[list[tuple[int, Any]], int]":
     """``(the unbroken run of filled cells nearest above, how many blank
     cells were stepped over before it)``. Blank rows before a total are
-    stepped over (and counted: a total with a blank above it is never called
-    wrong)."""
+    stepped over (and counted: a total with a blank above it is never said
+    to differ)."""
     gap = 0
     while gap < len(above) and above[gap][1] is None:
         gap += 1
@@ -652,7 +990,7 @@ def _sums(book: _Book, sheet: str, cells: dict, part: "list[tuple[int, Any]]", c
         got = book.number(sheet, r, col)
         if got is None:
             return []
-        if _row_is_total(cells, r, col):
+        if book.total_row(sheet, r, col):
             subtotals.append(got)
         else:
             plain.append(got)
@@ -675,9 +1013,9 @@ def _under_heading(cells: dict, run: "list[tuple[int, Any]]", heading: str, head
     return not (_is_number(over) or _is_formula(over) or _is_text_number(over))
 
 
-def _clean(cells: dict, run: "list[tuple[int, Any]]", gap: int, heading: str, heading_row: int,
-           col: int, label_col: int) -> bool:
-    """The ONE shape in which a total that does not match is called WRONG:
+def _clean(book: _Book, sheet: str, cells: dict, run: "list[tuple[int, Any]]", gap: int, heading: str,
+           heading_row: int, col: int, label_col: int) -> bool:
+    """The ONE shape in which a total that does not match is said to differ:
     the list sits directly above the total (no blank between) and directly
     under a text heading; it has at least two rows; every row has a text
     label in the total's own label column and a real number (not a formula,
@@ -689,13 +1027,50 @@ def _clean(cells: dict, run: "list[tuple[int, Any]]", gap: int, heading: str, he
         label = cells.get((r, label_col))
         if not _is_number(v) or not (isinstance(label, str) and label.strip() and not _is_formula(label)):
             return False
-        if _row_is_total(cells, r, col):
+        if book.total_row(sheet, r, col):
             return False
     return True
 
 
-def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col: int,
-               label_col: int) -> "tuple[str, str] | None":
+def _numeric_heading_row(cells: dict, by_row: "dict[int, list[int]]", row: int, label_col: int) -> bool:
+    """Is this row a SECOND heading row made of numbers (years, quarters:
+    ``Item | 2023 | 2024`` under ``Category | Sales``)? At least two whole
+    numbers to the right of the label, each larger than the one before, and
+    either counting up by one or all of them years."""
+    nums = [cells.get((row, c)) for c in sorted(c for c in by_row.get(row, ()) if c > label_col)]
+    nums = [float(x) for x in nums if _is_number(x)]
+    if len(nums) < 2 or not all(x.is_integer() for x in nums):
+        return False
+    steps = [b - a for a, b in zip(nums, nums[1:])]
+    if not all(s > 0 for s in steps):
+        return False
+    return all(s == 1 for s in steps) or all(1900 <= x <= 2100 for x in nums)
+
+
+def _other_reading(cells: dict, by_row: "dict[int, list[int]]", run: "list[tuple[int, Any]]", row: int,
+                   label_col: int, total: float) -> bool:
+    """Is there a plain reason the total of a clean list is NOT the sum of
+    its rows? Then the difference is not judged (it is not "worth a look"):
+
+    * the total's label is not the first filled cell of its row (a long
+      table whose rows are "North | Orders", "North | Total");
+    * a row's own label says it is not added, or is taken away (a rate, a
+      price, an average; a discount, a deposit paid, expenses);
+    * the top row of the list is a second heading row of numbers;
+    * another reading of the same rows gives the total (:func:`_explained`)."""
+    if any((row, c) in cells for c in range(1, label_col)):
+        return True
+    for r, _v in run:
+        label = cells.get((r, label_col))
+        if isinstance(label, str) and (_NOT_ADDED_RX.search(label) or _ROW_WORDS_RX.search(label)):
+            return True
+    if _numeric_heading_row(cells, by_row, run[-1][0], label_col):
+        return True
+    return _explained(total, [float(x) for _r, x in reversed(run)])
+
+
+def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col: int, label_col: int,
+               by_row: "dict[int, list[int]] | None" = None) -> "tuple[str, str] | None":
     """One figure of a total row, judged. None = it is not a total to add (a
     percent, a column headed rate / price / balance / invoice no ...).
 
@@ -705,11 +1080,14 @@ def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col:
     the rows, the subtotals or the rows since the last subtotal). A match is
     a pass even in a loose shape.
 
-    ``failed``: ONLY in the clean shape (:func:`_clean`), with both figures.
+    ``look``: ONLY a typed figure over a clean list (:func:`_clean`) that is
+    not written rounder than its rows (:func:`_rounder`) and that no other
+    plain reading explains (:func:`_other_reading`): both figures, no
+    verdict. NEVER ``failed``.
 
-    ``not_checked``: every other mismatch, and a formula total that is not a
-    plain ``=SUM`` of exactly the list above it (:func:`_formula_total`)."""
-    place = _place(sheet, row, col)
+    ``not_checked``: every other difference, and a formula total that is not
+    a plain ``=SUM`` of exactly the list above it (:func:`_formula_total`)."""
+    place = book.place(sheet, row, col)
     v = cells.get((row, col))
     if (sheet, row, col) in book.percent:
         return None
@@ -725,10 +1103,15 @@ def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col:
     for part in (run, [(r, x) for r, x in above if x is not None]):
         if part and any(_same(total, candidate) for candidate in _sums(book, sheet, cells, part, col)):
             return PASSED, ""
-    if _clean(cells, run, gap, heading, heading_row, col, label_col):
-        added = sum(float(x) for _r, x in run)
-        return FAILED, f"{place} says {_num(total)} and the cells above it add up to {_num(added)}"
-    if any(x is not None and _row_is_total(cells, r, col) for r, x in above):
+    if _clean(book, sheet, cells, run, gap, heading, heading_row, col, label_col):
+        vals = [float(x) for _r, x in run]
+        if _rounder(total, vals):
+            return NOT_CHECKED, f"{place} {ROUNDER}"
+        if _other_reading(cells, by_row or {}, run, row, label_col, total):
+            return NOT_CHECKED, f"{place} {ANOTHER_WAY}"
+        said, added = _figures(total, sum(vals))
+        return LOOK, f"{place} says {said} and the cells above it add up to {added}"
+    if any(x is not None and book.total_row(sheet, r, col) for r, x in above):
         return NOT_CHECKED, f"{place} {UNDER_TOTALS}"
     return NOT_CHECKED, f"{place} could not be added up: {NOT_ONE_LIST}"
 
@@ -741,13 +1124,14 @@ def _formula_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, 
     the run since the total row before it). A range that leaves a row out or
     takes one in, any other formula, and a saved result that is not what the
     cells add up to are ``not_checked``; a formula total is never ``failed``
-    (a spreadsheet program works it out again when it opens the file)."""
-    place = _place(sheet, row, col)
+    and never ``look`` (a spreadsheet program works it out again when it
+    opens the file)."""
+    place = book.place(sheet, row, col)
     ref = _one_sum_range(cells.get((row, col)))
     if ref is None:
         return NOT_CHECKED, f"{place} is worked out by a formula this check cannot follow"
     block = run
-    first_total = next((i for i, (r, _v) in enumerate(run) if _row_is_total(cells, r, col)), None)
+    first_total = next((i for i, (r, _v) in enumerate(run) if book.total_row(sheet, r, col)), None)
     if first_total is not None:
         if _label_words(cells.get((row, label_col))) not in _SUBTOTAL_WORDS:
             return NOT_CHECKED, f"{place} {UNDER_TOTALS}"
@@ -770,8 +1154,9 @@ def _formula_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, 
     added = sum(float(n) for n in numbers if n is not None)
     last = saved.get((row, col))
     if _is_number(last) and not _same(float(last), added):
+        was, now = _figures(float(last), added)
         return NOT_CHECKED, (
-            f"{place} has a saved result of {_num(float(last))} and its cells add up to {_num(added)}: "
+            f"{place} has a saved result of {was} and its cells add up to {now}: "
             "a spreadsheet program works it out again when it opens the file"
         )
     return PASSED, ""
@@ -782,17 +1167,18 @@ def _column_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, c
     total. Each row's figure should be the sum of the numbers to its left
     (or, for exactly two of them, their product: quantity times price); a
     formula counts only as a plain ``=SUM`` of exactly those cells. A column
-    that is neither is ``not_checked``: it is never ``failed``."""
+    that is neither is ``not_checked``: it is never ``failed`` or ``look``."""
     if col < 3 or not any(cells.get((row, c)) is not None for c in range(1, col)):
         return None
-    place = f"the {str(cells.get((row, col))).strip()!r} column of {sheet}"
+    place = f"the {str(cells.get((row, col))).strip()!r} column" + ("" if len(book.sheets or book.formulas) <= 1
+                                                                 else f" on {sheet}")
     judged = 0
     r = row + 1
     while (r, col) in cells and judged < 5_000:
         v = cells[(r, col)]
         if not (_is_number(v) or _is_formula(v)):
             break
-        if _row_is_total(cells, r, col):
+        if book.total_row(sheet, r, col):
             r += 1
             continue
         beside = [c for c in range(1, col) if _is_number(cells.get((r, c))) or _is_formula(cells.get((r, c)))]
@@ -826,55 +1212,68 @@ def _unpacked_too_large(path: Path) -> bool:
         return sum(int(i.file_size) for i in zf.infolist()) > MAX_UNPACKED_BYTES
 
 
-def _sheet_checks(path: Path, name: str, late: Callable[[], bool] = _never_late) -> list[Check]:
-    """A workbook's error cells and totals. Where the reply's deadline runs
-    out, what was not reached is ``not_checked`` and what was is kept."""
+def _sheet_checks(path: Path, name: str, late: Callable[[], bool] = _never_late, folder: str = "") -> list[Check]:
+    """Everything about a workbook from ONE load: whether it opens, its
+    error cells and its totals. Where the reply's deadline runs out, what
+    was not reached is ``not_checked`` and what was is kept."""
+    def row(code: str, result: str, detail: str) -> Check:
+        return Check(code, result, detail, file=name, folder=folder)
+
     try:
         book = _load(path, late)
+    except _DoesNotOpen as exc:
+        return [row(FILE_OPENS, FAILED, str(exc) or open_words(""))]
     except _OutOfTime:
-        return [Check(SHEET_ERRORS, NOT_CHECKED, OUT_OF_TIME, file=name)]
-    out: list[Check] = []
-    # A formula with NO saved result is worked out here (the app's own
-    # evaluator): "no error cells" is said only when every filled cell holds
-    # a value or a formula that was worked out without an error. A workbook
-    # read only in part is not worked out (a formula over half a column
-    # would come to the wrong number).
-    worked, unworked = ([], 0) if book.cut else _work_out(book, late)
-    errors = _error_cells(book, worked)
-    if errors:
-        out.append(Check(SHEET_ERRORS, FAILED, _named(errors, "cells hold an error"), file=name))
+        return [row(FILE_OPENS, PASSED, "opens"), row(SHEET_ERRORS, NOT_CHECKED, OUT_OF_TIME)]
+    out = [row(FILE_OPENS, PASSED, "opens")]
+    # WHAT THE FILE HOLDS: a saved error value is a problem. WHAT IRON JARVIS
+    # WORKS OUT (a formula with no saved result, a function Excel may not
+    # know by that name) is worth a look, never a problem. "no error cells"
+    # is said only when there is neither and every formula was worked out. A
+    # workbook read only in part is not worked out (a formula over half a
+    # column would come to the wrong number).
+    held = _error_cells(book)
+    timed_out = False
+    try:
+        found, unworked = ([], 0) if book.cut else _work_out(book, late)
+    except _OutOfTime:
+        found, unworked, timed_out = [], 0, True
+    if held:
+        out.append(row(SHEET_ERRORS, FAILED, _named(held, "cells hold an error")))
+    if found:
+        out.append(row(SHEET_ERRORS, LOOK, _named(_in_order(book, found), "formulas")))
     if book.cut:
-        if not errors:
-            out.append(Check(SHEET_ERRORS, NOT_CHECKED,
-                             f"only its first {MAX_CELLS:,} cells were read, and none of those holds an error",
-                             file=name))
+        if not held:
+            out.append(row(SHEET_ERRORS, NOT_CHECKED,
+                           f"only its first {MAX_CELLS:,} cells were read, and none of those holds an error"))
+    elif timed_out:
+        out.append(row(SHEET_ERRORS, NOT_CHECKED, OUT_OF_TIME))
     elif unworked:
-        out.append(Check(
+        out.append(row(
             SHEET_ERRORS, NOT_CHECKED,
             f"{_plural(unworked, 'formula')} {'has' if unworked == 1 else 'have'} no saved result and could not "
             "be worked out here",
-            file=name,
         ))
-    elif not errors:
-        out.append(Check(SHEET_ERRORS, PASSED, "no error cells", file=name))
+    elif not held and not found:
+        out.append(row(SHEET_ERRORS, PASSED, "no error cells"))
     if book.cut:
-        out.append(Check(SHEET_TOTALS, NOT_CHECKED, "it has too many cells to add its totals up here", file=name))
+        out.append(row(SHEET_TOTALS, NOT_CHECKED, "it has too many cells to add its totals up here"))
         return out
     try:
-        good, wrong, unknown = _totals(book, late)
+        good, look, unknown = _totals(book, late)
     except _OutOfTime:
-        out.append(Check(SHEET_TOTALS, NOT_CHECKED, OUT_OF_TIME, file=name))
+        out.append(row(SHEET_TOTALS, NOT_CHECKED, OUT_OF_TIME))
         return out
     if good:
-        out.append(Check(SHEET_TOTALS, PASSED, f"{_plural(good, 'total')} add{'s' if good == 1 else ''} up", file=name))
-    if wrong:
-        out.append(Check(SHEET_TOTALS, FAILED, _named(wrong, "totals are wrong"), file=name))
+        out.append(row(SHEET_TOTALS, PASSED, f"{_plural(good, 'total')} add{'s' if good == 1 else ''} up"))
+    if look:
+        # Iron Jarvis's own adding up: "worth a look", never a problem.
+        out.append(row(SHEET_TOTALS, LOOK, _named(look, "totals")))
     if unknown:
-        out.append(Check(
+        out.append(row(
             SHEET_TOTALS, NOT_CHECKED,
             f"{_plural(len(unknown), 'total')} could not be worked out by rule: "
             + _named(unknown[:1], "") + (f", and {len(unknown) - 1:,} more" if len(unknown) > 1 else ""),
-            file=name,
         ))
     return out
 
@@ -885,15 +1284,15 @@ def _sheet_checks(path: Path, name: str, late: Callable[[], bool] = _never_late)
 _TAG_RX = re.compile(r"<[^>]*>")
 
 
-def _docx_check(path: Path, name: str) -> list[Check]:
+def _docx_check(path: Path, name: str, folder: str = "") -> list[Check]:
     from ..documents.lint import lint_docx
 
-    codes ={f.get("code") for f in (lint_docx(path).get("findings") or [])}
+    codes = {f.get("code") for f in (lint_docx(path).get("findings") or [])}
     if "docx-unreadable" in codes:
-        return [Check(DOC_TEXT, NOT_CHECKED, "its text could not be read", file=name)]
+        return [Check(DOC_TEXT, NOT_CHECKED, "its text could not be read", file=name, folder=folder)]
     if "docx-empty" in codes:
-        return [Check(DOC_TEXT, FAILED, "it has no text", file=name)]
-    return [Check(DOC_TEXT, PASSED, "has text", file=name)]
+        return [Check(DOC_TEXT, FAILED, "it has no text", file=name, folder=folder)]
+    return [Check(DOC_TEXT, PASSED, "has text", file=name, folder=folder)]
 
 
 def _text_has_words(path: Path, ext: str) -> "bool | None":
@@ -917,124 +1316,168 @@ _WORD_NUMBERS = {
     "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
 }
 _COUNT = r"(?P<n>\d{1,4}|" + "|".join(_WORD_NUMBERS) + r")"
+#: The count must END its phrase: "(3 pages)", "has 3 pages.", "is 3 pages;".
+#: "has 2 pages of tables", "has 12 pages more than" and "2 pages per sheet"
+#: say something else.
+_PHRASE_END = r"\s*[`*_\"']*\s*(?:[).,;]|$)"
 #: The four forms a page count is read in, and no other: after the name,
 #: "report.pdf (3 pages)", "report.pdf has 3 pages", "report.pdf is 3 pages";
 #: before it, "the 3-page report.pdf".
 _AFTER_NAME_RX = re.compile(
-    r"^[\s`*_\"')\]]*(?:\(\s*|\s+(?:has|is)\s+(?:all\s+|just\s+|only\s+)?)" + _COUNT + r"\s*-?\s*pages?\b",
+    r"[\s`*_\"')\]]*(?:\(\s*|\s+(?:has|is)\s+(?:all\s+|just\s+|only\s+)?)" + _COUNT + r"\s*-?\s*pages?"
+    + _PHRASE_END,
     re.IGNORECASE,
 )
-_BEFORE_NAME_RX = re.compile(_COUNT + r"\s*-?\s*page\s+[`*_\"'(\[]*$", re.IGNORECASE)
-#: A reply that says pages were taken out, put in, split or joined: a count
-#: in it may be the count BEFORE the change ("I removed page 3 from the
-#: 5-page contract.pdf"), so none is read. (Turning a page keeps the count.)
+_BEFORE_NAME_RX = re.compile(r"(?<![A-Za-z0-9.])" + _COUNT + r"\s*-?\s*page\s+[`*_\"'(\[]*$", re.IGNORECASE)
+#: A reply that says pages were taken out, put in, split, joined or made
+#: fewer or more: a count in it may be the count BEFORE the change ("I
+#: shortened the 40-page report.pdf to 12 pages"), so none is read. (Turning
+#: a page keeps the count.)
 _PAGE_CHANGE_RX = re.compile(
     r"\b(?:remov\w*|delet\w*|drop(?:s|ped|ping)?|cut(?:s|ting)?|trim\w*|split\w*|extract\w*|merg\w*|combin\w*"
-    r"|append\w*|insert\w*|shorter|fewer|longer)\b"
-    r"|\badd(?:s|ed|ing)?\b[^.\n]{0,60}\bpages?\b",
+    r"|append\w*|insert\w*|shorten\w*|shorter|condens\w*|reduc\w*|expand\w*|extend\w*|summar\w*|compress\w*"
+    r"|original\w*|fewer|longer)\b"
+    r"|\badd(?:s|ed|ing)?\b[^.\n]{0,60}\bpages?\b"
+    r"|\bfirst\s+(?:\w+\s+)?pages?\b|\bper\s+sheet\b|\bmore\s+than\b|\bfewer\s+than\b",
     re.IGNORECASE,
 )
+#: A character that can be part of a file's name or its path.
+_NAME_CHAR_RX = re.compile(r"[A-Za-z0-9_\-./\\]")
+
+
+def _one_mention(text: str, name: str) -> int:
+    """Where the reply names the file, when it names it exactly ONCE and as
+    a name of its own (not inside a longer name or a path: "annual-report.pdf",
+    "out/report.pdf"); -1 otherwise."""
+    low, needle = text.lower(), name.lower()
+    at = low.find(needle)
+    if at < 0 or low.find(needle, at + 1) >= 0:
+        return -1
+    if at and _NAME_CHAR_RX.match(text[at - 1]):
+        return -1
+    after = text[at + len(name):at + len(name) + 2]
+    if re.match(r"[A-Za-z0-9_\-/\\]|\.[A-Za-z0-9]", after):
+        return -1
+    return at
 
 
 def stated_pages(reply: str, name: str) -> "int | None":
-    """The page count a reply STATES for the file *name*, or None. Only a
-    count tied to that file's own name, in one of four forms, is read
-    ("report.pdf (3 pages)", "report.pdf has 3 pages", "report.pdf is 3
-    pages", "the 3-page report.pdf"): "I read your 12-page contract and saved
-    report.pdf" states none. Two different counts for the one file state
-    none either, and a reply with a word that changes pages (remove, delete,
-    split, merge, add a page, shorter ...) states none at all: its count may
-    be the one before the change."""
+    """The page count a reply STATES for the file *name*, or None. A count
+    is read only when all of this holds:
+
+    * the reply has no word that changes pages (remove, shorten, condense,
+      reduce, expand, summarise, merge, add a page, the first page, per
+      sheet, more than ...): its count may be the one before the change;
+    * the reply names the file exactly once, as a name of its own;
+    * the count is tied to that name in one of four forms ("report.pdf (3
+      pages)", "report.pdf has 3 pages", "report.pdf is 3 pages", "the
+      3-page report.pdf") and, after the name, ENDS its phrase.
+
+    "I read your 12-page contract and saved report.pdf" states none."""
     text = str(reply or "")[:40_000]
     name = str(name or "")
     if not text or not name or _PAGE_CHANGE_RX.search(text):
         return None
+    at = _one_mention(text, name)
+    if at < 0:
+        return None
     found: set[int] = set()
-    lowered, needle = text.lower(), name.lower()
-    start = 0
-    while True:
-        at = lowered.find(needle, start)
-        if at < 0:
-            break
-        start = at + len(needle)
-        for m in (_AFTER_NAME_RX.match(text[start:start + 60]), _BEFORE_NAME_RX.search(text[max(0, at - 40):at])):
-            if m is not None:
-                said = m.group("n").lower()
-                found.add(_WORD_NUMBERS[said] if said in _WORD_NUMBERS else int(said))
+    end = at + len(name)
+    for m in (_AFTER_NAME_RX.match(text, end), _BEFORE_NAME_RX.search(text[max(0, at - 40):at])):
+        if m is not None:
+            said = m.group("n").lower()
+            found.add(_WORD_NUMBERS[said] if said in _WORD_NUMBERS else int(said))
     return found.pop() if len(found) == 1 else None
 
 
-def _pdf_check(path: Path, name: str, reply: str, said_name: str = "") -> list[Check]:
+def _pdf_check(path: Path, name: str, reply: str, folder: str = "") -> list[Check]:
     from pypdf import PdfReader
 
     pages = len(PdfReader(str(path)).pages)
-    said = stated_pages(reply, said_name or name)
+    # Two made files of one name: a count in the reply could be either's.
+    said = None if folder else stated_pages(reply, name)
     if said is None:
-        return [Check(PDF_PAGES, PASSED, f"has {_plural(pages, 'page')}", file=name)]
+        return [Check(PDF_PAGES, PASSED, f"has {_plural(pages, 'page')}", file=name, folder=folder)]
     if said == pages:
-        return [Check(PDF_PAGES, PASSED, f"has the {_plural(pages, 'page')} the reply says", file=name)]
-    return [Check(PDF_PAGES, FAILED, f"it has {_plural(pages, 'page')} and the reply says {said:,}", file=name)]
+        return [Check(PDF_PAGES, PASSED, f"has the {_plural(pages, 'page')} the reply says", file=name, folder=folder)]
+    # Read out of the reply's prose: worth a look, never a problem.
+    return [Check(PDF_PAGES, LOOK, f"it has {_plural(pages, 'page')} and the reply says {said:,}", file=name,
+                  folder=folder)]
 
 
 # --------------------------------------------------------------------------- #
 # One file, then a reply's files
 # --------------------------------------------------------------------------- #
 def check_one(path: Any, reply: str = "", *, may_read: Callable[[Any], bool] = readable,
-              name: str = "", late: Callable[[], bool] = _never_late) -> list[Check]:
+              name: str = "", folder: str = "", late: Callable[[], bool] = _never_late) -> list[Check]:
     """Every content check of ONE made file. A file that is no longer there
     (a scratch file the reply removed again) is checked by nothing and says
-    nothing. *name* is what the file is called in the record (its own name;
-    with its folder's name beside it when two made files share one); *late*
-    answers "has the reply's deadline run out?" and is asked inside the
-    file. BLOCKING; may raise (the caller turns that into ``not_checked``)."""
-    base = file_name(path)
-    name = name or base
+    nothing; so is an empty file that is not a document. *name* is the
+    file's own name; *folder* its folder's name, only when two made files
+    share one name; *late* answers "has the reply's deadline run out?" and is
+    asked inside the file. BLOCKING; may raise (the caller turns that into
+    ``not_checked``)."""
+    name = name or file_name(path)
+
+    def row(code: str, result: str, detail: str) -> Check:
+        return Check(code, result, detail, file=name, folder=folder)
+
     if not may_read(path):
-        return [Check(FILE_OPENS, NOT_CHECKED, "it is outside the folders Iron Jarvis may read", file=name)]
+        return [row(FILE_OPENS, NOT_CHECKED, "it is outside the folders Iron Jarvis may read")]
     p = Path(str(path))
     try:
         if not p.exists() or p.is_dir():
             return []
         size = p.stat().st_size
     except OSError:
-        return [Check(FILE_OPENS, NOT_CHECKED, "it could not be read", file=name)]
+        return [row(FILE_OPENS, NOT_CHECKED, "it could not be read")]
+    ext = p.suffix.lower()
     if size == 0:
-        return [Check(FILE_OPENS, FAILED, "it is empty", file=name)]
+        # An empty DOCUMENT is a problem. An empty file of any other kind is
+        # what it was meant to be (``__init__.py``, ``.gitkeep``): no row.
+        return [row(FILE_OPENS, FAILED, "it is empty")] if ext in _DOC_EXTS else []
     if size > MAX_BYTES:
-        return [Check(FILE_OPENS, NOT_CHECKED, f"it is too large to check here ({_size_words(size)})", file=name)]
+        return [row(FILE_OPENS, NOT_CHECKED, f"it is too large to check here ({_size_words(size)})")]
+    # An Office file is a package: one that unpacks past the cap is not
+    # opened by ANY reader below.
+    if ext in _PACKAGE_EXTS and zipfile.is_zipfile(p) and _unpacked_too_large(p):
+        return [row(FILE_OPENS, NOT_CHECKED, "it unpacks too large to check here")]
+    if ext in _SHEET_EXTS:
+        try:
+            return _sheet_checks(p, name, late, folder)
+        except Exception:  # noqa: BLE001 — a check that breaks is "not checked", never a pass
+            log.debug("a made workbook's content check broke", exc_info=True)
+            return [row(FILE_OPENS, PASSED, "opens"), row(SHEET_ERRORS, NOT_CHECKED, BROKE)]
     from ..deliverables.check import DONE, check_file
 
-    ext = p.suffix.lower()
-    # An Office file is a package: one that unpacks past the cap is not
-    # opened by ANY reader below (the "opens" look loads a workbook too).
-    if ext in _PACKAGE_EXTS and zipfile.is_zipfile(p) and _unpacked_too_large(p):
-        return [Check(FILE_OPENS, NOT_CHECKED, "it unpacks too large to check here", file=name)]
     status, why, _size = check_file(p)
     if status != DONE:
         if ext in _TEXT_EXTS and "blank space" in why:
-            return [Check(FILE_OPENS, PASSED, "opens", file=name), Check(DOC_TEXT, FAILED, "it has no text", file=name)]
+            if ext not in _DOC_EXTS:
+                return []       # a page of blank space is not a document that lost its text
+            return [row(FILE_OPENS, PASSED, "opens"), row(DOC_TEXT, FAILED, "it has no text")]
         # Plain words only: the older check's own reason may name an
         # exception or a part of the package (``record.open_words``).
-        return [Check(FILE_OPENS, FAILED, open_words(why), file=name)]
-    out = [Check(FILE_OPENS, PASSED, "opens", file=name)]
+        return [row(FILE_OPENS, FAILED, open_words(why))]
+    out = [row(FILE_OPENS, PASSED, "opens")]
     try:
-        if ext in _SHEET_EXTS:
-            out += _sheet_checks(p, name, late)
-        elif ext == ".docx":
-            out += _docx_check(p, name)
+        if ext == ".docx":
+            out += _docx_check(p, name, folder)
         elif ext in _TEXT_EXTS:
             has = _text_has_words(p, ext)
             if has is None:
-                out.append(Check(DOC_TEXT, NOT_CHECKED, "its text could not be read", file=name))
+                out.append(row(DOC_TEXT, NOT_CHECKED, "its text could not be read"))
+            elif has:
+                out.append(row(DOC_TEXT, PASSED, "has text"))
+            elif ext in _DOC_EXTS:
+                out.append(row(DOC_TEXT, FAILED, "it has no text"))
             else:
-                out.append(Check(DOC_TEXT, PASSED, "has text", file=name) if has
-                           else Check(DOC_TEXT, FAILED, "it has no text", file=name))
+                return []       # a web page that is only a picture: not a problem, and nothing to say
         elif ext == ".pdf":
-            out += _pdf_check(p, name, reply, base)
+            out += _pdf_check(p, name, reply, folder)
     except Exception:  # noqa: BLE001 — a check that breaks is "not checked", never a pass
         log.debug("a made file's content check broke", exc_info=True)
-        code = SHEET_ERRORS if ext in _SHEET_EXTS else PDF_PAGES if ext == ".pdf" else DOC_TEXT
-        out.append(Check(code, NOT_CHECKED, BROKE, file=name))
+        out.append(row(PDF_PAGES if ext == ".pdf" else DOC_TEXT, NOT_CHECKED, BROKE))
     return out
 
 
@@ -1050,20 +1493,21 @@ def _unique(paths: Iterable[Any]) -> list[str]:
     return out
 
 
-def names_for(paths: "list[str]") -> "dict[str, str]":
-    """What each made file is called in the record: its own name, and for two
-    files of the same name in two folders the folder's own name beside it
-    ("summary.xlsx (in 2023)", ``record.apart``); two that would still read
-    the same are numbered. Never a path."""
+def names_for(paths: "list[str]") -> "dict[str, tuple[str, str]]":
+    """``{path: (the file's own name, its folder's name or "")}``. The folder
+    is given ONLY for two files of the same name in two folders, so the
+    record can tell them apart ("summary.xlsx (in 2023)"); two that would
+    still read the same are numbered. One folder's own name, never a path."""
     bases = [file_name(p) for p in paths]
-    out: dict[str, str] = {}
-    used: dict[str, int] = {}
+    out: dict[str, tuple[str, str]] = {}
+    used: dict[tuple[str, str], int] = {}
     for path, base in zip(paths, bases):
-        label = base
+        folder = ""
         if sum(1 for b in bases if b.lower() == base.lower()) > 1:
-            label = apart(base, file_name(str(path).replace("\\", "/").rstrip("/").rpartition("/")[0]))
-        n = used[label.lower()] = used.get(label.lower(), 0) + 1
-        out[path] = label if n == 1 else apart(base, f"another folder, {n}")
+            folder = file_name(str(path).replace("\\", "/").rstrip("/").rpartition("/")[0]) or "another folder"
+        key = (base.lower(), folder.lower())
+        n = used[key] = used.get(key, 0) + 1
+        out[path] = (base, folder if n == 1 else f"another folder, {n}")
     return out
 
 
@@ -1090,21 +1534,21 @@ def check_files(
         return clock() - started > deadline_s
 
     for path in todo[:max(0, int(max_files))]:
-        name = names[path]
+        name, folder = names[path]
         if late():
-            out.append(Check(FILE_OPENS, NOT_CHECKED, OUT_OF_TIME, file=name))
+            out.append(Check(FILE_OPENS, NOT_CHECKED, OUT_OF_TIME, file=name, folder=folder))
             continue
         try:
-            out += one(path, reply, may_read=may_read, name=name, late=late)
+            out += one(path, reply, may_read=may_read, name=name, folder=folder, late=late)
         except Exception:  # noqa: BLE001 — a check that breaks is "not checked"
             log.debug("a made file could not be checked", exc_info=True)
-            out.append(Check(FILE_OPENS, NOT_CHECKED, BROKE, file=name))
+            out.append(Check(FILE_OPENS, NOT_CHECKED, BROKE, file=name, folder=folder))
     rest = len(todo) - max(0, int(max_files))
     if rest > 0:
         out.append(Check(
             FILE_OPENS, NOT_CHECKED,
             f"{_plural(rest, 'more file')} {'was' if rest == 1 else 'were'} not checked: only the first "
-            f"{max_files} of a reply are",
+            f"{max_files} are",
         ))
     return out
 
@@ -1142,11 +1586,12 @@ async def check_made_files(
         log.debug("a reply's made files could not be checked", exc_info=True)
         why = BROKE
     names = names_for(todo)
-    return [Check(FILE_OPENS, NOT_CHECKED, why, file=names[p]) for p in todo[:max(1, int(max_files))]]
+    return [Check(FILE_OPENS, NOT_CHECKED, why, file=names[p][0], folder=names[p][1])
+            for p in todo[:max(1, int(max_files))]]
 
 
 __all__ = [
-    "BROKE", "DEADLINE_S", "HARD_WAIT_S", "MAX_BYTES", "MAX_CELLS", "MAX_FILES", "MAX_FORMULA_READS",
-    "MAX_UNPACKED_BYTES", "MAX_VISITED", "MAX_WORKED", "NOT_ONE_LIST", "OUT_OF_TIME", "UNDER_TOTALS", "check_files",
-    "check_made_files", "check_one", "names_for", "parse_sum", "readable", "stated_pages",
+    "ANOTHER_WAY", "BROKE", "DEADLINE_S", "HARD_WAIT_S", "MAX_BYTES", "MAX_CELLS", "MAX_FILES", "MAX_FORMULA_READS",
+    "MAX_UNPACKED_BYTES", "MAX_WORKED", "NOT_ONE_LIST", "OUT_OF_TIME", "ROUNDER", "RUN_DEADLINE_S", "UNDER_TOTALS",
+    "check_files", "check_made_files", "check_one", "names_for", "parse_sum", "readable", "stated_pages",
 ]

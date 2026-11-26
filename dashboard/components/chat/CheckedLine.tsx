@@ -8,8 +8,11 @@
  * its result, and who checked ("by rule", or the model's name).
  *
  * Every word comes from the daemon's one record of checks (lib/checked
- * decodes it; this component composes none). A failed check reads in the
- * warn tone; a pass, and what could not be checked, quietly. Never a notice,
+ * decodes it; this component composes none). A problem, and something
+ * "worth a look" (what Iron Jarvis worked out itself and found different),
+ * read in the warn tone; a pass, and what could not be checked, quietly. The
+ * two keep their own words in the list ("Problem", "Worth a look"): the
+ * colour is shared, the claim is not. Never a notice,
  * never the bell: it is drawn where the reply already is, and a reply that
  * made no file gets none (the caller renders nothing for a null mark).
  *
@@ -18,10 +21,10 @@
 
 import { memo, useId, useState } from "react";
 import { Check, ChevronDown, ChevronRight, CircleDashed, TriangleAlert } from "lucide-react";
-import { CHECKED_CLOSE, CHECKED_OPEN, type CheckedItem, type CheckedMark } from "@/lib/checked";
+import { CHECKED_CLOSE, CHECKED_OPEN, isWarnResult, type CheckedItem, type CheckedMark } from "@/lib/checked";
 
 function ItemIcon({ result }: { result: CheckedItem["result"] }) {
-  if (result === "failed") return <TriangleAlert size={12} aria-hidden="true" className="mt-0.5 shrink-0 text-tone-warn" />;
+  if (isWarnResult(result)) return <TriangleAlert size={12} aria-hidden="true" className="mt-0.5 shrink-0 text-tone-warn" />;
   if (result === "passed") return <Check size={12} aria-hidden="true" className="mt-0.5 shrink-0 text-tone-success" />;
   return <CircleDashed size={12} aria-hidden="true" className="mt-0.5 shrink-0" />;
 }
@@ -85,7 +88,7 @@ export const CheckedLine = memo(function CheckedLine({ mark }: { mark: CheckedMa
             >
               <ItemIcon result={c.result} />
               <span className="min-w-0 [overflow-wrap:anywhere]">
-                <span className={c.result === "failed" ? "text-tone-warn" : "text-zinc-300"}>{c.label}</span>
+                <span className={isWarnResult(c.result) ? "text-tone-warn" : "text-zinc-300"}>{c.label}</span>
                 {c.said ? <span>: {c.said}</span> : null}
                 <span className="text-zinc-500">
                   {" "}

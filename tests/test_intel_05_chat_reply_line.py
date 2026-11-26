@@ -76,7 +76,7 @@ def test_a_spreadsheet_with_an_error_cell_fails_and_the_line_says_which_cell(cli
     checked = body["checked"]
     assert checked["line"] == (
         "Checked by Iron Jarvis: the spreadsheet opens, 1 total adds up. "
-        "Problem in the spreadsheet: Sheet!B5 holds #DIV/0!."
+        "Problem in the spreadsheet: B5 holds #DIV/0!."
     ), checked["line"]
     assert checked["tone"] == "warn"
     failed = [c for c in checked["checks"] if c["result"] == "failed"]
@@ -107,11 +107,23 @@ def test_totals_that_add_up_are_counted_and_pressing_the_line_lists_three_checks
 
 
 @pytest.mark.parametrize("lane", LANES)
-def test_a_wrong_total_is_named_with_both_figures(client, monkeypatch, lane):
+def test_a_total_that_differs_is_worth_a_look_with_both_figures_never_a_problem(client, monkeypatch, lane):
+    """Iron Jarvis added the list up itself and got another figure. It says
+    both, in the warning colour, under its own word: it is not saying the
+    file is wrong."""
     body, _ = _write_turn(client, monkeypatch, lane, WRONG_SHEET)
-    line = body["checked"]["line"]
-    assert "B4 says 1,700 and the cells above it add up to 1,500" in line, line
-    assert body["checked"]["tone"] == "warn"
+    checked = body["checked"]
+    assert checked["line"] == (
+        "Checked by Iron Jarvis: the spreadsheet opens, no error cells. "
+        "Worth a look: B4 says 1,700 and the cells above it add up to 1,500."
+    ), checked["line"]
+    assert checked["tone"] == "warn" and "Problem" not in checked["line"]
+    first = checked["checks"][0]
+    assert (first["label"], first["said"], first["result"], first["result_words"], first["who"]) == (
+        "summary.xlsx", "B4 says 1,700 and the cells above it add up to 1,500", "look", "Worth a look", "by rule")
+    assert not [c for c in checked["checks"] if c["result"] == "failed"]
+    rows = [r for r in _rows(client.app.state.platform) if r.check == R.SHEET_TOTALS]
+    assert [(r.result, r.detail) for r in rows] == [(R.LOOK, "B4 says 1,700 and the cells above it add up to 1,500")]
 
 
 #: The reviewer's rows (B2): the app's own writer warns that D3 is #DIV/0!
@@ -124,16 +136,17 @@ UNWORKED = [["Name", "Amount"], ["A", 100], ["B", "=NOSUCHFUNCTION(B2)"]]
 @pytest.mark.parametrize("lane", LANES)
 def test_a_formula_the_writer_saved_no_result_for_is_never_called_no_error_cells(client, monkeypatch, lane):
     """Through the real ``write_document`` tool: D3 is ``=B3/C3`` over a
-    zero. The file holds no saved result for it; the line names it."""
+    zero. The file holds no saved result for it; Iron Jarvis works it out
+    and says what it comes to, as worth a look (the file holds no error)."""
     body, _ = _write_turn(client, monkeypatch, lane, DIVIDES)
     checked = body["checked"]
     assert checked["line"] == (
-        "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: Sheet!D3 works out to #DIV/0!."
+        "Checked by Iron Jarvis: the spreadsheet opens. Worth a look: D3 works out to #DIV/0!."
     ), checked["line"]
     assert checked["tone"] == "warn" and "no error cells" not in checked["line"]
-    assert [(c["said"], c["result"]) for c in checked["checks"]][0] == ("Sheet!D3 works out to #DIV/0!", "failed")
+    assert [(c["said"], c["result"]) for c in checked["checks"]][0] == ("D3 works out to #DIV/0!", "look")
     rows = [r for r in _rows(client.app.state.platform) if r.check == R.SHEET_ERRORS]
-    assert [(r.result, r.detail) for r in rows] == [(R.FAILED, "Sheet!D3 works out to #DIV/0!")]
+    assert [(r.result, r.detail) for r in rows] == [(R.LOOK, "D3 works out to #DIV/0!")]
 
 
 @pytest.mark.parametrize("lane", LANES)
@@ -242,7 +255,7 @@ def test_a_reply_the_daemon_writes_into_the_chat_while_the_page_is_away_keeps_th
     kept = client.get(f"/chat/threads/{thread}").json()["messages"][-1]
     assert (kept["role"], kept["savedBy"], kept["turnId"]) == ("assistant", "daemon", "turn_keep")
     assert kept["checked"] == body["checked"], "the saved reply lost (or changed) its line"
-    assert "Sheet!B5 holds #DIV/0!" in kept["checked"]["line"]
+    assert "B5 holds #DIV/0!" in kept["checked"]["line"]
 
     # By whitelist: what is not the line's own shape is not written into the chat.
     dirty = {**body["checked"], "html": "<script>x</script>", "line": body["checked"]["line"] + " " + "z" * 5000,
@@ -359,6 +372,49 @@ def test_the_link_route_homes_the_rows_after_it_has_made_the_link_readable():
     route = source[source.index("async def link_chat_turn("):]
     route = route[:route.index("\n    @app.")]
     assert route.index("link_turn_holds(turn_id, tid)") < route.index("_checks.home_turn, d.platform.engine, turn_id, tid")
+
+
+async def test_a_link_cancelled_while_the_rows_are_homed_has_already_kept_its_local_only_holds(tmp_path, monkeypatch):
+    """PRIVACY. ``link_turn_holds`` hands a new chat's pending Local-only
+    holds over ONCE. The homing of the checks was awaited between taking
+    them and writing them: a request cancelled at that await (the page
+    closed, the app stopping) lost the hold, and the chat that read a
+    mailbox kept on the user's own models was no longer held Local only.
+    Driven: the request is cancelled exactly while the homing runs."""
+    import asyncio
+    import threading
+
+    from iron_jarvis.core.models import ChatThreadRecord
+    from iron_jarvis.providers import egress
+    from tests.test_chat_turn_stop_v1241 import _asgi_post
+
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+    with session_scope(engine) as db:
+        db.add(ChatThreadRecord(id="thread_hold", title="t", messages_json="[]"))
+        db.commit()
+    turn = "turn_hold_cancel"
+    assert egress.note_pending_hold(turn, "ms365") == "", "the turn was already linked"
+    reached, release = threading.Event(), threading.Event()
+    real = R.home_turn
+
+    def slow_home(*a, **kw):
+        reached.set()
+        release.wait(20)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(R, "home_turn", slow_home)
+    request = asyncio.create_task(_asgi_post(app, f"/chat/turns/{turn}/thread", {"thread_id": "thread_hold"}))
+    try:
+        assert await asyncio.to_thread(reached.wait, 20), "the link never reached the homing of the checks"
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    finally:
+        release.set()
+    assert egress.thread_holds(engine, "thread_hold") == ["ms365"], (
+        "a cancelled link lost the chat's Local-only hold")
+    assert egress.pending_holds_of(turn) == [], "the hold was taken and (had it been lost) could not be taken again"
 
 
 # --------------------------------------------------------------------------- #
