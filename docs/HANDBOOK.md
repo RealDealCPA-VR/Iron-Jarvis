@@ -2159,16 +2159,21 @@ yet**: "Asked 3 times, no tool: send a fax", with the date and your own
 words for each time. You do nothing for it: it is kept from your chats as
 you work.
 
-- **When it counts.** Your request is about something Iron Jarvis does not
-  offer, like controlling the desktop, and the reply then changed nothing.
-  Or Iron Jarvis looked the request up and found nothing for it, or only
-  other things, none of which mention what you asked for by name (like
-  "fax"): then it counts only when the reply itself said it could not do
-  what you asked ("I can't send faxes"), and not when the reply went on to
-  use or try one of them, even just to work out a figure or search the web.
-  So a figure, a draft, a translation or a joke the reply gave you in words
-  is never kept, and neither is a reply that only ends with a word about
-  something else it cannot do ("I can't taste-test this lasagna for you").
+- **When it counts.** Your request is something Iron Jarvis says it cannot
+  do, like controlling the desktop, and the reply then changed nothing. A
+  request it can do another way (a rule for new files in a folder, tasks
+  handed to your other computer) is not kept, and neither is a question it
+  answered ("how often do the backups run?"), unless the reply itself said
+  it could not do what you asked. Or Iron Jarvis looked the request up and
+  found nothing for it, or only other things, none of which mention what
+  you asked for by name (like "fax"): then it counts only when the reply
+  itself said it could not do what you asked ("I can't send faxes", "I
+  cannot send faxes"), and not when the reply went on to use or try one of
+  them, even just to work out a figure or search the web. So a figure, a
+  draft, a translation or a joke the reply gave you in words is not kept,
+  and neither is a reply that only ends with a word about something else it
+  cannot do ("I can't taste-test this lasagna for you"). A reply that says
+  first that it cannot and then gives the answer anyway may still be kept.
   Asking again in
   the same chat with the same words (**Try again**) is not counted twice. A
   request is never kept for a name in it (a person's or a company's) or

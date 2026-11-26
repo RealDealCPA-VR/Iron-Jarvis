@@ -17,7 +17,12 @@ lanes; an agent run's from its ledger, :func:`keep_run_miss`): the LAST lookup
   puts it in the prompt, ``daemon/page_doors.not_offered``) holds on the
   owner's words (:func:`not_offered_holds`; review round 4: "a monthly
   grocery budget" answers the line about agents' monthly limits first; such
-  a lookup is judged by the next rule instead), or
+  a lookup is judged by the next rule instead), AND the line says Iron
+  Jarvis CANNOT do what its rule holds on (:data:`NOT_OFFERED_CANNOT`;
+  review round 5: the line about new files names ``reflex_create``, which
+  does it, so it is judged by the next rule; the backup line and the
+  other-computer line also answer a question or say how, so they count only
+  when the reply itself says it cannot, :func:`reply_counts`), or
 * the request was NAMED by words no entry of the list knows: EVERY way the
   lookup named it (two or more) has such a word that is not a name (a word
   written with a capital mid-sentence, by the owner or the lookup:
@@ -35,9 +40,10 @@ and the reply then made no successful call that changes or creates something
 (for ``unknown``, whose lookup listed lines, no call at all after it, whatever
 became of it, other than a lookup: a line the reply took to fit, even one
 that only reads, failed or was declined, is not "nothing for it";
-:func:`done_another_way`). For ``unknown`` and ``nothing`` the final reply
-(a run's final answer) must ALSO say itself that it could not do it, naming
-the request (:func:`reply_says_it_cannot`: "I can't send faxes"; review
+:func:`done_another_way`). For ``unknown``, ``nothing`` and a "Not offered"
+line outside :data:`NOT_OFFERED_CANNOT` the final reply (a run's final
+answer) must ALSO say itself that it could not do it, naming the request
+(:func:`reply_says_it_cannot`: "I can't send faxes", "I cannot …"; review
 round 3: on a fresh set, half of 28 doable requests answered in words, a
 BMI, a translation, a draft, were kept without it; review round 4: a joke
 after a lookup that found nothing, and a closing hedge whose first word is
@@ -259,6 +265,24 @@ def _named_by_unknown(answer: dict[str, Any], names: frozenset[str]) -> bool:
     return all(any(str(w) and str(w) not in names for w in part) for part in parts)
 
 
+#: The "Not offered" lines (``daemon/page_doors.NOT_OFFERED``) that say Iron
+#: Jarvis CANNOT do whatever their own rule holds on (20-a review round 5):
+#: such a line is the record that the request is one it cannot do yet.
+NOT_OFFERED_CANNOT = frozenset({
+    "desktop_control", "full_access_default", "builtin_agent_limit", "voice_press", "internet_calls_in",
+    "chat_items",
+})
+#: The lines that name the tool that DOES what their rule holds on
+#: ("watcher_suggests": a rule for new files, ``reflex_create``): never a miss
+#: of this kind; such a lookup is judged as any other list (:func:`miss_of`).
+NOT_OFFERED_DOES = frozenset({"watcher_suggests"})
+#: Every other line ("jarvis_backup": its rule also holds on a question the
+#: line answers, "how often do your backups run?", and on a backup made now;
+#: "another_computer": also on handing tasks to another computer, which
+#: pairing does; and any line added later) counts only when the reply itself
+#: says it could not do the request, as for ``nothing`` (:func:`reply_counts`).
+
+
 def not_offered_holds(entry_id: Any, words: Any) -> bool:
     """Is the "Not offered" line *entry_id* about the owner's own *words*?
     Only when the deterministic rule that puts that line in the prompt
@@ -282,8 +306,9 @@ def miss_of(answer: Any, *, words: Any = "") -> "tuple[str, str, list[str]] | No
     (``tool.answer_record``) is a miss, else None. *words*: the owner's own
     words of the turn (their names are never unknown words; a "Not offered"
     first line counts only when its own rule holds on them,
-    :func:`not_offered_holds`, else the answer is judged as any other list).
-    Pure."""
+    :func:`not_offered_holds`, and it is not a line that names the tool that
+    does it, :data:`NOT_OFFERED_DOES`; else the answer is judged as any other
+    list). Pure."""
     if not isinstance(answer, dict):
         return None
     reason = str(answer.get("reason") or "")
@@ -296,8 +321,10 @@ def miss_of(answer: Any, *, words: Any = "") -> "tuple[str, str, list[str]] | No
     if reason == "nothing":
         return KIND_NOTHING, "", unknown
     first = answer.get("first") if isinstance(answer.get("first"), dict) else {}
-    if str(first.get("kind") or "") == "not_offered" and not_offered_holds(first.get("id"), words):
-        return KIND_NOT_OFFERED, str(first.get("id") or ""), unknown
+    entry = str(first.get("id") or "")
+    if str(first.get("kind") or "") == "not_offered" and entry not in NOT_OFFERED_DOES \
+            and not_offered_holds(entry, words):
+        return KIND_NOT_OFFERED, entry, unknown
     if unknown and _named_by_unknown(answer, names):
         return KIND_UNKNOWN, "", unknown
     return None
@@ -358,9 +385,11 @@ _LIMIT_SUBJECT = (
 _LIMIT_RX = re.compile(r"(?:" + _LIMIT_VERB + r")|(?P<subject>" + _LIMIT_SUBJECT + r")", re.IGNORECASE)
 #: The search words of a limit phrase itself and of the helping words before
 #: what it names ("I can't help with faxing", "no way to place an order"):
-#: passed over when the first word it names is read (20-a review round 4).
+#: passed over when the first word it names is read (20-a review round 4;
+#: round 5: "cannot", one word the index does not drop, as "can't" and "can
+#: not" are dropped: "I cannot send faxes").
 _LIMIT_WORDS = frozenset(_index.tokens(
-    "t m s re ve ll d don doesn won isn aren unable able am way ability means access option feature integration "
+    "t m s re ve ll d don doesn won isn aren cannot unable able am way ability means access option feature integration "
     "capability lacks offer include support help assist handle place process actually really currently directly "
     "personally simply just still yet unfortunately myself"
 ))
@@ -467,7 +496,7 @@ def reply_says_it_cannot(reply: Any, unknown: Iterable[str], query: Any = "") ->
         return False
 
 
-def reply_counts(kind: str, reply: Any, unknown: Iterable[str], query: Any = "") -> bool:
+def reply_counts(kind: str, reply: Any, unknown: Iterable[str], query: Any = "", *, entry_id: Any = "") -> bool:
     """Does the reply let this miss be kept? ``unknown`` (the lookup LISTED
     lines, none about the request) and ``nothing`` (it listed none): only
     when the reply itself said it could not do it
@@ -475,13 +504,16 @@ def reply_counts(kind: str, reply: Any, unknown: Iterable[str], query: Any = "")
     a figure, a draft, a translation, is never "can't do yet"; review round
     4: nor a joke after a lookup that found nothing), named by the words no
     entry knows or, when the lookup left none, by the search words of
-    *query*'s first way of naming it. ``not_offered``: the lookup's own line
-    says it, and :func:`miss_of` kept it only when that line's own rule
-    holds on the owner's words (always True here)."""
-    if kind == KIND_NOT_OFFERED:
+    *query*'s first way of naming it. ``not_offered``: a line that says Iron
+    Jarvis cannot do it (*entry_id* in :data:`NOT_OFFERED_CANNOT`) says it
+    itself (:func:`miss_of` kept it only when that line's own rule holds on
+    the owner's words); any other line, as ``nothing`` (review round 5: the
+    backup line answers "how often do your backups run?", the other-computer
+    line says how to hand tasks to it)."""
+    if kind == KIND_NOT_OFFERED and str(entry_id or "") in NOT_OFFERED_CANNOT:
         return True
     wanted = [str(w) for w in unknown or () if str(w or "").strip()]
-    if kind == KIND_NOTHING and not wanted:
+    if kind in (KIND_NOTHING, KIND_NOT_OFFERED) and not wanted:
         wanted = _index.tokens(_index.first_part(query))
     return reply_says_it_cannot(reply, wanted, query)
 
@@ -839,9 +871,9 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
     from the row's own ``reversibility``, means it was done another way; a
     rehearsal's row changed nothing; for ``unknown``, ANY call after it,
     ok or not, as :func:`done_another_way`; a "Not offered" line only when
-    its own rule holds on *words*, :func:`miss_of`; and for ``unknown`` and
-    ``nothing`` only when the run's final *answer* says it could not do it,
-    :func:`reply_counts`). The caller
+    its own rule holds on *words*, :func:`miss_of`; and for ``unknown``,
+    ``nothing`` and a line outside :data:`NOT_OFFERED_CANNOT` only when the
+    run's final *answer* says it could not do it, :func:`reply_counts`). The caller
     checks whose words the task is, the run's trust and where it came from.
     Returns the group's id, or None. BLOCKING; RAISES."""
     from sqlalchemy import text
@@ -877,14 +909,15 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
             continue
         if str(row.reversibility or "") != "readonly" and row.tool not in _index.READS_ONLY:
             return None
-    if not reply_counts(kind, answer, unknown, record["query"]):
+    if not reply_counts(kind, answer, unknown, record["query"], entry_id=entry_id):
         return None
     return keep(engine, words=words, query=record["query"], kind=kind, entry_id=entry_id, unknown=unknown,
                 thread_id=str(session_id), surface="run", local_only=local_only, now=now)
 
 
 __all__ = [
-    "ASKS_SHOWN", "KEEP_DAYS", "LIST_AT", "LIST_DAYS", "LIST_MAX", "WORDS_CHARS", "AlreadyAnswered", "NotFound",
+    "ASKS_SHOWN", "KEEP_DAYS", "LIST_AT", "LIST_DAYS", "LIST_MAX", "NOT_OFFERED_CANNOT", "NOT_OFFERED_DOES",
+    "WORDS_CHARS", "AlreadyAnswered", "NotFound",
     "answer", "answer_from_ledger", "calls_after_last_lookup", "changed_something", "clean_words",
     "done_another_way", "keep",
     "keep_run_miss", "miss_of", "not_offered_holds", "prune", "reply_counts", "reply_says_it_cannot",
