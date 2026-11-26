@@ -2150,6 +2150,35 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## What you asked for that Iron Jarvis can't do yet (v1.579.0)
+
+When you ask for something Iron Jarvis has no feature for, it now keeps a
+note of it. Ask for the same thing twice in a month and it waits on
+**Improvements**, under **Things you asked for that Iron Jarvis can't do
+yet**: "Asked 3 times, no tool: send a fax", with the date and your own
+words for each time. You do nothing for it: it is kept from your chats as
+you work.
+
+- **When it counts.** Iron Jarvis looked the request up and found nothing
+  for it (or only things it does not offer, like controlling the desktop),
+  and the reply then changed nothing. A request it found another way to do
+  is not kept, and neither is one made while a reply was reading something
+  flagged as unsafe, one from your phone or another computer, or a task an
+  agent was given by a rule.
+- **The same request in other words** is one line: "fax this to my
+  accountant", "send the letter by fax" and "can you fax the form" are
+  counted together; "book a flight" is a line of its own.
+- **Your answers.** **Keep as a note for the next version** keeps it on
+  this PC as a note (a later version lists those notes and lets you copy
+  one to send to the makers yourself). **Not needed** takes it off the list
+  for good, and later asks for the same thing are not listed again. Iron
+  Jarvis sends nothing anywhere for either.
+- **Your words stay here.** They are kept on this PC only, with anything
+  that looks like a password or a key hidden, shown only on Improvements,
+  and removed after 90 days (the count stays).
+- **From chat.** Ask "what have I asked for that you couldn't do?": the
+  answer lists each one with how many times and when, never your words.
+
 ## Search by meaning, offered with what it costs here (v1.586.0)
 
 **Search by meaning** finds notes, files and memories by what they are

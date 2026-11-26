@@ -171,6 +171,16 @@ def has_search_words(query: Any) -> bool:
     return bool(tokens(str(query or "")[:QUERY_CHARS]))
 
 
+_PARTS = re.compile(r"\s*/\s*")
+
+
+def first_part(query: Any) -> str:
+    """The request as the lookup named it first: *query* up to its first
+    " / " (the tool asks for the request, then two other ways to name it)."""
+    text = " ".join(str(query or "")[:QUERY_CHARS].split())
+    return _PARTS.split(text, maxsplit=1)[0].strip()
+
+
 def _one_line(text: Any, cap: int) -> str:
     return " ".join(str(text or "").split())[:cap]
 
@@ -376,6 +386,14 @@ class CapabilityIndex:
         language knows few of its own words."""
         words = list(dict.fromkeys(tokens(str(query or "")[:QUERY_CHARS])))
         return sum(1 for w in words if w in self._idf), len(words)
+
+    def unknown_words(self, text: Any) -> list[str]:
+        """The search words of *text* that appear in NO entry of the list, in
+        their order (next leaps 20-a: "fax" in "send a fax"). A request named
+        by such a word is about something nothing in Iron Jarvis is about,
+        whatever lines its other words matched."""
+        words = dict.fromkeys(tokens(str(text or "")[:QUERY_CHARS]))
+        return [w for w in words if w not in self._idf]
 
     def search(self, query: Any, limit: int = 5) -> list[tuple[float, Capability]]:
         """The best matches for *query*, best first; ``[]`` for a query with

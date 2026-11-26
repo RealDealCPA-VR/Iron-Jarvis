@@ -5066,6 +5066,78 @@ def with_looked_up_pages(entries: Any, ctx: Any) -> list[Any]:
         return base
 
 
+#: Next leaps 20-a: how long the end of a reply waits for its miss to be kept
+#: (one small SQLite write; past it the write goes on, the reply does not wait).
+MISS_KEEP_S = 2.0
+
+
+def _owner_words_of_turn(body: Any) -> str:
+    """The owner's own words of this turn: the last user message, without the
+    pick-up card's Continue sentence; "" for a message Iron Jarvis wrote
+    itself (a coding session's carry-on and plan-run texts)."""
+    from ..workmap.block import without_continue
+
+    text = " ".join(without_continue(_last_user_text(getattr(body, "messages", None))).split())
+    try:
+        from .routes.build import CONTINUE_TEXT as _carry_on
+        from .routes.build import PLAN_RUN_TEXT as _plan_run
+    except Exception:  # noqa: BLE001 — the route module is optional here
+        _carry_on = _plan_run = ""
+    if text in {" ".join(str(t).split()) for t in (_carry_on, _plan_run) if t}:
+        return ""
+    return text
+
+
+async def keep_lookup_miss(d, body, ctx, *, tools_used: Any, trust_state: dict[str, Any],
+                           escalate: bool = False) -> "str | None":
+    """Next leaps 20-a: when this reply's LAST lookup found nothing Iron Jarvis
+    has for the request (``capability_search/misses.miss_of``, read from the
+    turn's own record ``join.FOUND.last_answer``) and no call after it changed
+    or created something, ONE miss is kept, the owner's words masked. Never at
+    low trust (the request may be an injected one; a phone's or another
+    computer's turn starts low), never for a reply handed to an agent, never
+    without the owner's own words. Off the loop, bounded by
+    :data:`MISS_KEEP_S`; never raises and never changes the reply. Returns the
+    miss's group id, or None. MIRROR NOTE (lock-step): both lanes call it at
+    the same seam, right after the page door."""
+    try:
+        if escalate or finish_low_trust(trust_state) or ctx is None:
+            return None
+        from ..capability_search import join as _cj
+        from ..capability_search import misses as _misses
+
+        answer = _cj.FOUND.last_answer(_cj.turn_key(ctx))
+        found = _misses.miss_of(answer)
+        if found is None:
+            return None
+        after = _misses.calls_after_last_lookup(list(tools_used or ()))
+        if _misses.changed_something(after, getattr(d.platform, "registry", None)):
+            return None
+        words = _owner_words_of_turn(body)
+        if not words:
+            return None
+        kind, entry_id, unknown = found
+        from ..providers import egress
+        from ..providers.failure_words import current_surface
+
+        surface = surface_for(body) or current_surface()
+        local_only = bool(egress.current_scope().on)
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _misses.keep, d.platform.engine, words=words, query=str((answer or {}).get("query") or ""),
+                kind=kind, entry_id=entry_id, unknown=unknown,
+                thread_id=str(getattr(body, "thread_id", "") or ""), surface=surface, local_only=local_only,
+            ),
+            timeout=MISS_KEEP_S,
+        )
+    except asyncio.TimeoutError:
+        log.warning("keeping a request Iron Jarvis has no feature for took longer than %.0f s", MISS_KEEP_S)
+        return None
+    except Exception:  # noqa: BLE001 — a miss is never part of the reply
+        log.warning("a request Iron Jarvis has no feature for could not be kept", exc_info=True)
+        return None
+
+
 def page_steps_block(body: Any, platform: Any = None) -> str:
     """The plain lines the model is given for a step only a page can do and
     for what Iron Jarvis does not offer (v1.436.0, Wave 5 B3 —
@@ -16281,6 +16353,10 @@ async def run_chat_turn(
     door_entries = with_page_door(
         door_entries, body, harness=harness, escalate=escalate, platform=platform, ctx=ctx,
     )
+    # NEXT LEAPS 20-a: a request this reply's lookup found no feature for is
+    # kept (masked, on this PC) for Improvements; the reply is unchanged.
+    # MIRROR NOTE (lock-step): routes/chat.py calls the SAME helper here.
+    await keep_lookup_miss(d, body, ctx, tools_used=tools_used, trust_state=_trust_state, escalate=escalate)
     out: dict[str, Any] = {
         "reply": reply,
         "provider": route.provider,

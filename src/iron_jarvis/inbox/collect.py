@@ -84,6 +84,9 @@ KIND_CLIENT = "client"
 KIND_MEANING = "meaning_search"
 KIND_WANTS = "wants"
 KIND_UNASKED = "unasked"
+#: Next leaps 20-a: something the owner asked for, twice or more in 30 days,
+#: that Iron Jarvis had no feature for (``capability_search/misses``).
+KIND_MISSING = "missing"
 
 #: The groups, in the order the page shows them: ``(kind, heading)``.
 KINDS: tuple[tuple[str, str], ...] = (
@@ -97,6 +100,7 @@ KINDS: tuple[tuple[str, str], ...] = (
     (KIND_SESSION_EDIT, "Coding session instructions"),
     (KIND_MEMORY, "Memory tidy-up"),
     (KIND_TOOL, "Requests for a tool"),
+    (KIND_MISSING, "Things you asked for that Iron Jarvis can't do yet"),
     (KIND_WANTS, "Things Iron Jarvis wants to do"),
     (KIND_UNASKED, "Offers to stop asking"),
 )
@@ -627,6 +631,57 @@ def wants_item(row: Any, *, stopped: bool = False, self_dev_on: bool = True) -> 
     )
 
 
+#: Next leaps 20-a: what a missing item says (the owner's words are shown
+#: only here, D-20.1).
+MISSING_WHY = (
+    "Each time, Iron Jarvis looked for a feature for it and found none. Your words are kept on this PC only, "
+    "with anything that looks like a password or key hidden, and removed after 90 days."
+)
+MISSING_KEEP = "Keep as a note for the next version"
+MISSING_KEEP_NOTE = "Keeps it on this PC as a note for the next version of Iron Jarvis. Nothing is sent anywhere."
+MISSING_DECLINE = "Not needed"
+MISSING_DECLINE_NOTE = "Iron Jarvis won't list this again."
+#: An ask whose words could not be kept safely (the mask could not run).
+MISSING_NO_WORDS = "(your words were not kept)"
+
+
+def missing_item(view: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """Something the owner asked for that Iron Jarvis has no feature for
+    (``capability_search/misses.waiting``'s view): "Asked 3 times, no tool:
+    send a fax", one line per ask with its date and the owner's own words
+    (the newest :data:`EVIDENCE_LINES`, oldest first; past that, the last line
+    says how many earlier asks there were). Both answers are ONE press: each
+    saves the answer and nothing else."""
+    from ..capability_search.misses import ASKS_SHOWN
+    from ..improve.metrics import day_words
+
+    gid = str(view.get("id") or "")
+    count = int(view.get("count") or 0)
+    title = " ".join(str(view.get("title") or "").split()) or "something Iron Jarvis has no feature for"
+    asks = [a for a in (view.get("asks") or []) if isinstance(a, dict)]
+    moment = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    # Every ask, when they fit; else the newest ones and a line for the rest
+    # (asks removed after 90 days are still counted there).
+    every = len(asks) == count and count <= ASKS_SHOWN
+    shown = asks if every else asks[-(ASKS_SHOWN - 1):]
+    lines = []
+    for ask in shown:
+        said = " ".join(str(ask.get("words") or "").split())
+        lines.append(f"{day_words(ask.get('at'), moment)}: " + (f"“{said}”" if said else MISSING_NO_WORDS))
+    earlier = count - len(shown)
+    if earlier > 0:
+        first = day_words(view.get("first_at"), moment)
+        lines.append(f"And {_plural(earlier, 'earlier time')}" + (f", the first on {first}." if first else "."))
+    dates = [day_words(a.get("at"), moment) for a in asks[-10:]]
+    return item(
+        KIND_MISSING, gid, title=f"Asked {_plural(count, 'time')}, no tool: {title}",
+        why=MISSING_WHY, evidence=lines, created_at=view.get("last_at"),
+        accept=action(MISSING_KEEP, f"/capability/misses/{_seg(gid)}/note", note=MISSING_KEEP_NOTE),
+        decline=action(MISSING_DECLINE, f"/capability/misses/{_seg(gid)}/decline", note=MISSING_DECLINE_NOTE),
+        extra={"count": count, "asked": [d for d in dates if d], "kinds": list(view.get("kinds") or [])},
+    )
+
+
 def unasked_item(goal: Any, tool: str, *, args_hash: str = "", label: str = "", count: int = 0) -> dict[str, Any]:
     gid = str(getattr(goal, "id", "") or "")
     name = _one_line(getattr(goal, "name", "") or getattr(goal, "contract_text", "") or "a goal", 80)
@@ -833,6 +888,16 @@ def _goals_with_asks(engine: Any) -> tuple[list[Any], bool]:
     return goals, len(origins) > GOALS_MAX
 
 
+def _missing(d: Any) -> Read:
+    """20-a: the things the owner asked for that Iron Jarvis has no feature
+    for, asked twice or more in 30 days (``misses.waiting``, which RAISES
+    when its tables cannot be read: the kind is then named)."""
+    from ..capability_search import misses as M
+
+    views, total = M.waiting(d.platform.engine)
+    return Read({KIND_MISSING: (_built(views, missing_item, "missing"), total)})
+
+
 def _unasked(d: Any) -> Read:
     from ..daemon.routes import goals as G
 
@@ -870,6 +935,7 @@ SOURCES: tuple[tuple[tuple[str, ...], Source], ...] = (
     ((KIND_LESSON, KIND_SESSION_EDIT), _library),
     ((KIND_MEMORY,), _memory),
     ((KIND_TOOL,), _tools),
+    ((KIND_MISSING,), _missing),
     ((KIND_WANTS,), _wants),
     ((KIND_UNASKED,), _unasked),
 )
@@ -968,6 +1034,6 @@ __all__ = [
     "DETAIL_CHARS", "GOALS_MAX", "KINDS", "LABELS", "OPEN_LABEL", "PER_KIND", "RESULTS_KIND", "SOURCES", "Read",
     "action", "change_results",
     "client_item", "client_view", "coach_item", "collect", "detail_diff", "detail_text", "folder_label", "item",
-    "library_item", "memory_effect", "night_reasons",
+    "library_item", "memory_effect", "missing_item", "night_reasons",
     "memory_item", "preference_item", "skill_item", "tool_item", "unasked_item", "wants_item",
 ]

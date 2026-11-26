@@ -2241,6 +2241,39 @@ class AgentRuntime:
             getattr(session, "trust", ""), bool(self._tainted.get(session.id))
         )
 
+    #: Next leaps 20-a: how long a run's end waits for its miss to be kept.
+    MISS_KEEP_S = 5.0
+
+    async def _keep_lookup_miss(self, session: Session, story: Any, *, local_only: bool = False) -> None:
+        """Next leaps 20-a, the agent run's END: when the run's last lookup
+        found nothing Iron Jarvis has for its task and no call after it
+        changed something (``capability_search/misses.keep_run_miss``, read
+        from the run's own ledger), ONE miss is kept, in the owner's words.
+        Only for a task that IS the owner's own words (``RunStory.words``:
+        never a child, a reflex, autonomy, a teammate, a task started inside a
+        chat turn, or another computer's task), never at low trust or after it
+        read flagged content. Off the loop, bounded; never raises."""
+        try:
+            words = str(getattr(story, "words", "") or "")
+            if not words.strip() or run_is_remote(session):
+                return
+            if self._effective_trust(session) == TRUST_LOW or self._has_read_flagged(session):
+                return
+            from ..capability_search import misses as _misses
+
+            await asyncio.wait_for(
+                asyncio.to_thread(_misses.keep_run_miss, self.p, session.id, words=words, local_only=local_only),
+                timeout=self.MISS_KEEP_S,
+            )
+        except asyncio.TimeoutError:
+            logging.getLogger("iron_jarvis.agents.runtime").warning(
+                "keeping a run's request Iron Jarvis has no feature for took longer than %.0f s", self.MISS_KEEP_S,
+            )
+        except Exception:  # noqa: BLE001 — a miss never fails a run
+            logging.getLogger("iron_jarvis.agents.runtime").warning(
+                "a run's request Iron Jarvis has no feature for could not be kept", exc_info=True,
+            )
+
     def _has_read_flagged(self, session: Session) -> bool:
         """v1.502.0 (D4): has this run READ flagged content — tainted in this
         process, or a row whose ``tainted_at`` says an earlier run of the same
@@ -2849,9 +2882,14 @@ class AgentRuntime:
                 with _client_wall.turn_scope(_turn_wall), _call_ledger.counted_scope(), \
                         _reply_facts.scope():
                     if not _lo:
-                        return await self._run_body(session, agent_def, parent_id)
-                    with _egress.local_only_scope(True):
-                        return await self._run_body(session, agent_def, parent_id)
+                        _ran = await self._run_body(session, agent_def, parent_id)
+                    else:
+                        with _egress.local_only_scope(True):
+                            _ran = await self._run_body(session, agent_def, parent_id)
+                # NEXT LEAPS 20-a: the run's END, its result already written:
+                # a request its last lookup found no feature for is kept.
+                await self._keep_lookup_miss(session, _story, local_only=bool(_lo))
+                return _ran
             finally:
                 try:
                     SKIP_MEMORY.reset(_skip_token)

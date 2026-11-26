@@ -22,6 +22,7 @@ from sqlmodel import select
 
 from iron_jarvis.capability.models import CapabilityProposalRecord
 from iron_jarvis.capability.store import CapabilityProposalStore
+from iron_jarvis.capability_search.miss_models import CapabilityMiss, MissGroup
 from iron_jarvis.coach.models import CoachProposalRecord
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.events import EventType
@@ -242,13 +243,26 @@ def seed_meaning(desk) -> str:
     return choice
 
 
+def seed_missing(desk) -> str:
+    """Next leaps 20-a: two asks for one thing Iron Jarvis has no feature for
+    (the kind is listed from two asks in 30 days)."""
+    from iron_jarvis.capability_search import misses
+
+    gid = ""
+    for words in ("fax this to my accountant", "send the form by fax"):
+        gid = misses.keep(desk.engine, words=words, query="send a fax / fax a document / fax machine",
+                          kind="unknown", unknown=["fax"], surface="chat")
+    return gid
+
+
 def seed_everything(desk):
     return {
         "preference": seed_preference(desk), "client": seed_client(desk), "meaning_search": seed_meaning(desk),
         "skill": seed_skill(desk),
         "coach": seed_coach(desk),
         "habit": seed_habit(desk), "lesson": seed_lesson(desk), "session_edit": seed_session_edit(desk),
-        "memory": seed_memory(desk), "tool": seed_tool(desk), "wants": seed_wants(desk),
+        "memory": seed_memory(desk), "tool": seed_tool(desk), "missing": seed_missing(desk),
+        "wants": seed_wants(desk),
         "unasked": seed_goal_with_approved_asks(desk),
     }
 
@@ -439,6 +453,8 @@ def test_every_home_link_is_the_screen_the_suggestion_lives_on(desk):
         "session_edit": "/chat?view=code&session=chat_abc",
         "memory": "/memory",
         "tool": "/tools",
+        # 20-a: a thing you asked for lives on Improvements itself.
+        "missing": None,
         "wants": "/autonomy",
         "unasked": "/autonomy",
     }
@@ -625,6 +641,8 @@ TABLES = [
     (HarnessLibraryRecord, ["lesson", "session_edit"]),
     (MemoryProposalRecord, ["memory"]),
     (CapabilityProposalRecord, ["tool"]),
+    (CapabilityMiss, ["missing"]),
+    (MissGroup, ["missing"]),
     (ProposalRecord, ["wants"]),
     (GoalContractRecord, ["unasked"]),
     (EventRecord, ["unasked"]),
@@ -685,7 +703,7 @@ def test_reading_the_inbox_changes_nothing(desk):
     seed_everything(desk)
     tables = (LessonRecord, SkillProposalRecord, CoachProposalRecord, HarnessLibraryRecord,
               MemoryProposalRecord, CapabilityProposalRecord, ProposalRecord, EventRecord, GoalContractRecord,
-              WorkClient, WorkClientFolder)
+              WorkClient, WorkClientFolder, CapabilityMiss, MissGroup)
 
     def snapshot():
         with session_scope(desk.engine) as db:

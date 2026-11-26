@@ -275,6 +275,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     href: "/workflows",
   },
   prune_workflow_runs: { label: "Workflows", problem: "Old workflow runs weren't cleared", href: "/workflows" },
+  // Next leaps 20-a (D-20.1): the things you asked for that Iron Jarvis can't
+  // do yet are removed after 90 days, at start-up and once a day.
+  prune_capability_misses: {
+    label: "Things you asked for",
+    problem: "Things you asked for weren't cleared after 90 days",
+    href: "/improvements",
+  },
   reconcile_proposals: {
     label: "Autonomy",
     problem: "Plans the restart cut off weren't tidied up",

@@ -81,6 +81,11 @@ def _line(n: int, it: dict[str, Any], label: str) -> str:
     bits = [f"{n}. [{it.get('id')}] {label}: {it.get('title') or ''}"]
     if it.get("about"):
         bits.append(f"(about {it['about']})")
+    asked = (it.get("extra") or {}).get("asked") if it.get("kind") == "missing" else None
+    if isinstance(asked, list) and asked:
+        # 20-a: when it was asked for (the owner's own words stay on the
+        # Improvements page, D-20.1).
+        bits.append(f"(asked on {', '.join(str(a) for a in asked[-6:])})")
     acc, dec = it.get("accept"), it.get("decline")
     if acc is None and dec is None:
         bits.append("— answered only on its own page, not from chat.")
@@ -103,7 +108,8 @@ class SuggestionListTool(Tool):
         "List the suggestions Iron Jarvis is waiting on the user to accept or decline (the "
         "Improvements page): preferences it noticed, names that may be clients, skill drafts, "
         "changes to an agent's instructions, working habits, lessons from coding sessions, memory "
-        "tidy-ups, requests for a tool, and things it wants to do on its own. Each line has the "
+        "tidy-ups, requests for a tool, things the user asked for that Iron Jarvis can't do yet, and "
+        "things it wants to do on its own. Each line has the "
         "suggestion's id in brackets; answer one with suggestion_answer. Reads only."
     )
     input_schema = {"type": "object", "properties": {}}
@@ -355,6 +361,23 @@ _RESULT_WORDS = re.compile(
 )
 
 
+#: Next leaps 20-a: "what have I asked for that you couldn't do?", "the things
+#: you can't do yet that I asked for": the owner's own asks Iron Jarvis had no
+#: feature for (the Improvements kind ``missing``). Always a question: the
+#: list only.
+_CANT = (
+    r"(?:can['’]?t|cannot|can\s+not|couldn['’]?t|could\s+not|weren['’]?t\s+able\s+to|were\s+not\s+able\s+to"
+    r"|aren['’]?t\s+able\s+to|are\s+not\s+able\s+to|don['’]?t\s+have\s+a\s+(?:way|feature)|had\s+no\s+(?:way|feature))"
+)
+_WHO = r"(?:you|jarvis|iron\s+jarvis)"
+_MISSING_WORDS = re.compile(
+    r"\b(?:what|which|anything|things?|requests?)\b[^.!?\n]{0,24}?\b(?:I|we)\s+(?:have\s+|['’]ve\s+)?"
+    r"(?:ask(?:ed)?|request(?:ed)?|want(?:ed)?)\b[^.!?\n]{0,40}?\b" + _WHO + r"\s+" + _CANT
+    + r"|\b(?:things?|requests?)\s+(?:that\s+)?" + _WHO + r"\s+" + _CANT + r"\s+do\s+yet\b",
+    re.IGNORECASE,
+)
+
+
 def suggestion_tools_for(text: str) -> list[str]:
     """The suggestion tools a chat message asks for (linear: each pattern's
     gaps are bounded). A question keeps the readers only."""
@@ -362,6 +385,8 @@ def suggestion_tools_for(text: str) -> list[str]:
     out: list[str] = []
     if _SUGGESTION_WORDS.search(t):
         out += [LIST, ANSWER]
+    if _MISSING_WORDS.search(t) and LIST not in out:
+        out.append(LIST)
     if _ANSWER_WORDS.search(t):
         out += [n for n in (LIST, ANSWER) if n not in out]
     if _RESULT_WORDS.search(t):
@@ -372,4 +397,4 @@ def suggestion_tools_for(text: str) -> list[str]:
 #: The tools a QUESTION keeps (they only read).
 READERS = (LIST, RESULTS)
 
-ALL_PATTERNS = (_SUGGESTION_WORDS, _ANSWER_WORDS, _RESULT_WORDS)
+ALL_PATTERNS = (_SUGGESTION_WORDS, _ANSWER_WORDS, _RESULT_WORDS, _MISSING_WORDS)

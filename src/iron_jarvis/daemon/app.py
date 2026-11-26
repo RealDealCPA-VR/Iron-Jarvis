@@ -752,6 +752,19 @@ async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> 
             # lets the event table grow past its own retention setting, and a
             # DEBUG line is one nobody reads.
             log.warning("event-log retention sweep failed", exc_info=True)
+        # Next leaps 20-a (D-20.1): the things you asked for that Iron Jarvis
+        # can't do yet are removed after 90 days (their group's count is
+        # kept). Its own try, so the sweeps above failing never keeps them.
+        try:
+            from ..capability_search.misses import prune as _prune_misses
+
+            removed = await asyncio.to_thread(_prune_misses, platform.engine)
+            if removed:
+                log.info("removed %d asked-for request(s) kept past 90 days", removed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — logged; tomorrow's pass tries again
+            log.warning("removing asked-for requests past 90 days failed", exc_info=True)
 
 
 async def _tool_failure_pass(platform, tick=None) -> list[dict]:
@@ -1414,6 +1427,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         await _rehydrate_step(
             "settle_paired_computers", lambda: _peer_store_for(platform), off_loop_s=_TURN_PASS_TIMEOUT_S
+        )
+        # Next leaps 20-a (D-20.1): the things you asked for that Iron Jarvis
+        # can't do yet are removed after 90 days (the group's count is kept),
+        # at start-up too: an app that restarts every day never reaches the
+        # daily pass. Off the loop, bounded.
+        from ..capability_search.misses import prune as _prune_misses
+
+        await _rehydrate_step(
+            "prune_capability_misses", lambda: _prune_misses(platform.engine), off_loop_s=_TURN_PASS_TIMEOUT_S
         )
         # Third plan G6 / RB9: AFTER the coding sessions' replies were put
         # back (above), a chat reply that never reached its chat is written
@@ -4649,6 +4671,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import improvements as _improvements_routes
 
     _improvements_routes.register(app, d)
+    # Next leaps 20-a: the two answers to a thing you asked for that Iron
+    # Jarvis can't do yet (its item on Improvements names them).
+    from .routes import capability_misses as _capability_misses_routes
+
+    _capability_misses_routes.register(app, d)
     # Your other computers (v1.497.0, vision plan leap 7): pair two PCs
     # running Iron Jarvis with a six-digit code.
     from .routes import peers as _peers_routes

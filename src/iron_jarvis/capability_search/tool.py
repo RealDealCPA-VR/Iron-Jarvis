@@ -256,6 +256,10 @@ def answer(platform: Any, query: Any, limit: Any = 5) -> tuple[str, dict[str, An
         if not _index.has_search_words(query):
             return TOO_GENERAL, {**data, "reason": "no_search_words"}
         idx = _index.index_for(platform)
+        # Next leaps 20-a: the words the request was named by that no entry
+        # knows (a miss is kept from them, ``misses.miss_of``). Data only:
+        # the answer's text is unchanged.
+        data["unknown"] = idx.unknown_words(_index.first_part(query))
         found = [entry for _score, entry in idx.search(query, _index.MAX_RESULTS)]
         found = [entry for entry in found if not _not_needed(entry)]
         # v1.479.0: a tool a lookup can bring before one nothing in chat brings.
@@ -288,7 +292,9 @@ def answer(platform: Any, query: Any, limit: Any = 5) -> tuple[str, dict[str, An
         if any(row.get("kind") == "setting" for row in rows):
             lines.append(WHERE_HINT)
         lines.append(HOW_TO_USE)
-        return "\n".join(lines), {**data, "matches": rows}
+        # 20-a: an answer read from part of the list says nothing about what
+        # is missing (``partial``: never a miss).
+        return "\n".join(lines), {**data, "matches": rows, **({"partial": True} if missing else {})}
     except Exception:  # noqa: BLE001 — a fault is said as a fault, never as "nothing matches"
         return LOOKUP_FAILED, {**data, "reason": "failed"}
 
@@ -353,9 +359,29 @@ class FindCapabilityTool(Tool):
             # v1.506.0 (north-star plan 6.1): a page near the top of this
             # answer becomes a door under the reply (chat_turn.with_page_door).
             FOUND.note_pages(turn_key(ctx), list(data.get("matches") or [])[:PAGE_DOOR_RANK])
+            # Next leaps 20-a: what this lookup answered, for the turn's end
+            # (``chat_turn.keep_lookup_miss`` reads the LAST one).
+            FOUND.note_answer(turn_key(ctx), answer_record(data))
         except Exception:  # noqa: BLE001 — the answer stands by itself
             pass
         return ToolResult(ok=True, output=text, data=data)
+
+
+def answer_record(data: Any) -> dict[str, Any]:
+    """What one lookup answered, as a turn's end reads it (next leaps 20-a):
+    its query, ``reason`` (``nothing``, ``failed``, ``no_search_words`` or
+    "" for a list), its FIRST line's kind and id, whether part of the list
+    could not be read, and the request's words no entry knows."""
+    got = data if isinstance(data, dict) else {}
+    matches = [m for m in (got.get("matches") or []) if isinstance(m, dict)]
+    first = matches[0] if matches else None
+    return {
+        "query": str(got.get("query") or ""),
+        "reason": str(got.get("reason") or ""),
+        "first": {"kind": str(first.get("kind") or ""), "id": str(first.get("id") or "")} if first else None,
+        "partial": bool(got.get("partial")),
+        "unknown": [str(w) for w in (got.get("unknown") or [])],
+    }
 
 
 def capability_tools(platform: Any) -> list[Tool]:

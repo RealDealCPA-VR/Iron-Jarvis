@@ -179,6 +179,8 @@ def usable_first(entries: list) -> list:
 MAX_KEYS = 256
 #: Page-table ids kept per turn (a door is added only while there is room).
 MAX_PAGES = 8
+#: Next leaps 20-a: the answers kept per turn (only the last one is read).
+MAX_ANSWERS = 8
 
 
 def turn_key(ctx: Any) -> str:
@@ -238,6 +240,27 @@ class _Found:
             return
         with self._lock:
             self._entry(key)["pending"].append([r for r in rows if isinstance(r, dict)])
+
+    def note_answer(self, key: str, answer: Any) -> None:
+        """Next leaps 20-a: what one lookup of this turn ANSWERED
+        (``tool.answer_record``), kept apart from ``pending`` (a join takes
+        those), the newest :data:`MAX_ANSWERS`. Read at the end of the reply
+        by :meth:`last_answer`."""
+        if not key or not isinstance(answer, dict):
+            return
+        with self._lock:
+            got = self._entry(key).setdefault("answers", [])
+            got.append(dict(answer))
+            del got[:-MAX_ANSWERS]
+
+    def last_answer(self, key: str) -> "dict[str, Any] | None":
+        """The answer of this turn's LAST lookup, or None (no lookup, no id)."""
+        if not key:
+            return None
+        with self._lock:
+            entry = self._by.get(key)
+            got = (entry or {}).get("answers") or []
+            return dict(got[-1]) if got else None
 
     def take(self, key: str) -> list[list[dict[str, Any]]]:
         """The lookups not yet joined, handed over once."""
