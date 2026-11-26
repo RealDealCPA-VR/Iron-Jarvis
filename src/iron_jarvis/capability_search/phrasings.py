@@ -946,6 +946,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'Let a different AI check the fix',
         'Who signs off on fixes for broken tests',
     ),
+    'chat_fullness': (
+        'why is this chat getting full',
+        'what is filling this chat',
+        'what is using up this conversation',
+        'how full is this chat',
+        'how much room is left in this chat',
+        'is this conversation too long',
+        'why does the meter say the chat is almost full',
+        'what takes up the most room in this chat',
+    ),
     'client_answer': (
         'yes that one is a client',
         'no they are not a client',

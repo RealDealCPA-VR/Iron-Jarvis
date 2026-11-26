@@ -512,6 +512,12 @@ async def _one_shot(
     from .runtime import add_step_cost, step_cost_flag
 
     step_usd = add_step_cost(run, session, route.provider, route.model, usage)
+    # Release 6 of the intelligence plan: the provider's cache counts ride
+    # with the tokens (the run's columns, and this call's event), so the
+    # share reused reads against ``input_tokens``. Numbers only.
+    from .run_facts import note_call as _note_call
+
+    _cache = _note_call(run, usage)
     try:
         payload = {
             "run_id": run.id,
@@ -525,6 +531,7 @@ async def _one_shot(
             # loop rounds' event in runtime.py).
             **step_cost_flag(route.provider, route.model),
             "task_class": task_class,
+            **_cache,
         }
         # Step-aware routing audit (v1.135.0): ADDITIVE payload key on the
         # existing event, only when a role mapping actually changed the pair —

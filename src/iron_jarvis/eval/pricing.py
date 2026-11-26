@@ -460,6 +460,10 @@ class UsageTally:
         self.cache_creation_input_tokens = 0
         self.cost_usd = 0.0
         self.cache_known = False
+        #: The ``input_tokens`` of the calls that REPORTED a cache figure
+        #: (release 6 of the intelligence plan): what the share reused is
+        #: read against when only some of a reply's calls reported one.
+        self.cache_input_tokens = 0
         self.cost_known = False
         self.list_price_equivalent = False
         #: Tool names sent with this reply's model calls, in the order first
@@ -471,17 +475,25 @@ class UsageTally:
         #: True once any call noted its tools: "sent none" is then a known
         #: empty list, never confused with "not recorded".
         self.tools_known = False
+        #: Where the newest call's definitions came from, by size and count
+        #: (``context.breakdown.tool_origins``; the intelligence plan,
+        #: release 6). None = not measured. Saved in the row's ``parts_json``.
+        self.tool_origins: "dict[str, Any] | None" = None
         #: Next leaps 46-a: where the summed figure came from
         #: (:func:`merge_source` over each completion's :func:`step_source`),
         #: for the usage row's ``cost_source``. Never in :meth:`as_dict` (the
         #: receipt's shape is unchanged).
         self.cost_source = ""
 
-    def note_tools(self, tools: Any, tokens: int = 0) -> None:
+    def note_tools(self, tools: Any, tokens: int = 0, origins: Any = None) -> None:
         """One model call was sent *tools* (its tool definitions, or just
-        their names), which cost about *tokens*. Never raises."""
+        their names), which cost about *tokens*. *origins* (release 6 of the
+        intelligence plan): where they came from, by size and count; the
+        newest call's stands. Never raises."""
         try:
             self.tools_known = True
+            if isinstance(origins, Mapping) and origins:
+                self.tool_origins = dict(origins)
             for tool in tools or ():
                 name = tool
                 if isinstance(tool, Mapping):
@@ -502,6 +514,7 @@ class UsageTally:
         self.output_tokens += _tok(usage, "output_tokens")
         if "cache_read_input_tokens" in usage or "cache_creation_input_tokens" in usage:
             self.cache_known = True
+            self.cache_input_tokens += _tok(usage, "input_tokens")
             self.cache_read_input_tokens += _tok(usage, "cache_read_input_tokens")
             self.cache_creation_input_tokens += _tok(usage, "cache_creation_input_tokens")
         cost = step_cost(provider, model, usage)

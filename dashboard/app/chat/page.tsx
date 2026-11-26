@@ -70,6 +70,7 @@ import {
   FolderKanban,
   FolderOpen,
   FolderPen,
+  Gauge,
   GitBranch,
   Globe,
   House,
@@ -300,6 +301,8 @@ import {
 import { HomeLine } from "@/components/chat/HomeLine";
 import { ChatMoreMenu } from "@/components/chat/ChatMoreMenu";
 import { ChatUsageLine } from "@/components/chat/ChatUsageLine";
+import { ChatFilling } from "@/components/chat/ChatFilling";
+import { FILLING_TITLE, fillingMeterLabel } from "@/lib/chatFilling";
 import { ProjectDrawer } from "@/components/chat/ProjectDrawer";
 import { ChatFolderChip } from "@/components/chat/ChatFolderChip";
 import { FolderChip, useFolderPicker } from "@/components/folders/FolderChip";
@@ -1294,7 +1297,22 @@ function adaptedFrom(raw: unknown): TurnAdapted | null {
  * at 75% and rose once the daemon actually had to drop earlier turns, which is
  * the moment the user would otherwise conclude the assistant "forgot".
  */
-function ContextMeter({ usage }: { usage: ContextUsage | null }) {
+function ContextMeter({
+  usage,
+  fillingOpen,
+  onPress,
+}: {
+  usage: ContextUsage | null;
+  /** "What is filling this chat" is open (the page owns it: the chat's "⋯"
+   *  menu opens the same list). */
+  fillingOpen: boolean;
+  onPress: () => void;
+}) {
+  // The intelligence plan, release 6: pressing the gauge opens "What is
+  // filling this chat" (components/chat/ChatFilling: the coding session's
+  // own drop-down, read from the newest reply's record). The gauge shows when
+  // it always did (from half full); it is now a press, and shown at phone
+  // width too. In a shorter chat the "⋯" menu's row opens the same list.
   if (!usage || !usage.window) return null;
   // v1.153.0: prefer the daemon's RAW fill (what the conversation would need
   // untrimmed) over `used`, which is <= the window by construction and so
@@ -1310,8 +1328,14 @@ function ContextMeter({ usage }: { usage: ContextUsage | null }) {
       ? "text-tone-warn"
       : "text-zinc-500";
   return (
-    <span
-      className={`hidden items-center gap-1 text-[11px] sm:inline-flex ${tone}`}
+    <button
+      type="button"
+      data-testid="chat-fullness-meter"
+      aria-label={fillingMeterLabel(pct)}
+      aria-haspopup="dialog"
+      aria-expanded={fillingOpen}
+      onClick={onPress}
+      className={`inline-flex h-6 items-center gap-1 rounded-md px-1 text-[11px] transition-colors hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${tone}`}
       // v1.356.0 (G75): the hover says how full the chat is in words a new
       // user knows, never "context window" or "token". v1.377.0: a window no
       // pin, measurement or catalog knows is the app's SAFE SIZE, never "what
@@ -1329,7 +1353,7 @@ function ContextMeter({ usage }: { usage: ContextUsage | null }) {
         />
       </span>
       {pct}%
-    </span>
+    </button>
   );
 }
 
@@ -5220,6 +5244,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // the composer only renders it, so the meter can never disagree with what the
   // planner actually budgeted. Cleared with the conversation.
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
+  // The intelligence plan, release 6: "What is filling this chat" is open
+  // (the fullness gauge and the "⋯" menu's row both open the one list).
+  const [fillingOpen, setFillingOpen] = useState(false);
+  const closeFilling = useCallback(() => setFillingOpen(false), []);
   // Compaction (v1.153.0). `compactDismissedAt` remembers the fill level the
   // user waved away, so "not now" at 72% stays quiet until the conversation
   // grows meaningfully — and does NOT silence the offer again at 88%.
@@ -12727,6 +12755,23 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                   {workspaceOpen ? "Hide project panel" : "Show project panel"}
                 </span>
               </button>
+              {/* The intelligence plan, release 6: the list behind the
+                  fullness gauge, reachable in ANY saved chat (the gauge
+                  itself stays quiet until a chat is half full). */}
+              {threadId && (
+                <button
+                  type="button"
+                  data-testid="chat-more-filling"
+                  onClick={() => {
+                    closeMenu();
+                    setFillingOpen(true);
+                  }}
+                  className={menuRow}
+                >
+                  <Gauge size={15} className="shrink-0 text-zinc-400" />
+                  <span className="min-w-0 flex-1">{FILLING_TITLE}</span>
+                </button>
+              )}
               {threadId && (
                 <>
                   <div className="my-1 h-px bg-white/[0.06]" />
@@ -16487,7 +16532,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         matters: nobody needs a gauge at 12% of a 200k window, and
                         a permanent meter is the kind of chrome that gets ignored
                         exactly when it starts mattering. */}
-                    <ContextMeter usage={contextUsage} />
+                    <ContextMeter
+                      usage={contextUsage}
+                      fillingOpen={fillingOpen}
+                      onPress={() => setFillingOpen((v) => !v)}
+                    />
+                    {/* The one list both doors open (the gauge, and the "⋯"
+                        menu's row): a fixed panel, placed like the map's. */}
+                    {fillingOpen ? <ChatFilling threadId={threadId} onClose={closeFilling} /> : null}
                     {/* Redesign S9 (Q7): a detected model, one tap — never picked
                         silently. Silent once a real model answers, and absent
                         while the empty state's connect doors make the same offer

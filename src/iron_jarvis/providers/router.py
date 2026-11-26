@@ -931,6 +931,22 @@ def _note_final(adapter: Any, frame: Any) -> None:
         _note_call(adapter, frame.get("response"))
 
 
+def _note_time(seconds: float) -> None:
+    """The intelligence plan, release 6: one model call ANSWERED after
+    *seconds* (this router's own clock). Handed to
+    ``eval.reply_facts.note_model_time``, which adds it to the reply or agent
+    run the call belongs to (a no-op outside one, and for a call a tool
+    made). A number only. Beside :func:`_note_call` on both paths:
+    ``_timed_complete`` and, at the ``final`` frame, ``_stream_one``. Never
+    raises."""
+    try:
+        from ..eval.reply_facts import note_model_time
+
+        note_model_time(seconds)
+    except Exception:  # noqa: BLE001 — a record must never break a request
+        pass
+
+
 class RouteResult:
     """What answered — and, since v1.165.0, WHY.
 
@@ -2304,6 +2320,7 @@ class ModelRouter:
         # a tool reaches a usage row (``eval.call_ledger``; a no-op outside a
         # tool). The stream twin is in `_stream_one`.
         _note_call(adapter, resp)
+        _note_time(self._clock() - t0)  # release 6: how long the model took
         # v1.323.0: a leading `<think>` block is reasoning, not answer — the
         # stream twin is `_split_think_frames` in `_stream_one`.
         return _with_split_thinking(resp)
@@ -2820,16 +2837,20 @@ class ModelRouter:
         # (a fresh one per attempt), and only an ANSWER frame commits the
         # attempt — a `thinking` frame is display-only (`_is_answer_frame`).
         if not retry:
+            _t0 = self._clock()
             async for frame in _split_think_frames(adapter.stream(
                 system=system, messages=messages, tools=tools, **_kw
             )):
                 _note_final(adapter, frame)  # v1.529.0: the `_timed_complete` twin
+                if isinstance(frame, dict) and frame.get("type") == "final":
+                    _note_time(self._clock() - _t0)  # release 6 (the twin)
                 yield frame
             return
         delay = 1.5
         attempt = 0
         while True:
             yielded = False
+            _t0 = self._clock()  # this attempt's own start
             try:
                 async for frame in _split_think_frames(adapter.stream(
                     system=system, messages=messages, tools=tools, **_kw
@@ -2837,6 +2858,8 @@ class ModelRouter:
                     if _is_answer_frame(frame):
                         yielded = True
                     _note_final(adapter, frame)  # v1.529.0: the `_timed_complete` twin
+                    if isinstance(frame, dict) and frame.get("type") == "final":
+                        _note_time(self._clock() - _t0)  # release 6 (the twin)
                     yield frame
                 return
             except Exception as exc:  # noqa: BLE001 — classified below

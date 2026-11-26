@@ -684,7 +684,14 @@ def note_tools_sent(tally, d, tools, provider: str, model: str) -> None:
         return
     try:
         specs = list(tools or ())
-        note(specs, _tool_spec_tokens(specs, _history_ratio(d, provider, model)))
+        ratio = _history_ratio(d, provider, model)
+        # Release 6 of the intelligence plan: where they came from (Iron
+        # Jarvis's own, or which extension), by size and count. Names of
+        # extensions and numbers only; the same seam, so both lanes and
+        # ``look_first_call`` keep it without another call site.
+        from ..context.breakdown import tool_origins
+
+        note(specs, _tool_spec_tokens(specs, ratio), tool_origins(specs, ratio))
     except Exception:  # noqa: BLE001 — a record never breaks a reply
         log.debug("could not note a reply's tool definitions", exc_info=True)
 
@@ -708,6 +715,43 @@ def _sent_fields(tally) -> "dict[str, Any]":
             out["tool_spec_tokens"] = max(0, int(tally.tool_spec_tokens or 0))
     except Exception:  # noqa: BLE001 — accounting never breaks a reply
         log.debug("could not read what a reply was sent", exc_info=True)
+        return {}
+    out.update(_used_fields(tally))
+    return out
+
+
+def _used_fields(tally) -> "dict[str, Any]":
+    """The usage row's "what the reply USED" columns (the intelligence plan,
+    release 6), from the reply's facts (``eval.reply_facts``; the lane hangs
+    them on its tally, ``tally.facts``) and the tally's own tool origins:
+    ``parts_json`` (the size of each part when the reply began, the room, and
+    where the tool definitions came from), ``model_ms`` / ``model_calls`` and
+    ``first_word_ms``. ONLY what is known: a part that was not measured is
+    absent from the JSON, a reply whose calls were not timed has no time, the
+    POST lane has no first word. Sizes and names only. ``{}`` for no facts or
+    any fault; never raises (its own guard, so a fault here never costs the
+    v1.572.0 columns)."""
+    out: dict[str, Any] = {}
+    try:
+        facts = getattr(tally, "facts", None)
+        record: dict[str, Any] = dict(getattr(facts, "parts", None) or {})
+        origins = getattr(tally, "tool_origins", None)
+        if isinstance(origins, dict) and origins:
+            from ..context.breakdown import RECORD_VERSION
+
+            record.setdefault("v", RECORD_VERSION)
+            record["tools"] = origins
+        # The input of the calls that reported a cache figure: what the share
+        # reused is read against (the row's cache counts cover only those).
+        if record and getattr(tally, "cache_known", False):
+            record["cache_input"] = max(0, int(getattr(tally, "cache_input_tokens", 0) or 0))
+        if record:
+            out["parts_json"] = _json.dumps(record, ensure_ascii=False, sort_keys=True)
+        fields = getattr(facts, "fields", None)
+        if callable(fields):
+            out.update(fields())
+    except Exception:  # noqa: BLE001 — accounting never breaks a reply
+        log.debug("could not read what a reply used", exc_info=True)
         return {}
     return out
 
@@ -1054,6 +1098,93 @@ def _overflow_refit(
     return refit
 
 
+def _named_pieces(
+    *, system_before: str, system: str, harness: Any, harness_rules: str = "",
+    grounding: Any = None, brain: Any = None, pieces: "dict[str, list[str]] | None" = None,
+) -> "dict[str, list[str]]":
+    """The strings of a turn's prompt, by the part they belong to: the lane's
+    own appended sections (``pieces``) plus what the grounding, the brain and
+    (a coding session only) the harness added. ONE collector for the coding
+    session's Context drop-down (:func:`harness_context_breakdown`, v1.415.0)
+    and every reply's record (:func:`note_reply_parts`), so the two can never
+    name a string differently. Reads only; may raise (its callers guard)."""
+    parts: dict[str, list[str]] = {k: list(v) for k, v in (pieces or {}).items()}
+
+    def add(key: str, *texts: Any) -> None:
+        parts.setdefault(key, []).extend(t for t in texts if isinstance(t, str) and t)
+
+    g = grounding
+    add("rules", getattr(g, "folder_rules", ""), harness_rules)
+    add("memory", getattr(g, "lessons", ""), getattr(g, "index", ""), getattr(g, "fabric", ""),
+        getattr(g, "connector", ""))
+    # v1.499.0 (clients): the client block (the stable head) and the work
+    # record (the query tail) are memory too — named by their part, never
+    # left to "System prompt".
+    add("memory", getattr(g, "client", ""), getattr(g, "work", ""))
+    if brain is not None:
+        add("memory", getattr(brain, "block", ""))
+        try:
+            add("memory", brain.without_tools())
+        except Exception:  # noqa: BLE001
+            pass
+    add("project", getattr(g, "project", ""), getattr(g, "project_query", ""))
+    if harness is not None:
+        # A coding session's own sections (they read the session's state).
+        from ..harness.compact import prompt_section as _summary_section
+        from ..harness.picked_skill import prompt_section as _skill_section
+        from ..harness.branches import prompt_line as _branch_line
+
+        _map = str(getattr(getattr(harness, "project_map", None), "text", "") or "")
+        if _map:
+            add("project", "\n\n" + _map)
+        add("project", _branch_line())
+        add("skills", _skill_section())
+        add("summary", _summary_section())
+    if system.startswith(system_before) and len(system) > len(system_before):
+        # _apply_compaction's own summary of the older messages.
+        add("summary", system[len(system_before):])
+    return parts
+
+
+def note_reply_parts(
+    d, facts: Any, report: Any, *, system_before: str, system: str, messages: Any,
+    harness: Any = None, harness_rules: str = "", grounding: Any = None, brain: Any = None,
+    pieces: "dict[str, list[str]] | None" = None, plan: Any = None,
+) -> None:
+    """WHAT THE REPLY WAS SENT, BY PART (the intelligence plan, release 6):
+    the size of each part of this reply's prompt as it BEGAN, kept on the
+    reply's facts (``eval.reply_facts``) and saved on its usage row
+    (:func:`_used_fields`). EVERY chat reply, plain or coding; the same
+    strings and the same counting as the coding session's drop-down
+    (:func:`_named_pieces`, ``context.breakdown.sent_record``), measured where
+    the fullness report was (``system`` / ``messages`` are what
+    :func:`_apply_compaction` returned), so the parts add up to the meter's
+    percent. Sizes only, never a string. It READS: it changes nothing that
+    is sent. MIRROR NOTE (lock-step): both chat lanes call this at the same
+    seam, right after the history is planned, OFF the loop
+    (``asyncio.to_thread``: it estimates the whole prompt). Never raises."""
+    if facts is None or not isinstance(report, dict):
+        return
+    try:
+        from ..context.breakdown import sent_record
+
+        record = sent_record(
+            system=system, messages=messages, window=int(report.get("window") or 0),
+            window_known=report.get("window_known") is not False,
+            percent=report.get("percent"),
+            left_out=getattr(plan, "dropped", None),
+            pieces=_named_pieces(
+                system_before=system_before, system=system, harness=harness,
+                harness_rules=harness_rules, grounding=grounding, brain=brain, pieces=pieces,
+            ),
+        )
+        if record is not None and harness is not None:
+            record["kind"] = "code"  # a coding session's reply (read apart from plain chat)
+        facts.note_parts(record)
+    except Exception:  # noqa: BLE001 — a record never breaks a reply
+        log.debug("could not measure what a reply was sent", exc_info=True)
+
+
 def harness_context_breakdown(
     d, report: Any, *, system_before: str, system: str, messages: Any, harness: Any,
     harness_rules: str = "", grounding: Any = None, brain: Any = None,
@@ -1073,45 +1204,17 @@ def harness_context_breakdown(
         return
     try:
         from ..context.breakdown import harness_breakdown
-        from ..harness.compact import prompt_section as _summary_section
-        from ..harness.picked_skill import prompt_section as _skill_section
-        from ..harness.branches import prompt_line as _branch_line
 
-        parts: dict[str, list[str]] = {k: list(v) for k, v in (pieces or {}).items()}
-
-        def add(key: str, *texts: Any) -> None:
-            parts.setdefault(key, []).extend(t for t in texts if isinstance(t, str) and t)
-
-        g = grounding
-        add("rules", getattr(g, "folder_rules", ""), harness_rules)
-        add("memory", getattr(g, "lessons", ""), getattr(g, "index", ""), getattr(g, "fabric", ""),
-            getattr(g, "connector", ""))
-        # v1.499.0 (clients): the client block (the stable head) and the work
-        # record (the query tail) are memory too — named by their part, never
-        # left to "System prompt".
-        add("memory", getattr(g, "client", ""), getattr(g, "work", ""))
-        if brain is not None:
-            add("memory", getattr(brain, "block", ""))
-            try:
-                add("memory", brain.without_tools())
-            except Exception:  # noqa: BLE001
-                pass
-        add("project", getattr(g, "project", ""), getattr(g, "project_query", ""))
-        _map = str(getattr(getattr(harness, "project_map", None), "text", "") or "")
-        if _map:
-            add("project", "\n\n" + _map)
-        add("project", _branch_line())
-        add("skills", _skill_section())
-        add("summary", _summary_section())
-        if system.startswith(system_before) and len(system) > len(system_before):
-            # _apply_compaction's own summary of the older messages.
-            add("summary", system[len(system_before):])
+        parts = _named_pieces(
+            system_before=system_before, system=system, harness=harness,
+            harness_rules=harness_rules, grounding=grounding, brain=brain, pieces=pieces,
+        )
         _suggest, auto_at = _compaction_thresholds(d)
         window = report.get("window") or 0
         b = harness_breakdown(
             system=system, messages=messages, window=int(window), pieces=parts,
             tool_specs=list(tool_specs or ()), auto_at=auto_at,
-            rule_files=list(getattr(g, "folder_rules_used", None) or []),
+            rule_files=list(getattr(grounding, "folder_rules_used", None) or []),
             enabled=_compaction_enabled(d),
         )
         if b:
@@ -4989,7 +5092,7 @@ _READS_ONLY_TOOLS: frozenset[str] = frozenset({
     "excel_formula_check", "excel_live_look", "compare_documents", "pdf_form_fields", "redact_scan",
     "find_capability", "config_list", "schedule_list", "workflow_list", "goal_list", "night_task_list",
     "list_agents", "changes_list", "history_search", "work_history", "skill_search", "brain_read",
-    "brain_search",
+    "brain_search", "chat_fullness",
     "blackboard_read", "mcp_list_resources", "mcp_read_resource", "integration_list", "tool_list",
     "secret_list", "downloads_list", "pixio_models", "pixio_params", "worklist_status", "calculate",
     "browser_read_page", "browser_screenshot", "browser_get_elements", "browser_list_tabs",
@@ -13564,6 +13667,14 @@ async def run_chat_turn(
     from ..core.ids import utcnow as _utcnow
 
     turn_started = _utcnow()  # v1.246.0: the ledger row's real start
+    # WHAT THE REPLY USED (the intelligence plan, release 6): this reply's
+    # facts (``eval.reply_facts``: the size of each part, the model's time),
+    # begun HERE, before any model call of the reply, so the router's seam
+    # times every one of them. Saved on the reply's usage row; sizes and
+    # names only. MIRROR NOTE (lock-step): routes/chat.py begins its own.
+    from ..eval import reply_facts as _reply_facts
+
+    _facts = _reply_facts.begin()
 
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages is required")
@@ -14032,6 +14143,14 @@ async def run_chat_turn(
     system, _query_tail = split_query_tail(_ctx_system, system, _query_tail)
     plan = _plan_context(
         d, body, system + _query_tail, provider_choice, model_choice, messages=_ctx_messages
+    )
+    # Release 6: the size of each part of this reply's prompt, as it began
+    # (it reads; nothing sent changes). MIRROR NOTE (lock-step): routes/chat.py.
+    await asyncio.to_thread(
+        note_reply_parts, d, _facts, context_report,
+        system_before=_system_before_compaction, system=_ctx_system,
+        messages=_ctx_messages, harness=_harness, harness_rules=_harness_rules,
+        grounding=_grounding, brain=_brain, pieces=_ctx_pieces, plan=plan,
     )
     if plan.recap:
         # The recap rides in the SYSTEM prompt, not as a fake user turn: it is
@@ -14576,6 +14695,7 @@ async def run_chat_turn(
         thread_id=getattr(body, "thread_id", "") or "",
         turn_id=str(getattr(body, "turn_id", "") or ""), started_at=turn_started,
     )
+    _tally.facts = _facts  # release 6: the row saves them (lock-step)
     if _route is not None:
         # v1.489.0: the routing call is a billed call of this turn (billed
         # once, where its answer is used).

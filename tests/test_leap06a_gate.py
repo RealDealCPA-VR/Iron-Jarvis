@@ -248,6 +248,10 @@ LETS_RUN: dict[str, str] = {
         "counts nothing again and writes nothing"
     ),
     "changes_list": _RECORDS,
+    "chat_fullness": (
+        "reads the calling chat's own record of what each reply was sent (sizes only; the intelligence "
+        "plan, release 6); takes no argument and writes nothing"
+    ),
     "client_list": _RECORDS,
     "code_handoff_check": "waits on a coding helper that code_handoff_start started, and a rehearsal holds that",
     "code_handoff_list": "lists the coding tools and this session's helpers; starts none",

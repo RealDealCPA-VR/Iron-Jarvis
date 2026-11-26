@@ -306,9 +306,9 @@ class AgentRun(SQLModel, table=True):
     #: through ``core.db._HOT_INDEXES``.
     thread_id: str | None = None
     #: WHAT THE REPLY WAS SENT (v1.572.0), on a chat reply's row. All four are
-    #: None when not known: a row older than the columns, an agent run, a
-    #: provider that reported no cache figure. Never a made-up 0. Additive
-    #: (auto-reconciled).
+    #: None when not known: a row older than the columns, an agent run older
+    #: than release 6 of the intelligence plan, a provider that reported no
+    #: cache figure. Never a made-up 0. Additive (auto-reconciled).
     #: The parts of ``input_tokens`` the provider served from / wrote to its
     #: prompt cache, summed over the reply's model calls.
     cache_read_input_tokens: int | None = None
@@ -321,6 +321,23 @@ class AgentRun(SQLModel, table=True):
     #: (comparable with ``input_tokens``). An ESTIMATE
     #: (``chat_turn._tool_spec_tokens``), not a provider's count.
     tool_spec_tokens: int | None = None
+    #: WHAT THE REPLY USED (the intelligence plan, release 6), on a chat
+    #: reply's row AND an agent run's (which now fills the four columns above
+    #: too, summed over its steps). All None when not known, never a made-up
+    #: 0. Sizes and names only: never the text of any part, a file's content
+    #: or a tool's arguments. Additive (auto-reconciled).
+    #: The size of each part of what the reply was sent when it BEGAN
+    #: (``context.breakdown.sent_record``): a small JSON object, every size
+    #: an ESTIMATE; a part that was not measured is absent from it.
+    parts_json: str | None = None
+    #: How long the model took, summed over the reply's own model calls that
+    #: answered (milliseconds, the router's clock), and how many those were.
+    model_ms: int | None = None
+    model_calls: int | None = None
+    #: From the reply's start to the first word shown (milliseconds): the
+    #: stream lane and an agent run. None where no word is shown before the
+    #: end (the POST lane).
+    first_word_ms: int | None = None
     #: WHERE ``cost_usd`` CAME FROM (next leaps 46-a): ``vendor`` (every
     #: completion carried the vendor's own figure: measured), ``table`` (the
     #: price table: estimated), ``plan`` (a flat subscription: never money),

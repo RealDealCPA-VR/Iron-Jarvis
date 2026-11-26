@@ -2469,6 +2469,20 @@ def register(app: FastAPI, d) -> None:
         )
         return out
 
+    @app.get("/chat/threads/{thread_id}/filling")
+    def chat_thread_filling(thread_id: str) -> dict[str, Any]:
+        """WHAT IS FILLING THIS CHAT (the intelligence plan, release 6): the
+        list behind the chat's fullness meter, read from the newest reply's
+        own record (``AgentRun.parts_json``, written with the reply's usage
+        row since this release). ``reading`` is the Context drop-down's
+        shape (``context/breakdown``) in a plain chat's words; ``found``
+        false for a chat with no such reply yet (an older chat, a new one).
+        Sizes and names only: no text of any part is kept, so none is here.
+        Sync def (threadpool): one indexed read."""
+        from ...context.filling import for_thread
+
+        return for_thread(d.platform.engine, thread_id)
+
     @app.put("/chat/threads/{thread_id}")
     def save_chat_thread(thread_id: str, body: dict) -> dict[str, Any]:
         """Upsert a thread (the chat autosaves after every turn). Send
@@ -4402,6 +4416,12 @@ async def chat_stream(
     # v1.246.0: the ledger row's real start (prep included — reading the
     # attachments is part of what the user waited for).
     turn_started = _utcnow()
+    # WHAT THE REPLY USED (the intelligence plan, release 6): this reply's
+    # facts, begun before any model call of the reply. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn begins its own.
+    from ...eval import reply_facts as _reply_facts
+
+    _facts = _reply_facts.begin()
     # v1.366.0: `stream_chat_turn` already checked it; idempotent here so a
     # direct caller of the lane gets the same validation.
     harness = _chat_turn.turn_harness(harness)
@@ -5012,6 +5032,14 @@ async def chat_stream(
         return
     plan = _plan_context(
         d, body, system + _query_tail, provider_choice, model_choice, messages=_ctx_messages
+    )
+    # Release 6: the size of each part of this reply's prompt, as it began
+    # (it reads; nothing sent changes). MIRROR NOTE (lock-step): chat_turn.
+    await asyncio.to_thread(
+        _chat_turn.note_reply_parts, d, _facts, context_report,
+        system_before=_system_before_compaction, system=_ctx_system,
+        messages=_ctx_messages, harness=_harness, harness_rules=_harness_rules,
+        grounding=_grounding, brain=_brain, pieces=_ctx_pieces, plan=plan,
     )
     if plan.recap:
         system += "\n\n" + plan.recap
@@ -5963,6 +5991,7 @@ async def chat_stream(
             thread_id=getattr(body, "thread_id", "") or "", turn_id=_usage_turn,
             started_at=turn_started,
         )
+        _tally.facts = _facts  # release 6: the row saves them (lock-step)
         if _route is not None:
             # v1.489.0: the routing call is a billed call of this turn (billed
             # once, where its answer is used).
@@ -9414,6 +9443,12 @@ async def chat_stream(
     try:
         async with contextlib.aclosing(gen()) as _loop:
             async for _chunk in _loop:
+                # Release 6: the first word this reply shows, timed once,
+                # where every `token` frame of the loop leaves the lane (the
+                # POST lane shows no word before its end: None there).
+                if _facts.first_word_ms is None and isinstance(_chunk, str) \
+                        and _chunk.startswith("event: token\n"):
+                    _facts.first_word()
                 yield _chunk
     finally:
         _detach_session_turn(_sg_turn)

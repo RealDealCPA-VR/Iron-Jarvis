@@ -1676,6 +1676,15 @@ def build_platform(
 
     for tool in open_item_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # WHAT IS FILLING THIS CHAT (the intelligence plan, release 6):
+    # ``chat_fullness`` answers "why is this chat getting full?" from the
+    # chat's own record of what each reply was sent (sizes, never the text),
+    # for the chat it is asked in only. Read-only; chat arms it by its words
+    # (``autoselect``) and the lookup finds it.
+    from .tools.chat_fullness import filling_tools
+
+    for tool in filling_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
     # THE LOOKUP (capability search plan, Phase 1): ``find_capability`` lets
     # the model ask what Iron Jarvis can do, in its own words, and answers
     # from one index of every built-in tool, setting, page step and "not
