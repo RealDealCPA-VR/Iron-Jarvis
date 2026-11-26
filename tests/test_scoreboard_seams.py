@@ -19,7 +19,8 @@ Pinned:
 * Build › Code: a reply whose own file steps changed files is one row (its
   tool, the session's model); Commit settles it; a finished check gives its
   ``checked``; a rewind WITH the files throws the dropped message's row
-  away, one without the files leaves it undecided;
+  away (Undo rewind puts it back), one without the files leaves it
+  undecided;
 * the folder's line through ``GET /build/scoreboard`` (the done-when: three
   kept and one discarded session read "kept 3 of 4 (too few to judge)").
 """
@@ -353,6 +354,10 @@ async def test_a_build_code_rewind_that_puts_the_files_back_marks_it_rewound(
         assert r.status_code == 200, r.text
         got = {x.ref: (x.verdict, x.how) for x in rows_of(app, sid)}
         assert got == {f"{sid}:t1": ("", ""), f"{sid}:t2": (SB.THROWN, SB.HOW_REWOUND)}
+        # Undo rewind puts the files back: that piece is not decided again.
+        r = await c.post(f"/build/app/sessions/{sid}/rewind/undo")
+        assert r.status_code == 200, r.text
+        assert {x.ref: (x.verdict, x.how) for x in rows_of(app, sid)} == {f"{sid}:t1": ("", ""), f"{sid}:t2": ("", "")}
     await stop_all(app)
 
 

@@ -2160,8 +2160,10 @@ and in Build › Code, when you start a session and inside one.
 - **What counts.** One piece is a reply that changed files, or one attempt
   when you tried the work on several models. A piece is **kept** when you
   commit it, merge it, open a pull request with it, or keep that attempt. It
-  is thrown away when you discard the session's copy of the folder, rewind it
-  with its files, or keep another attempt. **Passed its checks** is Iron
+  is thrown away when you discard the session's copy of the folder (deleting
+  a session that worked on its own branch does that too), rewind it with its
+  files, or keep another attempt; **Undo rewind** puts it back as not decided.
+  **Passed its checks** is Iron
   Jarvis's own test run after the reply, never the model's own words.
 - **Every figure has its count.** Under five decided pieces the line adds
   **(too few to judge)**. Work you have neither kept nor thrown away yet is

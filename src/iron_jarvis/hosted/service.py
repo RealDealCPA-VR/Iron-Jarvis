@@ -2912,6 +2912,12 @@ class HostedService:
             return B.remove_worktree(self.home, facts)
 
         done = _locked(f"app:{row.id}", (lambda: CK.folder_locked(folder, move)) if folder else move)
+        # Next leaps 28-a: the Discard path, so what the session had not merged
+        # (or committed) is thrown away in the folder's coding record, before
+        # the session goes. Never fails the delete.
+        from ..harness import scoreboard as _SB
+
+        _SB.settle_session(self.engine, row.id, _SB.THROWN, _SB.HOW_DISCARDED)
         return {**done, "branch": branch}
 
     def _sweep_stores_later(self) -> None:

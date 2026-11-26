@@ -20,6 +20,7 @@ the daemon's start, through the real lifespan.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,8 @@ from iron_jarvis.hosted.events import session_dir
 from iron_jarvis.hosted.models import HostedSessionRecord
 
 REPO = "C:/code/shop"
+#: A file outside the folder, absolute on this OS (a coding tool's own plan file).
+OUTSIDE = "C:/Users/me/.codex/plan.md" if os.name == "nt" else "/home/me/.codex/plan.md"
 FIN = {"tests": "passed", "command": "pytest", "removed": 0, "kept": 0, "points": 0, "unmet": 0, "after": ""}
 
 
@@ -138,6 +141,45 @@ def test_the_backfill_runs_once_per_database_and_never_counts_a_piece_twice(engi
         conn.execute(text("DELETE FROM _ironjarvis_meta WHERE key=:k"), {"k": SB.BACKFILL_KEY})
     assert SB.backfill(engine, home) == 0
     assert len(_rows(engine)) == 7
+
+
+def test_a_build_code_reply_keeps_the_tool_its_message_went_to_and_only_its_folders_writes_count(engine, tmp_path):
+    """Review: a session that switched tools keeps each old reply with the
+    tool that wrote it (its user event's ``tool``, v1.545.0), with the model
+    that tool had last in the session (its parked record); a tool with no
+    model on record is not counted rather than credited to a guess; a reply
+    whose only write lies outside the folder is no piece."""
+    from iron_jarvis.hosted import tool_switch as TS
+
+    home = tmp_path / "home"
+    with session_scope(engine) as db:
+        db.add(HostedSessionRecord(id="app_2", harness="codex", folder=REPO, model="gpt-x"))
+        db.commit()
+    log = Path(session_dir(home, "app_2"))
+    log.mkdir(parents=True, exist_ok=True)
+    events = [
+        {"type": "user", "turn": "u1", "text": "add it", "tool": "claude-code"},
+        {"type": "tool", "turn": "u1", "kind": "edit", "status": "done", "path": f"{REPO}/a.py"},
+        {"type": "user", "turn": "u2", "text": "and this", "tool": "codex"},
+        {"type": "tool", "turn": "u2", "kind": "write", "status": "done", "path": f"{REPO}/b.py"},
+        {"type": "user", "turn": "u3", "text": "a plan", "tool": "codex"},
+        {"type": "tool", "turn": "u3", "kind": "write", "status": "done", "path": OUTSIDE},
+        {"type": "user", "turn": "u4", "text": "try pi", "tool": "pi"},
+        {"type": "tool", "turn": "u4", "kind": "write", "status": "done", "path": f"{REPO}/c.py"},
+        {"type": "user", "turn": "u5", "text": "older, no tool named"},
+        {"type": "tool", "turn": "u5", "kind": "write", "status": "done", "path": f"{REPO}/d.py"},
+    ]
+    (log / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    (log / TS.FILE).write_text(json.dumps({"parked": {
+        "claude-code": {"hid": "h-1", "model": "claude-opus-5-5"},
+    }}), encoding="utf-8")
+    assert SB.backfill(engine, home) == 3
+    got = {ref: row[1:3] for ref, row in _rows(engine).items()}
+    assert got == {
+        "app_2:u1": ("claude-code", "claude-opus-5-5"),
+        "app_2:u2": ("codex", "gpt-x"),
+        "app_2:u5": ("codex", "gpt-x"),
+    }
 
 
 def test_the_backfill_runs_at_the_daemons_start_off_the_loop(tmp_path, monkeypatch):

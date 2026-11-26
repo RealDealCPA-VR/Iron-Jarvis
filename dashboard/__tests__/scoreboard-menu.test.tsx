@@ -8,7 +8,7 @@
  */
 import React, { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const H = vi.hoisted(() => ({
   gets: [] as string[],
@@ -192,12 +192,51 @@ describe("Chat › Code's model menu", () => {
     expect(H.gets).toHaveLength(1);
   });
 
-  it("the chat's own menu reads nothing and keeps its markup", () => {
+  it("the chat's own menu reads nothing and keeps its markup", async () => {
+    // A record IS there: a read the chat's menu made would show it.
+    H.answer[FOLDER] = RECORD;
     render(<Menu />);
     const sub = openProvider();
+    // The hook reads inside a promise: let every pending one run first.
+    await flush();
     expect(H.gets).toEqual([]);
     expect(within(sub).queryByTestId("model-record")).toBeNull();
     const cells = Array.from(sub.querySelectorAll("button > span.min-w-0.truncate")).map((s) => s.textContent);
     expect(cells.length).toBe(2);
+  });
+});
+
+/** Every promise already queued, and the renders they cause. */
+async function flush() {
+  for (let i = 0; i < 3; i++) {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+}
+
+describe("another folder's record is never shown", () => {
+  it("a folder changed while its record loads shows nothing until the new folder's answer", async () => {
+    const OTHER = "C:\\code\\other";
+    let answerOther: (v: unknown) => void = () => {};
+    H.answer[FOLDER] = RECORD;
+    H.answer[OTHER] = new Promise((r) => {
+      answerOther = r;
+    });
+    const start: PickerChoice = { tool: "codex", model: "gpt-6-astra", effort: "" };
+    const { rerender } = render(<Picker start={start} folder={FOLDER} />);
+    fireEvent.click(screen.getByTestId("p-tool"));
+    expect((await screen.findByTestId("p-model-record-gpt-6-astra")).textContent).toBe(LINE);
+    // The folder changes with the menu open: the first folder's line goes at once.
+    rerender(<Picker start={start} folder={OTHER} />);
+    await waitFor(() => expect(H.gets).toContain(`/build/scoreboard?folder=${encodeURIComponent(OTHER)}`));
+    await flush();
+    expect(screen.queryByTestId("p-model-record-gpt-6-astra")).toBeNull();
+    // Its own answer arrives: its own line.
+    const OWN = "In this folder: kept 1 of 2 (too few to judge)";
+    await act(async () => {
+      answerOther({ ...RECORD, folder: "c:/code/other", rows: [{ ...RECORD.rows[0], kept: 1, thrown: 1, samples: 2, words: OWN }] });
+    });
+    expect((await screen.findByTestId("p-model-record-gpt-6-astra")).textContent).toBe(OWN);
   });
 });

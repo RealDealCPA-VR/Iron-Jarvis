@@ -14,8 +14,9 @@ Chat › Code session's picked folder); else the folders with a record, the
 most pieces first (:data:`FOLDERS_MAX`).
 
 THE CLIENT WALL decides what an answer may name (``workmap.clients.wall``):
-a folder this turn may not be told about is left out and counted in one
-sentence that names nothing; work done Local only is left out of every
+a folder this turn may not be told about (under ANY of its spellings on
+record: :func:`_may_tell`) is left out and counted in one sentence that
+names nothing; work done Local only is left out of every
 figure unless the turn itself stays on this network
 (``workmap.lookup.withhold_local_only``); an answer that goes to the phone
 names no folder. Refused to a task from another computer
@@ -182,10 +183,28 @@ def summary_without_local(engine: Any, key: str) -> list[dict[str, Any]]:
     return out
 
 
+def _may_tell(engine: Any, turn: Any, cmap: Any, key: str, asked: str) -> bool:
+    """May this turn be told the record of the folder ``key``? The wall is
+    asked about the key, the spelling the turn named and EVERY spelling the
+    record keeps: the key folds case, the wall's own key keeps it on Linux,
+    so ``/home/u/Work/Hartleys`` must not slip through as ``.../work/hartleys``.
+    One no is a no; spellings that cannot all be read are a no. BLOCKING."""
+    from ..harness import scoreboard as SB
+    from ..workmap.clients import wall
+
+    try:
+        kept = SB.spellings(engine, key)
+    except Exception:  # noqa: BLE001 — unread: not told
+        return False
+    if kept is None:
+        return False
+    named = [asked] if asked and SB.folder_key(asked) == key else []
+    return all(wall.may_tell(turn, cmap, folder=f) for f in {key, *named, *kept})
+
+
 def report(platform: Any, turn: Any, named: str, thread_id: str, *, phone: bool, withhold: bool) -> ToolResult:
     """The answer (BLOCKING: the record and the client map)."""
     from ..harness import scoreboard as SB
-    from ..workmap.clients import wall
     from ..workmap.lookup import _load_map
 
     engine = getattr(platform, "engine", None)
@@ -198,7 +217,7 @@ def report(platform: Any, turn: Any, named: str, thread_id: str, *, phone: bool,
     held = 0
     local_held = 0
     for key in keys:
-        if not wall.may_tell(turn, cmap, folder=key):
+        if not _may_tell(engine, turn, cmap, key, asked):
             held += 1
             continue
         rows, local = _rows_for(engine, key, withhold=withhold)

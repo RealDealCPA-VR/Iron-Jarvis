@@ -977,7 +977,7 @@ async def rewind_files(svc: Any, sid: str, to: str, expect: str = "", *, lock: A
     live = svc.live.get(sid)
     await _files_free(svc, row, live)
     history, _dropped, _merged = await _history(svc, row, live)
-    _idx, turn = _turn_of(history, to)
+    idx, turn = _turn_of(history, to)
     live = live or svc._live(row)
     svc._claim(live, "being rewound")
     try:
@@ -990,6 +990,14 @@ async def rewind_files(svc: Any, sid: str, to: str, expect: str = "", *, lock: A
         raise _as_refused(r) from None
     finally:
         live.claim = ""
+    # Next leaps 28-a: the files of this message and every later one went
+    # back, so their work was thrown away (Undo rewind takes it back). Off
+    # the loop; never fails the rewind.
+    from ..harness import scoreboard as _SB
+
+    gone = [str(e.get("turn") or "") for e in history[idx:] if e.get("type") == "user"]
+    with contextlib.suppress(Exception):
+        await asyncio.to_thread(_SB.rewound, svc.engine, row.id, gone, undo_key=str(got.get("before") or ""))
     note = f"{got['words']} {FILES_ONLY_NOTE.format(label=label(row.harness))}"
     _say(svc, row, FILES_NOTICE.format(words=note))
     return {"ok": True, "note": note, "restored": _restored(got),
@@ -1007,16 +1015,29 @@ async def undo_files(svc: Any, sid: str, *, lock: Any = None) -> dict[str, Any]:
     await _files_free(svc, row, live)
     live = live or svc._live(row)
     svc._claim(live, "being rewound")
+    undone = ""
     try:
         def act() -> dict[str, Any]:
+            nonlocal undone
             _still_free(svc, row)
-            return CK.undo(svc.home, row.id, row)
+            # The rewind this undo takes back (``checkpoints.undo`` reads the
+            # same row, inside the same locks).
+            entry, _late = CK.undo_row(svc.home, row.id)
+            got = CK.undo(svc.home, row.id, row)
+            undone = str((entry or {}).get("at") or "")
+            return got
 
         got = await _run(lock, act, str(row.folder or ""))
     except CK.RestoreRefused as r:
         raise _as_refused(r) from None
     finally:
         live.claim = ""
+    # Next leaps 28-a: that rewind's files are back, so the work it threw away
+    # is not decided again (off the loop; never fails the undo).
+    from ..harness import scoreboard as _SB
+
+    with contextlib.suppress(Exception):
+        await asyncio.to_thread(_SB.unrewound, svc.engine, row.id, undone)
     _say(svc, row, UNDO_NOTICE.format(words=got["words"]))
     return {"ok": True, "note": got["words"], "restored": _restored(got),
             "branch": await asyncio.to_thread(view_block, svc.home, row)}
@@ -1162,7 +1183,8 @@ async def rewind(svc: Any, sid: str, to: str, *, files: bool = False, expect: st
 
             gone = [str(e.get("turn") or "") for e in history[idx:] if e.get("type") == "user"]
             with contextlib.suppress(Exception):
-                await asyncio.to_thread(_SB.rewound, svc.engine, row.id, gone)
+                await asyncio.to_thread(_SB.rewound, svc.engine, row.id, gone,
+                                        undo_key=str(restored.get("before") or ""))
     except Exception as exc:
         if restored is None:
             raise

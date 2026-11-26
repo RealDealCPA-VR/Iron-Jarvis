@@ -186,6 +186,65 @@ def test_local_only_work_is_left_out_off_this_network_and_the_phone_names_no_fol
     assert all(r["folder"] == "" for r in phone.data["rows"])
 
 
+def test_a_clients_folder_the_turn_may_not_be_told_about_is_never_named_asked_or_listed(engine, tmp_path):
+    """The client wall (review): a confirmed client's folder that the turn
+    may not be told about is left out whether the chat names it or lists
+    every folder with a record; its key, its models and its counts never
+    show, one sentence says something was left out; a turn that names the
+    client is told."""
+    from iron_jarvis.workmap.clients import store, wall
+
+    work = tmp_path / "Work"
+    hart, shop = work / "Hartleys", work / "Shop"
+    for f in (hart, shop):
+        f.mkdir(parents=True)
+    plat = _Platform(engine)
+    store.create(plat, folder=str(hart), name="Hartleys")
+    piece(engine, 1, verdict=SB.KEPT, folder=str(hart), model="gpt-hart")
+    piece(engine, 2, verdict=SB.THROWN, folder=str(hart), model="gpt-hart")
+    piece(engine, 3, verdict=SB.KEPT, folder=str(shop), model="gpt-shop")
+    hart_key, shop_key = SB.folder_key(str(hart)), SB.folder_key(str(shop))
+    turn = wall.turn_wall(engine, str(shop), "which model does best in this folder?")
+
+    named = RS.report(plat, turn, str(hart), "", phone=False, withhold=False)
+    assert named.ok
+    assert hart_key not in named.output.lower() and "gpt-hart" not in named.output and "of 2" not in named.output
+    assert RS.HELD in named.output and named.data["left_out"] == 1 and named.data["rows"] == []
+
+    # No folder named: the listing (``SB.folders``) holds the client's folder.
+    assert set(SB.folders(engine)) == {hart_key, shop_key}
+    listed = RS.report(plat, turn, "", "", phone=False, withhold=False)
+    assert hart_key not in listed.output.lower() and "gpt-hart" not in listed.output
+    assert f"Folder {shop_key}:" in listed.output and "gpt-shop" in listed.output
+    assert RS.HELD in listed.output and listed.data["left_out"] == 1
+    assert {r["folder"] for r in listed.data["rows"]} == {shop_key}
+
+    # The owner names the client: told.
+    told = RS.report(plat, wall.turn_wall(engine, str(shop), "which model does best for Hartleys?"), str(hart), "",
+                     phone=False, withhold=False)
+    assert "gpt-hart" in told.output and "kept 1 of 2" in told.output and told.data["left_out"] == 0
+
+
+def test_the_wall_is_asked_about_every_spelling_the_record_keeps(engine, monkeypatch):
+    """The record's key folds case on every OS; the wall's own key keeps it
+    on Linux. So the wall is asked about each spelling on record (one no is
+    a no), never only about the folded key."""
+    from iron_jarvis.workmap.clients import wall
+
+    piece(engine, 1, verdict=SB.KEPT, folder="/home/u/Work/Hartleys")
+    piece(engine, 2, verdict=SB.KEPT, folder="/home/u/work/hartleys")
+    asked: list[str] = []
+
+    def strict(turn, cmap, *, folder, **_k):
+        asked.append(str(folder))
+        return str(folder) != "/home/u/Work/Hartleys"
+
+    monkeypatch.setattr(wall, "may_tell", strict)
+    got = RS.report(_Platform(engine), None, "/home/u/work/hartleys", "", phone=False, withhold=False)
+    assert "/home/u/Work/Hartleys" in asked
+    assert got.data["left_out"] == 1 and got.data["rows"] == [] and "kept" not in got.output
+
+
 def test_the_tool_is_a_reader_refused_to_another_computer_and_found_by_the_lookup():
     from iron_jarvis.capability_search.join import OWN_PLACE
     from iron_jarvis.capability_search.phrasings import PHRASINGS

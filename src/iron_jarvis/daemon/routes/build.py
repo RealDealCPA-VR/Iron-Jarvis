@@ -5916,6 +5916,12 @@ def register(app: FastAPI, d: Any) -> None:
                 if exc.details:
                     content["details"] = exc.details
                 return JSONResponse(status_code=exc.status, content=content)
+            # Next leaps 28-a: the Discard path, so what the session had not
+            # merged (or committed) is thrown away in the folder's coding
+            # record, before the session goes. Never fails the delete.
+            from ...harness import scoreboard as _SB
+
+            _SB.settle_session(engine_of(), thread_id, _SB.THROWN, _SB.HOW_DISCARDED)
         # v1.379.0: a session with no folder takes its own folder with it when
         # nothing was made there (one with files is kept, and said so below).
         kept_folder = ""

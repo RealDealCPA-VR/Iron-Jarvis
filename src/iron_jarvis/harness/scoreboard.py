@@ -26,7 +26,12 @@ user's OWN press. The seams that already write each fact settle the rows:
   (``attempt_kept``), every other one that changed files thrown
   (``attempt_dropped``); Discard all (``attempts.discard``) throws them.
 * A rewind that puts the files back (Chat › Code always; Build › Code with
-  "and the files") throws the rewound replies' rows (``rewound``).
+  "and the files", or its files-only rewind) throws the rewound replies' rows
+  (``rewound``). Build › Code's Undo rewind puts that rewind's rows back to
+  not decided (``rewind_at`` names the rewind: :func:`unrewound`).
+* Deleting a session on its own branch moves its copy of the folder to the
+  trash (the Discard path, both views): its undecided replies are thrown
+  (``discarded``).
 
 A reply still sitting uncommitted is "not decided": it is counted apart
 ("3 not decided yet") and NEVER in an "of N".
@@ -44,8 +49,10 @@ press it follows.
 THE BACKFILL (:func:`backfill`, once per database, off the loop at start):
 the facts that already exist become rows marked ``source="backfill"`` — each
 Chat › Code reply line with a finish record, each decided attempts card, each
-Build › Code reply whose own file steps changed files — settled by what the
-session's own facts say (``merged_at``, ``pr_url``, ``removed_at``). So
+Build › Code reply whose own file steps changed files in its folder — settled
+by what the session's own facts say (``merged_at``, ``pr_url``,
+``removed_at``). A Build › Code reply keeps the tool its message went to (the
+user event's ``tool``), with the model that tool had last in the session. So
 someone who changes nothing sees a record the first day.
 
 ``source="replay"`` is reserved for 28-c's nightly test: every reader here
@@ -128,6 +135,10 @@ class CodingOutcome(SQLModel, table=True):
     #: The folder the user PICKED (``harness/sessions.folder_key``): a branch
     #: session's copy of the folder never has its own.
     folder_key: str = Field(default="", index=True)
+    #: That folder as it was spelled. The key folds case on every OS; the
+    #: client wall does not on Linux, so chat asks the wall about every
+    #: spelling on record (``settings/records_scoreboard``).
+    folder: str = ""
     #: The Chat › Code thread id or the Build › Code session id.
     session_id: str = Field(default="", index=True)
     unit: str = UNIT_REPLY
@@ -148,6 +159,10 @@ class CodingOutcome(SQLModel, table=True):
     app_version: str = ""
     created_at: datetime = Field(default_factory=utcnow)
     decided_at: datetime | None = None
+    #: A Build › Code rewind that put the files back threw this piece away:
+    #: its before-rewind checkpoint's stamp (``checkpoints.restore``'s
+    #: ``before``), so an Undo of THAT rewind puts it back (:func:`unrewound`).
+    rewind_at: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -212,7 +227,8 @@ def note(engine: Any, *, session_id: str, ref: str, folder: str, surface: str, t
                 return False
             decided = verdict in (KEPT, THROWN)
             db.add(CodingOutcome(
-                folder_key=key, session_id=str(session_id)[:200], unit=unit if unit in UNITS else UNIT_REPLY,
+                folder_key=key, folder=str(folder or "").strip()[:4096],
+                session_id=str(session_id)[:200], unit=unit if unit in UNITS else UNIT_REPLY,
                 ref=str(ref)[:400], surface=surface if surface in (SURFACE_CODE, SURFACE_TOOL) else SURFACE_CODE,
                 tool=str(tool or "")[:60], provider=str(provider or "")[:120], model=str(model or "")[:200],
                 checked=_checked(checked), verdict=verdict if decided else "", how=str(how or "")[:40] if decided else "",
@@ -256,9 +272,11 @@ def settle_session(engine: Any, session_id: str, verdict: str, how: str) -> int:
         return 0
 
 
-def rewound(engine: Any, session_id: str, turn_ids: Iterable[str]) -> int:
+def rewound(engine: Any, session_id: str, turn_ids: Iterable[str], *, undo_key: str = "") -> int:
     """A rewind put these replies' files back: each one's UNDECIDED row is
-    thrown (``rewound``). BLOCKING; never raises."""
+    thrown (``rewound``). ``undo_key``: the Build › Code rewind's own
+    before-rewind stamp, kept on each row it threw so :func:`unrewound` can
+    take exactly that rewind back. BLOCKING; never raises."""
     refs = [reply_ref(str(session_id), str(t)) for t in turn_ids or () if str(t or "").strip()]
     if engine is None or not session_id or not refs:
         return 0
@@ -270,11 +288,36 @@ def rewound(engine: Any, session_id: str, turn_ids: Iterable[str]) -> int:
             now = utcnow()
             for row in rows:
                 row.verdict, row.how, row.decided_at = THROWN, HOW_REWOUND, now
+                row.rewind_at = str(undo_key or "")[:80]
                 db.add(row)
             db.commit()
             return len(rows)
     except Exception:  # noqa: BLE001 — a record never breaks the rewind
         log.warning("the coding record could not mark a rewind of %s", session_id, exc_info=True)
+        return 0
+
+
+def unrewound(engine: Any, session_id: str, undo_key: str) -> int:
+    """Build › Code's Undo rewind put the files of the rewind ``undo_key``
+    back: the rows THAT rewind threw away are not decided again (verdict,
+    how and decided_at cleared). A row decided any other way, or thrown by
+    another rewind, is never touched. BLOCKING; never raises."""
+    key = str(undo_key or "")
+    if engine is None or not session_id or not key:
+        return 0
+    try:
+        with _LOCK, session_scope(engine) as db:
+            rows = db.exec(select(CodingOutcome).where(
+                CodingOutcome.session_id == str(session_id), CodingOutcome.how == HOW_REWOUND,
+                CodingOutcome.rewind_at == key,
+            )).all()
+            for row in rows:
+                row.verdict, row.how, row.decided_at, row.rewind_at = "", "", None, ""
+                db.add(row)
+            db.commit()
+            return len(rows)
+    except Exception:  # noqa: BLE001 — a record never breaks the undo
+        log.warning("the coding record could not take back a rewind of %s", session_id, exc_info=True)
         return 0
 
 
@@ -415,22 +458,36 @@ def _hosted_row(engine: Any, sid: str) -> Any:
 
 
 def hosted_changed(events: list[dict[str, Any]], folder: str) -> bool:
-    """A Build › Code reply changed files when the tool's OWN finished
-    edit/write steps of that message say so (``panes.tool_paths``; pure, so
-    a reply's end pays no git read). Pure."""
+    """A Build › Code reply changed files IN THE SESSION'S FOLDER when the
+    tool's OWN finished edit/write steps of that message say so
+    (``panes.tool_paths``; pure, so a reply's end pays no git read). A step
+    whose file lies outside the folder (a scratch file in the temp folder,
+    the tool's own plan or memory file in its home) changes nothing the
+    session's Commit, Merge or Discard decide: not counted. ``folder`` is
+    where the session works (a branch session's own copy). Pure."""
+    import os
+
     from ..hosted import panes as PN
 
+    where = str(folder or "").strip()
+    if not where:
+        return False
     try:
-        return bool(PN.tool_paths(list(events or []), str(folder or "")))
+        root = os.path.normcase(os.path.normpath(where))
+        inside = root.rstrip("\\/") + os.sep
+        return any(k.startswith(inside) for k in PN.tool_paths(list(events or []), where))
     except Exception:  # noqa: BLE001
         return False
 
 
 def note_hosted_reply(engine: Any, sid: str, turn_id: str, *, checked: str = "",
-                      source: str = SOURCE_WORK, verdict: str = "", how: str = "") -> bool:
+                      source: str = SOURCE_WORK, verdict: str = "", how: str = "",
+                      tool: "str | None" = None, model: "str | None" = None) -> bool:
     """A Build › Code reply that changed files is one piece (its tool and the
-    model the session chose: "" is the tool's own default). BLOCKING; never
-    raises."""
+    model the session chose: "" is the tool's own default). ``tool`` /
+    ``model``: the backfill's own reading of an older message (the tool its
+    user event names); else the session's, which at a reply's end is the
+    tool and model that wrote it. BLOCKING; never raises."""
     try:
         row = _hosted_row(engine, sid)
         if row is None or not turn_id or getattr(row, "handed_from", None):
@@ -439,9 +496,9 @@ def note_hosted_reply(engine: Any, sid: str, turn_id: str, *, checked: str = "",
 
         return note(
             engine, session_id=sid, ref=reply_ref(sid, turn_id), folder=SG.checkout_of(row),
-            surface=SURFACE_TOOL, tool=str(getattr(row, "harness", "") or ""),
-            model=str(getattr(row, "model", "") or ""), checked=checked, source=source,
-            verdict=verdict, how=how,
+            surface=SURFACE_TOOL, tool=str(getattr(row, "harness", "") or "") if tool is None else str(tool),
+            model=str(getattr(row, "model", "") or "") if model is None else str(model),
+            checked=checked, source=source, verdict=verdict, how=how,
         )
     except Exception:  # noqa: BLE001 — a record never breaks a reply
         log.warning("the coding record could not read Build › Code reply %s", turn_id, exc_info=True)
@@ -618,6 +675,25 @@ def folders(engine: Any, limit: int = 12) -> list[str]:
     return [k for k, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))][:max(1, int(limit))]
 
 
+#: Spellings of one folder read for the client wall (a bound, never a cut
+#: that lets a folder through: the reader holds a folder it could not check).
+SPELLINGS_MAX = 50
+
+
+def spellings(engine: Any, key: str) -> "list[str] | None":
+    """Every spelling on record of the folder ``key`` (the wall compares
+    folders by their own key, which keeps case on Linux). None when there
+    are more than :data:`SPELLINGS_MAX` (the caller then tells nothing of
+    it). BLOCKING."""
+    if engine is None or not key:
+        return []
+    with session_scope(engine) as db:
+        got = db.exec(_real(select(CodingOutcome.folder).where(CodingOutcome.folder_key == key)).distinct()
+                      .limit(SPELLINGS_MAX + 1)).all()
+    out = sorted({str(f) for f in got if str(f or "").strip()})
+    return None if len(got) > SPELLINGS_MAX else out
+
+
 # --------------------------------------------------------------------------- #
 # the one-time backfill
 # --------------------------------------------------------------------------- #
@@ -710,6 +786,18 @@ def _log_tail(home: Any, sid: str) -> list[dict[str, Any]]:
     return out
 
 
+def _parked_tools(home: Any, sid: str) -> dict[str, Any]:
+    """The tools a Build › Code session switched away from, each with what it
+    had last (``tool_switch``'s own record). ``{}`` when none or unreadable."""
+    try:
+        from ..hosted import tool_switch as TS
+
+        got = TS.read(home, sid).get("parked")
+        return got if isinstance(got, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _backfill_hosted(engine: Any, home: Any) -> int:
     from ..hosted import session_git as SG
     from ..hosted import store
@@ -735,17 +823,37 @@ def _backfill_hosted(engine: Any, home: Any) -> int:
             events = _log_tail(home, row.id)
             by_turn: dict[str, list[dict[str, Any]]] = {}
             checks: dict[str, str] = {}
+            #: The tool each message went to (its user event, v1.545.0): a
+            #: session that switched tools keeps each reply with its writer.
+            tool_of: dict[str, str] = {}
             for ev in events:
                 if ev.get("type") == "proof" and ev.get("state") == "done" and ev.get("for_turn"):
                     checks[str(ev["for_turn"])] = _checked(ev.get("tests"))
                 tid = str(ev.get("turn") or "")
                 if tid:
                     by_turn.setdefault(tid, []).append(ev)
+                    if ev.get("type") == "user" and str(ev.get("tool") or "").strip():
+                        tool_of.setdefault(tid, str(ev["tool"]).strip())
+            current = str(getattr(row, "harness", "") or "")
+            parked: "dict[str, Any] | None" = None
             for tid, evs in by_turn.items():
                 if not hosted_changed(evs, folder):
                     continue
+                tool = tool_of.get(tid) or current
+                if tool == current:
+                    model = str(getattr(row, "model", "") or "")
+                else:
+                    # Another tool wrote it: the model that tool had last in
+                    # this session (its parked record). None on record: not
+                    # counted (never credited to a model it may not have used).
+                    if parked is None:
+                        parked = _parked_tools(home, row.id)
+                    if tool not in parked:
+                        continue
+                    model = str(parked[tool].get("model") or "")
                 n += int(note_hosted_reply(engine, row.id, tid, checked=checks.get(tid, ""),
-                                           source=SOURCE_BACKFILL, verdict=verdict, how=how))
+                                           source=SOURCE_BACKFILL, verdict=verdict, how=how,
+                                           tool=tool, model=model))
         except Exception:  # noqa: BLE001 — one session never stops the rest
             log.warning("the coding record could not read Build › Code session %s", getattr(row, "id", "?"),
                         exc_info=True)
@@ -788,5 +896,5 @@ __all__ = [
     "THROWN", "TOOL_JARVIS", "TOO_FEW", "after_hosted_turn", "backfill", "backfill_at_start", "folder_key",
     "folders", "install", "note", "note_attempts", "note_chat_reply", "note_hosted_reply", "note_hosted_turn",
     "on_proof",
-    "reply_changed", "rewound", "settle_session", "summary", "words",
+    "reply_changed", "rewound", "settle_session", "spellings", "summary", "unrewound", "words",
 ]
