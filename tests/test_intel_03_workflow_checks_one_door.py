@@ -327,3 +327,116 @@ def test_what_counts_as_missing_follows_what_each_kind_of_step_reads():
     assert missing_values(Step(name="A", task="{{ Nope }} and {{Given}}"), outs) == ["Nope"]
     assert missing_values(Step(name="A", task="plain words"), None) == []
     assert no_value_words(["A", "B"]) == "could not run: no value for A, B"
+
+
+# --------------------------------------------------------------------------- #
+# (3) Review follow-ups: the other doors that save, and a signal with no words.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("why", sorted(BAD))
+async def test_changing_a_workflow_in_chat_is_refused_in_the_pages_words_too(tmp_path, why):
+    """``workflow_update`` is the tool behind "change my workflow so step 1
+    is ...": it saved whatever it was handed."""
+    steps = BAD[why]
+    good = [{"name": "Tell", "kind": "notify", "message": "hi"}]
+    with TestClient(create_app(str(tmp_path))) as client:
+        platform = client.app.state.platform
+        assert client.post("/workflows", json={"name": "triage", "steps": good}).status_code == 200
+        said = client.post("/workflows", json={"name": "other", "steps": steps}).json()["detail"]
+
+        out = await platform.registry.invoke(
+            "workflow_update", {"name": "triage", "new_name": "triage-two", "steps": steps},
+            _tool_ctx(platform, tmp_path), platform.permissions,
+            session_allow=["workflow_update"],
+        )
+        assert out.ok is False, "the chat tool changed a workflow to steps the page refuses"
+        assert out.error == said
+        store = WorkflowStore(platform.engine)
+        # Nothing changed: not the steps, and not the name either.
+        assert json.loads(store.get("triage").steps_json) == good
+        assert store.get("triage-two") is None
+
+
+async def test_a_change_that_can_work_is_still_made_in_chat(tmp_path):
+    good = [{"name": "Tell", "kind": "notify", "message": "hi"}]
+    better = [{"name": "Tell", "kind": "notify", "message": "hello {{Name}}"}]
+    with TestClient(create_app(str(tmp_path))) as client:
+        platform = client.app.state.platform
+        assert client.post("/workflows", json={"name": "triage", "steps": good}).status_code == 200
+        out = await platform.registry.invoke(
+            "workflow_update", {"name": "triage", "steps": better},
+            _tool_ctx(platform, tmp_path), platform.permissions,
+            session_allow=["workflow_update"],
+        )
+        assert out.ok, out.error
+        assert json.loads(WorkflowStore(platform.engine).get("triage").steps_json) == better
+
+
+def test_a_workflow_a_model_built_for_the_page_is_checked_before_it_is_saved(tmp_path):
+    """``POST /workflows/generate`` saves steps a model wrote."""
+    from iron_jarvis.providers.adapters.base import LLMResponse
+
+    class _Writes:
+        def __init__(self, text):
+            self._text = text
+
+        async def complete(self, *, system, messages, tools):
+            return LLMResponse(text=self._text)
+
+    def client_with(reply):
+        app = create_app(str(tmp_path))
+        app.state.platform.providers.get = lambda *a, **k: _Writes(json.dumps(reply))
+        return TestClient(app)
+
+    bad = {"name": "Night Sweep", "description": "x", "steps": [
+        {"name": "Scan", "agent": "builder", "task": "scan the folder"},
+        {"name": "Tell", "kind": "notify", "message": "result: {{Scna.data}}"},
+    ]}
+    client = client_with(bad)
+    r = client.post("/workflows/generate", json={"description": "a nightly sweep"})
+    assert r.status_code == 422, r.json()
+    detail = r.json()["detail"]
+    assert "steps[1] (Tell)" in detail and "nothing was saved" in detail
+    assert client.get("/workflows/night-sweep").status_code == 404
+
+    good = {**bad, "steps": [bad["steps"][0], {"name": "Tell", "kind": "notify", "message": "result: {{Scan}}"}]}
+    client = client_with(good)
+    r = client.post("/workflows/generate", json={"description": "a nightly sweep"})
+    assert r.status_code == 200, r.json()
+    assert client.get("/workflows/night-sweep").status_code == 200
+
+
+async def test_a_signal_that_brought_no_words_still_gives_trigger_a_value(tmp_path):
+    """A rule or a phone command can start a workflow with nothing after it.
+    The signal still fired: ``{{Trigger}}`` is an empty value that was given,
+    as an input given as "" is. Without that the step would stop with
+    "no value for Trigger"."""
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.reflex.router import ReflexRouter
+
+    platform = build_platform(str(tmp_path))
+    WorkflowStore(platform.engine).save(
+        "greet", [{"name": "Tell", "kind": "notify", "message": "Started. Note: {{Trigger}}"}], ""
+    )
+    started: list = []
+    router = ReflexRouter(platform, Orchestrator(platform), spawn_bg=lambda sid, coro: started.append(coro))
+    sent: list[str] = []
+    orig = WorkflowEngine._deliver
+    WorkflowEngine._deliver = lambda self, message, **kw: (sent.append(message) or True, "sent")  # type: ignore[method-assign]
+    try:
+        seen = {}
+        for words in ("", "do the thing"):
+            out = await router.start("workflow", target="greet", task=words)
+            assert out.get("ok"), out
+            rec = await started.pop()
+            seen[words] = (rec.status, json.loads(rec.outputs_json))
+    finally:
+        WorkflowEngine._deliver = orig  # type: ignore[method-assign]
+
+    status, outs = seen[""]
+    assert status == "completed", outs
+    assert outs["Trigger"]["summary"] == "" and outs["Trigger"]["kind"] == "trigger"
+    # The posture rides only a signal that brought words (there is no outside
+    # text in an empty one): unchanged.
+    assert "trust" not in outs["Trigger"]
+    assert seen["do the thing"][0] == "completed"
+    assert sent == ["Started. Note:", "Started. Note: do the thing"]

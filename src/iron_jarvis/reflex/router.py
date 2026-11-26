@@ -645,10 +645,16 @@ class ReflexRouter:
         # signal's words (``kind`` "trigger": an agent step's task renders it
         # FENCED, ``workflows/engine.render_template``) and carries the run's
         # posture, so its agent steps start low like the session action.
+        # The intelligence plan, release 3: a signal that fired with NO words
+        # still fired, so ``{{Trigger}}`` is a value that was given (an empty
+        # one), exactly as an input given as "" is. Without the seed a step
+        # that names it now stops with "no value for Trigger"
+        # (``workflows/checks.missing_values``). The posture rides only a
+        # signal that brought words, as before: there is no outside text here.
         outputs = (
             {"Trigger": {"status": "completed", "summary": trigger_text[:1500], "kind": "trigger",
-                         **(trust or {})}}
-            if trigger_text and not collides
+                         **((trust or {}) if trigger_text else {})}}
+            if not collides
             else None
         )
         self._launch(engine.run_record(run, wf, outputs=outputs), run.id)
