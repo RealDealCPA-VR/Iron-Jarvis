@@ -275,3 +275,20 @@ def test_the_rewrite_request_is_masked_and_fenced_too(platform, learning):
     assert prompt.index(top) < prompt.index("chase the overdue invoices") < prompt.index(bottom)
     # The skill's own text is the thing being rewritten: it is not the record.
     assert prompt.index("Find overdue invoices") < prompt.index(top)
+
+
+def test_a_candidate_whose_run_cannot_be_read_waits_and_is_not_called_local_only(
+    platform, learning, monkeypatch
+):
+    """Left for the next sweep, under its own name: it is not a Local only
+    hold, and no request is built."""
+    sid = _seed(platform)
+    learning.observe_session(sid)
+    monkeypatch.setattr(learning, "_candidate_trusted", lambda cand: None)
+    complete, calls = _completer(_reply())
+
+    out = asyncio.run(learning.distill_candidates(complete))
+
+    assert calls == [] and out["proposals"] == []
+    assert out.get("held_unreadable") == 1 and "held_local_only" not in out
+    assert [c.status for c in _rows(platform.engine, SkillCandidateRecord)] == ["pending"]
