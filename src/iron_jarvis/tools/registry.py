@@ -218,6 +218,33 @@ def current_call_scope() -> "CallScope | None":
     return _CALL_SCOPE.get()
 
 
+def values_key(ctx: Any) -> str:
+    """Whose kept values a call reaches: the name its namespace is filed
+    under (``_store_as`` and the ``repl`` tool both ask here).
+
+    An agent run or a coding session has an id of its own, and that is the
+    name, as it always was. Every CHAT turn runs under the one id "chat", so
+    that id and the folder named ONE place for every chat in the folder: a
+    long result a Local only chat set aside could be read from another chat
+    answered by a cloud model. A chat's values are therefore filed under the
+    chat itself, by the rule the script worker already uses
+    (``tool_script.worker_key``): its saved thread, else the turn (a new
+    chat's first message; the values follow the chat when it is saved,
+    ``tool_script.adopt_turn_worker``). A chat call that names neither is
+    filed under its own context (``ToolContext.own_id``): the values last for
+    that message and no other message finds them."""
+    sid = str(getattr(ctx, "session_id", "") or "")
+    if sid != "chat":
+        return sid
+    from .tool_script import worker_key
+
+    key, once = worker_key(ctx)
+    if not once:
+        return key
+    own = str(getattr(ctx, "own_id", "") or "")
+    return f"chat:call-{own}" if own else key
+
+
 #: Tools whose output is routinely LARGE enough to be worth keeping out of the
 #: context window — the only ones that advertise ``_store_as`` (v1.159.0).
 #:
@@ -2054,8 +2081,10 @@ class ToolRegistry:
                 "(', %d items' % len(__ij_v)) if hasattr(__ij_v, '__len__') else ''))\n"
                 "del __ij_v\n"
             )
+            # Filed under the CHAT, never the shared "chat" id (release 1 of
+            # the intelligence plan; see `values_key`).
             reply = await registry.execute(
-                ctx.session_id, code, workspace=str(ctx.workspace)
+                values_key(ctx), code, workspace=str(ctx.workspace)
             )
             if not reply.get("ok"):
                 raise RuntimeError(reply.get("error") or "namespace refused the value")
