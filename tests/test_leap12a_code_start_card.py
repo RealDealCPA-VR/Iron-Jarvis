@@ -88,7 +88,8 @@ class _Proxy:
         return self._cache
 
 
-_RESET = (utcnow() + timedelta(hours=3)).isoformat()
+#: Within the task's 90-minute limit: work started now waits for it.
+_RESET = (utcnow() + timedelta(hours=1)).isoformat()
 _LATER = (utcnow() + timedelta(hours=4)).isoformat()
 
 
@@ -177,6 +178,75 @@ def test_with_carry_on_by_itself_off_the_card_says_the_work_stops_at_the_limit(p
     assert (f"Uses your Claude plan (at its usage limit until {when}; it stops at the limit, because "
             "\"Carry on by itself after an account's limit\" is off).") in said, said
     assert "waits for the reset" not in said and "takes over" not in said and "Home Pro" not in said
+
+
+def _hhmm(moment) -> str:
+    return moment.strftime("%H:%M")
+
+
+@pytest.mark.parametrize("case", [
+    "now_past_its_limit", "now_no_reset_known", "now_past_its_limit_after_a_wait_for_room",
+    "tonight_before_it_starts", "tonight_inside_the_window", "tonight_after_the_window", "tonight_no_reset_known",
+])
+def test_the_cards_limit_words_say_what_bounds_the_wait(platform, phone, monkeypatch, case):
+    """12-a review 4: a wait at the account's limit has a bound, and the card
+    says what it means. TONIGHT: the night window (``settle_running`` stops a
+    waiting night task with ``WAIT_WINDOW_CLOSED`` when it closes), so a reset
+    after the coming window closes is never "it waits for the reset". NOW: the
+    task's time limit (``night.wait_over``), so a reset days away says it
+    stops at the limit; with no reset known, or a wait for room first (when it
+    starts is not known), the bound is said."""
+    from datetime import datetime
+
+    from iron_jarvis.harness.night_window import clock_words
+
+    poll, fake, _repo = phone
+    cfg = platform.config
+    cfg.default_provider, cfg.default_model = "claude-cli", ""
+    local = datetime.now().astimezone()
+    # The coming night window, by the real clock (Iron-Proxy's parks are read
+    # against it): opens in an hour, closes an hour later.
+    opens, closes = local + timedelta(minutes=61), local + timedelta(minutes=181)
+    monkeypatch.setattr(cfg, "night_window_start", _hhmm(opens))
+    monkeypatch.setattr(cfg, "night_window_end", _hhmm(closes))
+    resets = {
+        "now_past_its_limit": local + timedelta(days=3),
+        "now_past_its_limit_after_a_wait_for_room": local + timedelta(days=3),
+        "tonight_before_it_starts": local + timedelta(minutes=30),
+        "tonight_inside_the_window": local + timedelta(minutes=120),
+        "tonight_after_the_window": local + timedelta(days=3),
+    }
+    reset = resets.get(case)
+    state = {"status": "parked", "parkedReason": {"kind": "quota-exhausted"}}
+    if reset is not None:
+        state["parkedUntil"] = reset.isoformat()
+    _accounts(platform, monkeypatch, {"c-work": state})
+    if case.endswith("after_a_wait_for_room"):
+        for n in range(N.max_at_once(cfg)):  # room is full: it waits before it starts
+            busy = N.add_task(platform.engine, folder=f"C:\\work\\busy{n}", words="busy")
+            N.mark_running(platform.engine, busy["id"])
+    ask = ASK if case.startswith("now") else "/code projA tonight: fix the broken contact form"
+    _card(platform, poll, fake, ask)
+    said = fake.texts[-1]
+    at = f"at its usage limit until {MT._reset_words(reset.isoformat())}" if reset else "at its usage limit now"  # noqa: SLF001
+    end = clock_words(_hhmm(closes))
+    expected = {
+        "now_past_its_limit": f"({at}, past its 90-minute limit, so it stops at the limit).",
+        "now_no_reset_known": f"({at}; it waits for the reset only up to its 90-minute limit, then stops).",
+        "now_past_its_limit_after_a_wait_for_room":
+            f"({at}; it waits for the reset only up to its 90-minute limit, then stops).",
+        "tonight_before_it_starts": f"({at}, which is before it starts).",
+        "tonight_inside_the_window": f"({at}; it waits for the reset).",
+        "tonight_after_the_window": f"({at}, after the night window closes at {end}, so it stops when the window "
+                                    "closes).",
+        "tonight_no_reset_known": f"({at}; if it has not reset, it waits until the night window closes at {end}, "
+                                  "then stops).",
+    }[case]
+    assert f"Uses your Claude plan {expected}" in said, said
+    if case != "tonight_inside_the_window":
+        assert "it waits for the reset)" not in said, said
+    if case.endswith("after_a_wait_for_room"):
+        assert "It waits until one of the" in said, said
 
 
 @pytest.mark.parametrize("case", ["emergency", "not_a_repo", "pay", "local_only"])

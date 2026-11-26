@@ -224,10 +224,10 @@ async def test_emergency_stop_the_pay_limit_and_a_local_only_chat_are_refused_in
 
 
 async def test_a_phone_task_at_its_usage_limit_by_day_waits_and_a_night_task_is_stopped(tmp_path, monkeypatch):
-    """The card says "at its usage limit now; it waits for the reset": a
-    phone task whose account reached its limit keeps waiting by day (it runs
-    now, inside its own time limit). A night task in the same state at 15:00
-    is stopped, its record saying the window closed."""
+    """The card says it waits for the reset (up to its time limit): a phone
+    task whose account reached its limit keeps waiting by day (it runs now,
+    inside its own time limit; the bound is the next test's). A night task in
+    the same state at 15:00 is stopped, its record saying the window closed."""
     from iron_jarvis.daemon.routes import build as build_routes
 
     app = create_app(str(tmp_path / "home"))
@@ -257,6 +257,74 @@ async def test_a_phone_task_at_its_usage_limit_by_day_waits_and_a_night_task_is_
     assert stopped["state"] == N.STOPPED, stopped
     assert stopped["notes"][0]["text"] == N.WAIT_WINDOW_CLOSED
     assert "account_wait" not in build_routes._setup_of(S.get_row(engine, night_thread))
+
+
+@pytest.mark.parametrize("case", ["reset_days_away", "waited_its_whole_limit", "reset_within_its_limit"])
+async def test_a_phone_tasks_wait_on_its_account_never_outlasts_its_time_limit(tmp_path, monkeypatch, case):
+    """12-a review 4: by day nothing else ends a phone task's account wait
+    (the night window bounds a night task's), so it is bounded by what was
+    left of its time limit when the wait began (``N.wait_over``). A reset
+    days away, or a wait that has lasted that long, ends it STOPPED with
+    ``WAIT_PAST_LIMIT`` at once — its slot given back and the PC no longer
+    held awake; a reset inside the limit keeps it waiting."""
+    from datetime import timedelta
+
+    from iron_jarvis.core.ids import utcnow
+    from iron_jarvis.daemon.routes import build as build_routes
+
+    app = create_app(str(tmp_path / "home"))
+    d, platform = app.state.d, app.state.platform
+    engine, cfg = platform.engine, platform.config
+    monkeypatch.setattr(N, "CLOCK", lambda: _local(15, 0))  # the night window (23:00-07:00) is closed
+    now = utcnow()
+    armed, reset = {
+        "reset_days_away": (now, now + timedelta(days=3)),
+        "waited_its_whole_limit": (now - timedelta(minutes=N.task_minutes(cfg) + 1), None),
+        "reset_within_its_limit": (now, now + timedelta(minutes=30)),
+    }[case]
+    folder = tmp_path / "phone"
+    folder.mkdir()
+    row = S.create(engine, str(folder), "work", {})
+    task = N.add_task(engine, folder=str(folder), words="carry on", start_now=True, asked_from="comm:tg")
+    N.mark_running(engine, task["id"])
+    N.set_session(engine, task["id"], thread_id=row.id)
+    S.update(engine, row.id, setup={"account": "acct-1", "account_wait": build_routes.wait_record(
+        {"account": "acct-1", "account_name": "Work"}, reset.isoformat() if reset else None) | {
+        "armed_at": armed.isoformat()}})
+    assert N.awake_needed(engine, cfg, _local(15, 0)) is True  # it runs: the PC is held awake
+    settled = await night_routes.settle_running(d)
+    ended = N.get_task(engine, task["id"])
+    if case == "reset_within_its_limit":
+        assert settled == [] and ended["state"] == N.RUNNING
+        assert build_routes._setup_of(S.get_row(engine, row.id)).get("account_wait")
+        assert N.awake_needed(engine, cfg, _local(15, 0)) is True
+        return
+    assert settled == [task["id"]]
+    assert ended["state"] == N.STOPPED, ended
+    assert ended["notes"][0]["text"] == N.WAIT_PAST_LIMIT
+    assert "account_wait" not in build_routes._setup_of(S.get_row(engine, row.id))
+    # Its slot is given back and nothing holds the PC awake for it any more.
+    assert N.rows_in(engine, N.RUNNING) == []
+    assert N.awake_needed(engine, cfg, _local(15, 0)) is False
+
+
+def test_only_a_phone_tasks_wait_is_bounded_by_its_time_limit(tmp_path):
+    """``N.wait_over`` bounds a PHONE task's wait only: a night task's wait
+    is bounded by the night window, as before 12-a (``settle_running``)."""
+    from datetime import timedelta
+
+    from iron_jarvis.core.ids import utcnow
+
+    cfg = create_app(str(tmp_path / "home")).state.platform.config
+    now = utcnow()
+    far = {"armed_at": now.isoformat(), "resets_at": (now + timedelta(days=3)).isoformat()}
+    long_ago = {"armed_at": (now - timedelta(days=1)).isoformat(), "resets_at": ""}
+    for wait in (far, long_ago):
+        assert N.wait_over({"start_now": True}, wait, cfg) is True
+        assert N.wait_over({"start_now": False}, wait, cfg) is False
+    assert N.wait_over({"start_now": True}, {"armed_at": now.isoformat(), "resets_at": ""}, cfg) is False
+    # No start to count from: never an unbounded wait.
+    assert N.wait_over({"start_now": True}, {"armed_at": "x"}, cfg) is True
 
 
 async def test_a_phone_tasks_carry_on_may_run_by_day_and_a_night_tasks_may_not(tmp_path, monkeypatch):

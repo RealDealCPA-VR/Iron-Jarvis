@@ -753,8 +753,13 @@ async def settle_running(d: Any) -> list[str]:
             continue
         waiting = bool(setup.get("account_wait"))
         # Next leaps 12-a: a task the phone started waits on its account by
-        # day too (it runs now, inside its time limit).
-        if (not stopping and waiting and N.may_run_now(task, platform.config)
+        # day too (it runs now). Review 4: only within what was left of its
+        # time limit when the wait began, and never for a reset that comes
+        # after that (``N.wait_over``) — the night window bounds a night
+        # task's wait; nothing else would end this one, and it held its slot
+        # and the PC awake until the reset, days for a weekly limit.
+        past = waiting and N.wait_over(task, setup.get("account_wait"), platform.config, now)
+        if (not stopping and waiting and not past and N.may_run_now(task, platform.config)
                 and N.minutes_left(task, platform.config) >= 1.0):
             # Waiting on its account's reset (Resume when ready carries it
             # on, inside the window): still the night's task.
@@ -768,7 +773,7 @@ async def settle_running(d: Any) -> list[str]:
             await asyncio.to_thread(S.update, engine, thread, setup={"account_wait": None})
             if not stopping:
                 forced.append(("account", N.WAIT_WINDOW_CLOSED if not N.may_run_now(task, platform.config)
-                               else N.WAIT_TIME_USED_UP))
+                               else N.WAIT_PAST_LIMIT if past else N.WAIT_TIME_USED_UP))
         if thread in kept:
             # v1.398.0 review: a cut-off reply nothing carried on is never
             # carried on later (a later boot would run it under the user's

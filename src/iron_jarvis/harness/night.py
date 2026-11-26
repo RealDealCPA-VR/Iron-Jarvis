@@ -923,6 +923,48 @@ WAIT_TIME_USED_UP = (
     "Its account reached a limit, and its time limit is used up, so it was stopped. Open the "
     "session to carry it on."
 )
+#: Next leaps 12-a review 4: the record's note when a task the phone started
+#: is stopped because its account's limit did not reset (or will reset only
+#: later) within what was left of its time limit when the wait began.
+WAIT_PAST_LIMIT = (
+    "Its account reached a limit that does not reset within this task's time limit, so it was "
+    "stopped. Press Resume when ready in the session to carry it on."
+)
+
+
+def _instant_utc(value: Any) -> "datetime | None":
+    """An ISO instant as naive UTC (a naive one is taken as UTC), else None."""
+    if isinstance(value, datetime):
+        moment = value
+    else:
+        try:
+            moment = datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    return _naive(moment)
+
+
+def wait_over(task: "dict[str, Any] | None", wait: Any, config: Any, now: Any = None) -> bool:
+    """Has the account wait of a task the PHONE started run past its time
+    limit, or will its account reset only after that (next leaps 12-a review
+    4)? Its wait may last what was left of its time limit when the wait began
+    (``wait.armed_at``; the task's own start when that is unreadable) — a
+    night task's wait is bounded by the night window instead, and a phone
+    task runs by day, so nothing else would end it: it held its slot and the
+    PC awake until a weekly reset. False for every other task. Pure (``now``:
+    naive UTC, default the wall clock)."""
+    if not (task or {}).get("start_now"):
+        return False
+    wait = wait if isinstance(wait, dict) else {}
+    armed = _instant_utc(wait.get("armed_at")) or _instant_utc((task or {}).get("started_at"))
+    if armed is None:
+        return True  # no start to count from: never an unbounded wait
+    deadline = armed + timedelta(minutes=minutes_left(task, config))
+    at = _instant_utc(now) or _naive(utcnow())
+    if at >= deadline:
+        return True
+    reset = _instant_utc(wait.get("resets_at")) if wait.get("resets_at") else None
+    return reset is not None and reset > deadline
 #: The refusal of a night turn on a model billed per use with no room left
 #: under the user's pay-per-use limit (v1.398.0 review).
 PAY_USED_UP = (
@@ -1486,7 +1528,7 @@ def last_reply_line(messages: list[dict[str, Any]], turn_ids: "set[str] | None" 
 
 __all__ = [
     "BY_CI", "BY_NIGHT", "BY_PERSON", "BY_PHONE", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED",
-    "FAILED", "TASK_STARTERS", "may_run_now",
+    "FAILED", "TASK_STARTERS", "WAIT_PAST_LIMIT", "may_run_now", "wait_over",
     "NEEDS_YOU", "NIGHT_TURN", "NightRefused", "NightTaskRecord", "NightTurn", "POSTURE", "QUEUED",
     "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
     "card_wait_seconds", "current", "edit_task", "finish_needs_you", "finish_task", "finish_unmet",

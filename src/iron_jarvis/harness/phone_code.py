@@ -50,6 +50,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -307,11 +308,59 @@ def pick_words(matches: list[dict[str, str]]) -> str:
 _VENDOR_WORDS = {"claude": "Claude", "codex": "Codex", "grok": "Grok"}
 
 
-def uses_words(platform: Any, provider: str, model: str) -> str:
+def _instant(value: Any) -> "datetime | None":
+    """An ISO instant, aware (a naive one is taken as UTC), else None."""
+    try:
+        moment = datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def limit_wait_words(platform: Any, resets_at: Any, when: str, *, room_wait: bool = False) -> str:
+    """What work whose account is at its usage limit then does, by what
+    bounds its wait (12-a review 4), as the tail of the card's "at its usage
+    limit …" words. A TONIGHT task waits only while the night window is open
+    (``routes/night.settle_running`` stops it with ``WAIT_WINDOW_CLOSED``), so
+    a reset after the coming window closes means it stops then; a task
+    started NOW waits only within its time limit (``night.wait_over``), so a
+    reset past that means it stops at the limit. ``room_wait``: the card also
+    says it waits for room, so when it starts is not known. Pure (the night
+    clock)."""
+    from . import night as N
+    from .night_window import clock_words, next_start, window_end
+
+    cfg = getattr(platform, "config", None)
+    reset = _instant(resets_at) if resets_at else None
+    now = N.now_local()
+    if when == WHEN_TONIGHT:
+        start, end = N.window_of(cfg)
+        closes_at = clock_words(end)
+        opens = next_start(now, start, end)
+        closes = window_end(opens, start, end) if opens is not None else None
+        if reset is None or opens is None or closes is None:
+            return f"; if it has not reset, it waits until the night window closes at {closes_at}, then stops"
+        if reset <= opens:
+            return ", which is before it starts"
+        if reset <= closes:
+            return "; it waits for the reset"
+        return f", after the night window closes at {closes_at}, so it stops when the window closes"
+    minutes = N.task_minutes(cfg)
+    if reset is not None and reset <= now + timedelta(minutes=minutes):
+        return "; it waits for the reset"
+    if reset is None or room_wait:
+        return f"; it waits for the reset only up to its {minutes}-minute limit, then stops"
+    return f", past its {minutes}-minute limit, so it stops at the limit"
+
+
+def uses_words(platform: Any, provider: str, model: str, when: str = WHEN_NOW, *,
+               room_wait: bool = False) -> str:
     """What the work will use, in one sentence for the card (the master
     plan's calm note: "Uses your Claude plan (42% of this window used)").
-    From Iron-Proxy's CACHED usage only — never a vendor call. BLOCKING
-    (this month's pay-per-use spend); never raises."""
+    From Iron-Proxy's CACHED usage only — never a vendor call. ``when`` /
+    ``room_wait``: what bounds a wait at the account's limit
+    (:func:`limit_wait_words`). BLOCKING (this month's pay-per-use spend);
+    never raises."""
     from ..agents import model_team as MT
 
     try:
@@ -330,8 +379,8 @@ def uses_words(platform: Any, provider: str, model: str) -> str:
             own = BA.default_for(svc, vendor) if vendor in BA.VENDORS else None
             if own is not None and own.get("status") == BA.LIMIT:
                 cfg = getattr(platform, "config", None)
-                when = MT._reset_words(own.get("resets_at"))  # noqa: SLF001 — the planner's own clock words
-                at_limit = f"at its usage limit {f'until {when}' if when else 'now'}"
+                said = MT._reset_words(own.get("resets_at"))  # noqa: SLF001 — the planner's own clock words
+                at_limit = f"at its usage limit {f'until {said}' if said else 'now'}"
                 # 12-a review 3: "Carry on by itself after an account's limit"
                 # OFF arms neither a wait nor a move within the group
                 # (``routes/build.auto_wait``): the task ends at the limit.
@@ -344,7 +393,11 @@ def uses_words(platform: Any, provider: str, model: str) -> str:
                 if partner is not None:
                     return (f"Uses {plan} ({own.get('name') or 'its account'} is at its usage limit now; "
                             f"{partner.get('name') or 'another account'}, in the same group, takes over).")
-                return f"Uses {plan} ({at_limit}; it waits for the reset)."
+                # 12-a review 4: the wait has a bound (the night window, or
+                # the task's time limit), and the card says what it means.
+                tail = limit_wait_words(platform, own.get("resets_at") if said else None, when,
+                                        room_wait=room_wait)
+                return f"Uses {plan} ({at_limit}{tail})."
             if own is not None and own.get("status") == BA.NEEDS_SIGN_IN:
                 return f"Uses {plan} (its account needs to sign in again)."
             usage = MT.usage_for(platform, provider, str(own.get("id") or "")) if own is not None else None
@@ -473,7 +526,6 @@ def card_words(platform: Any, name: str, path: str, words: str, when: str) -> st
     from . import night as N
 
     minutes = N.task_minutes(platform.config)
-    uses = uses_words(platform, *_pair(platform))
     where = f"{name} ({where_words(path)})"
     if when == WHEN_TONIGHT:
         start, end = N.window_of(platform.config)
@@ -484,6 +536,9 @@ def card_words(platform: Any, name: str, path: str, words: str, when: str) -> st
     else:
         lead = f"Start coding work in {where} now?"
         wait = _wait_words(platform, path)
+    # 12-a review 4: a wait at the account's limit is bounded by the night
+    # window tonight and by the time limit now — the words say which.
+    uses = uses_words(platform, *_pair(platform), when, room_wait=bool(wait))
     quoted = " ".join(str(words or "").split())
     return (
         f"{lead} It works on a new branch of its own, edits and runs commands only there, may take up to "
@@ -895,7 +950,8 @@ __all__ = [
     "ASKED_FROM_PREFIX", "Asking", "CARD_TTL_S", "CODE_FOLDER_KIND", "CODE_START_KIND", "Card", "EVENT",
     "NOT_NOW", "START", "START_OPTIONS", "STEP_ENDED", "STEP_STARTED", "WHEN_NOW", "WHEN_TONIGHT",
     "after_pick", "ask_which", "asking", "card_words", "clean_folder_name", "deliver", "door_open",
-    "ending_words", "find_folder", "from_phone", "from_words", "none_words", "parse_code", "problem",
+    "ending_words", "find_folder", "from_phone", "from_words", "limit_wait_words", "none_words", "parse_code",
+    "problem",
     "propose", "publish", "report_of", "reset_asking", "set_asking", "start_from_card", "started_words",
     "used_folders", "uses_words", "where_words",
 ]

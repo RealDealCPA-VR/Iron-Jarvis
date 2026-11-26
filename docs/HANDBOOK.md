@@ -2066,9 +2066,14 @@ used). What it will do: fix the broken contact form", with **Start** and
   plan). When that account is at its usage limit, the card says so and when
   it resets ("at its usage limit until 9:20 PM; it waits for the reset"), or
   names the account in the same group that takes over; when it must sign in
-  again, the card says that too. With **Carry on by itself after an
-  account's limit** turned off, nothing waits and nothing moves, so the card
-  says the work stops at the limit instead.
+  again, the card says that too. Work started now waits for a reset only
+  within its time limit, so a reset later than that reads "…, past its
+  90-minute limit, so it stops at the limit". Work for tonight waits only
+  while the night window is open, so a reset after the window closes reads
+  "…, after the night window closes at 7:00 AM, so it stops when the window
+  closes". With **Carry on by itself after an account's limit** turned off,
+  nothing waits and nothing moves, so the card says the work stops at the
+  limit instead.
 - **Only folders you have used.** It starts work only in a folder you have
   worked in with Iron Jarvis: a coding session's folder (by the name the
   Coding sessions list shows, or the folder's own name), a project's folder,
@@ -2081,7 +2086,11 @@ used). What it will do: fix the broken contact form", with **Start** and
   else it would need is asked on your phone and skipped if nobody answers.
   It keeps the night shift's limits (how many run at once, one per folder,
   the time limit, your pay-per-use limit), so it may wait for room, and the
-  reply says so. Your phone hears "Started on branch ij/…" when it begins.
+  reply says so. If its account reaches a limit, it waits for the reset only
+  within its time limit; a reset later than that stops it at once, so it
+  never holds your PC awake for days. Press **Resume when ready** in the
+  session to carry it on. Your phone hears "Started on branch ij/…" when it
+  begins.
 - **When it ends**, ONE message, written from Iron Jarvis's own record of the
   task, never from the model's words: "Done in website: 3 files changed;
   tests passed. Its work is committed on the branch ij/…; nothing is
