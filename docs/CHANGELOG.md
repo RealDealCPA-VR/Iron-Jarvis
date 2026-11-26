@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.581.0
+
+**Ask about earlier work by date and by client, and open each piece.** Ask "what did we do for Baker in March?" in any chat and the answer comes from Iron Jarvis's own record of earlier work: "3 pieces of work in March 2026, for Baker".
+
 ## v1.580.4
 
 **A step that could not be double-checked says so where you look first.** When Iron Jarvis splits a larger task into steps, it checks each step before moving on.
@@ -77,7 +81,3 @@
 ## v1.564.0
 
 **Sort a scanned pile into its documents.** One PDF that holds a whole scanned pile becomes separate, named documents in their folders, after you check the plan.
-
-## v1.563.0
-
-**Quick Ask: the answer appears right there.** Press **Ctrl+Shift+Space** in any program (Help › Keyboard shortcuts shows the key that is live, if another app holds that one), type your question, and press Enter.
