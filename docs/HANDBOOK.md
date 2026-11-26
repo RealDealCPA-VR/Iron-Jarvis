@@ -2150,6 +2150,42 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Phone chats and coding sessions keep every message too (v1.581.0)
+
+Phone chats and coding sessions no longer lose their oldest messages, and you
+can scroll back to them. Until now a phone chat (Telegram, Slack, email and
+the rest) kept only its newest 200 messages and a coding session (Chat ›
+Code) its newest 200 lines: anything older was deleted as new ones came in.
+From this version they are kept, the way a long chat's have been since
+v1.499.4.
+
+**How it works.** Nothing to set up. Open a long phone chat in Chat, or a
+long coding session in Chat › Code, and scroll up: at the top there is the
+same quiet **Earlier messages** line a long chat has. Scroll up to it and the
+50 before load in place, and what you were reading stays where it was. Keep
+scrolling to go further back, to **Start of this chat**. In a session too
+short to scroll, press the line instead.
+
+**Good to know.**
+
+- What was deleted before this version cannot be brought back. At the top of
+  a long phone chat or coding session started before this version, the line
+  reads "Earlier messages were not kept before this version" instead of
+  **Start of this chat**.
+- A session opens as fast as before: opening it reads nothing earlier.
+- Earlier lines of a coding session can be read and copied. You cannot
+  rewind to them, branch from them or try them again; Undo and the other
+  buttons stay on the newer lines.
+- Rewinding a coding session leaves its earlier lines as they are.
+- Deleting a phone chat or a coding session deletes its earlier messages
+  too.
+- History search finds a phone chat's earlier messages. Coding sessions stay
+  out of Chat's history search, as before.
+- Round-tables keep everything too. What their agents say also reaches the
+  chat it was asked from, so you read it there.
+- The model answering is sent what it was before: the newest messages that
+  fit. Keeping more uses a little more disk.
+
 ## Open items stay until they are done (v1.582.0)
 
 The card a new chat or coding session shows for a folder you have worked in
@@ -2246,6 +2282,7 @@ you picked at the top (7, 30 or 90 days), and says whose work each call was.
   totals but not in this card, because it has no folder on Iron Jarvis's
   record. The card reads once when you open the page or change the switch,
   and again when you press Refresh.
+
 ## Review comments arrive in the coding session (v1.579.0)
 
 When people comment on a pull request a coding session (Chat › Code) opened,
@@ -3952,7 +3989,8 @@ line instead.
 - If they cannot be read, the line says "Could not load earlier messages."
   with **Try again**. What you already scrolled back to stays on screen.
 - History search already finds earlier messages.
-- Phone chats and coding sessions still keep only their newest messages.
+- Phone chats and coding sessions kept only their newest messages until
+  v1.581.0, which keeps them too.
 
 ## Ask what was done before, in any chat (v1.547.0)
 

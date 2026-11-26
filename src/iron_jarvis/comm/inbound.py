@@ -2161,9 +2161,13 @@ class InboundPoller:
                 ),
             )
             # Build-out R0.1 review: the rows older than the tail are counted,
-            # so another Iron Jarvis says how many were left out, truly.
+            # so another Iron Jarvis says how many were left out, truly. 48-b:
+            # its older messages are counted too (a read of them), so off the
+            # loop.
             rows, earlier = (
-                self.thread_store.history_window(tid, limit=_REMOTE_CHAT_ROWS)
+                await asyncio.to_thread(
+                    self.thread_store.history_window, tid, limit=_REMOTE_CHAT_ROWS
+                )
                 if tid
                 else ([], {})
             )

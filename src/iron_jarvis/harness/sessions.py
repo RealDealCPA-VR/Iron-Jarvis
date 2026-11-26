@@ -61,7 +61,10 @@ SESSION_PREFIX = "build:"
 MODE_ACT = "act"
 MODE_PLAN = "plan"
 MODES = (MODE_ACT, MODE_PLAN)
-#: The newest messages a session keeps (the chat PUT route's horizon).
+#: The newest lines a session keeps LIVE (the chat PUT route's window). 48-b:
+#: the lines that leave it MOVE to the session's older lines
+#: (``daemon.chat_append.keep_older``), never deleted; until then they were
+#: cut. ``GET /build/sessions/{id}`` says how many (``older``).
 MAX_MESSAGES = 200
 #: A session title / a folder display name, at most.
 MAX_TITLE_CHARS = 120
@@ -700,13 +703,14 @@ def session_title(current: str, before: list[dict[str, Any]], after: list[dict[s
 
 
 def _capped(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The newest lines within :data:`MAX_MESSAGES` (the cap itself is listed
-    OPEN in ``docs/rules/context.md``), cut at a TURN START (v1.510.0, second
-    review S12): whole turns are dropped from the front, so a kept transcript
-    never begins with a reply or a steer note whose question is gone. Turn
-    starts are ``rewind.turn_starts``'s reading (a question, never a steer).
-    When the newest turn ALONE is longer than the cap there is no start to
-    cut at: its newest :data:`MAX_MESSAGES` lines are kept, as before. Pure."""
+    """The newest lines within :data:`MAX_MESSAGES` (the LIVE window), cut
+    at a TURN START (v1.510.0, second review S12): whole turns leave from the
+    front, so the live lines never begin with a reply or a steer note whose
+    question is elsewhere. Turn starts are ``rewind.turn_starts``'s reading (a
+    question, never a steer). When the newest turn ALONE is longer than the
+    cap there is no start to cut at: its newest :data:`MAX_MESSAGES` lines
+    stay live, as before. 48-b: what leaves moves to the session's older
+    lines (:func:`_with_lines`). Pure."""
     if len(msgs) <= MAX_MESSAGES:
         return msgs
     from .rewind import turn_starts  # lazy: rewind reads this module (lazily too)
@@ -731,11 +735,13 @@ def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
     stamp = utcnow().isoformat()
     cleaned = [c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None]
     try:
+        older_ok = _older_store_ready(engine)  # before the transaction
         with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
             row = db.get(ChatThreadRecord, str(thread_id or ""))
             if row is None or not is_build_thread(row):
                 return {"ok": False, "updated_at": None, "count": 0}
-            msgs = _with_lines(row, cleaned, title_from_first=title_from_first)
+            msgs = _with_lines(row, cleaned, title_from_first=title_from_first,
+                               db=db, keep_ok=older_ok)
             db.add(row)
             db.commit()
             db.refresh(row)
@@ -746,12 +752,44 @@ def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
         return {"ok": False, "updated_at": None, "count": 0, "failed": True}
 
 
-def _with_lines(row: Any, cleaned: list[dict[str, Any]], *, title_from_first: bool = True) -> list[dict[str, Any]]:
+def _older_store_ready(engine: Any) -> bool:
+    """The older lines' table is there (made if missing) — called BEFORE the
+    write's transaction (a CREATE inside it would wait on the write's own
+    slot). Never raises."""
+    try:
+        from ..daemon import chat_append as _older  # lazy: daemon/ reads this module
+
+        return bool(_older.ensure_older_table(engine))
+    except Exception:  # noqa: BLE001 — then the lines stay live
+        log.warning("the older lines of coding sessions cannot be kept", exc_info=True)
+        return False
+
+
+def _with_lines(row: Any, cleaned: list[dict[str, Any]], *, title_from_first: bool = True,
+                db: Any = None, keep_ok: bool = False) -> list[dict[str, Any]]:
     """Put already-cleaned ``cleaned`` lines on ``row`` (in the caller's open
-    write): capped, the first question naming a new session, ``updated_at``
-    moved the monotonic way. Returns the lines the row now holds."""
+    write ``db``): the newest :data:`MAX_MESSAGES` live (:func:`_capped`, a
+    whole-turn cut), the first question naming a new session, ``updated_at``
+    moved the monotonic way. Returns the lines the row now holds.
+
+    48-b: the lines the cut takes MOVE to the session's older lines in the
+    same write (``chat_append.keep_older``; ``keep_ok``: the caller made sure
+    of the table first). When they cannot be kept (no table, no write, a
+    fault) they stay live, as a chat's do: nothing is ever dropped."""
     before = _messages(row)
-    msgs = _capped(before + cleaned)
+    whole = before + cleaned
+    msgs = _capped(whole)
+    moved = whole[: len(whole) - len(msgs)]
+    if moved:
+        if not keep_ok or db is None:
+            msgs = whole
+        else:
+            try:
+                from ..daemon import chat_append as _older
+
+                _older.keep_older(db, row, moved, kind="build")
+            except Exception:  # noqa: BLE001 — logged there; they stay live
+                msgs = whole
     row.messages_json = json.dumps(msgs)
     if title_from_first:
         row.title = session_title(row.title or NEW_SESSION_TITLE, before, msgs)
@@ -959,16 +997,30 @@ def create_with_lines(engine: Any, folder: str, title: str, setup: "dict[str, An
                       lines: list[dict[str, Any]]) -> ChatThreadRecord:
     """:func:`create`, holding ``lines`` from the start (a branched session —
     its origin's conversation up to the message, whitelisted like every line,
-    stamps kept). BLOCKING."""
+    stamps kept). BLOCKING. 48-b: lines past the live window (an origin whose
+    lines could not be kept once) move to the new session's older lines, as
+    :func:`_with_lines` moves them; never dropped."""
     stamp = utcnow().isoformat()
-    kept = _capped([c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None])
+    whole = [c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None]
+    kept = _capped(whole)
+    moved = whole[: len(whole) - len(kept)]
     row = create(engine, folder, title, setup)
-    if not kept:
+    if not whole:
         return row
+    older_ok = _older_store_ready(engine) if moved else False  # before the transaction
     with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
         fresh = db.get(ChatThreadRecord, row.id)
         if fresh is None:
             return row
+        if moved:
+            try:
+                if not older_ok:
+                    raise RuntimeError("the older lines cannot be kept")
+                from ..daemon import chat_append as _older
+
+                _older.keep_older(db, fresh, moved, kind="build")
+            except Exception:  # noqa: BLE001 — they stay live (nothing is dropped)
+                kept = whole
         fresh.messages_json = json.dumps(kept)
         db.add(fresh)
         db.commit()
@@ -1615,6 +1667,7 @@ def take_wait(engine: Any, thread_id: str, armed_at: str, account: str, *,
         return False
     stamp = utcnow().isoformat()
     cleaned = [c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None]
+    older_ok = _older_store_ready(engine) if cleaned else False  # before the transaction
     with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
         row = db.get(ChatThreadRecord, str(thread_id or ""))
         if row is None or not is_build_thread(row) or getattr(row, "archived_at", None) is not None:
@@ -1639,7 +1692,7 @@ def take_wait(engine: Any, thread_id: str, armed_at: str, account: str, *,
                 setup[key] = value
         row.setup_json = _clean_setup(setup)
         if cleaned:
-            _with_lines(row, cleaned)
+            _with_lines(row, cleaned, db=db, keep_ok=older_ok)
         db.add(row)
         db.commit()
         return True

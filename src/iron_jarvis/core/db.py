@@ -417,6 +417,49 @@ def init_db(engine: Engine) -> None:
     _ensure_indexes(engine)
     _ensure_fts(engine)
     run_migrations(engine)
+    note_older_kept_since(engine)
+
+
+#: 48-b (idea 48, "Scroll back forever"): when THIS database was first opened
+#: by a version that keeps the oldest messages of phone chats, coding sessions
+#: and round-tables. Before it they were cut at their caps (200, 200, 400),
+#: and nothing on disk says whether one was: a conversation of those kinds
+#: made since this moment lost nothing; one made before may have. Written
+#: once by :func:`init_db`, never moved; read by ``daemon.chat_append``.
+OLDER_KEPT_SINCE_KEY = "older_kept_since"
+
+
+def note_older_kept_since(engine: Engine) -> None:
+    """Write :data:`OLDER_KEPT_SINCE_KEY` (now, UTC) unless it is there.
+    Never raises: a database that cannot take it reads as "not known"."""
+    try:
+        _ensure_meta(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO _ironjarvis_meta(key,value) VALUES(:k,:v) "
+                    "ON CONFLICT(key) DO NOTHING"
+                ),
+                {"k": OLDER_KEPT_SINCE_KEY, "v": datetime.now(timezone.utc).isoformat()},
+            )
+    except Exception:  # noqa: BLE001 — a start never fails on this stamp
+        logger.warning("could not note when older messages started being kept", exc_info=True)
+
+
+def older_kept_since(engine: Engine) -> datetime | None:
+    """:data:`OLDER_KEPT_SINCE_KEY` as an aware UTC time, or None when it is
+    missing or unreadable (then nothing older is claimed). BLOCKING."""
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT value FROM _ironjarvis_meta WHERE key=:k"), {"k": OLDER_KEPT_SINCE_KEY}
+            ).first()
+        if not row or not row[0]:
+            return None
+        when = datetime.fromisoformat(str(row[0]))
+        return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    except Exception:  # noqa: BLE001 — unsure is "not known"
+        return None
 
 
 #: v1.504.0 (north-star plan 4.3): the file that says a database was set aside

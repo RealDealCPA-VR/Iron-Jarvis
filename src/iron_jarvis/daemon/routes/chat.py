@@ -2276,14 +2276,16 @@ def register(app: FastAPI, d) -> None:
         chat's first message). ``start_kept`` says whether position 0 is the
         chat's VERY first message: False for a long chat made before the
         version that started keeping (``chat_append.start_kept``), whose first
-        messages may have been deleted then."""
+        messages may have been deleted then. 48-b: a phone chat and a coding
+        session are read here too, each with its own kind's rule
+        (``chat_append.start_kept_of``)."""
         from ...core.models import ChatThreadRecord
         from ..chat_append import (
             MAX_MESSAGES as _LIVE_MAX,
             older_count,
             older_window,
             read_older,
-            start_kept,
+            start_kept_of,
         )
 
         with session_scope(d.platform.engine) as db:
@@ -2303,7 +2305,7 @@ def register(app: FastAPI, d) -> None:
             "total": total,
             "offset": max(0, int(offset or 0)),
             "first_seq": start,
-            "start_kept": start_kept(getattr(r, "created_at", None), total, live),
+            "start_kept": start_kept_of(d.platform.engine, r, total, live),
             "messages": (
                 read_older(d.platform.engine, thread_id, offset=start, limit=count)
                 if count > 0 else []

@@ -291,6 +291,7 @@ import {
   decodeAskResolved,
   decodeAskUser,
   decodeFinish,
+  decodeMessage,
   decodeSessionView,
   deleteSession,
   refusedNotEmpty,
@@ -321,6 +322,33 @@ import {
   type BuildSessionView,
   type UnsavedReply,
 } from "@/lib/buildSessions";
+// 48-b: a session's EARLIER lines, read back as the reader scrolls up — the
+// chat's own pieces (48-a).
+import { OlderMessages } from "@/components/chat/OlderMessages";
+import {
+  decodeOlderPage,
+  gapRetry,
+  gapToFill,
+  hasEarlier,
+  olderCount,
+  olderFailed,
+  olderLoading,
+  olderPagePath,
+  olderStart,
+  withEarlierPage,
+  withRowsBetween,
+  withTotal,
+  type OlderPage,
+  type OlderState,
+} from "@/lib/olderMessages";
+
+/** 48-b: an earlier page of a session's lines, each read the way the live
+ *  lines are (`decodeMessage`), its positions kept. */
+function decodeOlderLines(raw: unknown): OlderPage<BuildMessage> | null {
+  const page = decodeOlderPage<BuildMessage>(raw);
+  if (!page) return null;
+  return { ...page, messages: page.messages.map((m) => decodeMessage(m) ?? m) };
+}
 
 /** How many times a finished turn's reply is looked for before giving up. */
 const REREAD_TRIES = 4;
@@ -1051,16 +1079,24 @@ export function HarnessSession({
   }, [threadId, onScreen]);
 
   // ------------------------------------------------------------- reading
+  // 48-b: where a view's live lines start (`older`) is taken WITH the view,
+  // in the same update, so the earlier lines' block and the live lines are
+  // never drawn from two different reads (set below, takeOlderTotal).
+  const takeOlderRef = useRef<(total: unknown) => void>(() => {});
+  const takeView = useCallback((v: BuildSessionView) => {
+    setView(v);
+    takeOlderRef.current(v.older);
+  }, []);
   /** Take a session view the daemon answered with: the view, and (from an
    *  Iron Jarvis that keeps them) its limit card and armed wait. */
   const adopt = useCallback((v: BuildSessionView) => {
-    setView(v);
+    takeView(v);
     setLoadError(null);
     if (v.knowsAccounts) {
       setLimit(decodeAccountLimit(v.accountLimit));
       setWaiting(!!decodeAccountWait(v.accountWait));
     }
-  }, []);
+  }, [takeView]);
   // v1.384.0: the view last drawn is what a return paints at once.
   useEffect(() => {
     if (view) keepView(threadId, view);
@@ -2252,7 +2288,7 @@ export function HarnessSession({
     setCapBusy(true);
     try {
       const v = await patchSession(threadId, { cap });
-      if (v) setView(v);
+      if (v) takeView(v);
       onChanged();
       return null;
     } catch (e) {
@@ -2409,13 +2445,13 @@ export function HarnessSession({
       // reads when it applies (the daemon says so only while a reply runs).
       if ("approval_mode" in body || "mode" in body || "local_only" in body) {
         const { view: v, applies, localOnlyLine } = await patchSessionLevel(threadId, body);
-        if (v) setView(v);
+        if (v) takeView(v);
         if ("approval_mode" in body || "mode" in body) setLevelApplies(busyNowRef.current ? applies : null);
         // The follow-up to RB3: Local only reaches the next message only.
         if ("local_only" in body) setLocalOnlyApplies(busyNowRef.current ? localOnlyLine : "");
       } else {
         const v = await patchSession(threadId, body);
-        if (v) setView(v);
+        if (v) takeView(v);
       }
       onChanged();
     } catch (e) {
@@ -2866,6 +2902,35 @@ export function HarnessSession({
    *  for a collapsed caret). */
   const trackCaret = (e: React.SyntheticEvent<HTMLTextAreaElement>) => setCaret(e.currentTarget.selectionStart ?? 0);
 
+  // ----------------------------------------------- earlier lines (48-b)
+  // A long session keeps its newest 200 lines LIVE (`view.messages`) and
+  // moves the rest to its older lines, never deleting them
+  // (harness/sessions._with_lines). Scrolling up to the top reads them back,
+  // 50 at a time, with the chat's own pieces (lib/olderMessages,
+  // components/chat/OlderMessages). They are NEVER part of `view.messages`:
+  // their own state, drawn above the live lines, read-only. Opening a session
+  // reads nothing older; a page is read only once the reader has left the
+  // bottom (or presses the line). The first view taken starts the state
+  // (`older` = where its live lines start); a later one whose count grew
+  // fetches just the lines in between (they were on screen as live ones).
+  const [older, setOlderState] = useState<OlderState<BuildMessage>>(() => {
+    const n = olderCount(viewFor<BuildSessionView>(threadId)?.older);
+    return n === null ? olderStart<BuildMessage>("", 0) : olderStart<BuildMessage>(threadId, n);
+  });
+  const olderRef = useRef(older);
+  // Bumped when the state starts over: a read still on its way lands nowhere.
+  const olderGenRef = useRef(0);
+  // One fill of the lines in between at a time (see fillOlderGap).
+  const olderFillingRef = useRef(false);
+  // Where the reader's line was before a page went in above it.
+  const olderPlaceRef = useRef<{ el: Element | null; top: number; height: number } | null>(null);
+  // The "Earlier messages" line is in view (its observer says so).
+  const olderInViewRef = useRef(false);
+  // The block the earlier lines are drawn in (the live lines follow it).
+  const olderBlockRef = useRef<HTMLDivElement | null>(null);
+  // The reach of the line, for the scroll handler (set below).
+  const olderReachRef = useRef<() => void>(() => {});
+
   // ------------------------------------------------------------- render
   // Keep the newest line in view — the TRANSCRIPT scrolls, never the page (a
   // scrollIntoView would drag the whole window down on a phone).
@@ -2882,10 +2947,16 @@ export function HarnessSession({
   const onTranscriptScroll = useCallback(() => {
     const el = transcriptRef.current;
     if (!el) return;
+    const was = atBottomRef.current;
     const at = atBottomOf(el);
     atBottomRef.current = at;
     followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK_PX;
     keepScroll(threadId, { top: el.scrollTop, atBottom: at });
+    // 48-b: the "Earlier messages" line was already in view while the reader
+    // followed the newest line (a session a little taller than the window):
+    // its observer reported then, and was rightly ignored, and scrolling up
+    // does not report again. Leaving the bottom is the reach.
+    if (was && !at && olderInViewRef.current) olderReachRef.current();
   }, [threadId]);
   /** v1.417.0 (C2.2): the streamed reply grew — keep the newest line in view
    *  (the transcript scrolls, never the page). Stable: the live block calls
@@ -2905,6 +2976,155 @@ export function HarnessSession({
     const el = transcriptRef.current;
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [view?.messages.length, pending, stream.tools.length, limit]);
+
+  /** 48-b: the older state, in the ref at once and on screen next render. */
+  function setOlder(next: OlderState<BuildMessage>) {
+    olderRef.current = next;
+    setOlderState(next);
+  }
+
+  /** 48-b: start over, for this session's live lines starting at `total`
+   *  (nothing held). A read still on its way is dropped. */
+  function resetOlder(total: number) {
+    olderGenRef.current += 1;
+    olderFillingRef.current = false;
+    olderPlaceRef.current = null;
+    setOlder(olderStart<BuildMessage>(threadId, total));
+  }
+
+  /** 48-b: a view the daemon answered with says where its live lines start
+   *  (`older`, read with them). The first one starts the state; a later one
+   *  whose count grew fetches just the lines that left the live ones, so no
+   *  gap opens and nothing shows twice. A view with no count (an older Iron
+   *  Jarvis, or one read while the session went) changes nothing. */
+  function takeOlderTotal(total: unknown) {
+    const n = olderCount(total);
+    if (n === null) return;
+    const cur = olderRef.current;
+    if (cur.threadId !== threadId || n < cur.total) {
+      resetOlder(n);
+      return;
+    }
+    const next = withTotal(cur, threadId, n);
+    if (next !== cur) setOlder(next);
+    fillOlderGap();
+  }
+
+  /** 48-b: fetch the lines between the held ones and the live ones, one
+   *  read at a time. A failed read keeps what is held and marks the gap
+   *  with Try again; it is not asked again by itself until then. */
+  function fillOlderGap() {
+    const s = olderRef.current;
+    const gap = gapToFill(s);
+    if (!gap || olderFillingRef.current || s.gapFailed) return;
+    olderFillingRef.current = true;
+    const gen = olderGenRef.current;
+    void (async () => {
+      let page: OlderPage<BuildMessage> | null = null;
+      try {
+        page = decodeOlderLines(await get<unknown>(olderPagePath(s.threadId, gap.to, gap.to - gap.from)));
+      } catch {
+        page = null;
+      }
+      if (olderGenRef.current !== gen) return;
+      olderFillingRef.current = false;
+      setOlder(withRowsBetween(olderRef.current, gap.from, gap.to, page));
+      fillOlderGap();
+    })();
+  }
+
+  /** 48-b: read the page of earlier lines just above the ones held. */
+  async function loadEarlier() {
+    const s = olderRef.current;
+    if (!s.threadId || s.loading || !hasEarlier(s)) return;
+    const gen = olderGenRef.current;
+    const before = s.loadedFrom;
+    setOlder(olderLoading(s));
+    let page: OlderPage<BuildMessage> | null = null;
+    try {
+      page = decodeOlderLines(await get<unknown>(olderPagePath(s.threadId, before)));
+    } catch {
+      page = null;
+    }
+    if (olderGenRef.current !== gen) return;
+    const cur = olderRef.current;
+    if (!page) {
+      setOlder(olderFailed(cur));
+      return;
+    }
+    const next = withEarlierPage(cur, before, page);
+    if (next.loadedFrom !== cur.loadedFrom) holdReadersPlace();
+    setOlder(next);
+  }
+
+  /** 48-b: the line came into view. Only a reader who left the bottom gets
+   *  a read (a session that just opened, following its newest line, reads
+   *  nothing older), and a failed read waits for Try again. */
+  function onOlderReach() {
+    const s = olderRef.current;
+    if (atBottomRef.current || s.loading || s.failed) return;
+    void loadEarlier();
+  }
+
+  /** 48-b: the line, or Try again, was pressed: the reader is reading back
+   *  (the lines going in above must not pull them to the newest one). */
+  function onOlderPress() {
+    atBottomRef.current = false;
+    followRef.current = false;
+    void loadEarlier();
+  }
+
+  /** 48-b: Try again on the line between the held lines and the live ones. */
+  function onOlderRetryGap() {
+    setOlder(gapRetry(olderRef.current));
+    fillOlderGap();
+  }
+
+  /** 48-b: note where the reader's line is before a page goes in above it:
+   *  the first line after the earlier block that has a box (everything
+   *  below the block moves by the same amount). The layout effect below
+   *  puts it back. */
+  function holdReadersPlace() {
+    const box = transcriptRef.current;
+    if (!box) return;
+    let el: Element | null = olderBlockRef.current?.nextElementSibling ?? null;
+    while (el && el.getBoundingClientRect().height <= 0) el = el.nextElementSibling;
+    olderPlaceRef.current = { el, top: el ? el.getBoundingClientRect().top : 0, height: box.scrollHeight };
+  }
+
+  // 48-b: every view the daemon answers with carries its count (`older`),
+  // taken with it (takeView).
+  takeOlderRef.current = takeOlderTotal;
+
+  // 48-b: an earlier page went in above the reader. Before the browser
+  // paints, move the scroll by exactly what their line moved, so it stays
+  // where it was on screen (zero when the browser's own scroll anchoring
+  // already kept it). The reader is reading back: nothing follows the bottom.
+  useLayoutEffect(() => {
+    const place = olderPlaceRef.current;
+    olderPlaceRef.current = null;
+    const box = transcriptRef.current;
+    if (!place || !box) return;
+    atBottomRef.current = false;
+    followRef.current = false;
+    const moved =
+      place.el && place.el.isConnected
+        ? place.el.getBoundingClientRect().top - place.top
+        : box.scrollHeight - place.height;
+    if (moved) box.scrollTop += moved;
+  }, [older.loadedFrom]);
+
+  // 48-b: stable props for the memoized OlderMessages (they call the newest
+  // closures through a ref).
+  const olderImplRef = useRef({ reach: onOlderReach, press: onOlderPress, retryGap: onOlderRetryGap });
+  olderImplRef.current = { reach: onOlderReach, press: onOlderPress, retryGap: onOlderRetryGap };
+  olderReachRef.current = () => olderImplRef.current.reach();
+  const olderReach = useCallback(() => olderImplRef.current.reach(), []);
+  const olderPress = useCallback(() => olderImplRef.current.press(), []);
+  const olderRetryGap = useCallback(() => olderImplRef.current.retryGap(), []);
+  const olderInView = useCallback((inView: boolean) => {
+    olderInViewRef.current = inView;
+  }, []);
 
   const asks = collectDockAsks({
     approval: stream.approval,
@@ -3126,6 +3346,69 @@ export function HarnessSession({
       },
     }),
     [],
+  );
+  // 48-b: an EARLIER line's row (HarnessMessageRow `readOnly`) draws no
+  // press that takes its index; should one ever reach it, it does nothing,
+  // since that index is the line's place in the session, not one in the
+  // live lines. Opening a file it names is reading, so that one stays.
+  const olderRowHandlers = useMemo<HarnessRowHandlers>(() => {
+    const none = () => {};
+    return {
+      onRewound: none,
+      onBranch: none,
+      onAttemptKept: none,
+      onKeepGoing: none,
+      onRetry: none,
+      onOpenRewind: none,
+      onOpenDocument: (path) => rowHandlers.onOpenDocument(path),
+    };
+  }, [rowHandlers]);
+  // Each earlier reply's changes window starts at the question before it.
+  const olderPrevUserAt = useMemo(() => {
+    const out = new Map<number, string | undefined>();
+    let last: string | undefined;
+    let seen = false;
+    for (const r of older.rows) {
+      out.set(r.seq, seen ? last : undefined);
+      if (r.message.role === "user") {
+        seen = true;
+        last = typeof r.message.at === "string" ? r.message.at : undefined;
+      }
+    }
+    return out;
+  }, [older.rows]);
+  const renderOlderRow = useCallback(
+    (m: BuildMessage, seq: number) =>
+      // The daemon's own "carry on" questions are not shown (as live ones).
+      m.continuation === true ? null : (
+        <HarnessMessageRow
+          readOnly
+          m={m}
+          index={seq}
+          threadId={threadId}
+          sessionId={view?.sessionId ?? ""}
+          archived={!!view?.archived}
+          busy={false}
+          isPending={false}
+          branching={null}
+          newest={false}
+          carriedOn={false}
+          canRewind={false}
+          prevUserAt={olderPrevUserAt.get(seq)}
+          teamRoster={teamRoster}
+          models={catalog.models}
+          health={daemon.health}
+          provider={provider}
+          localOnlyHeld={view?.setup.localOnlyHolds}
+          undoFor={undoFor}
+          onUndo={onUndo}
+          h={olderRowHandlers}
+        />
+      ),
+    [
+      threadId, view?.sessionId, view?.archived, view?.setup.localOnlyHolds, olderPrevUserAt, teamRoster,
+      catalog.models, daemon.health, provider, undoFor, onUndo, olderRowHandlers,
+    ],
   );
   const onPanesSessionChanged = useCallback(() => {
     void liveHandlers.current.load();
@@ -3575,6 +3858,31 @@ export function HarnessSession({
           onScroll={onTranscriptScroll}
         >
           {offline ? <OfflineHint /> : null}
+          {/* 48-b: the session's EARLIER lines, above the live ones:
+              "Earlier messages" at the top, read 50 at a time once the
+              reader scrolls up to it, through the same row, read-only. Their
+              own state (`older`), never `view.messages`; keyed
+              `older-<position>`, so the live rows' keys never move. Drawn
+              only for a session that keeps some (no box otherwise). */}
+          {older.threadId === threadId && older.total > 0 ? (
+            <div
+              ref={olderBlockRef}
+              data-older-block=""
+              data-testid="harness-older"
+              className="flex min-w-0 flex-col gap-6"
+            >
+              <OlderMessages
+                state={older}
+                firstLiveAt={shown[0]?.at}
+                rootRef={transcriptRef}
+                onReach={olderReach}
+                onInView={olderInView}
+                onLoad={olderPress}
+                onRetryGap={olderRetryGap}
+                renderRow={renderOlderRow}
+              />
+            </div>
+          ) : null}
           {shown.length === 0 && !busy ? (
             <p data-testid="harness-empty" className="break-words pt-6 text-center text-[13px] text-zinc-500">
               {view.noFolder

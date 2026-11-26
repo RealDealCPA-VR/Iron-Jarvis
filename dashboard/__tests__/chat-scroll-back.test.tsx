@@ -648,6 +648,61 @@ describe("scroll back in a chat (48-a)", () => {
   });
 });
 
+describe("scroll back in a phone chat (48-b)", () => {
+  // From 48-b a phone chat keeps its oldest messages too (comm/threads.py
+  // moves them, as a long chat's), and the chat page shows it with its
+  // banner: the same "Earlier messages" line, read the same way.
+  function storePhoneChat(older: number) {
+    storeThread(older);
+    H.api.getResponses["/chat/threads/t7"] = {
+      ...(H.api.getResponses["/chat/threads/t7"] as Record<string, unknown>),
+      title: "Telegram · Val",
+      owner: "daemon",
+      comm_channel: "telegram",
+      comm_display: "Val",
+    };
+  }
+
+  it("scrolls back to the start of a phone chat, read-only, and never saves it", async () => {
+    storePhoneChat(60);
+    serveOlder(60);
+    render(<ChatPage />);
+    await screen.findByText("live 199");
+    expect(await screen.findByTestId("older-more")).toHaveTextContent("Earlier messages");
+    // Opening it read nothing older.
+    expect(olderReads()).toHaveLength(0);
+    scrollToTop();
+    reachTop();
+    await screen.findByText("older 10");
+    reachTop();
+    await screen.findByText("older 0");
+    expect(olderReads()).toEqual([
+      "/chat/threads/t7/older?before=60&limit=50",
+      "/chat/threads/t7/older?before=10&limit=50",
+    ]);
+    expect(screen.getByTestId("older-start")).toHaveTextContent("Start of this chat");
+    // An earlier phone message is read-only, like any chat's.
+    const row = document.querySelector('[data-older-seq="0"]') as HTMLElement;
+    expect(within(row).queryByRole("button", { name: /edit/i })).toBeNull();
+    // A phone chat is the messaging store's to write: the page saved nothing.
+    expect(H.api.puts.filter((p) => p.path === "/chat/threads/t7")).toEqual([]);
+  });
+
+  it("says its first messages were not kept when the daemon says so", async () => {
+    // A phone chat made before 48-b that passed 200 messages lost its first
+    // ones then; the daemon says its start is not known.
+    storePhoneChat(20);
+    serveOlder(20, olderMsg, false);
+    render(<ChatPage />);
+    await screen.findByText("live 199");
+    fireEvent.click(await screen.findByTestId("older-more"));
+    await screen.findByText("older 0");
+    expect(screen.getByTestId("older-start")).toHaveTextContent(
+      "Earlier messages were not kept before this version",
+    );
+  });
+});
+
 describe("RunResultCard readOnly: an earlier message's run card acts on nothing", () => {
   const run = (over: Record<string, unknown>) =>
     ({

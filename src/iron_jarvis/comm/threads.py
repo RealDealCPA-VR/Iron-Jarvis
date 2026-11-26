@@ -42,8 +42,10 @@ from .models import CommIdentityRecord
 
 log = get_logger("comm.threads")
 
-#: Same tail cap as PUT /chat/threads/{id} — a comm thread must not diverge
-#: from what a desktop save would keep.
+#: Same LIVE window as PUT /chat/threads/{id} — a comm thread must not
+#: diverge from what a desktop save would keep. 48-b: what leaves it MOVES to
+#: the thread's older messages (``daemon.chat_append.keep_older``), never
+#: deleted; until then message 201 was simply cut.
 _MAX_MESSAGES = 200
 
 #: Same per-message content cap as the chat turn's input handling (chat.py
@@ -210,8 +212,10 @@ class CommThreadStore:
         line on a phone thread renders attributed on the desktop too.
 
         Read-modify-write of ``messages_json`` in ONE session under the store
-        lock; tail-capped to the same 200 messages PUT keeps; content capped
-        at the turn's 12000-char input cap; bumps ``updated_at``. Raises
+        lock; the same 200 messages PUT keeps stay live and (48-b) the ones
+        that leave MOVE to the thread's older messages in this same write
+        (kept live when they cannot be kept: nothing is ever dropped); content
+        capped at the turn's 12000-char input cap; bumps ``updated_at``. Raises
         ``ValueError`` on a vanished thread (callers ``resolve`` first, so
         this is a bug/race worth hearing about — silently dropping a phone
         message would be worse). Publishes CHAT_THREAD_UPDATED best-effort.
@@ -234,6 +238,11 @@ class CommThreadStore:
         for key in _EXTRA_KEYS:
             if extra and extra.get(key):
                 entry[key] = extra[key]
+        # 48-b: lazy (keeps comm/ free of daemon/ at import), and BEFORE the
+        # transaction: a CREATE inside it would wait on the write's own slot.
+        from ..daemon import chat_append as _older
+
+        older_ok = _older.ensure_older_table(self.engine)
         with self._lock, session_scope(self.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
             if r is None:
@@ -245,7 +254,12 @@ class CommThreadStore:
             except Exception:  # noqa: BLE001 — a corrupt blob must not wedge comm
                 msgs = []
             msgs.append(entry)
-            msgs = msgs[-_MAX_MESSAGES:]
+            if len(msgs) > _MAX_MESSAGES and older_ok:
+                try:
+                    _older.keep_older(db, r, msgs[:-_MAX_MESSAGES], engine=self.engine, kind="comm")
+                    msgs = msgs[-_MAX_MESSAGES:]
+                except Exception:  # noqa: BLE001 — logged there; they stay live
+                    pass
             r.messages_json = json.dumps(msgs)
             r.updated_at = utcnow()
             self._revive_if_archived(r, role)
@@ -339,9 +353,10 @@ class CommThreadStore:
         asked for the last 30 messages, a fixed slice taken BEFORE the chat
         turn's planner (``context.budget.plan_history``) could fit the
         conversation to the answering model's window — the forbidden
-        ``messages[-N:]``. The thread is already bounded by its own storage
-        cap (``_MAX_MESSAGES``, the 200 that ``append`` keeps), and the
-        planner decides what fits and says what it left out."""
+        ``messages[-N:]``. The thread is already bounded by its own live
+        window (``_MAX_MESSAGES``, the 200 that ``append`` keeps live; 48-b:
+        the older ones are kept beside it and never sent), and the planner
+        decides what fits and says what it left out."""
         try:
             with session_scope(self.engine) as db:
                 r = db.get(ChatThreadRecord, thread_id)
@@ -377,7 +392,7 @@ class CommThreadStore:
         an attributed line carries — so a remote addressed from the phone is
         shown the same conversation a desktop @-mention would be. ``[]`` on
         any failure."""
-        return self.history_window(thread_id, limit)[0]
+        return self._window(thread_id, limit, older=False)[0]
 
     def history_window(
         self, thread_id: str, limit: int = 60
@@ -385,31 +400,53 @@ class CommThreadStore:
         """:meth:`history_rows`, and the rows with words OLDER than that tail,
         counted by who said them (build-out R0.1 review): a remote seat's
         transport is told how many it did not get, so another Iron Jarvis
-        never states fewer left out than were. ``([], {})`` on any failure."""
+        never states fewer left out than were. 48-b: the thread's older
+        messages (kept beyond its live 200) are never passed either, so they
+        are counted too. BLOCKING (callers on the loop use a thread).
+        ``([], {})`` on any failure."""
+        return self._window(thread_id, limit, older=True)
+
+    @staticmethod
+    def _window_row(m: Any) -> dict[str, str] | None:
+        """One stored message as a remote is shown it, or None (no words)."""
+        if not isinstance(m, dict):
+            return None
+        content = str(m.get("content") or "")
+        if not content.strip():
+            return None
+        if m.get("role") == "user":
+            who = "user"
+        else:
+            who = str(m.get("panelWho") or "jarvis")
+        return {"who": who, "content": content}
+
+    def _window(
+        self, thread_id: str, limit: int, *, older: bool
+    ) -> tuple[list[dict[str, str]], dict[str, int]]:
         try:
+            if int(limit) <= 0:
+                return [], {}
+            earlier: dict[str, int] = {}
+            if older:
+                # The older messages FIRST, then the live window: an append
+                # between the two reads moves lines from the live window to
+                # the older ones, so this order can miss one (count fewer),
+                # never count one twice (``routes/agents._saved_chat_earlier``'s
+                # order).
+                from ..daemon.chat_append import older_by_who
+
+                earlier = older_by_who(
+                    self.engine, thread_id, lambda m: (self._window_row(m) or {}).get("who"),
+                )
             with session_scope(self.engine) as db:
                 r = db.get(ChatThreadRecord, thread_id)
                 if r is None:
                     return [], {}
                 msgs = json.loads(r.messages_json or "[]")
-            if not isinstance(msgs, list) or int(limit) <= 0:
+            if not isinstance(msgs, list):
                 return [], {}
-
-            def _row(m: Any) -> dict[str, str] | None:
-                if not isinstance(m, dict):
-                    return None
-                content = str(m.get("content") or "")
-                if not content.strip():
-                    return None
-                if m.get("role") == "user":
-                    who = "user"
-                else:
-                    who = str(m.get("panelWho") or "jarvis")
-                return {"who": who, "content": content}
-
-            out = [row for row in map(_row, msgs[-int(limit):]) if row is not None]
-            earlier: dict[str, int] = {}
-            for row in map(_row, msgs[: max(0, len(msgs) - int(limit))]):
+            out = [row for row in map(self._window_row, msgs[-int(limit):]) if row is not None]
+            for row in map(self._window_row, msgs[: max(0, len(msgs) - int(limit))]):
                 if row is not None:
                     earlier[row["who"]] = earlier.get(row["who"], 0) + 1
             return out, earlier

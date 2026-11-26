@@ -20,9 +20,9 @@ How to use this file: read the contents list, then read only the entries your ch
 - L372: **A phone turn knows its chat, and the desk door builds the phone door's body** (v1.515.0)
 - L382: **A file the phone cannot take is said in words on Slack and email too, after the guards, never before** (v1.546.1)
 - L412: **A task from another computer carries its conversation PLANNED, never its newest N rows** (v1.546.2)
-- L449: **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time** (v1.552.0)
-- L511: **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.558.0)
-- L578: **A finished file goes back to the phone only from the work's own record, inside its folder, after a yes asked once per destination; a button press is a message, read after the guards, through the one answer path**
+- L450: **A paired computer may do here only what its switch on this computer's card allows: every switch starts off, only the card's press turns one on, and the switch is checked at the door every time** (v1.552.0)
+- L512: **A file from the phone is fetched only after the guards, kept in the chat's own folder, and handed to the turn as an attachment, never as the user's words** (v1.558.0)
+- L579: **A finished file goes back to the phone only from the work's own record, inside its folder, after a yes asked once per destination; a button press is a message, read after the guards, through the one answer path**
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -433,8 +433,9 @@ How to use this file: read the contents list, then read only the entries your ch
   first 8 rows in the SAVED chat (its older messages, then the live ones,
   `_saved_chat_earlier`, off the loop, first match) and counts what comes
   before them; rows not found count nothing (never more than were). A phone
-  chat keeps only its newest 200 (`comm/threads.py`), so its count is of
-  those. `remote_history` returns every row and `RemoteAgentRegistry.run`
+  chat keeps its newest 200 live and (48-b) the rest as its older messages
+  (`comm/threads.py`); its count is of both (`history_window` adds
+  `chat_append.older_by_who`). `remote_history` returns every row and `RemoteAgentRegistry.run`
   alone cuts to `_HISTORY_ROWS`, adding what it cut; the sum rides as
   `history_held_back` to a task door ONLY, only when not 0 (any other
   remote's body is unchanged), and the door adds it (`held_back_of`, a whole

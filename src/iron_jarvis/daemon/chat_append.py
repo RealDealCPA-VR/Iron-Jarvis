@@ -251,16 +251,20 @@ def keep_older(db: Any, record: Any, moved: list, *, engine: Any = None, kind: s
         from sqlalchemy import func
         from sqlmodel import select
 
+        # 48-b: every row is written out BEFORE any is added, so a fault
+        # leaves nothing half-added in the caller's write (the rows then
+        # stay live, and none is also kept).
+        texts = [json.dumps(m) for m in rows]
         start = db.exec(
             select(func.count()).select_from(ChatOlderMessage).where(
                 ChatOlderMessage.thread_id == record.id
             )
         ).one()
         start = int(start[0] if isinstance(start, tuple) else start or 0)
-        for i, m in enumerate(rows):
-            db.add(ChatOlderMessage(
-                thread_id=record.id, seq=start + i, message_json=json.dumps(m),
-            ))
+        db.add_all([
+            ChatOlderMessage(thread_id=record.id, seq=start + i, message_json=text)
+            for i, text in enumerate(texts)
+        ])
         if str(getattr(record, "surface", "") or "") != "build":
             try:
                 from ..core.db import search_index
@@ -308,7 +312,8 @@ CHAT_OLDER_KEPT_SINCE = datetime(2026, 11, 15, 17, 2, 5, tzinfo=timezone.utc)
 
 
 def start_kept(created_at: Any, older: int, live: int = 0, *,
-               since: datetime = CHAT_OLDER_KEPT_SINCE) -> bool:
+               since: "datetime | None" = CHAT_OLDER_KEPT_SINCE,
+               short_proves: bool = True) -> bool:
     """Is a chat's first kept message (position 0) its VERY first one (48-a)?
 
     The chat page says "Start of this chat" only when this is True. A chat
@@ -322,16 +327,89 @@ def start_kept(created_at: Any, older: int, live: int = 0, *,
     (nothing on disk records that). The PC's first kept move is no better a
     bound: the first chat ever to pass the cap was made before that move, so
     it would always read as not kept although it lost nothing.
+    48-b: ``since`` None is "not known" (only the short rule can claim the
+    start), and ``short_proves`` False for a conversation whose live window
+    can shrink without growing first (a coding session's is cut at a turn
+    start, and a rewind cuts it), where fewer than the cap proves nothing.
     Pure; never raises."""
     try:
-        if int(older or 0) <= 0 and int(live or 0) < MAX_MESSAGES:
+        if short_proves and int(older or 0) <= 0 and int(live or 0) < MAX_MESSAGES:
             return True
-        if not isinstance(created_at, datetime):
+        if not isinstance(created_at, datetime) or not isinstance(since, datetime):
             return False
         made = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
         return made >= since
     except Exception:  # noqa: BLE001 — unsure is "not known", never a claim
         return False
+
+
+def start_kept_of(engine: Any, record: Any, older: int, live: int = 0) -> bool:
+    """:func:`start_kept` for the conversation ``record`` (48-b), with the
+    ``since`` of its kind. A chat started keeping with v1.499.4
+    (:data:`CHAT_OLDER_KEPT_SINCE`). A phone chat (``owner == "daemon"``) and
+    a coding session (``surface == "build"``) were cut at their caps until
+    48-b, so theirs is when this database was first opened by a version that
+    keeps them (``core.db.older_kept_since``; missing or unreadable: "not
+    known"). A coding session's live lines are cut at a turn start and by a
+    rewind, so fewer than the cap proves nothing there. BLOCKING (one read
+    for those two kinds); never raises."""
+    try:
+        from ..core.db import older_kept_since
+        from ..core.models import is_build_thread
+
+        build = is_build_thread(record)
+        if not build and (getattr(record, "owner", "user") or "user") != "daemon":
+            return start_kept(getattr(record, "created_at", None), older, live)
+        return start_kept(
+            getattr(record, "created_at", None), older, live,
+            since=older_kept_since(engine), short_proves=not build,
+        )
+    except Exception:  # noqa: BLE001 — unsure is "not known", never a claim
+        return False
+
+
+#: Older messages read per page by :func:`older_by_who`.
+_COUNT_PAGE = 500
+
+
+def older_by_who(engine: Any, thread_id: str, who_of: Any) -> dict[str, int]:
+    """How many of a conversation's older messages each speaker said (48-b),
+    as ``who_of(message)`` names them (None or "": not counted) — the
+    left-out count a remote seat is told (build-out R0.1: every row the
+    sender does not pass is counted, and older messages are never passed).
+    BLOCKING: read a page at a time, in the order they were kept. On a fault
+    what was counted so far, logged."""
+    out: dict[str, int] = {}
+    try:
+        from sqlmodel import select
+
+        if not thread_id or not ensure_older_table(engine):
+            return out
+        last = 0
+        while True:
+            with session_scope(engine) as db:
+                page = list(
+                    db.exec(
+                        select(ChatOlderMessage.id, ChatOlderMessage.message_json)
+                        .where(ChatOlderMessage.thread_id == thread_id, ChatOlderMessage.id > last)
+                        .order_by(ChatOlderMessage.id)
+                        .limit(_COUNT_PAGE)
+                    ).all()
+                )
+            for _id, text in page:
+                try:
+                    m = json.loads(text or "null")
+                except (TypeError, ValueError):
+                    continue
+                who = who_of(m) if isinstance(m, dict) else None
+                if who:
+                    out[str(who)] = out.get(str(who), 0) + 1
+            if len(page) < _COUNT_PAGE:
+                return out
+            last = int(page[-1][0] or 0)
+    except Exception:  # noqa: BLE001 — a count, never a reason to fail a turn
+        log.warning("could not count the older messages of %s", thread_id, exc_info=True)
+        return out
 
 
 #: The most older messages one read answers.

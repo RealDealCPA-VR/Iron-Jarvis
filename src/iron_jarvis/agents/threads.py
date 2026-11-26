@@ -77,7 +77,10 @@ ROLE_PRESETS = ("lead", "researcher", "critic", "builder", "reviewer", "scribe")
 #: agent reached over HTTP. All three speak in the same thread.
 SOURCES = ("builtin", "dynamic", "remote")
 
-_MAX_MESSAGES = 400  # per thread; oldest trimmed (matches chat's cap spirit)
+#: The newest messages a room keeps LIVE. 48-b: the ones that leave MOVE to
+#: the room's older messages (``daemon.chat_append.keep_older``, the store a
+#: long chat keeps), never deleted; until then they were cut.
+_MAX_MESSAGES = 400
 _TRANSCRIPT_CHARS = 24_000  # context handed to each speaker, newest kept
 #: The chat-history transcript's ceiling when the speaker's window IS known
 #: (v1.284.0): the budget scales with the model, but a 1M-token window must not
@@ -323,6 +326,15 @@ def project_of(rec: Any) -> str:
     """The project a room belongs to, ``""`` for a general room. NULL (a row
     older than the column) and whitespace both read as general — never None."""
     return str(getattr(rec, "project_id", "") or "").strip()
+
+
+def _room_for_older(rec: Any) -> Any:
+    """What ``chat_append.keep_older`` reads of a room (48-b): its id, its
+    title and its project for the history-search docs of the messages that
+    move (the project :func:`project_of` says, as the room's own docs)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id=rec.id, title=rec.title or "", project_id=project_of(rec), surface="")
 
 
 #: The sentence that opens a project room's grounding block (v1.304.0): the
@@ -1095,12 +1107,18 @@ class AgentThreads:
 
     def delete(self, thread_id: str) -> bool:
         """Delete a round table and its history-search docs together — the same
-        "delete means deleted" rule ``DELETE /chat/threads/{id}`` follows."""
-        with session_scope(self.engine) as db:
+        "delete means deleted" rule ``DELETE /chat/threads/{id}`` follows.
+        48-b: its older messages go in the same transaction."""
+        from ..daemon import chat_append as _older  # lazy: keeps agents/ free of daemon/
+
+        older_ok = _older.ensure_older_table(self.engine)  # outside the transaction
+        with _APPEND_LOCK, session_scope(self.engine) as db:
             rec = db.get(AgentThreadRecord, thread_id)
             if rec is None:
                 return False
             db.delete(rec)
+            if older_ok:
+                _older.drop_older(db, thread_id)
             try:
                 from ..core.db import search_index
 
@@ -1140,14 +1158,29 @@ class AgentThreads:
         same session and lock (before the commit), so what a panel of agents
         worked out is findable later. Round entries already carry ``at`` and
         use ``who``/``content``, all of which ``sync_thread`` reads leniently.
+
+        48-b: the newest :data:`_MAX_MESSAGES` stay live and the ones that
+        leave MOVE to the room's older messages in this same write (indexed
+        for history search as they move); when they cannot be kept they stay
+        live — nothing is ever dropped.
         """
+        from ..daemon import chat_append as _older  # lazy: keeps agents/ free of daemon/
+
+        older_ok = _older.ensure_older_table(self.engine)  # outside the transaction
         with _APPEND_LOCK, session_scope(self.engine) as db:
             rec = db.get(AgentThreadRecord, thread_id)
             if rec is None:
                 return 0
             msgs = json.loads(rec.messages_json or "[]")
             msgs.extend(entries)
-            msgs = msgs[-_MAX_MESSAGES:]
+            if len(msgs) > _MAX_MESSAGES and older_ok:
+                try:
+                    _older.keep_older(
+                        db, _room_for_older(rec), msgs[:-_MAX_MESSAGES], engine=self.engine, kind="round",
+                    )
+                    msgs = msgs[-_MAX_MESSAGES:]
+                except Exception:  # noqa: BLE001 — logged there; they stay live
+                    pass
             rec.messages_json = json.dumps(msgs)
             rec.updated_at = utcnow()
             db.add(rec)
@@ -1636,6 +1669,9 @@ class AgentThreads:
         spoke: list[str] = []
         skipped: list[str] = []
         chat_dropped = 0
+        #: 48-b: the room's older messages by who said them, read the first
+        #: time a remote seat is shown the room itself (``chat_history`` None).
+        room_older: dict[str, int] | None = None
         if (user_message or "").strip():
             user_entry = {
                 "who": "user",
@@ -1774,11 +1810,15 @@ class AgentThreads:
                     if restricted:
                         shown = [e for e in shown if str(e.get("who") or "user") in keep]
                     rows = self.remote_history(shown, p, participants)
-                    earlier = (
-                        self._earlier_for(chat_earlier, keep if restricted else None)
-                        if chat_history is not None
-                        else 0
-                    )
+                    if chat_history is not None:
+                        earlier = self._earlier_for(chat_earlier, keep if restricted else None)
+                    else:
+                        # 48-b: the room's own older messages (kept beyond
+                        # its live 400) are never passed either: counted,
+                        # once a round, off the loop (a read of them).
+                        if room_older is None:
+                            room_older = await asyncio.to_thread(self.older_by_who, thread_id)
+                        earlier = self._earlier_for(room_older, keep if restricted else None)
                     reply, extra = await self._speak_remote(
                         p,
                         transcript,
@@ -2061,6 +2101,21 @@ class AgentThreads:
                     {"role": "assistant", "content": cls._speaker_line(who, content, names)}
                 )
         return rows
+
+    def older_by_who(self, thread_id: str) -> dict[str, int]:
+        """The room's OLDER messages a remote seat would have been shown,
+        counted by who said them (48-b): the rows :meth:`remote_history`
+        keeps (words; never a pending or not-reported note). BLOCKING."""
+        from ..daemon import chat_append as _older  # lazy: keeps agents/ free of daemon/
+
+        def _who(e: dict[str, Any]) -> str | None:
+            if not str(e.get("content") or "").strip():
+                return None
+            if e.get("pending") or e.get(NOT_REPORTED_FLAG):
+                return None
+            return str(e.get("who") or "user")
+
+        return _older.older_by_who(self.engine, thread_id, _who)
 
     @staticmethod
     def _earlier_for(earlier: dict[str, int] | None, keep: tuple[str, ...] | None) -> int:

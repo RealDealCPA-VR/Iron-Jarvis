@@ -5334,7 +5334,24 @@ def register(app: FastAPI, d: Any) -> None:
             raise HTTPException(status_code=404, detail="no such coding session")
         return row
 
+    def _with_older(row: Any) -> "tuple[Any, int | None]":
+        """48-b: the session's row as it is NOW and how many of its lines
+        moved to its older lines (where its live ``messages[0]`` sits), read
+        as ONE under the conversation lock — a turn that moved lines between
+        two reads would show one twice or miss one at the join (the chat's
+        48-a rule). The row is read again here: the copy a caller holds may
+        be older than the count. BLOCKING (every caller is off the loop)."""
+        from ...core.db import CONVERSATION_WRITE_LOCK
+        from .. import chat_append as _older
+
+        with CONVERSATION_WRITE_LOCK:
+            fresh = S.get_row(engine_of(), row.id)
+            if fresh is None:
+                return row, None
+            return fresh, _older.older_count(engine_of(), fresh.id)
+
     def _full_view(row: Any) -> dict[str, Any]:
+        row, older = _with_older(row)
         # v1.375.0: a session on its own branch is named by the folder the
         # user picked (S.checkout_of — the session's folder otherwise).
         folder = S.checkout_of(row)
@@ -5342,6 +5359,11 @@ def register(app: FastAPI, d: Any) -> None:
         view = S.session_view(row, states=TURNS.thread_states(), names=names, full=True)
         # v1.544.0: this daemon takes comments on changed code with a message.
         view["takes_comments"] = True
+        # 48-b: how many lines this session keeps beyond its live ones (the
+        # Code view scrolls back to them; ``GET /chat/threads/{id}/older``
+        # reads them). Absent when the session went while it was read.
+        if older is not None:
+            view["older"] = older
         try:
             queued = json.loads(getattr(row, "queued_json", "") or "[]")
         except (TypeError, ValueError):

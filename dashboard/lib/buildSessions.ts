@@ -24,6 +24,7 @@ import { decodeBranchedFrom, type BranchedFrom } from "@/lib/buildNext";
 import type { FinishRecord, FinishReview } from "@/lib/stepWords";
 import { decodeSessionTeam, decodeTeamNames, type SessionTeam, type TeamNames } from "@/lib/sessionTeam";
 import { localOnlyHeldTitle } from "@/lib/localOnly";
+import { olderCount } from "@/lib/olderMessages";
 
 // Where a Build session opens lives in the import-free lib/buildLinks (the
 // bell and the Activity rows read it); re-exported here for the screen.
@@ -221,6 +222,11 @@ export interface BuildSessionView extends BuildSessionRow {
    *  message (`takes_comments`). An older one says nothing: the screen then
    *  offers no Comment and no chips (a comment is never silently dropped). */
   takesComments: boolean;
+  /** 48-b: how many lines the session keeps beyond its live `messages`
+   *  (where `messages[0]` sits), read with them; the Code view scrolls back
+   *  to them (lib/olderMessages). null = not said (an older Iron Jarvis, or
+   *  the session went while it was read): the count the view holds stays. */
+  older: number | null;
 }
 
 /** A transcript line: the chat page's own message shape (the daemon keeps
@@ -638,6 +644,7 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
     workRoot: r.no_folder === true ? str(r.work_root, 1000) : "",
     team: decodeSessionTeam(r.team),
     takesComments: r.takes_comments === true,
+    older: olderCount(r.older),
   };
 }
 

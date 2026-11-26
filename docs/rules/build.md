@@ -118,32 +118,32 @@ How to use this file: read the contents list, then read only the entries your ch
 - L6970: **A coding session is archived or deleted from its ROW, not only from inside it** (v1.500.1)
 - L6983: **A failed tool call says what to do next, and whose failure it was** (v1.508.0)
 - L7008: **A coding session never loses a reply, a plan approval, a file's replaced version or a helper's change without a copy and a word** (v1.510.0)
-- L7039: **Consent in a coding session is exactly what the card said, in both kinds of session and in every coding tool** (v1.511.0)
-- L7071: **Stop means stopped in Build, and a stop never races a start** (v1.512.0)
-- L7107: **A coding session, the night shift and the pull-request auto-fix never say more than they proved** (v1.513.0)
-- L7146: **What a coding tool's session reports is read from its own record, never assumed** (v1.514.0)
-- L7164: **A page the agent looks at is judged whole, its pictures belong to its session, and a turn never starts on an account nobody chose** (v1.515.0)
-- L7189: **A search pattern that could run away is matched by its own program, killed at the limit; an ordinary one stays in the daemon, bounded by line length** (v1.516.0)
-- L7214: **A coding tool's git check and a program's environment are worked out off the event loop, bounded, and fail closed** (v1.516.0)
-- L7223: **A coding tool's, helper's or attempt's failure is a plain sentence; a sentence the code or the tool wrote is kept** (v1.516.0)
-- L7232: **A test of "this never waits for that" asserts the order, never a number of seconds** (v1.516.0)
-- L7240: **A terminal's output reaches a model only through `_fence_terminal_output`, "Type it in" types one line, and a reset more than eight days away is not believed** (v1.520.0)
-- L7255: **"Try on…" carries a folder's uncommitted files through the night commit's own screen** (v1.520.0)
-- L7266: **A coding reply that was stopped, or that had ended, is never carried on by the start-up pass; a finished reply never gets a limit card; Delete holds the session** (v1.522.0)
-- L7286: **One reading of an attempts card decides a night try-on task's ending, its usage and its limits; the night's "at once" setting bounds its attempts** (v1.523.0)
-- L7310: **Continue uses the account the page names, a "with tools" launch is set up before it says ready, a stricter level reaches the running reply, and the session's record decides its boxes** (v1.524.0)
-- L7339: **A terminal survives a restart or says why it did not: one reader per session, a bounded second start, a folder check before any process, and backups without its output** (v1.526.0)
-- L7366: **A "Resume when ready" carry-on that is refused ends its wait and says why; the question and the wait's removal are ONE write; a grant that cannot be saved is kept and said** (v1.527.0)
-- L7389: **An open Chat › Code session's Local only is its own switch in the session's ⋯ menu, and a held session never turns it off** (v1.529.0)
-- L7401: **A Build › Code reply the tool ended at the model's length limit ends "failed" with `cut: "length"`, never "completed"** (v1.529.0)
-- L7414: **Why a "Resume when ready" wait ended (`account_limit.wait_ended`) and when its carry-on was first refused for a passing reason (`account_wait.refused_at`) are stored with the session, never in daemon memory** (v1.529.0)
-- L7424: **The "Other tools" part folds to its heading, and the choice is kept per place** (v1.531.0)
-- L7433: **A coding reply that ended on its done frame without finishing is read in ONE place, and an attempt follows the session's level** (v1.534.0)
-- L7436: **A stop names who made it, on the step, the reply's line, its Continue note and the night's ending** (v1.535.0)
-- L7439: **A launch recipe never sets an account home and never writes in the terminal's folder; the terminal says so, and takes its own files with it on Close** (v1.539.0)
-- L7442: **A timed-out open of the agent's browser writes ONE warning saying how far the page got, and its process facts never hold the open more than `SLOW_OPEN_FACTS_S` past its own limit** (v1.548.2)
-- L7445: **Before and after pictures under a coding reply are Iron Jarvis's OWN, taken only when asked (the message's words, Show me, or the setting), the before started as the reply begins and kept by the first screen write BEFORE it lands, and they never reach a model** (v1.553.0)
-- L7447: **Build › Code's `/` list is asked for each time the menu OPENS, the start box has one, and an answer says when the list is still being read** (v1.557.0)
+- L7040: **Consent in a coding session is exactly what the card said, in both kinds of session and in every coding tool** (v1.511.0)
+- L7072: **Stop means stopped in Build, and a stop never races a start** (v1.512.0)
+- L7108: **A coding session, the night shift and the pull-request auto-fix never say more than they proved** (v1.513.0)
+- L7147: **What a coding tool's session reports is read from its own record, never assumed** (v1.514.0)
+- L7165: **A page the agent looks at is judged whole, its pictures belong to its session, and a turn never starts on an account nobody chose** (v1.515.0)
+- L7190: **A search pattern that could run away is matched by its own program, killed at the limit; an ordinary one stays in the daemon, bounded by line length** (v1.516.0)
+- L7215: **A coding tool's git check and a program's environment are worked out off the event loop, bounded, and fail closed** (v1.516.0)
+- L7224: **A coding tool's, helper's or attempt's failure is a plain sentence; a sentence the code or the tool wrote is kept** (v1.516.0)
+- L7233: **A test of "this never waits for that" asserts the order, never a number of seconds** (v1.516.0)
+- L7241: **A terminal's output reaches a model only through `_fence_terminal_output`, "Type it in" types one line, and a reset more than eight days away is not believed** (v1.520.0)
+- L7256: **"Try on…" carries a folder's uncommitted files through the night commit's own screen** (v1.520.0)
+- L7267: **A coding reply that was stopped, or that had ended, is never carried on by the start-up pass; a finished reply never gets a limit card; Delete holds the session** (v1.522.0)
+- L7287: **One reading of an attempts card decides a night try-on task's ending, its usage and its limits; the night's "at once" setting bounds its attempts** (v1.523.0)
+- L7311: **Continue uses the account the page names, a "with tools" launch is set up before it says ready, a stricter level reaches the running reply, and the session's record decides its boxes** (v1.524.0)
+- L7340: **A terminal survives a restart or says why it did not: one reader per session, a bounded second start, a folder check before any process, and backups without its output** (v1.526.0)
+- L7367: **A "Resume when ready" carry-on that is refused ends its wait and says why; the question and the wait's removal are ONE write; a grant that cannot be saved is kept and said** (v1.527.0)
+- L7390: **An open Chat › Code session's Local only is its own switch in the session's ⋯ menu, and a held session never turns it off** (v1.529.0)
+- L7402: **A Build › Code reply the tool ended at the model's length limit ends "failed" with `cut: "length"`, never "completed"** (v1.529.0)
+- L7415: **Why a "Resume when ready" wait ended (`account_limit.wait_ended`) and when its carry-on was first refused for a passing reason (`account_wait.refused_at`) are stored with the session, never in daemon memory** (v1.529.0)
+- L7425: **The "Other tools" part folds to its heading, and the choice is kept per place** (v1.531.0)
+- L7434: **A coding reply that ended on its done frame without finishing is read in ONE place, and an attempt follows the session's level** (v1.534.0)
+- L7437: **A stop names who made it, on the step, the reply's line, its Continue note and the night's ending** (v1.535.0)
+- L7440: **A launch recipe never sets an account home and never writes in the terminal's folder; the terminal says so, and takes its own files with it on Close** (v1.539.0)
+- L7443: **A timed-out open of the agent's browser writes ONE warning saying how far the page got, and its process facts never hold the open more than `SLOW_OPEN_FACTS_S` past its own limit** (v1.548.2)
+- L7446: **Before and after pictures under a coding reply are Iron Jarvis's OWN, taken only when asked (the message's words, Show me, or the setting), the before started as the reply begins and kept by the first screen write BEFORE it lands, and they never reach a model** (v1.553.0)
+- L7448: **Build › Code's `/` list is asked for each time the menu OPENS, the start box has one, and an answer says when the list is still being read** (v1.557.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -7024,8 +7024,9 @@ How to use this file: read the contents list, then read only the entries your ch
   `approved_plans` only after `S.update` succeeds. A refused delete says
   `PROGRAMS_STOPPED`; a refused Choose account + continue restores the old
   account fields. `library.accept` writes a `write_file` Undo record before
-  it writes the file. The 200-line cap cuts at a turn start
-  (`sessions._capped`). Rewind: `rewind._rows_since` reads the session's
+  it writes the file. The 200-line live window cuts at a turn start
+  (`sessions._capped`; 48-b: the cut lines move to the session's older
+  lines, `docs/rules/context.md`). Rewind: `rewind._rows_since` reads the session's
   rows AND its helpers' (sessions whose `options.build_session` is the
   thread; one level, helpers start no helpers) as one newest-first
   sequence; a local hand-off is not listed as a command when helper rows

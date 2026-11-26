@@ -269,6 +269,13 @@ export interface HarnessMessageRowProps {
   undoFor: (path: string) => ChangeUndoState | null;
   onUndo: (actionId: string, path: string) => Promise<void>;
   h: HarnessRowHandlers;
+  /** 48-b: an EARLIER line of the session, drawn above the live ones and
+   *  never part of its `messages` (components/chat/OlderMessages). It can be
+   *  read and copied; nothing on it rewinds, branches, retries, keeps,
+   *  answers, undoes or runs anything (its `index` is its place in the
+   *  session, not one in the live lines), so every such press is left out,
+   *  not merely disabled. Opening a file it names is reading, so that stays. */
+  readOnly?: boolean;
 }
 
 function HarnessMessageRowImpl({
@@ -292,10 +299,15 @@ function HarnessMessageRowImpl({
   localOnlyHeld,
   nextRecap = "",
   prCard = false,
-  undoFor,
-  onUndo,
+  undoFor: undoForLive,
+  onUndo: onUndoLive,
   h,
+  readOnly = false,
 }: HarnessMessageRowProps) {
+  // 48-b: an earlier line offers no Undo (the changed-files line and the
+  // receipt read these).
+  const undoFor = readOnly ? noUndo : undoForLive;
+  const onUndo = readOnly ? noUndoPress : onUndoLive;
   // v1.418.0 (C2.3): the reply in order — its text and its runs of steps,
   // placed the way this window saw them run (lib/replyItems).
   const items = useMemo(
@@ -322,10 +334,10 @@ function HarnessMessageRowImpl({
           threadId={threadId}
           raw={m.prComments}
           content={m.content ?? ""}
-          archived={archived}
+          archived={archived || readOnly}
           busy={busy}
-          card={prCard}
-          onAnswered={h.onAnswerComments}
+          card={prCard && !readOnly}
+          onAnswered={readOnly ? undefined : h.onAnswerComments}
         />
       </div>
     );
@@ -355,7 +367,7 @@ function HarnessMessageRowImpl({
           {/* v1.370.0: rewind to before this message (two presses;
               a refusal is listed in words). Only a message the
               daemon wrote has a turn to rewind to. */}
-          {m.turnId && !isPending ? (
+          {m.turnId && !isPending && !readOnly ? (
             <RewindControl
               threadId={threadId}
               turnId={m.turnId}
@@ -366,7 +378,7 @@ function HarnessMessageRowImpl({
           ) : null}
           {/* v1.377.0: a new session from before this message (it
               goes in that session's box). */}
-          {m.turnId && !isPending ? (
+          {m.turnId && !isPending && !readOnly ? (
             <BranchButton
               at="question"
               turnId={m.turnId}
@@ -423,7 +435,7 @@ function HarnessMessageRowImpl({
             raw={m.attempts}
             threadId={threadId}
             turnId={m.turnId}
-            canKeep={!busy && !archived}
+            canKeep={!busy && !archived && !readOnly}
             onKept={h.onAttemptKept}
           />
         ) : null}
@@ -507,18 +519,18 @@ function HarnessMessageRowImpl({
           busy={busy}
           health={health}
           turnProvider={m.route?.provider || provider}
-          retry={retryOffered(m, { newest, busy, archived })}
-          onRetry={() => h.onRetry(index)}
-          canContinue={continueOffered(m, { newest, busy, archived })}
-          onContinue={h.onContinue ? () => h.onContinue?.(index) : undefined}
+          retry={!readOnly && retryOffered(m, { newest, busy, archived })}
+          onRetry={() => (readOnly ? undefined : h.onRetry(index))}
+          canContinue={!readOnly && continueOffered(m, { newest, busy, archived })}
+          onContinue={h.onContinue && !readOnly ? () => h.onContinue?.(index) : undefined}
           continuedBelow={continuedBelow}
-          canRewind={canRewind}
+          canRewind={canRewind && !readOnly}
           onRewind={h.onOpenRewind}
           carriedOn={carriedOn}
           models={models}
           localOnlyHeld={localOnlyHeld}
-          onChooseLocal={h.onOpenModelMenu}
-          onSendOnce={h.onSendOnce ? (p) => h.onSendOnce?.(index, p) : undefined}
+          onChooseLocal={readOnly ? undefined : h.onOpenModelMenu}
+          onSendOnce={h.onSendOnce && !readOnly ? (p) => h.onSendOnce?.(index, p) : undefined}
         />
         <ReplyLine
           parts={lineParts}
@@ -581,7 +593,7 @@ function HarnessMessageRowImpl({
           {/* v1.377.0: a new session with the conversation up to
               and including this reply. v1.510.0 (S2): not from a reply
               the session could not keep (it has no such reply yet). */}
-          {m.turnId && !m.keptLive ? (
+          {m.turnId && !m.keptLive && !readOnly ? (
             <BranchButton
               at="reply"
               turnId={m.turnId}
@@ -602,8 +614,8 @@ function HarnessMessageRowImpl({
             threadId={threadId}
             turnId={m.turnId}
             busy={busy}
-            archived={archived}
-            newest={newest}
+            archived={archived || readOnly}
+            newest={newest && !readOnly}
           />
         ) : null}
         {/* v1.414.0: a repeated correction, offered as a standing
@@ -612,7 +624,7 @@ function HarnessMessageRowImpl({
             comes back folded into the line by the daemon on the next
             read; the line keeps it meanwhile. */}
         {(() => {
-          const sug = decodeSuggestion(m.suggestion);
+          const sug = readOnly ? null : decodeSuggestion(m.suggestion);
           return sug && sug.state !== "gone" ? (
             <PreferenceSuggestion key={sug.id} suggestion={sug} />
           ) : null;
@@ -623,15 +635,22 @@ function HarnessMessageRowImpl({
             preference suggestion goes first. The line keeps its answer;
             the daemon writes a coding session's lines. */}
         {(() => {
-          if (decodeSuggestion(m.suggestion)) return null;
+          if (readOnly || decodeSuggestion(m.suggestion)) return null;
           const cq = decodeClientQuestion((m as unknown as { clientQuestion?: unknown }).clientQuestion);
           return cq && cq.state !== "gone" ? <ClientQuestion key={cq.id} question={cq} /> : null;
         })()}
-        <DoorsStrip doors={m.doors} />
+        {readOnly ? null : <DoorsStrip doors={m.doors} />}
       </div>
     )
   );
 }
+
+/** 48-b: what an earlier line's changed files and receipt are handed in
+ *  place of Undo (nothing to undo there). */
+function noUndo(): ChangeUndoState | null {
+  return null;
+}
+async function noUndoPress(): Promise<void> {}
 
 /** Memoised: a settled message redraws only when its own props change. */
 export const HarnessMessageRow = memo(HarnessMessageRowImpl);
