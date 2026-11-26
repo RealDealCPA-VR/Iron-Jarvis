@@ -2159,14 +2159,17 @@ yet**: "Asked 3 times, no tool: send a fax", with the date and your own
 words for each time. You do nothing for it: it is kept from your chats as
 you work.
 
-- **When it counts.** Iron Jarvis looked the request up and found nothing
-  for it (or only things it does not offer, like controlling the desktop),
-  and the reply then changed nothing. When the lookup listed other things,
-  none of which mention what you asked for by name (like "fax"), it counts
-  only when the reply itself said it could not do it ("I can't send
-  faxes"), and not when the reply went on to use or try one of them, even
-  just to work out a figure or search the web. So a figure, a draft or a
-  translation the reply gave you in words is never kept. Asking again in
+- **When it counts.** Your request is about something Iron Jarvis does not
+  offer, like controlling the desktop, and the reply then changed nothing.
+  Or Iron Jarvis looked the request up and found nothing for it, or only
+  other things, none of which mention what you asked for by name (like
+  "fax"): then it counts only when the reply itself said it could not do
+  what you asked ("I can't send faxes"), and not when the reply went on to
+  use or try one of them, even just to work out a figure or search the web.
+  So a figure, a draft, a translation or a joke the reply gave you in words
+  is never kept, and neither is a reply that only ends with a word about
+  something else it cannot do ("I can't taste-test this lasagna for you").
+  Asking again in
   the same chat with the same words (**Try again**) is not counted twice. A
   request is never kept for a name in it (a person's or a company's) or
   because it was written in another language. Neither is one made while a

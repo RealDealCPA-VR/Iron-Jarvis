@@ -85,6 +85,17 @@ FAX_ASKS = (
 #: "travel booking" would name it in words the list knows).
 FLIGHT_QUERY = "book a flight / airline tickets / flight reservation"
 DESKTOP_QUERY = "control the desktop mouse / click in desktop programs / desktop automation"
+#: Asks the desktop rule (``page_doors._DESKTOP_RULES``) holds on.
+MOUSE_ASKS = ("move my mouse to the start button and click it", "Move my mouse to the start button and click it")
+#: Review round 4 (blocking): on the real index this lookup's first line is
+#: the "Not offered" line about agents' monthly limits, which has nothing to
+#: do with a grocery budget; the reply gives the budget in words.
+BUDGET_QUERY = "monthly grocery budget / food budget / budget plan"
+BUDGET_ASKS = ("Draft a monthly grocery budget for two people", "Make me a monthly grocery budget for a couple")
+BUDGET_SAID = (
+    "Here is a monthly grocery budget for two: produce 150, protein 180, staples 80, snacks 50. Total 460.",
+    "For a couple: produce 140, protein 170, dairy 60, staples 90. That is 460 a month.",
+)
 
 #: Built from pieces at run time: no literal here is shaped like a credential.
 FILL = "Fake" + "Example" + "0123456789" + "NotReal"
@@ -383,6 +394,31 @@ LETTER_DRAFT = (
     "Friday.\n\nKind regards,\nAna"
 )
 FAX_LIMIT = "I can't send faxes: Iron Jarvis has no fax feature. An online fax service can send it for you."
+#: Review round 4: what a reply says when it cannot work out a BMI (its verb
+#: is the request's own: "calculate").
+BMI_LIMIT = "I can't calculate a BMI here: no feature in Iron Jarvis does it."
+
+#: Review round 4 (should): closing hedges that NAME the request, after an
+#: answer given in words; each limit is on something else (taste, see, give
+#: advice, promise). ``(reply, words no entry knows, the lookup's query)``.
+LASAGNA_QUERY = "lasagna recipe / cooking recipe / pasta dish"
+HEDGES = (
+    ("Classic lasagna for four:\n\nLayer pasta, sauce and cheese; bake 45 minutes at 180 C.\n\n"
+     "I can't taste-test this lasagna for you, so adjust the salt to your liking.", ["lasagna"], LASAGNA_QUERY),
+    ("Warm up 5 minutes, then 8 rounds of 30 s sprints and 30 s rest.\n\n"
+     "I can't see your form during the workout, so stop if anything hurts.", ["hiit", "workout"],
+     "20 minute HIIT workout / interval training plan / HIIT routine"),
+    ("Most adults need a tetanus booster every ten years.\n\n"
+     "I can't give medical advice about which vaccines you need, so ask your doctor.", ["vaccin"],
+     "which vaccines do I need / adult vaccines / vaccination schedule"),
+    ("There once was a cat named Lou, who slept in a size-seven shoe...\n\nI can't promise the limerick is perfect.",
+     ["limerick"], "limerick about a cat / funny cat poem / limerick"),
+)
+#: Review round 4 (blocking): the lookup finds NOTHING for a joke; the reply
+#: tells one.
+JOKE_QUERY = "joke / jokes / humor"
+JOKE_ASKS = ("Tell me a joke", "Got a joke for me?")
+JOKE_SAID = "Why did the scarecrow win an award? Because he was outstanding in his field."
 
 
 def _kind_on_the_real_index(app, query: str, words: str):
@@ -421,6 +457,70 @@ async def test_a_request_answered_in_words_keeps_nothing_though_no_entry_knows_i
     assert [i["title"] for i in await _missing_items(app)] == ["Asked 2 times, no tool: send a fax"]
 
 
+@pytest.mark.asyncio
+async def test_a_not_offered_line_about_something_else_keeps_nothing_in_either_lane(desk):
+    """Review round 4 (blocking): the lookup has no relevance floor, so its
+    first line can be a "Not offered" line about something else entirely
+    (agents' monthly limits, for a grocery budget). Asked twice, once per
+    lane, and answered in words: no row, no item. The control: a request the
+    line IS about (its own rule holds on the owner's words) is still kept as
+    not offered, in each lane, and says so."""
+    app, ws = desk
+    for lane, ask, said in zip(("stream", "post"), BUDGET_ASKS, BUDGET_SAID):
+        model = _lookup_then_say(BUDGET_QUERY, said)
+        await _turn(app, ws, lane, ask, model)
+        first = model.tool_texts[1][-1].splitlines()[1]
+        assert first.startswith("1. Not offered: Iron Jarvis's own agents"), ("the control: line 1", first[:200])
+    assert _misses(app) == []
+    assert await _missing_items(app) == []
+    for lane, ask in zip(("stream", "post"), MOUSE_ASKS):
+        await _turn(app, ws, lane, ask, _lookup_then_say(DESKTOP_QUERY, "Iron Jarvis cannot control the desktop."))
+    assert [(r["kind"], r["entry_id"]) for r in _misses(app)] == [("not_offered", "desktop_control")] * 2
+    items = await _missing_items(app)
+    assert [i["title"] for i in items] == ["Asked 2 times, no tool: control the desktop mouse"], items
+    assert items[0]["why"].startswith(
+        "Each time, Iron Jarvis looked for a feature for it and found it among the things it does not offer."), items
+
+
+@pytest.mark.asyncio
+async def test_a_lookup_that_found_nothing_is_kept_only_when_the_reply_says_it_cannot(desk):
+    """Review round 4 (blocking): "Tell me a joke" finds nothing in Iron
+    Jarvis, and the reply tells one. Asked twice, once per lane: no row, no
+    item. The control: "I can't fax here" after a lookup that found nothing
+    is kept (``test_a_lookup_that_found_nothing_keeps_one_miss_in_each_lane``)."""
+    app, ws = desk
+    for lane, ask in zip(("stream", "post"), JOKE_ASKS):
+        model = _lookup_then_say(JOKE_QUERY, JOKE_SAID)
+        await _turn(app, ws, lane, ask, model)
+        assert CT_TOOL.NOTHING_FOUND in model.tool_texts[1][-1], (lane, "the control: it answered nothing")
+    assert _misses(app) == []
+    assert await _missing_items(app) == []
+
+
+@pytest.mark.asyncio
+async def test_a_closing_hedge_that_names_the_request_keeps_nothing_in_either_lane(desk):
+    """Review round 4 (should): a lasagna recipe asked twice, once per lane,
+    answered with the recipe and closed with a hedge that names the lasagna
+    ("I can't taste-test this lasagna …"): no row, no item. The control: a
+    reply whose closing limit IS the request ("Sorry, I can't send a fax
+    myself.") is kept, in each lane."""
+    app, ws = desk
+    assert _kind_on_the_real_index(app, LASAGNA_QUERY, "Give me a lasagna recipe for four") == "unknown", (
+        "the control: the lookup alone says so")
+    closings = ("I can't taste-test this lasagna for you, so adjust the salt to your liking.",
+                "I can't taste this lasagna myself, so season it as you go.")
+    for lane, ask, closing in zip(("stream", "post"), ("Give me a lasagna recipe for four",
+                                                       "How do I make a classic lasagna?"), closings):
+        said = "Classic lasagna:\n\nLayer pasta, ragu and bechamel three times; bake 45 minutes.\n\n" + closing
+        await _turn(app, ws, lane, ask, _lookup_then_say(LASAGNA_QUERY, said))
+    assert _misses(app) == []
+    assert await _missing_items(app) == []
+    fax_said = "Here are two ways:\n\n- an online fax service\n- a copy shop\n\nSorry, I can't send a fax myself."
+    for lane, ask, query in zip(("stream", "post"), FAX_ASKS, FAX_QUERIES):
+        await _turn(app, ws, lane, ask, _lookup_then_say(query, fax_said))
+    assert [r["kind"] for r in _misses(app)] == ["unknown", "unknown"], _misses(app)
+
+
 def test_the_reply_itself_must_say_it_cannot_do_the_request():
     """Review round 3: what counts as the reply saying it could not do it,
     read from its first and last paragraphs only, naming the request."""
@@ -435,7 +535,7 @@ def test_the_reply_itself_must_say_it_cannot_do_the_request():
         "There's no way for me to send a fax. Want me to make the form a PDF?",
     )
     for reply in says:
-        assert M.reply_says_it_cannot(reply, ["fax"]), reply
+        assert M.reply_says_it_cannot(reply, ["fax"], FAX_QUERIES[0]), reply
     says_not = (
         "Here is the cover sheet for your fax.",
         "I can't check the fax line, but here is the cover sheet: To Ana, 2 pages.",
@@ -448,13 +548,23 @@ def test_the_reply_itself_must_say_it_cannot_do_the_request():
         "",
     )
     for reply in says_not[:-2]:
-        assert not M.reply_says_it_cannot(reply, ["fax"]), reply
-    assert not M.reply_says_it_cannot(says_not[-2], ["bmi"])
-    assert not M.reply_says_it_cannot(says_not[-1], ["fax"])
-    assert not M.reply_says_it_cannot(FAX_LIMIT, [])
-    assert M.reply_counts("nothing", "", ["fax"]) and M.reply_counts("not_offered", "", [])
-    assert not M.reply_counts("unknown", "Your BMI is 23.1.", ["bmi"])
-    assert M.reply_counts("unknown", "I can't work out a BMI here: no feature in Iron Jarvis does it.", ["bmi"])
+        assert not M.reply_says_it_cannot(reply, ["fax"], FAX_QUERIES[0]), reply
+    assert not M.reply_says_it_cannot(says_not[-2], ["bmi"], BMI_QUERY)
+    assert not M.reply_says_it_cannot(says_not[-1], ["fax"], FAX_QUERIES[0])
+    assert not M.reply_says_it_cannot(FAX_LIMIT, [], FAX_QUERIES[0])
+    # Review round 4 (should): a closing hedge that names the request but
+    # whose limit is on something else is not the reply saying it cannot.
+    for reply, unknown, query in HEDGES:
+        assert not M.reply_says_it_cannot(reply, unknown, query), reply
+    assert M.reply_says_it_cannot("Here are two ways.\n\nI can't help with faxing myself.", ["fax"], FAX_QUERIES[0])
+    assert M.reply_counts("not_offered", "", [])
+    # Review round 4: a lookup that found nothing counts only when the reply
+    # says it cannot (by the query's own words when none is unknown).
+    assert not M.reply_counts("nothing", "", ["fax"], NOTHING_QUERY)
+    assert not M.reply_counts("nothing", JOKE_SAID, [], JOKE_QUERY)
+    assert M.reply_counts("nothing", "I can't fax here.", [], NOTHING_QUERY)
+    assert not M.reply_counts("unknown", "Your BMI is 23.1.", ["bmi"], BMI_QUERY)
+    assert M.reply_counts("unknown", BMI_LIMIT, ["bmi"], BMI_QUERY)
 
 
 #: Review round 2, probe D: two doable requests that name one person, the
@@ -549,10 +659,19 @@ def test_a_lookup_read_from_part_of_the_list_says_nothing_is_missing():
 
     base = {"query": DESKTOP_QUERY, "reason": "", "first": {"kind": "not_offered", "id": "desktop_control"},
             "partial": False, "unknown": ["fax"], "unknown_parts": [["fax"], ["fax"], ["fax"]]}
-    assert M.miss_of(base) == ("not_offered", "desktop_control", ["fax"])
-    assert M.miss_of({**base, "partial": True}) is None
-    assert M.miss_of({**base, "reason": "failed"}) is None
-    assert M.miss_of({**base, "reason": "no_search_words"}) is None
+    assert M.miss_of(base, words=MOUSE_ASKS[0]) == ("not_offered", "desktop_control", ["fax"])
+    # Review round 4 (blocking): a "Not offered" line counts only when its own
+    # rule holds on the owner's words; else it is judged as any other list.
+    assert M.not_offered_holds("desktop_control", MOUSE_ASKS[0])
+    assert not M.not_offered_holds("builtin_agent_limit", BUDGET_ASKS[0])
+    assert not M.not_offered_holds("", MOUSE_ASKS[0]) and not M.not_offered_holds("desktop_control", "")
+    assert M.miss_of(base) == ("unknown", "", ["fax"])
+    budget = {**base, "first": {"kind": "not_offered", "id": "builtin_agent_limit"}}
+    assert M.miss_of(budget, words=BUDGET_ASKS[0]) == ("unknown", "", ["fax"])
+    assert M.miss_of({**budget, "unknown_parts": [["grocery"], ["food"], []]}, words=BUDGET_ASKS[0]) is None
+    assert M.miss_of({**base, "partial": True}, words=MOUSE_ASKS[0]) is None
+    assert M.miss_of({**base, "reason": "failed"}, words=MOUSE_ASKS[0]) is None
+    assert M.miss_of({**base, "reason": "no_search_words"}, words=MOUSE_ASKS[0]) is None
     listed = {**base, "first": {"kind": "tool", "id": "write_file"}}
     assert M.miss_of(listed) == ("unknown", "", ["fax"])
     assert M.miss_of({**listed, "unknown": []}) is None
@@ -590,7 +709,14 @@ async def test_the_turns_end_keeps_nothing_for_an_escalation_or_a_message_iron_j
     assert await CT.keep_lookup_miss(d, body(FAX_ASKS[0]), ctx, tools_used=[NAME],
                                      trust_state={"low": True, "tainted": False}) is None
     assert _misses(app) == []
-    assert await CT.keep_lookup_miss(d, body(FAX_ASKS[0]), ctx, tools_used=[NAME], trust_state=calm)
+    # Review round 4: a lookup that found nothing counts only when the reply
+    # says it cannot (no reply, or the answer in words, keeps nothing).
+    assert await CT.keep_lookup_miss(d, body(FAX_ASKS[0]), ctx, tools_used=[NAME], trust_state=calm) is None
+    assert await CT.keep_lookup_miss(d, body(FAX_ASKS[0]), ctx, tools_used=[NAME], trust_state=calm,
+                                     reply="A fax sends a scanned page over a phone line.") is None
+    assert _misses(app) == []
+    assert await CT.keep_lookup_miss(d, body(FAX_ASKS[0]), ctx, tools_used=[NAME], trust_state=calm,
+                                     reply=FAX_LIMIT)
     assert [r["words"] for r in _misses(app)] == [FAX_ASKS[0]]
 
 
@@ -1060,6 +1186,20 @@ def test_an_agent_runs_not_offered_first_line_is_read_from_its_ledger(tmp_path):
     assert _agent_run.entry_ids == ["desktop_control"], _agent_run.entry_ids
 
 
+@pytest.mark.parametrize("case", ["budget", "joke"])
+def test_an_agent_run_answered_in_words_after_a_not_offered_line_or_nothing_keeps_none(tmp_path, case):
+    """Review round 4 (blocking), in a run: the ledger's "1. Not offered: "
+    line about agents' monthly limits, for a grocery budget given in words;
+    a lookup that found nothing, for a joke the run told."""
+    task, query, said = ((BUDGET_ASKS[0], BUDGET_QUERY, BUDGET_SAID[0]) if case == "budget"
+                         else (JOKE_ASKS[0], JOKE_QUERY, JOKE_SAID))
+    rows, looked = _agent_run(tmp_path, task, script=[_call(1, NAME, query=query), said])
+    assert looked == 1, "the control: the run looked it up"
+    lead = "1. Not offered: Iron Jarvis's own agents" if case == "budget" else CT_TOOL.NOTHING_FOUND
+    assert lead in _agent_run.lookup_said[0], _agent_run.lookup_said[0][:300]
+    assert rows == [], rows
+
+
 def test_an_agent_runs_lookup_read_from_part_of_the_list_keeps_none(tmp_path, monkeypatch):
     _part_unreadable(monkeypatch)
     rows, looked = _agent_run(tmp_path, FAX_ASKS[0], script=[
@@ -1109,8 +1249,7 @@ def test_an_agent_run_answered_in_words_keeps_no_unknown_miss(tmp_path, answer):
     """Review round 3 (blocking), in a run: no entry knows "BMI", the run's
     final answer gives the figure in words: none. The control: the same run
     whose answer says it cannot is kept."""
-    said = "Your BMI is about 23.1, in the healthy range." if answer == "words" else (
-        "I can't work out a BMI here: no feature in Iron Jarvis does it.")
+    said = "Your BMI is about 23.1, in the healthy range." if answer == "words" else BMI_LIMIT
     rows, looked = _agent_run(tmp_path, BMI_ASKS[0], script=[_call(1, NAME, query=BMI_QUERY), said],
                               tools=(NAME, "calculate"))
     assert looked == 1, "the control: the run looked it up"

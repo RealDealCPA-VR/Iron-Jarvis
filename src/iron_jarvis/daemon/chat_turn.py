@@ -5096,10 +5096,13 @@ async def keep_lookup_miss(d, body, ctx, *, tools_used: Any, trust_state: dict[s
     or created something (``misses.done_another_way``: for a request named by
     a word no entry knows, no call after it at all, whatever became of it:
     ``join.FOUND.tried_after``), ONE miss is kept, the owner's words masked
-    (their names are never the words no entry knows). For a request named by
-    a word no entry knows, only when the final *reply* itself says it could
-    not do it (``misses.reply_counts``, review round 3: a figure, a draft or
-    a translation given in words is never "can't do yet"). Never at
+    (their names are never the words no entry knows). A "Not offered" first
+    line counts only when its own rule holds on the owner's words
+    (``misses.not_offered_holds``, review round 4). Otherwise only when the
+    final *reply* itself says it could not do the request, naming it
+    (``misses.reply_counts``, review rounds 3 and 4: a figure, a draft, a
+    translation or a joke given in words, or a closing hedge such as "I
+    can't taste-test this lasagna", is never "can't do yet"). Never at
     low trust (the request may be an injected one; a phone's or another
     computer's turn starts low), never for a reply handed to an agent, never
     without the owner's own words. Off the loop, bounded by
@@ -5129,7 +5132,7 @@ async def keep_lookup_miss(d, body, ctx, *, tools_used: Any, trust_state: dict[s
         if _misses.done_another_way(kind, after, getattr(d.platform, "registry", None),
                                     tried=_cj.FOUND.tried_after(key)):
             return None
-        if not _misses.reply_counts(kind, reply, unknown):
+        if not _misses.reply_counts(kind, reply, unknown, (answer or {}).get("query")):
             return None
         from ..providers import egress
         from ..providers.failure_words import current_surface

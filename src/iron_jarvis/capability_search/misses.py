@@ -13,7 +13,11 @@ record, ``join.FOUND.last_answer``, at the END of the reply, in both chat
 lanes; an agent run's from its ledger, :func:`keep_run_miss`): the LAST lookup
 
 * answered nothing (``NOTHING_FOUND``), or
-* its first line was "Not offered", or
+* its first line was "Not offered" AND that line's own rule (the one that
+  puts it in the prompt, ``daemon/page_doors.not_offered``) holds on the
+  owner's words (:func:`not_offered_holds`; review round 4: "a monthly
+  grocery budget" answers the line about agents' monthly limits first; such
+  a lookup is judged by the next rule instead), or
 * the request was NAMED by words no entry of the list knows: EVERY way the
   lookup named it (two or more) has such a word that is not a name (a word
   written with a capital mid-sentence, by the owner or the lookup:
@@ -31,11 +35,13 @@ and the reply then made no successful call that changes or creates something
 (for ``unknown``, whose lookup listed lines, no call at all after it, whatever
 became of it, other than a lookup: a line the reply took to fit, even one
 that only reads, failed or was declined, is not "nothing for it";
-:func:`done_another_way`). For ``unknown`` the final reply (a run's final
-answer) must ALSO say itself that it could not do it, naming the request
-(:func:`reply_says_it_cannot`: "I can't send faxes"; review round 3: on a
-fresh set, half of 28 doable requests answered in words, a BMI, a
-translation, a draft, were kept without it). The same words again in the
+:func:`done_another_way`). For ``unknown`` and ``nothing`` the final reply
+(a run's final answer) must ALSO say itself that it could not do it, naming
+the request (:func:`reply_says_it_cannot`: "I can't send faxes"; review
+round 3: on a fresh set, half of 28 doable requests answered in words, a
+BMI, a translation, a draft, were kept without it; review round 4: a joke
+after a lookup that found nothing, and a closing hedge whose first word is
+not the request, "I can't taste-test this lasagna", are not). The same words again in the
 same chat (Try again) are one ask (:func:`keep`). NEVER a miss: a lookup that
 failed (``LOOKUP_FAILED``), one with no search words (``TOO_GENERAL``), one
 read from part of the list (``partial``), a low-trust turn (the request may
@@ -253,10 +259,31 @@ def _named_by_unknown(answer: dict[str, Any], names: frozenset[str]) -> bool:
     return all(any(str(w) and str(w) not in names for w in part) for part in parts)
 
 
+def not_offered_holds(entry_id: Any, words: Any) -> bool:
+    """Is the "Not offered" line *entry_id* about the owner's own *words*?
+    Only when the deterministic rule that puts that line in the prompt
+    (``daemon/page_doors.not_offered``, its ``_NOT_OFFERED_RULES``) holds on
+    them (20-a review round 4: the lookup has no relevance floor, so its first
+    line can be the "Not offered" line about agents' monthly limits for "a
+    monthly grocery budget"). Pure; never raises (cannot tell = False)."""
+    entry = str(entry_id or "")
+    if not entry or not str(words or "").strip():
+        return False
+    try:
+        from ..daemon.page_doors import not_offered
+
+        return any(item.id == entry for item in not_offered(str(words)))
+    except Exception:  # noqa: BLE001 — a rule that cannot run confirms nothing
+        return False
+
+
 def miss_of(answer: Any, *, words: Any = "") -> "tuple[str, str, list[str]] | None":
     """``(kind, entry_id, unknown words)`` when one lookup's answer
     (``tool.answer_record``) is a miss, else None. *words*: the owner's own
-    words of the turn (their names are never unknown words). Pure."""
+    words of the turn (their names are never unknown words; a "Not offered"
+    first line counts only when its own rule holds on them,
+    :func:`not_offered_holds`, else the answer is judged as any other list).
+    Pure."""
     if not isinstance(answer, dict):
         return None
     reason = str(answer.get("reason") or "")
@@ -269,7 +296,7 @@ def miss_of(answer: Any, *, words: Any = "") -> "tuple[str, str, list[str]] | No
     if reason == "nothing":
         return KIND_NOTHING, "", unknown
     first = answer.get("first") if isinstance(answer.get("first"), dict) else {}
-    if str(first.get("kind") or "") == "not_offered":
+    if str(first.get("kind") or "") == "not_offered" and not_offered_holds(first.get("id"), words):
         return KIND_NOT_OFFERED, str(first.get("id") or ""), unknown
     if unknown and _named_by_unknown(answer, names):
         return KIND_UNKNOWN, "", unknown
@@ -304,12 +331,10 @@ REPLY_MAX_CHARS = 40_000
 _APOS = r"(?:'|’)"
 _NOT = r"(?:n" + _APOS + r"t|\s+not)"
 _CANT = r"(?:can" + _APOS + r"?t|cannot|can\s+not)"
-#: What a reply says when Iron Jarvis cannot do something: "I can't send
-#: faxes", "I'm not able to …", "I don't have a way to …", "Iron Jarvis has
-#: no …", "there's no way to …", "isn't something I can do", "isn't
-#: supported", "isn't available here". English only (a reply in another
-#: language is never read as one: no miss, the safe side).
-_LIMIT_RX = re.compile(
+#: What a reply says when Iron Jarvis cannot do something, WHAT FOLLOWS
+#: naming it: "I can't send faxes", "I'm not able to …", "I don't have a way
+#: to …", "Iron Jarvis has no …", "there's no way to …".
+_LIMIT_VERB = (
     r"\bI(?:\s+(?:really|simply|currently|just|unfortunately|actually|still|also))?"
     r"(?:\s+" + _CANT + r"|\s+am\s+unable\s+to|" + _APOS + r"m\s+unable\s+to|\s+am\s+not\s+able\s+to"
     r"|" + _APOS + r"m\s+not\s+able\s+to|\s+won" + _APOS + r"t\s+be\s+able\s+to"
@@ -319,12 +344,26 @@ _LIMIT_RX = re.compile(
     r"|\b(?:Iron\s+)?Jarvis\s+(?:" + _CANT + r"|is\s+unable\s+to|is" + _NOT + r"\s+able\s+to"
     r"|does" + _NOT + r"\s+(?:have|offer|include|support|do)|has\s+no|lacks)\b"
     r"|\bthere(?:" + _APOS + r"s|\s+is)\s+no\s+(?:\w+\s+){0,2}?(?:way|feature|tool|integration|option|capability)\b"
-    r"|\b(?:is|are)" + _NOT + r"\s+(?:something|a\s+thing|anything)\s+(?:I|Iron\s+Jarvis|Jarvis|we)\s+"
+)
+#: …and the forms whose SUBJECT, before them, names it: "Faxing isn't
+#: something I can do", "isn't supported", "isn't available here".
+_LIMIT_SUBJECT = (
+    r"\b(?:is|are)" + _NOT + r"\s+(?:something|a\s+thing|anything)\s+(?:I|Iron\s+Jarvis|Jarvis|we)\s+"
     r"(?:can|could|am\s+able)\b"
     r"|\b(?:is|are)" + _NOT + r"\s+(?:currently\s+|yet\s+)?supported\b"
-    r"|\b(?:is|are)" + _NOT + r"\s+(?:currently\s+)?(?:available|possible)\s+(?:here|from\s+here|in\s+Iron\s+Jarvis|yet)\b",
-    re.IGNORECASE,
+    r"|\b(?:is|are)" + _NOT + r"\s+(?:currently\s+)?(?:available|possible)\s+(?:here|from\s+here|in\s+Iron\s+Jarvis|yet)\b"
 )
+#: Both, one pass (``subject`` is set for the second kind). English only (a
+#: reply in another language is never read as one: no miss, the safe side).
+_LIMIT_RX = re.compile(r"(?:" + _LIMIT_VERB + r")|(?P<subject>" + _LIMIT_SUBJECT + r")", re.IGNORECASE)
+#: The search words of a limit phrase itself and of the helping words before
+#: what it names ("I can't help with faxing", "no way to place an order"):
+#: passed over when the first word it names is read (20-a review round 4).
+_LIMIT_WORDS = frozenset(_index.tokens(
+    "t m s re ve ll d don doesn won isn aren unable able am way ability means access option feature integration "
+    "capability lacks offer include support help assist handle place process actually really currently directly "
+    "personally simply just still yet unfortunately myself"
+))
 #: A word that turns what follows against what came before: the limit is a
 #: hedge ("I can't check live rates, but at about 1.08 that is 270 dollars").
 _CONTRAST_RX = re.compile(r"\b(?:but|however|though|although|still|instead)\b", re.IGNORECASE)
@@ -372,7 +411,16 @@ def _reply_spots(reply: Any) -> list[str]:
     return spots
 
 
-def reply_says_it_cannot(reply: Any, unknown: Iterable[str]) -> bool:
+def _names_first(text: str, verbs: set[str]) -> bool:
+    """Is the first thing *text* (a limit and what follows it) names, past the
+    limit's own words (:data:`_LIMIT_WORDS`), one of *verbs*?"""
+    for word in _index.tokens(text):
+        if word not in _LIMIT_WORDS:
+            return word in verbs
+    return False
+
+
+def reply_says_it_cannot(reply: Any, unknown: Iterable[str], query: Any = "") -> bool:
     """Does the reply ITSELF say it could not do the request (20-a review
     round 3: "Every 'I can't' becomes a suggestion")? Deterministic, no
     model; never raises (cannot tell = False: no miss). True only for a
@@ -381,15 +429,22 @@ def reply_says_it_cannot(reply: Any, unknown: Iterable[str]) -> bool:
     the request by one of *unknown* (the words of the lookup's first way of
     naming it that no entry knows: "I can't send faxes") in the stretch of
     the sentence around it (between a comma, colon, dash, "so" or contrast
-    word and the next). NOT one: a hedge followed by the answer ("I can't
-    check live rates, but at about 1.08 …"; "…, but you can …" is still
-    one), a limit on an input ("without your height"), a draft's or a
+    word and the next); and, for a limit whose object follows it ("I can't
+    X"), only when the FIRST thing it names is the request: one of *unknown*
+    or of the search words of the ways the lookup named it (*query*: "fax a
+    form / send a fax" lets "I can't send" count; review round 4: "I can't
+    taste-test this lasagna" closing a recipe is a hedge, not the request).
+    NOT one: a hedge followed by the answer ("I
+    can't check live rates, but at about 1.08 …"; "…, but you can …" is
+    still one), a limit on an input ("without your height"), a draft's or a
     story's words in double quotes, a reply in another language, a limit
-    that names something else ("I can't give medical advice")."""
+    that names something else ("I can't give medical advice", "I can't see
+    your form during the workout")."""
     try:
         wanted = {str(w) for w in unknown or () if str(w or "").strip()}
         if not wanted:
             return False
+        verbs = wanted | set(search_words(query))
         for spot in _reply_spots(reply):
             for sentence in _SENTENCE.split(spot):
                 for found in _LIMIT_RX.finditer(sentence):
@@ -402,24 +457,33 @@ def reply_says_it_cannot(reply: Any, unknown: Iterable[str]) -> bool:
                     ends += [m.end() for m in _CONTRAST_RX.finditer(sentence, 0, found.start())]
                     start = max(ends, default=0)
                     stop = [m.start() for m in (_CLAUSE_END_RX.search(sentence, found.end()), after) if m]
-                    stretch = sentence[start:min(stop, default=len(sentence))]
-                    if set(_index.tokens(stretch)) & wanted:
+                    end = min(stop, default=len(sentence))
+                    if not found.group("subject") and not _names_first(sentence[found.start():end], verbs):
+                        continue  # a limit on something else: "I can't taste it"
+                    if set(_index.tokens(sentence[start:end])) & wanted:
                         return True
         return False
     except Exception:  # noqa: BLE001 — a reading never keeps a miss
         return False
 
 
-def reply_counts(kind: str, reply: Any, unknown: Iterable[str]) -> bool:
+def reply_counts(kind: str, reply: Any, unknown: Iterable[str], query: Any = "") -> bool:
     """Does the reply let this miss be kept? ``unknown`` (the lookup LISTED
-    lines, none about the request): only when the reply itself said it could
-    not do it (:func:`reply_says_it_cannot`; review round 3: a request done
-    in words, a figure, a draft, a translation, is never "can't do yet").
-    ``nothing`` / ``not_offered``: the plan's rule, the lookup's own answer
-    says it (always True here)."""
-    if kind == KIND_UNKNOWN:
-        return reply_says_it_cannot(reply, unknown)
-    return True
+    lines, none about the request) and ``nothing`` (it listed none): only
+    when the reply itself said it could not do it
+    (:func:`reply_says_it_cannot`; review round 3: a request done in words,
+    a figure, a draft, a translation, is never "can't do yet"; review round
+    4: nor a joke after a lookup that found nothing), named by the words no
+    entry knows or, when the lookup left none, by the search words of
+    *query*'s first way of naming it. ``not_offered``: the lookup's own line
+    says it, and :func:`miss_of` kept it only when that line's own rule
+    holds on the owner's words (always True here)."""
+    if kind == KIND_NOT_OFFERED:
+        return True
+    wanted = [str(w) for w in unknown or () if str(w or "").strip()]
+    if kind == KIND_NOTHING and not wanted:
+        wanted = _index.tokens(_index.first_part(query))
+    return reply_says_it_cannot(reply, wanted, query)
 
 
 def changed_something(names: Iterable[str], registry: Any) -> bool:
@@ -774,8 +838,10 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
     and the calls after it (a successful one that changes something, read
     from the row's own ``reversibility``, means it was done another way; a
     rehearsal's row changed nothing; for ``unknown``, ANY call after it,
-    ok or not, as :func:`done_another_way`, and only when the run's final
-    *answer* says it could not do it, :func:`reply_counts`). The caller
+    ok or not, as :func:`done_another_way`; a "Not offered" line only when
+    its own rule holds on *words*, :func:`miss_of`; and for ``unknown`` and
+    ``nothing`` only when the run's final *answer* says it could not do it,
+    :func:`reply_counts`). The caller
     checks whose words the task is, the run's trust and where it came from.
     Returns the group's id, or None. BLOCKING; RAISES."""
     from sqlalchemy import text
@@ -811,7 +877,7 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
             continue
         if str(row.reversibility or "") != "readonly" and row.tool not in _index.READS_ONLY:
             return None
-    if not reply_counts(kind, answer, unknown):
+    if not reply_counts(kind, answer, unknown, record["query"]):
         return None
     return keep(engine, words=words, query=record["query"], kind=kind, entry_id=entry_id, unknown=unknown,
                 thread_id=str(session_id), surface="run", local_only=local_only, now=now)
@@ -821,6 +887,7 @@ __all__ = [
     "ASKS_SHOWN", "KEEP_DAYS", "LIST_AT", "LIST_DAYS", "LIST_MAX", "WORDS_CHARS", "AlreadyAnswered", "NotFound",
     "answer", "answer_from_ledger", "calls_after_last_lookup", "changed_something", "clean_words",
     "done_another_way", "keep",
-    "keep_run_miss", "miss_of", "prune", "reply_counts", "reply_says_it_cannot", "same_request", "search_words",
+    "keep_run_miss", "miss_of", "not_offered_holds", "prune", "reply_counts", "reply_says_it_cannot",
+    "same_request", "search_words",
     "waiting",
 ]
