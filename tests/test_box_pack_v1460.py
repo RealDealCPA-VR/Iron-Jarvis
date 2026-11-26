@@ -189,8 +189,15 @@ def test_other_import_failures_read_the_same_and_a_plain_crash_keeps_its_words()
         "exit code 1; its last output: SyntaxError: The requested module 'zod' does not provide an export named 'z' | at x",
     )
     assert "does not provide an export named 'z'" in node["reason"] and "upstream" in node["reason"]
+    # A launcher named by its FULL PATH, in this system's own spelling. Off
+    # Windows a Windows path is "a Windows program" before anything else
+    # (v1.577.0, `runs_elsewhere`, pinned in test_mcp_resilience_v1577), so the
+    # Windows spelling written here made the Linux release red (run
+    # 45711574897); the rule under test is the launcher's NAME, read from the
+    # last part of a path with either slash.
+    npx_by_path = "C:\\Program Files\\nodejs\\npx.cmd" if os.name == "nt" else "/usr/local/bin/npx"
     npx_cmd = classify_load_failure(
-        {"command": "C:\\Program Files\\nodejs\\npx.cmd"},
+        {"command": npx_by_path},
         "exit code 1; its last output: Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'zod' imported from C:\\x\\index.js",
     )
     assert "Cannot find package 'zod' imported from" in npx_cmd["reason"] and "upstream" in npx_cmd["reason"]
