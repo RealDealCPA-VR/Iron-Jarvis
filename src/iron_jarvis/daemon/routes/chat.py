@@ -9217,7 +9217,7 @@ async def chat_stream(
         # NEXT LEAPS 20-a: the lock-step copy of chat_turn's — a request this
         # reply's lookup found no feature for is kept for Improvements.
         await _chat_turn.keep_lookup_miss(
-            d, body, ctx, tools_used=tools_used, trust_state=_trust_state, escalate=escalate,
+            d, body, ctx, tools_used=tools_used, trust_state=_trust_state, escalate=escalate, reply=reply,
         )
         done_frame: dict[str, Any] = {
             "reply": reply,

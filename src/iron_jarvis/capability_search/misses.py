@@ -31,7 +31,12 @@ and the reply then made no successful call that changes or creates something
 (for ``unknown``, whose lookup listed lines, no call at all after it, whatever
 became of it, other than a lookup: a line the reply took to fit, even one
 that only reads, failed or was declined, is not "nothing for it";
-:func:`done_another_way`). NEVER a miss: a lookup that
+:func:`done_another_way`). For ``unknown`` the final reply (a run's final
+answer) must ALSO say itself that it could not do it, naming the request
+(:func:`reply_says_it_cannot`: "I can't send faxes"; review round 3: on a
+fresh set, half of 28 doable requests answered in words, a BMI, a
+translation, a draft, were kept without it). The same words again in the
+same chat (Try again) are one ask (:func:`keep`). NEVER a miss: a lookup that
 failed (``LOOKUP_FAILED``), one with no search words (``TOO_GENERAL``), one
 read from part of the list (``partial``), a low-trust turn (the request may
 be an injected one), a task from another computer, an agent run whose task
@@ -274,16 +279,147 @@ def miss_of(answer: Any, *, words: Any = "") -> "tuple[str, str, list[str]] | No
 def said_unknown(query: Any, unknown: Any, cap: int = 3) -> list[str]:
     """The owner-readable words behind *unknown* (search words, stemmed):
     the words of the query's first part whose search word is one of them,
-    lower-cased, each once, at most *cap* ("fax", never "fax" stemmed)."""
+    as they are written there ("BMI", never "bmi"; 20-a review round 3),
+    each once whatever its case, at most *cap* ("fax", never "fax" stemmed)."""
     wanted = set(_words_of(unknown) if isinstance(unknown, str) else (str(w) for w in unknown or ()))
     out: list[str] = []
     for raw in _RAW_WORD.findall(_index.first_part(query)):
-        word = raw.strip("\"'“”‘’()[]{}<>,.!?:;").lower()
-        if word and word not in out and set(_index.tokens(word)) & wanted:
+        word = raw.strip("\"'“”‘’()[]{}<>,.!?:;")
+        if word and word.casefold() not in {w.casefold() for w in out} and set(_index.tokens(word)) & wanted:
             out.append(word)
         if len(out) >= cap:
             break
     return out
+
+
+# --------------------------------------------------------------------------- #
+# the reply's own words (20-a review round 3)
+# --------------------------------------------------------------------------- #
+#: How much of the reply's first and last paragraphs is read.
+REPLY_HEAD_CHARS = 600
+REPLY_TAIL_CHARS = 900
+#: A reply longer than this is cut to its start and its end before it is read.
+REPLY_MAX_CHARS = 40_000
+
+_APOS = r"(?:'|’)"
+_NOT = r"(?:n" + _APOS + r"t|\s+not)"
+_CANT = r"(?:can" + _APOS + r"?t|cannot|can\s+not)"
+#: What a reply says when Iron Jarvis cannot do something: "I can't send
+#: faxes", "I'm not able to …", "I don't have a way to …", "Iron Jarvis has
+#: no …", "there's no way to …", "isn't something I can do", "isn't
+#: supported", "isn't available here". English only (a reply in another
+#: language is never read as one: no miss, the safe side).
+_LIMIT_RX = re.compile(
+    r"\bI(?:\s+(?:really|simply|currently|just|unfortunately|actually|still|also))?"
+    r"(?:\s+" + _CANT + r"|\s+am\s+unable\s+to|" + _APOS + r"m\s+unable\s+to|\s+am\s+not\s+able\s+to"
+    r"|" + _APOS + r"m\s+not\s+able\s+to|\s+won" + _APOS + r"t\s+be\s+able\s+to"
+    r"|\s+(?:don" + _APOS + r"t|do\s+not)\s+have\s+(?:a\s+|any\s+|the\s+)?(?:\w+\s+)?"
+    r"(?:way|ability|means|access|option|tool|feature|integration|capability)"
+    r"|\s+have\s+no\s+(?:\w+\s+)?(?:way|ability|means|access|tool|feature|integration|capability))\b"
+    r"|\b(?:Iron\s+)?Jarvis\s+(?:" + _CANT + r"|is\s+unable\s+to|is" + _NOT + r"\s+able\s+to"
+    r"|does" + _NOT + r"\s+(?:have|offer|include|support|do)|has\s+no|lacks)\b"
+    r"|\bthere(?:" + _APOS + r"s|\s+is)\s+no\s+(?:\w+\s+){0,2}?(?:way|feature|tool|integration|option|capability)\b"
+    r"|\b(?:is|are)" + _NOT + r"\s+(?:something|a\s+thing|anything)\s+(?:I|Iron\s+Jarvis|Jarvis|we)\s+"
+    r"(?:can|could|am\s+able)\b"
+    r"|\b(?:is|are)" + _NOT + r"\s+(?:currently\s+|yet\s+)?supported\b"
+    r"|\b(?:is|are)" + _NOT + r"\s+(?:currently\s+)?(?:available|possible)\s+(?:here|from\s+here|in\s+Iron\s+Jarvis|yet)\b",
+    re.IGNORECASE,
+)
+#: A word that turns what follows against what came before: the limit is a
+#: hedge ("I can't check live rates, but at about 1.08 that is 270 dollars").
+_CONTRAST_RX = re.compile(r"\b(?:but|however|though|although|still|instead)\b", re.IGNORECASE)
+#: …unless what follows only says how the OWNER can do it.
+_REDIRECT_RX = re.compile(
+    r"^\W*(?:you(?:" + _APOS + r"ll|\s+(?:can|could|may|might|will|would))|here" + _APOS + r"?s\s+how\s+you"
+    r"|here\s+is\s+how\s+you)\b",
+    re.IGNORECASE,
+)
+#: A limit on an INPUT, not on Iron Jarvis ("I can't work out your BMI
+#: without your height").
+_CONDITION_RX = re.compile(r"\b(?:without|unless|until|till|if\s+you)\b", re.IGNORECASE)
+#: Where the stretch of a sentence that names what cannot be done ends: a
+#: comma, a colon, a dash, a bracket, "so" ("I can't give medical advice, so
+#: ask your doctor about the fax" names no fax it cannot send).
+_CLAUSE_END_RX = re.compile(r"[,;:()\[\]—–]|\s-\s|\bso\b", re.IGNORECASE)
+_FENCE_LINE = re.compile(r"^\s*(```|~~~)")
+_QUOTE_LINE = re.compile(r"^\s*>")
+_QUOTED = re.compile(r"\"[^\"\n]{0,600}\"|“[^”\n]{0,600}”")
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _reply_spots(reply: Any) -> list[str]:
+    """Where a reply says what it could not do: its FIRST paragraph and its
+    LAST paragraph of prose, without code, quoted lines or words in double
+    quotes (a draft's or a story's "I can't" is not the reply's own)."""
+    raw = str(reply or "")
+    if len(raw) > REPLY_MAX_CHARS:
+        raw = raw[:REPLY_HEAD_CHARS * 4] + "\n\n" + raw[-REPLY_TAIL_CHARS * 4:]
+    lines: list[str] = []
+    fenced = False
+    for line in raw.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if _FENCE_LINE.match(line):
+            fenced = not fenced
+            continue
+        if fenced or _QUOTE_LINE.match(line):
+            continue
+        lines.append(line)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", "\n".join(lines)) if p.strip()]
+    if not paragraphs:
+        return []
+    spots = [_QUOTED.sub(" ", paragraphs[0][:REPLY_HEAD_CHARS])]
+    if len(paragraphs) > 1:
+        spots.append(_QUOTED.sub(" ", paragraphs[-1][-REPLY_TAIL_CHARS:]))
+    return spots
+
+
+def reply_says_it_cannot(reply: Any, unknown: Iterable[str]) -> bool:
+    """Does the reply ITSELF say it could not do the request (20-a review
+    round 3: "Every 'I can't' becomes a suggestion")? Deterministic, no
+    model; never raises (cannot tell = False: no miss). True only for a
+    sentence in the reply's first or last paragraph (:func:`_reply_spots`)
+    that says Iron Jarvis cannot do something (:data:`_LIMIT_RX`) and names
+    the request by one of *unknown* (the words of the lookup's first way of
+    naming it that no entry knows: "I can't send faxes") in the stretch of
+    the sentence around it (between a comma, colon, dash, "so" or contrast
+    word and the next). NOT one: a hedge followed by the answer ("I can't
+    check live rates, but at about 1.08 …"; "…, but you can …" is still
+    one), a limit on an input ("without your height"), a draft's or a
+    story's words in double quotes, a reply in another language, a limit
+    that names something else ("I can't give medical advice")."""
+    try:
+        wanted = {str(w) for w in unknown or () if str(w or "").strip()}
+        if not wanted:
+            return False
+        for spot in _reply_spots(reply):
+            for sentence in _SENTENCE.split(spot):
+                for found in _LIMIT_RX.finditer(sentence):
+                    after = _CONTRAST_RX.search(sentence, found.end())
+                    if after and not _REDIRECT_RX.match(sentence[after.end():]):
+                        continue  # a hedge: the answer follows
+                    if _CONDITION_RX.search(sentence, found.end()):
+                        continue  # a missing input, not a missing feature
+                    ends = [m.end() for m in _CLAUSE_END_RX.finditer(sentence, 0, found.start())]
+                    ends += [m.end() for m in _CONTRAST_RX.finditer(sentence, 0, found.start())]
+                    start = max(ends, default=0)
+                    stop = [m.start() for m in (_CLAUSE_END_RX.search(sentence, found.end()), after) if m]
+                    stretch = sentence[start:min(stop, default=len(sentence))]
+                    if set(_index.tokens(stretch)) & wanted:
+                        return True
+        return False
+    except Exception:  # noqa: BLE001 — a reading never keeps a miss
+        return False
+
+
+def reply_counts(kind: str, reply: Any, unknown: Iterable[str]) -> bool:
+    """Does the reply let this miss be kept? ``unknown`` (the lookup LISTED
+    lines, none about the request): only when the reply itself said it could
+    not do it (:func:`reply_says_it_cannot`; review round 3: a request done
+    in words, a figure, a draft, a translation, is never "can't do yet").
+    ``nothing`` / ``not_offered``: the plan's rule, the lookup's own answer
+    says it (always True here)."""
+    if kind == KIND_UNKNOWN:
+        return reply_says_it_cannot(reply, unknown)
+    return True
 
 
 def changed_something(names: Iterable[str], registry: Any) -> bool:
@@ -380,7 +516,10 @@ def _pick_title(rows: list[tuple[Any, str, str, bool]]) -> tuple[str, str, str, 
 def keep(engine: Any, *, words: Any, query: Any, kind: str, entry_id: str = "",
          unknown: Iterable[str] = (), thread_id: str = "", surface: str = "",
          local_only: bool = False, now: Any = None) -> str:
-    """Keep ONE miss and group it; returns its group's id. Removes rows past
+    """Keep ONE miss and group it; returns its group's id. The same kept
+    words again in the same *thread_id* (a Try again, an Edit and resend with
+    nothing changed) are the ask already kept: nothing is written, the count
+    stays (an unsaved chat has no thread and cannot be told). Removes rows past
     :data:`KEEP_DAYS` afterwards. BLOCKING; RAISES when the query cannot be
     masked or the write fails (the caller says nothing in the reply: a miss
     is never part of an answer)."""
@@ -397,8 +536,20 @@ def keep(engine: Any, *, words: Any, query: Any, kind: str, entry_id: str = "",
     kept_words = clean_words(words)
     mine_words = search_words(kept_query)
     mine_unknown = frozenset(sorted({str(w) for w in unknown if str(w or "").strip()})[:WORDS_MAX])
+    kept_thread = str(thread_id or "")[:200]
     with _LOCK:
         with session_scope(engine) as db:
+            if kept_thread:
+                # 20-a review round 3: the same words again in the same chat
+                # (Try again, or Edit and resend unchanged) are ONE ask: no
+                # row, no count. Never "Asked 2 times" over one request.
+                again = db.exec(
+                    select(CapabilityMiss.group_id)
+                    .where(CapabilityMiss.thread_id == kept_thread, CapabilityMiss.words == kept_words)
+                    .limit(1)
+                ).first()
+                if again is not None:
+                    return str(again)
             groups = list(db.exec(
                 select(MissGroup).order_by(MissGroup.last_at.desc()).limit(GROUPS_SCAN)
             ))
@@ -429,7 +580,7 @@ def keep(engine: Any, *, words: Any, query: Any, kind: str, entry_id: str = "",
             unknown_text = " ".join(sorted(mine_unknown))
             db.add(CapabilityMiss(
                 words=kept_words, query=kept_query, kind=kind, entry_id=str(entry_id or "")[:120],
-                unknown=unknown_text, thread_id=str(thread_id or "")[:200], surface=str(surface or "")[:40],
+                unknown=unknown_text, thread_id=kept_thread, surface=str(surface or "")[:40],
                 local_only=bool(local_only), group_id=group.id, created_at=at,
             ))
             group.count = int(group.count or 0) + 1
@@ -515,7 +666,8 @@ def waiting(engine: Any, *, now: Any = None) -> tuple[list[dict[str, Any]], int]
         said: list[str] = []
         for m in mine:
             if m.kind == KIND_UNKNOWN:
-                said += [w for w in said_unknown(m.query, m.unknown) if w not in said]
+                said += [w for w in said_unknown(m.query, m.unknown)
+                         if w.casefold() not in {s.casefold() for s in said}]
         out.append({
             # 20-a review: the words of its asks that nothing Iron Jarvis has
             # mentions, as the owner reads them (the page's why says them).
@@ -617,14 +769,15 @@ def answer_from_ledger(output: Any, args_json: Any, platform: Any = None) -> dic
 
 
 def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: bool = False,
-                  now: Any = None) -> "str | None":
+                  answer: Any = "", now: Any = None) -> "str | None":
     """An agent run's miss, from its OWN ledger: its last successful lookup,
     and the calls after it (a successful one that changes something, read
     from the row's own ``reversibility``, means it was done another way; a
     rehearsal's row changed nothing; for ``unknown``, ANY call after it,
-    ok or not, as :func:`done_another_way`). The caller checks whose words
-    the task is, the run's trust and where it came from. Returns the group's id, or
-    None. BLOCKING; RAISES."""
+    ok or not, as :func:`done_another_way`, and only when the run's final
+    *answer* says it could not do it, :func:`reply_counts`). The caller
+    checks whose words the task is, the run's trust and where it came from.
+    Returns the group's id, or None. BLOCKING; RAISES."""
     from sqlalchemy import text
     from sqlmodel import select
 
@@ -658,6 +811,8 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
             continue
         if str(row.reversibility or "") != "readonly" and row.tool not in _index.READS_ONLY:
             return None
+    if not reply_counts(kind, answer, unknown):
+        return None
     return keep(engine, words=words, query=record["query"], kind=kind, entry_id=entry_id, unknown=unknown,
                 thread_id=str(session_id), surface="run", local_only=local_only, now=now)
 
@@ -666,5 +821,6 @@ __all__ = [
     "ASKS_SHOWN", "KEEP_DAYS", "LIST_AT", "LIST_DAYS", "LIST_MAX", "WORDS_CHARS", "AlreadyAnswered", "NotFound",
     "answer", "answer_from_ledger", "calls_after_last_lookup", "changed_something", "clean_words",
     "done_another_way", "keep",
-    "keep_run_miss", "miss_of", "prune", "same_request", "search_words", "waiting",
+    "keep_run_miss", "miss_of", "prune", "reply_counts", "reply_says_it_cannot", "same_request", "search_words",
+    "waiting",
 ]

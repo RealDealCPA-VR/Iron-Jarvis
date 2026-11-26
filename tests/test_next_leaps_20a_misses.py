@@ -27,6 +27,11 @@ Pinned here, through the REAL lanes (only the model is scripted):
   request in another language; a run from another computer or a schedule's
   fire keeps none; each kind says what its record shows; a Local only chat's
   miss is marked so by the lane itself;
+* review round 3: a request named by words no entry knows is kept only when
+  the reply (a run's final answer) itself says it could not do it, naming
+  it: a BMI or a complaint letter answered in words keeps nothing in either
+  lane or a run, "I can't send faxes" is kept; a Try again with the same
+  words in the same chat is one ask;
 * three fax asks in different words make ONE group, "book a flight" another,
   and a word no entry knows that two requests share alone joins nothing;
 * a secret in the message is masked before it is stored;
@@ -148,7 +153,13 @@ async def _missing_items(app) -> list[dict]:
     return [i for i in inbox["items"] if i["kind"] == "missing"]
 
 
-def _lookup_then_say(query: str, said: str = "Iron Jarvis has no feature for that.") -> Model:
+def _lookup_then_say(query: str, said: str | None = None) -> Model:
+    """The lookup, then a reply. By default the reply says it cannot do the
+    request, naming it ("I can't send a fax here: …"), as a reply to a real
+    gap does (review round 3: a request named by a word no entry knows is
+    kept only when the reply itself says so)."""
+    if said is None:
+        said = f"I can't {query.split(' / ')[0]} here: Iron Jarvis has no feature for it."
     return Model([_call(1, NAME, query=query), said])
 
 
@@ -358,6 +369,94 @@ async def test_a_doable_request_done_in_words_is_not_kept(desk, lane):
     assert await _missing_items(app) == []
 
 
+#: Review round 3 (blocking): doable requests EVERY way of naming of which
+#: holds a word no entry knows, whose lookup's first line is the tool for
+#: them, answered in words with no call afterwards (the reviewer's probes).
+BMI_QUERY = "calculate BMI / body mass index / health calculator"
+BMI_ASKS = ("Calculate my BMI, I'm 180 cm and 75 kg", "What's my BMI at 165 cm and 60 kg?")
+LETTER_QUERY = "draft a complaint letter / landlord letter / heating complaint"
+LETTER_ASKS = ("Draft a polite complaint to my landlord about the heating",
+               "Write my landlord a complaint about the broken heating")
+LETTER_DRAFT = (
+    "Here is a draft you can adapt:\n\nDear Mr. Hale,\n\nI am writing about the heating, which has not worked for "
+    "two weeks. I can't keep working from home in a cold flat, and I would be grateful if it were repaired by "
+    "Friday.\n\nKind regards,\nAna"
+)
+FAX_LIMIT = "I can't send faxes: Iron Jarvis has no fax feature. An online fax service can send it for you."
+
+
+def _kind_on_the_real_index(app, query: str, words: str):
+    from iron_jarvis.capability_search import misses as M
+
+    _text, data = CT_TOOL.answer(app.state.platform, query)
+    got = M.miss_of(CT_TOOL.answer_record(data), words=words)
+    return got[0] if got else None
+
+
+@pytest.mark.asyncio
+async def test_a_request_answered_in_words_keeps_nothing_though_no_entry_knows_its_words(desk):
+    """Review round 3 (blocking): a BMI and a complaint letter, each asked
+    twice (once per lane) and answered in words, keep no row and no item:
+    a request named by words no entry knows is kept only when the reply
+    ITSELF says it could not do it. "I can't send faxes" after the fax
+    lookup is still kept, in each lane."""
+    app, ws = desk
+    for query, asks in ((BMI_QUERY, BMI_ASKS), (LETTER_QUERY, LETTER_ASKS)):
+        assert _kind_on_the_real_index(app, query, asks[0]) == "unknown", "the control: the lookup alone says so"
+    bmi = ("Your BMI is about 23.1, in the healthy range (18.5 to 24.9).",
+           "At 165 cm and 60 kg your BMI is 22.0, which is in the healthy range.")
+    for lane, ask, said in zip(("stream", "post"), BMI_ASKS, bmi):
+        model = _lookup_then_say(BMI_QUERY, said)
+        await _turn(app, ws, lane, ask, model)
+        listed = model.tool_texts[1][-1]
+        assert "tool calculate" in listed.splitlines()[1], ("the control: line 1 is the tool for it", listed[:300])
+    for lane, ask in zip(("stream", "post"), LETTER_ASKS):
+        await _turn(app, ws, lane, ask, _lookup_then_say(LETTER_QUERY, LETTER_DRAFT))
+    assert _misses(app) == []
+    assert await _missing_items(app) == []
+    # The control: a reply that says it cannot do it is kept, in each lane.
+    for lane, ask, query in zip(("stream", "post"), FAX_ASKS, FAX_QUERIES):
+        await _turn(app, ws, lane, ask, _lookup_then_say(query, FAX_LIMIT))
+    assert [r["kind"] for r in _misses(app)] == ["unknown", "unknown"], _misses(app)
+    assert [i["title"] for i in await _missing_items(app)] == ["Asked 2 times, no tool: send a fax"]
+
+
+def test_the_reply_itself_must_say_it_cannot_do_the_request():
+    """Review round 3: what counts as the reply saying it could not do it,
+    read from its first and last paragraphs only, naming the request."""
+    from iron_jarvis.capability_search import misses as M
+
+    says = (
+        FAX_LIMIT,
+        "Iron Jarvis doesn't have a fax feature. A copy shop can send it.",
+        "Faxing isn't something I can do from here.",
+        "Good question! I'm not able to fax documents, but you can use an online fax service.",
+        "Here are two ways:\n\n- an online fax service\n- a copy shop\n\nSorry, I can't send a fax myself.",
+        "There's no way for me to send a fax. Want me to make the form a PDF?",
+    )
+    for reply in says:
+        assert M.reply_says_it_cannot(reply, ["fax"]), reply
+    says_not = (
+        "Here is the cover sheet for your fax.",
+        "I can't check the fax line, but here is the cover sheet: To Ana, 2 pages.",
+        "I can't send the fax without the number. What is it?",
+        "I can't give medical advice, so please ask your doctor about the fax.",
+        "\"I can't send a fax,\" Pip said, and the story goes on.",
+        "Here it is:\n\nI can't believe the fax machine is gone.\n\nThat is the poem.",
+        "No puedo enviar el fax.",
+        "I can't send faxes.",  # names the fax, but the words asked about are others
+        "",
+    )
+    for reply in says_not[:-2]:
+        assert not M.reply_says_it_cannot(reply, ["fax"]), reply
+    assert not M.reply_says_it_cannot(says_not[-2], ["bmi"])
+    assert not M.reply_says_it_cannot(says_not[-1], ["fax"])
+    assert not M.reply_says_it_cannot(FAX_LIMIT, [])
+    assert M.reply_counts("nothing", "", ["fax"]) and M.reply_counts("not_offered", "", [])
+    assert not M.reply_counts("unknown", "Your BMI is 23.1.", ["bmi"])
+    assert M.reply_counts("unknown", "I can't work out a BMI here: no feature in Iron Jarvis does it.", ["bmi"])
+
+
 #: Review round 2, probe D: two doable requests that name one person, the
 #: name in EVERY way the lookup named them (the tool asks it to leave names
 #: out; a model may not), done in words or answered with a question.
@@ -555,7 +654,7 @@ async def test_three_fax_asks_in_different_words_make_one_group_and_show_on_impr
     # Review round 2 (d): what the record shows for this kind, never "found
     # none" over a lookup that listed lines.
     assert item["why"].startswith(
-        "Each time, Iron Jarvis looked for a feature for it, and nothing it had mentioned “fax”."), item["why"]
+        "Each time, Iron Jarvis looked for a feature for it, and none of its features mentioned “fax”."), item["why"]
     assert "found none" not in item["why"], item["why"]
     lines = item["evidence"]
     assert len(lines) == 3, lines
@@ -568,6 +667,24 @@ async def test_three_fax_asks_in_different_words_make_one_group_and_show_on_impr
     status, inbox = await _asgi(app, "GET", "/improvements")
     labels = {g["kind"]: g["label"] for g in inbox["groups"]}
     assert labels.get("missing") == "Things you asked for that Iron Jarvis can't do yet", inbox["groups"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_try_again_with_the_same_words_in_the_same_chat_is_one_ask(desk, lane):
+    """Review round 3 (should): the chat page's Try again resends the same
+    words as a new turn. One real ask and its Try again are ONE ask: one
+    row, nothing listed. The control: the same words in another chat are a
+    second ask."""
+    app, ws = desk
+    for _ in range(2):
+        await _turn(app, ws, lane, FAX_ASKS[0], _lookup_then_say(FAX_QUERIES[0], FAX_LIMIT), thread_id="thread-one")
+    assert [r["words"] for r in _misses(app)] == [FAX_ASKS[0]], _misses(app)
+    assert await _missing_items(app) == []
+    await _turn(app, ws, lane, FAX_ASKS[0], _lookup_then_say(FAX_QUERIES[0], FAX_LIMIT), thread_id="thread-two")
+    assert len(_misses(app)) == 2, _misses(app)
+    items = await _missing_items(app)
+    assert [i["title"] for i in items] == ["Asked 2 times, no tool: send a fax"], items
 
 
 def test_three_fax_requests_in_a_seeded_month_show_three_dates(desk):
@@ -619,8 +736,13 @@ def test_each_kind_says_what_its_record_shows(desk):
     mixed = C.missing_why({"count": 4, "unknown_said": ["fax"], "asks": [
         {"kind": "nothing"}, {"kind": "nothing"}, {"kind": "unknown"}]})
     assert mixed.startswith(
-        "Iron Jarvis looked for a feature for it: 2 times it found none, 1 time nothing it had mentioned “fax”; "
+        "Iron Jarvis looked for a feature for it: 2 times it found none, 1 time no feature mentioned “fax”; "
         "the record of the 1 earlier time was removed after 90 days."), mixed
+    # Review round 3: the word as the request was named ("BMI", never "bmi").
+    from iron_jarvis.capability_search import misses as M2
+
+    assert M2.said_unknown(BMI_QUERY, ["bmi"]) == ["BMI"]
+    assert M2.said_unknown("send a Fax / fax it", ["fax"]) == ["Fax"]
 
 
 def test_a_secret_in_the_message_is_masked_before_it_is_stored(desk):
@@ -958,7 +1080,8 @@ def test_an_agent_run_that_used_a_listed_tool_keeps_no_unknown_miss(tmp_path, th
     elif then == "failed":
         # Review round 2: a call tried after the lookup, even one that failed.
         script.append(_call(2, "read_document", path="no-such-form.pdf"))
-    script.append("Done.")
+    # Review round 3: the run's answer says it cannot (the control keeps it).
+    script.append(FAX_LIMIT)
     rows, looked = _agent_run(tmp_path, FAX_ASKS[0], script=script, tools=(NAME, "calculate", "read_document"))
     assert looked == 1, "the control: the run looked it up"
     if then == "nothing":
@@ -979,6 +1102,19 @@ def test_an_agent_run_whose_request_is_done_in_words_keeps_none(tmp_path):
     ], tools=(NAME, "calculate"))
     assert looked == 1, "the control: the run looked it up"
     assert rows == [], rows
+
+
+@pytest.mark.parametrize("answer", ["words", "cannot"])
+def test_an_agent_run_answered_in_words_keeps_no_unknown_miss(tmp_path, answer):
+    """Review round 3 (blocking), in a run: no entry knows "BMI", the run's
+    final answer gives the figure in words: none. The control: the same run
+    whose answer says it cannot is kept."""
+    said = "Your BMI is about 23.1, in the healthy range." if answer == "words" else (
+        "I can't work out a BMI here: no feature in Iron Jarvis does it.")
+    rows, looked = _agent_run(tmp_path, BMI_ASKS[0], script=[_call(1, NAME, query=BMI_QUERY), said],
+                              tools=(NAME, "calculate"))
+    assert looked == 1, "the control: the run looked it up"
+    assert rows == ([] if answer == "words" else [(BMI_ASKS[0], "unknown", "run")]), rows
 
 
 # --------------------------------------------------------------------------- #

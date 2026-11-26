@@ -74,7 +74,7 @@ function missing(extra: Record<string, unknown> = {}) {
     ref: GID,
     title: "Asked 3 times, no tool: send a fax",
     about: "",
-    why: "Each time, Iron Jarvis looked for a feature for it, and nothing it had mentioned “fax”.",
+    why: "Each time, Iron Jarvis looked for a feature for it, and none of its features mentioned “fax”.",
     evidence: LINES,
     created_at: "2026-11-20T10:00:00",
     detail: null,

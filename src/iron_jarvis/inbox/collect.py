@@ -642,8 +642,8 @@ MISSING_FOUND = {
         "it found it among the things it does not offer",
     ),
     "unknown": (
-        "Iron Jarvis looked for a feature for it, and nothing it had mentioned {words}",
-        "nothing it had mentioned {words}",
+        "Iron Jarvis looked for a feature for it, and none of its features mentioned {words}",
+        "no feature mentioned {words}",
     ),
 }
 MISSING_KEPT = (

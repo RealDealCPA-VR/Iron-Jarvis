@@ -2160,11 +2160,14 @@ words for each time. You do nothing for it: it is kept from your chats as
 you work.
 
 - **When it counts.** Iron Jarvis looked the request up and found nothing
-  for it (or only things it does not offer, like controlling the desktop,
-  or only things that never mention what you asked for by name, like "fax"),
-  and the reply then changed nothing. A request it did another way is not
-  kept: when the reply went on to use or try something the lookup listed,
-  even just to work out a figure or search the web, it counts as done. A
+  for it (or only things it does not offer, like controlling the desktop),
+  and the reply then changed nothing. When the lookup listed other things,
+  none of which mention what you asked for by name (like "fax"), it counts
+  only when the reply itself said it could not do it ("I can't send
+  faxes"), and not when the reply went on to use or try one of them, even
+  just to work out a figure or search the web. So a figure, a draft or a
+  translation the reply gave you in words is never kept. Asking again in
+  the same chat with the same words (**Try again**) is not counted twice. A
   request is never kept for a name in it (a person's or a company's) or
   because it was written in another language. Neither is one made while a
   reply was reading something flagged as unsafe, one from another computer,

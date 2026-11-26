@@ -2244,7 +2244,8 @@ class AgentRuntime:
     #: Next leaps 20-a: how long a run's end waits for its miss to be kept.
     MISS_KEEP_S = 5.0
 
-    async def _keep_lookup_miss(self, session: Session, story: Any, *, local_only: bool = False) -> None:
+    async def _keep_lookup_miss(self, session: Session, story: Any, *, local_only: bool = False,
+                                answer: Any = "") -> None:
         """Next leaps 20-a, the agent run's END: when the run's last lookup
         found nothing Iron Jarvis has for its task and no call after it
         changed something (``capability_search/misses.keep_run_miss``, read
@@ -2254,7 +2255,9 @@ class AgentRuntime:
         chat turn, or another computer's task), never at low trust or after it
         read flagged content, never for a schedule's fire (20-a review: the
         same words each time it fires are one ask, not a new one each day).
-        Off the loop, bounded; never raises."""
+        *answer*: the run's final answer (``AgentRun.result``), which must say
+        it could not do a request named by a word no entry knows
+        (``misses.reply_counts``). Off the loop, bounded; never raises."""
         try:
             words = str(getattr(story, "words", "") or "")
             origin = str(getattr(session, "origin", "") or "")
@@ -2265,7 +2268,8 @@ class AgentRuntime:
             from ..capability_search import misses as _misses
 
             await asyncio.wait_for(
-                asyncio.to_thread(_misses.keep_run_miss, self.p, session.id, words=words, local_only=local_only),
+                asyncio.to_thread(_misses.keep_run_miss, self.p, session.id, words=words, local_only=local_only,
+                                  answer=str(answer or "")),
                 timeout=self.MISS_KEEP_S,
             )
         except asyncio.TimeoutError:
@@ -2891,7 +2895,8 @@ class AgentRuntime:
                             _ran = await self._run_body(session, agent_def, parent_id)
                 # NEXT LEAPS 20-a: the run's END, its result already written:
                 # a request its last lookup found no feature for is kept.
-                await self._keep_lookup_miss(session, _story, local_only=bool(_lo))
+                await self._keep_lookup_miss(session, _story, local_only=bool(_lo),
+                                             answer=getattr(_ran, "result", ""))
                 return _ran
             finally:
                 try:
