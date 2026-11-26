@@ -47,7 +47,7 @@ const ROWS = [
     when: "2026-03-29T15:00:00+00:00", status: "still open", open: 1, link: "/chat?thread=t3",
     files: ["q1-bank-feed-reconciliation-final-version.xlsx", "notes.docx"],
     paths: ["D:\\Clients\\Baker\\q1-bank-feed-reconciliation-final-version.xlsx", "D:\\Clients\\Baker\\notes.docx"],
-    files_total: 2, decisions: "/clients/client_00000000000d", times: 1,
+    files_total: 2, decisions: "/clients/client_00000000000d?work=chat%3At3", times: 1,
   },
   {
     id: "chat:t2", kind: "chat", title: "Baker sales tax filing", when: "2026-03-17T15:00:00+00:00",

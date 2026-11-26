@@ -445,12 +445,31 @@ async def test_status_words_and_the_open_count(scene):
     assert by["Reconcile the March bank feed"]["decisions"] == ""  # no recap: nothing to read
 
 
-async def test_a_clients_piece_opens_its_decisions_on_the_clients_page(march):
-    _recap(march, march.ids["Baker payroll setup"], "DECIDED: payroll runs on Fridays")
+async def test_decisions_is_offered_only_for_a_recap_with_a_decision_or_an_open_line(scene):
+    """Review 3, finding 1: a kept recap of Done lines alone has no decision
+    to read, so its row offers no Decisions press."""
+    done_only = _chat(scene, "Sent the letters", DOCS, at=_at(3, 8))
+    _recap(scene, done_only, "DONE: sent two letters\nDONE: filed the copies")
+    decided = _chat(scene, "Chose the bank", DOCS, at=_at(3, 9))
+    _recap(scene, decided, "DONE: compared three banks\nDECIDED: use the credit union")
+    got = await _ask(scene, folder=DOCS, words="what did we do in March?", args=dict(MARCH))
+    by = {r["title"]: r for r in got.data["rows"]}
+    assert by["Sent the letters"]["decisions"] == "" and by["Sent the letters"]["open"] == 0
+    assert by["Chose the bank"]["decisions"] == "/memory?work=chat%3A" + decided
+
+
+async def test_a_clients_piece_opens_its_decisions_on_the_clients_page_at_the_piece(march):
+    """Review 3, finding 1: the client's page is opened AT the piece
+    (``?work=<id>``); its Decisions section alone keeps only the 40 newest
+    lines, so a bare ``/clients/<id>`` often says nothing of the piece."""
+    from urllib.parse import quote
+
+    tid = march.ids["Baker payroll setup"]
+    _recap(march, tid, "DECIDED: payroll runs on Fridays")
     got = await _ask(march, folder="", words="what did we do for Baker in March?",
                      args={"client": "Baker", **MARCH})
     row = next(r for r in got.data["rows"] if r["title"] == "Baker payroll setup")
-    assert row["decisions"] == "/clients/" + BK_ID
+    assert row["decisions"] == "/clients/" + BK_ID + "?work=" + quote("chat:" + tid, safe="")
     assert row["paths"] == [BAKER + r"\payroll.xlsx"] and row["files"] == ["payroll.xlsx"]
 
 
@@ -691,9 +710,21 @@ def test_the_memory_page_finds_a_piece_by_its_id(app_scene):
     wm = work_map(app_scene.engine)
     wm.refresh(force=True)
     pid = "chat:" + app_scene.ids["Baker payroll setup"]
+    with session_scope(app_scene.engine) as db:
+        rec = db.get(ChatThreadRecord, app_scene.ids["Baker payroll setup"])
+        db.add(WorkRecap(id=pid, kind="chat", ref=rec.id, state=RECAP_KEPT,
+                         text="Decided: payroll runs on Fridays", source_updated=R.stamp_of(rec.updated_at)))
+        db.commit()
     got = app_scene.client.get("/work-record/piece", params={"id": pid})
     assert got.status_code == 200 and got.json()["folder"] == str(app_scene.baker)
     assert got.json()["name"] == "Baker"
+    # Review 3: the piece itself, as the folder's list shows it, so the page
+    # can show a piece older than what it lists.
+    entry = got.json()["entry"]
+    assert entry["id"] == pid and entry["title"] == "Baker payroll setup"
+    assert entry["recap"]["lines"] == ["Decided: payroll runs on Fridays"] and entry["recap"]["current"] is True
+    listed = app_scene.client.get("/work-record/entries", params={"folder": str(app_scene.baker)}).json()
+    assert entry == next(e for e in listed["entries"] if e["id"] == pid)
     gone = app_scene.client.get("/work-record/piece", params={"id": "chat:nothing-here"})
     assert gone.status_code == 404 and gone.json()["detail"] == "That piece of work is not on record any more."
     assert app_scene.client.get("/work-record/piece").status_code == 400

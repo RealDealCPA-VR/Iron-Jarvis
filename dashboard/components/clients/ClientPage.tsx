@@ -99,6 +99,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { ConfirmButton } from "@/components/ui";
 import { EntryRow } from "@/components/memory/WorkByFolder";
+import { PIECE_NOT_LISTED_WORDS, PIECE_OPEN_IN_MEMORY, focusedWorkId, memoryPieceHref } from "@/lib/workHistory";
 
 type PageState =
   | { state: "loading" }
@@ -137,6 +138,13 @@ export function ClientPage({ id }: { id: string }) {
   const [note, setNote] = useState<{ words: string; failed: boolean } | null>(null);
   const alive = useRef(true);
   const seq = useRef(0);
+  // Next leaps 13-b (review 3): a chat reply's Decisions opens this page AT a
+  // piece (`?work=<id>`): that piece is marked in Work and brought into view,
+  // or, when Work does not list it, one quiet line opens it in Memory.
+  const [focusId, setFocusId] = useState("");
+  useEffect(() => {
+    setFocusId(typeof window === "undefined" ? "" : focusedWorkId(window.location.search));
+  }, [id]);
 
   const read = useCallback(() => {
     if (!isClientId(id)) {
@@ -223,6 +231,7 @@ export function ClientPage({ id }: { id: string }) {
   const d = page.data;
   const c = d.client;
   const confirmed = c.status === "confirmed";
+  const focusUnlisted = Boolean(focusId) && !d.entries.some((e) => e.id === focusId);
 
   return (
     <div data-testid="client-page" data-status={c.status}>
@@ -235,6 +244,14 @@ export function ClientPage({ id }: { id: string }) {
       >
         {note?.words ?? ""}
       </p>
+      {focusUnlisted && (
+        <p data-testid="client-piece-not-listed" className="py-1 text-[13px] text-zinc-500">
+          {PIECE_NOT_LISTED_WORDS}{" "}
+          <Link href={memoryPieceHref(focusId)} className="text-accent underline-offset-2 hover:underline">
+            {PIECE_OPEN_IN_MEMORY}
+          </Link>
+        </p>
+      )}
 
       <Folders data={d} busy={busy} press={press} />
       <Preferences data={d} busy={busy} press={press} />
@@ -268,7 +285,7 @@ export function ClientPage({ id }: { id: string }) {
           <>
             <ul className="mt-2 space-y-2">
               {d.entries.map((e) => (
-                <EntryRow key={e.id} entry={e} />
+                <EntryRow key={e.id} entry={e} focused={Boolean(focusId) && e.id === focusId} />
               ))}
             </ul>
             {d.entriesTotal > d.entries.length && (

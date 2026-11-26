@@ -117,7 +117,7 @@ export function MemorySurface({
       <YourClients />
       {/* v1.491.0 (vision plan leap 3): what Iron Jarvis did, folder by
           folder. Its own record of the work, beside what it knows of you. */}
-      <WorkByFolder />
+      <WorkByFolder aboveSettled={aboveSettled} />
       <Suspense fallback={null}>
         <ScopedMemory initialScope={initialScope} aboveSettled={aboveSettled} />
       </Suspense>

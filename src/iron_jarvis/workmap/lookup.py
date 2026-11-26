@@ -65,9 +65,11 @@ BY DATE, BY KIND, BY CLIENT (next leaps 13-b, master plan R2.10):
   out of the count. A read that stopped at ``READ_MAX``, or rows past what
   is asked again, set ``Found.partial``: the tool then says "at least".
 * Each piece shown carries ``open`` (how many Open lines its kept, current
-  recap has) and ``decisions`` (where the owner reads that recap: the
-  client's page, else the Memory page) whatever the recap rule says; the
-  LINES stay under ``Reader.recap_ok``. Never for another app or the phone.
+  recap has) and, when that recap has a Decided or Open line,
+  ``decisions`` (where the owner reads it, at the piece: the client's page
+  ``?work=<id>``, else the Memory page ``?work=<id>``) whatever the recap
+  rule says; the LINES stay under ``Reader.recap_ok``. Never for another
+  app or the phone.
 
 BLOCKING (SQLite): the callers run it off the event loop. :func:`lookup`
 never raises.
@@ -101,6 +103,8 @@ KIND_ARGS: dict[str, frozenset[str]] = {
 CLIENT_FOLDERS_READ = 8
 #: A kept recap line that is still open ("Open: …"; the recap's own labels).
 _OPEN_RX = re.compile(r"^\s*open\s*:\s*\S", re.IGNORECASE)
+#: A kept recap line the Decisions press is for ("Decided: …" or "Open: …").
+_DECISION_RX = re.compile(r"^\s*(?:decided|open)\s*:\s*\S", re.IGNORECASE)
 _DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: Where the owner reads a piece's decisions (the dashboard's own pages).
 MEMORY_WORK_HREF = "/memory?work="
@@ -508,16 +512,19 @@ def _client_rows(reader: "Reader", ids: list[str], read: Any, *, target: str,
 
 
 def _decisions_href(reader: "Reader", r: dict[str, Any]) -> str:
-    """Where the owner reads this piece's recap: its client's page when the
-    piece is in a confirmed client's folder, else the Memory page at the
-    piece (by its id: no folder in the address)."""
+    """Where the owner reads this piece's recap, AT the piece: its client's
+    page (``/clients/<client>?work=<piece>``, the page brings that piece
+    into view) when the piece is in a confirmed client's folder, else the
+    Memory page (``/memory?work=<piece>``). Ids only: no folder in the
+    address."""
+    piece = quote(str(r["id"]), safe="")
     try:
         root = reader.cmap.client_of(r.get("folder") or "")
     except Exception:  # noqa: BLE001 — the Memory page lists it either way
         root = None
     if root is not None and getattr(root, "client_id", ""):
-        return CLIENT_HREF + quote(str(root.client_id), safe="")
-    return MEMORY_WORK_HREF + quote(str(r["id"]), safe="")
+        return CLIENT_HREF + quote(str(root.client_id), safe="") + "?work=" + piece
+    return MEMORY_WORK_HREF + piece
 
 
 def _kept_recaps(engine: Any, ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -697,7 +704,10 @@ def lookup(platform: Any, *, turn: Any = None, cmap: Any = None, folder: str = "
                 continue
             lines = list(got.get("lines") or [])
             r["open"] = sum(1 for ln in lines if _OPEN_RX.match(str(ln)))
-            r["decisions"] = _decisions_href(reader, r)
+            # Decisions only where there is one to read (review 3): a recap
+            # of Done lines alone offers none.
+            if any(_DECISION_RX.match(str(ln)) for ln in lines):
+                r["decisions"] = _decisions_href(reader, r)
             if reader.recap_ok(r):
                 r["recap"] = lines
         found.rows = shown

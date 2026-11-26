@@ -2208,8 +2208,9 @@ from Iron Jarvis's own record of earlier work: "3 pieces of work in March
 day and how it stands. Press a row to open that chat, coding session or
 agent run. Two quiet links sit beside it: **Files** opens its file in the
 panel beside the chat (with several, a short list to pick from), and
-**Decisions** opens where its checked recap is read: the client's page, or
-**Memory › Your work, by folder** at that piece.
+**Decisions** opens that piece where its checked recap is read: in the Work
+list of the client's page, or in **Memory › Your work, by folder**, marked
+and scrolled into view.
 
 Nothing to turn on: the words of your message are enough.
 
@@ -2240,9 +2241,12 @@ Nothing to turn on: the words of your message are enough.
 - **Other apps** (Claude desktop, Codex) can ask Iron Jarvis's work search
   for a range of days too; they are still told no client's work.
 
-Good to know: Decisions shows only for a piece with a checked recap. The
-Memory page finds the piece by its own id, so the page's address never
-holds a folder.
+Good to know: Decisions shows only for a piece whose checked recap has
+something decided or still open. A piece older than what a page lists: the
+Memory page shows it above its list ("The piece of work you opened is older
+than the work listed here"), and a client's page says it is not among its
+work, with **Open it in Memory**. The pages find the piece by its own id,
+so an address never holds a folder.
 
 ## Start coding work from your phone (v1.578.0)
 

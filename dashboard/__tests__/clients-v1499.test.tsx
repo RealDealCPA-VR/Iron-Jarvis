@@ -704,7 +704,7 @@ describe("the Memory page", () => {
     const s = src("components/memory/MemorySurface.tsx");
     const knows = s.indexOf("<KnowsAboutYou");
     const clients = s.indexOf("<YourClients />");
-    const work = s.indexOf("<WorkByFolder />");
+    const work = s.indexOf("<WorkByFolder"); // 13-b: it takes aboveSettled
     expect(knows).toBeGreaterThan(-1);
     expect(clients).toBeGreaterThan(knows);
     expect(work).toBeGreaterThan(clients);

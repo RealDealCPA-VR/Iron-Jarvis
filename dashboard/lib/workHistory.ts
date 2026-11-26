@@ -12,7 +12,7 @@
  * lib/api (many tests mock that module whole).
  */
 
-import { insideLink } from "./workRecord";
+import { decodeEntries, insideLink, type WorkItem } from "./workRecord";
 
 /** The tool the rows come from. */
 export const WORK_HISTORY_TOOL = "work_history";
@@ -163,15 +163,35 @@ export function dayWords(iso: string): string {
 
 /* -------------------------------------------- the Memory page's ?work=<id> */
 
-/** `GET /work-record/piece?id=` → `{id, folder, name}`: where one piece of
- *  work is, so the Memory page opens its folder (the address names the
- *  piece by its id, never a folder). */
+/** `GET /work-record/piece?id=` → `{id, folder, name, entry}`: where one
+ *  piece of work is, so the Memory page opens its folder (the address names
+ *  the piece by its id, never a folder), and the piece itself, shown even
+ *  when it is older than what the page lists. */
 export const WORK_PIECE_PATH = "/work-record/piece";
 export const PIECE_GONE_WORDS = "That piece of work is not on record any more.";
 export const PIECE_UNREAD_WORDS = "That piece of work could not be found just now. Try again in a moment.";
+/** Review 3: the Memory page shows the piece above its list when the list
+ *  (the newest folders, a folder's newest pieces) does not hold it. */
+export const PIECE_OLDER_WORDS = "The piece of work you opened is older than the work listed here:";
+/** A client's page opened at a piece it does not list: one quiet line. */
+export const PIECE_NOT_LISTED_WORDS = "The piece of work you opened is not among the work listed here.";
+export const PIECE_OPEN_IN_MEMORY = "Open it in Memory";
 
 export function workPiecePath(id: string): string {
   return `${WORK_PIECE_PATH}?id=${encodeURIComponent(id)}`;
+}
+
+/** The Memory page at one piece of work (by its id). */
+export function memoryPieceHref(id: string): string {
+  return `/memory?work=${encodeURIComponent(id)}`;
+}
+
+/** The piece itself from `GET /work-record/piece`'s answer, decoded as the
+ *  folder list decodes its pieces; null unless it is the piece `id`. */
+export function decodePieceEntry(raw: unknown, id: string): WorkItem | null {
+  if (!raw || typeof raw !== "object" || !id) return null;
+  const got = decodeEntries({ entries: [(raw as Record<string, unknown>).entry] }).entries[0];
+  return got && got.id === id ? got : null;
 }
 
 /** The `work` the page's address asks for ("" for none). */

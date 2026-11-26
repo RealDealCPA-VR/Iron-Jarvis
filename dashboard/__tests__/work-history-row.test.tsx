@@ -16,7 +16,10 @@
  *    SAVES them on the reply; a reopened chat (a reply the daemon wrote home
  *    included) draws them again from what was saved;
  *  - the Memory page: `?work=<id>` opens that piece's folder and brings the
- *    piece into view, by the piece's id (no folder in the address).
+ *    piece into view, by the piece's id (no folder in the address); a piece
+ *    older than what the page lists is shown above the list (review 3);
+ *  - a client's page: `?work=<id>` marks that piece in Work and brings it
+ *    into view; a piece Work does not list says so and opens it in Memory.
  */
 
 import React from "react";
@@ -179,9 +182,13 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => <di
 import ChatPage from "@/app/chat/page";
 import { WorkHistoryRow } from "@/components/chat/WorkHistoryRow";
 import { WorkByFolder } from "@/components/memory/WorkByFolder";
+import { ClientPage } from "@/components/clients/ClientPage";
 import { sseEventFrom, upsertTool, type ToolCard } from "@/lib/useChatStream";
 import {
   PIECE_GONE_WORDS,
+  PIECE_NOT_LISTED_WORDS,
+  PIECE_OLDER_WORDS,
+  PIECE_OPEN_IN_MEMORY,
   WORK_ROW_DECISIONS,
   WORK_ROW_FILES,
   decodeWorkRows,
@@ -198,7 +205,7 @@ function wireRows(): Record<string, unknown>[] {
     {
       id: "chat:t3", kind: "chat", title: "Bank feed review", when: "2026-03-29T15:00:00+00:00",
       status: "still open", open: 1, link: "/chat?thread=t3", files: [], paths: [], files_total: 0,
-      decisions: "/clients/client_00000000000d", times: 1,
+      decisions: "/clients/client_00000000000d?work=chat%3At3", times: 1,
     },
     {
       id: "chat:t2", kind: "chat", title: "Baker sales tax filing", when: "2026-03-17T15:00:00+00:00",
@@ -303,7 +310,9 @@ describe("the row under the reply", () => {
     expect(within(rows[0]).getByTestId("work-history-status").textContent).toBe("still open");
     expect(within(rows[0]).getByText(/Mar \d+, 2026/)).toBeTruthy();
     // Decisions: the client's page, or the Memory page at the piece.
-    expect(within(rows[0]).getByTestId("work-history-decisions").getAttribute("href")).toBe("/clients/client_00000000000d");
+    expect(within(rows[0]).getByTestId("work-history-decisions").getAttribute("href")).toBe(
+      "/clients/client_00000000000d?work=chat%3At3",
+    );
     expect(within(rows[0]).getByTestId("work-history-decisions").textContent).toBe(WORK_ROW_DECISIONS);
     expect(within(rows[2]).getByTestId("work-history-decisions").getAttribute("href")).toBe("/memory?work=run%3As1");
     expect(within(rows[1]).queryByTestId("work-history-decisions")).toBeNull();
@@ -479,5 +488,124 @@ describe("Decisions on the Memory page", () => {
     await act(async () => {});
     expect(H.api.gets.some((p) => p.startsWith("/work-record/piece"))).toBe(false);
     expect(H.api.gets.some((p) => p.startsWith("/work-record/entries"))).toBe(false);
+  });
+
+  /** The piece as `GET /work-record/piece` carries it (review 3). */
+  const OLD_PIECE = {
+    id: "chat:t0", kind: "chat", ref: "t0", title: "Baker opening balances", folder: BAKER, files: [],
+    link: "/chat?thread=t0", recap: { lines: ["Decided: opening balances from the 2025 return"], written_at: null, current: true },
+  };
+
+  it("a piece past its folder's newest is shown above the list, marked and in view (review 3)", async () => {
+    H.api.getResponses[WORK_FOLDERS_PATH] = { folders: [{ folder: BAKER, name: "Baker", count: 140 }], building: false, forgotten: [] };
+    H.api.getResponses[workPiecePath("chat:t0")] = { id: "chat:t0", folder: BAKER, name: "Baker", entry: OLD_PIECE };
+    H.api.getResponses[workEntriesPath(BAKER)] = { ...entries, total: 140 };
+    window.history.replaceState({}, "", "/memory?work=chat%3At0");
+    render(<WorkByFolder />);
+    const older = await screen.findByTestId("work-piece-older");
+    expect(older.textContent).toContain(PIECE_OLDER_WORDS);
+    const focused = within(older).getByTestId("work-item");
+    expect(focused.getAttribute("data-focused")).toBe("true");
+    expect(focused.textContent).toContain("Baker opening balances");
+    expect(focused.textContent).toContain("opening balances from the 2025 return");
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    // The folder's own list is still there, nothing in it marked.
+    expect(screen.getByText("Baker payroll setup")).toBeTruthy();
+    expect(document.querySelectorAll('[data-focused="true"]')).toHaveLength(1);
+  });
+
+  it("a piece whose folder is not among those listed is shown at the top (review 3)", async () => {
+    H.api.getResponses[WORK_FOLDERS_PATH] = { folders: [{ folder: "C:\\Other", name: "Other", count: 1 }], building: false, forgotten: [] };
+    H.api.getResponses[workPiecePath("chat:t0")] = { id: "chat:t0", folder: BAKER, name: "Baker", entry: OLD_PIECE };
+    window.history.replaceState({}, "", "/memory?work=chat%3At0");
+    render(<WorkByFolder />);
+    const older = await screen.findByTestId("work-piece-older");
+    expect(within(older).getByTestId("work-item").getAttribute("data-focused")).toBe("true");
+    expect(older.textContent).toContain("opening balances from the 2025 return");
+    // No folder of its own to open: no other folder is opened or read.
+    expect(H.api.gets.some((p) => p.startsWith("/work-record/entries"))).toBe(false);
+  });
+
+  it("an open folder that is not the piece's shows nothing of it", async () => {
+    H.api.getResponses[WORK_FOLDERS_PATH] = {
+      folders: [{ folder: BAKER, name: "Baker", count: 2 }, { folder: "C:\\Other", name: "Other", count: 1 }],
+      building: false, forgotten: [],
+    };
+    H.api.getResponses[workPiecePath("chat:t0")] = { id: "chat:t0", folder: BAKER, name: "Baker", entry: OLD_PIECE };
+    H.api.getResponses[workEntriesPath(BAKER)] = entries;
+    H.api.getResponses[workEntriesPath("C:\\Other")] = { folder: "C:\\Other", name: "Other", entries: [], total: 0 };
+    window.history.replaceState({}, "", "/memory?work=chat%3At0");
+    render(<WorkByFolder />);
+    await screen.findByTestId("work-piece-older");
+    fireEvent.click(screen.getByText("Other"));
+    await screen.findByText("Nothing on record in this folder any more.");
+    expect(screen.queryByTestId("work-piece-older")).toBeNull();
+  });
+
+  it("the piece is brought into view again once the cards above have filled in", async () => {
+    H.api.getResponses[WORK_FOLDERS_PATH] = { folders: [{ folder: BAKER, name: "Baker", count: 2 }], building: false, forgotten: [] };
+    H.api.getResponses[workPiecePath("run:s1")] = { id: "run:s1", folder: BAKER, name: "Baker" };
+    H.api.getResponses[workEntriesPath(BAKER)] = entries;
+    window.history.replaceState({}, "", "/memory?work=run%3As1");
+    const view = render(<WorkByFolder aboveSettled={false} />);
+    await waitFor(() => expect(document.querySelector('[data-focused="true"]')).toBeTruthy());
+    const scroll = Element.prototype.scrollIntoView as unknown as ReturnType<typeof vi.fn>;
+    const before = scroll.mock.calls.length;
+    expect(before).toBeGreaterThan(0);
+    view.rerender(<WorkByFolder aboveSettled />);
+    await waitFor(() => expect(scroll.mock.calls.length).toBe(before + 1));
+  });
+});
+
+/* ----------------------------------------------------- the client's page */
+
+describe("Decisions on a client's page (review 3)", () => {
+  const CID = "client_00000000000d";
+  const page = () => ({
+    client: { id: CID, name: "Baker", status: "confirmed", how: "noticed", aliases: [], why: [] },
+    folders: [{ folder: BAKER, name: "Baker", how: "found", count: 2, last_at: null, forgotten: false }],
+    entries: [
+      { id: "chat:t3", kind: "chat", ref: "t3", title: "Bank feed review", folder: BAKER, files: [], link: "/chat?thread=t3" },
+      { id: "chat:t1", kind: "chat", ref: "t1", title: "Baker payroll setup", folder: BAKER, files: [], link: "/chat?thread=t1",
+        recap: { lines: ["Decided: payroll runs on Fridays"], written_at: null, current: true } },
+    ],
+    entries_total: 2, files: [], files_total: 0, decisions: [], people: [], preferences: [],
+    named_elsewhere: [], projects: [], told: "",
+  });
+
+  it("?work=<id> marks that piece in Work, with its recap, and brings it into view", async () => {
+    H.api.getResponses[`/clients/${CID}`] = page();
+    window.history.replaceState({}, "", `/clients/${CID}?work=chat%3At1`);
+    render(<ClientPage id={CID} />);
+    const focused = await waitFor(() => {
+      const el = document.querySelector('[data-testid="work-item"][data-focused="true"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(focused.textContent).toContain("Baker payroll setup");
+    expect(focused.textContent).toContain("payroll runs on Fridays");
+    expect(document.querySelectorAll('[data-focused="true"]')).toHaveLength(1);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(screen.queryByTestId("client-piece-not-listed")).toBeNull();
+  });
+
+  it("a piece Work does not list says so in one line that opens it in Memory", async () => {
+    H.api.getResponses[`/clients/${CID}`] = page();
+    window.history.replaceState({}, "", `/clients/${CID}?work=chat%3At0`);
+    render(<ClientPage id={CID} />);
+    const line = await screen.findByTestId("client-piece-not-listed");
+    expect(line.textContent).toContain(PIECE_NOT_LISTED_WORDS);
+    expect(within(line).getByText(PIECE_OPEN_IN_MEMORY).closest("a")?.getAttribute("href")).toBe("/memory?work=chat%3At0");
+    expect(document.querySelector('[data-focused="true"]')).toBeNull();
+  });
+
+  it("without ?work= nothing is marked and nothing is said", async () => {
+    H.api.getResponses[`/clients/${CID}`] = page();
+    window.history.replaceState({}, "", `/clients/${CID}`);
+    render(<ClientPage id={CID} />);
+    await screen.findByText("Baker payroll setup");
+    expect(document.querySelector('[data-focused="true"]')).toBeNull();
+    expect(screen.queryByTestId("client-piece-not-listed")).toBeNull();
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 });

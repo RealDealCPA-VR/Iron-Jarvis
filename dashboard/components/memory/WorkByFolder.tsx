@@ -71,8 +71,10 @@ import {
 } from "@/lib/workRecord";
 import {
   PIECE_GONE_WORDS,
+  PIECE_OLDER_WORDS,
   PIECE_UNREAD_WORDS,
   decodePiece,
+  decodePieceEntry,
   focusedWorkId,
   sameFolder,
   workPiecePath,
@@ -87,7 +89,9 @@ export const WORK_BUILD_REREADS = 30;
 
 type FolderWork = { state: "loading" } | { state: "failed"; error: FailureLike } | { state: "ready"; entries: WorkItem[]; total: number };
 
-export function WorkByFolder() {
+/** `aboveSettled` (MemorySurface): the cards above this section have filled
+ *  in, so a piece brought into view before that is brought into view again. */
+export function WorkByFolder({ aboveSettled = false }: { aboveSettled?: boolean } = {}) {
   const [folders, setFolders] = useState<WorkFolder[] | null>(null);
   const [building, setBuilding] = useState(false);
   const [foldersTotal, setFoldersTotal] = useState(0);
@@ -221,8 +225,10 @@ export function WorkByFolder() {
   // Next leaps 13-b: a chat reply's Decisions opens /memory?work=<id>. The
   // piece's folder is asked for once (by the piece's id: no folder in the
   // address), then opened here when the list has it, and the piece is
-  // brought into view.
-  const [focus, setFocus] = useState<{ id: string; folder: string } | null>(null);
+  // brought into view. Review 3: the answer carries the piece itself, shown
+  // above the list (PIECE_OLDER_WORDS) when its folder is not among the
+  // folders listed, or the piece not among its folder's newest.
+  const [focus, setFocus] = useState<{ id: string; folder: string; entry: WorkItem | null } | null>(null);
   const focusedOnce = useRef(false);
   useEffect(() => {
     const id = typeof window === "undefined" ? "" : focusedWorkId(window.location.search);
@@ -232,7 +238,7 @@ export function WorkByFolder() {
       .then((raw) => {
         if (!alive.current) return;
         const folder = decodePiece(raw);
-        if (folder) setFocus({ id, folder });
+        if (folder) setFocus({ id, folder, entry: decodePieceEntry(raw, id) });
         else setNote({ words: PIECE_GONE_WORDS, failed: false });
       })
       .catch((e: unknown) => {
@@ -267,6 +273,10 @@ export function WorkByFolder() {
 
   if (hidden) return null;
 
+  // The piece ?work= named, when no folder listed here is its folder.
+  const focusUnlisted =
+    focus && folders && !failed && !folders.some((x) => sameFolder(x.folder, focus.folder)) ? focus.entry : null;
+
   return (
     <section className="mt-6" aria-labelledby="work-by-folder-heading" data-testid="work-by-folder">
       <h2 id="work-by-folder-heading" className="text-[15px] font-medium text-zinc-100">
@@ -284,6 +294,7 @@ export function WorkByFolder() {
       >
         {note?.words ?? ""}
       </p>
+      {focusUnlisted && <OlderPiece entry={focusUnlisted} settled={aboveSettled} />}
 
       {failed ? (
         <LoadFailedLine thing="Your work record" error={failed} onRetry={read} testId="work-by-folder-failed" />
@@ -304,6 +315,8 @@ export function WorkByFolder() {
             {folders.map((f) => {
               const isOpen = open === f.folder;
               const mine = work[f.folder];
+              // Only the piece's own folder marks it (or shows it above its list).
+              const focusHere = focus && sameFolder(f.folder, focus.folder) ? focus : null;
               return (
                 <li key={f.folder} data-testid="work-folder">
                   <div className="flex items-center gap-2">
@@ -362,7 +375,13 @@ export function WorkByFolder() {
                           onRetry={() => readFolder(f.folder)}
                         />
                       ) : (
-                        <FolderWorkList entries={mine.entries} total={mine.total} focusId={focus?.id} />
+                        <FolderWorkList
+                          entries={mine.entries}
+                          total={mine.total}
+                          focusId={focusHere?.id}
+                          focusEntry={focusHere?.entry ?? null}
+                          settled={aboveSettled}
+                        />
                       )}
                       <div className="pt-2">
                         <ConfirmButton
@@ -419,16 +438,26 @@ export function WorkByFolder() {
 /** One piece of work, as the work record shows it (v1.499.0: shared with the
  *  client page, which lists a client's work the same way). Render it inside
  *  a `<ul>`. */
-export function EntryRow({ entry: e, focused = false }: { entry: WorkItem; focused?: boolean }) {
+export function EntryRow({
+  entry: e,
+  focused = false,
+  settled = false,
+}: {
+  entry: WorkItem;
+  focused?: boolean;
+  /** True once what is above it on the page has filled in: a focused row is
+   *  brought into view again then (a landing made earlier ends up too high). */
+  settled?: boolean;
+}) {
   // Said only when the work did not simply finish.
   const ended =
     e.outcome === "failed" || e.outcome === "cancelled" ? statusWords(e.outcome) : outcomeWords(e.outcome);
   const files = filesWords(e);
-  // Next leaps 13-b: the piece a chat reply's Decisions opened, brought into view once.
+  // Next leaps 13-b: the piece a chat reply's Decisions opened, brought into view.
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (focused) ref.current?.scrollIntoView?.({ block: "center" });
-  }, [focused]);
+  }, [focused, settled]);
   return (
     <li
       ref={ref}
@@ -472,15 +501,48 @@ export function EntryRow({ entry: e, focused = false }: { entry: WorkItem; focus
   );
 }
 
-function FolderWorkList({ entries, total, focusId }: { entries: WorkItem[]; total: number; focusId?: string }) {
+/** Next leaps 13-b, review 3: the piece a Decisions press opened that the
+ *  list does not hold (older than the folders or pieces listed), shown
+ *  above it, marked and brought into view. */
+function OlderPiece({ entry, settled }: { entry: WorkItem; settled: boolean }) {
+  return (
+    <div className="mb-2 mt-1" data-testid="work-piece-older">
+      <p className="text-[12px] text-zinc-500">{PIECE_OLDER_WORDS}</p>
+      <ul className="mt-1 space-y-2">
+        <EntryRow entry={entry} focused settled={settled} />
+      </ul>
+    </div>
+  );
+}
+
+function FolderWorkList({
+  entries,
+  total,
+  focusId,
+  focusEntry = null,
+  settled = false,
+}: {
+  entries: WorkItem[];
+  total: number;
+  focusId?: string;
+  focusEntry?: WorkItem | null;
+  settled?: boolean;
+}) {
+  const older = focusId && focusEntry && !entries.some((e) => e.id === focusId) ? focusEntry : null;
   if (entries.length === 0) {
-    return <p className="py-1 text-sm text-zinc-500">Nothing on record in this folder any more.</p>;
+    return (
+      <>
+        {older && <OlderPiece entry={older} settled={settled} />}
+        <p className="py-1 text-sm text-zinc-500">Nothing on record in this folder any more.</p>
+      </>
+    );
   }
   return (
     <>
+      {older && <OlderPiece entry={older} settled={settled} />}
       <ul className="space-y-2">
         {entries.map((e) => (
-          <EntryRow key={e.id} entry={e} focused={Boolean(focusId) && e.id === focusId} />
+          <EntryRow key={e.id} entry={e} focused={Boolean(focusId) && e.id === focusId} settled={settled} />
         ))}
       </ul>
       {total > entries.length && (

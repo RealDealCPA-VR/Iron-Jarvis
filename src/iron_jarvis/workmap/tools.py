@@ -35,7 +35,8 @@ finished, failed, stopped, needs you, part failed, or still open when its
 kept recap has an Open line; the Open line itself only where the recap rule
 allows). ``data.rows`` also carry ``status``, ``open``, ``paths`` (the
 files' full paths, for the screen) and ``decisions`` (where the owner reads
-the recap); :func:`screen_rows` is what the chat's step frame carries
+the recap's Decided and Open lines, at the piece; "" when it has none);
+:func:`screen_rows` is what the chat's step frame carries
 (``chat_turn.tool_frame_data``) and the row under the reply is drawn from
 (``dashboard/components/chat/WorkHistoryRow.tsx``): links from the tool's
 result, never from the model's words.
