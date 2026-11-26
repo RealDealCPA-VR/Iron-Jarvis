@@ -734,6 +734,45 @@ def test_not_yet_is_kept_for_every_later_piece_it_answered(scene):
     assert _card(scene, H)["open"][0]["maybe_done"] is None
 
 
+def test_not_yet_holds_for_a_copy_of_the_line_a_later_conversation_lists(scene):
+    """Review 12 of 04-b (north star 1, G6; the Handbook's "After Not yet it
+    does not ask again about that same later work"): the owner answers Not
+    yet about later piece P, then Continue starts a new chat whose recap
+    lists the same line (a new copy, ONE item on the card). When P's recap is
+    kept again with the same Done line, the card does not ask about P. The
+    Not yet answers the LINE: every copy of it keeps it, a copy written after
+    the answer too, and so does a copy its own conversation settled since."""
+    old = _chat(scene, "March close", H, hours_ago=6, started_hours_ago=7)
+    _keep(scene, old, "Open: Send recon_march.xlsx to Ann")
+    p = _chat(scene, "April close", H, hours_ago=4, started_hours_ago=5)
+    _keep(scene, p, "Done: Sent recon_march.xlsx to Ann")
+    (item,) = _items(scene)
+    assert _card(scene, H)["open"][0]["maybe_done"]["entry_id"] == f"chat:{p}"
+    assert scene.client.post(f"/work-record/open-items/{item.id}/reopen").status_code == 200
+    assert _card(scene, H)["open"][0]["maybe_done"] is None
+    # Continue: a new chat on the same work lists the same line again.
+    c = _chat(scene, "March close (continued)", H, hours_ago=1, started_hours_ago=1.5)
+    _keep(scene, c, "Done: Looked for the file", "Open: Send recon_march.xlsx to Ann")
+    (shown,) = _card(scene, H)["open"]
+    assert shown["maybe_done"] is None
+    # P's conversation goes on and its recap is kept again.
+    _keep(scene, p, "Done: Sent recon_march.xlsx to Ann", "Decided: Keep the April file")
+    (copy,) = _items(scene, entry_id=f"chat:{c}")
+    assert copy.status == OPEN_ITEM_OPEN and copy.maybe_done_entry == ""
+    (shown,) = _card(scene, H)["open"]
+    assert shown["maybe_done"] is None
+    # The copy that holds the Not yet is settled by its own conversation;
+    # the answer still stands for the copy left open.
+    _keep(scene, old, "Done: Filed the March papers")
+    (held,) = _items(scene, entry_id=f"chat:{old}")
+    assert held.status == OPEN_ITEM_SETTLED and open_items.declined(held) == [f"chat:{p}"]
+    _keep(scene, p, "Done: Sent recon_march.xlsx to Ann", "Decided: Keep the April file in the binder")
+    (copy,) = _items(scene, entry_id=f"chat:{c}")
+    assert copy.status == OPEN_ITEM_OPEN and copy.maybe_done_entry == ""
+    (shown,) = _card(scene, H)["open"]
+    assert shown["text"] == "Send recon_march.xlsx to Ann" and shown["maybe_done"] is None
+
+
 # --------------------------------------------------------------------------- #
 # what a turn is told
 # --------------------------------------------------------------------------- #

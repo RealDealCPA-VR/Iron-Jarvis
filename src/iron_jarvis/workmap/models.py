@@ -195,7 +195,8 @@ class WorkOpenItem(SQLModel, table=True):
     maybe_done_entry: str = ""
     #: Every piece of work the owner answered "Not yet" for, one entry id
     #: per line, newest last (``open_items.declined``): it never asks about
-    #: any of them again.
+    #: any of them again, nor does another copy of its line
+    #: (``open_items._declined_by_words``).
     maybe_declined: str = ""
     #: The owner reopened it: from then on only the owner (or a chat the
     #: owner asks) closes it; a rewritten recap no longer settles it.

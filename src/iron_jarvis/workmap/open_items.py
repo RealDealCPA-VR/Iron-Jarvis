@@ -55,7 +55,8 @@ that is open; Done or No longer needed closes every open copy
 (:func:`close`), Reopen reopens the copies THAT answer closed (never a copy
 the owner closed in another answer, or one its own conversation settled:
 :func:`_same_answer`, review 4) and Not yet answers every open one
-(:func:`reopen`), and a tool's Undo puts them all back
+(:func:`reopen`) and holds for every copy, one written later too
+(:func:`_declined_by_words`, review 12), and a tool's Undo puts them all back
 (:func:`snapshot`). A NEW copy whose words the owner closed in another
 conversation in the last :data:`CLOSED_LATELY_DAYS` is written closed only
 when ITS conversation was already going when the owner answered
@@ -478,15 +479,19 @@ def sync(db: Any, entry_id: str, lines: Iterable[Any], *, now: "datetime | None"
             it.updated_at = when
             db.add(it)
     if dones and fkey:
-        others = db.exec(
+        others = list(db.exec(
             select(WorkOpenItem)
             .where(WorkOpenItem.folder_key == fkey)
             .where(WorkOpenItem.status == OPEN_ITEM_OPEN)
             .where(WorkOpenItem.entry_id != entry_id)
             .limit(OPEN_READ)
-        )
+        ))
+        # A Not yet answers the LINE: a copy of it written after the answer,
+        # or one whose copy that holds the answer was settled since, never
+        # asks about that piece again (review 12 of 04-b).
+        answered = _declined_by_words(db, fkey, {it.text_key for it in others})
         for it in others:
-            if it.maybe_done_entry or entry_id in declined(it):
+            if it.maybe_done_entry or entry_id in declined(it) or entry_id in answered.get(it.text_key, ()):
                 continue
             opened = _naive(it.opened_at)
             if opened is not None and opened > when:
@@ -744,6 +749,30 @@ def declined(it: WorkOpenItem) -> list[str]:
     (review 11 of 04-b). A row written when only one was kept reads as that
     one. Pure."""
     return [e for e in str(it.maybe_declined or "").split("\n") if e]
+
+
+def _declined_by_words(db: Any, fkey: str, words: Iterable[str]) -> dict[str, set[str]]:
+    """``{text_key: {entry_id, …}}``: the pieces of work the owner answered
+    "Not yet" for about a line of folder ``fkey`` with these words, over
+    EVERY copy of it (other conversations', open or closed): the owner sees
+    the copies as one item, so the answer holds for all of them, a copy
+    written later included (review 12 of 04-b). The newest
+    :data:`OPEN_READ` copies with an answer are read. Inside the caller's
+    session."""
+    want = sorted({w for w in words if w})
+    out: dict[str, set[str]] = {}
+    if not fkey or not want:
+        return out
+    for key, kept in db.exec(
+        select(WorkOpenItem.text_key, WorkOpenItem.maybe_declined)
+        .where(WorkOpenItem.folder_key == fkey)
+        .where(WorkOpenItem.text_key.in_(want))  # type: ignore[attr-defined]
+        .where(WorkOpenItem.maybe_declined != "")
+        .order_by(WorkOpenItem.updated_at.desc())  # type: ignore[union-attr]
+        .limit(OPEN_READ)
+    ):
+        out.setdefault(str(key or ""), set()).update(e for e in str(kept or "").split("\n") if e)
+    return out
 
 
 def _decline(it: WorkOpenItem, entry_id: str) -> None:
