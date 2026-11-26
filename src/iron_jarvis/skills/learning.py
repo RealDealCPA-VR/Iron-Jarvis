@@ -547,6 +547,7 @@ class SkillLearningEngine:
         dismissed = 0
         reviewed = 0
         held = 0
+        unread = 0
         for cand in candidates:
             if reviewed >= want:
                 break
@@ -557,7 +558,7 @@ class SkillLearningEngine:
             # cannot be read is left for the next sweep (fail closed).
             trusted = self._candidate_trusted(cand)
             if trusted is None:
-                held += 1
+                unread += 1
                 continue
             if not trusted:
                 self._set_candidate_status(cand.id, "dismissed")
@@ -603,6 +604,10 @@ class SkillLearningEngine:
         }
         if held:
             out["held_local_only"] = held
+        if unread:
+            # Left for the next sweep: the run's row could not be read, so
+            # nobody could say whether it was trusted work.
+            out["held_unreadable"] = unread
         return out
 
     def _candidate_trusted(self, cand: SkillCandidateRecord) -> "bool | None":
