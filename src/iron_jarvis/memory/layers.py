@@ -7,7 +7,6 @@ similarity search and provides upsert-by-key reads/writes on top of it.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Engine
@@ -15,9 +14,9 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.ids import utcnow
-from .embeddings import Embedder, MockEmbedder
+from .embeddings import Embedder, MockEmbedder, embed_with_model
 from .models import MemoryRecord
-from .retrieval import SqliteVectorRetriever
+from .retrieval import SqliteVectorRetriever, encode_embedding
 
 if TYPE_CHECKING:
     from ..core.config import Config
@@ -77,7 +76,12 @@ class MemoryLayers:
             with session_scope(self.engine) as db:
                 row = db.get(MemoryRecord, existing.id)
                 row.text = text
-                row.embedding_json = json.dumps(self.embedder.embed(text))
+                # 16-a: tagged with the model that made it (as a new row is),
+                # so a change of search model can tell this row needs reading
+                # again (memory/meaning.reread_pass) instead of ranking it
+                # against another model's vectors of the same length.
+                vec, made_by = embed_with_model(self.embedder, text)
+                row.embedding_json = encode_embedding(vec, made_by)
                 row.created_at = utcnow()
                 if origin is not None:
                     row.origin_session, row.origin_folder = origin

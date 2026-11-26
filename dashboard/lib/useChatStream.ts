@@ -117,6 +117,9 @@ export type SSEEvent =
        *  `data.rows`, lib/workHistory), drawn under the reply. Absent on
        *  every other step. */
       workRows?: WorkHistoryRowData[];
+      /** Next leaps 16-a: a finished `file_search` step that carried the
+       *  search-by-meaning offer. Absent on every other step. */
+      meaningOffer?: boolean;
     }
   | {
       /** The turn is PAUSED on a tool that needs the user's approval
@@ -371,6 +374,9 @@ export interface ToolCard {
   /** Next leaps 13-b: a finished `work_history` step's rows (lib/workHistory),
    *  which the page saves on the reply as `workRows`. */
   workRows?: WorkHistoryRowData[];
+  /** Next leaps 16-a: this file_search step carried the search-by-meaning
+   *  offer; the page saves `meaningOffer` on the reply. */
+  meaningOffer?: boolean;
 }
 
 /** One tool step of a finished turn, in call order (v1.323.0): the receipt
@@ -727,6 +733,16 @@ export function sseEventFrom(
         if (ev.name === WORK_HISTORY_TOOL && data.data && typeof data.data === "object") {
           const rows = decodeWorkRows((data.data as { rows?: unknown }).rows);
           if (rows.length) ev.workRows = rows;
+        }
+        // Next leaps 16-a: this file_search step carried the search-by-meaning
+        // offer (its own result said so, once ever): the reply draws the card.
+        if (
+          ev.name === "file_search" &&
+          data.data &&
+          typeof data.data === "object" &&
+          (data.data as { meaning_offer?: unknown }).meaning_offer === true
+        ) {
+          ev.meaningOffer = true;
         }
       }
       if (data.check === "finish") ev.check = "finish";
@@ -1354,6 +1370,7 @@ export function upsertTool(
   if (ev.output !== undefined) patch.output = ev.output;
   if (ev.detail !== undefined) patch.detail = ev.detail;
   if (ev.workRows !== undefined) patch.workRows = ev.workRows;
+  if (ev.meaningOffer !== undefined) patch.meaningOffer = ev.meaningOffer;
   if (finished) patch.endedAt = now;
   else patch.startedAt = now;
   const idx = prev.findIndex((t) => t.id === patch.id);

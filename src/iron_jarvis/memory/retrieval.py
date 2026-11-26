@@ -36,7 +36,7 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.logging import get_logger
-from .embeddings import Embedder
+from .embeddings import Embedder, embed_with_model
 from .models import MemoryRecord
 
 _log = get_logger("retrieval")
@@ -186,9 +186,10 @@ class SqliteVectorRetriever(Retriever):
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
         if record.embedding_json in ("", "[]"):
-            record.embedding_json = encode_embedding(
-                self.embedder.embed(record.text), embedder_model(self.embedder)
-            )
+            # 16-a: the vector and the name of the model that made it come
+            # from ONE base, so a switch in between never mislabels a row.
+            vec, made_by = embed_with_model(self.embedder, record.text)
+            record.embedding_json = encode_embedding(vec, made_by)
         with session_scope(self.engine) as db:
             db.add(record)
             db.commit()
@@ -220,7 +221,8 @@ class SqliteVectorRetriever(Retriever):
         keyword fallback rescued — so a caller can tell the user "12 memories are
         here but unrankable" instead of showing them an empty result.
         """
-        q = np.asarray(self.embedder.embed(query), dtype=np.float64)
+        q_vec, q_model = embed_with_model(self.embedder, query)
+        q = np.asarray(q_vec, dtype=np.float64)
         stmt = select(MemoryRecord)
         if layer is not None:
             stmt = stmt.where(MemoryRecord.layer == layer)
@@ -234,7 +236,6 @@ class SqliteVectorRetriever(Retriever):
             # A query that embeds to nothing is not an embedder mismatch: stay
             # silent rather than blame the store for an empty question.
             return [], ""
-        q_model = embedder_model(self.embedder)
         # Vectorized cosine: stack the candidate embeddings and do ONE matmul rather
         # than a Python per-row loop (the measured hot cost) — keeps recall fast
         # while still scoring the whole candidate set for correctness.

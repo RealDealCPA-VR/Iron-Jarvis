@@ -144,6 +144,9 @@ BAD_DEVICE_REFUSAL = (
 
 def _coerce(d: schema.SettingDef, value: Any) -> Any:
     """Models send strings; turn them into the setting's type."""
+    if d.key == "meaning_search" and isinstance(value, bool):
+        # Next leaps 16-a: a switch's words for a row whose value is a model.
+        return "on" if value else "off"
     if d.type == "bool" and isinstance(value, str):
         v = value.strip().lower()
         if v in ("true", "on", "yes", "1", "enabled", "enable"):
@@ -255,6 +258,12 @@ def value_label(d: Any, value: Any, manager: Any = None) -> str | None:
 
     Never raises."""
     try:
+        if str(getattr(d, "key", "") or "") == "meaning_search":
+            # Next leaps 16-a: "nomic-embed-text on this PC", "Off", "Not set";
+            # never the stored "<kind>:<model> @ <address>".
+            from ..memory.meaning import choice_words
+
+            return choice_words(value) or ("Not set" if value is None else None)
         if value is None or value == "" or isinstance(value, bool):
             return None
         if isinstance(value, dict):
@@ -589,6 +598,13 @@ class _ConfigChangeBase(Tool):
             d, key, value = self._resolve(args)
         except Exception:  # noqa: BLE001 — an unknown key: execute says so
             return None
+        if key == "meaning_search" and d.tier_for(value) == self.TIER:
+            # Next leaps 16-a: turning search by meaning on (or to another
+            # model) asks on a card that says what it costs on THIS PC, from
+            # the measured figure; turning it off runs at once (Undo).
+            from ..memory.meaning import card_check
+
+            return await asyncio.to_thread(card_check, self.platform, value)
         if not getattr(d, "destination", "") or d.pattern:
             return None
         if not isinstance(value, str) or not value.strip() or d.tier_for(value) != self.TIER:

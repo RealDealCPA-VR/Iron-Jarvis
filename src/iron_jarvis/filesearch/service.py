@@ -73,12 +73,14 @@ MAX_SEMANTIC_CHUNKS = 50_000
 #: fabric asks this on every chat turn and agent run).
 SEMANTIC_WAIT_S = 5.0
 
-#: Words a caller may show when "By meaning" has no local embedding model
-#: (the embedder fell back to the offline word-hash one).
+#: Words a caller may show when "By meaning" has no search model (the
+#: embedder is the stand-in that matches words). Next leaps 16-a: the fix is
+#: the setting (it takes effect at once); the terminal line is the last resort.
 WORD_ONLY_NOTE = (
-    "[No local embedding model is connected, so this matched words, not meaning. "
-    "To search by meaning: install Ollama, run `ollama pull nomic-embed-text`, connect "
-    "Ollama in Settings › Connections, then restart Iron Jarvis.]"
+    "[Search by meaning is off, so this matched words, not meaning. It is turned on in "
+    "Settings › Memory & you › Search by meaning, with a search model on this PC or the "
+    "user's own network, and takes effect at once (no restart). With no search model yet, "
+    "the last resort is to install Ollama and run `ollama pull nomic-embed-text`.]"
 )
 
 #: Words for a "By meaning" search with no folder to look in.
@@ -275,6 +277,13 @@ class _SemanticIndex:
     not_indexed: int = 0
     #: v1.445.0: the meaning roots this index was built over.
     roots: tuple[Path, ...] = ()
+    #: 16-a: the search model that made its vectors. A change of model drops
+    #: the index (a query vector of one model never meets another's rows).
+    model: str = ""
+
+
+class _ModelChanged(Exception):
+    """The search model changed while the index was being built (16-a)."""
 
 
 class FileSearchService:
@@ -671,10 +680,13 @@ class FileSearchService:
         if not self._indexed or self._indexed_for != roots:
             self.index()
             roots = self._indexed_for
+        from ..memory.embeddings import embed_with_model
+
         paths: list[Path] = []
         refs: list[tuple[int, int]] = []
         rows: list[np.ndarray] = []
         not_indexed = 0
+        model = self._model_now()
         for n, path in enumerate(self._indexed):
             if len(refs) >= MAX_SEMANTIC_CHUNKS:
                 not_indexed = len(self._indexed) - n
@@ -689,16 +701,28 @@ class FileSearchService:
                 if slot < 0:
                     paths.append(path)
                     slot = len(paths) - 1
-                vec = np.asarray(self.embedder.embed(chunk), dtype=np.float32)
+                raw, made_by = embed_with_model(self.embedder, chunk)
+                if made_by != model:
+                    raise _ModelChanged()
+                vec = np.asarray(raw, dtype=np.float32)
                 norm = float(np.linalg.norm(vec))
                 rows.append(vec / norm if norm > 0.0 else vec)  # a zero row scores 0
                 refs.append((slot, start))
         matrix = np.vstack(rows) if rows else np.zeros((0, 0), dtype=np.float32)
-        self._chunk_cache = _SemanticIndex(paths, refs, matrix, not_indexed, roots)
+        self._chunk_cache = _SemanticIndex(paths, refs, matrix, not_indexed, roots, model)
+
+    def _model_now(self) -> str:
+        """The search model the embedder answers with now (16-a)."""
+        return str(getattr(self.embedder, "model", "") or "")
 
     def _build_in_background(self) -> None:
         try:
             self._build_chunk_cache()
+            self._build_error = None
+        except _ModelChanged:
+            # The owner switched search models mid-build: nothing half-made is
+            # kept, and the next search builds again with the new one.
+            self._chunk_cache = None
             self._build_error = None
         except BaseException as exc:  # noqa: BLE001 — handed to the waiting caller
             self._build_error = exc
@@ -708,15 +732,18 @@ class FileSearchService:
         own thread (one at a time) and waiting at most :data:`SEMANTIC_WAIT_S`.
         None = still building (``notes.indexing`` is set)."""
         want = tuple(self.meaning_roots)
+        model = self._model_now()
         cache = self._chunk_cache
-        if cache is not None and cache.roots == want:
+        if cache is not None and cache.roots == want and cache.model == model:
             return cache
         with self._build_lock:
             thread = self._build_thread
             if thread is None or not thread.is_alive():
                 cache = self._chunk_cache
-                if cache is not None and cache.roots == want:
+                if cache is not None and cache.roots == want and cache.model == model:
                     return cache
+                # 16-a: another search model's index is dropped, never queried.
+                self._chunk_cache = None
                 self._build_error = None
                 thread = threading.Thread(
                     target=self._build_in_background, name="filesearch-meaning-index", daemon=True
@@ -732,8 +759,9 @@ class FileSearchService:
             err, self._build_error = self._build_error, None
             raise err
         cache = self._chunk_cache
-        if cache is None or cache.roots != tuple(self.meaning_roots):
-            # The folders changed while it was built: the next search rebuilds.
+        if cache is None or cache.roots != tuple(self.meaning_roots) or cache.model != self._model_now():
+            # The folders (or the search model) changed while it was built:
+            # the next search rebuilds.
             if notes is not None:
                 notes.indexing = True
             return None
@@ -772,7 +800,17 @@ class FileSearchService:
             notes.not_indexed += index.not_indexed + (1 if self._index_capped else 0)
         if not index.refs:
             return []
-        qv = np.asarray(self.embedder.embed(query), dtype=np.float32)
+        from ..memory.embeddings import embed_with_model
+
+        raw, q_model = embed_with_model(self.embedder, query)
+        if q_model != index.model:
+            # Switched between the index and the question (16-a): answering
+            # one model's question from another's rows would be noise.
+            self._chunk_cache = None
+            if notes is not None:
+                notes.indexing = True
+            return []
+        qv = np.asarray(raw, dtype=np.float32)
         qn = float(np.linalg.norm(qv))
         scores = index.matrix @ (qv / qn) if qn > 0.0 else np.zeros(len(index.refs))
         order = np.argsort(-scores, kind="stable").tolist()[:k]

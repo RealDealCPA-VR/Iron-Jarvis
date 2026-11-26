@@ -2196,6 +2196,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'add a plugin I found',
         'plug this service into you',
     ),
+    'meaning_search': (
+        'find my files by what they are about',
+        'turn on search by meaning',
+        'search my notes by meaning not exact words',
+        'use my own model to search by meaning',
+        'how much memory does search by meaning use',
+        'switch the search model',
+        'turn off search by meaning',
+        'find the email even if it uses other words',
+    ),
     'media_ask_when_free': (
         'ask me before free image generations',
         'make it check before free creations',

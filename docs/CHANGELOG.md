@@ -12,7 +12,7 @@
 
 ## v1.583.0
 
-**See what is filling a chat.** When a chat gets long, a small meter under the message box shows how full it is.
+**See what is filling a chat.** When a chat gets long, a small meter under the message box shows how full it is. **Search by meaning, offered with what it costs here.** **Search by meaning** finds notes, files and memories by what they are about, not only by their words: "the angry email about shipping" finds the message that says "customer furious, parcel late".
 
 ## v1.582.0
 

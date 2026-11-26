@@ -4277,7 +4277,20 @@ def tool_frame_data(name: str, result: object, ran: bool) -> dict[str, object]:
     (``workmap.tools.screen_rows``), never from the model's words; ``{}``
     for every other step (their frames are byte-identical). MIRROR NOTE:
     the POST lane (``run_chat_turn``) sends no frames, so it has no rows,
-    as it has no ``detail`` (its response keys are pinned). Never raises."""
+    as it has no ``detail`` (its response keys are pinned). Never raises.
+
+    Next leaps 16-a: a ``file_search`` step whose own result says it carried
+    the search-by-meaning offer (``data.meaning_offer``, set by the tool once
+    ever) gets ``{"data": {"meaning_offer": true}}``, so the chat draws the
+    offer card under that reply; every other file_search frame is as before."""
+    if name == "file_search" and ran:
+        try:
+            data = getattr(result, "data", None)
+            if isinstance(data, dict) and data.get("meaning_offer") is True:
+                return {"data": {"meaning_offer": True}}
+        except Exception:  # noqa: BLE001
+            return {}
+        return {}
     if name != "work_history" or not ran:
         return {}
     try:

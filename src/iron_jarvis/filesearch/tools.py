@@ -111,6 +111,26 @@ class FileSearchTool(Tool):
         skipped = notes.note()
         if skipped:
             out = f"{out}\n\n{skipped}" if out else skipped
+        # Next leaps 16-a: the FIRST time a by-meaning search matched words in
+        # a chat that can draw a card (the stream lane: session "chat", not
+        # cannot_ask), the offer is shown under this reply, once ever
+        # (memory/meaning.mark_offered). Never in an agent run or the POST
+        # lane, which draw no card: Improvements still holds the offer.
+        offer = False
+        if (mode == "semantic" and notes.words_only and getattr(ctx, "session_id", "") == "chat"
+                and not getattr(ctx, "cannot_ask", False)):
+            from types import SimpleNamespace
+
+            from ..memory import meaning
+
+            offer = await asyncio.to_thread(
+                meaning.mark_offered, SimpleNamespace(config=ctx.config, embedder=self.service.embedder)
+            )
+            if offer:
+                out += (
+                    "\n[A card under this reply offers to turn on search by meaning, with what it costs "
+                    "on this PC. The user answers there; do not ask them in words.]"
+                )
         return ToolResult(
             ok=True,
             output=out,
@@ -126,6 +146,8 @@ class FileSearchTool(Tool):
                 "no_meaning_folders": notes.no_meaning_folders,
                 "still_indexing": notes.indexing,
                 "words_only": notes.words_only,
+                # 16-a: this reply carries the search-by-meaning offer.
+                "meaning_offer": offer,
             },
         )
 

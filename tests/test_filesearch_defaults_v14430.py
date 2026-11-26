@@ -208,7 +208,10 @@ def test_meaning_says_when_it_matched_words_not_meaning(tmp_path):
     notes = SearchNotes()
     fs.search_semantic("arc reactor", notes=notes)
     assert notes.words_only is True
-    assert "nomic-embed-text" in notes.note() and "Settings › Connections" in notes.note()
+    # Next leaps 16-a: the fix is the setting (no restart); the terminal line
+    # is the last resort.
+    assert "Settings › Memory & you › Search by meaning" in notes.note() and "no restart" in notes.note()
+    assert "nomic-embed-text" in notes.note()
 
 
 async def test_the_agent_tool_says_why_meaning_found_nothing(tmp_path):

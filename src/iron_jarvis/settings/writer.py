@@ -56,8 +56,15 @@ _HOOK_KEYS = frozenset(
     {"iron_proxy_enabled", "profile_share_claude_code", "profile_share_codex",
      "profile_share_pi", "profile_share_opencode", "profile_share_grok", "profile_share_antigravity",
      "agent_browser_enabled",
-     "mcp_auto_approve"}
+     "mcp_auto_approve",
+     # Next leaps 16-a: search by meaning lives in memory/meaning.py, not in
+     # config.toml (``_MEANING`` below).
+     "meaning_search"}
 )
+#: Next leaps 16-a: the row whose value lives in ``memory/meaning`` (its one
+#: state holder): read, checked (one probe of the search model) and applied
+#: there, so the switch takes effect at once with no restart.
+_MEANING = "meaning_search"
 
 
 #: 10-b review (build-out R2.4): plain config records a PERSON's change of a
@@ -146,6 +153,18 @@ class ConfigWriter:
         self.platform = d.platform
         self.devices = DevicePrefs(self.platform.config.home)
         self._lock = threading.RLock()
+        #: 16-a: what ``_validate`` checked for search by meaning, kept for
+        #: ``apply`` in the SAME thread (an Undo's pre-check in another
+        #: thread can never hand one apply another's model).
+        self._meaning_tls = threading.local()
+
+    @property
+    def _meaning_ready(self) -> Any:
+        return getattr(self._meaning_tls, "ready", None)
+
+    @_meaning_ready.setter
+    def _meaning_ready(self, value: Any) -> None:
+        self._meaning_tls.ready = value
 
     # ------------------------------------------------------------------ read
     def current(self, key: str, *, device_id: str = "") -> Any:
@@ -157,6 +176,10 @@ class ConfigWriter:
             from ..profile.store import ProfileStore
 
             return getattr(ProfileStore(self.platform.engine).get(), d.field_name, None)
+        if key == _MEANING:
+            from ..memory import meaning
+
+            return meaning.setting_value(self.platform)
         if d.pattern and key.startswith("permissions."):
             tool = schema.pattern_arg(d, key)
             mode = (getattr(cfg, "permissions", {}) or {}).get(tool)
@@ -265,6 +288,8 @@ class ConfigWriter:
                     raise SettingError(f"{d.label} {exc}.") from None
             if d.pattern and key.startswith("permissions."):
                 self._check_permission(schema.pattern_arg(d, key), value)
+            elif key == _MEANING:
+                pass  # checked below, by memory/meaning (it is not a config field)
             elif d.store == "config" and "." not in d.field_name:
                 try:
                     setattr(trial, d.field_name, value)
@@ -279,6 +304,18 @@ class ConfigWriter:
             raise SettingError(
                 f"Pick one theme: {_label('device.theme')} or {_label('device.theme_colors')}, not both."
             )
+        if _MEANING in clean:
+            # Next leaps 16-a: "on", a model's name or a choice becomes one
+            # choice on this network that answered one probe (its sentence when
+            # not); the base it built is applied by ``apply`` (no second probe).
+            from ..memory import meaning
+
+            try:
+                ready = meaning.prepare(self.d, clean[_MEANING], restoring=restoring)
+            except ValueError as exc:
+                raise SettingError(f"{_label(_MEANING)}: {exc}") from None
+            clean[_MEANING] = ready.value
+            self._meaning_ready = ready
         if "backup_mirror_dir" in clean and clean["backup_mirror_dir"]:
             from ..maintenance import mirror_dir_problem
 
@@ -433,6 +470,14 @@ class ConfigWriter:
                     self._agent_browser(bool(value))
                 elif key == "mcp_auto_approve":
                     out.cleared_auto_approve = self._mcp_auto_approve(bool(value))
+                elif key == _MEANING:
+                    from ..memory import meaning
+
+                    ready = self._meaning_ready
+                    if ready is None or ready.value != value:
+                        ready = meaning.prepare(self.d, value, restoring=restoring)
+                    meaning.commit(self.d, ready, actor=actor)
+                    self._meaning_ready = None
                 elif d.pattern and key.startswith("permissions."):
                     self._permission(schema.pattern_arg(d, key), "" if value is None else str(value))
                 else:

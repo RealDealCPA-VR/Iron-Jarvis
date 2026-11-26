@@ -157,6 +157,16 @@ const SUB_DEFS: Record<string, SubDef[]> = {
       Comp: named(() => import("@/components/settings/BrainProfiles"), "BrainProfiles"),
       requiresKey: "brain_profile",
     },
+    {
+      // Next leaps 16-a: the plain row for search by meaning (its one control
+      // on this page, CONTROLLED_IN_SECTION below): how it stands, and the
+      // search models found on this PC or your network with what each costs.
+      id: "memory-meaning",
+      label: "Search by meaning",
+      blurb: "Find notes, files and memories by what they are about, with a search model on this PC or your network.",
+      Comp: named(() => import("@/components/memory/MeaningSearch"), "MeaningSearchRow"),
+      requiresKey: "meaning_search",
+    },
   ],
   permissions: [
     {
@@ -250,6 +260,9 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   // Notifications card (settings/BellNotices), never as a second
   // "Notifications" heading beside that card.
   night_review_notice: "connections-notifications",
+  // Next leaps 16-a: search by meaning's value is a search model, chosen
+  // with its measured cost on its own section (never a text box).
+  meaning_search: "memory-meaning",
 };
 
 /**

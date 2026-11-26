@@ -628,6 +628,8 @@ import {
 } from "@/components/chat/SourcesRow";
 import { WorkHistoryRow } from "@/components/chat/WorkHistoryRow";
 import { decodeWorkRows, extractWorkRows, type WorkHistoryRowData } from "@/lib/workHistory";
+import { MeaningSearchOffer } from "@/components/memory/MeaningSearch";
+import { extractMeaningOffer } from "@/lib/meaningSearch";
 
 /* v1.258.0 (S-03): six panels the chat route used to download before first
  * paint. Every one renders only behind a state gate that is false on open —
@@ -852,6 +854,10 @@ interface ChatMessage {
    *  step found (its own result, lib/workHistory), drawn as rows under the
    *  bubble. Decoded again on every read (saved with the chat). */
   workRows?: WorkHistoryRowData[];
+  /** Next leaps 16-a: this reply's by-meaning search matched words and
+   *  carried the search-by-meaning offer (its step's own result, once
+   *  ever): the card under it shows while the offer is unanswered. */
+  meaningOffer?: boolean;
   /** The provider that ACTUALLY answered when it differs from the one the
    *  user explicitly picked (capability reroute / failover) — an honesty chip
    *  so a local-model turn silently served by a CLI is never invisible.
@@ -3973,6 +3979,10 @@ const MessageRow = memo(function MessageRow({
           step found, from its own result. Pressing a row opens it; Files
           and Decisions are quiet links. */}
       <WorkHistoryRow rows={decodeWorkRows(m.workRows)} onOpenFile={h.openDocument} />
+      {/* Next leaps 16-a: the ONE card offering search by meaning, under
+          the reply whose by-meaning search matched words; it draws
+          nothing once the offer was answered anywhere. */}
+      {m.meaningOffer === true ? <MeaningSearchOffer /> : null}
 
       {/* Crystallize nudge (v1.120.0): agent turns are by definition
           multi-step — offer to keep the process. */}
@@ -10022,6 +10032,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const sources = extractWebSources(streamToolsRef.current);
         // Next leaps 13-b: the earlier work its work_history steps found.
         const workRows = extractWorkRows(streamToolsRef.current);
+        // Next leaps 16-a: a file_search step carried the meaning offer.
+        const meaningOffer = extractMeaningOffer(streamToolsRef.current);
         const finalReply = (reply ?? "").trim() || "(no response)";
         const via = servedByOther(servedBy);
         // Accountability fields (v1.165.0): stored PER MESSAGE so the receipt
@@ -10141,6 +10153,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             ...(toolsUsed.length ? { toolsUsed } : {}),
             ...(sources.length ? { sources } : {}),
             ...(workRows.length ? { workRows } : {}),
+            ...(meaningOffer ? { meaningOffer: true } : {}),
             ...(via ? { viaProvider: via } : {}),
             ...receipt,
           },
@@ -10163,6 +10176,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               ...(toolsUsed.length ? { toolsUsed } : {}),
               ...(sources.length ? { sources } : {}),
               ...(workRows.length ? { workRows } : {}),
+              ...(meaningOffer ? { meaningOffer: true } : {}),
               ...(via ? { viaProvider: via } : {}),
               ...receipt,
             },
@@ -10283,6 +10297,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           const partial = (se?.partial ?? "").trim();
           const sources = extractWebSources(streamToolsRef.current);
           const workRows = extractWorkRows(streamToolsRef.current); // 13-b
+          const meaningOffer = extractMeaningOffer(streamToolsRef.current); // 16-a
           // v1.510.0 (second review, L4): a turn that failed AFTER its steps
           // ran keeps them — the failed reply carries its step cards, the
           // steps that ran and the files they made or changed (the files
@@ -10310,6 +10325,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                     ...(partial ? { interrupted: true } : {}),
                     ...(sources.length ? { sources } : {}),
                     ...(workRows.length ? { workRows } : {}),
+                    ...(meaningOffer ? { meaningOffer: true } : {}),
                     // v1.378.0 review: the rest was declined (typed fix_kind).
                     ...(isRefusal(failureFacts(e)) ? { refused: true } : {}),
                     ...(keptWork ?? {}),
@@ -11910,6 +11926,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       const partial = (stream.textStore?.get() ?? stream.text).trim();
       const sources = extractWebSources(toolsAtStop);
       const workRows = extractWorkRows(toolsAtStop); // 13-b
+      const meaningOffer = extractMeaningOffer(toolsAtStop); // 16-a
       // Third plan G19 (CS4): the line is written once the daemon has said
       // what became of the reply. It stopped it (or keeps the Stop for a
       // reply it had not started yet: `pending`) → "Stopped." as before. It
@@ -11938,6 +11955,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
             ...(partial ? { interrupted: true } : {}),
             ...(partial && sources.length ? { sources } : {}),
             ...(partial && workRows.length ? { workRows } : {}),
+            ...(meaningOffer ? { meaningOffer: true } : {}),
             // Third plan point 1: the stopped reply is this turn's — the daemon
             // writes no second one for it.
             ...(stopId ? { turnId: stopId } : {}),

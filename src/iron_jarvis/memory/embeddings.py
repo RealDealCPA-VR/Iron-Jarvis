@@ -160,22 +160,184 @@ class OllamaEmbedder:
             raise EmbedderError(f"ollama embeddings: non-numeric vector: {exc}") from exc
 
 
+class OpenAICompatEmbedder:
+    """A search model on a model server that is not Ollama (next leaps 16-a):
+    LM Studio, vLLM, a LiteLLM proxy, llama.cpp's server — anything that
+    answers ``POST {root}/v1/embeddings`` with ``{"model", "input"}`` ->
+    ``{"data": [{"embedding": [...]}]}``.
+
+    The same contract as :class:`OllamaEmbedder`: ANY failure is a clean
+    :class:`EmbedderError`, and under a Local only chat's scope a server off
+    this network is refused before anything is sent (16-a never offers one,
+    so this is the second line). ``headers`` are the saved server's own key
+    headers (``fleet.library.auth_headers``), never logged."""
+
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        *,
+        headers: "dict[str, str] | None" = None,
+        timeout: float = _EMBED_TIMEOUT,
+        http: Any = None,
+    ) -> None:
+        self.base_url = _openai_root(base_url)
+        self.model = model
+        self.timeout = timeout
+        self._headers = dict(headers or {})
+        self._http = http
+
+    def _client(self) -> Any:
+        if self._http is None:
+            from ..core import http as _http
+
+            self._http = _http.client(timeout=self.timeout, follow_redirects=False, trust_env=False)
+        return self._http
+
+    def embed(self, text: str) -> list[float]:
+        from ..providers import egress as _egress
+
+        if _egress.current_scope().on and not _egress.private_host(self.base_url):
+            raise EmbedderError(
+                "this chat is local only and the search model's server is not on this"
+                " network, so nothing was sent to it"
+            )
+        url = f"{self.base_url}/v1/embeddings"
+        try:
+            resp = self._client().post(
+                url, json={"model": self.model, "input": text}, headers=self._headers
+            )
+        except Exception as exc:  # noqa: BLE001 — connection error / timeout / DNS
+            raise EmbedderError(f"the search model's server did not answer: {type(exc).__name__}") from exc
+        status = getattr(resp, "status_code", 0)
+        if status != 200:
+            raise EmbedderError(f"the search model's server answered HTTP {status}")
+        try:
+            data = resp.json()
+            vec = (data.get("data") or [{}])[0].get("embedding")
+        except Exception as exc:  # noqa: BLE001
+            raise EmbedderError("the search model's server sent an answer it could not read") from exc
+        if not isinstance(vec, list) or not vec:
+            raise EmbedderError("the search model's server sent no vector")
+        try:
+            return [float(x) for x in vec]
+        except (TypeError, ValueError) as exc:
+            raise EmbedderError("the search model's server sent a vector that is not numbers") from exc
+
+
+def _openai_root(base_url: str) -> str:
+    """The server root with a trailing ``/v1`` taken off (the embeddings path
+    adds it back), so a chat address (``…/v1``) and a bare one both work."""
+    u = (base_url or "").strip().rstrip("/")
+    if u.endswith("/v1"):
+        u = u[: -len("/v1")]
+    return u.rstrip("/")
+
+
+class SwitchableEmbedder:
+    """THE one embedder every consumer holds (next leaps 16-a): it hands each
+    call to the CURRENT base, and :meth:`switch` changes the base for every
+    consumer at once, with no restart.
+
+    ``model`` and ``embed`` read the current base under a lock, and
+    :meth:`current` hands back the base itself so a caller that must stamp a
+    vector with the model that MADE it (:func:`embed_with_model`, the cache)
+    reads both from one base: a switch between reading the name and embedding
+    can never file one model's vector under the other's name.
+
+    ``where`` is the address the current base sends text to ("" for the
+    stand-in, which sends nothing); ``held`` is the model the owner chose when
+    the base is the stand-in because that model did not answer at start."""
+
+    def __init__(self, base: Embedder, *, held: str = "") -> None:
+        import threading
+
+        self._lock = threading.Lock()
+        self._base: Embedder = base
+        self.held = held
+
+    def current(self) -> Embedder:
+        with self._lock:
+            return self._base
+
+    def switch(self, base: Embedder, *, held: str = "") -> Embedder:
+        """Make *base* the one every consumer uses; returns the old one."""
+        with self._lock:
+            old, self._base = self._base, base
+            self.held = held
+        return old
+
+    @property
+    def model(self) -> str:
+        return str(getattr(self.current(), "model", "") or "")
+
+    @property
+    def where(self) -> str:
+        return str(getattr(self.current(), "base_url", "") or "")
+
+    def embed(self, text: str) -> list[float]:
+        return self.current().embed(text)
+
+
+def embed_with_model(embedder: Any, text: str) -> tuple[list[float], str]:
+    """``(vector, the model that made it)`` from ONE base (16-a). An embedder
+    that can switch is read once (:meth:`SwitchableEmbedder.current`, or the
+    cache's ``embed_tagged``); any other gives ``embed`` and its ``model``."""
+    tagged = getattr(embedder, "embed_tagged", None)
+    if callable(tagged):
+        vec, model = tagged(text)
+        return list(vec), str(model or "")
+    current = getattr(embedder, "current", None)
+    if callable(current):
+        base = current()
+        return list(base.embed(text)), str(getattr(base, "model", "") or "")
+    return list(embedder.embed(text)), str(getattr(embedder, "model", "") or "")
+
+
 class CachingEmbedder:
     """Wrap a base embedder with the persistent :class:`EmbeddingStore`.
 
     Transparent: it implements ``embed(text)`` so it drops straight into
     filesearch/ltm. Vectors are keyed by the base embedder's ``model`` so a
     cache built under one model is never reused under another.
+
+    16-a: the model name is read AT CALL TIME from the base (a
+    :class:`SwitchableEmbedder` changes it with no restart), and one call
+    reads the name and embeds through the SAME base, so the cache keeps two
+    models' vectors apart even while a switch happens. An explicit ``model``
+    still pins the name (a caller that wants one fixed identity).
     """
 
     def __init__(self, base: Embedder, engine: Any, *, model: str | None = None) -> None:
         self.base = base
         self.engine = engine
-        self.model = model or getattr(base, "model", "mock")
+        self._model = model or ""
         self.store = EmbeddingStore(engine)
 
+    def _base_now(self) -> Embedder:
+        current = getattr(self.base, "current", None)
+        return current() if callable(current) else self.base
+
+    @property
+    def model(self) -> str:
+        if self._model:
+            return self._model
+        return str(getattr(self._base_now(), "model", "mock") or "mock")
+
+    @property
+    def where(self) -> str:
+        return str(getattr(self._base_now(), "base_url", "") or "")
+
+    def current(self) -> Embedder:
+        return self._base_now()
+
+    def embed_tagged(self, text: str) -> tuple[list[float], str]:
+        base = self._base_now()
+        model = self._model or str(getattr(base, "model", "mock") or "mock")
+        return self.store.get_or_compute(base.embed, text, model=model), model
+
     def embed(self, text: str) -> list[float]:
-        return self.store.get_or_compute(self.base.embed, text, model=self.model)
+        return self.embed_tagged(text)[0]
 
 
 def _ollama_host_root(base_url: str) -> str:

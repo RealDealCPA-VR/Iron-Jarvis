@@ -117,6 +117,8 @@ const ACCEPTED_WORDS: Record<string, string> = {
   wants: "Started. It is running now.",
   // v1.499.0 (leap 3, Phase 3): a name Iron Jarvis noticed in your folders.
   client: "It is a client now. Its page is on Clients, and chats are told about it only in its own folders.",
+  // Next leaps 16-a (the route's own note, the status line, wins when it has one).
+  meaning_search: "Search by meaning is on.",
 };
 
 export function acceptedWords(kind: string): string {
@@ -175,6 +177,8 @@ const DECISION_PATHS: RegExp[] = [
   new RegExp(`^/memory/review/${ID}/(approve|dismiss)$`),
   new RegExp(`^/memory/preferences/${ID}/(keep|decline)$`),
   new RegExp(`^/proposals/${ID}/(approve|reject)$`),
+  // Next leaps 16-a: search by meaning's own routes (no id: there is one).
+  /^\/memory\/meaning\/(choose|decline)$/,
 ];
 
 export function isDecisionPath(path: string): boolean {

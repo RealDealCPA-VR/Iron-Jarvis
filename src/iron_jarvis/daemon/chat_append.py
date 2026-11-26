@@ -139,6 +139,9 @@ LINE_KEYS: tuple[str, ...] = (
     # Next leaps 13-b: the rows a work_history step carried, drawn under the
     # reply (``durable_turns.reply_line`` from the step's frame).
     "workRows",
+    # Next leaps 16-a: the reply that carries the search-by-meaning offer
+    # (a file_search step's own frame said so, once ever).
+    "meaningOffer",
 )
 
 #: Idea 39 (39-a): how many replaced report keys a folded line keeps.

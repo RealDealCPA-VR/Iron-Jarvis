@@ -37,7 +37,8 @@ THE RULES, each pinned in ``tests/test_improvements_inbox_v1495.py``:
   screen (rejecting something Iron Jarvis wants to do) takes two here.
 * An offer to run a tool WITHOUT ASKING is listed but never decided here: it
   widens what runs unasked, so it is answered on its own screen.
-* No model is called, no file on disk is opened, nothing is written.
+* No model is called, no file on disk is opened (but Iron Jarvis's own
+  state file for search by meaning, 16-a), nothing is written.
   BLOCKING (SQLite): the route is a sync ``def``.
 
 NOT listed, on purpose: approvals of an action in flight (their own cards),
@@ -77,6 +78,10 @@ KIND_PREFERENCE = "preference"
 #: v1.499.0 (vision plan leap 3 Phase 3): a name noticed in the owner's folder
 #: names that may be a client (``workmap/clients``).
 KIND_CLIENT = "client"
+#: Next leaps 16-a: search by meaning, offered once with what it costs here
+#: (``memory/meaning``: its own file, read; the look that finds and measures
+#: the model runs elsewhere, on its own pacing).
+KIND_MEANING = "meaning_search"
 KIND_WANTS = "wants"
 KIND_UNASKED = "unasked"
 
@@ -84,6 +89,7 @@ KIND_UNASKED = "unasked"
 KINDS: tuple[tuple[str, str], ...] = (
     (KIND_PREFERENCE, "Preferences Iron Jarvis noticed"),
     (KIND_CLIENT, "Clients Iron Jarvis noticed"),
+    (KIND_MEANING, "Search by meaning"),
     (KIND_SKILL, "Skill drafts"),
     (KIND_COACH, "Agent instructions"),
     (KIND_HABIT, "Working habits for a team member"),
@@ -551,6 +557,41 @@ def client_item(view: dict[str, Any], *, now: datetime | None = None) -> dict[st
     )
 
 
+MEANING_HOME = "/settings?focus=meaning_search"
+MEANING_OTHER = "Use another model"
+
+
+def meaning_item(view: dict[str, Any]) -> dict[str, Any]:
+    """16-a: the ONE offer of search by meaning, while it was never answered
+    and a search model on this PC or the owner's network answered its probe
+    (``memory/meaning.view``). Turn it on presses the setting's own route
+    with THAT model; Not now is final; Use another model opens the setting,
+    where every model found is listed with what it costs here."""
+    best = view.get("best") or {}
+    model = str(best.get("model") or "")
+    where = str(best.get("where_words") or "")
+    others = [str(c.get("model") or "") for c in view.get("candidates") or []
+              if c.get("choice") != best.get("choice") and c.get("works") is not False]
+    lines = [str(best.get("cost_words") or "")]
+    if others:
+        lines.append(f"Also found: {', '.join(others[:4])}{' and more' if len(others) > 4 else ''}.")
+    it = item(
+        KIND_MEANING, "offer", title=str(view.get("words") or ""),
+        about=f"{model} {where}".strip(),
+        why=(
+            f"{model} is already {where}. With it, Iron Jarvis finds notes, files and memories by what they "
+            "are about, not only by their words, and the text it searches stays on this PC or your own network."
+        ),
+        evidence=lines, created_at=view.get("looked_at") or None,
+        accept=action("Turn it on", "/memory/meaning/choose", body={"choice": str(best.get("choice") or "")},
+                      note="It takes effect at once, with no restart. Settings can turn it off again, with Undo."),
+        decline=action("Not now", "/memory/meaning/decline", note="Iron Jarvis won't offer it again."),
+        home=MEANING_HOME,
+    )
+    it["home"] = {"href": MEANING_HOME, "label": MEANING_OTHER}
+    return it
+
+
 _RISK_WORDS = {"low": "Low risk", "med": "Medium risk", "high": "High risk"}
 _SOURCE_WORDS = {
     "sentinel": "A watcher noticed a change",
@@ -660,6 +701,17 @@ def _clients(d: Any) -> Read:
 
     rows, total = _pending(d.platform.engine, WorkClient, WorkClient.status == CLIENT_PROPOSED)
     return Read({KIND_CLIENT: (_built(rows, lambda r: client_item(client_view(r)), "client"), total)})
+
+
+def _meaning(d: Any) -> Read:
+    """16-a: the search-by-meaning offer, from its state file (Iron Jarvis's
+    own; no model, no network: the look ran on the meaning loop's pacing)."""
+    from ..memory import meaning
+
+    view = meaning.view(d)
+    if not view.get("offer"):
+        return Read({KIND_MEANING: ([], 0)})
+    return Read({KIND_MEANING: ([meaning_item(view)], 1)})
 
 
 def _skills(d: Any) -> Read:
@@ -812,6 +864,7 @@ def _unasked(d: Any) -> Read:
 SOURCES: tuple[tuple[tuple[str, ...], Source], ...] = (
     ((KIND_PREFERENCE,), _preferences),
     ((KIND_CLIENT,), _clients),
+    ((KIND_MEANING,), _meaning),
     ((KIND_SKILL,), _skills),
     ((KIND_COACH, KIND_HABIT), _coach),
     ((KIND_LESSON, KIND_SESSION_EDIT), _library),

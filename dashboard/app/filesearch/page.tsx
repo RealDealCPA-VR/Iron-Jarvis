@@ -17,9 +17,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { FilePickerModal } from "@/components/FilePickerModal";
+import { MeaningSearchRow } from "@/components/memory/MeaningSearch";
 import {
   DEFAULT_LABEL,
-  MEANING_NEEDS_WORDS,
   MEANING_ONLY_ADDED_WORDS,
   NO_MEANING_FOLDERS_WORDS,
   SAVED_WORDS,
@@ -332,7 +332,7 @@ export default function FileSearchPage() {
           </form>
           {mode === "semantic" && (
             <p data-testid="filesearch-meaning-note" className="mt-3 text-xs text-zinc-400">
-              {MEANING_ONLY_ADDED_WORDS} {MEANING_NEEDS_WORDS}
+              {MEANING_ONLY_ADDED_WORDS}
             </p>
           )}
           {error && (
@@ -415,6 +415,12 @@ export default function FileSearchPage() {
               <ErrorNote>{folderError}</ErrorNote>
             </div>
           )}
+          {/* Next leaps 16-a: the plain settings row (the same as Settings ›
+              Memory & you), never a second offer: how By meaning stands,
+              and the search models found here with what each costs. */}
+          <div className="mt-4 border-t border-white/[0.05] pt-3">
+            <MeaningSearchRow />
+          </div>
         </Card>
       </Reveal>
 

@@ -14,11 +14,10 @@
 
 export const DEFAULT_LABEL = "Your folders";
 
-/** What "By meaning" needs to really match meaning (memory/embeddings.py). */
-export const MEANING_NEEDS_WORDS =
-  'By meaning needs a local embedding model to match meaning: install Ollama, run ' +
-  '"ollama pull nomic-embed-text", connect Ollama in Settings › Connections, then ' +
-  "restart Iron Jarvis. Without one it matches words.";
+/* Next leaps 16-a: what "By meaning" needs (a search model) is said by the
+ * plain settings row on this page (components/memory/MeaningSearch), with
+ * the models found on this PC or your network and what each costs here; the
+ * old terminal line is its last resort. */
 
 export const MEANING_ONLY_ADDED_WORDS =
   "By meaning looks only in the folders you add here (it reads every file in them once, " +

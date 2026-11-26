@@ -433,6 +433,19 @@ def _work_rows_from(data: dict[str, Any], into: list[dict[str, Any]]) -> None:
         return
 
 
+def _meaning_offer_in(data: dict[str, Any]) -> bool:
+    """16-a: a FINISHED ``file_search`` frame that ran and carried the offer
+    (``chat_turn.tool_frame_data``). Never raises."""
+    try:
+        inner = data.get("data")
+        return bool(
+            data.get("name") == "file_search" and data.get("status") == "finished" and data.get("ok")
+            and isinstance(inner, dict) and inner.get("meaning_offer") is True
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def reply_line(turn_id: str, frames: Any, status: str, *,
                handed_to: "str | None" = None) -> "dict[str, Any] | None":
     """The chat line a turn's stored frames make (third plan G6): what the
@@ -460,6 +473,7 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
         done: "dict[str, Any] | None" = None
         err: "dict[str, Any] | None" = None
         work_rows: list[dict[str, Any]] = []
+        meaning_offer = False
         for frame in frames if isinstance(frames, list) else []:
             if not (isinstance(frame, (list, tuple)) and len(frame) == 2):
                 continue
@@ -478,10 +492,15 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
                 err = _frame_data(data)
             elif event == "tool_call":
                 _work_rows_from(_frame_data(data), work_rows)
+                meaning_offer = meaning_offer or _meaning_offer_in(_frame_data(data))
         # Next leaps 13-b: the rows a work_history step carried, as the page
         # saves them under the reply (only when there are some: every other
         # line is as before).
         rows_extra: dict[str, Any] = {"workRows": work_rows[:WORK_ROWS_MAX]} if work_rows else {}
+        # Next leaps 16-a: the search-by-meaning offer a file_search step
+        # carried, as the page saves it under the reply.
+        if meaning_offer:
+            rows_extra["meaningOffer"] = True
         base: dict[str, Any] = {"role": "assistant", "turnId": turn_id, "savedBy": "daemon"}
         partial = acc.strip()
         if status == "done":

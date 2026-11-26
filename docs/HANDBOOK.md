@@ -2150,6 +2150,46 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Search by meaning, offered with what it costs here (v1.583.0)
+
+**Search by meaning** finds notes, files and memories by what they are
+about, not only by their words: "the angry email about shipping" finds the
+message that says "customer furious, parcel late". It needs a **search
+model**, and Iron Jarvis now uses one you already have, on this PC or on
+your own network, once you say yes. Until then: **Search by meaning: off.
+It matches words for now.**
+
+- **Offered once, with its cost.** When a search model is already on this
+  PC (Ollama's `nomic-embed-text`, say) or on a model server on your
+  network, Improvements shows one suggestion, and the first time a "by
+  meaning" search in a chat matched only words, one card sits under that
+  reply. Both say which model and what it costs here, measured on this PC:
+  "Uses about 300 MB of memory while it works. Already on your disk." A
+  server that does not report its memory reads "Not measured" instead of a
+  guess.
+- **Turn it on, Not now, Use another model.** Turn it on takes effect at
+  once, with no restart. Not now is final: it is not offered again.
+  Use another model lists every search model found, each with its cost.
+- **One row, everywhere else.** Settings › Memory & you › **Search by
+  meaning** and the File Search page show the same plain row: how it stands
+  ("Search by meaning: on, with nomic-embed-text on this PC."), **Choose a
+  search model** (or **Use another model**) and **Turn off**. Every change
+  is in Settings' list of changes, with Undo. In chat, "turn on search by
+  meaning" asks on a card that shows the same cost line; turning it off
+  needs no card.
+- **Never off your network.** A model server outside this PC and your own
+  network is never listed, and a Local only chat never sends text to one.
+  The text it searches stays where it is.
+- **Nothing found?** The card and the row say so and point to **Get a
+  model** (the model library on Model servers) and **Use a model server you
+  run**; `ollama pull nomic-embed-text` in a terminal is the last resort.
+- **What you remembered before keeps working.** Memories written while it
+  matched words are found by their words until Iron Jarvis has read them
+  again with the new search model, 200 at a time in the background, never
+  while a reply is being written.
+- **Already set up?** If Ollama's search model was already working for you
+  before this version, it stays on as it was.
+
 ## "When another task fails", and everything that runs by itself in one place (v1.585.0)
 
 Say it once in chat, such as "if the nightly report fails, tell me why and

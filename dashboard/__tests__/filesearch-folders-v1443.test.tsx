@@ -42,6 +42,13 @@ vi.mock("@/lib/api", () => {
     ApiError,
     get: (path: string) => {
       H.gets.push(path);
+      // Next leaps 16-a: the plain row on this page reads search by meaning.
+      if (path.startsWith("/memory/meaning")) {
+        return Promise.resolve({
+          state: "off", value: null, on: false, words: "Search by meaning: off. It matches words for now.",
+          offer: true, best: null, candidates: [], looking: false, none_found: "", terminal_line: "",
+        });
+      }
       return Promise.resolve({ results: [] });
     },
     put: (path: string, body?: unknown) => {
@@ -204,15 +211,23 @@ describe("File Search says which of YOUR folders it looks in", () => {
 });
 
 describe("'By meaning' says what it looks in and what it needs", () => {
-  it("names the added folders only, and the local embedding model it needs", () => {
+  it("names the added folders only; the plain row says how search by meaning stands (16-a)", async () => {
     setup({ search_roots: ["D:\\Scans"], chat_files_root: "" });
     expect(screen.queryByTestId("filesearch-meaning-note")).toBeNull(); // content mode: no note
     fireEvent.click(screen.getByRole("button", { name: "By meaning" }));
     expect(searching()).toHaveTextContent("your added folders (Scans)");
     const note = screen.getByTestId("filesearch-meaning-note");
-    expect(note).toHaveTextContent(/needs a local embedding model/);
-    expect(note).toHaveTextContent(/ollama pull nomic-embed-text/);
-    expect(note).toHaveTextContent(/Settings › Connections/);
+    expect(note).toHaveTextContent(/looks only in the folders you add/);
+    // Next leaps 16-a: the terminal line and the restart are gone from this
+    // note; the plain row below says how search by meaning stands.
+    expect(note).not.toHaveTextContent(/ollama pull|restart|embedding/);
+    await waitFor(() =>
+      expect(screen.getByTestId("meaning-row-words")).toHaveTextContent("Search by meaning: off. It matches words for now."),
+    );
+    // A plain settings row, never a second offer on this page.
+    expect(screen.queryByTestId("meaning-offer")).toBeNull();
+    expect(screen.queryByText("Turn it on")).toBeNull();
+    expect(screen.getByTestId("meaning-choose")).toHaveTextContent("Choose a search model");
   });
 
   it("with no added folder, an empty answer says why instead of 'No matches.'", async () => {

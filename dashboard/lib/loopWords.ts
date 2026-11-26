@@ -153,6 +153,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Some results of changes you accepted aren't being counted",
     href: "/improvements",
   },
+  // Next leaps 16-a: search by meaning's paced pass (looks for search models
+  // while the offer is unanswered; reads memory again with a new one).
+  meaning_search: {
+    label: "Search by meaning",
+    problem: "Search by meaning isn't reading your memory again with its search model",
+    href: "/settings?focus=meaning_search",
+  },
   // v1.499.0: the pass that notices names in your folder names that may be clients.
   work_clients: {
     label: "Clients in your folders",

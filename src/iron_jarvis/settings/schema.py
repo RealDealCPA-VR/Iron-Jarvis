@@ -1051,6 +1051,23 @@ SETTINGS: tuple[SettingDef, ...] = (
       aliases=("from memory", "what did you remember", "memory pop-up", "what memory was used"),
       options=(("auto", "Show briefly after a reply (default)"), ("press", "Only when I press")),
       ),
+    # Next leaps 16-a (master plan R2.11, idea 16): the search model that
+    # finds things by meaning. Its value lives in memory/meaning.py (the one
+    # state holder): not set = never answered (offered once on Improvements
+    # and under one reply), empty = off, else "<kind>:<model> @ <address>".
+    # Its ONE control on this page is its own section (CONTROLLED_IN_SECTION,
+    # the plain row with the models found and what each costs here); it has
+    # its own routes (/memory/meaning/*), so the generic PUT /settings skips
+    # it, and every change goes through the writer (Undo).
+    S("meaning_search", "Search by meaning", "memory", "string",
+      "Finds notes, files and memories by what they are about, not only by their words, with a "
+      "search model on this PC or your own network (never one outside it). Before you choose one, "
+      "Iron Jarvis measures what it costs here: the memory it uses while it works and the disk it "
+      "takes. Turning it on, off or to another search model takes effect at once. Off: searches "
+      "match words. Not set: Iron Jarvis offers it once.",
+      tier="ask", unset_ok=True, put=False,
+      aliases=("search by meaning", "meaning search", "search model", "find things by meaning",
+               "find files by meaning")),
     # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.
     # Its own control in Settings › Memory & you (CONTROLLED_IN_SECTION); a
     # project may choose its own (Project.brain_profile). Choosing where

@@ -2404,6 +2404,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
             )
         )
 
+        # SEARCH BY MEANING (next leaps 16-a, build-out plan R2.11): one look
+        # 120 s after start, then paced (30 s while rows still wait to be read
+        # again with the chosen search model, 200 a pass; else up to an hour,
+        # woken sooner by a switch), paused while a chat reply is written, off
+        # the loop. Never answered: it looks for search models (and measures
+        # the first) at most once a day, so the offer can wait on Improvements.
+        # Each pass reports on loop_health["meaning_search"].
+        from ..memory.meaning import meaning_loop as _meaning_loop
+
+        bg_tasks["meaning_search"] = asyncio.create_task(
+            _meaning_loop(_app.state.d, lambda ok, exc: _tick("meaning_search", ok, exc))
+        )
+
         # CLIENTS IN YOUR FOLDERS (v1.499.0, vision plan leap 3, Phase 3):
         # names in the work record's own folder names that look like clients
         # wait for ONE answer each (workmap/clients/detect). No model call, no
@@ -4526,6 +4539,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # and a literal path registered after a same-prefix catch-all is exactly the
     # shape that once swallowed /skills/learning. Pinned by a test.
     _routes.memory_review.register(app, d)
+    # Next leaps 16-a: search by meaning (/memory/meaning/*), for the same
+    # reason BEFORE learning's catch-all.
+    from .routes import meaning as _meaning_routes
+
+    _meaning_routes.register(app, d)
     _routes.profile.register(app, d)
     _routes.learning.register(app, d)
     _routes.computeruse.register(app, d)

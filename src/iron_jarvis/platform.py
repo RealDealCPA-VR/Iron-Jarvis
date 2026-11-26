@@ -96,7 +96,7 @@ from .ltm import (
     ltm_tools,
 )
 from .ltm import sources as _ltm_sources  # noqa: F401  (registers LTMSourceRecord)
-from .memory.embeddings import build_embedder
+from .memory.embeddings import build_embedder  # noqa: F401  (registers EmbeddingRecord; 16-a builds through memory/meaning)
 from .memory.fabric import MemoryFabric
 from .memory.recall import recall_tools
 from .search import SearchIndex
@@ -1198,7 +1198,12 @@ def build_platform(
     # against the SAME vectors: a real local model (Ollama) when reachable, else
     # the deterministic offline MockEmbedder, wrapped in the persistent embedding
     # cache (engine) so re-indexing is incremental and survives restarts (§22).
-    embedder = build_embedder(config, engine)
+    # Next leaps 16-a: built once as a SWITCHABLE embedder over the search
+    # model the owner chose (memory/meaning.py), so turning search by meaning
+    # on, off or to another model takes effect for every consumer at once.
+    from .memory.meaning import boot_embedder
+
+    embedder = boot_embedder(config, engine)
 
     # Phase 5: layered memory + retrieval, exposed as tools. Pass the shared
     # embedder so working-memory semantic search uses real vectors too.

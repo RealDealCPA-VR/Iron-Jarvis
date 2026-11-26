@@ -227,9 +227,25 @@ def _clients_routes(desk) -> bool:
     return any(str(getattr(r, "path", "")).startswith("/clients/") for r in desk.app.routes)
 
 
+def seed_meaning(desk) -> str:
+    """16-a: a search model the meaning loop already found and measured on
+    this PC (its own state file, as ``memory/meaning.look`` writes it)."""
+    from iron_jarvis.memory import meaning
+
+    where = "http://127.0.0.1:11434"
+    choice = meaning.choice_id(meaning.KIND_OLLAMA, "nomic-embed-text", where)
+    meaning.update(desk.platform.config.home, found=[{
+        "choice": choice, "kind": meaning.KIND_OLLAMA, "model": "nomic-embed-text", "where": where,
+        "server": "Ollama on this PC", "this_pc": True, "size_bytes": 274_000_000,
+    }], costs={choice: {"works": True, "memory_bytes": 300 * 1024 * 1024, "memory_measured": True,
+                        "disk_added_bytes": 0, "unloads": True}}, found_at="2026-11-26T10:00:00+00:00")
+    return choice
+
+
 def seed_everything(desk):
     return {
-        "preference": seed_preference(desk), "client": seed_client(desk), "skill": seed_skill(desk),
+        "preference": seed_preference(desk), "client": seed_client(desk), "meaning_search": seed_meaning(desk),
+        "skill": seed_skill(desk),
         "coach": seed_coach(desk),
         "habit": seed_habit(desk), "lesson": seed_lesson(desk), "session_edit": seed_session_edit(desk),
         "memory": seed_memory(desk), "tool": seed_tool(desk), "wants": seed_wants(desk),
@@ -415,6 +431,7 @@ def test_every_home_link_is_the_screen_the_suggestion_lives_on(desk):
     assert {k: (i["home"] or {}).get("href") for k, i in by.items()} == {
         "preference": "/memory#prefs-suggested",
         "client": "/clients#waiting",
+        "meaning_search": "/settings?focus=meaning_search",
         "skill": "/skills",
         "coach": "/agents?view=team&agent=custom%3Atax-reader",
         "habit": "/agents?view=team&agent=custom%3Aglm-worker",
