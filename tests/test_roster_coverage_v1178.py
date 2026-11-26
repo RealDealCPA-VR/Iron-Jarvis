@@ -269,6 +269,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # check of a session (read only); chat arms them
     # (records_build.build_tools_for); pinned by tests/test_records_build_checks_v1.py.
     "build_checks_set", "coding_reply_check",
+    # The intelligence plan, release 6: "why is this chat getting full?" reads
+    # the record of the chat it is ASKED IN, so it is chat's: chat arms it by
+    # its words (tools.autoselect) and the lookup finds it. An agent run has
+    # no chat to be full. Pinned by tests/test_intel_06_chat_fullness_tool.py.
+    "chat_fullness",
     # Next leaps 12-a: coding work from the phone — the card goes to the
     # sender the phone door proved, so only the phone's own chat turn arms it
     # (records_build.build_tools_for, phone_code.door_open); an agent run has

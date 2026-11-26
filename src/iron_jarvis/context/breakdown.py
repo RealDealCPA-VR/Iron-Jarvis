@@ -210,6 +210,222 @@ def harness_breakdown(
 
 
 # --------------------------------------------------------------------------- #
+# What a reply was sent, as its own record keeps it (the intelligence plan,
+# release 6): a plain chat's "What is filling this chat"
+# --------------------------------------------------------------------------- #
+
+#: The record's shape version (a reader skips a record it does not know).
+RECORD_VERSION = 1
+#: The parts a record may hold, in the order a list shows them.
+RECORD_PARTS: tuple[str, ...] = (
+    "messages", "attachments", "memory", "project", "rules", "skills", "summary", "system",
+)
+#: A PLAIN CHAT's words for the same parts (VOCABULARY.md: no "tokens", no
+#: "context", no "prompt"). A coding session keeps :data:`HARNESS_LABELS`.
+CHAT_LABELS: dict[str, str] = {
+    "messages": "Your messages and the replies",
+    "attachments": "Files you attached",
+    "memory": "What Iron Jarvis remembered",
+    "project": "Your project and folder",
+    "rules": "Instruction files",
+    "skills": "Skills",
+    "summary": "Summary of earlier messages",
+    "system": "Iron Jarvis's own instructions",
+}
+CHAT_FREE_LABEL = "Room left"
+CHAT_TOOLS_LABEL = "Tools it was given"
+#: The fold under it: Iron Jarvis's own tools, and each extension by name.
+CHAT_TOOL_ORIGINS_LABEL = "Where they came from"
+CHAT_BUILTIN_TOOLS = "Iron Jarvis's own tools"
+#: The most extensions one record names (the rest are summed under one name).
+MAX_ORIGINS = 24
+OTHER_EXTENSIONS = "other extensions"
+
+
+def tool_origins(specs: Iterable[Any], ratio: "float | None" = None) -> "dict[str, Any] | None":
+    """Where one model call's tool definitions came from, by SIZE and COUNT:
+    ``{"builtin": [count, tokens], "extensions": {name: [count, tokens]}}``.
+    Extension NAMES only (the ``mcp__<name>__`` part of a tool's name): never
+    a definition's text. Each size is an ESTIMATE of that definition as sorted
+    JSON. None for no tools; never raises."""
+    try:
+        builtin = [0, 0]
+        ext: dict[str, list[int]] = {}
+        seen = False
+        for spec in specs or ():
+            if not isinstance(spec, dict):
+                continue
+            fn = spec.get("function")
+            name = str(spec.get("name") or (fn.get("name") if isinstance(fn, dict) else "") or "")
+            try:
+                n = estimate_tokens(json.dumps(spec, ensure_ascii=False, sort_keys=True, default=str), ratio)
+            except (TypeError, ValueError):
+                continue
+            seen = True
+            server = _server_of(name)
+            row = ext.setdefault(server[:120], [0, 0]) if server else builtin
+            row[0] += 1
+            row[1] += n
+        if not seen:
+            return None
+        if len(ext) > MAX_ORIGINS:
+            ranked = sorted(ext.items(), key=lambda kv: -kv[1][1])
+            rest = [sum(v[0] for _, v in ranked[MAX_ORIGINS:]), sum(v[1] for _, v in ranked[MAX_ORIGINS:])]
+            ext = dict(ranked[:MAX_ORIGINS])
+            ext[OTHER_EXTENSIONS] = rest
+        return {"builtin": builtin, "extensions": ext}
+    except Exception:  # noqa: BLE001 — a record never breaks a reply
+        return None
+
+
+def sent_record(
+    *,
+    system: str,
+    messages: Iterable[Any],
+    window: int,
+    pieces: dict[str, Iterable[str]],
+    window_known: bool = True,
+    percent: Any = None,
+    left_out: Any = None,
+) -> "dict[str, Any] | None":
+    """THE RECORD of what one reply (or one agent run) was sent when it began:
+    the size of each part, the room the model has, and how full that is.
+    Counted exactly the way :func:`harness_breakdown` counts a coding
+    session's (the same strings, the same estimator), so the parts add up to
+    the fullness the chat's meter shows.
+
+    Numbers only. A part that holds nothing, or was not handed in, is ABSENT
+    (never 0). ``window`` 0 (nothing knows the room) keeps the sizes and no
+    share. ``left_out``: earlier messages the PLANNER did not send so the
+    reply fits (the context report's ``dropped``; the fit made for each
+    model call, ``chat_turn._fit_turn_transcript``, may leave out more, so
+    read it as "at least"). When it is above 0 the "messages" size is what
+    the chat holds, not what was sent. None when nothing could be measured;
+    never raises."""
+    try:
+        b = harness_breakdown(
+            system=system, messages=messages, window=max(1, int(window or 0)),
+            pieces=pieces, auto_at=1.0, enabled=False,
+        )
+        if not b:
+            return None
+        parts = {
+            p["key"]: int(p["tokens"]) for p in b["parts"]
+            if p.get("kind") == "used" and p.get("key") in RECORD_PARTS and int(p.get("tokens") or 0) > 0
+        }
+        if not parts:
+            return None
+        out: dict[str, Any] = {"v": RECORD_VERSION, "parts": parts, "used": int(b["used"])}
+        win = int(window or 0)
+        if win > 0:
+            out["window"] = win
+            out["window_known"] = bool(window_known)
+            pct = _int(percent)
+            out["percent"] = pct if pct is not None else int(round(100 * b["used"] / win))
+        n = _int(left_out)
+        if n:
+            out["left_out"] = n
+        return out
+    except Exception:  # noqa: BLE001 — a record never breaks a reply
+        return None
+
+
+def decode_record(raw: Any) -> "dict[str, Any] | None":
+    """A saved record (the row's ``parts_json``, text or dict) as a clean
+    dict, or None: an older row, a version this code does not know, junk."""
+    try:
+        r = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+        if not isinstance(r, dict) or r.get("v") != RECORD_VERSION:
+            return None
+        parts_in = r.get("parts") if isinstance(r.get("parts"), dict) else {}
+        parts = {k: n for k in RECORD_PARTS if (n := _int(parts_in.get(k)))}
+        out: dict[str, Any] = {"v": RECORD_VERSION, "parts": parts, "used": _int(r.get("used")) or sum(parts.values())}
+        if _int(r.get("window")):
+            out["window"] = _int(r.get("window"))
+            out["window_known"] = r.get("window_known") is not False
+            if _int(r.get("percent")) is not None:
+                out["percent"] = _int(r.get("percent"))
+        if _int(r.get("left_out")):
+            out["left_out"] = _int(r.get("left_out"))
+        if r.get("kind") == "code":
+            out["kind"] = "code"
+        tools = r.get("tools")
+        if isinstance(tools, dict):
+            t: dict[str, Any] = {}
+            b = tools.get("builtin")
+            if isinstance(b, list) and len(b) == 2 and _int(b[0]) is not None and _int(b[1]) is not None:
+                t["builtin"] = [_int(b[0]), _int(b[1])]
+            ext = {}
+            for name, row in (tools.get("extensions") or {}).items() if isinstance(tools.get("extensions"), dict) else ():
+                if isinstance(row, list) and len(row) == 2 and _int(row[0]) is not None and _int(row[1]) is not None:
+                    ext[_clip(name, 120)] = [_int(row[0]), _int(row[1])]
+            if ext:
+                t["extensions"] = ext
+            if t:
+                out["tools"] = t
+        if _int(r.get("cache_input")) is not None:
+            out["cache_input"] = _int(r.get("cache_input"))
+        sent = r.get("sent")
+        if isinstance(sent, dict):
+            s = {k: n for k in ("system", "messages", "tools", "steps") if (n := _int(sent.get(k))) is not None}
+            if s:
+                out["sent"] = s
+        return out if (parts or out.get("tools") or out.get("sent")) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def chat_reading(record: Any, tool_names: Iterable[Any] = ()) -> "dict[str, Any] | None":
+    """A saved record in the Context drop-down's own shape (the module
+    docstring's), with a PLAIN CHAT's words: the list behind the fullness
+    meter, "What is filling this chat". ``tool_names`` are the reply's tool
+    names (the row's ``tools_sent_json``). The tools are listed apart, as in
+    a coding session: they are sent with each message and are not part of
+    the percent. None when the record names no room (no share can be said)."""
+    try:
+        r = decode_record(record)
+        if not r or not r.get("window"):
+            return None
+        window, used = int(r["window"]), int(r["used"])
+        parts = [
+            {"key": k, "label": CHAT_LABELS[k], "tokens": r["parts"][k], "kind": "used"}
+            for k in RECORD_PARTS if r["parts"].get(k)
+        ]
+        parts.append({"key": "free", "label": CHAT_FREE_LABEL, "tokens": max(0, window - used), "kind": "free"})
+        out: dict[str, Any] = {
+            "source": "app", "used": used, "window": window,
+            "percent": r["percent"] if r.get("percent") is not None else _pct(used, window),
+            "parts": parts,
+        }
+        tools = r.get("tools") or {}
+        builtin = tools.get("builtin") or [0, 0]
+        ext = tools.get("extensions") or {}
+        total = int(builtin[1]) + sum(int(v[1]) for v in ext.values())
+        count = int(builtin[0]) + sum(int(v[0]) for v in ext.values())
+        if total and count:
+            out["extra"] = [{"key": "tools", "label": CHAT_TOOLS_LABEL, "tokens": total}]
+            items: list[dict[str, Any]] = []
+            names = [str(n) for n in tool_names or () if isinstance(n, str) and n]
+            own = [n for n in names if not _server_of(n)]
+            if builtin[0]:
+                items.append({
+                    "name": CHAT_BUILTIN_TOOLS,
+                    "detail": f"{builtin[0]} tool{'' if builtin[0] == 1 else 's'}",
+                    "tokens": int(builtin[1]),
+                })
+            for s, (c, t) in sorted(ext.items(), key=lambda kv: -kv[1][1])[:MAX_ITEMS]:
+                items.append({"name": s[:120], "detail": f"{c} tool{'' if c == 1 else 's'}", "tokens": int(t)})
+            # ``count`` is the rows of the fold (a list's count above its
+            # items reads "and N more"); how many tools is in each row.
+            out["lists"] = [{"key": "tools", "label": CHAT_TOOL_ORIGINS_LABEL, "count": len(items), "items": items}]
+            if own:
+                out["tool_names"] = own[:MAX_ITEMS]
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# --------------------------------------------------------------------------- #
 # Claude Code's own /context (get_context_usage)
 # --------------------------------------------------------------------------- #
 

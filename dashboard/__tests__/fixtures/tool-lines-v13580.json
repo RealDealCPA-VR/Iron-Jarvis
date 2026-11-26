@@ -212,6 +212,10 @@
       "ok": "switched a messaging channel's listening",
       "failed": "tried a channel switch and it failed"
     },
+    "chat_fullness": {
+      "ok": "looked up what is filling this chat",
+      "failed": "tried a fullness lookup and it failed"
+    },
     "chat_local_only": {
       "ok": "changed Local only for this chat",
       "failed": "tried a Local only change and it failed"

@@ -222,6 +222,9 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # Jarvis's own record of which work was done in which folder, behind
         # the turn's client wall. Same tier as history_search.
         "work_history",
+        # What is filling this chat (the intelligence plan, release 6):
+        # READ-ONLY, the calling chat's own record of sizes, no argument.
+        "chat_fullness",
         # Saved workflows (v1.170.0): READ-ONLY discovery — name/description/
         # step count/project pin of what the user already saved. Deliberately
         # NOT workflow_run: starting a run spawns multi-minute agent work with
@@ -2804,6 +2807,27 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"work_history": 8},
+    ),
+    # --- what is FILLING this chat (the intelligence plan, release 6) -------
+    # "why is this chat getting full?", "what is filling this chat?", "what is
+    # using up this conversation?", "how full is this chat?", "how much room
+    # is left in this chat?": a question about the chat's own size, which
+    # `chat_fullness` reads from Iron Jarvis's record. Narrow on purpose: the
+    # subject is this chat / conversation / thread ("my disk is getting full",
+    # "the inbox is full" and "fill in this form" arm nothing here).
+    (
+        re.compile(
+            r"\b(?:why|how\s+come)\s+(?:is|has)\s+(?:this|the|my)\s+(?:chat|conversation|thread)\s+"
+            r"(?:getting|gotten|got|become|becoming|so|already|almost|nearly|this)?\s*(?:so\s+)?(?:full|long|big|large)\b"
+            r"|\bwhat(?:'s|\s+is|\s+has\s+been)\s+(?:filling|using\s+up|taking\s+up|eating\s+up)\s+"
+            r"(?:(?:all\s+)?(?:the\s+)?(?:room|space)\s+in\s+)?(?:this|the|my)\s+(?:chat|conversation|thread)\b"
+            r"|\bhow\s+full\s+is\s+(?:this|the|my)\s+(?:chat|conversation|thread)\b"
+            r"|\bhow\s+much\s+(?:room|space)\s+is\s+(?:left|free|used)\s+in\s+(?:this|the|my)\s+"
+            r"(?:chat|conversation|thread)\b"
+            r"|\bwhat\s+is\s+(?:this|the|my)\s+(?:chat|conversation|thread)\s+(?:full|filled\s+up)\s+(?:of|with)\b",
+            re.IGNORECASE,
+        ),
+        {"chat_fullness": 8},
     ),
     # --- saved workflows (v1.170.0) ---------------------------------------
     # "run my month-end workflow", "what workflows do I have" — the module is

@@ -55,8 +55,10 @@ from ..tools.permissions import SAFE_HEADLESS_TOOLS, asks_each_use, runs_unasked
 from ..tools.rehearsal import holds as _rehearsal_holds
 from ..tools.rehearsal import rehearsal_of as _rehearsal_of
 from ..tools.reversible import call_reversible_flag
+from ..eval import reply_facts as _reply_facts
 from . import chat_delivery as _chat_delivery
 from . import decompose as _decompose
+from . import run_facts as _run_facts
 from . import transcript as _transcript
 from .types import AgentDefinition
 
@@ -2683,6 +2685,9 @@ class AgentRuntime:
         run.state = state
         if state in _TERMINAL:
             run.finished_at = utcnow()
+            # Release 6: the run's own facts, whole (``run_facts.settle``),
+            # written by the save below.
+            _run_facts.settle(run, _reply_facts.current())
         await asyncio.to_thread(self._save, run)  # v1.226.0: SQLite write off the loop
         await self.p.event_bus.publish(
             EventType.AGENT_STATE_CHANGED,
@@ -2816,9 +2821,15 @@ class AgentRuntime:
             # (its row is saved after each step), so a tool that started it
             # (``delegate``) does not count them again (``eval.call_ledger``).
             from ..eval import call_ledger as _call_ledger
+            # WHAT THE RUN USED (the intelligence plan, release 6): the run's
+            # own facts (``eval.reply_facts``), opened INSIDE the counted
+            # scope so the router's seam times this run's own model calls and
+            # never a tool's; the facts of whatever started the run are back
+            # when it ends.
 
             try:
-                with _client_wall.turn_scope(_turn_wall), _call_ledger.counted_scope():
+                with _client_wall.turn_scope(_turn_wall), _call_ledger.counted_scope(), \
+                        _reply_facts.scope():
                     if not _lo:
                         return await self._run_body(session, agent_def, parent_id)
                     with _egress.local_only_scope(True):
@@ -3314,6 +3325,12 @@ class AgentRuntime:
                 ]
 
         system_prompt = agent_def.system_prompt
+        # Release 6 of the intelligence plan: the parts of this prompt are
+        # NAMED as they are appended below (``run_facts.PromptParts``), so the
+        # run's row can say how big each was. It only looks: every
+        # ``_sent_parts`` line below can be deleted without changing a byte
+        # of what the model is sent.
+        _sent_parts = _run_facts.PromptParts(system_prompt)
         # THE RUN OPTIONS (v1.299.0, the schedule knobs): ``skip_memory`` gates
         # the three MEMORY injections below (lessons, the memory index, the
         # fabric grounding) — profile, voice, skills and the project spine
@@ -3407,6 +3424,7 @@ class AgentRuntime:
                 )
             except Exception:  # noqa: BLE001 — a skill must never break a run
                 pass
+        _sent_parts.claim("skills", system_prompt)
         # THE NOTEBOOK (v1.297.0): a custom agent's own NOTES.md, head+tail
         # trimmed to NOTEBOOK_INJECT_CHARS by `AgentFiles.notebook_block`.
         # A small file read, but a read: off the loop like the budget read.
@@ -3432,6 +3450,7 @@ class AgentRuntime:
             )
             if habits:
                 system_prompt += "\n\n" + habits
+        _sent_parts.claim("memory", system_prompt)
         reports_to = " ".join(str(getattr(agent_def, "reports_to", "") or "").split())
         if reports_to:
             system_prompt += (
@@ -3469,6 +3488,7 @@ class AgentRuntime:
         # that changes between steps defeats prompt caching.
         if self._effective_trust(session) == TRUST_LOW:
             system_prompt += "\n\n" + LOW_TRUST_PROMPT
+        _sent_parts.skip(system_prompt)  # the lines above are instructions
         # Self-correction: fold accumulated lessons + user preferences into the
         # system prompt so every run is a little smarter than the last.
         learning = getattr(self.p, "learning", None)
@@ -3482,6 +3502,7 @@ class AgentRuntime:
                 )
             except Exception:  # never block a run on the learning layer
                 pass
+        _sent_parts.claim("memory", system_prompt)
         # THE CLIENT BLOCK (v1.499.0, vision plan leap 3, Phase 3): a run in a
         # confirmed client's folder is told what the owner keeps for that
         # client ("Use cash basis"), right after the owner's own preferences,
@@ -3590,6 +3611,9 @@ class AgentRuntime:
                 system_prompt += "\n\n" + _mem_index
         except Exception:  # noqa: BLE001 — awareness must never break a run
             pass
+        # Release 6: the client block, earlier work, the profile and voice,
+        # the brain's block and the memory index, all told above.
+        _sent_parts.claim("memory", system_prompt)
         # CAPABILITY ROSTER (v1.139.0): ONLY the agent types that make
         # delegation choices see the roster — the supervisor picks `delegate`
         # targets, the planner assigns work to agents; a builder/reviewer run
@@ -3633,6 +3657,7 @@ class AgentRuntime:
                     system_prompt += "\n\n" + _team
             except Exception:  # noqa: BLE001 — presence must never break a run
                 pass
+        _sent_parts.skip(system_prompt)  # the roster and the team: instructions
         # CONTEXT SPINE: a session tagged into a project carries the project's
         # brief + recent activity, so chat/terminals/workflows share one thread
         # of "what the user is working on". Bounded; never blocks a run.
@@ -3642,6 +3667,7 @@ class AgentRuntime:
                 system_prompt += await asyncio.to_thread(self._project_context, session)
             except Exception:  # noqa: BLE001 — the spine must never break a run
                 pass
+        _sent_parts.claim("project", system_prompt)
         # FOLDER RULES (v1.299.0, the schedule's ``workspace_root`` knob): the
         # working folder's AGENTS.md / .ironjarvis.md (first found) rides the
         # prompt right after the project context, SCANNED (promptguard, source
@@ -3663,6 +3689,7 @@ class AgentRuntime:
                     system_prompt += "\n\n" + _rules
             except Exception:  # noqa: BLE001 — the rules must never break a run
                 pass
+        _sent_parts.claim("rules", system_prompt)
         # THE GUIDE'S BASE KNOWLEDGE (v1.224.0): a Guide session starts knowing
         # what the app is and how this install is set up (guide/corpus
         # base_knowledge — the Handbook's overview + live version facts), and
@@ -3720,6 +3747,9 @@ class AgentRuntime:
                 )
         except Exception:  # noqa: BLE001
             pass
+        # Release 6: the folder's rules file, then the guide's base and the
+        # environment lines (instructions).
+        _sent_parts.skip(system_prompt)
         # MEMORY FABRIC: fold in the most relevant snippets from every store
         # (files, notes, memory graph, this project's knowledge, lessons, past
         # sessions) so the run starts already grounded in what the user knows —
@@ -3738,6 +3768,10 @@ class AgentRuntime:
                     system_prompt += grounding
             except Exception:  # noqa: BLE001 — grounding must never break a run
                 pass
+        _sent_parts.claim("memory", system_prompt)
+        # The named parts go with the run (memory only; measured on its first
+        # step, ``run_facts.note_step``).
+        _run_facts.note_prompt(_reply_facts.current(), _sent_parts, run)
 
         # v1.132.0 SHORT-HORIZON DECOMPOSITION: a local model served through the
         # prompted-tools scaffold loses the thread over a long flat loop, so a
@@ -4345,6 +4379,7 @@ class AgentRuntime:
                 usage = getattr(getattr(route, "response", None), "usage", None) or {}
                 run.input_tokens += int(usage.get("input_tokens", 0) or 0)
                 run.output_tokens += int(usage.get("output_tokens", 0) or 0)
+                _run_facts.note_call(run, usage)  # release 6: its cache counts
                 add_step_cost(
                     run, session, str(getattr(route, "provider", "") or judge.provider),
                     str(getattr(route, "model", "") or judge.model), usage,
@@ -5284,6 +5319,10 @@ class AgentRuntime:
             # keeps appending to the real `messages` list, so the run's own
             # history (and the DB transcript) is never rewritten by trimming.
             step_messages, step_system = messages, system_prompt
+            # Release 6: the room and the measured ratio this step planned
+            # with (None when the planning below could not say).
+            _step_window: "int | None" = None
+            _step_ratio: "float | None" = None
             # v1.421.0: the one sentence this step ends the run with when its
             # model's KNOWN window cannot hold what the step must send.
             _too_small = ""
@@ -5308,6 +5347,7 @@ class AgentRuntime:
                     session.provider,
                     session.model,
                 )
+                _step_window, _step_ratio = _win, _cpt  # release 6 (read only)
                 # COMPACTION (v1.153.0) runs BEFORE the budget planner: a summary
                 # it produces joins the system prompt and shortens the history,
                 # both of which the planner then has to price. Everything below
@@ -5427,6 +5467,9 @@ class AgentRuntime:
             # accounting, the tool loop, the persisted result) stays byte-identical.
             route_resp = None
             streamed_chars = 0
+            # Release 6: this run's facts, and the model time before this step.
+            _facts = _reply_facts.current()
+            _ms_before = float(getattr(_facts, "model_ms", 0.0) or 0.0)
             stream = self._route_stream(
                 provider=session.provider,
                 model=session.model,
@@ -5440,6 +5483,8 @@ class AgentRuntime:
             async for ev in stream:
                 if ev.get("type") == "text":
                     streamed_chars += len(ev.get("text") or "")
+                    if _facts is not None and ev.get("text"):
+                        _facts.first_word()  # release 6: kept once per run
                     if sink:
                         sink.token_delta(ev["text"])
                     if streamed_chars > _MAX_STEP_STREAM_CHARS:
@@ -5480,6 +5525,16 @@ class AgentRuntime:
             # (whose finalizers merge this object) still counts toward the
             # agent's dollar allowance.
             step_usd = add_step_cost(run, session, run.provider, run.model, usage)
+            # WHAT THIS STEP USED (the intelligence plan, release 6): the
+            # provider's cache counts, the tools sent (names on the row, a
+            # count here), estimated sizes and the model's time, added to the
+            # run's own columns BEFORE the save below (no extra write) and
+            # said on the step's event. Sizes and names only.
+            _step_used = _run_facts.note_step(
+                run, _facts, usage=usage, tool_specs=tool_specs, system=step_system,
+                messages=step_messages, window=_step_window, ratio=_step_ratio,
+                model_ms_before=_ms_before,
+            )
             # Persist the step count BEFORE the tools run (v1.174.0). It used to
             # be saved only at the END of a step, so for the whole of step N the
             # stored record still said N-1 — and anything reading the ledger
@@ -5506,6 +5561,8 @@ class AgentRuntime:
                         "cost_usd": step_usd,
                         **step_cost_flag(run.provider, run.model),
                         "task_class": agent_def.type.value,
+                        # Release 6: numbers only (``run_facts.note_step``).
+                        **_step_used,
                     },
                     session_id=session.id,
                 )

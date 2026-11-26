@@ -183,7 +183,11 @@ def tool_scope(name: str, ctx: Any) -> Iterator[None]:
     scope: "_ToolUse | _Counted | None"
     try:
         if str(name or "").startswith("mcp__"):
-            scope = _COUNTED
+            # Its OWN counted scope (the intelligence plan, release 6): a
+            # reply's facts (``eval.reply_facts``) tell their own model
+            # calls from a tool's by the scope a call is made in, so an
+            # app's tool inside an agent run is never the run's own scope.
+            scope = _Counted()
         else:
             from ..core.ids import new_id, utcnow
 

@@ -31,6 +31,7 @@ import {
   settingFor,
   partPercent,
   swatchClass,
+  aboutShare,
   untilSummaryWords,
   usedOfWindow,
   type ContextList,
@@ -80,6 +81,7 @@ export function ContextBreakdown({
   autoCompactControl,
   compact,
   compactAbsent,
+  plain,
   children,
 }: {
   /** Test-id prefix ("session-rail" | "code-session"). */
@@ -99,6 +101,12 @@ export function ContextBreakdown({
   compact?: CompactPress | null;
   /** Why there is no Compact here (said instead of the button). */
   compactAbsent?: string;
+  /** A PLAIN CHAT's list (the intelligence plan, release 6): its own title
+   *  (no fold: it is opened by the chat's fullness meter), one sentence for
+   *  how full the chat is, and every size as a share of the chat's room
+   *  ("about 12%"), never a count. Absent: a coding session's drop-down,
+   *  exactly as it was. */
+  plain?: { title: string; headline: string };
   children?: ReactNode;
 }) {
   const [open, setOpen] = useState(true);
@@ -117,6 +125,11 @@ export function ContextBreakdown({
 
   return (
     <section data-testid={`session-rail-context`} data-prefix={prefix} className="space-y-1.5">
+      {plain ? (
+        <h3 data-testid={`${prefix}-title`} className="text-[13px] font-medium text-zinc-200">
+          {plain.title}
+        </h3>
+      ) : (
       <h3>
         <button
           type="button"
@@ -131,7 +144,8 @@ export function ContextBreakdown({
           {!open && reading ? <span className="font-normal text-zinc-500"> · {reading.percent}% used</span> : null}
         </button>
       </h3>
-      <div id={bodyId} hidden={!open} className="space-y-2">
+      )}
+      <div id={bodyId} hidden={plain ? false : !open} className="space-y-2">
         {children}
         {!reading ? (
           emptyWords ? (
@@ -141,6 +155,11 @@ export function ContextBreakdown({
           ) : null
         ) : (
           <>
+            {plain ? (
+              <p data-testid={`${prefix}-context-percent`} className={`text-[13px] ${hot ? "text-tone-warn" : "text-zinc-300"}`}>
+                {plain.headline}
+              </p>
+            ) : (
             <div className="flex items-baseline justify-between gap-2 text-[13px]">
               <span data-testid={`${prefix}-context-percent`} className={hot ? "text-tone-warn" : "text-zinc-200"}>
                 {reading.percent}% used
@@ -149,6 +168,7 @@ export function ContextBreakdown({
                 {hasParts ? usedOfWindow(reading) : `of ${formatTokens(reading.window)} tokens`}
               </span>
             </div>
+            )}
             {bars && hasParts ? (
               <div
                 data-testid={`${prefix}-context-stack`}
@@ -160,7 +180,7 @@ export function ContextBreakdown({
                   <div
                     key={p.key}
                     data-part={p.key}
-                    title={`${p.label}: ${formatTokens(p.tokens)}`}
+                    title={`${p.label}: ${plain ? aboutShare(p.tokens, reading.window) : formatTokens(p.tokens)}`}
                     className={`h-full ${swatchClass(p.key, p.kind)}`}
                     style={{ width: `${Math.max(0, Math.min(100, (p.tokens / reading.window) * 100))}%` }}
                   />
@@ -182,8 +202,14 @@ export function ContextBreakdown({
                   <li key={p.key} data-part={p.key} className="flex items-center gap-2 text-[12px]">
                     <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-sm ${swatchClass(p.key, p.kind)}`} />
                     <span className="min-w-0 flex-1 truncate text-zinc-300">{p.label}</span>
+                    {plain ? (
+                      <span className="shrink-0 text-right tabular-nums text-zinc-400">{aboutShare(p.tokens, reading.window)}</span>
+                    ) : (
+                      <>
                     <span className="tabular-nums text-zinc-400">{formatTokens(p.tokens)}</span>
                     <span className="w-12 text-right tabular-nums text-zinc-500">{partPercent(p.tokens, reading.window)}</span>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -201,15 +227,21 @@ export function ContextBreakdown({
                     <li key={e.key} className="flex items-center gap-2 text-[12px]">
                       <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-sm border border-white/20" />
                       <span className="min-w-0 flex-1 truncate text-zinc-400">{e.label}</span>
+                      {plain ? (
+                        <span className="shrink-0 text-right tabular-nums text-zinc-500">{aboutShare(e.tokens, reading.window)}</span>
+                      ) : (
+                        <>
                       <span className="tabular-nums text-zinc-500">{formatTokens(e.tokens)}</span>
                       <span className="w-12 text-right text-zinc-600">—</span>
+                        </>
+                      )}
                     </li>
                   ))}
                 </ul>
               </div>
             ) : null}
             {reading.lists.map((l) => (
-              <ListFold key={l.key} prefix={prefix} list={l} />
+              <ListFold key={l.key} prefix={prefix} list={l} shareOf={plain ? reading.window : 0} />
             ))}
             {note ? (
               <p data-testid={`${prefix}-context-note`} className={QUIET}>
@@ -334,7 +366,7 @@ export function AutoCompactChoice({ prefix, onSaved }: { prefix: string; onSaved
   );
 }
 
-function ListFold({ prefix, list }: { prefix: string; list: ContextList }) {
+function ListFold({ prefix, list, shareOf = 0 }: { prefix: string; list: ContextList; shareOf?: number }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   return (
@@ -355,7 +387,11 @@ function ListFold({ prefix, list }: { prefix: string; list: ContextList }) {
           <li key={`${it.name}-${i}`} className="flex items-center gap-2 text-[12px]" title={it.path || undefined}>
             <span className="min-w-0 flex-1 truncate text-zinc-300">{it.name}</span>
             {it.detail ? <span className="shrink-0 text-zinc-500">{it.detail}</span> : null}
-            {it.tokens !== null ? <span className="shrink-0 tabular-nums text-zinc-500">{formatTokens(it.tokens)}</span> : null}
+            {it.tokens !== null ? (
+              <span className="shrink-0 tabular-nums text-zinc-500">
+                {shareOf > 0 ? aboutShare(it.tokens, shareOf) : formatTokens(it.tokens)}
+              </span>
+            ) : null}
           </li>
         ))}
         {list.count > list.items.length ? (

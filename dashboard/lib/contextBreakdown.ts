@@ -209,6 +209,16 @@ export function partPercent(tokens: number, window: number): string {
   return `${p.toFixed(1)}%`;
 }
 
+/** A part's share of the room in a PLAIN CHAT's words ("about 12%", "less
+ *  than 1%"): every size is an estimate, so it is never said as a count
+ *  (the intelligence plan, release 6). */
+export function aboutShare(tokens: number, window: number): string {
+  if (window <= 0) return "";
+  const p = (tokens / window) * 100;
+  if (p > 0 && p < 1) return "less than 1%";
+  return `about ${Math.round(p)}%`;
+}
+
 /** "240k until earlier messages are summarized" — or null when there is no
  *  automatic summary to name. */
 export function untilSummaryWords(r: ContextReading): string | null {

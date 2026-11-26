@@ -1,0 +1,120 @@
+{
+  "filled": {
+    "thread_id": "chat_mine",
+    "found": true,
+    "reading": {
+      "source": "app",
+      "used": 43000,
+      "window": 100000,
+      "percent": 43,
+      "parts": [
+        {
+          "key": "messages",
+          "label": "Your messages and the replies",
+          "tokens": 30000,
+          "kind": "used"
+        },
+        {
+          "key": "attachments",
+          "label": "Files you attached",
+          "tokens": 8000,
+          "kind": "used"
+        },
+        {
+          "key": "memory",
+          "label": "What Iron Jarvis remembered",
+          "tokens": 2000,
+          "kind": "used"
+        },
+        {
+          "key": "system",
+          "label": "Iron Jarvis's own instructions",
+          "tokens": 3000,
+          "kind": "used"
+        },
+        {
+          "key": "free",
+          "label": "Room left",
+          "tokens": 57000,
+          "kind": "free"
+        }
+      ],
+      "extra": [
+        {
+          "key": "tools",
+          "label": "Tools it was given",
+          "tokens": 6600
+        }
+      ],
+      "lists": [
+        {
+          "key": "tools",
+          "label": "Where they came from",
+          "count": 3,
+          "items": [
+            {
+              "name": "Iron Jarvis's own tools",
+              "detail": "2 tools",
+              "tokens": 900
+            },
+            {
+              "name": "ledger",
+              "detail": "12 tools",
+              "tokens": 5100
+            },
+            {
+              "name": "mail",
+              "detail": "3 tools",
+              "tokens": 600
+            }
+          ]
+        }
+      ],
+      "tool_names": [
+        "read_file",
+        "list_files"
+      ]
+    },
+    "at": "2026-11-20T09:05:00",
+    "window_known": true,
+    "left_out": 3
+  },
+  "no_tools_safe_size": {
+    "thread_id": "chat_small",
+    "found": true,
+    "reading": {
+      "source": "app",
+      "used": 16500,
+      "window": 32000,
+      "percent": 52,
+      "parts": [
+        {
+          "key": "messages",
+          "label": "Your messages and the replies",
+          "tokens": 16100,
+          "kind": "used"
+        },
+        {
+          "key": "system",
+          "label": "Iron Jarvis's own instructions",
+          "tokens": 400,
+          "kind": "used"
+        },
+        {
+          "key": "free",
+          "label": "Room left",
+          "tokens": 15500,
+          "kind": "free"
+        }
+      ]
+    },
+    "at": "2026-11-20T09:06:00",
+    "window_known": false,
+    "left_out": 0
+  },
+  "none": {
+    "thread_id": "chat_new",
+    "found": false,
+    "reading": null
+  }
+}

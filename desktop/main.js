@@ -4563,6 +4563,7 @@ const TOOL_WORDS_BUILTIN = {
   channel_connect: "add a notification channel",
   channel_remove: "remove a notification destination",
   channel_toggle: "turn a channel's two-way messages on or off",
+  chat_fullness: "look up what is filling this chat",
   chat_local_only: "change Local only for this chat",
   chat_record: "save a chat to the work record",
   client_answer: "say whether a name is one of your clients",
