@@ -84,14 +84,18 @@ async def test_a_chat_with_no_checks_says_so_and_an_unsaved_chat_reads_only_its_
     R.write(platform.engine, SHEET, turn_id="turn_unsaved")          # a new chat: no chat id yet
     R.write(platform.engine, OTHER, session_id="some_run")            # a run's rows: no reply id at all
     empty = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_new"))
-    assert empty.ok and empty.output == CT.NOTHING and empty.data == {"checks": [], "more": 0}
+    assert empty.ok and empty.output == CT.NOTHING and empty.data == {"checks": [], "more": 0, "older": False}
     # No chat id and no reply id: nothing, never every row with no chat.
     assert (await _ask(platform, _ctx(platform, tmp_path))).output == CT.NOTHING
     mine = await _ask(platform, _ctx(platform, tmp_path, turn_id="turn_unsaved"))
     assert "summary.xlsx" in mine.output and "payroll" not in mine.output
 
 
-async def test_a_run_of_this_chat_is_read_and_a_run_of_another_chat_is_refused(platform, tmp_path):
+async def test_a_run_is_read_only_when_it_was_started_from_the_calling_chat(platform, tmp_path):
+    """S5: a run with NO chat on its rows was read from any chat (and this
+    test said so, with a file called payroll-private.xlsx). A run is answered
+    for only when the record says it belongs to the calling chat; every other
+    run gets the same refusal, which says where to look."""
     step = [Check(R.STEP_CHECK, R.NOT_CHECKED, "its check did not run", by="Sonnet 4.5", step="2")]
     R.write(platform.engine, step, session_id="run_mine", thread_id="chat_mine")
     R.write(platform.engine, OTHER, session_id="run_theirs", thread_id="chat_other")
@@ -100,14 +104,63 @@ async def test_a_run_of_this_chat_is_read_and_a_run_of_another_chat_is_refused(p
 
     mine = await _ask(platform, ctx, run="run_mine")
     assert "- Step 2: its check did not run (Not checked, by Sonnet 4.5)" in mine.output
-    theirs = await _ask(platform, ctx, run="run_theirs")
-    assert not theirs.ok and theirs.error == CT.OTHER_CHAT
-    assert "payroll" not in (theirs.output or "") + (theirs.error or "")
-    # A run that belongs to no chat, and one that does not exist.
-    assert "payroll-private.xlsx" in (await _ask(platform, ctx, run="run_nobody")).output
-    assert (await _ask(platform, ctx, run="no_such_run")).output == CT.NOTHING
+    for other in ("run_theirs", "run_nobody", "no_such_run"):
+        got = await _ask(platform, ctx, run=other)
+        assert not got.ok and got.error == CT.OTHER_RUN, (other, got.output, got.error)
+        assert "payroll" not in (got.output or "") + (got.error or "") + str(got.data or ""), other
+    assert CT.OTHER_RUN == ("That run was not started from this chat, so its checks are not read here. "
+                            "Open that run to see what was checked.")
+    # A chat not saved yet has no id: it owns no run, not even one that has none either.
+    unsaved = _ctx(platform, tmp_path, turn_id="turn_new")
+    for other in ("run_nobody", "run_mine"):
+        got = await _ask(platform, unsaved, run=other)
+        assert not got.ok and got.error == CT.OTHER_RUN and "payroll" not in str(got.data or "")
     # The chat's own list holds its run's checks too (the run was started from it).
     assert "Step 2" in (await _ask(platform, ctx)).output
+
+
+async def test_the_newest_replies_are_answered_for_whole_and_older_ones_are_said_to_be_left_out(platform, tmp_path):
+    """N4: the answer took a chat's newest 60 ROWS, so an older reply's
+    checks fell out from the middle of that reply with nothing said."""
+    eng = platform.engine
+    for n in range(8):          # eight replies of ten checks each, oldest first
+        R.write(eng, [Check(R.FILE_OPENS, R.PASSED, "opens", file=f"reply{n}-file{i}.txt") for i in range(10)],
+                thread_id="chat_long", turn_id=f"turn_{n}")
+    res = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_long"))
+    lines = res.output.splitlines()
+    assert lines[0] == "What Iron Jarvis checked (its own record, newest reply first):"
+    heads = [i for i, text in enumerate(lines) if text.startswith("A reply (")]
+    assert len(heads) == 6, "whole replies only: six of ten checks fit sixty"
+    # Newest reply first, and every reply that is answered for is whole.
+    for at, n in zip(heads, (7, 6, 5, 4, 3, 2)):
+        block = "\n".join(lines[at:at + 11])
+        assert all(f"reply{n}-file{i}.txt" in block for i in range(10)), (n, block)
+    assert "reply1-" not in res.output and "reply0-" not in res.output
+    assert lines[-1] == CT.OLDER == "Older checks in this chat are not listed here."
+    assert res.data["older"] is True
+    # A short chat says nothing about older checks.
+    R.write(eng, SHEET, thread_id="chat_short", turn_id="turn_s")
+    short = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_short"))
+    assert CT.OLDER not in short.output and short.data["older"] is False
+
+
+def test_whole_replies_newest_first_and_a_read_that_hit_its_limit_drops_its_partial_oldest():
+    def row(turn, i):
+        return {"turn_id": turn, "session_id": "", "run_id": "", "file": f"{turn}-{i}", "check": R.FILE_OPENS,
+                "result": R.PASSED, "detail": "opens", "at": ""}
+
+    newest_first = [row("c", 1), row("c", 0), row("b", 1), row("b", 0), row("a", 1), row("a", 0)]
+    kept, older = CT.newest_replies(newest_first, limit=4, read_limit=100)
+    assert [r["file"] for r in kept] == ["c-0", "c-1", "b-0", "b-1"] and older is True
+    kept, older = CT.newest_replies(newest_first, limit=60, read_limit=100)
+    assert [r["file"] for r in kept] == ["c-0", "c-1", "b-0", "b-1", "a-0", "a-1"] and older is False
+    # The newest reply is always whole, even past the limit.
+    kept, older = CT.newest_replies(newest_first, limit=1, read_limit=100)
+    assert [r["file"] for r in kept] == ["c-0", "c-1"] and older is True
+    # The read itself stopped at its limit: its oldest reply may be half there, so it is left out and said.
+    kept, older = CT.newest_replies(newest_first[:5], limit=60, read_limit=5)
+    assert [r["file"] for r in kept] == ["c-0", "c-1", "b-0", "b-1"] and older is True
+    assert CT.newest_replies([], limit=60) == ([], False)
 
 
 async def test_called_inside_a_run_it_reads_that_runs_checks(platform, tmp_path):

@@ -256,12 +256,138 @@ def test_the_list_puts_problems_first_says_who_checked_and_counts_what_it_leaves
 def test_no_engine_word_is_in_the_words_a_person_reads(word):
     from iron_jarvis.checks import content, existing, tool
 
-    said: list[str] = [R.LINE_HEAD, R.LINE_NOT_CHECKED, content.OUT_OF_TIME, content.BROKE, tool.NOTHING,
-                       tool.OTHER_CHAT, existing.CLAIMS_PASSED, *existing.OPEN_WORDS.values(),
-                       *existing.SKIPPED_WORDS.values(), *R._RESULT_WORDS.values(), *R._KIND_WORDS.values(),
-                       *R._SUBJECTS.values()]
+    said: list[str] = [R.LINE_HEAD, R.LINE_NOT_CHECKED, content.OUT_OF_TIME, content.BROKE, content.NOT_ONE_LIST,
+                       content.UNDER_TOTALS, tool.NOTHING, tool.OTHER_RUN, tool.OLDER, existing.CLAIMS_PASSED,
+                       existing.STEP_FAILED, *existing.OPEN_WORDS.values(), *existing.SKIPPED_WORDS.values(),
+                       *existing.REVIEW_ENDED_WORDS.values(), *existing.TESTS_NOT_RUN_WORDS,
+                       *R._RESULT_WORDS.values(), *R._KIND_WORDS.values(), *R._SUBJECTS.values()]
     for text in said:
         assert word not in text.lower(), text
+
+
+def test_the_line_is_never_longer_than_the_page_shows_and_a_long_one_counts_what_it_leaves_out():
+    """N3: the page shows 1,200 characters of the line and the daemon could
+    build 1,961, so a long line was cut in the middle of a finding. The
+    daemon now keeps to the same number, by naming fewer things and COUNTING
+    the rest; no finding is cut."""
+    import re
+
+    source = (Path(__file__).resolve().parents[1] / "dashboard" / "lib" / "checked.ts").read_text(
+        encoding="utf-8").replace("\r\n", "\n")
+    shown = int(re.search(r"text\(o\.line, ([\d_]+)\)", source).group(1).replace("_", ""))
+    assert R.LINE_MAX == shown == 1200, "the daemon's line cap and the page's are two numbers"
+
+    long = "x" * 280
+    rows = [_row(R.FILE_OPENS, R.PASSED, "opens", f"file{i}.xlsx") for i in range(4)]
+    rows += [_row(R.SHEET_ERRORS, R.FAILED, f"problem {i} {long}", f"file{i}.xlsx") for i in range(4)]
+    rows += [_row(R.SHEET_TOTALS, R.NOT_CHECKED, f"reason {i} {long}", f"file{i}.xlsx") for i in range(4)]
+    line, tone = R.line_for(rows)
+    assert len(line) <= R.LINE_MAX and tone == "warn", len(line)
+    assert line.endswith(".") and "\u2026" not in line, "the line was cut, not shortened"
+    # What it names it names whole, and what it leaves out it counts.
+    named = [d for d in (r["detail"] for r in rows if r["result"] != R.PASSED) if d in line]
+    assert named and all(f"{d}" in line for d in named)
+    assert f"problem 0 {long}" in line, "the first problem gave way before something less important"
+    assert re.search(r"and \d more", line), line
+    said_problems = sum(1 for r in rows if r["result"] == R.FAILED and r["detail"] in line)
+    left = int(re.search(r"Problem in .*?and (\d) more\.", line).group(1))
+    assert said_problems + left == 4, "a problem is neither said nor counted"
+    # What gives way first is what matters least: what was not checked, then the files that passed; the
+    # problems are named for as long as there is room.
+    assert said_problems == 2, "the problems gave way before what was merely not checked"
+    assert sum(1 for r in rows if r["result"] == R.NOT_CHECKED and r["detail"] in line) == 1
+    # A line that fits is exactly as before (three of each named).
+    short = [_row(R.SHEET_ERRORS, R.FAILED, f"p{i}", f"f{i}.xlsx") for i in range(5)]
+    assert R.line_for(short)[0] == (
+        "Checked by Iron Jarvis: a problem in f0.xlsx: p0; f1.xlsx: p1; f2.xlsx: p2; and 2 more.")
+    # One finding of each kind that is still too long is cut at a word, and says so.
+    huge = [_row(R.SHEET_ERRORS, R.FAILED, " ".join(["word"] * 400), "a.xlsx")]
+    cut, _ = R.line_for(huge)
+    assert len(cut) <= R.LINE_MAX and cut.endswith(" \u2026") and not cut.endswith("wor \u2026")
+
+
+def test_a_saved_checked_line_is_kept_by_whitelist_in_the_shape_the_page_decodes():
+    built = R.payload([_row(c.check, c.result, c.detail, c.file) for c in SHEET] + [
+        _row(R.SHEET_ERRORS, R.FAILED, "Summary!C7 holds #DIV/0!", "summary.xlsx"),
+        _row(R.STEP_CHECK, R.NOT_CHECKED, "its check did not run", by="Sonnet 4.5", step="2")], limit=3)
+    assert R.clean_checked(built) == built, "a payload the record built does not survive its own cleaning"
+    assert built["more"] == 2 and R.clean_checked(built)["more_words"] == "and 2 more checks"
+    # Unknown keys, an unknown result, an item with no label and oversize text do not get in.
+    dirty = {
+        "line": "  Checked by Iron Jarvis: " + "y" * 5000, "tone": "loud", "html": "<script>", "more": -4,
+        "more_words": "and many",
+        "checks": [
+            {"label": "a.xlsx", "said": "s" * 900, "result": "passed", "result_words": "Checked", "who": "by rule",
+             "path": "C:/clients/acme/a.xlsx"},
+            {"label": "b.xlsx", "said": "x", "result": "wonderful"},
+            {"label": "", "said": "x", "result": "failed"},
+            "not a check",
+            *[{"label": f"f{i}", "said": "", "result": "failed"} for i in range(80)],
+        ],
+    }
+    clean = R.clean_checked(dirty)
+    assert set(clean) == {"line", "tone", "checks", "more", "more_words"}
+    assert len(clean["line"]) == R.LINE_MAX and clean["line"].startswith("Checked by Iron Jarvis:")
+    assert clean["tone"] == "quiet" and clean["more"] == 0 and clean["more_words"] == ""
+    assert len(clean["checks"]) == R.MAX_LISTED
+    assert clean["checks"][0] == {"label": "a.xlsx", "said": "s" * 400, "result": "passed",
+                                  "result_words": "Checked", "who": "by rule"}
+    assert all(set(c) == {"label", "said", "result", "result_words", "who"} for c in clean["checks"])
+    assert "b.xlsx" not in [c["label"] for c in clean["checks"]]
+    assert all(c["label"] for c in clean["checks"]), "a check with no label was saved"
+    for nothing in (None, "Checked by Iron Jarvis: x", [], {"line": "   "}, {"tone": "warn"}, {"line": 7}):
+        assert R.clean_checked(nothing) is None
+
+
+def test_a_long_runs_newest_checks_are_the_ones_read(platform):
+    """N4: a run's read took the OLDEST 200 rows, so the file a long run
+    checked last was the one that fell out of its line."""
+    eng = platform.engine
+    for batch in range(5):                      # 300 rows, 60 a write
+        R.write(eng, [Check(R.FILE_OPENS, R.PASSED, "opens", file=f"f{batch * 60 + i:03d}.txt") for i in range(60)],
+                session_id="long_run")
+    got = [r["file"] for r in R.for_session(eng, "long_run")]
+    assert len(got) == R.MAX_READ == 200
+    assert got == [f"f{i:03d}.txt" for i in range(100, 300)], "not the newest rows, or not oldest first"
+
+
+@pytest.mark.parametrize("stored,said", [
+    # The page's own cases (dashboard/__tests__/calm-polish-v1329.test.tsx, friendlyModelName).
+    ("claude-opus-4-8", "Opus 4.8"), ("claude-sonnet-5", "Sonnet 5"), ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+    ("claude-sonnet-4-20250514", "Sonnet 4"), ("claude-3-5-sonnet-20241022", "Sonnet 3.5"),
+    ("claude-3-opus-latest", "Opus 3"), ("claude-opus-4-8[1m]", "Opus 4.8 1M"), ("CLAUDE-OPUS-5-5", "Opus 5.5"),
+    # Nothing is invented: any other name is said exactly as it was stored.
+    ("gpt-5", "gpt-5"), ("qwen3:30b", "qwen3:30b"), ("claude-fable-5", "claude-fable-5"),
+    ("my-claude-opus-4", "my-claude-opus-4"), ("claude-opus", "claude-opus"), ("Claude Code", "Claude Code"),
+    ("Sonnet 4.5", "Sonnet 4.5"),
+])
+def test_who_checked_is_said_by_the_name_people_use_for_the_model(stored, said):
+    """N6: the list said "by claude-sonnet-4-5". The id is said the way the
+    rest of the app says it; the row keeps the name it was given."""
+    assert R.friendly_model(stored) == said
+    assert R.who_words(stored) == f"by {said}"
+    shown = R.payload([_row(R.STEP_CHECK, R.FAILED, "its check did not pass", by=stored, step="2")])
+    assert shown["checks"][0]["who"] == f"by {said}"
+    assert R.who_words("rule") == R.who_words("") == "by rule"
+
+
+def test_the_daemons_model_names_are_the_pages_own_rule():
+    source = (Path(__file__).resolve().parents[1] / "dashboard" / "lib" / "friendlyModelName.ts").read_text(
+        encoding="utf-8").replace("\r\n", "\n")
+    for piece in ('const FAMILY = "(opus|sonnet|haiku)"', 'const VER = "(\\\\d{1,2})(?:[-.](\\\\d{1,2}))?"',
+                  'const TAIL = "(?:-\\\\d{8}|-latest)?"'):
+        assert piece in source, f"the page's rule changed; bring checks/record.friendly_model with it: {piece}"
+    assert (R._MODEL_FAMILY, R._MODEL_VER, R._MODEL_TAIL) == (
+        "(opus|sonnet|haiku)", r"(\d{1,2})(?:[-.](\d{1,2}))?", r"(?:-\d{8}|-latest)?")
+
+
+def test_a_file_told_apart_by_its_folder_keeps_its_own_kind_and_never_a_path():
+    assert R.apart("summary.xlsx", "2023") == "summary.xlsx (in 2023)"
+    assert R.apart("C:/clients/acme/summary.xlsx", "D:/work/2023/") == "summary.xlsx (in 2023)"
+    assert R.apart("summary.xlsx", "") == "summary.xlsx"
+    assert R.own_name("summary.xlsx (in 2023)") == "summary.xlsx" and R.own_name("plain.pdf") == "plain.pdf"
+    assert R.kind_words("summary.xlsx (in 2023)") == "the spreadsheet" and R.kind_words("x (in y).pdf") == "the file"
+    assert R.file_name(R.apart("summary.xlsx", "2023")) == "summary.xlsx (in 2023)"
 
 
 # --------------------------------------------------------------------------- #

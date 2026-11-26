@@ -7,17 +7,26 @@ sends the model back and writes its line, the required files still get their
 note, a coding reply's tests still write their event. They also write here,
 so "what did you check?" has one place to read.
 
+NO MODEL'S WORDS. A row's detail is words this module (or the check's own
+code) built: a judging model's reason, a reviewer's read and a tool's raw
+error are never stored, so they can never reach the line under a reply or
+the list a press opens. A model-judged step that failed reads "its check did
+not pass", with the model's name in ``by``, and nothing more. PLAIN WORDS:
+an older check's reason is put through ``record.open_words`` /
+``record.plain_words`` (never an exception's name or a folder).
+
 Pure and never raising: a row that cannot be built is no row.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Iterable
 
 from .record import (
     BY_RULE, CLAIMS, FAILED, LINE_HEAD, LINE_NOT_CHECKED, NOT_CHECKED, PASSED, REQUIRED_FILE, REVIEW, STEP_CHECK,
-    TESTS, WORKFLOW_STEP, Check,
+    TESTS, WORKFLOW_STEP, Check, file_name, open_words, plain_words,
 )
 
 log = logging.getLogger(__name__)
@@ -41,6 +50,46 @@ SKIPPED_WORDS = {
     "blocked": "it ended by saying what blocks it, so it was not checked again",
 }
 CLAIMS_PASSED = "what it says matches what it did"
+#: A model-judged step that failed: this, and the model's name in ``by``.
+STEP_FAILED = "its check did not pass"
+#: Why a coding reply's tests did not run, where the finish check's own code
+#: says so (``harness/finish``); any other reason reads "they did not run".
+TESTS_NOT_RUN_WORDS = frozenset({
+    "this folder turned the test run off",
+    "this reply is in low trust, so the check runs no command",
+    "this reply has no command tool",
+})
+#: How a review that gave no verdict ended (``harness/finish.REVIEW_*``).
+REVIEW_ENDED_WORDS = {
+    "not_run": "the review did not run",
+    "stopped": "the review was stopped before it finished",
+    "failed": "the review did not finish",
+    "not_counted": "its answer was not counted",
+}
+#: The reasons the finish check's OWN code writes for a review with no
+#: verdict (``harness/finish``; a test holds them equal to its constants).
+#: Only these are kept as they are. Any other reason may be the reviewer's
+#: answer or a tool's raw error, and reads by :data:`REVIEW_ENDED_WORDS`.
+REVIEW_WHY_WORDS = frozenset({
+    "it ended without a report",
+    "its answer was not counted: the reviewer read something that looked like an instruction, "
+    "so its run was at low trust",
+    "its answer was not counted: its report read like an instruction, so it was kept from the reply",
+    "its answer was not counted: its run could not be read back",
+    "this reply is in low trust, so it was not handed to a reviewer",
+    "the change could not be read for the reviewer",
+    "the reply was stopped during the review",
+    "the review was stopped before it finished",
+    "the review did not run",
+})
+_REVIEW_LATE_RX = re.compile(r"^the review took longer than \d{1,3} minutes?, so the reply went on without it$")
+
+
+def _review_words(state: str, why: Any) -> str:
+    said = " ".join(str(why or "").split())
+    if said in REVIEW_WHY_WORDS or _REVIEW_LATE_RX.match(said):
+        return said
+    return REVIEW_ENDED_WORDS.get(state, "it gave no verdict")
 
 
 def claims_check(until: Any) -> "Check | None":
@@ -73,8 +122,11 @@ def required_file_checks(states: Iterable[Any]) -> list[Check]:
         for s in states or ():
             status = str(getattr(s, "status", "") or "")
             result = PASSED if status == "ok" else NOT_CHECKED if status == "unchecked" else FAILED
-            out.append(Check(REQUIRED_FILE, result, str(getattr(s, "detail", "") or ""),
-                             file=str(getattr(s, "rel", "") or "")))
+            detail = str(getattr(s, "detail", "") or "")
+            # The older check's own reason for a file that does not open may
+            # name an exception or a part of the package: plain words only.
+            said = open_words(detail) if status == "unreadable" else plain_words(detail)
+            out.append(Check(REQUIRED_FILE, result, said, file=str(getattr(s, "rel", "") or "")))
     except Exception:  # noqa: BLE001
         log.debug("the required files could not be recorded", exc_info=True)
     return out
@@ -121,7 +173,10 @@ def finish_checks(record: Any) -> list[Check]:
         elif tests == "failed":
             out.append(Check(TESTS, FAILED, "they failed"))
         elif tests == "not_run":
-            out.append(Check(TESTS, NOT_CHECKED, str(record.get("why") or "") or "they did not run"))
+            # The reason is kept only when it is one the finish check's own
+            # code wrote: a command's raw error is not shown.
+            why = " ".join(str(record.get("why") or "").split())
+            out.append(Check(TESTS, NOT_CHECKED, why if why in TESTS_NOT_RUN_WORDS else "they did not run"))
         elif tests == "none":
             out.append(Check(TESTS, NOT_CHECKED, "no tests were found to run"))
         review = record.get("review")
@@ -133,7 +188,10 @@ def finish_checks(record: Any) -> list[Check]:
             elif state == "done" and verdict == "changes_needed":
                 out.append(Check(REVIEW, FAILED, "it asked for changes", by=who))
             else:
-                out.append(Check(REVIEW, NOT_CHECKED, str(review.get("why") or "") or "it gave no verdict", by=who))
+                # Never the reviewer's own words (its answer, a tool's raw
+                # error): a reason the finish check's own code wrote, else
+                # one plain sentence by how the review ended.
+                out.append(Check(REVIEW, NOT_CHECKED, _review_words(state, review.get("why")), by=who))
     except Exception:  # noqa: BLE001
         log.debug("a coding reply's finish check could not be recorded", exc_info=True)
     return out
@@ -146,7 +204,11 @@ def step_check(result: Any, *, judge: str = "", run_id: str = "") -> "Check | No
     the files the step named), ``model`` (the judging model read its
     output), ``unverified`` (the check did not run: ``not_checked``, never a
     pass). A step that named nothing to check (``none``), or was never
-    attempted, writes no row: nothing was checked and nothing is claimed."""
+    attempted, writes no row: nothing was checked and nothing is claimed.
+
+    The judging model's REASON is never kept: it is a model's words about a
+    step's output (content from anywhere), and the record's words reach the
+    line under a reply. A model-judged step that failed says only that."""
     try:
         get = result.get if isinstance(result, dict) else lambda k, d=None: getattr(result, k, d)
         method = str(get("verified") or "")
@@ -158,16 +220,38 @@ def step_check(result: Any, *, judge: str = "", run_id: str = "") -> "Check | No
             return Check(STEP_CHECK, NOT_CHECKED, "its check did not run", by=who, step=step, run_id=run_id)
         if bool(get("ok")):
             return Check(STEP_CHECK, PASSED, "it passed its check", by=who, step=step, run_id=run_id)
-        reason = " ".join(str(get("reason") or "").split())
         if method == "files":
-            names = reason.partition(":")[2].strip()
+            # The file gate's own sentence ("expected file(s) not found...:
+            # a.xlsx, b.docx") is built by code: the NAMES are kept.
+            listed = " ".join(str(get("reason") or "").split()).partition(":")[2]
+            names = ", ".join(n for n in (file_name(x.strip()) for x in listed.split(",")) if n)
             said = "a file it should have made is not there" + (f": {names}" if names else "")
         else:
-            said = "its check did not pass" + (f": {reason[:200]}" if reason else "")
+            said = STEP_FAILED
         return Check(STEP_CHECK, FAILED, said, by=who, step=step, run_id=run_id)
     except Exception:  # noqa: BLE001
         log.debug("a step's check could not be recorded", exc_info=True)
         return None
+
+
+_EXPECTED_FILE_RX = re.compile(r"^expected file '(?P<name>[^']*)' was not found")
+_SUMMARY_RX = re.compile(r"^step summary does not contain ")
+
+
+def _workflow_words(problem: str) -> str:
+    """The workflow engine's own sentence for an expectation that did not
+    hold (``_expect_failure``), in plain words: the file's NAME (never the
+    paths it saw), never the words the step was expected to say (a workflow
+    may be one a model drafted), and nothing of the engine's wording."""
+    m = _EXPECTED_FILE_RX.match(problem)
+    if m is not None:
+        name = file_name(m.group("name"))
+        return "a file it should have made was not found" + (f": {name}" if name else "")
+    if _SUMMARY_RX.match(problem) is not None:
+        return "its result does not say what it was expected to say"
+    if "expectations need an agent or tool step" in problem:
+        return "it was expected to make a file, and this kind of step makes none"
+    return "it did not give what it was expected to"
 
 
 def workflow_check(step_name: Any, problem: Any, *, run_id: str = "") -> "Check | None":
@@ -181,13 +265,14 @@ def workflow_check(step_name: Any, problem: Any, *, run_id: str = "") -> "Check 
         if text.startswith("could not verify"):
             return Check(WORKFLOW_STEP, NOT_CHECKED, "what it should have made could not be looked for",
                          step=step, run_id=run_id)
-        return Check(WORKFLOW_STEP, FAILED, text, step=step, run_id=run_id)
+        return Check(WORKFLOW_STEP, FAILED, _workflow_words(text), step=step, run_id=run_id)
     except Exception:  # noqa: BLE001
         log.debug("a workflow step's check could not be recorded", exc_info=True)
         return None
 
 
 __all__ = [
-    "CLAIMS_PASSED", "OPEN_WORDS", "SKIPPED_WORDS", "claims_check", "finish_checks", "proof_check",
-    "required_file_checks", "step_check", "workflow_check",
+    "CLAIMS_PASSED", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "SKIPPED_WORDS", "STEP_FAILED",
+    "TESTS_NOT_RUN_WORDS",
+    "claims_check", "finish_checks", "proof_check", "required_file_checks", "step_check", "workflow_check",
 ]

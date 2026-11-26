@@ -3787,11 +3787,6 @@ def register(app: FastAPI, d) -> None:
             await asyncio.to_thread(_marks.home_turn, d.platform.engine, turn_id, tid)
         except Exception:  # noqa: BLE001 — the link itself already landed
             log.warning("figure record: homing turn %s failed", turn_id, exc_info=True)
-        # The intelligence plan, release 5: what Iron Jarvis checked on the
-        # new chat's first reply belongs to the chat now named (never raises).
-        from ...checks import record as _checks
-
-        await asyncio.to_thread(_checks.home_turn, d.platform.engine, turn_id, tid)
         # v1.428.0: a new chat's first turn that read a mailbox kept on the
         # user's own models holds the chat it was saved as Local only.
         from ...providers.egress import hold_local_only, link_turn_holds
@@ -3810,6 +3805,14 @@ def register(app: FastAPI, d) -> None:
                     hold_local_only(d.platform.engine, tid, app_id)
 
             await asyncio.shield(asyncio.to_thread(_hold_all))
+        # The intelligence plan, release 5: what Iron Jarvis checked on the
+        # new chat's first reply belongs to the chat now named (never raises).
+        # AFTER the link is readable (`link_turn_holds` above: a reply still
+        # writing its rows reads it, `checks/turn._chat_of`), so no row lands
+        # between this homing and the link and is left with no chat.
+        from ...checks import record as _checks
+
+        await asyncio.to_thread(_checks.home_turn, d.platform.engine, turn_id, tid)
         # v1.435.0 (D3): a new chat's first turn that switched Local only on
         # or off from chat (`chat_local_only`) applies it to the chat now named.
         from ...providers.egress import set_thread_local_only, take_pending_local_only

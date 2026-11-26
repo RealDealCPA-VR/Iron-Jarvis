@@ -3,9 +3,16 @@
 Read only: it changes nothing and runs no check again. It reads ONLY the
 checks of the chat it was called in (the saved chat's, or, in a new chat not
 saved yet, this reply's own), or of the run it was called in. ``run`` names
-an agent run started from this chat (or one that belongs to no chat); a run
-of another chat is refused. Never another chat's rows: there is no argument
-that names a chat.
+an agent run STARTED FROM THIS CHAT: the tool answers for a run only when
+the record says that run belongs to the calling chat. Any other run (another
+chat's, one that belongs to no chat, one the record does not know) is
+refused in the same plain words, which say where to look. Never another
+chat's rows: there is no argument that names a chat.
+
+NEWEST FIRST, BY REPLY. A long chat holds more checks than one answer reads.
+The newest replies are answered for, each reply's checks whole, and when
+older ones are left out the answer says so: an older file's checks are never
+what falls out silently in the middle of a reply.
 
 The answer is words built from the record's rows (the same line the page
 shows, then each check with its result and who checked), handed to the model
@@ -21,34 +28,23 @@ from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from . import record
 
 TOOL_NAME = "checks_list"
-#: How many of a chat's newest checks one answer reads.
+#: About how many checks one answer lists (whole replies, newest first; the
+#: newest reply is always whole).
 MAX_ROWS = 60
 NOTHING = (
     "Iron Jarvis's record holds no check for this chat yet. It checks a reply when the reply ends: whether "
     "what it says matches what it did, and, when it made or changed a file, what that file holds."
 )
-OTHER_CHAT = "That run belongs to another chat, so its checks are not read here."
-
-
-def _owner_rows(engine: Any, ctx: ToolContext, run: str) -> "tuple[list[dict[str, Any]], str]":
-    """BLOCKING. ``(rows, refusal)`` for the caller: never another chat's."""
-    thread = str(getattr(ctx, "thread_id", "") or "")
-    session = str(getattr(ctx, "session_id", "") or "")
-    if run:
-        rows = record.for_session(engine, run)
-        mine = [r for r in rows if r.get("thread_id") in ("", thread)]
-        if rows and not mine:
-            return [], OTHER_CHAT
-        return mine, ""
-    if session and session != "chat":
-        return record.for_session(engine, session), ""
-    if thread:
-        return list(reversed(record.for_thread(engine, thread, limit=MAX_ROWS))), ""
-    return record.for_turn(engine, str(getattr(ctx, "turn_id", "") or "")), ""
+OTHER_RUN = (
+    "That run was not started from this chat, so its checks are not read here. Open that run to see what was "
+    "checked."
+)
+OLDER = "Older checks in this chat are not listed here."
 
 
 def _groups(rows: "list[dict[str, Any]]") -> "list[list[dict[str, Any]]]":
-    """Rows grouped by the reply or run they belong to, oldest group first."""
+    """Rows grouped by the reply or run they belong to, in the order each
+    group is first met."""
     out: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for r in rows:
         out.setdefault((str(r.get("turn_id") or ""), str(r.get("session_id") or ""),
@@ -56,11 +52,55 @@ def _groups(rows: "list[dict[str, Any]]") -> "list[list[dict[str, Any]]]":
     return list(out.values())
 
 
-def answer(rows: "list[dict[str, Any]]") -> str:
-    """The rows as words: per reply or run, its line, then each check."""
+def newest_replies(newest_first: "list[dict[str, Any]]", *, limit: int = MAX_ROWS,
+                   read_limit: int = record.MAX_READ) -> "tuple[list[dict[str, Any]], bool]":
+    """``(rows to answer with, were older ones left out)`` from a chat's rows
+    read NEWEST first. Whole replies are kept, newest reply first, while they
+    fit *limit* rows (the newest reply is always kept); inside a reply the
+    rows read oldest first, as they were written. A read that hit its own
+    limit may hold only part of its oldest reply: that reply is left out
+    (and said), unless it is the only one."""
+    groups = _groups(newest_first)
+    hit = len(newest_first) >= max(1, int(read_limit))
+    if hit and len(groups) > 1:
+        groups = groups[:-1]
+    kept: list[dict[str, Any]] = []
+    used = 0
+    for group in groups:
+        if used and len(kept) + len(group) > max(1, int(limit)):
+            break
+        kept += list(reversed(group))
+        used += 1
+    return kept, hit or used < len(groups)
+
+
+def _owner_rows(engine: Any, ctx: ToolContext, run: str) -> "tuple[list[dict[str, Any]], str, bool]":
+    """BLOCKING. ``(rows, refusal, older left out)`` for the caller: never
+    another chat's."""
+    thread = str(getattr(ctx, "thread_id", "") or "")
+    session = str(getattr(ctx, "session_id", "") or "")
+    inside = session if session and session != "chat" else ""
+    if run and run != inside:
+        # A run is answered for ONLY when the record says it was started
+        # from the calling chat. A run of no chat is not "everybody's".
+        mine = [r for r in record.for_session(engine, run) if thread and r.get("thread_id") == thread]
+        return (mine, "", len(mine) >= record.MAX_READ) if mine else ([], OTHER_RUN, False)
+    if inside:
+        rows = record.for_session(engine, inside)
+        return rows, "", len(rows) >= record.MAX_READ
+    if thread:
+        rows, older = newest_replies(record.for_thread(engine, thread, limit=record.MAX_READ))
+        return rows, "", older
+    rows = record.for_turn(engine, str(getattr(ctx, "turn_id", "") or ""))
+    return rows, "", len(rows) >= record.MAX_READ
+
+
+def answer(rows: "list[dict[str, Any]]", older: bool = False) -> str:
+    """The rows as words: per reply or run (in the order given: the newest
+    reply first), its line, then each check."""
     if not rows:
         return NOTHING
-    said: list[str] = ["What Iron Jarvis checked (its own record, oldest first):"]
+    said: list[str] = ["What Iron Jarvis checked (its own record, newest reply first):"]
     for group in _groups(rows):
         when = str(group[0].get("at") or "")[:16].replace("T", " ")
         owner = "A run" if group[0].get("session_id") and not group[0].get("turn_id") else "A reply"
@@ -71,6 +111,8 @@ def answer(rows: "list[dict[str, Any]]") -> str:
             said.append(f"- {item['label']}: {item['said']} ({item['result_words']}, {item['who']})")
         if shown.get("more_words"):
             said.append(f"- {shown['more_words']}")
+    if older:
+        said.append(OLDER)
     return "\n".join(said)
 
 
@@ -97,15 +139,17 @@ class ChecksListTool(Tool):
         if engine is None:
             return ToolResult(ok=False, error="Iron Jarvis's record of checks cannot be read right now.")
         run = " ".join(str((args or {}).get("run") or "").split())[:120]
-        rows, refusal = await asyncio.to_thread(_owner_rows, engine, ctx, run)
+        rows, refusal, older = await asyncio.to_thread(_owner_rows, engine, ctx, run)
         if refusal:
             return ToolResult(ok=False, error=refusal)
         shown = record.payload(rows, limit=MAX_ROWS) or {"checks": [], "more": 0}
-        return ToolResult(ok=True, output=answer(rows), data={"checks": shown["checks"], "more": shown["more"]})
+        return ToolResult(ok=True, output=answer(rows, older),
+                          data={"checks": shown["checks"], "more": shown["more"], "older": bool(older)})
 
 
 def checks_tools(platform: Any = None) -> list[Tool]:
     return [ChecksListTool(platform)]
 
 
-__all__ = ["ChecksListTool", "MAX_ROWS", "NOTHING", "OTHER_CHAT", "TOOL_NAME", "answer", "checks_tools"]
+__all__ = ["ChecksListTool", "MAX_ROWS", "NOTHING", "OLDER", "OTHER_RUN", "TOOL_NAME", "answer", "checks_tools",
+           "newest_replies"]

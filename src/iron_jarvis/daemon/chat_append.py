@@ -142,6 +142,13 @@ LINE_KEYS: tuple[str, ...] = (
     # Next leaps 16-a: the reply that carries the search-by-meaning offer
     # (a file_search step's own frame said so, once ever).
     "meaningOffer",
+    # The intelligence plan, release 5: what Iron Jarvis checked on the files
+    # a reply made (the done frame's ``checked``), so a reply the DAEMON
+    # writes home while the page is away keeps its "Checked by Iron Jarvis"
+    # line. Not copied as it comes: :func:`_clean_line` keeps only the shape
+    # the page's own decoder accepts, sizes capped
+    # (``checks/record.clean_checked``), and drops one that says nothing.
+    "checked",
 )
 
 #: Idea 39 (39-a): how many replaced report keys a folded line keeps.
@@ -449,6 +456,14 @@ def _clean_line(raw: Any, stamp: str) -> dict[str, Any] | None:
     role = str(line.get("role") or "").strip()
     if not role:
         return None
+    if "checked" in line:
+        # Whitelisted, never copied as it comes (release 5 of the
+        # intelligence plan): the line, its tone and the list, sizes capped.
+        from ..checks.record import clean_checked
+
+        checked = clean_checked(line.pop("checked"))
+        if checked is not None:
+            line["checked"] = checked
     line["role"] = role
     line["content"] = str(line.get("content") or "")
     # The server is the writer here: no client time to defer to (the v1.142.0

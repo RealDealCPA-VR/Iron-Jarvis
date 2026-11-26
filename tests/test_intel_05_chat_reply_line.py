@@ -114,6 +114,39 @@ def test_a_wrong_total_is_named_with_both_figures(client, monkeypatch, lane):
     assert body["checked"]["tone"] == "warn"
 
 
+#: The reviewer's rows (B2): the app's own writer warns that D3 is #DIV/0!
+#: and saves no result for it. The line used to read "no error cells".
+DIVIDES = [["Name", "Amount", "Parts", "Each"], ["A", 100, 4, "=B2/C2"], ["B", 50, 0, "=B3/C3"]]
+#: ... and a formula the app's evaluator cannot work out at all.
+UNWORKED = [["Name", "Amount"], ["A", 100], ["B", "=NOSUCHFUNCTION(B2)"]]
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_formula_the_writer_saved_no_result_for_is_never_called_no_error_cells(client, monkeypatch, lane):
+    """Through the real ``write_document`` tool: D3 is ``=B3/C3`` over a
+    zero. The file holds no saved result for it; the line names it."""
+    body, _ = _write_turn(client, monkeypatch, lane, DIVIDES)
+    checked = body["checked"]
+    assert checked["line"] == (
+        "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: Sheet!D3 works out to #DIV/0!."
+    ), checked["line"]
+    assert checked["tone"] == "warn" and "no error cells" not in checked["line"]
+    assert [(c["said"], c["result"]) for c in checked["checks"]][0] == ("Sheet!D3 works out to #DIV/0!", "failed")
+    rows = [r for r in _rows(client.app.state.platform) if r.check == R.SHEET_ERRORS]
+    assert [(r.result, r.detail) for r in rows] == [(R.FAILED, "Sheet!D3 works out to #DIV/0!")]
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_formula_nobody_could_work_out_reads_not_checked_never_no_error_cells(client, monkeypatch, lane):
+    body, _ = _write_turn(client, monkeypatch, lane, UNWORKED)
+    assert body["checked"]["line"] == (
+        "Checked by Iron Jarvis: the spreadsheet opens. Not checked: the spreadsheet "
+        "(1 formula has no saved result and could not be worked out here)."
+    ), body["checked"]["line"]
+    assert body["checked"]["tone"] == "quiet"
+    assert not [c for c in body["checked"]["checks"] if c["said"] == "no error cells"]
+
+
 def test_both_lanes_give_the_same_line_for_the_same_reply(tmp_path, monkeypatch):
     got = {}
     for lane in LANES:
@@ -191,34 +224,198 @@ def test_the_line_is_read_from_the_record(client, monkeypatch):
     assert "checked" not in again, "a line was built without reading the record"
 
 
-def test_the_reply_the_daemon_writes_home_and_a_reopened_chat_keep_the_line(client, monkeypatch):
-    body, frames = _write_turn(client, monkeypatch, "stream", ERROR_SHEET, turn_id="turn_keep")
-    # What the daemon itself writes into the chat when no page follows the turn.
-    line = reply_line("turn_keep", [[e, d] for e, d in frames], "done")
-    assert line["checked"] == body["checked"]
-    # A reply with no line is written home exactly as before (no key).
-    plain = reply_line("t2", [["done", {"reply": "hello"}]], "done")
-    assert "checked" not in plain
-    assert "checked" not in reply_line("t3", [["done", {"reply": "x", "checked": {"line": "  "}}]], "done")
+def test_a_reply_the_daemon_writes_into_the_chat_while_the_page_is_away_keeps_the_line(client, monkeypatch):
+    """B3: the daemon's own write into a saved chat (``write_home`` ->
+    ``append_to_chat_thread``) dropped ``checked`` with every key it did not
+    know, so a reply that finished while the page was closed lost its line.
+    Through the real write, into a real saved chat, read back."""
+    from iron_jarvis.daemon.durable_turns import HOME_WRITTEN, write_home
 
+    body, frames = _write_turn(client, monkeypatch, "stream", ERROR_SHEET, turn_id="turn_keep")
+    assert body["checked"]["tone"] == "warn"
+    saved = client.put("/chat/threads/new", json={"title": "t", "messages": [
+        {"role": "user", "content": "make me a summary sheet"}]})
+    assert saved.status_code == 200, saved.text
+    thread = saved.json()["id"]
+    engine = client.app.state.platform.engine
+    assert write_home(engine, "turn_keep", thread, [[e, d] for e, d in frames], "done") == HOME_WRITTEN
+    kept = client.get(f"/chat/threads/{thread}").json()["messages"][-1]
+    assert (kept["role"], kept["savedBy"], kept["turnId"]) == ("assistant", "daemon", "turn_keep")
+    assert kept["checked"] == body["checked"], "the saved reply lost (or changed) its line"
+    assert "Sheet!B5 holds #DIV/0!" in kept["checked"]["line"]
+
+    # By whitelist: what is not the line's own shape is not written into the chat.
+    dirty = {**body["checked"], "html": "<script>x</script>", "line": body["checked"]["line"] + " " + "z" * 5000,
+             "checks": [*body["checked"]["checks"], {"label": "x", "said": "y", "result": "wonderful"}]}
+    other = client.put("/chat/threads/new", json={"title": "t2", "messages": [{"role": "user", "content": "q"}]}).json()["id"]
+    assert write_home(engine, "turn_dirty", other, [["done", {"reply": "ok", "checked": dirty}]], "done") == HOME_WRITTEN
+    cleaned = client.get(f"/chat/threads/{other}").json()["messages"][-1]["checked"]
+    assert set(cleaned) == {"line", "tone", "checks", "more", "more_words"} and len(cleaned["line"]) == R.LINE_MAX
+    assert cleaned["checks"] == body["checked"]["checks"]
+    # ... and the chat's own writer cleans it too, whoever hands it the line (a line given whole, not
+    # built from frames, goes straight to it).
+    given = client.put("/chat/threads/new", json={"title": "t4", "messages": [{"role": "user", "content": "q"}]}).json()["id"]
+    whole = {"role": "assistant", "content": "ok", "turnId": "turn_given", "savedBy": "daemon", "checked": dirty}
+    assert write_home(engine, "turn_given", given, [], "done", line=whole) == HOME_WRITTEN
+    kept_given = client.get(f"/chat/threads/{given}").json()["messages"][-1]["checked"]
+    assert kept_given == cleaned, "the chat's own writer saved a line it was handed as it came"
+    blank = {"role": "assistant", "content": "ok", "turnId": "turn_given2", "savedBy": "daemon", "checked": {"line": " "}}
+    assert write_home(engine, "turn_given2", given, [], "done", line=blank) == HOME_WRITTEN
+    assert "checked" not in client.get(f"/chat/threads/{given}").json()["messages"][-1]
+    # A reply with no line is written home exactly as before (no key).
+    third = client.put("/chat/threads/new", json={"title": "t3", "messages": [{"role": "user", "content": "q"}]}).json()["id"]
+    for turn, done in (("turn_plain", {"reply": "hello"}), ("turn_blank", {"reply": "x", "checked": {"line": "  "}}),
+                       ("turn_junk", {"reply": "y", "checked": "Checked by Iron Jarvis: everything"})):
+        assert write_home(engine, turn, third, [["done", done]], "done") == HOME_WRITTEN
+    assert all("checked" not in m for m in client.get(f"/chat/threads/{third}").json()["messages"])
+
+
+def test_the_line_the_daemon_would_write_and_the_one_the_page_saves_are_the_same(client, monkeypatch):
+    body, frames = _write_turn(client, monkeypatch, "stream", ERROR_SHEET, turn_id="turn_same")
+    line = reply_line("turn_same", [[e, d] for e, d in frames], "done")
+    assert line["checked"] == body["checked"]
+    assert "checked" not in reply_line("t2", [["done", {"reply": "hello"}]], "done")
+    assert "checked" not in reply_line("t3", [["done", {"reply": "x", "checked": {"line": "  "}}]], "done")
     # What the page saves on the reply round-trips, so a reopened chat has it.
     saved = client.put("/chat/threads/new", json={"title": "t", "messages": [
-        {"role": "user", "content": "make me a summary sheet", "turnId": "turn_keep"},
-        {"role": "assistant", "content": body["reply"], "turnId": "turn_keep", "checked": body["checked"]},
+        {"role": "user", "content": "make me a summary sheet", "turnId": "turn_same"},
+        {"role": "assistant", "content": body["reply"], "turnId": "turn_same", "checked": body["checked"]},
     ]})
     assert saved.status_code == 200, saved.text
     again = client.get(f"/chat/threads/{saved.json()['id']}").json()
     assert again["messages"][-1]["checked"] == body["checked"]
 
 
-def test_a_new_chats_first_replys_checks_follow_the_chat_when_the_page_names_it(client, monkeypatch):
-    _write_turn(client, monkeypatch, "post", GOOD_SHEET, turn_id="turn_first")
-    engine = client.app.state.platform.engine
-    assert R.for_thread(engine, "thread_named") == []
-    r = client.post("/chat/turns/turn_first/thread", json={"thread_id": "thread_named"})
+# --------------------------------------------------------------------------- #
+# S4: a new chat's first reply's rows reach the chat, whenever the page names it
+# --------------------------------------------------------------------------- #
+def _owners(platform, turn) -> set:
+    return {(r.thread_id, r.turn_id) for r in _rows(platform) if r.turn_id == turn}
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_chat_named_before_its_first_reply_ends_gets_that_replys_rows(client, monkeypatch, lane):
+    """The page saved the new chat and linked the turn while the reply was
+    still on its way. The POST lane filed every row under the turn and none
+    under the chat: "What did you check?" then found nothing, and deleting
+    the chat left the rows behind."""
+    platform = client.app.state.platform
+    turn = f"turn_pre_{lane}"
+    r = client.post(f"/chat/turns/{turn}/thread", json={"thread_id": f"thread_pre_{lane}"})
     assert r.status_code == 200, r.text
-    homed = R.for_thread(engine, "thread_named")
-    assert {row["turn_id"] for row in homed} == {"turn_first"} and len(homed) >= 4
+    body, _ = _write_turn(client, monkeypatch, lane, GOOD_SHEET, turn_id=turn)
+    assert body["checked"]["line"].startswith("Checked by Iron Jarvis:")
+    assert _owners(platform, turn) == {(f"thread_pre_{lane}", turn)}, "rows were left with no chat"
+    assert len(R.for_thread(platform.engine, f"thread_pre_{lane}")) >= 4
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_chat_named_while_the_rows_are_being_written_gets_them(client, monkeypatch, lane):
+    """The link lands between the reply's look for its chat and the end of
+    its write (the route's own homing ran on an empty record): the reply
+    looks again after the write and homes its rows itself."""
+    platform = client.app.state.platform
+    turn, thread = f"turn_mid_{lane}", f"thread_mid_{lane}"
+    real = R.write
+    linked: list[int] = []
+
+    def link_then_write(engine, checks, **owner):
+        if owner.get("turn_id") == turn and not linked:
+            # On the record's own worker thread, as the page's request would arrive.
+            r = client.post(f"/chat/turns/{turn}/thread", json={"thread_id": thread})
+            linked.append(r.status_code)
+            assert owner.get("thread_id") == "", "the reply already knew its chat: this is not the late link"
+        return real(engine, checks, **owner)
+
+    monkeypatch.setattr(R, "write", link_then_write)
+    body, _ = _write_turn(client, monkeypatch, lane, GOOD_SHEET, turn_id=turn)
+    assert linked == [200], "the link was not made during the write"
+    assert body["checked"]["line"].startswith("Checked by Iron Jarvis:")
+    assert _owners(platform, turn) == {(thread, turn)}, "rows written while the chat was being named have no chat"
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_chat_named_after_its_first_reply_ended_gets_that_replys_rows(client, monkeypatch, lane):
+    platform = client.app.state.platform
+    turn, thread = f"turn_first_{lane}", f"thread_named_{lane}"
+    _write_turn(client, monkeypatch, lane, GOOD_SHEET, turn_id=turn)
+    assert R.for_thread(platform.engine, thread) == [] and _owners(platform, turn) == {("", turn)}
+    r = client.post(f"/chat/turns/{turn}/thread", json={"thread_id": thread})
+    assert r.status_code == 200, r.text
+    homed = R.for_thread(platform.engine, thread)
+    assert {row["turn_id"] for row in homed} == {turn} and len(homed) >= 4
+    assert _owners(platform, turn) == {(thread, turn)}
+
+
+def test_the_link_route_homes_the_rows_after_it_has_made_the_link_readable():
+    """The other half of the late link: a reply still writing reads the link
+    (``egress.linked_thread``), and the route homes the rows already written.
+    If the route homed FIRST, a row written between its homing and its link
+    would be seen by neither."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon" / "routes" / "chat.py").read_text(
+        encoding="utf-8").replace("\r\n", "\n")
+    route = source[source.index("async def link_chat_turn("):]
+    route = route[:route.index("\n    @app.")]
+    assert route.index("link_turn_holds(turn_id, tid)") < route.index("_checks.home_turn, d.platform.engine, turn_id, tid")
+
+
+# --------------------------------------------------------------------------- #
+# S6: a hand-off and a coding reply get no plain-chat line from this path
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("lane", LANES)
+def test_a_reply_that_hands_off_to_an_agent_run_gets_no_line_and_writes_no_row(client, monkeypatch, lane):
+    """The run it hands off to checks the files (when it is settled); the
+    reply itself claims nothing, even though its own tool wrote a file."""
+    platform = client.app.state.platform
+    _scripted_router(platform, monkeypatch, [
+        [ToolCall(id="c1", name="write_document", arguments={"path": "summary.xlsx", "content": ERROR_SHEET})],
+        [ToolCall(id="c2", name="escalate_to_agent", arguments={"reason": "this needs several more steps"})],
+    ], "handing off")
+    body, _ = _post_turn(client, lane, {
+        "messages": [{"role": "user", "content": "make me a summary sheet of this"}],
+        "tools": ["write_document"], "approval_mode": "yolo", "turn_id": f"turn_esc_{lane}",
+    })
+    assert body["escalate"] is True and body["documents"], "the scripted reply did not write a file and hand off"
+    assert "checked" not in body, "a reply that handed off shows a line of its own"
+    assert [r for r in _rows(platform) if r.turn_id == f"turn_esc_{lane}"] == []
+
+
+@pytest.mark.parametrize("lane", LANES)
+async def test_a_coding_reply_gets_no_plain_chat_line_and_no_check_of_what_its_file_says(tmp_path, monkeypatch, lane):
+    """A coding session has its own line (its finish check: tests, a review).
+    The plain-chat line, and the rule checks of what a made file says, are
+    not added to it."""
+    import json as _json
+
+    from iron_jarvis.daemon.chat_stream import stream_chat_turn
+    from iron_jarvis.daemon.chat_turn import run_chat_turn
+    from iron_jarvis.daemon.schemas import ChatBody, ChatMessageBody
+    from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
+    from iron_jarvis.platform import build_platform
+    from tests.test_build_sessions_v1367 import CLAUDE, Script
+    from tests.test_wave3_chat_lanes_v1311 import _parse_sse
+
+    work = tmp_path / "work"
+    work.mkdir()
+    platform = build_platform(str(tmp_path / "home"))
+    script = Script([[ToolCall(id="w", name="Write", arguments={"file_path": "notes.md", "content": "hello\n"})]])
+    monkeypatch.setattr(platform.router, "stream", script.stream)
+    monkeypatch.setattr(platform.router, "complete", script.complete)
+    body = ChatBody(messages=[ChatMessageBody(role="user", content="write it")], provider=CLAUDE[0], model=CLAUDE[1],
+                    workspace_dir=str(work), approval_mode="yolo", turn_id=f"turn_code_{lane}")
+    kw = {"harness": True, "session_id": "build:lane"}
+    if lane == "stream":
+        gen = await stream_chat_turn(platform, BUILTIN_PERSONAS, body, **kw)
+        raw = "".join([chunk if isinstance(chunk, str) else chunk.decode("utf-8") async for chunk in gen])
+        out = [d for e, d in _parse_sse(raw) if e == "done"][-1]
+    else:
+        out = await run_chat_turn(platform, BUILTIN_PERSONAS, body, **kw)
+    assert (work / "notes.md").read_text(encoding="utf-8") == "hello\n", "the scripted coding reply wrote no file"
+    assert [str(d).replace("\\", "/").rsplit("/", 1)[-1] for d in out["documents"]] == ["notes.md"], _json.dumps(out)[:400]
+    assert "checked" not in out, "a coding reply carries the plain-chat line"
+    assert not [r for r in _rows(platform) if r.check in R.CONTENT_CHECKS], "a coding reply's file got the rule checks"
 
 
 def test_a_reply_in_a_saved_chat_writes_its_rows_under_that_chat(client, monkeypatch):

@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -90,6 +91,9 @@ MAX_LISTED = 30
 #: The line names at most this many files, problems and unchecked things.
 MAX_LINE_FILES = 3
 MAX_LINE_PROBLEMS = 3
+#: The line is at most this long: the number the page shows
+#: (``dashboard/lib/checked.ts``; a test holds the two equal).
+LINE_MAX = 1_200
 #: How many rows one read returns at most.
 MAX_READ = 200
 
@@ -141,6 +145,56 @@ def file_name(path: Any) -> str:
     """The NAME of a file (its folder is never kept)."""
     text = str(path or "").replace("\\", "/").rstrip("/")
     return text.rpartition("/")[2][:NAME_MAX]
+
+
+_APART = " (in "
+
+
+def apart(name: Any, folder: Any) -> str:
+    """Two made files with the same name in two folders, told apart: the
+    folder's OWN name beside the file's ("summary.xlsx (in 2023)"). One
+    folder name, never a path."""
+    base, where = file_name(name), file_name(folder)[:60]
+    return f"{base}{_APART}{where})" if where else base
+
+
+def own_name(name: Any) -> str:
+    """A file's own name without the folder :func:`apart` put beside it."""
+    return str(name or "").partition(_APART)[0]
+
+
+_ENGINE_TAIL_RX = re.compile(r"\s*\([A-Z][A-Za-z0-9_.]*(?::[^)]*)?\)?\s*$")
+
+
+def open_words(why: Any) -> str:
+    """Why a file does not open, in plain words. The older check's own
+    reason (``deliverables/check._opens``) may name an exception ("BadZipFile:
+    File is not a zip file") or a part of the package ("xl/workbook.xml"):
+    neither is shown to a person."""
+    low = " ".join(str(why or "").split()).lower()
+    if "not a valid office file" in low:
+        return "it does not open: it is not a real Office file"
+    if "package has no" in low:
+        return "it does not open: a part of the file is missing"
+    if "no sheets" in low:
+        return "it does not open: the workbook has no sheets"
+    if "does not start like" in low:
+        return "it does not open: it is not the kind of file its name says"
+    if "no end marker" in low:
+        return "it does not open: the PDF was cut off"
+    if "not utf-8" in low:
+        return "its text could not be read"
+    if "only blank space" in low:
+        return "it has no text"
+    if "cannot be read" in low:
+        return "it could not be read"
+    return "it does not open"
+
+
+def plain_words(text: Any) -> str:
+    """A reason an older check built, without an exception's name at its
+    end ("it cannot be checked (OSError)" reads "it cannot be checked")."""
+    return _ENGINE_TAIL_RX.sub("", " ".join(str(text or "").split()))
 
 
 _READY: set[int] = set()
@@ -271,10 +325,14 @@ def for_turn(engine: Any, turn_id: str) -> list[dict[str, Any]]:
     return _read(engine, CheckRecord.turn_id == turn) if turn else []
 
 
-def for_session(engine: Any, session_id: str) -> list[dict[str, Any]]:
-    """One run's (or coding session's) checks, oldest first."""
+def for_session(engine: Any, session_id: str, limit: int = MAX_READ) -> list[dict[str, Any]]:
+    """One run's (or coding session's) checks, oldest first. A long run
+    holds more rows than one read returns: the NEWEST *limit* are read (a
+    file checked last is never the one that falls out)."""
     sid = str(session_id or "")
-    return _read(engine, CheckRecord.session_id == sid) if sid and sid != "chat" else []
+    if not sid or sid == "chat":
+        return []
+    return list(reversed(_read(engine, CheckRecord.session_id == sid, limit=limit, newest=True)))
 
 
 def for_thread(engine: Any, thread_id: str, limit: int = MAX_READ) -> list[dict[str, Any]]:
@@ -355,13 +413,43 @@ _RESULT_WORDS = {PASSED: "Checked", FAILED: "Problem", NOT_CHECKED: "Not checked
 
 def kind_words(name: str) -> str:
     """"the spreadsheet" for summary.xlsx: what one made file is called."""
-    return _KIND_WORDS.get(os.path.splitext(str(name or ""))[1].lower(), "the file")
+    return _KIND_WORDS.get(os.path.splitext(own_name(name))[1].lower(), "the file")
+
+
+_MODEL_FAMILY = r"(opus|sonnet|haiku)"
+_MODEL_VER = r"(\d{1,2})(?:[-.](\d{1,2}))?"
+_MODEL_TAIL = r"(?:-\d{8}|-latest)?"
+_MODEL_NEW_RX = re.compile(rf"^claude-{_MODEL_FAMILY}-{_MODEL_VER}{_MODEL_TAIL}$", re.IGNORECASE)
+_MODEL_OLD_RX = re.compile(rf"^claude-{_MODEL_VER}-{_MODEL_FAMILY}{_MODEL_TAIL}$", re.IGNORECASE)
+_MODEL_1M_RX = re.compile(r"\[1m\]$", re.IGNORECASE)
+
+
+def friendly_model(name: Any) -> str:
+    """A model id as people say it ("claude-sonnet-4-5" reads "Sonnet 4.5"):
+    the daemon's twin of the page's own helper
+    (``dashboard/lib/friendlyModelName.ts``; a test holds the two to the same
+    cases). Only the family and the version numbers the id already spells;
+    every other name comes back unchanged, so nothing is invented."""
+    raw = " ".join(str(name or "").split())
+    big = _MODEL_1M_RX.search(raw) is not None
+    bare = _MODEL_1M_RX.sub("", raw)
+    m = _MODEL_NEW_RX.match(bare)
+    if m is not None:
+        family, major, minor = m.groups()
+    else:
+        m = _MODEL_OLD_RX.match(bare)
+        if m is None:
+            return raw
+        major, minor, family = m.groups()
+    said = f"{family.capitalize()} {major}" + (f".{minor}" if minor is not None else "")
+    return f"{said} 1M" if big else said
 
 
 def who_words(by: Any) -> str:
-    """"by rule", or "by <the model's name>"."""
+    """"by rule", or "by <the model's name>" (a model id in the words people
+    say, :func:`friendly_model`; the row keeps the name it was given)."""
     name = " ".join(str(by or "").split())
-    return "by rule" if not name or name == BY_RULE else f"by {name}"
+    return "by rule" if not name or name == BY_RULE else f"by {friendly_model(name)}"
 
 
 def _subject(row: dict[str, Any], one_file: bool) -> str:
@@ -417,15 +505,33 @@ def line_for(rows: Iterable[dict[str, Any]]) -> "tuple[str, str]":
                 for r in rows if r.get("result") == FAILED]
     unchecked = [f"{_subject(r, one_file)} ({r.get('detail') or 'no reason was kept'})"
                  for r in rows if r.get("result") == NOT_CHECKED]
-    parts: list[str] = []
-    if passed:
-        parts.append(f"{LINE_HEAD} {_and_more(passed, MAX_LINE_FILES, 'file')}.")
-    if problems:
-        said = _and_more(problems, MAX_LINE_PROBLEMS)
-        parts.append(f"Problem in {said}." if passed else f"{LINE_HEAD} a problem in {said}.")
-    if unchecked:
-        parts.append(f"{LINE_NOT_CHECKED} {_and_more(unchecked, MAX_LINE_PROBLEMS)}.")
-    return " ".join(parts), ("warn" if problems else "quiet")
+
+    def build(n_files: int, n_problems: int, n_unchecked: int) -> str:
+        parts: list[str] = []
+        if passed:
+            parts.append(f"{LINE_HEAD} {_and_more(passed, n_files, 'file')}.")
+        if problems:
+            said = _and_more(problems, n_problems)
+            parts.append(f"Problem in {said}." if passed else f"{LINE_HEAD} a problem in {said}.")
+        if unchecked:
+            parts.append(f"{LINE_NOT_CHECKED} {_and_more(unchecked, n_unchecked)}.")
+        return " ".join(parts)
+
+    # The line is at most LINE_MAX long (the page shows no more). One that
+    # would be longer names fewer things and COUNTS the rest ("and 2 more"):
+    # what was not checked gives way first, then the files that passed, and
+    # the problems last. It is never cut in the middle of a finding.
+    caps = [MAX_LINE_FILES, MAX_LINE_PROBLEMS, MAX_LINE_PROBLEMS]
+    line = build(*caps)
+    for which in (2, 0, 1, 2, 0, 1):
+        if len(line) <= LINE_MAX:
+            break
+        if caps[which] > 1:
+            caps[which] -= 1
+            line = build(*caps)
+    if len(line) > LINE_MAX:    # one finding of each kind, and still too long
+        line = line[:LINE_MAX - 2].rsplit(" ", 1)[0].rstrip(" ,;:(") + " …"
+    return line, ("warn" if problems else "quiet")
 
 
 _ORDER = {FAILED: 0, NOT_CHECKED: 1, PASSED: 2}
@@ -462,6 +568,47 @@ def _more_words(rest: int) -> str:
     return f"and {rest:,} more check{'s' if rest != 1 else ''}" if rest > 0 else ""
 
 
+def _text(value: Any, cap: int) -> str:
+    return value.strip()[:cap] if isinstance(value, str) else ""
+
+
+def clean_checked(raw: Any) -> "dict[str, Any] | None":
+    """A ``checked`` payload as it may be SAVED on a chat reply: by
+    whitelist, the shape :func:`payload` builds and the page's decoder
+    accepts (``dashboard/lib/checked.ts``, the same caps), and nothing else.
+    None for one that says nothing (no line) or is not a payload at all. A
+    payload this module built comes back equal. Pure; never raises."""
+    try:
+        if not isinstance(raw, dict):
+            return None
+        line = _text(raw.get("line"), LINE_MAX)
+        if not line:
+            return None
+        checks: list[dict[str, Any]] = []
+        listed = raw.get("checks")
+        for item in listed if isinstance(listed, list) else []:
+            if not isinstance(item, dict) or item.get("result") not in RESULTS:
+                continue
+            label = _text(item.get("label"), 240)
+            if not label:
+                continue
+            checks.append({
+                "label": label, "said": _text(item.get("said"), 400), "result": item["result"],
+                "result_words": _text(item.get("result_words"), 40), "who": _text(item.get("who"), 140),
+            })
+            if len(checks) >= MAX_LISTED:
+                break
+        more = raw.get("more")
+        more = int(more) if isinstance(more, (int, float)) and not isinstance(more, bool) and 0 < more < 10**9 else 0
+        return {
+            "line": line, "tone": "warn" if raw.get("tone") == "warn" else "quiet", "checks": checks,
+            "more": more, "more_words": _text(raw.get("more_words"), 80) if more else "",
+        }
+    except Exception:  # noqa: BLE001 — a line is never worth a failed save
+        log.debug("a reply's checked line could not be read", exc_info=True)
+        return None
+
+
 def has_content(rows: Iterable[dict[str, Any]]) -> bool:
     """Does the record hold a check of a made file? (The line is drawn only
     then: a reply that made no file shows none.)"""
@@ -470,9 +617,10 @@ def has_content(rows: Iterable[dict[str, Any]]) -> bool:
 
 __all__ = [
     "BY_RULE", "CHECKS", "CLAIMS", "CONTENT_CHECKS", "Check", "CheckRecord", "DOC_TEXT", "FAILED", "FILE_OPENS",
-    "KEEP_DAYS", "LINE_HEAD", "LINE_NOT_CHECKED", "MAX_LISTED", "MAX_ROWS_PER_WRITE", "NOT_CHECKED", "PASSED",
-    "PDF_PAGES", "REQUIRED_FILE", "RESULTS", "REVIEW", "SHEET_ERRORS", "SHEET_TOTALS", "STEP_CHECK", "TESTS",
-    "WORKFLOW_STEP", "as_dict", "drop_thread", "ensure_table", "file_name", "for_session", "for_thread",
-    "for_turn", "has_content", "home_turn", "kind_words", "line_for", "new_check_id", "note", "payload", "prune",
-    "who_words", "write",
+    "KEEP_DAYS", "LINE_HEAD", "LINE_MAX", "LINE_NOT_CHECKED", "MAX_LISTED", "MAX_READ", "MAX_ROWS_PER_WRITE",
+    "NOT_CHECKED", "PASSED", "PDF_PAGES", "REQUIRED_FILE", "RESULTS", "REVIEW", "SHEET_ERRORS", "SHEET_TOTALS",
+    "STEP_CHECK", "TESTS", "WORKFLOW_STEP", "apart", "as_dict", "clean_checked", "drop_thread", "ensure_table",
+    "file_name", "for_session", "for_thread", "for_turn", "friendly_model", "has_content", "home_turn",
+    "kind_words", "line_for",
+    "new_check_id", "note", "open_words", "own_name", "payload", "plain_words", "prune", "who_words", "write",
 ]

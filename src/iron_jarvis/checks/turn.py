@@ -10,6 +10,25 @@ too, then READS THE RECORD BACK and builds the line from the rows it holds.
 The answer carries the line as ``checked`` only when a file was made or
 changed; a reply that made none shows no line and writes no content row.
 
+A REPLY NEVER WAITS LONG ON THE RECORD. The whole of a file reply's work (the
+files, the write, the read back) is inside ONE cap (:data:`TURN_CAP_S`), of
+which the record's own share is :data:`RECORD_WAIT_S`; a reply that made no
+file waits :data:`RECORD_WAIT_S` at most on its row. Past the cap the reply
+goes out with NO line (never a line the record does not hold); a write that
+was already on its way still lands, on its own thread, bounded by the
+database's own wait. Nothing here keeps a set of background tasks.
+
+THE CHAT a reply's rows belong to: the one the request names. A new chat's
+first reply names none: its rows are written under the turn, and AFTER the
+write the reply looks for its chat (:func:`_chat_of`: the one the page
+linked the turn to, ``providers/egress.linked_thread``, as the script worker
+resolves it; else the daemon-owned turn's live chat) and homes the rows
+itself. ONE place, after the write, so a link that landed before the reply
+ended and one that landed while the rows were being written are the same
+case. A link that lands later homes them from the route
+(``routes/chat.link_chat_turn`` -> ``record.home_turn``, which that route
+calls AFTER it has made the link readable here).
+
 AN AGENT RUN's files are checked when the run is settled
 (``Orchestrator._settle_finished_run``, already off the event loop):
 :func:`settle_run`. Its result's receipt reads the line from the record
@@ -31,6 +50,13 @@ from . import content, existing, record
 
 log = logging.getLogger(__name__)
 
+#: One file reply's whole check takes this long at most: its files, the
+#: write to the record and the read back of its line.
+TURN_CAP_S = content.HARD_WAIT_S
+#: The record's share of that (the write, the read back). A reply that made
+#: no file waits this long at most on its one row.
+RECORD_WAIT_S = 1.0
+
 
 async def checked_for_turn(
     platform: Any,
@@ -44,17 +70,21 @@ async def checked_for_turn(
     coding: bool = False,
     escalate: bool = False,
     clock: Callable[[], float] = time.monotonic,
+    cap_s: "float | None" = None,
+    record_wait_s: "float | None" = None,
 ) -> "dict[str, Any] | None":
     """One chat reply's checks, written, and its line read back from the
     record (``record.payload``: ``{line, tone, checks, more, more_words}``),
-    or None when the reply made no file.
+    or None when the reply made no file, or when the work did not fit its
+    cap (*cap_s*, default :data:`TURN_CAP_S`; *record_wait_s*, default
+    :data:`RECORD_WAIT_S`).
 
     *made_docs* is the lane's own record of the files its tools wrote or
     changed (absolute paths, from the tools' results); *reply* the model's
     own words, read only for a page count it states of a PDF it made. A
     coding session (*coding*) has its own line (the finish check), and a
     reply that hands off to an agent run (*escalate*) leaves the checking to
-    that run: neither gets a line here."""
+    that run: neither gets a line here, and a hand-off writes no row."""
     try:
         engine = getattr(platform, "engine", None)
         if engine is None:
@@ -64,37 +94,74 @@ async def checked_for_turn(
         turn = str(turn_id or "").strip() or f"reply-{uuid.uuid4().hex[:16]}"
         docs = [str(p) for p in (made_docs or ()) if p]
         made = bool(docs) and not coding and not escalate
-        # The checks of the made files come first in the record (and so in
-        # the list a press opens); the reply's older checks follow them.
-        rows: list[record.Check] = []
-        if made:
-            rows += await content.check_made_files(docs, str(reply or ""), clock=clock)
-        if not escalate:
-            rows += existing.required_file_checks(getattr(deliverables, "states", None) or ())
-            claims = existing.claims_check(until)
-            if claims is not None:
-                rows.append(claims)
-        if not rows:
+        record_wait = max(0.0, RECORD_WAIT_S if record_wait_s is None else float(record_wait_s))
+        cap = max(0.0, TURN_CAP_S if cap_s is None else float(cap_s)) if made else record_wait
+        files_wait = max(0.0, min(content.HARD_WAIT_S, cap - record_wait))
+        try:
+            return await asyncio.wait_for(
+                _checked(engine, turn, str(thread_id or "").strip(), docs if made else [], str(reply or ""),
+                         until, deliverables, escalate, clock, files_wait),
+                cap,
+            )
+        except asyncio.TimeoutError:
+            # The reply goes out now, with no line. (A write already on its
+            # way finishes on its own thread; the record may hold the rows.)
+            log.info("a reply's checks did not fit their time: the reply goes out with no line")
             return None
-        thread = str(thread_id or "").strip() or _live_thread()
-        await record.note(engine, rows, thread_id=thread, turn_id=turn)
-        if not thread:
-            # A NEW chat's first reply: the page names its chat with a link
-            # that may land while this reply is still ending. The link homes
-            # the rows written before it (``routes/chat.link_chat_turn``);
-            # one that landed while these were being written is read here.
-            late = _live_thread()
-            if late:
-                await asyncio.to_thread(record.home_turn, engine, turn, late)
-        if not made:
-            return None
-        kept = await asyncio.to_thread(record.for_turn, engine, turn)
-        return record.payload(kept) if record.has_content(kept) else None
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 — a line is never worth a failed reply
         log.debug("a reply's checks could not be recorded", exc_info=True)
         return None
+
+
+async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", reply: str, until: Any,
+                   deliverables: Any, escalate: bool, clock: Callable[[], float],
+                   files_wait: float) -> "dict[str, Any] | None":
+    """The work :func:`checked_for_turn` bounds. *docs* is empty for a reply
+    that gets no line (it made no file, a coding session, a hand-off)."""
+    # The checks of the made files come first in the record (and so in the
+    # list a press opens); the reply's older checks follow them.
+    rows: list[record.Check] = []
+    if docs:
+        rows += await content.check_made_files(docs, reply, clock=clock, hard_wait_s=files_wait)
+    if not escalate:
+        rows += existing.required_file_checks(getattr(deliverables, "states", None) or ())
+        claims = existing.claims_check(until)
+        if claims is not None:
+            rows.append(claims)
+    if not rows:
+        return None
+    await record.note(engine, rows, thread_id=thread_id, turn_id=turn)
+    if not thread_id:
+        # A NEW chat's first reply: the page names its chat with a link, at
+        # any moment (before this reply ends, while its rows are being
+        # written, or later). The chat is looked for HERE, after the write,
+        # whichever of the first two it was; a later link homes the rows
+        # itself (``routes/chat.link_chat_turn``).
+        chat = _chat_of(turn)
+        if chat:
+            await asyncio.to_thread(record.home_turn, engine, turn, chat)
+    if not docs:
+        return None
+    kept = await asyncio.to_thread(record.for_turn, engine, turn)
+    return record.payload(kept) if record.has_content(kept) else None
+
+
+def _chat_of(turn_id: str) -> str:
+    """The saved chat a reply with no chat in its request belongs to: the
+    one the page linked this turn to (either lane; the POST lane has no
+    daemon-owned turn to ask), else the daemon-owned turn's live chat. ""
+    = not named yet. Never raises."""
+    try:
+        from ..providers.egress import linked_thread
+
+        linked = str(linked_thread(turn_id) or "")
+        if linked:
+            return linked
+    except Exception:  # noqa: BLE001
+        log.debug("a turn's linked chat could not be read", exc_info=True)
+    return _live_thread()
 
 
 def _live_thread() -> str:
@@ -113,15 +180,19 @@ def _live_thread() -> str:
 async def note_finish(platform: Any, finish: Any, *, turn_id: str = "", thread_id: str = "",
                       session_id: str = "") -> None:
     """A coding reply's finish check (its tests, its review), written to the
-    record. MIRROR NOTE: both chat lanes, where they add ``finish``."""
+    record. MIRROR NOTE: both chat lanes, where they add ``finish``. The
+    reply waits :data:`RECORD_WAIT_S` at most on it."""
     try:
         rows = existing.finish_checks(finish)
         if rows and (turn_id or session_id):
-            await record.note(getattr(platform, "engine", None), rows, thread_id=str(thread_id or ""),
-                              turn_id=str(turn_id or ""), session_id=str(session_id or ""))
+            await asyncio.wait_for(
+                record.note(getattr(platform, "engine", None), rows, thread_id=str(thread_id or ""),
+                            turn_id=str(turn_id or ""), session_id=str(session_id or "")),
+                RECORD_WAIT_S,
+            )
     except asyncio.CancelledError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — a timeout included: the reply goes on
         log.debug("a coding reply's finish check could not be recorded", exc_info=True)
 
 
@@ -141,15 +212,44 @@ def settle_run(engine: Any, session_id: str, documents: "Iterable[Any] | None", 
         return 0
 
 
-def run_payload(engine: Any, session_id: str) -> "dict[str, Any] | None":
+def not_covered(rows: "list[dict[str, Any]]", documents: "Iterable[Any] | None") -> "dict[str, Any] | None":
+    """A result card may list files this run's own checks never looked at
+    (a team lead's card lists its workers' documents; a run that made more
+    than :data:`content.MAX_FILES`). ONE ``not_checked`` row that says so,
+    by name, so the line and its list never read as if they covered them;
+    None when every listed file has a check. Worked out at the read, from
+    the record's rows and the card's own list: it is not stored."""
+    covered = {record.own_name(r.get("file")).lower() for r in rows
+               if r.get("check") in record.CONTENT_CHECKS and r.get("file")}
+    names = list(dict.fromkeys(record.file_name(d) for d in (documents or ()) if d))
+    missing = [n for n in names if n and n.lower() not in covered]
+    if not missing:
+        return None
+    n = len(missing)
+    shown = ", ".join(missing[:record.MAX_LINE_FILES])
+    rest = n - min(n, record.MAX_LINE_FILES)
+    return {
+        "check": record.FILE_OPENS, "file": "", "result": record.NOT_CHECKED, "by": record.BY_RULE,
+        "detail": (f"{n:,} other file{'' if n == 1 else 's'} on this card {'was' if n == 1 else 'were'} not checked "
+                   f"here: {shown}" + (f" and {rest:,} more" if rest > 0 else "")),
+    }
+
+
+def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" = None) -> "dict[str, Any] | None":
     """BLOCKING. The line of a run's result, from the record; None when the
-    record holds no check of a file the run made."""
+    record holds no check of a file the run made. *documents* is the list
+    the result card shows: a file on it that no check of this run covers is
+    said as not checked (:func:`not_covered`)."""
     try:
         rows = record.for_session(engine, session_id)
-        return record.payload(rows) if record.has_content(rows) else None
+        if not record.has_content(rows):
+            return None
+        extra = not_covered(rows, documents)
+        return record.payload(rows + [extra] if extra is not None else rows)
     except Exception:  # noqa: BLE001
         log.debug("a run's checks could not be read", exc_info=True)
         return None
 
 
-__all__ = ["checked_for_turn", "note_finish", "run_payload", "settle_run"]
+__all__ = ["RECORD_WAIT_S", "TURN_CAP_S", "checked_for_turn", "not_covered", "note_finish", "run_payload",
+           "settle_run"]
