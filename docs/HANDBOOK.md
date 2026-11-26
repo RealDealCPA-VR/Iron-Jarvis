@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.583.0 (2026-11-19).*
+holds itself to. Current as of v1.584.0 (2026-11-19).*
 
 ---
 
@@ -2150,7 +2150,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Phone chats, coding sessions and round-tables keep every message too (v1.581.0)
+## Phone chats, coding sessions and round-tables keep every message too (v1.584.0)
 
 Phone chats, coding sessions and round-tables no longer lose their oldest
 messages, and you can scroll back to them. Until now a phone chat (Telegram,
@@ -3995,7 +3995,7 @@ line instead.
   with **Try again**. What you already scrolled back to stays on screen.
 - History search already finds earlier messages.
 - Phone chats and coding sessions kept only their newest messages until
-  v1.581.0, which keeps them too.
+  v1.584.0, which keeps them too.
 
 ## Ask what was done before, in any chat (v1.547.0)
 

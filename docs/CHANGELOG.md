@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.584.0
+
+**Phone chats, coding sessions and round-tables keep every message too.** Phone chats, coding sessions and round-tables no longer lose their oldest messages, and you can scroll back to them.
+
 ## v1.583.0
 
 **See what is filling a chat.** When a chat gets long, a small meter under the message box shows how full it is.
@@ -77,7 +81,3 @@
 ## v1.566.0
 
 **Changes you accepted show their result.** When you accept a change from **Improvements**, Iron Jarvis now counts how the work went before and after it, from its own records, and shows the result under the waiting suggestions, in **Results of changes you accepted**.
-
-## v1.565.1
-
-**Two changes at once in Build › Code wait for each other.** Two small fixes for moments when two things change the same session or the same files at once.
