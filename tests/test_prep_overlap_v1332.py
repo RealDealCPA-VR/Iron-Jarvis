@@ -223,7 +223,7 @@ def test_the_system_prompt_is_byte_identical_to_the_serial_order(tmp_path, monke
     found = (
         "\n\n# Attachments (provided by the user this turn)" + "\n\nATT-1"
         + "\n\n# Resources from the user's apps (attached this turn)" + "\n\nRES-1"
-        + "\n---\n[END UNTRUSTED CONTENT]"
+        + "\n---\n" + _prefix.FOUND_BOTTOM
     )
     last = (
         "# Skill invoked by the user: prep-skill\n"

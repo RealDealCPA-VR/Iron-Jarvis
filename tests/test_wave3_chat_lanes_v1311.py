@@ -473,7 +473,7 @@ def test_grounded_system_prompt_is_byte_identical(tmp_path, monkeypatch, lane):
     beside_at = system.index(_prefix.ONCE_TOP)
     assert system.index(_EXPECTED_STABLE_SEGMENT) < beside_at
     assert _EXPECTED_QUERY_SEGMENT not in system[:beside_at], "a query-dependent section is in the system prompt"
-    assert (_EXPECTED_QUERY_SEGMENT + "\n---\n[END UNTRUSTED CONTENT]") in system[beside_at:], (
+    assert (_EXPECTED_QUERY_SEGMENT + "\n---\n" + _prefix.FOUND_BOTTOM) in system[beside_at:], (
         f"{lane}: the query-dependent sections are out of order, re-joined, or followed by something:\n"
         f"{system[beside_at:]!r}"
     )
@@ -519,7 +519,7 @@ def test_the_named_apps_section_joins_right_after_connector_memory(tmp_path, mon
     from iron_jarvis.context import prefix as _prefix
 
     beside_at = system.index(_prefix.ONCE_TOP)
-    assert beside_at < system.index(head.lstrip("\n")) < system.index("[UNTRUSTED CONTENT", beside_at) < system.index("\n\nCONN-1"), (
+    assert beside_at < system.index(head.lstrip("\n")) < system.index(_prefix.FOUND_TOP, beside_at) < system.index("\n\nCONN-1"), (
         f"{lane}: the apps section is not Iron Jarvis's own words beside the message:\n{system[-900:]!r}"
     )
     assert head not in system[:beside_at] and "CONN-1" not in system[:beside_at]

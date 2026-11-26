@@ -378,14 +378,12 @@ def test_a_coding_session_is_not_touched():
 
 
 def test_an_attached_files_text_is_what_was_found_and_the_lines_about_it_are_read_last():
-    from iron_jarvis.computeruse.safety import _FENCE_TOP
-
     turn = CP.StableTurn(active=True)
     block = CP.AttachBlock("whole", files="\n\n## Attached file: a.txt\nFILETEXT", once="\n\n## Attached file: a.txt (LIVE)")
     got = turn.attached(block)
     assert got.of(P.FOUND) == CP.ATTACH_HEAD + block.files and got.of(P.LAST) == block.once and got.of(P.OWN) == ""
     rendered = P.once_block(got)
-    assert rendered.index(_FENCE_TOP) < rendered.index("FILETEXT") < rendered.index("[END UNTRUSTED CONTENT]") < rendered.index("(LIVE)")
+    assert rendered.index(P.FOUND_TOP) < rendered.index("FILETEXT") < rendered.index(P.FOUND_BOTTOM) < rendered.index("(LIVE)")
     # Only the conversation's earlier files, by name: Iron Jarvis's own lines, no fence needed.
     named = turn.attached(CP.AttachBlock("carried", files="", once="\n\n## Files in this conversation\n- a.txt"))
     assert named.of(P.LAST) == CP.ATTACH_HEAD + "\n\n## Files in this conversation\n- a.txt" and named.of(P.FOUND) == ""
