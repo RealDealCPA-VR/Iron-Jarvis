@@ -1690,6 +1690,14 @@ def build_platform(
 
     for tool in filling_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # WHAT IRON JARVIS CHECKED (the intelligence plan, release 5):
+    # ``checks_list`` answers "what did you check?" from the one record of
+    # checks, for the chat it is asked in only. Read-only; chat arms it by
+    # its words (``autoselect``) and the lookup finds it.
+    from .checks.tool import checks_tools
+
+    for tool in checks_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
     # THE LOOKUP (capability search plan, Phase 1): ``find_capability`` lets
     # the model ask what Iron Jarvis can do, in its own words, and answers
     # from one index of every built-in tool, setting, page step and "not

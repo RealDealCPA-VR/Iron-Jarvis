@@ -50,6 +50,8 @@ import { atStepLimit } from "@/lib/agentRun";
 import { runActionLines, stepFailedWords } from "@/lib/runWords";
 import { statusWords, uncheckedWords } from "@/lib/statusWords";
 import { runActivity, RunActivityFold } from "@/components/chat/RunActivity";
+import { CheckedLine } from "@/components/chat/CheckedLine";
+import { decodeChecked } from "@/lib/checked";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { answeredModelName } from "@/lib/answeredModel";
 import { useModels } from "@/lib/useModels";
@@ -113,6 +115,10 @@ export interface RunResult {
   /** The newest 20 plain action lines, oldest first (the mission screen's
    *  words); tone "ok" | "warn" | "ask". */
   activity?: { at: string; who: string; session_id: string; text: string; tone: string }[];
+  /** The intelligence plan, release 5: what Iron Jarvis itself checked on
+   *  the files this run made (`checks/turn.run_payload`: the daemon's line
+   *  and list, decoded by lib/checked). Absent when the run made no file. */
+  checked?: unknown;
 }
 
 /**
@@ -535,6 +541,10 @@ export function RunResultCard({
           total={result.files_changed_total}
           testId="run-result-files-changed"
         />
+        {/* The intelligence plan, release 5: what Iron Jarvis checked on the
+            files above, from its own record (the daemon's words). Nothing
+            for a run that made no file. */}
+        <CheckedLine mark={decodeChecked(result.checked)} />
         {/* What each failed step SAID, one press away (the row above already
             counts the failures in words). A native disclosure per error. */}
         {result.errors.length > 0 && (
@@ -715,6 +725,8 @@ export function RunResultCard({
           items={result.files_changed}
           total={result.files_changed_total}
         />
+        {/* The intelligence plan, release 5 (same line as the quiet form). */}
+        <CheckedLine mark={decodeChecked(result.checked)} />
 
         {actions.length > 0 && (
           <div className="flex gap-2">

@@ -153,6 +153,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   work_history: { did: "Looked up earlier work", noun: "work lookup" },
   // The intelligence plan, release 6.
   chat_fullness: { did: "Looked up what is filling this chat", noun: "fullness lookup" },
+  // The intelligence plan, release 5.
+  checks_list: { did: "Looked up what Iron Jarvis checked", noun: "check lookup" },
   excel_live_look: { did: "Looked at the workbook open in Excel", noun: "look at Excel", nouns: "looks at Excel" },
   excel_live_edit: { did: "Changed the workbook open in Excel", noun: "change in Excel", nouns: "changes in Excel" },
   excel_sheet_spec: { did: "Captured a sheet's layout", noun: "sheet layout capture" },

@@ -225,6 +225,9 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # What is filling this chat (the intelligence plan, release 6):
         # READ-ONLY, the calling chat's own record of sizes, no argument.
         "chat_fullness",
+        # What Iron Jarvis checked (the intelligence plan, release 5):
+        # READ-ONLY, its own record of checks, for the calling chat only.
+        "checks_list",
         # Saved workflows (v1.170.0): READ-ONLY discovery — name/description/
         # step count/project pin of what the user already saved. Deliberately
         # NOT workflow_run: starting a run spawns multi-minute agent work with
@@ -2858,6 +2861,27 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"chat_fullness": 8},
+    ),
+    # --- what Iron Jarvis CHECKED (the intelligence plan, release 5) --------
+    # "what did you check?", "what was checked?", "did you check the
+    # totals?", "how do you know the spreadsheet is right?": a question
+    # about the checks on the work in this chat, which `checks_list` reads
+    # from Iron Jarvis's own record. Narrow on purpose: "you"/"Jarvis"/"it"
+    # as the checker in the past ("check my email" and "can you check the
+    # contract" are requests to do something now, and arm nothing here).
+    (
+        re.compile(
+            r"\b(?:what|which\s+(?:things?|files?|parts?))\s+(?:did|have|has)\s+(?:you|jarvis|iron\s+jarvis|it)\s+"
+            r"(?:actually\s+|really\s+|already\s+)?(?:check|checked|double[\s-]?check(?:ed)?)\b"
+            r"|\bwhat\s+(?:was|got|has\s+been|were)\s+(?:actually\s+|really\s+)?checked\b"
+            r"|\b(?:did|have)\s+(?:you|jarvis|it)\s+(?:actually\s+|really\s+|already\s+|even\s+)?"
+            r"(?:check|checked|double[\s-]?check(?:ed)?)\s+(?:the|that|this|those|these|its|it|if|whether|any|all)\b"
+            r"|\bhow\s+do\s+(?:you|i|we)\s+know\s+(?:that\s+)?(?:it|this|that|the\s+\w+(?:\s+\w+)?)\s+"
+            r"(?:(?:is|are)\s+(?:right|correct|accurate)|adds?\s+up)\b"
+            r"|\bwhat\s+(?:could|did)\s+(?:you\s+)?not\s+(?:be\s+)?check(?:ed)?\b",
+            re.IGNORECASE,
+        ),
+        {"checks_list": 8},
     ),
     # --- saved workflows (v1.170.0) ---------------------------------------
     # "run my month-end workflow", "what workflows do I have" — the module is

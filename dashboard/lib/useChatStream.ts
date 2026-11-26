@@ -65,6 +65,7 @@ import { decodeApproved, decodeRefit, type ApprovedCall, type TurnRefit } from "
 import { decodeBrainReceipt, type BrainReceipt } from "./brainProfiles";
 import { decodeClientQuestion, type ChatClientQuestion } from "./clients";
 import { decodeMemoryUsed, decodeUsedMore, type MemoryUsedItem } from "./memoryUsed";
+import { decodeChecked, type CheckedMark } from "./checked";
 import { stepTarget } from "./workTarget";
 import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
 import { onceReasonOf, type OnceReason } from "./onceReason";
@@ -225,6 +226,11 @@ export type SSEEvent =
       /** ... and how many more it was given than `used` names (the cap of
        *  24; kept only when above 0 beside a non-empty `used`). */
       used_more?: number;
+      /** The intelligence plan, release 5: what Iron Jarvis checked on the
+       *  files this reply made. The daemon sends the key ONLY for a reply
+       *  that made or changed a file; the decode keeps a valid shape
+       *  (lib/checked). */
+      checked?: CheckedMark;
       /** Calm UI redesign S3/S4: "Setting changed" and secure credential
        *  cards. The daemon sends the key on every turn (possibly []). */
       config_cards?: ConfigCard[];
@@ -478,6 +484,9 @@ export interface ChatStreamResult {
   used?: MemoryUsedItem[];
   /** ... and how many more than `used` names (absent when none). */
   usedMore?: number;
+  /** The intelligence plan, release 5: what Iron Jarvis checked on the files
+   *  this reply made (absent when it made none). */
+  checked?: CheckedMark;
   /** Calm UI redesign S3/S4: the turn's settings cards (absent when none). */
   configCards?: ConfigCard[];
   /** v1.298.0: trust posture of the turn — see the done-frame fields. */
@@ -860,6 +869,12 @@ export function sseEventFrom(
         if (used.length) ev.used = used;
         const more = decodeUsedMore(data.used_more);
         if (used.length && more) ev.used_more = more;
+      }
+      // What Iron Jarvis checked (the intelligence plan, release 5):
+      // whitelisted; a frame without it, or a malformed one, leaves no key.
+      {
+        const checked = decodeChecked(data.checked);
+        if (checked) ev.checked = checked;
       }
       // Settings cards (redesign S3/S4): whitelisted — a card with no
       // change_id / request_id dies here, and a secret card never has a value.
@@ -2261,6 +2276,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(ev.client_question ? { clientQuestion: ev.client_question } : {}),
                 ...(ev.used?.length ? { used: ev.used } : {}),
                 ...(ev.used?.length && ev.used_more ? { usedMore: ev.used_more } : {}),
+                ...(ev.checked ? { checked: ev.checked } : {}),
                 ...(ev.config_cards?.length ? { configCards: ev.config_cards } : {}),
                 trust: ev.trust,
                 trustReason: ev.trust_reason,

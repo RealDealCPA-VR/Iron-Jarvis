@@ -818,6 +818,16 @@ async def _check(svc: Any, sid: str, turn_id: str, turn_events: list[dict[str, A
         _write(svc, sid, proof.record)
     if proof.record.get("state") == STATE_DONE:
         await _tell(sid, turn_id, proof.record, folder)
+        # The intelligence plan, release 5: the finished check also goes to
+        # the one record of checks (``checks/existing.proof_check``), under
+        # the session and the reply it checked. The log's record above is
+        # unchanged. Off the loop; never raises.
+        from ..checks import existing as _existing
+        from ..checks import record as _checks
+
+        _row = _existing.proof_check(proof.record)
+        if _row is not None:
+            await _checks.note(getattr(svc, "engine", None), [_row], session_id=sid, turn_id=turn_id)
     return proof
 
 

@@ -33,6 +33,9 @@ class TurnDeliverables:
         #: reply: their answer stands, and the model is never asked to try
         #: again. Set by both lanes.
         self.declined = False
+        #: Each required file's state as the END check found it
+        #: (:meth:`final`), for the record of checks (``checks/existing``).
+        self.states: list[Any] = []
 
     @classmethod
     async def start(cls, messages: Any, ws_resolved: "tuple[Path, bool] | None") -> "TurnDeliverables | None":
@@ -95,7 +98,7 @@ class TurnDeliverables:
         self.steps.note(name, args, result)
 
     async def final(self) -> str:
-        return await asyncio.to_thread(turn_note, self.scope, self.steps)
+        return await asyncio.to_thread(turn_note, self.scope, self.steps, self.states)
 
 
 def step_note(name: str, result: Any) -> str:

@@ -956,6 +956,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'why does the meter say the chat is almost full',
         'what takes up the most room in this chat',
     ),
+    'checks_list': (
+        'what did you check',
+        'did you check the totals',
+        'how do I know the spreadsheet is right',
+        'was the file ok',
+        'did anything fail when you looked it over',
+        'who looked over this work',
+        'show me the proof it is right',
+        'did the numbers add up',
+    ),
     'client_answer': (
         'yes that one is a client',
         'no they are not a client',

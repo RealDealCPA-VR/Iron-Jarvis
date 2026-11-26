@@ -2152,6 +2152,18 @@ class Orchestrator:
         except Exception:  # noqa: BLE001 — the card must never break the run
             log.exception("ledger read failed at finalize for %s", session.id)
             return [], None
+        # The intelligence plan, release 5: the files this run made or changed
+        # (``documents``: read above from its undo journal, never from its
+        # answer) are checked by rule and written to the one record of checks,
+        # under the run's session. Bounded, and already off the loop (this
+        # whole settle is). ``settle_run`` never raises.
+        from ..checks.turn import settle_run as _settle_checks
+
+        _settle_checks(
+            self.p.engine, session.id, result.get("documents"),
+            thread_id=_chat_delivery.chat_thread_of(session) or "",
+            reply=str(result.get("summary") or ""),
+        )
         # v1.503.0 (north-star 3.7): the claimed-write check is fed the calls
         # that SUCCEEDED in THIS run — ``tools_used`` counts every call made,
         # so "I saved report.docx" after a DECLINED or failed ``write_file``

@@ -211,6 +211,9 @@ def default_permissions() -> dict[str, str]:
         # The intelligence plan, release 6: "why is this chat getting full?"
         # reads the calling chat's own record of sizes. Read-only.
         "chat_fullness": "allow",
+        # The intelligence plan, release 5: "what did you check?" reads Iron
+        # Jarvis's own record of checks for the calling chat. Read-only.
+        "checks_list": "allow",
         "brain_save": "allow",
         "brain_change": "ask",
         # Memory housekeeping (v1.143.0): FILE a suggest-only cleanup proposal.

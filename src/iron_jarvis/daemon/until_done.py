@@ -436,6 +436,12 @@ class UntilDone:
     #: v1.498.0 (an agent run, which asks the side question in its own
     #: transcript): the answer it had, given back when the model says KEEP.
     side_draft: str = ""
+    #: The intelligence plan, release 5 (``checks/existing.claims_check``):
+    #: how many times the readings LOOKED at an answer, and why the last
+    #: answer was not looked at ("" = it was). Facts for the record of
+    #: checks only: nothing in the loop reads them.
+    looked: int = 0
+    skipped: str = ""
 
     async def check(
         self,
@@ -461,16 +467,21 @@ class UntilDone:
         import asyncio
 
         if low_trust or truncated:
+            self.skipped = "low_trust" if low_trust else "truncated"
             return ""
         if self.declined or said_no(facts.request):
             self.ended = self.ended or DECLINED
+            self.skipped = "declined"
             return ""
         reply = str(facts.reply or "")
         if self.notes and _BLOCKED_LINE_RX.search(reply):
             self.ended = BLOCKED
             self.open = []
+            self.skipped = "blocked"
             return ""
         problems = await asyncio.to_thread(find_problems, facts)
+        self.looked += 1
+        self.skipped = ""
         gave_up = False
         worked = [t for t in facts.tools_used if t not in NOT_WORK]
         if not self.gave_up_fired and worked and set(facts.armed or ()):

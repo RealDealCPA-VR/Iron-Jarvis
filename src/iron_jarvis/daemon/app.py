@@ -745,6 +745,11 @@ async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> 
             gone = await asyncio.to_thread(sweep_cleared_records, platform.config.home)
             if gone:
                 log.info("removed %d cleared run record(s) kept in the trash past 30 days", gone)
+            # The intelligence plan, release 5: the record of what Iron
+            # Jarvis checked keeps 90 days (``checks/record.KEEP_DAYS``).
+            from ..checks.record import prune as _prune_checks
+
+            await asyncio.to_thread(_prune_checks, platform.engine)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a sweep must never kill the daemon

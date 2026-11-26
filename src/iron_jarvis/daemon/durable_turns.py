@@ -521,6 +521,13 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
                 more = (done or {}).get("used_more")
                 if isinstance(more, int) and not isinstance(more, bool) and more > 0:
                     line["usedMore"] = more
+            # The intelligence plan, release 5: what Iron Jarvis checked on
+            # the files the reply made, so a reply written home by the daemon
+            # (and a reopened chat) shows its "Checked by Iron Jarvis" line
+            # (only when there is one: every other line is as before).
+            checked = (done or {}).get("checked")
+            if isinstance(checked, dict) and str(checked.get("line") or "").strip():
+                line["checked"] = checked
             return {**line, **rows_extra}
         if status == "error":
             if partial:

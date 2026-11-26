@@ -2183,6 +2183,10 @@ class AgentRuntime:
         try:
             if self._effective_trust(session) == TRUST_LOW or int(steps_left) < 2:
                 # Nothing is sent then: never read the ledger for it.
+                if self._effective_trust(session) == TRUST_LOW:
+                    # Release 5 of the intelligence plan: said on the record
+                    # of checks as "not checked", with the reason.
+                    until.skipped = "low_trust"
                 return ""
             from ..daemon.chat_turn import _asked_for_a_file, custom_tools_used, ran_local_writer
             from ..daemon.until_done import Facts, note_checked_again, run_record
@@ -2235,6 +2239,28 @@ class AgentRuntime:
                 "until-done note for a run failed", exc_info=True,
             )
             return ""
+
+    async def _note_claims_check(self, until: Any, session: Session, run: AgentRun) -> None:
+        """The intelligence plan, release 5: ONE row of the record of checks
+        for the check-again loop's last look at this run's answer (whether
+        what it says matches what it did; ``not_checked`` with the reason
+        when the loop did not look). Off the loop; never raises."""
+        try:
+            from ..checks import existing as _existing
+            from ..checks import record as _checks
+
+            row = _existing.claims_check(until)
+            if row is not None:
+                await _checks.note(
+                    self.p.engine, [row], session_id=session.id, run_id=run.id,
+                    thread_id=_chat_delivery.chat_thread_of(session) or "",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a record is never worth a failed run
+            logging.getLogger("iron_jarvis.agents.runtime").debug(
+                "the check-again verdict of a run was not recorded", exc_info=True,
+            )
 
     def _effective_trust(self, session: Session) -> str:
         return effective_trust(
@@ -5787,6 +5813,9 @@ class AgentRuntime:
                 _final = _closing_offer_reply(messages, resp.text) if transcript else resp.text
                 if _ud is not None:
                     _final = f"{_final}{_ud.verdict()}"
+                    # The intelligence plan, release 5: the loop's last look
+                    # at this answer also goes to the one record of checks.
+                    await self._note_claims_check(_ud, session, run)
                     self._until_runs.pop(run.id, None)
                 return True, _final
 

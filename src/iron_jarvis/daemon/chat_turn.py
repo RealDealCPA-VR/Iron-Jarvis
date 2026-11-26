@@ -5196,7 +5196,7 @@ _READS_ONLY_TOOLS: frozenset[str] = frozenset({
     "find_capability", "config_list", "schedule_list", "workflow_list", "goal_list", "night_task_list",
     "start_list",
     "list_agents", "changes_list", "history_search", "work_history", "skill_search", "brain_read",
-    "brain_search", "chat_fullness",
+    "brain_search", "checks_list", "chat_fullness",
     "blackboard_read", "mcp_list_resources", "mcp_read_resource", "integration_list", "tool_list",
     "secret_list", "downloads_list", "pixio_models", "pixio_params", "worklist_status", "calculate",
     "browser_read_page", "browser_screenshot", "browser_get_elements", "browser_list_tabs",
@@ -16604,6 +16604,15 @@ async def run_chat_turn(
         # or lowered by a flagged result) — the lead's R answers are never
         # read from a low-trust reply (lock-step: the stream lane).
         out["finish"] = await _finish.record(low_trust=finish_low_trust(_trust_state))
+        # The intelligence plan, release 5: the finish check's tests and
+        # review also go to the one record of checks (``checks/turn``); the
+        # key above is unchanged. MIRROR NOTE (lock-step): the stream lane.
+        from ..checks.turn import note_finish as _note_finish
+
+        await _note_finish(
+            platform, out["finish"], turn_id=_usage_turn,
+            thread_id=str(getattr(body, "thread_id", "") or ""), session_id=_tool_session,
+        )
     # THE CODING-SESSION TEAM (v1.403.0): LAST, and present ONLY for a turn of
     # a session with a team. MIRROR NOTE (lock-step): the stream done-frame.
     _team_rec = team_record(_harness)
@@ -16617,4 +16626,22 @@ async def run_chat_turn(
     _evidence_rec = await _evidence_at_end(made_docs)
     if _evidence_rec is not None:
         out["evidence"] = _evidence_rec
+    # WHAT IRON JARVIS CHECKED (the intelligence plan, release 5): the reply's
+    # existing checks (the check-again verdict, the required files) are
+    # written to the one record of checks, the files this reply's own tools
+    # wrote (`made_docs`, never a path from the model's words) are checked by
+    # rule off the loop, and the line is READ BACK from that record
+    # (`checks/record.payload`: the line, its tone, the list). LAST, and
+    # present ONLY when a plain chat reply made or changed a file (every
+    # other answer is byte-identical; a coding session has `finish`). MIRROR NOTE (lock-step): the stream
+    # done-frame carries the same conditional key from the same call.
+    from ..checks.turn import checked_for_turn as _checked_for_turn
+
+    _checked = await _checked_for_turn(
+        platform, turn_id=_usage_turn, thread_id=str(getattr(body, "thread_id", "") or ""),
+        made_docs=made_docs, reply=_fig_head, until=_until, deliverables=_deliv,
+        coding=_harness is not None, escalate=bool(escalate),
+    )
+    if _checked is not None:
+        out["checked"] = _checked
     return out

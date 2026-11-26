@@ -1,0 +1,211 @@
+"""Intelligence plan, release 5: "What did you check?" answers from the record.
+
+``checks_list`` is one read-only tool. Called through the real registry and
+its gate, it reads the checks of the chat it was called in and no other
+chat's; it changes nothing and checks nothing again. It carries the house
+rules of a new tool: plain words everywhere, read-only on the ledger, armed
+by its words, found by the lookup, allowed without a card, and refused to a
+task another computer started.
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlmodel import select
+
+from iron_jarvis.agents import mission
+from iron_jarvis.capability_search import index as CI
+from iron_jarvis.checks import record as R
+from iron_jarvis.checks import tool as CT
+from iron_jarvis.checks.record import Check, CheckRecord
+from iron_jarvis.core.db import session_scope
+from iron_jarvis.core.models import ToolInvocation
+from iron_jarvis.core.trust import REMOTE_RUN_DENY, REMOTE_RUN_KEEP, remote_run_keeps
+from iron_jarvis.daemon.app import create_app
+from iron_jarvis.providers.adapters.base import ToolCall
+from iron_jarvis.tools import autoselect
+from iron_jarvis.tools.base import Reversibility, ToolContext
+from iron_jarvis.tools.permissions import PermissionEngine
+from tests.test_wave3_chat_lanes_v1311 import _post_turn, _scripted_router
+
+SHEET = [
+    Check(R.FILE_OPENS, R.PASSED, "opens", file="summary.xlsx"),
+    Check(R.SHEET_ERRORS, R.FAILED, "Summary!C7 holds #DIV/0!", file="summary.xlsx"),
+    Check(R.SHEET_TOTALS, R.PASSED, "2 totals add up", file="summary.xlsx"),
+    Check(R.CLAIMS, R.PASSED, "what it says matches what it did"),
+]
+OTHER = [Check(R.FILE_OPENS, R.FAILED, "it is empty", file="payroll-private.xlsx")]
+
+
+def _ctx(platform, tmp_path, **kw) -> ToolContext:
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    return ToolContext(
+        workspace=ws, agent_run_id="r-1", config=platform.config, event_bus=platform.event_bus,
+        engine=platform.engine, **{"session_id": "chat", **kw},
+    )
+
+
+async def _ask(platform, ctx, **args):
+    return await platform.registry.invoke(CT.TOOL_NAME, args, ctx, PermissionEngine(dict(platform.config.permissions)))
+
+
+def _count(engine) -> int:
+    with session_scope(engine) as db:
+        return len(list(db.exec(select(CheckRecord))))
+
+
+# --------------------------------------------------------------------------- #
+# Its own chat only
+# --------------------------------------------------------------------------- #
+async def test_it_answers_from_the_record_for_the_chat_it_was_asked_in(platform, tmp_path):
+    R.write(platform.engine, SHEET, thread_id="chat_mine", turn_id="turn_1")
+    R.write(platform.engine, OTHER, thread_id="chat_other", turn_id="turn_2")
+    before = _count(platform.engine)
+
+    res = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_mine", turn_id="turn_9"))
+    assert res.ok, res.error
+    assert "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up." in res.output
+    assert "- summary.xlsx: Summary!C7 holds #DIV/0! (Problem, by rule)" in res.output
+    assert "- The reply: what it says matches what it did (Checked, by rule)" in res.output
+    assert "payroll-private" not in res.output, "another chat's check was read"
+    assert [c["label"] for c in res.data["checks"]][0] == "summary.xlsx"
+    assert all("payroll" not in str(c) for c in res.data["checks"])
+
+    theirs = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_other"))
+    assert "payroll-private.xlsx: it is empty" in theirs.output and "summary.xlsx" not in theirs.output
+    # It reads; it never writes or checks again.
+    assert _count(platform.engine) == before
+
+
+async def test_a_chat_with_no_checks_says_so_and_an_unsaved_chat_reads_only_its_own_reply(platform, tmp_path):
+    R.write(platform.engine, OTHER, thread_id="chat_other", turn_id="turn_2")
+    R.write(platform.engine, SHEET, turn_id="turn_unsaved")          # a new chat: no chat id yet
+    R.write(platform.engine, OTHER, session_id="some_run")            # a run's rows: no reply id at all
+    empty = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_new"))
+    assert empty.ok and empty.output == CT.NOTHING and empty.data == {"checks": [], "more": 0}
+    # No chat id and no reply id: nothing, never every row with no chat.
+    assert (await _ask(platform, _ctx(platform, tmp_path))).output == CT.NOTHING
+    mine = await _ask(platform, _ctx(platform, tmp_path, turn_id="turn_unsaved"))
+    assert "summary.xlsx" in mine.output and "payroll" not in mine.output
+
+
+async def test_a_run_of_this_chat_is_read_and_a_run_of_another_chat_is_refused(platform, tmp_path):
+    step = [Check(R.STEP_CHECK, R.NOT_CHECKED, "its check did not run", by="Sonnet 4.5", step="2")]
+    R.write(platform.engine, step, session_id="run_mine", thread_id="chat_mine")
+    R.write(platform.engine, OTHER, session_id="run_theirs", thread_id="chat_other")
+    R.write(platform.engine, OTHER, session_id="run_nobody")
+    ctx = _ctx(platform, tmp_path, thread_id="chat_mine")
+
+    mine = await _ask(platform, ctx, run="run_mine")
+    assert "- Step 2: its check did not run (Not checked, by Sonnet 4.5)" in mine.output
+    theirs = await _ask(platform, ctx, run="run_theirs")
+    assert not theirs.ok and theirs.error == CT.OTHER_CHAT
+    assert "payroll" not in (theirs.output or "") + (theirs.error or "")
+    # A run that belongs to no chat, and one that does not exist.
+    assert "payroll-private.xlsx" in (await _ask(platform, ctx, run="run_nobody")).output
+    assert (await _ask(platform, ctx, run="no_such_run")).output == CT.NOTHING
+    # The chat's own list holds its run's checks too (the run was started from it).
+    assert "Step 2" in (await _ask(platform, ctx)).output
+
+
+async def test_called_inside_a_run_it_reads_that_runs_checks(platform, tmp_path):
+    R.write(platform.engine, SHEET, session_id="session_run")
+    R.write(platform.engine, OTHER, thread_id="chat_other", turn_id="turn_2")
+    res = await _ask(platform, _ctx(platform, tmp_path, session_id="session_run"))
+    assert "summary.xlsx" in res.output and "payroll" not in res.output
+    assert res.output.splitlines()[1].startswith("A run (")
+
+
+# --------------------------------------------------------------------------- #
+# A new tool's house rules
+# --------------------------------------------------------------------------- #
+async def test_it_is_read_only_allowed_without_a_card_and_recorded_as_a_read(platform, tmp_path):
+    tool = platform.registry.get(CT.TOOL_NAME)
+    assert tool is not None and tool.reversibility is Reversibility.READONLY
+    assert platform.config.permissions[CT.TOOL_NAME] == "allow"
+    assert set(tool.input_schema["properties"]) == {"run"}, "an argument could name another chat"
+    R.write(platform.engine, SHEET, thread_id="chat_mine", turn_id="turn_1")
+    res = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_mine", session_id="chat"))
+    assert res.ok
+    with session_scope(platform.engine) as db:
+        (inv,) = [i for i in db.exec(select(ToolInvocation)) if i.tool == CT.TOOL_NAME]
+    assert inv.ok and (inv.reversibility or "").lower() == Reversibility.READONLY.value
+
+
+def test_it_reads_in_plain_words_everywhere():
+    assert mission.card_words(CT.TOOL_NAME) == "look up what Iron Jarvis checked"
+    assert mission.step_line_words(CT.TOOL_NAME) == (
+        "Looked up what Iron Jarvis checked", "Looking up what Iron Jarvis checked")
+    from iron_jarvis.daemon.chat_turn import _READS_ONLY_TOOLS
+
+    assert CT.TOOL_NAME in _READS_ONLY_TOOLS
+
+
+@pytest.mark.parametrize("said", [
+    "What did you check?",
+    "what was checked on that file",
+    "did you check the totals?",
+    "Did you actually check that it adds up",
+    "How do I know the spreadsheet is right?",
+    "what could you not check?",
+])
+def test_plain_words_arm_it(said):
+    assert CT.TOOL_NAME in autoselect.AUTO_SAFE_TOOLS
+    assert any(CT.TOOL_NAME in tools and rx.search(said) for rx, tools in autoselect._RULES), said
+
+
+@pytest.mark.parametrize("said", [
+    "check my email",
+    "can you check the contract for typos",
+    "please check whether the server is up",
+    "how do I know it is installed",
+    "what did we decide about the fee",
+    "write a check for the rent",
+])
+def test_a_request_to_do_something_now_does_not_arm_it(said):
+    assert not any(CT.TOOL_NAME in tools and rx.search(said) for rx, tools in autoselect._RULES), said
+
+
+@pytest.mark.parametrize("query", [
+    "what did you check", "did the numbers add up", "what could you not check",
+    # Found only through its everyday phrasings (its own description has none of these words).
+    "who looked over this work", "show me the proof it is right",
+])
+def test_the_lookup_finds_it_by_plain_words(platform, query):
+    assert CT.TOOL_NAME in [e.id for e in CI.search(platform, query, 5)]
+
+
+def test_a_task_from_another_computer_may_not_call_it():
+    """Decided: NOT on the keep list. A run another computer's task started
+    posts its answer back to that computer, and this tool reads this
+    computer's record of checks (file names, findings)."""
+    assert CT.TOOL_NAME not in REMOTE_RUN_KEEP
+    assert CT.TOOL_NAME not in REMOTE_RUN_DENY          # refused by the keep list itself
+    assert remote_run_keeps(CT.TOOL_NAME) is False
+
+
+# --------------------------------------------------------------------------- #
+# Asked in a chat, through the real lane
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("lane", ("post", "stream"))
+def test_asked_in_a_chat_the_model_is_handed_that_chats_checks(tmp_path, monkeypatch, lane):
+    with TestClient(create_app(str(tmp_path / "home"))) as client:
+        platform = client.app.state.platform
+        R.write(platform.engine, SHEET, thread_id="chat_mine", turn_id="turn_1")
+        R.write(platform.engine, OTHER, thread_id="chat_other", turn_id="turn_2")
+        seen = _scripted_router(platform, monkeypatch, [[ToolCall(id="c1", name=CT.TOOL_NAME, arguments={})]],
+                                "I checked that it opens and that the totals add up; one cell holds an error.")
+        body, _ = _post_turn(client, lane, {
+            "messages": [{"role": "user", "content": "What did you check?"}],
+            "thread_id": "chat_mine", "turn_id": "turn_ask",
+            # Nothing is ticked: the words alone arm it (Auto tools, as the page sends it).
+            "auto_tools": True,
+        })
+        assert body["auto_armed"] == [CT.TOOL_NAME], body.get("auto_armed")
+        assert CT.TOOL_NAME in body["tools_used"], body.get("reply")
+        given = "\n".join(str(getattr(m, "content", "")) for m in seen["messages"][-1])
+        assert "Summary!C7 holds #DIV/0!" in given and "payroll-private" not in given
+        # A question about the checks made no file: no line under this reply.
+        assert "checked" not in body

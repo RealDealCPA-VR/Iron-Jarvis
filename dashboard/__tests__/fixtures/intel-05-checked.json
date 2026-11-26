@@ -1,0 +1,315 @@
+{
+  "about": "What Iron Jarvis checked, as the daemon builds it from its record of checks (checks/record.payload). Written by tests/test_intel_05_record.py (IJ_REGEN_INTEL_05=1); read by dashboard/__tests__/intel-05-checked-line.test.tsx through the real line.",
+  "good": {
+    "line": "Checked by Iron Jarvis: the spreadsheet opens, no error cells, 3 totals add up.",
+    "tone": "quiet",
+    "checks": [
+      {
+        "label": "summary.xlsx",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "no error cells",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "3 totals add up",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "The reply",
+        "said": "what it says matches what it did",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      }
+    ],
+    "more": 0,
+    "more_words": ""
+  },
+  "bad": {
+    "line": "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up. Problem in the spreadsheet: Summary!C7 holds #DIV/0!. Not checked: the spreadsheet (1 total could not be worked out by rule: Summary!D9 is worked out by a formula this check cannot follow).",
+    "tone": "warn",
+    "checks": [
+      {
+        "label": "summary.xlsx",
+        "said": "Summary!C7 holds #DIV/0!",
+        "result": "failed",
+        "result_words": "Problem",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "1 total could not be worked out by rule: Summary!D9 is worked out by a formula this check cannot follow",
+        "result": "not_checked",
+        "result_words": "Not checked",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "summary.xlsx",
+        "said": "2 totals add up",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "Step 2",
+        "said": "it passed its check",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by Claude Sonnet 4.5"
+      }
+    ],
+    "more": 0,
+    "more_words": ""
+  },
+  "many": {
+    "line": "Checked by Iron Jarvis: file0.txt opens; file1.txt opens; file2.txt opens; and 30 more files.",
+    "tone": "quiet",
+    "checks": [
+      {
+        "label": "file0.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file1.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file2.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file3.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file4.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file5.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file6.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file7.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file8.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file9.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file10.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file11.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file12.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file13.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file14.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file15.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file16.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file17.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file18.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file19.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file20.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file21.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file22.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file23.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file24.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file25.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file26.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file27.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file28.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      },
+      {
+        "label": "file29.txt",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by rule"
+      }
+    ],
+    "more": 3,
+    "more_words": "and 3 more checks"
+  },
+  "not_checked": {
+    "line": "Not checked: the PDF (the check ran out of time).",
+    "tone": "quiet",
+    "checks": [
+      {
+        "label": "report.pdf",
+        "said": "the check ran out of time",
+        "result": "not_checked",
+        "result_words": "Not checked",
+        "who": "by rule"
+      }
+    ],
+    "more": 0,
+    "more_words": ""
+  }
+}
