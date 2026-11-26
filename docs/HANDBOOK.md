@@ -129,6 +129,61 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
+## A step that could not be double-checked says so where you look first (v1.578.5)
+
+When Iron Jarvis splits a larger task into steps, it checks each step
+before moving on. Sometimes the check itself cannot run: the model doing
+the checking fails, or its answer cannot be read. The step is then let
+through, because failing good work over a broken check would be worse. The
+run's write-up always said so at the end. The first things you look at did
+not: they read as a plain finish.
+
+Now they say it:
+
+- **The result line.** Under the reply, the run reads **Done. 1 step could
+  not be checked.** and a line below names the step. Press it to open the
+  run.
+- **The list of steps.** On the run's page and in the chat, that step has
+  its own mark and the words **could not be checked** beside it, instead of
+  a tick. The count reads "4 of 4 done, 1 could not be checked".
+- **Lists and the bell.** The status reads **Done, 1 step not checked**
+  wherever a run's status is shown, and a schedule's or an objective's line
+  in the bell and on your phone reads "finished. 1 step could not be
+  checked".
+
+Nothing changes for a run where every step was checked: it still reads
+**Done**. A run that needs you, partly failed, failed or was stopped keeps
+those words, because they matter more.
+
+There is nothing to set up, and no new notice: the bell row is as quiet as
+any finished run's.
+
+## A workflow made in chat is checked like one made on the page (v1.578.4)
+
+A workflow that cannot work is now refused when it is saved, whichever way
+you made it. The Workflows page already checked each step before saving.
+Asking for one in chat did not, so a workflow with a step that could never
+run was saved and failed later, at its turn.
+
+- **In chat.** Ask Iron Jarvis to make a workflow and it checks the steps
+  the same way the page does. If one cannot work (a step that uses a tool
+  this PC does not have, a question with no words, a step that points at
+  another step's data by a name the workflow does not have), nothing is
+  saved and the reply says which step and why, in the same words the page
+  uses.
+- **A step that needs something nobody gave it.** A step can use what an
+  earlier step found, or a value you give when you start the workflow, by
+  writing its name in double braces. When that name matches nothing, the
+  step used to run anyway with an empty space where the value should be.
+  It now stops before it does anything and says **could not run: no value
+  for** and the name. What the workflow does next follows that step's own
+  "if this fails" setting, as for any step that fails.
+- **What has not changed.** A value you gave as empty text is still a
+  value. A step that failed and was skipped still passes on that it
+  failed, as before.
+
+There is nothing to set up.
+
 ## The calm layout (v1.321.0)
 
 Iron Jarvis now looks like the chat apps you already know: the conversation

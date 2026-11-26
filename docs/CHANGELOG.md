@@ -2,6 +2,14 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.578.5
+
+**A step that could not be double-checked says so where you look first.** When Iron Jarvis splits a larger task into steps, it checks each step before moving on.
+
+## v1.578.4
+
+**A workflow made in chat is checked like one made on the page.** A workflow that cannot work is now refused when it is saved, whichever way you made it.
+
 ## v1.578.0
 
 **Start coding work from your phone.** Text Iron Jarvis from Telegram, Slack or email: "in the website folder, fix the broken contact form", or the command `/code website: fix the broken contact form`.
@@ -73,11 +81,3 @@
 ## v1.561.0
 
 **Commit and Open a pull request in Build › Code.** When a Build › Code reply is done (and Iron Jarvis has checked it), a small box under it offers **Commit** with the message already written, then **Open a pull request**: one press each.
-
-## v1.560.0
-
-**Browse and download models, with what fits this PC.** Model servers now has a second tab, **Models**: a model library in the style of LM Studio.
-
-## v1.559.2
-
-**A deleted session's copies of your files always go.** When you delete a Build › Code session in a folder without git, Iron Jarvis now removes its copies of your files even when one of them was in use at that moment.
