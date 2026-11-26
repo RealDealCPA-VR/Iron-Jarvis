@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.580.3
+
+**A workflow made in chat is checked like one made on the page.** A workflow that cannot work is now refused when it is saved, whichever way you made it.
+
 ## v1.580.0
 
 **What everything cost, by folder, client, automation and agent.** Usage has a new card, **What it cost**, with a **By** switch: **Folder**, **Client**, **Automation** and **Agent**.
@@ -77,7 +81,3 @@
 ## v1.562.0
 
 **Rehearse a rule or a schedule before it runs for real.** A rule or a schedule can now run once as a **rehearsal**.
-
-## v1.561.0
-
-**Commit and Open a pull request in Build › Code.** When a Build › Code reply is done (and Iron Jarvis has checked it), a small box under it offers **Commit** with the message already written, then **Open a pull request**: one press each.

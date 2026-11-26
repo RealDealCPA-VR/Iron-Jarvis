@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.580.2 (2026-11-19).*
+holds itself to. Current as of v1.580.3 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,32 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## A workflow made in chat is checked like one made on the page (v1.580.3)
+
+A workflow that cannot work is now refused when it is saved, whichever way
+you made it. The Workflows page already checked each step before saving.
+Asking for one in chat did not, so a workflow with a step that could never
+run was saved and failed later, at its turn.
+
+- **In chat.** Ask Iron Jarvis to make a workflow and it checks the steps
+  the same way the page does. If one cannot work (a step that uses a tool
+  this PC does not have, a question with no words, a step that points at
+  another step's data by a name the workflow does not have), nothing is
+  saved and the reply says which step and why, in the same words the page
+  uses.
+- **A step that needs something nobody gave it.** A step can use what an
+  earlier step found, or a value you give when you start the workflow, by
+  writing its name in double braces. When that name matches nothing, the
+  step used to run anyway with an empty space where the value should be.
+  It now stops before it does anything and says **could not run: no value
+  for** and the name. What the workflow does next follows that step's own
+  "if this fails" setting, as for any step that fails.
+- **What has not changed.** A value you gave as empty text is still a
+  value. A step that failed and was skipped still passes on that it
+  failed, as before.
+
+There is nothing to set up.
 
 ## The calm layout (v1.321.0)
 
