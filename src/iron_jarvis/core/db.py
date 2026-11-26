@@ -277,7 +277,7 @@ _LATE_MODEL_MODULES = (
     "..agents.team_notes",    # TeamNote + TeamNoteState — a member's accepted working habits (v1.423.0)
     "..workmap.models",       # WorkEntry — the work record: what was done, in which folder (v1.491.0)
     "..peers.models",         # PeerRecord — another computer paired with this one (v1.497.0)
-    "..daemon.chat_append",   # ChatOlderMessage — a chat's messages past the live window (v1.499.3)
+    "..context.older_messages",  # ChatOlderMessage — messages past a live window (v1.499.3, 48-b)
     "..documents.source_store",  # SourceMark — where each figure a chat read sits (v1.549.0)
     "..improve.models",       # NightReviewRecord — what one night's review did (17-a)
     "..fleet.pull_models",    # ModelDownload — a model downloaded from the library (next leaps 43-a)

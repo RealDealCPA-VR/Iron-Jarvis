@@ -43,6 +43,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..context import older_messages as _older
 from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ..core.ids import utcnow
 from ..core.models import (
@@ -63,7 +64,7 @@ MODE_PLAN = "plan"
 MODES = (MODE_ACT, MODE_PLAN)
 #: The newest lines a session keeps LIVE (the chat PUT route's window). 48-b:
 #: the lines that leave it MOVE to the session's older lines
-#: (``daemon.chat_append.keep_older``), never deleted; until then they were
+#: (``context.older_messages.keep_older``), never deleted; until then they were
 #: cut. ``GET /build/sessions/{id}`` says how many (``older``).
 MAX_MESSAGES = 200
 #: A session title / a folder display name, at most.
@@ -757,8 +758,6 @@ def _older_store_ready(engine: Any) -> bool:
     write's transaction (a CREATE inside it would wait on the write's own
     slot). Never raises."""
     try:
-        from ..daemon import chat_append as _older  # lazy: daemon/ reads this module
-
         return bool(_older.ensure_older_table(engine))
     except Exception:  # noqa: BLE001 — then the lines stay live
         log.warning("the older lines of coding sessions cannot be kept", exc_info=True)
@@ -773,7 +772,7 @@ def _with_lines(row: Any, cleaned: list[dict[str, Any]], *, title_from_first: bo
     moved the monotonic way. Returns the lines the row now holds.
 
     48-b: the lines the cut takes MOVE to the session's older lines in the
-    same write (``chat_append.keep_older``; ``keep_ok``: the caller made sure
+    same write (``older_messages.keep_older``; ``keep_ok``: the caller made sure
     of the table first). When they cannot be kept (no table, no write, a
     fault) they stay live, as a chat's do: nothing is ever dropped."""
     before = _messages(row)
@@ -785,8 +784,6 @@ def _with_lines(row: Any, cleaned: list[dict[str, Any]], *, title_from_first: bo
             msgs = whole
         else:
             try:
-                from ..daemon import chat_append as _older
-
                 _older.keep_older(db, row, moved, kind="build")
             except Exception:  # noqa: BLE001 — logged there; they stay live
                 msgs = whole
@@ -811,11 +808,14 @@ def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at:
     in); an account-limit card and a "Resume when ready" wait go (a
     continuation would carry on work that was just rewound). A session cut
     back to nothing is called :data:`NEW_SESSION_TITLE` again, so its next
-    question names it. BLOCKING; never raises."""
+    question names it; 48-b review: one that still keeps older lines (a cut
+    to its first LIVE question) is not back to nothing, and keeps its name.
+    BLOCKING; never raises."""
     from ..daemon.routes.chat import _clean_setup
     from .rewind import _naive_utc
 
     try:
+        older_ok = _older_store_ready(engine) if keep == 0 else False  # before the transaction
         with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
             row = db.get(ChatThreadRecord, str(thread_id or ""))
             if row is None or not is_build_thread(row):
@@ -829,7 +829,7 @@ def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at:
                 return {"ok": False, "reason": "the conversation changed while it was being rewound"}
             removed = len(msgs) - keep
             row.messages_json = json.dumps(msgs[:keep])
-            if keep == 0:
+            if keep == 0 and not (older_ok and _older.older_count_in(db, row.id) > 0):
                 row.title = NEW_SESSION_TITLE
             setup = _setup(row)
             plan = setup.get("plan")
@@ -1016,8 +1016,6 @@ def create_with_lines(engine: Any, folder: str, title: str, setup: "dict[str, An
             try:
                 if not older_ok:
                     raise RuntimeError("the older lines cannot be kept")
-                from ..daemon import chat_append as _older
-
                 _older.keep_older(db, fresh, moved, kind="build")
             except Exception:  # noqa: BLE001 — they stay live (nothing is dropped)
                 kept = whole

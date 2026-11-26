@@ -435,7 +435,7 @@ How to use this file: read the contents list, then read only the entries your ch
   before them; rows not found count nothing (never more than were). A phone
   chat keeps its newest 200 live and (48-b) the rest as its older messages
   (`comm/threads.py`); its count is of both (`history_window` adds
-  `chat_append.older_by_who`). `remote_history` returns every row and `RemoteAgentRegistry.run`
+  `context/older_messages.older_by_who`). `remote_history` returns every row and `RemoteAgentRegistry.run`
   alone cuts to `_HISTORY_ROWS`, adding what it cut; the sum rides as
   `history_held_back` to a task door ONLY, only when not 0 (any other
   remote's body is unchanged), and the door adds it (`held_back_of`, a whole

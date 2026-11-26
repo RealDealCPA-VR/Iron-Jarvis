@@ -60,6 +60,7 @@ from typing import Any
 from sqlalchemy import literal_column, or_
 from sqlmodel import Field, SQLModel, select
 
+from ..context import older_messages as _older
 from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ..core.events import EventType
 from ..core.ids import new_id, utcnow
@@ -78,7 +79,7 @@ ROLE_PRESETS = ("lead", "researcher", "critic", "builder", "reviewer", "scribe")
 SOURCES = ("builtin", "dynamic", "remote")
 
 #: The newest messages a room keeps LIVE. 48-b: the ones that leave MOVE to
-#: the room's older messages (``daemon.chat_append.keep_older``, the store a
+#: the room's older messages (``context.older_messages.keep_older``, the store a
 #: long chat keeps), never deleted; until then they were cut.
 _MAX_MESSAGES = 400
 _TRANSCRIPT_CHARS = 24_000  # context handed to each speaker, newest kept
@@ -329,7 +330,7 @@ def project_of(rec: Any) -> str:
 
 
 def _room_for_older(rec: Any) -> Any:
-    """What ``chat_append.keep_older`` reads of a room (48-b): its id, its
+    """What ``older_messages.keep_older`` reads of a room (48-b): its id, its
     title and its project for the history-search docs of the messages that
     move (the project :func:`project_of` says, as the room's own docs)."""
     from types import SimpleNamespace
@@ -1109,8 +1110,6 @@ class AgentThreads:
         """Delete a round table and its history-search docs together — the same
         "delete means deleted" rule ``DELETE /chat/threads/{id}`` follows.
         48-b: its older messages go in the same transaction."""
-        from ..daemon import chat_append as _older  # lazy: keeps agents/ free of daemon/
-
         older_ok = _older.ensure_older_table(self.engine)  # outside the transaction
         with _APPEND_LOCK, session_scope(self.engine) as db:
             rec = db.get(AgentThreadRecord, thread_id)
@@ -1164,8 +1163,6 @@ class AgentThreads:
         for history search as they move); when they cannot be kept they stay
         live — nothing is ever dropped.
         """
-        from ..daemon import chat_append as _older  # lazy: keeps agents/ free of daemon/
-
         older_ok = _older.ensure_older_table(self.engine)  # outside the transaction
         with _APPEND_LOCK, session_scope(self.engine) as db:
             rec = db.get(AgentThreadRecord, thread_id)
@@ -2108,8 +2105,6 @@ class AgentThreads:
         """The room's OLDER messages a remote seat would have been shown,
         counted by who said them (48-b): the rows :meth:`remote_history`
         keeps (words; never a pending or not-reported note). BLOCKING."""
-        from ..daemon import chat_append as _older  # lazy: keeps agents/ free of daemon/
-
         def _who(e: dict[str, Any]) -> str | None:
             if not str(e.get("content") or "").strip():
                 return None

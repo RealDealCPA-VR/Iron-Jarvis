@@ -6,8 +6,9 @@ Until this release three kinds of conversation still CUT their oldest
 messages at their caps (a phone chat and a coding session at 200, a
 round-table at 400): message 201 of a phone chat was simply deleted on the
 next append. Now what leaves the live window MOVES, in the same write, to the
-conversation's older messages (``chat_append.keep_older``, the store a long
-chat has kept since v1.499.3), in order, and is deleted only with its owner.
+conversation's older messages (``context.older_messages.keep_older``, the
+store a long chat has kept since v1.499.3), in order, and is deleted only
+with its owner.
 
 - message 201 of a phone chat, a coding session (cut at a turn start, as
   before) and a round-table is kept, in order, and read back with the same
@@ -16,7 +17,9 @@ chat has kept since v1.499.3), in order, and is deleted only with its owner.
   start), read with the lines under the conversation lock;
 - deleting any of the three deletes its older messages;
 - a coding session's rewind leaves its older lines alone;
-- lines that cannot be kept stay live (nothing is ever dropped);
+- lines that cannot be kept stay live (nothing is ever dropped), in a phone
+  chat, a coding session (an append, a resumed wait, a branch) and a
+  round-table alike, and the next write that can keep them moves them;
 - the start of a phone chat or coding session is claimed only for one made
   since this PC started keeping them (``core.db.older_kept_since``);
 - a phone chat's earlier rows are counted for a remote seat, older ones too.
@@ -36,6 +39,7 @@ from sqlmodel import select
 
 from iron_jarvis.agents.threads import AgentThreadRecord, AgentThreads
 from iron_jarvis.comm.threads import CommThreadStore
+from iron_jarvis.context import older_messages as OM
 from iron_jarvis.core import db as core_db
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.models import ChatThreadRecord
@@ -106,7 +110,7 @@ def test_phone_lines_that_cannot_be_kept_stay_live(tmp_path, monkeypatch):
     init_db(engine)
     store = CommThreadStore(engine)
     thread = store.resolve("slack", "u1", "Val")
-    monkeypatch.setattr(CA, "ensure_older_table", lambda _engine: False)
+    monkeypatch.setattr(OM, "ensure_older_table", lambda _engine: False)
     for i in range(203):
         store.append(thread.id, "user", f"line {i}")
     with session_scope(engine) as db:
@@ -211,6 +215,35 @@ def test_a_coding_sessions_rewind_leaves_its_older_lines_alone(tmp_path):
         assert out["ok"], out
         assert CA.read_older(engine, row.id, limit=1000) == kept
         assert len(S._messages(S.get_row(engine, row.id))) == keep
+
+
+def test_rewinding_a_long_session_to_its_first_live_question_keeps_its_name(tmp_path):
+    """48-b review: a session cut back to nothing is "New session" again, so
+    its next question names it. One that keeps older lines is not back to
+    nothing: a rewind to its first LIVE question keeps its name."""
+    from iron_jarvis.core.db import init_db, make_engine
+
+    engine = make_engine(str(tmp_path / "t.db"))
+    init_db(engine)
+    row = S.create(engine, str(tmp_path))
+    for n in range(110):
+        S.append_lines(engine, row.id, _turn(n))
+    name = S.get_row(engine, row.id).title
+    assert name and name != S.NEW_SESSION_TITLE
+    live = S._messages(S.get_row(engine, row.id))
+    out = S.cut_transcript(engine, row.id, live[0]["turnId"], 0, live[0].get("at"))
+    assert out["ok"], out
+    after = S.get_row(engine, row.id)
+    assert S._messages(after) == [] and OM.older_count(engine, row.id) == 20
+    assert after.title == name
+    # A short session cut back to nothing is new again, as before.
+    short = S.create(engine, str(tmp_path))
+    S.append_lines(engine, short.id, _turn(0))
+    first = S._messages(S.get_row(engine, short.id))[0]
+    assert S.get_row(engine, short.id).title != S.NEW_SESSION_TITLE
+    assert S.cut_transcript(engine, short.id, first["turnId"], 0, first.get("at"))["ok"]
+    assert S.get_row(engine, short.id).title == S.NEW_SESSION_TITLE
+    engine.dispose()
 
 
 def test_deleting_a_coding_session_deletes_its_older_lines(tmp_path):
@@ -484,6 +517,131 @@ def test_a_branch_and_a_resumed_wait_keep_what_leaves_the_window(tmp_path):
     assert _words(CA.read_older(engine, session.id)) == ["question 0", "reply 0.0"]
     live = S._messages(S.get_row(engine, session.id))
     assert len(live) == 199 and live[-1]["content"] == "question 100"
+    engine.dispose()
+
+
+# --------------------------------------------------------------------------- #
+# Lines that cannot be kept stay live (48-b review): sessions and rooms too
+# --------------------------------------------------------------------------- #
+def _no_table(monkeypatch) -> None:
+    """The older store cannot be made (``ensure_older_table`` says False)."""
+    monkeypatch.setattr(OM, "ensure_older_table", lambda _engine: False)
+
+
+def _keep_fails(monkeypatch) -> None:
+    """The table is there, but adding the rows to it fails in the write."""
+    def boom(*_a, **_k):
+        raise RuntimeError("the older rows could not be written")
+
+    monkeypatch.setattr(OM, "keep_older", boom)
+
+
+_FAULTS = {"no table": _no_table, "keep fails": _keep_fails}
+
+
+def _arm_wait(engine, thread_id: str, armed: str) -> None:
+    with session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, thread_id)
+        setup = json.loads(row.setup_json or "{}")
+        setup.update({"account": "acct", "account_wait": {"armed_at": armed, "account": "acct"}})
+        row.setup_json = json.dumps(setup)
+        db.add(row)
+        db.commit()
+
+
+@pytest.mark.parametrize("fault", sorted(_FAULTS))
+def test_coding_session_lines_that_cannot_be_kept_stay_live(tmp_path, monkeypatch, fault):
+    """An append and a resumed wait's question past the 200, while the older
+    lines cannot be kept: every line stays live, in order (the cut never
+    drops one), and the next append that can keep them moves the backlog."""
+    from iron_jarvis.core.db import init_db, make_engine
+
+    engine = make_engine(str(tmp_path / "t.db"))
+    init_db(engine)
+    session = S.create(engine, str(tmp_path))
+    written: list[dict] = []
+    for n in range(100):
+        written += _turn(n)
+        S.append_lines(engine, session.id, _turn(n))
+    _FAULTS[fault](monkeypatch)
+    for n in range(100, 103):
+        written += _turn(n)
+        assert S.append_lines(engine, session.id, _turn(n))["ok"]
+    live = S._messages(S.get_row(engine, session.id))
+    assert len(live) == 206 and _words(live) == _words(written)
+    armed = "2026-11-20T10:00:00+00:00"
+    _arm_wait(engine, session.id, armed)
+    question = {"role": "user", "content": "question 103", "turnId": "turn103"}
+    assert S.take_wait(engine, session.id, armed, "acct", lines=[question]) is True
+    written.append(question)
+    live = S._messages(S.get_row(engine, session.id))
+    assert len(live) == 207 and _words(live) == _words(written)
+    monkeypatch.undo()
+    assert OM.older_count(engine, session.id) == 0
+    # The store works again: the next append moves the backlog, in order.
+    written += _turn(104)
+    assert S.append_lines(engine, session.id, _turn(104))["ok"]
+    older = OM.read_older(engine, session.id, limit=1000)
+    live = S._messages(S.get_row(engine, session.id))
+    assert len(live) <= S.MAX_MESSAGES and len(older) >= 9
+    assert live[0]["role"] == "user" and live[0].get("turnId")
+    assert _words(older + live) == _words(written)
+    engine.dispose()
+
+
+@pytest.mark.parametrize("fault", sorted(_FAULTS))
+def test_a_branch_whose_lines_cannot_be_kept_holds_them_all_live(tmp_path, monkeypatch, fault):
+    from iron_jarvis.core.db import init_db, make_engine
+
+    engine = make_engine(str(tmp_path / "t.db"))
+    init_db(engine)
+    lines: list[dict] = []
+    for n in range(110):
+        lines += _turn(n)
+    _FAULTS[fault](monkeypatch)
+    branch = S.create_with_lines(engine, str(tmp_path), "Branch", {}, lines)
+    live = S._messages(S.get_row(engine, branch.id))
+    assert len(live) == 220 and _words(live) == _words(lines)
+    monkeypatch.undo()
+    assert OM.older_count(engine, branch.id) == 0
+    more = _turn(110)
+    assert S.append_lines(engine, branch.id, more)["ok"]
+    older = OM.read_older(engine, branch.id, limit=1000)
+    live = S._messages(S.get_row(engine, branch.id))
+    assert len(live) <= S.MAX_MESSAGES and len(older) >= 22
+    assert _words(older + live) == _words(lines + more)
+    engine.dispose()
+
+
+@pytest.mark.parametrize("fault", sorted(_FAULTS))
+def test_round_table_messages_that_cannot_be_kept_stay_live(tmp_path, monkeypatch, fault):
+    from iron_jarvis.core.db import init_db, make_engine
+
+    engine = make_engine(str(tmp_path / "t.db"))
+    init_db(engine)
+    threads = AgentThreads(engine)
+    room = threads.create("Planning", [{"key": "builtin:critic", "source": "builtin", "name": "critic", "role": "critic"}])
+    said: list[dict] = []
+
+    def say(i: int) -> None:
+        entry = {"who": "user" if i % 2 == 0 else "builtin:critic", "content": f"round line {i}", "at": "2026-11-20T10:00:00+00:00"}
+        said.append(entry)
+        threads._append(room.id, [entry])
+
+    for i in range(400):
+        say(i)
+    _FAULTS[fault](monkeypatch)
+    for i in range(400, 403):
+        say(i)
+    assert json.loads(threads.get(room.id).messages_json) == said  # 403, all live
+    monkeypatch.undo()
+    assert OM.older_count(engine, room.id) == 0
+    # The store works again: the next message moves the backlog, in order.
+    say(403)
+    live = json.loads(threads.get(room.id).messages_json)
+    older = OM.read_older(engine, room.id, limit=1000)
+    assert len(live) == 400 and older == said[:4]
+    assert older + live == said
     engine.dispose()
 
 

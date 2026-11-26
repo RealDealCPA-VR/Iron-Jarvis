@@ -737,14 +737,26 @@ def test_the_older_messages_table_is_made_at_boot(tmp_path):
     """init_db makes the table on every install's database, not only on the
     first save that overflows (core.db._LATE_MODEL_MODULES, v1.499.3). Run in
     a FRESH interpreter: in this one the test file already imported the model,
-    which would make the check pass with the entry gone."""
+    which would make the check pass with the entry gone. 48-b review: the
+    table lives in ``context/older_messages``, which other late models now
+    import too (harness/, agents/), so the entry is ALSO pinned by name: the
+    table must not hang on what some other module happens to import."""
+    import importlib
     import subprocess
     import sys
+
+    from iron_jarvis.core import db as core_db
+
+    entry = "..context.older_messages"
+    assert entry in core_db._LATE_MODEL_MODULES
+    mod = importlib.import_module(entry, package="iron_jarvis.core")
+    assert mod.ChatOlderMessage.__tablename__ == "chatoldermessage"
 
     code = (
         "import sys; from sqlalchemy import inspect; "
         "from iron_jarvis.core.db import init_db, make_engine; "
         "assert 'iron_jarvis.daemon.chat_append' not in sys.modules; "
+        "assert 'iron_jarvis.context.older_messages' not in sys.modules; "
         "e = make_engine(sys.argv[1]); init_db(e); "
         "print('chatoldermessage' in inspect(e).get_table_names()); e.dispose()"
     )

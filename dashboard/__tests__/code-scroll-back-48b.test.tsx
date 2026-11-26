@@ -138,6 +138,16 @@ function serveOlder(sid: string, total: number, startKept = true) {
 // IntersectionObserver: jsdom has none. Each observer is kept; `reachTop`
 // tells the ones watching the top line that it came into view.
 const observers: FakeIO[] = [];
+/** The observers watching the "Earlier messages" line now on screen. */
+function topWatchers(): { o: FakeIO; el: Element }[] {
+  const out: { o: FakeIO; el: Element }[] = [];
+  for (const o of observers) {
+    for (const el of o.targets) {
+      if (el.isConnected && el.closest('[data-testid="older-top"]')) out.push({ o, el });
+    }
+  }
+  return out;
+}
 class FakeIO {
   cb: IntersectionObserverCallback;
   targets = new Set<Element>();
@@ -158,13 +168,15 @@ class FakeIO {
     return [];
   }
 }
-function reachTop() {
+/** The line came into view. OlderMessages attaches its observer in an
+ *  effect, which can run after the text a test waited for is on screen (a
+ *  busy PC): wait for one to watch the line now on screen, THEN tell it, so
+ *  a reach is never lost (and a "reads nothing" check checks something). */
+async function reachTop() {
+  await waitFor(() => expect(topWatchers().length).toBeGreaterThan(0), LONG);
   act(() => {
-    for (const o of [...observers]) {
-      for (const el of [...o.targets]) {
-        if (!el.isConnected || !el.closest('[data-testid="older-top"]')) continue;
-        o.cb([{ target: el, isIntersecting: true } as unknown as IntersectionObserverEntry], o as unknown as IntersectionObserver);
-      }
+    for (const { o, el } of topWatchers()) {
+      o.cb([{ target: el, isIntersecting: true } as unknown as IntersectionObserverEntry], o as unknown as IntersectionObserver);
     }
   });
 }
@@ -250,7 +262,7 @@ describe("scroll back in a coding session (48-b)", () => {
     expect(screen.getByTestId("older-more")).toHaveTextContent("Earlier messages");
     expect(sessionReads(sid).length).toBeGreaterThanOrEqual(1);
     // Following the newest line: the line in view reads nothing.
-    reachTop();
+    await reachTop();
     await new Promise((r) => setTimeout(r, 30));
     expect(olderReads()).toEqual([]);
   });
@@ -269,7 +281,7 @@ describe("scroll back in a coding session (48-b)", () => {
     // The first live line is the reader's line, at the top of the screen.
     const first = screen.getByText("question 300").closest('[data-testid="harness-transcript"] > *') as Element;
     const was = first.getBoundingClientRect().top;
-    reachTop();
+    await reachTop();
     await screen.findByText("question 250", undefined, LONG);
     expect(olderReads()).toEqual([`/chat/threads/${sid}/older?before=300&limit=50`]);
     // The 50 went in above it, and the scroll moved with them: still there.
@@ -349,9 +361,9 @@ describe("scroll back in a coding session (48-b)", () => {
   it("says 'Start of this session' once the first line is loaded", async () => {
     await openLongSession(60);
     scrollToTop();
-    reachTop();
+    await reachTop();
     await screen.findByText("question 10", undefined, LONG);
-    reachTop();
+    await reachTop();
     await screen.findByText("question 0", undefined, LONG);
     const top = await screen.findByTestId("older-start", undefined, LONG);
     // One word per thing: the top of a coding session is not a chat's.
@@ -374,11 +386,11 @@ describe("scroll back in a coding session (48-b)", () => {
     const real = api.older;
     api.older = () => new api.ApiError("the daemon is busy", 503);
     scrollToTop();
-    reachTop();
+    await reachTop();
     const failed = await screen.findByTestId("older-failed", undefined, LONG);
     expect(failed).toHaveTextContent("Could not load earlier messages.");
     // Reaching it again does not ask again by itself.
-    reachTop();
+    await reachTop();
     await new Promise((r) => setTimeout(r, 30));
     expect(olderReads()).toHaveLength(1);
     api.older = real;
@@ -393,7 +405,7 @@ describe("scroll back in a coding session (48-b)", () => {
     // Following: at the bottom, the line reported in view (and was ignored).
     scrollTop = box.scrollHeight - 600;
     fireEvent.scroll(box);
-    reachTop();
+    await reachTop();
     await new Promise((r) => setTimeout(r, 20));
     expect(olderReads()).toEqual([]);
     // The reader leaves the bottom upward: that is the reach.
@@ -405,7 +417,7 @@ describe("scroll back in a coding session (48-b)", () => {
   it("a later read whose count grew fetches just the lines in between", async () => {
     const { rerender } = await openLongSession();
     scrollToTop();
-    reachTop();
+    await reachTop();
     await screen.findByText("question 250", undefined, LONG);
     // Two turns more: four lines left the live ones (the daemon moved them).
     const live = Array.from({ length: LIVE }, (_, i) => line(304 + i));
@@ -442,7 +454,7 @@ describe("scroll back in a coding session (48-b)", () => {
     // goes down, so its earlier lines held before that point stay.
     const { rerender } = await openLongSession();
     scrollToTop();
-    reachTop();
+    await reachTop();
     await screen.findByText("question 250", undefined, LONG);
     const reread = (k: number) =>
       rerender(
@@ -495,7 +507,7 @@ describe("scroll back in a coding session (48-b)", () => {
     let answer: () => void = () => {};
     api.older = () => new Promise((_r, no) => (answer = () => no(new api.ApiError("gone", 503)))) as unknown;
     scrollToTop();
-    reachTop();
+    await reachTop();
     await waitFor(() => expect(olderReads()).toHaveLength(1), LONG);
     // Meanwhile the session's lines were replaced: it keeps fewer older ones.
     api.gets[`/build/sessions/${sid}`] = view(sid, 10, Array.from({ length: LIVE }, (_, i) => line(10 + i)));
@@ -527,7 +539,7 @@ describe("scroll back in a coding session (48-b)", () => {
     const real = api.older;
     api.older = (before, limit) => new Promise((r) => (answer = () => r(real!(before, limit)))) as unknown;
     scrollToTop();
-    reachTop();
+    await reachTop();
     await waitFor(() => expect(olderReads()).toHaveLength(1), LONG);
     // Another session opens in this column before the page comes back.
     api.gets["/build/sessions/other"] = view("other", 0, [line(0), line(1)]);

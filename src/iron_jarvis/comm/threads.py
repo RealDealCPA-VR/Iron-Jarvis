@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import Engine
 from sqlmodel import select
 
+from ..context import older_messages as _older
 from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
@@ -44,7 +45,7 @@ log = get_logger("comm.threads")
 
 #: Same LIVE window as PUT /chat/threads/{id} — a comm thread must not
 #: diverge from what a desktop save would keep. 48-b: what leaves it MOVES to
-#: the thread's older messages (``daemon.chat_append.keep_older``), never
+#: the thread's older messages (``context.older_messages.keep_older``), never
 #: deleted; until then message 201 was simply cut.
 _MAX_MESSAGES = 200
 
@@ -238,10 +239,8 @@ class CommThreadStore:
         for key in _EXTRA_KEYS:
             if extra and extra.get(key):
                 entry[key] = extra[key]
-        # 48-b: lazy (keeps comm/ free of daemon/ at import), and BEFORE the
-        # transaction: a CREATE inside it would wait on the write's own slot.
-        from ..daemon import chat_append as _older
-
+        # 48-b: BEFORE the transaction: a CREATE inside it would wait on the
+        # write's own slot.
         older_ok = _older.ensure_older_table(self.engine)
         with self._lock, session_scope(self.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
@@ -433,9 +432,7 @@ class CommThreadStore:
                 # the older ones, so this order can miss one (count fewer),
                 # never count one twice (``routes/agents._saved_chat_earlier``'s
                 # order).
-                from ..daemon.chat_append import older_by_who
-
-                earlier = older_by_who(
+                earlier = _older.older_by_who(
                     self.engine, thread_id, lambda m: (self._window_row(m) or {}).get("who"),
                 )
             with session_scope(self.engine) as db:
