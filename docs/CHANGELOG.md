@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.585.0
+
+**"When another task fails", and everything that runs by itself in one place.** Say it once in chat, such as "if the nightly report fails, tell me why and try once more", and Iron Jarvis makes **one rule** that starts when that task falls short.
+
 ## v1.584.0
 
 **Phone chats, coding sessions and round-tables keep every message too.** Phone chats, coding sessions and round-tables no longer lose their oldest messages, and you can scroll back to them.
@@ -77,7 +81,3 @@
 ## v1.567.0
 
 **See what memory gave a reply, and fix a preference.** When a chat reply was given things Iron Jarvis remembers (your preferences, a client's preferences, earlier work in the folder and its recap, notes, earlier chats and agent runs, files, project knowledge), the reply says so.
-
-## v1.566.0
-
-**Changes you accepted show their result.** When you accept a change from **Improvements**, Iron Jarvis now counts how the work went before and after it, from its own records, and shows the result under the waiting suggestions, in **Results of changes you accepted**.

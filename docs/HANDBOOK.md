@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.584.0 (2026-11-19).*
+holds itself to. Current as of v1.585.0 (2026-11-19).*
 
 ---
 
@@ -2150,6 +2150,81 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## "When another task fails", and everything that runs by itself in one place (v1.585.0)
+
+Say it once in chat, such as "if the nightly report fails, tell me why and
+try once more", and Iron Jarvis makes **one rule** that starts when that task
+falls short. Its card says **When** ("When the schedule “Nightly report”
+fails."), **Do**, **Where it works** and **Limits**, with **Undo**, like any
+rule.
+
+**Which tasks.** One of your schedules, a workflow, a rule's run, an agent
+run, or any other task, by name or any of that kind. **How it ended:** it
+failed, it finished with part of it failed, it ended needing you, or any of
+those (or it did nothing). A task that was done, or that you stopped, starts
+nothing. On the Rules page, pick **Another task fails** under **Another kind
+of rule**.
+
+**What the rule is told.** Which task ended and how, and what that task does,
+come from Iron Jarvis's own record, never from what a model said about
+itself. What the run itself said (its last words, the step that stopped it,
+the question it waits on) is given to the rule's work as data, never as
+instructions. If the run that ended worked carefully (it, or one of a
+workflow's steps, read an email or a web page), the rule's work starts
+carefully too.
+
+**Local only stays local.** If the task that ended was Local only, the
+rule's work is Local only too (if its model is not on this PC, it does not
+start, and the rule's row says why), and so is a workflow the rule runs.
+What that task said is never given to a workflow's steps. If the rule was
+made in a chat that is not Local only, its report there says how the work
+went and links to it, but not what it found: "It ran Local only, so what it
+found stays with its run on this PC." A rule that hands
+work to a remote agent hands nothing on for such a task, not even its name:
+a remote agent works on another computer. Its row says "The task that ended
+was Local only, so it was not handed to the remote agent …", and its card's
+Limits line says so.
+
+**Try once more.** For one of your schedules or a workflow, the rule can also
+run that task once more: say "try once more" in chat, or tick **Run it once
+more** on the Rules page. The card's Do line says so ("Then it runs the
+schedule “Nightly report” once more."). The second try starts after the first
+has finished, as a fire of that schedule (or a run of that workflow) that the
+rule started. If the first is still running 15 minutes later, the second try
+does not run, and the rule's row says so.
+
+**It never goes round in circles.** The work a rule like this does never
+starts it, or any rule like it, again: if "try once more" fails too, nothing
+more starts by itself, and the rule's row says how it went. It still starts
+at most 12 times an hour, then pauses itself and tells you once a day.
+
+**A schedule is heard once a fire.** When a schedule runs a workflow or an
+agent, the schedule's own result is what a rule hears, once per fire, as the
+Schedules row says it. A rule for that workflow, or for that agent of yours,
+hears the same fire too: "When the workflow “Month end” fails" starts when
+Month end fails under its schedule, once, and so does a rule for the
+schedule. A workflow that stops to wait for your answer ended needing you. If
+you answer a schedule's waiting workflow and it then fails, the rule hears
+that once too, as the Schedules row then says it.
+
+**Everything that runs by itself, in one place.** The Rules page lists your
+rules by what starts them, and under them, **At a time**, your schedules, each
+with what it does and how it last went (press one to change it on
+Schedules). On a workflow's canvas, the first box (**When should this
+run?**) lists under **Runs it now** the schedules and rules that already run
+it. In chat, "what runs on its
+own here?" gets the same list. A chat that is not Local only hears how each
+schedule last went, but not what that run said (it may be a Local only run's
+words): the Schedules page shows that.
+
+**Not set up yet.** Asking in chat for a rule started by email while no
+mailbox listens, by a calendar event while your calendar is not read, or by
+Slack or your phone while nothing listens there, gets a plain answer and a
+button to the page that sets it up (Notifications, or the calendar under
+Triggers on Rules). Nothing is made from chat that could never start. On the
+Rules page you can still add one yourself; an email, Slack or calendar rule's
+row then says what to turn on.
+
 ## Phone chats, coding sessions and round-tables keep every message too (v1.584.0)
 
 Phone chats, coding sessions and round-tables no longer lose their oldest
@@ -2248,81 +2323,6 @@ seems to have done one, it asks you first.
   Continue, or say which item in your first message.
 - Your answers are kept by Iron Jarvis on this PC. Nothing is sent anywhere
   and no model is asked.
-
-## "When another task fails", and everything that runs by itself in one place
-
-Say it once in chat, such as "if the nightly report fails, tell me why and
-try once more", and Iron Jarvis makes **one rule** that starts when that task
-falls short. Its card says **When** ("When the schedule “Nightly report”
-fails."), **Do**, **Where it works** and **Limits**, with **Undo**, like any
-rule.
-
-**Which tasks.** One of your schedules, a workflow, a rule's run, an agent
-run, or any other task, by name or any of that kind. **How it ended:** it
-failed, it finished with part of it failed, it ended needing you, or any of
-those (or it did nothing). A task that was done, or that you stopped, starts
-nothing. On the Rules page, pick **Another task fails** under **Another kind
-of rule**.
-
-**What the rule is told.** Which task ended and how, and what that task does,
-come from Iron Jarvis's own record, never from what a model said about
-itself. What the run itself said (its last words, the step that stopped it,
-the question it waits on) is given to the rule's work as data, never as
-instructions. If the run that ended worked carefully (it, or one of a
-workflow's steps, read an email or a web page), the rule's work starts
-carefully too.
-
-**Local only stays local.** If the task that ended was Local only, the
-rule's work is Local only too (if its model is not on this PC, it does not
-start, and the rule's row says why), and so is a workflow the rule runs.
-What that task said is never given to a workflow's steps. If the rule was
-made in a chat that is not Local only, its report there says how the work
-went and links to it, but not what it found: "It ran Local only, so what it
-found stays with its run on this PC." A rule that hands
-work to a remote agent hands nothing on for such a task, not even its name:
-a remote agent works on another computer. Its row says "The task that ended
-was Local only, so it was not handed to the remote agent …", and its card's
-Limits line says so.
-
-**Try once more.** For one of your schedules or a workflow, the rule can also
-run that task once more: say "try once more" in chat, or tick **Run it once
-more** on the Rules page. The card's Do line says so ("Then it runs the
-schedule “Nightly report” once more."). The second try starts after the first
-has finished, as a fire of that schedule (or a run of that workflow) that the
-rule started. If the first is still running 15 minutes later, the second try
-does not run, and the rule's row says so.
-
-**It never goes round in circles.** The work a rule like this does never
-starts it, or any rule like it, again: if "try once more" fails too, nothing
-more starts by itself, and the rule's row says how it went. It still starts
-at most 12 times an hour, then pauses itself and tells you once a day.
-
-**A schedule is heard once a fire.** When a schedule runs a workflow or an
-agent, the schedule's own result is what a rule hears, once per fire, as the
-Schedules row says it. A rule for that workflow, or for that agent of yours,
-hears the same fire too: "When the workflow “Month end” fails" starts when
-Month end fails under its schedule, once, and so does a rule for the
-schedule. A workflow that stops to wait for your answer ended needing you. If
-you answer a schedule's waiting workflow and it then fails, the rule hears
-that once too, as the Schedules row then says it.
-
-**Everything that runs by itself, in one place.** The Rules page lists your
-rules by what starts them, and under them, **At a time**, your schedules, each
-with what it does and how it last went (press one to change it on
-Schedules). On a workflow's canvas, the first box (**When should this
-run?**) lists under **Runs it now** the schedules and rules that already run
-it. In chat, "what runs on its
-own here?" gets the same list. A chat that is not Local only hears how each
-schedule last went, but not what that run said (it may be a Local only run's
-words): the Schedules page shows that.
-
-**Not set up yet.** Asking in chat for a rule started by email while no
-mailbox listens, by a calendar event while your calendar is not read, or by
-Slack or your phone while nothing listens there, gets a plain answer and a
-button to the page that sets it up (Notifications, or the calendar under
-Triggers on Rules). Nothing is made from chat that could never start. On the
-Rules page you can still add one yourself; an email, Slack or calendar rule's
-row then says what to turn on.
 
 ## What everything cost, by folder, client, automation and agent (v1.580.0)
 
