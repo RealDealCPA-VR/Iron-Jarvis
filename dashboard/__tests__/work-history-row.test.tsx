@@ -46,7 +46,22 @@ const H = vi.hoisted(() => {
       getResponses: {} as Record<string, unknown>,
       postResponses: {} as Record<string, unknown>,
     },
-    stream: { bodies: [] as Record<string, unknown>[], tools: [] as unknown[] },
+    stream: {
+      bodies: [] as Record<string, unknown>[],
+      tools: [] as unknown[],
+      /** done: the reply finishes; fail: it fails after the lookup with
+       *  partial text; hold: it streams until Stop (review finding 3). */
+      mode: "done" as "done" | "fail" | "hold",
+      streaming: false,
+      text: "",
+      version: 0,
+      listeners: new Set<() => void>(),
+      settle: null as null | ((r: Record<string, unknown>) => void),
+      bump() {
+        this.version += 1;
+        for (const l of [...this.listeners]) l();
+      },
+    },
   };
 });
 
@@ -75,24 +90,54 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/useChatStream", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/useChatStream")>();
+  const React = await import("react");
+  const subscribe = (cb: () => void) => {
+    H.stream.listeners.add(cb);
+    return () => {
+      H.stream.listeners.delete(cb);
+    };
+  };
   return {
     ...real,
     StreamError: H.FakeStreamError,
     useLiveText: (s: { text?: string }) => s?.text ?? "",
     streamSSE: async function* () {},
-    useChatStream: () => ({
-      streaming: false,
-      text: "",
-      tools: H.stream.tools,
-      approval: null,
-      run: async (body: Record<string, unknown>, onDelta: (d: string, f: string) => void) => {
-        H.stream.bodies.push(body);
-        await new Promise<void>((r) => setTimeout(r, 0));
-        onDelta("Three pieces of work in March.", "Three pieces of work in March.");
-        return { reply: "Three pieces of work in March." };
-      },
-      abort: () => {},
-    }),
+    useChatStream: () => {
+      React.useSyncExternalStore(subscribe, () => H.stream.version);
+      return {
+        streaming: H.stream.streaming,
+        text: H.stream.text,
+        tools: H.stream.tools,
+        approval: null,
+        run: async (body: Record<string, unknown>, onDelta: (d: string, f: string) => void) => {
+          H.stream.bodies.push(body);
+          await new Promise<void>((r) => setTimeout(r, 0));
+          if (H.stream.mode === "fail") {
+            const e = new H.FakeStreamError("The model stopped answering.", 502);
+            e.committed = true;
+            e.partial = "I found three pieces of work in March, then";
+            throw e;
+          }
+          if (H.stream.mode === "hold") {
+            H.stream.streaming = true;
+            H.stream.text = "I found three pieces of work in March so far";
+            H.stream.bump();
+            return new Promise<Record<string, unknown>>((ok) => {
+              H.stream.settle = ok;
+            });
+          }
+          onDelta("Three pieces of work in March.", "Three pieces of work in March.");
+          return { reply: "Three pieces of work in March." };
+        },
+        abort: () => {
+          const settle = H.stream.settle;
+          H.stream.settle = null;
+          H.stream.streaming = false;
+          H.stream.bump();
+          settle?.({ reply: "" });
+        },
+      };
+    },
   };
 });
 vi.mock("@/lib/useEvents", () => ({ useEvents: () => ({ events: [], connected: false }) }));
@@ -178,6 +223,10 @@ beforeEach(() => {
   H.api.puts.length = 0;
   H.stream.bodies.length = 0;
   H.stream.tools = [];
+  H.stream.mode = "done";
+  H.stream.streaming = false;
+  H.stream.text = "";
+  H.stream.settle = null;
   H.api.getResponses = {
     "/models": { models: [] },
     "/chat/personas": { personas: [] },
@@ -309,6 +358,38 @@ describe("the real chat page", () => {
     const saved = H.api.puts.filter((p) => p.path.startsWith("/chat/threads/")).at(-1)!.body;
     const reply = (saved.messages as { role: string; workRows?: { id: string }[] }[]).filter((m) => m.role === "assistant").at(-1)!;
     expect(reply.workRows?.map((r) => r.id)).toEqual(["chat:t3", "chat:t2", "run:s1"]);
+  });
+
+  /** The last saved assistant line (each save carries the whole chat). */
+  const savedReply = () => {
+    const saved = H.api.puts.filter((p) => p.path.startsWith("/chat/threads/")).at(-1)?.body;
+    const lines = (saved?.messages ?? []) as { role: string; content?: string; workRows?: { id: string }[] }[];
+    return lines.filter((m) => m.role === "assistant").at(-1);
+  };
+
+  it("a reply that failed after the lookup keeps and saves its rows (review finding 3)", async () => {
+    H.stream.tools = [doneCard()];
+    H.stream.mode = "fail";
+    render(<ChatPage />);
+    const input = await box();
+    fireEvent.change(input, { target: { value: "what did we do for Baker in March?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(savedReply()?.workRows?.map((r) => r.id)).toEqual(["chat:t3", "chat:t2", "run:s1"]));
+    expect(savedReply()?.content).toBe("I found three pieces of work in March, then");
+    const rows = await screen.findByTestId("work-history-rows");
+    expect(within(rows).getAllByTestId("work-history-row")).toHaveLength(3);
+  });
+
+  it("a reply stopped with words keeps and saves its rows (review finding 3)", async () => {
+    H.stream.tools = [doneCard()];
+    H.stream.mode = "hold";
+    render(<ChatPage />);
+    const input = await box();
+    fireEvent.change(input, { target: { value: "what did we do for Baker in March?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(await screen.findByTitle("Stop this turn"));
+    await waitFor(() => expect(savedReply()?.workRows?.map((r) => r.id)).toEqual(["chat:t3", "chat:t2", "run:s1"]));
+    expect(savedReply()?.content).toBe("I found three pieces of work in March so far");
   });
 
   it("a turn with no such step draws no rows", async () => {

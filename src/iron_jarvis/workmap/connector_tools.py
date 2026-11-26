@@ -203,20 +203,22 @@ def dated_lines(platform: Any, *, folder: str, query: str, after: Any, before: A
 
     from .block import _safe, entry_line
     from .lookup import lookup
-    from .tools import status_of
+    from .tools import MAYBE_MORE, status_of
 
     try:
         found = lookup(platform, folder=folder, query=query, outside=True, after=after, before=before)
         if found.unreadable or not found.rows:
             return ""
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+        partial = bool(found.partial)  # 13-b review: not every row read, no exact number
         lines = [line for line in (
             _safe(entry_line(r, now, with_folder=True, times=int(r.get("times") or 1), dated=True,
-                             status=status_of(r)))
+                             status=status_of(r), at_least=partial))
             for r in found.rows) if line]
         if not lines:
             return ""
-        return "\n".join([f"Earlier work {period}:" if period else "Earlier work:", *lines])
+        return "\n".join([f"Earlier work {period}:" if period else "Earlier work:", *lines,
+                          *([MAYBE_MORE] if partial else [])])
     except Exception:  # noqa: BLE001 — the record is extra
         return ""
 

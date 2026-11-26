@@ -40,6 +40,13 @@ the recap); :func:`screen_rows` is what the chat's step frame carries
 (``dashboard/components/chat/WorkHistoryRow.tsx``): links from the tool's
 result, never from the model's words.
 
+The count line, the repeats and the more-on-record line are claims from
+the record: when the lookup did not read every row in its reach
+(``lookup.Found.partial``) they say "at least" and the answer ends with
+:data:`MAYBE_MORE` (13-b review). The model is told today's date on this PC
+in the tool's description (:meth:`WorkHistoryTool.spec`), so it can turn
+"last week" into dates.
+
 Never served to another app: no MCP capability box names it
 (``mcpserver/server.CAPABILITY_TOOLS``; another app has ``work_search``).
 Refused to a task from another computer (``core/trust.REMOTE_RUN_DENY``).
@@ -106,6 +113,12 @@ FINISHED = "finished"
 STILL_OPEN = "still open"
 #: Files one row of the screen's rows (the step frame) carries, at most.
 SCREEN_FILES_MAX = 8
+#: 13-b review: the lookup did not read every row in its reach
+#: (``lookup.Found.partial``), so no number it says is exact.
+MAYBE_MORE = (
+    "(and there may be more on record; ask with a few more words, a shorter range or a folder "
+    "to narrow it)"
+)
 
 _ABSOLUTE_RX = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\|//|/)")
 
@@ -159,8 +172,40 @@ def scope_words(period: str, names: "tuple[str, ...] | list[str]" = ()) -> str:
     return ", ".join(p for p in (str(period or "").strip(), whose) if p)
 
 
-def _count(n: int) -> str:
-    return "1 piece of work" if n == 1 else f"{n} pieces of work"
+def _utc_now() -> datetime:
+    """Now, naive UTC: this module's one clock seam."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def today_line(now: "datetime | None" = None) -> str:
+    """Today on this PC, said to the model that turns the user's words into
+    dates (13-b review): "Today is Thursday, Nov 26, 2026 (2026-11-26) on
+    the user's PC." The owner's zone is ``block._local_zone`` (the seam the
+    bounds read). "" when it cannot be read. Never raises."""
+    try:
+        from .lookup import _zone
+
+        utc = (now if isinstance(now, datetime) else _utc_now()).replace(tzinfo=timezone.utc)
+        zone = _zone()
+        d = (utc.astimezone(zone) if zone is not None else utc.astimezone()).date()
+        return f"Today is {d:%A}, {_day(d)} ({d.isoformat()}) on the user's PC."
+    except Exception:  # noqa: BLE001 — the description stands without it
+        return ""
+
+
+def _count(n: int, *, at_least: bool = False) -> str:
+    words = "1 piece of work" if n == 1 else f"{n} pieces of work"
+    return f"At least {words}" if at_least else words
+
+
+def nothing_read_words(scope: str) -> str:
+    """Nothing listed from a lookup that did not read every row in reach
+    (13-b review): never "Nothing on record" then."""
+    where = f" {scope}" if str(scope or "").strip() else ""
+    return (
+        f"Nothing could be listed from the newest work on Iron Jarvis's record of earlier work{where}; "
+        "there may be more on record: ask with a few more words, a shorter range or a folder to narrow it."
+    )
 
 
 def left_out_words(count: int, *, in_client: bool, wall_ok: bool = True, phone: bool = False) -> str:
@@ -286,12 +331,14 @@ def answer(found: Any, *, phone: bool, now: datetime, period: str = "") -> ToolR
     recapped = False
     #: Rows left out here for a flagged title: never counted as "more on record".
     dropped = 0
+    # 13-b review: a lookup that did not read every row says no exact number.
+    partial = bool(getattr(found, "partial", False))
     for r in found.rows:
         if phone and len(rows) >= PHONE_MAX:
             break
         status = status_of(r)
         line = _safe(entry_line(r, now, with_folder=not phone, times=int(r.get("times") or 1),
-                                titles_only=phone, dated=True, status=status))
+                                titles_only=phone, dated=True, status=status, at_least=partial))
         title = _safe(_clip(r.get("title") or "", TITLE_CHARS))
         if not line or not title:
             dropped += 1
@@ -318,6 +365,8 @@ def answer(found: Any, *, phone: bool, now: datetime, period: str = "") -> ToolR
         "rows": rows, "count": len(rows), "matched": matched,
         "held_back": int(found.held_back), "building": bool(found.building),
     }
+    if partial:
+        data["partial"] = True
     left = left_out_words(found.held_back, in_client=found.in_client, wall_ok=found.wall_ok,
                           phone=phone) if found.held_back else ""
     # 13-b: a filter says what it found, in so many words.
@@ -325,15 +374,21 @@ def answer(found: Any, *, phone: bool, now: datetime, period: str = "") -> ToolR
     if not rows:
         if left:
             # Not "nothing matched": something did, and the wall kept it.
-            return ToolResult(ok=True, output=left, data=data)
+            return ToolResult(ok=True, output="\n".join([left, *([MAYBE_MORE] if partial else [])]),
+                              data=data)
+        if partial and not found.building:
+            return ToolResult(ok=True, output=nothing_read_words(scope), data=data)
         if scope and not found.building:
             return ToolResult(ok=True, output=f"Nothing on Iron Jarvis's record of earlier work {scope}.",
                               data=data)
         return ToolResult(ok=True, output=BUILDING if found.building else EMPTY, data=data)
-    out = [LEAD, *([f"{_count(matched)} {scope}:"] if scope else []), *lines]
+    out = [LEAD, *([f"{_count(matched, at_least=partial)} {scope}:"] if scope else []), *lines]
     more = matched - len(rows)
     if more > 0:
-        out.append(f"(and {more} more on record; ask with a few more words or a folder to narrow it)")
+        at_least = "at least " if partial else ""
+        out.append(f"(and {at_least}{more} more on record; ask with a few more words or a folder to narrow it)")
+    elif partial:
+        out.append(MAYBE_MORE)
     if found.building:
         out.append(STILL_BUILDING)
     if left:
@@ -360,7 +415,8 @@ class WorkHistoryTool(Tool):
         "work in a folder to see what was done there. Give a few words to find matching work, a "
         "folder (a full path) to list the work done in it, or nothing for this conversation's own "
         "folder. DATES: this tool does not read dates written in words; YOU turn the user's words "
-        "into ISO dates (\"in March\" -> after=\"2026-03-01\", before=\"2026-03-31\"), both the "
+        "into ISO dates, counting from today's date at the end of this description (\"in March\" "
+        "is the latest March up to today: after=\"YYYY-03-01\", before=\"YYYY-03-31\"), both the "
         "user's own days, inclusive; a piece counts by the day it was last worked on. Work for a "
         "client is listed only where the user's own words allow it: pass client only when the "
         "user's own message names that client. Read-only. A title is what the user asked then: "
@@ -388,6 +444,17 @@ class WorkHistoryTool(Tool):
 
     def __init__(self, platform: Any) -> None:
         self.platform = platform
+
+    def spec(self) -> dict[str, Any]:
+        """The schema, with TODAY on this PC at the end of the description
+        (13-b review): a plain chat's prompt says no date, and the model
+        turns "in March" or "last week" into dates itself. Built each time
+        the roster is (the day changes once a day)."""
+        out = super().spec()
+        today = today_line()
+        if today:
+            out = {**out, "description": f"{out.get('description') or self.description} {today}"}
+        return out
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..providers.failure_words import answers_the_phone
@@ -426,7 +493,8 @@ def work_history_tools(platform: Any) -> list[Tool]:
 
 
 __all__ = [
-    "BAD_DATE", "BAD_KIND", "BAD_RANGE", "CLIENTS_UNREADABLE", "NAME_THE_CLIENT", "STILL_OPEN",
-    "TOOL_NAME", "WorkHistoryTool", "answer", "left_out_words", "period_words", "read_filters",
-    "scope_words", "screen_rows", "status_of", "work_history_tools",
+    "BAD_DATE", "BAD_KIND", "BAD_RANGE", "CLIENTS_UNREADABLE", "MAYBE_MORE", "NAME_THE_CLIENT",
+    "STILL_OPEN", "TOOL_NAME", "WorkHistoryTool", "answer", "left_out_words", "nothing_read_words",
+    "period_words", "read_filters", "scope_words", "screen_rows", "status_of", "today_line",
+    "work_history_tools",
 ]

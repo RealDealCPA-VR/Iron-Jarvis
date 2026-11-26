@@ -59,6 +59,11 @@ BY DATE, BY KIND, BY CLIENT (next leaps 13-b, master plan R2.10):
   the wall still decides each one.
 * A filter with no folder looks everywhere the wall allows (not only the
   turn's own folder).
+* A lookup whose answer SAYS HOW MANY (a filter or a client) asks again
+  every row its reads brought back (``COUNTED_MAX``), not only the best
+  ``CANDIDATES_MAX``: a busy month's nightly runs never push an older piece
+  out of the count. A read that stopped at ``READ_MAX``, or rows past what
+  is asked again, set ``Found.partial``: the tool then says "at least".
 * Each piece shown carries ``open`` (how many Open lines its kept, current
   recap has) and ``decisions`` (where the owner reads that recap: the
   client's page, else the Memory page) whatever the recap rule says; the
@@ -79,6 +84,7 @@ from urllib.parse import quote
 
 from ..core.db import session_scope
 from . import collect, keys
+from . import index as _index
 from .index import LIGHT_MAX, work_map
 from .models import KIND_CHAT, KIND_CODE, KIND_OUTSIDE, KIND_RUN, KIND_TOOL_CODE
 
@@ -172,6 +178,13 @@ LIMIT = 12
 LIMIT_MAX = 20
 #: Rows asked again and walled for one lookup, at most (the best first).
 CANDIDATES_MAX = 200
+#: 13-b review: rows one read of the record brings back for a lookup, at
+#: most (newest first), and rows asked again and walled for a lookup that
+#: SAYS HOW MANY it found (a date, kind or client: the count line), at most:
+#: every row its reads brought back. Past either cap the lookup is
+#: ``Found.partial`` and no number it says is exact ("at least").
+READ_MAX = LIGHT_MAX
+COUNTED_MAX = LIGHT_MAX
 #: Rows whose kept recap a query is matched against, at most (newest first).
 RECAP_SCAN_MAX = 400
 _CLIENT = "client:"
@@ -368,6 +381,10 @@ class Found:
     #: name (nothing was read); ``client_names`` the ones honoured.
     client_refused: bool = False
     client_names: tuple[str, ...] = ()
+    #: 13-b review: the lookup did not read or ask again every row in its
+    #: reach (a read stopped at ``READ_MAX``, or rows past what it asks
+    #: again), so ``matched`` and each row's ``times`` are at least that.
+    partial: bool = False
 
 
 def _match_words(r: dict[str, Any]) -> set[str]:
@@ -575,16 +592,33 @@ def lookup(platform: Any, *, turn: Any = None, cmap: Any = None, folder: str = "
             words -= _name_words(reader, asked)
         place = str(folder or "").strip()
         target = place or ("" if (words or filtered or asked) else str(reader.turn.folder_key or ""))
+        # 13-b review: an answer that SAYS HOW MANY (a filter or a client)
+        # asks again every row its reads brought back; any read that stopped
+        # at its cap, or rows past what is asked, make the lookup partial.
+        counting = filtered or bool(asked)
+        cut = False
 
         def read(where: str) -> list[dict[str, Any]]:
+            nonlocal cut
             if filtered:
-                return reader.wm.between(first, last, [where], want, LIGHT_MAX)
-            return reader.wm.for_folder(where, limit=LIGHT_MAX)[0]
+                got = reader.wm.between(first, last, [where], want, READ_MAX)
+                cut = cut or len(got) >= READ_MAX
+                return got
+            got, total = reader.wm.for_folder(where, limit=READ_MAX)
+            cut = cut or total > len(got)
+            return got
 
         def anywhere() -> list[dict[str, Any]]:
+            nonlocal cut
             if filtered:
-                return reader.wm.between(first, last, None, want, LIGHT_MAX)
-            return list(reader.wm._rows())
+                got = reader.wm.between(first, last, None, want, READ_MAX)
+                cut = cut or len(got) >= READ_MAX
+                return got
+            got = list(reader.wm._rows())
+            # 13-a's words read the newest LIGHT_MAX rows by design; a count
+            # for a client is a claim about all of its work.
+            cut = cut or (counting and len(got) >= _index.LIGHT_MAX)
+            return got
 
         if asked:
             rows = _client_rows(reader, asked, read, target=place, anywhere=anywhere)
@@ -628,7 +662,9 @@ def lookup(platform: Any, *, turn: Any = None, cmap: Any = None, folder: str = "
                     scored.append((hits, _newest(r), r))
             scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
             rows = [r for *_s, r in scored]
-        candidates = rows[:CANDIDATES_MAX]
+        ask_max = max(1, int(COUNTED_MAX if counting else CANDIDATES_MAX))
+        cut = cut or len(rows) > ask_max
+        candidates = rows[:ask_max]
         # Ask the sources again before anything is said (RAISES: nothing told).
         try:
             live = reader.live(candidates)
@@ -665,9 +701,10 @@ def lookup(platform: Any, *, turn: Any = None, cmap: Any = None, folder: str = "
             if reader.recap_ok(r):
                 r["recap"] = lines
         found.rows = shown
+        found.partial = bool(cut)
         # The plan's measure: how often a lookup matches more than it shows.
-        log.info("work lookup: %d matched, %d shown, %d held back", found.matched, len(shown),
-                 found.held_back)
+        log.info("work lookup: %d matched, %d shown, %d held back%s", found.matched, len(shown),
+                 found.held_back, " (not all read: at least)" if cut else "")
         return found
     except Exception:  # noqa: BLE001 — the record is extra; a turn never fails on it
         log.debug("work lookup: the record could not be read", exc_info=True)
@@ -675,7 +712,7 @@ def lookup(platform: Any, *, turn: Any = None, cmap: Any = None, folder: str = "
 
 
 __all__ = [
-    "CANDIDATES_MAX", "CLIENT_HREF", "KIND_ARGS", "LIMIT", "LIMIT_MAX", "MEMORY_WORK_HREF",
-    "TURN_REBUILD", "Found", "Reader", "as_it_is_now", "bound", "collapse", "kinds_of", "lookup",
+    "CANDIDATES_MAX", "CLIENT_HREF", "COUNTED_MAX", "KIND_ARGS", "LIMIT", "LIMIT_MAX", "MEMORY_WORK_HREF",
+    "READ_MAX", "TURN_REBUILD", "Found", "Reader", "as_it_is_now", "bound", "collapse", "kinds_of", "lookup",
     "withhold_local_only",
 ]

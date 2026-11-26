@@ -221,6 +221,107 @@ def test_the_bounds_are_the_owners_days_and_the_period_is_said_in_words(monkeypa
     assert WT.period_words(d, None) == "since Mar 1, 2026" and WT.period_words(None, d) == "up to Mar 1, 2026"
 
 
+def _runs(scene, task, folder, n, *, start) -> None:
+    """``n`` agent runs of one task (a schedule's nightly run), an hour apart."""
+    with session_scope(scene.engine) as db:
+        sessions = [Session(task=task, summary="All done.", status=SessionStatus.COMPLETED, origin="chat",
+                            workspace_path=folder, created_at=start + timedelta(hours=i),
+                            finished_at=start + timedelta(hours=i), options_json="{}") for i in range(n)]
+        db.add_all(sessions)
+        db.commit()
+        for s in sessions:
+            db.refresh(s)
+            db.add(AgentRun(session_id=s.id, parent_id=None))
+        db.commit()
+
+
+@pytest.fixture()
+def busy_march(scene):
+    """The review's case: one chat early in March, then 210 nightly runs (more
+    than one lookup used to ask again: 200)."""
+    _chat(scene, "Engagement letters", DOCS, at=_at(3, 5))
+    _runs(scene, "Nightly bank feed check", DOCS, 210, start=_at(3, 20, 0))
+    scene.wm.refresh(force=True)
+    return scene
+
+
+async def test_a_busy_month_is_counted_whole(busy_march):
+    """Review finding 1: the count line is a claim from the record, so every
+    row the range holds is asked again before it is said. 13-b's first cut
+    asked the newest 200 only and said "1 piece of work in March 2026" with
+    the chat missing and the runs "200 times"."""
+    got = await _ask(busy_march, folder=DOCS, words="what did we do in March?", args=dict(MARCH))
+    assert _titles(got) == ["Nightly bank feed check", "Engagement letters"]
+    assert got.output.splitlines()[1] == "2 pieces of work in March 2026:"
+    assert "(210 times, newest shown)" in got.output
+    assert "at least" not in got.output and "more on record" not in got.output
+    assert "partial" not in got.data
+
+
+@pytest.mark.parametrize("cap", ["READ_MAX", "COUNTED_MAX"])
+async def test_past_the_cap_the_count_is_said_as_at_least(busy_march, monkeypatch, cap):
+    """Past what one lookup reads (``READ_MAX``) or asks again
+    (``COUNTED_MAX``), no exact number is said: "At least", and a line that
+    there may be more."""
+    monkeypatch.setattr(L, cap, 50)
+    got = await _ask(busy_march, folder=DOCS, words="what did we do in March?", args=dict(MARCH))
+    lines = got.output.splitlines()
+    assert lines[1] == "At least 1 piece of work in March 2026:"
+    assert "(at least 50 times, newest shown)" in got.output
+    assert lines[-1] == WT.MAYBE_MORE and got.data["partial"] is True
+    # The same with the folder given (its own read).
+    there = await _ask(busy_march, folder=DOWNLOADS, words="what did we do there in March?",
+                       args={**MARCH, "folder": DOCS})
+    assert there.output.splitlines()[1] == "At least 1 piece of work in March 2026:"
+    # Nothing listed from what was read: never "Nothing on record" then.
+    none = WT.answer(L.Found(partial=True), phone=False, now=_at(11, 26), period="in March 2026")
+    assert "Nothing on Iron Jarvis's record" not in none.output
+    assert none.output == WT.nothing_read_words("in March 2026")
+    kept = WT.answer(L.Found(partial=True, held_back=2), phone=False, now=_at(11, 26), period="in March 2026")
+    assert kept.output.splitlines() == [WT.left_out_words(2, in_client=False), WT.MAYBE_MORE]
+
+
+async def test_without_a_filter_a_cut_list_says_at_least_too(busy_march, monkeypatch):
+    """No filter (13-a's reading: the newest 200 asked again, no count line):
+    the repeats and the more-on-record line never state a number the cut
+    could have made short."""
+    got = await _ask(busy_march, folder=DOCS, words="what did we do here?")
+    assert "(at least 200 times, newest shown)" in got.output
+    assert got.output.splitlines()[-1] == WT.MAYBE_MORE
+    # A folder read that stopped at its cap (asked again whole: 50 rows).
+    monkeypatch.setattr(L, "READ_MAX", 50)
+    cut = await _ask(busy_march, folder=DOCS, words="what did we do here?")
+    assert "(at least 50 times, newest shown)" in cut.output
+    assert cut.output.splitlines()[-1] == WT.MAYBE_MORE
+
+
+async def test_a_clients_count_past_the_newest_rows_read_is_at_least(march, monkeypatch):
+    """A client's count is a claim about ALL its work: its folders are read
+    whole, but work that only names it is looked for among the newest rows
+    on record (``index.LIGHT_MAX``); when those are all read, "at least"."""
+    from iron_jarvis.workmap import index as I
+
+    whole = await _ask(march, folder="", words="what did we do for Baker?", args={"client": "Baker"})
+    assert whole.output.splitlines()[1] == "5 pieces of work for Baker:"
+    monkeypatch.setattr(I, "LIGHT_MAX", 3)
+    march.wm._light = None
+    cut = await _ask(march, folder="", words="what did we do for Baker?", args={"client": "Baker"})
+    assert cut.output.splitlines()[1] == "At least 5 pieces of work for Baker:"
+
+
+def test_the_model_is_told_today_on_this_pc(scene, monkeypatch):
+    """Review finding 4: a plain chat's prompt says no date, and the model
+    turns "in March" or "last week" into ISO dates itself, so the tool's
+    description ends with today on the owner's PC (its zone, the one seam)."""
+    monkeypatch.setattr(B, "_local_zone", lambda: timezone(timedelta(hours=-5)))
+    monkeypatch.setattr(WT, "_utc_now", lambda: datetime(2027, 2, 4, 3, 0))  # Feb 3, 22:00 there
+    described = scene.tool.spec()["description"]
+    assert described.endswith(" Today is Wednesday, Feb 3, 2027 (2027-02-03) on the user's PC.")
+    assert described.startswith(WT.WorkHistoryTool.description)
+    assert "2026-03-01" not in described  # no example year the model could copy
+    assert WT.WorkHistoryTool.description == scene.tool.description  # the class text is untouched
+
+
 async def test_nothing_in_the_range_says_so_for_that_range(march):
     got = await _ask(march, folder="", words="what did we do for Baker in June?",
                      args={"client": "Baker", "after": "2026-06-01", "before": "2026-06-30"})
@@ -300,6 +401,9 @@ async def test_the_query_narrows_inside_the_clients_work(march):
 
 
 async def test_on_the_phone_a_named_client_comes_with_titles_dates_and_status_only(march):
+    # Review finding 2: a kept recap's Open line is never read for the phone,
+    # not even as "still open" (the control below: in the app it is).
+    _recap(march, march.ids["Baker payroll setup"], "DONE: set up payroll\nOPEN: the bank form waits on Baker")
     with FW.phone_surface():
         got = await _ask(march, folder="", words="what did we do for Baker in March?",
                          args={"client": "Baker", **MARCH})
@@ -307,6 +411,12 @@ async def test_on_the_phone_a_named_client_comes_with_titles_dates_and_status_on
     assert "payroll.xlsx" not in got.output and BAKER not in got.output
     assert all(r["link"] == "" and r["paths"] == [] and r["decisions"] == "" for r in got.data["rows"])
     assert WT.screen_rows(got) == []  # nothing to draw
+    assert WT.STILL_OPEN not in got.output and "bank form" not in got.output
+    assert all(r["open"] == 0 and r["status"] != WT.STILL_OPEN for r in got.data["rows"])
+    app = await _ask(march, folder="", words="what did we do for Baker in March?",
+                     args={"client": "Baker", **MARCH})
+    row = next(r for r in app.data["rows"] if r["title"] == "Baker payroll setup")
+    assert row["status"] == WT.STILL_OPEN and row["open"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -420,6 +530,9 @@ def test_the_outside_wall_still_refuses_every_owned_row_with_dates_set(march, mo
     # Work under a name still WAITING for the owner's answer: only the wall of
     # another app refuses it (the owner's own turn is told it).
     _chat(march, "Jones invoice follow up", DOWNLOADS, at=_at(3, 20))
+    # Review finding 2: an unowned piece another app IS told, with a kept
+    # recap that has an Open line: the app is never told it is still open.
+    _recap(march, march.ids["Price list update"], "DONE: new prices in\nOPEN: the supplier list waits")
     march.wm.refresh(force=True)
     tool = WorkSearchTool(march.platform)
     ctx = ToolContext(workspace=march.tmp, session_id="mcp:app:claude-desktop", agent_run_id="",
@@ -438,9 +551,12 @@ def test_the_outside_wall_still_refuses_every_owned_row_with_dates_set(march, mo
     with wall.turn_scope(wall.turn_wall(march.engine, "", "what did we do in March?")):
         mine = asyncio.run(march.tool.execute(dict(MARCH), SimpleNamespace(thread_id="", session_id="chat")))
     assert "Jones invoice follow up" in _titles(mine)
+    # ... and is told the price list is still open (the control for below).
+    assert next(r for r in mine.data["rows"] if r["title"] == "Price list update")["status"] == WT.STILL_OPEN
     anywhere = ask(dict(MARCH)).output
     assert "Earlier work in March 2026:" in anywhere and "Price list update" in anywhere
     assert "Baker April close" not in anywhere
+    assert WT.STILL_OPEN not in anywhere and "supplier list" not in anywhere
     assert ask({"folder": BAKER, **MARCH}).output.endswith(LOOKUP_EMPTY)
     bad = ask({"after": "last March"})
     assert bad.ok is False and bad.error == WT.BAD_DATE
@@ -488,11 +604,17 @@ def test_a_real_stream_turn_draws_three_march_rows_that_open_their_chats(app_sce
     from iron_jarvis.workmap.clients import store as store_mod
 
     store_mod.create(app_scene.platform, folder=str(app_scene.baker), name="Baker")
+    monkeypatch.setattr(WT, "_utc_now", lambda: datetime(2026, 11, 26, 15, 0))  # the clock seam
     calls = [ToolCall("c1", "work_history", {"client": "Baker", **MARCH})]
     n = {"i": 0}
     told: list[str] = []
+    offered: list[str] = []
 
     async def fake_stream(*, system, messages, tools=None, **kw):
+        for t in tools or []:
+            spec = t if isinstance(t, dict) else getattr(t, "__dict__", {})
+            if spec.get("name") == "work_history":
+                offered.append(str(spec.get("description") or ""))
         for m in messages:
             if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) == "tool":
                 told.append(str(m.get("content") if isinstance(m, dict) else m.content))
@@ -516,6 +638,8 @@ def test_a_real_stream_turn_draws_three_march_rows_that_open_their_chats(app_sce
     r = app_scene.client.post("/chat/stream", json=body)
     assert r.status_code == 200, r.text
     assert any("3 pieces of work in March 2026, for Baker:" in t for t in told), told
+    # Review finding 4: the model that turned "in March" into dates was told today's date.
+    assert offered and all(WT.today_line() in d for d in offered), offered
     finished = [d for e, d in _frames(r.text)
                 if e == "tool_call" and d.get("name") == "work_history" and d.get("status") == "finished"]
     assert finished, "no finished work_history step"

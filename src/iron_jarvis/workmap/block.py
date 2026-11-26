@@ -221,13 +221,15 @@ def date_words(when: Any) -> str:
 
 def entry_line(row: dict[str, Any], now: datetime, *, with_folder: bool = False,
                times: int = 1, for_name: str = "", titles_only: bool = False,
-               dated: bool = False, status: "str | None" = None) -> str:
+               dated: bool = False, status: "str | None" = None, at_least: bool = False) -> str:
     """One piece of work as one line. ``for_name`` says whose work it is
     (", for Hartleys, in …"); ``titles_only`` leaves out its file names and a
     run's result line (a client's other folders); ``dated`` adds the day
     after the age (v1.547.0, ``work_history``); ``status`` (13-b,
     ``work_history`` only) is said instead of the outcome words ("" says
-    nothing; None, the block's way, says the outcome when worth saying)."""
+    nothing; None, the block's way, says the outcome when worth saying);
+    ``at_least`` (13-b review) says the repeats as "at least N times" (the
+    lookup did not read every row)."""
     from ..projects.recent_activity import age_words
 
     bits = [KIND_WORDS.get(row["kind"], "work")]
@@ -241,7 +243,7 @@ def entry_line(row: dict[str, Any], now: datetime, *, with_folder: bool = False,
         bits.append(date_words(row.get("updated")))
     line = f"- [{' · '.join(bits)}] {_clip(row.get('title') or '', TITLE_CHARS)}"
     if times > 1:
-        line += f" ({times} times, newest shown)"
+        line += f" ({'at least ' if at_least else ''}{times} times, newest shown)"
     if with_folder and row.get("folder"):
         who = f", for {for_name}" if for_name else ""
         line += f"{who}, in {row['folder']}"

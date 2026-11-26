@@ -2214,9 +2214,13 @@ panel beside the chat (with several, a short list to pick from), and
 Nothing to turn on: the words of your message are enough.
 
 - **By date.** "in March", "last week", "since Monday": Jarvis turns your
-  words into days, your own days on this PC's clock. A piece counts by the
-  day it was last worked on. With a date and no folder, it looks in every
-  folder it may tell this chat about, not only this chat's own.
+  words into days, counting from today's date on this PC, your own days on
+  this PC's clock. A piece counts by the day it was last worked on. With a
+  date and no folder, it looks in every folder it may tell this chat about,
+  not only this chat's own.
+- **Counts you can trust.** The count is every piece in the range. In a
+  very busy range it says "at least" and asks for a shorter range rather
+  than give a number it did not check.
 - **By client.** A client's work is listed only when your own message names
   that client, or when the chat is in that client's folder. When only
   Jarvis's own words name a client, nothing is listed and it asks you to
