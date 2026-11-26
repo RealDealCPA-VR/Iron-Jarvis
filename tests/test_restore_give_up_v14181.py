@@ -425,12 +425,21 @@ def test_conpty_api_called_from_many_threads_loads_once(monkeypatch):
 def test_the_boot_loads_conpty_before_any_restore_thread_starts(tmp_path, monkeypatch):
     gate = _Gate()
     calls: list[tuple[str, list[str]]] = []
+    # A restore thread an EARLIER test left winding down in this process is
+    # not one this boot started: on GitHub this test passed only on its retry
+    # (tests.yml run 45886042248) because it read one as its own. Only the
+    # threads that start after this point count.
+    before = {t.ident for t in threading.enumerate()}
 
     def _warm() -> bool:
         calls.append(
             (
                 threading.current_thread().name,
-                [t.name for t in threading.enumerate() if t.name.startswith("pane-restore")],
+                [
+                    t.name
+                    for t in threading.enumerate()
+                    if t.name.startswith("pane-restore") and t.ident not in before
+                ],
             )
         )
         return True
