@@ -284,6 +284,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // Next leaps 43-a: the model library.
   model_library: { did: "Looked at which models fit this PC", noun: "model library" },
   model_download: { did: "Started downloading a model", noun: "model download" },
+  // The intelligence plan, release 9. Twin: agents/mission.py.
+  model_report: { did: "Looked at what your own models are good at", noun: "model check" },
+  model_measure: { did: "Started measuring one of your own models", noun: "model measure" },
   // Next leaps 46-a: what everything cost.
   usage_report: { did: "Looked up what your work cost", noun: "cost lookup" },
   // Next leaps 04-b: a folder's open item closed or reopened from chat. A call

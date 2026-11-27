@@ -63,6 +63,22 @@ def _local_ocr_off_by_default():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_idle_model_trials():
+    """The intelligence plan, release 9: the lifespan's idle trial reads this
+    PC's REAL keyboard/mouse idle time. A test that runs the app's lifespan
+    must never try a model because the owner stepped away; the worker's own
+    tests drive ``AutoTrials.step`` with injected readings."""
+    from iron_jarvis.envelope import autotrial
+
+    original = autotrial._FORCED_OFF
+    autotrial._FORCED_OFF = True
+    try:
+        yield
+    finally:
+        autotrial._FORCED_OFF = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _never_the_users_iron_proxy():
     """v1.367.0: the suite must NEVER find the Iron-Proxy on this machine.
 

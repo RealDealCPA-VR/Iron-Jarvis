@@ -145,6 +145,8 @@
     "message_agent",
     "model_download",
     "model_library",
+    "model_measure",
+    "model_report",
     "model_server_add",
     "model_server_default",
     "model_server_remove",
@@ -411,6 +413,8 @@
     "message_agent": "message a teammate",
     "model_download": "download a model into your model server",
     "model_library": "look at which models fit this PC",
+    "model_measure": "start measuring one of your own models",
+    "model_report": "look at what your own models are good at",
     "model_server_add": "add a model server",
     "model_server_default": "set the default model to one of a model server's",
     "model_server_remove": "remove a model server",
@@ -989,6 +993,14 @@
       "Looked at which models fit this PC",
       "Looking at which models fit this PC"
     ],
+    "model_measure": [
+      "Started measuring one of your own models",
+      "Starting measuring one of your own models"
+    ],
+    "model_report": [
+      "Looked at what your own models are good at",
+      "Looking at what your own models are good at"
+    ],
     "model_server_add": [
       "Added a model server",
       "Adding a model server"
@@ -1515,6 +1527,8 @@
     "message_agent": "",
     "model_download": "",
     "model_library": "",
+    "model_measure": "",
+    "model_report": "",
     "model_server_add": "",
     "model_server_default": "",
     "model_server_remove": "",

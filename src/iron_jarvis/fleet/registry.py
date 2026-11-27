@@ -29,7 +29,7 @@ from ..core.logging import get_logger
 from .adapter import FleetAdapter, adapter_for  # noqa: F401 — FleetAdapter re-exported
 from .models import NODE_PROTOCOLS, FleetNode
 from .probes import normalize_root
-from .upstreams import PLACE_CLOUD, UNREAD, RouteTable
+from .upstreams import NOT_A_PROXY, PLACE_CLOUD, UNREAD, RouteTable
 
 log = get_logger("fleet.registry")
 
@@ -94,6 +94,11 @@ class FleetRegistry:
         #: the routing path (``route_place``), so writes swap whole entries
         #: under ``_routes_lock`` and a read is one dict lookup.
         self._routes: dict[str, tuple[str, RouteTable]] = {}
+        #: The intelligence plan, release 9: node id -> the address root at
+        #: which the sampler last read "this server answers itself, it is not
+        #: a model proxy" (``upstreams.NOT_A_PROXY``). In memory only: after a
+        #: restart nothing is known until the sampler reads again.
+        self._plain: dict[str, str] = {}
         self._routes_lock = threading.Lock()
         self._routes_path = self._routes_file()
         self._load_routes()
@@ -443,9 +448,17 @@ class FleetRegistry:
         had — a proxy that did not answer this once has not changed its
         routing. A change to any verdict moves :attr:`revision`, so the model
         list is rebuilt with the new places."""
+        node = self._top_level().get(node_id)
+        with self._routes_lock:
+            # Release 9 review: "answers itself" is only as fresh as the last
+            # read that SAID so; an unread pass (the server changed, a key it
+            # now wants) forgets it, so a stale verdict never lets a trial go.
+            if result == NOT_A_PROXY and node is not None:
+                self._plain[node_id] = normalize_root(node.base_url)
+            else:
+                self._plain.pop(node_id, None)
         if result == UNREAD:
             return
-        node = self._top_level().get(node_id)
         changed = False
         with self._routes_lock:
             old = self._routes.get(node_id)
@@ -474,6 +487,51 @@ class FleetRegistry:
             return None
         root, table = held
         return table if root == normalize_root(node.base_url) else None
+
+    #: The server kinds that are KNOWN to answer with their own models (release 9
+    #: review: positive identification only). Anything else that is not a
+    #: LiteLLM proxy may still be a proxy we cannot read (OpenWebUI, one-api,
+    #: an nginx forward), so it is never called "answers itself".
+    _SELF_ANSWERING_KINDS = frozenset({"ollama", "vllm"})
+
+    def answers_itself(self, provider: str) -> bool:
+        """Release 9: is this node POSITIVELY a server that answers with its
+        own models? All of: a probe DETECTED its kind as Ollama or vLLM
+        (``kind_detected_at > 0``; a kind guessed from the config slot does
+        not count), it speaks the OpenAI protocol, and the sampler's last
+        read at its CURRENT address said it is not a model proxy. Anything
+        else (openai-compat, unknown, an Anthropic-protocol node, a changed
+        address, an unread pass) is False. Never a network call; never
+        raises."""
+        try:
+            node_id = self._node_id_for(provider)
+            node = self._top_level().get(node_id) if node_id else None
+            if node is None or not node.enabled:
+                return False
+            if node.kind not in self._SELF_ANSWERING_KINDS or not (node.kind_detected_at or 0) > 0:
+                return False
+            if (getattr(node, "protocol", "openai") or "openai") != "openai":
+                return False
+            with self._routes_lock:
+                held = self._plain.get(node_id)
+            return held is not None and held == normalize_root(node.base_url)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def table_holds_cloud(self, provider: str) -> bool | None:
+        """Release 9 review: does this node's proxy routing table hold ANY
+        cloud entry (or was it cut short)? A LiteLLM fallback to a cloud
+        model is invisible in ``/model/info``, so a proxy that can reach the
+        cloud at all is never trialled unasked. ``None`` = no table read.
+        Never raises (a fault reads as True)."""
+        try:
+            node_id = self._node_id_for(provider)
+            table = self.routes_for(node_id) if node_id else None
+            if table is None:
+                return None
+            return bool(table.truncated) or any(e.place != "local" for e in table.entries)
+        except Exception:  # noqa: BLE001 — fail closed
+            return True
 
     @staticmethod
     def _node_id_for(provider: str) -> str:

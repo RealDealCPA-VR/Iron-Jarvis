@@ -1,5 +1,23 @@
 """OutcomeLedger + deterministic downgrade-only tuning (Wave C4, v1.203.0).
 
+RELEASE 9 OF THE INTELLIGENCE PLAN (2026-11-27) WIRES IT. The missing feed
+named below now exists: the router records, for every tool-carrying reply of
+a user's own model, whether the model answered in a usable form
+(:func:`record_reply_form` — a parse/validate verdict per reply, protocol
+evidence). The ledger is version 2: ``tool_protocols`` counts ONLY that
+feed; the step outcomes the runtime still sends land in ``steps`` and are
+read by nothing that lowers a model (a hard task is not a broken format —
+"a hard task alone does not lower a capable model" is the pin). Five
+unusable replies running at the model's usual form move it to the GUIDED
+state (:data:`STUMBLE_RUN`); ten usable replies running at the more guided
+form move it back (:data:`RECOVER_RUN`). :func:`apply_tuning` is consulted
+in production (``ProviderManager.capability_profile``) and lowers the rung
+the model stumbled on, so the frozen ladder falls to the next rung by
+itself; its old rate rule stays in the function but production passes
+``rate_rule=False`` — one bad reply in the first ten would otherwise move a
+model and back again, and the owner approved the five-running rule. What
+follows is the original record, kept as written.
+
 Ported from the user's own IronCore project (``ironcore/envelope/outcomes.py``,
 its MS-8 self-improvement loop), adapted to Iron Jarvis. The probe battery
 measures a model once; live sessions keep producing evidence forever. This
@@ -85,6 +103,7 @@ nothing here imports the daemon, tools, agents, or providers.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -106,6 +125,27 @@ DECAY_CAP = 200
 #: Hysteresis floor: below this many attempts at a rung the tuner never acts.
 #: IronCore's exact number.
 MIN_TOOL_SAMPLES = 10
+
+#: Release 9: this many UNUSABLE replies running, at the model's usual form,
+#: move it to the guided state (the owner's approved rule).
+STUMBLE_RUN = 5
+
+#: Release 9: this many USABLE replies running at the more guided form move a
+#: guided model back to its usual form (a probation: if it stumbles five
+#: running again, it is guided again).
+RECOVER_RUN = 10
+
+#: The three forms a tool-carrying reply can be asked in, least guided first:
+#: the model's own tool calls, the guided JSON object (strict_json, the
+#: server holds the shape) and the fenced text contract (the most guidance).
+FORM_NATIVE = "native"
+FORM_GUIDED = "strict_json"
+FORM_PROMPTED = "prompted"
+FORMS: tuple[str, ...] = (FORM_NATIVE, FORM_GUIDED, FORM_PROMPTED)
+
+#: What :func:`record_reply_form` reports when a reply moved the model.
+MOVED_TO_GUIDED = "guided"
+MOVED_BACK = "recovered"
 
 #: A live success rate this clean at the recommended rung earns a re-probe
 #: HINT for any higher rung the stored profile keeps below threshold (never
@@ -180,10 +220,25 @@ class OutcomeLedger:
 
     model_id: str
     provider: str = ""
-    version: int = 1
+    #: 2 since release 9: ``tool_protocols`` holds ONLY the reply-form feed.
+    #: A version-1 sidecar's counters were goal evidence and are dropped on
+    #: load (``from_dict``), never read as protocol evidence.
+    version: int = 2
     #: generation stamp of the profile the counters were collected against.
     profile_stamp: str = ""
+    #: Reply-form evidence per ladder rung (did the reply come back usable).
     tool_protocols: dict[str, Counter] = field(default_factory=dict)
+    #: Step outcomes (goal evidence: a judge failing a hard task, a budget
+    #: stop). Kept for the record; NOTHING that lowers a model reads it.
+    steps: Counter = field(default_factory=Counter)
+    #: Unusable replies running at the usual form (reset by a usable one).
+    fail_run: int = 0
+    #: The model is being guided step by step (a more guided form).
+    guided: bool = False
+    #: The rung it stumbled on ("native" or "strict_json"); "" when not guided.
+    guided_rung: str = ""
+    #: Usable replies running at the more guided form, while guided.
+    guided_ok_run: int = 0
 
     # ------------------------------------------------------------------ #
     # Recording
@@ -209,7 +264,55 @@ class OutcomeLedger:
             return False
         self.profile_stamp = stamp
         self.tool_protocols.clear()
+        self.steps = Counter()
+        self._leave_guided()
         return True
+
+    def _leave_guided(self) -> None:
+        self.fail_run = 0
+        self.guided = False
+        self.guided_rung = ""
+        self.guided_ok_run = 0
+
+    def record_reply_form(self, form: str, ok: bool) -> str:
+        """One tool-carrying reply's verdict: did the model answer in a usable
+        form, asked in ``form`` (:data:`FORMS`)? Returns :data:`MOVED_TO_GUIDED`
+        when this reply made it :data:`STUMBLE_RUN` unusable running at its
+        usual form, :data:`MOVED_BACK` when it made :data:`RECOVER_RUN` usable
+        running at the more guided form, ``""`` otherwise.
+
+        * Not guided: a reply at a ladder rung counts on that rung and on the
+          run; a usable reply resets the run. A reply at the fenced form (the
+          most guided there is) counts nowhere: there is nothing more guided
+          to move to.
+        * Guided: only a reply at a MORE guided form than the rung it
+          stumbled on counts, toward coming back. Moving either way clears
+          the stumbled rung's counter, so old evidence never moves it again.
+        """
+        if form not in FORMS:
+            return ""
+        ok = bool(ok)
+        if not self.guided:
+            if form not in TOOL_PROTOCOL_LADDER:
+                return ""
+            self.record_tool_attempt(form, ok)
+            self.fail_run = 0 if ok else self.fail_run + 1
+            if self.fail_run >= STUMBLE_RUN:
+                self.guided = True
+                self.guided_rung = form
+                self.guided_ok_run = 0
+                self.fail_run = 0
+                self.tool_protocols.pop(form, None)
+                return MOVED_TO_GUIDED
+            return ""
+        if FORMS.index(form) <= FORMS.index(self.guided_rung or FORM_NATIVE):
+            return ""
+        self.guided_ok_run = self.guided_ok_run + 1 if ok else 0
+        if self.guided_ok_run >= RECOVER_RUN:
+            self.tool_protocols.pop(self.guided_rung, None)
+            self._leave_guided()
+            return MOVED_BACK
+        return ""
 
     # ------------------------------------------------------------------ #
     # Persistence (sidecar next to the profile store, same atomicity)
@@ -230,13 +333,34 @@ class OutcomeLedger:
         """Build from a JSON payload; malformed counters are dropped, never
         trusted. Raises only on payloads that are not ledger-shaped at all —
         :meth:`load` catches that and answers a fresh ledger."""
-        return cls(
+        version = data.get("version")
+        current = isinstance(version, int) and not isinstance(version, bool) and version >= 2
+        ledger = cls(
             model_id=str(data.get("model_id") or ""),
             provider=str(data.get("provider") or ""),
-            version=1,
+            version=2,
             profile_stamp=str(data.get("profile_stamp") or ""),
-            tool_protocols=_clean_counters(data.get("tool_protocols")),
+            # A version-1 sidecar counted STEP outcomes on its rungs: goal
+            # evidence, never read as the reply-form feed.
+            tool_protocols=_clean_counters(data.get("tool_protocols")) if current else {},
         )
+        if not current:
+            return ledger
+        steps = _clean_counters({"native": data.get("steps")}).get("native")
+        if steps is not None:
+            ledger.steps = steps
+        runs = {}
+        for key in ("fail_run", "guided_ok_run"):
+            value = data.get(key)
+            ok_int = isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            runs[key] = value if ok_int else 0
+        rung = data.get("guided_rung")
+        if data.get("guided") is True and rung in TOOL_PROTOCOL_LADDER:
+            ledger.guided = True
+            ledger.guided_rung = str(rung)
+            ledger.guided_ok_run = min(runs["guided_ok_run"], RECOVER_RUN)
+        ledger.fail_run = min(runs["fail_run"], STUMBLE_RUN)
+        return ledger
 
     def save(self, home: Path) -> Path:
         """Write the sidecar atomically (the profile store's staged write —
@@ -301,19 +425,119 @@ def record_outcome(
     there is no rung to attribute the evidence to and the tuner could never
     act on it (it only tunes measured profiles).
     """
+    # Release 9: step outcomes are GOAL evidence and land in ``steps``,
+    # which nothing that lowers a model reads (``protocol`` is accepted for
+    # the old callers and ignored). The reply-form feed is
+    # :func:`record_reply_form`.
+    del protocol
     try:
         profile = load_profile(home, provider, model_id)
         if profile is None or profile.is_trusted() or not profile.is_measured():
             return
-        rung = protocol if protocol is not None else profile.select_tool_protocol()
-        if rung not in TOOL_PROTOCOL_LADDER:
-            return
-        ledger = OutcomeLedger.load(home, provider, model_id)
-        ledger.ensure_stamp(generation_stamp(profile))
-        ledger.record_tool_attempt(rung, ok)
-        ledger.save(home)
+        with _lock_for(home, provider, model_id):
+            ledger = OutcomeLedger.load(home, provider, model_id)
+            ledger.ensure_stamp(generation_stamp(profile))
+            ledger.steps.record(bool(ok))
+            ledger.save(home)
     except Exception:  # noqa: BLE001 — never-raising by contract
         return
+
+
+#: Release 9 review: one lock per ledger file, so two replies of one model
+#: finishing together never lose a count (each is a read-modify-write).
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(home: Path, provider: str, model_id: str) -> threading.Lock:
+    key = str(OutcomeLedger.path_for(home, provider, model_id))
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = _LOCKS[key] = threading.Lock()
+        return lock
+
+
+@dataclass
+class GuidedState:
+    """What the manager keeps in memory after a record (release 9 review):
+    no ledger read on the event loop."""
+
+    guided: bool = False
+    rung: str = ""
+    stamp: str = ""
+
+
+def record_reply_form_state(
+    home: Path, provider: str, model_id: str, form: str, ok: bool
+) -> tuple[str, GuidedState | None]:
+    """:func:`record_reply_form`, also answering the ledger's guided state
+    after the record (None when nothing could be recorded). NEVER raises."""
+    try:
+        profile = load_profile(home, provider, model_id)
+        if profile is None:
+            profile = CapabilityProfile(model_id=model_id, provider=provider)
+        if profile.is_trusted():
+            return "", None
+        with _lock_for(home, provider, model_id):
+            ledger = OutcomeLedger.load(home, provider, model_id)
+            ledger.ensure_stamp(generation_stamp(profile))
+            moved = ledger.record_reply_form(form, ok)
+            ledger.save(home)
+        return moved, GuidedState(ledger.guided, ledger.guided_rung, ledger.profile_stamp)
+    except Exception:  # noqa: BLE001 — never-raising by contract
+        return "", None
+
+
+def guided_state_of(home: Path, provider: str, model_id: str) -> GuidedState | None:
+    """A model's guided state from its ledger file (the manager's start-up
+    warm-up, off the loop). None when there is no ledger. Never raises."""
+    try:
+        if not OutcomeLedger.path_for(home, provider, model_id).exists():
+            return None
+        ledger = OutcomeLedger.load(home, provider, model_id)
+        return GuidedState(ledger.guided, ledger.guided_rung, ledger.profile_stamp)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def tuned_for(profile: CapabilityProfile, state: GuidedState | None) -> CapabilityProfile:
+    """The profile a guided model answers with, from the in-memory state:
+    :func:`apply_tuning` over a ledger that carries only the guided bit."""
+    if state is None or not state.guided or state.stamp != generation_stamp(profile):
+        return profile
+    ledger = OutcomeLedger(
+        model_id=profile.model_id, provider=profile.provider, profile_stamp=state.stamp,
+        guided=True, guided_rung=state.rung,
+    )
+    return apply_tuning(profile, ledger, rate_rule=False).profile
+
+
+def record_reply_form(
+    home: Path, provider: str, model_id: str, form: str, ok: bool
+) -> str:
+    """Release 9's feed: one tool-carrying reply of a user's own model was
+    asked in ``form`` and came back usable (``ok``) or not. Works for ANY
+    stored profile, measured or not (a model nobody measured can stumble
+    too): the ledger is stamped with the profile's generation, so a new
+    measurement starts it fresh. Returns what the reply moved
+    (:meth:`OutcomeLedger.record_reply_form`). NEVER raises; synchronous
+    file I/O (callers hop through ``asyncio.to_thread``); trusted providers
+    are the caller's to skip (``ProviderManager.note_reply_form``)."""
+    return record_reply_form_state(home, provider, model_id, form, ok)[0]
+
+
+def guided_now(profile: CapabilityProfile, ledger: OutcomeLedger) -> bool:
+    """Is this model being guided step by step right now? Only a ledger of
+    THIS model whose stamp matches the profile's generation speaks: a new
+    measurement voids the old stumble."""
+    return (
+        not profile.is_trusted()
+        and ledger.guided
+        and ledger.model_id == profile.model_id
+        and ledger.provider == profile.provider
+        and ledger.profile_stamp == generation_stamp(profile)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -392,6 +616,7 @@ def apply_tuning(
     ledger: OutcomeLedger,
     *,
     min_tool_samples: int = MIN_TOOL_SAMPLES,
+    rate_rule: bool = True,
 ) -> TuningResult:
     """Fold live evidence into a COPY of ``profile`` (input never mutated).
 
@@ -416,7 +641,21 @@ def apply_tuning(
         return TuningResult(profile=tuned)
 
     adjustments: list[str] = []
-    _tune_ladder(tuned.tool_protocols, ledger.tool_protocols, min_tool_samples, adjustments)
+    if rate_rule:
+        _tune_ladder(tuned.tool_protocols, ledger.tool_protocols, min_tool_samples, adjustments)
+    if ledger.guided and ledger.guided_rung in TOOL_PROTOCOL_LADDER:
+        # Release 9: the stumble lowers the rung it happened on to just under
+        # its bar (downgrade-only: a score already below stays), so the
+        # frozen ladder falls to the next rung by itself.
+        rung = ledger.guided_rung
+        bar = TOOL_PROTOCOL_THRESHOLDS[rung]
+        stored = tuned.tool_protocols.get(rung, 0.0)
+        if stored >= bar:
+            tuned.tool_protocols[rung] = round(bar - 0.05, 2)
+            adjustments.append(
+                f"tool protocol {rung}: {STUMBLE_RUN} unusable replies running - "
+                f"guided until {RECOVER_RUN} usable replies running"
+            )
     hints = _ladder_hints(
         tuned.tool_protocols,
         ledger.tool_protocols,

@@ -923,6 +923,18 @@ def _note_call(adapter: Any, response: Any) -> None:
         )
     except Exception:  # noqa: BLE001 — accounting must never break a request
         pass
+    # The intelligence plan, release 9: the first time a user's own model
+    # answers, it waits for an idle moment to be tried (envelope/autotrial;
+    # a dict look-up after the first time, never raises).
+    try:
+        from ..envelope.autotrial import note_used
+
+        note_used(
+            str(getattr(adapter, "provider", "") or ""),
+            str(getattr(adapter, "model", "") or ""),
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _note_final(adapter: Any, frame: Any) -> None:
@@ -944,6 +956,89 @@ def _note_time(seconds: float) -> None:
 
         note_model_time(seconds)
     except Exception:  # noqa: BLE001 — a record must never break a request
+        pass
+
+
+# --------------------------------------------------------------------------- #
+# The intelligence plan, release 9: every tool-carrying reply of a user's own
+# model says whether it came back in a usable form, and a model that keeps
+# stumbling is asked in the more guided form (same model, more guidance).
+# --------------------------------------------------------------------------- #
+
+
+def _reply_form(adapter: Any) -> str:
+    """The form a tool-carrying request was asked in: the guided JSON object
+    (``GuidedToolsAdapter``), the fenced text contract
+    (``PromptedToolsAdapter``) or the model's own tool calls."""
+    if isinstance(adapter, GuidedToolsAdapter):
+        return "strict_json"
+    if isinstance(adapter, PromptedToolsAdapter):
+        return "prompted"
+    return "native"
+
+
+def _tool_names(tools: Any) -> set[str]:
+    from .adapters.prompted_tools import _spec_fields
+
+    names: set[str] = set()
+    for spec in tools or []:
+        try:
+            name = _spec_fields(spec)[0]
+        except Exception:  # noqa: BLE001 — a malformed spec names nothing
+            continue
+        if name:
+            names.add(str(name))
+    return names
+
+
+def _text_is_a_call(text: Any, names: set[str]) -> bool:
+    """Did a model asked for native tool calls WRITE a call as text instead
+    (``{"name": "read_file", "arguments": {...}}`` in its answer)? Only an
+    object naming one of the offered tools counts."""
+    if not names or not isinstance(text, str) or "{" not in text:
+        return False
+    try:
+        from ..core.jsonish import loads_object
+
+        obj = loads_object(text)
+    except Exception:  # noqa: BLE001
+        return False
+    if not isinstance(obj, dict):
+        return False
+    name = obj.get("name") or obj.get("tool")
+    fn = obj.get("function")
+    if not name and isinstance(fn, dict):
+        name = fn.get("name")
+    return isinstance(name, str) and name in names
+
+
+def form_usable(adapter: Any, tools: Any, response: Any) -> bool:
+    """Was this reply to a tool-carrying request in a usable form the FIRST
+    time? Mechanical, never a judgement of the answer: a wrapper's repair
+    round or an adapter's broken-JSON recovery (``LLMResponse.form_repaired``),
+    a native call naming a tool nobody offered, or a native reply that wrote a
+    call as text are not usable. A plain answer is usable (answering in words
+    is a legal reply)."""
+    if bool(getattr(response, "form_repaired", False)):
+        return False
+    if isinstance(adapter, PromptedToolsAdapter):
+        return True  # the wrappers mark their own repairs
+    names = _tool_names(tools)
+    calls = list(getattr(response, "tool_calls", None) or [])
+    if names and any(str(getattr(c, "name", "") or "") not in names for c in calls):
+        return False
+    if not calls and _text_is_a_call(getattr(response, "text", ""), names):
+        return False
+    return True
+
+
+def _note_guided() -> None:
+    """Tell the current reply it was guided (``eval.reply_facts``). Never raises."""
+    try:
+        from ..eval.reply_facts import note_guided
+
+        note_guided()
+    except Exception:  # noqa: BLE001
         pass
 
 
@@ -2058,6 +2153,77 @@ class ModelRouter:
                 return GuidedToolsAdapter(adapter)
         return wrap_prompted_tools(adapter)
 
+    def _guide_if_stumbling(self, adapter: LLMAdapter) -> LLMAdapter:
+        """THE GUIDED FORM (the intelligence plan, release 9). A user's own
+        model whose last five tool-carrying replies running came back
+        unusable (``ProviderManager.reply_guided``, from the outcome ledger)
+        is asked in the next more guided form — the SAME model, more
+        guidance, so this applies under a pin too:
+
+        * its own tool calls -> the guided JSON object when its measured
+          profile holds that rung (``profile_supports_guided`` on the TUNED
+          profile), else the fenced text contract;
+        * the guided JSON object -> the fenced text contract;
+        * the fenced contract is already the most guided form.
+
+        The reply is told (``reply_facts.note_guided``) so both chat lanes
+        add the quiet line. Trusted providers and the mock never are; a fault
+        anywhere keeps the adapter as it was. MIRROR NOTE (lock-step):
+        complete() and stream() call it at the same place."""
+        try:
+            provider = str(getattr(adapter, "provider", "") or "")
+            model = str(getattr(adapter, "model", "") or "")
+            if not provider or provider == "mock" or self.manager.is_trusted_provider(provider):
+                return adapter
+            ask = getattr(self.manager, "reply_guided", None)
+            if not callable(ask) or not ask(provider, model):
+                return adapter
+            if isinstance(adapter, GuidedToolsAdapter):
+                guided: LLMAdapter = PromptedToolsAdapter(adapter.inner)
+            elif isinstance(adapter, PromptedToolsAdapter):
+                guided = adapter
+            else:
+                profile = self.manager.capability_profile(provider, model)
+                guided = (
+                    GuidedToolsAdapter(adapter)
+                    if profile is not None and profile_supports_guided(profile)
+                    else PromptedToolsAdapter(adapter)
+                )
+            # Release 9 review: the reply is told only when THIS wrapper
+            # answers (``_note_form``), never at wrap time — a failover to
+            # another model must not carry the guided line.
+            try:
+                guided._ij_guided = True  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+            return guided
+        except Exception:  # noqa: BLE001 — guidance must never break routing
+            return adapter
+
+    async def _note_form(self, adapter: Any, tools: Any, response: Any) -> None:
+        """Record one tool-carrying reply's form verdict for its model
+        (``ProviderManager.note_reply_form``), off the loop. Only a request
+        that carried tools, from an untrusted provider, is recorded. Never
+        raises. MIRROR NOTE: ``_timed_complete`` and ``_stream_one``'s final
+        frames both call it, beside ``_note_call``."""
+        try:
+            if not tools or response is None:
+                return
+            if getattr(adapter, "_ij_guided", False):
+                _note_guided()  # the guided wrapper itself answered this call
+            provider = str(getattr(adapter, "provider", "") or "")
+            model = str(getattr(adapter, "model", "") or "")
+            if not provider or provider == "mock" or self.manager.is_trusted_provider(provider):
+                return
+            note = getattr(self.manager, "note_reply_form", None)
+            if not callable(note):
+                return
+            await asyncio.to_thread(
+                note, provider, model, _reply_form(adapter), form_usable(adapter, tools, response)
+            )
+        except Exception:  # noqa: BLE001 — a record never breaks a reply
+            pass
+
     def _first_available_real(
         self, *, need_tools: bool = False, allow: "Callable[[str], bool] | None" = None
     ) -> str | None:
@@ -2323,7 +2489,11 @@ class ModelRouter:
         _note_time(self._clock() - t0)  # release 6: how long the model took
         # v1.323.0: a leading `<think>` block is reasoning, not answer — the
         # stream twin is `_split_think_frames` in `_stream_one`.
-        return _with_split_thinking(resp)
+        resp = _with_split_thinking(resp)
+        # Release 9: usable form? Judged on the ANSWER, the reasoning split
+        # off first (a call the model only thought about is not a call).
+        await self._note_form(adapter, tools, resp)
+        return resp
 
     async def _attempt_with_retry(
         self, adapter: LLMAdapter, *, system, messages, tools, deadline: float,
@@ -2490,6 +2660,13 @@ class ModelRouter:
             if repl is not None:
                 adapter = repl
                 reason = "failover"
+
+        # A MODEL THAT KEEPS STUMBLING IS GUIDED (the intelligence plan,
+        # release 9): the same model, asked in the more guided form, under a
+        # pin too (it never changes WHICH model answers). MIRROR NOTE
+        # (lock-step): complete() and stream() — edit both or neither.
+        if need_tools and not downgraded:
+            adapter = self._guide_if_stumbling(adapter)
 
         # (An unconnected provider already raised above; the only mock that
         # reaches here is one the user actually chose or defaulted to.)
@@ -2844,6 +3021,7 @@ class ModelRouter:
                 _note_final(adapter, frame)  # v1.529.0: the `_timed_complete` twin
                 if isinstance(frame, dict) and frame.get("type") == "final":
                     _note_time(self._clock() - _t0)  # release 6 (the twin)
+                    await self._note_form(adapter, tools, frame.get("response"))  # release 9
                 yield frame
             return
         delay = 1.5
@@ -2860,6 +3038,7 @@ class ModelRouter:
                     _note_final(adapter, frame)  # v1.529.0: the `_timed_complete` twin
                     if isinstance(frame, dict) and frame.get("type") == "final":
                         _note_time(self._clock() - _t0)  # release 6 (the twin)
+                        await self._note_form(adapter, tools, frame.get("response"))  # release 9
                     yield frame
                 return
             except Exception as exc:  # noqa: BLE001 — classified below
@@ -3042,6 +3221,13 @@ class ModelRouter:
             if repl is not None:
                 adapter = repl
                 reason = "failover"
+
+        # A MODEL THAT KEEPS STUMBLING IS GUIDED (the intelligence plan,
+        # release 9): the same model, asked in the more guided form, under a
+        # pin too (it never changes WHICH model answers). MIRROR NOTE
+        # (lock-step): complete() and stream() — edit both or neither.
+        if need_tools and not downgraded:
+            adapter = self._guide_if_stumbling(adapter)
 
         # (An unconnected provider already raised above.)
         if (

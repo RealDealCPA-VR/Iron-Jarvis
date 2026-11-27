@@ -142,6 +142,24 @@ class CapabilityProfile:
     #: False; seeded from Ollama /api/show capabilities.
     vision: bool = False
 
+    #: HOW MUCH IT HOLDS (the intelligence plan, release 9; the HOLD probe):
+    #: the largest made-up text, in CHARACTERS, the model read back to its
+    #: first line. 0 = not measured — a consumer asks
+    #: ``field_measured("holds_chars")``, never the number. Deliberately NOT
+    #: the planning window (``honest_context``): nothing here changes what a
+    #: chat or a run is sent; it is what the Model servers card says.
+    holds_chars: int = 0
+    #: 1 when the size in ``holds_chars`` was the LARGEST the probe tried and
+    #: the window the app plans with is larger still, so the model may hold
+    #: more ("at least"); 0 when the size is bracketed (a larger try failed)
+    #: or is the whole window the app uses ("about"). An int, not a bool, so
+    #: the store's scalar merge carries it like every other measured number.
+    holds_more: int = 0
+    #: HOW FAST IT WRITES (release 9; the SPEED probe): words of a made-up
+    #: story per second of wall time, the best of its tries. 0.0 = not
+    #: measured (``field_measured("words_per_second")``).
+    words_per_second: float = 0.0
+
     # Reliability scores, [0..1]
     tool_protocols: dict[str, float] = field(default_factory=dict)
     json_adherence: float = 0.0
@@ -339,6 +357,19 @@ class CapabilityProfile:
         gen = profile.probe_generation
         if not isinstance(gen, int) or isinstance(gen, bool) or gen < 1:
             profile.probe_generation = 1
+        # Release 9's measured numbers: a corrupt value loads as "not
+        # measured" (0), never a guess a card would print.
+        for name in ("holds_chars", "holds_more"):
+            value = getattr(profile, name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+                setattr(profile, name, 0)
+            else:
+                setattr(profile, name, int(value))
+        wps = profile.words_per_second
+        if not isinstance(wps, (int, float)) or isinstance(wps, bool) or wps < 0:
+            profile.words_per_second = 0.0
+        else:
+            profile.words_per_second = float(wps)
         return profile
 
     def copy(self) -> CapabilityProfile:

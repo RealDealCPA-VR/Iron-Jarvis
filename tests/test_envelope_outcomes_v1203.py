@@ -298,7 +298,7 @@ def test_malformed_and_off_ladder_counters_are_dropped_on_load(tmp_path):
     path = OutcomeLedger.path_for(tmp_path, "ollama", "m")
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({
-        "model_id": "m", "provider": "ollama", "profile_stamp": "s",
+        "model_id": "m", "provider": "ollama", "profile_stamp": "s", "version": 2,
         "tool_protocols": {
             "native": {"attempts": 12, "failures": 3},
             "strict_json": {"attempts": "many", "failures": 0},  # malformed
@@ -311,7 +311,7 @@ def test_malformed_and_off_ladder_counters_are_dropped_on_load(tmp_path):
     assert loaded.tool_protocols["native"].attempts == 12
     # failures can never exceed attempts, whatever the file claimed.
     path.write_text(json.dumps({
-        "model_id": "m", "provider": "ollama",
+        "model_id": "m", "provider": "ollama", "version": 2,
         "tool_protocols": {"native": {"attempts": 3, "failures": 9}},
     }))
     counter = OutcomeLedger.load(tmp_path, "ollama", "m").tool_protocols["native"]
@@ -336,19 +336,19 @@ def test_a_mismatched_sidecar_reads_as_fresh(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_record_outcome_writes_the_sidecar_and_attributes_the_active_rung(tmp_path):
+def test_record_outcome_writes_step_evidence_never_the_reply_form_counters(tmp_path):
+    # Release 9 of the intelligence plan: a step outcome is GOAL evidence (a
+    # judge failing a hard task, a budget stop). It lands in ``steps``, which
+    # nothing that lowers a model reads; the rung counters are the reply-form
+    # feed's alone (``record_reply_form``).
     save_profile(tmp_path, _probed())  # selects native (gen-current, 0.97)
     record_outcome(tmp_path, "ollama", "qwen3:30b", True)
     record_outcome(tmp_path, "ollama", "qwen3:30b", False)
-    ledger = OutcomeLedger.load(tmp_path, "ollama", "qwen3:30b")
-    assert ledger.profile_stamp == generation_stamp(_probed())
-    counter = ledger.tool_protocols["native"]
-    assert (counter.attempts, counter.failures) == (2, 1)
-    # An explicit protocol wins over the selected rung (the retry ladder may
-    # have driven strict_json on a retry).
     record_outcome(tmp_path, "ollama", "qwen3:30b", False, protocol="strict_json")
     ledger = OutcomeLedger.load(tmp_path, "ollama", "qwen3:30b")
-    assert ledger.tool_protocols["strict_json"].failures == 1
+    assert ledger.profile_stamp == generation_stamp(_probed())
+    assert (ledger.steps.attempts, ledger.steps.failures) == (3, 2)
+    assert ledger.tool_protocols == {}
 
 
 def test_record_outcome_is_silent_with_nothing_measured(tmp_path):
@@ -363,12 +363,13 @@ def test_record_outcome_is_silent_with_nothing_measured(tmp_path):
     assert not list((tmp_path / "envelopes").glob("*.outcomes.json"))
 
 
-def test_record_outcome_skips_the_none_rung(tmp_path):
-    # Measured but nothing cleared a bar: select_tool_protocol() == "none" —
-    # there is no rung driving the calls, so nothing is recorded.
+def test_record_outcome_on_the_none_rung_counts_only_steps(tmp_path):
+    # Measured but nothing cleared a bar: no rung to attribute anything to;
+    # the step is kept as a step and no rung counter appears.
     save_profile(tmp_path, _probed(tool_protocols={"native": 0.5, "strict_json": 0.5}))
     record_outcome(tmp_path, "ollama", "qwen3:30b", False)
-    assert not list((tmp_path / "envelopes").glob("*.outcomes.json"))
+    ledger = OutcomeLedger.load(tmp_path, "ollama", "qwen3:30b")
+    assert ledger.tool_protocols == {} and ledger.steps.failures == 1
 
 
 def test_record_outcome_never_raises(tmp_path):
@@ -384,20 +385,23 @@ def test_record_outcome_resets_evidence_when_the_generation_bumped(tmp_path):
     # End to end: outcomes collected against a gen-1 record; the record is
     # re-probed under gen 2; the NEXT outcome resets the ledger first — old
     # bare-prompt evidence must never re-downgrade the fresh measurement.
+    from iron_jarvis.envelope.outcomes import record_reply_form
+
     gen1 = _probed(probe_generation=1)
     save_profile(tmp_path, gen1)
+    for _ in range(4):
+        record_reply_form(tmp_path, "ollama", "qwen3:30b", "native", False)
     for _ in range(30):
         record_outcome(tmp_path, "ollama", "qwen3:30b", False)
-    assert (
-        OutcomeLedger.load(tmp_path, "ollama", "qwen3:30b")
-        .tool_protocols["native"].failures == 30
-    )
+    old = OutcomeLedger.load(tmp_path, "ollama", "qwen3:30b")
+    assert old.tool_protocols["native"].failures == 4 and old.steps.failures == 30
     save_profile(tmp_path, _probed())  # the gen-2 re-probe landed
-    record_outcome(tmp_path, "ollama", "qwen3:30b", True)
+    record_reply_form(tmp_path, "ollama", "qwen3:30b", "native", True)
     ledger = OutcomeLedger.load(tmp_path, "ollama", "qwen3:30b")
     assert ledger.profile_stamp == generation_stamp(_probed())
     counter = ledger.tool_protocols["native"]
     assert (counter.attempts, counter.failures) == (1, 0)  # history voided
+    assert ledger.steps.attempts == 0 and ledger.fail_run == 0
     # ...and tuning off that fresh single sample does nothing (hysteresis).
     result = apply_tuning(_probed(), ledger)
     assert result.adjustments == []

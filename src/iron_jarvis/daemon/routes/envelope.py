@@ -77,7 +77,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from ...envelope.probes import ProbeReply
+from ...envelope.probes import TRIAL_TOTAL_TIMEOUT, ProbeReply, trial_battery
 from ...envelope.profile import CapabilityProfile, trusted_profile
 from ...envelope.runner import run_quick_battery
 from ...envelope.seed import seed_profile
@@ -155,6 +155,7 @@ def probe_transport(adapter: Any):
                 for c in resp.tool_calls
             ],
             usage=dict(resp.usage or {}),
+            thinking=str(getattr(resp, "thinking", "") or ""),
         )
 
     return transport
@@ -218,6 +219,181 @@ def _seed_kwargs(d, provider: str, base_url: str) -> dict[str, Any]:
     return kw
 
 
+async def run_trial(
+    d, base: CapabilityProfile, adapter: Any, provider: str, model: str, home: Path,
+    *, sized: bool = True,
+):
+    """THE measurement both doors run (Measure and the idle trial, release 9):
+    the quick battery, then how fast it writes and how much it holds, against
+    the ONE pinned adapter, under :data:`TRIAL_TOTAL_TIMEOUT`. The HOLD probe
+    fills the window the app really plans with (``chat_turn.
+    _context_window_source``, the one ladder), read off the loop. Made-up
+    text only: every probe's material is its own.
+
+    ``sized=False`` (release 9 re-check, the coordinator's decision): a model
+    NOT proven to stay on this network that the user measures by their own
+    press gets exactly the battery Measure ran before release 9 — the tool
+    trials only — never HOLD's long texts or SPEED's stories (they may be
+    billed by a service behind it)."""
+    if not sized:
+        return await run_quick_battery(base, probe_transport(adapter), home=home)
+    from ..chat_turn import _context_window_source
+
+    try:
+        limit, _src = await asyncio.to_thread(_context_window_source, d, provider, model)
+    except Exception:  # noqa: BLE001 — no window known: HOLD says nothing
+        limit = None
+    battery = trial_battery(limit_tokens=limit, chars_per_token=base.chars_per_token)
+    return await run_quick_battery(
+        base, probe_transport(adapter), probes=battery, home=home,
+        total_timeout=TRIAL_TOTAL_TIMEOUT,
+    )
+
+
+#: Model names a model proxy passes on to a cloud service under their maker's
+#: name. A server we could not read the routing of is still never tried with
+#: one of these (release 9). Lower-case prefixes; ``gpt-oss`` (an open model
+#: people run at home) is deliberately not one.
+_CLOUD_NAME_PREFIXES: tuple[str, ...] = (
+    "openai/", "anthropic/", "google/", "gemini/", "x-ai/", "xai/", "openrouter/",
+    "azure/", "bedrock/", "vertex_ai/", "groq/", "together_ai/", "mistral/", "cohere/",
+    "deepseek/", "fireworks_ai/", "perplexity/",
+    "gpt-3", "gpt-4", "gpt-5", "chatgpt", "o1", "o3", "o4", "claude", "gemini", "grok",
+)
+
+#: What the idle trial says when it leaves a model alone (kept in trials.json).
+NEVER_CLOUD = "a cloud model"
+NEVER_FORWARDED = "its model server may pass it on to a cloud service"
+NEVER_NO_ADDRESS = "no model server address is saved for it"
+
+
+def trial_refusal(d, provider: str, model: str) -> str:
+    """May the IDLE trial try ``model`` on ``provider`` (release 9)? ``""``
+    yes; :data:`~...envelope.autotrial.WAIT` not known yet (ask again later);
+    anything else is the reason it never will. BLOCKING (a fleet read).
+
+    A model is tried unasked only when it is CERTAIN that it stays on this
+    network:
+
+    * a trusted provider (every cloud API and subscription tool) — never;
+    * an Ollama cloud model (``…:cloud`` / ``…-cloud``) — never;
+    * the address must pass ``egress.stays_on_this_network`` (private address
+      AND, when its routing table was read, not sent to a cloud service);
+    * and the routing must be KNOWN: the model proxy's own table says this
+      name stays here (``upstream_place == "local"``), or the sampler read
+      that the server answers itself (``FleetRegistry.answers_itself``). A
+      server nobody has read yet WAITS;
+    * a name in the maker's own spelling (``openai/…``, ``claude-…``) is
+      never tried even then: a proxy we cannot read (not LiteLLM) may pass it
+      on.
+    Measure stays the user's own button and is not gated by this."""
+    from ...envelope.autotrial import WAIT
+    from ...fleet.library import is_cloud_name
+    from ...providers import egress
+
+    platform = d.platform
+    pm = platform.providers
+    if pm.is_trusted_provider(provider):
+        return NEVER_CLOUD
+    name = (model or "").strip()
+    low = name.lower()
+    if is_cloud_name(name) or any(low.startswith(p) for p in _CLOUD_NAME_PREFIXES):
+        return NEVER_CLOUD
+    if not _endpoint_base_url(d, provider):
+        return NEVER_NO_ADDRESS
+    if not egress.stays_on_this_network(provider, pm, platform.config, name):
+        return NEVER_FORWARDED
+    place = pm.upstream_place(provider, name)
+    if place == "cloud":
+        return NEVER_FORWARDED
+    fleet = getattr(d, "fleet", None) or getattr(platform, "fleet", None)
+    # Release 9 review: a LiteLLM proxy's FALLBACKS are invisible in its
+    # /model/info, so a proxy whose table holds ANY cloud entry may pass even
+    # a "local" name on. Never tried unasked (Measure stays the user's press).
+    holds = getattr(fleet, "table_holds_cloud", None)
+    if callable(holds) and holds(provider):
+        return NEVER_FORWARDED
+    if place == "local":
+        return ""
+    ask = getattr(fleet, "answers_itself", None)
+    if callable(ask) and ask(provider):
+        return ""
+    return WAIT
+
+
+def trial_fingerprint(d, provider: str) -> str:
+    """What a trial's verdict was decided ON (release 9 review): the
+    endpoint's address, the fleet's routing revision, and the two readings
+    above. When it changes, a model left alone (or refused) is looked at
+    again. BLOCKING-cheap (no network); never raises."""
+    try:
+        platform = d.platform
+        fleet = getattr(d, "fleet", None) or getattr(platform, "fleet", None)
+        url = _endpoint_base_url(d, provider) or ""
+        rev = getattr(fleet, "revision", None)
+        rev = rev() if callable(rev) else rev
+        ask = getattr(fleet, "answers_itself", None)
+        holds = getattr(fleet, "table_holds_cloud", None)
+        return "|".join((
+            url, str(rev),
+            str(bool(ask(provider))) if callable(ask) else "",
+            str(holds(provider)) if callable(holds) else "",
+        ))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+#: Said on the card and in chat for a model NOT proven to stay on this
+#: network (release 9 re-check): only what is known — its server is off this
+#: network, or MAY pass the name on to a cloud service.
+SIZED_ONLY_LOCAL_WORDS = (
+    "How much a model holds and how fast it writes are measured only for models on this PC or "
+    "your network. This one's model server is not, or may pass it on to a cloud service, so "
+    "Measure checks only how it uses tools."
+)
+
+
+def measure_refusal(d, provider: str, model: str) -> str:
+    """Is this model PROVEN to stay on this network? "" yes; else
+    :data:`SIZED_ONLY_LOCAL_WORDS`. Measure no longer refuses on it (the
+    button stays): it decides whether the press gets the size and speed
+    trials. BLOCKING-cheap; never raises (a fault reads as not proven)."""
+    from ...providers import egress
+
+    try:
+        pm = d.platform.providers
+        # The same test as ``egress.stays_on_this_network``, on the address
+        # Measure itself will call (``_endpoint_base_url``): a provider that
+        # is local by name, a private address, not passed on to the cloud.
+        base = _endpoint_base_url(d, provider) or ""
+        if not (egress.is_local_provider(provider) and base and egress.private_host(base)):
+            return SIZED_ONLY_LOCAL_WORDS
+        if egress.proxy_routes_to_cloud(provider, model, pm):
+            return SIZED_ONLY_LOCAL_WORDS
+        place = getattr(pm, "upstream_place", None)
+        if callable(place) and place(provider, model) == "cloud":
+            return SIZED_ONLY_LOCAL_WORDS
+        return ""
+    except Exception:  # noqa: BLE001 — fail closed
+        return SIZED_ONLY_LOCAL_WORDS
+
+
+def _busy_now(d) -> bool:
+    """A chat reply is being written, or a run, a workflow or a coding task
+    is working (``routes/system.activity_snapshot``'s ``working``, the sleep
+    blocker's own reading). BLOCKING; a reading that fails is busy."""
+    try:
+        from ...core.turns import CHAT_INFLIGHT
+
+        if CHAT_INFLIGHT.count() > 0:
+            return True
+        from .system import activity_snapshot
+
+        return bool(activity_snapshot(d).get("working"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -237,6 +413,9 @@ def register(app: FastAPI, d) -> None:
         base_url: str,
         home: Path,
         stored: CapabilityProfile | None,
+        *,
+        auto: bool = False,
+        sized: bool = True,
     ) -> None:
         """The background body: seed if nothing is stored, run the battery
         against the pinned adapter, publish the honest outcome. The battery
@@ -260,9 +439,7 @@ def register(app: FastAPI, d) -> None:
             if base is None:
                 base = CapabilityProfile(model_id=model, provider=provider)
             adapter = d.platform.providers.get(provider, model)
-            session = await run_quick_battery(
-                base, probe_transport(adapter), home=home
-            )
+            session = await run_trial(d, base, adapter, provider, model, home, sized=sized)
             source = session.source
         except asyncio.CancelledError:  # daemon shutdown: release, no event
             inflight.discard(key)
@@ -273,12 +450,68 @@ def register(app: FastAPI, d) -> None:
         # the key is free, so "wait for the event, probe again" cannot 409.
         inflight.discard(key)
         payload: dict[str, Any] = {"provider": provider, "model": model, "source": source}
+        if auto:
+            # Release 9: the idle trial's own run (no started event, no notice;
+            # the card refetches on this one).
+            payload["auto"] = True
         if error:
             payload["error"] = error
         try:
             await d.platform.event_bus.publish(PROBE_COMPLETED, payload)
         except Exception:  # noqa: BLE001 — a bus fault must not kill the task
             pass
+
+    # ------------------------------------------------------------------ #
+    # THE IDLE TRIAL (the intelligence plan, release 9): the same battery,
+    # unasked, one model at a time, only while the PC is idle. It shares the
+    # 409 gate above, so Measure and the trial never measure one model twice.
+    # The worker is started by the lifespan (``d.auto_trials.run_forever``).
+    # ------------------------------------------------------------------ #
+    async def _auto_run(provider: str, model: str) -> None:
+        key = (provider, model)
+        if key in inflight:
+            return  # Measure is measuring it right now
+        base_url = _endpoint_base_url(d, provider)
+        if not base_url:
+            return
+        inflight.add(key)
+        try:
+            home = Path(d.platform.config.home)
+            stored = await asyncio.to_thread(load_profile, home, provider, model)
+        except BaseException:
+            inflight.discard(key)
+            raise
+        await _run_probe(key, provider, model, base_url, home, stored, auto=True)
+
+    def _measured(provider: str, model: str) -> bool:
+        profile = load_profile(Path(d.platform.config.home), provider, model)
+        return profile is not None and profile.is_measured()
+
+    def _stopped() -> bool:
+        from ...agents.orchestrator import emergency_stop_on
+
+        return emergency_stop_on(d.platform.config)
+
+    from ...envelope import autotrial as _autotrial
+    from ...envelope.idle import input_idle_seconds
+
+    trials = _autotrial.AutoTrials(
+        home=Path(d.platform.config.home),
+        # Only the user's OWN model servers are noted (a cloud or CLI provider,
+        # and any other name that is not a local server, never).
+        is_trusted=lambda provider: not d.platform.providers.is_own_model_provider(provider),
+        measured=_measured,
+        refusal=lambda provider, model: trial_refusal(d, provider, model),
+        run=_auto_run,
+        idle_seconds=input_idle_seconds,
+        busy=lambda: _busy_now(d),
+        stopped=_stopped,
+        fingerprint=lambda provider, model: trial_fingerprint(d, provider),
+    )
+    d.auto_trials = trials
+    _autotrial.install(trials)
+    # Chat's "Measure my model" presses the same button (settings/records_models).
+    d.start_measure = lambda provider, model: _start_measure(provider, model)
 
     @app.get("/envelope/{provider}/{model:path}")
     async def envelope_get(provider: str, model: str) -> dict[str, Any]:
@@ -324,6 +557,10 @@ def register(app: FastAPI, d) -> None:
         profile = stored if stored is not None else CapabilityProfile(
             model_id=model, provider=provider
         )
+        # Release 9: is it being guided step by step right now (it kept
+        # stumbling with tools)? The manager's own reading (one stat a file).
+        ask = getattr(d.platform.providers, "reply_guided", None)
+        guided = await asyncio.to_thread(ask, provider, model) if callable(ask) else False
         return {
             "provider": provider,
             "model": model,
@@ -331,12 +568,21 @@ def register(app: FastAPI, d) -> None:
             "stored": stored is not None,
             "profile": profile.to_dict(),
             "effective_window": effective_window,
+            "guided": bool(guided),
+            # Release 9 re-check: size and speed are measured only for a
+            # model proven to stay on this network (the card says so).
+            "sized": not await asyncio.to_thread(measure_refusal, d, provider, model),
         }
 
     @app.post("/envelope/{provider}/{model:path}/probe")
     async def envelope_probe(provider: str, model: str) -> dict[str, Any]:
         """Start the quick battery in the background. Refusals are honest and
         specific — see the module docstring for the three shapes."""
+        return await _start_measure(provider, model)
+
+    async def _start_measure(provider: str, model: str) -> dict[str, Any]:
+        """THE Measure press (the route above, and chat's ``model_measure``,
+        release 9): the same refusals, the same 409 gate, the same events."""
         model = model.strip()
         if not model:
             raise HTTPException(status_code=400, detail="model id required after the provider")
@@ -362,6 +608,11 @@ def register(app: FastAPI, d) -> None:
                     "connect the endpoint on the Connections page first"
                 ),
             )
+        # Release 9 re-check: the button STAYS for every model it measured
+        # before; a model not proven to stay on this network gets the tool
+        # trials only (the pre-release-9 battery), never the size and speed
+        # trials.
+        sized = not await asyncio.to_thread(measure_refusal, d, provider, model)
         key = (provider, model)
         if key in inflight:
             raise HTTPException(
@@ -383,7 +634,7 @@ def register(app: FastAPI, d) -> None:
                 PROBE_STARTED, {"provider": provider, "model": model, "source": source}
             )
             task = asyncio.create_task(
-                _run_probe(key, provider, model, base_url, home, stored)
+                _run_probe(key, provider, model, base_url, home, stored, sized=sized)
             )
             tasks.add(task)
             task.add_done_callback(tasks.discard)

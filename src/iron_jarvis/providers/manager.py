@@ -278,13 +278,15 @@ class ProviderManager:
         # untrusted provider reads as the default floor profile. The platform
         # passes ``config.home``.
         self._envelope_home: Path | None = Path(envelope_home) if envelope_home else None
-        #: ``capability_profile`` cache: (provider, model) -> (store-file
-        #: signature, profile). Signature is ``(st_mtime_ns, st_size)`` of the
-        #: profile file, or None when it does not exist — see
-        #: ``capability_profile`` for why a signature beats a TTL here.
-        self._profile_cache: dict[
-            tuple[str, str], tuple[tuple[int, int] | None, CapabilityProfile]
-        ] = {}
+        #: ``capability_profile`` cache: (provider, model) -> ((profile-file
+        #: signature, ledger-file signature), profile, guided). A signature is
+        #: ``(st_mtime_ns, st_size)``, or None when the file does not exist —
+        #: see ``capability_profile`` for why a signature beats a TTL here.
+        self._profile_cache: dict[tuple[str, str], tuple[Any, CapabilityProfile, bool]] = {}
+        #: Release 9 review: each untrusted model's guided state, in MEMORY
+        #: (``outcomes.GuidedState``), set off the loop by ``note_reply_form``
+        #: and ``load_guided_states``; read on the loop by ``reply_guided``.
+        self._guided: dict[tuple[str, str], Any] = {}
         #: Resolver for the LOCAL models OpenCode may serve. Injected (and
         #: defaulting to "none") so a bare ProviderManager() never shells out.
         self._opencode_resolver: Callable[[], list[str]] = opencode_allowed or (lambda: [])
@@ -1071,20 +1073,38 @@ class ProviderManager:
         model = (model or "").strip()
         if self.is_trusted_provider(provider):
             return trusted_profile(provider, model)
+        return self._envelope_entry(provider, model)[0]
+
+    def _envelope_entry(self, provider: str, model: str) -> "tuple[CapabilityProfile, bool]":
+        """``(profile, guided)`` for one untrusted model. The stored profile
+        is cached by its file's signature (one ``stat`` a call, as before);
+        since release 9 of the intelligence plan the GUIDED state comes from
+        MEMORY (``_guided``: set by :meth:`note_reply_form`, which runs off
+        the loop, and by :meth:`load_guided_states` at start-up) — no ledger
+        file is read here, because this runs on the event loop after every
+        tool reply. A guided model answers the TUNED profile
+        (``outcomes.tuned_for``: the rung it stumbled on lowered, so the
+        frozen ladder falls to the next rung by itself); the state counts
+        only while its stamp matches the profile's generation (a new
+        measurement voids it). Never raises."""
         try:
             home = self._envelope_home
             if home is None:
-                return CapabilityProfile(model_id=model, provider=provider)
-            path = envelope_store.profile_path(home, provider, model)
+                return CapabilityProfile(model_id=model, provider=provider), False
+            from ..envelope import outcomes as envelope_outcomes
+
             try:
-                st = path.stat()
-                sig: tuple[int, int] | None = (st.st_mtime_ns, st.st_size)
+                st = envelope_store.profile_path(home, provider, model).stat()
+                sig: "tuple[int, int] | None" = (st.st_mtime_ns, st.st_size)
             except OSError:  # missing/unreadable = unprobed
                 sig = None
             key = (provider, model)
+            state = self._guided.get(key)
+            mark = (state.guided, state.rung, state.stamp) if state is not None else None
+            both = (sig, mark)
             cached = self._profile_cache.get(key)
-            if cached is not None and cached[0] == sig:
-                return cached[1]
+            if cached is not None and cached[0] == both:
+                return cached[1], bool(cached[2])
             profile: CapabilityProfile | None = None
             if sig is not None:
                 # load_profile never raises; a corrupt file answers None (and
@@ -1092,10 +1112,107 @@ class ProviderManager:
                 profile = envelope_store.load_profile(home, provider, model)
             if profile is None:
                 profile = CapabilityProfile(model_id=model, provider=provider)
-            self._profile_cache[key] = (sig, profile)
-            return profile
+            guided = bool(
+                state is not None
+                and state.guided
+                and state.stamp == envelope_outcomes.generation_stamp(profile)
+            )
+            if guided:
+                profile = envelope_outcomes.tuned_for(profile, state)
+            self._profile_cache[key] = (both, profile, guided)
+            return profile, guided
         except Exception:  # noqa: BLE001 — per contract: never raises
-            return CapabilityProfile(model_id=model, provider=provider)
+            return CapabilityProfile(model_id=model, provider=provider), False
+
+    def reply_guided(self, provider: str, model: str) -> bool:
+        """Release 9: is this user's own model being guided step by step
+        right now (five unusable replies running moved it; ten usable ones
+        running at the more guided form move it back)? Trusted providers
+        never are. From memory and one ``stat``: safe on the event loop.
+        Never raises."""
+        provider = (provider or "").strip()
+        model = (model or "").strip()
+        if not self.is_own_model_provider(provider):
+            return False
+        return self._envelope_entry(provider, model)[1]
+
+    def note_reply_form(self, provider: str, model: str, form: str, ok: bool) -> str:
+        """Release 9's feed: record whether one tool-carrying reply of a
+        user's own model came back in a usable form, asked in ``form``, and
+        keep the model's guided state in memory. Returns what it moved
+        (``"guided"`` / ``"recovered"`` / ``""``). Trusted providers and a
+        manager with no envelope home record nothing. BLOCKING (one small
+        file, under the ledger's own lock): the router calls it through
+        ``asyncio.to_thread``. Never raises."""
+        provider = (provider or "").strip()
+        model = (model or "").strip()
+        try:
+            if not model or not self.is_own_model_provider(provider):
+                return ""
+            home = self._envelope_home
+            if home is None:
+                return ""
+            from ..envelope.outcomes import record_reply_form_state
+
+            moved, state = record_reply_form_state(home, provider, model, form, ok)
+            if state is not None:
+                self._guided[(provider, model)] = state
+            return moved
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def is_own_model_provider(self, provider: str) -> bool:
+        """Release 9: is ``provider`` one of the user's OWN model servers
+        (Ollama, the custom slot, a fleet node: ``providers.local``), the only
+        providers whose replies are recorded, guided or tried? An untrusted
+        name that is not a local server (a test double, a provider added at
+        run time) is none of these. Never raises."""
+        try:
+            from .local import is_local_provider
+
+            p = (provider or "").strip()
+            return bool(p) and not self.is_trusted_provider(p) and is_local_provider(p)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def load_guided_states(self) -> int:
+        """Start-up warm-up (release 9 review): read every model's guided
+        state from its ledger into memory, so a model guided before a restart
+        is still guided on its first reply after it. BLOCKING (the lifespan
+        runs it off the loop). Returns how many guided models it found.
+        Never raises."""
+        home = self._envelope_home
+        if home is None:
+            return 0
+        found = 0
+        try:
+            import json
+
+            from ..envelope.outcomes import GuidedState
+
+            for path in envelope_store.envelope_dir(home).glob("*.outcomes.json"):
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                provider = str(data.get("provider") or "")
+                model = str(data.get("model_id") or "")
+                if not model or not self.is_own_model_provider(provider):
+                    continue
+                from ..envelope.outcomes import OutcomeLedger
+
+                ledger = OutcomeLedger.from_dict(data)
+                key = (provider, model)
+                if key not in self._guided:
+                    self._guided[key] = GuidedState(
+                        ledger.guided, ledger.guided_rung, ledger.profile_stamp
+                    )
+                    found += int(ledger.guided)
+        except Exception:  # noqa: BLE001
+            pass
+        return found
 
     def measured_context_window(self, provider: str, model: str) -> "int | None":
         """The MEASURED honest context window (tokens), or ``None`` when the

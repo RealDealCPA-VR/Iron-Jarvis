@@ -138,6 +138,10 @@ def _unverified_targets(
         declared.update(getattr(probe, "targets", ()) or ())
         if result.ok:
             delivered.update(result.scores)
+            # Release 9 review: a path the probe tried and found nothing for
+            # is not "unverified" (that would restore the record's old
+            # figure); it is cleared in _fold_results.
+            delivered.update(getattr(result, "cleared", ()) or ())
     return frozenset(declared - delivered)
 
 
@@ -213,6 +217,12 @@ def _fold_results(
         # both dropped rather than riding into a freshly stamped profile.
         # Restricted to reliability paths, exactly like _degraded: a failed
         # measurement must not zero a token ratio or a context number.
+        # Release 9 review: a non-reliability path the probe tried and could
+        # not measure is zeroed and loses its evidence claim (its line goes).
+        if result.ok:
+            for path in getattr(result, "cleared", ()) or ():
+                floored.add(path)
+                store.merge_value(profile, path, 0.0)
         for path in result.floored:
             if store.is_reliability_path(path):
                 floored.add(path)

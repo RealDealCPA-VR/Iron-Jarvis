@@ -2304,6 +2304,21 @@ def route_label(platform: Any, provider: str) -> str:
     return "" if label in (p, _MODEL_SERVER_WORDS) else label
 
 
+#: The intelligence plan, release 9: the quiet line under a reply whose model
+#: was asked in the more guided form because its recent tool replies kept
+#: coming back unusable (``router._guide_if_stumbling``). True by
+#: construction: the router sets the reply's flag only when it really asked
+#: this reply's own model call in that form.
+GUIDED_LINE = "This model had trouble with tools, so Iron Jarvis is guiding it step by step."
+
+
+def guided_note(facts: Any) -> str:
+    """The quiet line, when this reply's facts say it was guided; ``""``
+    otherwise. MIRROR NOTE (lock-step): both chat lanes append this beside
+    :func:`text_only_note`."""
+    return f"\n\n_{GUIDED_LINE}_" if bool(getattr(facts, "guided", False)) else ""
+
+
 def text_only_note(platform: Any, provider: str) -> str:
     """The reply's note when the user ARMED tools but picked a model that
     cannot use them (v1.125.0; plain words and the endpoint's label since
@@ -6019,6 +6034,11 @@ def settings_ask_tools(
         from ..settings.records_library import library_tools_for
 
         names += library_tools_for(text)
+        # The intelligence plan, release 9: "What is this model good at?",
+        # "Measure my model." Pure words; both stay on the user's own models.
+        from ..settings.records_models import model_tools_for
+
+        names += model_tools_for(text)
         # Next leaps 46-a: what something cost ("what did the invoice rule
         # cost this month?"). Pure words; the tool only reads, through the
         # turn's client wall.
@@ -16604,6 +16624,9 @@ async def run_chat_turn(
         )
     if text_only_pick and (body.tools or []):
         reply += text_only_note(d.platform, provider_choice)
+    # Release 9: a model that kept stumbling was guided step by step for this
+    # reply; one quiet line says so. MIRROR NOTE (lock-step): routes/chat.py.
+    reply += guided_note(_facts)
     # APPS FROM THE PHONE (readiness 12B, G39): the phone's conversation
     # arms no app tool (this lane cannot show a card, so an armed tool
     # would run with nobody's OK); a connected app the user named for

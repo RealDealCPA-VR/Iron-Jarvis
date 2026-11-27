@@ -144,6 +144,9 @@ _CATALOG: dict[str, dict[str, str]] = {
     # Next leaps 43-a: the model library is the Models tab on Model servers.
     "model_library": {"href": "/fleet?view=models", "label": "Open Model servers › Models"},
     "model_download": {"href": "/fleet?view=models", "label": "Open Model servers › Models"},
+    # The intelligence plan, release 9: each model's plain lines are on Model servers.
+    "model_report": {"href": "/fleet", "label": "Open Model servers"},
+    "model_measure": {"href": "/fleet", "label": "Open Model servers"},
     # Next leaps 40-a: the day's changes, with before and after and Undo for
     # one or many, are the Your day tab on Activity.
     "changes_list": {"href": "/activity?view=day", "label": "See your day on Activity"},

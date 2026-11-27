@@ -117,6 +117,9 @@ OWN_PLACE = frozenset({
     # Next leaps 43-a: the model library (settings/records_library), armed by its
     # words through chat_turn.settings_ask_tools.
     "model_library", "model_download",
+    # The intelligence plan, release 9: your own models (settings/records_models),
+    # armed by their words through chat_turn.settings_ask_tools.
+    "model_report", "model_measure",
     # v1.564.0 (idea 31-a): the plan of a scanned pile (READONLY, allow; it
     # reads on this PC and shows a card), armed by `autoselect.wants_stack`
     # through `chat_turn.stack_turn`. Never `stack_apply`: the card writes.

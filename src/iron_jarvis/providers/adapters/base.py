@@ -309,6 +309,13 @@ class LLMResponse:
     #: lanes and the agent runtime read it to continue the turn instead of
     #: ending it (``chat_turn.cut_off_round``).
     cut_calls: list[str] = field(default_factory=list)
+    #: The intelligence plan, release 9: True when the model did NOT answer a
+    #: tool-carrying request in a usable form the first time — its tool-call
+    #: arguments had to be recovered from broken JSON, or a guided/fenced
+    #: wrapper needed a repair round (or gave up). Read by the router's one
+    #: reply-form seam (``router._note_form``), which records it per model;
+    #: never sent to a model, never saved into a conversation.
+    form_repaired: bool = False
 
     @property
     def wants_tools(self) -> bool:

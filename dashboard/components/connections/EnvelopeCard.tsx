@@ -71,6 +71,14 @@ export interface EnvelopeProfile {
   /** Why a path was floored, keyed the same way as measured_fields (e.g.
    *  {"tool_protocols.native": "native trials errored: HTTP 400 …"}). */
   probe_notes?: Record<string, string> | null;
+  /** Release 9: the largest made-up text (characters) the model read back,
+   *  and 1 when a larger window was never tried ("at least"). Measured only
+   *  when "holds_chars" is in measured_fields. */
+  holds_chars?: number | null;
+  holds_more?: number | null;
+  /** Release 9: words of a made-up story per second. Measured only when
+   *  "words_per_second" is in measured_fields. */
+  words_per_second?: number | null;
 }
 
 /** The window the app ACTUALLY budgets with (pin → measured → endpoint →
@@ -84,6 +92,80 @@ export interface EnvelopeData {
   profile?: EnvelopeProfile | null;
   trusted?: boolean;
   effective_window?: EffectiveWindow | null;
+  /** Release 9: the model kept stumbling with tools and is being guided step
+   *  by step right now (the daemon's outcome record). */
+  guided?: boolean;
+  /** Release 9 re-check: false when the model is NOT proven to stay on this
+   *  PC or network, so Measure checks only its tool use (never size or
+   *  speed). */
+  sized?: boolean;
+}
+
+/** Said under such a model (the daemon's routes/envelope.SIZED_ONLY_LOCAL_WORDS). */
+export const SIZED_ONLY_LOCAL_LINE =
+  "How much a model holds and how fast it writes are measured only for models on this PC or " +
+  "your network. This one's model server is not, or may pass it on to a cloud service, so " +
+  "Measure checks only how it uses tools.";
+
+/** A printed page of plain text, in characters (about 500 words): the same
+ *  number the daemon's HOLD probe uses (envelope/probes.PAGE_CHARS). */
+export const PAGE_CHARS = 3000;
+
+/** The guided line, word for word the reply's quiet line's reason. */
+export const GUIDED_CARD_LINE =
+  "It had trouble with tools, so Iron Jarvis is guiding it step by step.";
+
+/**
+ * Release 9 of the intelligence plan: what a model of your own is good at, in
+ * up to three plain lines, each said ONLY when it was measured:
+ *  - tools: from the measured tool rungs (or the guided state);
+ *  - how much it holds: pages of made-up text it read back to the first line
+ *    ("at least" when a larger window was never tried);
+ *  - how fast it writes: words a second.
+ * Nothing measured, nothing said: a figure is never guessed.
+ */
+export function plainModelLines(
+  profile: EnvelopeProfile | null | undefined,
+  guided = false,
+): string[] {
+  if (!profile) return [];
+  const measured = MEASURED_SOURCES.has(profile.source) && !!profile.probed_at;
+  const mf = new Set(Array.isArray(profile.measured_fields) ? profile.measured_fields : []);
+  const lines: string[] = [];
+  if (guided) {
+    lines.push(GUIDED_CARD_LINE);
+  } else if (measured) {
+    const tp = profile.tool_protocols ?? {};
+    const scored = LADDER.filter((l) => mf.has(`tool_protocols.${l.rung}`));
+    if (scored.length > 0) {
+      const top = LADDER.find(
+        (l) => mf.has(`tool_protocols.${l.rung}`) && (tp[l.rung] ?? 0) >= l.bar,
+      );
+      if (top?.rung === "native") lines.push("Uses tools well.");
+      else if (top?.rung === "strict_json") lines.push("Uses tools when guided step by step.");
+      else if (scored.length === LADDER.length) lines.push("Does not use tools reliably.");
+    }
+  }
+  const held = Number(profile.holds_chars ?? 0);
+  if (mf.has("holds_chars") && Number.isFinite(held) && held >= PAGE_CHARS) {
+    const more = Number(profile.holds_more ?? 0) === 1;
+    const pages = more ? Math.floor(held / PAGE_CHARS) : Math.round(held / PAGE_CHARS);
+    lines.push(
+      more ? `Holds at least ${pages} pages at once.` : `Holds about ${pages} pages at once.`,
+    );
+  }
+  const wps = Number(profile.words_per_second ?? 0);
+  if (mf.has("words_per_second") && Number.isFinite(wps) && wps > 0) {
+    const n = Math.round(wps);
+    lines.push(
+      n < 1
+        ? "Writes less than one word a second."
+        : n === 1
+          ? "Writes about 1 word a second."
+          : `Writes about ${n} words a second.`,
+    );
+  }
+  return lines;
 }
 
 /**
@@ -486,6 +568,8 @@ function MeasuredProfileCard({
   // Context honesty: the app budgets with effective_window, so THAT is the
   // number shown. The profile's own floor context (8192/4096) never renders
   // as if it were the operating window.
+  const plain = plainModelLines(profile, data.guided === true);
+
   const ew = data.effective_window ?? null;
   const ctxMeasured = fieldMeasured("context_window") || fieldMeasured("honest_context");
   const adv = profile.context_window ?? null;
@@ -535,6 +619,16 @@ function MeasuredProfileCard({
       <p data-testid={`${tid}-verdict`} className={`mt-1 text-[11px] font-medium ${verdictTone}`}>
         {verdict}
       </p>
+      {plain.length > 0 && (
+        <p data-testid={`${tid}-plain`} className="mt-0.5 text-[11px] text-zinc-300">
+          {plain.join(" ")}
+        </p>
+      )}
+      {data.sized === false && (
+        <p data-testid={`${tid}-sized`} className="mt-0.5 text-[11px] text-zinc-500">
+          {SIZED_ONLY_LOCAL_LINE}
+        </p>
+      )}
 
       {ew && ew.value != null && (
         <p className="mt-0.5 text-[11px] text-zinc-400">
