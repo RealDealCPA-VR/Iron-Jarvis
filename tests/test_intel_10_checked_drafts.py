@@ -403,10 +403,44 @@ def test_a_run_nobody_asked_for_is_never_counted(desk, how):
     assert desk.router.calls == [] and _cands(desk) == []
 
 
-@pytest.mark.parametrize("origin", [None, "user_task", "project:p1", "assignment:a1"])
+@pytest.mark.parametrize("origin", [None, "user_task", "project:p1"])
 def test_a_run_the_owner_started_is_counted(desk, origin):
     three_runs(desk.engine, origin=origin)
     assert R.detect(desk.platform, now=datetime.now().astimezone()) == 1
+
+
+def _queued(desk, source: str, retry_of: str = "") -> str:
+    """A queued task (an assignment) and who queued it; ``retry_of``: the
+    task it is a retry of."""
+    from iron_jarvis.assignments.models import AssignmentRecord
+
+    row = AssignmentRecord(assignee="builder", task=TASK, source=f"retry:{retry_of}" if retry_of else source)
+    with session_scope(desk.engine) as db:
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+@pytest.mark.parametrize("who,counted", [
+    ("user", True),            # the assignments route: the owner queued it
+    ("project", True),         # a project's page
+    ("retry-user", True),      # a retry of one the owner queued
+    ("agent:sess_x", False),   # an agent's assign_work
+    ("retry-agent", False),    # a retry of one an agent queued
+    ("api", False),            # nobody known
+    ("missing", False),        # no record of who queued it
+])
+def test_a_queued_task_counts_only_when_the_owner_queued_it(desk, who, counted):
+    for w in range(3):
+        if who.startswith("retry-"):
+            first = _queued(desk, "user" if who == "retry-user" else "agent:sess_x")
+            aid = _queued(desk, "", retry_of=first)
+        elif who == "missing":
+            aid = f"asg_gone{w}"
+        else:
+            aid = _queued(desk, who)
+        seed_run(desk.engine, _monday(w), task=(TASK, TASK_ALIKE, TASK)[w], origin=f"assignment:{aid}")
+    assert R.detect(desk.platform, now=datetime.now().astimezone()) == (1 if counted else 0)
 
 
 def test_a_self_development_run_is_never_counted(desk):

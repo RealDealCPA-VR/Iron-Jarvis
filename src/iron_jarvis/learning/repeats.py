@@ -732,8 +732,9 @@ def asked_for(origin: Any) -> bool:
     """Was a run of ``origin`` one the OWNER asked for as a task of its own?
     Untagged (the Sessions page, Spotlight, a custom agent's Run, ``ij run``,
     a rerun of one of those), ``user…``, ``project…`` (a project's task) and
-    ``assignment…`` (a task queued from a project's page) are; never a
-    self-development run, tagged or not (``_run_ok``). NOT counted: ``chat…`` (a chat handed its task over: that task is
+    ``assignment…`` (a queued task) MAY be: only when the owner queued it
+    (:func:`_owner_queued`); never a self-development run, tagged or not
+    (``_run_ok``). NOT counted: ``chat…`` (a chat handed its task over: that task is
     already counted as the chat's own, once), ``job…`` (a mission's
     coordinator and helpers: the owner asked for the mission, not this
     run), and every unattended door (a schedule, a workflow, a rule, a
@@ -741,6 +742,64 @@ def asked_for(origin: Any) -> bool:
     nobody asked for that run just then). Pure."""
     text = str(origin or "").strip().lower()
     return not text or text.startswith(("user", "project", "assignment"))
+
+
+#: Who queued a task (``AssignmentRecord.source``) when it was the OWNER:
+#: the assignments route ("user") or a project's page ("project"). Never an
+#: agent's ``assign_work`` ("agent:<session>"), "api", or anything unknown.
+OWNER_QUEUED = frozenset({"user", "project"})
+_ASSIGNMENT = "assignment:"
+#: How many retries back a queued task is followed to the one first queued.
+_RETRY_HOPS = 10
+
+
+def _owner_queued(engine: Any, sessions: list[Any]) -> set[str]:
+    """The ids of the runs among ``sessions`` started from a queued task
+    (origin ``assignment:<id>``) that the OWNER queued (:data:`OWNER_QUEUED`;
+    a retry is judged by the task it retries). A task with no record of who
+    queued it is not the owner's. BLOCKING; RAISES when unreadable."""
+    from sqlmodel import select
+
+    from ..assignments.models import AssignmentRecord
+    from ..core.db import session_scope
+
+    asked = {str(x.id): str(x.origin or "")[len(_ASSIGNMENT):] for x in sessions
+             if str(getattr(x, "origin", "") or "").startswith(_ASSIGNMENT)}
+    if not asked:
+        return set()
+    source: dict[str, str] = {}
+    want = set(asked.values())
+    with session_scope(engine) as db:
+        for _ in range(_RETRY_HOPS + 1):
+            want -= set(source)
+            if not want:
+                break
+            ids = sorted(want)
+            for i in range(0, len(ids), _CHUNK):
+                for aid, src in db.exec(
+                    select(AssignmentRecord.id, AssignmentRecord.source)
+                    .where(AssignmentRecord.id.in_(ids[i:i + _CHUNK]))  # type: ignore[attr-defined]
+                ):
+                    source[str(aid)] = str(src or "")
+            want = {src[len("retry:"):] for src in source.values() if src.startswith("retry:")}
+
+    def _first(aid: str) -> str:
+        for _ in range(_RETRY_HOPS + 1):
+            src = source.get(aid, "")
+            if not src.startswith("retry:"):
+                return src
+            aid = src[len("retry:"):]
+        return ""
+
+    return {sid for sid, aid in asked.items() if _first(aid) in OWNER_QUEUED}
+
+
+def _owners_runs(engine: Any, sessions: list[Any]) -> list[Any]:
+    """``sessions`` less the queued tasks the owner did not queue.
+    BLOCKING; RAISES."""
+    mine = _owner_queued(engine, sessions)
+    return [x for x in sessions
+            if not str(getattr(x, "origin", "") or "").startswith(_ASSIGNMENT) or str(x.id) in mine]
 
 
 def _run_ok(sess: Any) -> bool:
@@ -846,6 +905,7 @@ def run_units(engine: Any, since: datetime, *, cmap: Any = None) -> list[Unit]:
     picked = [s for s in rows if asked_for(getattr(s, "origin", None)) and _run_ok(s)]
     if not picked:
         return []
+    picked = _owners_runs(engine, picked)
     children, tools = _runs_read(engine, picked)
     out: list[Unit] = []
     for sess in picked:
@@ -875,7 +935,8 @@ def reread_runs(engine: Any, evidence: dict[str, Any]) -> "list[tuple[Unit, list
             rows = {str(s.id): s for s in db.exec(select(Session).where(Session.id.in_(wanted)))}  # type: ignore[attr-defined]
             for s in rows.values():
                 db.expunge(s)
-        live = [rows[i] for i in wanted if i in rows and _run_ok(rows[i]) and asked_for(rows[i].origin)]
+        live = _owners_runs(engine, [rows[i] for i in wanted
+                                     if i in rows and _run_ok(rows[i]) and asked_for(rows[i].origin)])
         children, tools = _runs_read(engine, live)
         out: list[tuple[Unit, list[Any]]] = []
         for sess in live:
