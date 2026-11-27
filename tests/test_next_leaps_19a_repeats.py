@@ -427,3 +427,12 @@ def test_the_same_request_in_one_chat_on_three_mondays_is_three_times(platform):
     assert len(us) == 3 and all(u.tools == TOOLS for u in us)
     (group,) = R.groups(us)
     assert len(group.days) == 3
+
+
+def test_a_task_with_no_recorded_model_is_kept_home():
+    """Re-check B: a task saved before its model was recorded is unsure,
+    and unsure is home: its words never go to a cloud model in a draft."""
+    from dataclasses import replace
+
+    u = replace(U(_monday(0)), provider="", model="")
+    assert R._home_if_here(object(), u).local_only is True

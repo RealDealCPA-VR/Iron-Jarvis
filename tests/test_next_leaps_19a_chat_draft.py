@@ -469,3 +469,15 @@ def test_a_reply_that_says_it_ran_on_this_network_keeps_it_home(desk):
         db.commit()
     _pass(desk)
     assert desk.router.calls == [] and _proposals(desk) == []
+
+
+def test_a_chat_is_deleted_even_when_the_candidate_table_cannot_be_read(desk):
+    """Re-check A: a delete must always complete."""
+    from sqlalchemy import text
+
+    tids = _three(desk)
+    with desk.engine.begin() as conn:
+        conn.execute(text("DROP TABLE skillcandidaterecord"))
+    assert desk.client.delete(f"/chat/threads/{tids[0]}").status_code == 200
+    with session_scope(desk.engine) as db:
+        assert db.get(ChatThreadRecord, tids[0]) is None

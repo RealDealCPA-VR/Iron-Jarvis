@@ -840,8 +840,12 @@ def _home_if_here(platform: Any, u: Unit) -> Unit:
     """A task a model on the owner's own PC or network answered is kept
     home (Local only) even when its chat was not switched Local only: its
     words never go to a cloud model in a draft. Unsure = home."""
-    if u.local_only or not u.provider:
+    if u.local_only:
         return u
+    if not u.provider:      # no model recorded: unsure, so home
+        from dataclasses import replace
+
+        return replace(u, local_only=True)
     try:
         from ..providers.egress import stays_on_this_network
 
