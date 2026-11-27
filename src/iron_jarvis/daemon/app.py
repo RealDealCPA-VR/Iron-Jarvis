@@ -745,6 +745,13 @@ async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> 
             gone = await asyncio.to_thread(sweep_cleared_records, platform.config.home)
             if gone:
                 log.info("removed %d cleared run record(s) kept in the trash past 30 days", gone)
+            # Release 8 of the intelligence plan: a long result kept whole
+            # for its chat is removed 30 days after it was kept.
+            from ..tools.kept_results import sweep as _sweep_kept
+
+            old = await asyncio.to_thread(_sweep_kept, platform.config.home)
+            if old:
+                log.info("removed %d kept result(s) past 30 days", old)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a sweep must never kill the daemon
@@ -1727,6 +1734,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
             from ..maintenance import sweep_cleared_records
 
             sweep_cleared_records(platform.config.home)
+        except Exception:  # pragma: no cover - never block boot
+            pass
+        try:  # release 8 of the intelligence plan: kept results past 30 days
+            from ..tools.kept_results import sweep as _sweep_kept
+
+            await asyncio.to_thread(_sweep_kept, platform.config.home, boot=True)
         except Exception:  # pragma: no cover - never block boot
             pass
         _boot_watch.step("arming background loops")

@@ -299,6 +299,10 @@ LETS_RUN: dict[str, str] = {
     "history_search": _MEMORY,
     "image_info": _FILES,
     "integration_list": _RECORDS,
+    "kept_result_read": (
+        "reads a part of a long result Iron Jarvis kept for the calling chat or run (its own only; the "
+        "intelligence plan, release 8); writes nothing"
+    ),
     "list_agents": _RECORDS,
     "list_files": _FILES,
     "list_folder": _FILES,

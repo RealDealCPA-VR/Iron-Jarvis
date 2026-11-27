@@ -264,13 +264,24 @@ async def test_a_harness_turn_cuts_a_long_result_only_where_it_says_so(tmp_path,
     await stream(platform, body(ws))
     assert model.tool_messages(1)["r1"] == "s" * 20_000  # whole: the old lane cut it at 12,000
     cut = model.tool_messages(2)["r2"]
-    assert len(cut) == cap
-    note = ("\n[… 38,000+ of 70,000 characters cut here — ask for less: a range of the file "
-            "(offset / limit), a narrower search, a command that prints less, or fewer files at once …]\n")
-    head, _, tail = cut.partition(note)
+    # Moved on purpose in v1.587.0 (the intelligence plan, release 8): the
+    # result is now KEPT whole for the session, so the words changed. The
+    # promise is the same: within the cap, its start and its end kept (a test
+    # run says why it failed at its end), and the cut SAID. What is new: the
+    # line under it says how to read the part left out
+    # (tests/test_intel_08_kept_results_lanes.py).
+    import re
+
+    from iron_jarvis.tools import kept_results as K
+
+    assert len(cut) <= cap
+    shown, said = cut.rsplit("\n", 1)
+    assert K.NOTE_RX.fullmatch(said) and "for this coding session: 70,000 characters" in said
+    head, gap, tail = re.split(r"(\n\[… characters [0-9,]+ to [0-9,]+ are not shown here[^\n]*\]\n)", shown)
     # Its start and its end kept (a test run says why it failed at its end).
     assert set(head) == {"h"} and set(tail) == {"h"}
-    assert len(head) + len(note) + len(tail) == cap and abs(len(head) - 2 * len(tail)) <= 3
+    assert f"characters {len(head) + 1:,} to {70_000 - len(tail):,} are not shown here" in gap
+    assert cap - len(cut) < 40 and abs(len(head) - 2 * len(tail)) <= 3
 
 
 async def test_plain_chat_says_when_it_cuts_a_long_result(tmp_path, monkeypatch):
@@ -290,8 +301,12 @@ async def test_plain_chat_says_when_it_cuts_a_long_result(tmp_path, monkeypatch)
     model = wire(platform, monkeypatch, [[call("read_file", "r1", path="spec.md")], "Done."])
     await stream(platform, body(ws, tools=["read_file"]), harness=None, session_id="chat")
     seen = model.tool_messages(1)["r1"]
-    assert len(seen) <= 12_000 and seen.startswith("s" * 1000) and seen.endswith("s" * 1000)
-    assert "8,000+ of 20,000 characters cut here" in seen
+    # Moved on purpose in v1.587.0 (the intelligence plan, release 8): the cut
+    # is still said and the start and the end are still kept; the words are
+    # now the line under the result, which also says how to read the rest.
+    shown, said = seen.rsplit("\n", 1)
+    assert len(seen) <= 12_000 and shown.startswith("s" * 1000) and shown.endswith("s" * 1000)
+    assert "for this chat: 20,000 characters" in said and "are not shown here" in shown
 
 
 def test_the_harness_cap_follows_the_window_within_its_bounds():

@@ -45,6 +45,27 @@ STALE_TOOL_BLOCKS = 2
 
 _TOOL_TRIMMED = "[earlier tool output trimmed — it had already been acted on]"
 
+#: Lines a trimmed tool result KEEPS under the marker: each entry reads a tool
+#: message's text and answers the one line of it that must outlive the trim
+#: ("" for none). ``tools/kept_results`` adds the line that says a long result
+#: was kept whole and how to read the rest (the intelligence plan, release 8):
+#: the text it points at is still on disk, so trimming the message must not
+#: lose the only way to it. Filled by the owner of each line, so this package
+#: imports nothing of theirs.
+KEEP_ON_TRIM: list[Any] = []
+
+
+def _kept_on_trim(content: Any) -> str:
+    out = ""
+    for find in KEEP_ON_TRIM:
+        try:
+            line = str(find(content) or "")
+        except Exception:  # noqa: BLE001 — a finder never breaks a plan
+            line = ""
+        if line:
+            out += "\n" + line
+    return out
+
 
 @dataclass
 class TranscriptPlan:
@@ -249,7 +270,7 @@ def plan_agent_transcript(
         for m in block[1:]:
             if getattr(m, "role", "") == "tool" and (getattr(m, "content", "") or ""):
                 trimmed = copy.copy(m)
-                trimmed.content = _TOOL_TRIMMED
+                trimmed.content = _TOOL_TRIMMED + _kept_on_trim(m.content)
                 new_block.append(trimmed)
                 plan.tools_trimmed += 1
             else:

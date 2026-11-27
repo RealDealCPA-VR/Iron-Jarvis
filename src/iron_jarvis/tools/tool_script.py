@@ -1017,6 +1017,15 @@ async def adopt_turn_worker(platform: Any, turn_id: str, thread_id: str) -> int:
             SHELF.rekey(f"chat:{turn}", f"chat:{thread}")
         except Exception:  # noqa: BLE001
             pass
+        # ...and so do the long results it kept whole (the intelligence plan,
+        # release 8: `tools/kept_results`), off the event loop.
+        try:
+            from .kept_results import rekey as _rekey_kept
+
+            await asyncio.to_thread(
+                _rekey_kept, getattr(platform, "engine", None), f"chat:{turn}", f"chat:{thread}")
+        except Exception:  # noqa: BLE001
+            pass
         if repl is None or not hasattr(repl, "rekey"):
             return 0
         return int(await repl.rekey(f"chat:{turn}", f"chat:{thread}"))

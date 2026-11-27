@@ -1690,6 +1690,15 @@ def build_platform(
 
     for tool in filling_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # LONG RESULTS ARE KEPT WHOLE (the intelligence plan, release 8):
+    # ``kept_result_read`` reads a part of a result a lane shortened and kept
+    # for the chat, run or coding session it is asked in (``tools/
+    # kept_results``). Read-only. No words and no lookup arm it: it joins a
+    # turn only when that turn's own result was kept.
+    from .tools.kept_results import kept_result_tools
+
+    for tool in kept_result_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
     # THE LOOKUP (capability search plan, Phase 1): ``find_capability`` lets
     # the model ask what Iron Jarvis can do, in its own words, and answers
     # from one index of every built-in tool, setting, page step and "not

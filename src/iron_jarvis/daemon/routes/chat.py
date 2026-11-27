@@ -370,6 +370,11 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
             log.warning("history-search drop failed for thread %s", thread_id,
                         exc_info=True)
         db.commit()
+    # Release 8 of the intelligence plan: the long results kept for it (as a
+    # chat, or as a coding session) go with it.
+    from ...tools.kept_results import drop_owners as _drop_kept
+
+    _drop_kept(engine, (f"chat:{thread_id}", f"build:{thread_id}"))
     # CS7: ...and in memory — a finished turn of it is unknown from now on (its
     # stream answers 404); a running one is marked (nothing of it is written
     # any more) and its record goes when it ends. Marked FIRST, so a turn the
@@ -8651,8 +8656,8 @@ async def chat_stream(
                                                name=(_harness.called_as(tc) if _harness is not None else tc.name),
                                                # Part 3, Phase 3: a harness turn's own cap,
                                                # and a cut is said (lock-step: chat_turn).
-                                               content=_chat_turn.tool_message_text(
-                                                   _tool_content,
+                                               content=_chat_turn.kept_tool_message(
+                                                   ctx, _tool_content,
                                                    getattr(_harness, "tool_message_chars", None) if _harness is not None else None,
                                                ),
                                                # v1.371.0: a picture the tool handed
@@ -8661,6 +8666,13 @@ async def chat_stream(
                                                images=_chat_turn.tool_result_images(result, ran)))
                         if msgs[-1].images:
                             _chat_turn.trim_tool_images(msgs)
+                # A RESULT OVER THE LIMIT IS KEPT WHOLE (release 8 of the
+                # intelligence plan). MIRROR NOTE (lock-step): chat_turn.
+                await _chat_turn.settle_kept_results(
+                    d, msgs, ctx, armed=armed, auto_armed=auto_armed, ask_armed=ask_armed,
+                    tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
+                    tool_ceiling=tool_ceiling, ceiling=_arm_ceiling, harness=_harness,
+                )
                 # THE SCRIPT TOOL, OFFERED BY WHAT THE MODEL IS DOING
                 # (v1.473.0): after the fourth successful call of one reading
                 # tool it joins the turn for the next round. Plain chat only
