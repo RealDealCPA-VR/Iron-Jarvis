@@ -576,3 +576,15 @@ async def test_chats_yes_stores_the_choice_its_card_named_even_when_the_accounts
     assert platform.config.double_check in (None, "acct-work|claude-cli|claude-sonnet-4-5"), platform.config.double_check
     assert platform.config.double_check is None, "a choice the card did not name was stored"
     assert S.CHANGED_WORDS in json.dumps(frames, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_build_pane_reply_never_uses_up_the_once_only_card(client, monkeypatch, lane):
+    """Review 2: a Build pane's chat draws no card, so its reply must not mark
+    the card shown; the next plain chat reply still gets it."""
+    _accounts(client, monkeypatch, TWO)
+    body = _file_turn(client, monkeypatch, lane, pane_id="pane-1")
+    assert "double_check" not in body
+    assert client.app.state.platform.config.double_check_offered == ""
+    again = _file_turn(client, monkeypatch, lane, name="second.xlsx")
+    assert again["double_check"]["offer"]["account"] == "Work"

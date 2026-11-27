@@ -9585,12 +9585,14 @@ async def chat_stream(
         # offer of a second model's double-check, or that double-check started in
         # the background (``checks/second``): the conditional key ``double_check``,
         # right after ``checked``. MIRROR NOTE (lock-step): both chat lanes.
+        # A Build pane's chat draws no card (PaneChat): its reply neither
+        # uses up the once-only offer nor starts a double-check (review 2).
         _second: dict = {}
         _checked = await _checked_for_turn(
             platform, turn_id=_usage_turn, thread_id=str(getattr(body, "thread_id", "") or ""),
             made_docs=made_docs, reply=_fig_head, until=_until, deliverables=_deliv,
             coding=_harness is not None, escalate=bool(escalate),
-            request=_chat_turn._last_user_text(getattr(body, "messages", None) or []), second=_second,
+            request=_chat_turn._last_user_text(getattr(body, "messages", None) or []), second=None if str(getattr(body, "pane_id", "") or "").strip() else _second,
         )
         # v1.287.0: present ONLY when a note was left unread (see above).
         # v1.499.3: read as OWED (the notes closed above, handed over once) —
