@@ -232,9 +232,9 @@ def offer_for(platform: Any, prop: Any, *, tz: Any = None) -> "tuple[ScheduleOff
     found = R.reread(engine, got)
     if found is None:
         raise RuntimeError("the chats of a skill draft could not be read")
+    # A deleted chat's task is not read back; fewer than three days left
+    # fall on no rhythm below (``rhythm`` needs three different days).
     units = sorted((u for u, _lines in found), key=lambda u: -u.start)
-    if len(units) < R.MIN_UNITS:
-        return None, "fewer than three of its tasks are still in their chats"
     if any(u.low_trust or u.remote for u in units):
         return None, "one of its tasks read something from outside"
     rh = R.rhythm([u.start for u in units], tz=tz)

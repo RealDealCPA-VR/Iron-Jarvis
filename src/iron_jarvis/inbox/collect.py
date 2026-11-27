@@ -372,7 +372,7 @@ def offer_item(view: dict[str, Any]) -> dict[str, Any]:
         extra={
             "rehearse": {
                 "label": OFFER_REHEARSE, "path": f"{path}/rehearse",
-                "note": "Runs it once now, changing nothing: what it would do is listed here.",
+                "note": "Runs it once now on the same model, changing nothing: what it would do is listed here.",
             },
             "rehearsal_id": str(view.get("rehearsal_id") or ""),
         },

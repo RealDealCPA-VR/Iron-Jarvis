@@ -22,6 +22,11 @@
  * that still waits or was skipped for a reason only the owner can change. A
  * suggestion the review made says why, under its title.
  *
+ * 19-b: an offer to run a repeated task by itself has a quiet Rehearse
+ * beside Accept: it runs 06-a's rehearsal of the schedule once, changing
+ * nothing and making no schedule, and the report shows on the card (no
+ * Keep it: Accept makes the schedule).
+ *
  * 18-a (results): a second part under the waiting ones, "Results of changes
  * you accepted", from the same read (`results` on GET /improvements): each
  * accepted change's before and after in the daemon's own words. No button.
@@ -36,6 +41,7 @@ import { failureOf, type FailureLike } from "@/lib/loadFailed";
 import { useEvents } from "@/lib/useEvents";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { Empty } from "@/components/ui";
+import { RehearsalReport, decodeRehearsal, type RehearsalView } from "@/components/RehearsalReport";
 import {
   CUT_NOTE,
   IMPROVEMENTS_PATH,
@@ -59,6 +65,8 @@ import {
   decodeNightReview,
   groupsToShow,
   nightOfferWords,
+  offerRehearsalId,
+  offerRehearse,
   nightWhy,
   waitingWords,
   type ChangeResult,
@@ -217,6 +225,30 @@ function ImprovementCard({
     }
   }
 
+  // 19-b: Rehearse on an offered schedule (runs only when pressed).
+  const rehearse = offerRehearse(item);
+  const [rehearsal, setRehearsal] = useState<{ id: string; view: RehearsalView | null } | null>(() => {
+    const id = offerRehearsalId(item);
+    return id ? { id, view: null } : null;
+  });
+  const [rehearsing, setRehearsing] = useState(false);
+
+  async function startRehearsal() {
+    if (!rehearse) return;
+    setRehearsing(true);
+    setError(null);
+    try {
+      const view = decodeRehearsal(await post<unknown>(rehearse.path, {}));
+      if (view) setRehearsal({ id: view.id, view });
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : DID_NOT_WORK);
+      const status = failureOf(e).status;
+      if (status === 404 || status === 409) onChanged(e instanceof Error && e.message ? e.message : DID_NOT_WORK);
+    } finally {
+      setRehearsing(false);
+    }
+  }
+
   const night = nightWhy(item);
   return (
     <li
@@ -274,6 +306,18 @@ function ImprovementCard({
             onPress={() => void press(item.decline!, false)}
           />
         ) : null}
+        {rehearse ? (
+          <button
+            type="button"
+            data-testid="improvement-rehearse"
+            disabled={busy || rehearsing}
+            title={rehearse.note || undefined}
+            onClick={() => void startRehearsal()}
+            className={DECLINE_CLASS}
+          >
+            {rehearse.label}
+          </button>
+        ) : null}
         {item.home ? (
           <Link
             href={item.home.href}
@@ -284,6 +328,15 @@ function ImprovementCard({
           </Link>
         ) : null}
       </div>
+      {rehearsal ? (
+        <RehearsalReport
+          key={rehearsal.id}
+          id={rehearsal.id}
+          initial={rehearsal.view}
+          keepable={false}
+          onClose={() => setRehearsal(null)}
+        />
+      ) : null}
       {error ? (
         <p role="alert" data-testid="improvement-refused" className="text-[12px] text-tone-danger">
           {error}
