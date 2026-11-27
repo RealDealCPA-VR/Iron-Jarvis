@@ -110,6 +110,7 @@ WHY_BUSY = "too many double-checks were running"
 WHY_LATE = "it did not answer in time"
 WHY_NO_ANSWER = "it did not answer"
 WHY_UNREAD = "its answer could not be read"
+WHY_NONE_IN_FULL = "none of the files could be read in full for it, so nothing was sent"
 
 SYSTEM = (
     "You double-check finished work. You are shown what a person asked, the reply they got, and "
@@ -417,34 +418,65 @@ def _stopped(platform: Any) -> bool:
         return True
 
 
-def _file_texts(docs: Iterable[Any]) -> str:
+@dataclass
+class _Read:
+    """What the model is shown of the made files, and what it was not."""
+
+    text: str = ""
+    total: int = 0
+    #: The files it gets WHOLE.
+    in_full: int = 0
+    #: Each file it does not get whole, by NAME, with why.
+    not_full: "list[str]" = None  # type: ignore[assignment]
+
+
+def _file_texts(docs: Iterable[Any]) -> _Read:
     """BLOCKING. The made files' text, each read by the app's own reader,
-    bounded (:data:`FILE_TEXT_MAX` a file, :data:`TEXT_MAX` in all), each
-    under its NAME (never its folder). A file that cannot be read says so."""
+    bounded (:data:`FILES_MAX` files, :data:`FILE_TEXT_MAX` a file,
+    :data:`TEXT_MAX` in all), each under its NAME (never its folder). EVERY
+    file it does not get whole (left out, cut, not read) is named, with why:
+    the prompt says so, and the verdict says how many it read in full."""
     from ..documents.readers import extract_text
     from . import content
 
     parts: list[str] = []
+    not_full: list[str] = []
     left = TEXT_MAX
-    for path in list(dict.fromkeys(str(d) for d in docs if d))[:FILES_MAX]:
-        if left <= 0:
-            break
+    whole = 0
+    paths = list(dict.fromkeys(str(d) for d in docs if d))
+    for i, path in enumerate(paths):
         name = record.file_name(path)
+        if i >= FILES_MAX or left <= 0:
+            not_full.append(f"{name} (left out: only {FILES_MAX} files and {TEXT_MAX:,} characters are read)")
+            continue
         if not content.opened_kind(path) or not os.path.isfile(path):
-            parts.append(f"File {name}: (not read)")
+            not_full.append(f"{name} (not read: Iron Jarvis does not read this kind of file here)")
             continue
         try:
             text = extract_text(path, use_ocr_cache=False)
         except Exception:  # noqa: BLE001 — a file that cannot be read is said so, never its error
-            parts.append(f"File {name}: (could not be read)")
+            not_full.append(f"{name} (it could not be read)")
             continue
         text = str(text or "")
         cap = min(FILE_TEXT_MAX, left)
         cut = text[:cap]
-        note = "" if len(text) <= cap else f" (the first {cap:,} of {len(text):,} characters)"
-        parts.append(f"File {name}{note}:\n{cut}")
+        if len(text) <= cap:
+            whole += 1
+            parts.append(f"File {name}:\n{cut}")
+        else:
+            not_full.append(f"{name} (cut: only its first {cap:,} of {len(text):,} characters are shown)")
+            parts.append(f"File {name} (only its first {cap:,} of {len(text):,} characters):\n{cut}")
         left -= len(cut)
-    return "\n\n".join(parts)
+    if not_full:
+        parts.append("Not read in full:\n" + "\n".join(f"- {n}" for n in not_full))
+    return _Read(text="\n\n".join(parts), total=len(paths), in_full=whole, not_full=not_full)
+
+
+def passed_words(read: "_Read | None") -> str:
+    """A pass in words that say exactly what was read."""
+    if read is None or read.in_full >= read.total:
+        return PASSED_WORDS
+    return f"{PASSED_WORDS} in the {read.in_full:,} of {read.total:,} files it read in full"
 
 
 def prompt(request: str, reply: str, files: str) -> str:
@@ -523,8 +555,10 @@ async def double_check(platform: Any, choice: Choice, *, request: str, reply: st
     began = clock()
     try:
         async with asyncio.timeout(cap):
-            files = await asyncio.wait_for(asyncio.to_thread(_file_texts, list(docs or ())), min(READ_S, cap))
-            text = await _ask(platform, choice, pin, prompt(request, reply, files), thread_id=thread_id)
+            read = await asyncio.wait_for(asyncio.to_thread(_file_texts, list(docs or ())), min(READ_S, cap))
+            if read.total and not read.in_full:
+                return row(record.NOT_CHECKED, WHY_NONE_IN_FULL)
+            text = await _ask(platform, choice, pin, prompt(request, reply, read.text), thread_id=thread_id)
     except asyncio.CancelledError:
         raise
     except TimeoutError:
@@ -537,7 +571,7 @@ async def double_check(platform: Any, choice: Choice, *, request: str, reply: st
     verdict = verdict_of(text)
     if verdict is None:
         return row(record.NOT_CHECKED, WHY_UNREAD)
-    return row(verdict, PASSED_WORDS if verdict == record.PASSED else LOOK_WORDS)
+    return row(verdict, passed_words(read) if verdict == record.PASSED else LOOK_WORDS)
 
 
 # --------------------------------------------------------------------------- #

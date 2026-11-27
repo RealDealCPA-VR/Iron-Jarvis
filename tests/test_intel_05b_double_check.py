@@ -588,3 +588,40 @@ def test_a_build_pane_reply_never_uses_up_the_once_only_card(client, monkeypatch
     assert client.app.state.platform.config.double_check_offered == ""
     again = _file_turn(client, monkeypatch, lane, name="second.xlsx")
     assert again["double_check"]["offer"]["account"] == "Work"
+
+
+async def test_a_double_check_says_exactly_which_files_it_read_in_full(platform, monkeypatch, tmp_path):
+    """Review 3 (truth): eight made files, more than FILES_MAX and TEXT_MAX
+    allow. The prompt names every file left out or cut; the pass says how
+    many it read in full; with none read in full there is no request."""
+    log = _Log()
+    platform.providers.register("claude-cli", lambda model=None: _Checker("claude-cli", model, log))
+    real = platform.providers.available
+    monkeypatch.setattr(platform.providers, "available", lambda name: True if name == "claude-cli" else real(name))
+    monkeypatch.setattr(platform, "iron_proxy", _Accounts(TWO))
+    choice = S.Choice("acct-work", "claude-cli", "claude-sonnet-4-5")
+    docs = []
+    for i in range(8):
+        p = tmp_path / f"f{i}.txt"
+        p.write_text(("line %d\n" % i) * (2000 if i == 2 else 3), encoding="utf-8")
+        docs.append(str(p))
+    assert len(docs) > S.FILES_MAX
+    check = await S.double_check(platform, choice, request="r", reply="done", docs=docs, local_only=False)
+    full = [n for n in range(8) if n != 2][:S.FILES_MAX - 1]
+    message = log.calls[0]["message"]
+    for i in range(8):
+        if i not in full:
+            assert f"f{i}.txt" in message.split("Not read in full:")[1], i
+    assert check.result == R.PASSED
+    assert check.detail == f"it found nothing wrong in the {len(full)} of 8 files it read in full"
+    line, _ = R.line_for([{"check": R.DOUBLE_CHECK, "result": R.PASSED, "detail": check.detail, "by": choice.model}])
+    assert line == f"Double-checked by Sonnet 4.5: it found nothing wrong in the {len(full)} of 8 files it read in full."
+    # Every file read in full: the plain words.
+    one = await S.double_check(platform, choice, request="r", reply="done", docs=docs[:1], local_only=False)
+    assert one.detail == S.PASSED_WORDS
+    # None read in full: Not checked, and no request.
+    big = tmp_path / "big.txt"
+    big.write_text("x" * (S.FILE_TEXT_MAX + 10), encoding="utf-8")
+    before = len(log.calls)
+    none = await S.double_check(platform, choice, request="r", reply="done", docs=[str(big)], local_only=False)
+    assert (none.result, none.detail) == (R.NOT_CHECKED, S.WHY_NONE_IN_FULL) and len(log.calls) == before
