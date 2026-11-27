@@ -368,6 +368,11 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         # Third plan CS7: and its turn records (each reply's text, thinking,
         # tool inputs and results), in this same transaction.
         _durable.drop_thread_records(db, thread_id)
+        # Next leaps 19-a: and what a repeat took from it (a waiting skill
+        # draft's record of its task and words), in this same transaction.
+        from ...learning import repeats as _repeats
+
+        _repeats.drop_thread(db, thread_id)
         try:
             index = search_index(engine)
             if index is not None:

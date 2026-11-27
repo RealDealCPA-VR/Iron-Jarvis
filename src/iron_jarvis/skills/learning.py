@@ -676,10 +676,12 @@ class SkillLearningEngine:
                 continue
             if isinstance(outcome, SkillProposalRecord):
                 self._set_candidate_status(cand.id, "distilled")
-                if not local:
+                if not local and not chat:
                     # A draft written from a Local only run is never added
                     # unasked: once kept, a skill reaches every later prompt,
-                    # a cloud model's included. It waits for the owner.
+                    # a cloud model's included. It waits for the owner. 19-a:
+                    # nor is a draft from the owner's chats (suggest, never
+                    # act: "Approve learned skills automatically" is for runs).
                     outcome = self._maybe_auto_approve(outcome)
                 proposal_ids.append(outcome.id)
                 if announce:
@@ -746,7 +748,9 @@ class SkillLearningEngine:
             found = repeats.reread(self.engine, evidence)
             if found is None:
                 return True
-            return any(unit.local_only for unit, _lines in found)
+            # A task a model on the owner's own PC or network answered keeps
+            # the whole request home too (``repeats._home_if_here``).
+            return any(repeats._home_if_here(self.p, unit).local_only for unit, _lines in found)
         try:
             from ..agents.orchestrator import session_local_only
 
@@ -836,7 +840,10 @@ class SkillLearningEngine:
             source_session_ids=list(dict.fromkeys(u.ref for u in units)),
             signature=cand.signature,
             source=SOURCE_CHAT,
-            evidence_json=cand.evidence_json or "",
+            # Rebuilt from the tasks just READ (a deleted chat's task is not
+            # counted, its days and tools recomputed), with none of the
+            # owner's words: the rejected-draft check reads the candidate.
+            evidence_json=json.dumps(repeats.evidence_of(repeats.group_of(units), words=False)),
         )
 
     def _chat_context(self, evidence: dict) -> "tuple[str, list[Any]] | None":

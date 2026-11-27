@@ -385,3 +385,87 @@ def test_an_account_that_is_gone_or_off_drafts_nothing_that_night(desk, how):
     assert entry["result"] == NR.REFUSED and entry["reason"], entry
     assert B.requests_tonight(desk.platform.config.home, NIGHT) == 0
     assert [c.status for c in _cands(desk)] == ["pending"]  # tried again another night, never elsewhere
+
+
+# --------------------------------------------------------------------------- #
+# review fixes
+# --------------------------------------------------------------------------- #
+ODD = "zebrafold"  # a word only the oldest chat's request holds
+
+
+def _four(desk) -> list[str]:
+    """Four chats on four Mondays, newest first; the oldest says ODD."""
+    return [
+        seed_chat(desk.engine, _monday(w), words=(f"{WORDS} {ODD}" if w == 3 else ALIKE if w == 1 else WORDS))
+        for w in range(4)
+    ]
+
+
+def test_a_deleted_chat_is_not_counted_and_leaves_no_words(desk):
+    tids = _four(desk)
+    assert R.detect(desk.platform, now=datetime.now().astimezone()) == 1
+    assert desk.client.delete(f"/chat/threads/{tids[3]}").status_code == 200
+    (cand,) = _cands(desk)
+    assert ODD not in cand.evidence_json and tids[3] not in cand.evidence_json
+    assert cand.status == "pending"
+    _pass(desk)
+    (prop,) = _proposals(desk)
+    assert json.loads(prop.source_session_ids) == tids[:3]
+    assert ODD not in prop.evidence_json
+    assert all("words" not in u for u in json.loads(prop.evidence_json)["units"])
+    (item,) = [i for i in desk.client.get("/improvements").json()["items"] if i["kind"] == "skill"]
+    assert item["evidence"][0] == f"You asked for this 3 times, on {_days()}."
+
+
+def test_a_deleted_chat_that_leaves_too_few_ends_the_waiting_draft(desk):
+    tids = _three(desk)
+    assert R.detect(desk.platform, now=datetime.now().astimezone()) == 1
+    assert desk.client.delete(f"/chat/threads/{tids[0]}").status_code == 200
+    (cand,) = _cands(desk)
+    ev = json.loads(cand.evidence_json)
+    assert cand.status == "dismissed" and tids[0] not in cand.evidence_json and len(ev["units"]) == 2
+    assert cand.session_id == tids[1] and cand.task == ALIKE
+    _pass(desk)
+    assert desk.router.calls == [] and _proposals(desk) == []
+
+
+def test_a_rejected_chat_draft_is_still_not_offered_again(desk):
+    _three(desk)
+    _pass(desk)
+    (prop,) = _proposals(desk)
+    assert desk.client.post(f"/skills/proposals/{prop.id}/reject").status_code == 200
+    # three new Mondays' worth of the same request, in new chats
+    for w in range(3):
+        seed_chat(desk.engine, _monday(w, hour=16), words=WORDS)
+    assert R.detect(desk.platform, now=datetime.now().astimezone()) == 0
+
+
+def test_a_chat_draft_is_never_approved_by_itself(desk):
+    desk.platform.config.skill_learning_auto_approve = True
+    _three(desk)
+    _pass(desk)
+    (prop,) = _proposals(desk)
+    assert prop.status == "pending"
+
+
+def test_an_older_chat_a_model_on_this_network_answered_keeps_the_request_home(desk):
+    """Not switched Local only, but the oldest task ran on a model on this
+    PC: its words never go to the cloud model of the newest chat."""
+    _three(desk, models=(("claude-cli", "claude-sonnet-4-6"),) * 2 + (("ollama", "qwen3:8b"),))
+    _pass(desk)
+    assert desk.router.calls == [] and _proposals(desk) == []
+    (entry,) = [r for r in _ran(desk) if r["proposer"] == "repeat"]
+    assert entry["result"] == NR.REFUSED and "Local only" in entry["reason"]
+
+
+def test_a_reply_that_says_it_ran_on_this_network_keeps_it_home(desk):
+    tids = _three(desk)
+    with session_scope(desk.engine) as db:
+        row = db.get(ChatThreadRecord, tids[2])
+        lines = json.loads(row.messages_json)
+        lines[1]["route"] = {"provider": "claude-cli", "on_this_network": True}
+        row.messages_json = json.dumps(lines)
+        db.add(row)
+        db.commit()
+    _pass(desk)
+    assert desk.router.calls == [] and _proposals(desk) == []
