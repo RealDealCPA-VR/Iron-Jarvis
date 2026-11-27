@@ -1632,8 +1632,10 @@ How to use this file: read the contents list, then read only the entries your ch
   larger size was not read back or was cut, never because it errored).
   Answers that measured nothing CLEAR the line (`ProbeResult.cleared`, never
   restored by keep-last-good). `holds_chars`/`holds_more`/`words_per_second`
-  NEVER change the planning window. Measure refuses a model not on this
-  network or routed to the cloud (`measure_refusal`).
+  NEVER change the planning window. Measure STAYS for every model: one not
+  proven to stay on this network (`measure_refusal` != "") gets exactly the
+  pre-release-9 battery (`run_trial(sized=False)`, tool trials only) and the
+  card/chat say `SIZED_ONLY_LOCAL_WORDS` (GET `sized: false`).
   IDLE TRIAL (`envelope/autotrial`): the router's `_note_call` notes a model's
   first answer; the lifespan worker tries one model at a time only with no
   keyboard/mouse input for 5 min (`envelope/idle`, Windows only; None = not
@@ -1645,7 +1647,10 @@ How to use this file: read the contents list, then read only the entries your ch
   unless the name is listed local or the node is POSITIVELY self-answering
   (`answers_itself`: detected Ollama/vLLM, OpenAI protocol, a fresh not-a-proxy
   read; an unread pass forgets it). DONE only when a measurement landed; a
-  failure counts like a cut; Emergency stop is not a cut; a verdict is looked
+  failure counts like a cut, at most once per idle period, and a model left
+  for failures is looked at again after `RETRY_FAILED_AFTER_S` (24 h,
+  injected `clock`); chat promises an idle try only when `trial_refusal`
+  returns "" now; Emergency stop is not a cut; a verdict is looked
   at again when `trial_fingerprint` changes; an `auto: true` completion reaches
   no destination. Only `is_own_model_provider` names are noted, recorded or
   guided (a test double provider is none). `tests/conftest.py` sets
