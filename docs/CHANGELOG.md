@@ -12,7 +12,7 @@
 
 ## v1.587.0
 
-**What you asked for that Iron Jarvis can't do yet.** When you ask for something Iron Jarvis has no feature for, it now keeps a note of it.
+**Long files and long results are read to the end.** Some of what Iron Jarvis reads for you is long: a long Word, PDF or text document, a long list of files, a web page, a long answer from one of your extensions. **What you asked for that Iron Jarvis can't do yet.** When you ask for something Iron Jarvis has no feature for, it now keeps a note of it.
 
 ## v1.586.0
 

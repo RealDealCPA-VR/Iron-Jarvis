@@ -129,6 +129,74 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
+## Long files and long results are read to the end (v1.587.0)
+
+Some of what Iron Jarvis reads for you is long: a long Word, PDF or text
+document, a long list of files, a web page, a long answer from one of
+your extensions. Until now it could look at only part of a long result
+(of a document, only its first pages), and the rest was gone. An answer
+about a long file could miss what was in the middle or at the end.
+
+Now nothing is lost. When a result is too long to take in at once, Iron
+Jarvis keeps the whole of it and reads the other parts when it needs
+them. You do nothing: there is no setting and no new button. Attach a
+long document and ask what its last section says: Iron Jarvis can now
+read it to the last section. When it happens, the steps under a reply
+show **Read more of a long result**.
+
+This works in plain chats, in coding sessions under Chat › Code, in agent
+runs, and for what your extensions send back.
+
+Good to know:
+
+- **Where it is kept.** On this PC only, in Iron Jarvis's own folder,
+  filed with the chat, coding session or agent run it belongs to. One
+  chat cannot read what was kept for another, and neither can an agent
+  run or a coding session.
+- **For how long.** In a plain chat, only while Iron Jarvis is writing
+  the reply that needed it: when the reply ends, the kept copy is
+  removed. In a coding session or an agent run, where the work can be
+  picked up again later (after a restart too), it is kept until you
+  delete that session or run, and never longer than 30 days. Iron Jarvis
+  tidies up by itself, once a day and each time it starts. One session
+  or run keeps at most 16 long results, and everything together at most
+  512 MB; past either, the oldest go first.
+- **Local only.** What is kept in a Local only chat or session is never
+  given to a cloud model. If you switch it off Local only later, that
+  kept text stays closed and Iron Jarvis says so. While you allow a
+  cloud model for one message, nothing is kept at all.
+- **Backups.** The kept copy itself is left out of backups, and it is
+  not in anything you export. The parts Iron Jarvis actually reads are
+  recorded like any other step it takes, so those are in its record of
+  what it did, and in a backup, as every step already was.
+- **What has not changed.** A result that fits is handled exactly as
+  before. What Iron Jarvis reads is still information to it, never
+  instructions, and a part it reads again later is checked the same way
+  as the first time. If the later part of a long document holds text
+  that looks like an attempt to give Iron Jarvis orders, that part is
+  not read: you get the first part, as before.
+- **If keeping it fails** (a full disk, for example), nothing is left
+  behind and Iron Jarvis carries on with the first part, as before.
+
+A few things still come back shortened, and say so when they are:
+
+- A web page Iron Jarvis fetches is still fetched up to a limit, and the
+  output of a script it runs is still shortened.
+- A resource from an extension that you attach to a message.
+- A document longer than about a million characters (about 300 pages),
+  and any other single result longer than about 4 million characters.
+
+Two places work as they did before:
+
+- **Build › Code**, where your own Claude Code, Codex or another coding
+  tool does the reading.
+- **A task another computer sent.** It keeps nothing on this PC, so a
+  long result there is shortened as before.
+
+A long file you attach is still shown to Iron Jarvis first as the parts
+that match your question. When it needs the rest, it opens the file and
+reads it to the end as described above.
+
 ## Local only: memory search stays on this PC (v1.588.1)
 
 Two gaps in Local only are closed.

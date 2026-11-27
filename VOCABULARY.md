@@ -90,6 +90,7 @@ PR that ships it.
 | The parts of that list, in a plain chat | **Your messages and the replies**, **Files you attached**, **What Iron Jarvis remembered**, **Your project and folder**, **Iron Jarvis's own instructions**, **Tools it was given**, **Room left** | messages tokens, attachments, memory block, system prompt, tool definitions, free space (a coding session keeps its own words) |
 | How big a part of a chat is, in that list and in the chat's answer to "why is this chat getting full?" | **about N%** of the chat's room (a sliver is **less than 1%**); for a chat that holds more than its room, the first line is **This chat holds more than this model can read at once**, each part is its share of everything the chat holds, **Room left** reads **none**, and a tools row says **about N% of the room** | N tokens, N k, an exact count (every size is an estimate) |
 | How much of a chat the model did not have to read again, when the model did not say | **did not report** how much it reused | 0% cached, cache miss, no cache |
+| The step a chat, coding session or agent run shows when Iron Jarvis reads another part of a long result it kept whole (the intelligence plan, release 8) | **Read more of a long result** (while it runs, **Reading more of a long result**) | kept result, handle, truncation, cut (never shown) |
 
 Two-way is a per-destination *upgrade*, not a new noun (decided in the
 messaging plan, shipped v1.136.0): the toggle that creates one reads
