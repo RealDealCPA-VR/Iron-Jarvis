@@ -64,6 +64,52 @@ def _aware(dt: datetime, tz) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=tz)
 
 
+_DAY_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+
+
+def _crontab_days(field: str) -> list[int] | None:
+    """The crontab weekdays a day-of-week field names (Sunday = 0 or 7), or
+    None when the field holds no number (``*``, names): left as written."""
+    if not any(ch.isdigit() for ch in field):
+        return None
+    days: set[int] = set()
+    for part in field.split(","):
+        base, _, step_s = part.partition("/")
+        step = int(step_s) if step_s else 1
+        if step < 1:
+            raise ValueError(f"bad step in {field!r}")
+        if base == "*":
+            lo, hi = 0, 6
+        elif "-" in base:
+            a, b = base.split("-", 1)
+            lo, hi = int(a), int(b)
+        else:
+            lo = hi = int(base)
+            if step_s:
+                hi = 7
+        if not (0 <= lo <= 7 and 0 <= hi <= 7) or lo > hi:
+            raise ValueError(f"bad day of week in {field!r}")
+        days.update(d % 7 for d in range(lo, hi + 1, step))
+    return sorted(days)
+
+
+def crontab_days_named(cron: str) -> str:
+    """A 5-field crontab with its day-of-week NUMBERS written as names.
+
+    APScheduler 3 counts weekdays from Monday = 0, while a crontab counts
+    from Sunday = 0 (or 7): read as numbers, "0 9 * * 1" (Monday 9am) ran
+    on Tuesday. Names mean the same day to both. Anything else is left as
+    written (a field with names or ``*`` is unchanged)."""
+    fields = (cron or "").split()
+    if len(fields) != 5:
+        return cron
+    days = _crontab_days(fields[4])
+    if days is None:
+        return cron
+    fields[4] = ",".join(_DAY_NAMES[d] for d in days)
+    return " ".join(fields)
+
+
 def _cron_trigger(cron: str, timezone=None):
     """Parse a crontab string into a ``CronTrigger`` (raises ``ValueError``).
 
@@ -76,7 +122,7 @@ def _cron_trigger(cron: str, timezone=None):
     from apscheduler.triggers.cron import CronTrigger
 
     try:
-        return CronTrigger.from_crontab(cron, timezone=timezone)
+        return CronTrigger.from_crontab(crontab_days_named(cron), timezone=timezone)
     except Exception as exc:  # noqa: BLE001 — normalise to ValueError
         raise ValueError(f"invalid cron expression {cron!r}: {exc}") from exc
 

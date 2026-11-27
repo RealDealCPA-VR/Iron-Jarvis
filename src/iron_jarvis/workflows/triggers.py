@@ -77,7 +77,9 @@ def validate_cron(expr: str) -> bool:
     from apscheduler.triggers.cron import CronTrigger
 
     try:
-        CronTrigger.from_crontab(expr)
+        from ..scheduling.service import crontab_days_named
+
+        CronTrigger.from_crontab(crontab_days_named(expr))
         return True
     except Exception:
         return False
