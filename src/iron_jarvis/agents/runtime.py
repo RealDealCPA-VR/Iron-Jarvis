@@ -3438,6 +3438,11 @@ class AgentRuntime:
                 _transcript.load_for_resume, self.p.engine, _resume_run, self.p.registry
             )
             if _carried:
+                # Release 8 of the intelligence plan: the long results the
+                # cut-off run kept whole are this continuation's now (its
+                # carried steps hold the lines with their handles).
+                await asyncio.to_thread(
+                    _kept_results.follow_resume, self.p.engine, _resume_run, session.id)
                 # v1.402.0: "Keep going" on a run that stopped at its step
                 # limit resumes it the same way, told the TRUE reason (it was
                 # never a restart or a crash) — ``continue_session`` marks it.
@@ -5187,7 +5192,8 @@ class AgentRuntime:
         else:
             self._waiting_depth[run.id] = depth
 
-    def _arm_kept_reader(self, session: Session, agent_def: AgentDefinition, tool_specs: list) -> bool:
+    def _arm_kept_reader(self, session: Session, agent_def: AgentDefinition, tool_specs: list,
+                         dry: bool = False) -> bool:
         """`kept_result_read` joins this run's tool list, in place (release 8
         of the intelligence plan, ``tools/kept_results``). Never over a rule
         of the run (``_trust_overrides``): a run another computer's task
@@ -5195,7 +5201,7 @@ class AgentRuntime:
         so its long results are cut as before."""
         try:
             return _kept_results.arm_run(
-                self.p, tool_specs, self._trust_overrides(session, agent_def))
+                self.p, tool_specs, self._trust_overrides(session, agent_def), dry=dry)
         except Exception:  # noqa: BLE001 — not armed: the old cut
             return False
 
@@ -5386,11 +5392,14 @@ class AgentRuntime:
         # them (serialised once — they do not change between its steps), so
         # the budget planner can price them against a KNOWN window.
         _tools_blob: str | None = None
-        # Release 8 of the intelligence plan: a session that already holds a
-        # kept result (this run was picked up after a restart, or is a later
-        # piece of the same task) has the reader from its first step.
-        if await _kept_results.held(self.p, session.id):
-            self._arm_kept_reader(session, agent_def, tool_specs)
+        # Release 8 of the intelligence plan: a run that STARTS with a
+        # kept-result line in its messages (picked up after a restart, it
+        # reads its saved steps back) has the reader from its first step,
+        # once the store has answered for the line's handle.
+        await _kept_results.arm_at_start(
+            self.p, session.id, messages,
+            lambda dry=False: self._arm_kept_reader(session, agent_def, tool_specs, dry),
+        )
         for _ in range(max_steps):
             # STOP ON ONE TEAMMATE (v1.309.0): a delegated run has no task of
             # its own to cancel, so the user's Stop is the row — read at every
@@ -6288,7 +6297,7 @@ class AgentRuntime:
             # is kept whole for the run, and its reader joins the same list.)
             await _kept_results.settle(
                 self.p, ctx, messages,
-                lambda: self._arm_kept_reader(session, agent_def, tool_specs),
+                lambda dry=False: self._arm_kept_reader(session, agent_def, tool_specs, dry),
             )
             self._offer_script_tool(session, tool_specs, _bstate, messages)
             await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop

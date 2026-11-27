@@ -15,15 +15,18 @@ module cannot do better):
 1. :func:`hold` takes the place of the lane's own cut where the tool message
    is built. It returns EXACTLY what the lane's cut returns (a result under
    the limit is byte for byte what it was) and, for a result over the limit,
-   remembers the whole text until the round ends. It writes nothing.
-2. :func:`settle`, once per round, saves each remembered result (off the
-   event loop, bounded), puts ``kept_result_read`` on the turn's roster
-   through the lane's own arming (``arm``), and only then rewrites the tool
-   message: the start (and, where the lane's cut kept it, the end), and ONE
-   line of Iron Jarvis's own words under the result with the handle. A save
-   that fails, a reader that may not join (the user's deny, a surface's own
-   tool list, a small model's tool budget), a result too big to keep: the
-   message stays the lane's old cut.
+   remembers the whole text ON THE TURN'S OWN CONTEXT until the round ends
+   (nothing global holds it: it goes when the turn's context goes). It
+   writes nothing.
+2. :func:`settle`, once per round, first asks whether the reader may join
+   this turn at all (``arm(dry=True)``: the user's deny, a surface's own tool
+   list, a small model's tool budget, a task another computer sent) and
+   writes NOTHING when it may not. Then it saves each remembered result (off
+   the event loop, bounded), puts ``kept_result_read`` on the turn's roster
+   (``arm()``), and only then rewrites the tool message: the start (and,
+   where the lane's cut kept it, the end), and ONE line of Iron Jarvis's own
+   words under the result with the handle. A save that fails or does not
+   come back leaves no file of any kind and the message stays the old cut.
 
 WHOSE IT IS. A kept result is filed under ``tools/registry.values_key``, the
 key release 1 gave a chat's stored values: the saved chat (``chat:<id>``),
@@ -32,40 +35,55 @@ chat is saved), a coding session's ``build:<id>``, an agent run's session id.
 The folder on disk is named by a hash of that key and the reader looks ONLY
 in the caller's own folder, so another chat, another run, a helper, a guessed
 or copied handle and a call with no owner all get the same answer
-(:data:`NOT_FOUND`) and learn nothing, not even that the handle exists.
+(:func:`not_found`) and learn nothing, not even that the handle exists.
+
+HOW LONG. Only as long as something can still read it:
+
+* A PLAIN CHAT's kept results last for the reply that kept them. A later
+  reply never sees the handle (chat history carries the person's and the
+  assistant's words, never a tool message), so they are removed when the
+  reply ends, however it ends (:func:`reply_scope` / :func:`reply_frames`,
+  set by both chat lanes; a plain-chat turn outside one keeps nothing).
+* An AGENT RUN's and a CODING SESSION's last up to :data:`KEEP_DAYS` days:
+  their saved transcript holds the line with the handle, and
+  :func:`arm_at_start` gives a turn that starts with such a line (a run or a
+  coding reply picked up after a restart) the reader from its first step.
+* Removed with its chat, coding session or run (:func:`drop_owners`; a save
+  still running for an owner that was dropped writes nothing), when its owner
+  holds more than :data:`MAX_PER_OWNER` results or :data:`MAX_OWNER_CHARS`
+  characters (the oldest of EARLIER rounds goes; a round never pushes out its
+  own), and when the whole store would pass :data:`MAX_STORE_BYTES` (the
+  oldest of anyone's, never one saved within the last hour).
+
+TRUST IS NEVER READ FROM THE TEXT. A part read back is outside text: the
+reader is ``returns_untrusted_content``, so every lane fences it, scans it
+and taints on a hit, exactly as it does the whole. The ONE exception is a
+result whose original call said it was the session's own source
+(``builtins.is_own_source(result)``, decided at the call and saved with the
+text). What a result's text starts with decides nothing: a web page that
+arrives under a title line, or a page a scanner flagged, is fenced like any
+other.
 
 LOCAL ONLY. A result kept while the chat was Local only is marked so, and is
 handed back only to work that itself stays on this network (the scope is on
-and no cloud model was allowed for the message:
-``providers.egress.may_recall_local_only_chats``, the rule recall uses for a
-Local only chat's text). Switching the chat off Local only later does not
-open it.
+and no cloud model was allowed for the message). While a cloud model is
+allowed for one message nothing is kept at all (the read would be refused).
 
 A TOOL WITH A CAP OF ITS OWN. ``read_document`` and ``extract_pdf`` cut
-their own answer at 16,000 characters, so the end of a long document never
-reached a lane at all. They still answer exactly so, and put the uncut answer
-beside it (``ToolResult.whole``). :func:`hold` takes the result, and
-:func:`settle` puts the whole in the answer's place before it shows the start
-and keeps the rest: when the whole is clean (the injection scan the lane ran
-on the answer is run on the whole, off the event loop; a whole that is
-flagged is never shown and never kept) and something can keep it. Wherever
-nothing can (a caller with no owner, a run another computer's task started, a
-failed save, a reader that may not join), the model gets the tool's own cut
-with the tool's own words, exactly as before: never more of the document than
-before without a kept copy, never silently less.
+their own answer at 16,000 characters. They still answer exactly so, and put
+the uncut answer beside it (``ToolResult.whole``). :func:`settle` puts the
+whole in the answer's place when the whole is clean (the injection scan the
+lane ran on the answer is run on the whole, off the event loop; a whole over
+:data:`MAX_WHOLE_CHARS` is not scanned and not kept) and then either shows it
+whole (it fits the lane's limit) or shows the start and keeps the rest.
+Wherever nothing can keep it, the model gets the tool's own cut with the
+tool's own words, exactly as before.
 
 AT REST. ``<home>/kept-results/<hash of the owner>/<handle>.txt`` (+ a small
-``.json`` beside it: size, when, Local only, fenced). On this PC only; left
-out of every backup (``maintenance.create_backup``) and in no export; removed
-with its chat or run (:func:`drop_owners`, called by the delete paths), after
-:data:`KEEP_DAYS` days by the daily tidy-up (:func:`sweep`, from
-``daemon/app._event_prune_loop``), and when a chat holds more than
-:data:`MAX_PER_OWNER` results or :data:`MAX_OWNER_CHARS` characters (the
-oldest goes), and when the whole store would pass :data:`MAX_STORE_BYTES`
-(the oldest across every chat go first, never one saved within the last
-hour). The text is what the model was being shown, no rawer: the
-result after the lane's untrusted-data fence took out any fence marker.
-Never written to a log line, an event, a usage row or an error message.
+``.json`` beside it: size, when, Local only, own source). On this PC only;
+left out of every backup (``maintenance.create_backup``) and in no export.
+The text is what the model was being shown, no rawer. Never written to a log
+line, an event, a usage row or an error message.
 """
 
 from __future__ import annotations
@@ -80,9 +98,11 @@ import secrets
 import shutil
 import threading
 import time
-from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, AsyncIterator, Callable, Iterable, Iterator
 
 from .base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 
@@ -97,6 +117,12 @@ KEEP_DAYS = 30
 #: The longest result that is kept: the most one tool's output may be when it
 #: is handed to a script (``repl.session.MAX_TOOL_OUTPUT_CHARS``).
 MAX_RESULT_CHARS = 4_000_000
+#: The longest WHOLE a document reader may hand over to be shown or kept
+#: (``ToolResult.whole``). The whole must be scanned for planted instructions
+#: before any of it is shown, and that scan holds the interpreter: measured
+#: 0.07 s at this size on prose. Over it: the tool's own cut, and a line that
+#: says the rest was not kept.
+MAX_WHOLE_CHARS = 1_000_000
 #: The most results one chat, run or coding session holds, and the most
 #: characters in all: the script shelf's own bounds for one chat's kept values
 #: (``script_values.MAX_VALUES_PER_KEY`` / ``MAX_VALUE_CHARS``). Over either,
@@ -110,6 +136,9 @@ MAX_STORE_BYTES = 512 * 1024 * 1024
 #: A result saved within this long is never removed to make room (so the one
 #: being saved, and one a reply is still working with, always stay).
 FRESH_S = 3600.0
+#: How long a dropped owner (a deleted chat, coding session or run) is
+#: remembered, so a save that was already running for it writes nothing.
+DROPPED_S = 3600.0
 #: The most characters one call of the reader returns. Under every lane's
 #: limit for one result with room for the reader's own line and the fence, so
 #: a part read back is never itself cut.
@@ -127,42 +156,59 @@ _NO_HANDLE = "kr-" + "0" * 16
 #: The opening of the one line (also what :func:`defang` neutralises inside a
 #: result, so a result cannot show a line that reads as this one).
 NOTE_LEAD = "[Iron Jarvis kept this whole result for this "
-_NOTE = (
-    NOTE_LEAD + "{where}: {n} characters. Shown above: {shown}. To read the rest, call "
-    + READER + ' with handle "{handle}" and start (the character to read from); '
+_HOW = (
+    "call " + READER + ' with handle "{handle}" and start (the character to read from); '
     "end=true reads the last part.]"
 )
-#: The whole line, as a pattern (``context/agent_window`` keeps it when it
-#: trims an old tool result to a marker).
+_NOTE = NOTE_LEAD + "{where}: {n} characters. Shown above: {shown}. To read the rest, " + _HOW
+#: The line a tool message keeps when the context planner trims it to a
+#: marker: nothing of the result is shown any more, so it says only how long
+#: the result is and how to read it.
+_NOTE_TRIMMED = NOTE_LEAD + "{where}: {n} characters. To read it, " + _HOW
+#: The whole line, as a pattern.
 NOTE_RX = re.compile(
-    re.escape(NOTE_LEAD) + r"(?:chat|coding session|run): [0-9,]+ characters\. Shown above: "
+    re.escape(NOTE_LEAD) + r"(chat|coding session|run): ([0-9,]+) characters\. Shown above: "
     r"characters 1 to [0-9,]+(?: and [0-9,]+ to [0-9,]+)?\. To read the rest, call "
-    + READER + r' with handle "kr-[0-9a-f]{16}" and start \(the character to read from\); '
+    + READER + r' with handle "(kr-[0-9a-f]{16})" and start \(the character to read from\); '
     r"end=true reads the last part\.\]"
 )
 #: Where the middle was left out (inside the result, so inside its fence).
 _GAP = "\n[… characters {a} to {b} are not shown here: see the note under this result …]\n"
-#: A result over :data:`MAX_RESULT_CHARS`: the lane's cut, and this said.
+#: A result too long to keep: the lane's cut, and this said.
 _TOO_BIG = (
     "\n[Iron Jarvis did not keep the rest of this result: it has {n} characters, and a "
     "result is kept only up to {most}.]"
 )
-
-#: What every call gets that names no kept result of its own chat.
-NOT_FOUND = (
-    READER + ": there is no kept result with that handle in this chat. A kept result can be read "
-    "only in the chat, run or coding session it was kept in, and for at most " + str(KEEP_DAYS)
-    + " days."
+#: One round that held more long results than an owner keeps.
+_NO_ROOM = (
+    "\n[Iron Jarvis did not keep the rest of this result: this {where} already keeps "
+    "{most} long results from this step, the most it holds.]"
 )
+#: The reader's own first line (:func:`defang` neutralises a copy in a part).
+_LEAD = "[Characters {a} to {b} of {n} of the kept result; {then}.]\n"
+_LEAD_RX = re.compile(r"\[(Characters [0-9,]+ to [0-9,]+ of [0-9,]+ of the kept result;)")
+
+
+def not_found(where: str) -> str:
+    """What every call gets that names no kept result of its own chat: one
+    sentence for a handle that never was, one that is another chat's, one
+    past its date and one that newer results replaced."""
+    return (
+        f"{READER}: there is no kept result with that handle in this {where}. A kept result can "
+        f"be read only in the chat, run or coding session it was kept in; it may also be past its "
+        f"{KEEP_DAYS} days, or have been replaced by newer results: read the source again."
+    )
+
+
 _LOCAL_OFF = (
-    READER + ": this result was kept while the chat was Local only, so Iron Jarvis gives it only "
-    "to a model on your own network. This chat is not Local only now, so it was not read. Turn "
-    "Local only back on for this chat to read it."
+    READER + ": this result was kept while this {where} was Local only, so Iron Jarvis gives it "
+    "only to a model on your own network. This {where} is not Local only now, so it was not read. "
+    "Turn Local only back on to read it."
 )
 _LOCAL_ONCE = (
-    READER + ": this result was kept while the chat was Local only, so Iron Jarvis gives it only "
-    "to a model on your own network. {name} runs off your network and was allowed for this one "
-    "message, so the kept result was not read. Ask again on a model on your own network."
+    READER + ": this result was kept while this {where} was Local only, so Iron Jarvis gives it "
+    "only to a model on your own network. {name} runs off your network and was allowed for this "
+    "one message, so the kept result was not read. Ask again on a model on your own network."
 )
 
 
@@ -178,10 +224,11 @@ def _now() -> float:
 
 
 def defang(text: str) -> str:
-    """*text* with any copy of the note's opening made unlike it (``[`` to
-    ``(``, the fence's own rule: nothing is hidden, it only stops reading as
-    Iron Jarvis's line). Same length."""
-    return text.replace(NOTE_LEAD, "(" + NOTE_LEAD[1:])
+    """*text* with any copy of Iron Jarvis's own two lines made unlike them
+    (``[`` to ``(``, the fence's own rule: nothing is hidden, it only stops
+    reading as Iron Jarvis's): the kept-result line's opening, and the
+    reader's first line. Same length."""
+    return _LEAD_RX.sub(r"(\1", text.replace(NOTE_LEAD, "(" + NOTE_LEAD[1:]))
 
 
 #: The fence's opening and closing lines, read once.
@@ -189,31 +236,52 @@ _FENCE: list[str] = []
 
 
 def split_fence(text: str) -> tuple[str, str, str]:
-    """``(before, result, after)``: the lane's untrusted-data fence around a
-    result, when it has one (``computeruse.safety.wrap_untrusted``, read from
-    that function so its words can change). ``after`` starts at the fence's
-    closing lines and holds everything the lane added under it. A result with
-    no fence is ``("", text, "")``."""
+    """``(before, result, after)`` for LAYOUT only (where the one line goes
+    and which part is cut): the untrusted-data fence round a result
+    (``computeruse.safety.wrap_untrusted``, read from that function so its
+    words can change), wherever it opens. ``before`` ends with the fence's
+    opening lines (a tool that fences its own answer puts a title first);
+    ``after`` starts at its closing lines and holds everything under it. A
+    result with no fence is ``("", text, "")``. This decides NO trust: see
+    the module docstring."""
     if not _FENCE:
         from ..computeruse.safety import wrap_untrusted
 
         _FENCE.extend(wrap_untrusted("\x00").split("\x00", 1))
-    before, closing = _FENCE
-    if before and closing and text.startswith(before):
-        end = text.find(closing, len(before))
+    opening, closing = _FENCE
+    start = text.find(opening) if opening and closing else -1
+    if start >= 0:
+        end = text.find(closing, start + len(opening))
         if end >= 0:
-            return before, text[len(before):end], text[end:]
+            return text[:start + len(opening)], text[start + len(opening):end], text[end:]
     return "", text, ""
 
 
 def note_of(content: Any) -> str:
-    """The kept-result line of a tool message, or "". Only a line UNDER the
-    result counts: after the fence when the message has one, so a line a
-    fenced result carries inside itself is never taken for Iron Jarvis's."""
+    """The kept-result line in a tool message's TEXT, or "". Only a line
+    UNDER the result counts (after the fence when the message has one). A
+    line found here is a claim, not a fact: :func:`arm_at_start` checks its
+    handle against the store before anything trusts it."""
     text = str(content or "")
     _before, _body, after = split_fence(text)
-    found = NOTE_RX.findall(after if after else text)
+    found = [m.group(0) for m in NOTE_RX.finditer(after if after else text)]
     return found[-1] if found else ""
+
+
+def _trimmed_note(note: str) -> str:
+    """The short line for a trimmed message, from a full kept-result line."""
+    got = NOTE_RX.fullmatch(note)
+    if got is None:
+        return ""
+    return _NOTE_TRIMMED.format(where=got.group(1), n=got.group(2), handle=got.group(3))
+
+
+def _kept_line(message: Any) -> str:
+    """What a trimmed tool message keeps: the line :func:`settle` (or
+    :func:`arm_at_start`, for a transcript read back) put ON THE MESSAGE after
+    the store held its result for this owner. Never read from the text, so a
+    line a result carries inside itself is never kept as Iron Jarvis's."""
+    return str(getattr(message, "kept_line", "") or "")
 
 
 def _keep_note_on_trim() -> None:
@@ -221,8 +289,8 @@ def _keep_note_on_trim() -> None:
     kept-result line (``context.agent_window.KEEP_ON_TRIM``)."""
     from ..context import agent_window
 
-    if note_of not in agent_window.KEEP_ON_TRIM:
-        agent_window.KEEP_ON_TRIM.append(note_of)
+    if _kept_line not in agent_window.KEEP_ON_TRIM:
+        agent_window.KEEP_ON_TRIM.append(_kept_line)
 
 
 _keep_note_on_trim()
@@ -270,10 +338,22 @@ def kept_form(text: str, cap: int, handle: str, where: str, *, tail: bool) -> "s
 # --------------------------------------------------------------------------- #
 
 _LOCK = threading.Lock()
-#: Owners whose kept results cannot be reached after the message that kept
-#: them (a call that named no chat and no turn): their folders are removed at
-#: the next start.
-_ONCE_PREFIXES = ("chat:call-", "chat:once-")
+#: The bytes of kept text under each store, once known (a save adds, a
+#: removal subtracts): the whole store is walked only when this is not known
+#: or says the store is over its bound.
+_TOTALS: dict[str, int] = {}
+#: Owners that were dropped, and until when a save for them is refused.
+_DROPPED: dict[tuple[str, str], float] = {}
+_DROPPED_MOST = 512
+#: Handles whose save the lane stopped waiting for: the save removes its own
+#: files when it finishes.
+_ABANDONED: dict[str, None] = {}
+_ABANDONED_MOST = 512
+
+
+class NoRoom(Exception):
+    """This owner already holds its most results, all of them from this
+    round: the new one is not kept (a round never pushes out its own)."""
 
 
 def root_of(engine: Any) -> "Path | None":
@@ -286,8 +366,11 @@ def root_of(engine: Any) -> "Path | None":
 
 
 def _owner_dir(root: Path, owner: str) -> Path:
+    """An owner's folder. A plain chat's is marked ``reply-``: what it holds
+    lasts for one reply, so whatever is found there at start-up is left over
+    from a reply that never ended properly and is removed."""
     name = hashlib.sha256(owner.encode("utf-8", "surrogatepass")).hexdigest()[:40]
-    return root / (("once-" if owner.startswith(_ONCE_PREFIXES) else "") + name)
+    return root / (("reply-" if owner.startswith("chat:") else "") + name)
 
 
 def _metas(folder: Path) -> list[tuple[float, str, dict[str, Any]]]:
@@ -312,11 +395,18 @@ def _metas(folder: Path) -> list[tuple[float, str, dict[str, Any]]]:
 
 
 def _remove(folder: Path, handle: str) -> None:
-    for suffix in (".json", ".txt"):
+    """Remove one result: its text, its record and anything half-written
+    (under the lock). The store's running total follows."""
+    for suffix in (".json", ".txt", ".json.tmp", ".txt.tmp"):
+        path = folder / (handle + suffix)
         try:
-            (folder / (handle + suffix)).unlink()
+            size = path.stat().st_size if suffix == ".txt" else 0
+            path.unlink()
         except OSError:
-            pass
+            continue
+        key = str(folder.parent)
+        if size and key in _TOTALS:
+            _TOTALS[key] = max(0, _TOTALS[key] - size)
 
 
 def _write(path: Path, text: str) -> None:
@@ -328,20 +418,30 @@ def _write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def _make_room(root: Path) -> int:
-    """Hold the whole store under :data:`MAX_STORE_BYTES` (call it under the
-    lock): the oldest kept results go first, across every owner, never one
-    saved within :data:`FRESH_S` (the one being saved is one of those).
-    Returns how many went. The sizes are read from the files, and the ages
-    only when something has to go."""
-    total, sizes = 0, {}
+def _sizes(root: Path) -> dict[tuple[str, str], int]:
+    """``(folder name, handle) -> bytes`` of every kept text under *root*."""
+    sizes: dict[tuple[str, str], int] = {}
     for folder in os.scandir(root):
         if not folder.is_dir():
             continue
         for entry in os.scandir(folder.path):
             if entry.name.endswith(".txt") and _HANDLE_RX.match(entry.name[:-4]):
                 sizes[(folder.name, entry.name[:-4])] = entry.stat().st_size
-                total += sizes[(folder.name, entry.name[:-4])]
+    return sizes
+
+
+def _make_room(root: Path) -> int:
+    """Hold the whole store under :data:`MAX_STORE_BYTES` (call it under the
+    lock): the oldest kept results go first, across every owner, never one
+    saved within :data:`FRESH_S` (the one being saved is one of those).
+    Returns how many went. The store is walked only when its running total
+    is not known or says it is over the bound; the ages are read only when
+    something has to go."""
+    key = str(root)
+    if _TOTALS.get(key, MAX_STORE_BYTES + 1) <= MAX_STORE_BYTES:
+        return 0
+    sizes = _sizes(root)
+    total = _TOTALS[key] = sum(sizes.values())
     if total <= MAX_STORE_BYTES:
         return 0
     rows = sorted(
@@ -351,42 +451,89 @@ def _make_room(root: Path) -> int:
     )
     fresh, gone = _now() - FRESH_S, 0
     for kept_at, name, handle in rows:
-        if total <= MAX_STORE_BYTES:
+        if _TOTALS[key] <= MAX_STORE_BYTES:
             break
         if kept_at > fresh:
             continue
         _remove(root / name, handle)
-        total -= sizes.get((name, handle), 0)
         gone += 1
     return gone
 
 
-def put(root: Path, owner: str, text: str, *, fenced: bool, local_only: bool) -> str:
-    """Keep *text* for *owner*; returns its handle. Over the owner's bounds
-    the oldest results go, and over the whole store's the oldest of anyone's.
-    Raises on any failure (the caller then cuts as it always did)."""
-    if not owner or len(text) > MAX_RESULT_CHARS:
+def _dropped(root: Path, owner: str) -> bool:
+    until = _DROPPED.get((str(root), owner))
+    if until is None:
+        return False
+    if _now() > until:
+        _DROPPED.pop((str(root), owner), None)
+        return False
+    return True
+
+
+def new_handle() -> str:
+    """A handle for a result about to be saved (made BEFORE the save, so a
+    save nobody waits for any more can still be named and undone)."""
+    return "kr-" + secrets.token_hex(8)
+
+
+def put(root: Path, owner: str, text: str, *, own_source: bool, local_only: bool,
+        handle: "str | None" = None, keep: Iterable[str] = ()) -> str:
+    """Keep *text* for *owner* under *handle*; returns the handle. Over the
+    owner's bounds the oldest results go, never one of ``keep`` (the handles
+    this same round saved: :class:`NoRoom` when only those are left), and
+    over the whole store's the oldest of anyone's. Raises on any failure, and
+    then NOTHING of this result is left on disk: not its text, not its
+    record, not a half-written file."""
+    handle = handle or new_handle()
+    if not owner or len(text) > MAX_RESULT_CHARS or not _HANDLE_RX.match(handle):
         raise ValueError("not kept")
-    handle = "kr-" + secrets.token_hex(8)
     folder = _owner_dir(root, owner)
+    kept_now = set(keep)
     with _LOCK:
-        folder.mkdir(parents=True, exist_ok=True)
-        _write(folder / (handle + ".txt"), text)
-        _write(folder / (handle + ".json"), json.dumps({
-            "v": 1, "chars": len(text), "created": _now(),
-            "local_only": bool(local_only), "fenced": bool(fenced),
-        }))
-        rows = _metas(folder)
-        total = sum(int(meta.get("chars") or 0) for _at, _h, meta in rows)
-        while rows and (len(rows) > MAX_PER_OWNER or total > MAX_OWNER_CHARS):
-            _at, oldest, meta = rows[0]
-            if oldest == handle:
-                break
-            rows.pop(0)
-            total -= int(meta.get("chars") or 0)
-            _remove(folder, oldest)
-        _make_room(root)
+        try:
+            if _dropped(root, owner) or handle in _ABANDONED:
+                raise ValueError("not kept: its chat is gone, or nobody waits for it")
+            folder.mkdir(parents=True, exist_ok=True)
+            rows = _metas(folder)
+            total = sum(int(meta.get("chars") or 0) for _at, _h, meta in rows) + len(text)
+            while rows and (len(rows) + 1 > MAX_PER_OWNER or total > MAX_OWNER_CHARS):
+                oldest = next((row for row in rows if row[1] not in kept_now), None)
+                if oldest is None:
+                    raise NoRoom(owner)
+                rows.remove(oldest)
+                total -= int(oldest[2].get("chars") or 0)
+                _remove(folder, oldest[1])
+            _write(folder / (handle + ".txt"), text)
+            _write(folder / (handle + ".json"), json.dumps({
+                "v": 2, "chars": len(text), "created": _now(),
+                "local_only": bool(local_only), "own_source": bool(own_source),
+            }))
+            if str(root) in _TOTALS:
+                _TOTALS[str(root)] += (folder / (handle + ".txt")).stat().st_size
+            _make_room(root)
+            if handle in _ABANDONED or _dropped(root, owner):
+                raise ValueError("not kept: its chat is gone, or nobody waits for it")
+        except BaseException:
+            _remove(folder, handle)
+            _TOTALS.pop(str(root), None)  # (counted afresh at the next save)
+            try:
+                folder.rmdir()  # (only when this left it empty)
+            except OSError:
+                pass
+            raise
+        finally:
+            _ABANDONED.pop(handle, None)
     return handle
+
+
+def abandon(handle: str) -> None:
+    """The lane stopped waiting for this save: it writes nothing, or removes
+    what it wrote when it finishes."""
+    # (No lock: the save that is being given up may be holding it, and this
+    # runs on the event loop. One dict write is all there is.)
+    while len(_ABANDONED) >= _ABANDONED_MOST:
+        _ABANDONED.pop(next(iter(_ABANDONED)), None)
+    _ABANDONED[handle] = None
 
 
 def get(root: Path, owner: str, handle: str) -> "tuple[dict[str, Any], str] | None":
@@ -409,14 +556,29 @@ def get(root: Path, owner: str, handle: str) -> "tuple[dict[str, Any], str] | No
             return None
 
 
+def alive(root: Path, owner: str, handles: Iterable[str]) -> set[str]:
+    """Which of *handles* the store really holds for *owner* now."""
+    folder = _owner_dir(root, owner)
+    with _LOCK:
+        return {
+            h for h in handles
+            if isinstance(h, str) and _HANDLE_RX.match(h)
+            and (folder / (h + ".json")).is_file() and (folder / (h + ".txt")).is_file()
+        }
+
+
 def forget(root: Path, owner: str, handles: Iterable[str]) -> None:
     """Remove these kept results of *owner* (a save whose note never reached
-    the model). Never raises."""
+    the model; a plain chat's reply that ended). Never raises."""
     folder = _owner_dir(root, owner)
     with _LOCK:
         for handle in handles:
             if _HANDLE_RX.match(str(handle)):
                 _remove(folder, str(handle))
+        try:
+            folder.rmdir()  # (only when this left it empty)
+        except OSError:
+            pass
 
 
 def holds(root: "Path | None", owner: str) -> bool:
@@ -431,16 +593,27 @@ def holds(root: "Path | None", owner: str) -> bool:
 
 def drop_owners(engine: Any, owners: Iterable[str]) -> int:
     """Remove everything kept for these owners: their chat, run or coding
-    session was deleted. Returns how many folders went. Never raises."""
+    session was deleted. Each is also remembered for :data:`DROPPED_S`, so a
+    save that was already running for it writes nothing. Returns how many
+    folders went. Never raises."""
     gone = 0
     try:
         root = root_of(engine)
         if root is None:
             return 0
         with _LOCK:
+            until = _now() + DROPPED_S
             for owner in owners:
-                folder = _owner_dir(root, str(owner or ""))
-                if owner and folder.is_dir():
+                owner = str(owner or "")
+                if not owner:
+                    continue
+                while len(_DROPPED) >= _DROPPED_MOST:
+                    _DROPPED.pop(next(iter(_DROPPED)))
+                _DROPPED[(str(root), owner)] = until
+                folder = _owner_dir(root, owner)
+                if folder.is_dir():
+                    for _at, handle, _meta in _metas(folder):
+                        _remove(folder, handle)
                     shutil.rmtree(folder, ignore_errors=True)
                     gone += 1
     except Exception:  # noqa: BLE001 — a delete always completes
@@ -449,8 +622,9 @@ def drop_owners(engine: Any, owners: Iterable[str]) -> int:
 
 
 def rekey(engine: Any, old: str, new: str) -> int:
-    """A new chat was saved: what its first message kept (filed under the
-    turn) becomes the chat's. Returns how many results moved. Never raises."""
+    """A new chat was saved while its first reply was still running: what
+    that reply kept (filed under the turn) becomes the chat's, so the reply's
+    own reader still finds it. Returns how many results moved. Never raises."""
     moved = 0
     try:
         root = root_of(engine)
@@ -467,17 +641,36 @@ def rekey(engine: Any, old: str, new: str) -> int:
                 os.replace(src / (handle + ".json"), dst / (handle + ".json"))
                 moved += 1
             shutil.rmtree(src, ignore_errors=True)
-    except Exception:  # noqa: BLE001 — the first message's results then end with their 30 days
+    except Exception:  # noqa: BLE001 — the first reply's results then end with the reply
         log.warning("kept results did not follow their chat", exc_info=True)
     return moved
+
+
+def follow_resume(engine: Any, run_id: str, new_owner: str) -> int:
+    """An agent run is CONTINUED after it was cut off: the continuation is a
+    new session that starts from the old run's saved steps, lines with
+    handles included, so what the old run kept becomes the continuation's
+    (the old session is over; one job, one owner). BLOCKING (one row read,
+    then :func:`rekey`). Returns how many results moved. Never raises."""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import AgentRun
+
+        with session_scope(engine) as db:
+            row = db.get(AgentRun, str(run_id or ""))
+            old = str(getattr(row, "session_id", "") or "")
+        return rekey(engine, old, str(new_owner or "")) if old else 0
+    except Exception:  # noqa: BLE001 — the continuation then reads its sources again
+        return 0
 
 
 def sweep(home: Any, *, boot: bool = False) -> int:
     """The tidy-up: remove every kept result older than :data:`KEEP_DAYS`
     days, every half-written file, the oldest results while the whole store
     is over :data:`MAX_STORE_BYTES`, every folder left empty and, at start-up
-    (``boot``), the folders no later message can reach. Returns how many
-    results were removed. Never raises."""
+    (``boot``), every plain chat's folder (a reply that ended removed its
+    own: what is left is from one that never ended). Returns how many results
+    were removed. Never raises."""
     removed = 0
     try:
         root = Path(home) / FOLDER
@@ -488,7 +681,7 @@ def sweep(home: Any, *, boot: bool = False) -> int:
             for folder in list(root.iterdir()):
                 if not folder.is_dir():
                     continue
-                if boot and folder.name.startswith("once-"):
+                if boot and folder.name.startswith("reply-"):
                     removed += len(_metas(folder))
                     shutil.rmtree(folder, ignore_errors=True)
                     continue
@@ -500,12 +693,13 @@ def sweep(home: Any, *, boot: bool = False) -> int:
                     else:
                         live.add(handle)
                 for name in os.listdir(folder):
-                    if name.rsplit(".", 1)[0] not in live or name.endswith(".tmp"):
+                    if name.split(".", 1)[0] not in live or name.endswith(".tmp"):
                         try:
                             (folder / name).unlink()
                         except OSError:
                             pass
-            # ...and the whole store is held under its bound.
+            # ...and the whole store is held under its bound (walked afresh).
+            _TOTALS.pop(str(root), None)
             removed += _make_room(root)
             for folder in list(root.iterdir()):
                 if folder.is_dir() and not _metas(folder):
@@ -513,6 +707,96 @@ def sweep(home: Any, *, boot: bool = False) -> int:
     except Exception:  # noqa: BLE001 — a tidy-up never stops the daemon
         log.warning("the kept-results tidy-up failed", exc_info=True)
     return removed
+
+
+# --------------------------------------------------------------------------- #
+# One reply: what a plain chat kept goes when its reply ends
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _Reply:
+    """What one chat reply kept, for the moment it ends."""
+
+    kept: list[tuple[Path, Any, str, str]] = field(default_factory=list)  # (root, ctx, owner, handle)
+
+
+_REPLY: "ContextVar[_Reply | None]" = ContextVar("iron_jarvis_kept_reply", default=None)
+#: Removals in flight (held so they are not collected mid-way).
+_TASKS: "set[asyncio.Task[Any]]" = set()
+
+
+def _forget_reply(kept: list[tuple[Path, Any, str, str]]) -> None:
+    """BLOCKING: remove what a plain chat's reply kept, under the owner it
+    was saved for and under the one it has now (the chat may have been saved,
+    and its results moved, while the reply ran)."""
+    for root, ctx, owner, handle in kept:
+        for who in {owner, _owner(ctx)}:
+            if who:
+                forget(root, who, [handle])
+
+
+def _end_reply(reply: "_Reply | None") -> None:
+    """A reply ended (finished, stopped or failed): remove what it kept, off
+    the event loop, without waiting (this runs in a ``finally``, where a
+    cancelled turn must not be made to wait)."""
+    if reply is None or not reply.kept:
+        return
+    kept, reply.kept = list(reply.kept), []
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _forget_reply(kept)
+        return
+    task = loop.create_task(asyncio.to_thread(_forget_reply, kept))
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+
+
+async def removals_done() -> None:
+    """Wait for the removals that ended replies started (shutdown, tests)."""
+    while _TASKS:
+        await asyncio.gather(*list(_TASKS), return_exceptions=True)
+
+
+@contextmanager
+def reply_scope() -> Iterator[None]:
+    """One chat reply (the POST lane): what a plain chat keeps inside it is
+    removed when it ends."""
+    reply = _Reply()
+    token = _REPLY.set(reply)
+    try:
+        yield
+    finally:
+        try:
+            _REPLY.reset(token)
+        except (ValueError, LookupError):  # a token from another context
+            _REPLY.set(None)
+        _end_reply(reply)
+
+
+async def reply_frames(frames: AsyncIterator[Any]) -> AsyncIterator[Any]:
+    """*frames* (the stream lane's turn) as one reply: the scope is set when
+    the first frame is asked for, in the task that iterates the turn, and what
+    a plain chat kept is removed when the stream ends however it ends (a
+    reply the daemon carries on after the page left ends when IT ends).
+    Closing this closes *frames*."""
+    reply = _Reply()
+    token = _REPLY.set(reply)
+    try:
+        async for frame in frames:
+            yield frame
+    finally:
+        try:
+            close = getattr(frames, "aclose", None)
+            if close is not None:
+                await close()
+        finally:
+            try:
+                _REPLY.reset(token)
+            except (ValueError, LookupError):
+                _REPLY.set(None)
+            _end_reply(reply)
 
 
 # --------------------------------------------------------------------------- #
@@ -526,17 +810,18 @@ class _Held:
     text: str
     cap: int
     tail: bool
+    cut: Callable[[Any, int], str]
+    content: Any
+    #: The original call said its result is the session's own source.
+    own_source: bool = False
     #: A tool that cut its own answer: the answer as it gave it, and the
     #: whole of it (``ToolResult.whole``). None for every other result.
     shown: "str | None" = None
     whole: "str | None" = None
 
 
-#: Results over the limit, waiting for their round's :func:`settle`: keyed by
-#: the turn's own context and its owner. In memory only, and bounded.
-_PENDING: dict[tuple[str, str], list[_Held]] = {}
-_PENDING_KEYS = 32
-_PENDING_EACH = 32
+#: The most results one round may put by.
+_WAITING_MOST = 32
 
 
 def _owner(ctx: Any) -> str:
@@ -548,15 +833,24 @@ def _owner(ctx: Any) -> str:
         return ""
 
 
+def waiting(ctx: Any) -> list:
+    """What :func:`hold` put by on this turn's context and :func:`settle` has
+    not taken yet. It lives ON the context and nowhere else, so it is gone
+    when the round is settled and, at the latest, when the turn's context is."""
+    got = getattr(ctx, "_kept_waiting", None)
+    return got if isinstance(got, list) else []
+
+
 def hold(ctx: Any, content: Any, cap: int, *, cut: Callable[[Any, int], str],
          tail: bool = True, result: Any = None) -> str:
     """The lane's cut of one tool result (``cut(content, cap)``: its own
     function, so what comes back is what always came back), and a result over
     *cap* is remembered for :func:`settle`. ``tail``: that cut keeps the end
-    too. ``result``: the call's own result; when its tool cut its own answer
-    and handed the whole beside it (``ToolResult.whole``), the whole is
-    remembered too, whatever the answer's length. Writes nothing; never
-    raises past the lane's own cut."""
+    too. ``result``: the call's own result: whether it is the session's own
+    source is read from it HERE (never later, never from the text), and when
+    its tool cut its own answer and handed the whole beside it
+    (``ToolResult.whole``), the whole is remembered too, whatever the
+    answer's length. Writes nothing; never raises past the lane's own cut."""
     old = cut(content, cap)
     try:
         text = str(content)
@@ -569,17 +863,21 @@ def hold(ctx: Any, content: Any, cap: int, *, cut: Callable[[Any, int], str],
         owner = _owner(ctx)
         if not owner:
             return old
-        size = len(whole) if whole is not None else len(split_fence(text)[1])
-        if size > MAX_RESULT_CHARS:
-            said = _TOO_BIG.format(n=f"{size:,}", most=f"{MAX_RESULT_CHARS:,}")
+        size, most = (len(whole), MAX_WHOLE_CHARS) if whole is not None else (
+            len(split_fence(text)[1]), MAX_RESULT_CHARS)
+        if size > most:
+            said = _TOO_BIG.format(n=f"{size:,}", most=f"{most:,}")
             return cut(content, cap - len(said)) + said
-        key = (str(getattr(ctx, "own_id", "") or ""), owner)
-        if key not in _PENDING and len(_PENDING) >= _PENDING_KEYS:
-            _PENDING.pop(next(iter(_PENDING)))
-        waiting = _PENDING.setdefault(key, [])
-        if len(waiting) < _PENDING_EACH:
-            waiting.append(_Held(old=old, text=text, cap=int(cap), tail=bool(tail),
-                                 shown=shown, whole=whole))
+        from .builtins import is_own_source
+
+        put_by = waiting(ctx)
+        if not put_by:
+            ctx._kept_waiting = put_by = []
+        if len(put_by) < _WAITING_MOST:
+            put_by.append(_Held(
+                old=old, text=text, cap=int(cap), tail=bool(tail), cut=cut, content=content,
+                own_source=bool(is_own_source(result)), shown=shown, whole=whole,
+            ))
     except Exception:  # noqa: BLE001 — the old cut stands
         log.debug("a long result was not put by", exc_info=True)
     return old
@@ -588,14 +886,14 @@ def hold(ctx: Any, content: Any, cap: int, *, cut: Callable[[Any, int], str],
 def _with_whole(content: str, shown: str, whole: str) -> "str | None":
     """*content* (a lane's fenced tool message) with the tool's WHOLE answer
     in place of the answer it cut itself, or None when that cannot be done
-    safely: the message is not exactly the fence round that answer (the lane
-    withheld it, or reworded it), or the whole is flagged by the injection
-    scan the lane ran on the answer. BLOCKING on a long text (two scans):
-    call it off the event loop."""
+    safely: the message is not exactly the lane's fence round that answer
+    (the lane withheld it, or reworded it), or the whole is flagged by the
+    injection scan the lane ran on the answer. BLOCKING on a long text (two
+    scans): call it off the event loop."""
     from ..computeruse.safety import defang_fence_markers, detect_injection
 
     before, body, after = split_fence(content)
-    if not before or body != defang_fence_markers(shown):
+    if before != _FENCE[0] or body != defang_fence_markers(shown):
         return None
     if detect_injection(whole)["flagged"]:
         return None
@@ -617,30 +915,43 @@ def _may_read(platform: Any, overrides: Any = None) -> bool:
     return True
 
 
-async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[[], bool]) -> int:
+async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[..., bool]) -> int:
     """The end of a tool round: keep what :func:`hold` remembered and rewrite
-    those tool messages (see the module docstring). ``arm()`` puts the reader
-    on the turn's roster, in place, and answers whether it is there; it is
-    called only after a save succeeded, and when it says no the saves are
-    undone. Returns how many results were kept. Never raises."""
-    owner = _owner(ctx)
-    waiting = _PENDING.pop((str(getattr(ctx, "own_id", "") or ""), owner), None)
-    if not waiting:
+    those tool messages (see the module docstring). ``arm(dry=True)`` answers
+    whether the reader may join this turn and changes nothing; ``arm()`` puts
+    it on the turn's roster, in place. Nothing is written before the first
+    says yes, and the second is called only after a save succeeded. Returns
+    how many results were kept. Never raises."""
+    put_by = list(waiting(ctx))
+    if not put_by:
         return 0
+    ctx._kept_waiting = []  # taken: nothing of the round stays put by
+    owner = _owner(ctx)
     saved: list[str] = []
-    told = False
+    told: set[str] = set()
     root = None
     try:
-        root = root_of(getattr(ctx, "engine", None) or getattr(platform, "engine", None))
-        if root is None:
-            return 0
         from ..providers import egress as _egress
 
-        local_only = bool(_egress.current_scope().on)
+        scope = _egress.current_scope()
+        if scope.on and scope.allowed_once:
+            # A cloud model reads this one message: a kept result could not
+            # be read back by it, so nothing is kept (the old cut's advice
+            # is the one that works).
+            return 0
+        plain = str(getattr(ctx, "session_id", "") or "") == "chat"
+        reply = _REPLY.get()
+        if plain and reply is None:
+            return 0  # no reply to end with: nothing a plain chat keeps may outlive it
+        root = root_of(getattr(ctx, "engine", None) or getattr(platform, "engine", None))
+        if root is None or not owner:
+            return 0
+        local_only = bool(scope.on)
         where = _where(ctx)
         used: set[int] = set()
-        plans: list[tuple[Any, str, str]] = []
-        for item in waiting:
+        plans: list[tuple[Any, str, str, str]] = []
+        may: "bool | None" = None
+        for item in put_by:
             target = next(
                 (m for m in reversed(msgs)
                  if getattr(m, "role", "") == "tool" and id(m) not in used
@@ -649,10 +960,12 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[[], bool]) -
             )
             if target is None:
                 continue
+            under = str(target.content)[len(item.old):]
             text = item.text
             if item.whole is not None:
                 # A document reader cut its own answer: the whole takes the
-                # answer's place (when it is clean), and is then shown and
+                # answer's place (when it is clean). Where it fits this
+                # lane's own limit it is simply shown; else it is shown and
                 # kept like any other long result.
                 full = await asyncio.wait_for(
                     asyncio.to_thread(_with_whole, item.text, str(item.shown), item.whole),
@@ -660,46 +973,110 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[[], bool]) -
                 )
                 if full is None:
                     continue
+                if len(full) <= item.cap:
+                    used.add(id(target))
+                    target.content = full + under
+                    continue
                 text = full
             # (Every handle is the same length, so whether the note leaves
             # enough to show is known before anything is written.)
             if kept_form(text, item.cap, _NO_HANDLE, where, tail=item.tail) is None:
                 continue
-            before, body, _after = split_fence(text)
-            handle = await asyncio.wait_for(
-                asyncio.to_thread(put, root, owner, body, fenced=bool(before), local_only=local_only),
-                IO_TIMEOUT_S,
-            )
+            if may is None:
+                may = bool(arm(dry=True))
+            if not may:
+                continue
+            handle = new_handle()
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        put, root, owner, split_fence(text)[1], own_source=item.own_source,
+                        local_only=local_only, handle=handle, keep=tuple(saved),
+                    ),
+                    IO_TIMEOUT_S,
+                )
+            except NoRoom:
+                said = _NO_ROOM.format(where=where, most=MAX_PER_OWNER)
+                used.add(id(target))
+                target.content = item.cut(item.content, item.cap - len(said)) + said + under
+                continue
+            except (asyncio.TimeoutError, TimeoutError):
+                abandon(handle)
+                raise
             saved.append(handle)
             used.add(id(target))
-            plans.append((target, item.old, str(kept_form(text, item.cap, handle, where, tail=item.tail))))
+            plans.append((target, item.old, handle,
+                          str(kept_form(text, item.cap, handle, where, tail=item.tail))))
+        if not plans:
+            return 0
+        # A note never points at a result that is gone.
+        there = await asyncio.wait_for(asyncio.to_thread(alive, root, owner, saved), IO_TIMEOUT_S)
+        plans = [plan for plan in plans if plan[2] in there]
         if not plans or not arm():
             return 0
-        for target, old, form in plans:
+        for target, old, handle, form in plans:
             target.content = form + str(target.content)[len(old):]
-        told = True
+            target.kept_line = _trimmed_note(form.rsplit("\n", 1)[1])
+            told.add(handle)
+            if plain and reply is not None:
+                reply.kept.append((root, ctx, owner, handle))
         return len(plans)
     except Exception:  # noqa: BLE001 — the round's messages stay the old cut
         log.warning("a long result could not be kept; it was cut as before", exc_info=True)
         return 0
     finally:
-        if saved and not told and root is not None:
+        left = [h for h in saved if h not in told]
+        if left and root is not None:
             # Saved, but no message names it: it is not left on disk.
             try:
-                await asyncio.to_thread(forget, root, owner, saved)
+                await asyncio.to_thread(forget, root, owner, left)
             except Exception:  # noqa: BLE001
                 pass
+
+
+async def arm_at_start(platform: Any, owner: str, msgs: list, arm: Callable[..., bool]) -> int:
+    """A turn that STARTS with a kept-result line in its messages (an agent
+    run or a coding reply picked up after a restart reads its saved rounds
+    back, lines included) has the reader from its first step. Each line's
+    handle is checked against the store for THIS owner (off the event loop):
+    only a line the store answers for arms the reader and is put on its
+    message for a later trim. Returns how many lines were real. Never
+    raises."""
+    try:
+        noted = [
+            (m, got.group(0), got.group(3))
+            for m in msgs or []
+            if getattr(m, "role", "") == "tool"
+            for got in [NOTE_RX.fullmatch(note_of(getattr(m, "content", "")))]
+            if got is not None
+        ]
+        root = root_of(getattr(platform, "engine", None))
+        if not noted or root is None or not owner:
+            return 0
+        there = await asyncio.wait_for(
+            asyncio.to_thread(alive, root, str(owner), [handle for _m, _note, handle in noted]),
+            IO_TIMEOUT_S,
+        )
+        real = [(m, note) for m, note, handle in noted if handle in there]
+        if not real or not arm(dry=True) or not arm():
+            return 0
+        for m, note in real:
+            m.kept_line = _trimmed_note(note)
+        return len(real)
+    except Exception:  # noqa: BLE001 — not armed: a call of the reader is refused by the roster
+        return 0
 
 
 def arm_chat(
     d: Any, *, armed: list, auto_armed: list, tool_specs: list, overrides: dict, armed_grant: set,
     ask_armed: Any = (), tool_ceiling: Any = None, ceiling: "int | None" = None,
-    max_tools: int = 6, harness: Any = None,
+    max_tools: int = 6, harness: Any = None, dry: bool = False,
 ) -> bool:
     """``kept_result_read`` joins a chat turn (plain chat or a coding session)
     for its next round: armed and granted the way the arming pass arms a tool
     that only reads, changed IN PLACE because the round loop reads these same
-    lists. True when it is on the roster (already, or now).
+    lists. True when it is on the roster (already, or now). ``dry``: only
+    answer whether it may join; change nothing.
 
     Never: over the user's deny or a rule of this turn, outside a surface's
     own ceiling (``tool_ceiling``), or past a small model's tool budget
@@ -714,6 +1091,8 @@ def arm_chat(
         return False
     if ceiling is not None and ceiling < max_tools and len(armed) >= ceiling:
         return False
+    if dry:
+        return True
     # (The spec is read before anything is changed: a failure here leaves the
     # turn's lists exactly as they were.)
     specs = platform.registry.specs([READER])
@@ -733,36 +1112,44 @@ def arm_chat(
     return True
 
 
-def arm_run(platform: Any, tool_specs: list, overrides: Any = None) -> bool:
+def arm_run(platform: Any, tool_specs: list, overrides: Any = None, *, dry: bool = False) -> bool:
     """``kept_result_read`` joins an agent run's tool list, in place (the
-    runtime's roster is the names in this list). True when it is there."""
+    runtime's roster is the names in this list). True when it is there.
+    ``dry``: only answer whether it may join."""
     try:
         if any(isinstance(s, dict) and s.get("name") == READER for s in tool_specs):
             return True
         if not _may_read(platform, overrides):
             return False
-        tool_specs.extend(platform.registry.specs([READER]))
+        if not dry:
+            tool_specs.extend(platform.registry.specs([READER]))
         return True
     except Exception:  # noqa: BLE001 — not armed: the old cut
-        return False
-
-
-async def held(platform: Any, owner: str) -> bool:
-    """Does *owner* already hold a kept result? An agent run asks as it
-    starts: a run picked up after a restart reads its saved transcript, the
-    line with the handle is in it, so the reader joins from the first step.
-    Off the event loop; never raises."""
-    try:
-        root = root_of(getattr(platform, "engine", None))
-        return bool(await asyncio.wait_for(
-            asyncio.to_thread(holds, root, str(owner or "")), IO_TIMEOUT_S))
-    except Exception:  # noqa: BLE001
         return False
 
 
 # --------------------------------------------------------------------------- #
 # The one reader
 # --------------------------------------------------------------------------- #
+
+
+def _yes(value: Any) -> bool:
+    """True for ``true`` as a model may send it: the boolean, or the words
+    "true", "1", "yes"."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return value is True
+
+
+def _number(value: Any) -> int:
+    """A character position as a model may send it (17611, "17611",
+    "17,611"); 0 for anything that is not one."""
+    if isinstance(value, bool):
+        return 0
+    try:
+        return int(str(value).replace(",", "").strip()) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 class KeptResultReadTool(Tool):
@@ -795,9 +1182,12 @@ class KeptResultReadTool(Tool):
         self.platform = platform
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        args = args if isinstance(args, dict) else {}
         owner = _owner(ctx)
+        where = _where(ctx)
         root = root_of(getattr(ctx, "engine", None))
-        handle = str((args or {}).get("handle") or "").strip()
+        raw_handle = args.get("handle")
+        handle = raw_handle.strip() if isinstance(raw_handle, str) else ""
         got = None
         if root is not None and owner:
             try:
@@ -805,27 +1195,24 @@ class KeptResultReadTool(Tool):
             except Exception:  # noqa: BLE001 — unreadable is "not there"
                 got = None
         if got is None:
-            return ToolResult(ok=False, error=NOT_FOUND)
+            return ToolResult(ok=False, error=not_found(where))
         meta, text = got
         if meta.get("local_only"):
             from ..providers import egress as _egress
 
             scope = _egress.current_scope()
             if not scope.on:
-                return ToolResult(ok=False, error=_LOCAL_OFF)
+                return ToolResult(ok=False, error=_LOCAL_OFF.format(where=where))
             if scope.allowed_once:
                 name = _egress.friendly_name(
                     scope.allowed_once, getattr(self.platform, "providers", None))
-                return ToolResult(ok=False, error=_LOCAL_ONCE.format(name=name[:1].upper() + name[1:]))
+                return ToolResult(ok=False, error=_LOCAL_ONCE.format(
+                    where=where, name=name[:1].upper() + name[1:]))
         n = len(text)
-        raw = (args or {}).get("start")
-        if (args or {}).get("end") is True:
+        if _yes(args.get("end")):
             first = max(0, n - READ_CHARS)
         else:
-            try:
-                start = 1 if raw is None or isinstance(raw, bool) else int(raw)
-            except (TypeError, ValueError):
-                start = 0
+            start = 1 if args.get("start") is None else _number(args.get("start"))
             first = n + start if start < 0 else start - 1
             if start == 0 or first < 0 or first >= n:
                 return ToolResult(ok=False, error=(
@@ -833,16 +1220,16 @@ class KeptResultReadTool(Tool):
                     f"to {n:,} (or a negative number counting back from the end)."
                 ))
         last = min(n, first + READ_CHARS)
-        where = (
-            "this is the end" if last >= n
-            else f"the next part starts at {last + 1}"
+        lead = _LEAD.format(
+            a=f"{first + 1:,}", b=f"{last:,}", n=f"{n:,}",
+            then="this is the end" if last >= n else f"the next part starts at {last + 1:,}",
         )
-        lead = f"[Characters {first + 1:,} to {last:,} of {n:,} of the kept result; {where}.]\n"
         data: dict[str, Any] = {"handle": handle, "from": first + 1, "to": last, "of": n,
                                 "end": last >= n}
-        if not meta.get("fenced"):
-            # The whole was not outside text (a coding session's own source,
-            # a tool whose words are Iron Jarvis's): neither is a part of it.
+        if meta.get("own_source") is True:
+            # The ORIGINAL call said this result is the session's own source
+            # (decided there, saved with the text): so is a part of it. Every
+            # other part is outside text, whatever it looks like.
             from .builtins import OWN_SOURCE_KEY
 
             data[OWN_SOURCE_KEY] = True
@@ -855,7 +1242,9 @@ def kept_result_tools(platform: Any = None) -> list[Tool]:
 
 __all__ = [
     "FOLDER", "KEEP_DAYS", "KeptResultReadTool", "MAX_OWNER_CHARS", "MAX_PER_OWNER",
-    "MAX_RESULT_CHARS", "MAX_STORE_BYTES", "NOTE_RX", "NOT_FOUND", "READER", "READ_CHARS", "arm_chat", "arm_run",
-    "defang", "drop_owners", "held", "hold", "kept_form", "kept_result_tools",
-    "note_of", "rekey", "settle", "split_fence", "sweep",
+    "MAX_RESULT_CHARS", "MAX_STORE_BYTES", "MAX_WHOLE_CHARS", "NOTE_RX", "NoRoom", "READER",
+    "READ_CHARS", "abandon", "alive", "arm_at_start", "arm_chat", "arm_run", "defang",
+    "drop_owners", "hold", "kept_form", "kept_result_tools", "new_handle", "not_found",
+    "note_of", "rekey", "removals_done", "reply_frames", "reply_scope", "settle", "split_fence",
+    "sweep", "waiting",
 ]
