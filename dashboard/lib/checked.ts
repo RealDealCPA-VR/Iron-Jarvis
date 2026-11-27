@@ -45,6 +45,8 @@ export const CHECK_CODES: readonly string[] = [
   "review",
   "step_check",
   "workflow_step",
+  // 5b: a second model's double-check (never a "Problem").
+  "double_check",
 ];
 export const PROBLEM_CHECKS: readonly string[] = ["file_opens", "sheet_no_error_cells", "tests", "required_file"];
 

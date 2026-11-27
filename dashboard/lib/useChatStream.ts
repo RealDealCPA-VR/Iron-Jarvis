@@ -66,6 +66,7 @@ import { decodeBrainReceipt, type BrainReceipt } from "./brainProfiles";
 import { decodeClientQuestion, type ChatClientQuestion } from "./clients";
 import { decodeMemoryUsed, decodeUsedMore, type MemoryUsedItem } from "./memoryUsed";
 import { decodeChecked, type CheckedMark } from "./checked";
+import { decodeDoubleCheck, type DoubleCheckMark } from "./doubleCheck";
 import { stepTarget } from "./workTarget";
 import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
 import { onceReasonOf, type OnceReason } from "./onceReason";
@@ -231,6 +232,10 @@ export type SSEEvent =
        *  that made or changed a file; the decode keeps a valid shape
        *  (lib/checked). */
       checked?: CheckedMark;
+      /** The intelligence plan, 5b: the once-only offer of a second model's
+       *  double-check, or the one started after this reply (lib/doubleCheck).
+       *  Only beside `checked`. */
+      double_check?: DoubleCheckMark;
       /** Calm UI redesign S3/S4: "Setting changed" and secure credential
        *  cards. The daemon sends the key on every turn (possibly []). */
       config_cards?: ConfigCard[];
@@ -487,6 +492,9 @@ export interface ChatStreamResult {
   /** The intelligence plan, release 5: what Iron Jarvis checked on the files
    *  this reply made (absent when it made none). */
   checked?: CheckedMark;
+  /** 5b: the second model's double-check offer, or the one started (absent
+   *  when none). */
+  doubleCheck?: DoubleCheckMark;
   /** Calm UI redesign S3/S4: the turn's settings cards (absent when none). */
   configCards?: ConfigCard[];
   /** v1.298.0: trust posture of the turn — see the done-frame fields. */
@@ -875,6 +883,9 @@ export function sseEventFrom(
       {
         const checked = decodeChecked(data.checked);
         if (checked) ev.checked = checked;
+        // 5b: only beside a line (whitelisted, lib/doubleCheck).
+        const doubleCheck = checked ? decodeDoubleCheck(data.double_check) : null;
+        if (doubleCheck) ev.double_check = doubleCheck;
       }
       // Settings cards (redesign S3/S4): whitelisted — a card with no
       // change_id / request_id dies here, and a secret card never has a value.
@@ -2277,6 +2288,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(ev.used?.length ? { used: ev.used } : {}),
                 ...(ev.used?.length && ev.used_more ? { usedMore: ev.used_more } : {}),
                 ...(ev.checked ? { checked: ev.checked } : {}),
+                ...(ev.double_check ? { doubleCheck: ev.double_check } : {}),
                 ...(ev.config_cards?.length ? { configCards: ev.config_cards } : {}),
                 trust: ev.trust,
                 trustReason: ev.trust_reason,

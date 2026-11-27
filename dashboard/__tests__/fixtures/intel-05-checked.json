@@ -612,7 +612,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "file_opens",
+          "check": "double_check",
           "label": "item 2",
           "said": "it did not pass",
           "result": "failed",
@@ -620,7 +620,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "pdf_pages",
+          "check": "file_opens",
           "label": "item 3",
           "said": "it did not pass",
           "result": "failed",
@@ -628,7 +628,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "required_file",
+          "check": "pdf_pages",
           "label": "item 4",
           "said": "it did not pass",
           "result": "failed",
@@ -636,7 +636,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "review",
+          "check": "required_file",
           "label": "item 5",
           "said": "it did not pass",
           "result": "failed",
@@ -644,7 +644,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "sheet_no_error_cells",
+          "check": "review",
           "label": "item 6",
           "said": "it did not pass",
           "result": "failed",
@@ -652,7 +652,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "sheet_totals",
+          "check": "sheet_no_error_cells",
           "label": "item 7",
           "said": "it did not pass",
           "result": "failed",
@@ -660,7 +660,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "step_check",
+          "check": "sheet_totals",
           "label": "item 8",
           "said": "it did not pass",
           "result": "failed",
@@ -668,7 +668,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "tests",
+          "check": "step_check",
           "label": "item 9",
           "said": "it did not pass",
           "result": "failed",
@@ -676,7 +676,7 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "workflow_step",
+          "check": "tests",
           "label": "item 10",
           "said": "it did not pass",
           "result": "failed",
@@ -684,6 +684,7 @@
           "who": "by Iron Jarvis"
         },
         {
+          "check": "workflow_step",
           "label": "item 11",
           "said": "it did not pass",
           "result": "failed",
@@ -691,7 +692,6 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "a_check_nobody_knows",
           "label": "item 12",
           "said": "it did not pass",
           "result": "failed",
@@ -699,8 +699,16 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": 7,
+          "check": "a_check_nobody_knows",
           "label": "item 13",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": 7,
+          "label": "item 14",
           "said": "it did not pass",
           "result": "failed",
           "result_words": "Problem",
@@ -729,8 +737,16 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "file_opens",
+          "check": "double_check",
           "label": "item 2",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "file_opens",
+          "label": "item 3",
           "said": "it did not pass",
           "result": "failed",
           "result_words": "Problem",
@@ -738,7 +754,7 @@
         },
         {
           "check": "pdf_pages",
-          "label": "item 3",
+          "label": "item 4",
           "said": "it did not pass",
           "result": "look",
           "result_words": "Worth a look",
@@ -746,7 +762,7 @@
         },
         {
           "check": "required_file",
-          "label": "item 4",
+          "label": "item 5",
           "said": "it did not pass",
           "result": "failed",
           "result_words": "Problem",
@@ -754,7 +770,7 @@
         },
         {
           "check": "review",
-          "label": "item 5",
+          "label": "item 6",
           "said": "it did not pass",
           "result": "look",
           "result_words": "Worth a look",
@@ -762,7 +778,7 @@
         },
         {
           "check": "sheet_no_error_cells",
-          "label": "item 6",
+          "label": "item 7",
           "said": "it did not pass",
           "result": "failed",
           "result_words": "Problem",
@@ -770,14 +786,6 @@
         },
         {
           "check": "sheet_totals",
-          "label": "item 7",
-          "said": "it did not pass",
-          "result": "look",
-          "result_words": "Worth a look",
-          "who": "by Iron Jarvis"
-        },
-        {
-          "check": "step_check",
           "label": "item 8",
           "said": "it did not pass",
           "result": "look",
@@ -785,8 +793,16 @@
           "who": "by Iron Jarvis"
         },
         {
-          "check": "tests",
+          "check": "step_check",
           "label": "item 9",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "tests",
+          "label": "item 10",
           "said": "it did not pass",
           "result": "failed",
           "result_words": "Problem",
@@ -794,14 +810,6 @@
         },
         {
           "check": "workflow_step",
-          "label": "item 10",
-          "said": "it did not pass",
-          "result": "look",
-          "result_words": "Worth a look",
-          "who": "by Iron Jarvis"
-        },
-        {
-          "check": "",
           "label": "item 11",
           "said": "it did not pass",
           "result": "look",
@@ -823,6 +831,14 @@
           "result": "look",
           "result_words": "Worth a look",
           "who": "by Iron Jarvis"
+        },
+        {
+          "check": "",
+          "label": "item 14",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
         }
       ],
       "more": 0,
@@ -833,6 +849,7 @@
     "checks": [
       "claims_match_record",
       "document_not_empty",
+      "double_check",
       "file_opens",
       "pdf_pages",
       "required_file",
