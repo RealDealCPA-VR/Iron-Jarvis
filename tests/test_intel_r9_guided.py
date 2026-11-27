@@ -152,4 +152,64 @@ def test_the_guided_state_survives_a_restart(tmp_path):
     pm = _mgr(tmp_path)
     for _ in range(STUMBLE_RUN):
         pm.note_reply_form("ollama", M, "native", False)
-    assert _mgr(tmp_path).reply_guided("ollama", M) is True
+    after = _mgr(tmp_path)
+    assert after.load_guided_states() == 1
+    assert after.reply_guided("ollama", M) is True
+
+
+def test_reading_the_guided_state_reads_no_ledger_file(tmp_path, monkeypatch):
+    """Release 9 review: ``reply_guided`` runs on the event loop after every
+    tool reply; the state is kept in memory, never read from the ledger."""
+    from iron_jarvis.envelope import outcomes as O
+
+    save_profile(tmp_path, _capable())
+    pm = _mgr(tmp_path)
+    for _ in range(STUMBLE_RUN):
+        pm.note_reply_form("ollama", M, "native", False)
+    reads: list = []
+    real = O.OutcomeLedger.load
+
+    def counting(*a, **k):
+        reads.append(a)
+        return real(*a, **k)
+
+    monkeypatch.setattr(O.OutcomeLedger, "load", counting)
+    for _ in range(5):
+        assert pm.reply_guided("ollama", M) is True
+        assert pm.capability_profile("ollama", M).select_tool_protocol() == "strict_json"
+    assert reads == []
+
+
+def test_replies_finishing_together_never_lose_a_count(tmp_path):
+    import threading
+
+    save_profile(tmp_path, _capable())
+    pm = _mgr(tmp_path)
+    start = threading.Barrier(8)
+
+    def one():
+        start.wait()
+        for _ in range(10):
+            pm.note_reply_form("ollama", M, "native", True)
+
+    threads = [threading.Thread(target=one) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert OutcomeLedger.load(tmp_path, "ollama", M).tool_protocols["native"].attempts == 80
+
+
+def test_only_your_own_model_servers_are_recorded_or_guided(tmp_path):
+    """CI finding on 19ee7cc03 (test_attended_steps_v1402): a test double
+    provider ("stepfake") that is neither trusted nor a local server was
+    recorded, guided after five calls to a tool it was not given, and its
+    replies went through the fenced form. Only Ollama, the custom slot and
+    fleet nodes are the user's own models."""
+    pm = _mgr(tmp_path)
+    for _ in range(STUMBLE_RUN * 2):
+        assert pm.note_reply_form("stepfake", "stepfake-1", "native", False) == ""
+    assert pm.reply_guided("stepfake", "stepfake-1") is False
+    assert not list(tmp_path.glob("envelopes/*.outcomes.json"))
+    assert pm.is_own_model_provider("fleet-box") and pm.is_own_model_provider("custom")
+    assert not pm.is_own_model_provider("claude-cli") and not pm.is_own_model_provider("stepfake")

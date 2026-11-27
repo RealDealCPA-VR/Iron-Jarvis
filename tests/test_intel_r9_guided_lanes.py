@@ -127,3 +127,39 @@ def test_the_model_servers_card_hears_it_is_being_guided(tmp_path):
     _stumble(app)
     after = client.get(f"/envelope/ollama/{MODEL}").json()
     assert after["guided"] is True and after["trusted"] is False
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_call_the_model_only_thought_about_is_not_an_unusable_reply(tmp_path, lane):
+    thought = LLMResponse(
+        text='<think>maybe {"name": "read_file", "arguments": {"path": "x"}}</think>The folder is empty.'
+    )
+    model = _OwnModel(script=[thought])
+    app = _app(tmp_path, model)
+    _ask(app, lane, f"t-think-{lane}")
+    ledger = OutcomeLedger.load(app.state.platform.config.home, "ollama", MODEL)
+    counter = ledger.tool_protocols["native"]
+    assert counter.attempts >= 1 and counter.failures == 0
+
+
+def test_the_guided_line_is_set_only_when_the_guided_wrapper_answers(tmp_path):
+    import asyncio
+
+    from iron_jarvis.eval import reply_facts
+
+    model = _OwnModel()
+    app = _app(tmp_path, model)
+    router = app.state.platform.router
+    _stumble(app)
+
+    async def run():
+        facts = reply_facts.begin()
+        wrapped = router._guide_if_stumbling(model)
+        assert wrapped is not model and facts.guided is False  # not at wrap time
+        # Another model answered (a failover): no line.
+        await router._note_form(_OwnModel("other:1b"), [{"name": "read_file"}], LLMResponse(text="ok"))
+        assert facts.guided is False
+        await router._note_form(wrapped, [{"name": "read_file"}], LLMResponse(text="ok"))
+        assert facts.guided is True
+
+    asyncio.run(run())

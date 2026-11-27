@@ -2189,7 +2189,13 @@ class ModelRouter:
                     if profile is not None and profile_supports_guided(profile)
                     else PromptedToolsAdapter(adapter)
                 )
-            _note_guided()
+            # Release 9 review: the reply is told only when THIS wrapper
+            # answers (``_note_form``), never at wrap time — a failover to
+            # another model must not carry the guided line.
+            try:
+                guided._ij_guided = True  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
             return guided
         except Exception:  # noqa: BLE001 — guidance must never break routing
             return adapter
@@ -2203,6 +2209,8 @@ class ModelRouter:
         try:
             if not tools or response is None:
                 return
+            if getattr(adapter, "_ij_guided", False):
+                _note_guided()  # the guided wrapper itself answered this call
             provider = str(getattr(adapter, "provider", "") or "")
             model = str(getattr(adapter, "model", "") or "")
             if not provider or provider == "mock" or self.manager.is_trusted_provider(provider):
@@ -2479,10 +2487,13 @@ class ModelRouter:
         # tool). The stream twin is in `_stream_one`.
         _note_call(adapter, resp)
         _note_time(self._clock() - t0)  # release 6: how long the model took
-        await self._note_form(adapter, tools, resp)  # release 9: usable form?
         # v1.323.0: a leading `<think>` block is reasoning, not answer — the
         # stream twin is `_split_think_frames` in `_stream_one`.
-        return _with_split_thinking(resp)
+        resp = _with_split_thinking(resp)
+        # Release 9: usable form? Judged on the ANSWER, the reasoning split
+        # off first (a call the model only thought about is not a call).
+        await self._note_form(adapter, tools, resp)
+        return resp
 
     async def _attempt_with_retry(
         self, adapter: LLMAdapter, *, system, messages, tools, deadline: float,

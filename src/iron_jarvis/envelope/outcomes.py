@@ -103,6 +103,7 @@ nothing here imports the daemon, tools, agents, or providers.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -433,12 +434,83 @@ def record_outcome(
         profile = load_profile(home, provider, model_id)
         if profile is None or profile.is_trusted() or not profile.is_measured():
             return
-        ledger = OutcomeLedger.load(home, provider, model_id)
-        ledger.ensure_stamp(generation_stamp(profile))
-        ledger.steps.record(bool(ok))
-        ledger.save(home)
+        with _lock_for(home, provider, model_id):
+            ledger = OutcomeLedger.load(home, provider, model_id)
+            ledger.ensure_stamp(generation_stamp(profile))
+            ledger.steps.record(bool(ok))
+            ledger.save(home)
     except Exception:  # noqa: BLE001 — never-raising by contract
         return
+
+
+#: Release 9 review: one lock per ledger file, so two replies of one model
+#: finishing together never lose a count (each is a read-modify-write).
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(home: Path, provider: str, model_id: str) -> threading.Lock:
+    key = str(OutcomeLedger.path_for(home, provider, model_id))
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = _LOCKS[key] = threading.Lock()
+        return lock
+
+
+@dataclass
+class GuidedState:
+    """What the manager keeps in memory after a record (release 9 review):
+    no ledger read on the event loop."""
+
+    guided: bool = False
+    rung: str = ""
+    stamp: str = ""
+
+
+def record_reply_form_state(
+    home: Path, provider: str, model_id: str, form: str, ok: bool
+) -> tuple[str, GuidedState | None]:
+    """:func:`record_reply_form`, also answering the ledger's guided state
+    after the record (None when nothing could be recorded). NEVER raises."""
+    try:
+        profile = load_profile(home, provider, model_id)
+        if profile is None:
+            profile = CapabilityProfile(model_id=model_id, provider=provider)
+        if profile.is_trusted():
+            return "", None
+        with _lock_for(home, provider, model_id):
+            ledger = OutcomeLedger.load(home, provider, model_id)
+            ledger.ensure_stamp(generation_stamp(profile))
+            moved = ledger.record_reply_form(form, ok)
+            ledger.save(home)
+        return moved, GuidedState(ledger.guided, ledger.guided_rung, ledger.profile_stamp)
+    except Exception:  # noqa: BLE001 — never-raising by contract
+        return "", None
+
+
+def guided_state_of(home: Path, provider: str, model_id: str) -> GuidedState | None:
+    """A model's guided state from its ledger file (the manager's start-up
+    warm-up, off the loop). None when there is no ledger. Never raises."""
+    try:
+        if not OutcomeLedger.path_for(home, provider, model_id).exists():
+            return None
+        ledger = OutcomeLedger.load(home, provider, model_id)
+        return GuidedState(ledger.guided, ledger.guided_rung, ledger.profile_stamp)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def tuned_for(profile: CapabilityProfile, state: GuidedState | None) -> CapabilityProfile:
+    """The profile a guided model answers with, from the in-memory state:
+    :func:`apply_tuning` over a ledger that carries only the guided bit."""
+    if state is None or not state.guided or state.stamp != generation_stamp(profile):
+        return profile
+    ledger = OutcomeLedger(
+        model_id=profile.model_id, provider=profile.provider, profile_stamp=state.stamp,
+        guided=True, guided_rung=state.rung,
+    )
+    return apply_tuning(profile, ledger, rate_rule=False).profile
 
 
 def record_reply_form(
@@ -452,19 +524,7 @@ def record_reply_form(
     (:meth:`OutcomeLedger.record_reply_form`). NEVER raises; synchronous
     file I/O (callers hop through ``asyncio.to_thread``); trusted providers
     are the caller's to skip (``ProviderManager.note_reply_form``)."""
-    try:
-        profile = load_profile(home, provider, model_id)
-        if profile is None:
-            profile = CapabilityProfile(model_id=model_id, provider=provider)
-        if profile.is_trusted():
-            return ""
-        ledger = OutcomeLedger.load(home, provider, model_id)
-        ledger.ensure_stamp(generation_stamp(profile))
-        moved = ledger.record_reply_form(form, ok)
-        ledger.save(home)
-        return moved
-    except Exception:  # noqa: BLE001 — never-raising by contract
-        return ""
+    return record_reply_form_state(home, provider, model_id, form, ok)[0]
 
 
 def guided_now(profile: CapabilityProfile, ledger: OutcomeLedger) -> bool:

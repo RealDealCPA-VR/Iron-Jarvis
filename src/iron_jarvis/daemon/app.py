@@ -2493,6 +2493,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # user types (envelope/autotrial, built in routes/envelope.register).
         # A look every 30 s reads three small things off the loop. Each look
         # reports on loop_health["model_trials"].
+        # Release 9 review: a model guided before this start is still guided
+        # on its first reply (its state is read into memory, off the loop).
+        _warm = getattr(platform.providers, "load_guided_states", None)
+        if callable(_warm):
+            bg_tasks["guided_states"] = asyncio.create_task(asyncio.to_thread(_warm))
         _trials = getattr(_app.state.d, "auto_trials", None)
         if _trials is not None:
             bg_tasks["model_trials"] = asyncio.create_task(
