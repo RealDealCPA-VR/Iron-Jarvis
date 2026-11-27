@@ -121,6 +121,8 @@ const ACCEPTED_WORDS: Record<string, string> = {
   meaning_search: "Search by meaning is on.",
   // Next leaps 20-a: something you asked for that Iron Jarvis can't do yet.
   missing: "Kept on this PC as a note for the next version. Nothing was sent anywhere.",
+  // Next leaps 19-b (the route's own note, which names the schedule, wins).
+  schedule_offer: "The schedule was made.",
 };
 
 export function acceptedWords(kind: string): string {
@@ -183,7 +185,36 @@ const DECISION_PATHS: RegExp[] = [
   /^\/memory\/meaning\/(choose|decline)$/,
   // Next leaps 20-a: a thing you asked for that Iron Jarvis can't do yet.
   new RegExp(`^/capability/misses/${ID}/(note|decline)$`),
+  // Next leaps 19-b: an offer to run a repeated task by itself.
+  new RegExp(`^/schedules/offers/${ID}/(accept|decline)$`),
 ];
+
+/** 19-b: the one address Rehearse may post to (not a decision: it changes
+ *  nothing and makes no schedule). */
+const REHEARSE_PATH = new RegExp(`^/schedules/offers/${ID}/rehearse$`);
+
+export interface OfferRehearse {
+  label: string;
+  path: string;
+  note: string;
+}
+
+/** 19-b: an offer's Rehearse, when its address is the offer's own. */
+export function offerRehearse(item: ImprovementItem): OfferRehearse | null {
+  if (item.kind !== "schedule_offer") return null;
+  const r = record(item.extra.rehearse);
+  if (!r) return null;
+  const path = text(r.path, 300);
+  const label = text(r.label, 60).trim();
+  if (!label || !REHEARSE_PATH.test(path)) return null;
+  return { label, path, note: text(r.note, 400) };
+}
+
+/** 19-b: the offer's newest rehearsal, "" when it was never rehearsed. */
+export function offerRehearsalId(item: ImprovementItem): string {
+  const id = text(item.extra.rehearsal_id, 80);
+  return /^[A-Za-z0-9_-]+$/.test(id) ? id : "";
+}
 
 export function isDecisionPath(path: string): boolean {
   return DECISION_PATHS.some((rx) => rx.test(path));

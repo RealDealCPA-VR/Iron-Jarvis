@@ -118,6 +118,9 @@ def _line(n: int, it: dict[str, Any], label: str) -> str:
             opts.append(f"accept = {word}")
         if dec:
             opts.append(f"decline = {dec.get('label') or 'Decline'}")
+        if isinstance((it.get("extra") or {}).get("rehearse"), dict):
+            # 19-b: an offered schedule can be rehearsed first (06-a).
+            opts.append(f"rehearse first = the rehearse tool with kind offer and name {it.get('id')}")
         bits.append("— " + "; ".join(opts) + ".")
     return " ".join(bits)
 
@@ -128,7 +131,8 @@ class SuggestionListTool(Tool):
         "List the suggestions Iron Jarvis is waiting on the user to accept or decline (the "
         "Improvements page): preferences it noticed, names that may be clients, skill drafts, "
         "changes to an agent's instructions, working habits, lessons from coding sessions, memory "
-        "tidy-ups, requests for a tool, things the user asked for that Iron Jarvis can't do yet, and "
+        "tidy-ups, requests for a tool, offers to run a repeated task by itself on a schedule, things the "
+        "user asked for that Iron Jarvis can't do yet, and "
         "things it wants to do on its own. Each line has the "
         "suggestion's id in brackets; answer one with suggestion_answer. Reads only."
     )

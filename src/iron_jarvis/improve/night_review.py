@@ -174,6 +174,11 @@ PROPOSERS: tuple[tuple[str, str], ...] = (
     # different days (``learning/repeats``, no model) becomes one draft,
     # written on the model of the newest of those chats.
     ("repeat", "a skill draft from the same kind of task asked for in chat on three different days"),
+    # Next leaps 19-b: when those three times fell on a rhythm (the same
+    # weekday each week), an offer to run the task by itself on it, beside
+    # the draft. No model, no schedule, no rehearsal: the owner's Accept
+    # makes the schedule and their Rehearse runs the rehearsal.
+    ("schedule_offer", "an offer to run a repeated task by itself, when the times it was asked for fell on a rhythm"),
 )
 
 #: The coach's categories as the reason on a suggestion (``{n}`` is how
@@ -510,6 +515,9 @@ def match(platform: Any, start: datetime, end: datetime, night: str = "") -> lis
     jobs += _coach_jobs(platform, start, end)
     jobs += _skill_jobs(platform, night)
     jobs += _repeat_jobs(platform, end, night)
+    if getattr(platform, "skill_learning", None) is not None:
+        # 19-b: after the repeat drafts, so tonight's draft gets its offer.
+        jobs.append({"key": "schedule_offer", "proposer": "schedule_offer", "target": ""})
     return jobs
 
 
@@ -811,6 +819,25 @@ async def _run_skill(platform: Any, job: dict[str, Any], night: str) -> tuple[di
     return _entry(job, NOTHING, reason), []
 
 
+#: 19-b: why the review made an offer to run a task by itself (the item's
+#: own lines say the days, the tools and the rhythm).
+OFFER_WHY = "Offered beside the skill draft written from the same chats."
+
+
+async def _run_schedule_offer(platform: Any, job: dict[str, Any], night: str) -> tuple[dict[str, Any], list]:
+    """19-b: an offer for each new chat skill draft whose tasks fell on a
+    rhythm (``scheduling/offers.make_offers``). No model, nothing scheduled,
+    nothing rehearsed."""
+    from ..scheduling import offers as O
+
+    # The scheduler's own zone, so "10am" on the card is 10am on the schedule.
+    sched = getattr(platform, "scheduler", None)
+    tz = getattr(getattr(sched, "scheduler", None), "timezone", None)
+    made = await asyncio.to_thread(lambda: O.make_offers(platform, tz=tz))
+    out = [{"kind": "schedule_offer", "ref": str(o.id), "why": OFFER_WHY} for o in made]
+    return _entry(job, MADE if out else NOTHING), out
+
+
 async def _arm_account(platform: Any, job: dict[str, Any]) -> Any:
     """The account pin for the work's own account (``iron_proxy.choice.
     pin_for``), or None with no account. RAISES ``_Refused`` when that
@@ -847,6 +874,8 @@ _RUNNERS: dict[str, Callable[[Any, dict[str, Any], str], Awaitable[tuple[dict[st
     # 19-a: a chat candidate is drafted by the same runner (the skill
     # learner reads its chats; the job carries the newest chat's model).
     "repeat": _run_skill,
+    # 19-b: no model.
+    "schedule_offer": _run_schedule_offer,
 }
 assert set(_RUNNERS) == {name for name, _ in PROPOSERS}
 
@@ -1158,9 +1187,11 @@ def _pending_models() -> dict[str, tuple[Any, Any]]:
     """Improvements kind -> (table, the "still waiting" status)."""
     from ..coach.models import PENDING, CoachProposalRecord
     from ..motivation.models import ProposalRecord
+    from ..scheduling.offers import WAITING as OFFER_WAITING, ScheduleOfferRecord
     from ..skills.learning_models import SkillProposalRecord
 
     return {
+        "schedule_offer": (ScheduleOfferRecord, OFFER_WAITING),
         "coach": (CoachProposalRecord, PENDING),
         "skill": (SkillProposalRecord, "pending"),
         "wants": (ProposalRecord, "pending"),

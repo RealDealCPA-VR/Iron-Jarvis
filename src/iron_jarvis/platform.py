@@ -2554,6 +2554,11 @@ def build_platform(
             # the finalizers and the boot reconcile. A chat set to Local only
             # runs its schedule Local only.
             fire_options.update(await asyncio.to_thread(_schedule_report_options, task))
+            if payload.get("local_only") is True:
+                # Next leaps 19-b: a schedule made from Local only work runs
+                # Local only on every fire, whatever its chat says now. Only
+                # ever turns it on.
+                fire_options["local_only"] = True
             if rehearsal_id:
                 # Leap 06-a: the run carries its rehearsal; the person who
                 # pressed Rehearse started it (passed only then).

@@ -228,6 +228,104 @@ def groups(units: Iterable[Unit], *, tz: "tzinfo | None" = None) -> list[Group]:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# 19-b: the rhythm of a repeat (pure)
+# --------------------------------------------------------------------------- #
+#: Weekly: consecutive weeks, and at most this many skipped weeks in all.
+WEEK_GAPS = 1
+#: Monthly: every day within this many days of one day of the month.
+MONTH_SPREAD = 2
+_DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+#: APScheduler reads a crontab's day NUMBER from Monday = 0, every other
+#: crontab from Sunday = 0; a day NAME reads the same everywhere.
+_CRON_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+@dataclass(frozen=True)
+class Rhythm:
+    """When a repeat comes round: ``weekly`` on ``weekday`` (Monday = 0) or
+    ``monthly`` on ``day`` (1..28), at ``hour`` local time."""
+
+    kind: str
+    hour: int
+    weekday: int = -1
+    day: int = 0
+
+    @property
+    def cron(self) -> str:
+        """The schedule's crontab (the scheduler's own zone: this PC's)."""
+        if self.kind == "weekly":
+            return f"0 {self.hour} * * {_CRON_DAYS[self.weekday]}"
+        return f"0 {self.hour} {self.day} * *"
+
+    @property
+    def words(self) -> str:
+        """"each Monday at 9am", "on the 1st of each month at 2pm"."""
+        if self.kind == "weekly":
+            return f"each {_DAY_NAMES[self.weekday]} at {clock_words(self.hour)}"
+        return f"on the {ordinal(self.day)} of each month at {clock_words(self.hour)}"
+
+    @property
+    def on_days_words(self) -> str:
+        """"on a Monday", "within 2 days of the 1st of the month"."""
+        if self.kind == "weekly":
+            return f"on a {_DAY_NAMES[self.weekday]}"
+        return f"within {MONTH_SPREAD} days of the {ordinal(self.day)} of the month"
+
+
+def clock_words(hour: int) -> str:
+    """9 -> "9am", 0 -> "12am", 12 -> "12pm", 16 -> "4pm" (the Schedules
+    page's own way of saying an hour). Pure."""
+    h = int(hour) % 24
+    return f"{h % 12 or 12}{'am' if h < 12 else 'pm'}"
+
+
+def ordinal(n: int) -> str:
+    n = int(n)
+    tail = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{tail}"
+
+
+def rhythm(starts: "Iterable[float] | Group", *, tz: "tzinfo | None" = None) -> "Rhythm | None":
+    """Do these tasks come round on a rhythm? PURE (reads its input only).
+
+    ``starts`` are the tasks' start times (epoch seconds), or a
+    :class:`Group`. WEEKLY when every task fell on the same weekday in
+    consecutive weeks, at most :data:`WEEK_GAPS` week skipped in all.
+    MONTHLY when every task fell in a different month, consecutive months
+    (one skipped at most), and each within :data:`MONTH_SPREAD` days of the
+    same day of the month (the median one; never past the 28th, so the
+    schedule fires every month). The hour is the hour of the MEDIAN start
+    (the time of day, local), so the run is done by when the owner usually
+    asks. Needs :data:`MIN_DAYS` different days. None otherwise."""
+    if isinstance(starts, Group):
+        starts = [u.start for u in starts.units]
+    moments = sorted(
+        datetime.fromtimestamp(float(s), timezone.utc).astimezone(tz) if tz is not None
+        else datetime.fromtimestamp(float(s), timezone.utc).astimezone()
+        for s in starts if s is not None and math.isfinite(float(s))
+    )
+    days = sorted({m.date() for m in moments})
+    if len(days) < MIN_DAYS:
+        return None
+    minutes = sorted(m.hour * 60 + m.minute for m in moments)
+    hour = minutes[(len(minutes) - 1) // 2] // 60
+    if len({d.weekday() for d in days}) == 1:
+        gaps = [(b - a).days for a, b in zip(days, days[1:])]
+        if all(g in (7, 14) for g in gaps) and sum(g == 14 for g in gaps) <= WEEK_GAPS:
+            return Rhythm(kind="weekly", hour=hour, weekday=days[0].weekday())
+        return None
+    months = [d.year * 12 + d.month for d in days]
+    steps = [b - a for a, b in zip(months, months[1:])]
+    if not all(s in (1, 2) for s in steps) or sum(s == 2 for s in steps) > 1:
+        return None
+    doms = sorted(d.day for d in days)
+    middle = doms[(len(doms) - 1) // 2]
+    if middle > 28 or any(abs(x - middle) > MONTH_SPREAD for x in doms):
+        return None
+    return Rhythm(kind="monthly", hour=hour, day=middle)
+
+
 def _iso(epoch: float) -> "str | None":
     if not math.isfinite(epoch):
         return None
@@ -909,7 +1007,7 @@ def detect(platform: Any, *, now: "datetime | None" = None) -> int:
 
 
 __all__ = [
-    "MIN_DAYS", "MIN_UNITS", "THREADS_MAX", "UNKNOWN_OWNER", "WINDOW_DAYS", "Group", "Unit", "chat_units",
-    "day_of", "days_words", "detect", "drop_thread", "eligible", "evidence_of", "group_of", "groups", "load_evidence", "matches",
-    "reread", "times_line", "tools_line", "units",
+    "MIN_DAYS", "MIN_UNITS", "THREADS_MAX", "UNKNOWN_OWNER", "WINDOW_DAYS", "Group", "Rhythm", "Unit", "chat_units",
+    "clock_words", "day_of", "days_words", "detect", "drop_thread", "eligible", "evidence_of", "group_of", "groups",
+    "load_evidence", "matches", "ordinal", "reread", "rhythm", "times_line", "tools_line", "units",
 ]

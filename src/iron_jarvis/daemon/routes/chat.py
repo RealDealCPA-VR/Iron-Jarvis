@@ -385,6 +385,15 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
                 _repeats.drop_thread(db, thread_id)
         except Exception:  # noqa: BLE001
             log.warning("a deleted chat's repeat records could not be dropped", exc_info=True)
+        # 19-b: and an offer to run its task by itself (its words with it),
+        # guarded the same way.
+        from ...scheduling import offers as _offers
+
+        try:
+            with db.begin_nested():
+                _offers.drop_thread(db, thread_id)
+        except Exception:  # noqa: BLE001
+            log.warning("a deleted chat's offers could not be dropped", exc_info=True)
         try:
             index = search_index(engine)
             if index is not None:

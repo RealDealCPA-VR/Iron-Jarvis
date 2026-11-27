@@ -286,6 +286,7 @@ _LATE_MODEL_MODULES = (
     "..harness.scoreboard",   # CodingOutcome — what became of each piece of coding work (leap 28-a)
     "..checks.record",        # CheckRecord — what Iron Jarvis itself checked (intelligence plan, release 5)
     "..daemon.chat_kept",     # ChatKept — what a chat keeps between replies (intelligence plan, release 7)
+    "..scheduling.offers",   # ScheduleOfferRecord — an offer to run a repeated task by itself (next leaps 19-b)
 )
 
 

@@ -99,8 +99,12 @@ export function RehearsalReport({
   onClose,
   onKept,
   onChange,
+  keepable = true,
 }: {
   id: string;
+  /** Next leaps 19-b: false for a schedule that is only offered (its
+   *  Accept, not Keep it, makes it). */
+  keepable?: boolean;
   initial?: RehearsalView | null;
   onClose?: () => void;
   /** Every new reading of the report (the page keeps its own copy). */
@@ -282,7 +286,7 @@ export function RehearsalReport({
 
       {view && view.status !== "running" && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-1">
-          {view.status === "ready" && !view.kept_at && (
+          {keepable && view.status === "ready" && !view.kept_at && (
             <Button
               variant="primary"
               size="sm"

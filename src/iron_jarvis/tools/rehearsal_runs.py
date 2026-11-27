@@ -40,7 +40,10 @@ NEVER_STARTED_AFTER = timedelta(minutes=3)
 _DRIVERS: dict[str, "asyncio.Task[Any]"] = {}
 
 _ACTIVE = ("active", "queued")
-_KIND_ALIASES = {"rule": "rule", "reflex": "rule", "rules": "rule", "schedule": "schedule", "schedules": "schedule"}
+_KIND_ALIASES = {"rule": "rule", "reflex": "rule", "rules": "rule", "schedule": "schedule", "schedules": "schedule",
+                 # Next leaps 19-b: a schedule Iron Jarvis offers (Improvements),
+                 # rehearsed through the schedule's own door before it is made.
+                 "offer": "offer"}
 
 
 class RehearsalRefused(Exception):
@@ -136,6 +139,8 @@ async def start(platform: Any, kind: str, ident: str) -> dict[str, Any]:
     if not k:
         raise RehearsalRefused("Only a rule or a schedule can be rehearsed for now.")
     ident = " ".join(str(ident or "").split())
+    if k == "offer":
+        return await start_offer(platform, ident)
     if not ident:
         raise RehearsalRefused(f"Say which {k} to rehearse.")
     finder = _find_rule if k == "rule" else _find_schedule
@@ -200,6 +205,74 @@ async def start(platform: Any, kind: str, ident: str) -> dict[str, Any]:
 _FINISH_EVENTS = ("session.completed", "agent.completed")
 #: The most webhooks one report lists.
 _WEBHOOKS_MAX = 10
+
+
+async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
+    """Next leaps 19-b: rehearse a schedule Iron Jarvis OFFERS (Improvements)
+    before it exists: the schedule Accept would save (``scheduling/offers.
+    task_of``, not saved) runs through the schedule's own door
+    (``platform.rehearse_scheduled``) exactly as a kept schedule's rehearsal
+    does, with the same side doors, after the same add-time rules Accept
+    applies (an account gone or off; Local only work, read again from its
+    chats, whose model leaves this network: refused in words, nothing run).
+    One rehearsal of an offer runs at a time: a press while one runs, or
+    while another press is starting one, gets that one (a conditional write
+    claims the offer first). The offer keeps the newest
+    rehearsal's id; its report is ``GET /rehearsals/{id}``."""
+    from ..scheduling import offers as O
+
+    oid = " ".join(str(offer_id or "").split())
+    if oid.startswith("schedule_offer:"):
+        oid = oid.split(":", 1)[1]  # the id suggestion_list shows
+    if not oid:
+        raise RehearsalRefused("Say which offer to rehearse.")
+    row = await asyncio.to_thread(O.get, platform.engine, oid)
+    if row is None:
+        raise RehearsalRefused("There is no such offer.", status=404)
+    if row.status != O.WAITING:
+        raise RehearsalRefused("This offer was already answered, so it is not rehearsed.", status=409)
+    if O.claim_is_live(row.rehearsal_id):
+        raise RehearsalRefused("A rehearsal of it is starting. Its report will show here.", status=409)
+    if row.rehearsal_id and not row.rehearsal_id.startswith("claim:"):
+        before = await asyncio.to_thread(_store(platform).get, row.rehearsal_id)
+        if before is not None and before.status == "running":
+            return await asyncio.to_thread(report, platform, before.id)
+    rehearse = getattr(platform, "rehearse_scheduled", None)
+    if rehearse is None:
+        raise RehearsalRefused("Schedules are not running in this copy of Iron Jarvis.", status=409)
+    task = await asyncio.to_thread(O.task_of, platform, row)
+    try:
+        payload = json.loads(task.payload_json or "{}")
+        await asyncio.to_thread(O.check, platform, row, task.name, payload)
+    except O.OfferRefused as exc:
+        raise RehearsalRefused(exc.words, status=exc.status) from None
+    # One press at a time (review): the offer's rehearsal is claimed with a
+    # conditional write; a press that loses answers the winner's report.
+    claim = await asyncio.to_thread(O.claim_rehearsal, platform.engine, row.id, row.rehearsal_id)
+    if not claim:
+        now = await asyncio.to_thread(O.get, platform.engine, row.id)
+        rid = getattr(now, "rehearsal_id", "") or ""
+        if rid and not rid.startswith("claim:"):
+            return await asyncio.to_thread(report, platform, rid)
+        # (a stale claim was taken by the other press, which won)
+        raise RehearsalRefused("A rehearsal of it is starting. Its report will show here.", status=409)
+    store = _store(platform)
+    try:
+        rec = await asyncio.to_thread(
+            lambda: store.create(kind="offer", subject_id=row.id, name=task.name, sample={})
+        )
+    except BaseException:
+        await asyncio.to_thread(O.set_rehearsal, platform.engine, row.id, row.rehearsal_id)
+        raise
+    await asyncio.to_thread(O.set_rehearsal, platform.engine, row.id, rec.id)
+    where = _destinations_words(platform, payload)
+    if where:
+        await asyncio.to_thread(
+            lambda: R.record_side_door(platform.engine, session_id=rec.id, door="schedule_delivery", words=where)
+        )
+    await asyncio.to_thread(_record_webhooks, platform, rec.id)
+    _DRIVERS[rec.id] = asyncio.ensure_future(_drive_schedule(platform, store, rec.id, task))
+    return await asyncio.to_thread(report, platform, rec.id)
 
 
 def _record_webhooks(platform: Any, rid: str) -> None:
@@ -319,6 +392,10 @@ async def keep(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     rec = await asyncio.to_thread(store.get, rehearsal_id)
     if rec is None:
         raise RehearsalRefused("There is no such rehearsal.", status=404)
+    if rec.subject_kind == "offer":
+        # 19-b: an offered schedule does not exist yet; Accept makes it.
+        raise RehearsalRefused("This schedule is only offered so far. Accept it on Improvements to make it.",
+                               status=409)
     view = await asyncio.to_thread(report, platform, rec.id)
     if view["status"] != "ready":
         raise RehearsalRefused("Only a finished rehearsal can be kept.", status=409)
@@ -604,6 +681,9 @@ class RehearseTool(Tool):
         "is listed instead of done. Use when the user asks to rehearse, try "
         "out, dry-run or test a rule or a schedule without it doing anything. "
         "`kind` is rule or schedule; `name` is its name as the user said it. "
+        "A schedule Iron Jarvis OFFERS to run by itself (an Improvements suggestion "
+        "whose id starts with schedule_offer:) is rehearsed with `kind` offer and "
+        "`name` that id. "
         "The report shows on a card when the rehearsal ends; where no card "
         "can show (the phone), the result waits for the report and says it."
     )
@@ -616,7 +696,7 @@ class RehearseTool(Tool):
     input_schema = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "enum": ["rule", "schedule"]},
+            "kind": {"type": "string", "enum": ["rule", "schedule", "offer"]},
             "name": {"type": "string", "description": "The rule's or schedule's name."},
         },
         "required": ["kind", "name"],
@@ -691,7 +771,7 @@ async def _wait_for_report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
 
 def _report_words(view: dict[str, Any], what: str, subject: str, gave_up: bool = False) -> str:
     """The report as a reply's words (the phone has no card)."""
-    page = "Rules" if what == "rule" else "Schedules"
+    page = "Rules" if what == "rule" else "Improvements" if view.get("subject", {}).get("kind") == "offer" else "Schedules"
     status = view["status"]
     if gave_up:
         return (
