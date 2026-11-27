@@ -2159,23 +2159,27 @@ yet**: "Asked 3 times, no tool: send a fax", with the date and your own
 words for each time. You do nothing for it: it is kept from your chats as
 you work.
 
-- **When it counts.** Your request is something Iron Jarvis says it cannot
-  do, like controlling the desktop, and the reply then changed nothing. A
+- **When it counts.** The reply itself said it could not do what you asked
+  ("I can't send faxes", "I cannot send faxes", "Iron Jarvis cannot control
+  the desktop") and then changed nothing. That is the case when Iron Jarvis
+  looked the request up and found it among the things it does not offer
+  (like controlling the desktop), found nothing for it, or found only other
+  things, none of which mention what you asked for by name (like "fax"). A
   request it can do another way (a rule for new files in a folder, tasks
-  handed to your other computer) is not kept, and neither is a question it
-  answered ("how often do the backups run?", "how do I rename this chat?"),
-  unless the reply itself said it could not do what you asked. Or Iron
-  Jarvis looked the request up and found nothing for it, or only other
-  things, none of which mention what
-  you asked for by name (like "fax"): then it counts only when the reply
-  itself said it could not do what you asked ("I can't send faxes", "I
-  cannot send faxes"), and not when the reply went on to use or try one of
-  them, even just to work out a figure or search the web. So a figure, a
-  draft, a translation or a joke the reply gave you in words is not kept,
-  and neither is a reply that only ends with a word about something else it
-  cannot do ("I can't taste-test this lasagna for you"). A reply that says
-  first that it cannot and then gives the answer anyway may still be kept.
-  Asking again in
+  handed to your other computer, an outgoing webhook to Zapier) is not
+  kept, and neither is a question it answered ("how often do the backups
+  run?", "how do I rename this chat?", "what is the shortcut to show my
+  desktop?", "does my project default to full access?"), nor a reply that
+  went on to use or try one of the things it found, even just to work out a
+  figure or search the web. So a figure, a draft, a translation or a joke
+  the reply gave you in words is not kept, and neither is a reply that only
+  ends with a word about something else it cannot do ("I can't taste-test
+  this lasagna for you"). A reply that only says what Iron Jarvis does
+  instead, or what another service cannot do, without saying Iron Jarvis
+  cannot ("in desktop programs the clicking is yours", "Zapier can't reach
+  this PC"), is not kept either: when it is unsure, nothing is kept. A reply
+  that says first that it cannot and then gives the answer anyway may still
+  be kept. Asking again in
   the same chat with the same words (**Try again**) is not counted twice. A
   request is never kept for a name in it (a person's or a company's) or
   because it was written in another language. Neither is one made while a

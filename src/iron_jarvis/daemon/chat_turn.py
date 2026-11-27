@@ -5098,9 +5098,8 @@ async def keep_lookup_miss(d, body, ctx, *, tools_used: Any, trust_state: dict[s
     ``join.FOUND.tried_after``), ONE miss is kept, the owner's words masked
     (their names are never the words no entry knows). A "Not offered" first
     line counts only when its own rule holds on the owner's words
-    (``misses.not_offered_holds``, review round 4) and, unless the line says
-    Iron Jarvis cannot do it (``misses.NOT_OFFERED_CANNOT``, review round 5),
-    only as the others do. Otherwise only when the
+    (``misses.not_offered_holds``, review round 4). Every kind, that line
+    included (review round 7: no line is the record on its own), only when the
     final *reply* itself says it could not do the request, naming it
     (``misses.reply_counts``, review rounds 3 and 4: a figure, a draft, a
     translation or a joke given in words, or a closing hedge such as "I

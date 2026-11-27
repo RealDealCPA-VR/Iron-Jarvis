@@ -45,9 +45,10 @@ Pinned here, through the REAL lanes (only the model is scripted):
   that stays on this network;
 * an agent run keeps a miss only when its task is the owner's own words, and
   reads "Not offered" from its own ledger;
-* review round 5: a "Not offered" line is kept on its own only when it says
-  Iron Jarvis cannot do the request (the desktop); the new-files line, which
-  names reflex_create, never is (offered in words, or its card declined);
+* review round 5: a "Not offered" line was kept on its own only when it says
+  Iron Jarvis cannot do the request (the desktop; since round 7 no line is);
+  the new-files line, which names reflex_create, never is (offered in words,
+  or its card declined);
   the backup and other-computer lines, which also answer a question or say
   how, only when the reply itself says it cannot (both lanes and a run);
   "I cannot …" is a refusal; the low-trust, escalation and Continue-text
@@ -55,8 +56,16 @@ Pinned here, through the REAL lanes (only the model is scripted):
 * review round 6: the voice, chat and builder-limit lines say how the user
   gets it and their rules hold on questions ("How do I rename this chat?"):
   answered, asked twice, once per lane, they keep nothing; a rename refused
-  in the reply's own words is still kept; every line is read against a
-  request AND a question its rule holds on (``NOT_OFFERED_READ``).
+  in the reply's own words is still kept;
+* review round 7: the Zapier, desktop and folder-default lines' rules also
+  hold on an outgoing webhook to Zapier and on questions the reply answers
+  (the shortcut that shows the desktop; whether a project defaults to full
+  access): asked twice, once per lane, and answered, they keep nothing; the
+  desktop request refused "Iron Jarvis cannot control the desktop." is still
+  kept in each lane and in a run. No line is the record on its own: every
+  line is read against a request and a question its rule holds on
+  (``NOT_OFFERED_READ``), and any line keeps nothing for a reply that does
+  not say it cannot.
 """
 
 from __future__ import annotations
@@ -454,11 +463,16 @@ BACKUP_CHANGE = ("Back up Iron Jarvis every hour instead of once a day",
 #: The other-computer line says how to hand tasks to another computer.
 PAIR_QUERY = "hand tasks to another computer / send work to another PC / delegate to other computer"
 PAIR_ASKS = ("Send these tasks to my other computer", "Pass this work over to my other computer")
+#: Review round 7 (note): a question each of the two lines' rules holds on.
+PAIR_QUESTION = "How do I hand tasks to my other computer?"
+WATCH_QUESTION = "Can you move every new PDF in my Downloads folder to my Invoices folder?"
 PAIR_SAID = ("Pair the two computers in Settings › Connections › Your other computers, then type @ and "
              "its name in chat to hand it a task.")
-#: A line that says Iron Jarvis cannot do it is the record itself: a reply
-#: with no limit sentence of its own keeps it all the same.
+#: Review round 7: no "Not offered" line is the record on its own. A reply
+#: that only says, in other words, what Iron Jarvis does instead keeps
+#: nothing (the safe side); one that says it cannot is kept.
 DESKTOP_IN_WORDS = "The browser add-on clicks in web pages; in desktop programs the clicking is yours."
+DESKTOP_REFUSED = "Iron Jarvis cannot control the desktop."
 #: Review round 5 (should): refusals written with "cannot".
 CANNOT_SAID = ("I cannot send faxes from here.", "Iron Jarvis cannot send a fax.")
 #: Review round 6 (blocking): questions the voice, chat and builder-limit
@@ -479,6 +493,25 @@ LINE_QUESTIONS = (
 #: …and the control: a request to rename, refused in the reply's own words.
 RENAME_ASKS = ("Rename this chat to Taxes 2026", "Rename this chat to Budget 2027")
 RENAME_REFUSED = "I can't rename chats from inside a reply: use its ⋯ menu."
+#: Review round 7 (blocking): the Zapier, desktop and folder-default lines'
+#: rules also hold on a request Iron Jarvis does (an outgoing webhook to
+#: Zapier, which the line itself names) and on questions the reply answers
+#: (the Windows shortcut that shows the desktop; whether a folder defaults to
+#: full access). ``(entry, query, (stream ask, post ask), reply)``; on the
+#: real index each lookup's line 1 is that "Not offered" line.
+LINE_ANSWERS = (
+    ("internet_calls_in", "outgoing webhook to Zapier / webhook when a task finishes / Zapier integration",
+     ("How do I make a webhook so Zapier can start a workflow when a task finishes?",
+      "Set up a webhook so Zapier can start a workflow when my tasks finish"),
+     "That works with an outgoing webhook: paste your Zap's catch-hook address and I'll add it."),
+    ("desktop_control", "see my desktop / show desktop / hide all windows",
+     ("What is the keyboard shortcut to look at my desktop?",
+      "How do I see my desktop quickly when lots of windows are open?"),
+     "Press Windows+D to show the desktop; press it again to bring your windows back."),
+    ("full_access_default", "default full access for a folder / folder default approval level / project default mode",
+     ("Does my project default to full access?", "Should I set Auto or full access as the default for my repo?"),
+     "No: Auto can be a folder's default, and Full access is turned on in each coding session."),
+)
 
 
 def _kind_on_the_real_index(app, query: str, words: str):
@@ -549,9 +582,10 @@ async def test_a_not_offered_line_that_says_how_or_answers_the_question_keeps_no
     the request. A rule for new files (the line names reflex_create, which
     does it) offered in words, the backup question answered, tasks handed to
     the other computer by pairing: each asked twice, once per lane, keeps no
-    row and no item. The controls: the desktop request is still kept as not
-    offered on its line alone, in each lane; the backup line keeps a request
-    to change how often when the reply itself says it cannot."""
+    row and no item. The controls: the desktop request refused in the reply's
+    own words is still kept as not offered, in each lane (review round 7: no
+    line is the record on its own); the backup line keeps a request to change
+    how often when the reply itself says it cannot."""
     from iron_jarvis.capability_search import misses as M
 
     app, ws = desk
@@ -567,7 +601,7 @@ async def test_a_not_offered_line_that_says_how_or_answers_the_question_keeps_no
     assert _misses(app) == []
     assert await _missing_items(app) == []
     for lane, ask in zip(("stream", "post"), MOUSE_ASKS):
-        await _turn(app, ws, lane, ask, _lookup_then_say(DESKTOP_QUERY, DESKTOP_IN_WORDS))
+        await _turn(app, ws, lane, ask, _lookup_then_say(DESKTOP_QUERY, DESKTOP_REFUSED))
     assert [(r["kind"], r["entry_id"]) for r in _misses(app)] == [("not_offered", "desktop_control")] * 2
     assert [i["title"] for i in await _missing_items(app)] == ["Asked 2 times, no tool: control the desktop mouse"]
     ask, query, said = BACKUP_CHANGE
@@ -583,8 +617,8 @@ async def test_a_question_a_line_answers_keeps_nothing_in_either_lane(desk):
     question ("Does the builder agent have a monthly limit?"), and those
     lines say how the user gets it. Each asked twice, once per lane, and
     answered: no row, no item. The controls: a request to rename refused in
-    the reply's own words is still kept, in each lane; the desktop request
-    is still kept on its line alone."""
+    the reply's own words is still kept, in each lane; so is the desktop
+    request refused in the reply's own words."""
     from iron_jarvis.capability_search import misses as M
 
     app, ws = desk
@@ -601,8 +635,40 @@ async def test_a_question_a_line_answers_keeps_nothing_in_either_lane(desk):
         await _turn(app, ws, lane, ask, _lookup_then_say(LINE_QUESTIONS[1][1], RENAME_REFUSED))
     assert [(r["kind"], r["entry_id"]) for r in _misses(app)] == [("not_offered", "chat_items")] * 2, _misses(app)
     assert [i["title"] for i in await _missing_items(app)] == ["Asked 2 times, no tool: rename a chat"]
-    await _turn(app, ws, "post", MOUSE_ASKS[0], _lookup_then_say(DESKTOP_QUERY, DESKTOP_IN_WORDS))
+    await _turn(app, ws, "post", MOUSE_ASKS[0], _lookup_then_say(DESKTOP_QUERY, DESKTOP_REFUSED))
     assert [(r["kind"], r["entry_id"]) for r in _misses(app)][2:] == [("not_offered", "desktop_control")]
+
+
+@pytest.mark.asyncio
+async def test_a_doable_request_or_answered_question_on_the_zapier_desktop_or_folder_default_line_keeps_nothing(desk):
+    """Review round 7 (blocking): the Zapier, desktop and folder-default
+    lines' rules also hold on a request Iron Jarvis does ("Set up a webhook
+    so Zapier can start a workflow": an outgoing webhook, which the line
+    itself names) and on questions the reply answers (the shortcut that shows
+    the desktop; whether a project defaults to full access). Each asked twice,
+    once per lane, and answered: no row, no item. The control: the desktop
+    request refused "Iron Jarvis cannot control the desktop." is still kept,
+    in each lane, and listed."""
+    from iron_jarvis.capability_search import misses as M
+    from iron_jarvis.daemon.page_doors import NOT_OFFERED
+
+    lines = {item.id: " ".join(item.line.split()) for item in NOT_OFFERED}
+    app, ws = desk
+    for entry, query, asks, said in LINE_ANSWERS:
+        for lane, ask in zip(("stream", "post"), asks):
+            assert M.not_offered_holds(entry, ask), ("the control: the line's own rule holds", ask)
+            model = _lookup_then_say(query, said)
+            await _turn(app, ws, lane, ask, model)
+            first = model.tool_texts[1][-1].splitlines()[1]
+            assert first.startswith("1. Not offered: " + lines[entry][:60]), ("the control: line 1", lane, ask,
+                                                                             first[:200])
+    assert _misses(app) == []
+    assert await _missing_items(app) == []
+    for lane, ask in zip(("stream", "post"), MOUSE_ASKS):
+        await _turn(app, ws, lane, ask, _lookup_then_say(DESKTOP_QUERY, DESKTOP_REFUSED))
+    assert [(r["kind"], r["entry_id"], r["surface"]) for r in _misses(app)] == [
+        ("not_offered", "desktop_control", "chat")] * 2, _misses(app)
+    assert [i["title"] for i in await _missing_items(app)] == ["Asked 2 times, no tool: control the desktop mouse"]
 
 
 @pytest.mark.asyncio
@@ -718,9 +784,10 @@ def test_the_reply_itself_must_say_it_cannot_do_the_request():
         # …and written with "cannot" (review round 5) it is still a hedge.
         assert not M.reply_says_it_cannot(reply.replace("can't", "cannot"), unknown, query), reply
     assert M.reply_says_it_cannot("Here are two ways.\n\nI can't help with faxing myself.", ["fax"], FAX_QUERIES[0])
-    # Review round 5: a line that says Iron Jarvis cannot do it says it itself;
-    # any other line counts as ``nothing`` does.
-    assert M.reply_counts("not_offered", "", [], DESKTOP_QUERY, entry_id="desktop_control")
+    # Review round 7: every line counts as ``nothing`` does (round 5 let the
+    # desktop line say it itself; its rule also holds on answered questions).
+    assert not M.reply_counts("not_offered", "", [], DESKTOP_QUERY, entry_id="desktop_control")
+    assert M.reply_counts("not_offered", DESKTOP_REFUSED, [], DESKTOP_QUERY, entry_id="desktop_control")
     assert not M.reply_counts("not_offered", "", [], BACKUP_QUERY, entry_id="jarvis_backup")
     assert not M.reply_counts("not_offered", BACKUP_SAID, [], BACKUP_QUERY, entry_id="jarvis_backup")
     assert M.reply_counts("not_offered", BACKUP_CHANGE[2], [], BACKUP_CHANGE[1], entry_id="jarvis_backup")
@@ -852,20 +919,21 @@ def test_a_lookup_read_from_part_of_the_list_says_nothing_is_missing():
 
 
 #: Review round 5 (blocking): every "Not offered" line, read against what its
-#: own rule holds on (asks it holds on, requests AND questions, review round
-#: 6; the lookup's words): "cannot" (the line says Iron Jarvis cannot do it
-#: and gives no way to get it, so every ask is about a thing it cannot do),
-#: "does" (it names the tool that does it) or "reply" (it also answers a
-#: question or says how the user gets it: kept only when the reply itself
-#: says it cannot).
+#: own rule holds on (a request, a how-to or yes/no question, and, review
+#: round 7, the request Iron Jarvis DOES that the rule also holds on; the
+#: lookup's words): "does" (it names the tool that does it: never a miss of
+#: this kind) or "reply" (kept only when the reply itself says it cannot).
+#: Review round 7: no line is "cannot", the record on its own: the desktop,
+#: folder-default and Zapier lines also hold on a question the reply answers
+#: or an outgoing webhook, as round 6 found for voice, chat and the builder.
 NOT_OFFERED_READ = {
-    "desktop_control": ("cannot", (MOUSE_ASKS[0], "Can you move my mouse to the start button?",
-                                   "Is desktop automation something you can do?"), DESKTOP_QUERY),
-    "full_access_default": ("cannot", ("Make full access the default for my website folder",
-                                       "Can I make full access the default for this folder?"),
+    "desktop_control": ("reply", (MOUSE_ASKS[0], "Can you move my mouse to the start button?",
+                                  "Is desktop automation something you can do?", *LINE_ANSWERS[1][2]), DESKTOP_QUERY),
+    "full_access_default": ("reply", ("Make full access the default for my website folder",
+                                      "Can I make full access the default for this folder?", *LINE_ANSWERS[2][2]),
                             "default full access for a folder / folder default approval level / always full access"),
-    "internet_calls_in": ("cannot", ("Let Zapier start a task in Iron Jarvis",
-                                     "How do I get Zapier to trigger a run here?"),
+    "internet_calls_in": ("reply", ("Let Zapier start a task in Iron Jarvis",
+                                    "How do I get Zapier to trigger a run here?", *LINE_ANSWERS[0][2]),
                           "Zapier starts a task / incoming webhook from a web service / external trigger"),
     # Review round 6: each of these says how the user gets it (make an agent
     # of their own with a limit; the microphone button and Voice chat; the
@@ -875,23 +943,22 @@ NOT_OFFERED_READ = {
     "voice_press": ("reply", ("Turn on voice chat so I can talk to you", *LINE_QUESTIONS[0][2]),
                     "turn on voice chat / talk by voice / hands-free voice mode"),
     "chat_items": ("reply", (RENAME_ASKS[0], *LINE_QUESTIONS[1][2]), "rename a chat / rename conversation / chat title"),
-    "watcher_suggests": ("does", (WATCH_ASKS[0],), WATCH_QUERY),
+    "watcher_suggests": ("does", (WATCH_ASKS[0], WATCH_QUESTION), WATCH_QUERY),
     "jarvis_backup": ("reply", (BACKUP_ASKS[0], BACKUP_CHANGE[0]), BACKUP_QUERY),
-    "another_computer": ("reply", (PAIR_ASKS[0],), PAIR_QUERY),
+    "another_computer": ("reply", (PAIR_ASKS[0], PAIR_QUESTION), PAIR_QUERY),
 }
 
 
-def test_each_not_offered_line_counts_only_when_it_says_iron_jarvis_cannot_do_it():
+def test_each_not_offered_line_counts_only_when_the_reply_says_it_cannot():
     from iron_jarvis.capability_search import misses as M
     from iron_jarvis.daemon.page_doors import NOT_OFFERED
 
     lines = {item.id: " ".join(item.line.split()) for item in NOT_OFFERED}
-    assert M.NOT_OFFERED_CANNOT | M.NOT_OFFERED_DOES <= set(lines), "every id named is a line"
-    assert not M.NOT_OFFERED_CANNOT & M.NOT_OFFERED_DOES
+    assert M.NOT_OFFERED_DOES <= set(lines), "every id named is a line"
     for entry, (read, asks, query) in NOT_OFFERED_READ.items():
         if entry not in lines:
             continue  # a line taken out later
-        assert (entry in M.NOT_OFFERED_CANNOT) is (read == "cannot"), entry
+        assert read in ("does", "reply"), entry
         refusal = f"I can't {M._index.first_part(query)} here."
         for ask in asks:
             assert M.not_offered_holds(entry, ask), ("the control: its own rule holds", entry, ask)
@@ -903,9 +970,21 @@ def test_each_not_offered_line_counts_only_when_it_says_iron_jarvis_cannot_do_it
                 assert entry in M.NOT_OFFERED_DOES and found is None, (entry, found)
                 continue
             assert found == ("not_offered", entry, []), (entry, ask, found)
-            in_words = M.reply_counts("not_offered", "Here is how.", [], query, entry_id=entry)
-            assert in_words is (read == "cannot"), (entry, ask, "a reply in words")
+            assert not M.reply_counts("not_offered", "Here is how.", [], query, entry_id=entry), (
+                entry, ask, "a reply in words")
             assert M.reply_counts("not_offered", refusal, [], query, entry_id=entry), (entry, refusal)
+    # Every line, in the table or added later: a reply that does not say it
+    # cannot never keeps it (review round 7).
+    for item in NOT_OFFERED:
+        assert not M.reply_counts("not_offered", "Here is how.", [], "the request / it / this",
+                                  entry_id=item.id), item.id
+    # The answers in words of the round-7 asks are not refusals; the desktop
+    # refusals are (the pure reading behind the two-lane test).
+    for entry, query, _asks, said in LINE_ANSWERS:
+        assert not M.reply_counts("not_offered", said, [], query, entry_id=entry), (entry, said)
+    for said in (DESKTOP_REFUSED, "I can't control your desktop or move the mouse."):
+        assert M.reply_counts("not_offered", said, [], DESKTOP_QUERY, entry_id="desktop_control"), said
+    assert not M.reply_counts("not_offered", DESKTOP_IN_WORDS, [], DESKTOP_QUERY, entry_id="desktop_control")
 
 
 @pytest.mark.asyncio
@@ -1412,34 +1491,44 @@ def test_an_agent_run_that_then_made_the_change_keeps_none(tmp_path):
     assert rows == [], rows
 
 
-@pytest.mark.parametrize("said", ["Iron Jarvis cannot control the desktop.", DESKTOP_IN_WORDS])
-def test_an_agent_runs_not_offered_first_line_is_read_from_its_ledger(tmp_path, said):
-    """Review round 5: a line that says Iron Jarvis cannot do it is the record
-    itself, also when the run's answer has no limit sentence of its own."""
+@pytest.mark.parametrize("said, kept", [
+    (DESKTOP_REFUSED, True), ("I can't control your desktop or move the mouse.", True), (DESKTOP_IN_WORDS, False),
+])
+def test_an_agent_runs_not_offered_first_line_is_read_from_its_ledger(tmp_path, said, kept):
+    """Review round 7: the "Not offered" line is read from the run's own
+    ledger, and the run's answer must say itself that it cannot (no line is
+    the record on its own): an answer that only says what Iron Jarvis does
+    instead keeps nothing."""
     rows, looked = _agent_run(tmp_path, "Move my mouse to the start button and click it", script=[
         _call(1, NAME, query=DESKTOP_QUERY), said,
     ])
     assert looked == 1, "the control: the run looked it up"
     assert _agent_run.lookup_said[0].splitlines()[1].startswith("1. Not offered:"), _agent_run.lookup_said
+    if not kept:
+        assert rows == [], rows
+        return
     assert rows == [("Move my mouse to the start button and click it", "not_offered", "run")], rows
     assert _agent_run.entry_ids == ["desktop_control"], _agent_run.entry_ids
 
 
-@pytest.mark.parametrize("case", ["budget", "joke", "backup"])
+@pytest.mark.parametrize("case", ["budget", "joke", "backup", "zapier"])
 def test_an_agent_run_answered_in_words_after_a_not_offered_line_or_nothing_keeps_none(tmp_path, case):
     """Review round 4 (blocking), in a run: the ledger's "1. Not offered: "
     line about agents' monthly limits, for a grocery budget given in words;
     a lookup that found nothing, for a joke the run told. Review round 5: the
-    backup line, for the backup question the run answered."""
+    backup line, for the backup question the run answered. Review round 7:
+    the Zapier line, for an outgoing webhook the run said how to make."""
     task, query, said = {
         "budget": (BUDGET_ASKS[0], BUDGET_QUERY, BUDGET_SAID[0]),
         "joke": (JOKE_ASKS[0], JOKE_QUERY, JOKE_SAID),
         "backup": (BACKUP_ASKS[0], BACKUP_QUERY, BACKUP_SAID),
+        "zapier": (LINE_ANSWERS[0][2][0], LINE_ANSWERS[0][1], LINE_ANSWERS[0][3]),
     }[case]
     rows, looked = _agent_run(tmp_path, task, script=[_call(1, NAME, query=query), said])
     assert looked == 1, "the control: the run looked it up"
     lead = {"budget": "1. Not offered: Iron Jarvis's own agents", "joke": CT_TOOL.NOTHING_FOUND,
-            "backup": "1. Not offered: Iron Jarvis backs itself up"}[case]
+            "backup": "1. Not offered: Iron Jarvis backs itself up",
+            "zapier": "1. Not offered: A web service on the internet"}[case]
     assert lead in _agent_run.lookup_said[0], _agent_run.lookup_said[0][:300]
     assert rows == [], rows
 

@@ -17,14 +17,10 @@ lanes; an agent run's from its ledger, :func:`keep_run_miss`): the LAST lookup
   puts it in the prompt, ``daemon/page_doors.not_offered``) holds on the
   owner's words (:func:`not_offered_holds`; review round 4: "a monthly
   grocery budget" answers the line about agents' monthly limits first; such
-  a lookup is judged by the next rule instead), AND the line says Iron
-  Jarvis CANNOT do what its rule holds on (:data:`NOT_OFFERED_CANNOT`;
-  review round 5: the line about new files names ``reflex_create``, which
-  does it, so it is judged by the next rule; the backup line and the
-  other-computer line also answer a question or say how, so they count only
-  when the reply itself says it cannot, :func:`reply_counts`; review round 6:
-  so do the voice, chat and builder-limit lines, whose rules also hold on
-  "How do I rename this chat?" and the like), or
+  a lookup is judged by the next rule instead), AND the line is not one that
+  names the tool that does it (:data:`NOT_OFFERED_DOES`; review round 5: the
+  line about new files names ``reflex_create``, so it is judged by the next
+  rule), or
 * the request was NAMED by words no entry of the list knows: EVERY way the
   lookup named it (two or more) has such a word that is not a name (a word
   written with a capital mid-sentence, by the owner or the lookup:
@@ -42,10 +38,15 @@ and the reply then made no successful call that changes or creates something
 (for ``unknown``, whose lookup listed lines, no call at all after it, whatever
 became of it, other than a lookup: a line the reply took to fit, even one
 that only reads, failed or was declined, is not "nothing for it";
-:func:`done_another_way`). For ``unknown``, ``nothing`` and a "Not offered"
-line outside :data:`NOT_OFFERED_CANNOT` the final reply (a run's final
+:func:`done_another_way`). For EVERY kind the final reply (a run's final
 answer) must ALSO say itself that it could not do it, naming the request
-(:func:`reply_says_it_cannot`: "I can't send faxes", "I cannot …"; review
+(:func:`reply_counts`; review rounds 5 to 7: no "Not offered" line is the
+record on its own, since every line's rule also holds on a question the
+reply answers or on a request Iron Jarvis does: "How often do your backups
+run?", "How do I rename this chat?", "What is the keyboard shortcut to look
+at my desktop?", "Set up a webhook so Zapier can start a workflow", which
+the Zapier line itself says an outgoing webhook does;
+:func:`reply_says_it_cannot`: "I can't send faxes", "I cannot …"; review
 round 3: on a fresh set, half of 28 doable requests answered in words, a
 BMI, a translation, a draft, were kept without it; review round 4: a joke
 after a lookup that found nothing, and a closing hedge whose first word is
@@ -267,26 +268,26 @@ def _named_by_unknown(answer: dict[str, Any], names: frozenset[str]) -> bool:
     return all(any(str(w) and str(w) not in names for w in part) for part in parts)
 
 
-#: The "Not offered" lines (``daemon/page_doors.NOT_OFFERED``) that say Iron
-#: Jarvis CANNOT do whatever their own rule holds on, and give no way to get
-#: it (20-a review round 5): such a line is the record that the request is
-#: one it cannot do yet. Review round 6: not the voice line, the chat line or
-#: the builder-limit line: each says how the USER gets it (the microphone
-#: button and Voice chat; the chat's own menu; an agent of their own with a
-#: limit), and its rule also holds on a question about it ("Can I use the
-#: microphone to dictate?", "How do I rename this chat?", "Does the builder
-#: agent have a monthly limit?"), which the reply answers.
-NOT_OFFERED_CANNOT = frozenset({"desktop_control", "full_access_default", "internet_calls_in"})
-#: The lines that name the tool that DOES what their rule holds on
-#: ("watcher_suggests": a rule for new files, ``reflex_create``): never a miss
-#: of this kind; such a lookup is judged as any other list (:func:`miss_of`).
+#: The "Not offered" lines (``daemon/page_doors.NOT_OFFERED``) that name the
+#: tool that DOES what their rule holds on ("watcher_suggests": a rule for
+#: new files, ``reflex_create``): never a miss of this kind; such a lookup is
+#: judged as any other list (:func:`miss_of`).
 NOT_OFFERED_DOES = frozenset({"watcher_suggests"})
-#: Every other line ("jarvis_backup": its rule also holds on a question the
-#: line answers, "how often do your backups run?", and on a backup made now;
-#: "another_computer": also on handing tasks to another computer, which
-#: pairing does; the voice, chat and builder-limit lines, review round 6; and
-#: any line added later) counts only when the reply itself says it could not
-#: do the request, as for ``nothing`` (:func:`reply_counts`).
+#: Every other line, and any line added later, counts only when the reply
+#: itself says it could not do the request, as for ``nothing``
+#: (:func:`reply_counts`). No line is the record on its own (20-a review
+#: rounds 5 to 7): each line's rule also holds on a question the reply
+#: answers or a request Iron Jarvis does. "jarvis_backup": "how often do your
+#: backups run?"; "another_computer": handing tasks over, which pairing does;
+#: the voice, chat and builder-limit lines: "Can I use the microphone to
+#: dictate?", "How do I rename this chat?", "Does the builder agent have a
+#: monthly limit?" (round 6); "desktop_control": "What is the keyboard
+#: shortcut to look at my desktop?"; "full_access_default": "Does my project
+#: default to full access?", whose line says Auto can be the default;
+#: "internet_calls_in": "Set up a webhook so Zapier can start a workflow",
+#: which the line itself says an outgoing webhook does (round 7). The safe
+#: side: a reply that only says what Iron Jarvis does instead ("in desktop
+#: programs the clicking is yours") keeps nothing.
 
 
 def not_offered_holds(entry_id: Any, words: Any) -> bool:
@@ -510,15 +511,12 @@ def reply_counts(kind: str, reply: Any, unknown: Iterable[str], query: Any = "",
     a figure, a draft, a translation, is never "can't do yet"; review round
     4: nor a joke after a lookup that found nothing), named by the words no
     entry knows or, when the lookup left none, by the search words of
-    *query*'s first way of naming it. ``not_offered``: a line that says Iron
-    Jarvis cannot do it (*entry_id* in :data:`NOT_OFFERED_CANNOT`) says it
-    itself (:func:`miss_of` kept it only when that line's own rule holds on
-    the owner's words); any other line, as ``nothing`` (review round 5: the
-    backup line answers "how often do your backups run?", the other-computer
-    line says how to hand tasks to it; review round 6: the chat line answers
-    "How do I rename this chat?")."""
-    if kind == KIND_NOT_OFFERED and str(entry_id or "") in NOT_OFFERED_CANNOT:
-        return True
+    *query*'s first way of naming it. ``not_offered``: as ``nothing``,
+    whatever the line (*entry_id* is kept for the record; review rounds 5 to
+    7: the backup line answers "how often do your backups run?", the chat
+    line "How do I rename this chat?", the desktop line "What is the keyboard
+    shortcut to look at my desktop?", and the Zapier line's rule holds on an
+    outgoing webhook, which Iron Jarvis has)."""
     wanted = [str(w) for w in unknown or () if str(w or "").strip()]
     if kind in (KIND_NOTHING, KIND_NOT_OFFERED) and not wanted:
         wanted = _index.tokens(_index.first_part(query))
@@ -878,9 +876,8 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
     from the row's own ``reversibility``, means it was done another way; a
     rehearsal's row changed nothing; for ``unknown``, ANY call after it,
     ok or not, as :func:`done_another_way`; a "Not offered" line only when
-    its own rule holds on *words*, :func:`miss_of`; and for ``unknown``,
-    ``nothing`` and a line outside :data:`NOT_OFFERED_CANNOT` only when the
-    run's final *answer* says it could not do it, :func:`reply_counts`). The caller
+    its own rule holds on *words*, :func:`miss_of`; and, for every kind, only
+    when the run's final *answer* says it could not do it, :func:`reply_counts`). The caller
     checks whose words the task is, the run's trust and where it came from.
     Returns the group's id, or None. BLOCKING; RAISES."""
     from sqlalchemy import text
@@ -923,7 +920,7 @@ def keep_run_miss(platform: Any, session_id: str, *, words: Any, local_only: boo
 
 
 __all__ = [
-    "ASKS_SHOWN", "KEEP_DAYS", "LIST_AT", "LIST_DAYS", "LIST_MAX", "NOT_OFFERED_CANNOT", "NOT_OFFERED_DOES",
+    "ASKS_SHOWN", "KEEP_DAYS", "LIST_AT", "LIST_DAYS", "LIST_MAX", "NOT_OFFERED_DOES",
     "WORDS_CHARS", "AlreadyAnswered", "NotFound",
     "answer", "answer_from_ledger", "calls_after_last_lookup", "changed_something", "clean_words",
     "done_another_way", "keep",
