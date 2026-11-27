@@ -7,7 +7,9 @@ lane): :func:`checked_for_turn`, once the reply and its notes have settled.
 It writes the reply's existing checks (a claim the check-again loop left
 open, the required files), checks what the files the reply's own tools wrote
 say, writes those too, then READS THE RECORD BACK and builds the line from
-the rows it holds. A reply of a chat that is Local only when it is written
+the rows THAT WRITE made (by their own ids, ``record.by_ids``: never by the
+turn's id, which is the caller's choice and which two chats, or one chat
+twice, may send). A reply of a chat that is Local only when it is written
 marks its rows ``kept_home`` (:func:`reply_is_local_only`): after the chat
 is switched off Local only, no reader for it hands them to a model.
 The answer carries the line as ``checked`` only when a file was made or
@@ -166,8 +168,11 @@ async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", re
     # The rows hold file names, sheet names and figures: a reply of a chat
     # that is Local only NOW keeps them home, whatever the chat is later.
     home = await asyncio.to_thread(reply_is_local_only, engine, thread_id)
-    await record.note(engine, rows, thread_id=thread_id, turn_id=turn, kept_home=home)
-    chat = thread_id
+    # THIS write's rows, by their own ids: the line is read back by them and
+    # a new chat's rows are homed by them. Never by the turn's id (the
+    # caller's own choice: two new chats, or one chat twice, may send one).
+    mine: list[str] = []
+    await record.note(engine, rows, thread_id=thread_id, turn_id=turn, kept_home=home, written=mine)
     if not thread_id:
         # A NEW chat's first reply: the page names its chat with a link, at
         # any moment (before this reply ends, while its rows are being
@@ -176,14 +181,10 @@ async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", re
         # itself (``routes/chat.link_chat_turn``).
         chat = _chat_of(turn)
         if chat:
-            await asyncio.to_thread(record.home_turn, engine, turn, chat)
+            await asyncio.to_thread(record.home_ids, engine, mine, chat)
     if not docs:
         return None
-    kept = await asyncio.to_thread(record.for_turn, engine, turn)
-    # A turn's id is the caller's own choice. Two chats that send one id are
-    # never read as one reply: this chat's line holds this chat's rows (a
-    # chat not saved yet: the rows that have no chat, or were just homed).
-    kept = [r for r in kept if r.get("thread_id") in ({thread_id} if thread_id else {"", chat})]
+    kept = await asyncio.to_thread(record.by_ids, engine, mine)
     return record.payload(kept) if record.has_content(kept) else None
 
 
@@ -233,12 +234,13 @@ def _checked_later(engine: Any, turn: str, thread_id: str, docs: "list[str]", un
                 rows.append(claims)
         if not rows:
             return 0
+        mine: list[str] = []
         written = record.write(engine, rows, thread_id=thread_id, turn_id=turn,
-                               kept_home=reply_is_local_only(engine, thread_id))
+                               kept_home=reply_is_local_only(engine, thread_id), written=mine)
         if not thread_id:
             chat = _chat_of(turn)
             if chat:
-                record.home_turn(engine, turn, chat)
+                record.home_ids(engine, mine, chat)     # these rows, not every row of this turn id
         return written
     except Exception:  # noqa: BLE001 — a record is never worth anything of the reply's
         log.debug("a reply's checks could not be recorded", exc_info=True)
@@ -452,6 +454,22 @@ def _on_disk(path: str) -> bool:
         return False
 
 
+def _as_checked(rows: "list[dict[str, Any]]", key: "tuple[str, str]", path: str) -> bool:
+    """Is the file at *path* still the file these rows were written about:
+    on disk, with the size and the last-written time the check stored
+    (``record.file_stamp``)? A row says what a file held WHEN IT WAS
+    CHECKED; once the file has changed (the person's own edit, a later
+    reply's) its row is not shown. A row from a writer that stored no stamp
+    is held only to "the file is on disk"."""
+    now = record.file_stamp(path)
+    if not now:
+        return False
+    stamps = {str(r.get("stamp") or "") for r in rows
+              if r.get("check") in record.CONTENT_CHECKS and r.get("file") and _row_key(r) == key}
+    stamps.discard("")
+    return not stamps or now in stamps
+
+
 def not_covered(rows: "list[dict[str, Any]]", documents: "Iterable[Any] | None") -> "dict[str, Any] | None":
     """A result card may list files this run's own checks never looked at
     (a team lead's card lists its workers' documents; a run that made more
@@ -488,8 +506,9 @@ def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" 
     record holds no check of a file the run made. *documents* is the list
     the result card shows:
 
-    * a check of a file that is no longer on that list, or no longer on
-      disk, is not shown (the card speaks of the files it lists);
+    * a check of a file that is no longer on that list, no longer on disk,
+      or CHANGED since it was checked (:func:`_as_checked`) is not shown
+      (the card speaks of the files it lists, as they are now);
     * a file on it that no check of this run covers is said as not checked,
       ONCE and by name (:func:`not_covered`; the cap's own "2 more files"
       row gives way to it)."""
@@ -501,7 +520,7 @@ def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" 
         listed = bool(docs)
         if listed:
             took, _missing = _match(rows, docs)
-            shown = {key for key, path in took.items() if _on_disk(path)}
+            shown = {key for key, path in took.items() if _as_checked(rows, key, path)}
             rows = [r for r in rows if r.get("check") not in record.CONTENT_CHECKS or not r.get("file")
                     or _row_key(r) in shown]
             docs = [d for d in docs if _on_disk(d)]
@@ -516,5 +535,72 @@ def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" 
         return None
 
 
-__all__ = ["RECORD_WAIT_S", "TURN_CAP_S", "checked_for_turn", "may_read_home", "not_covered", "note_finish",
-           "reply_is_local_only", "run_payload", "settle_run"]
+def line_stays_home(engine: Any, session_id: str) -> bool:
+    """BLOCKING. Must a run's line be left off a result that is read from
+    OUTSIDE the run (``GET /sessions/{id}/result``: a chat's page draws the
+    run's card from it and saves it on the chat)? The rule of the delivered
+    card and of the tool: a run that keeps its words on this PC
+    (``agents/chat_delivery.keeps_words_home``) shows its line only in a
+    chat that is Local only itself, asked NOW; with no chat, or when any of
+    it cannot be read, the line stays home (True)."""
+    try:
+        from ..agents import chat_delivery
+        from ..core.db import session_scope
+        from ..core.models import Session
+
+        with session_scope(engine) as db:
+            row = db.get(Session, str(session_id or ""))
+            if row is None or not chat_delivery.keeps_words_home(row):
+                return False
+            chat = str(chat_delivery.chat_thread_of(row) or "")
+    except Exception:  # noqa: BLE001
+        log.debug("a run's own row could not be read", exc_info=True)
+        return True
+    return not (chat and _is_local_only(engine, chat))
+
+
+#: How many of a chat's rows one reopening reads at most.
+REOPEN_READ = 2_000
+
+
+def reopened(engine: Any, thread_id: str, messages: Any) -> Any:
+    """BLOCKING. A saved chat's messages as they are SERVED when the chat
+    is opened again: a reply's saved line (``checked``) says what its files
+    held when the reply ended, so the checks of a file that has CHANGED
+    since (or is gone) are taken off it, and the line is built again from
+    the record's remaining rows of that reply (no line when no check of a
+    file is left). Told by the stamp each row stored (:func:`_as_checked`)
+    against the reply's own list of files (``documents``). A reply whose
+    files are as they were, one with no rows left in the record, and
+    anything that cannot be read come back exactly as saved. Nothing is
+    written: the saved chat is not changed. Never raises."""
+    try:
+        marked = [m for m in messages if isinstance(m, dict) and isinstance(m.get("checked"), dict)
+                  and m.get("turnId") and isinstance(m.get("documents"), list)]
+        if not marked or not str(thread_id or ""):
+            return messages
+        by_turn: dict[str, list[dict[str, Any]]] = {}
+        for r in reversed(record.for_thread(engine, str(thread_id), limit=REOPEN_READ)):
+            by_turn.setdefault(str(r.get("turn_id") or ""), []).append(r)
+        for m in marked:
+            rows = by_turn.get(str(m.get("turnId")), [])
+            if not rows:
+                continue
+            took, _missing = _match(rows, [d for d in m["documents"] if isinstance(d, str)])
+            stale = {key for key, path in took.items() if not _as_checked(rows, key, path)}
+            if not stale:
+                continue
+            left = [r for r in rows if not (r.get("check") in record.CONTENT_CHECKS and r.get("file")
+                                            and _row_key(r) in stale)]
+            fresh = record.payload(left) if record.has_content(left) else None
+            if fresh is None:
+                m.pop("checked", None)
+            else:
+                m["checked"] = fresh
+    except Exception:  # noqa: BLE001 — a line is never worth a chat that does not open
+        log.debug("a reopened chat's checked lines could not be looked at again", exc_info=True)
+    return messages
+
+
+__all__ = ["RECORD_WAIT_S", "TURN_CAP_S", "checked_for_turn", "line_stays_home", "may_read_home", "not_covered",
+           "note_finish", "reopened", "reply_is_local_only", "run_payload", "settle_run"]

@@ -5,9 +5,12 @@ checks of the chat it was called in (the saved chat's, or, in a new chat not
 saved yet, this reply's own), or of the run it was called in. ``run`` names
 an agent run STARTED FROM THIS CHAT: the tool answers for a run only when
 the record says that run belongs to the calling chat. Any other run (another
-chat's, one that belongs to no chat, one the record does not know) is
-refused in the same plain words, which say where to look. Never another
-chat's rows: there is no argument that names a chat.
+chat's, one that belongs to no chat, one the record does not know, one
+whose rows stay on this PC) is refused in the same plain words. Never
+another chat's rows: there is no argument that names a chat. An answer with
+nothing to list is ONE text whether the record holds nothing or holds rows
+that stay on this PC, true in both cases (:data:`NOTHING`,
+:data:`OTHER_RUN`).
 
 NEWEST FIRST, BY REPLY. A long chat holds more checks than one answer reads.
 The newest replies are answered for, each reply's checks whole, and when
@@ -33,13 +36,18 @@ TOOL_NAME = "checks_list"
 #: About how many checks one answer lists (whole replies, newest first; the
 #: newest reply is always whole).
 MAX_ROWS = 60
+#: The two answers with nothing to list. Each is ONE text, the same whether
+#: the record holds nothing for the caller or holds rows that stay on this
+#: PC (so the answer never tells which), and every sentence of it is true in
+#: both cases.
 NOTHING = (
-    "Iron Jarvis's record holds no check for this chat yet. When a reply makes or changes a file, Iron Jarvis "
-    "looks at what that file holds when the reply ends."
+    "No check is listed here. When a reply makes or changes a file, Iron Jarvis looks at what that file holds "
+    "when the reply ends. Checks made in a Local only chat or task stay on this PC: they are listed only in a "
+    "chat that is Local only."
 )
 OTHER_RUN = (
-    "That run was not started from this chat, so its checks are not read here. Open that run to see what was "
-    "checked."
+    "No check of that run is listed here. A run's checks are listed only in the chat that started it, and a "
+    "Local only run's only in a chat that is Local only."
 )
 OLDER = "Older checks in this chat are not listed here."
 

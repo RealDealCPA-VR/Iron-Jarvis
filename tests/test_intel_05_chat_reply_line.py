@@ -353,7 +353,8 @@ def test_the_line_is_read_from_the_record(client, monkeypatch):
     kept = R.for_turn(client.app.state.platform.engine, "turn_from_record")
     assert R.payload(kept) == body["checked"]
 
-    monkeypatch.setattr(T.record, "for_turn", lambda engine, turn: [])
+    # (Read back by the ids of the rows the reply's own write made: ``record.by_ids``.)
+    monkeypatch.setattr(T.record, "by_ids", lambda engine, ids: [])
     again, _ = _write_turn(client, monkeypatch, "post", GOOD_SHEET, turn_id="turn_no_read", name="second.xlsx")
     assert "checked" not in again, "a line was built without reading the record"
 
@@ -707,3 +708,55 @@ def test_a_check_that_raises_never_costs_the_reply(client, monkeypatch):
     assert body["reply"].startswith("Done: I saved summary.xlsx.")
     assert body["checked"]["line"] == "Not checked: the spreadsheet (it could not be checked here)."
     assert all(c["result"] != "passed" for c in body["checked"]["checks"] if c["label"] == "“summary.xlsx”")
+
+
+# --------------------------------------------------------------------------- #
+# The fifth review, through both lanes and the app's own tools
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("lane", LANES)
+def test_a_date_typed_as_a_number_under_a_date_format_is_never_a_problem(client, monkeypatch, lane):
+    """B1. ``write_document`` makes the sheet and ``excel_edit`` (which
+    offers ``number_format``) puts 20261126 in under yyyy-mm-dd. The file
+    stores a number; the line read "Problem: B2 holds #VALUE!"."""
+    import json
+    import zipfile
+
+    platform = client.app.state.platform
+    _scripted_router(platform, monkeypatch, [
+        [ToolCall(id="c1", name="write_document", arguments={
+            "path": "invoices.xlsx", "content": [["Invoice", "Date", "Amount"], ["A-1", "", 100], ["A-2", "", 250]]})],
+        [ToolCall(id="c2", name="excel_edit", arguments={"path": "invoices.xlsx", "edits": [
+            {"cell": "B2", "value": 20261126, "number_format": "yyyy-mm-dd"},
+            {"cell": "B3", "value": 20261127, "number_format": "yyyy-mm-dd"}]})],
+    ], "Done: I saved invoices.xlsx with the two invoices and their dates.")
+    body, _ = _post_turn(client, lane, {
+        "messages": [{"role": "user", "content": "make me a sheet of these two invoices with their dates"}],
+        "tools": ["write_document", "excel_edit"], "approval_mode": "yolo"})
+    (doc,) = body["documents"]
+    with zipfile.ZipFile(doc) as zf:
+        sheet = zf.read("xl/worksheets/sheet1.xml")
+    assert b"<v>20261126</v>" in sheet and b't="e"' not in sheet, "the tool stored something else: read the test again"
+    checked = body["checked"]
+    assert checked["line"] == ("Checked by Iron Jarvis: the spreadsheet opens. "
+                               "Not checked: the spreadsheet (B2 holds a date this check cannot read).")
+    assert checked["tone"] == "quiet" and "failed" not in [c["result"] for c in checked["checks"]]
+    assert "#VALUE!" not in json.dumps(checked)
+
+
+def test_two_new_chats_that_send_one_turn_id_get_their_own_lines(client, monkeypatch):
+    """B6, through the POST lane: chat A (new, Local only) made
+    client-payroll.xlsx; chat B (new, the same turn id) got A's file name
+    and figures on its line."""
+    import json
+
+    a, _ = _write_turn(client, monkeypatch, "post", WRONG_SHEET, name="client-payroll.xlsx",
+                       final="Done: I saved client-payroll.xlsx.", local_only=True, turn_id="same-turn")
+    b, _ = _write_turn(client, monkeypatch, "post", GOOD_SHEET, name="plan.xlsx", final="Done: I saved plan.xlsx.",
+                       turn_id="same-turn")
+    assert "1,700" in a["checked"]["line"]
+    said = json.dumps(b["checked"], ensure_ascii=False)
+    assert "client-payroll" not in said and "1,700" not in said, said
+    assert b["checked"]["line"].startswith("Checked by Iron Jarvis: the spreadsheet opens, no error cells")
+    assert {c["label"] for c in b["checked"]["checks"]} == {"“plan.xlsx”"}
+    rows = _rows(client.app.state.platform)
+    assert {(r.file, r.kept_home) for r in rows if r.file} == {("client-payroll.xlsx", True), ("plan.xlsx", False)}

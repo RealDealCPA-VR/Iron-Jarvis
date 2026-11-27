@@ -1264,6 +1264,17 @@ def register(app: FastAPI, d) -> None:
         )
         if not result.get("found"):
             raise HTTPException(status_code=404, detail="session not found")
+        if result.get("checked") is not None:
+            # What Iron Jarvis checked names the run's files, sheets and
+            # figures. A chat's page draws the run's card from this answer
+            # and saves it on the chat, so the rule of the delivered card
+            # holds here too (``checks/turn.line_stays_home``): a run that
+            # keeps its words on this PC shows its line only where its own
+            # chat is Local only now. (A sync route: off the loop.)
+            from ...checks.turn import line_stays_home
+
+            if line_stays_home(d.platform.engine, session_id):
+                result = {k: v for k, v in result.items() if k != "checked"}
         return result
 
     @app.get("/sessions/{session_id}/plan")

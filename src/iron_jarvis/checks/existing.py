@@ -13,15 +13,20 @@ allowlist; a row of any other check is never a "Problem"):
 * :func:`claims_check` (the reply's own claims): ``look``, and ONLY when
   the check-again loop itself raised a claim no step matches. There is NO
   passed row: "nothing open" also means "the reading gave up", so nothing
-  is ever said to be in the record.
+  is ever said to be in the record. Its words say "it MAY say": the row is
+  a reading of prose.
 * :func:`required_file_checks`: ``failed`` ONLY for a required file that is
   not on disk (a fact). One that is there passes with that fact alone ("it
   is on disk (12 KB)": never "opens", the older check opens nothing of most
   kinds). One that is there and empty, or that the older check did not
   pass, is ``look``.
 * :func:`proof_check`, :func:`finish_checks` (tests): ``failed`` ONLY for a
-  test command that ran to its end and reported failure (a fact). A run
-  that did not finish in its time, or could not be run, is ``not_checked``.
+  test command that ran to its end and reported failure (a fact: an exit
+  status from 1 to 125, and nothing marking the run as not started). A run
+  that did not finish in its time, could not be run (the sandbox started
+  nothing, the shell did not find the program, it was killed from outside)
+  or found no test to run is ``not_checked``
+  (``harness/finish.run_ending``).
   A reviewer that asked for changes is ``look`` (a model's opinion; never
   its words).
 * :func:`step_check`, :func:`workflow_check`: a step whose check did not
@@ -57,11 +62,15 @@ log = logging.getLogger(__name__)
 #: it. Read after "the reply:". Only these: the loop's other open problems
 #: (a file that was asked for, a figure, a required file) are not claims of
 #: the reply, and write no row here.
+#: "MAY say": the row is the older check's READING of the reply's prose, and
+#: a reading can be wrong (a reply that says it saved NOTHING to a file reads
+#: the same to it). The words say what Iron Jarvis did, never what the reply
+#: did.
 OPEN_WORDS = {
-    "claimed_file": "it says a file was saved that no step wrote",
-    "changed_file": "it says a file was changed that no step changed",
-    "claimed_change": "it says a change was made that no step made",
-    "claimed_sent": "it says something was sent that no step sent",
+    "claimed_file": "it may say a file was saved that no step wrote",
+    "changed_file": "it may say a file was changed that no step changed",
+    "claimed_change": "it may say a change was made that no step made",
+    "claimed_sent": "it may say something was sent that no step sent",
 }
 #: A required file's states that are a FACT about the disk: it is not there
 #: (or a folder is where the file should be).
@@ -72,6 +81,10 @@ TESTS_FIXED = "they failed, then passed after a fix"
 TESTS_TIMED_OUT = "they did not finish in their time"
 TESTS_NO_EXIT = "they could not be run"
 TESTS_UNREAD = "how the run ended could not be read"
+TESTS_NONE = "no tests were found to run"
+#: ``FinishCheck.tests_ended``'s words for a failed verdict that is NOT a
+#: failed test run, as the record says each.
+TESTS_ENDED_WORDS = {"timed_out": TESTS_TIMED_OUT, "no_exit": TESTS_NO_EXIT, "none": TESTS_NONE}
 #: A model-judged step that failed: this, and the model's name in ``by``.
 STEP_FAILED = "its check did not pass"
 #: Why a coding reply's tests did not run, where the finish check's own code
@@ -210,10 +223,14 @@ def finish_checks(record: Any, ended: str = "") -> list[Check]:
 
     *ended* is how the runs behind a ``failed`` verdict ended
     (``FinishCheck.tests_ended``). A PROBLEM only for ``"failed"``: a
-    command that ran to its end and reported failure. The finish check
-    also calls a run it stopped at its time, and a command that could not
-    start, "failed": those are ``not_checked`` here, each with its reason,
-    and so is a ``failed`` verdict nobody said the ending of."""
+    command that ran to its end and reported failure (an exit status from
+    1 to 125, nothing marking it as not started). The finish check also
+    calls "failed" a run it stopped at its time, a command that could not
+    be run (the sandbox started nothing, the shell did not find the
+    program, it was killed from outside) and a test runner that found no
+    test: those are ``not_checked`` here, each with its reason
+    (:data:`TESTS_ENDED_WORDS`), and so is a ``failed`` verdict nobody said
+    the ending of."""
     out: list[Check] = []
     try:
         if not isinstance(record, dict):
@@ -232,15 +249,14 @@ def finish_checks(record: Any, ended: str = "") -> list[Check]:
             elif ended == "failed":
                 out.append(Check(TESTS, FAILED, "they failed"))
             else:
-                out.append(Check(TESTS, NOT_CHECKED, {"timed_out": TESTS_TIMED_OUT, "no_exit": TESTS_NO_EXIT}.get(
-                    ended, TESTS_UNREAD)))
+                out.append(Check(TESTS, NOT_CHECKED, TESTS_ENDED_WORDS.get(ended, TESTS_UNREAD)))
         elif tests == "not_run":
             # The reason is kept only when it is one the finish check's own
             # code wrote: a command's raw error is not shown.
             why = " ".join(str(record.get("why") or "").split())
             out.append(Check(TESTS, NOT_CHECKED, why if why in TESTS_NOT_RUN_WORDS else "they did not run"))
         elif tests == "none":
-            out.append(Check(TESTS, NOT_CHECKED, "no tests were found to run"))
+            out.append(Check(TESTS, NOT_CHECKED, TESTS_NONE))
         review = record.get("review")
         if isinstance(review, dict):
             who = " ".join(str(review.get("model") or review.get("member") or "").split()) or "a reviewer"
@@ -337,7 +353,7 @@ def workflow_check(step_name: Any, problem: Any, *, run_id: str = "") -> "Check 
 
 
 __all__ = [
-    "NOT_ON_DISK", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "STEP_FAILED", "TESTS_FIXED", "TESTS_NO_EXIT",
-    "TESTS_NOT_RUN_WORDS", "TESTS_TIMED_OUT", "TESTS_UNREAD",
+    "NOT_ON_DISK", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "STEP_FAILED", "TESTS_ENDED_WORDS",
+    "TESTS_FIXED", "TESTS_NONE", "TESTS_NO_EXIT", "TESTS_NOT_RUN_WORDS", "TESTS_TIMED_OUT", "TESTS_UNREAD",
     "claims_check", "finish_checks", "proof_check", "required_file_checks", "step_check", "workflow_check",
 ]

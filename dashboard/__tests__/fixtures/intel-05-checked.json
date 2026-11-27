@@ -89,7 +89,7 @@
     "more_words": ""
   },
   "look": {
-    "line": "Checked by Iron Jarvis: the spreadsheet opens, no error cells. Worth a look: B4 on \u201cSummary\u201d says 650 and the cells above it add up to 600; the reply: it says a file was saved that no step wrote.",
+    "line": "Checked by Iron Jarvis: the spreadsheet opens, no error cells. Worth a look: B4 on \u201cSummary\u201d says 650 and the cells above it add up to 600; the reply: it may say a file was saved that no step wrote.",
     "tone": "warn",
     "checks": [
       {
@@ -103,7 +103,7 @@
       {
         "check": "claims_match_record",
         "label": "The reply",
-        "said": "it says a file was saved that no step wrote",
+        "said": "it may say a file was saved that no step wrote",
         "result": "look",
         "result_words": "Worth a look",
         "who": "by Iron Jarvis"

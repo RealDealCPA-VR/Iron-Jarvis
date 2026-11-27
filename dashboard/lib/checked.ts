@@ -140,9 +140,13 @@ export function decodeChecked(raw: unknown): CheckedMark | null {
     if (checks.length >= CHECKED_LIST_MAX) break;
   }
   const more = typeof o.more === "number" && Number.isFinite(o.more) && o.more > 0 ? Math.floor(o.more) : 0;
+  // The tone is read from the ITEMS too (the daemon's `clean_checked` does
+  // the same): a payload that says "quiet" over a problem or something worth
+  // a look never draws quiet.
+  const warn = o.tone === "warn" || checks.some((c) => isWarnResult(c.result));
   return {
     line,
-    tone: o.tone === "warn" ? "warn" : "quiet",
+    tone: warn ? "warn" : "quiet",
     checks,
     more,
     moreWords: more > 0 ? text(o.more_words ?? o.moreWords, 80) : "",

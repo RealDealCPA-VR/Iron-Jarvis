@@ -765,7 +765,10 @@ def _power(a: float, b: float) -> float:
     except (OverflowError, ZeroDivisionError):
         raise ExcelError("#NUM!", "the power is out of range") from None
     if isinstance(out, complex):
-        raise ExcelError("#NUM!", "a negative number cannot take that power")
+        # A negative number to a power that is not whole. Excel works some
+        # of these out (=(-8)^(1/3) is -2) and refuses others (#NUM!): which
+        # is not worked out here, so no clean number and no error is claimed.
+        raise FormulaError("a negative number to a power that is not whole cannot be worked out here")
     return float(out)
 
 
@@ -1021,11 +1024,25 @@ SUPPORTED: tuple[str, ...] = (
 )
 
 _LAZY = frozenset({"IF", "IFERROR", "IFNA", "AND", "OR", "ISERROR", "ISNA"})
+_KNOWN = frozenset(SUPPORTED)
+
+
+def _not_supported(name: str) -> FormulaError:
+    return FormulaError(
+        f"function {name} is not supported by the checker — it cannot be worked out here. "
+        f"Supported: {', '.join(SUPPORTED)}"
+    )
 
 
 def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - one flat table
     if name in _LAZY:
         return _call_lazy(name, thunks)
+    if name not in _KNOWN:
+        # Refused BEFORE its arguments are worked out: a function this
+        # engine does not know may never look at some of them (CHOOSE works
+        # out only the one it picks), so an error in an argument is not the
+        # formula's result. =CHOOSE(1,5,1/0) is 5 in Excel.
+        raise _not_supported(name)
     args = [t() for t in thunks]
     n = len(args)
 
@@ -1369,10 +1386,7 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
             dep = min(book * factor / life, max(0.0, book - salvage))
             book -= dep
         return dep
-    raise FormulaError(
-        f"function {name} is not supported by the checker — it cannot be worked out here. "
-        f"Supported: {', '.join(SUPPORTED)}"
-    )
+    raise _not_supported(name)
 
 
 def _call_lazy(name: str, thunks: list[Thunk]) -> Any:

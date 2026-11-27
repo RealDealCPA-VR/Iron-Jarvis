@@ -25,7 +25,10 @@ time read "not checked", never "passed". Nothing here calls a model.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -117,7 +120,7 @@ def test_a_cell_is_named_in_plain_words_with_its_sheet_only_when_there_are_sever
     assert [c.detail for c in _by(got, SHEET_ERRORS)] == [
         "B6 on “Summary” holds #DIV/0!", "B5 on “Q2 plan” works out to an error"]
     assert [c.detail for c in _by(got, SHEET_TOTALS)] == [
-        "B5 on “Summary” says 1,700 and the cells above it add up to 1,650.50; "
+        "B5 on “Summary” says 1,700 and the cells above it add up to 1,650.5; "
         "B4 on “Q2 plan” says 9 and the cells above it add up to 3"]
     # A sheet whose NAME reads like a verdict stays a name.
     odd = _xlsx(tmp_path / "odd.xlsx", [*BUDGET, ["Total", 1700]], title="Summary. All good",
@@ -1185,10 +1188,10 @@ def test_every_shape_of_total_gets_the_answer_the_table_says(tmp_path, shape, ho
 def test_a_total_that_differs_is_worth_a_look_with_both_figures_and_no_verdict(tmp_path):
     p = _xlsx(tmp_path / "t.xlsx", [*BUDGET, ["Total", 1700]])
     got = _by(content.check_files([str(p)]), SHEET_TOTALS)
-    assert got == [Check(SHEET_TOTALS, LOOK, "B5 says 1,700 and the cells above it add up to 1,650.50", file="t.xlsx")]
+    assert got == [Check(SHEET_TOTALS, LOOK, "B5 says 1,700 and the cells above it add up to 1,650.5", file="t.xlsx")]
     line, tone = line_for(_rows(content.check_files([str(p)])))
     assert line == ("Checked by Iron Jarvis: the spreadsheet opens, no error cells. "
-                    "Worth a look: B5 says 1,700 and the cells above it add up to 1,650.50.")
+                    "Worth a look: B5 says 1,700 and the cells above it add up to 1,650.5.")
     assert tone == "warn" and "Problem" not in line and "wrong" not in line
 
 
@@ -1199,7 +1202,7 @@ def test_one_total_that_adds_up_and_one_that_differs_are_both_said(tmp_path):
     many = _xlsx(tmp_path / "m.xlsx", [["Item", "A", "B", "C", "D"], ["x", 1, 1, 1, 1], ["y", 2, 2, 2, 2],
                                        ["Total", 9, 9, 9, 9]])
     (look,) = [c for c in _by(content.check_files([str(many)]), SHEET_TOTALS) if c.result == LOOK]
-    assert look.detail.endswith("; and 1 more totals") and look.detail.count(" says 9 ") == 3
+    assert look.detail.endswith("; and 1 more total") and look.detail.count(" says 9 ") == 3
 
 
 @pytest.mark.parametrize("rows,total,result", [
@@ -1227,23 +1230,33 @@ def test_adds_up_means_exactly_its_arithmetic_and_a_total_that_only_rounds_to_it
     assert NOT_CHECKED not in [c.result for c in got]
 
 
-def test_the_total_is_quoted_as_its_cell_holds_it_and_two_figures_never_print_the_same(tmp_path):
-    """The line quotes the cell: 0.0425 stays 0.0425 (it read "0.04"), and
-    2.0149 stays 2.0149 (it read "2.015"). The sum is printed with as many
-    places as it takes to differ from it."""
-    p = _xlsx(tmp_path / "t.xlsx", [["Item", "Amount"], ["a", 1.0025], ["b", 1.0026], ["Total", 2.0149]])
+@pytest.mark.parametrize("rows,total,said", [
+    ([1.0025, 1.0026], 2.0149, "B4 says 2.0149 and the cells above it add up to 2.0051"),
+    # The fifth review's three: the sum read "30.01", "0.00", and the total "1,234.567891".
+    ([10.004, 20.004], 30.02, "B4 says 30.02 and the cells above it add up to 30.008"),
+    ([0.001, 0.001], 0.01, "B4 says 0.01 and the cells above it add up to 0.002"),
+    ([100.0, 200.0], 1234.5678912, "B4 says 1,234.5678912 and the cells above it add up to 300"),
+    ([1200, 300, 150.5], 1700, "B5 says 1,700 and the cells above it add up to 1,650.5"),
+    ([0.25, 0.1], 0.5, "B4 says 0.5 and the cells above it add up to 0.35"),
+    # A figure nobody reads (more than 15 digits) is not printed: the finding says only that the two differ.
+    ([1000000000000000, 1], 1000000000000004, "B4 differs from what the cells above it add up to"),
+    ([123456789.123456, 0.0000001], 999999999, "B4 differs from what the cells above it add up to"),
+])
+def test_both_figures_are_printed_exactly_as_they_are_never_rounded(tmp_path, rows, total, said):
+    """S2. The total as its cell holds it and the sum as the cells add up,
+    every digit and no place rounded away: 10.004 + 20.004 under 30.02 read
+    "add up to 30.01", which no reading of the sheet gives."""
+    p = _xlsx(tmp_path / "t.xlsx", [["Item", "Amount"], *[[f"row {i}", v] for i, v in enumerate(rows)],
+                                    ["Total", total]])
     (look,) = _by(content.check_files([str(p)]), SHEET_TOTALS)
-    assert (look.result, look.detail) == (LOOK, "B4 says 2.0149 and the cells above it add up to 2.0051")
-    assert content._figures(2.0149, 2.0051) == ("2.0149", "2.0051")
-    assert content._figures(0.0425, 0.07) == ("0.0425", "0.0700")
-    assert content._figures(1700, 1650.5) == ("1,700", "1,650.50")
-    assert content._figures(22.31, 22.32) == ("22.31", "22.32")
-    assert content._figures(1234.5, 1234.75) == ("1,234.5", "1,234.75")
-    assert content._figures(300, 324) == ("300", "324")
-    assert content._figures(0.123456, 0.1234569) == ("0.123456", "0.123457")
-    assert content._figures(3.0, 3.0) == ("3", "3")
-    # Two that differ far to the right never print as the same NUMBER ("1" and "1.00" are one number).
-    assert content._figures(1.0, 1.0000001) == ("1", "1.0000001")
+    assert (look.result, look.detail) == (LOOK, said)
+    from decimal import Decimal
+
+    assert content._in_full(Decimal("7037035.92")) == "7,037,035.92" and content._in_full(Decimal("1E+3")) == "1,000"
+    assert content._in_full(Decimal("-0.0425")) == "-0.0425" and content._in_full(Decimal("0E-7")) == "0"
+    assert content._in_full(Decimal("0.30000000000000004")) == "" and content._in_full(Decimal("1E+20")) == ""
+    assert content._in_full(Decimal("123456789012345")) == "123,456,789,012,345"       # 15 digits: still printed
+    assert content._in_full(Decimal("1234567890123456")) == ""                          # 16: not
 
 
 def test_a_total_in_any_other_shape_gets_no_row_at_all(tmp_path):
@@ -1379,7 +1392,7 @@ def test_a_percent_format_is_not_a_total_to_add(tmp_path):
 
 def test_a_formula_total_with_no_saved_result_is_added_up_never_read_as_zero(tmp_path):
     """openpyxl writes ``=SUM(B2:B4)`` with no saved result. Read as zero it
-    would be "says 0, cells add up to 1,650.50": a false alarm on every sheet
+    would be "says 0, cells add up to 1,650.5": a false alarm on every sheet
     the app itself writes."""
     p = _xlsx(tmp_path / "t.xlsx", [*BUDGET, ["Total", "=SUM(B2:B4)"]])
     book = content._load(p)
@@ -1951,7 +1964,6 @@ def test_the_disks_refusal_is_not_the_readers_failure(tmp_path, monkeypatch):
     """A file the disk will not hand over (another program holds it, a
     permission) was not opened, and that is not a fact about the file: not
     checked, never a problem."""
-    import docx
     import openpyxl
     import pypdf
 
@@ -1963,13 +1975,12 @@ def test_the_disks_refusal_is_not_the_readers_failure(tmp_path, monkeypatch):
     assert not content._disk_refused(OSError("File contains no valid workbook part"))
     assert not content._disk_refused(ValueError("x"))
 
+    # A reader that raises the disk's own error AFTER the disk handed the file over once (a lock taken in
+    # between): still not the reader's failure. (The real refusal, with a file another program holds, is
+    # test_a_file_the_disk_refuses_is_not_checked_for_every_kind below.)
     book = _xlsx(tmp_path / "t.xlsx", BUDGET)
     monkeypatch.setattr(openpyxl, "load_workbook", refused)
     assert content.check_files([str(book)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="t.xlsx")]
-    letter = tmp_path / "t.docx"
-    docx.Document().save(str(letter))
-    monkeypatch.setattr(docx, "Document", refused)
-    assert content.check_files([str(letter)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="t.docx")]
     pdf = _pdf(tmp_path / "t.pdf", 1)
     monkeypatch.setattr(pypdf, "PdfReader", refused)
     assert content.check_files([str(pdf)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="t.pdf")]
@@ -2489,7 +2500,7 @@ def test_two_files_of_the_same_name_in_two_folders_are_told_apart_by_the_folders
     assert line == (
         "Checked by Iron Jarvis: “summary.xlsx” (in “2023”) opens, no error cells, 1 total adds up; "
         "“summary.xlsx” (in “2024”) opens, no error cells; “other.xlsx” opens, no error cells. "
-        "Worth a look: “summary.xlsx” (in “2024”): B5 says 1,700 and the cells above it add up to 1,650.50."
+        "Worth a look: “summary.xlsx” (in “2024”): B5 says 1,700 and the cells above it add up to 1,650.5."
     ), line
     # The two fields survive the record's own cleaning, and the name alone says what kind of file it is.
     kept = R._clean(got[0])
@@ -2585,3 +2596,524 @@ def test_nothing_says_a_file_does_not_open_or_why():
         for words in ("it does not open", "not a real Office file", "a part of the file is missing",
                       "the PDF was cut off", "not the kind of file its name says"):
             assert words not in code, (module.__name__, words)
+
+
+# --------------------------------------------------------------------------- #
+# The fifth review: one row per phrase, each true of every file
+# --------------------------------------------------------------------------- #
+def _slow_reader(monkeypatch) -> None:
+    """The one-pass read is unavailable: the library's public reader is used
+    (``content._read_twice``)."""
+    def moved(*_a, **_kw):
+        raise ImportError("the library moved its cell parser")
+
+    monkeypatch.setattr(content, "_read_once", moved)
+
+
+def _stored_cell(tmp_path: Path, name: str, cell: bytes, *, dated: bool = False) -> Path:
+    """A real workbook whose B2 is STORED exactly as *cell* (the XML of one
+    ``<c>``). *dated*: B2 has a date format (style 1) to begin with."""
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Item", "Amount"])
+    ws.append(["Rent", 4242])
+    if dated:
+        ws["B2"].number_format = "yyyy-mm-dd"
+    src = tmp_path / f"src-{name}"
+    wb.save(src)
+    old = b'<c r="B2" s="1" t="n"><v>4242</v></c>' if dated else b'<c r="B2" t="n"><v>4242</v></c>'
+    done: list[int] = []
+
+    def change(part: str, data: bytes) -> bytes:
+        if part == "xl/worksheets/sheet1.xml":
+            assert old in data, "the writer stores a number cell another way: read the test again"
+            done.append(1)
+            return data.replace(old, cell)
+        return data
+
+    out = _repack(src, tmp_path / name, change)
+    assert done
+    return out
+
+
+def _said(checks: list[Check]) -> list[tuple]:
+    return [(c.check, c.result, c.detail) for c in checks]
+
+
+@pytest.mark.parametrize("reader", ["one pass", "two passes"])
+def test_a_number_under_a_date_format_is_not_an_error_cell(tmp_path, monkeypatch, reader):
+    """B1. 20261126 typed under yyyy-mm-dd is stored as a NUMBER (``t="n"``).
+    The reader turns a number it cannot make a date of into "#VALUE!" and
+    calls the cell an error; the line read "Problem: B2 holds #VALUE!". An
+    error cell is only a cell the FILE stores as an error."""
+    import zipfile
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Invoice", "Date", "Amount"])
+    ws.append(["A-1", 20261126, 100])
+    ws.append(["A-2", 20261127, 250])
+    for ref in ("B2", "B3"):
+        ws[ref].number_format = "yyyy-mm-dd"
+    p = tmp_path / "invoices.xlsx"
+    wb.save(p)
+    with zipfile.ZipFile(p) as zf:
+        sheet = zf.read("xl/worksheets/sheet1.xml")
+    assert b"<v>20261126</v>" in sheet and b't="e"' not in sheet, "the file stores a number there, and no error"
+    if reader == "two passes":
+        _slow_reader(monkeypatch)
+    got = content.check_files([str(p)])
+    assert _said(got) == [(FILE_OPENS, PASSED, "opens"),
+                          (SHEET_ERRORS, NOT_CHECKED, "B2 holds a date this check cannot read")]
+    assert line_for(_rows(got))[0] == (
+        "Checked by Iron Jarvis: the spreadsheet opens. "
+        "Not checked: the spreadsheet (B2 holds a date this check cannot read).")
+
+
+@pytest.mark.parametrize("reader", ["one pass", "two passes"])
+def test_an_error_the_file_stores_is_still_an_error_cell_beside_a_date_format(tmp_path, monkeypatch, reader):
+    """The other side of B1: a cell the file STORES as an error is one. With
+    no date format, both readers say so. Under a date format the public
+    reader cannot tell a stored "#VALUE!" from its own mark for a number:
+    it says "not checked", never an error it cannot stand behind."""
+    plain = _stored_cell(tmp_path, "plain.xlsx", b'<c r="B2" t="e"><v>#VALUE!</v></c>')
+    dated = _stored_cell(tmp_path, "dated.xlsx", b'<c r="B2" s="1" t="e"><v>#VALUE!</v></c>', dated=True)
+    if reader == "two passes":
+        _slow_reader(monkeypatch)
+    assert _said(content.check_files([str(plain)]))[1] == (SHEET_ERRORS, FAILED, "B2 holds #VALUE!")
+    want = (SHEET_ERRORS, FAILED, "B2 holds #VALUE!") if reader == "one pass" else (
+        SHEET_ERRORS, NOT_CHECKED, "B2 holds a date this check cannot read")
+    assert _said(content.check_files([str(dated)]))[1] == want
+
+
+@pytest.mark.parametrize("held", ["#GETTING_DATA", "#SPILL!", "#CALC!", "Err:502", "all totals verified", ""])
+def test_every_cell_stored_as_an_error_is_an_error_cell_whatever_it_holds(tmp_path, monkeypatch, held):
+    """B4. A cell stored ``t="e"`` whose code is not one of the seven read
+    "no error cells". Every such cell is an error cell; the code is named
+    only when it is one of the seven, and the cell's own text never shows."""
+    p = _stored_cell(tmp_path, "odd.xlsx", b'<c r="B2" t="e"><v>' + held.encode() + b"</v></c>")
+    for slow in (False, True):
+        if slow:
+            _slow_reader(monkeypatch)
+        got = content.check_files([str(p)])
+        if slow and not held:
+            continue    # the public reader shows no cell at all for an error with nothing in it
+        assert _said(got) == [(FILE_OPENS, PASSED, "opens"), (SHEET_ERRORS, FAILED, "B2 holds an error")], (held, slow)
+        assert "no error cells" not in line_for(_rows(got))[0]
+        assert not held or held not in line_for(_rows(got))[0]
+
+
+def test_a_known_error_is_named_and_a_formulas_saved_error_of_any_kind_is_one_too(tmp_path):
+    known = _stored_cell(tmp_path, "known.xlsx", b'<c r="B2" t="e"><v>#DIV/0!</v></c>')
+    assert _said(content.check_files([str(known)]))[1] == (SHEET_ERRORS, FAILED, "B2 holds #DIV/0!")
+    # A formula whose SAVED result is stored as an error, in a workbook that stands by its results.
+    asks = _stored_cell(tmp_path, "asks.xlsx", b'<c r="B2" t="e"><f>SORT(A1:A2)</f><v>#SPILL!</v></c>')
+    stands = _stands_by(asks, tmp_path / "stands.xlsx")
+    assert _said(content.check_files([str(stands)]))[1] == (SHEET_ERRORS, FAILED, "B2 holds an error")
+    assert FAILED not in [c.result for c in content.check_files([str(asks)])], "a result nobody stands by is no fact"
+
+
+@pytest.mark.parametrize("n,each,off", [(1500, 50_000_000.25, 0.01), (10_000, 100_000_000.0, 1.0),
+                                        (300, 5_000_000_000.0, 0.05)])
+def test_a_total_that_is_off_never_adds_up_however_long_the_list(tmp_path, n, each, off):
+    """B5. "Adds up" allowed one step of the largest figure for each row:
+    1,500 rows of fifty million under a total one cent high read "1 total
+    adds up". The comparison is exact, in decimal, with no slack."""
+    from decimal import Decimal
+
+    vals = [each + (i % 37) for i in range(n)]
+    exact = sum(Decimal(repr(v)) for v in vals)
+    true = float(exact)
+    assert Decimal(repr(true)) == exact, "the fixture's own sum is not a number a cell holds"
+
+    def totals(name: str, total: float) -> list[Check]:
+        p = _xlsx(tmp_path / name, [["Item", "Amount"], *[[f"row {i}", v] for i, v in enumerate(vals)],
+                                    ["Total", total]])
+        return _by(content.check_files([str(p)], deadline_s=120), SHEET_TOTALS)
+
+    assert [(c.result, c.detail) for c in totals("right.xlsx", true)] == [(PASSED, "1 total adds up")]
+    (wrong,) = totals("wrong.xlsx", true + off)
+    assert wrong.result == LOOK and wrong.detail == (
+        f"B{n + 2} says {content._in_full(Decimal(repr(true + off)))} and the cells above it add up to "
+        f"{content._in_full(exact)}")
+
+
+def test_adds_up_is_decimal_and_exact():
+    from decimal import Decimal
+
+    assert content._sum_exact([0.1, 0.2]) == Decimal("0.3") and content._adds_up(0.3, content._sum_exact([0.1, 0.2]))
+    assert not content._adds_up(0.30000000000000004, content._sum_exact([0.1, 0.2]))
+    assert content._adds_up(0.3, content._sum_exact([1000000.1, -1000000, 0.2]))
+    # A whole number too large for a float to hold exactly is still added exactly.
+    big = 12345678901234567890
+    assert content._sum_exact([big, 1]) == Decimal(big + 1) and content._adds_up(big + 1, content._sum_exact([big, 1]))
+    assert not content._adds_up(float(big), content._sum_exact([big, 1]))
+    # Nothing is rounded to fit: the largest and the smallest number a cell holds add up exactly.
+    assert content._sum_exact([1e308, 1e-320]) == Decimal("1" + "0" * 308 + "." + "0" * 319 + "1")
+    assert not content._adds_up(float("nan"), Decimal(0)) and not content._adds_up(1.0, None)
+
+
+def test_a_finding_is_never_cut_whole_findings_are_dropped_and_counted(tmp_path):
+    """S1. Three totals on sheets with long names: the third finding was cut
+    at "... add up to 7,0". Whole findings only; the rest are counted."""
+    rows = [["Item", "Amount"], ["North region", 1234567.89], ["South region", 2345678.91],
+            ["West region", 3456789.12], ["Total", 9876543.21]]
+    p = _xlsx(tmp_path / "year.xlsx", rows, title="Quarterly Revenue Summary 2026",
+              more={"Operating Expenses Detail 2026": rows, "Capital Purchases Register 26": rows})
+    (look,) = _by(content.check_files([str(p)]), SHEET_TOTALS)
+    one = "B5 on “{}” says 9,876,543.21 and the cells above it add up to 7,037,035.92"
+    assert look.detail == "; ".join([one.format("Quarterly Revenue Summary 2026"),
+                                     one.format("Operating Expenses Detail 2026")]) + "; and 1 more total"
+    assert len(look.detail) <= R.DETAIL_MAX and R._clean(look).detail == look.detail
+    # Short sheet names: all three fit, and all three are named.
+    q = _xlsx(tmp_path / "short.xlsx", rows, title="A", more={"B": rows, "C": rows})
+    (short,) = _by(content.check_files([str(q)]), SHEET_TOTALS)
+    assert short.detail.count("add up to 7,037,035.92") == 3 and "more" not in short.detail
+    assert content._named(["x"] * 5, "totals", "total") == "x; x; x; and 2 more totals"
+    assert content._named(["x"] * 4, "cells hold an error", "cell holds an error") == "x; x; x; and 1 more cell holds an error"
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_a_pdf_whose_stated_page_count_lies_gets_no_pages_row(tmp_path, locked):
+    """S3. A PDF of 2 pages whose own ``/Count`` says 9 read "9 pages". The
+    number is said only when the pages are walked to the end and are that
+    many."""
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import NameObject, NumberObject
+
+    w = PdfWriter()
+    w.add_blank_page(200, 200)
+    w.add_blank_page(200, 200)
+    if locked:
+        w.encrypt(user_password="", owner_password="o", algorithm="RC4-128")
+    w._root_object["/Pages"][NameObject("/Count")] = NumberObject(9)
+    p = tmp_path / "count9.pdf"
+    w.write(p)
+    r = PdfReader(str(p))
+    if r.is_encrypted:
+        r.decrypt("")
+    stated = len(r.pages)
+    try:
+        walked = sum(1 for _ in r.pages)
+    except Exception:  # noqa: BLE001
+        walked = -1
+    if locked:
+        assert stated == 9 and walked != 9, "the reader no longer believes the stated count: read the test again"
+    got = content.check_files([str(p)])
+    assert "9 pages" not in [c.detail for c in got]
+    if stated != walked:
+        assert got == [Check(FILE_OPENS, PASSED, "opens", file="count9.pdf")], "nothing is said of its pages or text"
+    else:
+        assert [c.detail for c in _by(got, PDF_PAGES)] == [f"{walked} pages"]
+    # A PDF whose count is true says it, as before.
+    assert [c.detail for c in _by(content.check_files([str(_pdf(tmp_path / "true.pdf", 3))]), PDF_PAGES)] == ["3 pages"]
+
+
+def test_a_workbook_that_lists_a_sheet_the_reader_did_not_load_claims_nothing_about_its_cells(tmp_path):
+    """N1. The workbook lists two sheets and the second one's part is
+    missing: the reader loads one and says nothing. It read "opens, no
+    error cells"."""
+    import zipfile
+
+    src = _xlsx(tmp_path / "src.xlsx", BUDGET, more={"Second": [["a", 1]]})
+    assert _said(content.check_files([str(src)])) == [(FILE_OPENS, PASSED, "opens"), (SHEET_ERRORS, PASSED, "no error cells")]
+    assert content._sheets_listed(src) == 2
+
+    def without(name: str, *gone: str) -> Path:
+        out = tmp_path / name
+        with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename not in gone:
+                    zout.writestr(item, zin.read(item.filename))
+        return out
+
+    one = without("one.xlsx", "xl/worksheets/sheet2.xml")
+    assert _said(content.check_files([str(one)])) == [
+        (FILE_OPENS, PASSED, "opens"), (SHEET_ERRORS, NOT_CHECKED, "not all of its sheets could be read here")]
+    # Every sheet's part gone: nothing is called empty either.
+    none = without("none.xlsx", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml")
+    assert _said(content.check_files([str(none)])) == [
+        (FILE_OPENS, PASSED, "opens"), (DOC_TEXT, NOT_CHECKED, "not all of its sheets could be read here")]
+    # In doubt (the list cannot be read) the count equals nothing.
+    assert content._sheets_listed(tmp_path / "no-such.xlsx") == -1
+
+
+@pytest.mark.parametrize("name,data", [
+    ("bom.txt", b"\xef\xbb\xbf"), ("bom2.md", b"\xef\xbb\xbf\xef\xbb\xbf"),
+    ("zwsp.txt", "​​".encode()), ("zw.csv", "​,‌\n﻿;⁠".encode()),
+    ("mix.md", "​ ﻿\n\t‍".encode()), ("nbsp.md", "  ".encode()),
+])
+def test_a_file_of_characters_nobody_sees_has_no_text(tmp_path, name, data):
+    """N2. A file of zero-width characters, or of byte-order marks, read
+    "has text"."""
+    p = tmp_path / name
+    p.write_bytes(data)
+    assert content.check_files([str(p)]) == [Check(FILE_OPENS, PASSED, "opens", file=name),
+                                             Check(DOC_TEXT, LOOK, content.NO_TEXT, file=name)]
+    seen = tmp_path / f"seen-{name}"
+    seen.write_bytes(data + "a".encode())
+    assert content.check_files([str(seen)])[1] == Check(DOC_TEXT, PASSED, "has text", file=seen.name)
+
+
+def test_a_workbook_whose_only_cells_hold_blank_space_says_so(tmp_path):
+    """N6. One cell, holding a space: it read "its cells could not be read
+    here", which is not true (they were read)."""
+    wb = Workbook()
+    wb.active["A1"] = " "
+    wb.active["C3"] = "   "
+    p = tmp_path / "space.xlsx"
+    wb.save(p)
+    got = content.check_files([str(p)])
+    assert got == [Check(FILE_OPENS, PASSED, "opens", file="space.xlsx"),
+                   Check(DOC_TEXT, LOOK, "its cells hold only blank space", file="space.xlsx")]
+    assert line_for(_rows(got))[0] == (
+        "Checked by Iron Jarvis: the spreadsheet opens. Worth a look: its cells hold only blank space.")
+    # A workbook with no cell at all is still the other sentence.
+    empty = tmp_path / "empty.xlsx"
+    Workbook().save(empty)
+    assert content.check_files([str(empty)])[1] == Check(DOC_TEXT, LOOK, content.NO_CELLS, file="empty.xlsx")
+
+
+@contextlib.contextmanager
+def _kept_by_the_disk(path: Path):
+    """The DISK does not hand *path* over while this holds: on Windows
+    another program has it open and shares it with nobody; elsewhere its
+    permission is taken away."""
+    if sys.platform == "win32":
+        import ctypes
+
+        k32 = ctypes.windll.kernel32
+        k32.CreateFileW.restype = ctypes.c_void_p
+        k32.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+                                    ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = k32.CreateFileW(str(path), 0x80000000, 0, None, 3, 0x80, None)   # read, share nothing, existing
+        assert handle not in (None, ctypes.c_void_p(-1).value), "the file was not taken"
+        try:
+            yield
+        finally:
+            k32.CloseHandle(handle)
+    else:
+        mode = path.stat().st_mode
+        os.chmod(path, 0)
+        try:
+            yield
+        finally:
+            os.chmod(path, mode)
+
+
+def _really_refused(path: Path) -> bool:
+    try:
+        open(path, "rb").close()
+    except OSError:
+        return True
+    return False
+
+
+def _one_of_each(tmp_path: Path) -> list[Path]:
+    import docx
+
+    letter = tmp_path / "letter.docx"
+    d = docx.Document()
+    d.add_paragraph("Dear Sam, the meeting is on Monday.")
+    d.save(str(letter))
+    notes = tmp_path / "notes.txt"
+    notes.write_text("hello", encoding="utf-8")
+    data = tmp_path / "data.json"
+    data.write_text("{}", encoding="utf-8")
+    return [letter, _xlsx(tmp_path / "sheet.xlsx", BUDGET), _pdf(tmp_path / "doc.pdf", 1), notes, data]
+
+
+def test_a_file_the_disk_refuses_is_not_checked_for_every_kind(tmp_path):
+    """B3. A REAL refusal (no stub): a Word file another program held read
+    "Problem: Iron Jarvis could not open “letter.docx”" (its reader answers
+    "not a package" for a file it was not let read). The disk is asked
+    before any reader, for every kind."""
+    for p in _one_of_each(tmp_path):
+        before = content.check_files([str(p)])
+        assert before[0] == Check(FILE_OPENS, PASSED, "opens", file=p.name)
+        with _kept_by_the_disk(p):
+            if not _really_refused(p):
+                pytest.skip("this machine hands the file over whatever its permission says")
+            assert content.check_files([str(p)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file=p.name)], p.name
+        assert content.check_files([str(p)]) == before, "once it is let go it is checked as before"
+
+
+def test_a_file_that_goes_away_between_the_look_and_the_read_is_not_checked(tmp_path, monkeypatch):
+    """B3. The file is there when it is looked for and gone when it is
+    read: the real ``open`` refuses, and that is "not checked"."""
+    real = content.file_stamp
+    for p in _one_of_each(tmp_path):
+        def goes(path, _real=real):
+            stamp = _real(path)
+            Path(path).unlink()
+            return stamp
+
+        monkeypatch.setattr(content, "file_stamp", goes)
+        assert content.check_files([str(p)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file=p.name)], p.name
+        assert not p.exists()
+
+
+def test_a_word_reader_that_hides_the_disks_refusal_is_not_blamed(tmp_path, monkeypatch):
+    """B3, the second look: the disk hands the file over once and another
+    program takes it before the reader gets to it. The Word reader answers
+    "not a package"; the disk is asked again before the reader is blamed."""
+    letter = _one_of_each(tmp_path)[0]
+    real = content._disk_gives
+    asked: list[bool] = []
+    held = contextlib.ExitStack()
+
+    def then_taken(path):
+        ok = real(path)
+        asked.append(ok)
+        if len(asked) == 1:
+            held.enter_context(_kept_by_the_disk(Path(path)))
+        return ok
+
+    monkeypatch.setattr(content, "_disk_gives", then_taken)
+    with held:
+        got = content.check_files([str(letter)])
+        refused = _really_refused(letter)
+    if not refused:
+        pytest.skip("this machine hands the file over whatever its permission says")
+    assert asked == [True, False]
+    assert got == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="letter.docx")]
+
+
+def test_each_row_of_a_made_file_carries_the_file_as_it_was_when_it_was_checked(tmp_path):
+    """S7. The file's size and when it was last written, read before the
+    file is opened. Not part of what a check says."""
+    p = _xlsx(tmp_path / "t.xlsx", BUDGET + [["Total", 1650.5]])
+    got = content.check_files([str(p)])
+    assert len(got) == 3 and {c.stamp for c in got} == {R.file_stamp(p)} and R.file_stamp(p)
+    size, _sep, written = R.file_stamp(p).partition(":")
+    assert int(size) == p.stat().st_size and int(written) == p.stat().st_mtime_ns
+    assert got[0] == Check(FILE_OPENS, PASSED, "opens", file="t.xlsx"), "the stamp is no part of what a check says"
+    assert R.file_stamp(tmp_path / "gone.xlsx") == ""
+    assert R._clean(got[0]).stamp == got[0].stamp
+
+
+def test_a_formula_this_check_cannot_work_out_never_reads_as_an_error(tmp_path):
+    """N3. ``=CHOOSE(1,5,1/0)`` is 5 in Excel (it works out only the one it
+    picks) and ``=(-8)^(1/3)`` is -2: both read "works out to an error". A
+    function the evaluator does not know is refused before its arguments
+    are worked out, and a negative number to a power that is not whole is
+    not worked out here."""
+    for formula in ("=CHOOSE(1,5,1/0)", "=(-8)^(1/3)", "=POWER(-8,1/3)", "=POWER(-8,0.5)", "=NOSUCHFN(1/0)"):
+        p = _xlsx(tmp_path / "f.xlsx", [["a", formula]])
+        assert _said(content.check_files([str(p)]))[1] == (
+            SHEET_ERRORS, NOT_CHECKED, "1 formula could not be worked out here"), formula
+    # What the evaluator does work out to an error still reads so (a known function, an argument that is one).
+    for formula in ("=SUM(1,1/0)", "=SQRT(-4)", "=0^0"):
+        p = _xlsx(tmp_path / "g.xlsx", [["a", formula]])
+        assert _said(content.check_files([str(p)]))[1] == (SHEET_ERRORS, LOOK, "B1 works out to an error"), formula
+    # A whole power of a negative number is a number.
+    p = _xlsx(tmp_path / "h.xlsx", [["a", "=(-8)^3"]])
+    assert _said(content.check_files([str(p)]))[1] == (SHEET_ERRORS, PASSED, "its formula works out")
+
+
+def test_the_cell_the_reader_calls_an_error_for_its_date_format_is_not_kept_as_text(tmp_path, monkeypatch):
+    """B1: the reader's "#VALUE!" for a number under a date format is not
+    put in the book as a word a heading or a label could be read from."""
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Item", "When"])
+    ws.append(["Rent", 20261126])
+    ws["B2"].number_format = "yyyy-mm-dd"
+    p = tmp_path / "t.xlsx"
+    wb.save(p)
+    plain = _stored_cell(tmp_path, "plain.xlsx", b'<c r="B2" t="e"><v>#VALUE!</v></c>')
+    other = _stored_cell(tmp_path, "other.xlsx", b'<c r="B2" t="e"><v>#REF!</v></c>')
+    assert content._load(p).undated == "B2" and (2, 2) not in content._load(p).formulas["Sheet"]
+    _slow_reader(monkeypatch)
+    book = content._load(p)
+    assert book.undated == "B2" and (2, 2) not in book.formulas["Sheet"] and not any(book.errors.values())
+    # In doubt about the format (it cannot be read), the public reader's "#VALUE!" is not called an error cell.
+    import openpyxl.styles.numbers as N
+
+    def broken(_fmt):
+        raise KeyError("no such style")
+
+    monkeypatch.setattr(N, "is_date_format", broken)
+    assert _said(content.check_files([str(plain)]))[1] == (
+        SHEET_ERRORS, NOT_CHECKED, "B2 holds a date this check cannot read")
+    assert _said(content.check_files([str(other)]))[1] == (SHEET_ERRORS, FAILED, "B2 holds #REF!")
+
+
+def test_a_workbook_whose_only_cell_is_an_error_or_a_number_it_cannot_read_is_not_called_blank(tmp_path):
+    """N6, its edges. A stored error with nothing in it is still an error
+    cell (never "no filled cells"); blank space beside a cell that could not
+    be read is not "only blank space"."""
+    import zipfile
+
+    wb = Workbook()
+    wb.active["B2"] = 4242
+    src = tmp_path / "src-bare.xlsx"
+    wb.save(src)
+    bare = _repack(src, tmp_path / "bare.xlsx", lambda part, data: data.replace(
+        b'<c r="B2" t="n"><v>4242</v></c>', b'<c r="B2" t="e"><v></v></c>') if part.endswith("sheet1.xml") else data)
+    with zipfile.ZipFile(bare) as zf:
+        assert b't="e"' in zf.read("xl/worksheets/sheet1.xml")
+    assert _said(content.check_files([str(bare)])) == [(FILE_OPENS, PASSED, "opens"), (SHEET_ERRORS, FAILED, "B2 holds an error")]
+    wb = Workbook()
+    wb.active["A1"] = " "
+    wb.active["B2"] = 20261126
+    wb.active["B2"].number_format = "yyyy-mm-dd"
+    mixed = tmp_path / "mixed.xlsx"
+    wb.save(mixed)
+    assert _said(content.check_files([str(mixed)])) == [(FILE_OPENS, PASSED, "opens"), (DOC_TEXT, NOT_CHECKED, content.CELLS_NOT_READ)]
+
+
+def test_a_formula_over_a_sheet_that_was_not_loaded_is_not_worked_out(tmp_path):
+    """N1: with a listed sheet missing, a formula that reads it would come
+    to an error here that the file does not have. A workbook read in part
+    is not worked out."""
+    import zipfile
+
+    wb = Workbook()
+    wb.active.append(["a", "=Second!A1+1"])
+    wb.create_sheet("Second")["A1"] = 5
+    src = tmp_path / "src.xlsx"
+    wb.save(src)
+    assert _said(content.check_files([str(src)]))[1] == (SHEET_ERRORS, PASSED, "its formula works out")
+    out = tmp_path / "part.xlsx"
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            if item.filename != "xl/worksheets/sheet2.xml":
+                zout.writestr(item, zin.read(item.filename))
+    assert _said(content.check_files([str(out)])) == [
+        (FILE_OPENS, PASSED, "opens"), (SHEET_ERRORS, NOT_CHECKED, content.SHEETS_NOT_READ)]
+
+
+def test_a_word_file_of_characters_nobody_sees_is_not_said_to_have_text(tmp_path):
+    """N2, a Word file: the reader read characters and none is a word. The
+    second look cannot tell them from words either: "not checked", never
+    "has text"."""
+    import docx
+
+    p = tmp_path / "zw.docx"
+    d = docx.Document()
+    d.add_paragraph("​​")
+    d.save(str(p))
+    assert content.check_files([str(p)]) == [Check(FILE_OPENS, PASSED, "opens", file="zw.docx"),
+                                             Check(DOC_TEXT, NOT_CHECKED, content.TEXT_NOT_READ, file="zw.docx")]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a Windows lock on a file's bytes")
+def test_a_file_whose_bytes_another_program_has_locked_is_not_checked(tmp_path):
+    """B3. The file OPENS and its bytes are locked (what a program that is
+    writing it does): the disk is asked for a byte, not only for the door."""
+    import msvcrt
+
+    for p in _one_of_each(tmp_path):
+        size = p.stat().st_size
+        fd = os.open(p, os.O_RDWR | os.O_BINARY)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, size)
+            open(p, "rb").close()       # the door opens
+            assert content.check_files([str(p)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file=p.name)], p.name
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, size)
+        finally:
+            os.close(fd)
+        assert content.check_files([str(p)])[0] == Check(FILE_OPENS, PASSED, "opens", file=p.name)

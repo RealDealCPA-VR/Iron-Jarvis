@@ -121,8 +121,9 @@ async def test_a_chat_with_no_checks_says_so_and_an_unsaved_chat_reads_only_its_
     assert "summary.xlsx" in mine.output and "payroll" not in mine.output
     # What the tool says of itself when there is nothing: no word about a reply's claims being checked.
     assert CT.NOTHING == (
-        "Iron Jarvis's record holds no check for this chat yet. When a reply makes or changes a file, Iron Jarvis "
-        "looks at what that file holds when the reply ends.")
+        "No check is listed here. When a reply makes or changes a file, Iron Jarvis looks at what that file holds "
+        "when the reply ends. Checks made in a Local only chat or task stay on this PC: they are listed only in a "
+        "chat that is Local only.")
     assert "it says it saved" not in ChecksListTool().description and "in its record" not in ChecksListTool().description
 
 
@@ -191,8 +192,8 @@ async def test_a_run_is_read_only_when_it_was_started_from_the_calling_chat(plat
         got = await _ask(platform, ctx, run=other)
         assert not got.ok and got.error == CT.OTHER_RUN, (other, got.output, got.error)
         assert "payroll" not in (got.output or "") + (got.error or "") + str(got.data or ""), other
-    assert CT.OTHER_RUN == ("That run was not started from this chat, so its checks are not read here. "
-                            "Open that run to see what was checked.")
+    assert CT.OTHER_RUN == ("No check of that run is listed here. A run's checks are listed only in the chat that "
+                            "started it, and a Local only run's only in a chat that is Local only.")
     # A chat not saved yet has no id: it owns no run, not even one that has none either.
     unsaved = _ctx(platform, tmp_path, turn_id="turn_new")
     for other in ("run_nobody", "run_mine"):
@@ -407,3 +408,25 @@ def test_asked_in_a_chat_the_model_is_handed_that_chats_checks(tmp_path, monkeyp
         assert "C7 on Summary holds #DIV/0!" in given and "payroll-private" not in given
         # A question about the checks made no file: no line under this reply.
         assert "checked" not in body
+
+
+async def test_the_answer_with_nothing_to_list_is_one_text_true_with_and_without_rows_kept_home(platform, tmp_path):
+    """S6. "Holds no check for this chat yet" was said of a chat whose rows
+    are kept home, and "that run was not started from this chat" of a run
+    that was. Each answer is ONE text, the same in both cases (it tells
+    nothing), and every sentence of it is true in both."""
+    eng = platform.engine
+    R.write(eng, SHEET, thread_id="chat_h", turn_id="t1", kept_home=True)
+    R.write(eng, SHEET, session_id="run_h", thread_id="chat_h", kept_home=True)
+    ctx = _ctx(platform, tmp_path, thread_id="chat_h")
+    held = await _ask(platform, ctx)
+    empty = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_empty"))
+    assert held.ok and empty.ok and held.output == empty.output == CT.NOTHING and held.data == empty.data
+    kept = await _ask(platform, ctx, run="run_h")
+    unknown = await _ask(platform, ctx, run="no_such_run")
+    assert not kept.ok and kept.error == unknown.error == CT.OTHER_RUN
+    assert "summary.xlsx" not in str(held.output) + str(kept.error) + str(kept.data)
+    for words in (CT.NOTHING, CT.OTHER_RUN):
+        for untrue in ("holds no check", "not started from this chat", "Open that run", " yet"):
+            assert untrue not in words, (untrue, words)
+        assert "Local only" in words and words.startswith("No check")

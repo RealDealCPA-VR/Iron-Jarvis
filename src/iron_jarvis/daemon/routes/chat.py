@@ -2244,6 +2244,14 @@ def register(app: FastAPI, d) -> None:
                 derived = _derive_thread_documents(msgs, setup)
             except Exception:  # noqa: BLE001 — recovery must never break a thread
                 derived = []
+        # The intelligence plan, release 5: a reply's saved "Checked by Iron
+        # Jarvis" line says what its files held when the reply ended. The
+        # checks of a file that has changed since are taken off it as the
+        # chat is served (``checks/turn.reopened``: never raises, writes
+        # nothing; a sync route, so its stat calls are off the loop).
+        from ...checks.turn import reopened as _reopened
+
+        msgs = _reopened(d.platform.engine, r.id, msgs)
         return {
             "id": r.id, "title": r.title, "persona": r.persona,
             "project_id": r.project_id, "messages": msgs, "setup": setup,

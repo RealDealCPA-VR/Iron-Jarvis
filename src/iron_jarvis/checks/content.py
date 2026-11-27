@@ -18,11 +18,21 @@ holds the four outcomes and the allowlist of what may be a "Problem"):
   could not open “letter.docx”". Nothing here decides that a file is broken
   by looking for parts by their names (``word/document2.xml`` and
   ``xl/workbook2.xml`` are valid files). A file that is protected with a
-  password is ``not_checked``, never a problem.
+  password is ``not_checked``, never a problem. THE DISK IS ASKED FIRST
+  (:func:`_disk_gives`): a file it does not hand over (another program
+  holds it, a permission, it went away) is ``not_checked`` for every kind,
+  whatever a reader would have answered.
 * **a spreadsheet's error cells** (``sheet_no_error_cells``):
-  - a cell whose TYPE is an error (an error value, or a formula's saved
-    result of that type) is ``failed``: "C7 holds #DIV/0!". A text cell
-    that reads "#N/A" is text;
+  - a cell whose STORED type is an error (``t="e"`` in the file: an error
+    value, or a formula's saved result of that type) is ``failed``, EVERY
+    such cell: "C7 holds #DIV/0!" for one of the seven errors everybody
+    knows, "C7 holds an error" for any other (never the cell's own text).
+    A text cell that reads "#N/A" is text. A NUMBER under a date format
+    that the reader calls "#VALUE!" (it cannot make a date of it) is no
+    error cell: ``not_checked``, "B2 holds a date this check cannot read";
+  - a workbook that lists a sheet the reader did not load is not read
+    through: ``not_checked`` ("not all of its sheets could be read here"),
+    and its formulas are not worked out;
   - a formula with NO saved result is worked out by the app's own evaluator
     (:func:`_work_out`). So is every formula of a workbook that says its
     saved results are not to be trusted (it asks for a full recalculation
@@ -41,7 +51,9 @@ holds the four outcomes and the allowlist of what may be a "Problem"):
     error.
 * **a spreadsheet's totals** (``sheet_totals``): see :func:`_totals`. ONE
   shape is judged (:func:`_row_total`); "adds up" means exactly its
-  arithmetic; every other total gets NO row. A total is NEVER ``failed``.
+  arithmetic, compared in DECIMAL with no slack (:func:`_adds_up`); every
+  other total gets NO row. A total is NEVER ``failed``. One that differs is
+  said with both figures printed exactly (:func:`_differs`).
 * **a document has text** (``document_not_empty``): for a DOCUMENT kind
   (text, Markdown, a table of text, Word, a workbook, a PDF). An empty one
   ("it is empty") and one in which no text was found ("Iron Jarvis found no
@@ -50,11 +62,14 @@ holds the four outcomes and the allowlist of what may be a "Problem"):
   found none AND nothing else in the package holds text or cells: a Word
   file whose words sit where the reader does not read (a text box, another
   prefix) and a workbook whose cells the reader does not see (Strict Open
-  XML) are ``not_checked``. A file that is not a document kind (code,
-  settings, data, a web page) is never asked for text, and an empty or
-  blank one gets no row.
+  XML) are ``not_checked``. Characters nobody sees (zero-width ones, a
+  byte-order mark) are not text. A workbook whose only cells hold blank
+  space says that ("its cells hold only blank space"). A file that is not
+  a document kind (code, settings, data, a web page) is never asked for
+  text, and an empty or blank one gets no row.
 * **a PDF's pages** (``pdf_pages``): how many it has, said as a fact ("12
-  pages"). Nothing is compared with what the reply says.
+  pages") ONLY when the pages were walked to the end and are as many as
+  the file states. Nothing is compared with what the reply says.
 
 THE RULE BEHIND ALL OF IT: a phrase is said only where it is true by
 construction for EVERY file. Where it would take a guess about what the
@@ -81,15 +96,18 @@ it runs out is ``not_checked``. BLOCKING: :func:`check_made_files` is the
 hop off the event loop, and it waits :data:`HARD_WAIT_S` at most.
 
 A FILE'S NAME is all a check keeps of where it is, beside a digest of its
-path (``Check.path_key``: a card matches a check to its file by it). Two
+path (``Check.path_key``: a card matches a check to its file by it) and the
+file's size and last-written time when it was checked (``Check.stamp``: a
+row is shown only while its file still has them). Two
 made files with the same name in two folders are told apart by the folder's
 own name, kept in its own field (``Check.folder``). A CELL is named in plain
 words: B4 on “Summary”, or "B4" alone in a workbook of one sheet. A name
 somebody else chose (a sheet's, a file's) is shown quoted (``record.quoted``).
 
 WORDS. Everything a check says can reach the line under a reply: plain
-words only, never an exception's name or a package part's path
-(``record.open_words``).
+words only, never an exception's name or a package part's path. A FINDING
+IS NEVER CUT: findings that do not fit the record's length are dropped
+whole and counted (:func:`_named`).
 """
 
 from __future__ import annotations
@@ -103,14 +121,15 @@ import re
 import time
 import zipfile
 from bisect import bisect_left, insort
-from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
+from dataclasses import replace
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Context, Decimal, Inexact, InvalidOperation, Overflow
 from itertools import product as _signs
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .record import (
-    DOC_TEXT, FAILED, FILE_OPENS, LOOK, NOT_CHECKED, PASSED, PDF_PAGES, SHEET_ERRORS, SHEET_TOTALS, Check,
-    file_name, path_key, quoted,
+    DETAIL_MAX, DOC_TEXT, FAILED, FILE_OPENS, LOOK, NOT_CHECKED, PASSED, PDF_PAGES, SHEET_ERRORS, SHEET_TOTALS,
+    Check, file_name, file_stamp, path_key, quoted,
 )
 
 log = logging.getLogger(__name__)
@@ -151,6 +170,10 @@ CELLS_NOT_READ = "its cells could not be read here"
 EMPTY = "it is empty"
 NO_TEXT = "Iron Jarvis found no text in it"
 NO_CELLS = "it has no filled cells"
+#: A workbook whose only cells hold blank space (the reader saw them).
+ONLY_SPACES = "its cells hold only blank space"
+#: The workbook lists a sheet the reader did not load (its part is missing).
+SHEETS_NOT_READ = "not all of its sheets could be read here"
 #: An Office file that is not a package but the older container: what a
 #: file protected with a password is saved as. Said for certain only when
 #: the container names its encrypted part; else as what it MAY be.
@@ -196,36 +219,56 @@ def _plural(n: int, one: str, many: str = "") -> str:
     return f"{n:,} {one if n == 1 else (many or one + 's')}"
 
 
-def _fmt(value: float, places: int) -> str:
-    if abs(value - round(value)) < 1e-9:
-        return f"{int(round(value)):,}"
-    return f"{value:,.{places}f}"
+#: Exact decimal arithmetic for a total: wide enough to hold the sum of any
+#: cells a workbook can hold without rounding it; anything it would have to
+#: round raises (and the total is then not judged).
+_EXACT = Context(prec=1_000, traps=[Inexact, InvalidOperation, Overflow])
+#: A figure with more digits than this is not printed (nobody reads it):
+#: the finding then says only that the two differ.
+MAX_FIGURE_DIGITS = 15
 
 
-def _num(value: float) -> str:
-    """A number as a person reads it: 1,250 or 1,250.40."""
-    return _fmt(value, 2)
+def _dec(value: Any) -> Decimal:
+    """A typed number EXACTLY as its cell holds it, in decimal: a whole
+    number as it is, any other by the shortest text that reads back as the
+    same number (what a spreadsheet shows for it and writes to the file)."""
+    return Decimal(value) if isinstance(value, int) else Decimal(repr(float(value)))
 
 
-def _as_held(value: float) -> str:
-    """A figure as the cell HOLDS it: every decimal place it was written
-    with (0.0425 stays 0.0425, never 0.04), thousands grouped."""
-    places = _decimals(value)
-    return f"{int(round(value)):,}" if places == 0 else f"{value:,.{places}f}"
+def _sum_exact(vals: "Iterable[Any]") -> "Decimal | None":
+    """The cells added up exactly, in decimal (0.1 + 0.2 is 0.3; nothing is
+    lost to a computer's own arithmetic, however many cells or however
+    large). None when it cannot be held exactly."""
+    try:
+        total = Decimal(0)
+        for v in vals:
+            total = _EXACT.add(total, _dec(v))
+        return total
+    except ArithmeticError:
+        return None
 
 
-def _figures(total: float, added: float) -> "tuple[str, str]":
-    """``(the total as its cell holds it, what the cells add up to)``. The
-    sum is printed like money (two places when it is not whole) and with as
-    many more as it takes to tell the two apart: two unequal figures never
-    print as the same number."""
-    said = _as_held(total)
-    whole = abs(added - round(added)) < 1e-9
-    for places in range(max(_decimals(total), 0 if whole else 2), 13):
-        other = _fmt(added, places)
-        if total == added or float(other.replace(",", "")) != float(said.replace(",", "")):
-            return said, other
-    return said, repr(float(added))
+def _in_full(value: Decimal) -> str:
+    """A figure in full: every digit it has, thousands grouped, never
+    rounded and never with an exponent. "" for one too long to print
+    (:data:`MAX_FIGURE_DIGITS`)."""
+    if value == 0:
+        return "0"
+    value = value.normalize()
+    if len(value.as_tuple().digits) > MAX_FIGURE_DIGITS or abs(value.adjusted()) > MAX_FIGURE_DIGITS:
+        return ""
+    return f"{value:,f}"
+
+
+def _differs(place: str, total: Decimal, added: Decimal) -> str:
+    """A typed total that is not the sum of its list, said with no verdict:
+    both figures EXACTLY (the total as its cell holds it, the sum as the
+    cells add up, no place rounded away), or, when one of them is too long
+    to print, only that the two differ."""
+    said, shown = _in_full(total), _in_full(added)
+    if said and shown:
+        return f"{place} says {said} and the cells above it add up to {shown}"
+    return f"{place} differs from what the cells above it add up to"
 
 
 def _size_words(size: int) -> str:
@@ -463,6 +506,12 @@ class _Book:
         self.cut = False
         #: The first number cell that holds no number ("" = none).
         self.void = ""
+        #: The first cell the reader calls an error ONLY because it is a
+        #: number under a date format that is no date it can read ("" =
+        #: none). The file stores a number there: it is no error cell.
+        self.undated = ""
+        #: The workbook lists a sheet the reader did not load.
+        self.partial = False
 
     def place(self, sheet: str, row: int, col: int) -> str:
         """A cell in plain words: B4 on “Summary” (the sheet's name is
@@ -505,18 +554,22 @@ def _load(path: Path, late: Callable[[], bool] = _never_late) -> _Book:
     try:
         trusted = not _recalculates(path)
         try:
-            return _read_once(wb, late, trusted)
+            book = _read_once(wb, late, trusted)
         except (ImportError, AttributeError, TypeError):
             # The one-pass read leans on the library's own cell parser. If a
             # later version moves it, read the slower way (two passes): the
             # answers are the same.
             log.debug("the one-pass read of a workbook is unavailable: reading it twice", exc_info=True)
             try:
-                return _read_twice(wb, path, late, trusted)
+                book = _read_twice(wb, path, late, trusted)
             except _OutOfTime:
                 raise
             except Exception as exc:  # noqa: BLE001
                 raise _NotRead() from exc
+        # The reader leaves out, without a word, a sheet the workbook lists
+        # and whose part is missing. Then not every cell was read.
+        book.partial = _sheets_listed(path) != len(book.sheets)
+        return book
     finally:
         wb.close()
 
@@ -579,6 +632,23 @@ def _recalculates(path: Path) -> bool:
         return True
 
 
+#: One sheet in the workbook part's own list (``<sheet name=... r:id=...>``,
+#: under any prefix; ``<sheets>`` itself does not match).
+_SHEET_LISTED_RX = re.compile(rb"<(?:[\w.-]+:)?sheet\s")
+
+
+def _sheets_listed(path: Path) -> int:
+    """How many sheets the workbook part lists. -1 when it cannot be told
+    (which then equals no count of loaded sheets: in doubt, not every sheet
+    is taken as read)."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return len(_SHEET_LISTED_RX.findall(zf.read(_workbook_part(zf))))
+    except Exception:  # noqa: BLE001
+        log.debug("a workbook's list of sheets could not be read", exc_info=True)
+        return -1
+
+
 def _saved_result(element: Any, value_tag: str, cast_number: Any) -> Any:
     """The result a spreadsheet program saved for a formula cell (its
     ``<v>``): a number, an error's text, a word, True/False; None for none."""
@@ -616,9 +686,20 @@ def _read_once(wb: Any, late: Callable[[], bool], trusted: bool = True) -> _Book
     class _Both(WorkSheetParser):
         def parse_cell(self, element: Any) -> dict:
             cell = super().parse_cell(element)
+            # An error cell is a cell whose STORED type is an error
+            # (``t="e"``), read from the file's own element: never what the
+            # reader makes of a cell of another type.
+            stored_error = element.get("t") == "e"
             if cell["data_type"] == "f":
                 cell["saved"] = _saved_result(element, VALUE_TAG, _cast_number)
-                cell["saved_error"] = element.get("t") == "e"
+                cell["saved_error"] = stored_error
+            elif stored_error:
+                cell["error"] = True
+            elif cell["data_type"] == "e":
+                # The reader's own mark for a NUMBER under a date format
+                # that is outside the dates it can make (20261126 typed
+                # under yyyy-mm-dd). The file stores a number: no error.
+                cell["undated"] = True
             elif cell["data_type"] == "n" and cell["value"] is None and element.find(VALUE_TAG) is not None:
                 # A number cell with a value element and nothing in it: how a
                 # writer saves a number that is not one (NaN, infinity).
@@ -654,6 +735,12 @@ def _read_once(wb: Any, late: Callable[[], bool], trusted: bool = True) -> _Book
                     v, r, c = cell["value"], cell["row"], cell["column"]
                     if cell.get("void") and not book.void:
                         book.void = book.place(ws.title, r, c)
+                    if cell.get("undated"):
+                        if not book.undated:
+                            book.undated = book.place(ws.title, r, c)
+                        continue    # neither the error the reader calls it nor a date this check can read
+                    if cell.get("error"):
+                        errors[(r, c)] = str(v or "").strip()   # a cell whose STORED type is an error
                     if not _keep(book, ws.title, cells, r, c, v):
                         continue
                     seen += 1
@@ -662,8 +749,6 @@ def _read_once(wb: Any, late: Callable[[], bool], trusted: bool = True) -> _Book
                             saved[(r, c)] = cell["saved"]
                             if cell.get("saved_error"):
                                 errors[(r, c)] = str(cell["saved"]).strip()
-                    elif cell["data_type"] == "e":
-                        errors[(r, c)] = str(v).strip()     # a cell whose TYPE is an error
                     elif _is_number(v) and cell["style_id"] and is_percent(cell["style_id"]):
                         book.percent.add((ws.title, r, c))
                 if seen >= MAX_CELLS:
@@ -699,11 +784,18 @@ def _read_twice(wb: Any, path: Path, late: Callable[[], bool], trusted: bool = T
                 if not isinstance(r, int) or not isinstance(c, int):
                     continue
                 v = cell.value
+                if getattr(cell, "data_type", "") == "e":
+                    if _maybe_undated(cell):
+                        # This reader cannot say what the file STORES here:
+                        # it reads "#VALUE!" for a stored error and for a
+                        # number under a date format alike. No error cell.
+                        if not book.undated:
+                            book.undated = book.place(ws.title, r, c)
+                        continue
+                    errors[(r, c)] = str(v or "").strip()   # a cell whose TYPE is an error
                 if not _keep(book, ws.title, cells, r, c, v):
                     continue
                 seen += 1
-                if getattr(cell, "data_type", "") == "e":
-                    errors[(r, c)] = str(v).strip()     # a cell whose TYPE is an error
                 if _is_number(v):
                     try:
                         if "%" in str(cell.number_format or ""):
@@ -736,12 +828,29 @@ def _read_twice(wb: Any, path: Path, late: Callable[[], bool], trusted: bool = T
                     key = (getattr(cell, "row", None), getattr(cell, "column", None))
                     if key in want and cell.value is not None and not (
                             isinstance(cell.value, str) and not cell.value.strip()):
+                        if getattr(cell, "data_type", "") == "e" and _maybe_undated(cell):
+                            continue    # a saved NUMBER under a date format: not read as a saved result
                         book.values[ws.title][key] = cell.value
                         if getattr(cell, "data_type", "") == "e":
                             book.errors[ws.title][key] = str(cell.value).strip()
     finally:
         kept.close()
     return book
+
+
+def _maybe_undated(cell: Any) -> bool:
+    """May a cell the public reader calls an error be a NUMBER under a date
+    format (the reader turns one it cannot make a date of into "#VALUE!")?
+    True for "#VALUE!" under a date format, and when the format cannot be
+    read (in doubt, it is not called an error cell)."""
+    if str(getattr(cell, "value", "") or "").strip() != "#VALUE!":
+        return False
+    try:
+        from openpyxl.styles.numbers import is_date_format
+
+        return bool(is_date_format(cell.number_format))
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _grid(book: _Book, late: Callable[[], bool]) -> Any:
@@ -926,14 +1035,18 @@ def _in_order(book: _Book, found: "Iterable[tuple[str, int, int, str]]") -> list
 
 
 def _error_cells(book: _Book) -> list[str]:
-    """Every cell whose TYPE is an error ("C7 on Summary holds #DIV/0!"): an
-    error value, or a formula's saved result of that type in a workbook
-    that stands by its saved results. What the file itself holds, and
-    nothing Iron Jarvis worked out; a TEXT cell that reads "#N/A" (typed as
-    words, with or without spaces round it) is text, not an error."""
+    """Every cell whose STORED type is an error ("C7 on Summary holds
+    #DIV/0!"): an error value, or a formula's saved result of that type in
+    a workbook that stands by its saved results. What the file itself
+    holds, and nothing Iron Jarvis worked out; a TEXT cell that reads "#N/A"
+    (typed as words, with or without spaces round it) is text, not an
+    error. EVERY such cell is one, whatever it holds: the error is NAMED
+    only when it is one of the seven everybody knows; any other (a newer
+    program's "#SPILL!", another program's own code) reads "holds an
+    error", and the cell's own text is never shown."""
     known = _errors()
-    found = [(sheet, row, col, f"holds {code}")
-             for sheet, cells in book.errors.items() for (row, col), code in cells.items() if code in known]
+    found = [(sheet, row, col, f"holds {code}" if code in known else "holds an error")
+             for sheet, cells in book.errors.items() for (row, col), code in cells.items()]
     return _in_order(book, found)
 
 
@@ -1024,15 +1137,16 @@ def _explained(total: float, vals: "list[float]") -> bool:
     return False
 
 
-def _adds_up(total: float, added: float, vals: "list[float]") -> bool:
-    """Is a total EXACTLY the sum of its cells (*vals*, which add up to
-    *added*)? Equal but for what a computer's own arithmetic loses over
-    those cells (0.1 + 0.2 is 0.3; 1,000,000.1 less 1,000,000 plus 0.2 is
-    0.3): one step of the largest figure involved for each cell. Nothing
-    else: a total that matches only after rounding is not "adds up" (it is
-    not judged: :func:`_rounder`)."""
-    largest = max([abs(total), abs(added), 1e-9, *(abs(v) for v in vals)])
-    return abs(total - added) <= (len(vals) + 2) * math.ulp(largest)
+def _adds_up(total: Any, added: "Decimal | None") -> bool:
+    """Is a total EXACTLY the sum of its cells (*added*: :func:`_sum_exact`)?
+    Compared in decimal, as the cells hold their numbers, with NO slack: a
+    total one cent off 1,500 rows of fifty million is not "adds up". A
+    total that matches only after rounding is not either (it is not
+    judged: :func:`_rounder`)."""
+    try:
+        return added is not None and math.isfinite(total) and _dec(total) == added
+    except (ArithmeticError, ValueError, TypeError):
+        return False
 
 
 def _totals(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[int, list[str]]":
@@ -1111,7 +1225,7 @@ def _list_above(cells: dict, row: int, col: int) -> "list[tuple[int, float]]":
         v = cells.get((r, col))
         if not (_is_number(v) and math.isfinite(v)):
             break
-        run.append((r, float(v)))
+        run.append((r, v))      # as the cell holds it (a whole number stays whole)
         r -= 1
     if len(run) < 2 or r < 1:
         return []
@@ -1226,8 +1340,10 @@ def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col:
         label = cells.get((r, label_col))
         if not (isinstance(label, str) and label.strip() and not _is_formula(label)):
             return None     # a row with no label in words (a number, a date, nothing): not a list to judge
-    vals = [x for _r, x in rows]
-    added = math.fsum(vals)
+    vals = [float(x) for _r, x in rows]
+    added = _sum_exact(x for _r, x in rows)
+    if added is None:
+        return None
     v = cells.get((row, col))
     if _is_formula(v):
         ref = _one_sum_range(v)
@@ -1235,24 +1351,32 @@ def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col:
                 ref[1], ref[3]) != (rows[0][0], rows[-1][0]):
             return None     # not a plain SUM of exactly the list above it
         last = saved.get((row, col))
-        if last is not None and not (_is_number(last) and _adds_up(float(last), added, vals)):
+        if last is not None and not (_is_number(last) and _adds_up(last, added)):
             return None     # the file holds another result for it: nothing is said
         return PASSED, ""
     total = float(v)
     if not math.isfinite(total):
         return None
-    if _adds_up(total, added, vals):
+    if _adds_up(v, added):
         return PASSED, ""
-    if _rounder(total, vals) or _other_reading(cells, by_row, rows, row, label_col, total):
+    if _rounder(total, vals) or _other_reading(cells, by_row, [(r, float(x)) for r, x in rows], row, label_col,
+                                               total):
         return None
-    said, shown = _figures(total, added)
-    return LOOK, f"{book.place(sheet, row, col)} says {said} and the cells above it add up to {shown}"
+    return LOOK, _differs(book.place(sheet, row, col), _dec(v), added)
 
 
-def _named(items: list[str], rest_words: str) -> str:
-    shown = items[:MAX_NAMED]
-    rest = len(items) - len(shown)
-    return "; ".join(shown) + (f"; and {rest:,} more {rest_words}" if rest > 0 else "")
+def _named(items: list[str], rest_words: str, one_word: str) -> str:
+    """Up to :data:`MAX_NAMED` findings in full and the rest COUNTED ("and
+    2 more totals", "and 1 more total"). A finding is never cut: while the
+    words would be longer than the record keeps (``record.DETAIL_MAX``), one
+    finding fewer is named and one more is counted."""
+    said = ""
+    for n in range(min(MAX_NAMED, len(items)), 0, -1):
+        rest = len(items) - n
+        said = "; ".join(items[:n]) + (f"; and {rest:,} more {one_word if rest == 1 else rest_words}" if rest else "")
+        if len(said) <= DETAIL_MAX:
+            break
+    return said
 
 
 def _unpacked_too_large(path: Path) -> bool:
@@ -1305,7 +1429,13 @@ def _sheet_checks(path: Path, name: str, late: Callable[[], bool] = _never_late,
     except _OutOfTime:
         return [row(FILE_OPENS, PASSED, "opens"), row(SHEET_ERRORS, NOT_CHECKED, OUT_OF_TIME)]
     out = [row(FILE_OPENS, PASSED, "opens")]
-    if not any(book.formulas.values()):
+    if not any(book.formulas.values()) and not any(book.errors.values()):
+        if book.partial:
+            return out + [row(DOC_TEXT, NOT_CHECKED, SHEETS_NOT_READ)]
+        if book.spaces and not (book.void or book.undated):
+            # The reader SAW this workbook's cells, and each holds only
+            # blank space: said as that, never "could not be read".
+            return out + [row(DOC_TEXT, LOOK, ONLY_SPACES)]
         # The reader found no filled cell. "No filled cells" is said only
         # when nothing else in the package holds a cell either: a workbook
         # whose cells the reader does not see (Strict Open XML) is NOT empty.
@@ -1326,20 +1456,24 @@ def _sheet_checks(path: Path, name: str, late: Callable[[], bool] = _never_late,
     odd = _not_a_number(book)
     timed_out = False
     try:
-        found, unworked = ([], 0) if book.cut else _work_out(book, late)
+        found, unworked = ([], 0) if book.cut or book.partial else _work_out(book, late)
     except _OutOfTime:
         found, unworked, timed_out = [], 0, True
     if held:
-        out.append(row(SHEET_ERRORS, FAILED, _named(held, "cells hold an error")))
+        out.append(row(SHEET_ERRORS, FAILED, _named(held, "cells hold an error", "cell holds an error")))
     if found:
-        out.append(row(SHEET_ERRORS, LOOK, _named(_in_order(book, found), "formulas")))
+        out.append(row(SHEET_ERRORS, LOOK, _named(_in_order(book, found), "formulas", "formula")))
     if book.cut:
         if not held:
             out.append(row(SHEET_ERRORS, NOT_CHECKED, f"only its first {MAX_CELLS:,} cells were read"))
     elif timed_out:
         out.append(row(SHEET_ERRORS, NOT_CHECKED, OUT_OF_TIME))
+    elif book.partial:
+        out.append(row(SHEET_ERRORS, NOT_CHECKED, SHEETS_NOT_READ))
     elif odd:
         out.append(row(SHEET_ERRORS, NOT_CHECKED, f"{odd} holds a number this check cannot read"))
+    elif book.undated:
+        out.append(row(SHEET_ERRORS, NOT_CHECKED, f"{book.undated} holds a date this check cannot read"))
     elif unworked:
         # Only what Iron Jarvis did: a workbook that asks to be worked out
         # again HOLDS a (placeholder) result for the formula, so "it has no
@@ -1364,7 +1498,7 @@ def _sheet_checks(path: Path, name: str, late: Callable[[], bool] = _never_late,
         out.append(row(SHEET_TOTALS, PASSED, f"{_plural(good, 'total')} add{'s' if good == 1 else ''} up"))
     if look:
         # Iron Jarvis's own adding up: "worth a look", never a problem.
-        out.append(row(SHEET_TOTALS, LOOK, _named(look, "totals")))
+        out.append(row(SHEET_TOTALS, LOOK, _named(look, "totals", "total")))
     return out
 
 
@@ -1446,12 +1580,15 @@ def _docx_checks(path: Path, name: str, folder: str = "", late: Callable[[], boo
         try:
             docx.Document(str(path))
         except Exception as exc:  # noqa: BLE001 — the reader could not open it: the one "Problem"
-            if _disk_refused(exc):      # a lock, a permission: not the reader's failure
+            # This reader hides the disk's own refusal (it answers "not a
+            # package" for a file it was not let read): the disk is asked
+            # again before the reader is blamed.
+            if _disk_refused(exc) or not _disk_gives(path):
                 return [row(FILE_OPENS, NOT_CHECKED, NOT_READ)]
             return [row(FILE_OPENS, FAILED, could_not_open(name))]
         return [row(FILE_OPENS, PASSED, "opens"), row(DOC_TEXT, NOT_CHECKED, TEXT_NOT_READ)]
     out = [row(FILE_OPENS, PASSED, "opens")]
-    if text != _nonempty_or_sentinel("", kind="docx"):
+    if text != _nonempty_or_sentinel("", kind="docx") and _has_words(text):
         return out + [row(DOC_TEXT, PASSED, "has text")]
     if _package_holds(path, _WORD_PART_RX, _TEXT_RUN_RX, late) is not False:
         return out + [row(DOC_TEXT, NOT_CHECKED, TEXT_NOT_READ)]
@@ -1489,9 +1626,21 @@ def _pdf_checks(path: Path, name: str, folder: str = "", late: Callable[[], bool
         if _disk_refused(exc):      # a lock, a permission: not the reader's failure
             return [row(FILE_OPENS, NOT_CHECKED, NOT_READ)]
         return [row(FILE_OPENS, FAILED, could_not_open(name))]
-    out = [row(FILE_OPENS, PASSED, "opens"), row(PDF_PAGES, PASSED, _plural(pages, "page"))]
+    out = [row(FILE_OPENS, PASSED, "opens")]
+    # The count the file STATES is not the pages it holds: the pages are
+    # walked (no text is read for it), and the number is said only when the
+    # walk reaches its end and finds exactly that many. A file whose count
+    # and pages disagree gets no pages row, and nothing is said of its text.
+    try:
+        walked = sum(1 for _page in reader.pages)
+    except Exception:  # noqa: BLE001 — the walk broke: the count is not said
+        log.debug("a made PDF's pages could not be walked", exc_info=True)
+        walked = -1
+    if walked != pages:
+        return out
     if pages == 0:
-        return out[:1] + [row(DOC_TEXT, LOOK, "it has no pages")]
+        return out + [row(DOC_TEXT, LOOK, "it has no pages")]
+    out.append(row(PDF_PAGES, PASSED, _plural(pages, "page")))
     try:
         read = 0
         for page in reader.pages:
@@ -1506,6 +1655,35 @@ def _pdf_checks(path: Path, name: str, folder: str = "", late: Callable[[], bool
     except Exception:  # noqa: BLE001 — its text could not be read: nothing is said about it
         log.debug("a made PDF's text could not be read", exc_info=True)
     return out
+
+
+#: Characters that are in a file and that nobody sees: the byte-order mark
+#: and the zero-width ones. A file of only these (and blank space) has no
+#: text.
+_NOT_SEEN = dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d\u2060"))
+
+
+def _has_words(text: str, blanks: "str | None" = None) -> bool:
+    """Does *text* hold anything a person would see: something that is not
+    blank space, not a character nobody sees (:data:`_NOT_SEEN`) and, for a
+    table of text, not one of its separators (*blanks*)?"""
+    return bool(str(text or "").translate(_NOT_SEEN).strip(blanks))
+
+
+def _disk_gives(path: Path) -> bool:
+    """Does the DISK hand the file over, all of it, right now? Asked before
+    any reader is (and again before a reader that hides the disk's refusal
+    is blamed): a file another program holds, one a permission keeps, one
+    that went away is not read, and that is never the reader's failure nor
+    a fact about what the file holds."""
+    try:
+        with open(path, "rb") as fh:
+            while fh.read(1 << 20):
+                pass
+        return True
+    except OSError:
+        log.debug("the disk did not hand a made file over", exc_info=True)
+        return False
 
 
 def _decoded(data: bytes) -> "str | None":
@@ -1531,8 +1709,10 @@ def _text_checks(path: Path, ext: str, name: str, folder: str = "") -> list[Chec
     text = _decoded(path.read_bytes())
     if text is None:
         return [row(FILE_OPENS, NOT_CHECKED, TEXT_NOT_READ)]
-    # A table of text that holds only its separators (",,,") has no text.
-    blank = not (text.strip(_TABLE_BLANKS) if ext in _TABLE_EXTS else text.strip())
+    # A table of text that holds only its separators (",,,") has no text;
+    # nor does a file of characters nobody sees (zero-width ones, a
+    # byte-order mark).
+    blank = not _has_words(text, _TABLE_BLANKS if ext in _TABLE_EXTS else None)
     if ext in _TEXT_DOC_EXTS:
         return [row(FILE_OPENS, PASSED, "opens"),
                 row(DOC_TEXT, LOOK, NO_TEXT) if blank else row(DOC_TEXT, PASSED, "has text")]
@@ -1565,8 +1745,10 @@ def check_one(path: Any, reply: str = "", *, may_read: Callable[[Any], bool] = r
     if ext not in OPENED_EXTS:
         return []       # nothing here opens this kind: no row, and never "opens"
 
+    stamp = ""
+
     def row(code: str, result: str, detail: str) -> Check:
-        return Check(code, result, detail, file=name, folder=folder, path_key=path_key(path))
+        return Check(code, result, detail, file=name, folder=folder, path_key=path_key(path), stamp=stamp)
 
     if not may_read(path):
         return [row(FILE_OPENS, NOT_CHECKED, "it is outside the folders Iron Jarvis may read")]
@@ -1574,6 +1756,10 @@ def check_one(path: Any, reply: str = "", *, may_read: Callable[[Any], bool] = r
         if not p.exists() or p.is_dir():
             return []
         size = p.stat().st_size
+        # The file as it was when it was checked (its size and when it was
+        # last written), read BEFORE it is opened: a row says what THIS
+        # file held, and is not shown for a file that has changed since.
+        stamp = file_stamp(p)
     except OSError:
         return [row(FILE_OPENS, NOT_CHECKED, NOT_READ)]
     if size == 0:
@@ -1582,21 +1768,29 @@ def check_one(path: Any, reply: str = "", *, may_read: Callable[[Any], bool] = r
         return [row(DOC_TEXT, LOOK, EMPTY)] if ext in _DOC_EXTS else []
     if size > MAX_BYTES:
         return [row(FILE_OPENS, NOT_CHECKED, f"it is too large to check here ({_size_words(size)})")]
+    # THE DISK IS ASKED FIRST, before any reader: a file it does not hand
+    # over (another program holds it, a permission, it went away) is "not
+    # checked", for every kind. Some readers hide the disk's refusal and
+    # answer "this is no document": that is never taken as the file's fault.
+    if not _disk_gives(p):
+        return [row(FILE_OPENS, NOT_CHECKED, NOT_READ)]
     # An Office file is a package: one that unpacks past the cap is not
     # opened by ANY reader below.
     if ext in _PACKAGE_EXTS and zipfile.is_zipfile(p) and _unpacked_too_large(p):
         return [row(FILE_OPENS, NOT_CHECKED, "it unpacks too large to check here")]
     try:
         if ext in _SHEET_EXTS:
-            return _sheet_checks(p, name, late, folder)
-        if ext in _WORD_EXTS:
-            return _docx_checks(p, name, folder, late)
-        if ext in _PDF_EXTS:
-            return _pdf_checks(p, name, folder, late)
-        return _text_checks(p, ext, name, folder)
+            got = _sheet_checks(p, name, late, folder)
+        elif ext in _WORD_EXTS:
+            got = _docx_checks(p, name, folder, late)
+        elif ext in _PDF_EXTS:
+            got = _pdf_checks(p, name, folder, late)
+        else:
+            got = _text_checks(p, ext, name, folder)
     except Exception:  # noqa: BLE001 — a check that breaks is "not checked": never a pass, never "opens"
         log.debug("a made file's content check broke", exc_info=True)
         return [row(FILE_OPENS, NOT_CHECKED, BROKE)]
+    return [replace(c, stamp=stamp) for c in got]
 
 
 def _unique(paths: Iterable[Any]) -> list[str]:

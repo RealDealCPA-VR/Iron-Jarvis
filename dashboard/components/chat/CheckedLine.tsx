@@ -12,10 +12,13 @@
  * "worth a look" (what Iron Jarvis worked out itself and found different),
  * read in the warn tone; a pass, and what could not be checked, quietly. The
  * two keep their own words in the list ("Problem", "Worth a look"): the
- * colour is shared, the claim is not. The quiet line's TICK is drawn only
- * when nothing on it is "Not checked" (and no check is left uncounted in
- * the list): a line that says something was not checked opens with the
- * neutral mark, never with a tick. Never a notice,
+ * colour is shared, the claim is not. The TICK is decided from the list's
+ * ITEMS, never from the stored tone alone: it is drawn only when at least
+ * one check passed and EVERY check in the list passed (none is a problem,
+ * worth a look or "Not checked") and no check is left uncounted. A line
+ * that says something was not checked opens with the neutral mark; one with
+ * a problem or something worth a look in its list opens with the warning
+ * mark, whatever tone it was saved with. Never a notice,
  * never the bell: it is drawn where the reply already is, and a reply that
  * made no file gets none (the caller renders nothing for a null mark).
  *
@@ -36,12 +39,13 @@ export const CheckedLine = memo(function CheckedLine({ mark }: { mark: CheckedMa
   const [open, setOpen] = useState(false);
   const listId = useId();
   if (!mark) return null;
-  const warn = mark.tone === "warn";
-  // A tick says "checked, and nothing was left out": some check passed, none
-  // reads "Not checked", and the list holds every check (none is only counted).
+  const warn = mark.tone === "warn" || mark.checks.some((c) => isWarnResult(c.result));
+  // A tick says "checked, and nothing was left out": some check passed, every
+  // check in the list passed, and the list holds every check (none is only
+  // counted). Read from the items: a stored tone alone never earns a tick.
   const ticked =
     mark.checks.some((c) => c.result === "passed") &&
-    !mark.checks.some((c) => c.result === "not_checked") &&
+    mark.checks.every((c) => c.result === "passed") &&
     mark.more === 0;
   const canOpen = mark.checks.length > 0;
   const line = (
@@ -61,7 +65,7 @@ export const CheckedLine = memo(function CheckedLine({ mark }: { mark: CheckedMa
   return (
     <div
       data-testid="checked-line"
-      data-tone={mark.tone}
+      data-tone={warn ? "warn" : "quiet"}
       className={`mt-1 grid min-w-0 gap-1 text-[12px] ${warn ? "text-tone-warn" : "text-zinc-500"}`}
     >
       {canOpen ? (

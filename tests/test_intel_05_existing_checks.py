@@ -110,7 +110,7 @@ async def test_the_claims_check_has_no_passed_row_ever():
     both = UntilDone(chat=True, ended="limit")
     both.open = ["figures", "claimed_sent", "claimed_file", "claimed_sent"]
     assert existing.claims_check(both) == Check(
-        R.CLAIMS, R.LOOK, "it says something was sent that no step sent; it says a file was saved that no step wrote")
+        R.CLAIMS, R.LOOK, "it may say something was sent that no step sent; it may say a file was saved that no step wrote")
     assert existing.claims_check(None) is None and existing.claims_check(object()) is None
     from iron_jarvis.daemon.until_done import END_WORDS
 
@@ -259,16 +259,18 @@ async def test_the_required_files_reach_the_record_with_the_replys_other_checks(
     rows = _rows(platform.engine, turn_id="turn_deliv")
     assert sorted((r.check, r.file, r.result) for r in rows) == sorted([
         # (No claims row: "Wrote the change log." names no file it saved.)
-        (R.REQUIRED_FILE, "summary.xlsx", R.FAILED),
-        (R.REQUIRED_FILE, "change_log.md", R.PASSED),
-        (R.REQUIRED_FILE, "FINAL_REPORT.md", R.FAILED),
+        # S5: a required file is kept as the task asked for it (its place), never as a bare name.
+        (R.REQUIRED_FILE, "OUTPUT/summary.xlsx", R.FAILED),
+        (R.REQUIRED_FILE, "OUTPUT/change_log.md", R.PASSED),
+        (R.REQUIRED_FILE, "OUTPUT/FINAL_REPORT.md", R.FAILED),
         (R.FILE_OPENS, "change_log.md", R.PASSED),
         (R.DOC_TEXT, "change_log.md", R.PASSED),
     ])
     assert {r.thread_id for r in rows} == {"thread_deliv"}
     assert checked["tone"] == "warn"
     assert checked["line"].startswith("Checked by Iron Jarvis: the document opens, has text. Problem in ")
-    assert "required file “summary.xlsx”: not on disk" in checked["line"]
+    assert "required file “OUTPUT/summary.xlsx”: not on disk" in checked["line"]
+    assert "Required file “OUTPUT/summary.xlsx”" in [c["label"] for c in checked["checks"]]
 
     # A reply that hands off to an agent run leaves the checking to that run.
     assert await T.checked_for_turn(platform, turn_id="turn_esc", made_docs=[str(made)], until=until,
@@ -479,7 +481,7 @@ async def test_the_finish_checks_tests_and_review_are_rows_from_its_own_record(p
     fc._by_id["ij-finish-1"] = run
     fc.runs = [run]
     await fc.take(SimpleNamespace(id="ij-finish-1", name="process_start"),
-                  SimpleNamespace(ok=True, data={"id": "p1", "running": False, "exit_code": 2},
+                  SimpleNamespace(ok=True, data={"id": "p1", "running": False, "exit_code": 1},
                                   error=None, output=""), "out", refused=False)
     fc._settle_review(F.REVIEW_DONE, member="Reviewer", model="Sonnet 4.5", verdict=F.VERDICT_CHANGES)
     rec = await fc.record()
@@ -534,7 +536,7 @@ async def test_a_test_run_that_did_not_finish_is_not_a_failed_test_run(platform)
         # (the tool, its result, how the run ended, the row)
         ("shell", NS(ok=False, data={"returncode": 1}, error="exit 1", output=""), "failed",
          Check(R.TESTS, R.FAILED, "they failed")),
-        ("process_start", NS(ok=True, data={"id": "p1", "running": False, "exit_code": 2}, error=None, output=""),
+        ("process_start", NS(ok=True, data={"id": "p1", "running": False, "exit_code": 1}, error=None, output=""),
          "failed", Check(R.TESTS, R.FAILED, "they failed")),
         ("shell", NS(ok=False, data={"returncode": None, "timed_out": True}, error="it took too long", output=""),
          "timed_out", Check(R.TESTS, R.NOT_CHECKED, "they did not finish in their time")),
@@ -858,16 +860,16 @@ async def test_the_lines_read_back_and_the_homing_of_its_rows_run_off_the_event_
     made = tmp_path / "notes.md"
     made.write_text("hello\n", encoding="utf-8")
     loop_thread = threading.get_ident()
-    where: dict[str, list[bool]] = {"for_turn": [], "home_turn": []}
-    real_read, real_home = R.for_turn, R.home_turn
-    monkeypatch.setattr(R, "for_turn", lambda *a, **kw: (where["for_turn"].append(threading.get_ident() == loop_thread),
-                                                          real_read(*a, **kw))[1])
-    monkeypatch.setattr(R, "home_turn", lambda *a, **kw: (where["home_turn"].append(threading.get_ident() == loop_thread),
-                                                           real_home(*a, **kw))[1])
+    where: dict[str, list[bool]] = {"by_ids": [], "home_ids": []}
+    real_read, real_home = R.by_ids, R.home_ids
+    monkeypatch.setattr(R, "by_ids", lambda *a, **kw: (where["by_ids"].append(threading.get_ident() == loop_thread),
+                                                        real_read(*a, **kw))[1])
+    monkeypatch.setattr(R, "home_ids", lambda *a, **kw: (where["home_ids"].append(threading.get_ident() == loop_thread),
+                                                          real_home(*a, **kw))[1])
     egress.link_turn_holds("turn_offloop", "thread_offloop")     # the page linked this turn to its chat
     got = await T.checked_for_turn(platform, turn_id="turn_offloop", made_docs=[str(made)])
     assert got is not None and got["line"].startswith("Checked by Iron Jarvis:")
-    assert where == {"for_turn": [False], "home_turn": [False]}, f"a database call ran on the event loop: {where}"
+    assert where == {"by_ids": [False], "home_ids": [False]}, f"a database call ran on the event loop: {where}"
     assert {r.thread_id for r in _rows(platform.engine, turn_id="turn_offloop")} == {"thread_offloop"}
 
 
@@ -1524,3 +1526,345 @@ async def test_the_card_a_local_only_run_delivers_carries_its_checked_line_only_
         assert line["sessionId"] == row.id and line["receipt"]["found"] is True, line
         assert ("checked" in line["receipt"]) is carried, f"{chat}: the delivered card's checked line"
         assert ("hello.txt" in json.dumps(line["receipt"].get("checked", ""))) is carried
+
+
+# --------------------------------------------------------------------------- #
+# The fifth review
+# --------------------------------------------------------------------------- #
+async def _ended(call_name: str, result, command: str = "pytest") -> "tuple":
+    """A real finish check that has taken ONE run of *command*: ``(its
+    record, how that run ended)``."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.harness import finish as F
+
+    fc = F.FinishCheck(engine=None, home=None, event_bus=None, session_id="build:x", folder=Path("."),
+                       mark=0, request="fix it")
+    run = F._Run(command=command, args={}, source="yours")
+    fc._by_id["ij-finish-1"] = run
+    fc.runs = [run]
+    await fc.take(SimpleNamespace(id="ij-finish-1", name=call_name), result, "out", refused=False)
+    return await fc.record(), fc.tests_ended()
+
+
+def _shell(code: int, output: str = "", **data):
+    from types import SimpleNamespace as NS
+
+    return NS(ok=code == 0, error=None if code == 0 else f"exit {code}", output=output,
+              data={"returncode": code, "timed_out": False, **data})
+
+
+def _program(code):
+    from types import SimpleNamespace as NS
+
+    return NS(ok=True, error=None, output="", data={"id": "p1", "running": False, "exit_code": code})
+
+
+COULD_NOT = "they could not be run"
+NO_TESTS = "no tests were found to run"
+FAILED_RUN = "they failed"
+
+
+@pytest.mark.parametrize("tag,call,result,command,ended,said", [
+    # The fifth review's six: each read "Problem: the tests: they failed" and no test had run.
+    ("the Docker sandbox is down", "shell",
+     _shell(127, "docker unavailable: Error while fetching server API version", confinement="sandbox"), "pytest",
+     "no_exit", COULD_NOT),
+    ("docker run failed (no image)", "shell",
+     _shell(1, "docker run failed: 404 Client Error: image not found", confinement="sandbox"), "pytest",
+     "no_exit", COULD_NOT),
+    ("the shell did not find the program", "shell", _shell(127, "bash: pytest: command not found"), "pytest",
+     "no_exit", COULD_NOT),
+    ("killed by a signal", "shell", _shell(-9, "Killed"), "pytest", "no_exit", COULD_NOT),
+    ("pytest collected nothing", "shell", _shell(5, "no tests ran in 0.01s"), "pytest", "none", NO_TESTS),
+    ("killed from outside (Ctrl+C on Windows)", "process_start", _program(-1073741510), "pytest", "no_exit", COULD_NOT),
+    # The rest of the rule.
+    ("the shell could not run the program", "shell", _shell(126), "npm test", "no_exit", COULD_NOT),
+    ("Windows did not find the program", "shell", _shell(9009), "npm test", "no_exit", COULD_NOT),
+    ("killed, as a shell says it", "shell", _shell(137), "npm test", "no_exit", COULD_NOT),
+    ("the same Windows exit, unsigned", "process_start", _program(3221225786), "npm test", "no_exit", COULD_NOT),
+    ("pytest was interrupted", "shell", _shell(2), "uv run pytest -q tests/", "no_exit", COULD_NOT),
+    ("pytest broke inside", "shell", _shell(3), "python -m pytest", "no_exit", COULD_NOT),
+    ("pytest was called wrongly", "shell", _shell(4), "py.test -x", "no_exit", COULD_NOT),
+    ("pytest through uv, nothing collected", "shell", _shell(5), "uv run pytest -q -k nothing", "none", NO_TESTS),
+    # A command that ran to its end and reported failure: the one problem.
+    ("pytest: a test failed", "shell", _shell(1, "1 failed, 3 passed"), "pytest -q", "failed", FAILED_RUN),
+    ("another runner's 2 is its own", "shell", _shell(2), "npm test", "failed", FAILED_RUN),
+    ("another runner's 5 is its own", "shell", _shell(5), "cargo test", "failed", FAILED_RUN),
+    ("pytest with a second command joined on: the status may be the other's", "shell", _shell(5),
+     "pytest -q && npm test", "failed", FAILED_RUN),
+    ("the last status that is a failed run", "process_start", _program(125), "make test", "failed", FAILED_RUN),
+    # A program that prints the sandbox's words itself, outside the sandbox, failed like any other.
+    ("the words, not from the sandbox", "shell", _shell(1, "docker unavailable: is the daemon running?"),
+     "make test", "failed", FAILED_RUN),
+    ("the words, not first in the output", "shell",
+     _shell(1, "1 failed\ndocker unavailable: x", confinement="sandbox"), "make test", "failed", FAILED_RUN),
+])
+async def test_only_a_command_that_ran_to_its_end_and_reported_failure_is_a_failed_test_run(
+        platform, tag, call, result, command, ended, said):
+    """B2. Each result goes through the real ``FinishCheck.take``. The
+    finish check's own verdict stays "failed" for every one of them (what
+    it does with a red run is unchanged); only the record of checks tells
+    them apart."""
+    rec, got = await _ended(call, result, command)
+    assert rec["tests"] == "failed", (tag, rec)
+    assert got == ended, (tag, got)
+    (row,) = existing.finish_checks(rec, got)
+    assert (row.check, row.result, row.detail) == (
+        R.TESTS, R.FAILED if said == FAILED_RUN else R.NOT_CHECKED, said), tag
+    line = R.line_for([{"check": row.check, "result": row.result, "detail": row.detail, "file": "", "by": row.by}])[0]
+    assert ("Problem" in line or "a problem" in line) is (said == FAILED_RUN), (tag, line)
+
+
+def test_the_sandboxs_own_words_for_nothing_started_are_what_the_real_runtime_answers(tmp_path, monkeypatch):
+    """B2. The marker is the Docker runtime's own result, read from the
+    real runtime: Docker cannot be reached, and the container cannot be
+    made. Its return codes (127, 1) are also a program's own."""
+    import sys
+    import types
+
+    from iron_jarvis.harness import finish as F
+    from iron_jarvis.sandbox import docker_runtime as D
+
+    monkeypatch.setitem(sys.modules, "docker", None)      # the SDK is not there
+    down = D.DockerSandbox().run("pytest", cwd=tmp_path, timeout=1)
+    assert (down.returncode, down.stdout) == (127, "") and down.stderr.startswith(D.UNAVAILABLE)
+
+    class _Containers:
+        def run(self, **_kw):
+            raise RuntimeError("404 Client Error: image not found")
+
+    fake = types.SimpleNamespace(from_env=lambda: types.SimpleNamespace(containers=_Containers(), close=lambda: None))
+    monkeypatch.setitem(sys.modules, "docker", fake)
+    failed = D.DockerSandbox().run("pytest", cwd=tmp_path, timeout=1)
+    assert (failed.returncode, failed.stdout) == (1, "") and failed.stderr.startswith(D.RUN_FAILED)
+    assert D.NOT_STARTED == (D.UNAVAILABLE, D.RUN_FAILED) == ("docker unavailable: ", "docker run failed: ")
+    for result in (down, failed):       # as the shell tool hands it on: its output, and the sandbox's own word
+        shaped = types.SimpleNamespace(output=result.combined.strip())
+        assert F._sandbox_started_nothing(shaped, {"confinement": "sandbox"})
+        assert not F._sandbox_started_nothing(shaped, {"confinement": "native"})
+    assert not F._sandbox_started_nothing(types.SimpleNamespace(output="3 failed"), {"confinement": "sandbox"})
+
+
+def test_how_one_failed_run_ended_and_which_ending_speaks_for_several():
+    from types import SimpleNamespace as NS
+
+    from iron_jarvis.harness import finish as F
+
+    def run(code=None, command="pytest", **kw):
+        return NS(exit_code=code, command=command, timed_out=False, not_started=False, verdict=F.TESTS_FAILED, **{
+            k: v for k, v in kw.items()})
+
+    assert [F.run_ending(run(c, "make test")) for c in (1, 2, 5, 125)] == ["failed"] * 4
+    assert [F.run_ending(run(c, "make test")) for c in (-1, 126, 127, 128, 255, 9009, 2**31)] == ["no_exit"] * 7
+    assert F.run_ending(run(0)) == "unread" and F.run_ending(run(None)) == "no_exit" and F.run_ending(run(True)) == "no_exit"
+    assert F.run_ending(NS(exit_code=1, command="pytest", timed_out=True, not_started=False)) == "timed_out"
+    assert F.run_ending(NS(exit_code=1, command="pytest", timed_out=False, not_started=True)) == "no_exit"
+    for alone in ("pytest", "  pytest -q tests/", "python -m pytest", "python3.12 -m pytest -x", "py -m pytest",
+                  "uv run pytest", "poetry run python -m pytest tests", "pytest.exe", "PY.TEST -q"):
+        assert F.run_ending(run(5, alone)) == "none" and F.run_ending(run(3, alone)) == "no_exit", alone
+    for joined in ("pytest && npm test", "pytest; echo done", "pytest | tee out.txt", "npm test", "mypytest",
+                   "pytest-watch", "tox -e pytest", "echo pytest"):
+        assert F.run_ending(run(5, joined)) == "failed", joined
+    # Several failed runs: a real failure speaks first, then a stop, then "could not be run", then "no tests".
+    fc = F.FinishCheck(engine=None, home=None, event_bus=None, session_id="build:x", folder=Path("."), mark=0,
+                       request="fix it")
+    fc.runs = [run(5), run(127)]
+    assert fc.tests_ended() == "no_exit"
+    fc.runs = [run(5), run(127), run(1)]
+    assert fc.tests_ended() == "failed"
+    fc.runs = [run(5), NS(exit_code=1, command="pytest", timed_out=True, not_started=False, verdict=F.TESTS_FAILED)]
+    assert fc.tests_ended() == "timed_out"
+    fc.runs = [run(5), run(0)]
+    assert fc.tests_ended() == "none"
+    fc.runs = [NS(exit_code=0, command="pytest", timed_out=False, not_started=False, verdict=F.TESTS_PASSED)]
+    assert fc.tests_ended() == ""
+    assert existing.TESTS_ENDED_WORDS == {"timed_out": "they did not finish in their time",
+                                          "no_exit": "they could not be run", "none": "no tests were found to run"}
+
+
+def test_the_replys_claim_row_says_may():
+    """S4. "It says a file was saved that no step wrote" stood under a reply
+    that said it had saved NOTHING to that file. The row is a reading of
+    prose: its words say so."""
+    assert existing.OPEN_WORDS == {
+        "claimed_file": "it may say a file was saved that no step wrote",
+        "changed_file": "it may say a file was changed that no step changed",
+        "claimed_change": "it may say a change was made that no step made",
+        "claimed_sent": "it may say something was sent that no step sent",
+    }
+
+
+async def test_a_replys_line_holds_the_rows_that_reply_wrote_whoever_else_sends_its_turn_id(platform, tmp_path):
+    """B6. Two NEW chats sent one turn id: the second one's line named the
+    first one's file and figures. And one chat that sent one id twice got
+    the first reply's file on the second reply's line."""
+    from iron_jarvis.providers import egress
+
+    payroll = tmp_path / "client-payroll.md"
+    payroll.write_text("Sam 4,200\n", encoding="utf-8")
+    plan = tmp_path / "plan.md"
+    plan.write_text("next week\n", encoding="utf-8")
+    with egress.local_only_scope(True):
+        a = await T.checked_for_turn(platform, turn_id="same-turn", made_docs=[str(payroll)])
+    b = await T.checked_for_turn(platform, turn_id="same-turn", made_docs=[str(plan)])
+    assert {c["label"] for c in a["checks"]} == {"“client-payroll.md”"}
+    assert {c["label"] for c in b["checks"]} == {"“plan.md”"} and "payroll" not in json.dumps(b)
+    assert {(r.file, r.thread_id, r.kept_home) for r in _rows(platform.engine, turn_id="same-turn")} == {
+        ("client-payroll.md", "", True), ("plan.md", "", False)}
+    # The second chat's link lands while it is written: ITS rows get its chat. The first chat's rows of the
+    # same turn id, which have no chat yet either, do not.
+    with egress.local_only_scope(True):
+        await T.checked_for_turn(platform, turn_id="linked-turn", made_docs=[str(payroll)])
+    egress.link_turn_holds("linked-turn", "chat_second")
+    await T.checked_for_turn(platform, turn_id="linked-turn", made_docs=[str(plan)])
+    assert {(r.file, r.thread_id) for r in _rows(platform.engine, turn_id="linked-turn")} == {
+        ("client-payroll.md", ""), ("plan.md", "chat_second")}
+    # One saved chat, one id, two replies (an API caller's constant id, a retry).
+    first = await T.checked_for_turn(platform, turn_id="again", thread_id="chat_one", made_docs=[str(payroll)])
+    second = await T.checked_for_turn(platform, turn_id="again", thread_id="chat_one", made_docs=[str(plan)])
+    assert {c["label"] for c in first["checks"]} == {"“client-payroll.md”"}
+    assert {c["label"] for c in second["checks"]} == {"“plan.md”"} and "payroll" not in second["line"]
+    # A reply that draws no line (a phone's) homes its own rows only, too.
+    egress.link_turn_holds("phone-turn", "chat_phone")
+    R.write(platform.engine, [Check(R.FILE_OPENS, R.PASSED, "opens", file="other.md")], turn_id="phone-turn")
+    assert T._checked_later(platform.engine, "phone-turn", "", [str(plan)], None, None, False, __import__("time").monotonic) == 2
+    assert {(r.file, r.thread_id) for r in _rows(platform.engine, turn_id="phone-turn")} == {
+        ("other.md", ""), ("plan.md", "chat_phone")}
+
+
+def test_a_runs_card_drops_the_checks_of_a_file_that_changed_after_it_was_checked(platform, tmp_path):
+    """S7. The card kept "opens, no error cells, 1 total adds up" after the
+    file was written again with an error cell and another total."""
+    from openpyxl import Workbook
+
+    def save(path, rows):
+        wb = Workbook()
+        for row in rows:
+            wb.active.append(row)
+        wb.save(path)
+
+    sheet = tmp_path / "summary.xlsx"
+    notes = tmp_path / "notes.md"
+    notes.write_text("hello\n", encoding="utf-8")
+    save(sheet, [["Item", "Amount"], ["Rent", 1200], ["Food", 300], ["Total", 1500]])
+    docs = [str(sheet), str(notes)]
+    assert T.settle_run(platform.engine, "ses_s7", docs, kept_home=False) == 5
+    first = T.run_payload(platform.engine, "ses_s7", docs)
+    assert first["line"] == ("Checked by Iron Jarvis: “summary.xlsx” opens, no error cells, 1 total adds up; "
+                             "“notes.md” opens, has text.")
+    save(sheet, [["Item", "Amount"], ["Rent", 1200], ["Food", 300], ["Total", 99], ["x", "y"]])
+    later = T.run_payload(platform.engine, "ses_s7", docs)
+    assert later["line"] == ("Checked by Iron Jarvis: the document opens, has text. Not checked: the other files "
+                             "(1 other file on this card was not checked here: “summary.xlsx”).")
+    assert "adds up" not in json.dumps(later) and "no error cells" not in json.dumps(later)
+    # Every listed file changed: no line at all (never the old one).
+    notes.write_text("hello again, at more length\n", encoding="utf-8")
+    assert T.run_payload(platform.engine, "ses_s7", docs) is None
+    # A settle says what the files hold now, and the card shows it again.
+    assert T.settle_run(platform.engine, "ses_s7", docs, kept_home=False) >= 4
+    assert "“notes.md” opens, has text" in T.run_payload(platform.engine, "ses_s7", docs)["line"]
+    # A row from a writer that stored no stamp is held only to "the file is on disk".
+    R.write(platform.engine, [Check(R.FILE_OPENS, R.PASSED, "opens", file="notes.md", path_key=R.path_key(notes))],
+            session_id="ses_old")
+    assert T.run_payload(platform.engine, "ses_old", [str(notes)])["line"] == "Checked by Iron Jarvis: the document opens."
+    assert T._as_checked([], ("k", ""), str(tmp_path / "gone.md")) is False
+
+
+def test_a_reopened_chat_drops_from_a_replys_line_the_checks_of_a_file_that_changed(tmp_path):
+    """S7, the reply's saved line. Through the real route that serves a
+    saved chat: the line is as saved while the reply's files are as they
+    were, and loses the checks of a file that changed (the saved chat itself
+    is not written)."""
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.core.models import ChatThreadRecord
+    from iron_jarvis.daemon.app import create_app
+
+    sheet = tmp_path / "summary.md"
+    sheet.write_text("Total 1,500\n", encoding="utf-8")
+    notes = tmp_path / "notes.md"
+    notes.write_text("hello\n", encoding="utf-8")
+    with TestClient(create_app(str(tmp_path / "home"))) as client:
+        platform = client.app.state.platform
+        checked = asyncio.run(T.checked_for_turn(platform, turn_id="turn_re", thread_id="chat_re",
+                                                 made_docs=[str(sheet), str(notes)]))
+        assert checked["line"] == "Checked by Iron Jarvis: “summary.md” opens, has text; “notes.md” opens, has text."
+        messages = [
+            {"role": "user", "content": "make them"},
+            {"role": "assistant", "content": "Done.", "turnId": "turn_re", "documents": [str(sheet), str(notes)],
+             "checked": checked},
+            {"role": "assistant", "content": "An older reply.", "turnId": "turn_gone", "documents": [str(notes)],
+             "checked": {**checked, "line": "kept as saved"}},      # the record holds no row for this one
+        ]
+        with session_scope(platform.engine) as db:
+            db.add(ChatThreadRecord(id="chat_re", title="t", messages_json=json.dumps(messages)))
+            db.commit()
+
+        def served() -> list:
+            got = client.get("/chat/threads/chat_re")
+            assert got.status_code == 200
+            return got.json()["messages"]
+
+        assert served() == messages, "a reply whose files are as they were is served as saved"
+        sheet.write_text("Total 99, and more words\n", encoding="utf-8")
+        after = served()
+        assert after[1]["checked"]["line"] == "Checked by Iron Jarvis: the document opens, has text."
+        assert [c["label"] for c in after[1]["checked"]["checks"]] == ["“notes.md”", "“notes.md”"]
+        assert after[2] == messages[2] and after[0] == messages[0]
+        notes.unlink()
+        assert "checked" not in served()[1], "no check of a file is left: no line"
+        with session_scope(platform.engine) as db:
+            assert json.loads(db.get(ChatThreadRecord, "chat_re").messages_json) == messages, "the saved chat was written"
+        # Nothing here can break the opening of a chat.
+        assert T.reopened(object(), "chat_re", messages) == messages and T.reopened(platform.engine, "", messages) == messages
+        assert T.reopened(platform.engine, "chat_re", "not a list") == "not a list"
+
+
+def test_the_result_route_leaves_the_line_off_for_a_run_that_keeps_its_words_home(tmp_path):
+    """The chat page draws a run's card from ``GET /sessions/{id}/result``
+    and saves it on the chat. The rule of the delivered card holds there
+    too: a run that keeps its words on this PC shows its line only where
+    its own chat is Local only now."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.agents import chat_delivery
+    from iron_jarvis.core.models import ChatThreadRecord, Session
+    from iron_jarvis.daemon.app import create_app
+
+    with TestClient(create_app(str(tmp_path / "home"))) as client:
+        platform = client.app.state.platform
+        made = client.post("/sessions", json={"task": "write a report", "wait": True})
+        assert made.status_code == 200
+        sid = made.json()["id"]
+        with session_scope(platform.engine) as db:
+            db.add(ChatThreadRecord(id="chat_open", title="o", setup_json="{}"))
+            db.add(ChatThreadRecord(id="chat_home", title="h", setup_json=json.dumps({"local_only": True})))
+            db.commit()
+
+        def line(local_only: bool, chat: str):
+            with session_scope(platform.engine) as db:
+                row = db.get(Session, sid)
+                options = json.loads(row.options_json or "{}")
+                options.pop("local_only", None)
+                options.pop(chat_delivery.CHAT_THREAD_OPTION, None)
+                if local_only:
+                    options["local_only"] = True
+                if chat:
+                    options[chat_delivery.CHAT_THREAD_OPTION] = chat
+                row.options_json = json.dumps(options)
+                db.add(row)
+                db.commit()
+            got = client.get(f"/sessions/{sid}/result")
+            assert got.status_code == 200 and got.json()["found"] is True
+            return (got.json().get("checked") or {}).get("line")
+
+        said = line(False, "chat_open")
+        assert said and said.startswith("Checked by Iron Jarvis:"), "the run made a file: its card has a line"
+        assert line(False, "") == said
+        assert line(True, "chat_home") == said, "a Local only run in a chat that is Local only now"
+        assert line(True, "chat_open") is None, "a Local only run's line reached a chat that is not Local only"
+        assert line(True, "") is None and line(True, "no_such_chat") is None
+        assert T.line_stays_home(platform.engine, "no_such_run") is False and T.line_stays_home(object(), sid) is True

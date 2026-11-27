@@ -262,7 +262,7 @@ describe("the daemon's `checked`, decoded by whitelist", () => {
     expect(mark.checks[1]).toEqual({
       check: "claims_match_record",
       label: "The reply",
-      said: "it says a file was saved that no step wrote",
+      said: "it may say a file was saved that no step wrote",
       result: "look",
       resultWords: "Worth a look",
       who: "by Iron Jarvis",
@@ -429,7 +429,7 @@ describe("the line", () => {
     expect(screen.getByTestId("checked-line-words").textContent).toBe(
       "Checked by Iron Jarvis: the spreadsheet opens, no error cells. " +
         `Worth a look: B4 on ${Q("Summary")} says 650 and the cells above it add up to 600; ` +
-        "the reply: it says a file was saved that no step wrote.",
+        "the reply: it may say a file was saved that no step wrote.",
     );
     expect(screen.getByTestId("checked-line-words").textContent).not.toContain("Problem");
     fireEvent.click(screen.getByTestId("checked-line-press"));
@@ -443,7 +443,7 @@ describe("the line", () => {
     expect(rows.map((r) => r.textContent).join(" ")).not.toContain("Problem");
     // A reply that says a file was saved that no step wrote: worth a look as well, in the same colour.
     expect(rows[1].getAttribute("data-result")).toBe("look");
-    expect(rows[1].textContent).toBe("The reply: it says a file was saved that no step wrote (Worth a look, by Iron Jarvis)");
+    expect(rows[1].textContent).toBe("The reply: it may say a file was saved that no step wrote (Worth a look, by Iron Jarvis)");
     // What passed beside them stays quiet.
     expect(rows[2].getAttribute("data-result")).toBe("passed");
     expect(rows[2].querySelector("span span")!.className).not.toContain("text-tone-warn");
@@ -480,6 +480,63 @@ describe("the line", () => {
     // A warning line draws neither: its own mark stands.
     expect(mark(BAD)).toEqual([false, false]);
     expect(mark(LOOK)).toEqual([false, false]);
+  });
+
+  it("the tick and the tone are read from the list's items, never from a stored tone alone", () => {
+    const item = (result: string, check = "tests") => ({ check, label: "The tests", said: "x", result });
+    const drawn = (raw: unknown) => {
+      cleanup();
+      const mark = decodeChecked(raw);
+      render(<CheckedLine mark={mark} />);
+      return {
+        tone: mark!.tone,
+        shown: screen.getByTestId("checked-line").getAttribute("data-tone"),
+        tick: screen.queryByTestId("checked-line-tick") !== null,
+        neutral: screen.queryByTestId("checked-line-neutral") !== null,
+      };
+    };
+    const line = "Checked by Iron Jarvis: the spreadsheet opens.";
+    const opens = item("passed", "file_opens");
+    // A payload saved as "quiet" over a failed item, or over one worth a look: the warning, and no tick.
+    for (const bad of [item("failed"), item("look"), item("failed", "made_up")]) {
+      expect(drawn({ line, tone: "quiet", checks: [bad, opens] })).toEqual({
+        tone: "warn",
+        shown: "warn",
+        tick: false,
+        neutral: false,
+      });
+    }
+    // Every item passed: quiet, with the tick. One not checked among them: quiet, no tick.
+    expect(drawn({ line, tone: "quiet", checks: [opens, item("passed")] })).toEqual({
+      tone: "quiet",
+      shown: "quiet",
+      tick: true,
+      neutral: false,
+    });
+    expect(drawn({ line, tone: "quiet", checks: [opens, item("not_checked")] }).tick).toBe(false);
+    // The component holds the rule itself: a mark handed to it with a quiet tone over a failed item
+    // (never through the decoder) still draws the warning and no tick.
+    cleanup();
+    const mark = decodeChecked({ line, tone: "quiet", checks: [opens] })!;
+    render(
+      <CheckedLine
+        mark={{
+          ...mark,
+          checks: [...mark.checks, { ...mark.checks[0], check: "tests", result: "failed", resultWords: "Problem" }],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("checked-line").getAttribute("data-tone")).toBe("warn");
+    expect(screen.queryByTestId("checked-line-tick")).toBeNull();
+    // `line` and `who` are cleaned and capped like every other text.
+    const dirty = decodeChecked({
+      line: "Checked‮ by  Iron	Jarvis: " + "y".repeat(5000),
+      checks: [{ ...opens, who: "by‮ Excel itself " + "z".repeat(500) }],
+    })!;
+    expect(dirty.line.startsWith("Checked by Iron Jarvis: yyy")).toBe(true);
+    expect(dirty.line).toHaveLength(1200);
+    expect(dirty.checks[0].who.startsWith("by Excel itself zzz")).toBe(true);
+    expect(dirty.checks[0].who).toHaveLength(140);
   });
 
   it("what could not be checked is said quietly, and a long list says how many more", () => {

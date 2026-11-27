@@ -50,7 +50,7 @@ def test_the_table_is_made_with_the_database_and_a_write_is_read_back_for_its_ow
     assert "..checks.record" in _LATE_MODEL_MODULES
     assert inspect(platform.engine).has_table("checkrecord"), "a fresh database has no record of checks"
     assert R.write(platform.engine, SHEET, thread_id="thread_a", turn_id="turn_1") == 3
-    assert R.write(platform.engine, [Check(R.CLAIMS, R.LOOK, "it says a file was saved that no step wrote")],
+    assert R.write(platform.engine, [Check(R.CLAIMS, R.LOOK, "it may say a file was saved that no step wrote")],
                    thread_id="thread_b", turn_id="turn_2") == 1
     assert R.write(platform.engine, [Check(R.STEP_CHECK, R.NOT_CHECKED, "its check did not run", by="Sonnet", step="2")],
                    session_id="session_9", run_id="run_9") == 1
@@ -106,10 +106,14 @@ def test_two_chats_that_send_one_turn_id_never_replace_each_others_rows(platform
             thread_id="chat_a", turn_id="same")
     assert sorted((r["check"], r["result"]) for r in R.for_thread(eng, "chat_a")) == [
         (R.DOC_TEXT, R.LOOK), (R.FILE_OPENS, R.PASSED)]
-    # A reply with no chat yet replaces only rows that have none; and a replace of made-file checks keeps to its chat.
+    # A reply with NO chat yet replaces nothing at all: whose a row of that turn id is cannot be told (two
+    # new chats may send one id). And a replace of made-file checks keeps to its chat.
     R.write(eng, [Check(R.FILE_OPENS, R.PASSED, "opens", file="summary.md")], turn_id="same")
     R.write(eng, [Check(R.FILE_OPENS, R.NOT_CHECKED, "the check ran out of time", file="summary.md")], turn_id="same")
-    assert [(r["thread_id"], r["result"]) for r in R.for_turn(eng, "same") if not r["thread_id"]] == [("", R.NOT_CHECKED)]
+    assert [(r["thread_id"], r["result"]) for r in R.for_turn(eng, "same") if not r["thread_id"]] == [
+        ("", R.PASSED), ("", R.NOT_CHECKED)]
+    assert R.write(eng, [], turn_id="same", replace_content=True) == 0
+    assert len([r for r in R.for_turn(eng, "same") if not r["thread_id"]]) == 2
     assert R.write(eng, [], thread_id="chat_b", turn_id="same", replace_content=True) == 0
     assert R.for_thread(eng, "chat_b") == [] and len(R.for_thread(eng, "chat_a")) == 2
     # A RUN's rows are its session's, whatever chat they sit under (it may be settled again under another answer).
@@ -128,7 +132,7 @@ def test_a_settle_that_replaces_takes_every_earlier_check_of_a_file_with_it(plat
                   Check(R.SHEET_ERRORS, R.FAILED, "A1 holds #DIV/0!", file="old.xlsx"),
                   Check(R.SHEET_TOTALS, R.LOOK, "B4 says 650 and the cells above it add up to 300", file="budget.xlsx"),
                   Check(R.STEP_CHECK, R.PASSED, "it passed its check", step="1"),
-                  Check(R.CLAIMS, R.LOOK, "it says a file was saved that no step wrote")], session_id="run_a")
+                  Check(R.CLAIMS, R.LOOK, "it may say a file was saved that no step wrote")], session_id="run_a")
     R.write(eng, [Check(R.FILE_OPENS, R.PASSED, "opens", file="other.xlsx")], session_id="run_b")
     assert R.write(eng, [Check(R.FILE_OPENS, R.PASSED, "opens", file="new.xlsx")], session_id="run_a",
                    replace_content=True) == 1
@@ -311,7 +315,7 @@ def test_a_failed_check_is_said_in_the_warn_tone_and_not_checked_says_why():
         _row(R.SHEET_ERRORS, R.FAILED, "C7 on Summary holds #DIV/0!", "summary.xlsx"),
         _row(R.SHEET_TOTALS, R.NOT_CHECKED, "it has too many cells to add its totals up here",
              "summary.xlsx"),
-        _row(R.CLAIMS, R.FAILED, "it says a file was saved that no step wrote"),    # an old row: said as a look
+        _row(R.CLAIMS, R.FAILED, "it may say a file was saved that no step wrote"),    # an old row: said as a look
     ]
     line, tone = R.line_for(rows)
     assert tone == "warn"
@@ -319,7 +323,7 @@ def test_a_failed_check_is_said_in_the_warn_tone_and_not_checked_says_why():
     assert line == (
         "Checked by Iron Jarvis: the spreadsheet opens. "
         "Problem in the spreadsheet: C7 on Summary holds #DIV/0!. "
-        "Worth a look: the reply: it says a file was saved that no step wrote. "
+        "Worth a look: the reply: it may say a file was saved that no step wrote. "
         "Not checked: the spreadsheet (it has too many cells to add its totals up here)."
     )
     only_problem = [_row(R.FILE_OPENS, R.FAILED, "Iron Jarvis could not open “summary.xlsx”", "summary.xlsx")]
@@ -504,7 +508,8 @@ def test_a_saved_checked_line_is_kept_by_whitelist_in_the_shape_the_page_decodes
     clean = R.clean_checked(dirty)
     assert set(clean) == {"line", "tone", "checks", "more", "more_words"}
     assert len(clean["line"]) == R.LINE_MAX and clean["line"].startswith("Checked by Iron Jarvis:")
-    assert clean["tone"] == "quiet" and clean["more"] == 0 and clean["more_words"] == ""
+    # (The tone is not the payload's word: its list holds items that are worth a look, so it is "warn".)
+    assert clean["tone"] == "warn" and clean["more"] == 0 and clean["more_words"] == ""
     assert len(clean["checks"]) == R.MAX_LISTED
     assert clean["checks"][0] == {"check": "file_opens", "label": "a.xlsx", "said": "s" * 400, "result": "passed",
                                   "result_words": "Checked", "who": "by Iron Jarvis"}
@@ -651,7 +656,7 @@ def test_the_contract_fixture_is_what_the_record_really_builds():
         _row(R.FILE_OPENS, R.PASSED, "opens", "summary.xlsx"),
         _row(R.SHEET_ERRORS, R.PASSED, "no error cells", "summary.xlsx"),
         _row(R.SHEET_TOTALS, R.LOOK, "B4 on “Summary” says 650 and the cells above it add up to 600", "summary.xlsx"),
-        _row(R.CLAIMS, R.LOOK, "it says a file was saved that no step wrote"),
+        _row(R.CLAIMS, R.LOOK, "it may say a file was saved that no step wrote"),
     ]
     both = bad[:2] + [
         _row(R.SHEET_ERRORS, R.LOOK, "D3 on “Summary” works out to an error", "summary.xlsx"),
@@ -751,3 +756,84 @@ def test_a_made_file_has_a_key_that_is_its_whole_path_and_never_the_path_itself(
         ("summary.xlsx", R.path_key(a), True), ("", "ae", True)]
     R.write(platform.engine, [Check(R.FILE_OPENS, R.PASSED, "opens", file="b.md")], session_id="run_open")
     assert [r["kept_home"] for r in R.for_session(platform.engine, "run_open")] == [False]
+
+
+# --------------------------------------------------------------------------- #
+# The fifth review
+# --------------------------------------------------------------------------- #
+def test_a_write_says_which_rows_it_wrote_and_they_are_read_back_and_homed_by_those(platform):
+    """B6. A turn's id is the caller's choice: two new chats (or one chat,
+    twice) may send one. A reply's rows are known by their OWN ids."""
+    eng = platform.engine
+    a: list[str] = []
+    b: list[str] = []
+    assert R.write(eng, [Check(R.FILE_OPENS, R.PASSED, "opens", file="a.md")], turn_id="same", written=a,
+                   kept_home=True) == 1
+    assert R.write(eng, [Check(R.FILE_OPENS, R.PASSED, "opens", file="b.md"),
+                         Check(R.DOC_TEXT, R.PASSED, "has text", file="b.md")], turn_id="same", written=b) == 2
+    assert len(a) == 1 and len(b) == 2 and not set(a) & set(b)
+    assert [(r["file"], r["check"]) for r in R.by_ids(eng, b)] == [("b.md", R.FILE_OPENS), ("b.md", R.DOC_TEXT)]
+    assert [r["file"] for r in R.by_ids(eng, a)] == ["a.md"]
+    assert R.by_ids(eng, []) == [] and R.by_ids(eng, ["chk_no_such_row"]) == [] and R.by_ids(object(), b) == []
+    # Homed by those ids: the other reply's row of the same turn id keeps no chat.
+    assert R.home_ids(eng, b, "chat_b") == 2
+    assert {(r["file"], r["thread_id"]) for r in R.for_turn(eng, "same")} == {("a.md", ""), ("b.md", "chat_b")}
+    assert R.home_ids(eng, b, "chat_c") == 0, "a row that has its chat is not given another"
+    assert R.home_ids(eng, [], "x") == 0 and R.home_ids(eng, a, "") == 0 and R.home_ids(object(), a, "y") == 0
+    # A write that wrote nothing names nothing.
+    none: list[str] = []
+    assert R.write(eng, [], turn_id="same", written=none) == 0 and none == []
+
+
+def test_a_detail_is_never_cut_inside_a_finding():
+    """S1. The record cut a detail at 300 characters, wherever that fell."""
+    one = "B5 on “Quarterly Revenue Summary 2026” says 9,876,543.21 and the cells above it add up to 7,037,035.92"
+    got = R._clean(Check(R.SHEET_TOTALS, R.LOOK, "; ".join([one] * 4), file="a.xlsx")).detail
+    assert got == "; ".join([one] * 2) + "; and more" and len(got) <= R.DETAIL_MAX
+    assert R.fit(one) == one and R.fit("") == ""
+    assert R.fit("; ".join(["x" * 100] * 3)) == "; ".join(["x" * 100] * 2) + "; and more"
+    # One finding too long by itself: cut at a word, and the cut is marked.
+    lone = R.fit("word " * 100)
+    assert len(lone) <= R.DETAIL_MAX and lone.endswith("word …") and R.fit("word " * 100, 20) == "word word word …"
+
+
+def test_a_required_file_is_kept_as_the_task_asked_for_it_and_a_made_file_by_its_name(platform):
+    """S5. "Required file “summary.xlsx”: not on disk" stood beside a
+    summary.xlsx that WAS there, one folder up. The row keeps the place the
+    task asked for."""
+    eng = platform.engine
+    R.write(eng, [Check(R.REQUIRED_FILE, R.FAILED, "not on disk", file="OUTPUT\\summary.xlsx"),
+                  Check(R.REQUIRED_FILE, R.PASSED, "it is on disk (2 KB)", file="DRAFT/summary.xlsx"),
+                  Check(R.FILE_OPENS, R.PASSED, "opens", file="C:/work/task/summary.xlsx")],
+            thread_id="c", turn_id="t")
+    rows = R.for_turn(eng, "t")
+    assert [r["file"] for r in rows] == ["OUTPUT/summary.xlsx", "DRAFT/summary.xlsx", "summary.xlsx"]
+    shown = R.payload(rows)
+    assert "Problem in required file “OUTPUT/summary.xlsx”: not on disk." in shown["line"]
+    assert [c["label"] for c in shown["checks"]] == [
+        "Required file “OUTPUT/summary.xlsx”", "Required file “DRAFT/summary.xlsx”", "“summary.xlsx”"]
+    assert R.asked_path("/OUTPUT//a.md/") == "OUTPUT/a.md" and R.asked_path(None) == "" and R.asked_path("a.md") == "a.md"
+    assert len(R.asked_path("x/" * 400 + "tail.md")) == R.NAME_MAX and R.asked_path("x/" * 400 + "tail.md").endswith("tail.md")
+
+
+def test_a_saved_lines_tone_is_read_from_its_items_and_every_text_is_cleaned():
+    """N4. A payload that says "quiet" over a failed item was kept quiet.
+    And ``line`` and ``who`` go through the cleaning and the caps of every
+    other text."""
+    def item(result, check="tests"):
+        return {"check": check, "label": "The tests", "said": "x", "result": result}
+
+    assert R.clean_checked({"line": "x", "tone": "quiet", "checks": [item("failed")]})["tone"] == "warn"
+    assert R.clean_checked({"line": "x", "tone": "quiet", "checks": [item("passed"), item("look")]})["tone"] == "warn"
+    assert R.clean_checked({"line": "x", "checks": [item("failed", "made_up")]})["tone"] == "warn"   # said as a look
+    assert R.clean_checked({"line": "x", "tone": "quiet", "checks": [item("passed"), item("not_checked")]})["tone"] == "quiet"
+    assert R.clean_checked({"line": "x", "tone": "warn", "checks": []})["tone"] == "warn"
+    assert R.clean_checked({"line": "x", "tone": "loud", "checks": [item("passed")]})["tone"] == "quiet"
+    dirty = R.clean_checked({
+        "line": "Checked\u202e by\x00 Iron\tJarvis: " + "y" * 5000,
+        "checks": [{"check": "tests", "label": "The\u2066 tests", "said": "they\x1b passed", "result": "passed",
+                    "who": "by\u202e Excel\x07 itself " + "z" * 500}],
+    })
+    assert dirty["line"].startswith("Checked by Iron Jarvis: yyy") and len(dirty["line"]) == R.LINE_MAX
+    assert dirty["checks"][0]["who"].startswith("by Excel itself zzz") and len(dirty["checks"][0]["who"]) == 140
+    assert dirty["checks"][0]["label"] == "The tests" and dirty["checks"][0]["said"] == "they passed"

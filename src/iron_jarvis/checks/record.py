@@ -17,8 +17,9 @@ construction, the good ones too:
   another program will show.
 * ``failed`` ("Problem") is an ALLOWLIST of facts (:data:`PROBLEM_CHECKS`),
   not a default: a file of a kind Iron Jarvis really opens that its own
-  reader could not open; a cell whose TYPE is an error; a test command that
-  ran to its end and reported failure; a required file that is not on disk.
+  reader could not open (and that the disk did hand over); a cell whose
+  STORED type is an error; a test command that ran to its end and reported
+  failure; a required file that is not on disk.
 * ``look`` ("Worth a look"): everything Iron Jarvis inferred, read out of
   prose or was told by a model, said with no verdict: a typed total that
   differs from the list above it, a formula it works out to an error, a
@@ -39,10 +40,19 @@ NAMES A MODEL CHOSE (a file's, a folder's, a step's) are shown inside curly
 quotes and cut to a sane length (:func:`quoted`), so a name can never read
 as part of Iron Jarvis's own sentence.
 
-WHAT A ROW MAY HOLD. Names, counts, sizes and plain words. Never a file's
-content beyond the one cell or figure a finding names, and the detail is
-secret-masked before it is stored. Rows stay on this PC: nothing here
-publishes an event, and nothing that sends to another computer reads them.
+WHAT A ROW MAY HOLD. Names, counts, sizes and plain words (a made file by
+its NAME; a required file by the path the task asked for it at). Never a
+file's content beyond the one cell or figure a finding names, and the
+detail is secret-masked before it is stored and never cut inside a finding
+(:func:`fit`). A made file's row also holds the file's size and
+last-written time when it was checked (``stamp``): a reader that knows
+where the file is shows the row only while the file still has them. Rows
+stay on this PC: nothing here publishes an event, and nothing that sends to
+another computer reads them.
+
+WHOSE ROWS. A reply's rows are known by their OWN ids (``write(written=)``,
+:func:`by_ids`, :func:`home_ids`): a turn's id is the caller's choice, and
+two chats (or one chat, twice) may send one.
 
 BOUNDED. A write keeps at most :data:`MAX_ROWS_PER_WRITE` rows; a row older
 than :data:`KEEP_DAYS` is removed by the daily tidy-up
@@ -190,6 +200,11 @@ class CheckRecord(SQLModel, table=True):
     #: The run these rows belong to keeps its words on this PC (a Local only
     #: run): a chat that is not Local only never reads them.
     kept_home: bool = False
+    #: A made file as it was when it was checked (:func:`file_stamp`: its
+    #: size and when it was last written; never its path or its content). A
+    #: reader that knows where the file is shows the row only while the file
+    #: still has this stamp. "" = not about a made file, or it was not read.
+    stamp: str = ""
 
 
 @dataclass(frozen=True)
@@ -207,6 +222,9 @@ class Check:
     #: Where the file is, as a digest (:func:`path_key`). Not part of what a
     #: check SAYS: two checks that say the same are equal whatever it is.
     path_key: str = field(default="", compare=False)
+    #: The file as it was when it was checked (:func:`file_stamp`). Not part
+    #: of what a check says either.
+    stamp: str = field(default="", compare=False)
 
 
 def path_key(path: Any) -> str:
@@ -220,10 +238,48 @@ def path_key(path: Any) -> str:
     return hashlib.sha256(spelled.encode("utf-8", "replace")).hexdigest()[:24]
 
 
+def file_stamp(path: Any) -> str:
+    """A file as it is on disk NOW, as one short text: its size and when it
+    was last written. Two stamps that differ mean the file changed (or is
+    gone: "" for a file that cannot be asked). Never raises."""
+    try:
+        st = os.stat(str(path))
+        return f"{int(st.st_size)}:{int(st.st_mtime_ns)}"
+    except (OSError, ValueError):
+        return ""
+
+
 def file_name(path: Any) -> str:
     """The NAME of a file (its folder is never kept)."""
     text = str(path or "").replace("\\", "/").rstrip("/")
     return text.rpartition("/")[2][:NAME_MAX]
+
+
+def asked_path(path: Any) -> str:
+    """A REQUIRED file as the task asked for it ("OUTPUT/summary.xlsx"): the
+    task's own relative path, with forward slashes. Two required files of
+    one name in two folders are two rows, and "not on disk" is said of the
+    place that was asked for (a file of that name one folder up is another
+    file)."""
+    text = "/".join(part for part in str(path or "").replace("\\", "/").split("/") if part.strip())
+    return text[-NAME_MAX:]
+
+
+def fit(detail: str, cap: int = 0) -> str:
+    """A check's words at the length the record keeps (:data:`DETAIL_MAX`),
+    never cut inside a finding: findings are parted by "; ", whole ones are
+    dropped from the end and "and more" says so. One finding that is too
+    long by itself is cut at a word, and the cut is marked ("…")."""
+    cap = cap or DETAIL_MAX
+    if len(detail) <= cap:
+        return detail
+    parts = detail.split("; ")
+    tail = "; and more"
+    for n in range(len(parts) - 1, 0, -1):
+        said = "; ".join(parts[:n]) + tail
+        if len(said) <= cap:
+            return said
+    return detail[:cap - 2].rsplit(" ", 1)[0].rstrip(" ,;:(") + " …"
 
 
 FOLDER_MAX = 60
@@ -320,13 +376,17 @@ def _clean(check: Check) -> "Check | None":
         detail = mask(" ".join(seen_text(check.detail).split()))
     except Exception:  # noqa: BLE001 — unmaskable words are not stored
         detail = ""
+    # A made file is kept by its NAME. A required file is kept as the task
+    # asked for it (its own relative path): "not on disk" is said of a place.
+    named = asked_path(check.file) if code == REQUIRED_FILE else file_name(check.file)
     return Check(
-        check=code, result=result, detail=str(storable_text(detail))[:DETAIL_MAX],
-        file=str(storable_text(seen_text(file_name(check.file)))),
+        check=code, result=result, detail=fit(str(storable_text(detail))),
+        file=str(storable_text(seen_text(named))),
         by=(" ".join(seen_text(check.by).split()) or BY_RULE)[:120],
         step=" ".join(seen_text(check.step).split())[:120], run_id=str(check.run_id or "")[:120],
         folder=str(storable_text(seen_text(file_name(check.folder))))[:FOLDER_MAX],
         path_key=re.sub(r"[^0-9a-f]", "", str(check.path_key or ""))[:24],
+        stamp=re.sub(r"[^0-9:]", "", str(check.stamp or ""))[:48],
     )
 
 
@@ -341,12 +401,19 @@ def write(
     clock: Any = time.time,
     replace_content: bool = False,
     kept_home: bool = False,
+    written: "list[str] | None" = None,
 ) -> int:
     """Write *checks* for one owner (a chat turn, or a session). A row this
     owner already holds for the same check, file and step is replaced, so a
     file checked again (a run that carried on) is said once. A REPLY's owner
     is its turn AND its chat: a turn's id is the caller's own choice, and
-    two chats that send one id never replace each other's rows.
+    two chats that send one id never replace each other's rows. A reply
+    with NO chat yet (a new chat's first reply) replaces nothing at all:
+    whose a row of that turn id is cannot be told.
+
+    *written*: a list the ids of the rows THIS call wrote are added to. A
+    reply's line is read back by these (:func:`by_ids`), never by its turn
+    id, which another reply may share.
 
     *replace_content* (a run that is settled again): EVERY check of a made
     file this owner holds is removed first, in the same transaction, even
@@ -379,14 +446,19 @@ def write(
         # session's whatever chat they sit under: a run that is settled again
         # may have another answer to "is its chat Local only now?".)
         mine = [CheckRecord.thread_id == tid] if turn else []
+        # A turn with no session and no chat yet: its id alone does not say
+        # whose rows these are (two new chats may send one id). Nothing of
+        # that id is removed for it.
+        own = bool(sid or tid or not turn)
+        ids: list[str] = []
         with session_scope(engine) as db:
-            if replace:
+            if replace and own:
                 db.exec(sa_delete(CheckRecord).where(
                     CheckRecord.turn_id == turn, CheckRecord.session_id == sid, *mine,
                     CheckRecord.check.in_(sorted(CONTENT_CHECKS)),  # type: ignore[attr-defined]
                     *([CheckRecord.run_id == rid] if rid else []),
                 ))
-            for key in {(c.check, c.file, c.folder, c.step, c.run_id or rid) for c in rows}:
+            for key in {(c.check, c.file, c.folder, c.step, c.run_id or rid) for c in rows} if own else ():
                 db.exec(sa_delete(CheckRecord).where(
                     CheckRecord.turn_id == turn, CheckRecord.session_id == sid, *mine,
                     CheckRecord.check == key[0], CheckRecord.file == key[1], CheckRecord.folder == key[2],
@@ -396,13 +468,16 @@ def write(
             # that ticks slower than the loop would tie them).
             now = utcnow()
             for i, c in enumerate(rows):
+                ids.append(new_check_id())
                 db.add(CheckRecord(
-                    created_at=now + timedelta(microseconds=i),
+                    id=ids[-1], created_at=now + timedelta(microseconds=i),
                     thread_id=tid, turn_id=turn, session_id=sid, run_id=c.run_id or rid,
                     step=c.step, check=c.check, file=c.file, folder=c.folder, result=c.result, detail=c.detail,
-                    by=c.by, path_key=c.path_key, kept_home=bool(kept_home),
+                    by=c.by, path_key=c.path_key, kept_home=bool(kept_home), stamp=c.stamp,
                 ))
             db.commit()
+        if written is not None:
+            written.extend(ids)
         return len(rows)
     except Exception:  # noqa: BLE001 — a record is never worth a failed reply
         log.warning("a check could not be written to the record", exc_info=True)
@@ -429,7 +504,7 @@ def as_dict(row: CheckRecord) -> dict[str, Any]:
         "thread_id": row.thread_id, "turn_id": row.turn_id, "session_id": row.session_id,
         "run_id": row.run_id, "step": row.step, "check": row.check, "file": row.file, "folder": row.folder,
         "result": row.result, "detail": row.detail, "by": row.by,
-        "path_key": str(row.path_key or ""), "kept_home": bool(row.kept_home),
+        "path_key": str(row.path_key or ""), "kept_home": bool(row.kept_home), "stamp": str(row.stamp or ""),
     }
 
 
@@ -452,6 +527,33 @@ def for_turn(engine: Any, turn_id: str) -> list[dict[str, Any]]:
     """One reply's checks, oldest first."""
     turn = str(turn_id or "")
     return _read(engine, CheckRecord.turn_id == turn) if turn else []
+
+
+def by_ids(engine: Any, ids: "Iterable[str]") -> list[dict[str, Any]]:
+    """The rows ONE write wrote (``write(written=...)``), oldest first, read
+    back from the record: a reply's own rows, whoever else used its turn
+    id."""
+    wanted = [str(i) for i in (ids or ()) if i][:MAX_ROWS_PER_WRITE]
+    return _read(engine, CheckRecord.id.in_(wanted)) if wanted else []  # type: ignore[attr-defined]
+
+
+def home_ids(engine: Any, ids: "Iterable[str]", thread_id: str) -> int:
+    """Give the rows ONE write wrote (before its chat had an id) their
+    chat: these rows and no other row of their turn id. Never raises."""
+    try:
+        wanted = [str(i) for i in (ids or ()) if i][:MAX_ROWS_PER_WRITE]
+        if not wanted or not thread_id or not ensure_table(engine):
+            return 0
+        with engine.begin() as conn:
+            res = conn.execute(
+                sa_update(CheckRecord)
+                .where(CheckRecord.id.in_(wanted), CheckRecord.thread_id == "")  # type: ignore[attr-defined]
+                .values(thread_id=str(thread_id))
+            )
+        return int(res.rowcount or 0)
+    except Exception:  # noqa: BLE001
+        log.debug("a reply's checks were not given their chat", exc_info=True)
+        return 0
 
 
 def for_session(engine: Any, session_id: str, limit: int = MAX_READ) -> list[dict[str, Any]]:
@@ -779,8 +881,11 @@ def clean_checked(raw: Any) -> "dict[str, Any] | None":
                 break
         more = raw.get("more")
         more = int(more) if isinstance(more, (int, float)) and not isinstance(more, bool) and 0 < more < 10**9 else 0
+        # The tone is read from the ITEMS too: a payload that says "quiet"
+        # over a problem or something worth a look is not kept quiet.
+        warn = raw.get("tone") == "warn" or any(c["result"] in (FAILED, LOOK) for c in checks)
         return {
-            "line": line, "tone": "warn" if raw.get("tone") == "warn" else "quiet", "checks": checks,
+            "line": line, "tone": "warn" if warn else "quiet", "checks": checks,
             "more": more, "more_words": _text(raw.get("more_words"), 80) if more else "",
         }
     except Exception:  # noqa: BLE001 — a line is never worth a failed save
@@ -801,6 +906,7 @@ __all__ = [
     "FOLDER_MAX", "LINE_LOOK", "LOOK", "PROBLEM_CHECKS", "path_key", "quoted", "seen_text", "shown_name",
     "STEP_CHECK", "TESTS", "WORKFLOW_STEP", "apart", "as_dict", "clean_checked", "drop_thread", "ensure_table",
     "file_name", "for_session", "for_thread", "for_turn", "friendly_model", "has_content", "home_turn",
-    "kind_words", "line_for", "BY_IRON_JARVIS",
+    "kind_words", "line_for", "BY_IRON_JARVIS", "DETAIL_MAX", "asked_path", "by_ids", "file_stamp", "fit",
+    "home_ids",
     "new_check_id", "note", "payload", "plain_words", "prune", "who_words", "write",
 ]
