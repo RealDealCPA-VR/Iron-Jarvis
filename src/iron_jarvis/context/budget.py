@@ -514,6 +514,13 @@ def plan_history(
                 MIN_LAST_MESSAGE_CHARS,
                 int(budget * effective_chars_per_token(cpt)),
             )
+            # Release 7 (the same test as the "no room at all" branch above):
+            # the tool definitions, what rides beside the message and the
+            # recap reserve are counted now, and they are what gives first.
+            # While the system prompt and the reply reserve ALONE leave room
+            # for the person's newest message, it is kept whole.
+            if win - system_tokens - reserve >= _est(m["content"]) + 4:
+                room_chars = len(m["content"])
             clipped = m["content"][:room_chars]
             kept.append(_with_rider({"role": m["role"], "content": clipped}))
             plan.clipped_last = len(m["content"]) > len(clipped)

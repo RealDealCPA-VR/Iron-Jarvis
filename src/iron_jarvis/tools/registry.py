@@ -1820,7 +1820,11 @@ class ToolRegistry:
         # Failures are never cached — a transient error must not become the
         # answer for the rest of the session.
         if name in CACHEABLE_READ_TOOLS:
-            if result.ok and cache_key is not None:
+            # The intelligence plan, release 7: a read made while the tool was
+            # armed ONLY because it stayed for the chat may be a partial one
+            # (a scan's pages not read). It is never remembered, or it would be
+            # the answer to the next message, which asks for the file.
+            if result.ok and cache_key is not None and name not in (getattr(ctx, "stayed_only", None) or ()):
                 self._remember_read(cache_key, name, result, ctx, cache_gen)
         elif result.ok and self._mutates(name, result, undo_desc):
             self._invalidate_scope(self._cache_scope(ctx))

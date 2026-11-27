@@ -281,9 +281,8 @@ CACHED_NOTE_SUFFIX = " [cached — already transcribed earlier]"
 #: What a file reader that is armed ONLY because it stayed for the chat says
 #: for a scan nobody has read yet (the intelligence plan, release 7).
 STAYED_NO_OCR = (
-    "scanned pages were NOT read: reading a scan takes a model call, and this tool is here from "
-    "an earlier message of the chat, so only the text the file already has is returned (tell "
-    "the user, and read the scan when their message asks you to read this file)"
+    "scanned pages were NOT read in this reply: only the text the file already has is returned "
+    "(to have the scan read, the user can name this file, or ask to read it, in a message)"
 )
 
 

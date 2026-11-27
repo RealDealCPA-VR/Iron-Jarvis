@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from ..context import prefix as P
@@ -103,6 +104,34 @@ LIVE_WORKBOOK_READERS = frozenset({
     "excel_read", "excel_profile", "excel_query", "excel_formula_check", "excel_sheet_spec",
 })
 SCAN_READERS = frozenset({"read_file", "read_document", "extract_pdf", "redact_scan"})
+#: ``file_search`` by meaning asks a model (one call for the query, and one a
+#: file chunk while its index is built): armed only by staying it searches by
+#: words.
+MEANING_SEARCHERS = frozenset({"file_search"})
+
+#: The person's own words NAME A FILE (a name with an extension, or a path)...
+_NAMES_A_FILE = re.compile(
+    r"(?:\b[\w\-]+\.[A-Za-z][A-Za-z0-9]{1,4}\b)"          # ledger.txt, c4.png
+    r"|(?:\b[A-Za-z]:[\\/])|(?:\\\\[\w.\-]+)|(?:~[\\/])|(?:(?:^|\s)/[\w.\-]+/)",   # C:\x, \\host, ~/x, /a/b
+)
+#: ...or ask to read, open, scan or OCR a file.
+_ASKS_TO_READ = re.compile(
+    r"\bocr\b|\b(?:read|open|scan|transcribe)\w*\b[^.?!\n]{0,60}"
+    r"\b(?:file|document|pdf|scan|image|picture|photo|page|attachment)s?\b",
+    re.IGNORECASE,
+)
+
+
+def asks_for_a_file(text: Any) -> bool:
+    """Do the person's own words plainly ask for a file: do they name one (a
+    name with an extension, or a path), or say read, open, scan or OCR of a
+    file? Then a file reader the chat already holds is asked for by THIS
+    message, whichever reader the model picks. Never raises."""
+    try:
+        words = P.own_words(str(text or ""))
+        return bool(_NAMES_A_FILE.search(words) or _ASKS_TO_READ.search(words))
+    except Exception:  # noqa: BLE001 — cannot tell: the narrower behaviour stands
+        return False
 
 
 def may_stay(registry: Any, name: str, permissions: Any = None) -> bool:
@@ -235,6 +264,15 @@ class SentMessages(list):
         return self
 
 
+def _newest_words(body: Any) -> str:
+    """The newest user message of *body*, as the person typed it ("" = none)."""
+    for message in reversed(list(getattr(body, "messages", None) or [])):
+        if str(getattr(message, "role", "") or "") == "user":
+            content = getattr(message, "content", "")
+            return content if isinstance(content, str) else ""
+    return ""
+
+
 def _user_index(messages: Any) -> int:
     for i in range(len(messages) - 1, -1, -1):
         if str(getattr(messages[i], "role", "") or "") == "user":
@@ -257,6 +295,7 @@ class StableTurn:
         self._when_sent: list = []
         self._built_last: "str | None" = None
         self._stayed: "frozenset[str]" = frozenset()
+        self._asked: "frozenset[str]" = frozenset()
         self._order: list[str] = list(self.kept.tools)
 
     # -- the attachments seam ------------------------------------------------ #
@@ -371,6 +410,7 @@ class StableTurn:
             # Armed ONLY because it stayed: not ticked, not armed by this
             # message's words (``stayed_only``).
             asked = set(explicit) | set(auto_armed)
+            self._asked = frozenset(asked)
             self._stayed = frozenset(n for n in auto if n not in asked)
             return explicit + auto, auto
         except Exception:  # noqa: BLE001 — the arming pass's own answer stands
@@ -382,11 +422,18 @@ class StableTurn:
         ``ToolContext.stayed_only``; empty for a coding session, at low trust
         and whenever nothing stayed). With "Use Excel in this chat" switched
         on for the message (``excel_now``) the workbook readers are not among
-        them: the user's own switch asks for the open workbook."""
+        them: the user's own switch asks for the open workbook. And a scan
+        reader is NOT "only stayed" when this message's words armed any file
+        reader, or when the person's own words plainly ask for a file
+        (:func:`asks_for_a_file`): "what does c4.png say?" arms no tool by
+        its words, and a message that arms ``read_document`` may be answered
+        with ``read_file``; the scan is read either way, as before."""
         names = self._stayed
         try:
             if names and getattr(body, "excel_now", None) is not None:
                 names = names - LIVE_WORKBOOK_READERS
+            if names & SCAN_READERS and (self._asked & SCAN_READERS or asks_for_a_file(_newest_words(body))):
+                names = names - SCAN_READERS
         except Exception:  # noqa: BLE001 — cannot tell: the narrower answer stands
             pass
         return names
@@ -521,8 +568,13 @@ class StableTurn:
             # fault falls back to a plain slice): never send a reply without
             # what was remembered and attached. The caller sends the old way.
             raise RuntimeError("the final plan lost the newest message's rider")
+        # When the room is too small for the person's newest message AND the
+        # whole block, the block gives first: what was found, then the rest.
+        shed = self._shed_block(d, final, once, system, int(fixed or 0), provider, model)
         if final.recap:
-            system += "\n\n" + final.recap
+            # The recap quotes the start of each left-out message: neutralised
+            # like every other text that is not the one real block.
+            system += "\n\n" + P.neutral(final.recap)
         # Release 6's record of this reply says how many messages the PLANNER
         # left out: that is this plan's count now (it counted the tools).
         try:
@@ -540,6 +592,8 @@ class StableTurn:
         last_user = -1
         for i, m in enumerate(final.messages):
             rider = str(m.get("rider") or "")
+            if shed is not None and rider == once:
+                rider = shed
             # Everything that is not the one real block is neutralised of the
             # block's marker lines: an earlier message (a model that echoed
             # them cannot plant them in history) and the person's own words.
@@ -551,13 +605,53 @@ class StableTurn:
         if last_user >= 0:
             target = out[last_user]
             rider = str(final.messages[last_user].get("rider") or "")
+            if shed is not None and rider == once:
+                rider = shed
             # The person's own words are what the next reply sends again.
-            if once and rider == once:
-                target.stable_chars = len(target.content) - len(once)
+            if once and rider and rider in (once, shed):
+                target.stable_chars = len(target.content) - len(rider)
             if images:
                 target.images = images
         await asyncio.to_thread(self._save, [P.spec_name(s) for s in tool_specs or ()])
         return system, SentMessages(out), final
+
+    def _shed_block(self, d: Any, final: Any, once: str, system: str, fixed: int, provider: str,
+                    model: str) -> "str | None":
+        """What rides beside the newest message when the room cannot hold the
+        person's own words AND the whole block: the block without what was
+        found (one line says it was left out), else no block at all. None =
+        the whole block rides (the usual case, and whenever nothing can be
+        told). ORDER when something must give: older history (the planner's),
+        then the found part of the block, then the rest of the block; the
+        person's own words last (the planner clips them only when the system
+        prompt and the reply reserve alone leave no room for them)."""
+        try:
+            if not once or not getattr(final, "suggest_larger", False) or len(final.messages) != 1:
+                return None
+            newest = final.messages[-1]
+            if newest.get("rider") != once:
+                return None
+            from ..context.budget import estimate_tokens, output_reserve
+            from . import chat_turn as _ct
+
+            window = int(getattr(final, "window", 0) or 0)
+            if window <= 0:
+                return None
+            ratio = _ct._history_ratio(d, provider, model)
+            reserve = _ct._answer_reserve(d, provider, model, window)
+            reserve = output_reserve(window) if reserve is None else int(reserve)
+            words = P.neutral(newest["content"])
+            room = (window - reserve - estimate_tokens(system, ratio) - int(fixed)
+                    - estimate_tokens(words, ratio) - 4)
+            if estimate_tokens(once, ratio) <= room:
+                return None
+            lighter = P.without_found(words + once)[len(words):]
+            if lighter != once and estimate_tokens(lighter, ratio) <= room:
+                return lighter
+            return ""
+        except Exception:  # noqa: BLE001 — the whole block rides, as planned
+            log.debug("could not size the block against the room", exc_info=True)
+            return None
 
     # -- the save ---------------------------------------------------------------- #
     def _save(self, sent_names: "list[str]") -> None:
@@ -610,6 +704,7 @@ async def begin(d: Any, body: Any, *, harness: Any = None, low_trust: bool = Fal
 
 
 __all__ = [
-    "ATTACH_HEAD", "AttachBlock", "LIVE_WORKBOOK_READERS", "SCAN_READERS", "STAY_READERS", "SentMessages",
+    "ATTACH_HEAD", "AttachBlock", "LIVE_WORKBOOK_READERS", "MEANING_SEARCHERS", "SCAN_READERS", "STAY_READERS",
+    "SentMessages", "asks_for_a_file",
     "StableTurn", "begin", "is_local_model", "keep_ceiling", "may_stay", "reads_only",
 ]

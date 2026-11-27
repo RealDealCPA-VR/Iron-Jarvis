@@ -42,9 +42,8 @@ def _resolve_read_path(raw: str, ctx: ToolContext) -> Path:
 #: answers for a ``live:`` path (the intelligence plan, release 7): it starts
 #: no helper and takes no copy of the workbook that is open in Excel.
 STAYED_NO_LIVE = (
-    "the workbook that is open in Excel is read only when the user's message asks for it, and "
-    "this tool is here from an earlier message of the chat, so it was not opened (say so, and "
-    "read it when the user's message asks about the open workbook)"
+    "the workbook that is open in Excel was not opened in this reply (to have it read, the user "
+    "can ask about the workbook they have open in Excel in a message)"
 )
 
 

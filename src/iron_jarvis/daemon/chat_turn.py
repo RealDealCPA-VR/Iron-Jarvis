@@ -1072,9 +1072,14 @@ def _shrink_to_window(
     # Release 7: before giving up, what the app FOUND for the message (the
     # found part of the block beside the question) is left out, one line
     # saying so. Never any of the person's own words.
-    if _tokens_of(sent, sent_system, d, provider, model) + _fixed > int(window * 0.98):
-        lighter = _question_without_found(kept, new_head)
+    # ORDER: older history (above), then the found part of the block, then
+    # the rest of the block; the person's own words last.
+    for lighten in (_question_without_found, _question_without_block):
+        if _tokens_of(sent, sent_system, d, provider, model) + _fixed <= int(window * 0.98):
+            break
+        lighter = lighten(kept, new_head)
         if lighter is not None:
+            kept = lighter
             sent, sent_system = _fit_turn_transcript(
                 d, lighter, fit_system, provider, model, head=new_head, tools=tools,
             )
@@ -1104,6 +1109,26 @@ def _question_without_found(msgs, head: int):
     if lighter == content:
         return None
     return [*msgs[:q], dataclasses.replace(msgs[q], content=lighter), *msgs[q + 1:]]
+
+
+def _question_without_block(msgs, head: int):
+    """*msgs* with the question as the person's own words alone (the whole
+    block beside it left out), or None when it carries no block. The step
+    after :func:`_question_without_found`; a new list and a new message."""
+    import dataclasses
+
+    from ..context.prefix import own_words
+
+    q = min(head, len(msgs)) - 1
+    while q >= 0 and getattr(msgs[q], "role", "") != "user":
+        q -= 1
+    if q < 0:
+        return None
+    content = getattr(msgs[q], "content", "") or ""
+    words = own_words(content)
+    if words == content:
+        return None
+    return [*msgs[:q], dataclasses.replace(msgs[q], content=words, stable_chars=0), *msgs[q + 1:]]
 
 
 def _overflow_refit(
