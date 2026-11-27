@@ -3064,10 +3064,10 @@ def test_a_workbook_whose_only_cell_is_an_error_or_a_number_it_cannot_read_is_no
     assert _said(content.check_files([str(mixed)])) == [(FILE_OPENS, PASSED, "opens"), (DOC_TEXT, NOT_CHECKED, content.CELLS_NOT_READ)]
 
 
-def test_a_formula_over_a_sheet_that_was_not_loaded_is_not_worked_out(tmp_path):
-    """N1: with a listed sheet missing, a formula that reads it would come
-    to an error here that the file does not have. A workbook read in part
-    is not worked out."""
+def test_a_formula_over_a_sheet_that_was_not_loaded_says_nothing_of_itself(tmp_path):
+    """N1: with a listed sheet missing, a formula that reads it is neither
+    said to work out nor to come to an error: the one row is "not all of
+    its sheets could be read here"."""
     import zipfile
 
     wb = Workbook()

@@ -31,8 +31,8 @@ holds the four outcomes and the allowlist of what may be a "Problem"):
     that the reader calls "#VALUE!" (it cannot make a date of it) is no
     error cell: ``not_checked``, "B2 holds a date this check cannot read";
   - a workbook that lists a sheet the reader did not load is not read
-    through: ``not_checked`` ("not all of its sheets could be read here"),
-    and its formulas are not worked out;
+    through: ``not_checked`` ("not all of its sheets could be read here");
+    what its loaded sheets hold (an error cell, a total) is still said;
   - a formula with NO saved result is worked out by the app's own evaluator
     (:func:`_work_out`). So is every formula of a workbook that says its
     saved results are not to be trusted (it asks for a full recalculation
@@ -1456,7 +1456,7 @@ def _sheet_checks(path: Path, name: str, late: Callable[[], bool] = _never_late,
     odd = _not_a_number(book)
     timed_out = False
     try:
-        found, unworked = ([], 0) if book.cut or book.partial else _work_out(book, late)
+        found, unworked = ([], 0) if book.cut else _work_out(book, late)
     except _OutOfTime:
         found, unworked, timed_out = [], 0, True
     if held:
