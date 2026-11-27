@@ -96,6 +96,11 @@ PR that ships it.
 | Something Iron Jarvis worked out itself or was told by a model, said with no verdict (a total that differs from the plain list above it, a formula it works out to an error, an empty document, no text found, a reply that may name a file no step wrote, a step or a review a model did not pass); in the warning colour, on the same line and in its list | **Worth a look:** … ("Worth a look: B4 says 650 and the cells above it add up to 600") | wrong total, mismatch, discrepancy, anomaly, warning, heuristic, inferred |
 | Something Iron Jarvis could not check on a made file (protected with a password, held open by another program, too large, a formula it could not work out, words or cells its reader does not read, a test run that did not finish or could not be run, the check ran out of time), on the same line | **Not checked:** … and why | unverified, not validated |
 | What Iron Jarvis says of a spreadsheet's formulas when it worked them out itself and none came to an error (always so for a spreadsheet Iron Jarvis wrote; beside **no error cells**, said when the file stands by the results saved in it) | **its 3 formulas work out** | formulas validated, recalculated, evaluated |
+| How much one of your own models can take in at once, as measured on Model servers (the intelligence plan, release 9; a page is 3,000 characters) | **Holds about N pages at once** / **Holds at least N pages at once** | context window, tokens (never shown) |
+| How fast one of your own models writes, as measured | **Writes about N words a second** | tokens per second, throughput |
+| Iron Jarvis asking a model that keeps stumbling in a more guided form, said on the reply | **guiding it step by step** | fallback, guided rung, strict JSON |
+| A model's measured tool use, on its card | **Uses tools well** / **Uses tools when guided step by step** / **Does not use tools reliably** | native rung, tool-calling score |
+| The background row while Iron Jarvis tries a model when the PC is idle | **Trying your own models** | probe, battery, benchmark |
 
 Two-way is a per-destination *upgrade*, not a new noun (decided in the
 messaging plan, shipped v1.136.0): the toggle that creates one reads

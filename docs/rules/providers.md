@@ -43,7 +43,7 @@ How to use this file: read the contents list, then read only the entries your ch
 - L1510: **A model is downloaded through ONE call, `fleet.pulls.start_download` (chat's `model_download`, the Models tab's Start download, the starter door): the size is read and the drive checked BEFORE the model server is asked, one download per server, progress and Cancel from the row** (v1.560.0)
 - L1566: **What everything cost is read from the usage rows that already exist, once each, by folder, client, automation and agent (`eval/usage_by.usage_by`); pay per use, your plan and free are kept apart, plan work is never money, and every money figure says measured or estimated from `AgentRun.cost_source`**
 - L1608: **In a Local only turn every search by the chat's own words stays on this PC, the `recall` tool included, and every Local only hold a first reply took is written even when the page goes away** (v1.588.1)
-- L1624: **A model of the user's own measures itself only when idle and only when it certainly stays on this network; a reply's form, never a task's difficulty, moves it to the guided form and back** (v1.590.0)
+- L1624: **A model of the user's own measures itself only when idle and only when it certainly stays on this network; a reply's form, never a task's difficulty, moves it to the guided form and back** (v1.593.0)
 <!-- contents:end -->
 
 <!-- also:start (written once by the split; edit by hand) -->
@@ -1621,7 +1621,7 @@ How to use this file: read the contents list, then read only the entries your ch
   request was cancelled between two, or before the write had started.
   Pins: `tests/test_local_only_recall_and_link.py`.
 
-- **A model of the user's own measures itself only when idle and only when it certainly stays on this network; a reply's form, never a task's difficulty, moves it to the guided form and back** (v1.590.0, the intelligence plan, release 9).
+- **A model of the user's own measures itself only when idle and only when it certainly stays on this network; a reply's form, never a task's difficulty, moves it to the guided form and back** (v1.593.0, the intelligence plan, release 9).
   MEASURE: `routes/envelope.run_trial` is THE battery (Measure, chat's
   `model_measure` via `d.start_measure`, and the idle trial): the quick battery,
   then SPEED (a different made-up hero each try; a reply without it, one that

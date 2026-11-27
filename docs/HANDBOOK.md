@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.592.1 (2026-11-19).*
+holds itself to. Current as of v1.593.0 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,48 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## Your own models set themselves up (v1.593.0)
+
+Each model on this PC or your network now says, on **Model servers**, what it
+is good at, in up to three plain lines:
+
+> Uses tools well. Holds about 12 pages at once. Writes about 25 words a second.
+
+Each line appears only when it was measured. "Holds at least N pages" means the
+model read back everything Iron Jarvis tried and may hold more.
+
+**You do not need to press anything.** The first time you use one of your own
+models, Iron Jarvis tries it the next time your PC is idle (no keyboard or
+mouse for five minutes and nothing running): about a minute or two of your own
+model server's time, made-up text only, nothing of yours. One model at a time,
+and it stops the moment you start typing. There is no notice; the card fills in
+by itself. **Measure** still does the same thing at once. Trying models while
+idle works on Windows; on Linux and Mac use Measure.
+
+It never tries a cloud model, never a model whose server passes it on to a
+cloud service, and never a model behind a model proxy that can reach the cloud
+at all. It tries a model by itself only on a server it has checked to be
+Ollama or vLLM answering with its own models; for any other server (and on
+Linux and Mac), press **Measure**. A try that measures nothing is tried again
+later; a figure a new measurement could not confirm is taken off the card.
+
+**Measure** works on every model, as before. For a model whose server is not
+on this PC or your network, or may pass it on to a cloud service, it checks
+only how the model uses tools, and the card says that size and speed are
+measured only for models on this PC or your network.
+
+**When a model keeps stumbling.** If a model's last five tool replies came
+back in a form Iron Jarvis could not use, it is asked in a more guided form,
+the same model, and the reply says so in one quiet line: "This model had
+trouble with tools, so Iron Jarvis is guiding it step by step." After ten good
+replies in a row it goes back. A hard task that fails does not count: only the
+form of the reply does.
+
+**Prefer my own hardware** now counts a job as done only when the record says
+it was done, not just that the run ended.
+
+**From chat:** ask "What is this model good at?" or "Measure my model."
 
 ## A weekly schedule runs on the day it names (v1.592.1)
 

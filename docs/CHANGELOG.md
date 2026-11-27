@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.593.0
+
+**Your own models set themselves up.** Each model on this PC or your network now says, on **Model servers**, what it is good at, in up to three plain lines:
+
 ## v1.592.1
 
 **A weekly schedule runs on the day it names.** A schedule set for a day of the week now runs on that day.
@@ -77,7 +81,3 @@
 ## v1.578.0
 
 **Start coding work from your phone.** Text Iron Jarvis from Telegram, Slack or email: "in the website folder, fix the broken contact form", or the command `/code website: fix the broken contact form`.
-
-## v1.577.0
-
-**Big extensions work the way you set them.** An extension with dozens of tools, such as an accounting app, now works through chat the whole way: Jarvis reaches the tool a job needs, asks you only where you want to be asked, and can run several of the extension's calls at once.
