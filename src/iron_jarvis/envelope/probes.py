@@ -35,6 +35,9 @@ class ProbeReply:
     text: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
+    #: Release 9: the model's reasoning text, when the server sent it apart
+    #: from the answer (SPEED does not time a reply that thought first).
+    thinking: str = ""
 
 
 #: ``complete(messages, **kw) -> ProbeReply`` — the one seam between the
@@ -74,6 +77,12 @@ class ProbeResult:
     notes: str = ""
     ok: bool = True
     floored: set[str] = field(default_factory=set)
+    #: Release 9 review: NON-reliability paths this probe TRIED to measure,
+    #: got answers for, and could not (HOLD read nothing back, SPEED timed no
+    #: reply). The runner zeroes them and drops their evidence claim, and the
+    #: store never restores them from the record: a re-measure that found
+    #: nothing must not leave the old figure on screen.
+    cleared: set[str] = field(default_factory=set)
 
 
 #: Default trials per rung/schema. Three, not IronCore's ten: this is the
@@ -491,25 +500,59 @@ def _code_word(seed: int) -> str:
     return f"{words[0]}-{4000 + (seed * 37) % 5000}"
 
 
+#: HOLD's calibration try: this much made-up text first, to learn how many
+#: characters of it make one of THIS model's tokens (made-up words are not
+#: English, so the English 4.0 would overfill the window).
+_HOLD_CALIBRATE_CHARS = 4000
+#: When the server reports no token counts, HOLD sizes as if a token were this
+#: many characters (the conservative side: a smaller text) and says "at least".
+_HOLD_UNKNOWN_CPT = 2.0
+
+
+def _hold_messages(code: str, text: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "The user sends a long made-up text. Answer the question at its end "
+                "with the code word only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"The code word is {code}.\n\n{text}\n\n"
+                "What was the code word given at the very start? "
+                "Reply with the code word only."
+            ),
+        },
+    ]
+
+
 class HoldProbe:
     """How much the model holds (fills ``holds_chars`` and ``holds_more``).
 
     A code word goes at the very START of a long made-up text and the
     question comes at its END; the try passes when the reply names the code
-    word AND the server did not report cutting the prompt. The first try fills
-    :data:`_HOLD_SHARE` of the window the app plans with (capped at
-    :data:`HOLD_CAP_TOKENS`); each failure halves the size, down to
-    :data:`HOLD_MIN_CHARS`, at most :data:`HOLD_TRIES` tries.
+    word AND the server did not report cutting the prompt.
 
-    Honest outcomes only:
+    Sizing (release 9 review): a first, small try learns how many characters
+    of THIS made-up text make one of the model's tokens (from the server's
+    own prompt-token count). The first real try then fills :data:`_HOLD_SHARE`
+    of the window the app plans with (capped at :data:`HOLD_CAP_TOKENS`); a
+    miss halves the size, down to :data:`HOLD_MIN_CHARS`, at most
+    :data:`HOLD_TRIES` tries.
 
-    * a size passed -> ``holds_chars`` is that size; ``holds_more`` is 1 only
-      when it was the FIRST try and the window is larger than the cap (the
-      model may hold more: "at least"), else 0;
-    * no size passed, or no window is known -> ``ok=True`` with EMPTY scores
-      (nothing measured, so nothing is said);
-    * a try the server refused (an error on an oversized prompt) is a FAILED
-      size, not a dead probe; only every try erroring is ``ok=False``.
+    What it says, honestly:
+
+    * ``holds_more`` = 1 ("at least") unless a LARGER size really failed — the
+      code word not read back, or the server reporting a cut. A larger size
+      the server REFUSED with an error says nothing about holding, and when
+      the token size could not be learned the answer is "at least" too;
+    * a size passed -> ``holds_chars`` is that size;
+    * tries were answered but none passed -> ``cleared``: the line goes (a
+      re-measure that finds nothing never keeps the old number on screen);
+    * every try errored -> ``ok=False`` (a dead server keeps the last good).
     """
 
     id = "HOLD"
@@ -520,74 +563,76 @@ class HoldProbe:
         self,
         *,
         limit_tokens: int | None,
-        chars_per_token: float = 4.0,
+        chars_per_token: float | None = None,
         cap_tokens: int = HOLD_CAP_TOKENS,
         tries: int = HOLD_TRIES,
     ) -> None:
         self.limit_tokens = int(limit_tokens) if limit_tokens else 0
-        try:
-            cpt = float(chars_per_token)
-        except (TypeError, ValueError):
-            cpt = 4.0
-        self.chars_per_token = cpt if 1.0 <= cpt <= 8.0 else 4.0
+        # ``chars_per_token`` is kept for callers; the probe learns its own.
+        del chars_per_token
         self.cap_tokens = max(1, int(cap_tokens))
         self.tries = max(1, int(tries))
+
+    async def _calibrate(self, complete: Transport) -> float | None:
+        """Characters per token of THIS made-up text, from the server's own
+        prompt-token count; None when it reports none (or the try failed)."""
+        messages = _hold_messages(_code_word(99), made_up_text(_HOLD_CALIBRATE_CHARS, seed=99))
+        try:
+            reply = await complete(messages)
+        except Exception:  # noqa: BLE001 — cannot learn it: size conservatively
+            return None
+        tokens = _prompt_tokens(reply.usage or {})
+        if tokens <= 0:
+            return None
+        return max(1.0, min(8.0, sum(len(m["content"]) for m in messages) / tokens))
 
     async def run(self, complete: Transport) -> ProbeResult:
         if self.limit_tokens <= 0:
             return ProbeResult(self.id, {}, notes="no window known; not measured", ok=True)
+        learned = await self._calibrate(complete)
+        cpt = learned if learned is not None else _HOLD_UNKNOWN_CPT
         want = min(self.limit_tokens, self.cap_tokens)
-        size = int(want * _HOLD_SHARE * self.chars_per_token)
-        more = 1 if self.limit_tokens > self.cap_tokens else 0
+        size = int(want * _HOLD_SHARE * cpt)
         asked = errors = 0
-        said: list[str] = []
+        failed_larger = False  # a larger size failed by read-back or a cut
+        said: list[str] = [f"{cpt:.2f} chars/token" + ("" if learned else " (not reported; assumed)")]
         for attempt in range(self.tries):
             if size < HOLD_MIN_CHARS:
                 break
             code = _code_word(attempt)
-            text = made_up_text(size, seed=attempt)
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "The user sends a long made-up text. Answer the question at its end "
-                        "with the code word only."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"The code word is {code}.\n\n{text}\n\n"
-                        "What was the code word given at the very start? "
-                        "Reply with the code word only."
-                    ),
-                },
-            ]
+            messages = _hold_messages(code, made_up_text(size, seed=attempt))
             asked += 1
             try:
                 reply = await complete(messages)
-            except Exception as exc:  # noqa: BLE001 — a refused size is a failed size
+            except Exception as exc:  # noqa: BLE001 — a refused size says nothing of holding
                 errors += 1
                 said.append(f"{size} chars errored ({type(exc).__name__})")
                 size //= 2
                 continue
             passed = code.lower() in (reply.text or "").lower()
             tokens = _prompt_tokens(reply.usage or {})
-            sent_tokens = sum(len(m["content"]) for m in messages) / self.chars_per_token
+            sent_tokens = sum(len(m["content"]) for m in messages) / cpt
             if passed and tokens and tokens < _HOLD_CUT_SHARE * sent_tokens:
                 passed = False
                 said.append(f"{size} chars cut by the server ({tokens} tokens read)")
             if passed:
+                more = 0 if (failed_larger and learned is not None) else 1
                 return ProbeResult(
                     self.id,
-                    {"holds_chars": float(size), "holds_more": float(more if attempt == 0 else 0)},
+                    {"holds_chars": float(size), "holds_more": float(more)},
                     notes="; ".join(said + [f"{size} chars read back"]),
                     ok=True,
                 )
+            failed_larger = True
             said.append(f"{size} chars not read back")
             size //= 2
         if asked and errors == asked:
             return ProbeResult(self.id, {}, notes=f"every try errored: {'; '.join(said)}", ok=False)
+        if asked:
+            return ProbeResult(
+                self.id, {}, notes="; ".join(said + ["nothing read back"]), ok=True,
+                cleared={"holds_chars", "holds_more"},
+            )
         return ProbeResult(self.id, {}, notes="; ".join(said) or "no size tried", ok=True)
 
 
@@ -595,15 +640,37 @@ class HoldProbe:
 SPEED_TRIES = 2
 #: A reply shorter than this many words is not timed (too short to be a rate).
 SPEED_MIN_WORDS = 40
+#: No model of anyone's own writes faster than this; a faster "rate" is a
+#: cached or canned answer, never a measurement (release 9 review).
+SPEED_MAX_WPS = 150.0
 _WORD_RE = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)?", re.UNICODE)
+_THINK_RE = re.compile(r"<think>.*?(</think>|$)", re.DOTALL | re.IGNORECASE)
+
+
+def _reasoning_tokens(usage: dict[str, Any]) -> int:
+    details = usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+    value = details.get("reasoning_tokens") if isinstance(details, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    return 0
 
 
 class SpeedProbe:
     """How fast the model writes (fills ``words_per_second``): a made-up
     story of about 150 words, timed on an injected clock from the request to
     the whole reply; words over seconds, the best of :data:`SPEED_TRIES`.
-    A reply under :data:`SPEED_MIN_WORDS` words is not timed; no timed reply
-    -> ``ok=True`` with EMPTY scores (not measured, so nothing is said)."""
+
+    Release 9 review, so the number is what the line says:
+
+    * every try names a DIFFERENT made-up hero, and a reply that does not
+      name it is not timed (a cache or a canned answer cannot pass);
+    * a reply that THOUGHT first (a ``<think>`` block, reasoning text, or
+      reasoning tokens the server reports) is not timed: its hidden words
+      would make "words a second" wrong — nothing is said rather than a
+      wrong number;
+    * a rate above :data:`SPEED_MAX_WPS` is not believed;
+    * replies answered but none timed -> ``cleared`` (the old line goes);
+      every try errored -> ``ok=False`` (the last good stays)."""
 
     id = "SPEED"
     title = "Words of a made-up story written per second"
@@ -614,20 +681,22 @@ class SpeedProbe:
         self.tries = max(1, int(tries))
 
     async def run(self, complete: Transport) -> ProbeResult:
-        messages = [
-            {"role": "system", "content": "Write plain prose. No title, no lists."},
-            {
-                "role": "user",
-                "content": (
-                    "Write a made-up story of about 150 words about a lighthouse keeper "
-                    "on a small island who finds a strange glass bottle."
-                ),
-            },
-        ]
         best = 0.0
         errors = 0
         said: list[str] = []
-        for _ in range(self.tries):
+        for attempt in range(self.tries):
+            hero = made_up_text(30, seed=500 + attempt).replace(".", "").split()[0].capitalize()
+            messages = [
+                {"role": "system", "content": "Write plain prose. No title, no lists."},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Write a made-up story of about 150 words about a lighthouse keeper "
+                        f"named {hero} on a small island who finds a strange glass bottle. "
+                        f"Use the name {hero}."
+                    ),
+                },
+            ]
             start = float(self.clock())
             try:
                 reply = await complete(messages)
@@ -636,16 +705,27 @@ class SpeedProbe:
                 said.append(f"errored ({type(exc).__name__})")
                 continue
             took = float(self.clock()) - start
-            words = len(_WORD_RE.findall(reply.text or ""))
+            text = reply.text or ""
+            if _THINK_RE.search(text) or getattr(reply, "thinking", "") or _reasoning_tokens(reply.usage or {}):
+                said.append("thought first, not timed")
+                continue
+            if hero.lower() not in text.lower():
+                said.append("did not write the story asked for, not timed")
+                continue
+            words = len(_WORD_RE.findall(text))
             if words < SPEED_MIN_WORDS or took <= 0:
                 said.append(f"{words} words, not timed")
                 continue
+            rate = words / took
+            if rate > SPEED_MAX_WPS:
+                said.append(f"{rate:.0f} words a second is not believable, not timed")
+                continue
             said.append(f"{words} words in {took:.1f}s")
-            best = max(best, words / took)
+            best = max(best, rate)
         if errors == self.tries:
             return ProbeResult(self.id, {}, notes="; ".join(said), ok=False)
         if best <= 0:
-            return ProbeResult(self.id, {}, notes="; ".join(said), ok=True)
+            return ProbeResult(self.id, {}, notes="; ".join(said), ok=True, cleared={"words_per_second"})
         return ProbeResult(
             self.id, {"words_per_second": round(best, 2)}, notes="; ".join(said), ok=True
         )
@@ -669,5 +749,5 @@ def trial_battery(
     return [
         *quick_battery(trials=trials),
         SpeedProbe(clock=clock),
-        HoldProbe(limit_tokens=limit_tokens, chars_per_token=chars_per_token),
+        HoldProbe(limit_tokens=limit_tokens),
     ]
