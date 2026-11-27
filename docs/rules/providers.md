@@ -1624,11 +1624,16 @@ How to use this file: read the contents list, then read only the entries your ch
 - **A model of the user's own measures itself only when idle and only when it certainly stays on this network; a reply's form, never a task's difficulty, moves it to the guided form and back** (v1.5xx.0, the intelligence plan, release 9).
   MEASURE: `routes/envelope.run_trial` is THE battery (Measure, chat's
   `model_measure` via `d.start_measure`, and the idle trial): the quick battery,
-  then SPEED (words a second, injected clock) and HOLD (a code word at the start
-  of made-up text, 3/4 of the planning window capped at 32k tokens, halving; a
-  server-reported cut fails the size). `holds_chars`/`holds_more`/
-  `words_per_second` are measured fields shown on the card; they NEVER change
-  the planning window (`honest_context` stays the deep battery's).
+  then SPEED (a different made-up hero each try; a reply without it, one that
+  thought first, or above 150 words a second is not timed) and HOLD (a code
+  word at the start of made-up text; a first small try learns the text's
+  characters per token from the server's count, else 2.0 and "at least"; 3/4
+  of the planning window capped at 32k tokens, halving; "about" only when a
+  larger size was not read back or was cut, never because it errored).
+  Answers that measured nothing CLEAR the line (`ProbeResult.cleared`, never
+  restored by keep-last-good). `holds_chars`/`holds_more`/`words_per_second`
+  NEVER change the planning window. Measure refuses a model not on this
+  network or routed to the cloud (`measure_refusal`).
   IDLE TRIAL (`envelope/autotrial`): the router's `_note_call` notes a model's
   first answer; the lifespan worker tries one model at a time only with no
   keyboard/mouse input for 5 min (`envelope/idle`, Windows only; None = not
@@ -1636,8 +1641,14 @@ How to use this file: read the contents list, then read only the entries your ch
   moment any of those changes (checked every second). Before each try
   `trial_refusal` refuses trusted providers, Ollama `:cloud` names, names in a
   cloud maker's spelling, addresses off this network or routed to the cloud,
-  and WAITS until the routing is known (`upstream_place == "local"` or
-  `FleetRegistry.answers_itself`). `tests/conftest.py` sets
+  any proxy whose table holds a cloud entry (`table_holds_cloud`), and WAITS
+  unless the name is listed local or the node is POSITIVELY self-answering
+  (`answers_itself`: detected Ollama/vLLM, OpenAI protocol, a fresh not-a-proxy
+  read; an unread pass forgets it). DONE only when a measurement landed; a
+  failure counts like a cut; Emergency stop is not a cut; a verdict is looked
+  at again when `trial_fingerprint` changes; an `auto: true` completion reaches
+  no destination. Only `is_own_model_provider` names are noted, recorded or
+  guided (a test double provider is none). `tests/conftest.py` sets
   `autotrial._FORCED_OFF`; test the worker through `AutoTrials.step`.
   GUIDED FORM: the router records every tool-carrying reply of an untrusted
   provider (`_note_form` beside `_note_call`, both paths): unusable = a
@@ -1646,10 +1657,12 @@ How to use this file: read the contents list, then read only the entries your ch
   text. Ledger v2 (`envelope/outcomes`): rung counters hold only that feed;
   step outcomes go to `steps`, read by nothing that lowers a model. 5 unusable
   running at the usual form -> guided; 10 usable running at the more guided
-  form -> back; a new measurement voids it. `ProviderManager.capability_profile`
-  answers `apply_tuning(rate_rule=False)` while guided; `_guide_if_stumbling`
-  (complete() and stream(), under a pin too: the same model) asks the next more
-  guided form and tells `reply_facts.note_guided`; both lanes append
-  `chat_turn.guided_note`. `local_quality` scores a session whose
+  form -> back; a new measurement voids it. The guided state is kept IN MEMORY
+  (`ProviderManager._guided`, set off the loop by `note_reply_form`, warmed by
+  `load_guided_states`); the ledger is never read on the loop, and its writes
+  hold a per-file lock. `_guide_if_stumbling` (complete() and stream(), under
+  a pin too: the same model) asks the next more guided form; the reply is told
+  only when that wrapper ANSWERS (`_note_form`), the `<think>` block split off
+  first; both lanes append `chat_turn.guided_note`. `local_quality` scores a session whose
   `Session.outcome` is not `completed` as 0.0 and skips a rehearsal.
   Pins: `tests/test_intel_r9_*.py`, `dashboard/__tests__/model-plain-lines-r9.test.tsx`.
